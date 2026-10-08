@@ -152,6 +152,25 @@ describe('referral reward reconciliation', () => {
     expect(rewardState.settle).toHaveBeenCalledWith(db.client, 'transaction-1');
   });
 
+  it('reports both settlement and deferral persistence failures', async () => {
+    const rpc = vi.fn(async (name: string) => name === 'list_unsettled_referral_purchase_transactions'
+      ? { data: [{ transaction_id: 'purchase-1' }], error: null }
+      : { data: null, error: new Error('retry store unavailable') });
+    rewardState.settle.mockRejectedValue(new Error('settlement unavailable'));
+    await expect(reconcileReferralPurchaseRewards({ rpc } as unknown as SupabaseClient)).rejects.toMatchObject({ summary: {
+      failed: 1, failures: [{ transactionId: 'purchase-1', error: 'settlement unavailable; retry deferral failed: retry store unavailable' }],
+    } });
+    expect(rpc).toHaveBeenCalledWith('defer_referral_purchase_reconciliation', { p_transaction_id: 'purchase-1' });
+  });
+
+  it('does not defer committed settlement when only foreground notification delivery fails', async () => {
+    const db = createClient({ data: [{ transaction_id: 'purchase-1' }], error: null });
+    rewardState.settle.mockResolvedValue({ status: 'settled', rewards: [{ credits: 5, userId: 'user-1', rewardId: 'reward-1', eventKey: 'grant-1' }] });
+    rewardState.notify.mockRejectedValue(new Error('notification unavailable'));
+    await expect(reconcileReferralPurchaseRewards(db.client)).rejects.toMatchObject({ summary: { failed: 1 } });
+    expect(db.rpc).toHaveBeenCalledTimes(1);
+  });
+
   it('fails the batch on catastrophic list-query and payload errors', async () => {
     const queryFailure = createClient({ data: null, error: new Error('database unavailable') });
     await expect(reconcileReferralPurchaseRewards(queryFailure.client)).rejects.toThrow(
