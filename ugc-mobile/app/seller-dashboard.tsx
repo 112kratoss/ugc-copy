@@ -36,6 +36,19 @@ export default function SellerDashboardScreen() {
     getNextPageParam: (lastPage) => lastPage.pageInfo?.nextOffset ?? undefined,
   });
 
+  const posts = data?.pages.flatMap((page) => page.posts) ?? [];
+  const summary = data?.pages[0]?.summary ?? getOwnerPostSalesSummary(posts);
+  const listings = posts.filter((post) => post.bundle);
+  // Listings are posts with a bundle, found by paging every owner post; the
+  // page-0 summary already knows how many there are, so keep paging until
+  // they are all on screen and never call the account empty before then.
+  const listingCount = data?.pages[0]?.summary?.listingCount ?? listings.length;
+  const hasUnlistedListings = listings.length < listingCount && Boolean(hasNextPage);
+  // Above the signed-out return below, so the hook count never changes when `user` flips.
+  useEffect(() => {
+    if (user && hasUnlistedListings && !isFetchingNextPage) void fetchNextPage();
+  }, [fetchNextPage, hasUnlistedListings, isFetchingNextPage, user]);
+
   if (!user) {
     return (
       <Screen>
@@ -45,17 +58,6 @@ export default function SellerDashboardScreen() {
     );
   }
 
-  const posts = data?.pages.flatMap((page) => page.posts) ?? [];
-  const summary = data?.pages[0]?.summary ?? getOwnerPostSalesSummary(posts);
-  const listings = posts.filter((post) => post.bundle);
-  // Listings are posts with a bundle, found by paging every owner post; the
-  // page-0 summary already knows how many there are, so keep paging until
-  // they are all on screen and never call the account empty before then.
-  const listingCount = data?.pages[0]?.summary?.listingCount ?? listings.length;
-  const hasUnlistedListings = listings.length < listingCount && Boolean(hasNextPage);
-  useEffect(() => {
-    if (hasUnlistedListings && !isFetchingNextPage) void fetchNextPage();
-  }, [fetchNextPage, hasUnlistedListings, isFetchingNextPage]);
 
   return (
     <Screen>

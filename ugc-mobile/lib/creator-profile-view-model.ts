@@ -1,5 +1,4 @@
-import { hasShowcaseVideoWithoutPreview } from './showcase-media';
-import type { CreatorProfileResponse, ShowcaseAssetSummary, ShowcaseFeedItem } from './types';
+import type { CreatorProfileResponse, ShowcaseFeedItem } from './types';
 
 export type CreatorProfileTab = 'creations' | 'unlocks' | 'tools';
 
@@ -77,11 +76,3 @@ function socialUrl(baseUrl: string, value: string) {
   return `${baseUrl}${trimmed.replace(/^@/, '')}`;
 }
 
-function creatorUnlockResourceLabel(kind: string) {
-  if (kind === 'prompt') return 'Prompt';
-  if (kind === 'workflow') return 'Workflow';
-  if (kind === 'files') return 'Files';
-  if (kind === 'notes') return 'Notes';
-  if (kind === 'remix') return 'Remix';
-  return null;
-}

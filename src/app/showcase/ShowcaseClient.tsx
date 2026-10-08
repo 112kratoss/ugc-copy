@@ -356,7 +356,8 @@ export default function ShowcaseClient({
         initialTool,
         initialUnlock,
         initialResource,
-        user,
+        // The id, not the object: the auth provider replaces `user` at every token refresh.
+        userId: user?.id ?? null,
     });
 
     useEffect(() => {
@@ -387,9 +388,12 @@ export default function ShowcaseClient({
     const renderedItems = tileableItems.slice(0, renderedItemCount);
     const hasDeferredItems = renderedItemCount < tileableItems.length;
     const hasAuthenticatedSession = Boolean(user && session?.access_token);
-    // Effects key on these, not on the objects: the auth provider replaces the
-    // session object at every token refresh.
+    // Effects key on the user id, not on the session or user objects: the auth
+    // provider replaces both at every token refresh, and the token itself
+    // changes then too, so the refresh effect reads it through a ref.
     const accessToken = session?.access_token ?? null;
+    const accessTokenRef = useRef(accessToken);
+    accessTokenRef.current = accessToken;
     const userId = user?.id ?? null;
     const priorityMediaItemId = renderedItems.find((item) => (
         item.postFormat !== 'text' && getShowcaseItemMediaItems(item).length > 0
@@ -574,7 +578,7 @@ export default function ShowcaseClient({
             && previousSnapshot.initialTool === initialTool
             && previousSnapshot.initialUnlock === initialUnlock
             && previousSnapshot.initialResource === initialResource
-            && previousSnapshot.user === user;
+            && previousSnapshot.userId === userId;
         initialSnapshotRef.current = {
             initialFeed,
             initialCategory,
@@ -582,13 +586,13 @@ export default function ShowcaseClient({
             initialTool,
             initialUnlock,
             initialResource,
-            user,
+            userId,
         };
         if (snapshotIsUnchanged) {
             return;
         }
 
-        const visibleInitialItems = user
+        const visibleInitialItems = userId
             ? initialFeed.items
             : filterSessionHiddenItems(
                 initialFeed.items,
@@ -611,7 +615,7 @@ export default function ShowcaseClient({
         setUnlock(initialUnlock);
         setResource(initialResource);
         setSavedItemIds(new Set(visibleInitialItems.filter((item) => item.isSaved).map((item) => item.id)));
-    }, [initialCategory, initialFeed, initialResource, initialSort, initialTool, initialUnlock, setItems, setSavedItemIds, user]);
+    }, [initialCategory, initialFeed, initialResource, initialSort, initialTool, initialUnlock, setItems, setSavedItemIds, userId]);
 
     useEffect(() => {
         if (!hasDeferredItems || isLoadingInitialFeed) {
@@ -715,9 +719,10 @@ export default function ShowcaseClient({
         setNonDefaultParam(params, 'resource', resource, 'all');
 
         const refreshPersonalizedFeed = (retryCount = 0) => {
+            const token = accessTokenRef.current;
             void fetch(`/api/showcase/feed?${params.toString()}`, {
-                headers: accessToken
-                    ? { Authorization: `Bearer ${accessToken}` }
+                headers: token
+                    ? { Authorization: `Bearer ${token}` }
                     : undefined,
                 signal: controller.signal,
             })
@@ -823,7 +828,6 @@ export default function ShowcaseClient({
             controller.abort();
         };
     }, [
-        accessToken,
         category,
         hasAnonymousPersonalizationDemand,
         hasAuthenticatedSession,
@@ -959,11 +963,15 @@ export default function ShowcaseClient({
                 return nextSavedIds;
             });
         } catch (error) {
+            if (loadMoreGeneration !== loadMoreGenerationRef.current) return;
             console.error('Failed to fetch more showcase items:', error);
             setLoadMoreError('Could not load more posts. Your current feed is still available.');
         } finally {
-            isLoadingMoreRef.current = false;
-            setIsLoadingMore(false);
+            // A stale page's end must not clear the new lane's own in-flight load.
+            if (loadMoreGeneration === loadMoreGenerationRef.current) {
+                isLoadingMoreRef.current = false;
+                setIsLoadingMore(false);
+            }
         }
     }, [
         accessToken,

@@ -8,7 +8,7 @@ import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Keyboard, Keyboar
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ContentPolicyGate } from '@/components/content-policy-gate';
-import { AppText, ChoiceChip, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
+import { AppText, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { ComposerMediaLightbox, getComposerMediaLabel } from '@/components/composer-media-lightbox';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { Overlay } from '@/components/overlay-host';
@@ -55,7 +55,6 @@ import {
   deriveCreationPackageFromResourceCards,
   getDefaultPostComposerDraft,
   getPostComposerDetailErrors,
-  getPostComposerPublishActions,
   getPostComposerPackageStatus,
   getPostComposerPriceTokens,
   getPostComposerResourceCardErrors,
@@ -72,10 +71,8 @@ import {
   isTemplateGeneration,
   isPostComposerResourceCardReady,
   POST_COMPOSER_CATEGORY_OPTIONS,
-  POST_COMPOSER_RESOURCE_KIND_OPTIONS,
   POST_COMPOSER_RESOURCE_CARD_OPTIONS,
   POST_COMPOSER_SOURCE_OPTIONS,
-  POST_COMPOSER_UNLOCK_OPTIONS,
   validatePostComposerDraft,
   type PostComposerValidationOptions,
   hasGenerationReferences,
@@ -117,11 +114,11 @@ import { useReducedMotion } from '@/lib/motion';
 import { BackGlyph, CloseGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { hexWithAlpha } from '@/lib/eased-fade';
-import { accentFill, appTheme, mediaColors, onAccentFill, type ToolAccent } from '@/lib/theme';
+import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-file';
 import { useHardwareBack } from '@/lib/use-hardware-back';
-import type { GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceBundleAccessMode, PostResourceItemType, SourceToolOption } from '@/lib/types';
+import type { GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceItemType, SourceToolOption } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
 import { haptic } from '@/lib/haptics';
 

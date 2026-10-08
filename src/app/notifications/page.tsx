@@ -197,9 +197,11 @@ export default function NotificationsPage() {
         <div>
           <h1 className="text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)]">Alerts</h1>
           <p className="mt-1 text-sm text-zinc-400">
-            {isAuthenticated
-              ? `${unreadCount} unread ${unreadCount === 1 ? 'alert' : 'alerts'}`
-              : 'Sign in to view alerts'}
+            {isAuthenticated === null
+              ? '\u00a0'
+              : isAuthenticated
+                ? `${unreadCount} unread ${unreadCount === 1 ? 'alert' : 'alerts'}`
+                : 'Sign in to view alerts'}
           </p>
         </div>
 

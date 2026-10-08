@@ -37,7 +37,7 @@ import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';
 import { getStoredMediaLocation } from '@/lib/media-urls';
-import { isAudioModel, isImageModel } from '@/lib/client-generation-models';
+import { isAudioModel, isImageModel, isMotionModel } from '@/lib/client-generation-models';
 import { pushToast, requestConfirmation } from '@/components/feedback-state';
 import { HOME_WORKSPACE_ACTIVE_STATUSES } from '@/lib/home-dashboard';
 import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profile';
@@ -269,9 +269,18 @@ function isActiveGenerationStatus(status: string): boolean {
     return (HOME_WORKSPACE_ACTIVE_STATUSES as readonly string[]).includes(status);
 }
 
-/** The creator for a Recreate of this creation, with the remix prefill. */
+/**
+ * The creator for a Recreate of this creation, with the remix prefill. A
+ * motion run is stored as category 'video', so the model decides first.
+ */
 function recreateHref(generation: Generation): string {
-    return `/create-${resolveRemixTool(generation.category)}?remix=${encodeURIComponent(generation.id)}`;
+    const tool = isMotionModel(generation.model) ? 'motion' : resolveRemixTool(generation.category);
+    return `/create-${tool}?remix=${encodeURIComponent(generation.id)}`;
+}
+
+/** Audio and template results have no creator to reopen in. */
+function canRecreate(generation: Generation): boolean {
+    return generation.origin !== 'template' && !isAudioModel(generation.model);
 }
 
 function preserveStableMediaUrl(
@@ -1860,12 +1869,13 @@ export default function CreationsPage() {
                                 const linkedPostPendingAction = linkedPostTarget
                                     ? postLifecycle.pendingAction(linkedPostTarget.id)
                                     : null;
+                                const primaryIsPublish = workspaceState.primaryAction.type === 'publish';
                                 const hasPrimaryAction =
                                     canManageFromCreation &&
-                                    !gen.source_unavailable_at &&
+                                    // Publishing needs the file; a lost source keeps its post's recipe actions.
+                                    !(primaryIsPublish && gen.source_unavailable_at) &&
                                     workspaceState.primaryAction.type !== 'none' &&
                                     Boolean(workspaceState.primaryAction.label);
-                                const primaryIsPublish = workspaceState.primaryAction.type === 'publish';
                                 const primaryIsUnlock =
                                     !isTemplateResult && (
                                         workspaceState.primaryAction.type === 'add-paywall' ||
@@ -2109,12 +2119,12 @@ export default function CreationsPage() {
                                         menu={(
                                             <StudioOverflowMenu
                                                 label={`More actions for ${failedTitle}`}
-                                                items={[{
+                                                items={[...(canRecreate(gen) ? [{
                                                     key: 'retry',
                                                     label: 'Try again',
                                                     icon: <RotateCcw className="h-4 w-4" />,
                                                     href: recreateHref(gen),
-                                                }, {
+                                                }] : []), {
                                                     key: 'delete',
                                                     label: 'Delete creation',
                                                     icon: <Trash2 className="h-4 w-4" />,

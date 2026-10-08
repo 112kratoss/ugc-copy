@@ -15,6 +15,7 @@ import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { NativeMenu } from '@/components/native-menu';
 import { AppText, SecondaryButton, StatusBlock } from '@/components/ui';
 import { showActionSheet } from '@/lib/action-sheet';
+import { mergeRefreshedFirstPage, type ProfilePageAdapter } from '@/lib/profile-media-refresh';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { actionSheetFromMenu, menuAction, type NativeMenuModel } from '@/lib/native-menu';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
@@ -51,6 +52,17 @@ import { formatUnlockCreditPrice } from '@/lib/pricing';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 
 const PROFILE_PAGE_SIZE = 24;
+
+/** How a creator page's pages carry their posts, for the first-page merge. */
+const CREATOR_PROFILE_PAGES: ProfilePageAdapter<CreatorProfileResponse, ShowcaseFeedItem> = {
+  items: (page) => page.items,
+  withItems: (page, items) => ({ ...page, items }),
+  hasMore: (page) => Boolean(page.pageInfo.hasMore),
+  orderKey: (item) => {
+    const parsed = item.createdAt ? Date.parse(item.createdAt) : Number.NaN;
+    return Number.isFinite(parsed) ? parsed : 0;
+  },
+};
 const GRID_GAP = 10;
 const LOAD_MORE_COOLDOWN_MS = 800;
 
@@ -118,20 +130,25 @@ export function CreatorProfileScreen({
     ];
   }, [activeTab, currentTabItems, data?.stats.toolsUsed]);
 
-  // Coming back to the screen refreshes the first page only. Invalidating the
-  // whole list refetched every loaded page in sequence (the profile dashboard
-  // fixed the same pattern, audit C7); pull-to-refresh already trims this way.
-  const refreshFirstPage = useCallback(() => {
-    queryClient.setQueryData<InfiniteData<CreatorProfileResponse>>(queryKey, (current) => {
-      if (!current?.pages.length) return current;
-      return { pages: current.pages.slice(0, 1), pageParams: current.pageParams.slice(0, 1) };
-    });
-    void queryClient.invalidateQueries({ queryKey });
-  }, [queryClient, queryKey]);
+  // Coming back to the screen, or following, refreshes the first page and
+  // merges it over the cached pages (the profile dashboard's pattern, audit
+  // C7). Invalidating the whole list refetched every loaded page in sequence,
+  // and trimming to page 1 would collapse the grid under a reader who opened
+  // a post from deep in it.
+  const refreshFirstPage = useCallback(async () => {
+    try {
+      const fresh = await api.getCreatorProfile(username, { limit: PROFILE_PAGE_SIZE, offset: 0 });
+      queryClient.setQueryData<InfiniteData<CreatorProfileResponse, number>>(queryKey, (current) => (
+        mergeRefreshedFirstPage(current, fresh, 0, CREATOR_PROFILE_PAGES)
+      ));
+    } catch {
+      // The cached pages stand; pull-to-refresh retries.
+    }
+  }, [api, queryClient, queryKey, username]);
 
   useEffect(() => {
     if (isFocused && !previousFocusRef.current) {
-      refreshFirstPage();
+      void refreshFirstPage();
     }
     previousFocusRef.current = isFocused;
   }, [isFocused, refreshFirstPage]);
@@ -163,7 +180,7 @@ export function CreatorProfileScreen({
       setFollowError('Could not update follow. Your previous state was restored.');
     },
     onSettled: () => {
-      refreshFirstPage();
+      void refreshFirstPage();
     },
   });
 

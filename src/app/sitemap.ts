@@ -42,7 +42,6 @@ export const revalidate = 3600;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     const baseUrl = siteConfig.siteUrl;
-    const now = new Date();
     const posts = getSortedPostsData();
 
     // Independent reads; one round trip rather than three sequential ones. Each
@@ -78,13 +77,13 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         })),
         ...creators.map((creator) => ({
             url: `${baseUrl}/creators/${creator.username}`,
-            lastModified: creator.lastPostedAt ? new Date(creator.lastPostedAt) : now,
+            ...(creator.lastPostedAt ? { lastModified: new Date(creator.lastPostedAt) } : {}),
             changeFrequency: 'weekly' as const,
             priority: 0.5,
         })),
         ...templates.map((template) => ({
             url: `${baseUrl}/templates/${template.slug}`,
-            lastModified: template.updated_at ? new Date(template.updated_at) : now,
+            ...(template.updated_at ? { lastModified: new Date(template.updated_at) } : {}),
             changeFrequency: 'weekly' as const,
             priority: 0.55,
         })),

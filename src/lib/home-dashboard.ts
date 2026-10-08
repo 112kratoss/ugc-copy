@@ -194,12 +194,25 @@ export function selectWhatsNewModels(
     return [];
   }
 
-  // Newest first: models are appended to the catalog, so the highest
-  // sortOrder is the latest launch. Thirteen models still carry "New" since
-  // August, and catalog order put those ahead of this week's.
-  const flaggedNew = models
-    .filter((model) => model.badge?.trim().toLowerCase() === 'new')
-    .sort((left, right) => right.sortOrder - left.sortOrder);
+  // Newest first, kind by kind: models are appended to each kind's list, so
+  // the highest sortOrder within a kind is its latest launch, but sortOrder
+  // says nothing across kinds (every kind restarts at 0). Thirteen models
+  // still carry "New" since August, and catalog order put those first.
+  const newestByKind = new Map<GenerationModelDescriptor['kind'], GenerationModelDescriptor[]>();
+  for (const model of models) {
+    if (model.badge?.trim().toLowerCase() !== 'new') continue;
+    const list = newestByKind.get(model.kind) ?? [];
+    list.push(model);
+    newestByKind.set(model.kind, list);
+  }
+  const flaggedNew: GenerationModelDescriptor[] = [];
+  const queues = [...newestByKind.values()].map((list) => list.sort((left, right) => right.sortOrder - left.sortOrder));
+  while (queues.some((queue) => queue.length > 0)) {
+    for (const queue of queues) {
+      const next = queue.shift();
+      if (next) flaggedNew.push(next);
+    }
+  }
   const selected = flaggedNew.length > 0 ? flaggedNew : models;
 
   return selected.slice(0, limit).map(toHomeWhatsNewModel);
