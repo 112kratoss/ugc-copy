@@ -233,7 +233,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
     const elementNames = useNameDrafts();
     const [resultPreviewImage, setResultPreviewImage] = useState<string | null>(null);
-    const nowMs = useTicker(isGenerating);
+    const nowMs = useTicker(isGenerating) ?? undefined;
 
     useEffect(() => () => {
         generationPollAbortControllerRef.current?.abort();

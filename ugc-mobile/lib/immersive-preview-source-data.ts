@@ -334,7 +334,7 @@ function cachedCreatorProfileItems(queryClient: QueryClient): ImmersiveSourceSna
 function cachedGenerations(queryClient: QueryClient, userId: string | undefined): ImmersiveSourceSnapshot | undefined {
   return mergeCachedEntities(
     queryClient,
-    [['profile-generations', userId], ['home-generations', userId], ['generations', userId]],
+    [['profile-generations', userId], ['generations', userId]],
     (data) => readCachedPages(data as CachedPages<GenerationListResponse> | undefined)
       .flatMap((page) => page.generations ?? []),
     (generations) => ({ generations })

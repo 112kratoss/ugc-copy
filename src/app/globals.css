@@ -41,6 +41,7 @@
 @source "../components/FeedbackViewport.tsx";
 @source "../components/GenerationNotifications.tsx";
 @source "../components/HomeExperience.tsx";
+@source "../components/HomeFeedSkeleton.tsx";
 @source "../components/HomeSlider.tsx";
 @source "../components/HoverVideo.tsx";
 @source "../components/InlineMediaAudio.tsx";

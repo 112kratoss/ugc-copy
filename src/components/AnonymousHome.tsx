@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { Suspense, use } from 'react';
 
 import { StatusCallout, Text } from '@/components/DesignSystem';
+import { HOME_FEED_DETAIL_CONTEXT, HomeFeedSkeleton } from '@/components/HomeFeedSkeleton';
 import HomeExperience from '@/components/HomeExperience';
 import HomeSlider from '@/components/HomeSlider';
 import { JsonLd } from '@/components/JsonLd';
@@ -31,24 +32,6 @@ import type { ShowcaseFeedPage } from '@/lib/showcase';
  * no server auth reads, and no `searchParams` (feed lane switching happens
  * client-side inside FeedClient). Pinned by anonymous-home-page-cache.test.tsx.
  */
-
-const FEED_DETAIL_CONTEXT = { from: 'home', returnTo: '/' };
-
-function HomeFeedSkeleton() {
-  return (
-    <div className="flex flex-col gap-4" aria-label="Loading feed">
-      {[220, 320, 260].map((height, index) => (
-        <div
-          key={index}
-          className="relative overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]"
-          style={{ minHeight: height }}
-        >
-          <div className="absolute inset-0 -translate-x-full animate-[skeleton-shimmer_1.5s_linear_infinite] bg-gradient-to-r from-transparent via-white/5 to-transparent" />
-        </div>
-      ))}
-    </div>
-  );
-}
 
 async function AnonymousFeedSection({ data }: { data: Promise<ShowcaseFeedPage | null> }) {
   const feed = await data;
@@ -81,7 +64,7 @@ async function AnonymousFeedSection({ data }: { data: Promise<ShowcaseFeedPage |
       initialFeed={feed}
       initialChipId="for-you"
       variant="embedded"
-      detailContext={FEED_DETAIL_CONTEXT}
+      detailContext={HOME_FEED_DETAIL_CONTEXT}
       initialPriorityPreview={priorityPost && priorityMedia && inlinePriorityPreview
         ? {
             postId: priorityPost.id,

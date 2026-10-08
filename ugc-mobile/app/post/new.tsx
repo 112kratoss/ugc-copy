@@ -5557,7 +5557,6 @@ async function invalidatePostCaches(queryClient: QueryClient, userId: string | u
     queryClient.invalidateQueries({ queryKey: ['post-new-generations', userId] }),
     queryClient.invalidateQueries({ queryKey: ['profile-generations', userId] }),
     queryClient.invalidateQueries({ queryKey: ['profile-owner-posts', userId] }),
-    queryClient.invalidateQueries({ queryKey: ['home-generations', userId] }),
     // The header's post count and the seller total ride on the profile.
     invalidateProfileStats(queryClient, userId),
     queryClient.invalidateQueries({ queryKey: ['generations', userId] }),

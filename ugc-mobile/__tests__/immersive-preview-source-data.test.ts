@@ -303,7 +303,7 @@ describe('immersive preview source data', () => {
     });
   });
 
-  it('merges a paginated profile cache with the single-page home cache', () => {
+  it('merges a paginated profile cache with the single-page library cache', () => {
     // profile-generations pages; home-generations does not.
     const queryClient = new QueryClient();
     queryClient.setQueryData(['profile-generations', 'user-1'], {
@@ -313,7 +313,7 @@ describe('immersive preview source data', () => {
       ],
       pageParams: [null, '24'],
     });
-    queryClient.setQueryData(['home-generations', 'user-1'], {
+    queryClient.setQueryData(['generations', 'user-1'], {
       generations: [{ id: 'gen-2', output_url: 'b.png' }, { id: 'gen-3', output_url: 'c.png' }],
     });
 
@@ -392,7 +392,7 @@ describe('immersive preview source data', () => {
       pages: [{ generations: [generation('gen-1', { title: 'Old title' }), generation('gen-2')] }],
       pageParams: [null],
     }, { updatedAt: now - 60 * 60 * 1000 });
-    queryClient.setQueryData(['home-generations', 'user-1'], {
+    queryClient.setQueryData(['generations', 'user-1'], {
       generations: [generation('gen-1', { title: 'Renamed a minute ago' })],
     }, { updatedAt: now - 60 * 1000 });
 
@@ -409,7 +409,7 @@ describe('immersive preview source data', () => {
 
   it('does not hand a viewer a snapshot that lacks the item it opened', () => {
     const queryClient = new QueryClient();
-    queryClient.setQueryData(['home-generations', 'user-1'], { generations: [generation('gen-1')] });
+    queryClient.setQueryData(['generations', 'user-1'], { generations: [generation('gen-1')] });
 
     expect(readCachedImmersiveSourceSnapshot(queryClient, 'home-creations', 'user-1', 'elsewhere')).toBeUndefined();
   });

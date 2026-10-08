@@ -154,7 +154,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const [remixSourceBundle, setRemixSourceBundle] = useState<RemixSourceBundle | null>(null);
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
-    const nowMs = useTicker(isGenerating);
+    const nowMs = useTicker(isGenerating) ?? undefined;
 
     useEffect(() => () => {
         generationPollAbortControllerRef.current?.abort();

@@ -205,7 +205,8 @@ export default function WorkspaceCard({
         <ul className="flex flex-col gap-4">
           {active.map((view) => {
             const kind = toGenerationKind(view);
-            const timing = withGenerationTimingEstimate(
+            // Timing text waits for the mounted clock (see useTicker).
+            const timing = nowMs === null ? null : withGenerationTimingEstimate(
               normalizeStoredGenerationTiming({
                 kind,
                 status: view.status,
@@ -222,7 +223,7 @@ export default function WorkspaceCard({
                   <KindGlyph kind={kind} className="h-3.5 w-3.5" />
                   <span className="truncate">{view.title ?? `${KIND_LABELS[kind]} · ${view.model}`}</span>
                 </div>
-                <StudioGenerationStatus accent={KIND_ACCENTS[kind]} timing={timing} nowMs={nowMs} />
+                {timing && nowMs !== null ? <StudioGenerationStatus accent={KIND_ACCENTS[kind]} timing={timing} nowMs={nowMs} /> : null}
               </li>
             );
           })}
@@ -277,7 +278,7 @@ export default function WorkspaceCard({
                         Failed
                       </span>
                     ) : null}
-                    <span className="sr-only">{formatTimeAgoShort(Date.parse(view.createdAt), nowMs)}</span>
+                    {nowMs !== null ? <span className="sr-only">{formatTimeAgoShort(Date.parse(view.createdAt), nowMs)}</span> : null}
                   </Link>
                 </li>
               );

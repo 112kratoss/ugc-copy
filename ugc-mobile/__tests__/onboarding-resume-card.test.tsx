@@ -73,7 +73,7 @@ function renderCard(queryClient: QueryClient) {
   act(() => {
     tree = renderer.create(
       <QueryClientProvider client={queryClient}>
-        <OnboardingResumeCard compact />
+        <OnboardingResumeCard />
       </QueryClientProvider>,
     );
   });

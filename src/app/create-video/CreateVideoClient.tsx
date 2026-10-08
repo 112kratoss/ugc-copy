@@ -774,7 +774,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
-    const nowMs = useTicker(isGenerating);
+    const nowMs = useTicker(isGenerating) ?? undefined;
 
     useEffect(() => () => {
         generationPollAbortControllerRef.current?.abort();

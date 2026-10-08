@@ -16,6 +16,7 @@ import { FEED_CHIPS, FEED_PAGE_SIZE, getFeedChip, type FeedChipId } from '@/lib/
 import { buildPostFeedCards } from '@/lib/post-feed-presentation';
 import {
     getShowcaseFeedSessionId,
+    QualifiedImpressionBoundary,
     sendShowcaseFeedEvent,
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
@@ -412,13 +413,27 @@ export default function FeedClient({
         });
     }, []);
     const handleOpenPost = useCallback((postId: string) => {
+        // The ranker's seen-suppression reads opens as well as impressions;
+        // the Home feed used to report only shares.
+        const cardIndex = cardsRef.current.findIndex((candidate) => candidate.id === postId);
+        const card = cardIndex >= 0 ? cardsRef.current[cardIndex] : null;
+        if (card) {
+            void sendShowcaseFeedEvent({
+                item: card.item,
+                eventType: 'open',
+                sourceSurface: 'feed',
+                accessToken,
+                feedSessionId,
+                fallbackPosition: cardIndex,
+            }).catch(() => undefined);
+        }
         // An imperative push raises no link status, so the progress bar has to
         // be told the click happened. Client-side navigation keeps the shell
         // alive; a full document load here made every post click pay for a
         // cold reload out and another one back.
         publishNavigationStart();
         router.push(buildShowcaseDetailPath(postId, detailContext));
-    }, [detailContext, router]);
+    }, [accessToken, detailContext, feedSessionId, router]);
     const handlePrefetchPost = useCallback((postId: string) => {
         if (prefetchedIdsRef.current.has(postId)) return;
         prefetchedIdsRef.current.add(postId);
@@ -512,6 +527,12 @@ export default function FeedClient({
                     <p className="mt-2 text-sm text-[var(--ui-text-muted)]">
                         Switch lanes, or share a note, prompt, or creation to start it.
                     </p>
+                    <Link
+                        href={`/post/new?from=community&returnTo=${encodeURIComponent(detailContext.returnTo)}`}
+                        className="ui-focus-ring mt-5 inline-flex min-h-12 items-center rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)]"
+                    >
+                        Share the first post
+                    </Link>
                 </div>
             ) : (
                 <WindowedFeedList
@@ -522,8 +543,15 @@ export default function FeedClient({
                     // its card scrolls beyond the ordinary 24-card window.
                     pinnedKeys={commentsOpenIds}
                     renderItem={(card, cardIndex) => (
-                        <FeedPostCard
+                        <QualifiedImpressionBoundary
                             key={card.id}
+                            item={card.item}
+                            position={cardIndex}
+                            feedSessionId={feedSessionId}
+                            accessToken={accessToken}
+                            sourceSurface="feed"
+                        >
+                        <FeedPostCard
                             card={card}
                             isSaved={savedItemIds.has(card.id)}
                             saving={savingItemIds.has(card.id)}
@@ -544,6 +572,7 @@ export default function FeedClient({
                             onOpenPost={handleOpenPost}
                             onPrefetchPost={handlePrefetchPost}
                         />
+                        </QualifiedImpressionBoundary>
                     )}
                 />
             )}
@@ -557,6 +586,20 @@ export default function FeedClient({
             ) : null}
 
             <div ref={sentinelRef} aria-hidden="true" />
+
+            {!switching && !loadingMore && cards.length > 0 && nextOffset === null && nextCursor === null ? (
+                // A personalised lane stops at 60 posts; the bottom used to be silent.
+                <div className="flex flex-col items-center gap-3 py-8 text-center">
+                    <p className="text-sm font-semibold text-[var(--ui-text-muted)]">You&apos;re all caught up.</p>
+                    <button
+                        type="button"
+                        onClick={() => void fetchPage(chipId, 0, true)}
+                        className="ui-focus-ring inline-flex min-h-11 items-center rounded-full border border-[var(--ui-border-default)] px-4 text-xs font-bold text-[var(--ui-text-secondary)] transition hover:text-[var(--ui-text-primary)]"
+                    >
+                        Refresh this lane
+                    </button>
+                </div>
+            ) : null}
 
             {loadingMore ? (
                 <p className="flex items-center justify-center gap-2 py-4 text-sm text-[var(--ui-text-muted)]">
