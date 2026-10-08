@@ -100,7 +100,11 @@ export type SheetScrollProps = Pick<
 >;
 
 export interface SheetDismissDrag {
-  /** The grabber's handlers: it takes the touch the moment it lands. `SheetGrabber` spreads them. */
+  /**
+   * The grabber's handlers: it takes the touch the moment it lands, and keeps
+   * it to the end. `SheetGrabber` spreads them, and so does a title row that
+   * has to answer a pull while the list under it is scrolled.
+   */
   panHandlers: PanHandlers;
   /**
    * The rest of the sheet's handlers: they take a touch only once it has moved
@@ -210,6 +214,9 @@ export function useSheetDismissDrag({
   // on touch-down starts unarmed and the panel ignores its movement until it
   // has; one taken over from a pressed button mid-drag arrives armed.
   const armedRef = useRef(false);
+  // Whether the grabber's responder holds the touch: on its own strip, or on a
+  // title row that carries its handlers. The panel leaves that touch alone.
+  const grabberHoldsRef = useRef(false);
   const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -217,6 +224,8 @@ export function useSheetDismissDrag({
     // A Modal remounts its list at the top; the hook outlives it, so it has to
     // forget the old offset too or the content drag stays off until a scroll.
     scrollOffsetRef.current = 0;
+    // And a grabber unmounted under a finger never said that it let go.
+    grabberHoldsRef.current = false;
   }, [visible]);
 
   useEffect(() => () => {
@@ -283,6 +292,12 @@ export function useSheetDismissDrag({
     const contentTerminate = () => {
       if (armedRef.current) terminate();
     };
+    // Whether the panel takes, at a move, a touch it does not hold: one a
+    // pressed child has, or one nothing has. Why each part is asked is told
+    // where the panel's responder puts the question.
+    const takesAtMove = (event: ReactNative.GestureResponderEvent, gesture: GestureState) => (
+      !grabberHoldsRef.current && isContentDrag(gesture) && !touchBelongsToNativeView(event)
+    );
 
     return {
       grabber: panResponderApi.create({
@@ -294,11 +309,18 @@ export function useSheetDismissDrag({
         onStartShouldSetPanResponder: () => enabledRef.current,
         onMoveShouldSetPanResponder: (_event, gesture) => isDownwardDrag(gesture),
         onPanResponderGrant: (_event, gesture) => {
+          grabberHoldsRef.current = true;
           grantOffsetRef.current = gesture.dy;
         },
         onPanResponderMove: move,
-        onPanResponderRelease: release,
-        onPanResponderTerminate: terminate,
+        onPanResponderRelease: (event, gesture) => {
+          grabberHoldsRef.current = false;
+          release(event, gesture);
+        },
+        onPanResponderTerminate: () => {
+          grabberHoldsRef.current = false;
+          terminate();
+        },
       }),
       content: panResponderApi.create({
         // Two ways in. A touch nothing below wanted — a title, a gap — is
@@ -323,8 +345,17 @@ export function useSheetDismissDrag({
         // A player's touch is held by nothing, so the panel is asked about it
         // at every move, and a finger that slides down on the play button as
         // it presses reads as a pull. That touch is the player's still.
-        onMoveShouldSetPanResponderCapture: (event, gesture) => isContentDrag(gesture) && !touchBelongsToNativeView(event),
-        onMoveShouldSetPanResponder: (event, gesture) => isContentDrag(gesture) && !touchBelongsToNativeView(event),
+        //
+        // The grabber's touch is the sheet's own drag already, and the panel,
+        // being above the grabber, is asked about every move of that too.
+        // With the list at its top it used to take the pull over 6 points in:
+        // the grabber sprang the sheet back as it let go, and the panel
+        // waited 6 more points before it followed. A slow pull went down,
+        // back to rest, and then with the finger (Pixel 9a emulator films,
+        // 2026-10-07: 5, 2, 0, 5, 19 dp below rest). So that touch is left
+        // with the grabber.
+        onMoveShouldSetPanResponderCapture: takesAtMove,
+        onMoveShouldSetPanResponder: takesAtMove,
         onPanResponderGrant: contentGrant,
         onPanResponderMove: contentMove,
         onPanResponderRelease: contentRelease,

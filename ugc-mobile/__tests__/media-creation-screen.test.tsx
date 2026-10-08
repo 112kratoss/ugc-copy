@@ -2538,6 +2538,100 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
   });
 
+  describe('the parameter sheet', () => {
+    type Config = Record<string, (...args: unknown[]) => unknown>;
+
+    /**
+     * The image composer with its parameter sheet open. The double hands each
+     * responder's own config back as its handlers, so the tree shows which
+     * view carries which.
+     */
+    function openParameters() {
+      vi.mocked(PanResponder.create).mockImplementation(((config: unknown) => ({ panHandlers: { panConfig: config } })) as never);
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+      });
+      renderer.act(() => {
+        findPressableByLabelPrefix(tree!.root, 'Generation parameters.').props.onPress();
+      });
+      return tree!;
+    }
+
+    afterEach(() => {
+      vi.mocked(PanResponder.create).mockImplementation((() => ({ panHandlers: {} })) as never);
+    });
+
+    function ancestors(node: renderer.ReactTestInstance) {
+      const found: renderer.ReactTestInstance[] = [];
+      for (let current = node.parent; current; current = current.parent) found.push(current);
+      return found;
+    }
+
+    const touch = { nativeEvent: { target: 57 }, stopPropagation: () => undefined };
+    const sheetPanel = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ testID: 'creator-parameter-sheet' });
+    const isOpen = (tree: renderer.ReactTestRenderer) => tree.root.findAllByProps({ testID: 'creator-parameter-sheet' }).length > 0;
+    /** The row the title and the close button are in, and the responder it carries. */
+    const titleRow = (tree: renderer.ReactTestRenderer) => (
+      ancestors(sheetPanel(tree).findByProps({ children: 'Generation parameters' })).find((node) => node.props.panConfig)!
+    );
+
+    it('takes a pull from its title as from its grabber, wherever its list is scrolled to', () => {
+      const tree = openParameters();
+      const panel = sheetPanel(tree).props.panConfig as Config;
+      const header = titleRow(tree).props.panConfig as Config;
+
+      // The title row has a responder of its own, the grabber's: taken as the
+      // touch lands, with no question about the list. Left to the panel, a pull
+      // from the title waited for the list to be at its top, and did nothing
+      // once the list had scrolled.
+      expect(header).not.toBe(panel);
+      expect('onMoveShouldSetPanResponderCapture' in header).toBe(false);
+
+      const list = sheetPanel(tree).find((node) => String(node.type) === 'scrollview');
+      renderer.act(() => {
+        list.props.onScroll({ nativeEvent: { contentOffset: { y: 120 } } });
+      });
+      // Scrolled into the list, a downward pull on the panel is the list's to scroll back.
+      expect(panel.onMoveShouldSetPanResponderCapture(touch, { dy: 12, dx: 0 })).toBe(false);
+      // The row still takes the touch-down, and a pull that began on its close
+      // button, which reaches the row as a move.
+      expect(header.onStartShouldSetPanResponder(touch, { dy: 0, dx: 0 })).toBe(true);
+      expect(header.onMoveShouldSetPanResponder(touch, { dy: 12, dx: 0 })).toBe(true);
+
+      renderer.act(() => {
+        header.onPanResponderGrant(touch, { dy: 0, dx: 0 });
+        header.onPanResponderMove(touch, { dy: 140, dx: 0 });
+        header.onPanResponderRelease(touch, { dy: 140, dx: 0, vy: 0 });
+      });
+      expect(isOpen(tree)).toBe(false);
+    });
+
+    it('keeps its panel taking a touch-down, as a sheet in a Modal has to, and its close button a press', () => {
+      const tree = openParameters();
+      const panel = sheetPanel(tree).props.panConfig as Config;
+
+      // It holds no field, so it is still a Modal, and the two go together:
+      // inside a Modal on Android a view that declines a touch-down is never
+      // asked about the moves after it, so the panel takes a touch nothing
+      // below it wanted. The three sheets drawn in the app's own window ask
+      // their panels to wait instead; moved there, this one would have to too.
+      expect(ancestors(sheetPanel(tree)).some((node) => String(node.type) === 'modal')).toBe(true);
+      expect(panel.onStartShouldSetPanResponder(touch, { dy: 0, dx: 0 })).toBe(true);
+
+      // The way out sits in the title row, below the row's responder: a press
+      // that lands on it is asked of the button first.
+      const close = tree.root.findByProps({ accessibilityLabel: 'Close generation parameters' });
+      expect(String(close.type)).not.toBe('view');
+      expect(ancestors(close)).toContain(titleRow(tree));
+      expect(titleRow(tree).props.panConfig).not.toBe(panel);
+      renderer.act(() => {
+        close.props.onPress();
+      });
+      expect(isOpen(tree)).toBe(false);
+    });
+  });
+
   it('keeps model selection out of the parameter sheet', () => {
     authState.credits = 1_234;
     let tree: renderer.ReactTestRenderer | undefined;
