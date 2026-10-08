@@ -83,6 +83,8 @@ const APP_SOURCE_TOOL: SourceToolOption = sourceTool({
     { slug: 'minimax-h3', label: 'MiniMax H3' },
     { slug: 'gpt-image-2.5-flare', label: 'GPT Image 2.5 Flare' },
     { slug: 'gpt-image-2.5-sunburst', label: 'GPT Image 2.5 Sunburst' },
+    { slug: 'seedream-5-flash', label: 'Seedream 5 Flash' },
+    { slug: 'qwen-image-2.1', label: 'Qwen Image 2.1' },
     // Registration audit 2026-08-16: first-party attribution catalog had drifted
     // to 16 of 29 models; these were the missing shipped models.
     { slug: 'seedream-5-lite', label: 'Seedream 5 Lite' },
@@ -98,6 +100,11 @@ const APP_SOURCE_TOOL: SourceToolOption = sourceTool({
     { slug: 'happyhorse-1.1', label: 'HappyHorse 1.1' },
     { slug: 'gemini-omni-video', label: 'Gemini Omni Video' },
     { slug: 'hailuo-2.3', label: 'Hailuo 2.3' },
+    { slug: 'gemini-omni-1.1-flash', label: 'Gemini Omni 1.1 Flash' },
+    { slug: 'wan-3.0', label: 'Wan 3.0' },
+    { slug: 'wan-3.0-prime', label: 'Wan 3.0 Prime' },
+    { slug: 'grok-imagine-video-1.5', label: 'Grok Imagine Video 1.5' },
+    { slug: 'pixverse-v6', label: 'PixVerse V6' },
   ],
   supportedMediaKinds: ['image', 'video'],
   catalogTier: 'featured',

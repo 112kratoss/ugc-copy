@@ -48,7 +48,16 @@ describe('advertised capabilities are reachable', () => {
     },
   );
 
-  it.each(['seedance-2-5', 'kling-o3', 'minimax-h3'])(
+  it.each([
+    'seedance-2-5',
+    'kling-o3',
+    'minimax-h3',
+    'gemini-omni-1.1-flash',
+    'wan-3.0',
+    'wan-3.0-prime',
+    'grok-imagine-video-1.5',
+    'pixverse-v6',
+  ])(
     '%s can quote a run that attaches its published references',
     (modelId) => {
       const published = descriptorFor(modelId).inputs.imageReferences?.max ?? 0;

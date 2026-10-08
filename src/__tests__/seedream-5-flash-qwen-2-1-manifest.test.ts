@@ -6,17 +6,17 @@ import { describe, expect, it } from 'vitest';
 import {
   buildGenerationModelCatalog,
   quoteGenerationModel,
-  CatalogError,
   type GenerationModelQuoteInput,
 } from '@/lib/generation-model-catalog';
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 
 /**
- * Release 2026-09-11-gpt-image-2-5: GPT Image 2.5 Flare and Sunburst join the catalog next to
- * GPT Image 2, which stays (evidence: docs/model-api-references/gpt-image-2-5.md). Every entry must
- * equal the code build byte for byte — the shadow verifier diffs projections — so entries are
- * compared against buildGenerationModelCatalog and buildCodeGenerationModelOperations, while
- * provider ids and prices are pinned to the evidence file.
+ * Release 2026-10-08-seedream-5-flash-qwen-2-1: Seedream 5 Flash and Qwen Image 2.1 join the
+ * catalog (evidence: docs/model-api-references/seedream-5-flash.md and qwen-image-2-1.md).
+ * Every entry must equal the code build byte for byte — the shadow verifier diffs projections —
+ * so entries are compared against buildGenerationModelCatalog and
+ * buildCodeGenerationModelOperations, while provider ids and prices are pinned to the evidence
+ * files.
  */
 
 interface ManifestEntry {
@@ -49,10 +49,10 @@ function read(name: string): Manifest {
   ), 'utf8')) as Manifest;
 }
 
-const manifest = read('2026-09-11-gpt-image-2-5.json');
-const base = read('2026-09-04-reference-audit.json');
+const manifest = read('2026-10-08-seedream-5-flash-qwen-2-1.json');
+const base = read('2026-09-11-gpt-image-2-5.json');
 
-const ADDED = ['gpt-image-2.5-flare', 'gpt-image-2.5-sunburst'];
+const ADDED = ['qwen-image-2.1', 'seedream-5-flash'];
 
 const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
 const operations = new Map(
@@ -75,31 +75,20 @@ function imageQuote(modelId: string, settings: Record<string, string>, images = 
   return { kind: 'image', modelId, settings, inputCounts: images > 0 ? { images } : {} };
 }
 
-function fieldErrorsFor(input: GenerationModelQuoteInput): string {
-  try {
-    quoteGenerationModel(input);
-  } catch (error) {
-    if (error instanceof CatalogError) return Object.values(error.fieldErrors).join(' ');
-    throw error;
-  }
-  throw new Error('expected the quote to be rejected');
-}
-
-describe('gpt-image-2-5 release', () => {
+describe('seedream-5-flash-qwen-2-1 release', () => {
   it('chains onto the release production is running', () => {
-    expect(manifest.release.revision).toBe('gpt-image-2-5-20260911');
+    expect(manifest.release.revision).toBe('seedream-5-flash-qwen-2-1-20261008');
     expect(manifest.release.basedOnRevision).toBe(base.release.revision);
     expect(manifest.release.schemaVersion).toBe(2);
     expect(manifest.mode).toBe('clone-active');
   });
 
-  it('adds the two tiers and replaces no existing model, GPT Image 2 included', () => {
+  it('adds the two image models and replaces no existing model', () => {
     expect(manifest.entries.map((entry) => entry.modelId).sort()).toEqual(ADDED);
     expect(manifest.addsModelIds).toEqual(ADDED);
-    // expectedModelIds guards the release being CLONED, so it is the base's inventory exactly;
-    // the base added nothing, so its own expectedModelIds is what production runs.
-    expect(manifest.expectedModelIds).toEqual(base.expectedModelIds);
-    expect(manifest.expectedModelIds).toContain('gpt-image-2');
+    // expectedModelIds guards the release being CLONED: the base's inventory plus what the
+    // base itself added, which is what production runs.
+    expect([...manifest.expectedModelIds].sort()).toEqual([...base.expectedModelIds, ...(base.addsModelIds ?? [])].sort());
     for (const added of ADDED) expect(manifest.expectedModelIds).not.toContain(added);
   });
 
@@ -124,14 +113,14 @@ describe('gpt-image-2-5 release', () => {
     );
   });
 
-  it('routes each tier to the provider ids its spec declares, on the declarative adapter', () => {
-    expect(entryFor('gpt-image-2.5-flare').providerModelMap).toEqual({
-      text: 'gpt-image-2-5-flare-text-to-image',
-      reference: 'gpt-image-2-5-flare-image-to-image',
+  it('routes each model to the provider ids its spec declares, on the declarative adapter', () => {
+    expect(entryFor('seedream-5-flash').providerModelMap).toEqual({
+      text: 'seedream/5-flash-text-to-image',
+      reference: 'seedream/5-flash-image-to-image',
     });
-    expect(entryFor('gpt-image-2.5-sunburst').providerModelMap).toEqual({
-      text: 'gpt-image-2-5-sunburst-text-to-image',
-      reference: 'gpt-image-2-5-sunburst-image-to-image',
+    expect(entryFor('qwen-image-2.1').providerModelMap).toEqual({
+      text: 'qwen2-1/text-to-image',
+      reference: 'qwen2-1/image-to-image',
     });
     for (const modelId of ADDED) {
       const entry = entryFor(modelId);
@@ -142,9 +131,9 @@ describe('gpt-image-2-5 release', () => {
     }
   });
 
-  it('stays readable by every shipped app and sorts after the existing image models', () => {
-    // The image models production ran before this release (its expectedModelIds), not the
-    // code build of the day: Seedream 5 Flash and Qwen Image 2.1 sort after these two.
+  it('stays readable by every shipped app and sorts after the image models that preceded it', () => {
+    // The models production ran before this release, not whatever the code build holds
+    // today: a later model sorts after these two and must not fail this pin.
     const existingSortOrders = catalog.models
       .filter((model) => model.kind === 'image' && manifest.expectedModelIds.includes(model.id))
       .map((model) => model.sortOrder);
@@ -160,29 +149,37 @@ describe('gpt-image-2-5 release', () => {
       expect(published.controls.map((control) => [control.key, control.type]), modelId).toEqual([
         ['aspectRatio', 'choice'],
         ['resolution', 'choice'],
+        ['outputFormat', 'choice'],
       ]);
     }
   });
 
-  it('quotes both tiers at 6 / 10 / 16 credits, references included', () => {
-    for (const modelId of ADDED) {
-      expect(quoteGenerationModel(imageQuote(modelId, { aspectRatio: '16:9', resolution: '1K' })).costCredits).toBe(6);
-      expect(quoteGenerationModel(imageQuote(modelId, { aspectRatio: '16:9', resolution: '2K' })).costCredits).toBe(10);
-      expect(quoteGenerationModel(imageQuote(modelId, { aspectRatio: '16:9', resolution: '4K' })).costCredits).toBe(16);
-      expect(quoteGenerationModel(imageQuote(modelId, { aspectRatio: '16:9', resolution: '4K' }, 16)).costCredits).toBe(16);
-    }
+  it('quotes Seedream 5 Flash at 4 credits at either size, references free', () => {
+    // Kie's 3.24 is the table value (models.ts, the evidence file); the quote bills whole
+    // credits and rounds up, as it bills Seedream 5 Lite's 5.5 as 6 and Wan 2.7 Image's 4.8 as 5.
+    expect(quoteGenerationModel(imageQuote('seedream-5-flash', { aspectRatio: '16:9', resolution: '1K' })).costCredits).toBe(4);
+    expect(quoteGenerationModel(imageQuote('seedream-5-flash', { aspectRatio: '16:9', resolution: '2K' })).costCredits).toBe(4);
+    expect(quoteGenerationModel(imageQuote('seedream-5-flash', { aspectRatio: '1:1', resolution: '2K' }, 10)).costCredits).toBe(4);
+    expect(quoteGenerationModel(imageQuote('seedream-5-lite', { aspectRatio: '1:1', resolution: '2K' })).costCredits).toBe(6);
   });
 
-  it('refuses the resolutions Kie cannot render, and names the cap', () => {
-    for (const modelId of ADDED) {
-      for (const aspectRatio of ['27:16', '16:27', '9:8', '8:9', 'auto']) {
-        expect(fieldErrorsFor(imageQuote(modelId, { aspectRatio, resolution: '2K' })), `${modelId} ${aspectRatio}`)
-          .toMatch(/at 1K only/);
-        expect(() => quoteGenerationModel(imageQuote(modelId, { aspectRatio, resolution: '1K' }))).not.toThrow();
-      }
-      expect(fieldErrorsFor(imageQuote(modelId, { aspectRatio: '1:1', resolution: '4K' }))).toMatch(/at 1K or 2K only/);
-      expect(() => quoteGenerationModel(imageQuote(modelId, { aspectRatio: '1:1', resolution: '2K' }))).not.toThrow();
-      expect(() => quoteGenerationModel(imageQuote(modelId, { aspectRatio: '21:9', resolution: '4K' }))).not.toThrow();
-    }
+  it('quotes Qwen Image 2.1 at 4 credits at 1K and 8 at 2K, references free', () => {
+    expect(quoteGenerationModel(imageQuote('qwen-image-2.1', { aspectRatio: '9:21', resolution: '1K' })).costCredits).toBe(4);
+    expect(quoteGenerationModel(imageQuote('qwen-image-2.1', { aspectRatio: '9:21', resolution: '2K' })).costCredits).toBe(8);
+    expect(quoteGenerationModel(imageQuote('qwen-image-2.1', { aspectRatio: '1:1', resolution: '2K' }, 10)).costCredits).toBe(8);
+  });
+
+  it('offers only the ratios and sizes the specs list', () => {
+    const flash = descriptor('seedream-5-flash');
+    const ratios = (key: string, model: typeof flash) => {
+      const control = model.controls.find((candidate) => candidate.key === key);
+      return control?.type === 'choice' ? control.options.map((option) => option.value) : [];
+    };
+    expect(ratios('aspectRatio', flash)).toEqual(['1:1', '4:3', '3:4', '16:9', '9:16', '2:3', '3:2', '21:9']);
+    // The spec's 1.5K is left out: not a size either client's ImageResolution names, and no cheaper.
+    expect(ratios('resolution', flash)).toEqual(['1K', '2K']);
+    const qwen = descriptor('qwen-image-2.1');
+    expect(ratios('aspectRatio', qwen)).toEqual(['1:1', '4:3', '3:4', '3:2', '2:3', '16:9', '9:16', '21:9', '9:21']);
+    expect(ratios('resolution', qwen)).toEqual(['1K', '2K']);
   });
 });

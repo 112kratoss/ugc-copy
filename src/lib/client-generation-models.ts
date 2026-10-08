@@ -268,6 +268,34 @@ export const IMAGE_MODELS = {
     resolutions: ['1K', '2K', '4K'] as const,
     outputFormats: ['jpg'] as const,
   },
+  'seedream-5-flash': {
+    id: 'seedream-5-flash' as const,
+    displayName: 'Seedream 5 Flash',
+    description: 'Fastest Seedream tier: generation and multi-image editing at one flat price',
+    badge: 'Value',
+    badgeColor: 'from-cyan-500 to-sky-500',
+    accentColor: 'blue',
+    maxImages: 10,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: true,
+    aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16', '2:3', '3:2', '21:9'] as const,
+    resolutions: ['1K', '2K'] as const,
+    outputFormats: ['jpg', 'png'] as const,
+  },
+  'qwen-image-2.1': {
+    id: 'qwen-image-2.1' as const,
+    displayName: 'Qwen Image 2.1',
+    description: 'Low-cost Qwen generation and editing with 2K output',
+    badge: 'Value',
+    badgeColor: 'from-emerald-500 to-teal-500',
+    accentColor: 'blue',
+    maxImages: 10,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: true,
+    aspectRatios: ['1:1', '4:3', '3:4', '3:2', '2:3', '16:9', '9:16', '21:9', '9:21'] as const,
+    resolutions: ['1K', '2K'] as const,
+    outputFormats: ['jpg', 'png'] as const,
+  },
 } as const;
 
 export type ImageModelId = keyof typeof IMAGE_MODELS;
@@ -514,6 +542,70 @@ export const VIDEO_MODELS = {
     resolutions: ['768P', '2K'] as const,
     modeOptions: [] as const,
   },
+  'gemini-omni-1.1-flash': {
+    id: 'gemini-omni-1.1-flash' as const,
+    displayName: 'Gemini Omni 1.1 Flash',
+    description: 'Faster Gemini Omni with start and end frames, references, and 360p to 4K output',
+    supportsMultiShot: false,
+    supportsSound: false,
+    supportsFixedLens: false,
+    aspectRatios: ['16:9', '9:16'] as const,
+    durations: [4, 6, 8, 10] as const,
+    resolutions: ['360p', '720p', '1080p', '4k'] as const,
+    modeOptions: [] as const,
+  },
+  'wan-3.0': {
+    id: 'wan-3.0' as const,
+    displayName: 'Wan 3.0',
+    description: 'Wan 3.0 with frames, up to ten references, generated audio, and clips up to 30 seconds',
+    supportsMultiShot: false,
+    supportsSound: true,
+    supportsFixedLens: false,
+    aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] as const,
+    durations: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30] as const,
+    singleShotDurationRange: { min: 2, max: 30, default: 5 } as const,
+    resolutions: ['480P', '720P', '1080P'] as const,
+    modeOptions: [] as const,
+  },
+  'wan-3.0-prime': {
+    id: 'wan-3.0-prime' as const,
+    displayName: 'Wan 3.0 Prime',
+    description: 'High-speed Wan 3.0 tier with the same frames, references, audio, and 30-second clips',
+    supportsMultiShot: false,
+    supportsSound: true,
+    supportsFixedLens: false,
+    aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] as const,
+    durations: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30] as const,
+    singleShotDurationRange: { min: 2, max: 30, default: 5 } as const,
+    resolutions: ['480P', '720P', '1080P'] as const,
+    modeOptions: [] as const,
+  },
+  'grok-imagine-video-1.5': {
+    id: 'grok-imagine-video-1.5' as const,
+    displayName: 'Grok Imagine Video 1.5',
+    description: 'xAI preview tier with up to seven reference images and 1 to 15 second clips',
+    supportsMultiShot: false,
+    supportsSound: false,
+    supportsFixedLens: false,
+    aspectRatios: ['16:9', '9:16', '1:1', '3:2', '2:3'] as const,
+    durations: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+    singleShotDurationRange: { min: 1, max: 15, default: 8 } as const,
+    resolutions: ['480p', '720p'] as const,
+    modeOptions: [] as const,
+  },
+  'pixverse-v6': {
+    id: 'pixverse-v6' as const,
+    displayName: 'PixVerse V6',
+    description: 'PixVerse video from text, a start frame, a frame pair, or named references, with optional audio',
+    supportsMultiShot: false,
+    supportsSound: true,
+    supportsFixedLens: false,
+    aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3', '21:9'] as const,
+    durations: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+    singleShotDurationRange: { min: 1, max: 15, default: 5 } as const,
+    resolutions: ['360p', '540p', '720p', '1080p'] as const,
+    modeOptions: [] as const,
+  },
 } as const;
 
 export type VideoModelId = keyof typeof VIDEO_MODELS;
@@ -547,6 +639,12 @@ export function getVideoElementSupport(
       : { enabled: false, maxElements: 0, maxNamed: 0, reason: 'Reusable references require Veo Lite or Fast.' };
   }
   if (modelId === 'grok-imagine-video') return { enabled: true, maxElements: 1, maxNamed: 1, reason: null };
+  // 7 image_urls (Gemini Omni 1.1 Flash, Grok 1.5 Preview) and 7 image_references (PixVerse V6).
+  if (modelId === 'gemini-omni-1.1-flash' || modelId === 'grok-imagine-video-1.5' || modelId === 'pixverse-v6') {
+    return { enabled: true, maxElements: 7, maxNamed: 7, reason: null };
+  }
+  // Wan 3.0's reference_image_urls takes 10 where Wan 2.7's reference mode stops at 5.
+  if (modelId === 'wan-3.0' || modelId === 'wan-3.0-prime') return { enabled: true, maxElements: 10, maxNamed: 10, reason: null };
   if (modelId === 'kling-3.0-video') return { enabled: false, maxElements: 0, maxNamed: 0, reason: 'Reusable image references are not available for Kling yet.' };
   return { enabled: false, maxElements: 0, maxNamed: 0, reason: 'Reusable references are not available for this model yet.' };
 }
@@ -575,7 +673,12 @@ export function getVideoReferenceSupport(modelId: VideoModelId): { videos: numbe
     case 'minimax-h3':
       return { videos: 3, audios: 3 };
     case 'gemini-omni-video':
+    case 'gemini-omni-1.1-flash':
       return { videos: 1, audios: 0 };
+    // wan/3-0-video: 5 reference clips and 5 audio files, 15 s each kind in total.
+    case 'wan-3.0':
+    case 'wan-3.0-prime':
+      return { videos: 5, audios: 5 };
     // Kling's slot carries named video elements rather than plain reference clips, but
     // the canvas routes both through the reference-video handle.
     case 'kling-3.0-video':

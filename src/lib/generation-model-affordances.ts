@@ -183,14 +183,14 @@ function legacyFallbackAffordances(
       max: isKling ? 0 : references.videos,
       maxDurationSeconds: modelId === 'seedance-2-5'
         ? 30
-        : (modelId.startsWith('seedance-2') || modelId === 'minimax-h3' ? 15 : null),
+        : (modelId.startsWith('seedance-2') || modelId === 'minimax-h3' || modelId === 'wan-3.0' || modelId === 'wan-3.0-prime' ? 15 : null),
     },
     referenceAudios: { max: references.audios },
     frames: {
       start: true,
       // kling-o3 takes a single start image and no end frame; it was missing from this
       // list, so the surface offered an end-frame slot the model cannot use.
-      end: !['grok-imagine-video', 'kling-3.0-turbo', 'hailuo-2.3', 'happyhorse-1.1', 'gemini-omni-video', 'kling-o3'].includes(modelId),
+      end: !['grok-imagine-video', 'grok-imagine-video-1.5', 'kling-3.0-turbo', 'hailuo-2.3', 'happyhorse-1.1', 'gemini-omni-video', 'kling-o3'].includes(modelId),
       startRequired: modelId === 'hailuo-2.3',
     },
     combineFramesWithReferences: modelId === 'wan-2.7' && activeMode === 'elements',

@@ -120,6 +120,7 @@ import { loadGenerationModelOperationalConfig } from '@/lib/generation-model-cat
 import {
   KLING_26_IMAGE_ORIENTATION_MAX_DURATION_SECONDS,
   resolveProviderModelId,
+  WAN_3_REFERENCE_MAX_DURATION_SECONDS,
   WAN_REFERENCE_MAX_DURATION_SECONDS,
   type GenerationModelOperationalConfig,
 } from '@/lib/generation-model-runtime';
@@ -1391,6 +1392,17 @@ export function getKieImageModelId(model: ImageModelId, referenceCount: number):
   // Character references are mandatory, so both admission modes hit the same endpoint.
   if (model === 'ideogram-character') return 'ideogram/character';
 
+  // Verified 2026-10-08 against docs.kie.ai/market/seedream/5-flash-*.md.
+  if (model === 'seedream-5-flash') {
+    return referenceCount > 0 ? 'seedream/5-flash-image-to-image' : 'seedream/5-flash-text-to-image';
+  }
+
+  // Qwen Image 2.1's vendor segment is `qwen2-1`, dashed, not the dotted app id. Verified
+  // 2026-10-08 against docs.kie.ai/market/qwen2-1/text-to-image.md and .../image-to-image.md.
+  if (model === 'qwen-image-2.1') {
+    return referenceCount > 0 ? 'qwen2-1/image-to-image' : 'qwen2-1/text-to-image';
+  }
+
   // Everything else sends the app id unchanged, which is correct only because
   // those ids are byte-identical to the provider's (nano-banana-2,
   // nano-banana-2-lite, nano-banana-pro, z-image). Adding a model whose
@@ -2322,7 +2334,10 @@ export async function startVideoGeneration(params: {
   const supportsMultimodalReferences = isSeedance2Family
     || model === 'wan-2.7'
     || model === 'gemini-omni-video'
-    || model === 'minimax-h3';
+    || model === 'minimax-h3'
+    || model === 'gemini-omni-1.1-flash'
+    || model === 'wan-3.0'
+    || model === 'wan-3.0-prime';
   const resolvedReferenceImageUrls = normalizedReferences.length > 0
     ? await resolveMediaUrls(
         supabase,
@@ -2549,7 +2564,7 @@ export async function startVideoGeneration(params: {
     );
   }
   const frameImageUrls = [startFrameUrl, endFrameUrl].filter((url): url is string => Boolean(url));
-  const grokVideoImageUrls = model === 'grok-imagine-video'
+  const grokVideoImageUrls = model === 'grok-imagine-video' || model === 'grok-imagine-video-1.5'
     ? (
         resolvedReferenceImageUrls.length > 0
           ? resolvedReferenceImageUrls
@@ -2571,7 +2586,7 @@ export async function startVideoGeneration(params: {
     );
   }
 
-  if ((model === 'kling-3.0-turbo' || model === 'hailuo-2.3') && frameImageUrls.length > 1) {
+  if ((model === 'kling-3.0-turbo' || model === 'hailuo-2.3' || model === 'grok-imagine-video-1.5') && frameImageUrls.length > 1) {
     throw new GenerationServiceError(
       `${selectedModel.displayName} supports a start frame only.`,
       400
@@ -2585,6 +2600,48 @@ export async function startVideoGeneration(params: {
   if (model === 'grok-imagine-video' && grokVideoImageUrls.length > 1) {
     throw new GenerationServiceError(
       'Grok Imagine Video supports up to 1 image reference per run.',
+      400
+    );
+  }
+
+  // google/gemini-omni-flash-1-1: one video_list item, "occupying two image slots" of
+  // seven; and both image_urls and video_list are "mutually exclusive with the
+  // first-frame image".
+  if (model === 'gemini-omni-1.1-flash' && resolvedReferenceVideoUrls.length > 1) {
+    throw new GenerationServiceError('Gemini Omni 1.1 Flash supports one reference video per run.', 400);
+  }
+  if (model === 'gemini-omni-1.1-flash' && totalReferenceImageCount + (resolvedReferenceVideoUrls.length * 2) > 7) {
+    throw new GenerationServiceError('Gemini Omni 1.1 Flash supports seven reference slots; a video uses two.', 400);
+  }
+  // wan/3-0-video: reference_*_urls "Cannot be provided together with the first-frame /
+  // last-frame parameters"; up to 5 clips and 5 audio files; and with reference clips
+  // "input video duration + output duration ≤ 30", so the output stays at 15 s.
+  const isWan3 = model === 'wan-3.0' || model === 'wan-3.0-prime';
+  if (isWan3 && resolvedReferenceVideoUrls.length > videoInputLimits.videos) {
+    throw new GenerationServiceError(
+      `${selectedModel.displayName} supports up to ${videoInputLimits.videos} reference videos per run.`,
+      400
+    );
+  }
+  if (isWan3 && resolvedReferenceAudioUrls.length > videoInputLimits.audios) {
+    throw new GenerationServiceError(
+      `${selectedModel.displayName} supports up to ${videoInputLimits.audios} reference audio files per run.`,
+      400
+    );
+  }
+  if (isWan3
+    && (totalReferenceImageCount > 0 || resolvedReferenceVideoUrls.length > 0 || resolvedReferenceAudioUrls.length > 0)
+    && duration > WAN_3_REFERENCE_MAX_DURATION_SECONDS) {
+    throw new GenerationServiceError(
+      `${selectedModel.displayName} reference runs may be at most ${WAN_3_REFERENCE_MAX_DURATION_SECONDS} seconds, so the clip and its references fit in 30.`,
+      400
+    );
+  }
+  if ((isWan3 || model === 'gemini-omni-1.1-flash')
+    && frameImageUrls.length > 0
+    && (resolvedReferenceVideoUrls.length > 0 || resolvedReferenceAudioUrls.length > 0)) {
+    throw new GenerationServiceError(
+      `${selectedModel.displayName} takes reference clips or frames, not both in one run.`,
       400
     );
   }
@@ -2679,6 +2736,7 @@ export async function startVideoGeneration(params: {
     resolution,
     hasReferenceVideo: resolvedReferenceVideoUrls.length > 0,
     hasReferenceImage: resolvedReferenceImageUrls.length > 0 || frameImageUrls.length > 0,
+    hasReusableReference,
   });
   const cost = resolveQuotedGenerationCost(computedCost, quotedCostCredits);
 
@@ -2920,6 +2978,79 @@ export async function startVideoGeneration(params: {
         input.ratio = aspectRatio;
       }
       body = { model: providerModelId, input };
+    } else if (selectedModel.provider === 'wan-3') {
+      // wan/3-0-video and wan/3-0-video-prime share one body
+      // (docs/model-api-references/wan-3-0.md, 2026-10-08): frames travel as
+      // first_frame_url and last_frame_url, references as reference_*_urls, never
+      // together; `audio` is the sound toggle; resolution is spelled 480P/720P/1080P
+      // and the 15 s ceiling on reference runs is applied above. The ratio is left to
+      // the model ("adaptive") when a frame sets it.
+      const input: Record<string, unknown> = {
+        prompt: compiledPrompt,
+        resolution,
+        duration,
+        audio: soundEnabled,
+      };
+      if (effectiveReferenceMode === 'references') {
+        input.aspect_ratio = aspectRatio;
+        if (providerReferenceImageUrls.length > 0) input.reference_image_urls = providerReferenceImageUrls;
+        if (resolvedReferenceVideoUrls.length > 0) input.reference_video_urls = resolvedReferenceVideoUrls;
+        if (resolvedReferenceAudioUrls.length > 0) input.reference_audio_urls = resolvedReferenceAudioUrls;
+      } else if (frameImageUrls.length > 0) {
+        input.first_frame_url = frameImageUrls[0];
+        if (frameImageUrls[1]) input.last_frame_url = frameImageUrls[1];
+      } else {
+        input.aspect_ratio = aspectRatio;
+      }
+      body = { model: providerModelId, input };
+    } else if (selectedModel.provider === 'pixverse') {
+      // pixverse-v6 (docs/model-api-references/pixverse-v6.md, 2026-10-08): four
+      // endpoints share `quality`, `duration` and `generate_audio_switch`. Text and
+      // reference runs take `aspect_ratio`; a start frame goes to image-to-video as the
+      // one `image_urls` entry; a frame pair to transition; named pictures to
+      // reference-to-video as `image_references`, whose `ref_name` is the @handle the
+      // prompt mentions, so the provider resolves the mention itself.
+      const pixverseVariant = providerReferenceImageUrls.length > 0
+        ? 'reference'
+        : frameImageUrls.length > 1
+          ? 'transition'
+          : frameImageUrls.length === 1
+            ? 'image'
+            : 'text';
+      const pixverseProviderIds = {
+        reference: 'pixverse-v6/reference-to-video',
+        transition: 'pixverse-v6/transition',
+        image: 'pixverse-v6/image-to-video',
+        text: 'pixverse-v6/text-to-video',
+      } as const;
+      providerModelId = resolveProviderModelId(runtimeConfig, pixverseVariant, pixverseProviderIds[pixverseVariant]);
+      const input: Record<string, unknown> = {
+        prompt: compiledPrompt,
+        quality: resolution,
+        duration,
+        generate_audio_switch: soundEnabled,
+      };
+      if (pixverseVariant === 'reference') {
+        input.aspect_ratio = aspectRatio;
+        input.image_references = providerReferenceImageUrls.map((url, index) => {
+          const handle = normalizedReferences.length > 0
+            ? normalizedReferences[index]?.handle
+            : normalizedElements[index]?.handle;
+          return {
+            image_url: url,
+            type: 'subject',
+            ...(handle ? { ref_name: handle.replace(/^@/, '').slice(0, 30) } : {}),
+          };
+        });
+      } else if (pixverseVariant === 'transition') {
+        input.first_frame_image_url = frameImageUrls[0];
+        input.last_frame_image_url = frameImageUrls[1];
+      } else if (pixverseVariant === 'image') {
+        input.image_urls = [frameImageUrls[0]];
+      } else {
+        input.aspect_ratio = aspectRatio;
+      }
+      body = { model: providerModelId, input };
     } else if (selectedModel.provider === 'happyhorse') {
       const input: Record<string, unknown> = {
         prompt: compiledPrompt,
@@ -2936,6 +3067,28 @@ export async function startVideoGeneration(params: {
       } else {
         providerModelId = resolveProviderModelId(runtimeConfig, 'text', 'happyhorse-1-1/text-to-video');
         input.aspect_ratio = aspectRatio;
+      }
+      body = { model: providerModelId, input };
+    } else if (model === 'gemini-omni-1.1-flash') {
+      // google/gemini-omni-flash-1-1 (docs/model-api-references/gemini-omni-1-1-flash.md,
+      // 2026-10-08): the frame fields are "mutually exclusive" with image_urls and
+      // video_list, a lone last frame is refused above, and the unpriced audio_ids and
+      // character_ids helpers are not offered.
+      providerModelId = resolveProviderModelId(runtimeConfig, 'default', 'google/gemini-omni-flash-1-1');
+      const input: Record<string, unknown> = {
+        prompt: compiledPrompt,
+        duration: String(duration),
+        aspect_ratio: aspectRatio,
+        resolution,
+      };
+      if (frameImageUrls.length > 0) {
+        input.first_frame_url = frameImageUrls[0];
+        if (frameImageUrls[1]) input.last_frame_url = frameImageUrls[1];
+      } else {
+        if (providerReferenceImageUrls.length > 0) input.image_urls = providerReferenceImageUrls;
+        if (resolvedReferenceVideoUrls[0]) {
+          input.video_list = [{ url: resolvedReferenceVideoUrls[0], start: 0, ends: duration }];
+        }
       }
       body = { model: providerModelId, input };
     } else if (selectedModel.provider === 'gemini-omni') {
@@ -2969,15 +3122,22 @@ export async function startVideoGeneration(params: {
         },
       };
     } else if (selectedModel.provider === 'grok') {
+      // grok-imagine-video-1-5-preview (docs/model-api-references/grok-imagine-video-1-5.md,
+      // 2026-10-08) is one id for text and pictures, has no normal/fun mode, takes up
+      // to seven image_urls, and reads aspect_ratio only when the input is not a single
+      // picture ("This parameter is invalid if it is a single image").
+      const isGrokPreview = model === 'grok-imagine-video-1.5';
       providerModelId = resolveProviderModelId(
         runtimeConfig,
         grokVideoImageUrls.length > 0 ? 'image' : 'text',
-        grokVideoImageUrls.length > 0 ? 'grok-imagine/image-to-video' : 'grok-imagine/text-to-video',
+        isGrokPreview
+          ? 'grok-imagine-video-1-5-preview'
+          : (grokVideoImageUrls.length > 0 ? 'grok-imagine/image-to-video' : 'grok-imagine/text-to-video'),
       );
 
       const input: Record<string, unknown> = {
         prompt: compiledPrompt,
-        mode: providerMode,
+        ...(isGrokPreview ? {} : { mode: providerMode }),
         duration: totalDuration,
         resolution,
         nsfw_checker: true,
@@ -2985,6 +3145,7 @@ export async function startVideoGeneration(params: {
 
       if (grokVideoImageUrls.length > 0) {
         input.image_urls = grokVideoImageUrls;
+        if (isGrokPreview && grokVideoImageUrls.length > 1) input.aspect_ratio = aspectRatio;
       } else {
         input.aspect_ratio = aspectRatio;
       }

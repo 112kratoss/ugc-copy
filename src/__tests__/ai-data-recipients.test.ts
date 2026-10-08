@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { AI_MODEL_MAKER_BY_MODEL_ID, AI_MODEL_MAKERS, PROMPT_ENHANCER_MAKER } from '@/lib/ai-data-recipients';
+import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
 import { IMAGE_MODELS, MOTION_MODELS, SOUND_EFFECT_MODELS, VIDEO_MODELS, VOICEOVER_MODELS } from '@/lib/models';
 
 /**
@@ -15,10 +16,18 @@ import { IMAGE_MODELS, MOTION_MODELS, SOUND_EFFECT_MODELS, VIDEO_MODELS, VOICEOV
 const makerOf = AI_MODEL_MAKER_BY_MODEL_ID as Record<string, string>;
 const policyMakers = new Set<string>(AI_MODEL_MAKERS.map(({ maker }) => maker));
 
-// The mobile app names the makers of the models it can send to. It offers no
-// voice or sound models, so their maker is left out there.
-const mobileModelIds = [...Object.keys(IMAGE_MODELS), ...Object.keys(VIDEO_MODELS), ...Object.keys(MOTION_MODELS)];
-const allModelIds = [...mobileModelIds, ...Object.keys(VOICEOVER_MODELS), ...Object.keys(SOUND_EFFECT_MODELS)];
+// The mobile app names the makers of the models it can send to: the catalog's mobile
+// build, which leaves out a model whose `availability` keeps it on the web (PixVerse V6
+// until an app update names its maker). It offers no voice or sound models, so their
+// maker is left out there.
+const mobileModelIds = buildGenerationModelCatalog({ platform: 'mobile', schemaVersion: 2 }).models.map((model) => model.id);
+const allModelIds = [
+  ...Object.keys(IMAGE_MODELS),
+  ...Object.keys(VIDEO_MODELS),
+  ...Object.keys(MOTION_MODELS),
+  ...Object.keys(VOICEOVER_MODELS),
+  ...Object.keys(SOUND_EFFECT_MODELS),
+];
 
 function mobileMakers() {
   const source = readFileSync('ugc-mobile/lib/ai-data-consent.ts', 'utf8');

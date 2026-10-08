@@ -159,7 +159,7 @@ describe('descriptor-driven affordances', () => {
       expect(videoModelIds.filter((modelId) => takes(modelId) === '- - -').sort())
         .toEqual(['hailuo-2.3', 'kling-3.0-turbo', 'kling-3.0-video']);
       expect(videoModelIds.filter((modelId) => takes(modelId) === 'images - -')).toEqual(expect.arrayContaining(['seedance-1.5-pro', 'kling-o3', 'veo-3.1']));
-      expect(videoModelIds.filter((modelId) => takes(modelId) === 'images clips -')).toEqual(['gemini-omni-video']);
+      expect(videoModelIds.filter((modelId) => takes(modelId) === 'images clips -')).toEqual(['gemini-omni-video', 'gemini-omni-1.1-flash']);
       expect(videoModelIds.filter((modelId) => takes(modelId) === 'images clips tracks')).toEqual(expect.arrayContaining(['seedance-2', 'wan-2.7', 'minimax-h3']));
     });
 

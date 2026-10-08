@@ -947,6 +947,253 @@ describe('generation services', () => {
     expect(generations[0].duration).toBe(7);
   });
 
+  describe('the five Kie video models added 2026-10-08', () => {
+    // Bodies pinned to docs/model-api-references/{wan-3-0,pixverse-v6,gemini-omni-1-1-flash,
+    // grok-imagine-video-1-5}.md. Each run returns the provider body the mock saw.
+    async function providerBodyFor(params: Record<string, unknown>) {
+      const { startVideoGeneration } = await import('@/lib/generation-services');
+      let providerBody: Record<string, unknown> | null = null;
+      vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        providerBody = JSON.parse(String(init?.body));
+        return {
+          ok: true,
+          json: async () => ({ code: 200, data: { taskId: 'task-new-video-1' } }),
+        } as Response;
+      });
+      const { supabase } = createSupabaseMock();
+      await startVideoGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'A chef plates a dish under warm kitchen light.',
+        ...(params as object),
+      } as Parameters<typeof startVideoGeneration>[0]);
+      return providerBody as Record<string, unknown> | null;
+    }
+
+    it('sends Wan 3.0 its own body: audio, uppercase resolution, no 2.7 extender fields', async () => {
+      const body = await providerBodyFor({ model: 'wan-3.0', duration: 6, resolution: '720P', aspectRatio: '16:9', sound: true });
+      expect(body).toMatchObject({
+        model: 'wan/3-0-video',
+        input: {
+          prompt: 'A chef plates a dish under warm kitchen light.',
+          resolution: '720P',
+          duration: 6,
+          audio: true,
+          aspect_ratio: '16:9',
+        },
+      });
+      const input = (body as { input: Record<string, unknown> }).input;
+      for (const key of ['prompt_extend', 'negative_prompt', 'watermark', 'ratio', 'nsfw_checker', 'seed']) {
+        expect(input, key).not.toHaveProperty(key);
+      }
+    });
+
+    it('sends Wan 3.0 frames as first_frame_url and last_frame_url with the ratio left to the model', async () => {
+      const body = await providerBodyFor({
+        model: 'wan-3.0',
+        duration: 10,
+        resolution: '480P',
+        aspectRatio: '9:16',
+        startImageUrl: 'https://cdn.example.com/start.jpg',
+        endImageUrl: 'https://cdn.example.com/end.jpg',
+      });
+      expect(body).toMatchObject({
+        model: 'wan/3-0-video',
+        input: {
+          prompt: 'A chef plates a dish under warm kitchen light.',
+          resolution: '480P',
+          duration: 10,
+          audio: false,
+          first_frame_url: 'https://cdn.example.com/start.jpg',
+          last_frame_url: 'https://cdn.example.com/end.jpg',
+        },
+      });
+      expect((body as { input: Record<string, unknown> }).input).not.toHaveProperty('aspect_ratio');
+    });
+
+    it('sends Wan 3.0 Prime references as reference_*_urls and keeps a reference run to 15 s', async () => {
+      const body = await providerBodyFor({
+        model: 'wan-3.0-prime',
+        duration: 15,
+        resolution: '1080P',
+        aspectRatio: '1:1',
+        referenceMode: 'elements',
+        elements: [{ id: 'element-1', displayName: 'The chef', handle: '@chef', storagePath: null, sourceGenerationId: null }],
+        elementImageUrls: ['https://cdn.example.com/chef.jpg'],
+        referenceVideoUrls: ['https://cdn.example.com/plating.mp4'],
+        referenceAudioUrls: ['https://cdn.example.com/voice.mp3'],
+      });
+      expect(body).toMatchObject({
+        model: 'wan/3-0-video-prime',
+        input: {
+          resolution: '1080P',
+          duration: 15,
+          audio: false,
+          aspect_ratio: '1:1',
+          reference_image_urls: ['https://cdn.example.com/chef.jpg'],
+          reference_video_urls: ['https://cdn.example.com/plating.mp4'],
+          reference_audio_urls: ['https://cdn.example.com/voice.mp3'],
+        },
+      });
+      expect((body as { input: Record<string, unknown> }).input).not.toHaveProperty('first_frame_url');
+
+      await expect(providerBodyFor({
+        model: 'wan-3.0',
+        duration: 16,
+        resolution: '480P',
+        aspectRatio: '1:1',
+        referenceMode: 'elements',
+        referenceVideoUrls: ['https://cdn.example.com/plating.mp4'],
+      })).rejects.toThrow('reference runs may be at most 15 seconds');
+    });
+
+    it('routes PixVerse V6 by shape: text, start frame, frame pair, named references', async () => {
+      const common = { model: 'pixverse-v6', duration: 5, resolution: '540p', aspectRatio: '16:9', sound: true };
+
+      expect(await providerBodyFor(common)).toMatchObject({
+        model: 'pixverse-v6/text-to-video',
+        input: {
+          prompt: 'A chef plates a dish under warm kitchen light.',
+          quality: '540p',
+          duration: 5,
+          generate_audio_switch: true,
+          aspect_ratio: '16:9',
+        },
+      });
+
+      const startFrame = await providerBodyFor({ ...common, startImageUrl: 'https://cdn.example.com/start.jpg' });
+      expect(startFrame).toMatchObject({
+        model: 'pixverse-v6/image-to-video',
+        input: {
+          prompt: 'A chef plates a dish under warm kitchen light.',
+          quality: '540p',
+          duration: 5,
+          generate_audio_switch: true,
+          image_urls: ['https://cdn.example.com/start.jpg'],
+        },
+      });
+      // image-to-video and transition have no ratio field; the picture sets it.
+      expect((startFrame as { input: Record<string, unknown> }).input).not.toHaveProperty('aspect_ratio');
+
+      expect(await providerBodyFor({
+        ...common,
+        startImageUrl: 'https://cdn.example.com/start.jpg',
+        endImageUrl: 'https://cdn.example.com/end.jpg',
+      })).toMatchObject({
+        model: 'pixverse-v6/transition',
+        input: {
+          prompt: 'A chef plates a dish under warm kitchen light.',
+          quality: '540p',
+          duration: 5,
+          generate_audio_switch: true,
+          first_frame_image_url: 'https://cdn.example.com/start.jpg',
+          last_frame_image_url: 'https://cdn.example.com/end.jpg',
+        },
+      });
+
+      const reference = await providerBodyFor({
+        ...common,
+        prompt: '@chef lifts the plate toward the camera.',
+        referenceMode: 'elements',
+        elements: [{ id: 'element-1', displayName: 'The chef', handle: '@chef', storagePath: null, sourceGenerationId: null }],
+        elementImageUrls: ['https://cdn.example.com/chef.jpg'],
+      });
+      expect(reference).toMatchObject({
+        model: 'pixverse-v6/reference-to-video',
+        input: {
+          quality: '540p',
+          duration: 5,
+          generate_audio_switch: true,
+          aspect_ratio: '16:9',
+          image_references: [{ image_url: 'https://cdn.example.com/chef.jpg', type: 'subject', ref_name: 'chef' }],
+        },
+      });
+      // The compiled prompt keeps the @mention the provider resolves through ref_name.
+      expect(String((reference as { input: { prompt: string } }).input.prompt)).toContain('@chef lifts the plate');
+    });
+
+    it('sends Gemini Omni 1.1 Flash frames as a pair, or pictures and one clip, never both', async () => {
+      expect(await providerBodyFor({
+        model: 'gemini-omni-1.1-flash',
+        duration: 6,
+        resolution: '360p',
+        aspectRatio: '9:16',
+        startImageUrl: 'https://cdn.example.com/start.jpg',
+        endImageUrl: 'https://cdn.example.com/end.jpg',
+      })).toMatchObject({
+        model: 'google/gemini-omni-flash-1-1',
+        input: {
+          prompt: 'A chef plates a dish under warm kitchen light.',
+          duration: '6',
+          aspect_ratio: '9:16',
+          resolution: '360p',
+          first_frame_url: 'https://cdn.example.com/start.jpg',
+          last_frame_url: 'https://cdn.example.com/end.jpg',
+        },
+      });
+
+      const pictures = await providerBodyFor({
+        model: 'gemini-omni-1.1-flash',
+        duration: 8,
+        resolution: '4k',
+        aspectRatio: '16:9',
+        referenceMode: 'elements',
+        elements: [{ id: 'element-1', displayName: 'The chef', handle: '@chef', storagePath: null, sourceGenerationId: null }],
+        elementImageUrls: ['https://cdn.example.com/chef.jpg'],
+        referenceVideoUrls: ['https://cdn.example.com/plating.mp4'],
+      });
+      expect(pictures).toMatchObject({
+        model: 'google/gemini-omni-flash-1-1',
+        input: {
+          duration: '8',
+          resolution: '4k',
+          image_urls: ['https://cdn.example.com/chef.jpg'],
+          video_list: [{ url: 'https://cdn.example.com/plating.mp4', start: 0, ends: 8 }],
+        },
+      });
+      for (const key of ['first_frame_url', 'last_frame_url', 'audio_ids', 'character_ids']) {
+        expect((pictures as { input: Record<string, unknown> }).input, key).not.toHaveProperty(key);
+      }
+
+      await expect(providerBodyFor({
+        model: 'gemini-omni-1.1-flash',
+        duration: 4,
+        resolution: '720p',
+        aspectRatio: '16:9',
+        startImageUrl: 'https://cdn.example.com/start.jpg',
+        referenceVideoUrls: ['https://cdn.example.com/plating.mp4'],
+      })).rejects.toThrow('reference clips or frames, not both');
+    });
+
+    it('sends Grok Imagine Video 1.5 without a mode, and a ratio only when no single picture sets it', async () => {
+      expect(await providerBodyFor({ model: 'grok-imagine-video-1.5', duration: 3, resolution: '720p', aspectRatio: '3:2' })).toMatchObject({
+        model: 'grok-imagine-video-1-5-preview',
+        input: {
+          prompt: 'A chef plates a dish under warm kitchen light.',
+          duration: 3,
+          resolution: '720p',
+          nsfw_checker: true,
+          aspect_ratio: '3:2',
+        },
+      });
+
+      const single = await providerBodyFor({
+        model: 'grok-imagine-video-1.5',
+        duration: 15,
+        resolution: '480p',
+        aspectRatio: '3:2',
+        startImageUrl: 'https://cdn.example.com/start.jpg',
+      });
+      expect(single).toMatchObject({
+        model: 'grok-imagine-video-1-5-preview',
+        input: { duration: 15, resolution: '480p', image_urls: ['https://cdn.example.com/start.jpg'] },
+      });
+      expect((single as { input: Record<string, unknown> }).input).not.toHaveProperty('aspect_ratio');
+      expect((single as { input: Record<string, unknown> }).input).not.toHaveProperty('mode');
+    });
+  });
+
   it('keeps a template video recipe out of the generation row while sending it to the provider', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;
@@ -4162,6 +4409,41 @@ describe('generation services', () => {
         model: 'minimax-h3',
         settings: { duration: 5, resolution: '768P' },
         request: { model: 'minimax-h3/reference-to-video', input: { reference_image_urls: [REFERENCE] } },
+      },
+      // The five added 2026-10-08 (docs/model-api-references/*): one id each, except PixVerse's
+      // reference endpoint, where a named picture travels with its handle as ref_name.
+      {
+        label: 'Gemini Omni 1.1 Flash',
+        model: 'gemini-omni-1.1-flash',
+        settings: { duration: 4, resolution: '360p' },
+        request: { model: 'google/gemini-omni-flash-1-1', input: { image_urls: [REFERENCE] } },
+      },
+      {
+        label: 'Wan 3.0',
+        model: 'wan-3.0',
+        settings: { duration: 5, resolution: '480P' },
+        request: { model: 'wan/3-0-video', input: { reference_image_urls: [REFERENCE], aspect_ratio: '16:9' } },
+      },
+      {
+        label: 'Wan 3.0 Prime',
+        model: 'wan-3.0-prime',
+        settings: { duration: 5, resolution: '480P' },
+        request: { model: 'wan/3-0-video-prime', input: { reference_image_urls: [REFERENCE], aspect_ratio: '16:9' } },
+      },
+      {
+        label: 'Grok Imagine Video 1.5',
+        model: 'grok-imagine-video-1.5',
+        settings: { duration: 8, resolution: '480p' },
+        request: { model: 'grok-imagine-video-1-5-preview', input: { image_urls: [REFERENCE] } },
+      },
+      {
+        label: 'PixVerse V6',
+        model: 'pixverse-v6',
+        settings: { duration: 5, resolution: '360p' },
+        request: {
+          model: 'pixverse-v6/reference-to-video',
+          input: { image_references: [{ image_url: REFERENCE, type: 'subject', ref_name: 'lead' }], aspect_ratio: '16:9' },
+        },
       },
     ];
 

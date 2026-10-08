@@ -121,6 +121,30 @@ describe('kie-task-v1 image adapter parity with the legacy payload ladder', () =
     });
   });
 
+  it('seedream 5 flash sends its resolution as size, jpg as jpeg, and switches endpoints on references', () => {
+    // docs/model-api-references/seedream-5-flash.md, read 2026-10-08.
+    expect(build('seedream-5-flash', { ...BASE_SETTINGS, aspectRatio: '16:9', resolution: '2K' }).body).toEqual({
+      model: 'seedream/5-flash-text-to-image',
+      input: { prompt: PROMPT, aspect_ratio: '16:9', size: '2K', output_format: 'jpeg', nsfw_checker: true },
+    });
+    expect(build('seedream-5-flash', { ...BASE_SETTINGS, outputFormat: 'png' }, [REF_URL, REF_URL_2]).body).toEqual({
+      model: 'seedream/5-flash-image-to-image',
+      input: { prompt: PROMPT, aspect_ratio: '1:1', size: '1K', output_format: 'png', nsfw_checker: true, image_urls: [REF_URL, REF_URL_2] },
+    });
+  });
+
+  it('qwen image 2.1 names the ratio aspect_ratio, asks for the prompt rewrite, and switches endpoints on references', () => {
+    // docs/model-api-references/qwen-image-2-1.md, read 2026-10-08.
+    expect(build('qwen-image-2.1', { ...BASE_SETTINGS, aspectRatio: '9:21' }).body).toEqual({
+      model: 'qwen2-1/text-to-image',
+      input: { prompt: PROMPT, aspect_ratio: '9:21', resolution: '1K', output_format: 'jpeg', enhance_prompt: true, nsfw_checker: true },
+    });
+    expect(build('qwen-image-2.1', { ...BASE_SETTINGS, resolution: '2K' }, [REF_URL]).body).toEqual({
+      model: 'qwen2-1/image-to-image',
+      input: { prompt: PROMPT, aspect_ratio: '1:1', resolution: '2K', output_format: 'jpeg', enhance_prompt: true, nsfw_checker: true, image_urls: [REF_URL] },
+    });
+  });
+
   it('flux 2 pro keeps nsfw checker and switches provider id on references', () => {
     expect(build('flux-2-pro', BASE_SETTINGS).body).toEqual({
       model: 'flux-2/pro-text-to-image',

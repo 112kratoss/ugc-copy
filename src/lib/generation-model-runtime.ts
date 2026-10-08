@@ -53,6 +53,9 @@ const REFERENCE_VIDEO_SECONDS_CAPS: Record<string, number> = {
   'seedance-2-mini': 15,
   'seedance-2-5': 30,
   'minimax-h3': 15,
+  // wan/3-0-video: "up to 5 clips ... with a total duration ≤ 15 seconds".
+  'wan-3.0': 15,
+  'wan-3.0-prime': 15,
 };
 
 /**
@@ -69,6 +72,9 @@ const REFERENCE_AUDIO_SECONDS_CAPS: Record<string, number> = {
   'seedance-2-fast': 15,
   'seedance-2-mini': 15,
   'minimax-h3': 15,
+  // wan/3-0-video: "up to 5 clips ... with a total duration ≤ 15 seconds" for audio too.
+  'wan-3.0': 15,
+  'wan-3.0-prime': 15,
 };
 
 /**
@@ -89,10 +95,24 @@ const END_FRAME_NEEDS_START_FRAME: readonly string[] = [
   'wan-2.7',
   'kling-3.0-video',
   'veo-3.1',
+  // google/gemini-omni-flash-1-1: "The last-frame image cannot be used alone".
+  'gemini-omni-1.1-flash',
+  // wan/3-0-video: `last_frame_url` is "Use together with first_frame_url".
+  'wan-3.0',
+  'wan-3.0-prime',
+  // pixverse-v6/transition requires both frame fields; a lone end frame has no endpoint.
+  'pixverse-v6',
 ];
 
 /** wan/2-7-r2v declares `duration: min 2, max 10`; text and image-to-video allow 15. */
 export const WAN_REFERENCE_MAX_DURATION_SECONDS = 10;
+
+/**
+ * wan/3-0-video: "With reference videos: input video duration + output duration ≤ 30",
+ * and the clips may total 15 seconds, so a reference run keeps its output to 15 seconds
+ * where a text or frame run reaches 30.
+ */
+export const WAN_3_REFERENCE_MAX_DURATION_SECONDS = 15;
 
 /**
  * kling-2.6/motion-control: `character_orientation: image` is documented as "(max 10s
@@ -119,6 +139,11 @@ const VIDEO_REFERENCE_IMAGE_CAPS: Record<string, number> = {
   'grok-imagine-video': 1,
   'kling-o3': 7,
   'minimax-h3': 9,
+  'gemini-omni-1.1-flash': 7,
+  'wan-3.0': 10,
+  'wan-3.0-prime': 10,
+  'grok-imagine-video-1.5': 7,
+  'pixverse-v6': 7,
 };
 
 export const GENERATION_MODEL_VALIDATION_RULE_TYPES = [
@@ -246,6 +271,19 @@ const IMAGE_PROVIDER_MODELS: Record<ImageModelId, Record<string, string>> = {
     text: 'gpt-image-2-5-sunburst-text-to-image',
     reference: 'gpt-image-2-5-sunburst-image-to-image',
   },
+  // Verified 2026-10-08 against docs.kie.ai/market/seedream/5-flash-*.md: the Flash tier
+  // keeps the Seedream vendor prefix of Pro and Lite.
+  'seedream-5-flash': {
+    text: 'seedream/5-flash-text-to-image',
+    reference: 'seedream/5-flash-image-to-image',
+  },
+  // Verified 2026-10-08 against docs.kie.ai/market/qwen2-1/*.md: the vendor segment is
+  // `qwen2-1`, dashed, where Qwen Image 3.0 lives under `qwen3/`; the dotted app id never
+  // reaches Kie.
+  'qwen-image-2.1': {
+    text: 'qwen2-1/text-to-image',
+    reference: 'qwen2-1/image-to-image',
+  },
 };
 
 /**
@@ -331,6 +369,30 @@ const KIE_TASK_IMAGE_ADAPTER_CONFIGS: Partial<Record<ImageModelId, Record<string
   'gpt-image-2': GPT_IMAGE_ADAPTER_CONFIG,
   'gpt-image-2.5-flare': GPT_IMAGE_ADAPTER_CONFIG,
   'gpt-image-2.5-sunburst': GPT_IMAGE_ADAPTER_CONFIG,
+  // Seedream 5 Flash takes its resolution as `size`, with Pro and Lite's values, and has no
+  // quality ternary, so unlike them it fits the bindings (docs/model-api-references/seedream-5-flash.md).
+  'seedream-5-flash': {
+    settings: {
+      aspectRatio: { field: 'aspect_ratio' },
+      resolution: { field: 'size' },
+      outputFormat: { field: 'output_format', transform: 'jpg-to-jpeg' },
+    },
+    constants: { nsfw_checker: true },
+    slots: { imageReferences: { field: 'image_urls', cardinality: 'many', source: 'url' } },
+    variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
+  },
+  // Qwen Image 2.1 names the ratio `aspect_ratio` where Qwen 3 says `image_size`, and calls
+  // Kie's prompt rewrite `enhance_prompt` (docs/model-api-references/qwen-image-2-1.md).
+  'qwen-image-2.1': {
+    settings: {
+      aspectRatio: { field: 'aspect_ratio' },
+      resolution: { field: 'resolution' },
+      outputFormat: { field: 'output_format', transform: 'jpg-to-jpeg' },
+    },
+    constants: { enhance_prompt: true, nsfw_checker: true },
+    slots: { imageReferences: { field: 'image_urls', cardinality: 'many', source: 'url' } },
+    variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
+  },
 };
 
 const VIDEO_PROVIDER_MODELS: Record<VideoModelId, Record<string, string>> = {
@@ -386,6 +448,22 @@ const VIDEO_PROVIDER_MODELS: Record<VideoModelId, Record<string, string>> = {
     text: 'minimax-h3/text-to-video',
     image: 'minimax-h3/image-to-video',
     reference: 'minimax-h3/reference-to-video',
+  },
+  // One id each for text, frames and references (docs/model-api-references/*, 2026-10-08).
+  'gemini-omni-1.1-flash': { default: 'google/gemini-omni-flash-1-1' },
+  'wan-3.0': { default: 'wan/3-0-video' },
+  'wan-3.0-prime': { default: 'wan/3-0-video-prime' },
+  'grok-imagine-video-1.5': {
+    default: 'grok-imagine-video-1-5-preview',
+    text: 'grok-imagine-video-1-5-preview',
+    image: 'grok-imagine-video-1-5-preview',
+  },
+  'pixverse-v6': {
+    default: 'pixverse-v6/text-to-video',
+    text: 'pixverse-v6/text-to-video',
+    image: 'pixverse-v6/image-to-video',
+    transition: 'pixverse-v6/transition',
+    reference: 'pixverse-v6/reference-to-video',
   },
 };
 
@@ -527,7 +605,7 @@ function seedanceReferencePricing(
  * test now pins the September release to this expression.
  */
 function inputSecondsPricing(
-  model: (typeof VIDEO_MODELS)['minimax-h3'],
+  model: (typeof VIDEO_MODELS)['minimax-h3' | 'wan-3.0' | 'wan-3.0-prime'],
 ): PricingExpression {
   return {
     strategy: 'reference-adjustment',
@@ -591,14 +669,83 @@ function videoPricingExpression(model: (typeof VIDEO_MODELS)[VideoModelId]): Pri
       ));
     case 'minimax-h3':
       return inputSecondsPricing(model);
+    // wan/3-0-video: "Billed seconds = output duration + total duration of reference
+    // videos", one rate per resolution, so both tables carry the same figures.
+    case 'wan-3.0':
+    case 'wan-3.0-prime':
+      return inputSecondsPricing(model);
     case 'kling-3.0-turbo':
     case 'wan-2.7':
     case 'happyhorse-1.1':
     case 'grok-imagine-video':
+    case 'grok-imagine-video-1.5':
       return perSecond(lookup(
         [selector('setting', 'resolution', { defaultValue: model.resolutions[0] })],
         model.pricing,
       ));
+    case 'pixverse-v6':
+      // Reference-to-video bills 12.5 % more than text, start-frame and frame-pair runs;
+      // a frames run also counts pictures, so the branch keys on the mode as well.
+      return conditional(
+        [{
+          conditions: [
+            { source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' },
+            { source: 'inputCount', key: 'images', operator: 'greaterThan', value: 0 },
+          ],
+          pricing: perSecond(lookup(
+            [
+              selector('setting', 'resolution', { defaultValue: model.resolutions[0] }),
+              selector('setting', 'sound', { defaultValue: false }),
+            ],
+            Object.fromEntries(Object.entries(model.pricing.reference).map(([resolution, rates]) => [
+              resolution,
+              { false: rates.noSound, true: rates.withSound },
+            ])),
+          )),
+        }],
+        perSecond(lookup(
+          [
+            selector('setting', 'resolution', { defaultValue: model.resolutions[0] }),
+            selector('setting', 'sound', { defaultValue: false }),
+          ],
+          Object.fromEntries(Object.entries(model.pricing.standard).map(([resolution, rates]) => [
+            resolution,
+            { false: rates.noSound, true: rates.withSound },
+          ])),
+        )),
+      );
+    case 'gemini-omni-1.1-flash':
+      return conditional(
+        [{
+          conditions: [{
+            source: 'inputCount',
+            key: 'videos',
+            operator: 'greaterThan',
+            value: 0,
+          }],
+          pricing: lookup(
+            [selector('setting', 'resolution', { defaultValue: '360p' })],
+            {
+              '360p': model.pricing.withVideo.standard,
+              '720p': model.pricing.withVideo.standard,
+              '1080p': model.pricing.withVideo.standard,
+              '4k': model.pricing.withVideo['4k'],
+            },
+          ),
+        }],
+        lookup(
+          [
+            selector('setting', 'resolution', { defaultValue: '360p' }),
+            selector('setting', 'duration', { defaultValue: 4 }),
+          ],
+          {
+            '360p': model.pricing['360p'],
+            '720p': model.pricing['720p'],
+            '1080p': model.pricing['1080p'],
+            '4k': model.pricing['4k'],
+          },
+        ),
+      );
     case 'gemini-omni-video':
       return conditional(
         [{
@@ -860,6 +1007,20 @@ function validationConfigForModel(
         },
       );
     }
+    if (modelId === 'wan-3.0' || modelId === 'wan-3.0-prime') {
+      rules.push({
+        // Reference clips may total 15 s and "input video duration + output duration" may
+        // not pass 30, so a reference run keeps its output to 15 s; text and frame runs
+        // reach 30. The start path applies the same ceiling from the resolved URLs.
+        type: 'control-range',
+        key: 'duration',
+        min: 2,
+        max: WAN_3_REFERENCE_MAX_DURATION_SECONDS,
+        conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' }],
+        field: 'duration',
+        message: `${VIDEO_MODELS[modelId].displayName} reference runs may be at most ${WAN_3_REFERENCE_MAX_DURATION_SECONDS} seconds, so the clip and its references fit in 30.`,
+      });
+    }
     if (END_FRAME_NEEDS_START_FRAME.includes(modelId)) {
       // Only clients that report per-slot counts can trip this (the legacy count-only
       // quote cannot tell an end frame from a start frame); the start service applies
@@ -871,6 +1032,17 @@ function validationConfigForModel(
         conditions: [{ source: 'inputCount', key: 'endFrame', operator: 'greaterThan', value: 0 }],
         field: 'startFrame',
         message: 'Add a start frame to use an end frame with this model.',
+      });
+    }
+    if (modelId === 'gemini-omni-1.1-flash') {
+      // google/gemini-omni-flash-1-1: image_urls "Maximum of 7 images", video_list
+      // "Maximum of 1 item, occupying two image slots"; no audio or character ids.
+      rules.push({
+        type: 'weighted-slot-count',
+        weights: { images: 1, videos: 2 },
+        max: 7,
+        field: 'references',
+        message: 'Gemini Omni 1.1 Flash supports seven reference slots; a video uses two.',
       });
     }
     if (modelId === 'gemini-omni-video') {

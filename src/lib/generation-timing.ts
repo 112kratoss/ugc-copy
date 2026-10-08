@@ -62,6 +62,9 @@ const IMAGE_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
   // GPT Image 2's figure until real GPT Image 2.5 runs give each tier its own.
   'gpt-image-2.5-flare': 120_000,
   'gpt-image-2.5-sunburst': 120_000,
+  // Seedream 5 Lite's and Qwen 3's figures until real runs give each its own.
+  'seedream-5-flash': 90_000,
+  'qwen-image-2.1': 105_000,
   // Registration audit 2026-08-16: these models had no estimate, which silently
   // disabled their progress bars (estimateGenerationDurationMs returns null).
   'seedream-5-lite': 105_000,
@@ -96,6 +99,13 @@ const VIDEO_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
   'happyhorse-1.1': 150_000,
   'gemini-omni-video': 180_000,
   'hailuo-2.3': 120_000,
+  // 2026-10-08: neighbours' figures until real runs give each its own. Flash is Omni's
+  // faster tier; Wan 3.0 renders up to 30 s and Prime is its high-speed variant.
+  'gemini-omni-1.1-flash': 150_000,
+  'wan-3.0': 180_000,
+  'wan-3.0-prime': 120_000,
+  'grok-imagine-video-1.5': 120_000,
+  'pixverse-v6': 120_000,
 };
 
 const MOTION_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {

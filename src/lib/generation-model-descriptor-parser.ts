@@ -224,6 +224,15 @@ function parseInputSlot(value: unknown): CatalogInputSlot | null {
       Number(value.maxDurationSeconds) <= 0)
   )
     return null;
+  // How many of the slot's assets may carry a name. Kling O3's subjects slot has carried
+  // maxNamed: 3 in the published row since 2026-08-24, and this parser dropped it on every
+  // read, so /api/model-catalog/v1/details served the slot without it and both creators
+  // fell back to the slot's 12.
+  if (
+    value.maxNamed !== undefined &&
+    (!Number.isInteger(value.maxNamed) || Number(value.maxNamed) < 0)
+  )
+    return null;
   const conditions = parseConditions(value.conditions);
   if (value.conditions !== undefined && !conditions) return null;
   return {
@@ -236,6 +245,7 @@ function parseInputSlot(value: unknown): CatalogInputSlot | null {
     ...(typeof value.supportsNaming === 'boolean'
       ? { supportsNaming: value.supportsNaming }
       : {}),
+    ...(value.maxNamed === undefined ? {} : { maxNamed: Number(value.maxNamed) }),
     ...(value.durationMetadata
       ? { durationMetadata: value.durationMetadata }
       : {}),
