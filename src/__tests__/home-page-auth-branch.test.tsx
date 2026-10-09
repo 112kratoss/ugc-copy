@@ -10,6 +10,10 @@ const loadHomeWorkspaceGenerationsMock = vi.fn();
 const loadHomeWhatsNewModelsMock = vi.fn();
 const feedClientPropsMock = vi.fn();
 
+vi.mock('next/headers', () => ({
+  headers: async () => new Headers(),
+}));
+
 vi.mock('@/lib/supabase-server', () => ({
   getServerAuthState: () => getServerAuthStateMock(),
 }));

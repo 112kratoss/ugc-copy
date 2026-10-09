@@ -246,6 +246,101 @@ describe('showcase feed interactions', () => {
     expect(screen.queryByRole('menuitem', { name: /hide creator name/i })).not.toBeInTheDocument();
   });
 
+  it('offers the five rows the app card menu has, in its order, with safety set apart', () => {
+    const onReportContent = vi.fn();
+    const onReportUser = vi.fn();
+    const onBlockUser = vi.fn();
+    render(
+      <ShowcaseFeedbackMenu
+        variant="inline"
+        itemTitle="Campaign Frame"
+        creatorName="fluffy"
+        onSelect={vi.fn()}
+        onReportContent={onReportContent}
+        onReportUser={onReportUser}
+        onBlockUser={onBlockUser}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+
+    const rows = screen.getAllByRole('menuitem').map((row) => row.querySelector('.font-semibold')?.textContent);
+    expect(rows).toEqual(['Not interested', 'Hide fluffy', 'Report content', 'Report user', 'Block user']);
+    expect(screen.getAllByRole('separator')).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /block user/i }));
+    expect(onBlockUser).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /report user/i }));
+    expect(onReportUser).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /report content/i }));
+    expect(onReportContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays open while something else on the page scrolls, and follows its button when the page does', () => {
+    // The Home slider scrolls its own track every few seconds; that used to
+    // close the menu under the reader.
+    const slider = document.createElement('div');
+    document.body.appendChild(slider);
+    render(
+      <ShowcaseFeedbackMenu
+        variant="inline"
+        itemTitle="Campaign Frame"
+        creatorName="fluffy"
+        onSelect={vi.fn()}
+        onBlockUser={vi.fn()}
+      />
+    );
+    const trigger = screen.getByRole('button', { name: /more actions for campaign frame/i });
+    const rect = (top: number) => ({ top, bottom: top + 36, left: 600, right: 636, width: 36, height: 36, x: 600, y: top, toJSON: () => ({}) }) as DOMRect;
+    vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue(rect(200));
+
+    fireEvent.click(trigger);
+    expect(screen.getByRole('menu')).toHaveStyle({ top: '244px' });
+
+    fireEvent.scroll(slider);
+    act(() => vi.advanceTimersByTime(50));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+
+    // The page scrolls 120px: the menu moves with its button.
+    vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue(rect(80));
+    fireEvent.scroll(document);
+    act(() => vi.advanceTimersByTime(50));
+    expect(screen.getByRole('menu')).toHaveStyle({ top: '124px' });
+
+    // Scrolled off the top of the screen: now it closes.
+    vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue(rect(-300));
+    fireEvent.scroll(document);
+    act(() => vi.advanceTimersByTime(50));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+
+    slider.remove();
+  });
+
+  it('leaves out the rows about the creator when there is no creator to act on', () => {
+    render(
+      <ShowcaseFeedbackMenu
+        variant="inline"
+        itemTitle="Campaign Frame"
+        creatorName="fluffy"
+        canHideCreator={false}
+        onSelect={vi.fn()}
+        onReportContent={vi.fn()}
+        onReportUser={vi.fn()}
+        onBlockUser={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+
+    const rows = screen.getAllByRole('menuitem').map((row) => row.querySelector('.font-semibold')?.textContent);
+    expect(rows).toEqual(['Not interested', 'Report content']);
+  });
+
   it('describes anonymous feedback as limited to the current visit', () => {
     render(
       <ShowcaseFeedbackMenu

@@ -27,6 +27,7 @@
 @source "./terms";
 /* Public route import closure. Keep this list explicit so private editor and
    account utilities stay in the route-only supplemental stylesheet. */
+@source "../components/AlertsBadge.tsx";
 @source "../components/AnonymousHome.tsx";
 @source "../components/AppShell.tsx";
 @source "../components/AppShellAccount.tsx";
@@ -85,6 +86,7 @@
 @source "../components/usePostLifecycle.ts";
 @source "../components/useShareAction.ts";
 @source "../components/useSupabaseAuthCookieHint.ts";
+@source "../components/useUnreadAlertsCount.ts";
 
 /* Home composes model badge gradients from data rather than JSX literals. */
 @source "../lib/client-generation-models.ts";

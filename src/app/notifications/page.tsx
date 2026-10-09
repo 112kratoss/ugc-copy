@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Sparkles,
 } from 'lucide-react';
+import { publishUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
 import { supabase } from '@/lib/supabase';
 import { resolveWebNotificationPath } from '@/lib/web-notification-links';
 
@@ -58,6 +59,11 @@ export default function NotificationsPage() {
   const router = useRouter();
   const [notifications, setNotifications] = useState<WebNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  // The shell's bell and Alerts tab show this count; what this page reads and
+  // marks is the freshest value there is.
+  useEffect(() => {
+    publishUnreadAlertsCount(unreadCount);
+  }, [unreadCount]);
   const [loading, setLoading] = useState(true);
   // null until the session check answers: a signed-in visitor used to see
   // "Sign in required" for the first few hundred milliseconds of every visit.

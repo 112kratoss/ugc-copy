@@ -1,12 +1,13 @@
 'use client';
 
-import { Heart, MessageCircle, Repeat2, ShoppingBag } from 'lucide-react';
+import { Heart, Loader2, MessageCircle, Repeat2, ShoppingBag } from 'lucide-react';
 import Link from 'next/link';
 import { memo } from 'react';
 
 import PostCommentAvatar from '@/components/PostCommentAvatar';
 import PostComments from '@/components/PostComments';
 import PublicShareButton from '@/components/PublicShareButton';
+import { ShowcaseFeedbackMenu, type ShowcaseFeedbackAction } from '@/app/showcase/ShowcaseFeedInteraction';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
@@ -50,6 +51,12 @@ interface FeedPostCardProps {
     accessToken: string | null;
     /** The viewer wrote this post, so a share by them may claim the work. */
     viewerIsOwner?: boolean;
+    /** Signed-out viewers' feed choices hold for the visit only; the menu says so. */
+    signedIn?: boolean;
+    /** A remix request for this post is in flight. */
+    remixing?: boolean;
+    /** Autoplay the in-view clip (no pointer to hover with). */
+    autoPlayMedia?: boolean;
     /** Prioritizes the above-the-fold cover that can become the page LCP. */
     priorityMedia?: boolean;
     /** Bounded server-inlined data URL for that priority cover. */
@@ -82,6 +89,14 @@ interface FeedPostCardProps {
      * cache hit rather than a cold round trip. Safe to call repeatedly.
      */
     onPrefetchPost: (postId: string) => void;
+    /** Not interested / Hide creator from the card's menu. */
+    onFeedback: (postId: string, action: ShowcaseFeedbackAction) => void;
+    /** Starts the remix from the card. */
+    onRemix: (postId: string) => void;
+    /** Report content / Report user / Block user, as the app's card menu offers. */
+    onReportContent: (postId: string) => void;
+    onReportUser: (postId: string) => void;
+    onBlockUser: (postId: string) => void;
 }
 
 /**
@@ -98,6 +113,9 @@ function FeedPostCardView({
     commentsOpen,
     accessToken,
     viewerIsOwner = false,
+    signedIn = false,
+    remixing = false,
+    autoPlayMedia = false,
     cardIndex,
     priorityMedia = false,
     priorityPoster = null,
@@ -110,6 +128,11 @@ function FeedPostCardView({
     onOpenMedia,
     onOpenPost,
     onPrefetchPost,
+    onFeedback,
+    onRemix,
+    onReportContent,
+    onReportUser,
+    onBlockUser,
 }: FeedPostCardProps) {
     const { item } = card;
     const mediaItems = (item.mediaItems ?? []).slice().sort((left, right) => left.sortOrder - right.sortOrder);
@@ -187,11 +210,25 @@ function FeedPostCardView({
                     </div>
                 )}
                 <span className="text-xs text-[var(--ui-text-faint)]">{`· ${card.timeLabel}`}</span>
-                {card.kind === 'text' ? (
-                    <span className="ml-auto shrink-0 rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-2.5 py-0.5 text-[11px] font-bold text-[var(--ui-text-muted)]">
-                        {item.isNsfw ? 'NSFW · 18+' : card.categoryLabel}
-                    </span>
-                ) : null}
+                <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                    {card.kind === 'text' ? (
+                        <span className="rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-2.5 py-0.5 text-[11px] font-bold text-[var(--ui-text-muted)]">
+                            {item.isNsfw ? 'NSFW · 18+' : card.categoryLabel}
+                        </span>
+                    ) : null}
+                    {/* The same menu the showcase grid and the app's cards carry. */}
+                    <ShowcaseFeedbackMenu
+                        variant="inline"
+                        itemTitle={card.title}
+                        creatorName={item.creator.name}
+                        canHideCreator={!viewerIsOwner && Boolean(item.creator.id)}
+                        sessionOnly={!signedIn}
+                        onSelect={(action) => onFeedback(item.id, action)}
+                        onReportContent={viewerIsOwner ? undefined : () => onReportContent(item.id)}
+                        onReportUser={() => onReportUser(item.id)}
+                        onBlockUser={() => onBlockUser(item.id)}
+                    />
+                </div>
             </div>
 
             <div className="flex flex-col gap-2 px-4 pt-2 sm:px-5">
@@ -243,6 +280,7 @@ function FeedPostCardView({
                         sizes="(min-width: 768px) 640px, 100vw"
                         priority={priorityMedia}
                         priorityPoster={priorityPoster}
+                        autoPlayVideo={autoPlayMedia || undefined}
                         // `w-full` is load-bearing: with `width: auto`, CSS
                         // aspect-ratio transfers the max-height back into width,
                         // shrinking the frame to a left-aligned column. Full width
@@ -271,14 +309,19 @@ function FeedPostCardView({
                 {item.canRemix ? (
                     // The product's differentiated verb leads the row as a labeled
                     // pill; save/comment/share are universal socials and follow.
-                    <Link
-                        href={detailHref}
-                        prefetch={false}
-                        className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-[var(--ui-primary-strong)]/40 bg-[var(--ui-primary)]/10 px-4 text-xs font-extrabold text-[var(--ui-primary)] transition hover:bg-[var(--ui-primary)]/20"
+                    // It starts the remix here, as the app's card does.
+                    <button
+                        type="button"
+                        onClick={() => onRemix(item.id)}
+                        disabled={remixing}
+                        aria-busy={remixing || undefined}
+                        className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-[var(--ui-primary-strong)]/40 bg-[var(--ui-primary)]/10 px-4 text-xs font-extrabold text-[var(--ui-primary)] transition hover:bg-[var(--ui-primary)]/20 disabled:opacity-70"
                     >
-                        <Repeat2 className="h-4 w-4" aria-hidden="true" />
+                        {remixing
+                            ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                            : <Repeat2 className="h-4 w-4" aria-hidden="true" />}
                         {card.remixLabel}
-                    </Link>
+                    </button>
                 ) : null}
                 <ActionButton
                     label={card.saveLabel}

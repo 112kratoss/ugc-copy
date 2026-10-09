@@ -86,7 +86,11 @@ export default function WindowedFeedList<T>({
 }) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<number | null>(null);
-  const [, setMeasurementVersion] = useState(0);
+  const [measurementVersion, setMeasurementVersion] = useState(0);
+  // What the last committed viewport mounts. A scroll frame that would mount
+  // the same cards is dropped before it reaches React: with 24 cards and an
+  // impression wrapper each, every frame used to re-render all of them.
+  const committedRangeRef = useRef<{ startIndex: number; endIndex: number; measurementVersion: number } | null>(null);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   const [viewport, setViewport] = useState({
     ready: false,
@@ -150,12 +154,23 @@ export default function WindowedFeedList<T>({
       const list = listRef.current;
       if (!list) return;
       const rect = list.getBoundingClientRect();
-      setViewport({
+      const next = {
         ready: true,
         height: window.innerHeight,
         listTop: rect.top + window.scrollY,
         scrollY: window.scrollY,
-      });
+      };
+      const committed = committedRangeRef.current;
+      if (committed && committed.measurementVersion === measurementVersion) {
+        const nextRange = getWindowedFeedRange({
+          heights: keys.map((key) => feedCardHeightCache.get(key) ?? FEED_WINDOW_ESTIMATED_CARD_HEIGHT),
+          gap,
+          viewportStart: Math.max(0, next.scrollY - next.listTop),
+          viewportHeight: next.height,
+        });
+        if (nextRange.startIndex === committed.startIndex && nextRange.endIndex === committed.endIndex) return;
+      }
+      setViewport(next);
     };
     const scheduleUpdate = () => {
       if (frameRef.current !== null) return;
@@ -170,7 +185,13 @@ export default function WindowedFeedList<T>({
       window.removeEventListener('resize', scheduleUpdate);
       if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
     };
-  }, [items.length]);
+  }, [gap, items.length, keys, measurementVersion]);
+
+  useEffect(() => {
+    committedRangeRef.current = viewport.ready
+      ? { startIndex: range.startIndex, endIndex: range.endIndex, measurementVersion }
+      : null;
+  });
 
   useEffect(() => {
     if (typeof ResizeObserver === 'undefined') return;

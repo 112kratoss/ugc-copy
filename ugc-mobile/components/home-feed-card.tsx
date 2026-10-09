@@ -1,5 +1,6 @@
-import { Lock, MessageCircle, Repeat2 } from 'lucide-react-native';
+import { Lock, MessageCircle, Repeat2, ShoppingBag } from 'lucide-react-native';
 import { memo, useCallback, useContext } from 'react';
+import { Pressable, Text } from 'react-native';
 
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
 import { NativeMenu } from '@/components/native-menu';
@@ -15,6 +16,8 @@ import {
   getHomeFeedMediaHeight,
   type HomeFeedCard,
 } from '@/lib/home-feed-view-model';
+import { verticalHitSlop } from '@/lib/hit-target';
+import { cardUnlock } from '@/lib/showcase-feed-view-model';
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { buildImmersiveShowcaseItems } from '@/lib/immersive-preview-view-model';
@@ -35,6 +38,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   onComments,
   onRemix,
   onShare,
+  onAssetPress,
   remixLoading,
 }: {
   card: HomeFeedCard;
@@ -50,11 +54,14 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   onComments: () => void;
   onRemix: () => void;
   onShare: () => void;
+  /** Opens the post's details, where the recipe or unlock is. */
+  onAssetPress?: () => void;
   remixLoading?: boolean;
 }) {
   const theme = useAppTheme();
   const accent = accentColor(card.accent, theme.colors);
   const hasMedia = card.previewKind !== 'text' && Boolean(card.mediaUrl);
+  const unlockRow = card.item.asset ? cardUnlock(card.item) : null;
   // The inset media and measured zoom source keep exactly the same width.
   const mediaWidth = feedCardMediaWidth(contentWidth);
   const mediaHeight = hasMedia ? getHomeFeedMediaHeight(card, mediaWidth) : 0;
@@ -114,6 +121,38 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
       readMore={card.bodyText && canExpandHomeFeedBody(card, bodyWidth)
         ? <PostReadMore onPress={onReadMore} />
         : null}
+      unlock={unlockRow ? (
+        // Sellable posts were invisible while scrolling: the web card names the
+        // recipe and its price; the app's card showed only the category.
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${unlockRow.label}: ${card.item.asset?.title ?? 'recipe'}`}
+          onPress={onAssetPress}
+          disabled={!onAssetPress}
+          hitSlop={verticalHitSlop(40)}
+          style={({ pressed }) => ({
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            minHeight: 40,
+            marginTop: appTheme.spacing.compact,
+            paddingHorizontal: 12,
+            borderRadius: 14,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.panelSoft,
+            opacity: pressed ? appTheme.opacity.pressed : 1,
+          })}
+        >
+          <ShoppingBag size={appTheme.icon.compact} color={theme.colors.text} />
+          <Text numberOfLines={1} style={{ color: theme.colors.text, ...appTheme.type.label, flexShrink: 0 }}>
+            {unlockRow.label}
+          </Text>
+          <Text numberOfLines={1} style={{ color: theme.colors.muted, ...appTheme.type.caption, flexShrink: 1 }}>
+            {card.item.asset?.title}
+          </Text>
+        </Pressable>
+      ) : null}
       media={hasMedia ? (
         <MediaZoomSourceView source={zoomSource}>
           <ShowcaseMediaPreview

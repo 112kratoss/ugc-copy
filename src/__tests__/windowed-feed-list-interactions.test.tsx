@@ -90,6 +90,40 @@ describe('WindowedFeedList interactions', () => {
       .toBeLessThanOrEqual(FEED_WINDOW_MAX_MOUNTED_CARDS + 1);
   });
 
+  it('does not re-render the mounted cards for a scroll that mounts the same ones', () => {
+    const renderItem = vi.fn((item: string) => <p>{item}</p>);
+    const { container } = render(
+      <WindowedFeedList items={items} getKey={(item) => item} renderItem={renderItem} />,
+    );
+    const list = container.querySelector<HTMLElement>('[data-feed-windowed-list]');
+    vi.spyOn(list!, 'getBoundingClientRect').mockImplementation(() => ({
+      x: 0,
+      y: -window.scrollY,
+      top: -window.scrollY,
+      left: 0,
+      right: 680,
+      bottom: 39_108 - window.scrollY,
+      width: 680,
+      height: 39_108,
+      toJSON: () => ({}),
+    }));
+    const settledCalls = renderItem.mock.calls.length;
+
+    // A few pixels: the same cards stay mounted, so nothing should re-render.
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 12 });
+    fireEvent.scroll(window);
+    act(() => frameCallback?.(0));
+
+    expect(renderItem.mock.calls.length).toBe(settledCalls);
+
+    // Far enough to mount other cards: that is a real change.
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 20_000 });
+    fireEvent.scroll(window);
+    act(() => frameCallback?.(0));
+
+    expect(renderItem.mock.calls.length).toBeGreaterThan(settledCalls);
+  });
+
   it('mounts keyboard runway as focus reaches the edge of the window', async () => {
     const { container } = render(
       <WindowedFeedList

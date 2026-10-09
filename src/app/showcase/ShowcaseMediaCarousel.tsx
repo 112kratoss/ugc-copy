@@ -7,6 +7,7 @@ import { useInlineMediaPlayback } from '@/components/useInlineMediaPlayback';
 import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import { useMediaLoadingPreferences } from '@/components/useMediaLoadingPreferences';
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';
+import { thumbHashToDataURL } from 'thumbhash';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
 import UnavailableMediaNote from '@/components/UnavailableMediaNote';
@@ -45,6 +46,23 @@ interface ShowcaseMediaCarouselProps {
 
 const MEDIA_LOAD_TIMEOUT_MS = 15_000;
 const HAVE_METADATA = 1;
+
+/**
+ * The server's preview thumbhash (base64) as a data URL, drawn under the media
+ * while it loads: the app draws the same blur in a pre-sized frame, the web
+ * frame used to sit on black.
+ */
+function decodeThumbhash(hash: string | null | undefined): string | null {
+  if (!hash || typeof atob !== 'function') return null;
+  try {
+    const binary = atob(hash);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return thumbHashToDataURL(bytes);
+  } catch {
+    return null;
+  }
+}
 
 function clampIndex(index: number, itemCount: number) {
   return Math.min(Math.max(index, 0), Math.max(0, itemCount - 1));
@@ -93,30 +111,41 @@ export default function ShowcaseMediaCarousel({
   const { prefersReducedMotion, saveData } = useMediaLoadingPreferences();
   const requestedAutoPlay = autoPlayVideo ?? mode !== 'feed';
   const canPlayMotion = !prefersReducedMotion && !saveData;
-  const shouldPlayVideo = canPlayMotion && (
-    mode === 'feed'
-      ? isInteracting || (requestedAutoPlay && isInViewport)
-      : requestedAutoPlay
-  );
-  const shouldAttachVideo = mode !== 'feed' || (
-    canPlayMotion
-    && (isInteracting || (requestedAutoPlay && isInViewport))
-  );
   const activeItem = items[activeIndex] ?? items[0] ?? null;
   // Every mode streams the small rendition when one exists — feed, detail and
   // reel alike. Detail and reel used to keep the source for full quality, which
   // the 2026-08 scaling audit measured as the bulk of all storage egress at
   // ~23 Mbps a stream. Downloads and remixes still read `url` directly.
   //
+  // In a feed the server has already decided what may stream (a teaser, the
+  // rendition, a provably lean source, or nothing): `feedStreamUrl` is that
+  // contract, and `url` must never autoplay there. A page from before the
+  // field (undefined) keeps the fallback chain; null means poster only.
+  //
   // Keying on the played URL matters: a rendition can appear mid-session, and
   // reusing the source key would leave the element's terminal error state
   // attached to what is now a different source.
   const activePlaybackUrl = activeItem
-    ? resolvePlaybackUrl({
-      url: activeItem.url,
-      renditionUrl: activeItem.preview?.renditionUrl ?? activeItem.renditionUrl ?? null,
-    })
+    ? (mode === 'feed' && activeItem.feedStreamUrl !== undefined
+      ? activeItem.feedStreamUrl ?? ''
+      : resolvePlaybackUrl({
+        url: activeItem.url,
+        renditionUrl: activeItem.preview?.renditionUrl ?? activeItem.renditionUrl ?? null,
+      }))
     : '';
+  const shouldPlayVideo = Boolean(activePlaybackUrl) && canPlayMotion && (
+    mode === 'feed'
+      ? isInteracting || (requestedAutoPlay && isInViewport)
+      : requestedAutoPlay
+  );
+  const shouldAttachVideo = Boolean(activePlaybackUrl) && (mode !== 'feed' || (
+    canPlayMotion
+    && (isInteracting || (requestedAutoPlay && isInViewport))
+  ));
+  const placeholderUrl = useMemo(
+    () => (mode === 'reel' ? null : decodeThumbhash(activeItem?.previewThumbhash)),
+    [activeItem?.previewThumbhash, mode],
+  );
   const activeSourceKey = activeItem ? JSON.stringify([activeItem.id, activePlaybackUrl]) : '';
   const activeLoadAttempt = activeSourceKey ? loadAttempts[activeSourceKey] ?? 0 : 0;
   const activeLoadKey = activeItem
@@ -385,6 +414,7 @@ export default function ShowcaseMediaCarousel({
         style={isReel ? undefined : {
           aspectRatio: frameAspectRatio,
           ...(numericFrameRatio ? { '--media-ratio': numericFrameRatio } as React.CSSProperties : {}),
+          ...(placeholderUrl ? { backgroundImage: `url(${placeholderUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}),
         }}
         onClick={(event) => {
           if (!onOpen || event.target instanceof HTMLElement && event.target.closest('button, video[controls]')) {

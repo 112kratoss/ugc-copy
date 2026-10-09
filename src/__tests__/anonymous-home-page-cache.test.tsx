@@ -322,13 +322,16 @@ describe('Anonymous home cacheability', () => {
     expect(quickStartImage).toHaveAttribute('data-prefetch', 'false');
   });
 
-  it('degrades to a callout when the feed is unavailable', async () => {
+  it('hands the lane to the client when the feed is unavailable', async () => {
+    // This page is cached and shared: a callout baked into it would greet
+    // every visitor until the next regeneration. The client lane fetches page
+    // one itself instead, with a Retry that works in the browser.
     getShowcaseFeedPageMock.mockRejectedValue(new Error('feed offline'));
     const { default: Home } = await import('@/app/page');
 
     const html = await renderPageToHtml(<Home />);
 
-    expect(html).toContain('Could not load the community feed');
-    expect(html).not.toContain('feed-client');
+    expect(html).not.toContain('Could not load the community feed');
+    expect(html).toContain('feed-client');
   });
 });
