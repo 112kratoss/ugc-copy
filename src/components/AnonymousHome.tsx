@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { Suspense, use } from 'react';
 
-import { StatusCallout, Text } from '@/components/DesignSystem';
+import { Text } from '@/components/DesignSystem';
 import { HOME_FEED_DETAIL_CONTEXT, HomeFeedSkeleton } from '@/components/HomeFeedSkeleton';
 import HomeExperience from '@/components/HomeExperience';
 import HomeSlider from '@/components/HomeSlider';
@@ -37,17 +37,17 @@ async function AnonymousFeedSection({ data }: { data: Promise<ShowcaseFeedPage |
   const feed = await data;
 
   if (!feed) {
+    // The loader failed during this render. This page is cached and shared, so
+    // an error baked into it would greet every visitor until the next
+    // regeneration; the client lane fetches page one itself instead, with a
+    // Retry that works in the browser.
     return (
-      <div className="space-y-3">
-        <StatusCallout
-          tone="danger"
-          title="Could not load the community feed"
-          body="The creation tools are still available. Check the connection, then try again."
-        />
-        <Link href="/create" prefetch={false} className="ui-button ui-button-secondary ui-focus-ring">
-          Start creating
-        </Link>
-      </div>
+      <FeedClient
+        initialFeed={null}
+        initialChipId="for-you"
+        variant="embedded"
+        detailContext={HOME_FEED_DETAIL_CONTEXT}
+      />
     );
   }
 
@@ -164,6 +164,7 @@ export default function AnonymousHome() {
 
       <HomeExperience
         hero={<AnonymousHero />}
+        inlineStrip={<SignInWorkspaceCard variant="inline" />}
         feed={(
           <Suspense fallback={<HomeFeedSkeleton />}>
             <AnonymousFeedSection data={feedPromise} />

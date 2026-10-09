@@ -30,6 +30,7 @@ import {
   type AppNavItem,
 } from './app-shell-nav';
 import DeferredAppShellAccount from './DeferredAppShellAccount';
+import AlertsBadge from '@/components/AlertsBadge';
 
 const NAV_GROUPS = [
   { label: 'Create', ids: ['home', 'create', 'studio', 'showcase'] },
@@ -197,6 +198,7 @@ function DrawerNavItem({
     >
       <Icon className={`h-[18px] w-[18px] ${active ? 'text-[var(--ui-primary)]' : 'text-[var(--ui-text-faint)]'}`} aria-hidden />
       <span>{item.label}</span>
+      {item.id === 'alerts' ? <AlertsBadge className="ml-auto" /> : null}
     </Link>
   );
 }
@@ -245,6 +247,7 @@ function BottomNavItem({
     >
       {active ? <span className="absolute top-1 h-[3px] w-[18px] rounded-full bg-[var(--ui-primary)]" aria-hidden /> : null}
       <Icon className="h-5 w-5" strokeWidth={active ? 2.5 : 2.1} aria-hidden />
+      {item.id === 'alerts' ? <AlertsBadge className="absolute left-1/2 top-1.5 ml-1" /> : null}
       <span className="max-w-full truncate">{item.shortLabel}</span>
     </Link>
   );
@@ -606,9 +609,10 @@ export default function AppShellClient({ children }: { children: React.ReactNode
               href="/notifications"
               prefetch={false}
               aria-label="Open alerts"
-              className="ui-focus-ring hidden h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)] sm:inline-flex"
+              className="ui-focus-ring relative hidden h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)] sm:inline-flex"
             >
               <Bell className="h-[18px] w-[18px]" aria-hidden />
+              <AlertsBadge className="absolute -right-1 -top-1" />
             </Link>
             <Link
               href="/create"

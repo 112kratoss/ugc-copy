@@ -8,7 +8,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from 'react';
-import { EyeOff, MoreHorizontal, UserRoundX } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { EyeOff, MoreHorizontal, UserRoundX, Flag } from 'lucide-react';
 
 import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
 
@@ -364,6 +365,10 @@ interface ShowcaseFeedbackMenuProps {
   canHideCreator?: boolean;
   sessionOnly?: boolean;
   onSelect: (action: ShowcaseFeedbackAction) => void | Promise<void>;
+  /** Adds a "Report post" row; the caller opens the report form. */
+  onReport?: () => void;
+  /** `overlay` sits on media (the grid tile); `inline` sits in a card header. */
+  variant?: 'overlay' | 'inline';
   className?: string;
   buttonClassName?: string;
 }
@@ -374,14 +379,33 @@ export function ShowcaseFeedbackMenu({
   canHideCreator = true,
   sessionOnly = false,
   onSelect,
+  onReport,
+  variant = 'overlay',
   className = '',
   buttonClassName = '',
 }: ShowcaseFeedbackMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
+  // The inline menu is rendered into <body>: a feed card is paint-contained
+  // (`content-visibility: auto`), which clips anything positioned past its
+  // edge, and a short text post is shorter than the open menu.
+  const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const actionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const actionCount = canHideCreator ? 2 : 1;
+  const actionCount = 1 + (canHideCreator ? 1 : 0) + (onReport ? 1 : 0);
+  const usesPortal = variant === 'inline';
+  const openMenu = () => {
+    if (usesPortal && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setAnchor({ top: rect.bottom + 8, right: Math.max(8, window.innerWidth - rect.right) });
+    }
+    setIsOpen(true);
+  };
+  const reportIndex = canHideCreator ? 2 : 1;
+  const triggerClassName = variant === 'inline'
+    ? 'ui-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-full text-[var(--ui-text-faint)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]'
+    : 'ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-black/60 text-white shadow-md backdrop-blur-md transition hover:bg-black/80';
 
   const focusAction = useCallback((index: number) => {
     const normalizedIndex = (index + actionCount) % actionCount;
@@ -394,9 +418,15 @@ export function ShowcaseFeedbackMenu({
     }
 
     const handlePointerDown = (event: PointerEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (!containerRef.current?.contains(target) && !menuRef.current?.contains(target)) {
         setIsOpen(false);
       }
+    };
+    // A portalled menu is pinned to where the trigger was; the page moving
+    // under it would leave it floating, so it closes instead.
+    const handleMove = () => {
+      if (usesPortal) setIsOpen(false);
     };
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') {
@@ -411,11 +441,15 @@ export function ShowcaseFeedbackMenu({
 
     document.addEventListener('pointerdown', handlePointerDown);
     document.addEventListener('keydown', handleEscape, true);
+    window.addEventListener('scroll', handleMove, true);
+    window.addEventListener('resize', handleMove);
     return () => {
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleEscape, true);
+      window.removeEventListener('scroll', handleMove, true);
+      window.removeEventListener('resize', handleMove);
     };
-  }, [isOpen]);
+  }, [isOpen, usesPortal]);
 
   const handleMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const activeIndex = actionRefs.current.findIndex((button) => button === document.activeElement);
@@ -444,6 +478,8 @@ export function ShowcaseFeedbackMenu({
     void onSelect(action);
   };
 
+  const menu = renderMenu();
+
   return (
     <div ref={containerRef} className={`relative ${className}`}>
       <button
@@ -454,27 +490,34 @@ export function ShowcaseFeedbackMenu({
         aria-expanded={isOpen}
         onClick={(event) => {
           event.stopPropagation();
-          setIsOpen((current) => !current);
+          if (isOpen) setIsOpen(false); else openMenu();
         }}
         onKeyDown={(event) => {
           if (event.key === 'ArrowDown') {
             event.preventDefault();
-            setIsOpen(true);
+            openMenu();
             window.requestAnimationFrame(() => focusAction(0));
           }
         }}
-        className={`ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-black/60 text-white shadow-md backdrop-blur-md transition hover:bg-black/80 ${buttonClassName}`}
+        className={`${triggerClassName} ${buttonClassName}`}
       >
         <MoreHorizontal className="h-5 w-5" aria-hidden />
       </button>
 
-      {isOpen ? (
+      {isOpen ? (usesPortal && anchor && typeof document !== 'undefined' ? createPortal(menu, document.body) : menu) : null}
+    </div>
+  );
+
+  function renderMenu() {
+    return (
         <div
+          ref={menuRef}
           role="menu"
           aria-label={`Feedback actions for ${itemTitle}`}
           onClick={(event) => event.stopPropagation()}
           onKeyDown={handleMenuKeyDown}
-          className="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-64 overflow-hidden rounded-2xl border border-white/10 bg-[rgba(24,24,27,0.98)] p-1.5 text-left shadow-[0_18px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl"
+          style={usesPortal && anchor ? { top: anchor.top, right: anchor.right } : undefined}
+          className={`${usesPortal ? 'fixed' : 'absolute right-0 top-[calc(100%+0.5rem)]'} z-50 w-64 overflow-hidden rounded-2xl border border-white/10 bg-[rgba(24,24,27,0.98)] p-1.5 text-left shadow-[0_18px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl`}
         >
           <button
             ref={(node) => { actionRefs.current[0] = node; }}
@@ -508,8 +551,25 @@ export function ShowcaseFeedbackMenu({
               </span>
             </button>
           ) : null}
+          {onReport ? (
+            <button
+              ref={(node) => { actionRefs.current[reportIndex] = node; }}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setIsOpen(false);
+                onReport();
+              }}
+              className="ui-focus-ring flex min-h-12 w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left text-zinc-100 transition hover:bg-white/[0.07]"
+            >
+              <Flag className="mt-0.5 h-4.5 w-4.5 shrink-0 text-zinc-400" aria-hidden />
+              <span>
+                <span className="block text-sm font-semibold">Report post</span>
+                <span className="mt-0.5 block text-xs leading-4 text-zinc-400">Spam, stolen, unsafe, or misleading</span>
+              </span>
+            </button>
+          ) : null}
         </div>
-      ) : null}
-    </div>
-  );
+    );
+  }
 }

@@ -79,6 +79,9 @@ function renderCard(overrides: Partial<ShowcaseFeedItem> = {}, props: Record<str
         onOpenMedia: vi.fn(),
         onOpenPost: vi.fn(),
         onPrefetchPost: vi.fn(),
+onFeedback: vi.fn(),
+onRemix: vi.fn(),
+onReport: vi.fn(),
     };
     const card = buildPostFeedCard(feedItem(overrides));
     render(
@@ -184,12 +187,13 @@ describe('FeedPostCard click routing', () => {
         expect(onOpenPost).not.toHaveBeenCalled();
     });
 
-    it('leaves the remix pill alone', () => {
-        const { onOpenPost } = renderCard();
+    it('starts the remix from the pill instead of opening the post', () => {
+        const { onOpenPost, onRemix } = renderCard();
 
-        fireEvent.click(screen.getByRole('link', { name: /Remix/i }));
+        fireEvent.click(screen.getByRole('button', { name: /Remix/i }));
 
         expect(onOpenPost).not.toHaveBeenCalled();
+        expect(onRemix).toHaveBeenCalledTimes(1);
     });
 
     it('does not navigate from inside the expanded comments', () => {

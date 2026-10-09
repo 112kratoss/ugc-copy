@@ -8,8 +8,8 @@ import type { ReactNode } from 'react';
  *
  * Below `xl` the rail is dropped entirely; `inlineStrip` is where a variant
  * puts the one piece of rail context that still earns its place on a narrow
- * screen (active renders for signed-in users; nothing for signed-out, whose
- * hero already carries the sign-in call to action).
+ * screen (active renders for signed-in users; a one-line sign-in prompt for
+ * signed-out, whose rail card is otherwise never seen on a phone).
  */
 export default function HomeExperience({
   hero,

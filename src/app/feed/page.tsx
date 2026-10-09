@@ -28,7 +28,7 @@ export default async function FeedPage({ searchParams }: FeedPageProps) {
     const auth = await getServerAuthState();
 
     const initialFeed = await getShowcaseFeedPage({
-        category: 'all',
+        category: chip.category,
         sort: chip.sort,
         unlock: chip.unlock,
         resource: 'all',
