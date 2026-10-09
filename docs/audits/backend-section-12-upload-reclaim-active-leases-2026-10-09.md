@@ -28,6 +28,11 @@ is a durable deletion request: the byte charge stays outstanding and the intent
 stays uncleared until Storage confirms removal. The existing reservation worker
 still requires its two-observation absence proof before releasing capacity.
 Already claimed deletion can be retried after a failed request or dead process.
+The existing accounting policy charges the original reserved maximum while a
+reservation is `deleted` or `reclaiming`, rather than its smaller finalized byte
+count. The tests verify this conservative charge explicitly. Available upload
+capacity can therefore temporarily decrease until the reservation worker proves
+absence and releases it; this change does not alter that accounting policy.
 
 The application still applies the rollout gate, original 48-hour age and legacy
 reference protection before requesting this claim. RPC failure aborts before

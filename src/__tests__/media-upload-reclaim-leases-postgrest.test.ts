@@ -71,6 +71,7 @@ it.skipIf(!process.env.AUDIT_STORAGE_CONFIG || !process.env.SUPABASE_TEST_DB_URL
   if(['claim-error','remove-error','lost-ack','late-reader'].includes(mode))expect(injected).toBe(true);
   const state=(await db.query("select r.finalization_status,r.released_at is null charged,i.storage_cleared_at is not null cleared,exists(select 1 from storage.objects where bucket_id='uploads' and name=$2) object_exists from public.upload_byte_reservations r cross join public.media_upload_intents i where r.id=$1 and i.id=$3",[upload,path,intent])).rows[0];
   expect(state).toEqual({finalization_status:mode==='active'?'consuming':['unknown','claim-error'].includes(mode)?'consumed':'deleted',charged:true,cleared:mode==='late-reader',object_exists:!['late-reader','lost-ack'].includes(mode)});
+  expect((await db.query('select outstanding_bytes::text bytes from public.upload_byte_user_counters where user_id=$1',[owner])).rows).toEqual([{bytes:['active','unknown','claim-error'].includes(mode)?'22':'262144000'}]);
   expect((await admin.storage.from('uploads').download(path)).error===null).toBe(state.object_exists);
   if(mode==='unknown'){
    expect((await reclaimAbandonedMediaUploads(admin)).kept).toBe(1);
