@@ -21,6 +21,7 @@ import {
   type GenerationKind,
 } from '@/lib/generation-timing';
 import { useTicker } from '@/lib/use-ticker';
+import { useMediaQuery } from '@/lib/use-media-query';
 
 /**
  * The poller's sessionStorage snapshot, consumed as an external store: the
@@ -151,7 +152,11 @@ export default function WorkspaceCard({
     const views = applyStatusUpdate(initialGenerations, parseStatusSnapshot(statusSnapshot));
     return rankHomeWorkspaceGenerations(views);
   }, [initialGenerations, statusSnapshot]);
-  const nowMs = useTicker(active.length > 0);
+  // The page renders this card twice, in the strip and in the rail, and the
+  // stylesheet shows one of them per width. Only the shown one ticks.
+  const isRailWidth = useMediaQuery('(min-width: 80rem)');
+  const isShown = variant === 'rail' ? isRailWidth : !isRailWidth;
+  const nowMs = useTicker(active.length > 0 && isShown);
 
   const creditsPill = (
     <Link

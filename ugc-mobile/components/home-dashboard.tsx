@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
-import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
+import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { HomeFeedCardView } from '@/components/home-feed-card';
 import { MediaZoomSurface } from '@/components/media-zoom';
 import { HomeSideMenu } from '@/components/home-side-menu';
@@ -267,9 +267,9 @@ export function HomeDashboard() {
       {
         feedSessionId: runtime.feedSessionId,
         algorithmVersion: item.recommendation?.algorithmVersion ?? runtime.algorithmVersion,
-        // The server only accepts the showcase surfaces; the metadata tag is how
-        // home-originated events stay separable in the ranker's telemetry.
-        sourceSurface: 'showcase',
+        // The same surface the web Home sends, so one feed reads as one in the
+        // ranker's telemetry. The metadata tag stays for the old rows' sake.
+        sourceSurface: 'feed',
       },
       { ...details, metadata: { ...(details.metadata ?? {}), surface: 'home-feed' } }
     );
@@ -684,7 +684,7 @@ export function HomeDashboard() {
       {
         feedSessionId: runtime.feedSessionId,
         algorithmVersion: item.recommendation?.algorithmVersion ?? runtime.algorithmVersion,
-        sourceSurface: 'showcase',
+        sourceSurface: 'feed',
       },
       { metadata: { surface: 'home-feed' } }
     );
@@ -834,6 +834,7 @@ export function HomeDashboard() {
         onRemix={() => void remixItem(card.item)}
         remixLoading={remixingItemId === card.item.id}
         onShare={() => void shareItem(card.item)}
+        onAssetPress={() => openCard(card, { initialPage: 'details' })}
       />
     </Reveal>
   );
@@ -946,6 +947,11 @@ export function HomeDashboard() {
           </View>
         ) : feedQuery.isFetchNextPageError ? (
           <FeedLoadMoreErrorFooter onRetry={retryNextPage} />
+        ) : hasItems && !isFirstLoad && !pullRefreshing && feedQuery.hasNextPage === false ? (
+          // A ranked lane stops at 60 posts; the list used to just end.
+          <FeedEndFooter
+            message={activeChipId === 'for-you' ? "You're all caught up." : `You've reached the end of ${activeChip.label}.`}
+          />
         ) : null}
       />
 
@@ -1379,14 +1385,23 @@ function TopSlide({
         }}
       >
         <View style={{ gap: 6 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {/* The count opens the creations list: it used to be a label on a
+              slide that rotated away, with no way to the renders it counted. */}
+          <Pressable
+            accessibilityRole={activeGenerationCount > 0 ? 'button' : undefined}
+            accessibilityLabel={activeGenerationCount > 0 ? 'Open your creations' : undefined}
+            disabled={activeGenerationCount === 0}
+            onPress={() => router.push({ pathname: '/profile', params: { tab: 'Creations' } } as never)}
+            hitSlop={8}
+            style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 8, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+          >
             <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: activeGenerationCount > 0 ? theme.colors.success : theme.colors.primary }} />
             <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase' }}>
               {activeGenerationCount > 0
                 ? `${activeGenerationCount} render${activeGenerationCount === 1 ? '' : 's'} in progress`
                 : 'Creator workspace'}
             </Text>
-          </View>
+          </Pressable>
           <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82} style={{ color: theme.colors.text, fontSize: 22, lineHeight: 27, fontWeight: '800', letterSpacing: -0.45 }}>
             {title}
           </Text>

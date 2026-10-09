@@ -159,6 +159,40 @@ describe('ShowcaseMediaCarousel', () => {
     expect(video).not.toHaveAttribute('src');
   });
 
+  it("streams the server's feed stream URL on hover, never the source", () => {
+    const { container } = render(
+      <ShowcaseMediaCarousel
+        title="Campaign clip"
+        mediaItems={[createVideoItem({
+          feedStreamUrl: 'https://example.com/clip-teaser.mp4',
+          renditionUrl: 'https://example.com/clip-720.mp4',
+        })]}
+      />
+    );
+    const video = container.querySelector('video');
+    const carousel = video?.parentElement?.parentElement;
+
+    fireEvent.mouseEnter(carousel!);
+
+    expect(video).toHaveAttribute('src', 'https://example.com/clip-teaser.mp4');
+  });
+
+  it('stays poster-only in the feed when the server decided nothing may stream', () => {
+    const { container } = render(
+      <ShowcaseMediaCarousel
+        title="Campaign clip"
+        mediaItems={[createVideoItem({ feedStreamUrl: null })]}
+      />
+    );
+    const video = container.querySelector('video');
+    const carousel = video?.parentElement?.parentElement;
+
+    fireEvent.mouseEnter(carousel!);
+
+    expect(video).not.toHaveAttribute('src');
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+  });
+
   it('loads a deferred feed poster near the viewport without attaching or playing the video', () => {
     const { container } = render(
       <ShowcaseMediaCarousel

@@ -269,7 +269,10 @@ export default function GenerationNotifications() {
         hasCompletedInitialSync = true;
         activeGenerationIds = new Set(
           generations
-            .filter((generation) => generation.status === 'processing' || generation.status === 'waiting')
+            // `pending` too: the workspace card counts it as in progress, and a
+            // run still queued when a poll lands used to stay "in progress"
+            // until a reload.
+            .filter((generation) => generation.status === 'processing' || generation.status === 'waiting' || generation.status === 'pending')
             .map((generation) => generation.id),
         );
         shouldFetchFullList = pollingRequestVersion !== requestVersionAtStart;

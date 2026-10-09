@@ -7,9 +7,23 @@ import { Button, Kicker, Text } from '@/components/DesignSystem';
  * The signed-out counterpart to the dashboard's WorkspaceCard: it holds the
  * same rail slot so the page reads identically before and after sign-in, and
  * states plainly what signing in unlocks instead of showing an empty
- * workspace.
+ * workspace. `inline` is the one-line strip for widths without a rail, which
+ * had no sign-in prompt at all below 1280px.
  */
-export default function SignInWorkspaceCard() {
+export default function SignInWorkspaceCard({ variant = 'rail' }: { variant?: 'rail' | 'inline' }) {
+  if (variant === 'inline') {
+    return (
+      <section aria-label="Workspace overview" className="ui-card mb-5 flex flex-wrap items-center gap-3 p-4">
+        <Text variant="bodySm" className="min-w-0 flex-1 text-[var(--ui-text-muted)]">
+          Sign in to track renders, keep creations in one Studio, and save recipes.
+        </Text>
+        <Button href="/login?returnUrl=%2F" prefetch={false} variant="primary" icon={ArrowRight}>
+          Sign in
+        </Button>
+      </section>
+    );
+  }
+
   return (
     <section aria-label="Workspace overview" className="ui-card flex flex-col gap-4 p-5">
       <div className="flex items-center justify-between gap-3">
@@ -26,7 +40,7 @@ export default function SignInWorkspaceCard() {
       </Text>
 
       <div className="flex items-center gap-2 border-t border-[var(--ui-border-subtle)] pt-4">
-        <Button href="/login?returnUrl=/create" prefetch={false} variant="primary" icon={ArrowRight}>
+        <Button href="/login?returnUrl=%2F" prefetch={false} variant="primary" icon={ArrowRight}>
           Sign in
         </Button>
         <Link

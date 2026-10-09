@@ -184,7 +184,7 @@ function OnboardingFlow() {
       const destination = resolveOnboardingDestination({
         hasUser: true,
         welcome: nextWelcome,
-        local: { identityDeferredAt },
+        local: { identityDeferredAt, status: state.status },
       });
       if (destination === 'none') {
         // Nothing outstanding. Reaching here means a deep link or a stale card,

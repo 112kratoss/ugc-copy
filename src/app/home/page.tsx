@@ -1,10 +1,9 @@
-import Link from 'next/link';
+import { headers } from 'next/headers';
 import { Suspense, use } from 'react';
 
 import AnonymousHome from '@/components/AnonymousHome';
 import { HOME_FEED_DETAIL_CONTEXT, HomeFeedSkeleton } from '@/components/HomeFeedSkeleton';
 import WelcomeCreditsCard from '@/app/home/WelcomeCreditsCard';
-import { StatusCallout } from '@/components/DesignSystem';
 import HomeExperience from '@/components/HomeExperience';
 import HomeSlider from '@/components/HomeSlider';
 import QuickStartsCard from '@/components/QuickStartsCard';
@@ -54,22 +53,10 @@ function HomeFeedSection({
   data: Promise<ShowcaseFeedPage | null>;
   initialChipId: ReturnType<typeof getFeedChip>['id'];
 }) {
+  // A null feed (the loader failed) hands the client an empty lane that
+  // fetches page one itself, with its own Retry: a server-side failure used to
+  // show a link back to the same render.
   const feed = use(data);
-
-  if (!feed) {
-    return (
-      <div className="space-y-3">
-        <StatusCallout
-          tone="danger"
-          title="Could not load the feed"
-          body="Your creation tools are still available. Check the connection, then try again."
-        />
-        <Link href="/" prefetch={false} className="ui-button ui-button-secondary ui-focus-ring">
-          Retry feed
-        </Link>
-      </div>
-    );
-  }
 
   return (
     <FeedClient
@@ -138,10 +125,12 @@ export default async function HomeDashboardPage({ searchParams }: HomeDashboardP
 
   const chip = getFeedChip(getFirstValue(resolvedSearchParams.chip));
   const viewerUserId = auth.session.user.id;
+  // Page one prices in the viewer's currency, as the API pages after it do.
+  const countryCode = (await headers()).get('x-vercel-ip-country');
 
   // Kicked off in parallel; each section streams in behind its own Suspense
   // boundary as its data settles.
-  const feedPromise = loadHomeFeed({ viewerUserId, chip });
+  const feedPromise = loadHomeFeed({ viewerUserId, chip, countryCode });
   const workspacePromise = loadHomeWorkspaceGenerations({ userId: viewerUserId });
   const modelsPromise = loadHomeWhatsNewModels();
 

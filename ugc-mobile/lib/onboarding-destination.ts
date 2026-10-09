@@ -16,7 +16,7 @@ export interface OnboardingDestinationInput {
   /** A *registered* user. Guests are install-local and never resolve past `intro`. */
   hasUser: boolean;
   welcome: Pick<WelcomeCreditResponse, 'status' | 'identityComplete'> | null;
-  local: Pick<InstallOnboardingState, 'identityDeferredAt'>;
+  local: Pick<InstallOnboardingState, 'identityDeferredAt' | 'status'>;
 }
 
 /**
@@ -44,7 +44,9 @@ export function resolveOnboardingDestination({
   welcome,
   local,
 }: OnboardingDestinationInput): OnboardingDestination {
-  if (!hasUser) return 'intro';
+  // A guest who stepped out of the intro ("Explore as guest") or finished it
+  // is not asked again on every visit; Settings still opens the flow.
+  if (!hasUser) return local.status === 'skipped' || local.status === 'completed' ? 'none' : 'intro';
   if (!welcome) return 'pending';
   if (!welcome.identityComplete && !local.identityDeferredAt) return 'identity';
   if (welcome.status === 'eligible') return 'reward';

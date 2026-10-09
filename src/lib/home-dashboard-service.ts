@@ -71,13 +71,20 @@ export async function loadHomeWhatsNewModels(): Promise<HomeWhatsNewModel[]> {
 export async function loadHomeFeed({
   viewerUserId,
   chip,
+  countryCode = null,
 }: {
   viewerUserId: string | null;
   chip: FeedChip;
+  /**
+   * The signed-in page passes the request's country so page one prices in the
+   * viewer's currency, as the API pages after it do. The signed-out page is
+   * static and shared, so it stays null there.
+   */
+  countryCode?: string | null;
 }): Promise<ShowcaseFeedPage | null> {
   try {
     return await getShowcaseFeedPage({
-      category: 'all',
+      category: chip.category,
       sort: chip.sort,
       unlock: chip.unlock,
       resource: 'all',
@@ -85,7 +92,7 @@ export async function loadHomeFeed({
       limit: FEED_PAGE_SIZE,
       viewerUserId,
       tool: null,
-      countryCode: null,
+      countryCode,
     });
   } catch (error) {
     logBackendError('home_dashboard_feed_load_failed', { error });

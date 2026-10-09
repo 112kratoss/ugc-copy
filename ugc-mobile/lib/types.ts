@@ -847,7 +847,7 @@ export interface ShowcaseFeedEventRequest {
   position?: number;
   durationMs?: number;
   progress?: number;
-  sourceSurface: 'showcase' | 'showcase-reel';
+  sourceSurface: 'showcase' | 'showcase-reel' | 'feed';
   occurredAt?: string;
   metadata?: Record<string, unknown>;
 }
