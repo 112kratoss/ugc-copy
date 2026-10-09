@@ -1,5 +1,5 @@
 import type { AnchorHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseClient from '@/app/showcase/ShowcaseClient';
@@ -1339,5 +1339,272 @@ describe('ShowcaseClient save actions', () => {
 
     expect(await screen.findByText('Campaign Frame')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent(/post was restored/i);
+  });
+
+  // The safety rows the app's Explore card and the web's feed card carry, sent
+  // and worded as the feed card's are. Explore's tile and its reel had only the
+  // two feed preferences until 2026-10-10.
+  const otherCreator = { id: 'creator-2', username: 'second-creator', name: 'Second Creator', avatar: null };
+
+  function tileMenuRows(title: string) {
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`more actions for ${title}`, 'i') }));
+    return screen.getAllByRole('menuitem').map((row) => row.querySelector('.font-semibold')?.textContent);
+  }
+
+  function chooseFromTileMenu(title: string, row: RegExp) {
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`more actions for ${title}`, 'i') }));
+    fireEvent.click(screen.getByRole('menuitem', { name: row }));
+  }
+
+  function requestTo(path: string) {
+    return vi.mocked(fetch).mock.calls.find(([input]) => String(input) === path);
+  }
+
+  it("offers a tile the feed card's five rows", () => {
+    renderShowcase(createShowcaseItem());
+
+    expect(tileMenuRows('Campaign Frame'))
+      .toEqual(['Not interested', 'Hide @creator-name', 'Report content', 'Report user', 'Block user']);
+  });
+
+  it("offers Not interested and nothing else on the viewer's own post", () => {
+    renderShowcase(createShowcaseItem({ creator: { id: 'user-1', username: 'me', name: 'Me', avatar: null } }));
+
+    expect(tileMenuRows('Campaign Frame')).toEqual(['Not interested']);
+  });
+
+  it('draws the open menu in the page body, where a short tile cannot clip its five rows', () => {
+    renderShowcase(createShowcaseItem());
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+
+    const menu = screen.getByRole('menu');
+    expect(menu.parentElement).toBe(document.body);
+    expect(menu.className).toContain('fixed');
+  });
+
+  it('reports a post after a confirmation, removes it from the grid and says so', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderShowcase([
+      createShowcaseItem(),
+      createShowcaseItem({ id: 'post-2', title: 'Second Frame', creator: otherCreator }),
+    ]);
+
+    chooseFromTileMenu('Campaign Frame', /report content/i);
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Content reported and removed from your feed.');
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Report content?'));
+    const [, init] = requestTo('/api/posts/post-1/report') ?? [];
+    expect(init).toMatchObject({ method: 'POST', headers: expect.objectContaining({ Authorization: 'Bearer test-token' }) });
+    expect(JSON.parse(String(init?.body))).toEqual({
+      reason: 'unsafe_content',
+      details: 'Reported from the web Explore grid.',
+    });
+    expect(screen.queryByText('Campaign Frame')).not.toBeInTheDocument();
+    expect(screen.getByText('Second Frame')).toBeInTheDocument();
+  });
+
+  it('sends nothing and keeps the post when the confirmation is declined', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderShowcase(createShowcaseItem());
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: /report content/i }));
+    });
+
+    expect(requestTo('/api/posts/post-1/report')).toBeUndefined();
+    expect(screen.getByText('Campaign Frame')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('keeps the post and says why when the report is refused', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/posts/post-1/report') {
+        return { ok: false, status: 400, json: async () => ({ error: 'You cannot report your own post.' }) };
+      }
+      return { ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) };
+    }));
+    renderShowcase(createShowcaseItem());
+
+    chooseFromTileMenu('Campaign Frame', /report content/i);
+
+    expect(await screen.findByRole('alert'))
+      .toHaveTextContent('Could not report this post. You cannot report your own post.');
+    expect(screen.getByText('Campaign Frame')).toBeInTheDocument();
+  });
+
+  it('asks a signed-out viewer to sign in before reporting or blocking, and brings them back to Explore', () => {
+    authState.session = null;
+    authState.user = null;
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderShowcase(createShowcaseItem());
+
+    chooseFromTileMenu('Campaign Frame', /report content/i);
+    chooseFromTileMenu('Campaign Frame', /report user/i);
+    chooseFromTileMenu('Campaign Frame', /block user/i);
+
+    expect(mockPush.mock.calls).toEqual([
+      ['/login?returnUrl=%2Fshowcase'],
+      ['/login?returnUrl=%2Fshowcase'],
+      ['/login?returnUrl=%2Fshowcase'],
+    ]);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => /\/report|\/moderation\//.test(String(input)))).toEqual([]);
+  });
+
+  it('reports the creator with the reason and surface the feed card sends, and removes nothing', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderShowcase(createShowcaseItem());
+
+    chooseFromTileMenu('Campaign Frame', /report user/i);
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Creator reported. Our moderation team will take a look.');
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Report this creator?'));
+    const [, init] = requestTo('/api/moderation/reports') ?? [];
+    expect(JSON.parse(String(init?.body))).toEqual({
+      targetType: 'user',
+      targetId: 'creator-1',
+      reason: 'harassment',
+      sourceSurface: 'showcase',
+    });
+    expect(screen.getByText('Campaign Frame')).toBeInTheDocument();
+  });
+
+  it('blocks the creator after a confirmation and drops every post of theirs from the grid', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderShowcase([
+      createShowcaseItem(),
+      createShowcaseItem({ id: 'post-2', title: 'Second Frame', creator: otherCreator }),
+      createShowcaseItem({ id: 'post-3', title: 'Third Frame' }),
+    ]);
+
+    chooseFromTileMenu('Campaign Frame', /block user/i);
+
+    expect(await screen.findByRole('status'))
+      .toHaveTextContent('Creator Name is blocked. Their posts are gone from your feed.');
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Block this creator?'));
+    expect(requestTo('/api/moderation/blocks/creator-1')?.[1]).toMatchObject({
+      method: 'POST',
+      headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
+    });
+    expect(screen.queryByText('Campaign Frame')).not.toBeInTheDocument();
+    expect(screen.queryByText('Third Frame')).not.toBeInTheDocument();
+    expect(screen.getByText('Second Frame')).toBeInTheDocument();
+  });
+
+  it('does not bring a reported post back when a later page carries it again', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const reportedItem = createShowcaseItem();
+    const keptItem = createShowcaseItem({ id: 'post-keep', title: 'Kept Frame', creator: otherCreator });
+    const laterItem = createShowcaseItem({ id: 'post-later', title: 'Later Frame', creator: otherCreator });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/feed?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            items: [reportedItem, laterItem],
+            pageInfo: { hasMore: false, nextOffset: null, limit: 12, offset: 2 },
+          }),
+        };
+      }
+      return { ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) };
+    }));
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed([reportedItem, keptItem], { hasMore: true, nextOffset: 2, limit: 2 })}
+        initialCategory="all"
+        initialSort="recent"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+
+    chooseFromTileMenu('Campaign Frame', /report content/i);
+    expect(await screen.findByRole('status')).toHaveTextContent('Content reported and removed from your feed.');
+
+    let loadMoreObserver: (typeof intersectionObservers)[number] | undefined;
+    await waitFor(() => {
+      loadMoreObserver = intersectionObservers.find((observer) => (
+        observer.observedTargets.some((target) => (
+          target.getAttribute('data-showcase-load-more-sentinel') === 'true'
+        ))
+      ));
+      expect(loadMoreObserver).toBeDefined();
+    });
+    act(() => {
+      loadMoreObserver?.trigger(true);
+    });
+
+    expect(await screen.findByText('Later Frame')).toBeInTheDocument();
+    expect(screen.getByText('Kept Frame')).toBeInTheDocument();
+    expect(screen.queryByText('Campaign Frame')).not.toBeInTheDocument();
+  });
+
+  it('names the reel as the surface when a creator is reported from it, as the app does', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.spyOn(window.history, 'pushState');
+    renderShowcase(createShowcaseItem());
+
+    fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+    const reel = await screen.findByRole('dialog');
+    fireEvent.click(await within(reel).findByRole('button', { name: /more actions for campaign frame/i }));
+    fireEvent.click(within(reel).getByRole('menuitem', { name: /report user/i }));
+
+    expect(await screen.findByText('Creator reported. Our moderation team will take a look.')).toBeInTheDocument();
+    expect(JSON.parse(String(requestTo('/api/moderation/reports')?.[1]?.body))).toEqual({
+      targetType: 'user',
+      targetId: 'creator-1',
+      reason: 'harassment',
+      sourceSurface: 'showcase-reel',
+    });
+    // Reporting a creator takes nothing away: the reel stays on the post.
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: /more actions for campaign frame/i }))
+      .toBeInTheDocument();
+  });
+
+  it('offers the same rows in the reel, and moves on to the next post when the open one is reported', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.spyOn(window.history, 'pushState');
+    renderShowcase([
+      createShowcaseItem(),
+      createShowcaseItem({ id: 'post-2', title: 'Second Frame', creator: otherCreator }),
+    ]);
+
+    fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+    const reel = await screen.findByRole('dialog');
+    fireEvent.click(await within(reel).findByRole('button', { name: /more actions for campaign frame/i }));
+    expect(within(reel).getAllByRole('menuitem').map((row) => row.querySelector('.font-semibold')?.textContent))
+      .toEqual(['Not interested', 'Hide @creator-name', 'Report content', 'Report user', 'Block user']);
+
+    fireEvent.click(within(reel).getByRole('menuitem', { name: /report content/i }));
+
+    // By its words: the reel has a status line of its own.
+    expect(await screen.findByText('Content reported and removed from your feed.')).toBeInTheDocument();
+    expect(JSON.parse(String(requestTo('/api/posts/post-1/report')?.[1]?.body))).toEqual({
+      reason: 'unsafe_content',
+      details: 'Reported from the web reel.',
+    });
+    // The reel stays open on the post that followed the reported one.
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get('post')).toBe('post-2');
+    });
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: /more actions for second frame/i }))
+      .toBeInTheDocument();
+  });
+
+  it("offers the reel Not interested and nothing else on the viewer's own post", async () => {
+    renderShowcase(createShowcaseItem({ creator: { id: 'user-1', username: 'me', name: 'Me', avatar: null } }));
+
+    fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+    const reel = await screen.findByRole('dialog');
+    fireEvent.click(await within(reel).findByRole('button', { name: /more actions for campaign frame/i }));
+
+    expect(within(reel).getAllByRole('menuitem').map((row) => row.querySelector('.font-semibold')?.textContent))
+      .toEqual(['Not interested']);
   });
 });

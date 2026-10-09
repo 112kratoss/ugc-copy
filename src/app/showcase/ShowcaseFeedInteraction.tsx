@@ -4,6 +4,7 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -378,6 +379,13 @@ interface ShowcaseFeedbackMenuProps {
   onBlockUser?: () => void;
   /** `overlay` sits on media (the grid tile); `inline` sits in a card header. */
   variant?: 'overlay' | 'inline';
+  /**
+   * Draws the open menu in the page's body, fixed to its trigger. A feed
+   * card's always is (`inline`), and Explore's tile asks for it: both clip
+   * what they hold, and five rows are taller than most tiles. The reel's menu
+   * stays where it is: the reel is a layer above the body's menus, with room.
+   */
+  portal?: boolean;
   className?: string;
   buttonClassName?: string;
 }
@@ -391,17 +399,35 @@ type FeedbackMenuRow = {
   run: () => void;
 };
 
-// Room a row takes when the menu decides whether it fits below its trigger.
+// Room a row is given when the menu picks a side before it exists. Its real
+// height settles the side before the first paint: descriptions wrap, and five
+// rows measured 361px where this says 300.
 const FEEDBACK_MENU_ROW_HEIGHT = 60;
+// The menu's width (`w-64`), and the room it keeps from its trigger and from
+// the screen's edges.
+const FEEDBACK_MENU_WIDTH = 256;
+const FEEDBACK_MENU_GAP = 8;
 
 type FeedbackMenuAnchor = { side: 'below' | 'above'; top?: number; bottom?: number; right: number };
 
-/** Where the portalled menu sits for a trigger at `rect`, on the side chosen when it opened. */
+/** Below the trigger, or above it when a menu this tall has no room below and more room above. */
+function feedbackMenuSide(rect: DOMRect, menuHeight: number): FeedbackMenuAnchor['side'] {
+  const needed = menuHeight + FEEDBACK_MENU_GAP * 2;
+  const spaceBelow = window.innerHeight - rect.bottom;
+  return spaceBelow < needed && rect.top > spaceBelow ? 'above' : 'below';
+}
+
+/** Where the portalled menu sits for a trigger at `rect`, on the side chosen for it. */
 function placeFeedbackMenu(rect: DOMRect, side: FeedbackMenuAnchor['side']): FeedbackMenuAnchor {
-  const right = Math.max(8, window.innerWidth - rect.right);
+  // Its right edge under the trigger's, kept in from both edges of the screen:
+  // a trigger near the left edge would push a menu this wide off it.
+  const right = Math.max(
+    FEEDBACK_MENU_GAP,
+    Math.min(window.innerWidth - rect.right, window.innerWidth - FEEDBACK_MENU_WIDTH - FEEDBACK_MENU_GAP),
+  );
   return side === 'above'
-    ? { side, bottom: window.innerHeight - rect.top + 8, right }
-    : { side, top: rect.bottom + 8, right };
+    ? { side, bottom: window.innerHeight - rect.top + FEEDBACK_MENU_GAP, right }
+    : { side, top: rect.bottom + FEEDBACK_MENU_GAP, right };
 }
 
 export function ShowcaseFeedbackMenu({
@@ -414,21 +440,23 @@ export function ShowcaseFeedbackMenu({
   onReportUser,
   onBlockUser,
   variant = 'overlay',
+  portal,
   className = '',
   buttonClassName = '',
 }: ShowcaseFeedbackMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
-  // The inline menu is rendered into <body>: a feed card is paint-contained
-  // (`content-visibility: auto`), which clips anything positioned past its
-  // edge, and a short text post is shorter than the open menu. It opens below
-  // its trigger, or above it when the screen has no room below, and follows
-  // the trigger while the page scrolls.
+  // A portalled menu is rendered into <body>: a feed card and an Explore tile
+  // are paint-contained (`content-visibility: auto`), which clips anything
+  // positioned past their edge, and a short text post or a wide tile is
+  // shorter than the open menu. It opens below its trigger, or above it when
+  // the screen has no room below, and follows the trigger while the page
+  // scrolls.
   const [anchor, setAnchor] = useState<FeedbackMenuAnchor | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const actionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const usesPortal = variant === 'inline';
+  const usesPortal = portal ?? variant === 'inline';
 
   // The app's order and grouping: what to see less of, then safety.
   const rows: FeedbackMenuRow[] = [
@@ -463,15 +491,26 @@ export function ShowcaseFeedbackMenu({
   const openMenu = () => {
     if (usesPortal && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
-      const needed = 16 + rows.length * FEEDBACK_MENU_ROW_HEIGHT;
-      const spaceBelow = window.innerHeight - rect.bottom;
-      setAnchor(placeFeedbackMenu(rect, spaceBelow < needed && rect.top > spaceBelow ? 'above' : 'below'));
+      setAnchor(placeFeedbackMenu(rect, feedbackMenuSide(rect, rows.length * FEEDBACK_MENU_ROW_HEIGHT)));
     }
     setIsOpen(true);
   };
   const triggerClassName = variant === 'inline'
     ? 'ui-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-full text-[var(--ui-text-faint)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]'
     : 'ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-black/60 text-white shadow-md backdrop-blur-md transition hover:bg-black/80';
+
+  // The side above was picked from an estimate. Once the menu is in the page
+  // its real height picks again, before anything is painted.
+  useLayoutEffect(() => {
+    const trigger = triggerRef.current;
+    const menuHeight = menuRef.current?.offsetHeight ?? 0;
+    if (!isOpen || !usesPortal || !trigger || menuHeight <= 0) {
+      return;
+    }
+    const rect = trigger.getBoundingClientRect();
+    const side = feedbackMenuSide(rect, menuHeight);
+    setAnchor((current) => (current && current.side !== side ? placeFeedbackMenu(rect, side) : current));
+  }, [isOpen, usesPortal]);
 
   const focusAction = useCallback((index: number) => {
     const normalizedIndex = (index + actionCount) % actionCount;

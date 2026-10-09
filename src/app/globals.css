@@ -1041,6 +1041,13 @@ button:disabled,
   .group:focus-within .showcase-card-actions {
     opacity: 1;
   }
+
+  /* A tile's menu is drawn in the page body, so the pointer leaves the tile to
+     reach it: the tile keeps its controls for as long as the menu is open. A
+     rule of its own, because a browser without :has() drops the whole list. */
+  .group:has([aria-haspopup="menu"][aria-expanded="true"]) .showcase-card-actions {
+    opacity: 1;
+  }
 }
 
 .app-scrollbar {

@@ -4,7 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { submitPostReportForRoute } from '@/lib/post-report-service';
 
 function createAdminSupabaseMock(options?: {
-  post?: { id: string } | null;
+  post?: { id: string; user_id?: string } | null;
   postError?: { message: string } | null;
   bundle?: { id: string } | null;
   bundleError?: { message: string } | null;
@@ -13,6 +13,7 @@ function createAdminSupabaseMock(options?: {
 }) {
   const calls = {
     tables: [] as string[],
+    selects: [] as Array<{ table: string; columns: string }>,
     inserts: [] as Array<Record<string, unknown>>,
     rpc: [] as Array<{ name: string; args: Record<string, unknown> }>,
   };
@@ -20,7 +21,8 @@ function createAdminSupabaseMock(options?: {
   function createQuery(table: string) {
     const filters: Record<string, unknown> = {};
     const query = {
-      select() {
+      select(columns: string) {
+        calls.selects.push({ table, columns });
         return query;
       },
       eq(column: string, value: unknown) {
@@ -34,7 +36,8 @@ function createAdminSupabaseMock(options?: {
       async maybeSingle() {
         if (table === 'posts') {
           return {
-            data: options?.post === undefined ? { id: filters.id as string } : options.post,
+            // Someone else's post unless a test says whose it is.
+            data: options?.post === undefined ? { id: filters.id as string, user_id: 'creator-1' } : options.post,
             error: options?.postError ?? null,
           };
         }
@@ -191,6 +194,50 @@ describe('submitPostReportForRoute', () => {
       status: 404,
       body: { error: 'Post not found.' },
     });
+    expect(admin.calls.inserts).toEqual([]);
+  });
+
+  // A report asks moderators to look at someone else's post. The clients leave
+  // the row out on your own post; this answers the ones that still send it, as
+  // the subject-report route answers a report on your own profile or comment.
+  it("refuses a report on the reporter's own post", async () => {
+    const admin = createAdminSupabaseMock({ post: { id: 'post-1', user_id: 'reporter-1' } });
+    const invalidateFeedCache = vi.fn();
+
+    const result = await submitPostReportForRoute({
+      postId: 'post-1',
+      reporterUserId: 'reporter-1',
+      readBody: vi.fn(async () => ({ reason: 'unsafe_content', details: 'Reported from the mobile home feed.' })),
+      createAdminSupabase: vi.fn(() => admin.client),
+      invalidateFeedCache,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'You cannot report your own post.' },
+    });
+    expect(admin.calls.selects).toEqual([{ table: 'posts', columns: 'id, user_id' }]);
+    expect(admin.calls.inserts).toEqual([]);
+    expect(invalidateFeedCache).not.toHaveBeenCalled();
+  });
+
+  it("refuses a report on the reporter's own recipe before looking the recipe up", async () => {
+    const admin = createAdminSupabaseMock({ post: { id: 'post-1', user_id: 'reporter-1' } });
+
+    const result = await submitPostReportForRoute({
+      postId: 'post-1',
+      reporterUserId: 'reporter-1',
+      readBody: vi.fn(async () => ({ reason: 'misleading_unlock', bundleId: 'bundle-1' })),
+      createAdminSupabase: vi.fn(() => admin.client),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'You cannot report your own post.' },
+    });
+    expect(admin.calls.tables).toEqual(['posts']);
     expect(admin.calls.inserts).toEqual([]);
   });
 
