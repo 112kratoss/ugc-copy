@@ -36,6 +36,5 @@ SIGKILL assertion remains unchanged. The final complete run passes all 28
 actual cleanup tests across five files in 27 seconds; all fixtures clean up.
 
 Private before/after evidence uses `upload-reclaim-managed-*` under
-`.audit-evidence/backend-social/`. Production release is pending. JOB-02 remains
-failed for these reproduced reporting defects; this batch does not close the
+`.audit-evidence/backend-social/`. [Production release is independently verified](backend-section-12-upload-reclaim-job-reporting-release-2026-10-09.md). JOB-02 returns to untested; this batch does not close the
 remaining per-job recovery, poison-work or expiry-fencing matrix.

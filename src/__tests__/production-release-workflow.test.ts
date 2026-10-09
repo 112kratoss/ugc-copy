@@ -30,7 +30,8 @@ describe('production release workflow', () => {
     expect(workflow).toContain('for attempt in $(seq 1 12)');
     expect(workflow).toContain('within 60 seconds of promotion');
     expect(workflow).toContain('Require protected production health after promotion');
-    expect(workflow).toContain('Production backend health is ');
+    expect(workflow).toContain('node .github/scripts/verify-production-health.mjs');
+    expect(workflow).not.toContain('body.buildId &&');
     expect(workflow).toContain('environment: production');
     expect(workflow).toContain(
       'node .github/scripts/apply-supabase-migrations.mjs',
