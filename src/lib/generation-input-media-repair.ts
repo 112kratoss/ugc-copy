@@ -156,7 +156,9 @@ export async function hasRepairableLegacyGenerations(
     return rows.length > 0;
   } catch (error) {
     logBackendError('failed_to_check_repairable_legacy_generations', { error });
-    return false;
+    // Unknown eligibility is a failed run, not proof that the backlog is empty.
+    // Let the managed job persist the failure and allow the next run to retry.
+    throw error;
   }
 }
 
@@ -424,7 +426,7 @@ export async function repairMissingGenerationInputMedia(
     });
   } catch (error) {
     logBackendError('failed_to_select_generations_for_input_media_repair', { error });
-    return summary;
+    throw error;
   }
 
   for (const generation of generations) {
