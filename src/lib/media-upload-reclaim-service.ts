@@ -21,6 +21,8 @@ const UPLOADS_BUCKET = 'uploads';
  * this is a handful of requests even at the cap.
  */
 export const RECLAIM_BATCH_SIZE = 500;
+// UUID filters travel in the URL; keep each write below proxy URI limits.
+const RECLAIM_WRITE_BATCH_SIZE = 100;
 
 /**
  * Never-consumed intents are withheld until this is explicitly enabled.
@@ -103,7 +105,8 @@ export async function selectReclaimableIntents(
     .select('id, user_id, storage_path, kind, declared_bytes, created_at, consumed_by')
     .is('storage_cleared_at', null)
     .lt('created_at', cutoff)
-    .order('created_at', { ascending: true })
+    .order('reclaim_priority_at', { ascending: true })
+    .order('id', { ascending: true })
     .limit(options.limit ?? RECLAIM_BATCH_SIZE);
 
   if (!includeAbandoned) {
@@ -170,6 +173,20 @@ export async function reclaimAbandonedMediaUploads(
 
   if (rows.length === 0) {
     return summary;
+  }
+
+  // Advance this bounded batch before external work. Protected objects, failed
+  // deletes and dead workers stay eligible but rotate behind older waiting work.
+  // This marker never changes upload age, protection checks or cleared state.
+  const checkedAt = new Date().toISOString();
+  for (let start = 0; start < rows.length; start += RECLAIM_WRITE_BATCH_SIZE) {
+    const scan = await client.from(MEDIA_UPLOAD_INTENTS_TABLE)
+      .update({ reclaim_checked_at: checkedAt })
+      .in('id', rows.slice(start, start + RECLAIM_WRITE_BATCH_SIZE).map((row) => row.id))
+      .is('storage_cleared_at', null);
+    if (scan.error) {
+      throw new Error(scan.error.message ?? 'Failed to record upload reclaim selection.');
+    }
   }
 
   const protectedPaths = options.protectedPaths !== undefined
@@ -279,13 +296,16 @@ async function markCleared(client: SupabaseClient, ids: string[]): Promise<void>
     return;
   }
 
-  const { error } = await client
-    .from(MEDIA_UPLOAD_INTENTS_TABLE)
-    .update({ storage_cleared_at: new Date().toISOString() })
-    .in('id', ids);
+  for (let start = 0; start < ids.length; start += RECLAIM_WRITE_BATCH_SIZE) {
+    const batch = ids.slice(start, start + RECLAIM_WRITE_BATCH_SIZE);
+    const { error } = await client
+      .from(MEDIA_UPLOAD_INTENTS_TABLE)
+      .update({ storage_cleared_at: new Date().toISOString() })
+      .in('id', batch);
 
-  if (error) {
-    logBackendWarning('failed_to_mark_reclaimed_media_upload_intents', { error, count: ids.length });
+    if (error) {
+      logBackendWarning('failed_to_mark_reclaimed_media_upload_intents', { error, count: batch.length });
+    }
   }
 }
 

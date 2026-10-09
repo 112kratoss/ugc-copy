@@ -1,8 +1,7 @@
 # Section 12G — unused rendition repair reservations
 
 Status: reproduced through actual local service, PostgREST, Storage and SQL.
-Candidate passes six actual controls and 43 focused regressions. CI and standard
-release verification remain pending. No schema migration is needed.
+Six actual controls and 43 focused regressions pass. The [production release is independently verified](backend-section-12-media-rendition-budget-release-2026-10-08.md). No schema migration is needed.
 
 The rendition worker reserves a retry for every row it claims. When its time
 budget ends, it breaks the processing loop but previously left unstarted rows in
@@ -42,7 +41,7 @@ deliberately absent, so no encoder or provider is invoked. These checks verify
 claim/budget/release behavior, not rendition quality or genuine worker death.
 Forty-three existing preview/repair-capacity tests, app/test typechecking and scoped lint also pass. A bounded read-only production inventory found nine video media rows, all ready with attempt count one and no expired leases. No historical repair is indicated by that current inventory.
 
-JOB-02 remains failed until the prevention release is independently verified;
+JOB-02 remains failed for the separate upload reclaim progress finding;
 the full media recovery and job matrices remain open. Private evidence is under
 `.audit-evidence/backend-social/media-rendition-budget-*`.
 
@@ -61,4 +60,4 @@ React state updater. Each verified account load gets a fresh identity, including
 returning to the same user. Sign-out and unmount invalidate it as well. The
 existing assertions remain intact; 25 account/shell tests, app/test types and
 scoped lint pass. The candidate incorporates main through #417; final CI and
-release remain required for both runtime corrections.
+production release verification passed for both runtime corrections.
