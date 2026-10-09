@@ -25,16 +25,21 @@ it.skipIf(!process.env.AUDIT_STORAGE_CONFIG || !process.env.SUPABASE_TEST_DB_URL
   const anon=createClient(cfg.API_URL,cfg.ANON_KEY,options);
   const own=await owner.storage.from('generation_inputs').createSignedUrl(paths[0],60);expect(own.error).toBeNull();if(!own.data)throw Error('No signed URL');
   const first=await localFetch(own.data.signedUrl);expect(first.status).toBe(200);expect(await first.text()).toBe('fixture-0');
+  const range=await localFetch(own.data.signedUrl,{headers:{Range:'bytes=0-3'}});
+  expect(range.status).toBe(206);expect(range.headers.get('content-range')).toBe('bytes 0-3/9');expect(await range.text()).toBe('fixt');
   const cross=await other.storage.from('generation_inputs').createSignedUrl(paths[0],60);expect(cross.error).not.toBeNull();expect(cross.data).toBeNull();
   const unauth=await anon.storage.from('generation_inputs').createSignedUrl(paths[0],60);expect(unauth.error).not.toBeNull();expect(unauth.data).toBeNull();
   const publicUrl=admin.storage.from('generation_inputs').getPublicUrl(paths[0]).data.publicUrl;
   const unsigned=await localFetch(publicUrl);expect(unsigned.ok).toBe(false);
+  expect((await localFetch(publicUrl,{headers:{Range:'bytes=0-3'}})).ok).toBe(false);
   const tampered=new URL(own.data.signedUrl);const token=tampered.searchParams.get('token')!;const parts=token.split('.');parts[2]=(parts[2][0]==='a'?'b':'a')+parts[2].slice(1);tampered.searchParams.set('token',parts.join('.'));
   const invalid=await localFetch(tampered);expect(invalid.ok).toBe(false);
   const changed=new URL(own.data.signedUrl);changed.pathname=changed.pathname.replace(users[0],users[1]);const rebound=await localFetch(changed);expect(rebound.ok).toBe(false);
   const short=await owner.storage.from('generation_inputs').createSignedUrl(paths[0],2);expect(short.error).toBeNull();if(!short.data)throw Error('No short-lived URL');expect((await localFetch(short.data.signedUrl)).ok).toBe(true);
   await new Promise(resolve=>setTimeout(resolve,4000));const expired=await localFetch(short.data.signedUrl);expect(expired.ok).toBe(false);
+  expect((await localFetch(short.data.signedUrl,{headers:{Range:'bytes=0-3'}})).ok).toBe(false);
   expect((await admin.storage.from('generation_inputs').remove([paths[0]])).error).toBeNull();const removed=await localFetch(own.data.signedUrl);expect(removed.ok).toBe(false);
+  expect((await localFetch(own.data.signedUrl,{headers:{Range:'bytes=0-3'}})).ok).toBe(false);
   expect((await admin.storage.from('generation_inputs').download(paths[1])).error).toBeNull();
  }finally{
   if(paths.length)expect((await admin.storage.from('generation_inputs').remove(paths)).error).toBeNull();
