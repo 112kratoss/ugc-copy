@@ -38,6 +38,5 @@ change. All 136 mobile contract cases and 30 focused web/parser cases pass, as d
 application/test typing and scoped lint. API integration CI includes the new
 suite. No migration, production data mutation or provider request is needed.
 
-Production release is pending. SOCIAL-04 remains failed for this reproduced
-limit gap until release verification; other profile/social methods and remaining
+[Production release is independently verified](backend-section-12-profile-request-bounds-release-2026-10-09.md). SOCIAL-04 returns to untested; other profile/social methods and remaining
 lifecycle coverage remain open. Includes the eight passing 12O media controls.
