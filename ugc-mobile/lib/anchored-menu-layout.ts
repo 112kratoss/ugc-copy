@@ -1,8 +1,8 @@
 /**
  * Where a menu sits beside the button that opened it, and the point it grows
  * from (`components/anchored-menu.tsx`). Pure arithmetic, so the rules are held
- * by a unit test: the panel never leaves the area it is given, and its motion
- * always starts at the button.
+ * by a unit test: the panel never leaves the area it is given, it always spans
+ * its button's centre, and its motion always starts at the button.
  */
 export interface MenuRect {
   x: number;
@@ -58,11 +58,17 @@ export function placeAnchoredMenu({
   const anchorCentreX = anchor.x + anchor.width / 2;
   const anchorCentreY = anchor.y + anchor.height / 2;
 
-  // A button on the right half of the screen (every ••• today) shares its right
+  // A button on the right half of its area (most ••• today) shares its right
   // edge with the menu; one on the left shares its left edge.
-  const opensLeftward = anchorCentreX > (bounds.left + bounds.right) / 2;
+  const onRightHalf = anchorCentreX > (bounds.left + bounds.right) / 2;
+  const aligned = onRightHalf ? anchor.x + anchor.width - panel.width : anchor.x;
+  const fits = aligned >= bounds.left && aligned + panel.width <= bounds.right;
+  // Where that edge has no room the menu stays against its button's side of
+  // the area. Sliding it back only as far as it had to go carried the menu of
+  // a left-hand card (Explore's grid) across the screen, to hang under the
+  // next card's ⋮ as though it were that card's.
   const left = clamp(
-    opensLeftward ? anchor.x + anchor.width - panel.width : anchor.x,
+    fits ? aligned : onRightHalf ? bounds.right - panel.width : bounds.left,
     bounds.left,
     bounds.right - panel.width,
   );
