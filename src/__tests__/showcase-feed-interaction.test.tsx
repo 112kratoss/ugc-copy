@@ -322,6 +322,25 @@ describe('showcase feed interactions', () => {
     slider.remove();
   });
 
+  // A handle has no space to wrap at. Measured in a browser on 2026-10-09: 24 wide
+  // letters ran 80px past the 256px menu until the label could break anywhere.
+  it('lets a long handle break inside its row', () => {
+    render(
+      <ShowcaseFeedbackMenu
+        variant="inline"
+        itemTitle="Campaign Frame"
+        creator={{ username: 'wwwwwwwwwwwwwwwwwwwwwwww', name: 'W' }}
+        onSelect={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+
+    const label = screen.getByText('Hide @wwwwwwwwwwwwwwwwwwwwwwww');
+    expect(label.className).toContain('[overflow-wrap:anywhere]');
+    expect(label.parentElement?.className).toContain('min-w-0');
+  });
+
   it('leaves out the rows about the creator when there is no creator to act on', () => {
     render(
       <ShowcaseFeedbackMenu
