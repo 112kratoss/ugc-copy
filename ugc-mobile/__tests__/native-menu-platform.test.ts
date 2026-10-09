@@ -79,12 +79,31 @@ describe('the iOS menu', () => {
 
 describe('the Android menu', () => {
   const android = read('components/native-menu.android.tsx');
+  const surface = read('components/anchored-menu.tsx');
 
-  // Compose parses a colour prop with Android's parser, which rejects the
-  // palettes' rgba() tokens: the divider once failed its prop on every open.
-  it('hands Compose every colour through toAndroidColor', () => {
-    const colourProps = android.match(/\bcolor=\{[^}]*\}/g) ?? [];
-    expect(colourProps.length).toBeGreaterThan(0);
-    for (const prop of colourProps) expect(prop).toMatch(/^color=\{toAndroidColor\(/);
+  // The app draws it, so it reaches every build over the air: nothing in it
+  // may wait on a native module the way the Material dropdown did.
+  it("is the app's own, with no Expo UI and no availability check behind it", () => {
+    expect(android).toContain('<AnchoredMenu');
+    expect(`${android}\n${surface}`).not.toMatch(/(from|require\()\s*['"]@expo\/ui/);
+    expect(android).not.toContain('isNativeMenuAvailable');
+  });
+
+  it('is mounted only while it is open or leaving, so a feed of cards pays nothing for it', () => {
+    expect(android).toMatch(/\{anchor \? \(\s*<AnchoredMenu/);
+  });
+
+  // The press measures this view. Android drops a view that only lays out its
+  // children, and a dropped view measures as nothing.
+  it('grows from a button it can measure, and opens the sheet when it cannot', () => {
+    expect(android).toMatch(/<View ref=\{buttonRef\} collapsable=\{false\}/);
+    expect(android.match(/props\.onFallbackPress\(\)/g)?.length).toBe(2);
+  });
+
+  // A Modal is another window on Android, above the overlay host: a menu
+  // hosted there would open behind the screen that asked for it.
+  it('is hosted in the app window, not in a Modal', () => {
+    expect(`${android}\n${surface}`).not.toContain('<Modal');
+    expect(surface).toMatch(/<Overlay visible>\s*\{\/\*[^]*?\*\/\}\s*<AppSchemeScope>\s*<MenuSurface/);
   });
 });

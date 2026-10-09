@@ -10,6 +10,7 @@ import {
   menuAction,
   menuSubmenu,
   nativeMenuRows,
+  nativeMenuSectionRows,
   type NativeMenuAction,
   type NativeMenuModel,
 } from '../lib/native-menu';
@@ -75,7 +76,7 @@ describe('native menu model', () => {
     expect(hasNativeMenuItems({ quickActions: [action('q')], sections: [] })).toBe(true);
   });
 
-  it("lists Android's rows with quick actions first and a divider between groups", () => {
+  it('lists every row with the quick actions first and a divider between groups', () => {
     const model: NativeMenuModel = {
       quickActions: [action('q1'), action('q2')],
       sections: [
@@ -85,6 +86,21 @@ describe('native menu model', () => {
       ],
     };
     expect(rowIds(model)).toEqual(['q1', 'q2', '—', 'a', 'b', '—', 'c']);
+  });
+
+  it("leaves the quick actions out of the rows under Android's icon row, and opens with no divider", () => {
+    const flat = vi.fn();
+    const rows = nativeMenuSectionRows({
+      quickActions: [action('q1'), action('q2')],
+      sections: [
+        { id: 'one', items: [action('a'), menuSubmenu({ id: 'visibility', label: 'Change visibility', items: [action('public')], onSelectFlat: flat })] },
+        { id: 'empty', items: [] },
+        { id: 'two', items: [action('c')] },
+      ],
+    });
+
+    expect(rows.map((row) => (row.kind === 'divider' ? '—' : row.action.id))).toEqual(['a', 'visibility', '—', 'c']);
+    expect(nativeMenuSectionRows({ quickActions: [action('q1')], sections: [] })).toEqual([]);
   });
 
   it('draws a submenu as its one row where it can run a flat stand-in, and as its rows where it cannot', () => {

@@ -36,15 +36,15 @@ export interface NativeMenuTrigger {
 
 export interface NativeMenuProps {
   model: NativeMenuModel;
-  /** What VoiceOver reads for the iOS button, e.g. "More options". */
+  /** What VoiceOver reads for the iOS button, and TalkBack for Android's menu, e.g. "More options". */
   accessibilityLabel: string;
   accessibilityHint?: string;
   /** The iOS button. */
   trigger: NativeMenuTrigger;
   /**
    * Draws the React Native button around the press handler it is given. Android
-   * draws it (the handler opens the dropdown), and so does a build without Expo
-   * UI (the handler is `onFallbackPress`).
+   * draws it (the handler opens the menu), and so does an iOS build without
+   * Expo UI (the handler is `onFallbackPress`).
    */
   renderButton: (onPress: () => void) => ReactNode;
   /** What a press did before native menus: open the caller's sheet. */

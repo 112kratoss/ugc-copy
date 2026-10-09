@@ -4,9 +4,10 @@ let available: boolean | undefined;
 
 /**
  * Whether this binary carries Expo UI's native module (`ExpoUI`), which draws
- * the native menus (`lib/native-menu.ts`). Store builds from 0.1.8 do; a dev
+ * the iOS menu (`lib/native-menu.ts`). Store builds from 0.1.8 do; a dev
  * client built before it was added does not, and there a ••• button keeps its
- * sheet rather than crashing on a view the binary cannot create.
+ * sheet rather than crashing on a view the binary cannot create. Android's
+ * menu is the app's own and does not ask.
  *
  * Read through `requireOptionalNativeModule`, as `lib/system-bars.ts` reads the
  * navigation bar: the package's own components require their views at import.
