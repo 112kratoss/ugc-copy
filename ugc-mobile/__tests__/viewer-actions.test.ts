@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -14,6 +17,7 @@ import {
   getViewerActionGroupLabel,
   getViewerActionLabel,
   getViewerActionSlots,
+  getViewerSafetyActions,
   getViewerShareIntent,
   getViewerShareSourceSurface,
   getViewerStateChip,
@@ -194,6 +198,41 @@ describe('immersive viewer actions', () => {
     for (const action of ['report-content', 'report-user', 'block-user', 'report-ai-output']) {
       expect(isDestructiveViewerAction(action)).toBe(true);
     }
+  });
+
+  // What a viewer may report or block from a viewer item's ••• (the reel, the
+  // Details page, a profile card). A post is anyone's to report but its
+  // creator's: Report content stayed on your own post until 2026-10-09, where
+  // it filed a report on no one.
+  it("offers a post's three Safety rows to anyone but its creator", () => {
+    const post = { sourceType: 'showcase', creatorId: 'maya', generationId: null } as const;
+
+    expect(getViewerSafetyActions(post, 'me')).toEqual(['report-content', 'report-user', 'block-user']);
+    expect(getViewerSafetyActions(post, undefined)).toEqual(['report-content', 'report-user', 'block-user']);
+    expect(getViewerSafetyActions(post, null)).toEqual(['report-content', 'report-user', 'block-user']);
+    expect(getViewerSafetyActions({ ...post, creatorId: 'me' }, 'me')).toEqual([]);
+    // No creator account: no one to report or block, and the post is no one's own.
+    expect(getViewerSafetyActions({ ...post, creatorId: null }, 'me')).toEqual(['report-content']);
+    expect(getViewerSafetyActions({ ...post, creatorId: undefined }, undefined)).toEqual(['report-content']);
+  });
+
+  it('offers a creation its own report, and a post from your profile none', () => {
+    expect(getViewerSafetyActions({ sourceType: 'generation', creatorId: 'me', generationId: 'gen-1' }, 'me')).toEqual(['report-ai-output']);
+    expect(getViewerSafetyActions({ sourceType: 'generation', creatorId: 'me', generationId: null }, 'me')).toEqual([]);
+    // Whoever a creation's item names as its creator, it is not a post: no post row.
+    expect(getViewerSafetyActions({ sourceType: 'generation', creatorId: null, generationId: 'gen-1' }, 'me')).toEqual(['report-ai-output']);
+    expect(getViewerSafetyActions({ sourceType: 'owner-post', creatorId: 'maya', generationId: null }, 'me')).toEqual([]);
+    expect(getViewerSafetyActions({ sourceType: 'owner-post', creatorId: 'me', generationId: null }, 'me')).toEqual([]);
+    // A post that carries its creation's id is still a post.
+    expect(getViewerSafetyActions({ sourceType: 'showcase', creatorId: 'me', generationId: 'gen-1' }, 'me')).toEqual([]);
+  });
+
+  it('is the list the menu and its sheet are built from', () => {
+    const source = readFileSync(path.resolve(__dirname, '../lib/use-viewer-action-handlers.ts'), 'utf8');
+
+    expect(source).toContain('    ...getViewerSafetyActions(item, user?.id),\n  ];');
+    // Nothing beside it adds a Safety row of its own.
+    expect(source).not.toMatch(/\? \['(report-content|report-user|block-user|report-ai-output)'/);
   });
 
   it('groups creation-to-post actions separately from general media actions', () => {

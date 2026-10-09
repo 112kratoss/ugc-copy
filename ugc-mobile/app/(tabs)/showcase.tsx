@@ -25,7 +25,7 @@ import {
 } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
 import { createFeedVideoActivationStore, FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
-import { buildFeedFeedbackMenu, canHideFeedCreator } from '@/lib/feed-feedback-menu';
+import { buildFeedFeedbackMenu, canHideFeedCreator, isOwnFeedPost } from '@/lib/feed-feedback-menu';
 import { hideCreatorLabel } from '@/lib/hide-creator-label';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { buildImmersiveShowcaseItems, showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
@@ -682,6 +682,7 @@ export default function ShowcaseScreen() {
   const feedbackMenu = (item: ShowcaseFeedItem): NativeMenuModel => buildFeedFeedbackMenu({
     creator: item.creator,
     canHideCreator: canHideFeedCreator(item.creator.id, user?.id),
+    viewerIsOwner: isOwnFeedPost(item.creator.id, user?.id),
     sessionOnly: !user,
     onNotInterested: () => applyFeedFeedback(item, 'not_interested'),
     onHideCreator: () => applyFeedFeedback(item, 'hide_creator'),
@@ -886,6 +887,7 @@ export default function ShowcaseScreen() {
           creatorLabel={feedbackItem ? formatCreatorLabel(feedbackItem.creator.username || feedbackItem.creator.name) : '@creator'}
           hideLabel={hideCreatorLabel(feedbackItem?.creator ?? {})}
           canHideCreator={canHideFeedCreator(feedbackItem?.creator.id, user?.id)}
+          viewerIsOwner={isOwnFeedPost(feedbackItem?.creator.id, user?.id)}
           onClose={() => setFeedbackItem(null)}
           onHideCreator={() => applyFeedFeedback(feedbackItem, 'hide_creator')}
           onNotInterested={() => applyFeedFeedback(feedbackItem, 'not_interested')}

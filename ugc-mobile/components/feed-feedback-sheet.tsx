@@ -13,12 +13,13 @@ import { useAppTheme } from '@/lib/theme-context';
 /**
  * The rows of a feed card's ⋮ as a sheet, where the menu cannot be drawn
  * (`lib/feed-feedback-menu.ts` lists the same rows and says why your own post
- * has no creator rows).
+ * has Not interested and nothing else).
  */
 export function FeedFeedbackSheet({
   creatorLabel,
   hideLabel,
   canHideCreator = true,
+  viewerIsOwner = false,
   onClose,
   onHideCreator,
   onNotInterested,
@@ -34,6 +35,8 @@ export function FeedFeedbackSheet({
   hideLabel: string;
   /** False on the viewer's own post: the Hide, Report user and Block user rows are left out. */
   canHideCreator?: boolean;
+  /** True on the viewer's own post: Report content is left out too. */
+  viewerIsOwner?: boolean;
   onClose: () => void;
   onHideCreator: () => void;
   onNotInterested: () => void;
@@ -50,12 +53,16 @@ export function FeedFeedbackSheet({
   const bottomInset = resolvedBottomInset(insets.bottom);
   const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
   // The screen clears its post as the sheet starts to leave, and a cleared post
-  // has no creator. The rows stay as they were while the sheet slides away.
+  // has no creator and is no one's own. The rows stay as they were while the
+  // sheet slides away.
   const [showsCreatorRows, setShowsCreatorRows] = useState(canHideCreator);
+  const [showsReportContent, setShowsReportContent] = useState(!viewerIsOwner);
   if (visible && showsCreatorRows !== canHideCreator) setShowsCreatorRows(canHideCreator);
+  if (visible && showsReportContent === viewerIsOwner) setShowsReportContent(!viewerIsOwner);
+  const reportContent = showsReportContent ? onReportContent : undefined;
   const reportUser = showsCreatorRows ? onReportUser : undefined;
   const blockUser = showsCreatorRows ? onBlockUser : undefined;
-  const hasSafetyActions = Boolean(onReportContent || reportUser || blockUser);
+  const hasSafetyActions = Boolean(reportContent || reportUser || blockUser);
 
   return (
     <Modal
@@ -126,12 +133,12 @@ export function FeedFeedbackSheet({
                   Safety
                 </Text>
                 <SheetActionGroup>
-                  {onReportContent ? (
+                  {reportContent ? (
                     <SheetActionRow
                       body="Send this post to the moderation team for review."
                       icon={Flag}
                       label="Report content"
-                      onPress={onReportContent}
+                      onPress={reportContent}
                       tone="danger"
                     />
                   ) : null}
