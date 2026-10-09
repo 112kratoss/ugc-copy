@@ -48,6 +48,7 @@ export function FeedCardShell({
   media,
   player,
   readMore,
+  unlock,
   onOpen,
   onOpenTouchStart,
   nativeZoom = false,
@@ -81,6 +82,8 @@ export function FeedCardShell({
   player?: ReactNode;
   /** Its own tap target, beside the preview's ordinary post-open target. */
   readMore?: ReactNode;
+  /** The recipe or unlock behind the post, as the web card shows it. */
+  unlock?: ReactNode;
   onOpen?: () => void;
   /**
    * The finger has gone down on the media: a chance to get its opening ready.
@@ -246,6 +249,8 @@ export function FeedCardShell({
       {readMore}
 
       {player}
+
+      {unlock}
 
       <View
         style={{

@@ -5,13 +5,24 @@ import {
   resolveOnboardingDestination,
 } from '../lib/onboarding-destination';
 
-const noDeferral = { identityDeferredAt: null };
+const noDeferral = { identityDeferredAt: null, status: 'not_started' as const };
 
 describe('resolving the onboarding destination', () => {
   it('sends a signed-out visitor to the intro', () => {
     expect(resolveOnboardingDestination({
       hasUser: false, welcome: null, local: noDeferral,
     })).toBe('intro');
+  });
+
+  it('stops asking a guest who stepped out of the intro or finished it', () => {
+    // "Explore as guest" marks the flow skipped; the Home card used to come
+    // back on every visit regardless. Settings still opens the flow.
+    expect(resolveOnboardingDestination({
+      hasUser: false, welcome: null, local: { identityDeferredAt: null, status: 'skipped' },
+    })).toBe('none');
+    expect(resolveOnboardingDestination({
+      hasUser: false, welcome: null, local: { identityDeferredAt: null, status: 'completed' },
+    })).toBe('none');
   });
 
   it('waits rather than guessing while the account state is unknown', () => {
@@ -46,7 +57,7 @@ describe('resolving the onboarding destination', () => {
     expect(resolveOnboardingDestination({
       hasUser: true,
       welcome: { status: 'not_eligible', identityComplete: false },
-      local: { identityDeferredAt: '2026-08-28T07:00:00.000Z' },
+      local: { identityDeferredAt: '2026-08-28T07:00:00.000Z', status: 'not_started' as const },
     })).toBe('none');
   });
 

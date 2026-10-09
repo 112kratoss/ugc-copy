@@ -10,6 +10,8 @@ describe('generation polling helpers', () => {
   it('recognizes terminal provider states', () => {
     expect(isGenerationFinished('succeeded')).toBe(true);
     expect(isGenerationFinished('failed')).toBe(true);
+    // The legacy spelling the database still allows; it used to run for ever.
+    expect(isGenerationFinished('completed')).toBe(true);
     expect(isGenerationFinished('processing')).toBe(false);
   });
 

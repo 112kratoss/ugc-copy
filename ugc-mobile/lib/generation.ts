@@ -3,7 +3,9 @@ import type { GenerationStatusResponse } from './types';
 export type GenerationKind = 'image' | 'video' | 'motion';
 
 export function isGenerationFinished(status: string) {
-  return status === 'succeeded' || status === 'failed';
+  // `completed` is the legacy spelling still allowed by the database; the web
+  // maps it to succeeded, and the app used to count it as in flight for ever.
+  return status === 'succeeded' || status === 'failed' || status === 'completed';
 }
 
 /**
