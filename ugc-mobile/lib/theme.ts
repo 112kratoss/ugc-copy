@@ -562,6 +562,10 @@ const staticTokens = {
       // the token the divergence was invisible — so reality wins over the
       // number nobody used.
       reveal: 360,
+      // A menu leaving (`components/anchored-menu.tsx`): shorter than its
+      // arrival, because the choice is made and the screen under it is what
+      // the eye wants next.
+      menuExit: 110,
     },
     // `instant`/`pressIn`/`pressOut` used to live here and were referenced
     // nowhere. Press feedback is spring-driven (see `spring.pressIn` /
@@ -583,6 +587,10 @@ const staticTokens = {
       navigationTravelX: 1.16,
       navigationTravelY: 0.9,
       navigationCapsule: 1.045,
+      // The size a menu starts from as it grows out of its button. Never from
+      // nothing: a panel that starts near its full size reads as unfolding,
+      // one that starts from a point reads as flying in.
+      menuClosed: 0.86,
     },
     // Springs rather than eased curves: the settle is the point. Friction is
     // high enough that the overshoot reads as responsiveness, not a glitch.
@@ -602,6 +610,12 @@ const staticTokens = {
       // overshoot lands under a pixel.
       panel: { stiffness: 520, damping: 38, mass: 0.9 },
       navigationSettle: { stiffness: 380, damping: 23, mass: 0.8 },
+      // A menu growing out of its button: nearly all the way in 150 ms and at
+      // rest by about 200, with a damping ratio near 0.8 so it lands softly
+      // instead of stopping dead (the overshoot is under two thousandths of
+      // its size, about a pixel). Stiffer (560/30) it was over in 100 ms on
+      // the Pixel 9a emulator, too quick to read as growing out of anything.
+      menu: { stiffness: 420, damping: 28, mass: 0.7 },
     },
   },
 } as const;
