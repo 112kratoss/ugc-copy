@@ -33,6 +33,10 @@ reservation is `deleted` or `reclaiming`, rather than its smaller finalized byte
 count. The tests verify this conservative charge explicitly. Available upload
 capacity can therefore temporarily decrease until the reservation worker proves
 absence and releases it; this change does not alter that accounting policy.
+Taking deletion ownership clears an earlier scheduling deferral. A follow-up
+actual regression with a one-day deferral failed in four deletion cases before
+this correction. The original capability expiry and two-observation quiescence
+gate still apply before release; a prior mobile-draft hold no longer delays them.
 
 The application still applies the rollout gate, original 48-hour age and legacy
 reference protection before requesting this claim. RPC failure aborts before

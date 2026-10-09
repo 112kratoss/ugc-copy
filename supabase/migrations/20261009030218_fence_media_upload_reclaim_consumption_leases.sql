@@ -42,7 +42,8 @@ BEGIN
       END IF;
       IF v_reservation.finalization_status IN ('finalized', 'consumed') THEN
         UPDATE public.upload_byte_reservations
-        SET finalization_status = 'deleted', status_updated_at = now()
+        SET finalization_status = 'deleted', reclaim_after = NULL,
+            status_updated_at = now()
         WHERE id = v_reservation.id;
       END IF;
       -- The reservation remains charged. Its existing two-observation worker

@@ -52,6 +52,7 @@ it.skipIf(!process.env.AUDIT_STORAGE_CONFIG || !process.env.SUPABASE_TEST_DB_URL
   expect((await admin.storage.from('uploads').download(path)).error).toBeNull();
   if(mode!=='active')expect((await completeUploadByteConsumption(admin,{claim:reuse.consumptionClaim,disposition:'draft'})).ok).toBe(true);
   if(mode==='unknown')await db.query('update public.upload_byte_reservations set consumption_outcome_unknown_at=now() where id=$1',[upload]);
+  await db.query("update public.upload_byte_reservations set reclaim_after=now()+interval '1 day' where id=$1",[upload]);
   armed=true;
   if(mode==='worker-death'){
    worker=fork('src/__tests__/media-upload-reclaim-worker.cjs',[],{execArgv:['--import','tsx'],silent:true,env:{NODE_ENV:'test',PATH:process.env.PATH,TSX_TSCONFIG_PATH:'tsconfig.mobile-push-worker.json',AUDIT_STORAGE_CONFIG:process.env.AUDIT_STORAGE_CONFIG,AUDIT_RECLAIM_PHASE:'after-claim'}});
@@ -69,8 +70,8 @@ it.skipIf(!process.env.AUDIT_STORAGE_CONFIG || !process.env.SUPABASE_TEST_DB_URL
   else await reclaimAbandonedMediaUploads(admin);
   armed=false;
   if(['claim-error','remove-error','lost-ack','late-reader'].includes(mode))expect(injected).toBe(true);
-  const state=(await db.query("select r.finalization_status,r.released_at is null charged,i.storage_cleared_at is not null cleared,exists(select 1 from storage.objects where bucket_id='uploads' and name=$2) object_exists from public.upload_byte_reservations r cross join public.media_upload_intents i where r.id=$1 and i.id=$3",[upload,path,intent])).rows[0];
-  expect(state).toEqual({finalization_status:mode==='active'?'consuming':['unknown','claim-error'].includes(mode)?'consumed':'deleted',charged:true,cleared:mode==='late-reader',object_exists:!['late-reader','lost-ack'].includes(mode)});
+  const state=(await db.query("select r.finalization_status,r.released_at is null charged,r.reclaim_after is null ready_for_reclaim,i.storage_cleared_at is not null cleared,exists(select 1 from storage.objects where bucket_id='uploads' and name=$2) object_exists from public.upload_byte_reservations r cross join public.media_upload_intents i where r.id=$1 and i.id=$3",[upload,path,intent])).rows[0];
+  expect(state).toEqual({finalization_status:mode==='active'?'consuming':['unknown','claim-error'].includes(mode)?'consumed':'deleted',charged:true,ready_for_reclaim:!['active','unknown','claim-error'].includes(mode),cleared:mode==='late-reader',object_exists:!['late-reader','lost-ack'].includes(mode)});
   expect((await db.query('select outstanding_bytes::text bytes from public.upload_byte_user_counters where user_id=$1',[owner])).rows).toEqual([{bytes:['active','unknown','claim-error'].includes(mode)?'22':'262144000'}]);
   expect((await admin.storage.from('uploads').download(path)).error===null).toBe(state.object_exists);
   if(mode==='unknown'){
