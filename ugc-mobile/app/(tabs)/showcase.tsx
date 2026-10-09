@@ -26,6 +26,7 @@ import {
 import { useAuth } from '@/lib/auth';
 import { createFeedVideoActivationStore, FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
 import { buildFeedFeedbackMenu, canHideFeedCreator } from '@/lib/feed-feedback-menu';
+import { hideCreatorLabel } from '@/lib/hide-creator-label';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { buildImmersiveShowcaseItems, showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import type { NativeMenuModel } from '@/lib/native-menu';
@@ -679,7 +680,7 @@ export default function ShowcaseScreen() {
   // post. `FeedFeedbackSheet` below is the fallback for a build without native
   // menus, and acts on the post whose ⋮ opened it.
   const feedbackMenu = (item: ShowcaseFeedItem): NativeMenuModel => buildFeedFeedbackMenu({
-    creatorLabel: formatCreatorLabel(item.creator.username || item.creator.name),
+    creator: item.creator,
     canHideCreator: canHideFeedCreator(item.creator.id, user?.id),
     sessionOnly: !user,
     onNotInterested: () => applyFeedFeedback(item, 'not_interested'),
@@ -883,6 +884,7 @@ export default function ShowcaseScreen() {
 
         <FeedFeedbackSheet
           creatorLabel={feedbackItem ? formatCreatorLabel(feedbackItem.creator.username || feedbackItem.creator.name) : '@creator'}
+          hideLabel={hideCreatorLabel(feedbackItem?.creator ?? {})}
           canHideCreator={canHideFeedCreator(feedbackItem?.creator.id, user?.id)}
           onClose={() => setFeedbackItem(null)}
           onHideCreator={() => applyFeedFeedback(feedbackItem, 'hide_creator')}

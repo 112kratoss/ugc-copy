@@ -60,6 +60,7 @@ import { createHomeFeedPlaybackController } from '@/lib/home-feed-playback';
 import { createFeedVideoActivationStore, FeedVideoActivationContext } from '@/lib/feed-video-activation';
 import { useAppForeground } from '@/lib/app-foreground';
 import { buildFeedFeedbackMenu, canHideFeedCreator } from '@/lib/feed-feedback-menu';
+import { hideCreatorLabel } from '@/lib/hide-creator-label';
 import { buildImmersiveShowcaseItems, immersiveViewerHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
 import { feedReadMoreSection, type FeedReadMoreSection } from '@/lib/feed-read-more';
 import type { NativeMenuModel } from '@/lib/native-menu';
@@ -790,7 +791,7 @@ export function HomeDashboard() {
   // post. `FeedFeedbackSheet` below is the fallback for a build without native
   // menus, and acts on the post whose ⋮ opened it.
   const feedbackMenu = (item: ShowcaseFeedItem): NativeMenuModel => buildFeedFeedbackMenu({
-    creatorLabel: item.creator.username || item.creator.name || 'this creator',
+    creator: item.creator,
     canHideCreator: canHideFeedCreator(item.creator.id, user?.id),
     sessionOnly: !user,
     onNotInterested: () => applyFeedFeedback(item, 'not_interested'),
@@ -959,6 +960,7 @@ export function HomeDashboard() {
 
       <FeedFeedbackSheet
         creatorLabel={feedbackItem?.creator.username || feedbackItem?.creator.name || 'this creator'}
+        hideLabel={hideCreatorLabel(feedbackItem?.creator ?? {})}
         canHideCreator={canHideFeedCreator(feedbackItem?.creator.id, user?.id)}
         onBlockUser={() => blockFeedbackUser(feedbackItem)}
         onClose={() => setFeedbackItem(null)}

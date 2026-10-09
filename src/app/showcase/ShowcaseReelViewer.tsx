@@ -1466,7 +1466,7 @@ export default function ShowcaseReelViewer({
           {onFeedback ? (
             <ShowcaseFeedbackMenu
               itemTitle={item.title}
-              creatorName={item.creator.name}
+              creator={item.creator}
               canHideCreator={Boolean(item.creator.id && item.creator.id !== user?.id)}
               sessionOnly={!user}
               onSelect={(action) => onFeedback(item, action)}

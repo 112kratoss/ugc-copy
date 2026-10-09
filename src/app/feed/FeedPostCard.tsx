@@ -220,7 +220,7 @@ function FeedPostCardView({
                     <ShowcaseFeedbackMenu
                         variant="inline"
                         itemTitle={card.title}
-                        creatorName={item.creator.name}
+                        creator={item.creator}
                         canHideCreator={!viewerIsOwner && Boolean(item.creator.id)}
                         sessionOnly={!signedIn}
                         onSelect={(action) => onFeedback(item.id, action)}

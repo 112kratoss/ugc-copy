@@ -339,7 +339,8 @@ describe('ViewerActionSheet permanent delete', () => {
     expect(onClose).toHaveBeenCalled();
     expect(onNotInterested).toHaveBeenCalledOnce();
 
-    renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Hide this creator').props.onPress());
+    // The row names the creator the item names, as a feed card's Hide row does.
+    renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Hide @batman').props.onPress());
     expect(onHideCreator).toHaveBeenCalledOnce();
   });
 
