@@ -1,7 +1,8 @@
 # Backend audit completion checklist
 
 Updated 2026-10-09. Latest independently checked production:
-`a4fb1d9ee6d803c74f6191984e3f7e390755f0b5`, including the verified 12O/12P profile request and media controls.
+`0ad91678fa7030dfcc1ad5f54d015cd0eb1c5bd0`, including the verified 12R exact release-health identity gates.
+[12R release evidence](backend-section-12-release-health-gate-verification-2026-10-09.md).
 [12O/P release evidence](backend-section-12-profile-request-bounds-release-2026-10-09.md).
 [12M release evidence](backend-section-12-upload-reclaim-job-reporting-release-2026-10-09.md).
 [12J/K release evidence](backend-section-12-upload-reclaim-leases-release-2026-10-09.md).
