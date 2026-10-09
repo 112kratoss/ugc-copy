@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { buildCommentMenu } from '../lib/comment-menu';
-import { buildFeedFeedbackMenu } from '../lib/feed-feedback-menu';
+import { buildFeedFeedbackMenu, canHideFeedCreator } from '../lib/feed-feedback-menu';
 import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
 import {
   actionSheetFromMenu,
@@ -15,6 +18,7 @@ import {
   type NativeMenuModel,
 } from '../lib/native-menu';
 import { buildPostVisibilityMenu, postVisibilityChoices } from '../lib/post-visibility-menu';
+import { isDestructiveViewerAction } from '../lib/viewer-actions';
 import { buildViewerActionsMenu } from '../lib/viewer-actions-menu';
 
 const noop = () => undefined;
@@ -152,7 +156,7 @@ describe('feed menu', () => {
   };
 
   it("offers the sheet's rows: preferences first, then the destructive safety rows", () => {
-    const menu = buildFeedFeedbackMenu({ creatorLabel: '@maya', hideCreatorDisabled: false, sessionOnly: false, ...handlers });
+    const menu = buildFeedFeedbackMenu({ creatorLabel: '@maya', canHideCreator: true, sessionOnly: false, ...handlers });
 
     expect(menu.sections.map((section) => section.title)).toEqual([undefined, 'Safety']);
     expect(menu.sections[0].items.map((item) => item.label)).toEqual(['Not interested', 'Hide @maya']);
@@ -164,25 +168,66 @@ describe('feed menu', () => {
   });
 
   it("tells a guest the choice lasts for the visit, as a heading on iOS and a line on each row elsewhere", () => {
-    const menu = buildFeedFeedbackMenu({ creatorLabel: '@maya', hideCreatorDisabled: false, sessionOnly: true, ...handlers });
+    const menu = buildFeedFeedbackMenu({ creatorLabel: '@maya', canHideCreator: true, sessionOnly: true, ...handlers });
 
     expect(menu.sections[0].title).toBe('For this visit');
     expect(menu.sections[0].items.map((item) => (item.kind === 'action' ? item.subtitle : null)))
       .toEqual(['For this visit', 'For this visit']);
   });
 
-  it('keeps the creator rows visible but disabled on your own post, and leaves out safety rows it was not given', () => {
+  // Nothing can make hiding, reporting or blocking yourself possible, so the
+  // rows are left out, not dimmed: the reel's menu and the web's do the same.
+  it('leaves the creator rows out on your own post, whatever handlers it was given', () => {
+    const menu = buildFeedFeedbackMenu({ creatorLabel: '@me', canHideCreator: false, sessionOnly: false, ...handlers });
+
+    expect(menu.sections.map((section) => section.items.map((item) => item.label)))
+      .toEqual([['Not interested'], ['Report content']]);
+    expect(menu.sections.flatMap((section) => section.items).some((item) => item.disabled)).toBe(false);
+  });
+
+  it('leaves out the safety rows it was not given', () => {
     const menu = buildFeedFeedbackMenu({
-      creatorLabel: '@me',
-      hideCreatorDisabled: true,
+      creatorLabel: '@maya',
+      canHideCreator: true,
       sessionOnly: false,
       onNotInterested: noop,
       onHideCreator: noop,
       onReportContent: noop,
     });
 
-    expect(menu.sections[0].items[1]).toMatchObject({ label: 'Hide @me', disabled: true });
     expect(menu.sections[1].items.map((item) => item.label)).toEqual(['Report content']);
+  });
+
+  // One meaning for red across the two menus that share these rows: a feed
+  // card's and the reel's. Hide was red in the reel and plain on a card.
+  it("colours each row as the reel's menu colours the same row", () => {
+    const menu = buildFeedFeedbackMenu({ creatorLabel: '@maya', canHideCreator: true, sessionOnly: false, ...handlers });
+    const rows = menu.sections.flatMap((section) => section.items);
+
+    expect(rows.map((row) => row.id)).toEqual(['not-interested', 'hide-creator', 'report-content', 'report-user', 'block-user']);
+    expect(rows.map((row) => Boolean(row.kind === 'action' && row.destructive)))
+      .toEqual(rows.map((row) => isDestructiveViewerAction(row.id)));
+    expect(isDestructiveViewerAction('hide-creator')).toBe(false);
+  });
+});
+
+describe("whose creator a feed card's menu can act on", () => {
+  it('is any account but your own, and a guest has no own', () => {
+    expect(canHideFeedCreator('maya', 'me')).toBe(true);
+    expect(canHideFeedCreator('maya', undefined)).toBe(true);
+    expect(canHideFeedCreator('me', 'me')).toBe(false);
+    expect(canHideFeedCreator(null, 'me')).toBe(false);
+    expect(canHideFeedCreator(undefined, undefined)).toBe(false);
+  });
+
+  // The rule is only as good as the two screens that ask it: each builds the
+  // menu and its fallback sheet for the post whose ⋮ was pressed.
+  it.each(['components/home-dashboard.tsx', 'app/(tabs)/showcase.tsx'])('is asked by %s for the menu and for the sheet', (file) => {
+    const source = readFileSync(path.resolve(__dirname, '..', file), 'utf8');
+
+    expect(source).toContain('canHideCreator: canHideFeedCreator(item.creator.id, user?.id),');
+    expect(source).toContain('canHideCreator={canHideFeedCreator(feedbackItem?.creator.id, user?.id)}');
+    expect(source.match(/canHideCreator[:=]/g)?.length).toBe(2);
   });
 });
 

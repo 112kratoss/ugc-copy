@@ -359,9 +359,11 @@ Every pushed screen has a real way back, including its loading and error states.
   - The Android menu is a panel in the `panel` colour with a hairline and the `floating` shadow, a 20pt radius, and rows of 48pt with a 16pt radius of their own (the panel's less its 4pt padding, so a pressed row follows the panel's corner). Every row leads with its icon, the Lucide twin of the row's SF Symbol (`lib/native-menu-icons.ts`); a pick-one row leads with its checkmark instead.
   - It grows out of the button that opened it: scale from 0.86 and opacity, on the `menu` spring (about 150 ms), and leaves in 110 ms. Under Reduce Motion it fades in place. It dims nothing.
   - It opens under its button, above it where there is no room below, and over it where there is room on neither side; never under a system bar. A touch outside closes it as the finger lands and reaches nothing below, and Android's back key closes it.
+  - It shares its button's right edge on the right half of the screen and its left edge on the left. Where that edge has no room (the ⋮ of a left-hand card in Explore's grid) it stays against its button's side of the screen, so it never hangs under another card's ⋮ (`lib/anchored-menu-layout.ts`).
   - It is hosted through `OverlayHost`, so it cannot be opened from inside a React Native `Modal` (a second window on Android, above the host).
   - A menu is what a ••• reveals. An action sheet is for a choice that follows an action, such as leaving unsaved work or confirming an unlock.
-  - Destructive rows are red and still confirm through `showConfirmDialog` after they are chosen.
+  - Destructive rows are red and still confirm through `showConfirmDialog` after they are chosen. Red is for a row that removes or reports: delete, archive, report, block. Not interested and Hide are feed preferences and stay plain, on a card, in the reel and on the web (`isDestructiveViewerAction`).
+  - A row that can never apply is left out, not dimmed: your own post has no Hide, Report user or Block user row, on a card, in the reel and on the web. A dimmed row means "not now" and says why in its second line.
   - An iOS menu row has no second line, so a choice that needs one to be understood (who can see a post, in the composer) stays a sheet.
   - Rows the screen already shows go in the icon row at the top (Save, Comments, Share on the reel), three at most. Both platforms draw that row.
 - **Action sheets** (`showActionSheet`, `components/action-sheet.tsx`) draw in-window through `OverlayHost`, so a sheet opened from another sheet draws above it.

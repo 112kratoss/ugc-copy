@@ -24,7 +24,7 @@ const namedSymbols = new Set([
   ...Object.values(VIEWER_ACTION_SYMBOLS),
   ...symbolsIn(buildFeedFeedbackMenu({
     creatorLabel: '@creator',
-    hideCreatorDisabled: false,
+    canHideCreator: true,
     sessionOnly: false,
     onNotInterested: noop,
     onHideCreator: noop,

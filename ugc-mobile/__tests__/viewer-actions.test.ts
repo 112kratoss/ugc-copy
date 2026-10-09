@@ -186,6 +186,16 @@ describe('immersive viewer actions', () => {
     expect(isDestructiveViewerAction('share')).toBe(false);
   });
 
+  // The two feed preferences remove nothing and report no one. Hiding a
+  // creator was red in the reel's menu while a feed card's drew it plain.
+  it('leaves the feed preferences plain, and keeps the safety rows red', () => {
+    expect(isDestructiveViewerAction('not-interested')).toBe(false);
+    expect(isDestructiveViewerAction('hide-creator')).toBe(false);
+    for (const action of ['report-content', 'report-user', 'block-user', 'report-ai-output']) {
+      expect(isDestructiveViewerAction(action)).toBe(true);
+    }
+  });
+
   it('groups creation-to-post actions separately from general media actions', () => {
     expect(getViewerActionGroupLabel('publish')).toBe('Creation to post');
     expect(getViewerActionGroupLabel('view-linked')).toBe('Creation to post');
