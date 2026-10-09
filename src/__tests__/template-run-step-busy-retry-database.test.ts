@@ -11,6 +11,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { startImageGeneration, startVideoGeneration, type TemplateGenerationContext } from '@/lib/generation-services';
 import { validateAndCompileTemplateGraph } from '@/lib/template-graph-compiler';
 import { processTemplateRunJobs } from '@/lib/template-run-jobs-processor';
+import { reapStalledGenerations } from '@/lib/stalled-generation-reaper';
 import {
   abandonTemplateRun,
   approveTemplateRunStep,
@@ -178,6 +179,16 @@ function databaseClient(db: Client, startAnswers: string[], beforeWrite?: (table
         },
         eq: compare('='),
         neq: compare('<>'),
+        is(column: string, value: null) {
+          if (value !== null) throw new Error('Only null identity filters are supported');
+          filters.push(`${identifier(column)} is null`);
+          return query;
+        },
+        not(column: string, operator: string, value: null) {
+          if (operator !== 'is' || value !== null) throw new Error('Only non-null identity filters are supported');
+          filters.push(`${identifier(column)} is not null`);
+          return query;
+        },
         // The job processor's sweep reads the runs in progress with these two.
         lt: compare('<'),
         limit(count: number) {
@@ -359,6 +370,15 @@ describe.skipIf(!connectionString || crashWorker)('template run step starts the 
     await admin.query('delete from public.template_runs where id=$1', [runId]);
     await admin.query('delete from public.templates where id=$1', [templateId]);
     await admin.query('delete from auth.users where id=$1', [userId]);
+    expect((await admin.query(`select
+      (select count(*) from auth.users where id=$1)::int as users,
+      (select count(*) from public.generations where user_id=$1)::int as generations,
+      (select count(*) from public.template_runs where id=$2)::int as runs,
+      (select count(*) from public.template_run_steps where run_id=$2)::int as steps,
+      (select count(*) from public.template_run_jobs where run_id=$2)::int as jobs,
+      (select count(*) from public.templates where id=$3)::int as templates,
+      (select count(*) from public.mobile_notifications where user_id=$1)::int as notifications`,
+    [userId, runId, templateId])).rows[0]).toEqual({ users: 0, generations: 0, runs: 0, steps: 0, jobs: 0, templates: 0, notifications: 0 });
   });
 
   function providerIsBusy() {
@@ -417,7 +437,12 @@ describe.skipIf(!connectionString || crashWorker)('template run step starts the 
   type ShownRun = Awaited<ReturnType<typeof tick>>;
   const shownImageSteps = (run: ShownRun) => run.steps.filter((step) => step.kind === 'generation' && step.mediaKind === 'image');
 
-  it.each(['claim_template_run_jobs', 'attach_generation_provider_task'])('recovers a real killed worker after %s without duplicate charges', async point => {
+  it.each([
+    { point: 'claim_template_run_jobs', cancelBeforeReap: false },
+    { point: 'start_template_generation', cancelBeforeReap: false },
+    { point: 'start_template_generation', cancelBeforeReap: true },
+    { point: 'attach_generation_provider_task', cancelBeforeReap: false },
+  ])('recovers a real killed worker after $point without duplicate charges (cancel before reap: $cancelBeforeReap)', async ({ point, cancelBeforeReap }) => {
     const directory = await mkdtemp(join(tmpdir(), 'template-audit-crash-'));
     const children = new Set<ChildProcess>();
     function launch(barrier = '') {
@@ -454,12 +479,65 @@ describe.skipIf(!connectionString || crashWorker)('template run step starts the 
       expect((await worker.closed).signal).toBe('SIGKILL');
       expect((await admin.query('select status from public.template_run_jobs where run_id=$1', [runId])).rows[0].status).toBe('processing');
       expect(await generations()).toHaveLength(point === 'claim_template_run_jobs' ? 0 : 1);
+      if (point === 'start_template_generation') {
+        expect(await readFile(join(directory, 'provider-calls'), 'utf8').catch(() => '')).toBe('');
+        const [held] = await generations();
+        expect(held).toMatchObject({ status: 'pending', refunded: false });
+        expect(await credits()).toBe(STARTING_CREDITS - held.cost);
+      }
       expect(await recover()).toMatchObject({ claimed: 0 });
       // Advance only this isolated fixture's lease age; no wall-clock TTL claim.
       await admin.query("update public.template_run_jobs set locked_at=now()-interval '301 seconds', heartbeat_at=now()-interval '301 seconds' where run_id=$1", [runId]);
       expect(await recover()).toMatchObject({ claimed: 1, deferred: 1, exhausted: 0 });
       const rows = await generations();
       expect(rows).toHaveLength(2);
+      if (point === 'start_template_generation') {
+        expect(rows.map(row => row.status)).toEqual(['pending', 'processing']);
+        expect(await credits()).toBe(STARTING_CREDITS - rows.reduce((sum, row) => sum + row.cost, 0));
+        expect((await readFile(join(directory, 'provider-calls'), 'utf8')).trim().split('\n')).toHaveLength(1);
+        const held = (await admin.query('select id,template_run_step_id,cost from public.generations where user_id=$1 and status=\'pending\'', [userId])).rows[0];
+        const reap = () => reapStalledGenerations({ supabase: client, creditSupabase: client });
+        expect((await reap()).startFailures).toMatchObject({ eligible: 0, settled: 0, failed: 0 });
+        expect(await recover()).toMatchObject({ claimed: 0 });
+        if (cancelBeforeReap) {
+          expect((await cancelTemplateRun(client, runId, userId)).status).toBe('cancelled');
+          expect(await credits()).toBe(STARTING_CREDITS - rows.reduce((sum, row) => sum + row.cost, 0));
+        }
+        // Only this fixture is aged. This proves stale selection, not elapsed wall-clock TTL.
+        await admin.query("update public.generations set created_at=now()-interval '46 minutes' where id=$1", [held.id]);
+        expect((await reap()).startFailures).toMatchObject({ eligible: 1, settled: 1, failed: 0 });
+        expect((await admin.query('select status,refunded from public.generations where id=$1', [held.id])).rows[0]).toEqual({ status: 'failed', refunded: true });
+        expect((await admin.query('select status from public.template_run_steps where id=$1', [held.template_run_step_id])).rows[0].status).toBe(cancelBeforeReap ? 'cancelled' : 'failed');
+        const remainingCost = rows.reduce((sum, row) => sum + row.cost, 0) - held.cost;
+        expect(await credits()).toBe(STARTING_CREDITS - remainingCost);
+        const notificationCount = async () => (await admin.query('select count(*)::int as count from public.mobile_notifications where user_id=$1', [userId])).rows[0].count;
+        expect(await notificationCount()).toBe(1);
+        expect((await reap()).startFailures).toMatchObject({ eligible: 0, settled: 0, failed: 0 });
+        expect(await notificationCount()).toBe(1);
+        expect(await credits()).toBe(STARTING_CREDITS - remainingCost);
+        if (cancelBeforeReap) {
+          await expect(retryTemplateRunStep({ adminClient: client, runId, stepId: held.template_run_step_id, userId }))
+            .rejects.toMatchObject({ code: 'RUN_TERMINAL' });
+          expect((await tick()).status).toBe('cancelled');
+          expect(providerCalls()).toBe(0);
+          expect((await cancelTemplateRun(client, runId, userId)).status).toBe('cancelled');
+          expect(await generations()).toHaveLength(2);
+          expect(await credits()).toBe(STARTING_CREDITS - remainingCost);
+          return;
+        }
+        providerHasRoom();
+        await retryTemplateRunStep({ adminClient: client, runId, stepId: held.template_run_step_id, userId });
+        await tick();
+        expect(providerCalls()).toBe(1);
+        const retried = await generations();
+        expect(retried).toHaveLength(3);
+        expect(retried.map(row => row.status)).toEqual(['failed', 'processing', 'processing']);
+        expect(await credits()).toBe(STARTING_CREDITS - retried.filter(row => !row.refunded).reduce((sum, row) => sum + row.cost, 0));
+        await tick();
+        expect(providerCalls()).toBe(0);
+        expect(await generations()).toHaveLength(3);
+        return;
+      }
       expect(rows.every(row => row.status === 'processing')).toBe(true);
       expect(await credits()).toBe(STARTING_CREDITS - rows.reduce((sum, row) => sum + row.cost, 0));
       expect((await readFile(join(directory, 'provider-calls'), 'utf8')).trim().split('\n')).toHaveLength(2);
