@@ -20,8 +20,12 @@ import { getViewerActionGroupLabel, getViewerActionLabel, isDestructiveViewerAct
  */
 const QUICK_ACTIONS = new Set(['save', 'unsave', 'comment', 'share']);
 
-/** SF Symbols for the iOS rows, one for each Lucide icon the sheet draws. */
-const VIEWER_ACTION_SYMBOLS: Record<string, string> = {
+/**
+ * SF Symbols for the iOS rows, one for each Lucide icon the sheet draws. Android
+ * draws that Lucide icon again, looked up by the symbol's name
+ * (`lib/native-menu-icons.ts`).
+ */
+export const VIEWER_ACTION_SYMBOLS: Readonly<Record<string, string>> = {
   save: 'bookmark',
   unsave: 'bookmark.slash',
   comment: 'bubble.right',

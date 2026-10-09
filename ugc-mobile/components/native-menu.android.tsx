@@ -1,139 +1,73 @@
 /**
- * Android: the ••• button stays the app's own, and a press opens Material 3's
- * dropdown anchored to it, which grows out of the button's corner the way the
- * platform's overflow menus do. `lib/native-menu.ts` explains the arrangement;
- * the iOS menu is `native-menu.ios.tsx`.
+ * Android: the ••• button stays the app's own, and a press opens the app's own
+ * menu, grown out of that button (`components/anchored-menu.tsx`).
+ * `lib/native-menu.ts` explains the arrangement; the iOS menu is
+ * `native-menu.ios.tsx`.
  *
- * The dropdown's host is mounted only while the menu is open or closing, so a
- * feed of cards pays nothing for the menus nobody opened.
+ * It was Material 3's dropdown through Expo UI until 2026-10-09. The binding in
+ * the builds people hold (`@expo/ui` 55.0.17) passes that dropdown its fill
+ * colour and nothing else: the popup keeps Material's 4dp corners, its shadow
+ * and its motion, and a row is a line of text. The menus Material 3 Expressive
+ * redrew are in the bundled Compose library but have no binding, so reaching
+ * them takes native code and a store build. Drawn here instead, the menu ships
+ * over the air and needs no native module at all, on any build.
+ *
+ * The menu is mounted only while it is open or closing, so a feed of cards
+ * pays nothing for the menus nobody opened.
  */
-import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { View } from 'react-native';
 
+import { AnchoredMenu } from '@/components/anchored-menu';
 import type { NativeMenuProps } from '@/components/native-menu-types';
-import { toAndroidColor } from '@/lib/android-color';
-import { useResolvedColorScheme } from '@/lib/appearance';
-import { hasNativeMenuItems, nativeMenuRows, type NativeMenuAction } from '@/lib/native-menu';
-import { isNativeMenuAvailable } from '@/lib/native-menu-available';
-import { appTheme, themes } from '@/lib/theme';
+import type { MenuRect } from '@/lib/anchored-menu-layout';
+import { hasNativeMenuItems } from '@/lib/native-menu';
 
 export type { NativeMenuProps, NativeMenuTrigger } from '@/components/native-menu-types';
 
-/** Longer than Material's menu exit (75 ms), so the host outlives the animation. */
-const MENU_EXIT_MS = 250;
-
-type ComposeModules = {
-  ui: typeof import('@expo/ui/jetpack-compose');
-  modifiers: typeof import('@expo/ui/jetpack-compose/modifiers');
-};
-
-let compose: ComposeModules | undefined;
-
-/**
- * Required on first use rather than imported: the package requires its native
- * views as it loads, and a binary without them must never evaluate it.
- */
-function loadCompose(): ComposeModules {
-  compose ??= {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    ui: require('@expo/ui/jetpack-compose') as typeof import('@expo/ui/jetpack-compose'),
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    modifiers: require('@expo/ui/jetpack-compose/modifiers') as typeof import('@expo/ui/jetpack-compose/modifiers'),
-  };
-  return compose;
-}
-
 export function NativeMenu(props: NativeMenuProps) {
+  const buttonRef = useRef<View>(null);
+  // The button's box as it was pressed. Set for as long as the menu is on
+  // screen, which is a little longer than it is open: the exit plays first.
+  const [anchor, setAnchor] = useState<MenuRect | null>(null);
   const [open, setOpen] = useState(false);
-  const [mounted, setMounted] = useState(false);
 
-  useEffect(() => {
-    if (open || !mounted) return;
-    const timer = setTimeout(() => setMounted(false), MENU_EXIT_MS);
-    return () => clearTimeout(timer);
-  }, [open, mounted]);
-
-  if (!isNativeMenuAvailable() || !hasNativeMenuItems(props.model)) {
+  if (!hasNativeMenuItems(props.model)) {
     return <View style={props.style}>{props.renderButton(props.onFallbackPress)}</View>;
   }
 
   const openMenu = () => {
-    setMounted(true);
-    setOpen(true);
+    const button = buttonRef.current;
+    if (!button?.measureInWindow) {
+      props.onFallbackPress();
+      return;
+    }
+    button.measureInWindow((x, y, width, height) => {
+      // A box that cannot be read leaves nothing to grow a menu from: the
+      // press opens the sheet it opened before menus rather than nothing.
+      if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
+        props.onFallbackPress();
+        return;
+      }
+      setAnchor({ x, y, width, height });
+      setOpen(true);
+    });
   };
 
   return (
-    <View style={props.style}>
+    // Never flattened away: this view is what the press measures.
+    <View ref={buttonRef} collapsable={false} style={props.style}>
       {props.renderButton(openMenu)}
-      {mounted ? (
-        <MaterialDropdown
+      {anchor ? (
+        <AnchoredMenu
+          anchor={anchor}
+          model={props.model}
           open={open}
-          props={props}
+          accessibilityLabel={props.accessibilityLabel}
           onDismiss={() => setOpen(false)}
+          onExited={() => setAnchor(null)}
         />
       ) : null}
-    </View>
-  );
-}
-
-function MaterialDropdown({ open, props, onDismiss }: { open: boolean; props: NativeMenuProps; onDismiss: () => void }) {
-  // A menu is app UI: it follows the app's scheme even from the reel, which
-  // stays dark (see `AppSchemeScope`). Android parses each colour itself, so
-  // every one goes through `toAndroidColor`.
-  const { colors } = themes[useResolvedColorScheme()];
-  const { ui, modifiers } = loadCompose();
-  const { Column, DropdownMenu, DropdownMenuItem, Host, HorizontalDivider, Text } = ui;
-
-  const choose = (action: NativeMenuAction) => {
-    onDismiss();
-    action.onSelect();
-  };
-
-  return (
-    // The dropdown anchors to its host, which covers the button exactly; the
-    // host takes no touches, so the button underneath keeps them. The popup is
-    // a window of its own and takes its own.
-    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-      <Host style={StyleSheet.absoluteFill}>
-        <DropdownMenu
-          expanded={open}
-          onDismissRequest={onDismiss}
-          color={toAndroidColor(colors.panel)}
-          modifiers={[modifiers.fillMaxSize()]}
-        >
-          <DropdownMenu.Items>
-            {nativeMenuRows(props.model).map((row) => {
-              if (row.kind === 'divider') return <HorizontalDivider key={row.id} color={toAndroidColor(colors.border)} />;
-              const { action } = row;
-              const labelColor = action.disabled
-                ? colors.faint
-                : action.destructive
-                  ? colors.danger
-                  : colors.text;
-              return (
-                <DropdownMenuItem
-                  key={action.id}
-                  enabled={!action.disabled}
-                  onClick={() => choose(action)}
-                >
-                  <DropdownMenuItem.Text>
-                    <Column>
-                      <Text color={toAndroidColor(labelColor)} style={{ fontSize: appTheme.type.body.fontSize }}>
-                        {action.checked ? `✓  ${action.label}` : action.label}
-                      </Text>
-                      {action.subtitle ? (
-                        <Text color={toAndroidColor(colors.muted)} style={{ fontSize: appTheme.type.caption.fontSize }}>
-                          {action.subtitle}
-                        </Text>
-                      ) : null}
-                    </Column>
-                  </DropdownMenuItem.Text>
-                </DropdownMenuItem>
-              );
-            })}
-          </DropdownMenu.Items>
-        </DropdownMenu>
-      </Host>
     </View>
   );
 }

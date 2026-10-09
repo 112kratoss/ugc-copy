@@ -88,7 +88,7 @@ Use the shared layers before writing anything local:
 - **Haptics:** `lib/haptics.ts`.
 - **Geometry:** `lib/hit-target.ts` for touch reach, `lib/safe-area.ts` for insets, `lib/tab-bar-layout.ts` for the dock's metrics.
 - **Chrome:** `components/magic-tab-bar.tsx` (the dock), `magic-create-menu.tsx`, `home-side-menu.tsx`, `top-scrim.tsx`.
-- **Overlays:** `components/overlay-host.tsx`, `action-sheet.tsx`, `dialog.tsx`, `sheet-chrome.tsx`.
+- **Overlays:** `components/overlay-host.tsx`, `action-sheet.tsx`, `dialog.tsx`, `sheet-chrome.tsx`, `native-menu.tsx` (the ••• menus; Android's is drawn by `anchored-menu.tsx`).
 - **Feeds and media:**
   - `components/feed-card-shell.tsx`, `home-feed-card.tsx`, `reel-chrome.tsx`;
   - `media-zoom.tsx` with `lib/apple-zoom.ts`;
@@ -355,11 +355,15 @@ Every pushed screen has a real way back, including its loading and error states.
 
 ## Overlays
 
-- **Menus** (`components/native-menu.tsx`, described in `lib/native-menu.ts`): a ••• opens a native menu anchored to it. On iOS it is a SwiftUI `Menu`, which from iOS 26 grows out of the button and back into it; on Android it is Material 3's dropdown.
+- **Menus** (`components/native-menu.tsx`, described in `lib/native-menu.ts`): a ••• opens a menu anchored to it. On iOS it is a SwiftUI `Menu`, which from iOS 26 grows out of the button and back into it. On Android the app draws it (`components/anchored-menu.tsx`): Material 3's dropdown, as Expo UI binds it, lets an app set its fill colour and nothing else.
+  - The Android menu is a panel in the `panel` colour with a hairline and the `floating` shadow, a 20pt radius, and rows of 48pt with a 16pt radius of their own (the panel's less its 4pt padding, so a pressed row follows the panel's corner). Every row leads with its icon, the Lucide twin of the row's SF Symbol (`lib/native-menu-icons.ts`); a pick-one row leads with its checkmark instead.
+  - It grows out of the button that opened it: scale from 0.86 and opacity, on the `menu` spring (about 150 ms), and leaves in 110 ms. Under Reduce Motion it fades in place. It dims nothing.
+  - It opens under its button, above it where there is no room below, and over it where there is room on neither side; never under a system bar. A touch outside closes it as the finger lands and reaches nothing below, and Android's back key closes it.
+  - It is hosted through `OverlayHost`, so it cannot be opened from inside a React Native `Modal` (a second window on Android, above the host).
   - A menu is what a ••• reveals. An action sheet is for a choice that follows an action, such as leaving unsaved work or confirming an unlock.
   - Destructive rows are red and still confirm through `showConfirmDialog` after they are chosen.
   - An iOS menu row has no second line, so a choice that needs one to be understood (who can see a post, in the composer) stays a sheet.
-  - Rows the screen already shows go in the icon row at the top (Save, Comments, Share on the reel), three at most.
+  - Rows the screen already shows go in the icon row at the top (Save, Comments, Share on the reel), three at most. Both platforms draw that row.
 - **Action sheets** (`showActionSheet`, `components/action-sheet.tsx`) draw in-window through `OverlayHost`, so a sheet opened from another sheet draws above it.
 - **Dialogs** (`showConfirmDialog`, `showMessageDialog`, `components/dialog.tsx`) use a `Modal`. A dialog has no text field and has to sit above everything.
 - **Sheets with a text field** (comments, editors) render through `components/overlay-host.tsx`, never a React Native `Modal`, for the keyboard reason above.

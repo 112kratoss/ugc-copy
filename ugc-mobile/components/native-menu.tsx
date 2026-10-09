@@ -1,7 +1,7 @@
 /**
- * Where Expo UI does not run — the test runner, and the web — a ••• button does
- * what it did before native menus: `onFallbackPress` opens the caller's sheet.
- * The native menus are `native-menu.ios.tsx` and `native-menu.android.tsx`;
+ * Off the phones — the test runner, and the web — a ••• button does what it
+ * did before menus: `onFallbackPress` opens the caller's sheet. The iOS menu is
+ * `native-menu.ios.tsx` and Android's is `native-menu.android.tsx`;
  * `lib/native-menu.ts` explains the arrangement.
  */
 import { View } from 'react-native';
