@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useRef,
@@ -9,7 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { EyeOff, MoreHorizontal, UserRoundX, Flag } from 'lucide-react';
+import { Ban, EyeOff, Flag, MoreHorizontal, ShieldAlert, UserRoundX } from 'lucide-react';
 
 import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
 
@@ -365,13 +366,31 @@ interface ShowcaseFeedbackMenuProps {
   canHideCreator?: boolean;
   sessionOnly?: boolean;
   onSelect: (action: ShowcaseFeedbackAction) => void | Promise<void>;
-  /** Adds a "Report post" row; the caller opens the report form. */
-  onReport?: () => void;
+  /**
+   * The safety rows the app's card menu carries (`ugc-mobile/lib/feed-feedback-menu.ts`),
+   * each shown only when given. The two about the creator also need a creator
+   * to act on (`canHideCreator`).
+   */
+  onReportContent?: () => void;
+  onReportUser?: () => void;
+  onBlockUser?: () => void;
   /** `overlay` sits on media (the grid tile); `inline` sits in a card header. */
   variant?: 'overlay' | 'inline';
   className?: string;
   buttonClassName?: string;
 }
+
+type FeedbackMenuRow = {
+  key: string;
+  label: string;
+  description: string;
+  Icon: typeof EyeOff;
+  danger?: boolean;
+  run: () => void;
+};
+
+// Room a row takes when the menu decides whether it fits below its trigger.
+const FEEDBACK_MENU_ROW_HEIGHT = 60;
 
 export function ShowcaseFeedbackMenu({
   itemTitle,
@@ -379,7 +398,9 @@ export function ShowcaseFeedbackMenu({
   canHideCreator = true,
   sessionOnly = false,
   onSelect,
-  onReport,
+  onReportContent,
+  onReportUser,
+  onBlockUser,
   variant = 'overlay',
   className = '',
   buttonClassName = '',
@@ -387,22 +408,57 @@ export function ShowcaseFeedbackMenu({
   const [isOpen, setIsOpen] = useState(false);
   // The inline menu is rendered into <body>: a feed card is paint-contained
   // (`content-visibility: auto`), which clips anything positioned past its
-  // edge, and a short text post is shorter than the open menu.
-  const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null);
+  // edge, and a short text post is shorter than the open menu. It opens below
+  // its trigger, or above it when the screen has no room below.
+  const [anchor, setAnchor] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const actionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const actionCount = 1 + (canHideCreator ? 1 : 0) + (onReport ? 1 : 0);
   const usesPortal = variant === 'inline';
+
+  // The app's order and grouping: what to see less of, then safety.
+  const rows: FeedbackMenuRow[] = [
+    {
+      key: 'not-interested',
+      label: 'Not interested',
+      description: sessionOnly ? 'Remove this post for this visit' : 'Show fewer posts like this',
+      Icon: EyeOff,
+      run: () => void onSelect('not_interested'),
+    },
+  ];
+  if (canHideCreator) {
+    rows.push({
+      key: 'hide-creator',
+      label: `Hide ${creatorName}`,
+      description: sessionOnly ? 'Hide this creator for this visit' : 'Stop showing posts from this creator',
+      Icon: UserRoundX,
+      run: () => void onSelect('hide_creator'),
+    });
+  }
+  if (onReportContent) {
+    rows.push({ key: 'report-content', label: 'Report content', description: 'Send this post for a safety review', Icon: Flag, danger: true, run: onReportContent });
+  }
+  if (canHideCreator && onReportUser) {
+    rows.push({ key: 'report-user', label: 'Report user', description: 'Ask moderators to review this creator', Icon: ShieldAlert, danger: true, run: onReportUser });
+  }
+  if (canHideCreator && onBlockUser) {
+    rows.push({ key: 'block-user', label: 'Block user', description: 'Stop seeing their posts; no follows either way', Icon: Ban, danger: true, run: onBlockUser });
+  }
+  const actionCount = rows.length;
+
   const openMenu = () => {
     if (usesPortal && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
-      setAnchor({ top: rect.bottom + 8, right: Math.max(8, window.innerWidth - rect.right) });
+      const right = Math.max(8, window.innerWidth - rect.right);
+      const needed = 16 + rows.length * FEEDBACK_MENU_ROW_HEIGHT;
+      const spaceBelow = window.innerHeight - rect.bottom;
+      setAnchor(spaceBelow < needed && rect.top > spaceBelow
+        ? { bottom: window.innerHeight - rect.top + 8, right }
+        : { top: rect.bottom + 8, right });
     }
     setIsOpen(true);
   };
-  const reportIndex = canHideCreator ? 2 : 1;
   const triggerClassName = variant === 'inline'
     ? 'ui-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-full text-[var(--ui-text-faint)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]'
     : 'ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-black/60 text-white shadow-md backdrop-blur-md transition hover:bg-black/80';
@@ -473,12 +529,43 @@ export function ShowcaseFeedbackMenu({
     }
   };
 
-  const selectAction = (action: ShowcaseFeedbackAction) => {
+  const choose = (row: FeedbackMenuRow) => {
     setIsOpen(false);
-    void onSelect(action);
+    row.run();
   };
 
-  const menu = renderMenu();
+  const menu = (
+    <div
+      ref={menuRef}
+      role="menu"
+      aria-label={`Feedback actions for ${itemTitle}`}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={handleMenuKeyDown}
+      style={usesPortal && anchor ? anchor : undefined}
+      className={`${usesPortal ? 'fixed' : 'absolute right-0 top-[calc(100%+0.5rem)]'} z-50 w-64 overflow-hidden rounded-2xl border border-white/10 bg-[rgba(24,24,27,0.98)] p-1.5 text-left shadow-[0_18px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl`}
+    >
+      {rows.map((row, index) => (
+        <Fragment key={row.key}>
+          {row.danger && !rows[index - 1]?.danger ? (
+            <div role="separator" className="mx-2 my-1 h-px bg-white/10" />
+          ) : null}
+          <button
+            ref={(node) => { actionRefs.current[index] = node; }}
+            type="button"
+            role="menuitem"
+            onClick={() => choose(row)}
+            className="ui-focus-ring flex min-h-12 w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-white/[0.07]"
+          >
+            <row.Icon className={`mt-0.5 h-4.5 w-4.5 shrink-0 ${row.danger ? 'text-[#ff7c8b]' : 'text-zinc-400'}`} aria-hidden />
+            <span>
+              <span className={`block text-sm font-semibold ${row.danger ? 'text-[#ff7c8b]' : 'text-zinc-100'}`}>{row.label}</span>
+              <span className="mt-0.5 block text-xs leading-4 text-zinc-400">{row.description}</span>
+            </span>
+          </button>
+        </Fragment>
+      ))}
+    </div>
+  );
 
   return (
     <div ref={containerRef} className={`relative ${className}`}>
@@ -507,69 +594,4 @@ export function ShowcaseFeedbackMenu({
       {isOpen ? (usesPortal && anchor && typeof document !== 'undefined' ? createPortal(menu, document.body) : menu) : null}
     </div>
   );
-
-  function renderMenu() {
-    return (
-        <div
-          ref={menuRef}
-          role="menu"
-          aria-label={`Feedback actions for ${itemTitle}`}
-          onClick={(event) => event.stopPropagation()}
-          onKeyDown={handleMenuKeyDown}
-          style={usesPortal && anchor ? { top: anchor.top, right: anchor.right } : undefined}
-          className={`${usesPortal ? 'fixed' : 'absolute right-0 top-[calc(100%+0.5rem)]'} z-50 w-64 overflow-hidden rounded-2xl border border-white/10 bg-[rgba(24,24,27,0.98)] p-1.5 text-left shadow-[0_18px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl`}
-        >
-          <button
-            ref={(node) => { actionRefs.current[0] = node; }}
-            type="button"
-            role="menuitem"
-            onClick={() => selectAction('not_interested')}
-            className="ui-focus-ring flex min-h-12 w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left text-zinc-100 transition hover:bg-white/[0.07]"
-          >
-            <EyeOff className="mt-0.5 h-4.5 w-4.5 shrink-0 text-zinc-400" aria-hidden />
-            <span>
-              <span className="block text-sm font-semibold">Not interested</span>
-              <span className="mt-0.5 block text-xs leading-4 text-zinc-400">
-                {sessionOnly ? 'Remove this post for this visit' : 'Show fewer posts like this'}
-              </span>
-            </span>
-          </button>
-          {canHideCreator ? (
-            <button
-              ref={(node) => { actionRefs.current[1] = node; }}
-              type="button"
-              role="menuitem"
-              onClick={() => selectAction('hide_creator')}
-              className="ui-focus-ring flex min-h-12 w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left text-zinc-100 transition hover:bg-white/[0.07]"
-            >
-              <UserRoundX className="mt-0.5 h-4.5 w-4.5 shrink-0 text-zinc-400" aria-hidden />
-              <span>
-                <span className="block text-sm font-semibold">Hide {creatorName}</span>
-                <span className="mt-0.5 block text-xs leading-4 text-zinc-400">
-                  {sessionOnly ? 'Hide this creator for this visit' : 'Stop showing posts from this creator'}
-                </span>
-              </span>
-            </button>
-          ) : null}
-          {onReport ? (
-            <button
-              ref={(node) => { actionRefs.current[reportIndex] = node; }}
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setIsOpen(false);
-                onReport();
-              }}
-              className="ui-focus-ring flex min-h-12 w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left text-zinc-100 transition hover:bg-white/[0.07]"
-            >
-              <Flag className="mt-0.5 h-4.5 w-4.5 shrink-0 text-zinc-400" aria-hidden />
-              <span>
-                <span className="block text-sm font-semibold">Report post</span>
-                <span className="mt-0.5 block text-xs leading-4 text-zinc-400">Spam, stolen, unsafe, or misleading</span>
-              </span>
-            </button>
-          ) : null}
-        </div>
-    );
-  }
 }

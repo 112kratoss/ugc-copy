@@ -93,8 +93,10 @@ interface FeedPostCardProps {
     onFeedback: (postId: string, action: ShowcaseFeedbackAction) => void;
     /** Starts the remix from the card. */
     onRemix: (postId: string) => void;
-    /** Opens the post page's report form. */
-    onReport: (postId: string) => void;
+    /** Report content / Report user / Block user, as the app's card menu offers. */
+    onReportContent: (postId: string) => void;
+    onReportUser: (postId: string) => void;
+    onBlockUser: (postId: string) => void;
 }
 
 /**
@@ -128,7 +130,9 @@ function FeedPostCardView({
     onPrefetchPost,
     onFeedback,
     onRemix,
-    onReport,
+    onReportContent,
+    onReportUser,
+    onBlockUser,
 }: FeedPostCardProps) {
     const { item } = card;
     const mediaItems = (item.mediaItems ?? []).slice().sort((left, right) => left.sortOrder - right.sortOrder);
@@ -220,7 +224,9 @@ function FeedPostCardView({
                         canHideCreator={!viewerIsOwner && Boolean(item.creator.id)}
                         sessionOnly={!signedIn}
                         onSelect={(action) => onFeedback(item.id, action)}
-                        onReport={() => onReport(item.id)}
+                        onReportContent={viewerIsOwner ? undefined : () => onReportContent(item.id)}
+                        onReportUser={() => onReportUser(item.id)}
+                        onBlockUser={() => onBlockUser(item.id)}
                     />
                 </div>
             </div>

@@ -79,9 +79,11 @@ function renderCard(overrides: Partial<ShowcaseFeedItem> = {}, props: Record<str
         onOpenMedia: vi.fn(),
         onOpenPost: vi.fn(),
         onPrefetchPost: vi.fn(),
-onFeedback: vi.fn(),
-onRemix: vi.fn(),
-onReport: vi.fn(),
+        onFeedback: vi.fn(),
+        onRemix: vi.fn(),
+        onReportContent: vi.fn(),
+        onReportUser: vi.fn(),
+        onBlockUser: vi.fn(),
     };
     const card = buildPostFeedCard(feedItem(overrides));
     render(

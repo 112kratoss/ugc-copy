@@ -246,6 +246,61 @@ describe('showcase feed interactions', () => {
     expect(screen.queryByRole('menuitem', { name: /hide creator name/i })).not.toBeInTheDocument();
   });
 
+  it('offers the five rows the app card menu has, in its order, with safety set apart', () => {
+    const onReportContent = vi.fn();
+    const onReportUser = vi.fn();
+    const onBlockUser = vi.fn();
+    render(
+      <ShowcaseFeedbackMenu
+        variant="inline"
+        itemTitle="Campaign Frame"
+        creatorName="fluffy"
+        onSelect={vi.fn()}
+        onReportContent={onReportContent}
+        onReportUser={onReportUser}
+        onBlockUser={onBlockUser}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+
+    const rows = screen.getAllByRole('menuitem').map((row) => row.querySelector('.font-semibold')?.textContent);
+    expect(rows).toEqual(['Not interested', 'Hide fluffy', 'Report content', 'Report user', 'Block user']);
+    expect(screen.getAllByRole('separator')).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /block user/i }));
+    expect(onBlockUser).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /report user/i }));
+    expect(onReportUser).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /report content/i }));
+    expect(onReportContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves out the rows about the creator when there is no creator to act on', () => {
+    render(
+      <ShowcaseFeedbackMenu
+        variant="inline"
+        itemTitle="Campaign Frame"
+        creatorName="fluffy"
+        canHideCreator={false}
+        onSelect={vi.fn()}
+        onReportContent={vi.fn()}
+        onReportUser={vi.fn()}
+        onBlockUser={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+
+    const rows = screen.getAllByRole('menuitem').map((row) => row.querySelector('.font-semibold')?.textContent);
+    expect(rows).toEqual(['Not interested', 'Report content']);
+  });
+
   it('describes anonymous feedback as limited to the current visit', () => {
     render(
       <ShowcaseFeedbackMenu

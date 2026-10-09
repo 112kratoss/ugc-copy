@@ -411,13 +411,11 @@ export default function ShowcaseDetailBody({
                 </div>
               ) : null}
 
-              <div id="report">
-                <ReportPostButton
-                  postId={detail.id}
-                  bundleId={detail.resourceBundle?.id ?? null}
-                  accessToken={accessToken}
-                />
-              </div>
+              <ReportPostButton
+                postId={detail.id}
+                bundleId={detail.resourceBundle?.id ?? null}
+                accessToken={accessToken}
+              />
             </div>
           </aside>
         </div>
