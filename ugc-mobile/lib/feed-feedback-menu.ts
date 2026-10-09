@@ -1,8 +1,9 @@
+import { hideCreatorLabel } from '@/lib/hide-creator-label';
 import { menuAction, type NativeMenuModel } from '@/lib/native-menu';
 
 export interface FeedFeedbackMenuInput {
-  /** How the creator is named on the card: "@name". */
-  creatorLabel: string;
+  /** The post's creator, whom the Hide row names (`lib/hide-creator-label.ts`). */
+  creator: { username?: string | null; name?: string | null };
   /**
    * False on the viewer's own post and on one with no creator account: there
    * is no one to hide, report or block, and those rows are left out. The web
@@ -42,7 +43,7 @@ export function canHideFeedCreator(creatorId: string | null | undefined, viewerI
  * 2026-10-09 a card dimmed them and the reel did not list them.
  */
 export function buildFeedFeedbackMenu({
-  creatorLabel,
+  creator,
   canHideCreator,
   sessionOnly,
   onNotInterested,
@@ -70,7 +71,7 @@ export function buildFeedFeedbackMenu({
           }),
           ...(canHideCreator ? [menuAction({
             id: 'hide-creator',
-            label: `Hide ${creatorLabel}`,
+            label: hideCreatorLabel(creator),
             subtitle: forThisVisit,
             systemImage: 'person.crop.circle.badge.xmark',
             onSelect: onHideCreator,

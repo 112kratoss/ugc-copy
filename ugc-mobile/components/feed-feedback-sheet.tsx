@@ -17,6 +17,7 @@ import { useAppTheme } from '@/lib/theme-context';
  */
 export function FeedFeedbackSheet({
   creatorLabel,
+  hideLabel,
   canHideCreator = true,
   onClose,
   onHideCreator,
@@ -29,6 +30,8 @@ export function FeedFeedbackSheet({
   visible,
 }: {
   creatorLabel: string;
+  /** The Hide row's wording, from `hideCreatorLabel`: the one the menu's row carries. */
+  hideLabel: string;
   /** False on the viewer's own post: the Hide, Report user and Block user rows are left out. */
   canHideCreator?: boolean;
   onClose: () => void;
@@ -101,7 +104,7 @@ export function FeedFeedbackSheet({
                     ? `Remove posts from ${creatorLabel} for this visit.`
                     : `Remove posts from ${creatorLabel} from your recommendations.`}
                   icon={UserRoundX}
-                  label={`Hide ${creatorLabel}`}
+                  label={hideLabel}
                   onPress={onHideCreator}
                 />
               ) : null}

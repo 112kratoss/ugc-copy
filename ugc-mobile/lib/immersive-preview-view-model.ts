@@ -10,6 +10,7 @@ import {
   type GenerationAudioKind,
   type GenerationMediaKind,
 } from './generation-media';
+import { UNKNOWN_CREATOR_LABEL } from './hide-creator-label';
 import { formatCompactCount } from './home-view-model';
 import { formatUnlockCreditPrice } from './pricing';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-display';
@@ -878,7 +879,7 @@ function ownerPostToImmersiveItem(
 
 function creatorHandle(username: string | null, name: string) {
   if (username?.trim()) return `@${username.replace(/^@+/, '')}`;
-  return name.trim() || '@creator';
+  return name.trim() || UNKNOWN_CREATOR_LABEL;
 }
 
 function showcaseBadge(item: ShowcaseFeedItem) {

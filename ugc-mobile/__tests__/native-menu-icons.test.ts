@@ -23,7 +23,7 @@ function symbolsIn(model: NativeMenuModel): string[] {
 const namedSymbols = new Set([
   ...Object.values(VIEWER_ACTION_SYMBOLS),
   ...symbolsIn(buildFeedFeedbackMenu({
-    creatorLabel: '@creator',
+    creator: { username: 'creator' },
     canHideCreator: true,
     sessionOnly: false,
     onNotInterested: noop,

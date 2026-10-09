@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    { "creator": { "username": "fluffy", "name": "Fluffy" }, "label": "Hide @fluffy" },
+    { "creator": { "username": "@fluffy", "name": "Fluffy" }, "label": "Hide @fluffy" },
+    { "creator": { "username": "  fluffy  ", "name": null }, "label": "Hide @fluffy" },
+    { "creator": { "username": null, "name": "Fluffy Cat" }, "label": "Hide Fluffy Cat" },
+    { "creator": { "username": "", "name": "  Fluffy Cat " }, "label": "Hide Fluffy Cat" },
+    { "creator": { "username": "   ", "name": "   " }, "label": "Hide this creator" },
+    { "creator": { "username": null, "name": null }, "label": "Hide this creator" },
+    { "creator": {}, "label": "Hide this creator" }
+  ]
+}

@@ -34,7 +34,7 @@ import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { useViewerActionHandlers } from '@/lib/use-viewer-action-handlers';
-import { getViewerActionGroupLabel, getViewerActionLabel, isDestructiveViewerAction } from '@/lib/viewer-actions';
+import { getViewerActionGroupLabel, getViewerItemActionLabel, isDestructiveViewerAction } from '@/lib/viewer-actions';
 
 export function ViewerActionSheet({
   item,
@@ -138,7 +138,7 @@ export function ViewerActionSheet({
                         body={disabledReason ?? getViewerActionDescription(action, item)}
                         disabled={Boolean(disabledReason)}
                         icon={getViewerActionIcon(action)}
-                        label={getViewerActionLabel(action, item.sourceType)}
+                        label={getViewerItemActionLabel(action, item)}
                         onPress={() => handleAction(action)}
                         tone={isDestructiveViewerAction(action) ? 'danger' : 'default'}
                       />
