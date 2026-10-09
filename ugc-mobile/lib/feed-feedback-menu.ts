@@ -38,8 +38,8 @@ export function canHideFeedCreator(creatorId: string | null | undefined, viewerI
  * Your own post has no Hide, Report user or Block user row. A dimmed row says
  * "not now"; nothing can ever make these apply to yourself, so they are left
  * out, as the reel's menu (`canModerateCreator` in
- * `lib/use-viewer-action-handlers.ts`) and the web's leave them out. Until 2026-10-09 a card dimmed them and the reel did not
- * list them.
+ * `lib/use-viewer-action-handlers.ts`) and the web's leave them out. Until
+ * 2026-10-09 a card dimmed them and the reel did not list them.
  */
 export function buildFeedFeedbackMenu({
   creatorLabel,
