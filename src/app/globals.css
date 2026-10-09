@@ -1041,6 +1041,17 @@ button:disabled,
   .group:focus-within .showcase-card-actions {
     opacity: 1;
   }
+
+  /* A tile's menu is drawn in the page body, so the pointer leaves the tile to
+     reach it: the tile keeps its controls for as long as the menu is open.
+     Inside @supports so that it stays a rule of its own in the built sheet:
+     the minifier folds a bare one into the hover list above, and a browser
+     that does not know :has() drops a whole list that names it. */
+  @supports selector(:has(*)) {
+    .group:has([aria-haspopup="menu"][aria-expanded="true"]) .showcase-card-actions {
+      opacity: 1;
+    }
+  }
 }
 
 .app-scrollbar {

@@ -2,6 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseDetailPage, { generateMetadata } from '@/app/showcase/[id]/page';
+import { getServerAuthState } from '@/lib/supabase-server';
 
 const mockHeaders = vi.fn(async () => new Headers());
 const mockNotFound = vi.fn(() => {
@@ -184,6 +185,48 @@ describe('Showcase detail page', () => {
 
     expect(screen.getByRole('heading', { name: /shared creation/i })).toBeInTheDocument();
     expect(recordPostShareEventMock).not.toHaveBeenCalled();
+  });
+
+  // The page's own report row, by who is looking. A creator was offered a
+  // report on their own post here until 2026-10-10: the feed card's menu and
+  // the app's leave the row out, and the server refuses the report.
+  function signInAs(userId: string) {
+    vi.mocked(getServerAuthState).mockResolvedValueOnce({
+      session: { user: { id: userId }, access_token: 'token' },
+      credits: null,
+    } as unknown as Awaited<ReturnType<typeof getServerAuthState>>);
+  }
+
+  it('offers the report row to a signed-out visitor', async () => {
+    render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+    expect(screen.getByRole('button', { name: /report post or recipe/i })).toBeInTheDocument();
+  });
+
+  it('offers the report row on a post with no creator account, which is no one\'s own', async () => {
+    const detail = await getPublicPostDetailMock('post-1');
+    getPublicPostDetailMock.mockResolvedValueOnce({
+      ...detail,
+      creator: { id: null, username: null, name: 'Magicbooklet', avatar: null },
+    });
+    render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+    expect(screen.getByRole('button', { name: /report post or recipe/i })).toBeInTheDocument();
+  });
+
+  it('offers the report row to another account', async () => {
+    signInAs('user-2');
+    render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+    expect(screen.getByRole('button', { name: /report post or recipe/i })).toBeInTheDocument();
+  });
+
+  it("leaves the report row out on the creator's own post", async () => {
+    signInAs('user-1');
+    render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+    expect(screen.getByRole('heading', { name: /shared creation/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /report post or recipe/i })).not.toBeInTheDocument();
   });
 
   it('does not mount public-only comments on an unlisted detail page', async () => {

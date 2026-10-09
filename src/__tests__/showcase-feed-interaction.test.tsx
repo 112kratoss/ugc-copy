@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import type { ReactNode } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -322,6 +325,68 @@ describe('showcase feed interactions', () => {
     slider.remove();
   });
 
+  // Measured in a browser on 2026-10-10: five rows are 361px (three descriptions
+  // wrap), the estimate said 316px, and a menu whose button stood 332px above
+  // the foot of the screen opened below it and ran 37px off the bottom.
+  it('opens above its button when its real height does not fit below, whatever the estimate said', () => {
+    vi.stubGlobal('innerHeight', 900);
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function offsetHeight(this: HTMLElement) {
+      return this.getAttribute('role') === 'menu' ? 361 : 0;
+    });
+    render(
+      <ShowcaseFeedbackMenu
+        portal
+        itemTitle="Campaign Frame"
+        creator={{ username: 'fluffy', name: 'Fluffy' }}
+        onSelect={vi.fn()}
+        onReportContent={vi.fn()}
+        onReportUser={vi.fn()}
+        onBlockUser={vi.fn()}
+      />
+    );
+    const trigger = screen.getByRole('button', { name: /more actions for campaign frame/i });
+    const rect = (top: number) => ({ top, bottom: top + 48, left: 423, right: 471, width: 48, height: 48, x: 423, y: top, toJSON: () => ({}) }) as DOMRect;
+
+    // 332px below the button: more than the estimate, less than the menu.
+    vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue(rect(520));
+    fireEvent.click(trigger);
+    expect(screen.getByRole('menu')).toHaveStyle({ bottom: '388px' });
+    expect(screen.getByRole('menu').style.top).toBe('');
+    fireEvent.click(trigger);
+
+    // With room for all of it the menu still opens below.
+    vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue(rect(400));
+    fireEvent.click(trigger);
+    expect(screen.getByRole('menu')).toHaveStyle({ top: '456px' });
+
+    height.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
+  // The menu's right edge sits under its button's. A button near the left edge
+  // of a narrow screen would push the 256px menu off the left of it.
+  it('keeps all of the menu on screen when its button is near the left edge', () => {
+    vi.stubGlobal('innerWidth', 390);
+    render(
+      <ShowcaseFeedbackMenu
+        portal
+        itemTitle="Campaign Frame"
+        creator={{ username: 'fluffy', name: 'Fluffy' }}
+        onSelect={vi.fn()}
+      />
+    );
+    const trigger = screen.getByRole('button', { name: /more actions for campaign frame/i });
+    vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue(
+      { top: 200, bottom: 248, left: 137, right: 185, width: 48, height: 48, x: 137, y: 200, toJSON: () => ({}) } as DOMRect,
+    );
+
+    fireEvent.click(trigger);
+    // 390 - 256 - 8: its left edge is 8px in from the screen's.
+    expect(screen.getByRole('menu')).toHaveStyle({ right: '126px' });
+
+    vi.unstubAllGlobals();
+  });
+
   // A handle has no space to wrap at. Measured in a browser on 2026-10-09: 24 wide
   // letters ran 80px past the 256px menu until the label could break anywhere.
   it('lets a long handle break inside its row', () => {
@@ -339,6 +404,53 @@ describe('showcase feed interactions', () => {
     const label = screen.getByText('Hide @wwwwwwwwwwwwwwwwwwwwwwww');
     expect(label.className).toContain('[overflow-wrap:anywhere]');
     expect(label.parentElement?.className).toContain('min-w-0');
+  });
+
+  // Explore's tile clips what it holds, and five rows are taller than most
+  // tiles; the reel is a layer above the body's menus and has the room.
+  it("draws a tile's menu in the page body when asked, and leaves the reel's where it is", () => {
+    const { unmount } = render(
+      <ShowcaseFeedbackMenu
+        portal
+        itemTitle="Campaign Frame"
+        creator={{ username: 'fluffy', name: 'Fluffy' }}
+        onSelect={vi.fn()}
+        onReportContent={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+    expect(screen.getByRole('menu').parentElement).toBe(document.body);
+    expect(screen.getByRole('menu').className).toContain('fixed');
+    unmount();
+
+    render(
+      <ShowcaseFeedbackMenu
+        itemTitle="Campaign Frame"
+        creator={{ username: 'fluffy', name: 'Fluffy' }}
+        onSelect={vi.fn()}
+        onReportContent={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+    expect(screen.getByRole('menu').parentElement).not.toBe(document.body);
+    expect(screen.getByRole('menu').className).toContain('absolute');
+  });
+
+  // The pointer leaves the tile to reach a menu drawn in the body, and the
+  // tile shows its controls on hover: without this rule the button a menu
+  // hangs from fades out under it. It sits inside @supports because the
+  // minifier folds a bare rule into the hover rule's selector list (checked
+  // with the build's own, 2026-10-10), and a browser without :has() drops a
+  // whole list that names it: the hover rule would go with it.
+  it("keeps a tile's controls on screen for as long as its menu is open", () => {
+    const css = readFileSync(path.resolve(__dirname, '../app/globals.css'), 'utf8');
+
+    expect(css).toMatch(
+      /@supports selector\(:has\(\*\)\) \{\s*\.group:has\(\[aria-haspopup="menu"\]\[aria-expanded="true"\]\) \.showcase-card-actions \{\s*opacity: 1;\s*\}\s*\}/,
+    );
+    // Nowhere else, and never beside another selector.
+    expect(css.match(/\.group:has\(/g)).toHaveLength(1);
+    expect(css).not.toMatch(/,\s*\.group:has\(|\.group:has\([^{]*,/);
   });
 
   it('leaves out the rows about the creator when there is no creator to act on', () => {

@@ -187,16 +187,21 @@ The two must look and behave like one product. A stale session falls back to the
   - then the actions: Save (heart), Comments (opens the thread inline, first page loaded at once) and Share.
 - **Clicks:** the card itself opens the post. Anything inside it that owns a click is a link or a button, or carries `data-feed-card-inert`.
 - **Media:** it opens in `FeedMediaLightbox`.
+- **The ⋯ menu** (`ShowcaseFeedbackMenu`): one menu for a feed card, an Explore tile and the reel, with the rows the app's card carries.
+  - Not interested and Hide @handle, then Report content, Report user and Block user.
+  - A row that can never apply is left out: your own post keeps Not interested and nothing else, and a post with no creator account keeps Not interested and Report content.
+  - The three safety rows are asked for, sent and answered one way (`src/lib/feed-safety-actions.ts`). They need an account, so a signed-out viewer is sent to sign in and comes back.
+  - On a card and on a tile the open menu is drawn in the page body, fixed to its button: both clip what they hold, and five rows are taller than most tiles. The reel's menu stays in the reel, which is a layer above the body's menus.
 
 ### Explore (`/showcase`)
 
 - **Controls:** a category filter (All posts, Images, Videos) and a sort (For you, Recent, Saved, Remixed, Sales) over a media grid.
-- **The reel:** a tile opens the reel viewer (`ShowcaseReelViewer`), which is loaded on demand and warmed ahead of the click.
+- **The reel:** a tile opens the reel viewer (`ShowcaseReelViewer`), which is loaded on demand and warmed ahead of the click. While a confirmation is open above it ("Report content?") the reel leaves the keyboard alone.
 - **Order:** media comes first, gutters are consistent, and filters show real selected state.
 
 ### Post page (`/showcase/[id]`)
 
-- **Contents:** the post (`ShowcaseDetailBody`), its engagement row and actions, the resource bundle panel for unlocks, report, and the comment thread (`PostComments`).
+- **Contents:** the post (`ShowcaseDetailBody`), its engagement row and actions, the resource bundle panel for unlocks, report (not on the creator's own post; the server refuses a report on your own post too), and the comment thread (`PostComments`).
 - **Links in, links out:**
   - Every state keeps a way back (`ShowcaseDetailBackLink`).
   - Shared links render a rich social card and structured data from the cover's poster frame.

@@ -48,6 +48,12 @@ import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 import { isTextOnlyPost } from '@/lib/post-feed-presentation';
 import type { SourceToolOption } from '@/lib/source-tools';
+import {
+    blockCreatorAfterConfirmation,
+    reportCreatorAfterConfirmation,
+    reportPostAfterConfirmation,
+    type FeedSafetyOutcome,
+} from '@/lib/feed-safety-actions';
 import { mergeShowcaseFeedKeepingVisibleItems } from '@/lib/showcase-feed-stability';
 import {
     buildShowcaseClientCacheKey,
@@ -327,8 +333,13 @@ export default function ShowcaseClient({
     const isLoadingMoreRef = useRef(false);
     // Bumped by the server-page reset so a load-more reply for the old lane is dropped.
     const loadMoreGenerationRef = useRef(0);
-    const anonymousHiddenPostIdsRef = useRef(new Set<string>());
-    const anonymousHiddenCreatorIdsRef = useRef(new Set<string>());
+    // Posts and creators taken out of the grid for the rest of this visit: a
+    // guest's feed preferences, and anything anyone reported or blocked. Every
+    // later page and refresh is filtered by them (`filterSessionHiddenItems`),
+    // for a signed-in viewer too: the server's feed leaves out what they marked
+    // not interested or hid, but not a post they reported.
+    const sessionHiddenPostIdsRef = useRef(new Set<string>());
+    const sessionHiddenCreatorIdsRef = useRef(new Set<string>());
     const anonymousPersonalizationStartedRef = useRef(false);
     const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
     const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(
@@ -592,13 +603,11 @@ export default function ShowcaseClient({
             return;
         }
 
-        const visibleInitialItems = userId
-            ? initialFeed.items
-            : filterSessionHiddenItems(
-                initialFeed.items,
-                anonymousHiddenPostIdsRef.current,
-                anonymousHiddenCreatorIdsRef.current
-            );
+        const visibleInitialItems = filterSessionHiddenItems(
+            initialFeed.items,
+            sessionHiddenPostIdsRef.current,
+            sessionHiddenCreatorIdsRef.current
+        );
         // A server navigation replaces the feed snapshot and its pagination/filter state.
         setItems(visibleInitialItems);
         setPageInfo(initialFeed.pageInfo);
@@ -738,13 +747,11 @@ export default function ShowcaseClient({
                         return;
                     }
 
-                    const visiblePersonalizedItems = userId
-                        ? personalizedFeed.items
-                        : filterSessionHiddenItems(
-                            personalizedFeed.items,
-                            anonymousHiddenPostIdsRef.current,
-                            anonymousHiddenCreatorIdsRef.current
-                        );
+                    const visiblePersonalizedItems = filterSessionHiddenItems(
+                        personalizedFeed.items,
+                        sessionHiddenPostIdsRef.current,
+                        sessionHiddenCreatorIdsRef.current
+                    );
                     const currentItems = feedItemsForEventsRef.current;
                     const preservedVisibleItemCount = Math.min(
                         renderedItemCountRef.current,
@@ -936,13 +943,11 @@ export default function ShowcaseClient({
             if (loadMoreGeneration !== loadMoreGenerationRef.current) {
                 return;
             }
-            const visibleNextItems = userId
-                ? nextFeed.items
-                : filterSessionHiddenItems(
-                    nextFeed.items,
-                    anonymousHiddenPostIdsRef.current,
-                    anonymousHiddenCreatorIdsRef.current
-                );
+            const visibleNextItems = filterSessionHiddenItems(
+                nextFeed.items,
+                sessionHiddenPostIdsRef.current,
+                sessionHiddenCreatorIdsRef.current
+            );
 
             setItems((currentItems) => [
                 ...currentItems,
@@ -985,7 +990,6 @@ export default function ShowcaseClient({
         sort,
         tool,
         unlock,
-        userId,
     ]);
 
     useEffect(() => {
@@ -1076,9 +1080,9 @@ export default function ShowcaseClient({
 
         if (!user) {
             if (action === 'hide_creator' && feedbackItem.creator.id) {
-                anonymousHiddenCreatorIdsRef.current.add(feedbackItem.creator.id);
+                sessionHiddenCreatorIdsRef.current.add(feedbackItem.creator.id);
             } else {
-                anonymousHiddenPostIdsRef.current.add(feedbackItem.id);
+                sessionHiddenPostIdsRef.current.add(feedbackItem.id);
             }
         }
 
@@ -1126,9 +1130,9 @@ export default function ShowcaseClient({
             console.error('Failed to save showcase feedback:', error);
             if (!user) {
                 if (action === 'hide_creator' && feedbackItem.creator.id) {
-                    anonymousHiddenCreatorIdsRef.current.delete(feedbackItem.creator.id);
+                    sessionHiddenCreatorIdsRef.current.delete(feedbackItem.creator.id);
                 } else {
-                    anonymousHiddenPostIdsRef.current.delete(feedbackItem.id);
+                    sessionHiddenPostIdsRef.current.delete(feedbackItem.id);
                 }
             }
             setItems((currentItems) => {
@@ -1145,6 +1149,84 @@ export default function ShowcaseClient({
                 message: 'We couldn’t save that preference, so the post was restored. Please try again.',
             });
         }
+    };
+
+    // Report content, Report user and Block user, asked for and sent as the
+    // feed card's are (`lib/feed-safety-actions.ts`). The server takes them
+    // from registered accounts only, so a signed-out viewer is asked to sign
+    // in first, and comes back here.
+    const requireAccount = (): string | null => {
+        if (user && session?.access_token) return session.access_token;
+        router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath('/showcase'))}`);
+        return null;
+    };
+    const clearFeedbackNotice = () => setFeedbackNotice(null);
+    const showSafetyOutcome = (outcome: FeedSafetyOutcome) => {
+        if (outcome.status === 'cancelled') return;
+        setFeedbackNotice({ tone: outcome.status === 'done' ? 'success' : 'error', message: outcome.message });
+    };
+    // Takes posts out of the grid once a report or a block has gone through.
+    // The answer can arrive after the grid has grown or the reel has moved on,
+    // so it reads both as they are now. A reel left open on a removed post
+    // moves to the post that followed it, or the one before, or closes.
+    const removeAfterSafetyAction = (isRemoved: (candidate: ShowcaseFeedItem) => boolean) => {
+        const currentItems = feedItemsForEventsRef.current;
+        const openId = selectedItemIdRef.current;
+        const openPosition = openId ? currentItems.findIndex((candidate) => candidate.id === openId) : -1;
+        setItems((latestItems) => latestItems.filter((candidate) => !isRemoved(candidate)));
+        if (openPosition < 0 || !isRemoved(currentItems[openPosition])) return;
+        const replacementItem = currentItems.slice(openPosition + 1).find((candidate) => !isRemoved(candidate))
+            ?? currentItems.slice(0, openPosition).reverse().find((candidate) => !isRemoved(candidate))
+            ?? null;
+        if (replacementItem) {
+            selectPreviewItem(replacementItem.id);
+        } else {
+            closePreview();
+        }
+    };
+    const handleReportContent = async (reportedItem: ShowcaseFeedItem, surface: 'explore' | 'reel') => {
+        const token = requireAccount();
+        if (!token) return;
+        const outcome = await reportPostAfterConfirmation({
+            postId: reportedItem.id,
+            accessToken: token,
+            surface,
+            onSend: clearFeedbackNotice,
+        });
+        if (outcome.status === 'done') {
+            sessionHiddenPostIdsRef.current.add(reportedItem.id);
+            removeAfterSafetyAction((candidate) => candidate.id === reportedItem.id);
+        }
+        showSafetyOutcome(outcome);
+    };
+    const handleReportUser = async (reportedItem: ShowcaseFeedItem, surface: 'explore' | 'reel') => {
+        const creatorId = reportedItem.creator.id;
+        if (!creatorId || creatorId === user?.id) return;
+        const token = requireAccount();
+        if (!token) return;
+        showSafetyOutcome(await reportCreatorAfterConfirmation({
+            userId: creatorId,
+            accessToken: token,
+            surface,
+            onSend: clearFeedbackNotice,
+        }));
+    };
+    const handleBlockUser = async (blockedItem: ShowcaseFeedItem) => {
+        const creatorId = blockedItem.creator.id;
+        if (!creatorId || creatorId === user?.id) return;
+        const token = requireAccount();
+        if (!token) return;
+        const outcome = await blockCreatorAfterConfirmation({
+            userId: creatorId,
+            creatorName: blockedItem.creator.name,
+            accessToken: token,
+            onSend: clearFeedbackNotice,
+        });
+        if (outcome.status === 'done') {
+            sessionHiddenCreatorIdsRef.current.add(creatorId);
+            removeAfterSafetyAction((candidate) => candidate.creator.id === creatorId);
+        }
+        showSafetyOutcome(outcome);
     };
 
     const activeFilterPills = [
@@ -1444,7 +1526,10 @@ export default function ShowcaseClient({
                                                     <div className="px-2.5 py-1 bg-black/60 backdrop-blur-md rounded-full text-[11px] font-medium border border-white/10 flex items-center gap-1.5 text-white">
                                                         <span>{isMixedMedia ? 'Mixed' : item.category}</span>
                                                     </div>
+                                                    {/* The feed card's five rows. Not on the viewer's own
+                                                        post: nothing there to hide, report or block. */}
                                                     <ShowcaseFeedbackMenu
+                                                        portal
                                                         itemTitle={item.title}
                                                         creator={item.creator}
                                                         canHideCreator={Boolean(
@@ -1452,6 +1537,11 @@ export default function ShowcaseClient({
                                                         )}
                                                         sessionOnly={!user}
                                                         onSelect={(action) => handleFeedFeedback(item, action, 'showcase')}
+                                                        onReportContent={user && item.creator.id === user.id
+                                                            ? undefined
+                                                            : () => void handleReportContent(item, 'explore')}
+                                                        onReportUser={() => void handleReportUser(item, 'explore')}
+                                                        onBlockUser={() => void handleBlockUser(item)}
                                                     />
                                                 </div>
 
@@ -1663,6 +1753,9 @@ export default function ShowcaseClient({
                         action,
                         'showcase-reel'
                     )}
+                    onReportContent={(reportedItem) => handleReportContent(reportedItem, 'reel')}
+                    onReportUser={(reportedItem) => handleReportUser(reportedItem, 'reel')}
+                    onBlockUser={handleBlockUser}
                     buildDetailPath={buildCommunityDetailPath}
                 />
             ) : null}

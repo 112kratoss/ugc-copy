@@ -27,6 +27,7 @@ import CreatorIdentity from '@/components/CreatorIdentity';
 import PublicShareButton from '@/components/PublicShareButton';
 import TextPostPreviewCard from '@/components/TextPostPreviewCard';
 import { useAuth } from '@/components/AuthProvider';
+import { readFeedbackSnapshot } from '@/components/feedback-state';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import {
   ShowcaseFeedbackMenu,
@@ -83,6 +84,14 @@ interface ShowcaseReelViewerProps {
   onRemix: (id: string) => void | Promise<void>;
   feedSessionId?: string | null;
   onFeedback?: (item: ShowcaseFeedItem, action: ShowcaseFeedbackAction) => void | Promise<void>;
+  /**
+   * The safety rows of the menu `onFeedback` opens, each shown when given and
+   * when it can apply (`ShowcaseFeedbackMenu`): the caller asks, sends and
+   * takes the post away, as it does for its own tiles.
+   */
+  onReportContent?: (item: ShowcaseFeedItem) => void | Promise<void>;
+  onReportUser?: (item: ShowcaseFeedItem) => void | Promise<void>;
+  onBlockUser?: (item: ShowcaseFeedItem) => void | Promise<void>;
   buildDetailPath: (id: string, section?: string) => string;
 }
 
@@ -237,6 +246,9 @@ export default function ShowcaseReelViewer({
   onRemix,
   feedSessionId,
   onFeedback,
+  onReportContent,
+  onReportUser,
+  onBlockUser,
   buildDetailPath,
 }: ShowcaseReelViewerProps) {
   const router = useRouter();
@@ -680,6 +692,17 @@ export default function ShowcaseReelViewer({
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      // A key something above this viewer has already answered is not the
+      // viewer's as well. The confirmation asked from its menu ("Report
+      // content?") is drawn above it and hears keys first: its Escape has
+      // closed the question by the time it arrives here, marked as handled,
+      // and must not close the reel too. So are the arrows that step through
+      // the open menu's rows. And while the question is open the arrows must
+      // not change the post it asks about.
+      if (event.defaultPrevented || readFeedbackSnapshot().confirmation) {
+        return;
+      }
+
       if (event.key === 'Tab') {
         const activeDialog = activeReferencePreview
           ? referenceDialogRef.current
@@ -1439,7 +1462,12 @@ export default function ShowcaseReelViewer({
         ) : null}
       </AnimatePresence>
 
-      <header className="relative z-10 flex h-14 items-center justify-between gap-3 border-b border-white/8 bg-black/40 px-3 backdrop-blur-xl sm:px-5">
+      {/*
+        Above the body below (z-10): the ⋯ menu hangs from this bar over the
+        media and the details rail. At the body's own level the body, which
+        comes later, was drawn over the menu, and no row could be seen or pressed.
+      */}
+      <header className="relative z-20 flex h-14 items-center justify-between gap-3 border-b border-white/8 bg-black/40 px-3 backdrop-blur-xl sm:px-5">
         <button
           ref={reelCloseButtonRef}
           type="button"
@@ -1470,6 +1498,12 @@ export default function ShowcaseReelViewer({
               canHideCreator={Boolean(item.creator.id && item.creator.id !== user?.id)}
               sessionOnly={!user}
               onSelect={(action) => onFeedback(item, action)}
+              // Not on the viewer's own post, as on a feed card and an Explore tile.
+              onReportContent={onReportContent && !(user && item.creator.id === user.id)
+                ? () => void onReportContent(item)
+                : undefined}
+              onReportUser={onReportUser ? () => void onReportUser(item) : undefined}
+              onBlockUser={onBlockUser ? () => void onBlockUser(item) : undefined}
               buttonClassName="h-10 w-10 bg-white/[0.04] shadow-none"
             />
           ) : null}

@@ -83,6 +83,7 @@ export default function ShowcaseDetailBody({
   const previewKinds = bundle?.lockedPreview?.resourceKinds ?? bundle?.resourceKinds ?? [];
   const previewKindSummary = formatResourceKinds(previewKinds);
   const lockedViewer = Boolean(bundle && !bundle.viewerCanAccess && !bundle.viewerIsOwner);
+  const viewerIsOwner = Boolean(viewerUserId && viewerUserId === detail.creator.id);
   const postTypeLabel = getPostTypeLabel({
     category: detail.category,
     mediaKind: detail.mediaKind,
@@ -392,7 +393,7 @@ export default function ShowcaseDetailBody({
                   title={displayTitle}
                   creatorUsername={detail.creator.username}
                   visibility={detail.visibility}
-                  viewerIsOwner={Boolean(viewerUserId && viewerUserId === detail.creator.id)}
+                  viewerIsOwner={viewerIsOwner}
                   hasResourceBundle={Boolean(detail.resourceBundle)}
                   bundle={bundle
                     ? { accessMode: bundle.accessMode, status: bundle.status, salesCount: bundle.salesCount }
@@ -411,11 +412,15 @@ export default function ShowcaseDetailBody({
                 </div>
               ) : null}
 
-              <ReportPostButton
-                postId={detail.id}
-                bundleId={detail.resourceBundle?.id ?? null}
-                accessToken={accessToken}
-              />
+              {/* Not on the creator's own post: the feed card's menu and the app
+                  leave it out there too, and the server refuses the report. */}
+              {viewerIsOwner ? null : (
+                <ReportPostButton
+                  postId={detail.id}
+                  bundleId={detail.resourceBundle?.id ?? null}
+                  accessToken={accessToken}
+                />
+              )}
             </div>
           </aside>
         </div>
