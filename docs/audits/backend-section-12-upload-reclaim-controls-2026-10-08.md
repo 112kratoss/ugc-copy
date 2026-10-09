@@ -1,7 +1,7 @@
 # Section 12H — staged upload cleanup recovery controls
 
 Nine controls pass against the actual reclaim service, local PostgREST, Storage
-and SQL. Test typechecking and scoped lint pass. CI is pending. This batch adds
+and SQL. Test typechecking and scoped lint pass. CI passed and the [release is independently verified](backend-section-12-upload-reclaim-controls-release-2026-10-09.md). This batch adds
 regression evidence; it changes no application behavior or database schema.
 
 Each fixture owns one user, one 72-hour-old consumed upload intent and one small
