@@ -21,6 +21,7 @@ import {
 } from '@/lib/post-lifecycle';
 import type { OwnerPostsResponse } from '@/lib/types';
 import { adjustProfileStats } from '@/lib/profile-stats';
+import { getViewerSafetyActions } from '@/lib/viewer-actions';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 
 /**
@@ -74,16 +75,11 @@ export function useViewerActionHandlers({
 }: ViewerActionCallbacks & { item: ImmersivePreviewItem; onClose?: () => void }) {
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
-  const canModerateCreator = item.sourceType === 'showcase'
-    && Boolean(item.creatorId)
-    && item.creatorId !== user?.id;
   const actions = [
     ...item.availableActions,
     ...(onNotInterested ? ['not-interested'] : []),
     ...(onHideCreator ? ['hide-creator'] : []),
-    ...(item.sourceType === 'showcase' ? ['report-content'] : []),
-    ...(canModerateCreator ? ['report-user', 'block-user'] : []),
-    ...(item.sourceType === 'generation' && item.generationId ? ['report-ai-output'] : []),
+    ...getViewerSafetyActions(item, user?.id),
   ];
 
   const refreshMedia = async () => {

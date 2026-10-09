@@ -1,4 +1,5 @@
 import { hexWithAlpha } from './eased-fade';
+import { canHideFeedCreator, isOwnFeedPost } from './feed-feedback-menu';
 import { hideCreatorLabelFromCardLabel } from './hide-creator-label';
 import type { ImmersivePreviewItem, PreviewViewerSource } from './immersive-preview-view-model';
 import { appTheme, type ThemeColors } from './theme';
@@ -421,6 +422,28 @@ export function isDestructiveViewerAction(action: string) {
     || action === 'report-user'
     || action === 'block-user'
     || action === 'report-ai-output';
+}
+
+/**
+ * The Safety rows a viewer item offers whoever is looking at it, in order.
+ *
+ * A post is anyone's to report but its creator's, and its creator is anyone's
+ * to report or block but their own: the two rules a feed card's menu applies
+ * (`lib/feed-feedback-menu.ts`), so a post's ⋮ and its ••• in the reel offer
+ * the same rows. Report content stayed on your own post here until 2026-10-09.
+ * A creation is its maker's to report: that is the report on what a model
+ * made, not on a person.
+ */
+export function getViewerSafetyActions(
+  item: Pick<ImmersivePreviewItem, 'sourceType' | 'creatorId' | 'generationId'>,
+  viewerId: string | null | undefined,
+): string[] {
+  const isPost = item.sourceType === 'showcase';
+  return [
+    ...(isPost && !isOwnFeedPost(item.creatorId, viewerId) ? ['report-content'] : []),
+    ...(isPost && canHideFeedCreator(item.creatorId, viewerId) ? ['report-user', 'block-user'] : []),
+    ...(item.sourceType === 'generation' && item.generationId ? ['report-ai-output'] : []),
+  ];
 }
 
 export function getViewerActionGroupLabel(action: string) {

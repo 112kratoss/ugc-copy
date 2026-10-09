@@ -6,6 +6,8 @@ Update, 2026-10-09: Android no longer draws Material's dropdown. The owner found
 
 Second update, 2026-10-09, from a look at the shipped menus on a Galaxy S24: a left-hand Explore card's menu no longer slides across to sit under the next card's ⋮, Hide is plain in the reel as it is on a card, and your own post lists no Hide, Report user or Block user row on a card, as in the reel and on the web. `docs/design/design-mobile.md` (Overlays) holds the rules.
 
+Third update, 2026-10-09: your own post lists no Report content row either, on a card, in the card's sheet, in the reel and on the Details page, as the web's feed card does not. The row filed a report on the viewer's own post, which the server takes (it refuses one on your own profile or comment). A card's menu on your own post is now the one row, Not interested.
+
 Scope: `ugc-mobile/` only; paths below are relative to it. Expo UI (`@expo/ui`) is a new native module, so this ships in store build 0.1.8, never over the air. The plan was to keep the branch unmerged until 0.1.8 was cut; merged early, it left OTAs published from `main` no longer matching 0.1.7's fingerprint, as after #202, so 0.1.7 fixes publish from `7113b590` with `publish-ota.mjs --ref` until 0.1.8 ships. Develop and check on the S24 first; the iPhone gets one batched pass.
 
 ## Why

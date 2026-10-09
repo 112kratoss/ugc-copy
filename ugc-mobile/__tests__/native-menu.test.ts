@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import hideCreatorLabelContract from '../../contracts/hide-creator-label-v1.json';
 
 import { buildCommentMenu } from '../lib/comment-menu';
-import { buildFeedFeedbackMenu, canHideFeedCreator } from '../lib/feed-feedback-menu';
+import { buildFeedFeedbackMenu, canHideFeedCreator, isOwnFeedPost } from '../lib/feed-feedback-menu';
 import { hideCreatorLabel, hideCreatorLabelFromCardLabel } from '../lib/hide-creator-label';
 import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
 import {
@@ -21,7 +21,7 @@ import {
   type NativeMenuModel,
 } from '../lib/native-menu';
 import { buildPostVisibilityMenu, postVisibilityChoices } from '../lib/post-visibility-menu';
-import { isDestructiveViewerAction } from '../lib/viewer-actions';
+import { getViewerSafetyActions, isDestructiveViewerAction } from '../lib/viewer-actions';
 import { buildViewerActionsMenu } from '../lib/viewer-actions-menu';
 
 const noop = () => undefined;
@@ -159,7 +159,7 @@ describe('feed menu', () => {
   };
 
   it("offers the sheet's rows: preferences first, then the destructive safety rows", () => {
-    const menu = buildFeedFeedbackMenu({ creator: { username: 'maya', name: 'Maya R' }, canHideCreator: true, sessionOnly: false, ...handlers });
+    const menu = buildFeedFeedbackMenu({ creator: { username: 'maya', name: 'Maya R' }, canHideCreator: true, viewerIsOwner: false, sessionOnly: false, ...handlers });
 
     expect(menu.sections.map((section) => section.title)).toEqual([undefined, 'Safety']);
     expect(menu.sections[0].items.map((item) => item.label)).toEqual(['Not interested', 'Hide @maya']);
@@ -171,27 +171,38 @@ describe('feed menu', () => {
   });
 
   it("tells a guest the choice lasts for the visit, as a heading on iOS and a line on each row elsewhere", () => {
-    const menu = buildFeedFeedbackMenu({ creator: { username: 'maya', name: 'Maya R' }, canHideCreator: true, sessionOnly: true, ...handlers });
+    const menu = buildFeedFeedbackMenu({ creator: { username: 'maya', name: 'Maya R' }, canHideCreator: true, viewerIsOwner: false, sessionOnly: true, ...handlers });
 
     expect(menu.sections[0].title).toBe('For this visit');
     expect(menu.sections[0].items.map((item) => (item.kind === 'action' ? item.subtitle : null)))
       .toEqual(['For this visit', 'For this visit']);
   });
 
-  // Nothing can make hiding, reporting or blocking yourself possible, so the
-  // rows are left out, not dimmed: the reel's menu and the web's do the same.
-  it('leaves the creator rows out on your own post, whatever handlers it was given', () => {
-    const menu = buildFeedFeedbackMenu({ creator: { username: 'me', name: 'Me' }, canHideCreator: false, sessionOnly: false, ...handlers });
+  // Nothing can make hiding, reporting or blocking yourself possible, and a
+  // report on your own post asks for a review of no one. The rows are left out,
+  // not dimmed: the reel's menu and the web's do the same. Report content
+  // stayed on your own post in the app until 2026-10-09.
+  it('leaves the creator rows and Report content out on your own post, whatever handlers it was given', () => {
+    const menu = buildFeedFeedbackMenu({ creator: { username: 'me', name: 'Me' }, canHideCreator: false, viewerIsOwner: true, sessionOnly: false, ...handlers });
+
+    expect(rowIds(menu)).toEqual(['not-interested']);
+    // No row is left under the Safety heading, so no heading is drawn.
+    expect(compactNativeMenu(menu).sections.map((section) => section.id)).toEqual(['preferences']);
+    expect(menu.sections.flatMap((section) => section.items).some((item) => item.disabled)).toBe(false);
+  });
+
+  it("keeps Report content on a post with no creator account, which is no one's own", () => {
+    const menu = buildFeedFeedbackMenu({ creator: {}, canHideCreator: false, viewerIsOwner: false, sessionOnly: false, ...handlers });
 
     expect(menu.sections.map((section) => section.items.map((item) => item.label)))
       .toEqual([['Not interested'], ['Report content']]);
-    expect(menu.sections.flatMap((section) => section.items).some((item) => item.disabled)).toBe(false);
   });
 
   it('leaves out the safety rows it was not given', () => {
     const menu = buildFeedFeedbackMenu({
       creator: { username: 'maya', name: 'Maya R' },
       canHideCreator: true,
+      viewerIsOwner: false,
       sessionOnly: false,
       onNotInterested: noop,
       onHideCreator: noop,
@@ -204,7 +215,7 @@ describe('feed menu', () => {
   // One meaning for red across the two menus that share these rows: a feed
   // card's and the reel's. Hide was red in the reel and plain on a card.
   it("colours each row as the reel's menu colours the same row", () => {
-    const menu = buildFeedFeedbackMenu({ creator: { username: 'maya', name: 'Maya R' }, canHideCreator: true, sessionOnly: false, ...handlers });
+    const menu = buildFeedFeedbackMenu({ creator: { username: 'maya', name: 'Maya R' }, canHideCreator: true, viewerIsOwner: false, sessionOnly: false, ...handlers });
     const rows = menu.sections.flatMap((section) => section.items);
 
     expect(rows.map((row) => row.id)).toEqual(['not-interested', 'hide-creator', 'report-content', 'report-user', 'block-user']);
@@ -242,6 +253,7 @@ describe('the Hide row', () => {
     const card = buildFeedFeedbackMenu({
       creator: { username: 'maya', name: 'Maya R' },
       canHideCreator: true,
+      viewerIsOwner: false,
       sessionOnly: false,
       onNotInterested: noop,
       onHideCreator: noop,
@@ -267,6 +279,17 @@ describe("whose creator a feed card's menu can act on", () => {
     expect(canHideFeedCreator(undefined, undefined)).toBe(false);
   });
 
+  it('counts a post as your own only when you are signed in and made it', () => {
+    expect(isOwnFeedPost('me', 'me')).toBe(true);
+    expect(isOwnFeedPost('maya', 'me')).toBe(false);
+    expect(isOwnFeedPost('maya', undefined)).toBe(false);
+    expect(isOwnFeedPost(null, 'me')).toBe(false);
+    // A guest looking at a post that names no creator: nothing equals nothing,
+    // and the post is still not theirs. So is the post a closing sheet has let go.
+    expect(isOwnFeedPost(undefined, undefined)).toBe(false);
+    expect(isOwnFeedPost(null, null)).toBe(false);
+  });
+
   // The rule is only as good as the two screens that ask it: each builds the
   // menu and its fallback sheet for the post whose ⋮ was pressed.
   it.each(['components/home-dashboard.tsx', 'app/(tabs)/showcase.tsx'])('is asked by %s for the menu and for the sheet', (file) => {
@@ -275,9 +298,36 @@ describe("whose creator a feed card's menu can act on", () => {
     expect(source).toContain('canHideCreator: canHideFeedCreator(item.creator.id, user?.id),');
     expect(source).toContain('canHideCreator={canHideFeedCreator(feedbackItem?.creator.id, user?.id)}');
     expect(source.match(/canHideCreator[:=]/g)?.length).toBe(2);
+    expect(source).toContain('viewerIsOwner: isOwnFeedPost(item.creator.id, user?.id),');
+    expect(source).toContain('viewerIsOwner={isOwnFeedPost(feedbackItem?.creator.id, user?.id)}');
+    expect(source.match(/viewerIsOwner[:=]/g)?.length).toBe(2);
     // And the Hide row is worded by the one rule, for the menu and for the sheet.
     expect(source).toContain('    creator: item.creator,\n    canHideCreator:');
     expect(source).toContain('hideLabel={hideCreatorLabel(feedbackItem?.creator ?? {})}');
+  });
+});
+
+// A feed card's ⋮ and the reel's ••• open onto the same post, so whoever is
+// looking is offered the same Safety rows by both.
+describe('the Safety rows of a post, on its card and in the reel', () => {
+  const handlers = { onNotInterested: noop, onHideCreator: noop, onReportContent: noop, onReportUser: noop, onBlockUser: noop };
+  const cardSafetyRows = (creatorId: string | null, viewerId: string | undefined) => buildFeedFeedbackMenu({
+    creator: {},
+    canHideCreator: canHideFeedCreator(creatorId, viewerId),
+    viewerIsOwner: isOwnFeedPost(creatorId, viewerId),
+    sessionOnly: !viewerId,
+    ...handlers,
+  }).sections.find((section) => section.id === 'safety')?.items.map((item) => item.id);
+
+  it.each([
+    { post: "someone else's", creatorId: 'maya', viewerId: 'me', rows: ['report-content', 'report-user', 'block-user'] },
+    { post: "someone else's, seen by a guest", creatorId: 'maya', viewerId: undefined, rows: ['report-content', 'report-user', 'block-user'] },
+    { post: 'your own', creatorId: 'me', viewerId: 'me', rows: [] },
+    { post: 'one with no creator account', creatorId: null, viewerId: 'me', rows: ['report-content'] },
+    { post: 'one with no creator account, seen by a guest', creatorId: null, viewerId: undefined, rows: ['report-content'] },
+  ])('are $rows on $post', ({ creatorId, viewerId, rows }) => {
+    expect(cardSafetyRows(creatorId, viewerId)).toEqual(rows);
+    expect(getViewerSafetyActions({ sourceType: 'showcase', creatorId, generationId: null }, viewerId)).toEqual(rows);
   });
 });
 
