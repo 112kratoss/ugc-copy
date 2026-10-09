@@ -27,6 +27,12 @@ vi.mock('next/navigation', () => ({
   }),
 }));
 
+// Spending credits asks first; these tests answer yes.
+vi.mock('@/components/feedback-state', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/feedback-state')>()),
+  requestConfirmation: vi.fn(async () => true),
+}));
+
 vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     session: authState.session,

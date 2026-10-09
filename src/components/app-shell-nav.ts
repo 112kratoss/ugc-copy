@@ -171,6 +171,11 @@ export function getActiveAppNavItem(pathname: string) {
 
 export function getAppShellTitle(pathname: string) {
   if (pathname.startsWith('/pricing')) return 'Pricing';
+  if (pathname.startsWith('/models')) return 'Models';
+  if (pathname.startsWith('/alternatives')) return 'Compare';
+  if (pathname.startsWith('/ai-image-generator')) return 'AI image generator';
+  if (pathname.startsWith('/ai-video-generator')) return 'AI video generator';
+  if (pathname.startsWith('/ai-motion-transfer')) return 'Motion transfer';
   if (pathname.startsWith('/blog')) return 'Blog';
   if (pathname.startsWith('/contact')) return 'Contact';
   if (pathname.startsWith('/login')) return 'Sign in';

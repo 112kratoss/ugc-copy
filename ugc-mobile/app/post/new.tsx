@@ -8,7 +8,7 @@ import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Keyboard, Keyboar
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ContentPolicyGate } from '@/components/content-policy-gate';
-import { AppText, ChoiceChip, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
+import { AppText, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { ComposerMediaLightbox, getComposerMediaLabel } from '@/components/composer-media-lightbox';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { Overlay } from '@/components/overlay-host';
@@ -55,7 +55,6 @@ import {
   deriveCreationPackageFromResourceCards,
   getDefaultPostComposerDraft,
   getPostComposerDetailErrors,
-  getPostComposerPublishActions,
   getPostComposerPackageStatus,
   getPostComposerPriceTokens,
   getPostComposerResourceCardErrors,
@@ -72,10 +71,8 @@ import {
   isTemplateGeneration,
   isPostComposerResourceCardReady,
   POST_COMPOSER_CATEGORY_OPTIONS,
-  POST_COMPOSER_RESOURCE_KIND_OPTIONS,
   POST_COMPOSER_RESOURCE_CARD_OPTIONS,
   POST_COMPOSER_SOURCE_OPTIONS,
-  POST_COMPOSER_UNLOCK_OPTIONS,
   validatePostComposerDraft,
   type PostComposerValidationOptions,
   hasGenerationReferences,
@@ -89,6 +86,7 @@ import {
   type PostComposerResourceCardDraft,
   type PostComposerResourceCardType,
   type PostComposerValidationResult,
+  getDefaultResourceDraft,
 } from '@/lib/post-new-view-model';
 import {
   COMPOSER_UNDO_WINDOW_MS,
@@ -116,38 +114,13 @@ import { useReducedMotion } from '@/lib/motion';
 import { BackGlyph, CloseGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { hexWithAlpha } from '@/lib/eased-fade';
-import { accentFill, appTheme, mediaColors, onAccentFill, type ToolAccent } from '@/lib/theme';
+import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-file';
 import { useHardwareBack } from '@/lib/use-hardware-back';
-import type { GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceBundleAccessMode, PostResourceItemType, SourceToolOption } from '@/lib/types';
+import type { GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceItemType, SourceToolOption } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
 import { haptic } from '@/lib/haptics';
-
-const getDefaultResourceDraft = () => ({
-  accessMode: 'none' as const,
-  selectedKinds: {
-    prompt: true,
-    workflow: false,
-    files: false,
-    notes: false,
-    remix: false,
-  },
-  promptText: '',
-  notesMarkdown: '',
-  workflowShareUrl: '',
-  attachmentUrl: '',
-  attachmentLabel: '',
-  attachments: [],
-  organizeSections: false,
-  sections: [],
-  cards: [],
-  allowRemix: false,
-  summary: '',
-  previewText: '',
-  priceUsd: '1',
-  priceTokens: '100',
-});
 
 // The dimmed strip kept between the status bar and a resource sheet that the keyboard has shortened.
 const RESOURCE_SHEET_TOP_GAP = 8;
@@ -156,12 +129,6 @@ const COMPOSER_SECTION_STYLE = {
   padding: 14,
   borderRadius: appTheme.radii.lg,
   gap: 10,
-} as const;
-
-const MINIMAL_COMPOSER_SECTION_STYLE = {
-  padding: 14,
-  borderRadius: 18,
-  gap: 12,
 } as const;
 
 interface MediaUploadBatchProgress {
@@ -267,6 +234,7 @@ function PostDetailsPage({
   detailErrors,
   isPickingMedia,
   isMediaLocked,
+  isEditMode,
   isMadeWithOpen,
   mediaControlRef,
   titleInputRef,
@@ -287,6 +255,8 @@ function PostDetailsPage({
   detailErrors: PostComposerDetailErrors;
   isPickingMedia: boolean;
   isMediaLocked: boolean;
+  /** Editing keeps the post's format: the server never changes it on update. */
+  isEditMode: boolean;
   isMadeWithOpen: boolean;
   mediaControlRef: RefObject<View | null>;
   titleInputRef: RefObject<TextInput | null>;
@@ -347,7 +317,7 @@ function PostDetailsPage({
         />
       ) : null}
 
-      {!selectedGeneration && !isMediaLocked ? (
+      {!selectedGeneration && !isMediaLocked && !isEditMode ? (
         <PostFormatSelector value={draft.mode === 'text' ? 'text' : 'upload'} onChange={onModeChange} />
       ) : null}
 
@@ -419,7 +389,7 @@ function PostDetailsPage({
           accessibilityLabel="Story, optional"
           accessibilityHint={`Share the idea, process, or story behind this post. Maximum ${BODY_MAX_LENGTH} characters.`}
           value={draft.caption}
-          onChangeText={(caption) => onChange({ caption: caption.slice(0, BODY_MAX_LENGTH), description: caption.slice(0, BODY_MAX_LENGTH) })}
+          onChangeText={(caption) => onChange({ caption: caption.slice(0, BODY_MAX_LENGTH) })}
           placeholder="Share the idea, process, or story behind it…"
           multiline
           minHeight={150}
@@ -1884,10 +1854,6 @@ function getResourceCardSignature(card: PostComposerResourceCardDraft) {
   return JSON.stringify(card);
 }
 
-
-
-
-
 // Posting is creating: the community rules come first (`ContentPolicyGate`),
 // and the composer's drafts and uploads start only once they are accepted.
 export default function NewPostScreen() {
@@ -2182,8 +2148,10 @@ function NewPostComposer() {
           allowRemix: hydratePostComposerAllowRemix(resourceBundleInput),
           summary: resourceBundleInput.summary || '',
           previewText: resourceBundleInput.previewText || '',
+          // Both from the stored price, else both the default: '9' beside '100'
+          // showed 100 tokens and saved 900 through the legacy-USD rule.
           priceUsd: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents / 100) : '9',
-          priceTokens: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents) : '100',
+          priceTokens: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents) : '900',
         } : getDefaultResourceDraft(),
       });
       setHasPrefilledEdit(true);
@@ -2311,7 +2279,13 @@ function NewPostComposer() {
       setMessage({
         tone: 'success',
         title: isEditMode ? 'Saved' : 'Posted',
-        body: isEditMode ? 'Your post has been updated.' : 'Your post is now live in your profile.',
+        body: isEditMode
+          ? 'Your post has been updated.'
+          : context?.submittedDraft.visibility === 'public'
+            ? 'Your post is now live in your profile.'
+            : context?.submittedDraft.resource.accessMode !== 'none'
+              ? 'Your post is saved. Its recipe stays a draft until the post is public.'
+              : 'Your post is saved to your profile.',
       });
       const targetPostId = response.postId || postId;
       if (!isEditMode) {
@@ -2476,7 +2450,8 @@ function NewPostComposer() {
   }
 
   const setMode = (mode: Exclude<PostComposerMode, 'creation'>) => {
-    if (isMediaLocked) return;
+    // Media → text on an uploaded post saved an empty body and deleted the caption.
+    if (isMediaLocked || isEditMode) return;
     setMessage(null);
     const next = {
       ...draft,
@@ -2972,52 +2947,6 @@ function NewPostComposer() {
     });
   };
 
-  const updateResourceKind = (kind: keyof PostComposerDraft['resource']['selectedKinds'], enabled: boolean) => {
-    updateResource({
-      selectedKinds: {
-        ...draft.resource.selectedKinds,
-        [kind]: enabled,
-      },
-      allowRemix: kind === 'remix' ? enabled : draft.resource.allowRemix,
-    });
-  };
-
-  const addResourceAttachment = (attachment: Partial<PostComposerDraft['resource']['attachments'][number]> = {}) => {
-    updateResource({
-      selectedKinds: { ...draft.resource.selectedKinds, files: true },
-      attachments: [
-        ...draft.resource.attachments,
-        {
-          id: `att-${Date.now()}`,
-          kind: attachment.kind ?? 'link',
-          label: attachment.label ?? '',
-          url: attachment.url ?? '',
-          storagePath: attachment.storagePath ?? '',
-          contentType: attachment.contentType ?? null,
-          sizeBytes: attachment.sizeBytes ?? null,
-          resourceType: attachment.resourceType ?? 'external_link',
-          role: attachment.role ?? 'primary',
-          remixUse: attachment.remixUse ?? 'none',
-        },
-      ],
-    });
-  };
-
-  const updateResourceAttachment = (
-    id: string,
-    patch: Partial<PostComposerDraft['resource']['attachments'][number]>
-  ) => {
-    updateResource({
-      attachments: draft.resource.attachments.map((attachment) => attachment.id === id ? { ...attachment, ...patch } : attachment),
-    });
-  };
-
-  const removeResourceAttachment = (id: string) => {
-    updateResource({
-      attachments: draft.resource.attachments.filter((attachment) => attachment.id !== id),
-    });
-  };
-
   const uploadPendingResourceFile = async (pending: PendingResourceUpload) => {
     if (isPickingResourceFile || hasPaidOrders || resourceEditorCard?.id !== pending.cardId) return;
 
@@ -3242,41 +3171,6 @@ function NewPostComposer() {
     clearResourceEditor();
   };
 
-  const addResourceSection = () => {
-    updateResource({
-      organizeSections: true,
-      sections: [
-        ...draft.resource.sections,
-        {
-          id: `section-${Date.now()}`,
-          title: `Section ${draft.resource.sections.length + 1}`,
-          kind: 'scene',
-          description: '',
-          promptText: '',
-          workflowShareUrl: '',
-          notesMarkdown: '',
-          attachments: [],
-          allowRemix: false,
-        },
-      ],
-    });
-  };
-
-  const updateResourceSection = (
-    id: string,
-    patch: Partial<PostComposerDraft['resource']['sections'][number]>
-  ) => {
-    updateResource({
-      sections: draft.resource.sections.map((section) => section.id === id ? { ...section, ...patch } : section),
-    });
-  };
-
-  const removeResourceSection = (id: string) => {
-    updateResource({
-      sections: draft.resource.sections.filter((section) => section.id !== id),
-    });
-  };
-
   const editingResource = resourceEditorCard;
 
   const focusDetailField = (field: PostComposerDetailField) => {
@@ -3404,6 +3298,7 @@ function NewPostComposer() {
             detailErrors={detailErrors}
             isPickingMedia={isPickingMedia}
             isMediaLocked={isMediaLocked}
+            isEditMode={isEditMode}
             isMadeWithOpen={isMadeWithOpen}
             mediaControlRef={mediaControlRef}
             titleInputRef={titleInputRef}
@@ -3717,32 +3612,6 @@ function MadeWithSection({
           </View>
         ) : null}
       </View>
-    </SurfaceSection>
-  );
-}
-
-function TitleSection({
-  draft,
-  disabled,
-  onChange,
-}: {
-  draft: PostComposerDraft;
-  disabled: boolean;
-  onChange: (patch: Partial<PostComposerDraft>) => void;
-}) {
-  return (
-    <SurfaceSection
-      eyebrow="Post"
-      title="Title"
-      accent="primary"
-      style={COMPOSER_SECTION_STYLE}
-    >
-      <ComposerInput
-        value={draft.title}
-        onChangeText={(title) => onChange({ title: title.slice(0, TITLE_MAX_LENGTH) })}
-        placeholder="Give your post a title"
-        editable={!disabled}
-      />
     </SurfaceSection>
   );
 }
@@ -4071,341 +3940,6 @@ function getMadeWithToolOptions(sourceTools: SourceToolOption[]): SourceToolOpti
   return [...optionsByKey.values()].sort((left, right) => catalogTierRank(left) - catalogTierRank(right));
 }
 
-function ProofSection({
-  draft,
-  selectedGeneration,
-  isPickingMedia,
-  isMediaLocked,
-  onModeChange,
-  onPickMedia,
-  onRemoveMedia,
-  onReorderMedia,
-}: {
-  draft: PostComposerDraft;
-  selectedGeneration: GenerationListItem | null;
-  isPickingMedia: boolean;
-  isMediaLocked: boolean;
-  onModeChange: (mode: Exclude<PostComposerMode, 'creation'>) => void;
-  onPickMedia: () => void;
-  onRemoveMedia: (id: string) => void;
-  onReorderMedia: (id: string, targetIndex: number) => void;
-}) {
-  return (
-    <SurfaceSection
-      eyebrow={draft.mode === 'creation' ? 'Generated media attached' : draft.proofMode === 'text' ? 'Text post' : 'Media post'}
-      title="Proof"
-      accent="image"
-      style={COMPOSER_SECTION_STYLE}
-    >
-      {!selectedGeneration ? (
-        <SegmentedRow>
-          <Chip label="Media" active={draft.proofMode === 'media' && draft.mode !== 'creation'} onPress={() => onModeChange('upload')} disabled={isMediaLocked} />
-          <Chip label="Text" active={draft.proofMode === 'text'} onPress={() => onModeChange('text')} disabled={isMediaLocked} />
-        </SegmentedRow>
-      ) : null}
-
-      {selectedGeneration ? (
-        <GeneratedProofCard
-          item={selectedGeneration}
-        />
-      ) : null}
-
-      {draft.mode === 'upload' ? (
-        <UploadContent
-          draft={draft}
-          isPicking={isPickingMedia}
-          onPickMedia={onPickMedia}
-          onRemoveMedia={onRemoveMedia}
-          onReorderMedia={onReorderMedia}
-          disabled={isMediaLocked}
-        />
-      ) : null}
-
-    </SurfaceSection>
-  );
-}
-
-function StorySection({
-  draft,
-  disabled,
-  isDescriptionOpen,
-  onChange,
-  onToggleDescription,
-}: {
-  draft: PostComposerDraft;
-  disabled: boolean;
-  isDescriptionOpen: boolean;
-  onChange: (patch: Partial<PostComposerDraft>) => void;
-  onToggleDescription: () => void;
-}) {
-  return (
-    <MinimalComposerSection
-      title="Story"
-      body="The public content visible in Explore."
-      action={(
-        <MiniAction
-          label={isDescriptionOpen ? 'Hide description' : 'Add Explore description'}
-          onPress={onToggleDescription}
-        />
-      )}
-    >
-      <FieldBlock label={draft.proofMode === 'text' ? 'Post body' : 'Story'}>
-        <ComposerInput
-          value={draft.proofMode === 'text' ? draft.contentText : draft.caption}
-          onChangeText={(value) => onChange(draft.proofMode === 'text' ? { contentText: value } : { caption: value })}
-          placeholder={draft.proofMode === 'text' ? 'Write the post content…' : 'Write an optional story…'}
-          multiline
-          minHeight={130}
-          editable={!disabled}
-        />
-      </FieldBlock>
-      {isDescriptionOpen ? (
-        <FieldBlock label="Explore description">
-          <ComposerInput
-            value={draft.description}
-            onChangeText={(description) => onChange({ description })}
-            placeholder="Optional: give the post a short one-line setup for Explore and previews."
-            multiline
-            minHeight={78}
-            editable={!disabled}
-          />
-        </FieldBlock>
-      ) : null}
-    </MinimalComposerSection>
-  );
-}
-
-function UnlockSection({
-  draft,
-  selectedGeneration,
-  packageStatus,
-  isPickingResourceFile,
-  onResourceChange,
-  onCreationPackageChange,
-  onTogglePromptResource,
-  onResourceKindChange,
-  onAddAttachment,
-  onUpdateAttachment,
-  onRemoveAttachment,
-  onPickResourceFile,
-  onAddSection,
-  onUpdateSection,
-  onRemoveSection,
-}: {
-  draft: PostComposerDraft;
-  selectedGeneration: GenerationListItem | null;
-  packageStatus: ReturnType<typeof getPostComposerPackageStatus>;
-  isPickingResourceFile: boolean;
-  onResourceChange: (patch: Partial<PostComposerDraft['resource']>) => void;
-  onCreationPackageChange: (patch: Partial<PostComposerDraft['creationPackage']>) => void;
-  onTogglePromptResource: (enabled: boolean) => void;
-  onResourceKindChange: (kind: keyof PostComposerDraft['resource']['selectedKinds'], enabled: boolean) => void;
-  onAddAttachment: (attachment?: Partial<PostComposerDraft['resource']['attachments'][number]>) => void;
-  onUpdateAttachment: (id: string, patch: Partial<PostComposerDraft['resource']['attachments'][number]>) => void;
-  onRemoveAttachment: (id: string) => void;
-  onPickResourceFile: () => void;
-  onAddSection: () => void;
-  onUpdateSection: (id: string, patch: Partial<PostComposerDraft['resource']['sections'][number]>) => void;
-  onRemoveSection: (id: string) => void;
-}) {
-  const theme = useAppTheme();
-  const resourceActive = draft.resource.accessMode !== 'none';
-  const unlockEnabled = resourceActive
-    || draft.creationPackage.attachGenerationReferences
-    || draft.creationPackage.attachPromptResource;
-
-  const toggleUnlockEnabled = () => {
-    if (unlockEnabled) {
-      onResourceChange({ accessMode: 'none', organizeSections: false });
-      onCreationPackageChange({
-        attachGenerationReferences: false,
-        attachPromptResource: false,
-      });
-      return;
-    }
-
-    onResourceChange({ accessMode: 'free' });
-  };
-
-  return (
-    <MinimalComposerSection
-      title="Unlock"
-      body="Add optional gated resources to this post."
-      tone="workflow"
-    >
-      <UnlockChecklistRow
-        checked={unlockEnabled}
-        label="Add references & unlockable resources"
-        onPress={toggleUnlockEnabled}
-      />
-
-      {unlockEnabled && draft.mode === 'creation' && selectedGeneration ? (
-        <View style={{ gap: appTheme.spacing.compact }}>
-          {hasGenerationReferences(selectedGeneration) ? (
-            <ToggleRow
-              label="Attach creation references"
-              body="Include the saved input media in post details."
-              value={draft.creationPackage.attachGenerationReferences}
-              onValueChange={(attachGenerationReferences) => onCreationPackageChange({ attachGenerationReferences })}
-              accent="image"
-            />
-          ) : null}
-          <ToggleRow
-            label="Use exact prompt as resource"
-            body="Turn the generation prompt into a free resource package."
-            value={draft.creationPackage.attachPromptResource}
-            onValueChange={onTogglePromptResource}
-            accent="workflow"
-            disabled={!selectedGeneration.prompt?.trim()}
-          />
-        </View>
-      ) : null}
-
-      {unlockEnabled ? (
-        <>
-          <View
-            style={{
-              borderRadius: 16,
-              borderWidth: 1,
-              borderColor: hexWithAlpha(theme.colors.text, 0.10),
-              backgroundColor: hexWithAlpha(theme.dim.color, 0.16 * theme.dim.scale),
-              padding: 10,
-              gap: appTheme.spacing.gap,
-            }}
-          >
-            <SegmentedRow>
-              {POST_COMPOSER_UNLOCK_OPTIONS.filter((option) => option.id !== 'none').map((option) => (
-                <Chip
-                  key={option.id}
-                  label={option.label === 'Paid' ? 'Paid ($)' : option.label}
-                  active={draft.resource.accessMode === option.id}
-                  onPress={() => {
-                    onResourceChange({ accessMode: option.id });
-                    if (option.id === 'none') {
-                      onCreationPackageChange({
-                        attachGenerationReferences: false,
-                        attachPromptResource: false,
-                      });
-                    }
-                  }}
-                  accent={option.id === 'paid' ? 'commerce' : option.id === 'free' ? 'workflow' : 'motion'}
-                />
-              ))}
-            </SegmentedRow>
-
-            <View style={{ height: 1, backgroundColor: hexWithAlpha(theme.colors.text, 0.08) }} />
-
-            <FieldBlock label="Resource types">
-              <SegmentedRow wrap>
-                {POST_COMPOSER_RESOURCE_KIND_OPTIONS.map((option) => (
-                  <SmallChip
-                    key={option.id}
-                    label={option.label}
-                    active={draft.resource.selectedKinds[option.id]}
-                    onPress={() => onResourceKindChange(option.id, !draft.resource.selectedKinds[option.id])}
-                  />
-                ))}
-              </SegmentedRow>
-            </FieldBlock>
-
-            {resourceActive ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: appTheme.spacing.gap }}>
-                <AppText variant="caption" color="muted">Need section-based structure?</AppText>
-                <MiniAction
-                  label={draft.resource.organizeSections ? 'Disable section layout' : 'Enable section layout'}
-                  onPress={() => onResourceChange({ organizeSections: !draft.resource.organizeSections })}
-                />
-              </View>
-            ) : null}
-          </View>
-
-          <ReadinessRow label={packageStatus.label} body={packageStatus.body} state={packageStatus.state} />
-        </>
-      ) : null}
-
-      {resourceActive ? (
-        <>
-          <UnlockFields
-            accessMode={draft.resource.accessMode}
-            resource={draft.resource}
-            onChange={onResourceChange}
-            onAddAttachment={onAddAttachment}
-            onUpdateAttachment={onUpdateAttachment}
-            onRemoveAttachment={onRemoveAttachment}
-            onPickResourceFile={onPickResourceFile}
-            isPickingResourceFile={isPickingResourceFile}
-          />
-          {draft.resource.organizeSections ? (
-            <View style={{ gap: appTheme.spacing.gap }}>
-              {draft.resource.sections.map((section, index) => (
-                <View key={section.id} style={{ gap: appTheme.spacing.compact }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: appTheme.spacing.compact }}>
-                    <AppText variant="label" color="muted">{`Section ${index + 1}`}</AppText>
-                    <MiniAction
-                      label="Remove"
-                      accessibilityLabel={`Remove Section ${index + 1}`}
-                      onPress={() => onRemoveSection(section.id)}
-                    />
-                  </View>
-                  <ComposerInput value={section.title} onChangeText={(title) => onUpdateSection(section.id, { title })} placeholder="Section title" />
-                  <ComposerInput value={section.description} onChangeText={(description) => onUpdateSection(section.id, { description })} placeholder="Section description" multiline minHeight={68} />
-                  <ComposerInput value={section.promptText} onChangeText={(promptText) => onUpdateSection(section.id, { promptText })} placeholder="Section prompt" multiline minHeight={76} />
-                  <ComposerInput value={section.notesMarkdown} onChangeText={(notesMarkdown) => onUpdateSection(section.id, { notesMarkdown })} placeholder="Section notes" multiline minHeight={76} />
-                  <ToggleRow
-                    label="Section remix access"
-                    value={section.allowRemix}
-                    onValueChange={(allowRemix) => onUpdateSection(section.id, { allowRemix })}
-                    accent="workflow"
-                  />
-                </View>
-              ))}
-              <SecondaryButton label="Add section" onPress={onAddSection} />
-            </View>
-          ) : null}
-        </>
-      ) : null}
-    </MinimalComposerSection>
-  );
-}
-
-function PublishSection({
-  actions,
-  canSubmit,
-  onSubmit,
-}: {
-  actions: ReturnType<typeof getPostComposerPublishActions>;
-  canSubmit: boolean;
-  onSubmit: (visibility: PostComposerDraft['visibility']) => void;
-}) {
-  return (
-    <MinimalComposerSection
-      title="Publish"
-      body="Choose who can see this post."
-      tone="commerce"
-      action={<MinimalStatusPill label="Saved privately in Studio" tone="commerce" />}
-    >
-      <View
-        style={{
-          flexDirection: actions.length > 2 ? 'column' : 'row',
-          gap: appTheme.spacing.compact,
-        }}
-      >
-        {actions.map((action) => (
-          <PublishActionCard
-            key={action.id}
-            variant={action.variant}
-            label={action.label}
-            body={getPublishActionBody(action.visibility)}
-            loading={action.loading}
-            disabled={!canSubmit || action.disabled}
-            onPress={() => onSubmit(action.visibility)}
-          />
-        ))}
-      </View>
-    </MinimalComposerSection>
-  );
-}
-
 function GeneratedProofCard({ item }: { item: GenerationListItem }) {
   const theme = useAppTheme();
   const mediaUrl = item.media?.url ?? item.output_urls?.[0] ?? item.output_url ?? null;
@@ -4501,60 +4035,6 @@ function FieldBlock({
   );
 }
 
-function MinimalComposerSection({
-  title,
-  body,
-  tone = 'neutral',
-  pill,
-  action,
-  children,
-}: {
-  title: string;
-  body?: string;
-  tone?: 'neutral' | 'workflow' | 'commerce';
-  pill?: string;
-  action?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  const theme = useAppTheme();
-  const toneColor = tone === 'workflow'
-    ? theme.colors.workflow
-    : tone === 'commerce'
-      ? theme.colors.image
-      : theme.colors.borderStrong;
-
-  return (
-    <View
-      style={{
-        ...MINIMAL_COMPOSER_SECTION_STYLE,
-        borderWidth: 1,
-        borderColor: tone === 'neutral' ? theme.colors.border : `${toneColor}3f`,
-        backgroundColor: tone === 'workflow' ? hexWithAlpha(theme.colors.workflow, 0.1) : theme.colors.surface,
-      }}
-    >
-      <View style={{ gap: 9 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: appTheme.spacing.gap }}>
-          <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-            <AppText variant="cardTitle">{title}</AppText>
-            {body ? (
-              <AppText variant="caption" color="muted">
-                {body}
-              </AppText>
-            ) : null}
-          </View>
-          {action ? (
-            <View style={{ flexShrink: 0 }}>{action}</View>
-          ) : null}
-        </View>
-        {!action && pill ? (
-          <MinimalStatusPill label={pill} tone={tone} />
-        ) : null}
-      </View>
-      {children}
-    </View>
-  );
-}
-
 function MinimalStatusPill({
   label,
   tone = 'neutral',
@@ -4587,114 +4067,6 @@ function MinimalStatusPill({
       </AppText>
     </View>
   );
-}
-
-function UnlockChecklistRow({
-  checked,
-  label,
-  onPress,
-}: {
-  checked: boolean;
-  label: string;
-  onPress: () => void;
-}) {
-  const theme = useAppTheme();
-  return (
-    <Pressable
-      accessibilityRole="checkbox"
-      accessibilityState={{ checked }}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: appTheme.touch.compact,
-        borderRadius: 14,
-        borderWidth: 1,
-        borderColor: checked ? `${theme.colors.workflow}66` : 'transparent',
-        backgroundColor: checked ? hexWithAlpha(theme.colors.workflow, 0.10) : 'transparent',
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-        paddingHorizontal: checked ? 10 : 0,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-      })}
-    >
-      <View
-        style={{
-          width: 18,
-          height: 18,
-          borderRadius: 4,
-          borderWidth: 1,
-          borderColor: checked ? accentFill('workflow') : theme.colors.borderStrong,
-          backgroundColor: checked ? accentFill('workflow') : theme.colors.surfaceInset,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        {checked ? <Check size={13} color={onAccentFill('workflow')} /> : null}
-      </View>
-      <AppText selectable={false} variant="label" color="text">
-        {label}
-      </AppText>
-    </Pressable>
-  );
-}
-
-function PublishActionCard({
-  label,
-  body,
-  variant,
-  loading,
-  disabled,
-  onPress,
-}: {
-  label: string;
-  body: string;
-  variant: 'primary' | 'secondary';
-  loading: boolean;
-  disabled: boolean;
-  onPress: () => void;
-}) {
-  const theme = useAppTheme();
-  const isPrimary = variant === 'primary';
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      disabled={disabled || loading}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        flex: 1,
-        minHeight: 58,
-        borderRadius: 13,
-        borderWidth: 1,
-        borderColor: isPrimary ? theme.colors.primaryStrong : theme.colors.border,
-        backgroundColor: isPrimary ? theme.colors.primaryFill : theme.colors.surfaceStrong,
-        opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-        justifyContent: 'center',
-        gap: 4,
-        paddingHorizontal: 14,
-        paddingVertical: 10,
-      })}
-    >
-      {loading ? (
-        <ActivityIndicator color={isPrimary ? theme.colors.onPrimary : theme.colors.text} />
-      ) : (
-        <>
-          <AppText selectable={false} variant="label" color={isPrimary ? 'onPrimary' : 'text'} numberOfLines={1}>
-            {label}
-          </AppText>
-          <AppText selectable={false} variant="caption" color={isPrimary ? 'onPrimary' : 'muted'} numberOfLines={1}>
-            {body}
-          </AppText>
-        </>
-      )}
-    </Pressable>
-  );
-}
-
-function getPublishActionBody(visibility: PostComposerDraft['visibility']) {
-  if (visibility === 'private') return 'Saved privately in Studio.';
-  if (visibility === 'unlisted') return 'Share by link.';
-  return 'Visible in Explore.';
 }
 
 function ComposerInput({
@@ -4744,48 +4116,6 @@ function ComposerInput({
         paddingHorizontal: appTheme.spacing.gap,
         paddingVertical: appTheme.spacing.gap,
       }}
-    />
-  );
-}
-
-function SegmentedRow({ children, wrap }: { children: React.ReactNode; wrap?: boolean }) {
-  return <View style={{ flexDirection: 'row', flexWrap: wrap ? 'wrap' : 'nowrap', gap: 8 }}>{children}</View>;
-}
-
-function Chip({
-  label,
-  active,
-  onPress,
-  disabled = false,
-  accent = 'primary',
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-  disabled?: boolean;
-  accent?: ToolAccent;
-}) {
-  return (
-    <ChoiceChip
-      accent={accent}
-      active={active}
-      disabled={disabled}
-      grow
-      label={label}
-      onPress={onPress}
-    />
-  );
-}
-
-function SmallChip({ label, active, onPress, disabled = false }: { label: string; active: boolean; onPress: () => void; disabled?: boolean }) {
-  return (
-    <ChoiceChip
-      accent="workflow"
-      active={active}
-      compact
-      disabled={disabled}
-      label={label}
-      onPress={onPress}
     />
   );
 }
@@ -5371,123 +4701,6 @@ function MiniAction({
   );
 }
 
-function SecondaryPickButton({ icon, label, loading, onPress }: { icon: React.ReactNode; label: string; loading: boolean; onPress: () => void }) {
-  const theme = useAppTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      disabled={loading}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        flex: 1,
-        minHeight: appTheme.touch.compact,
-        borderRadius: 22,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: theme.colors.surface,
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexDirection: 'row',
-        gap: 8,
-        opacity: pressed ? appTheme.opacity.pressed : loading ? 0.58 : 1,
-      })}
-    >
-      {loading ? <ActivityIndicator color={theme.colors.text} /> : icon}
-      <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '700' }}>{label}</Text>
-    </Pressable>
-  );
-}
-
-function UnlockFields({
-  accessMode,
-  resource,
-  onChange,
-  onAddAttachment,
-  onUpdateAttachment,
-  onRemoveAttachment,
-  onPickResourceFile,
-  isPickingResourceFile,
-}: {
-  accessMode: PostResourceBundleAccessMode;
-  resource: PostComposerDraft['resource'];
-  onChange: (patch: Partial<PostComposerDraft['resource']>) => void;
-  onAddAttachment: (attachment?: Partial<PostComposerDraft['resource']['attachments'][number]>) => void;
-  onUpdateAttachment: (id: string, patch: Partial<PostComposerDraft['resource']['attachments'][number]>) => void;
-  onRemoveAttachment: (id: string) => void;
-  onPickResourceFile: () => void;
-  isPickingResourceFile: boolean;
-}) {
-  const theme = useAppTheme();
-  return (
-    <View style={{ gap: 10 }}>
-      <ComposerInput value={resource.previewText} onChangeText={(previewText) => onChange({ previewText })} placeholder="Buyer preview: what is inside the unlock?" minHeight={64} multiline />
-      {accessMode === 'paid' ? (
-        <ComposerInput value={resource.priceUsd} onChangeText={(priceUsd) => onChange({ priceUsd })} placeholder="Price in USD, e.g. 9" keyboardType="decimal-pad" />
-      ) : null}
-      {resource.selectedKinds.prompt ? (
-        <ComposerInput value={resource.promptText} onChangeText={(promptText) => onChange({ promptText })} placeholder="Exact prompt or prompt pack" minHeight={80} multiline />
-      ) : null}
-      {resource.selectedKinds.workflow ? (
-        <ComposerInput value={resource.workflowShareUrl} onChangeText={(workflowShareUrl) => onChange({ workflowShareUrl })} placeholder="Workflow/setup URL" keyboardType="url" textContentType="URL" autoCapitalize="none" autoCorrect={false} spellCheck={false} />
-      ) : null}
-      {resource.selectedKinds.notes ? (
-        <ComposerInput value={resource.notesMarkdown} onChangeText={(notesMarkdown) => onChange({ notesMarkdown })} placeholder="Notes, steps, or usage guide" minHeight={84} multiline />
-      ) : null}
-      {resource.selectedKinds.files ? (
-        <View style={{ gap: appTheme.spacing.compact }}>
-          <View style={{ flexDirection: 'row', gap: appTheme.spacing.compact }}>
-            <SecondaryButton label="Add link" onPress={() => onAddAttachment({ kind: 'link', resourceType: 'external_link' })} />
-            <SecondaryButton label={isPickingResourceFile ? 'Uploading file' : 'Upload file'} disabled={isPickingResourceFile} onPress={onPickResourceFile} />
-          </View>
-          {resource.attachments.map((attachment) => (
-            <View key={attachment.id} style={{ gap: appTheme.spacing.compact }}>
-              <ComposerInput value={attachment.label} onChangeText={(label) => onUpdateAttachment(attachment.id, { label })} placeholder="Attachment label" />
-              {attachment.kind === 'file' ? (
-                <ComposerInput value={attachment.storagePath ?? ''} onChangeText={(storagePath) => onUpdateAttachment(attachment.id, { storagePath })} placeholder="Uploaded file path" autoCapitalize="none" autoCorrect={false} spellCheck={false} />
-              ) : (
-                <ComposerInput value={attachment.url ?? ''} onChangeText={(url) => onUpdateAttachment(attachment.id, { url })} placeholder="File or reference link" keyboardType="url" textContentType="URL" autoCapitalize="none" autoCorrect={false} spellCheck={false} />
-              )}
-              <SegmentedRow wrap>
-                {(['external_link', 'source_file', 'reference_image', 'preset', 'settings'] as const).map((type) => (
-                  <SmallChip
-                    key={`${attachment.id}-${type}`}
-                    label={type.replace(/_/g, ' ')}
-                    active={attachment.resourceType === type}
-                    onPress={() => onUpdateAttachment(attachment.id, { resourceType: type })}
-                  />
-                ))}
-              </SegmentedRow>
-              <SecondaryButton label="Remove resource" onPress={() => onRemoveAttachment(attachment.id)} />
-            </View>
-          ))}
-        </View>
-      ) : null}
-      {resource.selectedKinds.remix ? (
-        <Pressable
-          accessibilityRole="checkbox"
-          accessibilityState={{ checked: resource.allowRemix }}
-          onPress={() => onChange({ allowRemix: !resource.allowRemix })}
-          style={({ pressed }) => ({
-            minHeight: appTheme.touch.compact,
-            borderRadius: appTheme.radii.pill,
-            borderWidth: 1,
-            borderColor: resource.allowRemix ? theme.colors.primary : theme.colors.borderSubtle,
-            backgroundColor: resource.allowRemix ? theme.colors.selected : theme.colors.surface,
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingHorizontal: 13,
-            opacity: pressed ? appTheme.opacity.pressed : 1,
-          })}
-        >
-          <Text style={{ color: resource.allowRemix ? theme.colors.primary : theme.colors.muted, fontSize: 13, fontWeight: '700' }}>Include remix access</Text>
-          <Lock size={16} color={resource.allowRemix ? theme.colors.primary : theme.colors.muted} />
-        </Pressable>
-      ) : null}
-    </View>
-  );
-}
-
 function validateCurrentDraft(
   draft: PostComposerDraft,
   selectedGeneration: GenerationListItem | null,
@@ -5557,7 +4770,6 @@ async function invalidatePostCaches(queryClient: QueryClient, userId: string | u
     queryClient.invalidateQueries({ queryKey: ['post-new-generations', userId] }),
     queryClient.invalidateQueries({ queryKey: ['profile-generations', userId] }),
     queryClient.invalidateQueries({ queryKey: ['profile-owner-posts', userId] }),
-    queryClient.invalidateQueries({ queryKey: ['home-generations', userId] }),
     // The header's post count and the seller total ride on the profile.
     invalidateProfileStats(queryClient, userId),
     queryClient.invalidateQueries({ queryKey: ['generations', userId] }),

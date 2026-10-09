@@ -65,7 +65,7 @@ export default function WhatsNewModelsCard({ models }: { models: HomeWhatsNewMod
         })}
       </ul>
       <Link
-        href="/create"
+        href="/models"
         prefetch={false}
         className="ui-focus-ring inline-flex min-h-9 items-center gap-1.5 self-start rounded-full px-2.5 text-xs font-bold text-[var(--ui-text-muted)] transition hover:text-[var(--ui-text-primary)]"
       >

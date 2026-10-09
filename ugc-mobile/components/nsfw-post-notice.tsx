@@ -3,6 +3,7 @@ import { AppState, Linking, Platform, ScrollView, View, useWindowDimensions } fr
 import { AppText, Pill, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { useAuth } from '@/lib/auth';
+import { env } from '@/lib/env';
 import { canRevealNsfwInApp } from '@/lib/nsfw-reveal-policy';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ShowcaseFeedItem } from '@/lib/types';
@@ -55,7 +56,7 @@ export function NsfwPostNotice({ postId }: { postId: string }) {
       <AppText variant="body">The creator marked this post NSFW. Its media and text stay hidden until you choose to reveal them.</AppText>
       <AppText variant="body" color="muted">Mature content is off by default. Adults can enable it on the Magicbooklet website, then return here to reveal individual posts.</AppText>
       <PrimaryButton label="Reveal post" loading={loading} loadingLabel="Loading…" onPress={() => void reveal()} />
-      <SecondaryButton label="Manage on website" onPress={() => void Linking.openURL(`https://magicbooklet.com/showcase/${encodeURIComponent(postId)}`)} />
+      <SecondaryButton label="Manage on website" onPress={() => void Linking.openURL(`${env.siteUrl}/showcase/${encodeURIComponent(postId)}`)} />
     </>}
     {error ? <AppText variant="body" accessibilityRole="alert">{error}</AppText> : null}
   </ScrollView>;

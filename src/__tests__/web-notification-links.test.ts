@@ -13,14 +13,16 @@ describe('resolveWebNotificationPath', () => {
       .toBe('/showcase/post-1');
   });
 
-  it('maps the mobile studio route to the web studio', () => {
-    expect(resolveWebNotificationPath('/studio')).toBe('/creations');
-    expect(resolveWebNotificationPath('/studio?tab=alerts')).toBe('/creations');
+  it('keeps a bare Alerts-tab link on the Alerts page, as the app does', () => {
+    // "New follower" alerts link to /studio, the app's Alerts tab; opening
+    // the Creations library for a follow made no sense.
+    expect(resolveWebNotificationPath('/studio')).toBeNull();
+    expect(resolveWebNotificationPath('/studio?tab=alerts')).toBeNull();
   });
 
   it('maps a workflow run link to its canvas', () => {
     expect(resolveWebNotificationPath('/studio?workflowCanvas=canvas-1')).toBe('/create-workflow?canvas=canvas-1');
-    expect(resolveWebNotificationPath('/studio?workflowCanvas=')).toBe('/creations');
+    expect(resolveWebNotificationPath('/studio?workflowCanvas=')).toBeNull();
   });
 
   it('preserves valid web routes', () => {

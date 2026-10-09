@@ -144,6 +144,8 @@ export interface ShowcaseFeedItem {
     remixTarget?: PostRemixTarget;
     savedAt?: string;
     recommendation?: ShowcaseRecommendationContext;
+    /** Set by the by-id read; feed pages list public posts only. */
+    visibility?: 'public' | 'unlisted';
 }
 
 interface ShowcaseFeedPageInfo {
@@ -247,6 +249,34 @@ export function sanitizeShowcaseAssetSummary(
  * objects, so callers may localize prices on the result without mutating rows
  * shared with a cache.
  */
+/**
+ * The media a feed item carries, in display order: the post's media rows
+ * when it has them, else its cover as a single item. One copy for the grid,
+ * the bootstrap grid, the reel and the creator page, which each had their own
+ * (and only the reel's sorted by sortOrder).
+ */
+export function getShowcaseItemMediaItems(item: ShowcaseFeedItem): ShowcaseMediaItem[] {
+    if (item.mediaItems?.length) {
+      return item.mediaItems.slice().sort((left, right) => left.sortOrder - right.sortOrder);
+    }
+
+    if (!item.mediaUrl || !item.mediaKind) {
+      return [];
+    }
+
+    return [{
+      id: `${item.id}:cover`,
+      url: item.mediaUrl,
+      mediaKind: item.mediaKind,
+      contentType: null,
+      originalName: null,
+      width: null,
+      height: null,
+      durationSeconds: null,
+      sortOrder: 0,
+    }];
+}
+
 export function sanitizeShowcaseFeedItem(item: ShowcaseFeedItem): ShowcaseFeedItem {
     const asset = sanitizeShowcaseAssetSummary(item.asset);
     const publicContent = sanitizePublicPostContent({

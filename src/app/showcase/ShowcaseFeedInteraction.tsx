@@ -266,6 +266,8 @@ interface QualifiedImpressionBoundaryProps {
   feedSessionId?: string | null;
   accessToken?: string | null;
   position: number;
+  /** Where the card is shown; the Home feed sends 'feed'. */
+  sourceSurface?: ShowcaseEventSourceSurface;
   className?: string;
   children: ReactNode;
 }
@@ -275,6 +277,7 @@ export function QualifiedImpressionBoundary({
   feedSessionId,
   accessToken,
   position,
+  sourceSurface = 'showcase',
   className,
   children,
 }: QualifiedImpressionBoundaryProps) {
@@ -323,7 +326,7 @@ export function QualifiedImpressionBoundary({
         void sendShowcaseFeedEvent({
           item,
           eventType: 'impression',
-          sourceSurface: 'showcase',
+          sourceSurface,
           accessToken,
           feedSessionId,
           fallbackPosition: position,
@@ -342,7 +345,7 @@ export function QualifiedImpressionBoundary({
       cancelQualification();
       observer.disconnect();
     };
-  }, [accessToken, feedSessionId, item, position]);
+  }, [accessToken, feedSessionId, item, position, sourceSurface]);
 
   return (
     <div

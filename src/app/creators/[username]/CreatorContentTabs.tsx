@@ -26,7 +26,7 @@ import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { getBundleAccessLabel } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
-import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
+import { getShowcaseItemMediaItems, type ShowcaseFeedItem } from '@/lib/showcase';
 
 function ShowcaseReelLoadingFallback() {
   return (
@@ -66,22 +66,6 @@ function getTabFromHash(hash: string): CreatorTab {
   return 'creations';
 }
 
-function getItemMediaItems(item: ShowcaseFeedItem): ShowcaseMediaItem[] {
-  if (item.mediaItems?.length) return item.mediaItems;
-  if (!item.mediaUrl || !item.mediaKind) return [];
-
-  return [{
-    id: `${item.id}:cover`,
-    url: item.mediaUrl,
-    mediaKind: item.mediaKind,
-    contentType: null,
-    originalName: null,
-    width: null,
-    height: null,
-    durationSeconds: null,
-    sortOrder: 0,
-  }];
-}
 
 function itemDisplayText(item: ShowcaseFeedItem) {
   return item.body?.trim() || item.prompt?.trim() || item.title || 'Creator note';
@@ -465,7 +449,7 @@ function CreatorCard({
   item: ShowcaseFeedItem;
   onOpen: (item: ShowcaseFeedItem, mediaIndex?: number) => void;
 }) {
-  const mediaItems = getItemMediaItems(item);
+  const mediaItems = getShowcaseItemMediaItems(item);
   const isText = item.postFormat === 'text';
   const unlockLabel = assetLabel(item);
 

@@ -379,6 +379,7 @@ export interface MediaTemplateDetail extends MediaTemplateSummary {
 export interface MediaTemplateListResponse {
   success: boolean;
   templates: MediaTemplateSummary[];
+  nextCursor?: string | null;
 }
 
 export interface MediaTemplateDetailResponse {
@@ -899,6 +900,8 @@ export interface ShowcaseFeedItem {
   remixTarget?: 'image' | 'video' | 'motion' | 'workflow' | 'text_template' | null;
   savedAt?: string;
   recommendation?: ShowcaseRecommendationMetadata | null;
+  /** Set by the by-id read; feed pages list public posts only. */
+  visibility?: 'public' | 'unlisted';
 }
 
 export interface ShowcaseFeedResponse {

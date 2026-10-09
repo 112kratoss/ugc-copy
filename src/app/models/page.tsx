@@ -13,6 +13,7 @@ import {
     toModelSlug,
 } from '@/lib/model-pages';
 import type { GenerationModelKind } from '@/lib/generation-model-catalog';
+import { PRICING_PLAN_MAP } from '@/lib/pricing';
 import {
     buildBreadcrumbSchema,
     buildFaqSchema,
@@ -71,7 +72,7 @@ export default async function ModelsIndexPage() {
         {
             question: 'What is a credit worth?',
             answer:
-                `Credits are priced at one flat rate across every pack — one credit is about ₹${CREDIT_RATE_INR.toFixed(2)} (roughly $${CREDIT_RATE_USD.toFixed(2)}). A 500-credit pack is ₹415 and a 10,000-credit pack is ₹8,300, so the rate does not change with pack size.`,
+                `Credits are priced at one flat rate across every pack — one credit is about ₹${CREDIT_RATE_INR.toFixed(2)} (roughly $${CREDIT_RATE_USD.toFixed(2)}). A ${PRICING_PLAN_MAP.starter.credits}-credit pack is ₹${PRICING_PLAN_MAP.starter.priceInr.toLocaleString('en-IN')} and a ${PRICING_PLAN_MAP.pro.credits.toLocaleString('en-IN')}-credit pack is ₹${PRICING_PLAN_MAP.pro.priceInr.toLocaleString('en-IN')}, so the rate does not change with pack size.`,
         },
         {
             question: 'Why do costs differ so much between models?',
@@ -81,7 +82,7 @@ export default async function ModelsIndexPage() {
         {
             question: 'Are these the exact prices I will pay?',
             answer:
-                'These are the costs at each model\'s default settings. Raising resolution or duration raises the cost, and the exact figure for your settings is shown in the studio before a generation runs — nothing is spent before you see it.',
+                'These are the costs at each model\'s default settings. Raising resolution or duration raises the cost, and the exact figure for your settings is shown before a generation runs — nothing is spent before you see it.',
         },
         {
             question: 'Do credits expire?',
@@ -109,7 +110,7 @@ export default async function ModelsIndexPage() {
                 ]}
             />
 
-            <main className="studio-shell ui-section-gap relative py-20">
+            <div className="studio-shell ui-section-gap relative py-20">
                 <section className="space-y-5">
                     <Kicker>Model reference</Kicker>
                     <Text as="h1" variant="display" className="max-w-4xl">
@@ -190,7 +191,7 @@ export default async function ModelsIndexPage() {
                         ))}
                     </div>
                 </section>
-            </main>
+            </div>
         </div>
     );
 }

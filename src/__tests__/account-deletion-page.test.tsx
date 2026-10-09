@@ -7,8 +7,8 @@ describe('account deletion page', () => {
     it('publishes store-compliant deletion steps and retention information', () => {
         const html = renderToString(<DeleteAccountPage />);
 
-        expect(html).toContain('Delete your Magic Booklet account');
-        expect(html).toContain('Open Profile, then Settings');
+        expect(html).toContain('Delete your Magicbooklet account');
+        expect(html).toContain('tap your avatar to open the menu, then choose Settings');
         expect(html).toContain('type DELETE');
         expect(html).toContain('What permanent deletion removes');
         expect(html).toContain('Data we may retain');

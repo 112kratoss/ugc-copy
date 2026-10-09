@@ -164,7 +164,6 @@ export interface StudioCardProps {
   /** Sits on the tile's top-left: the kind of thing this is. */
   badge?: ReactNode;
   /** Sits on the tile's top-right, e.g. a download button. */
-  mediaOverlay?: ReactNode;
   title: ReactNode;
   subtitle?: ReactNode;
   summary?: ReactNode;
@@ -191,7 +190,6 @@ export default function StudioCard({
   tone = 'default',
   media,
   badge,
-  mediaOverlay,
   title,
   subtitle,
   summary,
@@ -236,7 +234,6 @@ export default function StudioCard({
       <div className="relative shrink-0 overflow-hidden bg-black">
         {media}
         {badge}
-        {mediaOverlay}
       </div>
       <div className="flex flex-1 flex-col gap-3 p-3.5 sm:p-4">
         {chipsBlock}
@@ -253,7 +250,6 @@ export default function StudioCard({
       <div className="relative overflow-hidden rounded-[18px] border border-white/8 bg-black/60">
         {media}
         {badge}
-        {mediaOverlay}
       </div>
       <div className="flex min-w-0 flex-col gap-4 p-1 md:p-2">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">

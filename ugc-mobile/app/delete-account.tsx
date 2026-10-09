@@ -3,13 +3,14 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { Platform, View } from 'react-native';
 
-import { AppText, AppTextInput, Card, PrimaryButton, SecondaryButton, SectionTitle, StatusBlock, Screen } from '@/components/ui';
+import { AppText, AppTextInput, Card, PrimaryButton, SecondaryButton, SectionTitle, StatusBlock, Screen, WebLinkButton } from '@/components/ui';
 import {
   isAccountReauthenticationRequired,
   useAuth,
   type AccountDeletionReauthentication,
 } from '@/lib/auth';
 import { showMessageDialog } from '@/lib/dialog';
+import { env } from '@/lib/env';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
@@ -67,6 +68,11 @@ export default function DeleteAccountScreen() {
           <AppText variant="bodySm" color="muted">• Private creations, uploads, templates, and saved items</AppText>
           <AppText variant="bodySm" color="muted">• Remaining credits and purchase-linked account access</AppText>
         </View>
+        <AppText variant="cardTitle">What is kept</AppText>
+        <AppText variant="bodySm" color="muted">
+          A one-way digest of your sign-in identifiers, so the one-time welcome credits cannot be claimed again by a new account, plus the legal and tax records of your purchases and routine backups for a limited time.
+        </AppText>
+        <WebLinkButton href={`${env.siteUrl}/delete-account`} label="Read the full deletion policy" />
       </Card>
 
       {error ? (

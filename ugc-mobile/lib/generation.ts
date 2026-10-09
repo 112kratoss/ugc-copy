@@ -51,7 +51,7 @@ export async function pollGenerationStatus(
     );
   }
 
-  throw new Error('Generation is still processing. Check Studio in a few minutes.');
+  throw new Error('Generation is still processing. Check Alerts in a few minutes.');
 }
 
 export function getPollDelayMs(

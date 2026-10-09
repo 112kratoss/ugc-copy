@@ -18,7 +18,7 @@ export const MOBILE_PRICING_PLANS: MobilePricingPlan[] = [
     webPriceInr: 415,
     productId: 'magicbooklet.credits.starter',
     popular: false,
-    description: 'Enough to test image, video, and motion flows.',
+    description: 'Enough to try image, video, and motion.',
   },
   {
     id: 'creator',
@@ -27,7 +27,7 @@ export const MOBILE_PRICING_PLANS: MobilePricingPlan[] = [
     webPriceInr: 1660,
     productId: 'magicbooklet.credits.creator',
     popular: true,
-    description: 'Best mobile pack for active creator iteration.',
+    description: 'Best value for active creators.',
   },
   {
     id: 'pro',

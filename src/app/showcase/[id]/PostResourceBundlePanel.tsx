@@ -1,6 +1,7 @@
 'use client';
 
 import ResourceMediaPreview from '@/components/ResourceMediaPreview';
+import { requestConfirmation } from '@/components/feedback-state';
 
 import Script from 'next/script';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -630,6 +631,16 @@ export default function PostResourceBundlePanel({
     if (hasKnownInsufficientCredits) {
       setError(`This recipe costs ${formattedCreditCost} credits. Add credits to continue.`);
       setFeedback(null);
+      return;
+    }
+
+    // The spend cannot be undone; the app asks first and the web spent on one click.
+    const confirmed = await requestConfirmation({
+      title: 'Unlock this recipe?',
+      message: `${formattedCreditCost} credits will come off your balance right away.`,
+      confirmLabel: `Use ${formattedCreditCost} credits`,
+    });
+    if (!confirmed) {
       return;
     }
 

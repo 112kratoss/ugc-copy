@@ -139,7 +139,7 @@ export default function ReferralLandingScreen() {
 
       {state.status === 'claimed' ? (
         <>
-          <StatusBlock tone="success" title="Invite applied" body="Your 5% welcome bonus will be added to your first verified credit-pack purchase." />
+          <StatusBlock tone="success" title="Invite applied" body="Your 5% first top-up bonus will be added to your first verified credit-pack purchase." />
           <PrimaryButton label="Continue to Magicbooklet" onPress={() => router.replace(destination as never)} />
           <SecondaryButton label="View Invite & Earn" onPress={() => router.replace('/invite' as never)} />
         </>
@@ -198,13 +198,11 @@ function claimReasonMessage(reason?: string) {
       return 'You cannot apply your own referral link.';
     case 'already_attributed':
       return 'This account already has an inviter.';
-    case 'account_not_new':
     case 'existing_account':
       return 'Invite bonuses are only available to new accounts.';
-    case 'expired':
-      return 'This invite is outside the 30-day attribution window.';
-    case 'disabled':
-      return 'This referral program is not currently active.';
+    // The server's one answer for an expired, disabled or already-used link.
+    case 'visit_unavailable':
+      return 'This invite link is no longer active. It may have expired or already been used.';
     default:
       return 'This account is not eligible for this invite, but you can continue using Magicbooklet.';
   }

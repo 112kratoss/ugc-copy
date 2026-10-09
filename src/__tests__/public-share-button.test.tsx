@@ -56,7 +56,7 @@ describe('PublicShareButton', () => {
     await waitFor(() => {
       expect(shareMock).toHaveBeenCalledWith({
         title: 'Public creation',
-        text: 'Look what I created on magicbooklet: Public creation',
+        text: 'See "Public creation" on magicbooklet',
         url: shareUrl,
       });
     });
@@ -88,6 +88,7 @@ describe('PublicShareButton', () => {
         title="Hero still"
         description="This is a deliberately long prompt-like description that should never be sent through the share sheet as the body text."
         sourceSurface="showcase"
+        viewerIsOwner
       />
     );
 

@@ -47,7 +47,7 @@ export default function SettingsScreen() {
         body={user ? 'Manage profile details, credits, and app preferences.' : 'Sign in to manage your Magicbooklet account.'}
       />
 
-      <OnboardingResumeCard compact />
+      <OnboardingResumeCard />
 
       <GroupLabel>Account</GroupLabel>
 

@@ -8,6 +8,7 @@ import { PostResourceBundleContent } from '@/components/post-resource-bundle-con
 import { DetailSkeleton } from '@/components/skeleton';
 import { AppText, Card, Pill, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { showActionSheet } from '@/lib/action-sheet';
+import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { CREDIT_BALANCE_LOADING_LABEL, formatCreditAmount } from '@/lib/pricing';
@@ -134,6 +135,10 @@ export default function MarketplaceAssetScreen() {
     }
   };
 
+  const isUnlockGone = detailQuery.error instanceof ApiError && detailQuery.error.status === 404;
+  // Where sign-in comes back to; a bare /auth landed the buyer on Home.
+  const unlockPath = `/marketplace/${encodeURIComponent(String(assetId))}${postId ? `?postId=${encodeURIComponent(String(postId))}` : ''}`;
+
   return (
     <Screen>
       <SectionTitle
@@ -149,14 +154,20 @@ export default function MarketplaceAssetScreen() {
       />
 
       {detailQuery.error ? (
-        <View style={{ gap: appTheme.spacing.gap }}>
-          <StatusBlock
-            tone="danger"
-            title="Could not load unlock"
-            body="Check your connection, then try again."
-          />
-          <SecondaryButton label="Retry unlock" onPress={() => void detailQuery.refetch()} />
-        </View>
+        // A 404 is the unlock being gone (a removed listing opened from an
+        // alert), not a connection problem; the two used to show together.
+        isUnlockGone ? (
+          <StatusBlock title="Unlock unavailable" body="This resource may be unlisted, private, or removed." />
+        ) : (
+          <View style={{ gap: appTheme.spacing.gap }}>
+            <StatusBlock
+              tone="danger"
+              title="Could not load unlock"
+              body="Check your connection, then try again."
+            />
+            <SecondaryButton label="Retry unlock" onPress={() => void detailQuery.refetch()} />
+          </View>
+        )
       ) : null}
       {detailQuery.isLoading ? <DetailSkeleton label="Loading unlock details" /> : null}
       {unlockMutation.error ? (
@@ -174,10 +185,10 @@ export default function MarketplaceAssetScreen() {
             <View style={{ gap: appTheme.spacing.compact }}>
               <Pill label={marketplacePriceLabel(detail)} accent={marketplaceAccent(detail.accessMode)} />
               <AppText variant="body" color="text">
-                {detail.summary ?? detail.description ?? detail.previewText ?? 'Reusable creator resource.'}
+                {detail.summary || detail.description || detail.previewText || 'Reusable creator resource.'}
               </AppText>
               <AppText variant="bodySm" color="muted">
-                {detail.previewText ?? 'Unlock includes creator-facing resources for this post.'}
+                {detail.previewText || 'Unlock includes creator-facing resources for this post.'}
               </AppText>
             </View>
           </Card>
@@ -206,7 +217,7 @@ export default function MarketplaceAssetScreen() {
               <View style={{ gap: appTheme.spacing.gap }}>
                 <AppText variant="label">Sign in required</AppText>
                 <AppText variant="bodySm" color="muted">Sign in before unlocking free or paid resources.</AppText>
-                <PrimaryButton label="Sign in to unlock" onPress={() => router.push('/auth')} accent="primary" />
+                <PrimaryButton label="Sign in to unlock" onPress={() => router.push({ pathname: '/auth', params: { returnTo: unlockPath } } as never)} accent="primary" />
               </View>
             ) : detail.viewerCanAccess ? (
               <View style={{ gap: 4 }}>
@@ -217,13 +228,7 @@ export default function MarketplaceAssetScreen() {
               <PrimaryButton
                 label={unlockMutation.isPending ? 'Getting resources…' : 'Get resources — Free'}
                 loading={unlockMutation.isPending}
-                onPress={() => {
-                  if (!user) {
-                    router.push('/auth');
-                    return;
-                  }
-                  unlockMutation.mutate();
-                }}
+                onPress={() => unlockMutation.mutate()}
                 accent="primary"
               />
             ) : (
@@ -256,7 +261,7 @@ export default function MarketplaceAssetScreen() {
             )}
           </Card>
         </>
-      ) : !detailQuery.isLoading ? (
+      ) : !detailQuery.isLoading && !detailQuery.error ? (
         <StatusBlock title="Unlock unavailable" body="This resource may be unlisted, private, or removed." />
       ) : null}
     </Screen>

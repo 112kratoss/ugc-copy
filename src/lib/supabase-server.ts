@@ -48,6 +48,8 @@ async function createServerSupabaseClient(cookieStore?: CookieStore) {
 export interface ServerAuthState {
   session: Session | null;
   credits: number | null;
+  /** The profile's display name, when the row was read with the session. */
+  displayName?: string | null;
 }
 
 function unauthenticatedServerState(): ServerAuthState {
@@ -154,12 +156,13 @@ export const getServerAuthState = cache(async (): Promise<ServerAuthState> => {
   const adminSupabase = createServiceClient();
   const { data: profile } = await adminSupabase
     .from('profiles')
-    .select('credits')
+    .select('credits, display_name')
     .eq('id', user.id)
     .maybeSingle();
 
   return {
     session: createVerifiedSession(session, user),
     credits: profile?.credits ?? null,
+    displayName: typeof profile?.display_name === 'string' ? profile.display_name : null,
   };
 });

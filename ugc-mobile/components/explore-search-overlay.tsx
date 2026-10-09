@@ -164,7 +164,9 @@ function PostRow({ item }: { item: ShowcaseFeedItem }) {
 
 function RecipeRow({ recipe }: { recipe: RecipeSearchResult }) {
   const theme = useAppTheme();
-  const preview = recipe.post?.mediaPreviewUrl ?? recipe.post?.mediaUrl ?? null;
+  // Only an image post may fall back to its media URL: a video's is not an image.
+  const preview = recipe.post?.mediaPreviewUrl
+    ?? (recipe.post?.mediaKind === 'image' ? recipe.post.mediaUrl : null);
   return (
     <Pressable
       accessibilityRole="button"

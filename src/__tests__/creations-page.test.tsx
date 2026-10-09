@@ -1155,6 +1155,7 @@ describe('CreationsPage', () => {
     expect(within(creationMenu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
       'Copy post link',
       'Download creation',
+      'Recreate',
       'Archive creation',
       'Delete creation',
     ]);

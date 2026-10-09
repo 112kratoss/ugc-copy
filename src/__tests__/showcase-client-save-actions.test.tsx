@@ -449,7 +449,7 @@ describe('ShowcaseClient save actions', () => {
     drainIdleCallbacks();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      `/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}`,
+      `/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}&category=media`,
       expect.objectContaining({
       headers: undefined,
       })
@@ -844,7 +844,7 @@ describe('ShowcaseClient save actions', () => {
     await waitFor(() => {
       expect(feedFetch).toHaveBeenCalledTimes(1);
     });
-    expect(feedFetch).toHaveBeenCalledWith('/api/showcase/feed?limit=12&offset=2&sort=recent');
+    expect(feedFetch).toHaveBeenCalledWith('/api/showcase/feed?limit=12&offset=2&category=media&sort=recent');
 
     // Appended pages ride the same reveal ticks — no scrolling required.
     await waitFor(() => {
@@ -1030,7 +1030,7 @@ describe('ShowcaseClient save actions', () => {
     );
 
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith('/api/showcase/feed?limit=12', expect.objectContaining({
+      expect(fetch).toHaveBeenCalledWith('/api/showcase/feed?limit=12&category=media', expect.objectContaining({
         headers: { Authorization: 'Bearer test-token' },
       }));
     });
@@ -1138,7 +1138,7 @@ describe('ShowcaseClient save actions', () => {
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      `/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}`,
+      `/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}&category=media`,
       expect.objectContaining({
         headers: undefined,
       })

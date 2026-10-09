@@ -7,7 +7,7 @@ import { ArrowLeft, Loader2, LogIn, Play, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/components/AuthProvider';
 import { Button, StatusCallout, Surface, Text } from '@/components/DesignSystem';
 
-import { createClientIdempotencyKey, createTemplateRun, getTemplate } from './api';
+import { createClientIdempotencyKey, createTemplateRun } from './api';
 import { TemplatePageShell } from './TemplatePrimitives';
 
 export default function CreateTemplateRunClient({ slug }: { slug: string }) {
@@ -21,13 +21,13 @@ export default function CreateTemplateRunClient({ slug }: { slug: string }) {
   useEffect(() => {
     if (isAuthLoading || !session?.access_token) return;
     let active = true;
-    void getTemplate(slug, session.access_token)
-      .then((template) => {
-        if (active) setTemplateName(template.name);
-        return createTemplateRun(template.id, session.access_token, idempotencyKey);
-      })
+    // The run request resolves the slug itself and answers with the title;
+    // a separate GET for the name was one more round trip before the run.
+    void createTemplateRun(slug, session.access_token, idempotencyKey)
       .then((run) => {
-        if (active) router.replace(`/template-runs/${run.id}`);
+        if (!active) return;
+        setTemplateName(run.templateTitle);
+        router.replace(`/template-runs/${run.id}`);
       })
       .catch((reason: unknown) => {
         if (active) setError(reason instanceof Error ? reason.message : 'Could not start this template.');

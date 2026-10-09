@@ -155,6 +155,33 @@ describe('WelcomeRewardClient', () => {
     }
   });
 
+  it('shows a number only to someone about to receive credits or who just did', async () => {
+    // For every other status `amount` is the program default, so an account that
+    // predates the program was shown "Your welcome credits are ready" and "25".
+    const cases: Array<[WelcomeBody, string, boolean]> = [
+      [welcomeBody(), 'Claim your welcome credits', true],
+      [welcomeBody({ status: 'claimed', credits: 25, promotionalCredits: 25, claimedAt: '2026-08-25T00:00:00.000Z' }), 'Your welcome credits are ready', true],
+      [welcomeBody({ status: 'legacy_ineligible', credits: 25 }), 'Your welcome credits are ready', false],
+      [welcomeBody({ status: 'not_eligible' }), 'Finish your creator profile first', false],
+      [welcomeBody({ status: 'unavailable' }), 'Welcome credits are unavailable right now', false],
+      [welcomeBody({ status: 'identity_already_claimed' }), 'Welcome credits already claimed', false],
+    ];
+    for (const [body, heading, showsAmount] of cases) {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })));
+      const { unmount } = render(<WelcomeRewardClient nextPath="/create" />);
+      expect(await screen.findByRole('heading', { level: 1, name: heading })).toBeTruthy();
+      expect(Boolean(screen.queryByText('25'))).toBe(showsAmount);
+      unmount();
+    }
+  });
+
+  it('sends an incomplete profile to the editor', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(welcomeBody({ status: 'not_eligible' })), { status: 200 })));
+    render(<WelcomeRewardClient nextPath="/create" />);
+    const link = await screen.findByRole('link', { name: /finish creator profile/i });
+    expect(link.getAttribute('href')).toBe('/profile/edit');
+  });
+
   it('names the welcome credits when they cannot be loaded', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: '' }), { status: 503 })));
 
