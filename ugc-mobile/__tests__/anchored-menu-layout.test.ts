@@ -30,6 +30,39 @@ describe('where a menu sits beside its button', () => {
     expect(placement.origin).toEqual({ x: 24, y: 0 });
   });
 
+  // Explore's grid on a 384dp phone (a Galaxy S24): each card ends its footer
+  // with a ⋮, the left card's just short of the middle of the screen. Measured
+  // there on 2026-10-09, when the left card's menu sat under the right card's ⋮.
+  describe('beside a button with no room to line up an edge', () => {
+    const phone = { left: 8, top: 63, right: 376, bottom: 800 };
+    const panel = { width: 248, height: 259 };
+    const leftCard: MenuRect = { x: 155, y: 487, width: 37, height: 40 };
+    const rightCard: MenuRect = { x: 339, y: 493, width: 37, height: 40 };
+
+    it("keeps a left-hand card's menu on the left, clear of the next card's button", () => {
+      const placement = placeAnchoredMenu({ anchor: leftCard, panel, bounds: phone });
+
+      expect(placement.left).toBe(phone.left);
+      expect(placement.left + panel.width).toBeLessThan(rightCard.x);
+      // Still under its own button, and growing from it.
+      expect(placement.top).toBe(leftCard.y + leftCard.height + MENU_ANCHOR_GAP);
+      expect(placement.origin).toEqual({ x: 155 + 18.5 - 8, y: 0 });
+    });
+
+    it("leaves the right-hand card's menu sharing its button's right edge", () => {
+      const placement = placeAnchoredMenu({ anchor: rightCard, panel, bounds: phone });
+
+      expect(placement.left + panel.width).toBe(rightCard.x + rightCard.width);
+    });
+
+    it('keeps a menu too wide for a right-hand button against the right', () => {
+      const wide = { width: 300, height: 259 };
+      const placement = placeAnchoredMenu({ anchor: { x: 200, y: 487, width: 48, height: 48 }, panel: wide, bounds: phone });
+
+      expect(placement.left + wide.width).toBe(phone.right);
+    });
+  });
+
   it('opens above a button near the foot of the screen, and grows up from it', () => {
     const placement = placeAnchoredMenu({ anchor: button(355, 800), panel: { width: 248, height: 160 }, bounds });
 
@@ -76,5 +109,18 @@ describe('where a menu sits beside its button', () => {
       }
     }
     expect(escaped).toEqual([]);
+  });
+
+  it("always spans its button's centre, so it never reads as another button's menu", () => {
+    const adrift: string[] = [];
+    for (const panel of [{ width: 120, height: 120 }, { width: 248, height: 240 }, { width: 300, height: 480 }]) {
+      // Every place a 48dp button can stand with its centre inside the area.
+      for (let x = bounds.left - 24; x <= bounds.right - 24; x += 7) {
+        const centre = x + 24;
+        const { left } = placeAnchoredMenu({ anchor: button(x, 300), panel, bounds });
+        if (centre < left || centre > left + panel.width) adrift.push(`${panel.width} wide, button at ${x}: ${left}`);
+      }
+    }
+    expect(adrift).toEqual([]);
   });
 });
