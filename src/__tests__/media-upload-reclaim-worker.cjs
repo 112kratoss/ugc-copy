@@ -6,7 +6,13 @@ const config=JSON.parse(readFileSync(process.env.AUDIT_STORAGE_CONFIG,'utf8'));
 const origin=new URL(config.API_URL).origin;
 if(!['localhost','127.0.0.1'].includes(new URL(origin).hostname))throw Error('Local API required');
 const phase=process.env.AUDIT_RECLAIM_PHASE;
-const pause=async()=>{process.send?.({stage:phase});await new Promise(()=>{});};
+const pause=async()=>{
+ // A pending Promise alone does not keep Node alive once its HTTP sockets idle.
+ // Keep the fixture process alive until the parent sends the asserted SIGKILL.
+ setInterval(()=>{},1000);
+ process.send?.({stage:phase});
+ await new Promise(()=>{});
+};
 const client=createClient(config.API_URL,config.SERVICE_ROLE_KEY,{
  auth:{persistSession:false,autoRefreshToken:false},
  global:{fetch:async(input,init)=>{

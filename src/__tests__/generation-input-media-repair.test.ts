@@ -252,9 +252,9 @@ describe('hasRepairableLegacyGenerations', () => {
     expect(Date.parse(String(rpcCalls[0].p_created_before))).toBeLessThan(NOW.getTime());
   });
 
-  it('reports no work rather than throwing when the scan fails', async () => {
+  it('propagates an unknown eligibility result so the job records failure', async () => {
     const { client } = repairClientDouble({ rpcError: { message: 'rpc down' } });
-    expect(await hasRepairableLegacyGenerations(client, { now: NOW })).toBe(false);
+    await expect(hasRepairableLegacyGenerations(client, { now: NOW })).rejects.toThrow('rpc down');
   });
 });
 
@@ -554,14 +554,8 @@ describe('repairMissingGenerationInputMedia', () => {
     expect(summary).toMatchObject({ attempted: 0, skipped: 1 });
   });
 
-  it('returns an empty summary rather than throwing when selection fails', async () => {
+  it('propagates a failed selection rather than reporting empty successful repair', async () => {
     const { client } = repairClientDouble({ rpcError: { message: 'rpc down' } });
-    expect(await repairMissingGenerationInputMedia(client, { now: NOW })).toEqual({
-      attempted: 0,
-      completed: 0,
-      failed: 0,
-      skipped: 0,
-      rollbackFailures: [],
-    });
+    await expect(repairMissingGenerationInputMedia(client, { now: NOW })).rejects.toThrow('rpc down');
   });
 });
