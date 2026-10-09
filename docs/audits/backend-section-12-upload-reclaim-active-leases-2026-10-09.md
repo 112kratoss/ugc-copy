@@ -71,3 +71,23 @@ No customer object or balance was used. Private evidence is under
 `.audit-evidence/backend-social/upload-reclaim-active-lease-*` and
 `upload-reclaim-leases-*`. MEDIA-09 is failed until verified release; its broader
 recovery obligations remain open afterward.
+
+## Actual capacity release after elapsed-time gates
+
+A separate local end-to-end probe completed at 04:04:46 UTC on October 9. It
+issued a real capability with the minimum allowed 60-second lifetime, uploaded,
+finalized and consumed a disposable object, then ran the actual staged cleanup.
+The reservation moved to deleted while its counter retained 262,144,000 bytes.
+After actual capability expiry, the reservation worker made its first observation
+and imposed its real 15-minute gate (10 minutes plus the existing processing
+margin). An immediate second pass deferred release and retained the charge.
+After the actual clock crossed that gate, the worker proved absence and released
+the reservation; the user's counter became zero. A duplicate pass scanned zero.
+
+No clock mocking or future `now` argument was used. Reservation read queries were
+restricted to the fixture owner to avoid touching unrelated local audit data.
+The 961-second probe exited successfully and independently verified zero users,
+reservations, intents and Storage objects, with global counters reconciled.
+Private script/config/log/progress/result and cleanup use the
+`upload-reclaim-capacity-lifecycle-*` prefix. This proves the exercised release
+path, not a production backlog-drain or throughput guarantee.
