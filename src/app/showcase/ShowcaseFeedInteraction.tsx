@@ -392,6 +392,16 @@ type FeedbackMenuRow = {
 // Room a row takes when the menu decides whether it fits below its trigger.
 const FEEDBACK_MENU_ROW_HEIGHT = 60;
 
+type FeedbackMenuAnchor = { side: 'below' | 'above'; top?: number; bottom?: number; right: number };
+
+/** Where the portalled menu sits for a trigger at `rect`, on the side chosen when it opened. */
+function placeFeedbackMenu(rect: DOMRect, side: FeedbackMenuAnchor['side']): FeedbackMenuAnchor {
+  const right = Math.max(8, window.innerWidth - rect.right);
+  return side === 'above'
+    ? { side, bottom: window.innerHeight - rect.top + 8, right }
+    : { side, top: rect.bottom + 8, right };
+}
+
 export function ShowcaseFeedbackMenu({
   itemTitle,
   creatorName,
@@ -409,8 +419,9 @@ export function ShowcaseFeedbackMenu({
   // The inline menu is rendered into <body>: a feed card is paint-contained
   // (`content-visibility: auto`), which clips anything positioned past its
   // edge, and a short text post is shorter than the open menu. It opens below
-  // its trigger, or above it when the screen has no room below.
-  const [anchor, setAnchor] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  // its trigger, or above it when the screen has no room below, and follows
+  // the trigger while the page scrolls.
+  const [anchor, setAnchor] = useState<FeedbackMenuAnchor | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -450,12 +461,9 @@ export function ShowcaseFeedbackMenu({
   const openMenu = () => {
     if (usesPortal && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
-      const right = Math.max(8, window.innerWidth - rect.right);
       const needed = 16 + rows.length * FEEDBACK_MENU_ROW_HEIGHT;
       const spaceBelow = window.innerHeight - rect.bottom;
-      setAnchor(spaceBelow < needed && rect.top > spaceBelow
-        ? { bottom: window.innerHeight - rect.top + 8, right }
-        : { top: rect.bottom + 8, right });
+      setAnchor(placeFeedbackMenu(rect, spaceBelow < needed && rect.top > spaceBelow ? 'above' : 'below'));
     }
     setIsOpen(true);
   };
@@ -479,10 +487,28 @@ export function ShowcaseFeedbackMenu({
         setIsOpen(false);
       }
     };
-    // A portalled menu is pinned to where the trigger was; the page moving
-    // under it would leave it floating, so it closes instead.
-    const handleMove = () => {
-      if (usesPortal) setIsOpen(false);
+    // A portalled menu is fixed to the screen, so it follows its trigger when
+    // the page moves, and closes only once the trigger has left the screen.
+    // Only a scroll that moves the trigger counts: the Home slider scrolls its
+    // own track every few seconds, and closing on any scroll shut the menu
+    // under the reader.
+    let frame = 0;
+    const handleMove = (event: Event) => {
+      const trigger = triggerRef.current;
+      if (!usesPortal || !trigger) return;
+      if (event.type === 'scroll') {
+        const scroller = event.target === document ? document.documentElement : event.target;
+        if (!(scroller instanceof Node) || !scroller.contains(trigger)) return;
+      }
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const rect = trigger.getBoundingClientRect();
+        if (rect.bottom < 0 || rect.top > window.innerHeight) {
+          setIsOpen(false);
+          return;
+        }
+        setAnchor((current) => (current ? placeFeedbackMenu(rect, current.side) : current));
+      });
     };
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') {
@@ -504,6 +530,7 @@ export function ShowcaseFeedbackMenu({
       document.removeEventListener('keydown', handleEscape, true);
       window.removeEventListener('scroll', handleMove, true);
       window.removeEventListener('resize', handleMove);
+      window.cancelAnimationFrame(frame);
     };
   }, [isOpen, usesPortal]);
 
@@ -541,7 +568,7 @@ export function ShowcaseFeedbackMenu({
       aria-label={`Feedback actions for ${itemTitle}`}
       onClick={(event) => event.stopPropagation()}
       onKeyDown={handleMenuKeyDown}
-      style={usesPortal && anchor ? anchor : undefined}
+      style={usesPortal && anchor ? { top: anchor.top, bottom: anchor.bottom, right: anchor.right } : undefined}
       className={`${usesPortal ? 'fixed' : 'absolute right-0 top-[calc(100%+0.5rem)]'} z-50 w-64 overflow-hidden rounded-2xl border border-white/10 bg-[rgba(24,24,27,0.98)] p-1.5 text-left shadow-[0_18px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl`}
     >
       {rows.map((row, index) => (
