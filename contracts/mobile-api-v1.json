@@ -1778,5 +1778,23 @@
         "error": "Invalid post form data."
       }
     }
-  ]
+  ],
+  "profileRequestTooLarge": {
+    "operations": [
+      "updateProfile",
+      "validateProfile",
+      "createProfileMediaUpload"
+    ],
+    "paths": [
+      "/api/profile",
+      "/api/profile/validate",
+      "/api/profile/media/sign",
+      "/api/profile/media/cleanup"
+    ],
+    "maxBytes": 65536,
+    "status": 413,
+    "response": {
+      "error": "Profile request is too large."
+    }
+  }
 }

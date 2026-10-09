@@ -12,6 +12,7 @@ import {
   type ProfileRouteResult,
 } from '@/lib/profile-route-service';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
+import { readProfileJsonBody, PROFILE_REQUEST_TOO_LARGE } from '@/lib/profile-request-body';
 
 type ProfileRouteAdapterDependencies = {
   createUserClient?: typeof createUserClient;
@@ -164,7 +165,11 @@ export async function patchProfileRouteResult({
       );
     }
 
-    const body: unknown = await request.json().catch(() => null);
+    const parsed = await readProfileJsonBody(request);
+    if (!parsed.ok && parsed.reason === 'too_large') {
+      return createProfileRouteResult(request, { error: PROFILE_REQUEST_TOO_LARGE }, 413);
+    }
+    const body = parsed.ok ? parsed.value : null;
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return createProfileRouteResult(request, { error: 'Invalid profile payload.' }, 400);
     }

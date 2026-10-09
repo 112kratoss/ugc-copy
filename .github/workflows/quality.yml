@@ -319,6 +319,9 @@ jobs:
       - name: Test profile media ownership and retries with real Storage and SQL
         run: npx vitest run --config vitest.profile-media-postgrest.config.ts
 
+      - name: Test profile request byte bounds with real Auth and SQL
+        run: npx vitest run --config vitest.profile-request-bounds-postgrest.config.ts
+
       - name: Stop isolated Supabase API stack
         if: always()
         continue-on-error: true

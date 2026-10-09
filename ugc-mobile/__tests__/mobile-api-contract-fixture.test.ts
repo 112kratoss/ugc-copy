@@ -631,3 +631,18 @@ it.each(mobileApiContract.socialInputErrors)('preserves $operation input failure
   });
   expect(fetcher).toHaveBeenCalledTimes(1);
 });
+
+it.each(mobileApiContract.profileRequestTooLarge.operations)('preserves %s request-size errors', async (name) => {
+  const failure = mobileApiContract.profileRequestTooLarge;
+  const operation = [...successCases, ...extendedOperationCases].find(item => item.key === name);
+  expect(operation).toBeDefined();
+  const fetcher = vi.fn(async () => jsonResponse(failure.response, failure.status));
+  const api = createApiClient({
+    baseUrl: 'https://magicbooklet.test', getAccessToken: async () => 'token-1',
+    fetcher: fetcher as unknown as typeof fetch,
+  });
+  await expect(operation!.call(api)).rejects.toMatchObject({
+    status: failure.status, message: failure.response.error, details: failure.response,
+  });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
