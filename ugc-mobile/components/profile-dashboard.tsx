@@ -22,7 +22,7 @@ import {
   Wallet,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, PanResponder, Pressable, Text, useWindowDimensions, View, type PanResponderGestureState } from 'react-native';
+import { ActivityIndicator, PanResponder, Pressable, Share, Text, useWindowDimensions, View, type PanResponderGestureState } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { StableMediaImage } from '@/components/media-preview';
@@ -36,6 +36,8 @@ import { ProfileGridSkeleton } from '@/components/skeleton';
 import { TopScrim } from '@/components/top-scrim';
 import { AppText, IconButton, SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
+import { env } from '@/lib/env';
+import { buildShareUrl } from '@/lib/viewer-actions';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { formatUsdCents } from '@/lib/home-view-model';
 import { haptic } from '@/lib/haptics';
@@ -110,6 +112,15 @@ export function ProfileDashboard({
 } = {}) {
   const theme = useAppTheme();
   const { user, api, credits } = useAuth();
+
+  // The same share as a creator page's, for the viewer's own: Profile offered
+  // no way to share or preview the public page (the web /profile has both).
+  const shareOwnProfile = async (username: string, name: string) => {
+    const url = buildShareUrl(env.siteUrl, `/creators/${encodeURIComponent(username)}`, 'creator-profile');
+    const result = await Share.share({ message: `${name} on Magicbooklet\n${url}`, url, title: name });
+    if (result.action !== Share.sharedAction) return;
+    await api.shareCreatorProfile(username, { sourceSurface: 'creator-profile' }).catch(() => null);
+  };
   const isFocused = useIsFocused();
   const [activeTab, setActiveTab] = useState<ProfileMediaTab>(initialTab);
   // Archived posts live under their own scope of the Posts tab: the archive
@@ -396,6 +407,9 @@ export function ProfileDashboard({
     );
   }
 
+  // The public page exists once a handle is claimed.
+  const publicUsername = profile?.username ?? null;
+
   return (
     <ProfileMediaList
       activeTab={activeTab}
@@ -426,6 +440,8 @@ export function ProfileDashboard({
             email={user.email}
             stats={stats}
             onEdit={() => router.push('/edit-profile' as never)}
+            onViewPublic={publicUsername ? () => router.push(`/creators/${encodeURIComponent(publicUsername)}` as never) : undefined}
+            onShare={publicUsername ? () => void shareOwnProfile(publicUsername, displayName) : undefined}
           />
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <BalanceCard
@@ -745,6 +761,8 @@ function ProfileHeroCard({
   email,
   stats,
   onEdit,
+  onViewPublic,
+  onShare,
 }: {
   profile?: ProfileResponse | null;
   displayName: string;
@@ -753,6 +771,9 @@ function ProfileHeroCard({
   email?: string;
   stats: ReturnType<typeof getProfileStats>;
   onEdit: () => void;
+  /** Present once a handle is claimed: the public page exists then. */
+  onViewPublic?: () => void;
+  onShare?: () => void;
 }) {
   const theme = useAppTheme();
   return (
@@ -806,6 +827,48 @@ function ProfileHeroCard({
             <Text style={{ color: theme.colors.onPrimary, fontSize: 14, fontWeight: '800' }}>Edit profile</Text>
           </Pressable>
         </View>
+        {onViewPublic || onShare ? (
+          <View style={{ flexDirection: 'row', gap: 8, paddingTop: 10 }}>
+            {onViewPublic ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="View public profile"
+                onPress={onViewPublic}
+                style={({ pressed }) => ({
+                  flex: 1,
+                  minHeight: 44,
+                  borderRadius: 14,
+                  borderWidth: 1,
+                  borderColor: theme.colors.border,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  opacity: pressed ? appTheme.opacity.pressed : 1,
+                })}
+              >
+                <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '700' }}>View public profile</Text>
+              </Pressable>
+            ) : null}
+            {onShare ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Share profile"
+                onPress={onShare}
+                style={({ pressed }) => ({
+                  flex: 1,
+                  minHeight: 44,
+                  borderRadius: 14,
+                  borderWidth: 1,
+                  borderColor: theme.colors.border,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  opacity: pressed ? appTheme.opacity.pressed : 1,
+                })}
+              >
+                <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '700' }}>Share profile</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
 
         <View style={{ gap: 5, paddingTop: 12 }}>
           <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: theme.colors.text, fontSize: 23, lineHeight: 28, fontWeight: '800', letterSpacing: -0.35 }}>{displayName}</Text>

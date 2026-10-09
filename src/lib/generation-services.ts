@@ -60,6 +60,8 @@ import {
   type ReferenceMediaDescriptor,
 } from '@/lib/generation-input-media';
 import { importSharedGenerationInputMedia } from '@/lib/generation-input-media-import';
+// Shared with both composers' inputs, so the three limits cannot drift.
+import { GENERATION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-candidates';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
@@ -851,7 +853,6 @@ async function settleGenerationStartFailureQuietly(params: {
 
 // Generous ceiling above every supported model's accepted prompt size; it only
 // exists to stop unbounded payloads from reaching the provider and database.
-const GENERATION_PROMPT_MAX_LENGTH = 10000;
 
 function trimPrompt(prompt: string, errorMessage: string): string {
   const trimmed = prompt.trim();

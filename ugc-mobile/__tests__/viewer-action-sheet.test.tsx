@@ -395,13 +395,24 @@ describe('ViewerActionSheet permanent delete', () => {
       );
     });
 
+    // A report names its reason, as on the web post page: the six reasons are
+    // offered as an action sheet (a system dialog here, with no host mounted).
     renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Report content').props.onPress());
     expect(alertState.alert).toHaveBeenLastCalledWith(
-      'Report content?',
+      'Why are you reporting this?',
       expect.stringContaining('moderation team'),
-      expect.any(Array),
-      expect.any(Object)
+      expect.any(Array)
     );
+    const reasonButtons = alertState.alert.mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
+    expect(reasonButtons.map((button) => button.text)).toEqual([
+      'Spam', 'Stolen content', 'Misleading recipe', 'Unsafe content', 'Payment issue', 'Something else', 'Cancel',
+    ]);
+    authState.api.reportPost.mockResolvedValue({ success: true });
+    renderer.act(() => reasonButtons.find((button) => button.text === 'Stolen content')?.onPress?.());
+    expect(authState.api.reportPost).toHaveBeenCalledWith('post-123', {
+      reason: 'stolen_content',
+      details: expect.any(String),
+    });
     renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Report user').props.onPress());
     expect(alertState.alert).toHaveBeenLastCalledWith(
       'Report user?',

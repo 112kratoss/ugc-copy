@@ -774,7 +774,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
-    const nowMs = useTicker(isGenerating);
+    const nowMs = useTicker(isGenerating) ?? undefined;
 
     useEffect(() => () => {
         generationPollAbortControllerRef.current?.abort();
@@ -1157,7 +1157,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         },
         catalogRevision: modelCatalog.catalog.revision,
     } : null, [activeReferenceMode, activeSupportsEndFrame, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, runElements.length, endImageFile, endImageUrl, frameReferenceCount, isGeminiOmniVideoModel, isKlingVideoModel, klingSubjects, klingSubjectsActive, klingVideoElements.length, modelCatalog.catalog, videoElementsSlotActive, preparedAudioIds.length, runReferenceAudios, runReferenceVideos, selectedModel, startImageFile, startImageUrl, totalDuration, modelCatalog.detailsReady, additionalSettings.settings]);
-    const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
+    const [quoteAttempt, setQuoteAttempt] = useState(0);
+    const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token, quoteAttempt);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
         // The quote response is the external signal that the local catalog is stale.
@@ -4778,7 +4779,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             <StudioElementHandleText text={error} />
                                         </p>
                                     ) : quoteState.status === 'error' ? (
-                                        <p className="text-sm text-amber-300">{quoteUi.message}</p>
+                                        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={() => setQuoteAttempt((current) => current + 1)} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
                                     ) : (
                                         <p className="text-sm text-zinc-500">The current run will replace this workspace as soon as generation starts.</p>
                                     )}
@@ -4823,6 +4824,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 <>
                                                     <PublicShareButton
                                                         generationId={latestGenerationId}
+                                                        viewerIsOwner
                                                         title={shareTitle}
                                                         description={primarySharePrompt}
                                                         sourceSurface="create-video"

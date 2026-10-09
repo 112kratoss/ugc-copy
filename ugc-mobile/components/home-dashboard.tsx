@@ -121,6 +121,7 @@ import type {
 } from '@/lib/types';
 import { buildShareUrl, getNativeRemixCreateHref } from '@/lib/viewer-actions';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
+import { useActiveGenerationCount } from '@/lib/use-active-generations';
 
 const TOOL_PREVIEW_IMAGES = {
   kingdom: require('../assets/images/home-previews/image.jpg'),
@@ -168,10 +169,8 @@ export function HomeDashboard() {
     comments?: string | string[];
     replyTo?: string | string[];
   }>();
-  // `user` keeps gating the community actions on this screen (remix, save,
-  // follow). Only the viewer's own creations strip reads `identityUserId`, so a
-  // guest can find what they just generated.
-  const { user, identityUserId, api, credits, isLoading: isAuthLoading, signOut } = useAuth();
+  // `user` gates the community actions on this screen (remix, save, follow).
+  const { user, api, credits, isLoading: isAuthLoading, signOut } = useAuth();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
@@ -235,24 +234,12 @@ export function HomeDashboard() {
   );
   const viewerFeedQueryKey = useMemo(() => createShowcaseFeedViewerQueryKey(user?.id), [user?.id]);
 
-  const generationsQuery = useQuery({
-    queryKey: ['home-generations', identityUserId],
-    enabled: Boolean(identityUserId),
-    queryFn: () => api.listGenerations(true, { limit: 12 }),
-    staleTime: 1000 * 60,
-  });
-
   const profileQuery = useQuery({
     queryKey: ['profile', user?.id],
     enabled: Boolean(user),
     queryFn: () => api.getProfile(),
     staleTime: 1000 * 60 * 5,
   });
-
-  useEffect(() => {
-    if (!isFocused || !identityUserId || generationsQuery.isFetching || !generationsQuery.isStale) return;
-    void generationsQuery.refetch();
-  }, [generationsQuery.isFetching, generationsQuery.isStale, isFocused, identityUserId]);
 
 
   const loadingMoreRef = useRef(false);
@@ -458,9 +445,10 @@ export function HomeDashboard() {
 
   const { toggleSave } = useShowcaseSaveMutation();
 
-  const rawGenerations = generationsQuery.data?.generations ?? [];
-  const activeGenerationCount = rawGenerations
-    .filter((item) => ['waiting', 'processing', 'starting'].includes(item.status)).length;
+  // The same count the tab bar's ring shows, from the shared in-flight check.
+  // Home's own query counted a status that does not exist ('starting'), left
+  // out 'pending', and re-read the library every minute while nothing ran.
+  const activeGenerationCount = useActiveGenerationCount();
 
   // The seller total rides on the profile; unknown until the profile has answered.
   const totalSalesUsdCents = profileQuery.data?.sales?.earningsUsdCents ?? null;
@@ -912,7 +900,7 @@ export function HomeDashboard() {
             />
 
             <View style={{ paddingHorizontal: horizontalPadding }}>
-              <OnboardingResumeCard compact />
+              <OnboardingResumeCard />
             </View>
 
             <FeedChips

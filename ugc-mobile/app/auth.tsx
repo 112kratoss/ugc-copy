@@ -384,6 +384,20 @@ function AuthPanel({
         </View>
       ) : null}
 
+      {mode === 'login' ? (
+        // Password accounts are created on the web, where the reset flow lives;
+        // the wrong-password notice alone pointed only at Apple or Google.
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel="Forgot password?"
+          accessibilityHint="Opens the password reset on the Magicbooklet website"
+          onPress={() => void Linking.openURL(`${env.siteUrl}/login?recovery=1`)}
+          style={{ alignSelf: 'flex-end', minHeight: 44, justifyContent: 'center', paddingHorizontal: 4 }}
+        >
+          <Text style={{ color: theme.colors.primary, fontSize: 14, lineHeight: 20, fontWeight: '600' }}>Forgot password?</Text>
+        </Pressable>
+      ) : null}
+
       {/* Inside the panel and above the action, so it survives the keyboard: the
           password field's Return key is "go", which submits with the keyboard
           up, and the old toast was pinned to the bottom of the screen behind it. */}

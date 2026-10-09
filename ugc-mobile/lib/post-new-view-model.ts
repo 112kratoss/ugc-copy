@@ -541,6 +541,9 @@ const MIN_RESOURCE_PRICE_TOKENS = 10;
 const MAX_MEDIA_ITEMS = 5;
 const MAX_MADE_WITH_ROWS = 5;
 
+/** Default recipe price in credits, the same as the web composer's. */
+const DEFAULT_PRICE_TOKENS = 900;
+
 export function getDefaultResourceDraft(): PostComposerResourceDraft {
   return {
     accessMode: 'none',
@@ -558,8 +561,9 @@ export function getDefaultResourceDraft(): PostComposerResourceDraft {
     allowRemix: false,
     summary: '',
     previewText: '',
-    priceUsd: '1',
-    priceTokens: '100',
+    // The same default as the web composer.
+    priceUsd: String(DEFAULT_PRICE_TOKENS / 100),
+    priceTokens: String(DEFAULT_PRICE_TOKENS),
   };
 }
 
@@ -1390,6 +1394,11 @@ export function getPostComposerPreviewStatusLabel(
   draft: PostComposerDraft,
   selectedGeneration?: GenerationListItem | null
 ) {
+  if (draft.resource.accessMode !== 'none' && draft.visibility !== 'public') {
+    // The server keeps a recipe on an unlisted or private post as a draft.
+    return 'This recipe saves as a draft until the post is public.';
+  }
+
   if (draft.resource.accessMode === 'paid') {
     return 'Paid resource package will appear in post details.';
   }
@@ -1908,7 +1917,9 @@ function getPriceTokens(resource: PostComposerResourceDraft) {
   const tokenValue = Number.parseInt(resource.priceTokens?.trim() || '', 10);
   const legacyUsdValue = getPriceUsdCents(resource.priceUsd);
   if (Number.isFinite(tokenValue)) {
-    if (tokenValue === 100 && legacyUsdValue !== 100 && resource.priceUsd?.trim()) {
+    // An old draft that only ever set the USD field: the tokens still hold
+    // the default, so the USD value is the price the creator chose.
+    if (tokenValue === DEFAULT_PRICE_TOKENS && legacyUsdValue !== DEFAULT_PRICE_TOKENS && resource.priceUsd?.trim()) {
       return legacyUsdValue;
     }
     return Math.max(0, tokenValue);

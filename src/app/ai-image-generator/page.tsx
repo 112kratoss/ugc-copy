@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 
 import FeatureLandingPage from '@/components/FeatureLandingPage';
 import { createMetadata } from '@/lib/seo';
+import { PRICING_PLAN_MAP } from '@/lib/pricing';
 
 export const metadata: Metadata = createMetadata({
     title: 'AI Image Generator for UGC Ads',
@@ -124,7 +125,7 @@ export default function AIImageGeneratorPage() {
                 {
                     question: 'How much does AI image generation cost?',
                     answer:
-                        'Images are billed in credits, with the cost depending on the model and quality settings. Credit packs start at ₹415 for 500 credits and do not expire while your account is active.',
+                        `Images are billed in credits, with the cost depending on the model and quality settings. Credit packs start at ₹${PRICING_PLAN_MAP.starter.priceInr} for ${PRICING_PLAN_MAP.starter.credits} credits and do not expire while your account is active.`,
                 },
             ]}
             relatedHeading="Go deeper on AI imagery"

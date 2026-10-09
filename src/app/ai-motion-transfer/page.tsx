@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 
 import FeatureLandingPage from '@/components/FeatureLandingPage';
 import { createMetadata } from '@/lib/seo';
+import { PRICING_PLAN_MAP } from '@/lib/pricing';
 
 export const metadata: Metadata = createMetadata({
     title: 'AI Motion Transfer for UGC Ads',
@@ -134,7 +135,7 @@ export default function AIMotionTransferPage() {
                 {
                     question: 'How much does a motion transfer video cost?',
                     answer:
-                        'Generations are billed in credits, and the cost depends on the model, duration, and quality settings you choose. Credit packs start at ₹415 for 500 credits and do not expire while your account is active. Current per-generation costs are shown in the studio before you run anything.',
+                        `Generations are billed in credits, and the cost depends on the model, duration, and quality settings you choose. Credit packs start at ₹${PRICING_PLAN_MAP.starter.priceInr} for ${PRICING_PLAN_MAP.starter.credits} credits and do not expire while your account is active. Current per-generation costs are shown before you run anything.`,
                 },
                 {
                     question: 'Do I need to disclose that an ad is AI-generated?',

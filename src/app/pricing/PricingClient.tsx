@@ -178,13 +178,11 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
     const router = useRouter();
 
     useEffect(() => {
-        const fetchUser = async () => {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (user) {
-                setUserId(user.id);
-            }
-        };
-        fetchUser();
+        // The session is local; getUser() went to the network, and a click
+        // before it returned sent a signed-in buyer to /login.
+        void supabase.auth.getSession().then(({ data: { session } }) => {
+            if (session?.user) setUserId(session.user.id);
+        });
     }, []);
 
     useEffect(() => {
@@ -221,16 +219,18 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
     }, [initialCountryCode]);
 
     const handlePayment = async (planId: string) => {
-        if (!userId) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.user) {
             router.push('/login?redirect=/pricing');
             return;
         }
+        const buyerId = session.user.id;
+        if (buyerId !== userId) setUserId(buyerId);
 
         try {
             setLoadingPlan(planId);
 
-            const { data: { session } } = await supabase.auth.getSession();
-            const token = session?.access_token;
+            const token = session.access_token;
 
             if (!token) {
                 throw new Error("Authentication token not found. Please log in again.");
@@ -244,7 +244,7 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify({ planId, userId, clientIntentKey }),
+                body: JSON.stringify({ planId, userId: buyerId, clientIntentKey }),
             });
 
             const orderData = await orderRes.json();
@@ -272,7 +272,7 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                                 razorpay_payment_id: response.razorpay_payment_id,
                                 razorpay_order_id: response.razorpay_order_id,
                                 razorpay_signature: response.razorpay_signature,
-                                userId,
+                                userId: buyerId,
                             },
                         });
 

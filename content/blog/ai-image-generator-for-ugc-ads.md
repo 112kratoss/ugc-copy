@@ -2,7 +2,6 @@
 title: "AI Image Generator for UGC Ads: What to Make First"
 date: "2026-03-10"
 excerpt: "A practical guide to using an AI image generator for hooks, product shots, creator-style frames, and concept testing in UGC campaigns."
-seoTitle: "AI Image Generator for UGC Ads"
 seoDescription: "Learn which image assets an AI image generator should create first when your goal is better UGC ad testing and faster creative iteration."
 coverImage: "/opengraph-image.png"
 ---

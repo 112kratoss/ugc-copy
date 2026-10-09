@@ -51,6 +51,7 @@ import type {
   RemixSourceBundle,
   VideoGenerationRequest,
 } from './types';
+import { formatCreditCost } from './generation-action-label';
 
 function draftKey(draft: CreationDraft, controlKey: string) {
   return draft.tool === 'motion' && controlKey === 'resolution' ? 'mode' : controlKey;
@@ -603,7 +604,7 @@ export function validateCatalogCreationDraft(
   const hasServerQuote = typeof options.quotedCost === 'number' && Number.isFinite(options.quotedCost);
   const cost = hasServerQuote ? options.quotedCost as number : 0;
   if (typeof options.credits === 'number' && hasServerQuote && options.credits < cost) {
-    errors.push(`Insufficient credits. This generation costs ${cost} credits.`);
+    errors.push(`Insufficient credits. This generation costs ${formatCreditCost(cost)}.`);
   }
   return { errors, warnings: [], cost, canGenerate: errors.length === 0 && hasServerQuote };
 }

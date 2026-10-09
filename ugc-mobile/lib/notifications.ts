@@ -93,7 +93,6 @@ function isNativeMobile() {
   return Platform.OS === 'ios' || Platform.OS === 'android';
 }
 
-export type MobilePushPermissionStatus = 'unsupported' | 'undetermined' | 'denied' | 'granted';
 export type MobilePushRegistrationResult =
   | { status: 'registered'; expoPushToken: string }
   | { status: 'not-mobile' }
@@ -111,23 +110,6 @@ function withBasePermissionFields(
   permissions: Notifications.NotificationPermissionsStatus
 ): NotificationPermissionResponse {
   return permissions as NotificationPermissionResponse;
-}
-
-export async function getMobilePushPermissionState(): Promise<{ status: MobilePushPermissionStatus }> {
-  if (!isNativeMobile()) {
-    return { status: 'unsupported' };
-  }
-
-  const permissions = withBasePermissionFields(await Notifications.getPermissionsAsync());
-  if (permissions.granted) {
-    return { status: 'granted' };
-  }
-
-  if (permissions.canAskAgain === false) {
-    return { status: 'denied' };
-  }
-
-  return { status: 'undetermined' };
 }
 
 function isMissingFirebaseSetupError(error: unknown) {

@@ -219,6 +219,19 @@ describe('selectWhatsNewModels', () => {
     expect(selected.map((model) => model.id)).toEqual(['fresh-video', 'fresh-motion']);
   });
 
+  it('takes the newest New-badged model of each kind in turn', () => {
+    // sortOrder restarts per kind, so it ranks within a kind, never across.
+    const models = [
+      buildModel({ id: 'image-august', badge: 'New', sortOrder: 10 }),
+      buildModel({ id: 'image-this-week', badge: 'New', sortOrder: 190 }),
+      buildModel({ id: 'video-this-week', kind: 'video', badge: 'New', sortOrder: 180 }),
+      buildModel({ id: 'motion-new', kind: 'motion', badge: 'New', sortOrder: 10 }),
+    ];
+
+    expect(selectWhatsNewModels(models).map((model) => model.id))
+      .toEqual(['image-this-week', 'video-this-week', 'motion-new', 'image-august']);
+  });
+
   it('falls back to catalog head order when nothing is badged New', () => {
     const models = [
       buildModel({ id: 'first' }),

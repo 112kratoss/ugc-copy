@@ -22,6 +22,7 @@ import {
     type ShowcaseResourceFilter,
     type ShowcaseSort,
     type ShowcaseUnlockFilter,
+    getShowcaseItemMediaItems,
 } from '@/lib/showcase';
 import { isTextOnlyPost } from '@/lib/post-feed-presentation';
 import type { SourceToolOption } from '@/lib/source-tools';
@@ -76,27 +77,6 @@ function buildFilterHref(
     return params.size > 0 ? `/showcase?${params.toString()}` : '/showcase';
 }
 
-function getItemMediaItems(item: ShowcaseFeedItem): ShowcaseMediaItem[] {
-    if (item.mediaItems?.length) {
-        return item.mediaItems;
-    }
-
-    if (!item.mediaUrl || !item.mediaKind) {
-        return [];
-    }
-
-    return [{
-        id: `${item.id}:cover`,
-        url: item.mediaUrl,
-        mediaKind: item.mediaKind,
-        contentType: null,
-        originalName: null,
-        width: null,
-        height: null,
-        durationSeconds: null,
-        sortOrder: 0,
-    }];
-}
 
 function getPriorityPosterUrl(
     item: ShowcaseFeedItem,
@@ -140,7 +120,7 @@ function BootstrapCard({
     priorityPoster: ShowcasePriorityPosterData | null;
     onOpen: (postId: string) => void;
 }) {
-    const mediaItems = getItemMediaItems(item);
+    const mediaItems = getShowcaseItemMediaItems(item);
     const cover = mediaItems.slice().sort((left, right) => left.sortOrder - right.sortOrder)[0];
     const posterUrl = getPriorityPosterUrl(item, cover, priorityPoster);
     // The canonical detail URL, matching what the sitemap emits — no `from` or
@@ -160,53 +140,34 @@ function BootstrapCard({
             data-showcase-bootstrap-card="true"
             className="min-w-0 overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]"
         >
-            {isTextOnlyPost(item) ? (
+            <div className="relative overflow-hidden bg-black" style={{ aspectRatio: '4 / 5' }}>
+                {isPriority && posterUrl ? (
+                    // The server-selected inline poster remains the single priority LCP image.
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                        src={posterUrl}
+                        alt={item.title}
+                        loading="eager"
+                        fetchPriority="high"
+                        decoding="async"
+                        className="absolute inset-0 h-full w-full object-cover"
+                    />
+                ) : (
+                    <div
+                        className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,122,89,0.17),transparent_58%),var(--ui-surface-inset)]"
+                        aria-hidden="true"
+                    />
+                )}
+                <span className="pointer-events-none absolute left-3 top-3 z-[1] rounded-full border border-white/10 bg-black/65 px-2.5 py-1 text-[11px] font-semibold capitalize text-white">
+                    {item.category}
+                </span>
                 <a
                     href={detailHref}
                     onClick={openInPage}
-                    className="ui-focus-ring block min-h-64 w-full bg-[var(--ui-surface-inset)] p-6 text-left"
+                    className="ui-focus-ring absolute inset-0 z-[2] h-full w-full"
                     aria-label={`Open ${item.title} in viewer`}
-                >
-                    <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--ui-primary)]">
-                        Creator tip
-                    </span>
-                    <span className="mt-4 block text-xl font-extrabold text-[var(--ui-text-primary)]">
-                        {item.title}
-                    </span>
-                    <span className="mt-3 line-clamp-5 block text-sm leading-6 text-[var(--ui-text-muted)]">
-                        {item.body.trim() || item.prompt.trim()}
-                    </span>
-                </a>
-            ) : (
-                <div className="relative overflow-hidden bg-black" style={{ aspectRatio: '4 / 5' }}>
-                    {isPriority && posterUrl ? (
-                        // The server-selected inline poster remains the single priority LCP image.
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                            src={posterUrl}
-                            alt={item.title}
-                            loading="eager"
-                            fetchPriority="high"
-                            decoding="async"
-                            className="absolute inset-0 h-full w-full object-cover"
-                        />
-                    ) : (
-                        <div
-                            className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,122,89,0.17),transparent_58%),var(--ui-surface-inset)]"
-                            aria-hidden="true"
-                        />
-                    )}
-                    <span className="pointer-events-none absolute left-3 top-3 z-[1] rounded-full border border-white/10 bg-black/65 px-2.5 py-1 text-[11px] font-semibold capitalize text-white">
-                        {item.category}
-                    </span>
-                    <a
-                        href={detailHref}
-                        onClick={openInPage}
-                        className="ui-focus-ring absolute inset-0 z-[2] h-full w-full"
-                        aria-label={`Open ${item.title} in viewer`}
-                    />
-                </div>
-            )}
+                />
+            </div>
 
             <div className="flex items-center justify-between gap-3 px-4 py-3">
                 <div className="min-w-0">
@@ -412,7 +373,7 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
         .filter((item) => !isTextOnlyPost(item))
         .slice(0, SHOWCASE_INITIAL_RENDER_COUNT);
     const priorityMediaItemId = bootstrapItems.find((item) => (
-        getItemMediaItems(item).length > 0
+        getShowcaseItemMediaItems(item).length > 0
     ))?.id ?? null;
     const priorityPoster = props.initialPriorityPoster ?? null;
 

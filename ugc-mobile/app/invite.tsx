@@ -287,7 +287,7 @@ function RewardActivity({ rewards }: { rewards: ReferralReward[] }) {
                     : <Gift size={18} color={theme.colors.success} />}
                 </View>
                 <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-                  <AppText variant="label">{reward.kind === 'invitee_first_purchase' ? 'Welcome bonus' : 'Friend top-up'}</AppText>
+                  <AppText variant="label">{reward.kind === 'invitee_first_purchase' ? 'First top-up bonus' : 'Friend top-up reward'}</AppText>
                   <AppText variant="caption" color="muted">{formatRewardDate(reward.createdAt)}</AppText>
                 </View>
                 <AppText variant="label" color={reward.status === 'reversed' ? 'warning' : 'success'} style={{ fontVariant: ['tabular-nums'] }}>

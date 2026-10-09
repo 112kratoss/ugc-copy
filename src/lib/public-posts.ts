@@ -234,6 +234,68 @@ export async function getPostReferenceForShowcaseId(
   }
 }
 
+async function loadPublicPostMediaItems(
+  adminSupabase: ReturnType<typeof createServiceClient>,
+  row: PublicPostRow,
+) {
+  const mediaItemsMap = await loadPostMediaItemsMap(adminSupabase, [row.id]);
+  return mediaItemsMap.get(row.id) ?? await buildLegacyPostMediaItems({
+    supabase: adminSupabase,
+    postId: row.id,
+    row,
+  });
+}
+
+async function loadPublicPostCreator(
+  adminSupabase: ReturnType<typeof createServiceClient>,
+  userId: string | null,
+): Promise<ShowcaseCreator> {
+  const anonymous: ShowcaseCreator = { id: null, username: null, name: 'Anonymous', avatar: null };
+  if (!userId) return anonymous;
+
+  const { data: profile, error: profileError } = await adminSupabase
+    .from('profiles')
+    .select('id, username, display_name, avatar_url')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (profileError) {
+    logBackendError('failed_to_fetch_public_post_creator_profile', { error: profileError });
+    return anonymous;
+  }
+  if (!profile) return anonymous;
+
+  const typedProfile = profile as ProfileSummary;
+  return {
+    id: typedProfile.id,
+    username: typedProfile.username,
+    name: getCreatorDisplayName({
+      displayName: typedProfile.display_name,
+      username: typedProfile.username,
+    }),
+    avatar: typedProfile.avatar_url,
+  };
+}
+
+async function loadPublicPostGenerationModel(
+  adminSupabase: ReturnType<typeof createServiceClient>,
+  generationId: string | null,
+): Promise<string | null> {
+  if (!generationId) return null;
+
+  const { data: generation, error: generationError } = await adminSupabase
+    .from('generations')
+    .select('model')
+    .eq('id', generationId)
+    .maybeSingle();
+
+  if (generationError) {
+    logBackendError('failed_to_fetch_post_generation_model', { error: generationError });
+    return null;
+  }
+  return generation?.model ?? null;
+}
+
 export async function getPublicPostDetail(
   id: string,
   options?: {
@@ -336,12 +398,14 @@ export async function getPublicPostDetail(
     return null;
   }
 
-  const mediaItemsMap = await loadPostMediaItemsMap(adminSupabase, [row.id]);
-  const mediaItems = mediaItemsMap.get(row.id) ?? await buildLegacyPostMediaItems({
-    supabase: adminSupabase,
-    postId: row.id,
-    row,
-  });
+  // The four reads below depend only on the row, so they run together; a
+  // post page used to pay for them one after the other.
+  const [mediaItems, creator, resourceBundle, generationModel] = await Promise.all([
+    loadPublicPostMediaItems(adminSupabase, row),
+    loadPublicPostCreator(adminSupabase, row.user_id),
+    getPostResourceBundleDetailByPostId(row.id, { viewerUserId, countryCode }),
+    loadPublicPostGenerationModel(adminSupabase, row.generation_id),
+  ]);
   const coverMedia = mediaItems[0] ?? null;
   const mediaUrl = coverMedia?.url ?? null;
   const mediaKind = coverMedia?.mediaKind ?? null;
@@ -349,58 +413,11 @@ export async function getPublicPostDetail(
     return null;
   }
 
-  let creator: ShowcaseCreator = {
-    id: null,
-    username: null,
-    name: 'Anonymous',
-    avatar: null,
-  };
-
-  if (row.user_id) {
-    const { data: profile, error: profileError } = await adminSupabase
-      .from('profiles')
-      .select('id, username, display_name, avatar_url')
-      .eq('id', row.user_id)
-      .maybeSingle();
-
-    if (profileError) {
-      logBackendError('failed_to_fetch_public_post_creator_profile', { error: profileError });
-    } else if (profile) {
-      const typedProfile = profile as ProfileSummary;
-      creator = {
-        id: typedProfile.id,
-        username: typedProfile.username,
-        name: getCreatorDisplayName({
-          displayName: typedProfile.display_name,
-          username: typedProfile.username,
-        }),
-        avatar: typedProfile.avatar_url,
-      };
-    }
-  }
-
-  const resourceBundle = await getPostResourceBundleDetailByPostId(row.id, {
-    viewerUserId,
-    countryCode,
-  });
-  let model =
-    normalizeShowcaseSourceKind(row.source_kind) === 'manual'
+  const model =
+    generationModel
+    ?? (normalizeShowcaseSourceKind(row.source_kind) === 'manual'
       ? 'manual'
-      : row.source_tool ?? 'external';
-
-  if (row.generation_id) {
-    const { data: generation, error: generationError } = await adminSupabase
-      .from('generations')
-      .select('model')
-      .eq('id', row.generation_id)
-      .maybeSingle();
-
-    if (generationError) {
-      logBackendError('failed_to_fetch_post_generation_model', { error: generationError });
-    } else if (generation?.model) {
-      model = generation.model;
-    }
-  }
+      : row.source_tool ?? 'external');
 
   const publicContent = sanitizePublicPostContent({
     prompt: row.prompt?.trim() || '',

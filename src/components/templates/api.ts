@@ -120,12 +120,6 @@ function normalizeCreator(value: unknown, parent: UnknownRecord): TemplateCreato
 export function normalizeTemplate(value: unknown): MediaTemplate {
   const wrapper = asRecord(value);
   const template = asRecord(wrapper.template ?? wrapper.data ?? value);
-  const legacyCredits = asRecord(first(template, ['estimatedStageCredits', 'estimated_stage_credits']));
-  const legacyTotal = numberValue(legacyCredits, ['total']);
-  const legacyFrameCredits = numberValue(template, ['estimatedFrameCredits', 'estimated_frame_credits'])
-    ?? numberValue(legacyCredits, ['keyframesTotal', 'keyframes_total']);
-  const legacyVideoCredits = numberValue(template, ['estimatedVideoCredits', 'estimated_video_credits'])
-    ?? numberValue(legacyCredits, ['video']);
 
   return {
     id: stringValue(template, ['id']),
@@ -143,11 +137,7 @@ export function normalizeTemplate(value: unknown): MediaTemplate {
       ? stringValue(template, ['status']) as MediaTemplate['status']
       : 'active',
     useCount: numberValue(template, ['useCount', 'use_count']) ?? 0,
-    estimatedTotalCredits: numberValue(template, ['estimatedTotalCredits', 'estimated_total_credits'])
-      ?? legacyTotal
-      ?? (legacyFrameCredits !== null || legacyVideoCredits !== null
-        ? (legacyFrameCredits ?? 0) + (legacyVideoCredits ?? 0)
-        : null),
+    estimatedTotalCredits: numberValue(template, ['estimatedTotalCredits', 'estimated_total_credits']),
     createdAt: stringValue(template, ['createdAt', 'created_at']),
     updatedAt: stringValue(template, ['updatedAt', 'updated_at']),
   };

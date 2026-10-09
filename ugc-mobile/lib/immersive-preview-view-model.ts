@@ -336,8 +336,13 @@ export function profileMediaFeedHref({
   };
 }
 
-export function buildImmersiveShowcaseItems(source: PreviewViewerSource, items: ShowcaseFeedItem[]) {
-  return items.map((item) => showcaseToImmersiveItem(source, item));
+export function buildImmersiveShowcaseItems(
+  source: PreviewViewerSource,
+  items: ShowcaseFeedItem[],
+  /** The signed-in viewer, so their own post can offer Edit post. */
+  viewerUserId: string | null = null,
+) {
+  return items.map((item) => showcaseToImmersiveItem(source, item, viewerUserId));
 }
 
 export function buildImmersiveGenerationItems(
@@ -526,7 +531,11 @@ function getGenerationMediaItemsList(
   });
 }
 
-function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeedItem): ImmersivePreviewItem {
+function showcaseToImmersiveItem(
+  source: PreviewViewerSource,
+  item: ShowcaseFeedItem,
+  viewerUserId: string | null = null,
+): ImmersivePreviewItem {
   const displayText = getShowcasePostDisplayText(item);
   const title = item.title.trim() || item.prompt.trim() || displayText;
   const textOnly = isTextOnlyShowcasePost(item);
@@ -561,7 +570,8 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
     saveCount: item.saveCount,
     commentLabel: formatCompactCount(item.commentCount),
     commentCount: item.commentCount ?? 0,
-    canComment: true,
+    // The server takes comments on public posts only.
+    canComment: item.visibility !== 'unlisted',
     isSaved,
     canSave: true,
     canShare: true,
@@ -602,8 +612,11 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
     linkedPostTitle: null,
     linkedPostVisibility: null,
     archivedAt: null,
-    visibility: 'public',
+    visibility: item.visibility ?? 'public',
     availableActions: [
+      // The creator reaches their own post from the feed, a link or an alert as
+      // often as from Profile; the web post page offers Edit there too.
+      ...(viewerUserId && item.creator.id === viewerUserId ? ['edit-post'] : []),
       isSaved ? 'unsave' : 'save',
       'comment',
       'share',
@@ -760,8 +773,11 @@ function getGenerationAvailableActions(
     return ['recreate', 'archive', 'view-details'];
   }
 
+  // Download, as on owned posts and on the web Studio card; audio has no file to save.
+  const download = isAudio ? [] : ['download'];
+
   if (!linkedPostId) {
-    return ['publish', 'recreate', 'archive', 'share', 'view-details'];
+    return ['publish', 'recreate', 'archive', 'share', ...download, 'view-details'];
   }
 
   // The linked post gets the same three-state control as a post of its own;
@@ -771,7 +787,7 @@ function getGenerationAvailableActions(
     linkedActions.push('change-linked-visibility');
   }
 
-  return [...linkedActions, 'view-linked', 'recreate', 'archive', 'share', 'view-details'];
+  return [...linkedActions, 'view-linked', 'recreate', 'archive', 'share', ...download, 'view-details'];
 }
 
 function ownerPostToImmersiveItem(

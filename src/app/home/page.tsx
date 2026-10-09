@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { Suspense, use } from 'react';
 
 import AnonymousHome from '@/components/AnonymousHome';
+import { HOME_FEED_DETAIL_CONTEXT, HomeFeedSkeleton } from '@/components/HomeFeedSkeleton';
+import WelcomeCreditsCard from '@/app/home/WelcomeCreditsCard';
 import { StatusCallout } from '@/components/DesignSystem';
 import HomeExperience from '@/components/HomeExperience';
 import HomeSlider from '@/components/HomeSlider';
@@ -29,35 +31,20 @@ function getFirstValue(value: string | string[] | undefined) {
 }
 
 /**
- * Mirrors the mobile rail's greeting chain, minus its profile lookup: the
- * session already carries these, so the rail costs this page no extra query.
- * A creator who set a custom `display_name` therefore sees their sign-in name
- * here and their profile name on mobile.
+ * Mirrors the mobile rail's greeting chain: the profile's display name first
+ * (the auth state already reads the profile row for the credit balance), then
+ * the sign-in name, then the email's local part.
  */
-function resolveDisplayName(user: { user_metadata?: Record<string, unknown>; email?: string }) {
+function resolveDisplayName(
+  user: { user_metadata?: Record<string, unknown>; email?: string },
+  profileDisplayName: string | null | undefined,
+) {
+  const displayName = profileDisplayName?.trim() ?? '';
   const fullName = typeof user.user_metadata?.full_name === 'string'
     ? user.user_metadata.full_name.trim()
     : '';
 
-  return fullName || user.email?.split('@')[0] || 'Creator';
-}
-
-const FEED_DETAIL_CONTEXT = { from: 'home', returnTo: '/' };
-
-function HomeFeedSkeleton() {
-  return (
-    <div className="flex flex-col gap-4" aria-label="Loading feed">
-      {[220, 320, 260].map((height, index) => (
-        <div
-          key={index}
-          className="relative overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]"
-          style={{ minHeight: height }}
-        >
-          <div className="absolute inset-0 -translate-x-full animate-[skeleton-shimmer_1.5s_linear_infinite] bg-gradient-to-r from-transparent via-white/5 to-transparent" />
-        </div>
-      ))}
-    </div>
-  );
+  return displayName || fullName || user.email?.split('@')[0] || 'Creator';
 }
 
 function HomeFeedSection({
@@ -89,7 +76,7 @@ function HomeFeedSection({
       initialFeed={feed}
       initialChipId={initialChipId}
       variant="embedded"
-      detailContext={FEED_DETAIL_CONTEXT}
+      detailContext={HOME_FEED_DETAIL_CONTEXT}
     />
   );
 }
@@ -160,11 +147,14 @@ export default async function HomeDashboardPage({ searchParams }: HomeDashboardP
 
   return (
     <HomeExperience
-      hero={<HomeSlider displayName={resolveDisplayName(auth.session.user)} />}
+      hero={<HomeSlider displayName={resolveDisplayName(auth.session.user, auth.displayName)} />}
       inlineStrip={(
-        <Suspense fallback={null}>
-          <HomeWorkspaceSection data={workspacePromise} credits={auth.credits} variant="inline" />
-        </Suspense>
+        <>
+          <WelcomeCreditsCard />
+          <Suspense fallback={null}>
+            <HomeWorkspaceSection data={workspacePromise} credits={auth.credits} variant="inline" />
+          </Suspense>
+        </>
       )}
       feed={(
         <Suspense fallback={<HomeFeedSkeleton />}>
@@ -173,6 +163,7 @@ export default async function HomeDashboardPage({ searchParams }: HomeDashboardP
       )}
       rail={(
         <>
+          <WelcomeCreditsCard />
           <Suspense fallback={<WorkspaceRailFallback />}>
             <HomeWorkspaceSection data={workspacePromise} credits={auth.credits} variant="rail" />
           </Suspense>
