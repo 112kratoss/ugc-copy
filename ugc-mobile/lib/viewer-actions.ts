@@ -397,11 +397,15 @@ export function getViewerActionLabel(action: string, sourceType?: ImmersivePrevi
  * "Save" the moment it is used, and nothing is destroyed by it. Dressing it in
  * the danger colour spends the app's loudest signal on its cheapest action, so
  * the sheet's remaining red rows (delete, block, report) stop meaning anything.
+ *
+ * Hiding a creator is not one either. It is a feed preference, the creator's
+ * half of "Not interested": it removes nothing and reports no one. A feed
+ * card's menu (`lib/feed-feedback-menu.ts`) and the web's draw it plain, and
+ * the reel's drew it red until 2026-10-09.
  */
 export function isDestructiveViewerAction(action: string) {
   return action === 'archive'
     || action === 'delete-post'
-    || action === 'hide-creator'
     || action === 'report-content'
     || action === 'report-user'
     || action === 'block-user'

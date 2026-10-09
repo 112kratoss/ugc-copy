@@ -4,6 +4,8 @@ Status: merged early as #217 (`767a2138`, 2026-09-27) at the owner's call, and s
 
 Update, 2026-10-09: Android no longer draws Material's dropdown. The owner found it generic, and the Expo UI binding in the builds people hold passes that dropdown its fill colour and nothing else (no shape, shadow, offset or motion). Android's menu is now the app's own, grown out of the button (`components/anchored-menu.tsx`, opened by `components/native-menu.android.tsx`; look and motion in `docs/design/design-mobile.md`, Overlays). It is JavaScript only, so it reaches Android over the air. Everything below about Android describes the dropdown it replaced; the iOS menu is unchanged.
 
+Second update, 2026-10-09, from a look at the shipped menus on a Galaxy S24: a left-hand Explore card's menu no longer slides across to sit under the next card's ⋮, Hide is plain in the reel as it is on a card, and your own post lists no Hide, Report user or Block user row on a card, as in the reel and on the web. `docs/design/design-mobile.md` (Overlays) holds the rules.
+
 Scope: `ugc-mobile/` only; paths below are relative to it. Expo UI (`@expo/ui`) is a new native module, so this ships in store build 0.1.8, never over the air. The plan was to keep the branch unmerged until 0.1.8 was cut; merged early, it left OTAs published from `main` no longer matching 0.1.7's fingerprint, as after #202, so 0.1.7 fixes publish from `7113b590` with `publish-ota.mjs --ref` until 0.1.8 ships. Develop and check on the S24 first; the iPhone gets one batched pass.
 
 ## Why

@@ -91,13 +91,46 @@ describe('feed feedback sheet', () => {
     expect(pressable(tree!.root, 'Not interested').props.accessibilityHint).toContain('Remove this post');
   });
 
-  it('disables hiding the signed-in creator from their own feed', () => {
+  function labels(root: renderer.ReactTestInstance) {
+    return root.findAll((node) => String(node.type) === 'pressable' && typeof node.props.accessibilityLabel === 'string')
+      .map((node) => node.props.accessibilityLabel as string)
+      .filter((label) => label !== 'Close feed preferences');
+  }
+
+  function ownPostSheet(props: { canHideCreator: boolean; visible: boolean }) {
+    return (
+      <FeedFeedbackSheet
+        creatorLabel="@me"
+        onBlockUser={vi.fn()}
+        onClose={vi.fn()}
+        onHideCreator={vi.fn()}
+        onNotInterested={vi.fn()}
+        onReportContent={vi.fn()}
+        onReportUser={vi.fn()}
+        postTitle="My post"
+        {...props}
+      />
+    );
+  }
+
+  // The rows of the card's menu (`lib/feed-feedback-menu.ts`): nothing can make
+  // hiding, reporting or blocking yourself possible, so they are not offered.
+  it("leaves the creator rows out on the signed-in creator's own post", () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(ownPostSheet({ canHideCreator: false, visible: true }));
+    });
+
+    expect(labels(tree!.root)).toEqual(['Not interested', 'Report content']);
+  });
+
+  it('leaves out the Safety heading when the own post has no safety row at all', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(
         <FeedFeedbackSheet
+          canHideCreator={false}
           creatorLabel="@me"
-          hideCreatorDisabled
           onBlockUser={vi.fn()}
           onClose={vi.fn()}
           onHideCreator={vi.fn()}
@@ -109,11 +142,26 @@ describe('feed feedback sheet', () => {
       );
     });
 
-    const hide = pressable(tree!.root, 'Hide @me');
-    expect(hide.props.disabled).toBe(true);
-    expect(hide.props.accessibilityState).toEqual({ disabled: true });
-    expect(pressable(tree!.root, 'Report user').props.disabled).toBe(true);
-    expect(pressable(tree!.root, 'Block user').props.disabled).toBe(true);
+    expect(labels(tree!.root)).toEqual(['Not interested']);
+    expect(tree!.root.findAll((node) => String(node.type) === 'text' && node.props.children === 'Safety')).toEqual([]);
+  });
+
+  // The screen clears its post (and so its creator) in the same render that
+  // hides the sheet, which then slides away for a few hundred milliseconds.
+  it('keeps the rows it was showing while it slides away', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(ownPostSheet({ canHideCreator: true, visible: true }));
+    });
+    const shown = labels(tree!.root);
+    expect(shown).toEqual(['Not interested', 'Hide @me', 'Report content', 'Report user', 'Block user']);
+
+    renderer.act(() => tree!.update(ownPostSheet({ canHideCreator: false, visible: false })));
+    expect(labels(tree!.root)).toEqual(shown);
+
+    // The next post it opens for is the viewer's own: now the rows go.
+    renderer.act(() => tree!.update(ownPostSheet({ canHideCreator: false, visible: true })));
+    expect(labels(tree!.root)).toEqual(['Not interested', 'Report content']);
   });
 
   it('labels anonymous feedback as limited to this visit', () => {

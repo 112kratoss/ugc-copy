@@ -1,4 +1,5 @@
 import { Ban, EyeOff, Flag, ShieldAlert, UserRoundX } from 'lucide-react-native';
+import { useState } from 'react';
 import { Modal, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -9,9 +10,14 @@ import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
+/**
+ * The rows of a feed card's ⋮ as a sheet, where the menu cannot be drawn
+ * (`lib/feed-feedback-menu.ts` lists the same rows and says why your own post
+ * has no creator rows).
+ */
 export function FeedFeedbackSheet({
   creatorLabel,
-  hideCreatorDisabled = false,
+  canHideCreator = true,
   onClose,
   onHideCreator,
   onNotInterested,
@@ -23,7 +29,8 @@ export function FeedFeedbackSheet({
   visible,
 }: {
   creatorLabel: string;
-  hideCreatorDisabled?: boolean;
+  /** False on the viewer's own post: the Hide, Report user and Block user rows are left out. */
+  canHideCreator?: boolean;
   onClose: () => void;
   onHideCreator: () => void;
   onNotInterested: () => void;
@@ -39,7 +46,13 @@ export function FeedFeedbackSheet({
   const insets = useSafeAreaInsets();
   const bottomInset = resolvedBottomInset(insets.bottom);
   const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
-  const hasSafetyActions = Boolean(onReportContent || onReportUser || onBlockUser);
+  // The screen clears its post as the sheet starts to leave, and a cleared post
+  // has no creator. The rows stay as they were while the sheet slides away.
+  const [showsCreatorRows, setShowsCreatorRows] = useState(canHideCreator);
+  if (visible && showsCreatorRows !== canHideCreator) setShowsCreatorRows(canHideCreator);
+  const reportUser = showsCreatorRows ? onReportUser : undefined;
+  const blockUser = showsCreatorRows ? onBlockUser : undefined;
+  const hasSafetyActions = Boolean(onReportContent || reportUser || blockUser);
 
   return (
     <Modal
@@ -82,17 +95,16 @@ export function FeedFeedbackSheet({
                 label="Not interested"
                 onPress={onNotInterested}
               />
-              <SheetActionRow
-                body={hideCreatorDisabled
-                  ? 'You cannot hide your own creator profile.'
-                  : sessionOnly
+              {showsCreatorRows ? (
+                <SheetActionRow
+                  body={sessionOnly
                     ? `Remove posts from ${creatorLabel} for this visit.`
                     : `Remove posts from ${creatorLabel} from your recommendations.`}
-                disabled={hideCreatorDisabled}
-                icon={UserRoundX}
-                label={`Hide ${creatorLabel}`}
-                onPress={onHideCreator}
-              />
+                  icon={UserRoundX}
+                  label={`Hide ${creatorLabel}`}
+                  onPress={onHideCreator}
+                />
+              ) : null}
             </SheetActionGroup>
             {hasSafetyActions ? (
               <>
@@ -120,23 +132,21 @@ export function FeedFeedbackSheet({
                       tone="danger"
                     />
                   ) : null}
-                  {onReportUser ? (
+                  {reportUser ? (
                     <SheetActionRow
                       body={`Report ${creatorLabel} for unsafe or abusive behavior.`}
-                      disabled={hideCreatorDisabled}
                       icon={ShieldAlert}
                       label="Report user"
-                      onPress={onReportUser}
+                      onPress={reportUser}
                       tone="danger"
                     />
                   ) : null}
-                  {onBlockUser ? (
+                  {blockUser ? (
                     <SheetActionRow
                       body={`Hide ${creatorLabel}'s content and prevent future follows between you.`}
-                      disabled={hideCreatorDisabled}
                       icon={Ban}
                       label="Block user"
-                      onPress={onBlockUser}
+                      onPress={blockUser}
                       tone="danger"
                     />
                   ) : null}
