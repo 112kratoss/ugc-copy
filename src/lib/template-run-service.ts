@@ -1658,6 +1658,13 @@ async function insertRetryStep(
   return data as unknown as TemplateRunStepRow;
 }
 
+async function resumeGenerationRetry(client: SupabaseClient, runId: string) {
+  const { error } = await client.from('template_runs').update({ status: 'queued', error_message: null })
+    .eq('id', runId).in('status', ['awaiting_approval', 'needs_attention']);
+  if (error) throw error;
+  await enqueueTemplateRunJob(client, runId);
+}
+
 export async function retryTemplateRunStep(params: {
   adminClient: SupabaseClient;
   runId: string;
@@ -1673,6 +1680,12 @@ export async function retryTemplateRunStep(params: {
   const current = state.latestSteps.get(step.node_id);
   if (current?.id !== step.id) {
     if (current && current.attempt === step.attempt + 1) {
+      // The attempt can commit before resuming the run or enqueueing succeeds.
+      // A repeated request must finish that work without inserting another attempt.
+      if (current.kind === 'generation' && current.status === 'queued') {
+        await resumeGenerationRetry(params.adminClient, state.run.id);
+        return toRunDto(params.adminClient, await loadRunState(params.adminClient, state.run.id, params.userId));
+      }
       return toRunDto(params.adminClient, state);
     }
     throw new MediaTemplateError(
@@ -1725,9 +1738,7 @@ export async function retryTemplateRunStep(params: {
     const next = await loadRunState(params.adminClient, state.run.id, params.userId);
     return toRunDto(params.adminClient, next);
   }
-  await params.adminClient.from('template_runs').update({ status: 'queued', error_message: null })
-    .eq('id', state.run.id).in('status', ['awaiting_approval', 'needs_attention']);
-  await enqueueTemplateRunJob(params.adminClient, state.run.id);
+  await resumeGenerationRetry(params.adminClient, state.run.id);
   const next = await loadRunState(params.adminClient, state.run.id, params.userId);
   return toRunDto(params.adminClient, next);
 }
