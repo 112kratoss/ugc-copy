@@ -15,6 +15,7 @@ import {
 } from '@/lib/backend-rate-limit';
 import { validateProfileSubmission } from '@/lib/profile-server';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
+import { readProfileJsonBody, PROFILE_REQUEST_TOO_LARGE } from '@/lib/profile-request-body';
 
 type ProfileValidateRouteAdapterDependencies = {
   createServiceClient?: () => SupabaseClient;
@@ -71,7 +72,11 @@ async function handleProfileValidatePOST(
       );
     }
 
-    const body: unknown = await request.json().catch(() => null);
+    const parsed = await readProfileJsonBody(request);
+    if (!parsed.ok && parsed.reason === 'too_large') {
+      return NextResponse.json({ error: PROFILE_REQUEST_TOO_LARGE }, { status: 413 });
+    }
+    const body = parsed.ok ? parsed.value : null;
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return NextResponse.json({ error: 'Invalid profile payload.' }, { status: 400 });
     }

@@ -15,6 +15,7 @@ import {
   type ProfileMediaUploadIntentResult,
 } from '@/lib/profile-media-upload-sign';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
+import { readProfileJsonBody, PROFILE_REQUEST_TOO_LARGE } from '@/lib/profile-request-body';
 
 type ProfileMediaRouteResult = ProfileMediaUploadIntentResult | ProfileMediaCleanupResult;
 
@@ -65,17 +66,17 @@ function toJsonResponse(result: ProfileMediaRouteResult) {
 }
 
 async function readJsonBody(request: Request, invalidMessage: string) {
-  try {
-    return {
-      ok: true as const,
-      body: await request.json(),
-    };
-  } catch {
+  const parsed = await readProfileJsonBody(request);
+  if (!parsed.ok) {
     return {
       ok: false as const,
-      response: NextResponse.json({ error: invalidMessage }, { status: 400 }),
+      response: NextResponse.json(
+        { error: parsed.reason === 'too_large' ? PROFILE_REQUEST_TOO_LARGE : invalidMessage },
+        { status: parsed.reason === 'too_large' ? 413 : 400 },
+      ),
     };
   }
+  return { ok: true as const, body: parsed.value };
 }
 
 async function handleProfileMediaSignPOST(
