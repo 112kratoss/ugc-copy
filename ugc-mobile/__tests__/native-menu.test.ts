@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { buildCommentMenu } from '../lib/comment-menu';
 import { buildFeedFeedbackMenu, canHideFeedCreator } from '../lib/feed-feedback-menu';
+import { hideCreatorLabel, hideCreatorLabelFromCardLabel } from '../lib/hide-creator-label';
 import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
 import {
   actionSheetFromMenu,
@@ -156,7 +157,7 @@ describe('feed menu', () => {
   };
 
   it("offers the sheet's rows: preferences first, then the destructive safety rows", () => {
-    const menu = buildFeedFeedbackMenu({ creatorLabel: '@maya', canHideCreator: true, sessionOnly: false, ...handlers });
+    const menu = buildFeedFeedbackMenu({ creator: { username: 'maya', name: 'Maya R' }, canHideCreator: true, sessionOnly: false, ...handlers });
 
     expect(menu.sections.map((section) => section.title)).toEqual([undefined, 'Safety']);
     expect(menu.sections[0].items.map((item) => item.label)).toEqual(['Not interested', 'Hide @maya']);
@@ -168,7 +169,7 @@ describe('feed menu', () => {
   });
 
   it("tells a guest the choice lasts for the visit, as a heading on iOS and a line on each row elsewhere", () => {
-    const menu = buildFeedFeedbackMenu({ creatorLabel: '@maya', canHideCreator: true, sessionOnly: true, ...handlers });
+    const menu = buildFeedFeedbackMenu({ creator: { username: 'maya', name: 'Maya R' }, canHideCreator: true, sessionOnly: true, ...handlers });
 
     expect(menu.sections[0].title).toBe('For this visit');
     expect(menu.sections[0].items.map((item) => (item.kind === 'action' ? item.subtitle : null)))
@@ -178,7 +179,7 @@ describe('feed menu', () => {
   // Nothing can make hiding, reporting or blocking yourself possible, so the
   // rows are left out, not dimmed: the reel's menu and the web's do the same.
   it('leaves the creator rows out on your own post, whatever handlers it was given', () => {
-    const menu = buildFeedFeedbackMenu({ creatorLabel: '@me', canHideCreator: false, sessionOnly: false, ...handlers });
+    const menu = buildFeedFeedbackMenu({ creator: { username: 'me', name: 'Me' }, canHideCreator: false, sessionOnly: false, ...handlers });
 
     expect(menu.sections.map((section) => section.items.map((item) => item.label)))
       .toEqual([['Not interested'], ['Report content']]);
@@ -187,7 +188,7 @@ describe('feed menu', () => {
 
   it('leaves out the safety rows it was not given', () => {
     const menu = buildFeedFeedbackMenu({
-      creatorLabel: '@maya',
+      creator: { username: 'maya', name: 'Maya R' },
       canHideCreator: true,
       sessionOnly: false,
       onNotInterested: noop,
@@ -201,13 +202,53 @@ describe('feed menu', () => {
   // One meaning for red across the two menus that share these rows: a feed
   // card's and the reel's. Hide was red in the reel and plain on a card.
   it("colours each row as the reel's menu colours the same row", () => {
-    const menu = buildFeedFeedbackMenu({ creatorLabel: '@maya', canHideCreator: true, sessionOnly: false, ...handlers });
+    const menu = buildFeedFeedbackMenu({ creator: { username: 'maya', name: 'Maya R' }, canHideCreator: true, sessionOnly: false, ...handlers });
     const rows = menu.sections.flatMap((section) => section.items);
 
     expect(rows.map((row) => row.id)).toEqual(['not-interested', 'hide-creator', 'report-content', 'report-user', 'block-user']);
     expect(rows.map((row) => Boolean(row.kind === 'action' && row.destructive)))
       .toEqual(rows.map((row) => isDestructiveViewerAction(row.id)));
     expect(isDestructiveViewerAction('hide-creator')).toBe(false);
+  });
+});
+
+// One wording for the row that hides a creator, wherever it is drawn. It read
+// "Hide fluffy" on Home, "Hide @fluffy" on Explore and "Hide this creator" in
+// the reel until 2026-10-09. The web's twin of this rule is held equal to it by
+// src/__tests__/hide-creator-label-parity.test.ts.
+describe('the Hide row', () => {
+  it('names the creator by handle, by display name without one, and never by nothing', () => {
+    expect(hideCreatorLabel({ username: 'maya', name: 'Maya R' })).toBe('Hide @maya');
+    expect(hideCreatorLabel({ username: ' @maya ', name: 'Maya R' })).toBe('Hide @maya');
+    expect(hideCreatorLabel({ username: null, name: ' Maya R ' })).toBe('Hide Maya R');
+    expect(hideCreatorLabel({ username: '  ', name: '' })).toBe('Hide this creator');
+    expect(hideCreatorLabel({})).toBe('Hide this creator');
+  });
+
+  it("reads the same from the label a post's card shows", () => {
+    expect(hideCreatorLabelFromCardLabel('@maya')).toBe('Hide @maya');
+    expect(hideCreatorLabelFromCardLabel('Maya R')).toBe('Hide Maya R');
+    expect(hideCreatorLabelFromCardLabel('@creator')).toBe('Hide this creator');
+    expect(hideCreatorLabelFromCardLabel('  ')).toBe('Hide this creator');
+  });
+
+  it("is the same row on a feed card's menu and in the reel's, for the same creator", () => {
+    const card = buildFeedFeedbackMenu({
+      creator: { username: 'maya', name: 'Maya R' },
+      canHideCreator: true,
+      sessionOnly: false,
+      onNotInterested: noop,
+      onHideCreator: noop,
+    });
+    const reel = buildViewerActionsMenu({
+      item: viewerItem({ creatorLabel: '@maya' }),
+      actions: ['not-interested', 'hide-creator'],
+      onAction: noop,
+    });
+    const label = (menu: NativeMenuModel) => menu.sections.flatMap((section) => section.items).find((row) => row.id === 'hide-creator')?.label;
+
+    expect(label(card)).toBe('Hide @maya');
+    expect(label(reel)).toBe('Hide @maya');
   });
 });
 
@@ -228,6 +269,9 @@ describe("whose creator a feed card's menu can act on", () => {
     expect(source).toContain('canHideCreator: canHideFeedCreator(item.creator.id, user?.id),');
     expect(source).toContain('canHideCreator={canHideFeedCreator(feedbackItem?.creator.id, user?.id)}');
     expect(source.match(/canHideCreator[:=]/g)?.length).toBe(2);
+    // And the Hide row is worded by the one rule, for the menu and for the sheet.
+    expect(source).toContain('    creator: item.creator,\n    canHideCreator:');
+    expect(source).toContain('hideLabel={hideCreatorLabel(feedbackItem?.creator ?? {})}');
   });
 });
 

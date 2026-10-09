@@ -9,7 +9,12 @@ import {
 } from '@/lib/native-menu';
 import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
 import { postVisibilityChoices } from '@/lib/post-visibility-menu';
-import { getViewerActionGroupLabel, getViewerActionLabel, isDestructiveViewerAction } from '@/lib/viewer-actions';
+import {
+  getViewerActionGroupLabel,
+  getViewerActionLabel,
+  getViewerItemActionLabel,
+  isDestructiveViewerAction,
+} from '@/lib/viewer-actions';
 
 /**
  * The actions the reel's rail already shows. The menu opens with them as one
@@ -92,7 +97,7 @@ export function buildViewerActionsMenu({
     const disabledReason = item.disabledActions[action];
     return menuAction({
       id: action,
-      label: getViewerActionLabel(action, item.sourceType),
+      label: getViewerItemActionLabel(action, item),
       subtitle: disabledReason,
       systemImage: VIEWER_ACTION_SYMBOLS[action],
       destructive: isDestructiveViewerAction(action),

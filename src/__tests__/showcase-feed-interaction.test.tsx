@@ -204,7 +204,7 @@ describe('showcase feed interactions', () => {
     render(
       <ShowcaseFeedbackMenu
         itemTitle="Campaign Frame"
-        creatorName="Creator Name"
+        creator={{ username: 'creator-name', name: 'Creator Name' }}
         onSelect={onSelect}
       />
     );
@@ -217,9 +217,9 @@ describe('showcase feed interactions', () => {
     expect(screen.getByRole('menuitem', { name: /not interested/i })).toHaveFocus();
 
     fireEvent.keyDown(screen.getByRole('menuitem', { name: /not interested/i }), { key: 'ArrowDown' });
-    expect(screen.getByRole('menuitem', { name: /hide creator name/i })).toHaveFocus();
+    expect(screen.getByRole('menuitem', { name: /hide @creator-name/i })).toHaveFocus();
 
-    fireEvent.click(screen.getByRole('menuitem', { name: /hide creator name/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /hide @creator-name/i }));
     expect(onSelect).toHaveBeenCalledWith('hide_creator');
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 
@@ -234,7 +234,7 @@ describe('showcase feed interactions', () => {
     render(
       <ShowcaseFeedbackMenu
         itemTitle="Campaign Frame"
-        creatorName="Creator Name"
+        creator={{ username: 'creator-name', name: 'Creator Name' }}
         canHideCreator={false}
         onSelect={vi.fn()}
       />
@@ -243,7 +243,7 @@ describe('showcase feed interactions', () => {
     fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
 
     expect(screen.getByRole('menuitem', { name: /not interested/i })).toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: /hide creator name/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /hide @creator-name/i })).not.toBeInTheDocument();
   });
 
   it('offers the five rows the app card menu has, in its order, with safety set apart', () => {
@@ -254,7 +254,7 @@ describe('showcase feed interactions', () => {
       <ShowcaseFeedbackMenu
         variant="inline"
         itemTitle="Campaign Frame"
-        creatorName="fluffy"
+        creator={{ username: 'fluffy', name: 'Fluffy' }}
         onSelect={vi.fn()}
         onReportContent={onReportContent}
         onReportUser={onReportUser}
@@ -265,7 +265,8 @@ describe('showcase feed interactions', () => {
     fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
 
     const rows = screen.getAllByRole('menuitem').map((row) => row.querySelector('.font-semibold')?.textContent);
-    expect(rows).toEqual(['Not interested', 'Hide fluffy', 'Report content', 'Report user', 'Block user']);
+    // The Hide row names the creator by handle, as the card above it and the app's row do.
+    expect(rows).toEqual(['Not interested', 'Hide @fluffy', 'Report content', 'Report user', 'Block user']);
     expect(screen.getAllByRole('separator')).toHaveLength(1);
 
     fireEvent.click(screen.getByRole('menuitem', { name: /block user/i }));
@@ -290,7 +291,7 @@ describe('showcase feed interactions', () => {
       <ShowcaseFeedbackMenu
         variant="inline"
         itemTitle="Campaign Frame"
-        creatorName="fluffy"
+        creator={{ username: 'fluffy', name: 'Fluffy' }}
         onSelect={vi.fn()}
         onBlockUser={vi.fn()}
       />
@@ -326,7 +327,7 @@ describe('showcase feed interactions', () => {
       <ShowcaseFeedbackMenu
         variant="inline"
         itemTitle="Campaign Frame"
-        creatorName="fluffy"
+        creator={{ username: 'fluffy', name: 'Fluffy' }}
         canHideCreator={false}
         onSelect={vi.fn()}
         onReportContent={vi.fn()}
@@ -345,7 +346,7 @@ describe('showcase feed interactions', () => {
     render(
       <ShowcaseFeedbackMenu
         itemTitle="Campaign Frame"
-        creatorName="Creator Name"
+        creator={{ username: 'creator-name', name: 'Creator Name' }}
         sessionOnly
         onSelect={vi.fn()}
       />
@@ -353,6 +354,6 @@ describe('showcase feed interactions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
     expect(screen.getByRole('menuitem', { name: /not interested/i })).toHaveTextContent(/for this visit/i);
-    expect(screen.getByRole('menuitem', { name: /hide creator name/i })).toHaveTextContent(/for this visit/i);
+    expect(screen.getByRole('menuitem', { name: /hide @creator-name/i })).toHaveTextContent(/for this visit/i);
   });
 });

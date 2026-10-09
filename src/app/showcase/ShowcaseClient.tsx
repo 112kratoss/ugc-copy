@@ -1446,7 +1446,7 @@ export default function ShowcaseClient({
                                                     </div>
                                                     <ShowcaseFeedbackMenu
                                                         itemTitle={item.title}
-                                                        creatorName={item.creator.name}
+                                                        creator={item.creator}
                                                         canHideCreator={Boolean(
                                                             item.creator.id && item.creator.id !== user?.id
                                                         )}

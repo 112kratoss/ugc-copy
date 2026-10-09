@@ -363,6 +363,7 @@ Every pushed screen has a real way back, including its loading and error states.
   - It is hosted through `OverlayHost`, so it cannot be opened from inside a React Native `Modal` (a second window on Android, above the host).
   - A menu is what a ••• reveals. An action sheet is for a choice that follows an action, such as leaving unsaved work or confirming an unlock.
   - Destructive rows are red and still confirm through `showConfirmDialog` after they are chosen. Red is for a row that removes or reports: delete, archive, report, block. Not interested and Hide are feed preferences and stay plain, on a card, in the reel and on the web (`isDestructiveViewerAction`).
+  - The row that hides a creator names them the way a card does, "Hide @handle" (the display name for an account with no handle), on a card, in the reel, in the fallback sheets and on the web. One rule words it on each side (`lib/hide-creator-label.ts`, and the web's file of the same name), and a root test holds the two to one answer.
   - A row that can never apply is left out, not dimmed: your own post has no Hide, Report user or Block user row, on a card, in the reel and on the web. A dimmed row means "not now" and says why in its second line.
   - An iOS menu row has no second line, so a choice that needs one to be understood (who can see a post, in the composer) stays a sheet.
   - Rows the screen already shows go in the icon row at the top (Save, Comments, Share on the reel), three at most. Both platforms draw that row.

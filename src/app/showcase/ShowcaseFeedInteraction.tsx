@@ -12,6 +12,7 @@ import {
 import { createPortal } from 'react-dom';
 import { Ban, EyeOff, Flag, MoreHorizontal, ShieldAlert, UserRoundX } from 'lucide-react';
 
+import { hideCreatorLabel } from '@/lib/hide-creator-label';
 import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
 
 export type ShowcaseFeedbackAction = 'not_interested' | 'hide_creator';
@@ -362,7 +363,8 @@ export function QualifiedImpressionBoundary({
 
 interface ShowcaseFeedbackMenuProps {
   itemTitle: string;
-  creatorName: string;
+  /** The post's creator, whom the Hide row names (`lib/hide-creator-label.ts`). */
+  creator: { username?: string | null; name?: string | null };
   canHideCreator?: boolean;
   sessionOnly?: boolean;
   onSelect: (action: ShowcaseFeedbackAction) => void | Promise<void>;
@@ -404,7 +406,7 @@ function placeFeedbackMenu(rect: DOMRect, side: FeedbackMenuAnchor['side']): Fee
 
 export function ShowcaseFeedbackMenu({
   itemTitle,
-  creatorName,
+  creator,
   canHideCreator = true,
   sessionOnly = false,
   onSelect,
@@ -441,7 +443,7 @@ export function ShowcaseFeedbackMenu({
   if (canHideCreator) {
     rows.push({
       key: 'hide-creator',
-      label: `Hide ${creatorName}`,
+      label: hideCreatorLabel(creator),
       description: sessionOnly ? 'Hide this creator for this visit' : 'Stop showing posts from this creator',
       Icon: UserRoundX,
       run: () => void onSelect('hide_creator'),
