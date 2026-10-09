@@ -10,7 +10,7 @@ import { updateProfileForRoute } from '@/lib/profile-route-service';
 import sharp from 'sharp';
 
 const enabled = process.env.AUDIT_STORAGE_CONFIG && process.env.SUPABASE_TEST_DB_URL;
-const modes = ['avatar', 'cover', 'resave', 'metadata', 'ownership', 'remove-error', 'lost-ack', 'duplicate'] as const;
+const modes = ['avatar', 'cover', 'resave', 'metadata', 'ownership', 'remove-error', 'lost-ack', 'duplicate', 'sign-rate', 'cleanup-rate', 'sign-rate-error', 'cleanup-rate-error', 'eligibility-error'] as const;
 
 it.skipIf(!enabled).each(modes)('profile media with actual Storage and SQL: %s', async (mode) => {
   const config = JSON.parse(readFileSync(process.env.AUDIT_STORAGE_CONFIG!, 'utf8'));
@@ -22,9 +22,18 @@ it.skipIf(!enabled).each(modes)('profile media with actual Storage and SQL: %s',
   let armed = false;
   let injected = false;
   let removals = 0;
+  let signings = 0;
   const localFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.origin !== new URL(config.API_URL).origin) throw Error('External calls forbidden');
+    if (url.pathname.startsWith('/storage/v1/object/upload/sign/profiles/')) signings++;
+    if (armed && ((mode.endsWith('rate-error') && url.pathname === '/rest/v1/rpc/check_backend_rate_limit')
+      || (mode === 'eligibility-error' && url.pathname === '/rest/v1/rpc/is_account_deletion_requested'))) {
+      injected = true;
+      return new Response(JSON.stringify({ code: 'XX000', message: 'Injected admission lookup failure' }), {
+        status: 503, headers: { 'Content-Type': 'application/json' },
+      });
+    }
     if (init?.method === 'DELETE' && url.pathname === '/storage/v1/object/profiles') {
       removals++;
       if (armed && !injected) {
@@ -51,7 +60,43 @@ it.skipIf(!enabled).each(modes)('profile media with actual Storage and SQL: %s',
       await db.query("insert into auth.users(id,email,aud,role,created_at) values($1,$2,'authenticated','authenticated',now())", [user, user + '@profile-media.invalid']);
     }
     for (const path of paths) expect((await admin.storage.from('profiles').upload(path, file())).error).toBeNull();
-    if (mode === 'resave') {
+    if (mode === 'sign-rate') {
+      for (let index = 0; index < 30; index++) {
+        const result = await createProfileMediaUploadIntent({ body: metadata, userId: owner, client: admin });
+        expect(result.ok).toBe(true); if (result.ok) paths.push(result.body.path);
+      }
+      expect(signings).toBe(30);
+      const denied = await createProfileMediaUploadIntent({ body: metadata, userId: owner, client: admin });
+      expect(denied).toMatchObject({ ok: false, status: 429, body: { code: 'RATE_LIMITED', limit: 30 } });
+      expect(signings).toBe(30);
+      expect((await db.query('select count(*)::int count from public.upload_byte_reservations where user_id=$1', [owner])).rows).toEqual([{ count: 30 }]);
+      // The other owner has an independent rate bucket.
+      const otherResult = await createProfileMediaUploadIntent({ body: metadata, userId: other, client: admin });
+      expect(otherResult.ok).toBe(true); if (otherResult.ok) paths.push(otherResult.body.path);
+    } else if (mode === 'cleanup-rate') {
+      for (let index = 0; index < 30; index++) expect((await cleanup()).ok).toBe(true);
+      expect((await admin.storage.from('profiles').upload(paths[0], file())).error).toBeNull();
+      expect(removals).toBe(30);
+      expect(await cleanup()).toMatchObject({ ok: false, status: 429, body: { code: 'RATE_LIMITED', limit: 30 } });
+      expect(removals).toBe(30);
+      expect((await admin.storage.from('profiles').download(paths[0])).error).toBeNull();
+      expect(await cleanupProfileMedia({ userId: other, body: { paths: [other + '/absent.png'] }, client: admin })).toMatchObject({ ok: true });
+    } else if (mode.endsWith('rate-error') || mode === 'eligibility-error') {
+      armed = true;
+      const result = mode === 'cleanup-rate-error' ? await cleanup()
+        : await createProfileMediaUploadIntent({ body: metadata, userId: owner, client: admin });
+      armed = false;
+      expect(injected).toBe(true);
+      expect(result).toMatchObject({ ok: false, status: 500 });
+      expect(removals).toBe(0); expect(signings).toBe(0);
+      expect((await admin.storage.from('profiles').download(paths[0])).error).toBeNull();
+      expect((await db.query('select id from public.upload_byte_reservations where user_id=$1', [owner])).rows).toEqual([]);
+      if (mode === 'cleanup-rate-error') expect((await cleanup()).ok).toBe(true);
+      else {
+        const retry = await createProfileMediaUploadIntent({ body: metadata, userId: owner, client: admin });
+        expect(retry.ok).toBe(true); if (retry.ok) paths.push(retry.body.path);
+      }
+    } else if (mode === 'resave') {
       const pixels = Buffer.alloc(1024 * 1024 * 3);
       let state = 0x9e3779b9;
       for (let index = 0; index < pixels.length; index++) {
