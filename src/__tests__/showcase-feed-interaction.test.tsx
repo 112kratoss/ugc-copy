@@ -438,14 +438,18 @@ describe('showcase feed interactions', () => {
 
   // The pointer leaves the tile to reach a menu drawn in the body, and the
   // tile shows its controls on hover: without this rule the button a menu
-  // hangs from fades out under it. A rule of its own, because a browser
-  // without :has() drops a whole selector list that names it.
+  // hangs from fades out under it. It sits inside @supports because the
+  // minifier folds a bare rule into the hover rule's selector list (checked
+  // with the build's own, 2026-10-10), and a browser without :has() drops a
+  // whole list that names it: the hover rule would go with it.
   it("keeps a tile's controls on screen for as long as its menu is open", () => {
     const css = readFileSync(path.resolve(__dirname, '../app/globals.css'), 'utf8');
 
     expect(css).toMatch(
-      /\n  \.group:has\(\[aria-haspopup="menu"\]\[aria-expanded="true"\]\) \.showcase-card-actions \{\s*opacity: 1;\s*\}/,
+      /@supports selector\(:has\(\*\)\) \{\s*\.group:has\(\[aria-haspopup="menu"\]\[aria-expanded="true"\]\) \.showcase-card-actions \{\s*opacity: 1;\s*\}\s*\}/,
     );
+    // Nowhere else, and never beside another selector.
+    expect(css.match(/\.group:has\(/g)).toHaveLength(1);
     expect(css).not.toMatch(/,\s*\.group:has\(|\.group:has\([^{]*,/);
   });
 
