@@ -41,3 +41,5 @@ notification persistence use their real code and local PostgreSQL. Deliberate
 fixture timestamp aging proves cutoff behavior, not real elapsed TTL. This
 extends WORKFLOW-02/03 without closing their wider action, provider and Storage
 recovery requirements. Candidate CI and release inclusion are pending.
+
+[Included in the independently verified 12S/T/U release](backend-section-12-template-retry-release-2026-10-09.md) on live `6b39c0b7`.
