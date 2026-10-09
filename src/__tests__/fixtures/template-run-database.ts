@@ -323,6 +323,20 @@ export function createTemplateRunDatabase(options: { credits?: number } = {}) {
 
   function call(fn: string, args: Row): Answer<unknown> {
     switch (fn) {
+      case 'approve_template_checkpoint': {
+        const run = tables.template_runs.find(row => row.id === args.p_run_id && row.user_id === args.p_user_id);
+        if (!run) return { data: 'RUN_NOT_FOUND', error: null };
+        if (['failed', 'cancelled', 'succeeded'].includes(String(run.status))) return { data: 'RUN_TERMINAL', error: null };
+        const step = tables.template_run_steps.find(row => row.id === args.p_step_id && row.run_id === run.id);
+        if (!step) return { data: 'STEP_NOT_FOUND', error: null };
+        if (tables.template_run_steps.some(row => row.run_id === run.id && row.node_id === step.node_id && Number(row.attempt) > Number(step.attempt))) {
+          return { data: 'STALE_STEP_ATTEMPT', error: null };
+        }
+        if (step.kind !== 'approval' || step.status !== 'awaiting_approval' || !step.output_url) return { data: 'APPROVAL_NOT_READY', error: null };
+        Object.assign(step, { status: 'succeeded', approved_at: now(), finished_at: now(), error_message: null });
+        Object.assign(run, { status: 'processing', error_message: null });
+        return { data: 'approved', error: null };
+      }
       case 'start_template_generation':
         return conditions.startUnavailable
           ? { data: null, error: { message: 'canceling statement due to statement timeout' } }

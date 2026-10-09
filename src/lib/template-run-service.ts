@@ -1602,20 +1602,20 @@ export async function approveTemplateRunStep(params: {
   if (step.kind !== 'approval' || step.status !== 'awaiting_approval' || !step.output_url) {
     throw new MediaTemplateError('This checkpoint is not waiting for approval.', 409, 'APPROVAL_NOT_READY');
   }
-  const approvedAt = new Date().toISOString();
-  const { data, error } = await params.adminClient.from('template_run_steps').update({
-    status: 'succeeded',
-    approved_at: approvedAt,
-    finished_at: approvedAt,
-    error_message: null,
-  }).eq('id', step.id).eq('status', 'awaiting_approval').select('id').maybeSingle();
+  const { data, error } = await params.adminClient.rpc('approve_template_checkpoint', {
+    p_run_id: state.run.id,
+    p_step_id: step.id,
+    p_user_id: params.userId,
+  });
   if (error) throw error;
-  if (!data) throw new MediaTemplateError('This checkpoint was already handled.', 409, 'APPROVAL_ALREADY_HANDLED');
-  // The run can end between the read above and this write. It then stays ended.
-  await params.adminClient.from('template_runs').update({ status: 'processing', error_message: null })
-    .eq('id', state.run.id)
-    .neq('status', 'succeeded').neq('status', 'failed').neq('status', 'cancelled');
-  await enqueueTemplateRunJob(params.adminClient, state.run.id);
+  if (data !== 'approved') {
+    if (data === 'RUN_TERMINAL') throw new MediaTemplateError(TEMPLATE_RUN_ENDED_MESSAGE, 409, 'RUN_TERMINAL');
+    if (data === 'RUN_NOT_FOUND' || data === 'STEP_NOT_FOUND') {
+      throw new MediaTemplateError('Template run step not found.', 404, data);
+    }
+    throw new MediaTemplateError('This checkpoint was already handled.', 409,
+      data === 'STALE_STEP_ATTEMPT' ? data : 'APPROVAL_ALREADY_HANDLED');
+  }
   const next = await loadRunState(params.adminClient, state.run.id, params.userId);
   return toRunDto(params.adminClient, next);
 }
