@@ -106,7 +106,7 @@ function clientDouble({
   }));
 
   return {
-    client: { from, storage: { from: storageFrom } } as unknown as SupabaseClient,
+    client: { from, storage: { from: storageFrom }, rpc: vi.fn(async (_name, args: { p_intent_ids: string[] }) => ({ data: args.p_intent_ids.map(intent_id => ({ intent_id })), error: null })) } as unknown as SupabaseClient,
     notFilters,
     updates,
     removed,
