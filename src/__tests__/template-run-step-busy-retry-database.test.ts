@@ -217,6 +217,7 @@ function databaseClient(db: Client, startAnswers: string[], beforeWrite?: (table
       const call = `public.${name}(${Object.keys(args).map((key, index) => `${identifier(key)}=>$${index + 1}`).join(',')})`;
       try {
         if (name === 'retry_template_checkpoint') await beforeWrite?.('template_run_steps');
+        if (name === 'enqueue_template_run_job') await beforeWrite?.(name);
         const { rows } = await db.query(
           ROW_FUNCTIONS.has(name) ? `select * from ${call}` : `select ${call} as result`,
           Object.values(args).map(writable),
@@ -928,6 +929,76 @@ describe.skipIf(!connectionString || crashWorker)('template run step starts the 
     expect((await getTemplateRun({ adminClient: client, runId, userId })).creditsUsed).toBe(totalSpent);
     await tick();
     expect(await generations()).toHaveLength(3);
+  });
+
+  it.each(['reports the failed resume', 'recovers the committed retry'])('%s when a generation retry cannot resume its run', async scenario => {
+    providerRefuses();
+    const stopped = await tick();
+    expect(stopped.status).toBe('needs_attention');
+    const step = shownImageSteps(stopped)[0];
+    const refusingRunWrites = databaseClient(worker, [], async table => {
+      if (table === 'template_runs') throw new Error('fixture run resume unavailable');
+    });
+    const args = { runId, stepId: step.id, userId };
+    const first = await retryTemplateRunStep({ ...args, adminClient: refusingRunWrites })
+      .then(value => ({ value, error: null }), error => ({ value: null, error }));
+    expect((await admin.query('select status from public.template_runs where id=$1', [runId])).rows[0].status).toBe('needs_attention');
+    expect((await admin.query('select status from public.template_run_steps where run_id=$1 and attempt=1', [runId])).rows)
+      .toEqual([{ status: 'queued' }]);
+    expect(await credits()).toBe(STARTING_CREDITS);
+    if (scenario === 'reports the failed resume') {
+      expect(first.error).toMatchObject({ message: 'fixture run resume unavailable' });
+      expect(first.value).toBeNull();
+      return;
+    }
+    providerHasRoom();
+    expect((await retryTemplateRunStep({ ...args, adminClient: client })).status).toBe('queued');
+    await tick();
+    expect(providerCalls()).toBe(1);
+    const rows = await generations();
+    expect(rows).toHaveLength(3);
+    expect(rows.filter(row => !row.refunded)).toHaveLength(1);
+    expect(await credits()).toBe(STARTING_CREDITS - rows.find(row => !row.refunded)!.cost);
+    await retryTemplateRunStep({ ...args, adminClient: client });
+    await tick();
+    expect(providerCalls()).toBe(0);
+    expect(await generations()).toHaveLength(3);
+    expect((await admin.query('select count(*)::int as count from public.template_run_steps where run_id=$1 and attempt=1', [runId])).rows[0].count).toBe(1);
+  });
+
+  it.each([false, true])('recovers retry enqueue failure without reviving a cancelled run (cancel: %s)', async cancelled => {
+    providerRefuses();
+    const stopped = await tick();
+    const step = shownImageSteps(stopped)[0];
+    const args = { runId, stepId: step.id, userId };
+    const refusingEnqueue = databaseClient(worker, [], async operation => {
+      if (operation === 'enqueue_template_run_job') throw new Error('fixture enqueue unavailable');
+    });
+    await expect(retryTemplateRunStep({ ...args, adminClient: refusingEnqueue }))
+      .rejects.toMatchObject({ message: 'fixture enqueue unavailable' });
+    expect((await admin.query('select status from public.template_runs where id=$1', [runId])).rows[0].status).toBe('queued');
+    // Model the enqueue being unavailable, including its status-change trigger.
+    await admin.query('delete from public.template_run_jobs where run_id=$1', [runId]);
+    providerHasRoom();
+    vi.mocked(fetch).mockClear();
+    if (cancelled) {
+      await cancelTemplateRun(client, runId, userId);
+      await expect(retryTemplateRunStep({ ...args, adminClient: client })).rejects.toMatchObject({ code: 'RUN_TERMINAL' });
+      expect((await tick()).status).toBe('cancelled');
+      expect(providerCalls()).toBe(0);
+      expect(await credits()).toBe(STARTING_CREDITS);
+      expect(await generations()).toHaveLength(2);
+    } else {
+      expect((await retryTemplateRunStep({ ...args, adminClient: client })).status).toBe('queued');
+      expect((await admin.query('select status from public.template_run_jobs where run_id=$1', [runId])).rows)
+        .toEqual([{ status: 'pending' }]);
+      await processTemplateRunJobs({ client, lockedBy: randomUUID(), limit: 1 });
+      expect(providerCalls()).toBe(1);
+      const rows = await generations();
+      expect(rows).toHaveLength(3);
+      expect(await credits()).toBe(STARTING_CREDITS - rows.find(row => !row.refunded)!.cost);
+    }
+    expect((await admin.query('select count(*)::int as count from public.template_run_steps where run_id=$1 and attempt=1', [runId])).rows[0].count).toBe(1);
   });
 
   it('two database clients cannot approve the same checkpoint twice', async () => {
