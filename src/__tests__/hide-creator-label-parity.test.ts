@@ -2,29 +2,27 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { hideCreatorLabel as appLabel } from '../../ugc-mobile/lib/hide-creator-label';
-import { hideCreatorLabel as webLabel } from '../lib/hide-creator-label';
+import contract from '../../contracts/hide-creator-label-v1.json';
+import { hideCreatorLabel } from '../lib/hide-creator-label';
 
 // The row that hides a creator read four ways on 2026-10-09: "Hide Fluffy" on
 // the web, "Hide fluffy" on the app's Home, "Hide @fluffy" on its Explore and
 // "Hide this creator" in its reel. It is one wording now, worked out by one
-// rule on each side of the repository. Web and app share no module, so this
-// test is what keeps the two rules one.
+// rule on each side of the repository. Web and app share no module (this suite
+// cannot even load an app file: the web workspace never installs the app's
+// dependencies, which its tsconfig needs), so both suites answer the same
+// contract: this one for the web's rule, `ugc-mobile/__tests__/native-menu.test.ts`
+// for the app's.
 describe('the Hide row, on the web and in the app', () => {
-  const creators: Array<[{ username?: string | null; name?: string | null }, string]> = [
-    [{ username: 'fluffy', name: 'Fluffy' }, 'Hide @fluffy'],
-    [{ username: '@fluffy', name: 'Fluffy' }, 'Hide @fluffy'],
-    [{ username: '  fluffy  ', name: null }, 'Hide @fluffy'],
-    [{ username: null, name: 'Fluffy Cat' }, 'Hide Fluffy Cat'],
-    [{ username: '', name: '  Fluffy Cat ' }, 'Hide Fluffy Cat'],
-    [{ username: '   ', name: '   ' }, 'Hide this creator'],
-    [{ username: null, name: null }, 'Hide this creator'],
-    [{}, 'Hide this creator'],
-  ];
+  it.each(contract.cases)('words $creator as "$label" on the web', ({ creator, label }) => {
+    expect(hideCreatorLabel(creator)).toBe(label);
+  });
 
-  it.each(creators)('words %j the same on both', (creator, expected) => {
-    expect(webLabel(creator)).toBe(expected);
-    expect(appLabel(creator)).toBe(expected);
+  it('is asked the same cases by the app', () => {
+    const appTest = readFileSync('ugc-mobile/__tests__/native-menu.test.ts', 'utf8');
+
+    expect(appTest).toContain("from '../../contracts/hide-creator-label-v1.json'");
+    expect(appTest).toContain('it.each(hideCreatorLabelContract.cases)');
   });
 
   // The rule is only as good as its callers: each menu hands it the post's creator.

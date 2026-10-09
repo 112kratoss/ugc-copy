@@ -3,6 +3,8 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import hideCreatorLabelContract from '../../contracts/hide-creator-label-v1.json';
+
 import { buildCommentMenu } from '../lib/comment-menu';
 import { buildFeedFeedbackMenu, canHideFeedCreator } from '../lib/feed-feedback-menu';
 import { hideCreatorLabel, hideCreatorLabelFromCardLabel } from '../lib/hide-creator-label';
@@ -214,9 +216,13 @@ describe('feed menu', () => {
 
 // One wording for the row that hides a creator, wherever it is drawn. It read
 // "Hide fluffy" on Home, "Hide @fluffy" on Explore and "Hide this creator" in
-// the reel until 2026-10-09. The web's twin of this rule is held equal to it by
-// src/__tests__/hide-creator-label-parity.test.ts.
+// the reel until 2026-10-09. The web's twin of this rule answers the same
+// contract in src/__tests__/hide-creator-label-parity.test.ts.
 describe('the Hide row', () => {
+  it.each(hideCreatorLabelContract.cases)('words $creator as "$label", as the web does', ({ creator, label }) => {
+    expect(hideCreatorLabel(creator)).toBe(label);
+  });
+
   it('names the creator by handle, by display name without one, and never by nothing', () => {
     expect(hideCreatorLabel({ username: 'maya', name: 'Maya R' })).toBe('Hide @maya');
     expect(hideCreatorLabel({ username: ' @maya ', name: 'Maya R' })).toBe('Hide @maya');

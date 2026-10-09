@@ -1,8 +1,8 @@
 /**
  * The wording of the row that hides a creator. One answer for a feed card's
  * menu, the reel's, their fallback sheets and the web's menu
- * (`src/lib/hide-creator-label.ts`, held to this one by
- * `src/__tests__/hide-creator-label-parity.test.ts`).
+ * (`src/lib/hide-creator-label.ts`). The two rules share no module; each
+ * suite holds its own to `contracts/hide-creator-label-v1.json`.
  *
  * It names the creator the way a card does: by handle, or by the display name
  * of an account that has none. Until 2026-10-09 the same row read "Hide fluffy"
