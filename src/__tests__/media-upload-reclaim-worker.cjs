@@ -19,7 +19,8 @@ const client=createClient(config.API_URL,config.SERVICE_ROLE_KEY,{
    const marker=method==='PATCH'&&url.pathname==='/rest/v1/media_upload_intents'&&'reclaim_checked_at' in body;
    const clear=method==='PATCH'&&url.pathname==='/rest/v1/media_upload_intents'&&'storage_cleared_at' in body;
    const removal=method==='DELETE'&&url.pathname==='/storage/v1/object/uploads';
-   if((marker&&phase==='after-scan')||(removal&&phase==='after-removal')||(clear&&phase==='after-clearing'))await pause();
+   const claim=url.pathname==='/rest/v1/rpc/claim_media_upload_intents_for_reclaim';
+   if((marker&&phase==='after-scan')||(claim&&phase==='after-claim')||(removal&&phase==='after-removal')||(clear&&phase==='after-clearing'))await pause();
   }
   return response;
  }},

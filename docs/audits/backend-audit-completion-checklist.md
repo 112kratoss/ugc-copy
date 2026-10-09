@@ -1,7 +1,8 @@
 # Backend audit completion checklist
 
-Updated 2026-10-08. Latest independently checked production:
-`cc159f7e7fdea346476543d40756cbe442092261`, including Sections 9A–9O, 10A–I, 11A–Z and 12A–C.
+Updated 2026-10-09. Latest independently checked production:
+`51c4eefab1bf4ec1812d29f4313a14ce10ed56c6`, including the verified 12F/12G fixes and 12H controls.
+[12H release evidence](backend-section-12-upload-reclaim-controls-release-2026-10-09.md).
 [12C release evidence](backend-section-12-referral-deletion-release-2026-10-08.md).
 [12A release evidence](backend-section-12-commerce-inputs-release-2026-10-07.md).
 [11X–Z release evidence](backend-section-11-credit-inputs-release-2026-10-07.md).
@@ -53,7 +54,7 @@ unequal effort and risk. Do not turn their pass count into a percentage of backe
 safety or an ETA. New findings attach to these obligations; changes in scope must
 be recorded explicitly instead of silently adding another lettered batch.
 
-Current ledger: **53 obligations — 24 passed, 25 untested, 2 failed, 2 external**.
+Current ledger: **53 obligations — 24 passed, 24 untested, 3 failed, 2 external**.
 These counts describe this scoped checklist, not a percentage of the backend.
 WORKFLOW-02 remains untested after its scoped fixes shipped. WORKFLOW-04 returns
 to untested after the verified 11Q validation fix. SOCIAL-03 also returns to
@@ -61,8 +62,7 @@ untested after the independently verified 11T admin input fix.
 SOCIAL-01/02/04 return to untested after the verified 8F/8G releases.
 DB-04 passes for the current empty Realtime publication; enabling table streams or application channels requires reopening it.
 SOCIAL-03 remains untested for its broader matrix after 11T. MEDIA-07
-remains failed for legacy retirement. MEDIA-09 returns to untested after its
-independently verified 11V revocation fix; broader recovery remains open.
+remains failed for legacy retirement. MEDIA-09 is failed for the newly reproduced 12K active upload-consumption lease deletion; its local prevention passes and release is pending.
 MAP-02 returns to untested after the verified 11X/11Z/12A releases. AUTH-03 returns to untested after the verified 12C release. PAY-04 returns to untested after the independently verified 12F settlement progress release. JOB-02 remains failed for the 12I upload reclaim progress defect after the verified 12G media reservation release. The three
 11Y admin balance failures have a verified prevention release, and [12D historical
 review](backend-section-12-historical-admin-credit-review-2026-10-08.md) proves the
@@ -165,7 +165,7 @@ coverage includes shared helpers that do not end in `service.ts`.
 | MEDIA-06 | Concurrent disk admission/backpressure across cooperating writers | passed | [6R release](backend-section-06-capacity-admission-release-2026-10-03.md): shared atomic claims, enforced output ceilings, completed-source accounting, inherited readers, block/inode headroom and DB retry with stable credits; exact-main CI and standard release passed. Uncoordinated writers and production throughput remain outside this bounded certificate |
 | MEDIA-07 | Other scratch namespaces and metadata/legacy accumulation policy | failed | [6N reproduction/fix](backend-section-06-media-scratch-2026-10-01.md): all five old namespaces retain bytes after owner death. New leased scratch and cancellation ordering pass real FFmpeg locally and in CI; [deployed in #257](backend-section-06-media-scratch-release-2026-10-01.md). [6S release](backend-section-06-metadata-lifecycle-release-2026-10-03.md) fixes interrupted initialization; verified legacy environment-retirement evidence remains open |
 | MEDIA-08 | Upload/import validation, private signed reads, finalization and revocation | untested | [11S publication](backend-section-11-template-publication-2026-10-07.md) adds sixteen actual Auth/PostgREST/Storage controls with signed PNG delivery, committed activation reply faults, actual constraint rejection and copied-object cleanup. Exact-head CI/release remain; [11U](backend-section-11-moderation-storage-2026-10-07.md) adds sixteen actual moderation Storage deletion, signed-access, replay and fault controls; broader upload/import, expiry, video/fixed-asset variants and hosted revocation behavior stay open |
-| MEDIA-09 | Deletion/retention correctness and durable input/output recovery | untested | [11V revocation recovery](backend-section-11-showcase-revocation-recovery-2026-10-07.md) reproduces four fetchable-object failures after reported removal; ten actual SQL/Storage cases, 93 focused and sixteen direct controls pass after retaining paths until full verification. [11V release is independently verified](backend-section-11-showcase-revocation-release-2026-10-07.md). [11W process death](backend-section-11-showcase-revocation-worker-death-2026-10-07.md) adds three actual SIGKILL checkpoints with fresh-process completion and independent zero fixtures; [11W release verified](backend-section-11-showcase-worker-death-release-2026-10-07.md). [10H](backend-section-10-retention-mapping-recovery-2026-10-06.md) mapping retry fix is [released and independently verified](backend-section-10-retention-mapping-release-2026-10-06.md). Broader recovery matrix stays open. |
+| MEDIA-09 | Deletion/retention correctness and durable input/output recovery | failed | [12K active consumption lease](backend-section-12-upload-reclaim-active-leases-2026-10-09.md) reproduces deletion during an active generation read; seven new actual cases and 2,360 SQL assertions pass locally, release pending. [11V revocation recovery](backend-section-11-showcase-revocation-recovery-2026-10-07.md) reproduces four fetchable-object failures after reported removal; ten actual SQL/Storage cases, 93 focused and sixteen direct controls pass after retaining paths until full verification. [11V release is independently verified](backend-section-11-showcase-revocation-release-2026-10-07.md). [11W process death](backend-section-11-showcase-revocation-worker-death-2026-10-07.md) adds three actual SIGKILL checkpoints with fresh-process completion and independent zero fixtures; [11W release verified](backend-section-11-showcase-worker-death-release-2026-10-07.md). [10H](backend-section-10-retention-mapping-recovery-2026-10-06.md) mapping retry fix is [released and independently verified](backend-section-10-retention-mapping-release-2026-10-06.md). Broader recovery matrix stays open. |
 
 ## Community, jobs and operations
 

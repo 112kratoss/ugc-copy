@@ -218,7 +218,7 @@ export async function reclaimAbandonedMediaUploads(
   }
 
   const existingPaths = await listExistingObjectPaths(client, canonicalRows);
-  const toReclaim: IntentRow[] = [];
+  let toReclaim: IntentRow[] = [];
   const toDropRow: IntentRow[] = [];
 
   for (const row of canonicalRows) {
@@ -240,6 +240,23 @@ export async function reclaimAbandonedMediaUploads(
     } else {
       summary.kept += 1;
     }
+  }
+
+  if (toReclaim.length > 0) {
+    // Fence new consumers atomically with the reservation lease check. A plain
+    // SELECT here would leave a race before the external Storage DELETE.
+    const claim = await client.rpc('claim_media_upload_intents_for_reclaim', {
+      p_intent_ids: toReclaim.map((row) => row.id),
+    });
+    if (claim.error) {
+      throw new Error(claim.error.message ?? 'Failed to claim uploads for reclaim.');
+    }
+    const claimedIds = new Set(
+      ((claim.data ?? []) as Array<{ intent_id: string }>).map((row) => row.intent_id),
+    );
+    summary.kept += toReclaim.filter((row) => !claimedIds.has(row.id)).length;
+    toReclaim = toReclaim.filter((row) => claimedIds.has(row.id));
+    summary.bytesReclaimed = toReclaim.reduce((total, row) => total + (row.declared_bytes ?? 0), 0);
   }
 
   if (toReclaim.length > 0) {
