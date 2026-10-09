@@ -1,4 +1,5 @@
 import { hexWithAlpha } from './eased-fade';
+import { hideCreatorLabelFromCardLabel } from './hide-creator-label';
 import type { ImmersivePreviewItem, PreviewViewerSource } from './immersive-preview-view-model';
 import { appTheme, type ThemeColors } from './theme';
 import type { CreatorToolId, GenerationShareSourceSurface } from './types';
@@ -389,6 +390,16 @@ export function getViewerActionLabel(action: string, sourceType?: ImmersivePrevi
     default:
       return action.charAt(0).toUpperCase() + action.slice(1).replaceAll('-', ' ');
   }
+}
+
+/**
+ * A row's wording for one item. Every row but one reads the same for any item;
+ * Hide names the creator it hides, as a feed card's Hide row does
+ * (`lib/hide-creator-label.ts`).
+ */
+export function getViewerItemActionLabel(action: string, item: Pick<ImmersivePreviewItem, 'sourceType' | 'creatorLabel'>) {
+  if (action === 'hide-creator') return hideCreatorLabelFromCardLabel(item.creatorLabel);
+  return getViewerActionLabel(action, item.sourceType);
 }
 
 /**

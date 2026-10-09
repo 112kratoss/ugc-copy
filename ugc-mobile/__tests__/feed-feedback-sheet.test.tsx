@@ -65,6 +65,7 @@ describe('feed feedback sheet', () => {
       tree = renderer.create(
         <FeedFeedbackSheet
           creatorLabel="@luna"
+          hideLabel="Hide @luna"
           onClose={vi.fn()}
           onBlockUser={onBlockUser}
           onHideCreator={onHideCreator}
@@ -101,6 +102,7 @@ describe('feed feedback sheet', () => {
     return (
       <FeedFeedbackSheet
         creatorLabel="@me"
+        hideLabel="Hide @me"
         onBlockUser={vi.fn()}
         onClose={vi.fn()}
         onHideCreator={vi.fn()}
@@ -131,6 +133,7 @@ describe('feed feedback sheet', () => {
         <FeedFeedbackSheet
           canHideCreator={false}
           creatorLabel="@me"
+          hideLabel="Hide @me"
           onBlockUser={vi.fn()}
           onClose={vi.fn()}
           onHideCreator={vi.fn()}
@@ -164,12 +167,32 @@ describe('feed feedback sheet', () => {
     expect(labels(tree!.root)).toEqual(['Not interested', 'Report content']);
   });
 
+  it('words the Hide row as it is told to, whatever it calls the creator in its sentences', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(
+        <FeedFeedbackSheet
+          creatorLabel="luna"
+          hideLabel="Hide @luna"
+          onClose={vi.fn()}
+          onHideCreator={vi.fn()}
+          onNotInterested={vi.fn()}
+          postTitle="Serum reveal"
+          visible
+        />
+      );
+    });
+
+    expect(pressable(tree!.root, 'Hide @luna').props.accessibilityHint).toContain('Remove posts from luna');
+  });
+
   it('labels anonymous feedback as limited to this visit', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(
         <FeedFeedbackSheet
           creatorLabel="@luna"
+          hideLabel="Hide @luna"
           onClose={vi.fn()}
           onHideCreator={vi.fn()}
           onNotInterested={vi.fn()}
