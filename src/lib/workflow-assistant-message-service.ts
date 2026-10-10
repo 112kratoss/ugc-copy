@@ -12,7 +12,6 @@ import {
   AiUsageLedgerError,
   buildAiUsageReplayResponse,
   getAiUsageLedgerIdempotencyKey,
-  markAiUsageSucceeded,
   refundAiUsageLedger,
   startAiUsageLedger,
   type AiUsageLedger,
@@ -30,7 +29,6 @@ import {
   createWorkflowAssistantSetupRequiredBody,
   loadOwnedWorkflowCanvas,
   normalizeAssistantMessages,
-  normalizeAssistantProposalRecord,
 } from '@/lib/workflow-assistant-route-shared';
 import {
   fetchWithProviderTimeout,
@@ -39,10 +37,6 @@ import {
 import {
   isMissingWorkflowCanvasAssistantSchemaError,
 } from '@/lib/workflow-canvas-route-compat';
-
-type WorkflowAssistantMessageBody = {
-  content?: unknown;
-};
 
 const WORKFLOW_ASSISTANT_PROMPT_HISTORY_LIMIT = 6;
 
@@ -196,14 +190,18 @@ export async function createWorkflowAssistantMessageForRoute({
   userId,
 }: {
   adminSupabase: SupabaseClient;
-  body: WorkflowAssistantMessageBody;
+  body: unknown;
   canvasId: string;
   idempotencyKey?: string | null;
   request?: Request;
   supabase: SupabaseClient;
   userId: string;
 }): Promise<WorkflowAssistantMessageRouteResult> {
-  const content = typeof body.content === 'string' ? body.content.trim() : '';
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, status: 400, body: { error: 'Message must be a JSON object.' } };
+  }
+  const message = body as Record<string, unknown>;
+  const content = typeof message.content === 'string' ? message.content.trim() : '';
 
   if (!content) {
     return { ok: false, status: 400, body: { error: 'Message content is required.' } };
@@ -240,7 +238,7 @@ export async function createWorkflowAssistantMessageForRoute({
   let ledgerIdempotencyKey = idempotencyKey ?? null;
   if (request) {
     try {
-      ledgerIdempotencyKey = getAiUsageLedgerIdempotencyKey(request, body as Record<string, unknown>);
+      ledgerIdempotencyKey = getAiUsageLedgerIdempotencyKey(request, message);
     } catch (error) {
       if (error instanceof AiUsageLedgerError) {
         return {
@@ -331,79 +329,37 @@ export async function createWorkflowAssistantMessageForRoute({
       blueprint,
     });
 
-    await supabase
-      .from('workflow_canvas_assistant_proposals')
-      .update({
-        status: 'discarded',
-        discarded_at: new Date().toISOString(),
-      })
-      .eq('canvas_id', canvasId)
-      .eq('user_id', userId)
-      .eq('status', 'ready');
-
-    const proposalInsert = await supabase
-      .from('workflow_canvas_assistant_proposals')
-      .insert({
-        canvas_id: canvasId,
-        user_id: userId,
-        base_revision: canvas.revision,
-        status: 'ready',
-        summary: blueprint.changeSummary,
-        diff: proposalArtifacts.diff,
-        proposed_graph: proposalArtifacts.proposedGraph,
-      })
-      .select('id, canvas_id, base_revision, status, summary, diff, proposed_graph, created_at, applied_at, discarded_at')
-      .single();
-
-    if (proposalInsert.error || !proposalInsert.data) {
-      throw proposalInsert.error || new Error('Failed to persist assistant proposal.');
+    const completion = await adminSupabase.rpc('complete_workflow_assistant_message', {
+      p_event_id: ledger.eventId,
+      p_canvas_id: canvasId,
+      p_user_id: userId,
+      p_base_revision: canvas.revision,
+      p_content: content,
+      p_reply: blueprint.assistantReply,
+      p_summary: blueprint.changeSummary,
+      p_diff: proposalArtifacts.diff,
+      p_proposed_graph: proposalArtifacts.proposedGraph,
+    });
+    if (completion.error) throw completion.error;
+    if (!completion.data || typeof completion.data !== 'object' || Array.isArray(completion.data)
+      || !Array.isArray(completion.data.messages) || !completion.data.proposal) {
+      throw new Error('Invalid persisted assistant response.');
     }
-
-    const proposal = normalizeAssistantProposalRecord(proposalInsert.data);
-    if (!proposal) {
-      throw new Error('Failed to normalize assistant proposal.');
-    }
-
-    const messageInsert = await supabase
-      .from('workflow_canvas_assistant_messages')
-      .insert([
-        {
-          canvas_id: canvasId,
-          user_id: userId,
-          role: 'user',
-          content,
-          proposal_id: proposal.id,
-        },
-        {
-          canvas_id: canvasId,
-          user_id: userId,
-          role: 'assistant',
-          content: blueprint.assistantReply,
-          proposal_id: proposal.id,
-        },
-      ])
-      .select('id, canvas_id, role, content, proposal_id, created_at')
-      .order('created_at', { ascending: true });
-
-    if (messageInsert.error) {
-      throw messageInsert.error;
-    }
-
-    const messages = normalizeAssistantMessages(messageInsert.data ?? []);
-    const responsePayload = {
-      messages,
-      proposal,
-      remainingCredits: ledger.remainingCredits,
-    };
-
-    await markAiUsageSucceeded(adminSupabase, ledger, JSON.stringify({
-      proposalId: proposal.id,
-      summary: blueprint.changeSummary,
-      reply: blueprint.assistantReply,
-    }), responsePayload);
-
-    return { ok: true, body: responsePayload };
+    return { ok: true, body: completion.data as Record<string, unknown> };
   } catch (error) {
+    // The transaction may have committed before its HTTP reply was lost. Only
+    // a confirmed pending event may be refunded; a saved success is replayed.
+    const saved = await adminSupabase.from('ai_usage_events')
+      .select('status,refunded,response_payload').eq('id', ledger.eventId).eq('user_id', userId).maybeSingle();
+    if (saved.error || !saved.data) {
+      logBackendError('workflow_assistant_completion_state_unavailable', { error: saved.error });
+      return { ok: false, status: 500, body: { error: 'Could not confirm the assistant result. Retry with the same request key.' } };
+    }
+    if (saved.data.status === 'succeeded' && saved.data.refunded === false
+      && saved.data.response_payload && typeof saved.data.response_payload === 'object'
+      && !Array.isArray(saved.data.response_payload)) {
+      return { ok: true, body: saved.data.response_payload as Record<string, unknown> };
+    }
     if (isMissingWorkflowCanvasAssistantSchemaError(error)) {
       await refundAiUsageLedger(adminSupabase, ledger, error);
       logBackendError('workflow_assistant_persistence_is_unavailable', { error: error });

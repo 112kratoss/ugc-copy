@@ -1,0 +1,18 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+set local search_path=public,extensions;
+select plan(6);
+select is((select prosecdef from pg_proc where oid='public.complete_workflow_assistant_message(uuid,uuid,uuid,integer,text,text,text,jsonb,jsonb)'::regprocedure),false,'completion uses invoker privileges');
+select ok(not has_function_privilege('authenticated','public.complete_workflow_assistant_message(uuid,uuid,uuid,integer,text,text,text,jsonb,jsonb)','EXECUTE'),'authenticated role cannot complete paid messages directly');
+select ok(has_function_privilege('service_role','public.complete_workflow_assistant_message(uuid,uuid,uuid,integer,text,text,text,jsonb,jsonb)','EXECUTE'),'service role can complete paid messages');
+set local role anon;
+select throws_ok($$select public.complete_workflow_assistant_message(null,null,null,0,'x','x','x','{}','{}')$$,'42501','permission denied for function complete_workflow_assistant_message','anonymous callers are denied');
+reset role;
+set local role authenticated;
+select throws_ok($$select public.complete_workflow_assistant_message(null,null,null,0,'x','x','x','{}','{}')$$,'42501','permission denied for function complete_workflow_assistant_message','authenticated callers are denied');
+reset role;
+set local role service_role;
+select throws_ok($$select public.complete_workflow_assistant_message(null,null,null,0,'x','x','x','{}','{}')$$,'22023','Assistant usage event does not match the request','service completion requires an existing matching paid event');
+reset role;
+select * from finish();
+rollback;
