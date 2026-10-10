@@ -98,7 +98,7 @@ describe('feed feedback sheet', () => {
       .filter((label) => label !== 'Close feed preferences');
   }
 
-  function ownPostSheet(props: { canHideCreator: boolean; visible: boolean }) {
+  function ownPostSheet(props: { canHideCreator: boolean; viewerIsOwner?: boolean; visible: boolean }) {
     return (
       <FeedFeedbackSheet
         creatorLabel="@me"
@@ -116,37 +116,26 @@ describe('feed feedback sheet', () => {
   }
 
   // The rows of the card's menu (`lib/feed-feedback-menu.ts`): nothing can make
-  // hiding, reporting or blocking yourself possible, so they are not offered.
-  it("leaves the creator rows out on the signed-in creator's own post", () => {
+  // hiding, reporting or blocking yourself possible, and a report on your own
+  // post reports no one, so none of them is offered and no Safety heading is left.
+  it("leaves the creator rows and Report content out on the signed-in creator's own post", () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(ownPostSheet({ canHideCreator: false, viewerIsOwner: true, visible: true }));
+    });
+
+    expect(labels(tree!.root)).toEqual(['Not interested']);
+    expect(tree!.root.findAll((node) => String(node.type) === 'text' && node.props.children === 'Safety')).toEqual([]);
+  });
+
+  it("keeps Report content on a post with no creator account, which is no one's own", () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(ownPostSheet({ canHideCreator: false, visible: true }));
     });
 
     expect(labels(tree!.root)).toEqual(['Not interested', 'Report content']);
-  });
-
-  it('leaves out the Safety heading when the own post has no safety row at all', () => {
-    let tree: renderer.ReactTestRenderer | undefined;
-    renderer.act(() => {
-      tree = renderer.create(
-        <FeedFeedbackSheet
-          canHideCreator={false}
-          creatorLabel="@me"
-          hideLabel="Hide @me"
-          onBlockUser={vi.fn()}
-          onClose={vi.fn()}
-          onHideCreator={vi.fn()}
-          onNotInterested={vi.fn()}
-          onReportUser={vi.fn()}
-          postTitle="My post"
-          visible
-        />
-      );
-    });
-
-    expect(labels(tree!.root)).toEqual(['Not interested']);
-    expect(tree!.root.findAll((node) => String(node.type) === 'text' && node.props.children === 'Safety')).toEqual([]);
+    expect(tree!.root.findAll((node) => String(node.type) === 'text' && node.props.children === 'Safety')).toHaveLength(1);
   });
 
   // The screen clears its post (and so its creator) in the same render that
@@ -163,8 +152,13 @@ describe('feed feedback sheet', () => {
     expect(labels(tree!.root)).toEqual(shown);
 
     // The next post it opens for is the viewer's own: now the rows go.
-    renderer.act(() => tree!.update(ownPostSheet({ canHideCreator: false, visible: true })));
-    expect(labels(tree!.root)).toEqual(['Not interested', 'Report content']);
+    renderer.act(() => tree!.update(ownPostSheet({ canHideCreator: false, viewerIsOwner: true, visible: true })));
+    expect(labels(tree!.root)).toEqual(['Not interested']);
+
+    // And a cleared post is no one's own: Report content does not come back
+    // into a sheet that is on its way out.
+    renderer.act(() => tree!.update(ownPostSheet({ canHideCreator: false, viewerIsOwner: false, visible: false })));
+    expect(labels(tree!.root)).toEqual(['Not interested']);
   });
 
   it('words the Hide row as it is told to, whatever it calls the creator in its sentences', () => {

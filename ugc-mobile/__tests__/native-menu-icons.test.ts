@@ -25,6 +25,7 @@ const namedSymbols = new Set([
   ...symbolsIn(buildFeedFeedbackMenu({
     creator: { username: 'creator' },
     canHideCreator: true,
+    viewerIsOwner: false,
     sessionOnly: false,
     onNotInterested: noop,
     onHideCreator: noop,

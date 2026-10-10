@@ -304,3 +304,42 @@ describe('FeedPostCard click routing', () => {
         expect(onOpenMedia).not.toHaveBeenCalled();
     });
 });
+
+// The rows the app's card menu and the reel's leave out on your own post
+// (`ugc-mobile/lib/feed-feedback-menu.ts`, `getViewerSafetyActions`) follow
+// this card: there is no one to hide, report or block, and a report on your
+// own post asks for a review of your own work.
+describe("FeedPostCard's menu, by whose post it is", () => {
+    beforeEach(() => {
+        vi.stubGlobal('IntersectionObserver', IntersectionObserverMock);
+    });
+
+    afterEach(() => {
+        cleanup();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    function menuRows() {
+        fireEvent.click(screen.getByRole('button', { name: /more actions for a launch frame/i }));
+        return screen.getAllByRole('menuitem').map((row) => row.querySelector('.font-semibold')?.textContent);
+    }
+
+    it("offers every row on someone else's post", () => {
+        renderCard({}, { viewerIsOwner: false });
+
+        expect(menuRows()).toEqual(['Not interested', 'Hide @batman', 'Report content', 'Report user', 'Block user']);
+    });
+
+    it('offers Not interested and nothing else on your own', () => {
+        renderCard({}, { viewerIsOwner: true });
+
+        expect(menuRows()).toEqual(['Not interested']);
+    });
+
+    it("keeps Report content on a post with no creator account, which is no one's own", () => {
+        renderCard({ creator: { id: null, username: null, name: 'Magicbooklet', avatar: null } });
+
+        expect(menuRows()).toEqual(['Not interested', 'Report content']);
+    });
+});

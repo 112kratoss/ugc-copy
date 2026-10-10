@@ -3,6 +3,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseReelViewer from '@/app/showcase/ShowcaseReelViewer';
+import FeedbackViewport from '@/components/FeedbackViewport';
+import { requestConfirmation } from '@/components/feedback-state';
 import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
 
 vi.mock('next/link', () => ({
@@ -378,6 +380,131 @@ describe('ShowcaseReelViewer pagination', () => {
     await waitFor(() => {
       expect(loadMoreItems).toHaveBeenCalledTimes(1);
     });
+  });
+
+  // "Report content?" is asked from the reel's own menu and drawn above the
+  // reel. Its Escape answered "no" and went on to close the reel under it, and
+  // the arrows changed the post the question was about. The dialog hears a key
+  // first (it listens on the document, the reel on the window), so by the time
+  // its Escape reaches the reel the question is already closed.
+  it('leaves the keyboard to a confirmation that is open above it', async () => {
+    const onClose = vi.fn();
+    const onSelectItemId = vi.fn();
+    render(
+      <>
+        <FeedbackViewport />
+        <ShowcaseReelViewer
+          isOpen
+          items={[
+            createShowcaseItem({ id: 'post-1', title: 'First Frame' }),
+            createShowcaseItem({ id: 'post-2', title: 'Second Frame' }),
+          ]}
+          selectedItemId="post-1"
+          savedItemIds={new Set()}
+          savingItemIds={new Set()}
+          accessToken={null}
+          hasMoreItems={false}
+          isLoadingMoreItems={false}
+          onLoadMoreItems={vi.fn()}
+          onClose={onClose}
+          onSelectItemId={onSelectItemId}
+          onToggleSave={vi.fn()}
+          onRemix={vi.fn()}
+          buildDetailPath={(id, section) => section ? `/showcase/${id}#${section}` : `/showcase/${id}`}
+        />
+      </>
+    );
+    let answer: Promise<boolean> = Promise.resolve(true);
+    act(() => {
+      answer = requestConfirmation({ title: 'Report content?', message: 'A safety review.', confirmLabel: 'Report content' });
+    });
+    const question = await screen.findByRole('alertdialog');
+
+    // Keys go to where the focus is, and from there up to the document and the window.
+    fireEvent.keyDown(question, { key: 'ArrowDown' });
+    expect(onSelectItemId).not.toHaveBeenCalled();
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+
+    fireEvent.keyDown(question, { key: 'Escape' });
+    await expect(answer).resolves.toBe(false);
+    expect(onClose).not.toHaveBeenCalled();
+
+    // With the question answered the reel has its keys back.
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    fireEvent.keyDown(document.body, { key: 'ArrowDown' });
+    expect(onSelectItemId).toHaveBeenCalledWith('post-2');
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // Up and Down step through the open menu's rows. They used to turn the reel
+  // to another post as well, under the menu.
+  it('does not change post while the arrows step through its open menu', () => {
+    const onSelectItemId = vi.fn();
+    render(
+      <ShowcaseReelViewer
+        isOpen
+        items={[
+          createShowcaseItem({ id: 'post-1', title: 'First Frame' }),
+          createShowcaseItem({ id: 'post-2', title: 'Second Frame' }),
+        ]}
+        selectedItemId="post-1"
+        savedItemIds={new Set()}
+        savingItemIds={new Set()}
+        accessToken={null}
+        hasMoreItems={false}
+        isLoadingMoreItems={false}
+        onLoadMoreItems={vi.fn()}
+        onClose={vi.fn()}
+        onSelectItemId={onSelectItemId}
+        onToggleSave={vi.fn()}
+        onRemix={vi.fn()}
+        onFeedback={vi.fn()}
+        onReportContent={vi.fn()}
+        buildDetailPath={(id, section) => section ? `/showcase/${id}#${section}` : `/showcase/${id}`}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions for first frame/i }));
+    const rows = screen.getAllByRole('menuitem');
+    rows[0].focus();
+    fireEvent.keyDown(rows[0], { key: 'ArrowDown' });
+
+    expect(document.activeElement).toBe(rows[1]);
+    expect(onSelectItemId).not.toHaveBeenCalled();
+  });
+
+  // jsdom has no layers, so this reads the two class lists. The ⋯ menu hangs
+  // from the reel's bar over the body below it. With both at one level the
+  // body, which comes later in the page, was drawn over the menu: measured in
+  // a browser on 2026-10-10, no row of it could be seen or pressed.
+  it('keeps its bar a level above its body, so the menu that hangs from the bar is not drawn under the details', () => {
+    const { container } = render(
+      <ShowcaseReelViewer
+        isOpen
+        items={[createShowcaseItem()]}
+        selectedItemId="post-1"
+        savedItemIds={new Set()}
+        savingItemIds={new Set()}
+        accessToken={null}
+        hasMoreItems={false}
+        isLoadingMoreItems={false}
+        onLoadMoreItems={vi.fn()}
+        onClose={vi.fn()}
+        onSelectItemId={vi.fn()}
+        onToggleSave={vi.fn()}
+        onRemix={vi.fn()}
+        onFeedback={vi.fn()}
+        buildDetailPath={(id, section) => section ? `/showcase/${id}#${section}` : `/showcase/${id}`}
+      />
+    );
+    const level = (element: Element | null | undefined) => Number(element?.className.match(/(?:^|\s)z-(\d+)(?:\s|$)/)?.[1]);
+    const bar = container.querySelector('header');
+    const body = bar?.nextElementSibling;
+
+    expect(bar?.querySelector('[aria-haspopup="menu"]')).not.toBeNull();
+    expect(level(body)).toBeGreaterThan(0);
+    expect(level(bar)).toBeGreaterThan(level(body));
   });
 
   it('records reel open, qualified impression, and dwell events with delivery context', async () => {

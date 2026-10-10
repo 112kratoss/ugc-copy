@@ -6,7 +6,6 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useAuth } from '@/components/AuthProvider';
-import { requestConfirmation } from '@/components/feedback-state';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import { publishNavigationStart } from '@/components/navigation-progress-state';
 import FeedMediaLightbox from '@/app/feed/FeedMediaLightbox';
@@ -14,7 +13,12 @@ import FeedPostCard, { type FeedDetailContext } from '@/app/feed/FeedPostCard';
 import WindowedFeedList from '@/app/feed/WindowedFeedList';
 import SkeletonLoader from '@/components/SkeletonLoader';
 import { FEED_CHIPS, FEED_PAGE_SIZE, getFeedChip, type FeedChipId } from '@/lib/post-feed-chips';
-import { blockCreator, reportCreator, reportPostContent } from '@/lib/moderation-client';
+import {
+    blockCreatorAfterConfirmation,
+    reportCreatorAfterConfirmation,
+    reportPostAfterConfirmation,
+    type FeedSafetyOutcome,
+} from '@/lib/feed-safety-actions';
 import { buildPostFeedCards } from '@/lib/post-feed-presentation';
 import {
     getShowcaseFeedSessionId,
@@ -56,10 +60,6 @@ type HiddenFromLane = { postIds: Set<string>; creatorIds: Set<string> };
 /** A post the viewer removed this visit: not interested, hidden, reported or blocked. */
 function isHiddenFromLane(hidden: HiddenFromLane, item: ShowcaseFeedItem) {
     return hidden.postIds.has(item.id) || Boolean(item.creator.id && hidden.creatorIds.has(item.creator.id));
-}
-
-function describeFailure(prefix: string, error: unknown) {
-    return error instanceof Error && error.message ? `${prefix} ${error.message}` : prefix;
 }
 
 function emptyFeedPage(): ShowcaseFeedPage {
@@ -647,9 +647,10 @@ export default function FeedClient({
             setRemixingId(null);
         }
     }, [accessToken, detailContext, feedSessionId, router, user]);
-    // Report content, Report user and Block user, worded and sent as the app's
-    // Home sends them. The server takes them from registered accounts only, so
-    // a signed-out viewer is asked to sign in first, and comes back here.
+    // Report content, Report user and Block user, asked for and sent as
+    // Explore's tile and the reel send them (`lib/feed-safety-actions.ts`). The
+    // server takes them from registered accounts only, so a signed-out viewer
+    // is asked to sign in first, and comes back here.
     const requireAccount = useCallback((): string | null => {
         if (user && accessToken) return accessToken;
         router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(detailContext.returnTo))}`);
@@ -662,69 +663,46 @@ export default function FeedClient({
             return open && predicate(open) ? null : current;
         });
     }, [setItems]);
+    const clearNotice = useCallback(() => setFeedbackNotice(null), []);
+    const showOutcome = useCallback((outcome: FeedSafetyOutcome) => {
+        if (outcome.status === 'cancelled') return;
+        setFeedbackNotice({ tone: outcome.status === 'done' ? 'success' : 'error', message: outcome.message });
+    }, []);
     const handleReportContent = useCallback(async (postId: string) => {
         const token = requireAccount();
         if (!token) return;
-        const confirmed = await requestConfirmation({
-            title: 'Report content?',
-            message: 'Magicbooklet will send this post to the moderation team for a safety review.',
-            confirmLabel: 'Report content',
-            tone: 'danger',
-        });
-        if (!confirmed) return;
-        setFeedbackNotice(null);
-        try {
-            await reportPostContent({ postId, accessToken: token });
+        const outcome = await reportPostAfterConfirmation({ postId, accessToken: token, surface: 'feed', onSend: clearNotice });
+        if (outcome.status === 'done') {
             hiddenRef.current.postIds.add(postId);
             removeFromLane((item) => item.id === postId);
-            setFeedbackNotice({ tone: 'success', message: 'Content reported and removed from your feed.' });
-        } catch (error) {
-            setFeedbackNotice({ tone: 'error', message: describeFailure('Could not report this post.', error) });
         }
-    }, [removeFromLane, requireAccount]);
+        showOutcome(outcome);
+    }, [clearNotice, removeFromLane, requireAccount, showOutcome]);
     const handleReportUser = useCallback(async (postId: string) => {
         const creatorId = cardsRef.current.find((card) => card.id === postId)?.item.creator.id;
         if (!creatorId || creatorId === user?.id) return;
         const token = requireAccount();
         if (!token) return;
-        const confirmed = await requestConfirmation({
-            title: 'Report this creator?',
-            message: 'Our moderation team will review their recent activity.',
-            confirmLabel: 'Report user',
-            tone: 'danger',
-        });
-        if (!confirmed) return;
-        setFeedbackNotice(null);
-        try {
-            await reportCreator({ userId: creatorId, accessToken: token });
-            setFeedbackNotice({ tone: 'success', message: 'Creator reported. Our moderation team will take a look.' });
-        } catch (error) {
-            setFeedbackNotice({ tone: 'error', message: describeFailure('Could not report this creator.', error) });
-        }
-    }, [requireAccount, user?.id]);
+        showOutcome(await reportCreatorAfterConfirmation({ userId: creatorId, accessToken: token, surface: 'feed', onSend: clearNotice }));
+    }, [clearNotice, requireAccount, showOutcome, user?.id]);
     const handleBlockUser = useCallback(async (postId: string) => {
         const creator = cardsRef.current.find((card) => card.id === postId)?.item.creator;
         const creatorId = creator?.id;
         if (!creator || !creatorId || creatorId === user?.id) return;
         const token = requireAccount();
         if (!token) return;
-        const confirmed = await requestConfirmation({
-            title: 'Block this creator?',
-            message: 'You will stop seeing their posts and neither of you can follow the other.',
-            confirmLabel: 'Block',
-            tone: 'danger',
+        const outcome = await blockCreatorAfterConfirmation({
+            userId: creatorId,
+            creatorName: creator.name,
+            accessToken: token,
+            onSend: clearNotice,
         });
-        if (!confirmed) return;
-        setFeedbackNotice(null);
-        try {
-            await blockCreator({ userId: creatorId, accessToken: token });
+        if (outcome.status === 'done') {
             hiddenRef.current.creatorIds.add(creatorId);
             removeFromLane((item) => item.creator.id === creatorId);
-            setFeedbackNotice({ tone: 'success', message: `${creator.name} is blocked. Their posts are gone from your feed.` });
-        } catch (error) {
-            setFeedbackNotice({ tone: 'error', message: describeFailure('Could not block this creator.', error) });
         }
-    }, [removeFromLane, requireAccount, user?.id]);
+        showOutcome(outcome);
+    }, [clearNotice, removeFromLane, requireAccount, showOutcome, user?.id]);
     const priorityPoster = useMemo(() => (initialPriorityPreview
         ? { mediaId: initialPriorityPreview.mediaId, dataUrl: initialPriorityPreview.dataUrl }
         : null), [initialPriorityPreview]);

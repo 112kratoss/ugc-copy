@@ -40,24 +40,54 @@ async function postModerationRequest(path: string, accessToken: string, body?: u
   );
 }
 
+/**
+ * Where a post's menu was opened: the feed card, Explore's tile, or the reel.
+ * The moderation team reads it in a post report's note, as it reads the app's
+ * ("Reported from the mobile home feed.").
+ */
+export type SafetySurface = 'feed' | 'explore' | 'reel';
+
+const POST_REPORT_NOTES: Record<SafetySurface, string> = {
+  feed: 'Reported from the web home feed.',
+  explore: 'Reported from the web Explore grid.',
+  reel: 'Reported from the web reel.',
+};
+
 /** The post goes to the moderation team; the same reason and note shape the app sends. */
-export function reportPostContent({ postId, accessToken }: { postId: string; accessToken: string }) {
+export function reportPostContent({
+  postId,
+  accessToken,
+  surface = 'feed',
+}: {
+  postId: string;
+  accessToken: string;
+  surface?: SafetySurface;
+}) {
   return postModerationRequest(`/api/posts/${encodeURIComponent(postId)}/report`, accessToken, {
     reason: 'unsafe_content',
-    details: 'Reported from the web home feed.',
+    details: POST_REPORT_NOTES[surface],
   });
 }
 
 /**
- * The creator goes to the moderation team. `showcase` is the surface the app's
- * Home sends too: the report endpoint accepts only the showcase surfaces.
+ * The creator goes to the moderation team. The report endpoint accepts only the
+ * showcase surfaces: `showcase` is what the app's Home sends too, and the reel
+ * names itself as the app's reel does.
  */
-export function reportCreator({ userId, accessToken }: { userId: string; accessToken: string }) {
+export function reportCreator({
+  userId,
+  accessToken,
+  surface = 'feed',
+}: {
+  userId: string;
+  accessToken: string;
+  surface?: SafetySurface;
+}) {
   return postModerationRequest('/api/moderation/reports', accessToken, {
     targetType: 'user',
     targetId: userId,
     reason: 'harassment',
-    sourceSurface: 'showcase',
+    sourceSurface: surface === 'reel' ? 'showcase-reel' : 'showcase',
   });
 }
 

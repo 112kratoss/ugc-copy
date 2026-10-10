@@ -115,13 +115,21 @@ export async function submitPostReportForRoute({
 
   const { data: post, error: postError } = await adminSupabase
     .from('posts')
-    .select('id')
+    .select('id, user_id')
     .eq('id', postId)
     .is('archived_at', null)
     .maybeSingle();
 
   if (postError || !post) {
     return { ok: false, status: 404, body: { error: 'Post not found.' } };
+  }
+
+  // A report asks moderators to look at someone else's post or recipe. Both
+  // clients leave the row out on the viewer's own post; this answers the ones
+  // that still send it, as the subject-report route answers a report on your
+  // own profile or comment (`moderation-service.ts`).
+  if (String(post.user_id) === reporterUserId) {
+    return { ok: false, status: 400, body: { error: 'You cannot report your own post.' } };
   }
 
   if (bundleId) {
