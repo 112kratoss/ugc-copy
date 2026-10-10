@@ -280,6 +280,9 @@ jobs:
       - name: Test template publication with real Auth, Storage and PostgREST
         run: npx vitest run --config vitest.template-publication-postgrest.config.ts
 
+      - name: Test template run identity with real Auth, Storage and PostgREST
+        run: npx vitest run --config vitest.template-run-auth-postgrest.config.ts
+
       - name: Test admin moderation with authoritative sessions and real SQL
         run: npx vitest run --config vitest.admin-moderation-postgrest.config.ts
 
