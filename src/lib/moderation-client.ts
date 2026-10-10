@@ -1,8 +1,9 @@
 /**
- * The three safety actions a feed card's menu offers, as the app sends them
- * (`ugc-mobile/components/home-dashboard.tsx`): report the post, report its
- * creator, block its creator. All three need a registered account; the server
- * answers 401 to a guest or a signed-out request.
+ * The three safety actions a post's menu and a creator's page offer, as the
+ * app sends them (`ugc-mobile/components/home-dashboard.tsx`,
+ * `creator-profile-screen.tsx`): report the post, report its creator, block
+ * its creator. All three need a registered account; the server answers 401 to
+ * a guest or a signed-out request.
  */
 
 export class ModerationRequestError extends Error {
@@ -41,16 +42,19 @@ async function postModerationRequest(path: string, accessToken: string, body?: u
 }
 
 /**
- * Where a post's menu was opened: the feed card, Explore's tile, or the reel.
- * The moderation team reads it in a post report's note, as it reads the app's
- * ("Reported from the mobile home feed.").
+ * Where the action was asked for: the feed card, Explore's tile, Explore's
+ * reel, a creator's page (its own menu and the reel opened from it), or the
+ * reel opened from the viewer's saved posts. The moderation team reads it in a
+ * report's note, as it reads the app's ("Reported from the mobile home feed.").
  */
-export type SafetySurface = 'feed' | 'explore' | 'reel';
+export type SafetySurface = 'feed' | 'explore' | 'reel' | 'creator-page' | 'saved';
 
 const POST_REPORT_NOTES: Record<SafetySurface, string> = {
   feed: 'Reported from the web home feed.',
   explore: 'Reported from the web Explore grid.',
   reel: 'Reported from the web reel.',
+  'creator-page': 'Reported from a creator page on the web.',
+  saved: 'Reported from saved posts on the web profile.',
 };
 
 /** The post goes to the moderation team; the same reason and note shape the app sends. */
@@ -70,10 +74,28 @@ export function reportPostContent({
 }
 
 /**
- * The creator goes to the moderation team. The report endpoint accepts only the
- * showcase surfaces: `showcase` is what the app's Home sends too, and the reel
- * names itself as the app's reel does.
+ * How each surface files a creator. The report endpoint accepts a short list
+ * of surfaces (`REPORT_SOURCE_SURFACES`): `showcase` is what the app's Home
+ * sends too, a reel names itself as the app's reel does, and a creator's page
+ * files what the app's creator screen files, reason and note included.
  */
+const CREATOR_REPORTS: Record<SafetySurface, {
+  reason: 'harassment' | 'unsafe_content';
+  sourceSurface: 'showcase' | 'showcase-reel' | 'creator-profile';
+  details?: string;
+}> = {
+  feed: { reason: 'harassment', sourceSurface: 'showcase' },
+  explore: { reason: 'harassment', sourceSurface: 'showcase' },
+  reel: { reason: 'harassment', sourceSurface: 'showcase-reel' },
+  'creator-page': {
+    reason: 'unsafe_content',
+    sourceSurface: 'creator-profile',
+    details: "Reported from the creator's page on the web.",
+  },
+  saved: { reason: 'harassment', sourceSurface: 'showcase-reel' },
+};
+
+/** The creator goes to the moderation team, filed under the surface it was asked on. */
 export function reportCreator({
   userId,
   accessToken,
@@ -86,8 +108,7 @@ export function reportCreator({
   return postModerationRequest('/api/moderation/reports', accessToken, {
     targetType: 'user',
     targetId: userId,
-    reason: 'harassment',
-    sourceSurface: surface === 'reel' ? 'showcase-reel' : 'showcase',
+    ...CREATOR_REPORTS[surface],
   });
 }
 

@@ -36,6 +36,12 @@ import ProfileShareButton from '@/components/ProfileShareButton';
 import TextPostPreviewCard from '@/components/TextPostPreviewCard';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import { loadShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
+import {
+  blockCreatorAfterConfirmation,
+  reportCreatorAfterConfirmation,
+  reportPostAfterConfirmation,
+  toastSafetyOutcome,
+} from '@/lib/feed-safety-actions';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';
 import { getBundleAccessLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
@@ -413,6 +419,14 @@ export default function OwnerProfileMediaHub({
   const setProfilePostItems = postSaveState.setItems;
   const setProfileSavedItems = savedSaveState.setItems;
   const setProfileSavedItemIds = savedSaveState.setSavedItemIds;
+  // What is on screen now, for an answer that arrives after a question and a
+  // request: the saved list can have grown and the reel moved on since.
+  const savedItemsRef = useRef<ShowcaseFeedItem[]>(EMPTY_SHOWCASE_ITEMS);
+  const selectedPostIdRef = useRef<string | null>(selectedPostId);
+  useEffect(() => {
+    savedItemsRef.current = savedSaveState.items;
+    selectedPostIdRef.current = selectedPostId;
+  }, [savedSaveState.items, selectedPostId]);
 
   const authHeaders = useMemo(() => accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined, [accessToken]);
 
@@ -583,6 +597,12 @@ export default function OwnerProfileMediaHub({
     updateLocation({ postId: item.id, mediaIndex: 0, generationId: null }, 'push');
   };
 
+  const selectPost = (id: string) => {
+    setSelectedPostId(id);
+    setSelectedMediaIndex(0);
+    updateLocation({ postId: id, mediaIndex: 0 }, 'replace');
+  };
+
   const closePost = () => {
     setSelectedPostId(null);
     if (reelHistoryModeRef.current === 'pushed') {
@@ -591,6 +611,61 @@ export default function OwnerProfileMediaHub({
     } else {
       reelHistoryModeRef.current = null;
       updateLocation({ postId: null }, 'replace');
+    }
+  };
+
+  // The reel's ⋯ over saved posts, which are other people's: Report content,
+  // Report user and Block user, asked for and sent as a feed card's are
+  // (`lib/feed-safety-actions.ts`). No Not interested or Hide: a saved list is
+  // not a feed to tune. The Posts tab's reel has no ⋯: every post there is the
+  // viewer's own.
+  const handleSavedReportContent = async (reportedItem: ShowcaseFeedItem) => {
+    if (!accessToken) return authRequired();
+    // The post stays saved: reporting it is not unsaving it.
+    toastSafetyOutcome(await reportPostAfterConfirmation({
+      postId: reportedItem.id,
+      accessToken,
+      surface: 'saved',
+    }));
+  };
+  const handleSavedReportUser = async (reportedItem: ShowcaseFeedItem) => {
+    const creatorId = reportedItem.creator.id;
+    if (!creatorId || creatorId === user?.id) return;
+    if (!accessToken) return authRequired();
+    toastSafetyOutcome(await reportCreatorAfterConfirmation({
+      userId: creatorId,
+      accessToken,
+      surface: 'saved',
+    }));
+  };
+  const handleSavedBlockUser = async (blockedItem: ShowcaseFeedItem) => {
+    const creatorId = blockedItem.creator.id;
+    if (!creatorId || creatorId === user?.id) return;
+    if (!accessToken) return authRequired();
+    const outcome = await blockCreatorAfterConfirmation({
+      userId: creatorId,
+      creatorName: blockedItem.creator.name,
+      accessToken,
+    });
+    toastSafetyOutcome(outcome);
+    if (outcome.status !== 'done') return;
+    // The server's saved list leaves out a blocked creator's posts
+    // (`showcase-saved-media-service.ts`); the page does the same at once. A
+    // reel open on one of them moves to the post that followed it, or the one
+    // before, or closes.
+    const isBlocked = (candidate: ShowcaseFeedItem) => candidate.creator.id === creatorId;
+    const currentItems = savedItemsRef.current;
+    const openId = selectedPostIdRef.current;
+    const openPosition = openId ? currentItems.findIndex((candidate) => candidate.id === openId) : -1;
+    setProfileSavedItems((latestItems) => latestItems.filter((candidate) => !isBlocked(candidate)));
+    if (openPosition < 0 || !isBlocked(currentItems[openPosition])) return;
+    const replacementItem = currentItems.slice(openPosition + 1).find((candidate) => !isBlocked(candidate))
+      ?? currentItems.slice(0, openPosition).reverse().find((candidate) => !isBlocked(candidate))
+      ?? null;
+    if (replacementItem) {
+      selectPost(replacementItem.id);
+    } else {
+      closePost();
     }
   };
 
@@ -994,16 +1069,16 @@ export default function OwnerProfileMediaHub({
           isLoadingMoreItems={loadingMoreTab === activeTab}
           onLoadMoreItems={loadMore}
           onClose={closePost}
-          onSelectItemId={(id) => {
-            setSelectedPostId(id);
-            setSelectedMediaIndex(0);
-            updateLocation({ postId: id, mediaIndex: 0 }, 'replace');
-          }}
+          onSelectItemId={selectPost}
           onMediaIndexChange={(index) => {
             setSelectedMediaIndex(index);
             updateLocation({ postId: selectedPostId, mediaIndex: index }, 'replace');
           }}
           onToggleSave={activeSaveState.toggleSave}
+          onReportContent={activeTab === 'saved' ? handleSavedReportContent : undefined}
+          onReportUser={activeTab === 'saved' ? handleSavedReportUser : undefined}
+          onBlockUser={activeTab === 'saved' ? handleSavedBlockUser : undefined}
+          originLabel="Profile"
           onRemix={async (id) => {
             if (!accessToken) return authRequired();
             const { redirectTo } = await requestShowcaseRemix({ accessToken, generationId: id });

@@ -57,6 +57,7 @@ import {
 import { mergeShowcaseFeedKeepingVisibleItems } from '@/lib/showcase-feed-stability';
 import {
     buildShowcaseClientCacheKey,
+    getCreatorsBlockedThisVisit,
     readShowcaseClientSnapshot,
     writeShowcaseClientSnapshot,
     type ShowcaseClientSnapshot,
@@ -250,7 +251,16 @@ export default function ShowcaseClient({
         });
         const snapshot = readShowcaseClientSnapshot(cacheKey);
         if (!snapshot) {
-            return { snapshot: null, feed: initialFeed };
+            // The server builds this first page for everyone. A creator the
+            // viewer blocked on another page a moment ago is not drawn from it.
+            const blockedThisVisit = getCreatorsBlockedThisVisit();
+            return {
+                snapshot: null,
+                feed: blockedThisVisit.size === 0 ? initialFeed : {
+                    ...initialFeed,
+                    items: initialFeed.items.filter((item) => !item.creator.id || !blockedThisVisit.has(item.creator.id)),
+                },
+            };
         }
 
         const restoredSavedItemIds = new Set(snapshot.savedItemIds);
@@ -339,7 +349,8 @@ export default function ShowcaseClient({
     // for a signed-in viewer too: the server's feed leaves out what they marked
     // not interested or hid, but not a post they reported.
     const sessionHiddenPostIdsRef = useRef(new Set<string>());
-    const sessionHiddenCreatorIdsRef = useRef(new Set<string>());
+    // Begins with the creators blocked on other pages since this tab loaded.
+    const sessionHiddenCreatorIdsRef = useRef(new Set<string>(getCreatorsBlockedThisVisit()));
     const anonymousPersonalizationStartedRef = useRef(false);
     const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
     const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(

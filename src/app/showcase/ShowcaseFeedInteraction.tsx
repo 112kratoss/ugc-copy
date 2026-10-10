@@ -368,17 +368,26 @@ interface ShowcaseFeedbackMenuProps {
   creator: { username?: string | null; name?: string | null };
   canHideCreator?: boolean;
   sessionOnly?: boolean;
-  onSelect: (action: ShowcaseFeedbackAction) => void | Promise<void>;
+  /**
+   * The two rows about what a feed shows: Not interested and Hide. Left out
+   * where there is no feed to tune (a creator's page, the viewer's saved
+   * posts), as the app's reel leaves them out there (`ugc-mobile/app/viewer.tsx`).
+   */
+  onSelect?: (action: ShowcaseFeedbackAction) => void | Promise<void>;
   /**
    * The safety rows the app's card menu carries (`ugc-mobile/lib/feed-feedback-menu.ts`),
    * each shown only when given. The two about the creator also need a creator
-   * to act on (`canHideCreator`).
+   * to act on (`canHideCreator`). With no row to show, nothing is drawn: a
+   * button that opens an empty menu is worse than no button.
    */
   onReportContent?: () => void;
   onReportUser?: () => void;
   onBlockUser?: () => void;
-  /** `overlay` sits on media (the grid tile); `inline` sits in a card header. */
-  variant?: 'overlay' | 'inline';
+  /**
+   * `overlay` sits on media (the grid tile); `inline` sits in a card header;
+   * `outline` sits in a row of outlined pill buttons (a creator's page).
+   */
+  variant?: 'overlay' | 'inline' | 'outline';
   /**
    * Draws the open menu in the page's body, fixed to its trigger. A feed
    * card's always is (`inline`), and Explore's tile asks for it: both clip
@@ -459,16 +468,17 @@ export function ShowcaseFeedbackMenu({
   const usesPortal = portal ?? variant === 'inline';
 
   // The app's order and grouping: what to see less of, then safety.
-  const rows: FeedbackMenuRow[] = [
-    {
+  const rows: FeedbackMenuRow[] = [];
+  if (onSelect) {
+    rows.push({
       key: 'not-interested',
       label: 'Not interested',
       description: sessionOnly ? 'Remove this post for this visit' : 'Show fewer posts like this',
       Icon: EyeOff,
       run: () => void onSelect('not_interested'),
-    },
-  ];
-  if (canHideCreator) {
+    });
+  }
+  if (onSelect && canHideCreator) {
     rows.push({
       key: 'hide-creator',
       label: hideCreatorLabel(creator),
@@ -497,7 +507,9 @@ export function ShowcaseFeedbackMenu({
   };
   const triggerClassName = variant === 'inline'
     ? 'ui-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-full text-[var(--ui-text-faint)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]'
-    : 'ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-black/60 text-white shadow-md backdrop-blur-md transition hover:bg-black/80';
+    : variant === 'outline'
+      ? 'ui-focus-ring inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.05] text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.09]'
+      : 'ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-black/60 text-white shadow-md backdrop-blur-md transition hover:bg-black/80';
 
   // The side above was picked from an estimate. Once the menu is in the page
   // its real height picks again, before anything is painted.
@@ -614,7 +626,8 @@ export function ShowcaseFeedbackMenu({
     >
       {rows.map((row, index) => (
         <Fragment key={row.key}>
-          {row.danger && !rows[index - 1]?.danger ? (
+          {/* Between the feed rows and the safety rows; a menu of safety rows alone has nothing to part. */}
+          {index > 0 && row.danger && !rows[index - 1].danger ? (
             <div role="separator" className="mx-2 my-1 h-px bg-white/10" />
           ) : null}
           <button
@@ -635,6 +648,10 @@ export function ShowcaseFeedbackMenu({
       ))}
     </div>
   );
+
+  if (rows.length === 0) {
+    return null;
+  }
 
   return (
     <div ref={containerRef} className={`relative ${className}`}>

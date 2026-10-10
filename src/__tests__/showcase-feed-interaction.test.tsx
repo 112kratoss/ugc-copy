@@ -473,6 +473,74 @@ describe('showcase feed interactions', () => {
     expect(rows).toEqual(['Not interested', 'Report content']);
   });
 
+  // A creator's page and the viewer's saved posts are not feeds: there the
+  // menu carries the safety rows alone, as the app's reel does.
+  it('carries the safety rows alone where there is no feed to tune, with nothing to part them from', () => {
+    const onReportContent = vi.fn();
+    render(
+      <ShowcaseFeedbackMenu
+        itemTitle="Campaign Frame"
+        creator={{ username: 'fluffy', name: 'Fluffy' }}
+        onReportContent={onReportContent}
+        onReportUser={vi.fn()}
+        onBlockUser={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
+
+    const rows = screen.getAllByRole('menuitem').map((row) => row.querySelector('.font-semibold')?.textContent);
+    expect(rows).toEqual(['Report content', 'Report user', 'Block user']);
+    // The line parts the feed rows from the safety rows. With no feed rows it
+    // would sit at the top of the menu, parting nothing.
+    expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /report content/i }));
+    expect(onReportContent).toHaveBeenCalledTimes(1);
+  });
+
+  // A button that opens an empty menu is worse than no button: the viewer's
+  // own post on a creator's page has no row that applies.
+  it('draws nothing when no row applies', () => {
+    const { container } = render(
+      <ShowcaseFeedbackMenu
+        itemTitle="Campaign Frame"
+        creator={{ username: 'fluffy', name: 'Fluffy' }}
+        canHideCreator={false}
+        onReportUser={vi.fn()}
+        onBlockUser={vi.fn()}
+      />
+    );
+
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("sits among a creator page's outlined buttons, at their size and in their dress", () => {
+    render(
+      <ShowcaseFeedbackMenu
+        variant="outline"
+        portal
+        itemTitle="@fluffy"
+        creator={{ username: 'fluffy', name: 'Fluffy' }}
+        onReportUser={vi.fn()}
+        onBlockUser={vi.fn()}
+      />
+    );
+
+    const trigger = screen.getByRole('button', { name: 'More actions for @fluffy' });
+    // The Follow and Share buttons beside it: 44px tall, a hairline border on a faint fill.
+    expect(trigger.className).toContain('h-11 w-11');
+    expect(trigger.className).toContain('border-white/10 bg-white/[0.05]');
+    // Not the tile's dress, which is made to sit on a picture.
+    expect(trigger.className).not.toContain('bg-black/60');
+    expect(trigger.className).not.toContain('h-12');
+
+    fireEvent.click(trigger);
+    const rows = screen.getAllByRole('menuitem').map((row) => row.querySelector('.font-semibold')?.textContent);
+    expect(rows).toEqual(['Report user', 'Block user']);
+    expect(screen.getByRole('menu').parentElement).toBe(document.body);
+  });
+
   it('describes anonymous feedback as limited to the current visit', () => {
     render(
       <ShowcaseFeedbackMenu

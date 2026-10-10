@@ -8,6 +8,7 @@ import { SHOWCASE_INITIAL_RENDER_COUNT, type ShowcaseFeedItem } from '@/lib/show
 import {
   buildShowcaseClientCacheKey,
   clearShowcaseClientCacheForTests,
+  takeBlockedCreatorOffClientFeeds,
   writeShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
 
@@ -227,6 +228,27 @@ describe('ShowcaseBootstrapClient', () => {
       .toBeInTheDocument();
     expect(screen.queryByText(`Trailing campaign ${SHOWCASE_INITIAL_RENDER_COUNT}`))
       .not.toBeInTheDocument();
+  });
+
+  // A viewer who blocks a creator on that creator's page is sent here. For
+  // the moment before the full grid takes over, this shell draws the first
+  // page, which the server builds for everyone.
+  it('does not draw a creator who was blocked on another page a moment ago', () => {
+    const props = createProps();
+    // Past the prefix the shell paints, until the blocked creator's posts are out of the way.
+    props.initialFeed.items.push(createItem({
+      id: 'post-someone-else',
+      title: 'Someone else',
+      creator: { id: 'creator-2', username: 'creator-two', name: 'Creator Two', avatar: null },
+    }));
+    takeBlockedCreatorOffClientFeeds('creator-1');
+
+    render(<ShowcaseBootstrapClient {...props} />);
+
+    expect(screen.getByText('Someone else')).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-showcase-bootstrap-card="true"]')).toHaveLength(1);
+    expect(screen.queryByText('Priority campaign')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Trailing campaign/)).not.toBeInTheDocument();
   });
 
   it('prioritizes the first usable media instead of the first placeholder tile', () => {
