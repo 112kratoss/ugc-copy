@@ -29,3 +29,5 @@ under `.audit-evidence/backend-social/`.
 
 SOCIAL-04/MEDIA-08/09 remain open for their broader route, hosted, publication
 and lifecycle requirements. Candidate CI and release inclusion remain pending.
+
+[Included in the independently verified 12S/T/U release](backend-section-12-template-retry-release-2026-10-09.md) on live `6b39c0b7`.

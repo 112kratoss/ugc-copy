@@ -216,7 +216,7 @@ function databaseClient(db: Client, startAnswers: string[], beforeWrite?: (table
       identifier(name);
       const call = `public.${name}(${Object.keys(args).map((key, index) => `${identifier(key)}=>$${index + 1}`).join(',')})`;
       try {
-        if (name === 'retry_template_checkpoint') await beforeWrite?.('template_run_steps');
+        if (name === 'retry_template_checkpoint' || name === 'approve_template_checkpoint') await beforeWrite?.('template_run_steps');
         if (name === 'enqueue_template_run_job') await beforeWrite?.(name);
         const { rows } = await db.query(
           ROW_FUNCTIONS.has(name) ? `select * from ${call}` : `select ${call} as result`,
@@ -873,15 +873,15 @@ describe.skipIf(!connectionString || crashWorker)('template run step starts the 
       ending.release();
       expect(await abandoned).toBe(true);
 
-      // The checkpoint was written before the approval could know. The run stays ended.
-      expect(outcome.error).toBeNull();
-      expect(outcome.value?.status).toBe('failed');
+      // The atomic approval rechecks the run before changing its checkpoint.
+      expect(outcome.error).toMatchObject({ code: 'RUN_TERMINAL' });
+      expect(outcome.value).toBeNull();
       const after = await runRows();
       expect(after.run[0]).toMatchObject({ status: 'failed', error_message: TEMPLATE_RUN_ABANDONED_MESSAGE });
-      expect(after.steps.find((step) => step.id === gates[0].id)).toMatchObject({ status: 'succeeded' });
+      expect(after.steps.find((step) => step.id === gates[0].id)).toMatchObject({ status: 'cancelled' });
       expect(stepStatuses(after)).toEqual([
         'approval/image: cancelled',
-        'approval/image: succeeded',
+        'approval/image: cancelled',
         'generation/image: succeeded',
         'generation/image: succeeded',
         'generation/video: cancelled',
@@ -1015,6 +1015,48 @@ describe.skipIf(!connectionString || crashWorker)('template run step starts the 
       expect(await credits()).toBe(STARTING_CREDITS - spent);
       expect(await generations()).toHaveLength(2);
     } finally { await second.end(); }
+  });
+
+  it.each([
+    { scenario: 'reports the failure', table: 'template_runs' },
+    { scenario: 'rolls back the checkpoint', table: 'template_runs' },
+    { scenario: 'reports the failure', table: 'template_run_jobs' },
+    { scenario: 'rolls back the checkpoint', table: 'template_run_jobs' },
+  ])('$scenario when approval cannot write $table', async ({ scenario, table }) => {
+    const { gates, spent } = await finishImagesAndAwaitApproval();
+    await approveTemplateRunStep({ adminClient: client, runId, stepId: gates[0].id, userId });
+    await tick();
+    expect((await getTemplateRun({ adminClient: client, runId, userId })).status).toBe('awaiting_approval');
+    await admin.query(`CREATE FUNCTION public.audit_fail_template_approval_resume() RETURNS trigger LANGUAGE plpgsql AS $body$
+      BEGIN
+        IF (to_jsonb(NEW)->>TG_ARGV[1]) = TG_ARGV[0] THEN
+          RAISE EXCEPTION 'fixture approval resume unavailable';
+        END IF;
+        RETURN NEW;
+      END; $body$`);
+    try {
+      await admin.query(`CREATE TRIGGER audit_fail_template_approval_resume BEFORE INSERT OR UPDATE ON public.${table}
+        FOR EACH ROW EXECUTE FUNCTION public.audit_fail_template_approval_resume('${runId}', '${table === 'template_runs' ? 'id' : 'run_id'}')`);
+      const first = await approveTemplateRunStep({ adminClient: client, runId, stepId: gates[1].id, userId })
+        .then(value => ({ value, error: null }), error => ({ value: null, error }));
+      expect(await credits()).toBe(STARTING_CREDITS - spent);
+      if (scenario === 'reports the failure') {
+        expect(first.error).toMatchObject({ message: 'fixture approval resume unavailable' });
+        expect(first.value).toBeNull();
+      } else {
+        expect((await admin.query('select status,approved_at from public.template_run_steps where id=$1', [gates[1].id])).rows[0])
+          .toEqual({ status: 'awaiting_approval', approved_at: null });
+        expect((await admin.query('select status from public.template_runs where id=$1', [runId])).rows[0].status).toBe('awaiting_approval');
+      }
+    } finally {
+      await admin.query(`DROP TRIGGER IF EXISTS audit_fail_template_approval_resume ON public.${table}`);
+      await admin.query('DROP FUNCTION public.audit_fail_template_approval_resume()');
+    }
+    providerHasRoom();
+    await approveTemplateRunStep({ adminClient: client, runId, stepId: gates[1].id, userId });
+    await tick();
+    expect(providerCalls()).toBe(1);
+    expect(await generations()).toHaveLength(3);
   });
 
   it.each(['approval', 'cancellation'] as const)('does not retry a checkpoint when concurrent %s wins after the retry read', async action => {

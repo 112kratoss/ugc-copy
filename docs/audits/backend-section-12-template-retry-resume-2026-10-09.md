@@ -41,3 +41,5 @@ automatic recovery or transport failure window. WORKFLOW-02 is failed pending
 exact-candidate CI and independently verified standard release. Broader workflow
 coverage remains open. Private logs use `template-retry-resume-*` under
 `.audit-evidence/backend-social/`.
+
+[Included in the independently verified 12S/T/U release](backend-section-12-template-retry-release-2026-10-09.md) on live `6b39c0b7`.

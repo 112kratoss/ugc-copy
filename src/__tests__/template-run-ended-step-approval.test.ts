@@ -216,6 +216,13 @@ describe('approving a checkpoint of a template run that has ended', () => {
     let ended = false;
     return {
       ...base,
+      rpc(fn: string, args: Record<string, unknown>) {
+        if (fn === 'approve_template_checkpoint' && !ended) {
+          ended = true;
+          end();
+        }
+        return base.rpc(fn, args);
+      },
       from(table: string) {
         const query = base.from(table) as unknown as WritableQuery;
         const { update } = query;
@@ -335,12 +342,12 @@ describe('approving a checkpoint of a template run that has ended', () => {
       // The run's own row is written first by whatever ends it. Its steps are closed after that.
       const racing = endingTheRunAtTheFirstWrite(client, () => Object.assign(database.run, ENDED[status]));
 
-      const shown = await approve(gate, racing);
+      const refused = await refusal(gate, racing);
 
-      // The checkpoint was written before the approval could know. The run stays ended.
+      // The transaction rechecks the run and leaves the checkpoint unchanged.
       expect(database.run).toMatchObject(ENDED[status]);
-      expect(shown.status).toBe(status);
-      expect(shown.errorMessage).toBe(ENDED[status].error_message);
+      expect(refused).toMatchObject(RUN_ENDED);
+      expect(gate.status).toBe('awaiting_approval');
     },
   );
 
@@ -355,8 +362,8 @@ describe('approving a checkpoint of a template run that has ended', () => {
       expect(gate).toMatchObject({ status: 'succeeded', approved_at: NOW, finished_at: NOW, error_message: null });
       expect(other.status).toBe('awaiting_approval');
       expect(database.run).toMatchObject({ status: 'processing', error_message: null, completed_at: null });
-      expect(worker.asked).toHaveBeenCalledTimes(1);
-      expect(worker.asked).toHaveBeenCalledWith(client, TEMPLATE_RUN_ID);
+      expect(database.rpcCalls.filter(call => call.fn === 'approve_template_checkpoint')).toHaveLength(1);
+      expect(worker.asked).not.toHaveBeenCalled(); // The SQL transaction enqueues.
       expect(shown.status).toBe('processing');
       expect(shown.steps.find((step) => step.id === gate.id)?.status).toBe('succeeded');
     },

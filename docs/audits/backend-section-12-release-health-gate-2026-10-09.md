@@ -33,3 +33,5 @@ Private evidence uses `production-health-gate-*` under
 `.audit-evidence/backend-social/`. OPS-04 is reopened for this operational health
 verification gap until CI and the modified standard release prove the exact
 candidate. This does not close the wider operations or recovery matrix.
+
+[Release verified](backend-section-12-release-health-gate-verification-2026-10-09.md) on exact live `0ad91678`; both standard gates pass and the new verifier execution is independently proven.
