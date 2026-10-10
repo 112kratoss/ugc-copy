@@ -370,6 +370,7 @@ const extendedOperationCases: Array<{
       sourceSurface: 'generation-viewer',
     }),
   },
+  { key: 'listBlockedUsers', call: (api) => api.listBlockedUsers() },
   { key: 'blockUser', call: (api) => api.blockUser('creator-1') },
   { key: 'unblockUser', call: (api) => api.unblockUser('creator-1') },
   { key: 'getCreatorFollowState', call: (api) => api.getCreatorFollowState('creator-1') },
@@ -452,10 +453,13 @@ describe('mobile shared API v1 contract fixture', () => {
 
   it.each(extendedOperationCases)('keeps $key aligned with its registered method and route', async ({ key, call }) => {
     const operation = mobileApiOperationsV1.operations[key];
+    // What the client asked for is kept and checked after the call: an
+    // expectation that fails in here is thrown into the client, and the catch
+    // below, which is there for an empty answer, swallowed it. A call to the
+    // wrong address or with the wrong method passed.
+    const asked: Array<{ method: string; path: string }> = [];
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = new URL(String(input));
-      expect((init?.method ?? 'GET').toUpperCase()).toBe(operation.method);
-      expect(matchesPathTemplate(operation.path, url.pathname)).toBe(true);
+      asked.push({ method: (init?.method ?? 'GET').toUpperCase(), path: new URL(String(input)).pathname });
       return jsonResponse({});
     });
     const api = createApiClient({
@@ -472,6 +476,8 @@ describe('mobile shared API v1 contract fixture', () => {
 
     await call(api).catch(() => undefined);
     expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(asked[0].method).toBe(operation.method);
+    expect(matchesPathTemplate(operation.path, asked[0].path), `${key} asked for ${asked[0].path}`).toBe(true);
   });
 
   it.each(successCases)('consumes the $key response example through the mobile API client', async ({ key, call }) => {

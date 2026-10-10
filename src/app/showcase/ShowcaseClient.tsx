@@ -55,10 +55,15 @@ import {
     type FeedSafetyOutcome,
 } from '@/lib/feed-safety-actions';
 import { mergeShowcaseFeedKeepingVisibleItems } from '@/lib/showcase-feed-stability';
+import { fetchShowcaseViewerExclusions } from '@/lib/showcase-viewer-exclusions-client';
 import {
     buildShowcaseClientCacheKey,
+    claimVisitMemoryFor,
+    filterFeedItemsForVisit,
     getCreatorsBlockedThisVisit,
+    getFeedPreferencesHiddenThisVisit,
     readShowcaseClientSnapshot,
+    rememberViewerExclusionsForVisit,
     writeShowcaseClientSnapshot,
     type ShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
@@ -206,15 +211,21 @@ function setNonDefaultParam(params: URLSearchParams, key: string, value: string,
 }
 
 
+function isSessionHiddenItem(
+    item: ShowcaseFeedItem,
+    hiddenPostIds: Set<string>,
+    hiddenCreatorIds: Set<string>
+) {
+    return hiddenPostIds.has(item.id)
+        || Boolean(item.creator.id && hiddenCreatorIds.has(item.creator.id));
+}
+
 function filterSessionHiddenItems(
     feedItems: ShowcaseFeedItem[],
     hiddenPostIds: Set<string>,
     hiddenCreatorIds: Set<string>
 ) {
-    return feedItems.filter((item) => (
-        !hiddenPostIds.has(item.id)
-        && (!item.creator.id || !hiddenCreatorIds.has(item.creator.id))
-    ));
+    return feedItems.filter((item) => !isSessionHiddenItem(item, hiddenPostIds, hiddenCreatorIds));
 }
 
 export default function ShowcaseClient({
@@ -251,15 +262,17 @@ export default function ShowcaseClient({
         });
         const snapshot = readShowcaseClientSnapshot(cacheKey);
         if (!snapshot) {
-            // The server builds this first page for everyone. A creator the
-            // viewer blocked on another page a moment ago is not drawn from it.
-            const blockedThisVisit = getCreatorsBlockedThisVisit();
+            // The server builds this first page for everyone. What this tab
+            // already knows the viewer's own feed leaves out is not drawn from
+            // it: a creator blocked on another page a moment ago, and what the
+            // server answered the last time this page asked (below).
+            const visibleItems = filterFeedItemsForVisit(initialFeed.items, {
+                forYou: initialSort === DEFAULT_SHOWCASE_SORT,
+                viewerId: user?.id ?? null,
+            });
             return {
                 snapshot: null,
-                feed: blockedThisVisit.size === 0 ? initialFeed : {
-                    ...initialFeed,
-                    items: initialFeed.items.filter((item) => !item.creator.id || !blockedThisVisit.has(item.creator.id)),
-                },
+                feed: visibleItems === initialFeed.items ? initialFeed : { ...initialFeed, items: visibleItems },
             };
         }
 
@@ -348,9 +361,16 @@ export default function ShowcaseClient({
     // later page and refresh is filtered by them (`filterSessionHiddenItems`),
     // for a signed-in viewer too: the server's feed leaves out what they marked
     // not interested or hid, but not a post they reported.
-    const sessionHiddenPostIdsRef = useRef(new Set<string>());
-    // Begins with the creators blocked on other pages since this tab loaded.
-    const sessionHiddenCreatorIdsRef = useRef(new Set<string>(getCreatorsBlockedThisVisit()));
+    // They begin with what this tab already knows: the creators blocked on
+    // other pages since it loaded, and on For you what the server has said the
+    // viewer hid or marked not interested.
+    const sessionHiddenPostIdsRef = useRef(new Set<string>(
+        initialSort === DEFAULT_SHOWCASE_SORT ? getFeedPreferencesHiddenThisVisit(user?.id ?? null).postIds : []
+    ));
+    const sessionHiddenCreatorIdsRef = useRef(new Set<string>([
+        ...getCreatorsBlockedThisVisit(user?.id ?? null),
+        ...(initialSort === DEFAULT_SHOWCASE_SORT ? getFeedPreferencesHiddenThisVisit(user?.id ?? null).creatorIds : []),
+    ]));
     const anonymousPersonalizationStartedRef = useRef(false);
     const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
     const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(
@@ -417,6 +437,83 @@ export default function ShowcaseClient({
     const accessTokenRef = useRef(accessToken);
     accessTokenRef.current = accessToken;
     const userId = user?.id ?? null;
+
+    // What the tab remembers of a viewer's blocks and preferences is theirs:
+    // once it is known who is looking, anyone else's is dropped. Signing out,
+    // or in as someone else, does not reload the page.
+    useEffect(() => {
+        if (!isAuthLoading) {
+            claimVisitMemoryFor(userId);
+        }
+    }, [isAuthLoading, userId]);
+
+    // The first page is the server's for everyone, and the viewer's own feed is
+    // merged in under the rows already drawn, so nothing took out of those rows
+    // what the viewer's own feed leaves out: a creator they blocked or hid was
+    // back on screen after every reload. Ask about the posts this page drew,
+    // and take out the ones the server names. Blocks hold on every lane; Hide
+    // and Not interested are For you's, as on the server. A post open in the
+    // reel stays while the reel is open (the effect after this one).
+    useEffect(() => {
+        if (isAuthLoading || !hasAuthenticatedSession || !userId || !accessTokenRef.current) {
+            return;
+        }
+
+        const drawnItems = [...new Map(
+            [...feedItemsForEventsRef.current, ...initialFeed.items].map((item) => [item.id, item])
+        ).values()];
+        const controller = new AbortController();
+        void fetchShowcaseViewerExclusions({
+            items: drawnItems,
+            accessToken: accessTokenRef.current,
+            signal: controller.signal,
+        }).then((exclusions) => {
+            if (!exclusions || controller.signal.aborted) {
+                return;
+            }
+
+            rememberViewerExclusionsForVisit(userId, exclusions);
+            exclusions.blockedCreatorIds.forEach((id) => sessionHiddenCreatorIdsRef.current.add(id));
+            if (initialSort === DEFAULT_SHOWCASE_SORT) {
+                exclusions.hiddenCreatorIds.forEach((id) => sessionHiddenCreatorIdsRef.current.add(id));
+                exclusions.hiddenPostIds.forEach((id) => sessionHiddenPostIdsRef.current.add(id));
+            }
+            setItems((latestItems) => {
+                const openItemId = selectedItemIdRef.current;
+                const visibleItems = latestItems.filter((item) => (
+                    item.id === openItemId
+                    || !isSessionHiddenItem(item, sessionHiddenPostIdsRef.current, sessionHiddenCreatorIdsRef.current)
+                ));
+                return visibleItems.length === latestItems.length ? latestItems : visibleItems;
+            });
+        });
+
+        return () => controller.abort();
+    }, [hasAuthenticatedSession, initialFeed, initialSort, isAuthLoading, setItems, userId]);
+
+    // A post that was left on the page because the viewer had it open in the
+    // reel goes once the reel is closed: its tile would be a blocked or hidden
+    // creator's post back in the grid. Only on a close: the page as first drawn
+    // is already without them. Nothing to do on most closes, and then the list
+    // is handed back as it is.
+    const reelWasOpenRef = useRef(false);
+    useEffect(() => {
+        if (selectedItemId) {
+            reelWasOpenRef.current = true;
+            return;
+        }
+        if (!reelWasOpenRef.current) {
+            return;
+        }
+
+        reelWasOpenRef.current = false;
+        setItems((latestItems) => {
+            const visibleItems = latestItems.filter((item) => (
+                !isSessionHiddenItem(item, sessionHiddenPostIdsRef.current, sessionHiddenCreatorIdsRef.current)
+            ));
+            return visibleItems.length === latestItems.length ? latestItems : visibleItems;
+        });
+    }, [selectedItemId, setItems]);
     const priorityMediaItemId = renderedItems.find((item) => (
         item.postFormat !== 'text' && getShowcaseItemMediaItems(item).length > 0
     ))?.id ?? null;
@@ -763,7 +860,15 @@ export default function ShowcaseClient({
                         sessionHiddenPostIdsRef.current,
                         sessionHiddenCreatorIdsRef.current
                     );
-                    const currentItems = feedItemsForEventsRef.current;
+                    // What has been taken off the page since it was drawn stays
+                    // off: the answer about the first page (above) can land a
+                    // moment before this one, and the list read here is from
+                    // before it. Keeping the rows already drawn would put a
+                    // blocked creator's posts straight back.
+                    const currentItems = feedItemsForEventsRef.current.filter((candidate) => (
+                        candidate.id === selectedItemIdRef.current
+                        || !isSessionHiddenItem(candidate, sessionHiddenPostIdsRef.current, sessionHiddenCreatorIdsRef.current)
+                    ));
                     const preservedVisibleItemCount = Math.min(
                         renderedItemCountRef.current,
                         currentItems.length

@@ -16,29 +16,43 @@ export class ModerationRequestError extends Error {
   }
 }
 
-async function postModerationRequest(path: string, accessToken: string, body?: unknown): Promise<void> {
+async function moderationRequest(
+  method: 'GET' | 'POST' | 'DELETE',
+  path: string,
+  accessToken: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<unknown> {
   let response: Response;
   try {
     response = await fetch(path, {
-      method: 'POST',
+      method,
       headers: {
         Authorization: `Bearer ${accessToken}`,
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal,
     });
-  } catch {
+  } catch (error) {
+    // A request the page itself gave up on is not a failure to report.
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
     throw new ModerationRequestError('Check your connection and try again.', 0);
   }
-  if (response.ok) return;
 
   const data = await response.json().catch(() => null) as { error?: unknown } | null;
+  if (response.ok) return data;
+
   throw new ModerationRequestError(
     response.status === 401
       ? 'Your session has ended. Sign in again, then try once more.'
       : (data && typeof data.error === 'string' && data.error) || 'Something went wrong. Try again.',
     response.status,
   );
+}
+
+async function postModerationRequest(path: string, accessToken: string, body?: unknown): Promise<void> {
+  await moderationRequest('POST', path, accessToken, body);
 }
 
 /**
@@ -115,4 +129,51 @@ export function reportCreator({
 /** Blocks the creator: their posts leave the viewer's feeds and follows are removed both ways. */
 export function blockCreator({ userId, accessToken }: { userId: string; accessToken: string }) {
   return postModerationRequest(`/api/moderation/blocks/${encodeURIComponent(userId)}`, accessToken);
+}
+
+/** Takes a block back. The follows it removed stay removed. */
+export async function unblockCreator({ userId, accessToken }: { userId: string; accessToken: string }): Promise<void> {
+  await moderationRequest('DELETE', `/api/moderation/blocks/${encodeURIComponent(userId)}`, accessToken);
+}
+
+/** Someone the viewer has blocked, named the way a post's creator is named. */
+export type BlockedCreator = {
+  id: string;
+  username: string | null;
+  name: string;
+  avatar: string | null;
+  blockedAt: string;
+};
+
+function isBlockedCreator(value: unknown): value is BlockedCreator {
+  const candidate = value as Partial<BlockedCreator> | null;
+  return Boolean(
+    candidate
+    && typeof candidate.id === 'string'
+    && typeof candidate.name === 'string'
+    && typeof candidate.blockedAt === 'string'
+    && (candidate.username === null || typeof candidate.username === 'string')
+    && (candidate.avatar === null || typeof candidate.avatar === 'string'),
+  );
+}
+
+/**
+ * Whom the viewer has blocked, newest first. An answer of another shape is an
+ * error and never an empty list: an empty list says "you have blocked nobody".
+ */
+export async function listBlockedCreators({
+  accessToken,
+  signal,
+}: {
+  accessToken: string;
+  signal?: AbortSignal;
+}): Promise<{ blockedUsers: BlockedCreator[]; hasMore: boolean }> {
+  const data = await moderationRequest('GET', '/api/moderation/blocks', accessToken, undefined, signal) as {
+    blockedUsers?: unknown;
+    hasMore?: unknown;
+  } | null;
+  if (!data || !Array.isArray(data.blockedUsers) || !data.blockedUsers.every(isBlockedCreator)) {
+    throw new ModerationRequestError('Something went wrong. Try again.', 200);
+  }
+  return { blockedUsers: data.blockedUsers, hasMore: data.hasMore === true };
 }

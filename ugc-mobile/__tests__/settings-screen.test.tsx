@@ -34,6 +34,7 @@ vi.mock('lucide-react-native', () => {
   const icon = (name: string) => (props: Record<string, unknown>) => React.createElement('icon', { name, ...props });
   return {
     ArrowUpRight: icon('ArrowUpRight'),
+    Ban: icon('Ban'),
     Bell: icon('Bell'),
     ChevronRight: icon('ChevronRight'),
     CircleHelp: icon('CircleHelp'),
@@ -226,6 +227,18 @@ describe('settings screen (HIG S16)', () => {
     aiDataConsent.grantedAt = '2026-09-25T08:00:00.000Z';
     const allowed = rowByTitle(renderScreen(), 'AI data sharing');
     expect(allowed.props.accessibilityLabel).toContain('Allowed. Your prompts and media go to AI services when you create.');
+  });
+
+  // The one place a block can be taken back: a blocked creator is left out of everywhere else.
+  it('opens the list of blocked users for a signed-in account, and offers none to a signed-out visitor', () => {
+    const blocked = rowByTitle(renderScreen(), 'Blocked users');
+    expect(blocked.props.accessibilityRole).toBe('button');
+    expect(blocked.props.accessibilityLabel).toBe('Blocked users. See whom you blocked, and unblock them.');
+    renderer.act(() => { (blocked.props.onPress as () => void)(); });
+    expect(routerPush).toHaveBeenCalledWith('/blocked-users');
+
+    authState.user = null;
+    expect(() => rowByTitle(renderScreen(), 'Blocked users')).toThrow('No settings row titled "Blocked users"');
   });
 
   it('copies media diagnostics, named by the running version, from a long-press on the version line', async () => {

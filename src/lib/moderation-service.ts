@@ -9,6 +9,7 @@ import {
   USER_BLOCK_MUTATION_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { getCreatorDisplayName } from '@/lib/profile';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 const USER_REPORT_REASONS = new Set([
@@ -298,6 +299,98 @@ export async function setUserBlockForRoute({
 
   invalidateFeedCache();
   return { ok: true, body: { success: true, blocked: shouldBlock } };
+}
+
+/**
+ * How many blocks one reading of "whom have I blocked" returns, newest first.
+ * Real lists are tens of entries (see `VIEWER_BLOCK_RELATIONSHIP_LIMIT`).
+ */
+export const USER_BLOCK_LIST_LIMIT = 200;
+
+/** Someone the viewer has blocked, named the way a post's creator is named. */
+export type BlockedUserSummary = {
+  id: string;
+  username: string | null;
+  name: string;
+  avatar: string | null;
+  blockedAt: string;
+};
+
+export type UserBlockListRouteResult =
+  | { ok: true; body: { success: true; blockedUsers: BlockedUserSummary[]; hasMore: boolean } }
+  | { ok: false; status: 500; body: { error: string } };
+
+/**
+ * Whom the viewer has blocked. There was no way to read this: a block could be
+ * taken back (`DELETE` on the same route), but only by someone who still knew
+ * the id of the person they had blocked, and a blocked creator is left out of
+ * every place that would show it. Only the viewer's own blocks are read, never
+ * who has blocked the viewer: the table stays off the Data API so that nobody
+ * can enumerate block lists, and this answers for the caller alone.
+ */
+export async function listUserBlocksForRoute({
+  actorUserId,
+  adminSupabase,
+}: {
+  actorUserId: string;
+  adminSupabase: SupabaseClient;
+}): Promise<UserBlockListRouteResult> {
+  const { data: blockRows, error: blockError } = await adminSupabase
+    .from('user_blocks')
+    .select('blocked_user_id, created_at')
+    .eq('blocker_user_id', actorUserId)
+    .order('created_at', { ascending: false })
+    .limit(USER_BLOCK_LIST_LIMIT + 1);
+  if (blockError) {
+    logBackendError('failed_to_list_user_blocks', { error: blockError });
+    return { ok: false, status: 500, body: { error: 'Failed to load blocked users.' } };
+  }
+
+  const rows = ((blockRows ?? []) as Array<{ blocked_user_id: string; created_at: string }>)
+    .slice(0, USER_BLOCK_LIST_LIMIT);
+  if (rows.length === 0) {
+    return { ok: true, body: { success: true, blockedUsers: [], hasMore: false } };
+  }
+
+  const { data: profileRows, error: profileError } = await adminSupabase
+    .from('profiles')
+    .select('id, username, display_name, avatar_url')
+    .in('id', rows.map((row) => String(row.blocked_user_id)));
+  if (profileError) {
+    logBackendError('failed_to_load_blocked_user_profiles', { error: profileError });
+    return { ok: false, status: 500, body: { error: 'Failed to load blocked users.' } };
+  }
+
+  const profilesById = new Map(
+    ((profileRows ?? []) as Array<{
+      id: string;
+      username: string | null;
+      display_name: string | null;
+      avatar_url: string | null;
+    }>).map((profile) => [String(profile.id), profile]),
+  );
+  return {
+    ok: true,
+    body: {
+      success: true,
+      // Someone with no profile row is listed all the same: a block the viewer
+      // cannot see is a block they cannot take back.
+      blockedUsers: rows.map((row) => {
+        const profile = profilesById.get(String(row.blocked_user_id));
+        return {
+          id: String(row.blocked_user_id),
+          username: profile?.username ?? null,
+          name: getCreatorDisplayName({
+            displayName: profile?.display_name ?? null,
+            username: profile?.username ?? null,
+          }),
+          avatar: profile?.avatar_url ?? null,
+          blockedAt: row.created_at,
+        };
+      }),
+      hasMore: (blockRows ?? []).length > USER_BLOCK_LIST_LIMIT,
+    },
+  };
 }
 
 /**

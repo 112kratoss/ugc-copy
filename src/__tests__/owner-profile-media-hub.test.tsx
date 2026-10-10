@@ -235,6 +235,14 @@ describe('OwnerProfileMediaHub', () => {
     expect(window.location.search).toContain('post=post-public');
   });
 
+  // The one way to see whom you blocked and take a block back.
+  it('links to the list of blocked users', async () => {
+    render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} />);
+
+    expect(screen.getByRole('link', { name: /blocked users/i })).toHaveAttribute('href', '/profile/blocked');
+    await screen.findByRole('button', { name: /open public post/i });
+  });
+
   it('keeps raw creations in a focused preview instead of the Showcase reel', async () => {
     render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} />);
 

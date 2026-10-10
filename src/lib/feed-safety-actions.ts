@@ -3,9 +3,10 @@ import {
   blockCreator,
   reportCreator,
   reportPostContent,
+  unblockCreator,
   type SafetySurface,
 } from '@/lib/moderation-client';
-import { takeBlockedCreatorOffClientFeeds } from '@/lib/showcase-client-cache';
+import { forgetBlockedCreatorForVisit, takeBlockedCreatorOffClientFeeds } from '@/lib/showcase-client-cache';
 
 /**
  * The three safety rows of a post's menu, each asked for, sent and answered one
@@ -123,5 +124,39 @@ export async function blockCreatorAfterConfirmation({
     return { status: 'done', message: `${creatorName} is blocked. Their posts are gone from your feed.` };
   } catch (error) {
     return failed('Could not block this creator.', error);
+  }
+}
+
+/**
+ * Takes a block back, from the list of whom the viewer has blocked. Asked
+ * first: it lets the other person see and follow the viewer again.
+ */
+export async function unblockCreatorAfterConfirmation({
+  userId,
+  creatorLabel,
+  accessToken,
+  onSend,
+}: {
+  userId: string;
+  /** How the list names them: `@handle`, or their name when they have no handle. */
+  creatorLabel: string;
+  accessToken: string;
+  /** Runs once the viewer has confirmed, before anything is sent. */
+  onSend?: () => void;
+}): Promise<FeedSafetyOutcome> {
+  const confirmed = await requestConfirmation({
+    title: `Unblock ${creatorLabel}?`,
+    message: 'Their posts will return to your feeds, and you can follow each other again.',
+    confirmLabel: 'Unblock',
+  });
+  if (!confirmed) return { status: 'cancelled' };
+  onSend?.();
+  try {
+    await unblockCreator({ userId, accessToken });
+    // Explore stops leaving them out for the rest of this visit too.
+    forgetBlockedCreatorForVisit(userId);
+    return { status: 'done', message: `${creatorLabel} is unblocked.` };
+  } catch (error) {
+    return failed('Could not unblock this creator.', error);
   }
 }

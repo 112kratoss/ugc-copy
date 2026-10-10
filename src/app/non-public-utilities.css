@@ -5,8 +5,8 @@
  * Route-only utility supplement.
  *
  * globals.css owns Tailwind's theme/base layers and the utilities needed by
- * the anonymous public entry points. This sheet emits only utility rules used
- * by the remaining visual routes, so it can be linked from their layouts
+ * the anonymous public entry points. This sheet emits every utility rule the
+ * remaining visual routes can use, so it can be linked from their layouts
  * without growing the home, showcase, or marketplace stylesheet graph.
  */
 @source "./admin";
@@ -28,23 +28,105 @@
 @source "./unlocks";
 @source "./welcome-reward";
 
-/* Shared components that are reachable only from the route set above. Keep
- * this closure explicit so public-only component utilities are not rescanned. */
+/* Every other file a route above can draw: the components it shares with the
+ * public routes, the shell the root layout draws around every route, and the
+ * public folders' own files that a route above opens (the reel on the profile,
+ * the feed card on the signed-in home).
+ *
+ * This sheet comes after globals.css on those routes, so a utility it emits
+ * outranks every rule of globals.css of the same weight, whatever order
+ * Tailwind gave them. While it scanned only what the public sheet did not,
+ * a shared component kept this sheet's `h-8` over its own `lg:h-px`, which
+ * only globals.css held: the reel on the profile drew a block where a hairline
+ * belongs, and the shell lost hover and breakpoint rules on every signed-in
+ * route. Scanning the whole closure makes this sheet complete for its routes,
+ * so its own order decides. `route-style-readiness.test.ts` holds each list
+ * below to the import closure, file for file. */
+@source "../components/AlertsBadge.tsx";
+@source "../components/AnonymousHome.tsx";
+@source "../components/AppShell.tsx";
+@source "../components/AppShellAccount.tsx";
+@source "../components/AppShellAccountFallback.tsx";
+@source "../components/AppShellClient.tsx";
+@source "../components/AuthProvider.tsx";
 @source "../components/CatalogAdditionalControls.tsx";
+@source "../components/CreatorIdentity.tsx";
 @source "../components/CreatorStudio.tsx";
 @source "../components/CreatorToolPreview.tsx";
+@source "../components/DeferredAppShellAccount.tsx";
+@source "../components/DeferredGenerationNotifications.tsx";
+@source "../components/DesignSystem.tsx";
 @source "../components/EnhancePromptButton.tsx";
+@source "../components/FeedbackViewport.tsx";
+@source "../components/GenerationNotifications.tsx";
 @source "../components/GenerationResultVideo.tsx";
+@source "../components/HomeExperience.tsx";
+@source "../components/HomeFeedSkeleton.tsx";
+@source "../components/HomeSlider.tsx";
+@source "../components/HoverVideo.tsx";
+@source "../components/InlineMediaAudio.tsx";
+@source "../components/InlineMediaVideo.tsx";
+@source "../components/JsonLd.tsx";
 @source "../components/MediaDetailsPreviewModal.tsx";
+@source "../components/NavigationProgress.tsx";
+@source "../components/OptimizedPreviewImage.tsx";
+@source "../components/PostCommentAvatar.tsx";
+@source "../components/PostComments.tsx";
+@source "../components/PostVisibilityMenu.tsx";
+@source "../components/ProfileShareButton.tsx";
+@source "../components/PublicShareButton.tsx";
 @source "../components/PublishToShowcaseModal.tsx";
+@source "../components/QuickStartsCard.tsx";
 @source "../components/RecoverableMediaAudio.tsx";
-@source "../components/StudioOverflowMenu.tsx";
+@source "../components/RecoverableMediaVideo.tsx";
+@source "../components/ResourceFileLink.tsx";
+@source "../components/ResourceMediaPreview.tsx";
+@source "../components/RouteAuthBoundary.tsx";
+@source "../components/SignInWorkspaceCard.tsx";
+@source "../components/SkeletonLoader.tsx";
 @source "../components/StudioModelPicker.tsx";
+@source "../components/StudioOverflowMenu.tsx";
+@source "../components/TabLoadingShell.tsx";
+@source "../components/TextPostPreviewCard.tsx";
+@source "../components/UnavailableMediaNote.tsx";
+@source "../components/WhatsNewModelsCard.tsx";
+@source "../components/app-shell-auth-state.ts";
+@source "../components/app-shell-nav.ts";
 @source "../components/enhancePromptClient.ts";
+@source "../components/feedback-state.ts";
+@source "../components/navigation-progress-state.ts";
 @source "../components/search/CreatorSearchResult.tsx";
 @source "../components/search/SearchField.tsx";
 @source "../components/search/SearchStateBlock.tsx";
+@source "../components/templates/TemplatePrimitives.tsx";
 @source "../components/templates/TemplateRunClient.tsx";
+@source "../components/templates/TemplateRunMedia.tsx";
+@source "../components/templates/api.ts";
+@source "../components/templates/types.ts";
+@source "../components/useAnchoredMenu.ts";
+@source "../components/useInlineMediaPlayback.ts";
+@source "../components/useMediaLoadingPreferences.ts";
+@source "../components/useOptimisticPostSave.ts";
+@source "../components/usePostLifecycle.ts";
+@source "../components/useShareAction.ts";
+@source "../components/useSupabaseAuthCookieHint.ts";
+@source "../components/useUnreadAlertsCount.ts";
+
+/* Files of the public route folders that a route above draws, named one by
+ * one: scanning a whole public folder here would carry every public page's
+ * utilities into the signed-in routes. `*` stands for a folder whose name is
+ * in brackets, which the glob that reads these lines takes for a set of
+ * letters. */
+@source "./feed/FeedClient.tsx";
+@source "./feed/FeedMediaLightbox.tsx";
+@source "./feed/FeedPostCard.tsx";
+@source "./feed/WindowedFeedList.tsx";
+@source "./layout.tsx";
+@source "./showcase/ShowcaseFeedInteraction.tsx";
+@source "./showcase/ShowcaseMediaCarousel.tsx";
+@source "./showcase/ShowcaseReelViewer.tsx";
+@source "./showcase/*/PostResourceBundlePanel.tsx";
+@source "./showcase/showcase-reel-loader.ts";
 
 /* Model and tool registries expose complete class tokens through data fields
  * (for example gradient badge colors) that route components compose at run

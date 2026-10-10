@@ -116,14 +116,30 @@ function collectPublicImportClosure(): Set<string> {
   ]);
 }
 
-function collectNonPublicImportClosure(): Set<string> {
-  const routeSources = readdirSync(APP_ROOT, { withFileTypes: true })
+function listNonPublicRouteDirectories(): string[] {
+  return readdirSync(APP_ROOT, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .filter((entry) => !PUBLIC_ROUTE_DIRECTORIES.has(entry.name) && entry.name !== 'api')
-    .flatMap((entry) => walkFiles(path.join(APP_ROOT, entry.name)))
+    .map((entry) => entry.name);
+}
+
+/**
+ * Every file a route that links the supplement can draw: what its own folder
+ * imports, and what the root layout draws around every route (the shell).
+ */
+function collectSupplementImportClosure(): Set<string> {
+  const routeSources = listNonPublicRouteDirectories()
+    .flatMap((directory) => walkFiles(path.join(APP_ROOT, directory)))
     .filter((file) => /\.(?:ts|tsx|js|jsx)$/.test(file));
 
-  return collectImportClosure(routeSources);
+  return collectImportClosure([path.join(APP_ROOT, 'layout.tsx'), ...routeSources]);
+}
+
+/** A source line for a file under `src/app`, as the supplement names it. */
+function toRouteFileSource(file: string): string {
+  // The glob that reads `@source` takes a bracketed folder (`[id]`) for a set
+  // of letters, and a line written that way matches nothing. `*` names it.
+  return `./${path.relative(APP_ROOT, file).split(path.sep).join('/')}`.replace(/\/\[[^\]/]+\]\//g, '/*/');
 }
 
 function getDeclaredSources(stylesheet: string): string[] {
@@ -224,14 +240,19 @@ describe('route utility stylesheet readiness', () => {
     expect(declaredLibSources).toEqual(expectedLibSources);
   });
 
-  it('keeps the supplemental stylesheet aligned with the private component import closure', () => {
+  // The supplement comes after globals.css on its routes, so a utility it emits
+  // outranks every rule of globals.css of the same weight. While it left out
+  // the components the public sheet already scanned, a shared component kept
+  // the supplement's `h-8` over its own `lg:h-px`: the reel on the profile and
+  // the shell on every signed-in route lost breakpoint and hover rules. So it
+  // scans everything its routes can draw, shared or not
+  // (`route-style-two-sheet-order.test.ts` reads the two compiled sheets).
+  it('keeps the supplemental stylesheet complete for every file its routes can draw', () => {
     const supplementalCss = readFileSync(path.join(APP_ROOT, 'non-public-utilities.css'), 'utf8');
     const declaredSources = getDeclaredSources(supplementalCss);
-    const publicClosure = collectPublicImportClosure();
-    const privateClosure = collectNonPublicImportClosure();
-    const expectedComponentSources = [...privateClosure]
+    const supplementClosure = collectSupplementImportClosure();
+    const expectedComponentSources = [...supplementClosure]
       .filter((file) => file.startsWith(path.join(SRC_ROOT, 'components') + path.sep))
-      .filter((file) => !publicClosure.has(file))
       .map((file) => `../${path.relative(SRC_ROOT, file).split(path.sep).join('/')}`)
       .sort();
     const declaredComponentSources = declaredSources
@@ -239,8 +260,32 @@ describe('route utility stylesheet readiness', () => {
       .sort();
 
     expect(declaredComponentSources).toEqual(expectedComponentSources);
+    // Shared with the public routes, and scanned here all the same.
+    expect(declaredComponentSources).toContain('../components/AppShellClient.tsx');
 
-    const expectedLibSources = [...privateClosure]
+    // The public folders' own files that a signed-in route draws (the reel on
+    // the profile, the feed card on the signed-in home), and the root layout:
+    // named file by file, never as a whole public folder.
+    const nonPublicDirectories = listNonPublicRouteDirectories();
+    const expectedRouteFileSources = [...supplementClosure]
+      .filter((file) => file.startsWith(APP_ROOT + path.sep))
+      .filter((file) => !file.startsWith(path.join(APP_ROOT, 'api') + path.sep))
+      .filter((file) => !nonPublicDirectories.some((directory) => (
+        file.startsWith(path.join(APP_ROOT, directory) + path.sep)
+      )))
+      .map(toRouteFileSource)
+      .sort();
+    const declaredRouteFileSources = declaredSources
+      .filter((source) => source.startsWith('./') && !nonPublicDirectories.includes(source.slice(2)))
+      .sort();
+
+    expect(declaredRouteFileSources).toEqual(expectedRouteFileSources);
+    expect(declaredRouteFileSources).toContain('./showcase/ShowcaseReelViewer.tsx');
+    for (const source of declaredRouteFileSources) {
+      expect(source, `${source} would be read as a set of letters`).not.toMatch(/[[\]]/);
+    }
+
+    const expectedLibSources = [...supplementClosure]
       .filter((file) => file.startsWith(path.join(SRC_ROOT, 'lib') + path.sep))
       .filter((file) => DYNAMIC_UTILITY_STRING.test(readFileSync(file, 'utf8')))
       .map((file) => `../${path.relative(SRC_ROOT, file).split(path.sep).join('/')}`)

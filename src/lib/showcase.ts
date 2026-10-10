@@ -23,6 +23,12 @@ export const SHOWCASE_INITIAL_PAGE_SIZE = 12;
 // fetches only the priority poster; the remaining cards reserve stable space
 // until the interactive client takes over.
 export const SHOWCASE_INITIAL_RENDER_COUNT = 6;
+/**
+ * How many drawn posts a page may ask about at once when it checks them against
+ * the viewer's own feed (`/api/showcase/viewer-exclusions`): two pages of the
+ * grid, which is more than draws before the viewer's own feed arrives.
+ */
+export const SHOWCASE_VIEWER_EXCLUSIONS_MAX_ITEMS = 60;
 
 export interface ShowcasePriorityPosterData {
     postId: string;
