@@ -48,8 +48,99 @@ const memoryCache = new Map<string, ShowcaseClientSnapshot>();
  */
 const creatorsBlockedThisVisit = new Set<string>();
 
-export function getCreatorsBlockedThisVisit(): ReadonlySet<string> {
-  return creatorsBlockedThisVisit;
+/**
+ * The viewer's own Hide and Not interested, as far as the server has told this
+ * tab (`/api/showcase/viewer-exclusions`). The server leaves them out of For
+ * you, and Explore's first page is not the viewer's own. Kept with the blocks
+ * above so that coming back to Explore within the tab does not draw them
+ * again while the same answer is fetched a second time.
+ */
+const creatorsHiddenThisVisit = new Set<string>();
+const postsHiddenThisVisit = new Set<string>();
+
+/**
+ * Whose blocks and preferences this tab is remembering. Signing out, or in as
+ * someone else, does not reload the page, so what is remembered carries its
+ * viewer as a snapshot's key does: a page reads it only for that viewer, and
+ * `claimVisitMemoryFor` starts it again once another viewer, or nobody, is
+ * looking. `undefined` until a page that knows who is looking has said so:
+ * what was learned before then is a signed-in viewer's (only they can block),
+ * so the first signed-in page to ask takes it as its own, and a signed-out one
+ * is shown none of it.
+ */
+let visitViewerId: string | null | undefined;
+const NOBODY: ReadonlySet<string> = new Set<string>();
+
+function isVisitMemoryOf(viewerId: string | null): boolean {
+  return visitViewerId === undefined ? viewerId !== null : visitViewerId === viewerId;
+}
+
+/** A page that knows who is looking says so. What was remembered for anyone else is dropped. */
+export function claimVisitMemoryFor(viewerId: string | null) {
+  if (!isVisitMemoryOf(viewerId)) {
+    creatorsBlockedThisVisit.clear();
+    creatorsHiddenThisVisit.clear();
+    postsHiddenThisVisit.clear();
+  }
+  visitViewerId = viewerId;
+}
+
+export function getCreatorsBlockedThisVisit(viewerId: string | null): ReadonlySet<string> {
+  return isVisitMemoryOf(viewerId) ? creatorsBlockedThisVisit : NOBODY;
+}
+
+export function getFeedPreferencesHiddenThisVisit(viewerId: string | null): {
+  creatorIds: ReadonlySet<string>;
+  postIds: ReadonlySet<string>;
+} {
+  return isVisitMemoryOf(viewerId)
+    ? { creatorIds: creatorsHiddenThisVisit, postIds: postsHiddenThisVisit }
+    : { creatorIds: NOBODY, postIds: NOBODY };
+}
+
+/** Keeps the server's answer to one viewer about the posts a page asked about, for the rest of their visit. */
+export function rememberViewerExclusionsForVisit(viewerId: string, exclusions: {
+  blockedCreatorIds: string[];
+  hiddenCreatorIds: string[];
+  hiddenPostIds: string[];
+}) {
+  claimVisitMemoryFor(viewerId);
+  exclusions.blockedCreatorIds.forEach((id) => creatorsBlockedThisVisit.add(id));
+  exclusions.hiddenCreatorIds.forEach((id) => creatorsHiddenThisVisit.add(id));
+  exclusions.hiddenPostIds.forEach((id) => postsHiddenThisVisit.add(id));
+}
+
+/** A creator has been unblocked: their posts may be drawn again. */
+export function forgetBlockedCreatorForVisit(creatorId: string) {
+  creatorsBlockedThisVisit.delete(creatorId);
+}
+
+/**
+ * A feed page without the posts this tab already knows this viewer's own feed
+ * leaves out: a blocked creator's on every lane, and on For you what the
+ * viewer hid or marked not interested. The same list back when it knows of
+ * nothing, which is every visit of nearly every viewer, and for anyone but the
+ * viewer it learned them for.
+ */
+export function filterFeedItemsForVisit<TItem extends { id: string; creator: { id?: string | null } }>(
+  items: TItem[],
+  { forYou, viewerId }: { forYou: boolean; viewerId: string | null },
+): TItem[] {
+  if (!isVisitMemoryOf(viewerId)) {
+    return items;
+  }
+
+  const usesPreferences = forYou && (creatorsHiddenThisVisit.size > 0 || postsHiddenThisVisit.size > 0);
+  if (creatorsBlockedThisVisit.size === 0 && !usesPreferences) {
+    return items;
+  }
+
+  return items.filter((item) => {
+    const creatorId = item.creator.id;
+    if (creatorId && creatorsBlockedThisVisit.has(creatorId)) return false;
+    if (!usesPreferences) return true;
+    return !postsHiddenThisVisit.has(item.id) && !(creatorId && creatorsHiddenThisVisit.has(creatorId));
+  });
 }
 
 function getSessionStorage(): Storage | null {
@@ -201,6 +292,10 @@ export function writeShowcaseClientSnapshot(
  * stays fresh. A snapshot keeps its age and its place.
  */
 export function takeBlockedCreatorOffClientFeeds(creatorId: string) {
+  // Only a signed-in viewer can block. If the last page to say who was looking
+  // was a signed-out one, someone has signed in since: the next signed-in page
+  // to ask takes this as its own.
+  if (visitViewerId === null) visitViewerId = undefined;
   creatorsBlockedThisVisit.add(creatorId);
   const storage = getSessionStorage();
   const cacheKeys = new Set(memoryCache.keys());
@@ -243,9 +338,17 @@ export function hasFreshShowcaseClientSnapshot(cacheKey: string): boolean {
   return readShowcaseClientSnapshot(cacheKey) !== null;
 }
 
+/** Test helper: drops the copies kept in memory, and leaves what the tab remembers of the viewer. */
+export function forgetShowcaseSnapshotsInMemoryForTests() {
+  memoryCache.clear();
+}
+
 export function clearShowcaseClientCacheForTests() {
   memoryCache.clear();
   creatorsBlockedThisVisit.clear();
+  creatorsHiddenThisVisit.clear();
+  postsHiddenThisVisit.clear();
+  visitViewerId = undefined;
   const storage = getSessionStorage();
   if (!storage) {
     return;

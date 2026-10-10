@@ -221,6 +221,11 @@
       "path": "/api/moderation/reports",
       "auth": "required"
     },
+    "listBlockedUsers": {
+      "method": "GET",
+      "path": "/api/moderation/blocks",
+      "auth": "required"
+    },
     "blockUser": {
       "method": "POST",
       "path": "/api/moderation/blocks/:userId",

@@ -10,7 +10,7 @@ import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import {
     buildShowcaseClientCacheKey,
-    getCreatorsBlockedThisVisit,
+    filterFeedItemsForVisit,
     hasFreshShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
 import {
@@ -370,14 +370,16 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
         return <FullShowcaseClient {...props} />;
     }
 
-    // A creator the viewer blocked on another page a moment ago is not drawn
-    // here either, for the moment this shell stands in for the grid. The list
-    // lives in memory, so it is empty on any page the server drew and the
-    // markup it sent still matches.
-    const blockedThisVisit = getCreatorsBlockedThisVisit();
-    const bootstrapItems = props.initialFeed.items
+    // What this tab already knows this viewer's own feed leaves out (a creator
+    // blocked a moment ago on another page, what the server answered the grid)
+    // is not drawn here either, for the moment this shell stands in for the
+    // grid. That knowledge lives in memory, so it is empty on any page the
+    // server drew and the markup it sent still matches.
+    const bootstrapItems = filterFeedItemsForVisit(props.initialFeed.items, {
+        forYou: props.initialSort === 'for-you',
+        viewerId: user?.id ?? null,
+    })
         .filter((item) => !isTextOnlyPost(item))
-        .filter((item) => !item.creator.id || !blockedThisVisit.has(item.creator.id))
         .slice(0, SHOWCASE_INITIAL_RENDER_COUNT);
     const priorityMediaItemId = bootstrapItems.find((item) => (
         getShowcaseItemMediaItems(item).length > 0

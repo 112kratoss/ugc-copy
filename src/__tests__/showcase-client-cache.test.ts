@@ -3,9 +3,14 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   SHOWCASE_CLIENT_CACHE_TTL_MS,
   buildShowcaseClientCacheKey,
+  claimVisitMemoryFor,
   clearShowcaseClientCacheForTests,
   readShowcaseClientSnapshot,
+  filterFeedItemsForVisit,
+  forgetBlockedCreatorForVisit,
   getCreatorsBlockedThisVisit,
+  getFeedPreferencesHiddenThisVisit,
+  rememberViewerExclusionsForVisit,
   takeBlockedCreatorOffClientFeeds,
   writeShowcaseClientSnapshot,
   SHOWCASE_SNAPSHOT_MAX_OFFSET_ITEMS,
@@ -219,13 +224,124 @@ describe('showcase client cache', () => {
     // Explore's first page is the server's for everyone, so it asks who was
     // blocked since the tab loaded before it draws.
     it('remembers the creator for the rest of the visit', () => {
-      expect([...getCreatorsBlockedThisVisit()]).toEqual([]);
+      expect([...getCreatorsBlockedThisVisit('viewer-1')]).toEqual([]);
 
       takeBlockedCreatorOffClientFeeds('creator-a');
       takeBlockedCreatorOffClientFeeds('creator-b');
       takeBlockedCreatorOffClientFeeds('creator-a');
 
-      expect([...getCreatorsBlockedThisVisit()]).toEqual(['creator-a', 'creator-b']);
+      expect([...getCreatorsBlockedThisVisit('viewer-1')]).toEqual(['creator-a', 'creator-b']);
+    });
+  });
+
+  // Explore's first page is the server's for everyone. What the server has said
+  // the viewer's own feed leaves out is kept for the visit, so that the next
+  // time Explore opens in this tab it does not draw them while it asks again.
+  describe("what the viewer's own feed leaves out", () => {
+    const postBy = (id: string, creatorId: string | null) => ({ id, creator: { id: creatorId } });
+    const page = [postBy('a-1', 'blocked'), postBy('b-1', 'hidden'), postBy('c-1', 'kept'), postBy('c-2', 'kept'), postBy('d-1', null)];
+
+    it('hands the page back untouched while it knows of nothing, which is nearly every visit', () => {
+      expect(filterFeedItemsForVisit(page, { forYou: true, viewerId: 'viewer-1' })).toBe(page);
+      expect(filterFeedItemsForVisit(page, { forYou: false, viewerId: 'viewer-1' })).toBe(page);
+    });
+
+    it("keeps a blocked creator off every lane, and Hide and Not interested off For you alone", () => {
+      rememberViewerExclusionsForVisit('viewer-1', { blockedCreatorIds: ['blocked'], hiddenCreatorIds: ['hidden'], hiddenPostIds: ['c-2'] });
+
+      expect(filterFeedItemsForVisit(page, { forYou: true, viewerId: 'viewer-1' }).map((item) => item.id)).toEqual(['c-1', 'd-1']);
+      // The server leaves the viewer's feed preferences out of For you only: the other lanes show them on every page.
+      expect(filterFeedItemsForVisit(page, { forYou: false, viewerId: 'viewer-1' }).map((item) => item.id)).toEqual(['b-1', 'c-1', 'c-2', 'd-1']);
+      expect([...getCreatorsBlockedThisVisit('viewer-1')]).toEqual(['blocked']);
+      expect([...getFeedPreferencesHiddenThisVisit('viewer-1').creatorIds]).toEqual(['hidden']);
+      expect([...getFeedPreferencesHiddenThisVisit('viewer-1').postIds]).toEqual(['c-2']);
+    });
+
+    it('still hands a lane back untouched when all it knows about is For you', () => {
+      rememberViewerExclusionsForVisit('viewer-1', { blockedCreatorIds: [], hiddenCreatorIds: ['hidden'], hiddenPostIds: [] });
+
+      expect(filterFeedItemsForVisit(page, { forYou: false, viewerId: 'viewer-1' })).toBe(page);
+      expect(filterFeedItemsForVisit(page, { forYou: true, viewerId: 'viewer-1' }).map((item) => item.id)).toEqual(['a-1', 'c-1', 'c-2', 'd-1']);
+    });
+
+    it('draws a creator again once they are unblocked', () => {
+      takeBlockedCreatorOffClientFeeds('blocked');
+      rememberViewerExclusionsForVisit('viewer-1', { blockedCreatorIds: ['other'], hiddenCreatorIds: [], hiddenPostIds: [] });
+
+      forgetBlockedCreatorForVisit('blocked');
+
+      expect([...getCreatorsBlockedThisVisit('viewer-1')]).toEqual(['other']);
+      expect(filterFeedItemsForVisit(page, { forYou: true, viewerId: 'viewer-1' })).toEqual(page);
+    });
+
+    it('starts each test, like each tab, knowing nothing', () => {
+      expect([...getCreatorsBlockedThisVisit('viewer-1')]).toEqual([]);
+      expect(getFeedPreferencesHiddenThisVisit('viewer-1').creatorIds.size + getFeedPreferencesHiddenThisVisit('viewer-1').postIds.size).toBe(0);
+    });
+
+    // Signing out, or in as someone else, does not reload the page: the tab
+    // would have gone on leaving one viewer's blocks out of another's Explore.
+    describe('and whose it is', () => {
+      const everything = { blockedCreatorIds: ['blocked'], hiddenCreatorIds: ['hidden'], hiddenPostIds: ['c-2'] };
+
+      it('is shown to the viewer it was learned for, and to nobody else', () => {
+        rememberViewerExclusionsForVisit('viewer-1', everything);
+
+        expect(filterFeedItemsForVisit(page, { forYou: true, viewerId: 'viewer-1' }).map((item) => item.id)).toEqual(['c-1', 'd-1']);
+        expect(filterFeedItemsForVisit(page, { forYou: true, viewerId: 'viewer-2' })).toBe(page);
+        expect(filterFeedItemsForVisit(page, { forYou: true, viewerId: null })).toBe(page);
+        expect([...getCreatorsBlockedThisVisit('viewer-2')]).toEqual([]);
+        expect([...getCreatorsBlockedThisVisit(null)]).toEqual([]);
+        expect(getFeedPreferencesHiddenThisVisit('viewer-2').creatorIds.size + getFeedPreferencesHiddenThisVisit(null).postIds.size).toBe(0);
+        // Reading it as someone else drops nothing: it is still the first viewer's.
+        expect([...getCreatorsBlockedThisVisit('viewer-1')]).toEqual(['blocked']);
+      });
+
+      it('is dropped once a page says another viewer, or nobody, is looking', () => {
+        rememberViewerExclusionsForVisit('viewer-1', everything);
+        claimVisitMemoryFor('viewer-1');
+        expect([...getCreatorsBlockedThisVisit('viewer-1')]).toEqual(['blocked']);
+
+        claimVisitMemoryFor(null);
+        claimVisitMemoryFor('viewer-1');
+
+        expect([...getCreatorsBlockedThisVisit('viewer-1')]).toEqual([]);
+        expect(filterFeedItemsForVisit(page, { forYou: true, viewerId: 'viewer-1' })).toBe(page);
+      });
+
+      it("does not mix one viewer's answer into another's", () => {
+        rememberViewerExclusionsForVisit('viewer-1', everything);
+        rememberViewerExclusionsForVisit('viewer-2', { blockedCreatorIds: ['kept'], hiddenCreatorIds: [], hiddenPostIds: [] });
+
+        expect(filterFeedItemsForVisit(page, { forYou: true, viewerId: 'viewer-2' }).map((item) => item.id)).toEqual(['a-1', 'b-1', 'd-1']);
+        expect(filterFeedItemsForVisit(page, { forYou: true, viewerId: 'viewer-1' })).toBe(page);
+      });
+
+      // On their own page, say, which is opened without Explore having drawn.
+      it('gives a block made before any page said who was looking to the first signed-in page that asks', () => {
+        takeBlockedCreatorOffClientFeeds('blocked');
+
+        expect(filterFeedItemsForVisit(page, { forYou: false, viewerId: null })).toBe(page);
+        expect(filterFeedItemsForVisit(page, { forYou: false, viewerId: 'viewer-1' }).map((item) => item.id)).toEqual(['b-1', 'c-1', 'c-2', 'd-1']);
+        claimVisitMemoryFor('viewer-1');
+        expect(filterFeedItemsForVisit(page, { forYou: false, viewerId: 'viewer-2' })).toBe(page);
+        expect([...getCreatorsBlockedThisVisit('viewer-1')]).toEqual(['blocked']);
+      });
+
+      it('gives a block made after a signed-out page to the viewer who has signed in since', () => {
+        claimVisitMemoryFor(null);
+        takeBlockedCreatorOffClientFeeds('blocked');
+
+        expect(filterFeedItemsForVisit(page, { forYou: false, viewerId: null })).toBe(page);
+        expect([...getCreatorsBlockedThisVisit('viewer-1')]).toEqual(['blocked']);
+      });
+
+      it('never shows a signed-out page what was learned before anyone said who was looking', () => {
+        takeBlockedCreatorOffClientFeeds('blocked');
+        claimVisitMemoryFor(null);
+
+        expect([...getCreatorsBlockedThisVisit('viewer-1')]).toEqual([]);
+      });
     });
   });
 });

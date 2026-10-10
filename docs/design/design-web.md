@@ -199,6 +199,7 @@ The two must look and behave like one product. A stale session falls back to the
 
 - **Controls:** a category filter (All posts, Images, Videos) and a sort (For you, Recent, Saved, Remixed, Sales) over a media grid.
 - **The reel:** a tile opens the reel viewer (`ShowcaseReelViewer`), which is loaded on demand and warmed ahead of the click. While a confirmation is open above it ("Report content?") the reel leaves the keyboard alone. A creator's page and the profile open the same viewer, and its close button names the page it goes back to (Explore, Creator, Profile), as the shell titles them.
+- **The first page is everyone's:** the server builds it without knowing the viewer, so that it can be cached and painted at once, and the viewer's own feed is merged in under the rows already drawn. A signed-in page therefore asks the server which of the posts it drew the viewer's own feed leaves out (`/api/showcase/viewer-exclusions`) and takes those out: a creator with a block between them and the viewer on every lane, and on For you what the viewer hid or marked not interested, as on the server. The answer is kept for the visit (`showcase-client-cache.ts`), so Explore does not draw them again the next time it opens in the tab. What the tab keeps is one viewer's: signing out, or in as someone else, does not reload the page, so a page reads it only for the viewer it was learned for and drops it once someone else, or nobody, is looking. A post open in the reel stays until it is closed.
 - **Order:** media comes first, gutters are consistent, and filters show real selected state.
 
 ### Post page (`/showcase/[id]`)
@@ -236,6 +237,7 @@ Failed and processing states say what happens next.
 - **Search** (`/search`): one unified search, in tabs for Top, Creators, Posts and Recipes.
 - **Alerts** (`/notifications`): every alert links to its target (`resolveWebNotificationPath`).
 - **Profile** (`/profile`): the owner's card and media hub. The reel over Saved carries the ⋯ menu's safety rows; the reel over your own posts has no ⋯.
+- **Blocked users** (`/profile/blocked`, a quiet row under the profile's shortcuts): whom you have blocked, newest first, each with Unblock. It is the one way to take a block back, because a blocked creator is left out of every place that would show them. Unblock asks first, and the row leaves at the answer, not at the server's reply: a refusal draws it again in its place and says why in a toast, and a success says so and lets Explore draw them again. A list that cannot be read says so and never reads as empty.
 - **Public profiles** (`/creators/[username]`): Follow (Edit Profile on your own), Share profile, and for anyone but the creator a ⋯ with Report user and Block user, as on the app's creator screen. Their answers are toasts, and a block leaves for Explore.
 - **Pricing** (`/pricing`): Razorpay credit packs.
 - **Invite & Earn** (`/invite`).

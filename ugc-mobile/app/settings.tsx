@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { router } from 'expo-router';
-import { ArrowUpRight, Bell, ChevronRight, CircleHelp, CreditCard, FileText, Gift, ShieldCheck, Sparkles, Trash2, UserRound } from 'lucide-react-native';
+import { ArrowUpRight, Ban, Bell, ChevronRight, CircleHelp, CreditCard, FileText, Gift, ShieldCheck, Sparkles, Trash2, UserRound } from 'lucide-react-native';
 import { Linking, Pressable, View } from 'react-native';
 
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
@@ -96,6 +96,17 @@ export default function SettingsScreen() {
           : 'Not allowed. You’ll be asked before anything is sent to AI services.'}
         onPress={() => router.push('/ai-data-sharing' as never)}
       />
+
+      {/* Blocks belong to an account, and this is the one place a block can be
+          taken back: a blocked creator is left out of everywhere else. */}
+      {user ? (
+        <SettingsCard
+          icon={<Ban size={appTheme.icon.feature} color={theme.colors.text} />}
+          title="Blocked users"
+          body="See whom you blocked, and unblock them."
+          onPress={() => router.push('/blocked-users' as never)}
+        />
+      ) : null}
 
       <GroupLabel>Support & legal</GroupLabel>
 

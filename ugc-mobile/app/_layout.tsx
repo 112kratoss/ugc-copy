@@ -352,6 +352,7 @@ function RootLayoutNav() {
                 <Stack.Screen name="delete-account" options={{ title: 'Delete Account' }} />
                 <Stack.Screen name="help" options={{ title: 'Help & Support' }} />
                 <Stack.Screen name="ai-data-sharing" options={{ title: 'AI Data Sharing' }} />
+                <Stack.Screen name="blocked-users" options={{ title: 'Blocked Users' }} />
                 </Stack>
                 </OverlayHost>
                 {/* Above every screen: the flight a tapped tile's picture makes

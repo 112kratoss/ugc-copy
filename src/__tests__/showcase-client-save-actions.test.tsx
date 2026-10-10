@@ -10,7 +10,11 @@ import {
   type ShowcaseFeedPage,
 } from '@/lib/showcase';
 import type { SourceToolOption } from '@/lib/source-tools';
-import { clearShowcaseClientCacheForTests, takeBlockedCreatorOffClientFeeds } from '@/lib/showcase-client-cache';
+import {
+  clearShowcaseClientCacheForTests,
+  forgetShowcaseSnapshotsInMemoryForTests,
+  takeBlockedCreatorOffClientFeeds,
+} from '@/lib/showcase-client-cache';
 
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
@@ -116,6 +120,14 @@ function createFeed(
       ...pageInfo,
     },
   };
+}
+
+/** Drops the copies Explore keeps of its pages, and nothing else the tab remembers. */
+function clearShowcaseSnapshotsOnly() {
+  for (const key of Object.keys(window.sessionStorage)) {
+    if (key.startsWith('magicbooklet:showcase:')) window.sessionStorage.removeItem(key);
+  }
+  forgetShowcaseSnapshotsInMemoryForTests();
 }
 
 function renderShowcase(itemOrItems: ShowcaseFeedItem | ShowcaseFeedItem[]) {
@@ -1663,5 +1675,264 @@ describe('ShowcaseClient save actions', () => {
 
     expect(within(reel).getAllByRole('menuitem').map((row) => row.querySelector('.font-semibold')?.textContent))
       .toEqual(['Not interested']);
+  });
+
+  // Explore's first page is the server's for everyone, and the viewer's own feed
+  // is merged in under the rows already drawn. A creator the viewer had blocked
+  // or hidden was back in those rows after every reload.
+  describe("what the viewer's own feed leaves out of the first page", () => {
+    const blockedCreator = { id: 'creator-blocked', username: 'blocked', name: 'Blocked', avatar: null };
+    const hiddenCreator = { id: 'creator-hidden', username: 'hidden', name: 'Hidden', avatar: null };
+    const theirs = createShowcaseItem({ id: 'post-blocked', title: 'Blocked Frame', creator: blockedCreator });
+    const hiddenCreators = createShowcaseItem({ id: 'post-hidden-creator', title: 'Hidden Creator Frame', creator: hiddenCreator });
+    const notInterested = createShowcaseItem({ id: 'post-not-interested', title: 'Not Interested Frame', creator: otherCreator });
+    const kept = createShowcaseItem({ id: 'post-kept', title: 'Kept Frame', creator: otherCreator });
+    const answer = {
+      blockedCreatorIds: [blockedCreator.id],
+      hiddenCreatorIds: [hiddenCreator.id],
+      hiddenPostIds: [notInterested.id],
+    };
+
+    function answerRequests({ exclusions = answer, ok = true, feedItems = [] as ShowcaseFeedItem[] } = {}) {
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/showcase/viewer-exclusions') {
+          return { ok, status: ok ? 200 : 500, json: async () => (ok ? exclusions : { error: 'unavailable' }) };
+        }
+        if (url.startsWith('/api/showcase/feed?')) {
+          return {
+            ok: true,
+            json: async () => ({
+              items: feedItems,
+              pageInfo: { hasMore: false, nextOffset: null, limit: 12, offset: 4 },
+            }),
+          };
+        }
+        return { ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) };
+      }));
+    }
+    const exclusionRequests = () => vi.mocked(fetch).mock.calls
+      .filter(([input]) => String(input) === '/api/showcase/viewer-exclusions');
+    const firstPage = (sort: 'recent' | 'for-you', feed: ShowcaseFeedPage) => (
+      <ShowcaseClient
+        initialFeed={feed}
+        initialCategory="all"
+        initialSort={sort}
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+    const renderFirstPage = (sort: 'recent' | 'for-you', pageInfo: Partial<ShowcaseFeedPage['pageInfo']> = {}) => render(
+      firstPage(sort, createFeed([theirs, hiddenCreators, notInterested, kept], pageInfo))
+    );
+
+    it('asks the server about the posts it drew, once, as the signed-in viewer', async () => {
+      answerRequests();
+      renderFirstPage('recent');
+
+      await waitFor(() => expect(exclusionRequests()).toHaveLength(1));
+      const [, init] = exclusionRequests()[0];
+      expect(init).toMatchObject({ method: 'POST', headers: { Authorization: 'Bearer test-token' } });
+      expect(JSON.parse(String(init?.body))).toEqual({
+        items: [
+          { postId: 'post-blocked', creatorId: 'creator-blocked' },
+          { postId: 'post-hidden-creator', creatorId: 'creator-hidden' },
+          { postId: 'post-not-interested', creatorId: 'creator-2' },
+          { postId: 'post-kept', creatorId: 'creator-2' },
+        ],
+      });
+    });
+
+    // Until sign-in has settled the page does not know whose feed to ask about.
+    it('waits until it is known who is looking before it asks', async () => {
+      answerRequests();
+      authState.isLoading = true;
+      const feed = createFeed([theirs, hiddenCreators, notInterested, kept]);
+      const view = render(firstPage('recent', feed));
+      await act(async () => Promise.resolve());
+      expect(exclusionRequests()).toHaveLength(0);
+      expect(screen.getByText('Blocked Frame')).toBeInTheDocument();
+
+      authState.isLoading = false;
+      view.rerender(firstPage('recent', feed));
+
+      await waitFor(() => expect(exclusionRequests()).toHaveLength(1));
+      await waitFor(() => expect(screen.queryByText('Blocked Frame')).not.toBeInTheDocument());
+    });
+
+    // The viewer is looking at it. It goes when the reel is closed.
+    it('leaves the post that is open in the reel where it is, takes the rest, and takes it too once the reel is closed', async () => {
+      vi.spyOn(window.history, 'pushState');
+      const theirsToo = createShowcaseItem({ id: 'post-blocked-2', title: 'Other Blocked Frame', creator: blockedCreator });
+      let answerNow: () => void = () => undefined;
+      const untilAsked = new Promise<void>((resolve) => { answerNow = resolve; });
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/showcase/viewer-exclusions') {
+          await untilAsked;
+          return { ok: true, status: 200, json: async () => answer };
+        }
+        return { ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) };
+      }));
+      render(firstPage('recent', createFeed([theirs, theirsToo, kept])));
+
+      fireEvent.click(screen.getByRole('img', { name: 'Blocked Frame' }));
+      const reel = await screen.findByRole('dialog');
+      expect(await within(reel).findByRole('button', { name: /more actions for blocked frame/i })).toBeInTheDocument();
+      await act(async () => {
+        answerNow();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(screen.queryByText('Other Blocked Frame')).not.toBeInTheDocument());
+      expect(within(screen.getByRole('dialog')).getByRole('button', { name: /more actions for blocked frame/i }))
+        .toBeInTheDocument();
+      expect(screen.getByText('Kept Frame')).toBeInTheDocument();
+
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Explore' }));
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.queryByRole('img', { name: 'Blocked Frame' })).not.toBeInTheDocument());
+      expect(screen.getByRole('img', { name: 'Kept Frame' })).toBeInTheDocument();
+    });
+
+    it("takes a blocked creator's posts out on any lane, and leaves Hide and Not interested to For you", async () => {
+      answerRequests();
+      renderFirstPage('recent');
+
+      await waitFor(() => expect(screen.queryByText('Blocked Frame')).not.toBeInTheDocument());
+      // The server keeps the viewer's feed preferences out of For you only, so Recent shows them, as its later pages do.
+      expect(screen.getByText('Hidden Creator Frame')).toBeInTheDocument();
+      expect(screen.getByText('Not Interested Frame')).toBeInTheDocument();
+      expect(screen.getByText('Kept Frame')).toBeInTheDocument();
+    });
+
+    it('takes out what the viewer hid or marked not interested as well, on For you', async () => {
+      // The viewer's own feed arrives too, and carries none of them.
+      answerRequests({ feedItems: [kept] });
+      renderFirstPage('for-you');
+
+      await waitFor(() => expect(screen.queryByText('Blocked Frame')).not.toBeInTheDocument());
+      expect(screen.queryByText('Hidden Creator Frame')).not.toBeInTheDocument();
+      expect(screen.queryByText('Not Interested Frame')).not.toBeInTheDocument();
+      expect(screen.getByText('Kept Frame')).toBeInTheDocument();
+    });
+
+    it('keeps them out of a later page that carries them again', async () => {
+      const theirSecond = createShowcaseItem({ id: 'post-blocked-2', title: 'Blocked Again Frame', creator: blockedCreator });
+      const later = createShowcaseItem({ id: 'post-later', title: 'Later Frame', creator: otherCreator });
+      answerRequests({ feedItems: [theirSecond, later] });
+      renderFirstPage('recent', { hasMore: true, nextOffset: 4, limit: 4 });
+      await waitFor(() => expect(screen.queryByText('Blocked Frame')).not.toBeInTheDocument());
+
+      let loadMoreObserver: (typeof intersectionObservers)[number] | undefined;
+      await waitFor(() => {
+        loadMoreObserver = intersectionObservers.find((observer) => (
+          observer.observedTargets.some((target) => (
+            target.getAttribute('data-showcase-load-more-sentinel') === 'true'
+          ))
+        ));
+        expect(loadMoreObserver).toBeDefined();
+      });
+      act(() => {
+        loadMoreObserver?.trigger(true);
+      });
+
+      expect(await screen.findByText('Later Frame')).toBeInTheDocument();
+      expect(screen.queryByText('Blocked Again Frame')).not.toBeInTheDocument();
+    });
+
+    it('asks nothing for a signed-out viewer, who has blocked and hidden nobody', async () => {
+      authState.session = null;
+      authState.user = null;
+      answerRequests();
+      renderFirstPage('recent');
+
+      expect(await screen.findByText('Blocked Frame')).toBeInTheDocument();
+      await act(async () => Promise.resolve());
+      expect(exclusionRequests()).toHaveLength(0);
+    });
+
+    it('keeps what it drew when the server cannot answer', async () => {
+      answerRequests({ ok: false });
+      renderFirstPage('recent');
+
+      await waitFor(() => expect(exclusionRequests()).toHaveLength(1));
+      await act(async () => Promise.resolve());
+      expect(screen.getByText('Blocked Frame')).toBeInTheDocument();
+      expect(screen.getByText('Kept Frame')).toBeInTheDocument();
+    });
+
+    it('does not draw them at all the next time Explore opens in this tab', async () => {
+      answerRequests();
+      const first = renderFirstPage('for-you');
+      await waitFor(() => expect(screen.queryByText('Blocked Frame')).not.toBeInTheDocument());
+      first.unmount();
+      // No kept copy of the page: what is remembered is the server's answer.
+      clearShowcaseSnapshotsOnly();
+      answerRequests({ exclusions: { blockedCreatorIds: [], hiddenCreatorIds: [], hiddenPostIds: [] }, ok: false });
+
+      renderFirstPage('for-you');
+
+      expect(screen.getByText('Kept Frame')).toBeInTheDocument();
+      expect(screen.queryByText('Blocked Frame')).not.toBeInTheDocument();
+      expect(screen.queryByText('Hidden Creator Frame')).not.toBeInTheDocument();
+      expect(screen.queryByText('Not Interested Frame')).not.toBeInTheDocument();
+    });
+
+    // Signing out, or in as someone else, does not reload the page: the tab
+    // went on leaving the last viewer's blocks out of the next one's Explore.
+    it('draws the whole page for a visitor who has signed out, and for another viewer, in the same tab', async () => {
+      answerRequests();
+      const first = renderFirstPage('for-you');
+      await waitFor(() => expect(screen.queryByText('Blocked Frame')).not.toBeInTheDocument());
+      first.unmount();
+      clearShowcaseSnapshotsOnly();
+
+      authState.session = null;
+      authState.user = null;
+      const signedOut = renderFirstPage('for-you');
+      for (const title of ['Blocked Frame', 'Hidden Creator Frame', 'Not Interested Frame', 'Kept Frame']) {
+        expect(screen.getByText(title)).toBeInTheDocument();
+      }
+      signedOut.unmount();
+      clearShowcaseSnapshotsOnly();
+
+      // The next viewer has blocked and hidden nobody, and the server says so.
+      authState.session = { access_token: 'other-token', user: { id: 'user-2' } };
+      authState.user = { id: 'user-2' };
+      answerRequests({ exclusions: { blockedCreatorIds: [], hiddenCreatorIds: [], hiddenPostIds: [] } });
+      renderFirstPage('for-you');
+      await waitFor(() => expect(exclusionRequests()).toHaveLength(1));
+      await act(async () => Promise.resolve());
+      for (const title of ['Blocked Frame', 'Hidden Creator Frame', 'Not Interested Frame', 'Kept Frame']) {
+        expect(screen.getByText(title)).toBeInTheDocument();
+      }
+    });
+
+    it('forgets the first viewer for good once someone else has looked', async () => {
+      answerRequests();
+      const first = renderFirstPage('for-you');
+      await waitFor(() => expect(screen.queryByText('Blocked Frame')).not.toBeInTheDocument());
+      first.unmount();
+      clearShowcaseSnapshotsOnly();
+
+      authState.session = null;
+      authState.user = null;
+      renderFirstPage('for-you').unmount();
+      clearShowcaseSnapshotsOnly();
+
+      // The first viewer signs in again: the page asks afresh, and until the
+      // answer comes it draws what the server sent.
+      authState.session = { access_token: 'test-token', user: { id: 'user-1' } };
+      authState.user = { id: 'user-1' };
+      answerRequests({ ok: false });
+      renderFirstPage('for-you');
+
+      expect(screen.getByText('Blocked Frame')).toBeInTheDocument();
+      await waitFor(() => expect(exclusionRequests()).toHaveLength(1));
+    });
   });
 });

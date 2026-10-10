@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server';
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
 import {
+  listUserBlocksForRoute,
   setUserBlockForRoute,
   submitModerationReportForRoute,
   type ModerationRouteResult,
@@ -16,6 +17,7 @@ import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 type ModerationRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
+  listUserBlocksForRoute?: typeof listUserBlocksForRoute;
   setUserBlockForRoute?: typeof setUserBlockForRoute;
   submitModerationReportForRoute?: typeof submitModerationReportForRoute;
 };
@@ -24,6 +26,7 @@ function resolveDependencies(dependencies: ModerationRouteDependencies | undefin
   return {
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
+    listUserBlocksForRoute: dependencies?.listUserBlocksForRoute ?? listUserBlocksForRoute,
     setUserBlockForRoute: dependencies?.setUserBlockForRoute ?? setUserBlockForRoute,
     submitModerationReportForRoute: dependencies?.submitModerationReportForRoute ?? submitModerationReportForRoute,
   };
@@ -101,6 +104,43 @@ export async function userBlockRouteResponse({
     shouldBlock,
   }));
   return applyPrivateNoStoreApiResponseHeaders(response, request);
+}
+
+/** Whom the signed-in viewer has blocked: theirs alone, and kept out of every cache. */
+export async function userBlockListRouteResponse({
+  dependencies,
+  request,
+}: {
+  dependencies?: ModerationRouteDependencies;
+  request: Request;
+}) {
+  const resolved = resolveDependencies(dependencies);
+  const actorUserId = await getAuthenticatedUserId(request, resolved);
+  if (!actorUserId) {
+    return applyPrivateNoStoreApiResponseHeaders(
+      NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+      request,
+    );
+  }
+
+  const result = await resolved.listUserBlocksForRoute({
+    actorUserId,
+    adminSupabase: resolved.createServiceClient(),
+  });
+  return applyPrivateNoStoreApiResponseHeaders(
+    NextResponse.json(result.body, { status: result.ok ? 200 : result.status }),
+    request,
+  );
+}
+
+export function createUserBlockListRouteHandlers({
+  dependencies,
+}: {
+  dependencies?: ModerationRouteDependencies;
+} = {}) {
+  return {
+    GET: (request: Request) => userBlockListRouteResponse({ dependencies, request }),
+  };
 }
 
 export function createUserBlockRouteHandlers({

@@ -8,6 +8,7 @@ import { SHOWCASE_INITIAL_RENDER_COUNT, type ShowcaseFeedItem } from '@/lib/show
 import {
   buildShowcaseClientCacheKey,
   clearShowcaseClientCacheForTests,
+  rememberViewerExclusionsForVisit,
   takeBlockedCreatorOffClientFeeds,
   writeShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
@@ -242,6 +243,7 @@ describe('ShowcaseBootstrapClient', () => {
       creator: { id: 'creator-2', username: 'creator-two', name: 'Creator Two', avatar: null },
     }));
     takeBlockedCreatorOffClientFeeds('creator-1');
+    authState.user = { id: 'viewer-1' };
 
     render(<ShowcaseBootstrapClient {...props} />);
 
@@ -249,6 +251,44 @@ describe('ShowcaseBootstrapClient', () => {
     expect(document.querySelectorAll('[data-showcase-bootstrap-card="true"]')).toHaveLength(1);
     expect(screen.queryByText('Priority campaign')).not.toBeInTheDocument();
     expect(screen.queryByText(/Trailing campaign/)).not.toBeInTheDocument();
+  });
+
+  // Signing out, or in as someone else, does not reload the page.
+  it("draws the whole first page for anyone but the viewer whose blocks the tab remembers", () => {
+    const props = createProps();
+    rememberViewerExclusionsForVisit('viewer-1', { blockedCreatorIds: ['creator-1'], hiddenCreatorIds: [], hiddenPostIds: [] });
+
+    const signedOut = render(<ShowcaseBootstrapClient {...props} />);
+    expect(screen.getByText('Priority campaign')).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-showcase-bootstrap-card="true"]')).toHaveLength(SHOWCASE_INITIAL_RENDER_COUNT);
+    signedOut.unmount();
+
+    authState.user = { id: 'viewer-2' };
+    render(<ShowcaseBootstrapClient {...props} />);
+    expect(screen.getByText('Priority campaign')).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-showcase-bootstrap-card="true"]')).toHaveLength(SHOWCASE_INITIAL_RENDER_COUNT);
+  });
+
+  // The grid asks the server what the viewer's own feed leaves out and the tab
+  // keeps the answer. Hide and Not interested are For you's, as on the server.
+  it('does not draw what the viewer hid, on For you, once the tab has been told', () => {
+    const props = createProps();
+    props.initialFeed.items.push(createItem({
+      id: 'post-someone-else',
+      title: 'Someone else',
+      creator: { id: 'creator-2', username: 'creator-two', name: 'Creator Two', avatar: null },
+    }));
+    rememberViewerExclusionsForVisit('viewer-1', { blockedCreatorIds: [], hiddenCreatorIds: ['creator-1'], hiddenPostIds: [] });
+    authState.user = { id: 'viewer-1' };
+
+    const forYou = render(<ShowcaseBootstrapClient {...props} />);
+    expect(screen.getByText('Someone else')).toBeInTheDocument();
+    expect(screen.queryByText('Priority campaign')).not.toBeInTheDocument();
+    forYou.unmount();
+
+    render(<ShowcaseBootstrapClient {...props} initialSort="recent" />);
+    expect(screen.getByText('Priority campaign')).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-showcase-bootstrap-card="true"]')).toHaveLength(SHOWCASE_INITIAL_RENDER_COUNT);
   });
 
   it('prioritizes the first usable media instead of the first placeholder tile', () => {

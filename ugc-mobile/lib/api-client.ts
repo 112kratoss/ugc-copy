@@ -306,6 +306,15 @@ export interface SaveShowcasePostResponse {
 export type UserReportReason = 'spam' | 'harassment' | 'impersonation' | 'unsafe_content' | 'other';
 export type GenerationReportReason = 'offensive_ai_output' | 'unsafe_content' | 'other';
 export type CommentReportReason = 'spam' | 'harassment' | 'unsafe_content' | 'other';
+/** Someone the signed-in viewer has blocked, named the way a post's creator is named. */
+export type BlockedUser = {
+  id: string;
+  username: string | null;
+  name: string;
+  avatar: string | null;
+  blockedAt: string;
+};
+
 export type ModerationReportSourceSurface =
   | 'showcase'
   | 'showcase-reel'
@@ -918,6 +927,8 @@ export function createApiClient({
         ...body,
       }),
     }),
+    listBlockedUsers: () =>
+      request<{ success: true; blockedUsers: BlockedUser[]; hasMore: boolean }>('/api/moderation/blocks'),
     blockUser: (userId: string) =>
       request<{ success: true; blocked: boolean }>(`/api/moderation/blocks/${encodeURIComponent(userId)}`, {
         method: 'POST',
