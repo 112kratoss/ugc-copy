@@ -280,6 +280,9 @@ jobs:
       - name: Test template publication with real Auth, Storage and PostgREST
         run: npx vitest run --config vitest.template-publication-postgrest.config.ts
 
+      - name: Test template run identity with real Auth, Storage and PostgREST
+        run: npx vitest run --config vitest.template-run-auth-postgrest.config.ts
+
       - name: Test admin moderation with authoritative sessions and real SQL
         run: npx vitest run --config vitest.admin-moderation-postgrest.config.ts
 
@@ -369,6 +372,11 @@ jobs:
       # here because this is the only job with a live database.
       - name: Install dependencies
         run: npm ci
+
+      - name: Test operational retention with actual row locks
+        run: npx vitest run src/__tests__/operational-retention-locks-database.test.ts
+        env:
+          SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 
       - name: Test credit unlock concurrency
         run: npx vitest run src/__tests__/credit-unlock-concurrency.test.ts
