@@ -187,16 +187,18 @@ The two must look and behave like one product. A stale session falls back to the
   - then the actions: Save (heart), Comments (opens the thread inline, first page loaded at once) and Share.
 - **Clicks:** the card itself opens the post. Anything inside it that owns a click is a link or a button, or carries `data-feed-card-inert`.
 - **Media:** it opens in `FeedMediaLightbox`.
-- **The ⋯ menu** (`ShowcaseFeedbackMenu`): one menu for a feed card, an Explore tile and the reel, with the rows the app's card carries.
+- **The ⋯ menu** (`ShowcaseFeedbackMenu`): one menu for a feed card, an Explore tile, the reel and a creator's page, with the rows the app carries in the same places.
   - Not interested and Hide @handle, then Report content, Report user and Block user.
-  - A row that can never apply is left out: your own post keeps Not interested and nothing else, and a post with no creator account keeps Not interested and Report content.
+  - The first two tune a feed, so they are offered only where there is one: the feed card, the Explore tile and Explore's reel. A creator's page, the reel opened from it and the reel over your saved posts carry the safety rows alone.
+  - A row that can never apply is left out: your own post keeps Not interested and nothing else, and a post with no creator account keeps Not interested and Report content. With no row left there is no ⋯ at all: the reel over your own posts, and your own creator page.
   - The three safety rows are asked for, sent and answered one way (`src/lib/feed-safety-actions.ts`). They need an account, so a signed-out viewer is sent to sign in and comes back.
-  - On a card and on a tile the open menu is drawn in the page body, fixed to its button: both clip what they hold, and five rows are taller than most tiles. The reel's menu stays in the reel, which is a layer above the body's menus.
+  - What leaves the screen is the surface's to decide. A feed takes a reported post away; a creator's page and your saved posts keep what they list, and say only that it was reported. A block takes the creator's posts off a feed and out of your saved posts, sends you from their page to Explore, and takes their posts out of what Explore and the home feed kept for coming back, and out of Explore's first page, which the server builds for everyone, in its shell and in its grid (`takeBlockedCreatorOffClientFeeds`).
+  - On a card, on a tile and on a creator's page the open menu is drawn in the page body, fixed to its button: all three clip what they hold. The reel's menu stays in the reel, which is a layer above the body's menus.
 
 ### Explore (`/showcase`)
 
 - **Controls:** a category filter (All posts, Images, Videos) and a sort (For you, Recent, Saved, Remixed, Sales) over a media grid.
-- **The reel:** a tile opens the reel viewer (`ShowcaseReelViewer`), which is loaded on demand and warmed ahead of the click. While a confirmation is open above it ("Report content?") the reel leaves the keyboard alone.
+- **The reel:** a tile opens the reel viewer (`ShowcaseReelViewer`), which is loaded on demand and warmed ahead of the click. While a confirmation is open above it ("Report content?") the reel leaves the keyboard alone. A creator's page and the profile open the same viewer, and its close button names the page it goes back to (Explore, Creator, Profile), as the shell titles them.
 - **Order:** media comes first, gutters are consistent, and filters show real selected state.
 
 ### Post page (`/showcase/[id]`)
@@ -233,7 +235,8 @@ Failed and processing states say what happens next.
 - **Marketplace** (`/marketplace`): the resource bundles creators sell.
 - **Search** (`/search`): one unified search, in tabs for Top, Creators, Posts and Recipes.
 - **Alerts** (`/notifications`): every alert links to its target (`resolveWebNotificationPath`).
-- **Profile** (`/profile`): the owner's card and media hub. **Public profiles** live at `/creators/[username]`.
+- **Profile** (`/profile`): the owner's card and media hub. The reel over Saved carries the ⋯ menu's safety rows; the reel over your own posts has no ⋯.
+- **Public profiles** (`/creators/[username]`): Follow (Edit Profile on your own), Share profile, and for anyone but the creator a ⋯ with Report user and Block user, as on the app's creator screen. Their answers are toasts, and a block leaves for Explore.
 - **Pricing** (`/pricing`): Razorpay credit packs.
 - **Invite & Earn** (`/invite`).
 - **The operator console** (`/admin`): it lives in the same app under its own shell, `AdminShell`. It uses `Surface` and `Text` like everything else; see `AGENTS.md` for its auth model.

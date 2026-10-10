@@ -39,6 +39,19 @@ export interface ShowcaseClientSnapshot {
 
 const memoryCache = new Map<string, ShowcaseClientSnapshot>();
 
+/**
+ * Creators blocked in this tab since it loaded. Explore draws its first rows
+ * from a page the server builds for everyone, and merges the viewer's own feed
+ * in under the rows already drawn: a creator blocked on another page (their
+ * own, or from saved posts) would be on screen again the moment the viewer
+ * arrives. Kept in memory, which lasts for the move from that page to this one.
+ */
+const creatorsBlockedThisVisit = new Set<string>();
+
+export function getCreatorsBlockedThisVisit(): ReadonlySet<string> {
+  return creatorsBlockedThisVisit;
+}
+
 function getSessionStorage(): Storage | null {
   if (typeof window === 'undefined') {
     return null;
@@ -179,12 +192,60 @@ export function writeShowcaseClientSnapshot(
   return nextSnapshot;
 }
 
+/**
+ * A creator has been blocked: remembers them for the visit (above), and takes
+ * their posts out of every snapshot this tab keeps, the grid's and the home
+ * feed's, for every viewer and filter. A creator can be blocked away from the
+ * pages that keep a snapshot (on their own page, from saved posts), and a
+ * snapshot restored afterwards would bring their posts back for as long as it
+ * stays fresh. A snapshot keeps its age and its place.
+ */
+export function takeBlockedCreatorOffClientFeeds(creatorId: string) {
+  creatorsBlockedThisVisit.add(creatorId);
+  const storage = getSessionStorage();
+  const cacheKeys = new Set(memoryCache.keys());
+  if (storage) {
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key?.startsWith(SHOWCASE_CLIENT_CACHE_STORAGE_PREFIX)) {
+        cacheKeys.add(key.slice(SHOWCASE_CLIENT_CACHE_STORAGE_PREFIX.length));
+      }
+    }
+  }
+
+  for (const cacheKey of cacheKeys) {
+    // Reading also drops a snapshot that has gone stale or cannot be read.
+    const snapshot = readShowcaseClientSnapshot(cacheKey);
+    if (!snapshot) {
+      continue;
+    }
+
+    const items = snapshot.feed.items.filter((item) => item.creator?.id !== creatorId);
+    if (items.length === snapshot.feed.items.length) {
+      continue;
+    }
+
+    const nextSnapshot: ShowcaseClientSnapshot = {
+      ...snapshot,
+      feed: { ...snapshot.feed, items },
+      renderedItemCount: Math.min(snapshot.renderedItemCount, items.length),
+    };
+    memoryCache.set(cacheKey, nextSnapshot);
+    try {
+      storage?.setItem(getStorageKey(cacheKey), JSON.stringify(nextSnapshot));
+    } catch {
+      // As when a snapshot is written: the copy in memory still holds.
+    }
+  }
+}
+
 export function hasFreshShowcaseClientSnapshot(cacheKey: string): boolean {
   return readShowcaseClientSnapshot(cacheKey) !== null;
 }
 
 export function clearShowcaseClientCacheForTests() {
   memoryCache.clear();
+  creatorsBlockedThisVisit.clear();
   const storage = getSessionStorage();
   if (!storage) {
     return;

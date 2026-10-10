@@ -9,7 +9,13 @@ import { supabase } from '@/lib/supabase';
 import type { EditableCreatorProfile, ProfileApiResponse } from '@/lib/profile';
 import { toEditableCreatorProfile } from '@/lib/profile';
 import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
+import { ShowcaseFeedbackMenu } from '@/app/showcase/ShowcaseFeedInteraction';
 import ProfileShareButton from '@/components/ProfileShareButton';
+import {
+  blockCreatorAfterConfirmation,
+  reportCreatorAfterConfirmation,
+  toastSafetyOutcome,
+} from '@/lib/feed-safety-actions';
 
 interface ProfileActionsProps {
   profile: EditableCreatorProfile;
@@ -132,6 +138,47 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
     );
   }
 
+  const returnUrl = profile.username
+    ? `/creators/${profile.username}`
+    : '/showcase';
+
+  // Report user and Block user, behind a ⋯ of their own as on the app's
+  // creator screen: reachable, and quieter than Follow and Share. The server
+  // takes both from registered accounts only, so a signed-out viewer is sent
+  // to sign in and comes back here.
+  const requireAccountToken = async (): Promise<string | null> => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (session?.access_token) return session.access_token;
+    router.push(`/login?returnUrl=${encodeURIComponent(returnUrl)}`);
+    return null;
+  };
+
+  const handleReportUser = async () => {
+    const token = await requireAccountToken();
+    if (!token) return;
+    toastSafetyOutcome(await reportCreatorAfterConfirmation({
+      userId: profile.id,
+      accessToken: token,
+      surface: 'creator-page',
+    }));
+  };
+
+  const handleBlockUser = async () => {
+    const token = await requireAccountToken();
+    if (!token) return;
+    const outcome = await blockCreatorAfterConfirmation({
+      userId: profile.id,
+      creatorName: profile.displayName,
+      accessToken: token,
+    });
+    toastSafetyOutcome(outcome);
+    // With the creator blocked, nothing on their page is left to show: the
+    // viewer goes to Explore, as the app's creator screen sends them.
+    if (outcome.status === 'done') router.replace('/showcase');
+  };
+
   const handleFollowToggle = async () => {
     setFollowError(null);
     setFollowStatusMessage(null);
@@ -139,10 +186,6 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
     const {
       data: { session },
     } = await supabase.auth.getSession();
-
-    const returnUrl = profile.username
-      ? `/creators/${profile.username}`
-      : '/showcase';
 
     if (!session) {
       router.push(`/login?returnUrl=${encodeURIComponent(returnUrl)}`);
@@ -232,6 +275,17 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
           accessToken={accessToken}
           className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-5 text-sm font-bold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-70"
         />
+        {/* Never on your own page. Drawn in the body: the card around this row clips what it holds. */}
+        {isOwner ? null : (
+          <ShowcaseFeedbackMenu
+            itemTitle={`@${profile.username}`}
+            creator={{ username: profile.username, name: profile.displayName }}
+            variant="outline"
+            portal
+            onReportUser={() => void handleReportUser()}
+            onBlockUser={() => void handleBlockUser()}
+          />
+        )}
       </div>
       {followError ? (
         <p className="mt-2 text-sm text-rose-300">{followError}</p>
