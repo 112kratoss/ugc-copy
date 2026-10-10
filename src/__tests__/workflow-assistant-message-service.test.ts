@@ -90,6 +90,15 @@ function createAdminSupabaseMock() {
 }
 
 describe('createWorkflowAssistantMessageForRoute', () => {
+  it.each([null, undefined, [], 'text', 42, true])('rejects non-object body %j before database or credit work', async body => {
+    const admin = createAdminSupabaseMock();
+    const supabase = { from() { throw new Error('Invalid input must not query the database'); } } as unknown as SupabaseClient;
+    expect(await createWorkflowAssistantMessageForRoute({
+      adminSupabase: admin.client, body, canvasId: 'canvas-1', supabase, userId: 'user-1',
+    })).toMatchObject({ ok: false, status: 400 });
+    expect(admin.rpcCalls).toEqual([]);
+  });
+
   it('returns setup-required before rate limiting or charging when assistant tables are missing', async () => {
     const admin = createAdminSupabaseMock();
     const result = await createWorkflowAssistantMessageForRoute({

@@ -277,6 +277,9 @@ jobs:
       - name: Test workflow authoring and billing with real Auth and PostgREST
         run: npx vitest run --config vitest.workflow-authoring-postgrest.config.ts
 
+      - name: Test workflow assistant admission with real Auth and PostgREST
+        run: npx vitest run --config vitest.workflow-assistant-auth-postgrest.config.ts
+
       - name: Test template publication with real Auth, Storage and PostgREST
         run: npx vitest run --config vitest.template-publication-postgrest.config.ts
 

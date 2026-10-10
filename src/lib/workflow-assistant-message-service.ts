@@ -40,10 +40,6 @@ import {
   isMissingWorkflowCanvasAssistantSchemaError,
 } from '@/lib/workflow-canvas-route-compat';
 
-type WorkflowAssistantMessageBody = {
-  content?: unknown;
-};
-
 const WORKFLOW_ASSISTANT_PROMPT_HISTORY_LIMIT = 6;
 
 export type WorkflowAssistantMessageRouteResult =
@@ -196,14 +192,18 @@ export async function createWorkflowAssistantMessageForRoute({
   userId,
 }: {
   adminSupabase: SupabaseClient;
-  body: WorkflowAssistantMessageBody;
+  body: unknown;
   canvasId: string;
   idempotencyKey?: string | null;
   request?: Request;
   supabase: SupabaseClient;
   userId: string;
 }): Promise<WorkflowAssistantMessageRouteResult> {
-  const content = typeof body.content === 'string' ? body.content.trim() : '';
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, status: 400, body: { error: 'Message must be a JSON object.' } };
+  }
+  const message = body as Record<string, unknown>;
+  const content = typeof message.content === 'string' ? message.content.trim() : '';
 
   if (!content) {
     return { ok: false, status: 400, body: { error: 'Message content is required.' } };
@@ -240,7 +240,7 @@ export async function createWorkflowAssistantMessageForRoute({
   let ledgerIdempotencyKey = idempotencyKey ?? null;
   if (request) {
     try {
-      ledgerIdempotencyKey = getAiUsageLedgerIdempotencyKey(request, body as Record<string, unknown>);
+      ledgerIdempotencyKey = getAiUsageLedgerIdempotencyKey(request, message);
     } catch (error) {
       if (error instanceof AiUsageLedgerError) {
         return {
