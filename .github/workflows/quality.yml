@@ -373,6 +373,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Test operational retention with actual row locks
+        run: npx vitest run src/__tests__/operational-retention-locks-database.test.ts
+        env:
+          SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
       - name: Test credit unlock concurrency
         run: npx vitest run src/__tests__/credit-unlock-concurrency.test.ts
         env:
