@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import OwnerProfileMediaHub from '@/app/profile/OwnerProfileMediaHub';
+import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 const pushMock = vi.fn();
@@ -12,23 +13,41 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
+// Stands in for the reel: names the open post, and offers a button for each
+// menu handler the page gives it.
+type ReelHandler = (item: ShowcaseFeedItem) => void | Promise<void>;
 vi.mock('next/dynamic', () => ({
   default: () => function MockReel({
     isOpen,
     items,
     selectedItemId,
     buildDetailPath,
+    onFeedback,
+    onReportContent,
+    onReportUser,
+    onBlockUser,
+    originLabel,
   }: {
     isOpen: boolean;
     items: ShowcaseFeedItem[];
     selectedItemId: string | null;
     buildDetailPath: (id: string, section?: string) => string;
+    originLabel?: string;
+    onFeedback?: unknown;
+    onReportContent?: ReelHandler;
+    onReportUser?: ReelHandler;
+    onBlockUser?: ReelHandler;
   }) {
     const item = items.find((candidate) => candidate.id === selectedItemId);
     return isOpen && item ? (
       <div role="dialog" aria-label={`${item.title} Showcase reel`}>
         <span>{item.title}</span>
         <a href={buildDetailPath(item.id, 'resources')}>Post details</a>
+        <span>Closes to {originLabel ?? 'Explore'}</span>
+        {onFeedback ? <button type="button">Feed rows</button> : null}
+        {onReportContent ? <button type="button" onClick={() => void onReportContent(item)}>Report content</button> : null}
+        {onReportUser ? <button type="button" onClick={() => void onReportUser(item)}>Report user</button> : null}
+        {onBlockUser ? <button type="button" onClick={() => void onBlockUser(item)}>Block user</button> : null}
       </div>
     ) : null;
   },
@@ -138,8 +157,13 @@ const savedPost: ShowcaseFeedItem = {
 };
 
 describe('OwnerProfileMediaHub', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
     pushMock.mockReset();
+    resetFeedbackState();
     window.history.replaceState(null, '', '/profile');
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
@@ -273,5 +297,176 @@ describe('OwnerProfileMediaHub', () => {
     // No media to open, so the card is a record rather than a control that
     // does nothing when pressed.
     expect(screen.queryByRole('button', { name: /open failed clip/i })).not.toBeInTheDocument();
+  });
+
+  // The reel opened from your own profile had no ⋯ at all. Saved posts are
+  // other people's, so their reel carries the three safety rows, as the app's
+  // does; the reel over your own posts still has none.
+  describe("the Saved reel's safety rows", () => {
+    const owner = { id: 'owner-1', username: 'owner', name: 'Owner', avatar: null };
+    const secondSavedPost: ShowcaseFeedItem = { ...savedPost, id: 'saved-post-2', title: 'Second by the same creator' };
+    const otherSavedPost: ShowcaseFeedItem = {
+      ...savedPost,
+      id: 'saved-other',
+      title: 'Saved from someone else',
+      creator: { id: 'creator-3', username: 'creator-three', name: 'Creator Three', avatar: null },
+    };
+    const isSafetyRequest = (url: string) => /^\/api\/(moderation\/|posts\/[^/]+\/report$)/.test(url);
+    // The page's own requests answer as in the other tests; the saved list and
+    // the report and block requests answer as given here.
+    const answerRequests = (savedItems: ShowcaseFeedItem[], ok = true) => {
+      const answerPage = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
+      const sent: Array<{ url: string; init?: RequestInit }> = [];
+      vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (isSafetyRequest(url)) {
+          sent.push({ url, init });
+          return Promise.resolve({
+            ok,
+            status: ok ? 200 : 500,
+            json: async () => (ok ? { success: true } : { error: 'Failed to block user.' }),
+          } as Response);
+        }
+        if (url.startsWith('/api/showcase/saved-media?')) {
+          return response({ items: savedItems, pageInfo: { hasMore: false, nextOffset: null } });
+        }
+        return answerPage(input);
+      }));
+      return sent;
+    };
+    const toasts = () => readFeedbackSnapshot().toasts.map(({ tone, message }) => ({ tone, message }));
+    const openSavedReel = async (title: RegExp) => {
+      render(<OwnerProfileMediaHub creator={owner} />);
+      await screen.findByRole('button', { name: /open public post/i });
+      fireEvent.click(screen.getByRole('tab', { name: /saved/i }));
+      fireEvent.click(await screen.findByRole('button', { name: title }));
+    };
+
+    it('gives the Saved reel Report content, Report user and Block user, and no feed rows', async () => {
+      answerRequests([savedPost]);
+      await openSavedReel(/open saved inspiration/i);
+
+      expect(screen.getByRole('dialog', { name: /saved inspiration showcase reel/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Report content' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Report user' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Block user' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Feed rows' })).not.toBeInTheDocument();
+    });
+
+    it('gives the reel over your own posts none of them', async () => {
+      render(<OwnerProfileMediaHub creator={owner} />);
+      fireEvent.click(await screen.findByRole('button', { name: /open public post/i }));
+
+      const reel = screen.getByRole('dialog', { name: /public post showcase reel/i });
+      // Its close button goes back to the profile, not to Explore, and says so.
+      expect(reel).toHaveTextContent('Closes to Profile');
+      expect(screen.queryByRole('button', { name: 'Report content' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Report user' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Block user' })).not.toBeInTheDocument();
+    });
+
+    it('reports a saved post as from saved posts, and leaves it saved', async () => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const sent = answerRequests([savedPost]);
+      await openSavedReel(/open saved inspiration/i);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Report content' }));
+
+      await waitFor(() => expect(sent).toHaveLength(1));
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Report content?'));
+      expect(sent[0].url).toBe('/api/posts/saved-post/report');
+      expect(sent[0].init).toMatchObject({ method: 'POST', headers: { Authorization: 'Bearer profile-token' } });
+      expect(JSON.parse(String(sent[0].init?.body))).toEqual({
+        reason: 'unsafe_content',
+        details: 'Reported from saved posts on the web profile.',
+      });
+      await waitFor(() => expect(toasts()).toEqual([
+        { tone: 'success', message: 'Content reported. Our moderation team will take a look.' },
+      ]));
+      expect(screen.getByRole('dialog', { name: /saved inspiration showcase reel/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /open saved inspiration/i })).toBeInTheDocument();
+    });
+
+    it('reports the creator of a saved post as the reel files one', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const sent = answerRequests([savedPost]);
+      await openSavedReel(/open saved inspiration/i);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Report user' }));
+
+      await waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0].url).toBe('/api/moderation/reports');
+      expect(JSON.parse(String(sent[0].init?.body))).toEqual({
+        targetType: 'user',
+        targetId: 'creator-2',
+        reason: 'harassment',
+        sourceSurface: 'showcase-reel',
+      });
+      await waitFor(() => expect(toasts()).toEqual([
+        { tone: 'success', message: 'Creator reported. Our moderation team will take a look.' },
+      ]));
+    });
+
+    it("blocks a creator, drops every saved post of theirs, and moves the reel to what is left", async () => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const sent = answerRequests([savedPost, secondSavedPost, otherSavedPost]);
+      await openSavedReel(/open saved inspiration/i);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Block user' }));
+
+      expect(await screen.findByRole('dialog', { name: /saved from someone else showcase reel/i })).toBeInTheDocument();
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Block this creator?'));
+      expect(sent.map((request) => request.url)).toEqual(['/api/moderation/blocks/creator-2']);
+      expect(sent[0].init).toMatchObject({ method: 'POST', headers: { Authorization: 'Bearer profile-token' } });
+      expect(toasts()).toEqual([
+        { tone: 'success', message: 'Creator Two is blocked. Their posts are gone from your feed.' },
+      ]);
+      expect(screen.queryByRole('button', { name: /open saved inspiration/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /open second by the same creator/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /open saved from someone else/i })).toBeInTheDocument();
+      expect(window.location.search).toContain('post=saved-other');
+    });
+
+    it('closes the reel when the blocked creator made everything that was saved', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      answerRequests([savedPost, secondSavedPost]);
+      await openSavedReel(/open second by the same creator/i);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Block user' }));
+
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: /showcase reel/i })).not.toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: /open saved inspiration/i })).not.toBeInTheDocument();
+      expect(screen.getByText('Nothing saved yet')).toBeInTheDocument();
+      // Closing steps back over the entry the reel pushed, which lands a moment
+      // later: the address stops naming a post, and stays on the Saved tab.
+      await waitFor(() => expect(window.location.search).toBe('?tab=saved'));
+    });
+
+    it('sends nothing and keeps the saved posts when the question is declined', async () => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      const sent = answerRequests([savedPost]);
+      await openSavedReel(/open saved inspiration/i);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Block user' }));
+
+      await waitFor(() => expect(confirm).toHaveBeenCalled());
+      expect(sent).toHaveLength(0);
+      expect(toasts()).toEqual([]);
+      expect(screen.getByRole('dialog', { name: /saved inspiration showcase reel/i })).toBeInTheDocument();
+    });
+
+    it('keeps the saved posts and says why when the block fails', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      answerRequests([savedPost], false);
+      await openSavedReel(/open saved inspiration/i);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Block user' }));
+
+      await waitFor(() => expect(toasts()).toEqual([
+        { tone: 'error', message: 'Could not block this creator. Failed to block user.' },
+      ]));
+      expect(screen.getByRole('dialog', { name: /saved inspiration showcase reel/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /open saved inspiration/i })).toBeInTheDocument();
+    });
   });
 });

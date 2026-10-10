@@ -10,7 +10,7 @@ import {
   type ShowcaseFeedPage,
 } from '@/lib/showcase';
 import type { SourceToolOption } from '@/lib/source-tools';
-import { clearShowcaseClientCacheForTests } from '@/lib/showcase-client-cache';
+import { clearShowcaseClientCacheForTests, takeBlockedCreatorOffClientFeeds } from '@/lib/showcase-client-cache';
 
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
@@ -1542,6 +1542,63 @@ describe('ShowcaseClient save actions', () => {
 
     expect(await screen.findByText('Later Frame')).toBeInTheDocument();
     expect(screen.getByText('Kept Frame')).toBeInTheDocument();
+    expect(screen.queryByText('Campaign Frame')).not.toBeInTheDocument();
+  });
+
+  // A creator can be blocked on their own page, which then sends the viewer
+  // here. This page's first rows are the server's for everyone, so the creator
+  // was back on screen under the line that said their posts were gone.
+  it('does not draw a creator who was blocked on another page a moment ago, from its first page or a later one', async () => {
+    const theirFirstPost = createShowcaseItem();
+    const theirLaterPost = createShowcaseItem({ id: 'post-theirs-later', title: 'Third Frame' });
+    const keptItem = createShowcaseItem({ id: 'post-keep', title: 'Kept Frame', creator: otherCreator });
+    const laterItem = createShowcaseItem({ id: 'post-later', title: 'Later Frame', creator: otherCreator });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/feed?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            items: [theirLaterPost, laterItem],
+            pageInfo: { hasMore: false, nextOffset: null, limit: 12, offset: 2 },
+          }),
+        };
+      }
+      return { ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) };
+    }));
+    // What a block does wherever it is made (`blockCreatorAfterConfirmation`).
+    takeBlockedCreatorOffClientFeeds('creator-1');
+
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed([theirFirstPost, keptItem], { hasMore: true, nextOffset: 2, limit: 2 })}
+        initialCategory="all"
+        initialSort="recent"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+
+    expect(await screen.findByText('Kept Frame')).toBeInTheDocument();
+    expect(screen.queryByText('Campaign Frame')).not.toBeInTheDocument();
+
+    let loadMoreObserver: (typeof intersectionObservers)[number] | undefined;
+    await waitFor(() => {
+      loadMoreObserver = intersectionObservers.find((observer) => (
+        observer.observedTargets.some((target) => (
+          target.getAttribute('data-showcase-load-more-sentinel') === 'true'
+        ))
+      ));
+      expect(loadMoreObserver).toBeDefined();
+    });
+    act(() => {
+      loadMoreObserver?.trigger(true);
+    });
+
+    expect(await screen.findByText('Later Frame')).toBeInTheDocument();
+    expect(screen.queryByText('Third Frame')).not.toBeInTheDocument();
     expect(screen.queryByText('Campaign Frame')).not.toBeInTheDocument();
   });
 

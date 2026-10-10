@@ -83,15 +83,24 @@ interface ShowcaseReelViewerProps {
   onToggleSave: (id: string) => void | Promise<void>;
   onRemix: (id: string) => void | Promise<void>;
   feedSessionId?: string | null;
+  /** The ⋯ menu's two feed rows (Not interested, Hide): given where the reel plays a feed. */
   onFeedback?: (item: ShowcaseFeedItem, action: ShowcaseFeedbackAction) => void | Promise<void>;
   /**
-   * The safety rows of the menu `onFeedback` opens, each shown when given and
-   * when it can apply (`ShowcaseFeedbackMenu`): the caller asks, sends and
-   * takes the post away, as it does for its own tiles.
+   * The ⋯ menu's safety rows, each shown when given and when it can apply
+   * (`ShowcaseFeedbackMenu`): the caller asks, sends and decides what leaves
+   * the screen. A reel given none of the four handlers, or showing a post none
+   * of their rows applies to (the viewer's own), has no ⋯ at all.
    */
   onReportContent?: (item: ShowcaseFeedItem) => void | Promise<void>;
   onReportUser?: (item: ShowcaseFeedItem) => void | Promise<void>;
   onBlockUser?: (item: ShowcaseFeedItem) => void | Promise<void>;
+  /**
+   * The page the reel was opened from, as the app shell titles it
+   * (`app-shell-nav.ts`): the button that closes the reel goes back there and
+   * says so. Explore's by default; a creator's page and the profile name
+   * themselves.
+   */
+  originLabel?: string;
   buildDetailPath: (id: string, section?: string) => string;
 }
 
@@ -249,6 +258,7 @@ export default function ShowcaseReelViewer({
   onReportContent,
   onReportUser,
   onBlockUser,
+  originLabel = 'Explore',
   buildDetailPath,
 }: ShowcaseReelViewerProps) {
   const router = useRouter();
@@ -1415,7 +1425,7 @@ export default function ShowcaseReelViewer({
       ref={reelDialogRef}
       role="dialog"
       aria-modal="true"
-      aria-label="Explore reel viewer"
+      aria-label={`${originLabel} reel viewer`}
       className="fixed inset-0 z-[90] overflow-hidden bg-[#050506] text-white"
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
@@ -1475,11 +1485,11 @@ export default function ShowcaseReelViewer({
           className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
         >
           <X className="h-4 w-4" />
-          Explore
+          {originLabel}
         </button>
 
         <div className="min-w-0 text-center">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">Explore reel</div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">{originLabel} reel</div>
           <div className="text-xs text-zinc-300">
             {selectedIndex + 1}
             {!hasMoreItems && !isLoadingMoreItems ? ` / ${items.length}` : null}
@@ -1491,13 +1501,13 @@ export default function ShowcaseReelViewer({
 
         <div className="flex items-center gap-2 text-xs text-zinc-500">
           <span className="hidden rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 sm:inline-flex">Arrow keys</span>
-          {onFeedback ? (
+          {onFeedback || onReportContent || onReportUser || onBlockUser ? (
             <ShowcaseFeedbackMenu
               itemTitle={item.title}
               creator={item.creator}
               canHideCreator={Boolean(item.creator.id && item.creator.id !== user?.id)}
               sessionOnly={!user}
-              onSelect={(action) => onFeedback(item, action)}
+              onSelect={onFeedback ? (action) => onFeedback(item, action) : undefined}
               // Not on the viewer's own post, as on a feed card and an Explore tile.
               onReportContent={onReportContent && !(user && item.creator.id === user.id)
                 ? () => void onReportContent(item)

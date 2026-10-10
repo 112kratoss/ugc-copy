@@ -1,15 +1,16 @@
-import { requestConfirmation } from '@/components/feedback-state';
+import { pushToast, requestConfirmation } from '@/components/feedback-state';
 import {
   blockCreator,
   reportCreator,
   reportPostContent,
   type SafetySurface,
 } from '@/lib/moderation-client';
+import { takeBlockedCreatorOffClientFeeds } from '@/lib/showcase-client-cache';
 
 /**
  * The three safety rows of a post's menu, each asked for, sent and answered one
- * way wherever the menu is drawn: the feed card, Explore's tile and the reel.
- * Worded as the app's Home words them.
+ * way wherever the menu is drawn: the feed card, Explore's tile, the reel, and
+ * a creator's page. Worded as the app's Home words them.
  *
  * `cancelled`: the viewer said no and nothing was sent. `done` and `failed`
  * carry the line to show. The caller owns everything else: who may ask (the
@@ -25,6 +26,22 @@ interface FeedSafetyRequest {
   surface: SafetySurface;
   /** Runs once the viewer has confirmed, before anything is sent. */
   onSend?: () => void;
+}
+
+/**
+ * A feed takes a reported post away. A creator's page and the viewer's saved
+ * posts are lists of their own, not a feed: the post stays where it is listed,
+ * and the answer says only that it was reported.
+ */
+const KEEPS_REPORTED_POST: ReadonlySet<SafetySurface> = new Set(['creator-page', 'saved']);
+
+/**
+ * Shows a finished action's line as a toast, for a page with no notice bar of
+ * its own. A toast is drawn above the reel and outlives a change of page.
+ */
+export function toastSafetyOutcome(outcome: FeedSafetyOutcome) {
+  if (outcome.status === 'cancelled') return;
+  pushToast({ tone: outcome.status === 'done' ? 'success' : 'error', message: outcome.message });
 }
 
 function failed(prefix: string, error: unknown): FeedSafetyOutcome {
@@ -50,7 +67,12 @@ export async function reportPostAfterConfirmation({
   onSend?.();
   try {
     await reportPostContent({ postId, accessToken, surface });
-    return { status: 'done', message: 'Content reported and removed from your feed.' };
+    return {
+      status: 'done',
+      message: KEEPS_REPORTED_POST.has(surface)
+        ? 'Content reported. Our moderation team will take a look.'
+        : 'Content reported and removed from your feed.',
+    };
   } catch (error) {
     return failed('Could not report this post.', error);
   }
@@ -94,6 +116,10 @@ export async function blockCreatorAfterConfirmation({
   onSend?.();
   try {
     await blockCreator({ userId, accessToken });
+    // Wherever the block was made, no page this tab goes on to may draw their
+    // posts again: not from the copy it kept (Explore, the home feed), and
+    // not from Explore's first page, which the server builds for everyone.
+    takeBlockedCreatorOffClientFeeds(userId);
     return { status: 'done', message: `${creatorName} is blocked. Their posts are gone from your feed.` };
   } catch (error) {
     return failed('Could not block this creator.', error);

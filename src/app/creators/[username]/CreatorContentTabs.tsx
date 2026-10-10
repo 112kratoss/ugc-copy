@@ -22,9 +22,15 @@ import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { loadShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
+import {
+  blockCreatorAfterConfirmation,
+  reportCreatorAfterConfirmation,
+  reportPostAfterConfirmation,
+  toastSafetyOutcome,
+} from '@/lib/feed-safety-actions';
 import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { getBundleAccessLabel } from '@/lib/post-resource-bundles';
-import { buildShowcaseDetailPath } from '@/lib/share';
+import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import { getShowcaseItemMediaItems, type ShowcaseFeedItem } from '@/lib/showcase';
 
@@ -331,6 +337,54 @@ export function CreatorContentTabs({
     }
   };
 
+  // The reel's ⋯: Report content, Report user and Block user, asked for and
+  // sent as a feed card's are (`lib/feed-safety-actions.ts`). No Not interested
+  // or Hide: this page is one creator's list, not a feed to tune. The server
+  // takes all three from registered accounts only, so a signed-out viewer is
+  // sent to sign in, and comes back to the post they had open.
+  const requireAccount = (): string | null => {
+    if (user && session?.access_token) return session.access_token;
+    router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(profilePath))}`);
+    return null;
+  };
+  // A reported post stays in the creator's list: reporting it changes what
+  // moderators see, not what this creator has published.
+  const handleReportContent = async (reportedItem: ShowcaseFeedItem) => {
+    const token = requireAccount();
+    if (!token) return;
+    toastSafetyOutcome(await reportPostAfterConfirmation({
+      postId: reportedItem.id,
+      accessToken: token,
+      surface: 'creator-page',
+    }));
+  };
+  const handleReportUser = async (reportedItem: ShowcaseFeedItem) => {
+    const creatorId = reportedItem.creator.id;
+    if (!creatorId || creatorId === user?.id) return;
+    const token = requireAccount();
+    if (!token) return;
+    toastSafetyOutcome(await reportCreatorAfterConfirmation({
+      userId: creatorId,
+      accessToken: token,
+      surface: 'creator-page',
+    }));
+  };
+  const handleBlockUser = async (blockedItem: ShowcaseFeedItem) => {
+    const creatorId = blockedItem.creator.id;
+    if (!creatorId || creatorId === user?.id) return;
+    const token = requireAccount();
+    if (!token) return;
+    const outcome = await blockCreatorAfterConfirmation({
+      userId: creatorId,
+      creatorName: blockedItem.creator.name,
+      accessToken: token,
+    });
+    toastSafetyOutcome(outcome);
+    // Every post here is theirs, so nothing on this page is left to show: the
+    // viewer goes to Explore, as the app's creator screen sends them.
+    if (outcome.status === 'done') router.replace('/showcase');
+  };
+
   const buildDetailPath = (id: string, section?: string) => buildShowcaseDetailPath(id, {
     from: 'creator',
     returnTo: `${profilePath}${tabHashes[activeTab]}`,
@@ -435,6 +489,10 @@ export function CreatorContentTabs({
           }}
           onToggleSave={toggleSave}
           onRemix={handleRemix}
+          onReportContent={handleReportContent}
+          onReportUser={handleReportUser}
+          onBlockUser={handleBlockUser}
+          originLabel="Creator"
           buildDetailPath={buildDetailPath}
         />
       ) : null}

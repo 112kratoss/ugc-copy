@@ -38,6 +38,7 @@ const { mockPush, mockUpdateCredits, authState } = vi.hoisted(() => ({
   authState: {
     session: null as { access_token: string } | null,
     credits: null as number | null,
+    user: null as { id: string } | null,
   },
 }));
 
@@ -52,6 +53,7 @@ vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     session: authState.session,
     credits: authState.credits,
+    user: authState.user,
     updateCredits: mockUpdateCredits,
   }),
 }));
@@ -269,6 +271,7 @@ describe('ShowcaseReelViewer pagination', () => {
     mockUpdateCredits.mockClear();
     authState.session = null;
     authState.credits = null;
+    authState.user = null;
     vi.unstubAllGlobals();
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
       configurable: true,
@@ -472,6 +475,89 @@ describe('ShowcaseReelViewer pagination', () => {
 
     expect(document.activeElement).toBe(rows[1]);
     expect(onSelectItemId).not.toHaveBeenCalled();
+  });
+
+  // A creator's page and the viewer's saved posts are not feeds. Their reel is
+  // given the safety rows alone, and had no ⋯ at all: the menu was drawn only
+  // for a reel that was also given the feed rows.
+  describe('away from a feed', () => {
+    const renderReelWithoutFeedRows = (handlers: {
+      onReportContent?: (item: ShowcaseFeedItem) => void;
+      onReportUser?: (item: ShowcaseFeedItem) => void;
+      onBlockUser?: (item: ShowcaseFeedItem) => void;
+      originLabel?: string;
+    }) => render(
+      <ShowcaseReelViewer
+        isOpen
+        items={[createShowcaseItem()]}
+        selectedItemId="post-1"
+        savedItemIds={new Set()}
+        savingItemIds={new Set()}
+        accessToken={null}
+        hasMoreItems={false}
+        isLoadingMoreItems={false}
+        onLoadMoreItems={vi.fn()}
+        onClose={vi.fn()}
+        onSelectItemId={vi.fn()}
+        onToggleSave={vi.fn()}
+        onRemix={vi.fn()}
+        {...handlers}
+        buildDetailPath={(id, section) => section ? `/showcase/${id}#${section}` : `/showcase/${id}`}
+      />
+    );
+
+    it('offers the safety rows alone, each about the post that is open', () => {
+      const onReportContent = vi.fn();
+      const onReportUser = vi.fn();
+      const onBlockUser = vi.fn();
+      renderReelWithoutFeedRows({ onReportContent, onReportUser, onBlockUser });
+
+      const trigger = screen.getByRole('button', { name: /more actions for campaign frame/i });
+      fireEvent.click(trigger);
+      const rows = screen.getAllByRole('menuitem').map((row) => row.querySelector('.font-semibold')?.textContent);
+      expect(rows).toEqual(['Report content', 'Report user', 'Block user']);
+      expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('menuitem', { name: /report content/i }));
+      expect(onReportContent).toHaveBeenCalledWith(expect.objectContaining({ id: 'post-1' }));
+      fireEvent.click(trigger);
+      fireEvent.click(screen.getByRole('menuitem', { name: /report user/i }));
+      expect(onReportUser).toHaveBeenCalledWith(expect.objectContaining({ id: 'post-1' }));
+      fireEvent.click(trigger);
+      fireEvent.click(screen.getByRole('menuitem', { name: /block user/i }));
+      expect(onBlockUser).toHaveBeenCalledWith(expect.objectContaining({ id: 'post-1' }));
+    });
+
+    it("has no ⋯ on the viewer's own post: no row applies to it", () => {
+      authState.user = { id: 'creator-1' };
+      renderReelWithoutFeedRows({ onReportContent: vi.fn(), onReportUser: vi.fn(), onBlockUser: vi.fn() });
+
+      expect(screen.queryByRole('button', { name: /more actions for/i })).not.toBeInTheDocument();
+    });
+
+    it('has no ⋯ when it is given nothing to offer', () => {
+      renderReelWithoutFeedRows({});
+
+      expect(screen.queryByRole('button', { name: /more actions for/i })).not.toBeInTheDocument();
+    });
+
+    // The button that closes the reel says where it goes back to. It said
+    // "Explore" on a creator's page and on the profile, which it does not go to.
+    it('names the page it was opened from on the button that closes it', () => {
+      const { unmount } = renderReelWithoutFeedRows({ originLabel: 'Creator' });
+
+      expect(screen.getByRole('dialog', { name: 'Creator reel viewer' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Creator' })).toBeInTheDocument();
+      expect(screen.getByText('Creator reel')).toBeInTheDocument();
+      expect(screen.queryByText(/explore/i)).not.toBeInTheDocument();
+      unmount();
+
+      // Explore's own reel is unchanged.
+      renderReelWithoutFeedRows({});
+      expect(screen.getByRole('dialog', { name: 'Explore reel viewer' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Explore' })).toBeInTheDocument();
+      expect(screen.getByText('Explore reel')).toBeInTheDocument();
+    });
   });
 
   // jsdom has no layers, so this reads the two class lists. The ⋯ menu hangs
