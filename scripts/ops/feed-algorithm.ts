@@ -26,7 +26,9 @@ const RUNBOOK_PATH = 'docs/feed-algorithm-operations.md';
 const DASH = '–';
 
 /** `activate_feed_algorithm_version` takes only these targets (plan §2.4). */
-export const ACTIVATABLE_VERSION_STATUSES: readonly string[] = ['draft', 'shadow'];
+// A retired version can be activated again: that is how a rollback works. The
+// RPC clears its retired_at in the same statement.
+export const ACTIVATABLE_VERSION_STATUSES: readonly string[] = ['draft', 'shadow', 'retired'];
 /** `create_feed_experiment` takes only these versions for a variant (plan §2.5). */
 export const EXPERIMENT_VERSION_STATUSES: readonly string[] = ['active', 'shadow'];
 export const EXPERIMENT_STOP_STATUSES = ['completed', 'cancelled', 'paused'] as const;
@@ -896,14 +898,8 @@ async function runActivate(
   ));
   if (!target) throw new Error(`No feed algorithm version ${label}. Run list to see the versions.`);
   if (target.status === 'active') throw new Error(`${label} is already active.`);
-  if (target.status === 'retired') {
-    throw new Error(
-      `${label} is retired, and activate_feed_algorithm_version takes only a draft or shadow version. `
-      + `To roll back to it, follow "Rollback" in ${RUNBOOK_PATH}.`,
-    );
-  }
   if (!ACTIVATABLE_VERSION_STATUSES.includes(target.status)) {
-    throw new Error(`${label} is ${target.status}; only a draft or shadow version can be activated.`);
+    throw new Error(`${label} is ${target.status}; only a draft, shadow or retired version can be activated.`);
   }
 
   const current = versions.find((version) => (

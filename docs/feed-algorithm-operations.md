@@ -62,7 +62,7 @@ Home sends no dwell, progress or skip events yet (plan §6), so meaningful and q
 2. Baseline: run `scorecard --days 7` and `scorecard --days 7 --by source` while v1 serves everyone. Keep the output (paste it into the PR or a dated note).
 3. Turn v3 on, one of:
    - **Experiment** (easier to undo): `experiment start --key v3-vs-v1-<yyyymmdd> --control 1 --treatment 3 --apply`. v1 stays active and half the viewers get v3, both arms in the same week.
-   - **Activation**: `activate --key for-you-rules --version 3 --apply`. Everyone gets v3 and v1 becomes `retired`; the only comparison is before/after, and undoing it takes the two steps under Rollback.
+   - **Activation**: `activate --key for-you-rules --version 3 --apply`. Everyone gets v3 and v1 becomes `retired`; the only comparison is before/after, and undoing it is one `activate` of v1 (see Rollback).
 4. After 7 days, run `scorecard --days 7` (and `--by source`) again. Compare it with the baseline, and for an experiment, arm with arm.
 5. Keep v3 or drop it:
    - Experiment, keep: `experiment stop --key <key> --apply` (it ends `completed`), then `activate --key for-you-rules --version 3 --apply`.
@@ -74,21 +74,11 @@ Home sends no dwell, progress or skip events yet (plan §6), so meaningful and q
 Rolling back means making the previous version active again.
 
 - **An experiment**: `experiment stop --key <key> --status cancelled --apply`. Every viewer is back on the active version at their next feed session.
-- **An activation**: the previous version is now `retired`, and `activate_feed_algorithm_version` takes only a `draft` or `shadow` target (the CLI refuses a retired one and points here). Return it to `shadow`, then activate it. In the Supabase SQL editor (or through the Supabase MCP) on the production project:
-
-  ```sql
-  UPDATE public.feed_algorithm_versions
-  SET status = 'shadow', retired_at = NULL, updated_at = now()
-  WHERE algorithm_key = 'for-you-rules' AND version = 1 AND status = 'retired';
-  ```
-
-  then:
+- **An activation**: activate the previous version again. `activate_feed_algorithm_version` accepts a `retired` target and clears its `retired_at` in the same statement that retires the current version (`feed_algorithm_versions_lifecycle_check` forbids a `retired_at` earlier than the new `activated_at`, so the RPC does it, not you):
 
   ```bash
   npm run ops:feed-algorithm -- activate --key for-you-rules --version 1 --apply
   ```
-
-  `retired_at` has to be cleared because activation stamps a new `activated_at`, and `feed_algorithm_versions_lifecycle_check` forbids a `retired_at` earlier than the `activated_at`. The activation retires v3 in the same statement.
 
 ## Kill switches
 

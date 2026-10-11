@@ -609,14 +609,14 @@ describe('activate', () => {
     expect(result.rpcCalls).toEqual([]);
   });
 
-  it('refuses a retired target and points at the rollback steps', async () => {
+  it('activates a retired target again: that is the rollback', async () => {
     const result = await run(['activate', '--key', 'for-you-rules', '--version', '1', '--apply'], {
       versions: AFTER_V3_ACTIVATION,
     });
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('for-you-rules-v1 is retired');
-    expect(result.stderr).toContain('"Rollback" in docs/feed-algorithm-operations.md');
-    expect(result.rpcCalls).toEqual([]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(new RegExp(`for-you-rules-v3\\s+active → retired\\s+${V3}`));
+    expect(result.stdout).toMatch(new RegExp(`for-you-rules-v1\\s+retired → active\\s+${V1}`));
+    expect(result.rpcCalls).toEqual([{ name: 'activate_feed_algorithm_version', args: { p_version_id: V1 } }]);
   });
 
   it('refuses a version that does not exist', async () => {
