@@ -6,7 +6,7 @@ import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { guardUserFacingRouteIdentity, proxy } from '@/proxy';
-import { routeIdentityPolicyForPathname } from '@/lib/route-identity-policy';
+import { routeIdentityPolicyForPathname, routeIdentityPolicyForRequest } from '@/lib/route-identity-policy';
 
 const SUBJECT = '11111111-1111-4111-8111-111111111111';
 const SESSION = '22222222-2222-4222-8222-222222222222';
@@ -60,6 +60,13 @@ function identityClient(options: {
 
 function authenticatedRequest(pathname: string, authorization = 'Bearer signed-user-token') {
   return new NextRequest(`https://magicbooklet.test${pathname}`, {
+    headers: { Authorization: authorization },
+  });
+}
+
+function requestWithMethod(method: string, pathname: string, authorization = 'Bearer signed-user-token') {
+  return new NextRequest(`https://magicbooklet.test${pathname}`, {
+    method,
     headers: { Authorization: authorization },
   });
 }
@@ -279,6 +286,73 @@ describe('central route identity admission', () => {
     );
     expect(response?.status).toBe(403);
     await expect(response?.json()).resolves.toMatchObject({ code: 'REGISTRATION_REQUIRED' });
+  });
+
+  // A guest's app sends its token with every request. The comments path is
+  // registered-only for its writes, while its read is the public post page's
+  // own data, served with no token at all. Asking the path's question of that
+  // read answered every guest 403, and the app drew "Comments are unavailable"
+  // on every post (seen on the Pixel 9a's guest session, 2026-10-11).
+  it('lets a guest read a thread any visitor may read, and still refuses the write', async () => {
+    const comments = '/api/showcase/posts/post-1/comments';
+    const guest = identityClient({ anonymous: true });
+    const dependencies = { createUserClient: () => guest };
+
+    await expect(guardUserFacingRouteIdentity(requestWithMethod('GET', comments), dependencies))
+      .resolves.toBeNull();
+    await expect(guardUserFacingRouteIdentity(requestWithMethod('HEAD', comments), dependencies))
+      .resolves.toBeNull();
+
+    for (const [method, pathname] of [
+      ['POST', comments],
+      ['DELETE', `${comments}/comment-1`],
+      // Another registered read stays the viewer's own: nothing to show a guest.
+      ['GET', '/api/content-preferences'],
+      ['GET', '/api/showcase/saved-media'],
+    ]) {
+      const response = await guardUserFacingRouteIdentity(requestWithMethod(method, pathname), dependencies);
+      expect(response?.status, `${method} ${pathname}`).toBe(403);
+      await expect(response?.json()).resolves.toMatchObject({ code: 'REGISTRATION_REQUIRED' });
+    }
+  });
+
+  it('still asks for a live identity behind a token sent with that read', async () => {
+    const comments = '/api/showcase/posts/post-1/comments';
+
+    // A token is optional there, never decorative: a spent one is refused.
+    for (const client of [
+      identityClient({ anonymous: true, claims: null }),
+      identityClient({ anonymous: true, sessionValid: false }),
+      identityClient({ anonymous: true, banned: true }),
+    ]) {
+      const response = await guardUserFacingRouteIdentity(
+        requestWithMethod('GET', comments),
+        { createUserClient: () => client },
+      );
+      expect(response?.status).toBe(401);
+    }
+
+    const merged = await guardUserFacingRouteIdentity(
+      requestWithMethod('GET', comments),
+      { createUserClient: () => identityClient({ anonymous: true, state: 'merged' }) },
+    );
+    expect(merged?.status).toBe(409);
+  });
+
+  it('answers per request: the path keeps its policy, the listed read is public', () => {
+    const comments = '/api/showcase/posts/post-1/comments';
+
+    expect(routeIdentityPolicyForPathname(comments)).toBe('registered');
+    expect(routeIdentityPolicyForRequest(comments, 'GET')).toBe('public');
+    expect(routeIdentityPolicyForRequest(comments, 'get')).toBe('public');
+    expect(routeIdentityPolicyForRequest(comments, 'HEAD')).toBe('public');
+    expect(routeIdentityPolicyForRequest(comments, 'POST')).toBe('registered');
+    expect(routeIdentityPolicyForRequest(`${comments}/comment-1`, 'GET')).toBe('registered');
+    // Every other path answers as it did, whatever the method.
+    expect(routeIdentityPolicyForRequest('/api/generations/abc/restore', 'GET')).toBe('guest');
+    expect(routeIdentityPolicyForRequest('/api/content-preferences', 'GET')).toBe('registered');
+    expect(routeIdentityPolicyForRequest('/api/webhooks/kie', 'GET')).toBe('service');
+    expect(routeIdentityPolicyForRequest('/api/not-a-route', 'GET')).toBeNull();
   });
 
   it('keeps tokenless public routes public and never gates service routes', async () => {

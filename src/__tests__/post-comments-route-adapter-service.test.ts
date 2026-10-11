@@ -26,6 +26,18 @@ function createUserClient(userId: string | null = 'viewer-1') {
   } as unknown as SupabaseClient;
 }
 
+/** A guest's token resolves to a real user, flagged anonymous. */
+function createGuestClient(userId = 'guest-1') {
+  return {
+    auth: {
+      getUser: vi.fn(async () => ({
+        data: { user: { id: userId, is_anonymous: true } },
+        error: null,
+      })),
+    },
+  } as unknown as SupabaseClient;
+}
+
 function commentsContext() {
   return { params: Promise.resolve({ postId: POST_ID }) };
 }
@@ -71,6 +83,34 @@ describe('getPostCommentsRouteResponse', () => {
     expect(response.headers.get('Vary')).toContain('Authorization');
     expect(createUserClientSpy).not.toHaveBeenCalled();
     expect(listPostCommentsForRoute.mock.calls[0][0]).toMatchObject({ viewerUserId: null });
+  });
+
+  // The proxy lets a guest's token through to this read
+  // (GUEST_READABLE_REGISTERED_ROUTES); the route must then serve it. A guest's
+  // app sends that token with every request, and used to be told 403.
+  it('serves a guest reader as it serves any visitor', async () => {
+    const enforceBackendRateLimit = vi.fn();
+    const listPostCommentsForRoute = vi.fn<typeof ListPostCommentsForRoute>()
+      .mockResolvedValue(emptyPage());
+
+    const response = await getPostCommentsRouteResponse({
+      context: commentsContext(),
+      request: new Request(`http://localhost/api/showcase/posts/${POST_ID}/comments`, {
+        headers: { authorization: 'Bearer guest-token' },
+      }),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        createUserClient: () => createGuestClient('guest-1'),
+        enforceBackendRateLimit,
+        getFeedNetworkKeyHash: () => 'network-hash',
+        listPostCommentsForRoute,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(listPostCommentsForRoute).toHaveBeenCalledTimes(1);
+    // Counted against the guest's own identity, not the network it shares.
+    expect(enforceBackendRateLimit.mock.calls[0][1]).toMatchObject({ key: 'guest-1' });
   });
 
   it('passes normalized paging and sort params through to the service', async () => {
@@ -166,6 +206,30 @@ describe('createPostCommentRouteResponse', () => {
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(response.headers.get('x-request-id')).toBe('comment-auth-1');
     await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+    expect(createServiceClient).not.toHaveBeenCalled();
+    expect(createPostCommentForRoute).not.toHaveBeenCalled();
+  });
+
+  // The second line behind the proxy's 403: reading is anyone's, writing is not.
+  it('refuses a guest writer before creating an admin client', async () => {
+    const createServiceClient = vi.fn();
+    const createPostCommentForRoute = vi.fn();
+
+    const response = await createPostCommentRouteResponse({
+      context: commentsContext(),
+      request: new Request(`http://localhost/api/showcase/posts/${POST_ID}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', authorization: 'Bearer guest-token' },
+        body: JSON.stringify({ body: 'hello' }),
+      }),
+      dependencies: {
+        createServiceClient,
+        createUserClient: () => createGuestClient(),
+        createPostCommentForRoute,
+      },
+    });
+
+    expect(response.status).toBe(401);
     expect(createServiceClient).not.toHaveBeenCalled();
     expect(createPostCommentForRoute).not.toHaveBeenCalled();
   });

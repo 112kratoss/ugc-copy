@@ -243,6 +243,30 @@ const SERVICE_ROUTES = [
   '/api/mobile/commerce/revenuecat-webhook',
 ] as const;
 
+/**
+ * Registered-only paths whose read any visitor may make.
+ *
+ * The registry answers per path, and a path's methods can differ. Writing a
+ * comment takes an account; reading the thread under a public post takes no
+ * one, not even a token. A guest's app sends its token with every request, so
+ * asking the path's question of that read refused a guest what a signed-out
+ * visitor is served: every guest saw "Comments are unavailable" on every post.
+ *
+ * A GET or HEAD of a path listed here is answered as `public`: a token that is
+ * sent must still have a live identity behind it, and need not be a registered
+ * one. Every other method keeps the path's policy, so a guest's write is still
+ * refused 403 REGISTRATION_REQUIRED before it reaches the route. (Moving the
+ * path to the guest list instead would hand that write to the adapter, whose
+ * 401 the app reads as a session that has ended.)
+ *
+ * List a path only when its GET handler serves a request with no Authorization
+ * header at all. `route-identity-policy.test.ts` holds each entry to a
+ * registered path with a read and a write.
+ */
+export const GUEST_READABLE_REGISTERED_ROUTES = [
+  '/api/showcase/posts/[postId]/comments',
+] as const;
+
 export const ROUTE_IDENTITY_POLICY: Readonly<Record<string, RouteIdentityPolicy>> =
   Object.freeze({
     ...Object.fromEntries(GUEST_ROUTES.map((route) => [route, 'guest' as const])),
@@ -275,4 +299,21 @@ export function routeIdentityPolicyForPathname(pathname: string): RouteIdentityP
   }
 
   return null;
+}
+
+/**
+ * The policy one request is admitted under: its path's own, except the read of
+ * a path in `GUEST_READABLE_REGISTERED_ROUTES`. Admission asks this, not the
+ * path alone.
+ */
+export function routeIdentityPolicyForRequest(pathname: string, method: string): RouteIdentityPolicy | null {
+  const policy = routeIdentityPolicyForPathname(pathname);
+  if (policy !== 'registered') return policy;
+
+  const verb = method.toUpperCase();
+  if (verb !== 'GET' && verb !== 'HEAD') return policy;
+
+  return GUEST_READABLE_REGISTERED_ROUTES.some((template) => routeSegmentsMatch(template, pathname))
+    ? 'public'
+    : policy;
 }
