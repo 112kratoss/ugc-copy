@@ -236,4 +236,42 @@ describe('post feed presentation', () => {
             expect(formatRelativeTime('not-a-date')).toBe('');
         });
     });
+    // The cases themselves are contracts/feed-recipe-chip-v1.json, asked of both
+    // clients; this is the card carrying the answer to its component.
+    describe('recipe chip', () => {
+        const recipe = {
+            id: 'bundle-1',
+            postId: 'post-1',
+            title: 'A launch frame',
+            accessMode: 'free',
+            priceUsdCents: 0,
+            previewText: '',
+            allowRemix: false,
+        } as NonNullable<ShowcaseFeedItem['asset']>;
+
+        it('leaves a free recipe to Remix where the card has one', () => {
+            expect(buildPostFeedCard(item({ asset: recipe, canRemix: true })).recipeChip).toBeNull();
+        });
+
+        it('names a free recipe on a card with no Remix', () => {
+            expect(buildPostFeedCard(item({ asset: recipe, canRemix: false })).recipeChip)
+                .toEqual({ label: 'Free recipe', tone: 'free' });
+        });
+
+        it('prices a paid recipe as this viewer pays it, beside Remix too', () => {
+            const paid = {
+                ...recipe,
+                accessMode: 'paid',
+                priceUsdCents: 250,
+                priceQuote: { formatted: '\u20b9210', amountSubunits: 21000 },
+            } as NonNullable<ShowcaseFeedItem['asset']>;
+
+            expect(buildPostFeedCard(item({ asset: paid, canRemix: true })).recipeChip)
+                .toEqual({ label: '\u20b9210 recipe', tone: 'paid' });
+        });
+
+        it('has nothing to say about a post with no recipe', () => {
+            expect(buildPostFeedCard(item({ asset: null, canRemix: false })).recipeChip).toBeNull();
+        });
+    });
 });

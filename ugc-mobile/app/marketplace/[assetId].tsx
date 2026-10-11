@@ -11,7 +11,7 @@ import { showActionSheet } from '@/lib/action-sheet';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
-import { CREDIT_BALANCE_LOADING_LABEL, formatCreditAmount } from '@/lib/pricing';
+import { CREDIT_BALANCE_LOADING_LABEL, FREE_RECIPE_LABEL, formatCreditAmount } from '@/lib/pricing';
 import { appTheme, type ToolAccent } from '@/lib/theme';
 import type { MarketplaceResource, PostResourceKind } from '@/lib/types';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
@@ -27,7 +27,7 @@ function marketplaceAccent(accessMode?: MarketplaceResource['accessMode']): Tool
 }
 
 function marketplacePriceLabel(detail: MarketplaceResource) {
-  return detail.accessMode === 'free' ? 'Free unlock' : formatUnlockPrice(detail.priceUsdCents ?? 0);
+  return detail.accessMode === 'free' ? FREE_RECIPE_LABEL : formatUnlockPrice(detail.priceUsdCents ?? 0);
 }
 
 export default function MarketplaceAssetScreen() {

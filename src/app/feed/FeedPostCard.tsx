@@ -10,7 +10,6 @@ import PublicShareButton from '@/components/PublicShareButton';
 import { ShowcaseFeedbackMenu, type ShowcaseFeedbackAction } from '@/app/showcase/ShowcaseFeedInteraction';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { buildShowcaseDetailPath } from '@/lib/share';
-import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 import type { PostFeedCard } from '@/lib/post-feed-presentation';
 
 export interface FeedDetailContext {
@@ -293,18 +292,6 @@ function FeedPostCardView({
                 </div>
             ) : null}
 
-            {item.asset ? (
-                <Link
-                    href={buildShowcaseDetailPath(item.id, { ...detailContext, section: 'resources' })}
-                    prefetch={false}
-                    className="ui-focus-ring mx-4 mt-3 flex min-h-11 items-center gap-2 rounded-2xl border border-amber-300/20 bg-amber-400/[0.08] px-3 text-xs font-bold text-amber-100 transition hover:border-amber-300/35 sm:mx-5"
-                >
-                    <ShoppingBag className="h-4 w-4" aria-hidden="true" />
-                    {getAssetAccessLabel(item.asset)}
-                    <span className="truncate font-medium text-amber-100/70">{item.asset.title}</span>
-                </Link>
-            ) : null}
-
             <div className="mt-2 flex flex-wrap items-center gap-1 px-2 pb-2 sm:px-3">
                 {item.canRemix ? (
                     // The product's differentiated verb leads the row as a labeled
@@ -349,6 +336,25 @@ function FeedPostCardView({
                     iconOnly
                     className="ui-focus-ring inline-flex h-11 w-11 items-center justify-center rounded-full text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
                 />
+                {card.recipeChip ? (
+                    // The recipe behind the post, at the row's far end and only
+                    // where it adds something: a price, or a free recipe on a card
+                    // with no Remix (`getPostFeedRecipeChip`). It opens the post at
+                    // its recipe, as the bar it replaced did.
+                    <Link
+                        href={buildShowcaseDetailPath(item.id, { ...detailContext, section: 'resources' })}
+                        prefetch={false}
+                        aria-label={`${card.recipeChip.label}: ${card.title}`}
+                        className={`ui-focus-ring ml-auto inline-flex min-h-11 items-center gap-2 rounded-full px-3 text-xs font-bold transition ${
+                            card.recipeChip.tone === 'paid'
+                                ? 'border border-amber-300/20 bg-amber-400/[0.08] text-amber-100 hover:border-amber-300/35'
+                                : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]'
+                        }`}
+                    >
+                        <ShoppingBag className="h-4 w-4" aria-hidden="true" />
+                        {card.recipeChip.label}
+                    </Link>
+                ) : null}
             </div>
 
             {commentsOpen ? (

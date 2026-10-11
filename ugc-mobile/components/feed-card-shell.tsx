@@ -48,7 +48,6 @@ export function FeedCardShell({
   media,
   player,
   readMore,
-  unlock,
   onOpen,
   onOpenTouchStart,
   nativeZoom = false,
@@ -82,8 +81,6 @@ export function FeedCardShell({
   player?: ReactNode;
   /** Its own tap target, beside the preview's ordinary post-open target. */
   readMore?: ReactNode;
-  /** The recipe or unlock behind the post, as the web card shows it. */
-  unlock?: ReactNode;
   onOpen?: () => void;
   /**
    * The finger has gone down on the media: a chance to get its opening ready.
@@ -250,8 +247,6 @@ export function FeedCardShell({
 
       {player}
 
-      {unlock}
-
       <View
         style={{
           flexDirection: 'row',
@@ -284,7 +279,7 @@ export function FeedCardAction({
   /** Swaps the glyph for a spinner and blocks repeat taps while a request is in flight. */
   loading?: boolean;
   onPress: () => void;
-  tone?: 'default' | 'primary' | 'success' | 'warning';
+  tone?: 'default' | 'primary' | 'success' | 'warning' | 'commerce';
 }) {
   const theme = useAppTheme();
   const labelColor = tone === 'primary'
@@ -293,7 +288,9 @@ export function FeedCardAction({
       ? theme.colors.success
       : tone === 'warning'
         ? theme.colors.warning
-        : theme.colors.faint;
+        : tone === 'commerce'
+          ? theme.colors.commerce
+          : theme.colors.faint;
   const motion = usePressMotion(Boolean(disabled || loading), { scale: appTheme.motion.scale.pressedControl });
 
   return (

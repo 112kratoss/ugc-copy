@@ -1,5 +1,6 @@
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
+import { getAssetAccessLabel, isFreeRecipeAsset } from '@/lib/showcase-asset-labels';
 
 /**
  * How a post presents in a single-column feed.
@@ -153,7 +154,38 @@ export interface PostFeedCard {
     saveLabel: string;
     commentLabel: string;
     remixLabel: string;
+    /** The recipe behind the post, where the action row has reason to name it. */
+    recipeChip: PostFeedRecipeChip | null;
     canExpandBody: boolean;
+}
+
+export interface PostFeedRecipeChip {
+    /** `Free recipe`, or the price as this viewer pays it. */
+    label: string;
+    tone: 'free' | 'paid';
+}
+
+/**
+ * The recipe behind a post, as a chip at the end of the card's action row. It
+ * is drawn only where it says something the row does not already:
+ *
+ * - a paid recipe always shows its price, so a post that sells something is
+ *   visible while scrolling;
+ * - a free one shows only on a card with no Remix, where it is the one way to
+ *   the prompt. Beside Remix it would say nothing Remix does not.
+ *
+ * It replaced a full-width bar under the media that repeated the post's title.
+ * Mirrors `homeRecipeChip` in ugc-mobile/lib/home-feed-view-model.ts;
+ * `contracts/feed-recipe-chip-v1.json` holds both to the same cases.
+ */
+export function getPostFeedRecipeChip(item: Pick<ShowcaseFeedItem, 'asset' | 'canRemix'>): PostFeedRecipeChip | null {
+    if (!item.asset) return null;
+
+    if (!isFreeRecipeAsset(item.asset)) {
+        return { label: getAssetAccessLabel(item.asset), tone: 'paid' };
+    }
+
+    return item.canRemix ? null : { label: getAssetAccessLabel(item.asset), tone: 'free' };
 }
 
 /** Width the feed column gives body text, used only for the line estimate. */
@@ -220,6 +252,7 @@ export function buildPostFeedCard(item: ShowcaseFeedItem, now = new Date()): Pos
         saveLabel: formatActionLabel(item.saveCount, 'Save'),
         commentLabel: formatActionLabel(item.commentCount, 'Comment'),
         remixLabel: item.remixCount > 0 ? `Remix · ${formatCompactCount(item.remixCount)}` : 'Remix',
+        recipeChip: getPostFeedRecipeChip(item),
         // A text post never expands in place — the card itself opens the post,
         // so a clamped body ends in an ellipsis that reads as "there is more".
         canExpandBody: kind !== 'text'

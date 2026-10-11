@@ -12,7 +12,7 @@ import {
 } from './generation-media';
 import { UNKNOWN_CREATOR_LABEL } from './hide-creator-label';
 import { formatCompactCount } from './home-view-model';
-import { formatUnlockCreditPrice } from './pricing';
+import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-display';
 import { getShowcaseRemixAccess, type ShowcaseRemixAccess } from './showcase-remix-access';
 
@@ -883,7 +883,7 @@ function creatorHandle(username: string | null, name: string) {
 }
 
 function showcaseBadge(item: ShowcaseFeedItem) {
-  if (item.asset?.accessMode === 'free') return 'Free unlock';
+  if (item.asset?.accessMode === 'free') return FREE_RECIPE_LABEL;
   if (item.asset) return formatUnlockCreditPrice(item.asset.priceUsdCents);
   if (getShowcaseRemixAccess(item) === 'open') return 'Remix';
   if (item.category === 'text' || item.postFormat === 'text') return 'Prompt';
@@ -893,8 +893,8 @@ function showcaseBadge(item: ShowcaseFeedItem) {
 }
 
 function ownerPostBadge(item: OwnerPostListItem) {
-  if (item.bundle?.accessMode === 'free') return 'Free unlock';
-  if (item.bundle?.accessMode === 'paid') return 'Paid unlock';
+  if (item.bundle?.accessMode === 'free') return FREE_RECIPE_LABEL;
+  if (item.bundle?.accessMode === 'paid') return 'Paid recipe';
   if (item.category === 'text' || item.postFormat === 'text') return 'Prompt';
   if (item.mediaKind === 'video' || item.category === 'video') return 'Video';
   return 'Post';

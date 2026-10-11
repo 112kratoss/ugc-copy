@@ -184,7 +184,8 @@ The two must look and behave like one product. A stale session falls back to the
 - **Card anatomy** (`FeedPostCard`):
   - the creator line, then the title and body, clamped with a way to expand it;
   - the media cover (the first cover is prioritized as the page's LCP);
-  - then the actions: Save (heart), Comments (opens the thread inline, first page loaded at once) and Share.
+  - then the actions: Remix where the post can be remixed, Save (heart), Comments (opens the thread inline, first page loaded at once) and Share;
+  - and, at the far end of that row, the post's recipe as a chip, only where it says something the row does not (`getPostFeedRecipeChip`): a paid recipe shows its price, a free one shows "Free recipe" only on a card with no Remix. It opens the post at its recipe. There is no bar under the media for it: the bar repeated the post's title. The app's card follows the same cases (`contracts/feed-recipe-chip-v1.json`).
 - **Clicks:** the card itself opens the post. Anything inside it that owns a click is a link or a button, or carries `data-feed-card-inert`.
 - **Media:** it opens in `FeedMediaLightbox`.
 - **The ⋯ menu** (`ShowcaseFeedbackMenu`): one menu for a feed card, an Explore tile, the reel and a creator's page, with the rows the app carries in the same places.

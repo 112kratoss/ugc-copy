@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import FeedPostCard from '@/app/feed/FeedPostCard';
 import { buildPostFeedCard } from '@/lib/post-feed-presentation';
 import { buildShowcaseDetailPath } from '@/lib/share';
-import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
+import type { ShowcaseAssetSummary, ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
 
 vi.mock('@/components/PostComments', () => ({
     default: () => <div data-testid="post-comments"><textarea aria-label="Write a comment" /></div>,
@@ -341,5 +341,82 @@ describe("FeedPostCard's menu, by whose post it is", () => {
         renderCard({ creator: { id: null, username: null, name: 'Magicbooklet', avatar: null } });
 
         expect(menuRows()).toEqual(['Not interested', 'Report content']);
+    });
+});
+
+// The recipe behind a post was a full-width bar under the media that named the
+// recipe by its title, which is the post's title again. It is a chip at the end
+// of the action row now, and only where it says something the row does not
+// (`getPostFeedRecipeChip`; the cases are `contracts/feed-recipe-chip-v1.json`).
+describe("FeedPostCard's recipe chip", () => {
+    beforeEach(() => {
+        vi.stubGlobal('IntersectionObserver', IntersectionObserverMock);
+    });
+
+    afterEach(() => {
+        cleanup();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    function recipe(overrides: Partial<ShowcaseAssetSummary> = {}): ShowcaseAssetSummary {
+        return {
+            id: 'bundle-1',
+            postId: 'post-1',
+            title: 'A launch frame',
+            accessMode: 'free',
+            priceUsdCents: 0,
+            previewText: '',
+            allowRemix: false,
+            ...overrides,
+        } as ShowcaseAssetSummary;
+    }
+
+    const recipeHref = buildShowcaseDetailPath('post-1', { ...DETAIL_CONTEXT, section: 'resources' });
+    const actionRow = () => screen.getByRole('button', { name: /Save A launch frame/i }).parentElement;
+
+    it('draws nothing for a free recipe beside Remix', () => {
+        renderCard({ asset: recipe(), canRemix: true });
+
+        expect(screen.getByRole('button', { name: /Remix/ })).toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /recipe/i })).not.toBeInTheDocument();
+        expect(document.querySelector(`a[href="${recipeHref}"]`)).toBeNull();
+    });
+
+    it('names a free recipe at the end of the action row on a card with no Remix', () => {
+        renderCard({ asset: recipe(), canRemix: false });
+
+        const chip = screen.getByRole('link', { name: 'Free recipe: A launch frame' });
+
+        expect(screen.queryByRole('button', { name: /Remix/ })).not.toBeInTheDocument();
+        expect(chip).toHaveAttribute('href', recipeHref);
+        // The words, and not the post's title after them as the bar had it.
+        expect(chip.textContent).toBe('Free recipe');
+        expect(actionRow()?.lastElementChild).toBe(chip);
+    });
+
+    it("shows a paid recipe's price, beside Remix too", () => {
+        renderCard({ asset: recipe({ accessMode: 'paid', priceUsdCents: 250 }), canRemix: true });
+
+        const chip = screen.getByRole('link', { name: '$2.50 recipe: A launch frame' });
+
+        expect(screen.getByRole('button', { name: /Remix/ })).toBeInTheDocument();
+        expect(chip).toHaveAttribute('href', recipeHref);
+        expect(chip.textContent).toBe('$2.50 recipe');
+        expect(actionRow()?.lastElementChild).toBe(chip);
+    });
+
+    it('draws nothing on a post with no recipe', () => {
+        renderCard({ asset: null, canRemix: false });
+
+        expect(screen.queryByRole('link', { name: /recipe/i })).not.toBeInTheDocument();
+    });
+
+    it('keeps its click to itself: the card does not open the post as well', () => {
+        const { onOpenPost } = renderCard({ asset: recipe(), canRemix: false });
+
+        fireEvent.click(screen.getByRole('link', { name: 'Free recipe: A launch frame' }));
+
+        expect(onOpenPost).not.toHaveBeenCalled();
     });
 });

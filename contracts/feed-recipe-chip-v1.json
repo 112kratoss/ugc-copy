@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "freeLabel": "Free recipe",
+  "cases": [
+    {
+      "name": "a post with no recipe, beside Remix",
+      "asset": null,
+      "remix": true,
+      "chip": null
+    },
+    {
+      "name": "a post with no recipe and nothing to remix",
+      "asset": null,
+      "remix": false,
+      "chip": null
+    },
+    {
+      "name": "a free recipe beside Remix",
+      "asset": { "accessMode": "free", "priceUsdCents": 0 },
+      "remix": true,
+      "chip": null
+    },
+    {
+      "name": "a free recipe on a card with no Remix",
+      "asset": { "accessMode": "free", "priceUsdCents": 0 },
+      "remix": false,
+      "chip": { "tone": "free", "label": { "web": "Free recipe", "mobile": "Free recipe" } }
+    },
+    {
+      "name": "a free recipe that still carries a price, on a card with no Remix",
+      "asset": { "accessMode": "free", "priceUsdCents": 500 },
+      "remix": false,
+      "chip": { "tone": "free", "label": { "web": "Free recipe", "mobile": "Free recipe" } }
+    },
+    {
+      "name": "a paid recipe beside Remix",
+      "asset": { "accessMode": "paid", "priceUsdCents": 250 },
+      "remix": true,
+      "chip": { "tone": "paid", "label": { "web": "$2.50 recipe", "mobile": "250 credits" } }
+    },
+    {
+      "name": "a paid recipe on a card with no Remix",
+      "asset": { "accessMode": "paid", "priceUsdCents": 250 },
+      "remix": false,
+      "chip": { "tone": "paid", "label": { "web": "$2.50 recipe", "mobile": "250 credits" } }
+    },
+    {
+      "name": "a paid recipe at no price, beside Remix",
+      "asset": { "accessMode": "paid", "priceUsdCents": 0 },
+      "remix": true,
+      "chip": null
+    },
+    {
+      "name": "a paid recipe at no price, on a card with no Remix",
+      "asset": { "accessMode": "paid", "priceUsdCents": 0 },
+      "remix": false,
+      "chip": { "tone": "free", "label": { "web": "Free recipe", "mobile": "Free recipe" } }
+    }
+  ]
+}
