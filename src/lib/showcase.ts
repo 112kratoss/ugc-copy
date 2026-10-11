@@ -176,7 +176,8 @@ export type ShowcaseFeedCandidateSource =
     | 'fresh'
     | 'trending'
     | 'exploration'
-    | 'semantic';
+    | 'semantic'
+    | 'cold';
 
 export interface ShowcaseRecommendationContext {
     deliveryId: string;
