@@ -2,7 +2,7 @@ import type { ToolAccent } from '@/lib/theme';
 import type { ShowcaseFeedItem } from '@/lib/types';
 import type { PreviewViewerSource } from './immersive-preview-view-model';
 import { formatCompactCount } from './home-view-model';
-import { formatUnlockCreditPrice } from './pricing';
+import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import { isTextOnlyShowcasePost } from './showcase-display';
 import { getShowcaseRemixAccess } from './showcase-remix-access';
 
@@ -195,7 +195,7 @@ export function mergeAspectRatios(
 }
 
 function cardBadge(item: ShowcaseFeedItem) {
-  if (item.asset?.accessMode === 'free') return 'Free unlock';
+  if (item.asset?.accessMode === 'free') return FREE_RECIPE_LABEL;
   if (item.asset) return formatUnlockCreditPrice(item.asset.priceUsdCents);
   if (canRecreateShowcaseItem(item)) return 'Remix';
   if (item.category === 'text' || item.postFormat === 'text') return 'Prompt';
@@ -209,7 +209,7 @@ export function cardUnlock(item: ShowcaseFeedItem): ShowcaseMasonryUnlock | null
     const free = item.asset.accessMode === 'free';
     return {
       // In credits, as the unlock is paid in the app: never a cash price.
-      label: free ? 'Free unlock' : formatUnlockCreditPrice(item.asset.priceUsdCents),
+      label: free ? FREE_RECIPE_LABEL : formatUnlockCreditPrice(item.asset.priceUsdCents),
       summary: resourceSummary(item.asset.resourceKinds, item.asset.allowRemix),
       ctaLabel: free ? 'Get resources — Free' : 'View unlock',
       accent: free ? 'workflow' : 'commerce',

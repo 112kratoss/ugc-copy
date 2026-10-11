@@ -10,7 +10,7 @@ import {
 } from './generation-media';
 import { formatCompactCount, formatRelativeTime } from './home-view-model';
 import { mediaItemAspectRatio } from './media-zoom-transition';
-import { UNKNOWN_AMOUNT_LABEL, formatUnlockCreditPrice } from './pricing';
+import { FREE_RECIPE_LABEL, UNKNOWN_AMOUNT_LABEL, formatUnlockCreditPrice } from './pricing';
 
 export type ProfilePreviewState = 'image' | 'videoPoster' | 'videoFallback' | 'text' | 'audio' | 'artFallback';
 
@@ -449,7 +449,7 @@ export function savedShowcaseToProfileMediaCards(items: ShowcaseFeedItem[] | nul
 }
 
 function ownerPostBadge(item: OwnerPostListItem) {
-  if (item.bundle?.accessMode === 'free') return 'Free unlock';
+  if (item.bundle?.accessMode === 'free') return FREE_RECIPE_LABEL;
   if (item.bundle?.accessMode === 'paid') return formatUnlockCreditPrice(item.bundle.priceUsdCents);
   if (item.category === 'text' || item.postFormat === 'text') return 'Prompt';
   if (item.mediaKind === 'video' || item.category === 'video') return 'Video';

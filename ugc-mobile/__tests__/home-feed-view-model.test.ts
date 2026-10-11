@@ -1,5 +1,9 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
+import feedRecipeChipContract from '../../contracts/feed-recipe-chip-v1.json';
 import {
   HOME_FEED_CHIPS,
   advanceHomeSlide,
@@ -16,10 +20,12 @@ import {
   getHomeSlidePassWidth,
   getInitialHomeSlideIndex,
   foldHomeSlideOffset,
+  homeRecipeChip,
   shouldAutoAdvanceHomeSlides,
   shouldTurnHomeSlides,
   showcaseToHomeFeedCard,
 } from '@/lib/home-feed-view-model';
+import { FREE_RECIPE_LABEL } from '@/lib/pricing';
 import { createShowcaseFeedQueryKey, getShowcaseFeedPageParams } from '@/lib/showcase-feed-query';
 import type { ShowcaseFeedItem } from '@/lib/types';
 
@@ -222,8 +228,9 @@ describe('home feed view model', () => {
       }));
 
       expect(card.remixAccess).toBe('paid-unlock');
-      expect(card.remixLabel).toBe('Remix · 8');
-      expect(card.remixAccessibilityLabel).toBe('Unlock A launch frame to remix it');
+      // The price stands where "Remix · 8" would: the lock says the rest.
+      expect(card.remixLabel).toBe('900 credits');
+      expect(card.remixAccessibilityLabel).toBe('Unlock A launch frame to remix it, 900 credits');
     });
 
     it('offers nothing where there is nothing to remix', () => {
@@ -483,5 +490,123 @@ describe('home feed view model', () => {
       expect(shouldTurnHomeSlides({ ...resting, railBottom: null, feedOffset: 2400 })).toBe(true);
       expect(shouldTurnHomeSlides({ ...resting, railBottom: null, feedMoving: true })).toBe(false);
     });
+  });
+});
+
+// A Home card used to carry a full-width row under its media: "Free unlock",
+// then the post's own title again. The recipe is a chip at the end of the
+// action row now, drawn only where it says something the row does not. The
+// web's card follows the same cases (`getPostFeedRecipeChip`, asked by
+// src/__tests__/feed-recipe-chip-parity.test.ts).
+describe("a Home card's recipe chip", () => {
+  const read = (name: string) => readFileSync(path.resolve(__dirname, '..', name), 'utf8');
+
+  function recipePost({ asset, remix }: { asset: { accessMode: string; priceUsdCents: number } | null; remix: boolean }) {
+    return item({
+      // `none` is the server saying there is nothing to remix, whatever is attached.
+      canRemix: remix,
+      remixCapability: remix ? 'public' : 'none',
+      asset: asset ? {
+        id: 'asset-1',
+        postId: 'post-1',
+        title: 'A launch frame',
+        previewText: '',
+        allowRemix: false,
+        ...asset,
+      } : null,
+    } as Partial<ShowcaseFeedItem>);
+  }
+
+  it.each(feedRecipeChipContract.cases)('draws $name as the contract says', ({ asset, remix, chip }) => {
+    const card = showcaseToHomeFeedCard(recipePost({ asset, remix }));
+
+    expect(Boolean(card.remixAccess)).toBe(remix);
+    expect(card.recipeChip?.tone ?? null).toBe(chip?.tone ?? null);
+    expect(card.recipeChip?.label ?? null).toBe(chip?.label.mobile ?? null);
+  });
+
+  it('calls a recipe that costs nothing what the web calls it', () => {
+    expect(FREE_RECIPE_LABEL).toBe(feedRecipeChipContract.freeLabel);
+  });
+
+  it('leaves a free recipe to Remix when that tap takes the unlock on its way', () => {
+    // The web has no Remix on this post, so there the chip is drawn.
+    const card = showcaseToHomeFeedCard(item({
+      canRemix: false,
+      remixCapability: 'unlock_required',
+      remixTarget: 'image',
+      asset: {
+        id: 'asset-1',
+        postId: 'post-1',
+        title: 'A launch frame',
+        accessMode: 'free',
+        priceUsdCents: 0,
+        previewText: '',
+        allowRemix: true,
+      },
+    }));
+
+    expect(card.remixAccess).toBe('free-unlock');
+    expect(card.recipeChip).toBeNull();
+  });
+
+  it('puts the price on the locked Remix where the recipe is what locks it', () => {
+    // Two pills would not fit on a phone's row, and both would open one unlock.
+    const card = showcaseToHomeFeedCard(item({
+      canRemix: false,
+      remixCapability: 'unlock_required',
+      remixTarget: 'image',
+      asset: {
+        id: 'asset-1',
+        postId: 'post-1',
+        title: 'A launch frame',
+        accessMode: 'paid',
+        priceUsdCents: 900,
+        previewText: '',
+        allowRemix: true,
+      },
+    }));
+
+    expect(card.remixAccess).toBe('paid-unlock');
+    expect(card.remixLabel).toBe('900 credits');
+    expect(card.recipeChip).toBeNull();
+  });
+
+  it('keeps the price on a chip where the paid recipe does not lock Remix', () => {
+    const paid = { accessMode: 'paid', priceUsdCents: 900 };
+
+    expect(showcaseToHomeFeedCard(recipePost({ asset: paid, remix: true }))).toMatchObject({
+      remixAccess: 'open',
+      remixLabel: 'Remix · 8',
+      recipeChip: { label: '900 credits', accessibilityLabel: 'Recipe for A launch frame, 900 credits', tone: 'paid' },
+    });
+    expect(showcaseToHomeFeedCard(recipePost({ asset: paid, remix: false }))).toMatchObject({
+      remixAccess: null,
+      recipeChip: { label: '900 credits', tone: 'paid' },
+    });
+  });
+
+  it('says whose recipe it is to a screen reader', () => {
+    expect(homeRecipeChip(recipePost({ asset: { accessMode: 'free', priceUsdCents: 0 }, remix: false }), 'A launch frame', null))
+      .toEqual({ label: 'Free recipe', accessibilityLabel: 'Free recipe for A launch frame', tone: 'free' });
+  });
+
+  it('draws the chip as the last action of the row, and no row of its own', () => {
+    const card = read('components/home-feed-card.tsx');
+    const shell = read('components/feed-card-shell.tsx');
+    const share = card.indexOf('onPress={onShare}');
+    const chip = card.indexOf('{card.recipeChip ? (');
+
+    expect(share).toBeGreaterThan(-1);
+    expect(chip).toBeGreaterThan(share);
+    expect(card.slice(chip)).toContain('label={card.recipeChip.label}');
+    expect(card.slice(chip)).toContain('onPress={onAssetPress}');
+    // A price is drawn in the commerce colour, on the chip and on a locked Remix.
+    expect(card).toContain("tone={card.recipeChip.tone === 'paid' ? 'commerce' : 'default'}");
+    expect(card).toContain("tone={card.remixAccess === 'paid-unlock' ? 'commerce' : 'default'}");
+    // The row named the recipe by its title, which is the post's title again.
+    expect(card).not.toContain('asset?.title');
+    expect(card).not.toContain('cardUnlock');
+    expect(shell).not.toMatch(/\bunlock\b/);
   });
 });

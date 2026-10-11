@@ -78,7 +78,7 @@ describe('showcase feed view model', () => {
     expect(cards.map((card) => card.id)).toEqual(['image-post', 'video-post']);
     expect(cards[0]).toMatchObject({
       accent: 'image',
-      badge: 'Free unlock',
+      badge: 'Free recipe',
       creatorAvatar: null,
       creatorLabel: 'luna',
       saveLabel: '1.2K',
@@ -86,7 +86,7 @@ describe('showcase feed view model', () => {
       unlock: {
         accent: 'workflow',
         ctaLabel: 'Get resources — Free',
-        label: 'Free unlock',
+        label: 'Free recipe',
         summary: 'Prompt + Files + Remix',
       },
       viewerSource: 'showcase-feed',

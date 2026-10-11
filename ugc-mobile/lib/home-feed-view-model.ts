@@ -2,6 +2,7 @@ import type { ToolAccent } from '@/lib/theme';
 import type { ShowcaseFeedItem } from '@/lib/types';
 import type { PreviewViewerSource } from './immersive-preview-view-model';
 import { HOME_TOOL_SHORTCUTS, formatCompactCount, formatRelativeTime, type HomeToolShortcut } from './home-view-model';
+import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import type { ShowcaseFeedFilters } from './showcase-feed-query';
 import { getShowcaseRemixAccess, type ShowcaseRemixAccess } from './showcase-remix-access';
 
@@ -62,8 +63,11 @@ export interface HomeFeedCard {
   remixAccess: ShowcaseRemixAccess | null;
   saveLabel: string;
   commentLabel: string;
+  /** `Remix`, with its count; behind a paid unlock, the price of that unlock. */
   remixLabel: string;
   remixAccessibilityLabel: string;
+  /** The recipe behind the post, where the action row has reason to name it. */
+  recipeChip: HomeFeedRecipeChip | null;
   isSaved: boolean;
   viewerSource: PreviewViewerSource;
 }
@@ -308,6 +312,12 @@ export function showcaseToHomeFeedCard(item: ShowcaseFeedItem): HomeFeedCard {
   const creatorName = item.creator.name || item.creator.username || 'Creator';
   const title = homeCardTitle(item, previewKind);
   const remixAccess = getShowcaseRemixAccess(item);
+  // A remix behind a paid unlock is sold from its own pill: the lock, and the
+  // price where "Remix" would be. A second pill for the price would not fit
+  // beside it on a phone, and both would open the same unlock.
+  const remixPrice = remixAccess === 'paid-unlock' && item.asset && item.asset.priceUsdCents > 0
+    ? formatUnlockCreditPrice(item.asset.priceUsdCents)
+    : null;
 
   return {
     id: item.id,
@@ -332,12 +342,56 @@ export function showcaseToHomeFeedCard(item: ShowcaseFeedItem): HomeFeedCard {
     remixAccess,
     saveLabel: formatFeedActionLabel(item.saveCount, 'Save'),
     commentLabel: formatFeedActionLabel(item.commentCount, 'Comment'),
-    remixLabel: item.remixCount > 0 ? `Remix · ${formatCompactCount(item.remixCount)}` : 'Remix',
+    remixLabel: remixPrice ?? (item.remixCount > 0 ? `Remix · ${formatCompactCount(item.remixCount)}` : 'Remix'),
     // A free unlock asks nothing of the viewer, so only a paid one is announced.
-    remixAccessibilityLabel: remixAccess === 'paid-unlock' ? `Unlock ${title} to remix it` : `Remix ${title}`,
+    remixAccessibilityLabel: remixAccess === 'paid-unlock'
+      ? `Unlock ${title} to remix it${remixPrice ? `, ${remixPrice}` : ''}`
+      : `Remix ${title}`,
+    recipeChip: homeRecipeChip(item, title, remixAccess),
     isSaved: Boolean(item.isSaved),
     viewerSource: 'showcase-feed',
   };
+}
+
+export interface HomeFeedRecipeChip {
+  /** `Free recipe`, or the price in credits, as the app sells an unlock. */
+  label: string;
+  accessibilityLabel: string;
+  tone: 'free' | 'paid';
+}
+
+/**
+ * The recipe behind a post, as a chip at the end of the card's action row. It
+ * is drawn only where it says something the row does not already:
+ *
+ * - a paid recipe always shows its price, so a post that sells something is
+ *   visible while scrolling. Where the recipe is what locks Remix, that pill
+ *   carries the price instead, and there is no second one;
+ * - a free one shows only on a card with no Remix, where it is the one way to
+ *   the prompt. Beside Remix it would say nothing Remix does not: that tap
+ *   takes a free unlock on its way.
+ *
+ * It replaced a full-width row under the media that repeated the post's title.
+ * Mirrors `getPostFeedRecipeChip` in src/lib/post-feed-presentation.ts;
+ * `contracts/feed-recipe-chip-v1.json` holds both to the same cases.
+ */
+export function homeRecipeChip(
+  item: Pick<ShowcaseFeedItem, 'asset'>,
+  title: string,
+  remixAccess: ShowcaseRemixAccess | null,
+): HomeFeedRecipeChip | null {
+  const asset = item.asset;
+  if (!asset) return null;
+
+  if (asset.accessMode !== 'free' && asset.priceUsdCents > 0) {
+    // The locked Remix pill already carries this price (`remixLabel`).
+    if (remixAccess === 'paid-unlock') return null;
+    const price = formatUnlockCreditPrice(asset.priceUsdCents);
+    return { label: price, accessibilityLabel: `Recipe for ${title}, ${price}`, tone: 'paid' };
+  }
+
+  if (remixAccess) return null;
+  return { label: FREE_RECIPE_LABEL, accessibilityLabel: `${FREE_RECIPE_LABEL} for ${title}`, tone: 'free' };
 }
 
 /**

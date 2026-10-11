@@ -81,6 +81,15 @@ export function formatCreditBalance(value: number | null | undefined) {
 }
 
 /**
+ * What a recipe that costs nothing is called wherever a post is listed: a Home
+ * card's chip, an Explore tile, the reel, a profile tile, the marketplace page.
+ * The web says the same words (`FREE_RECIPE_LABEL` in
+ * src/lib/showcase-asset-labels.ts); `contracts/feed-recipe-chip-v1.json` holds
+ * both to them. It read "Free unlock" here while the web read "Free recipe".
+ */
+export const FREE_RECIPE_LABEL = 'Free recipe';
+
+/**
  * A creator's price for an unlock, as a buyer pays it in the app: in credits.
  * Bundle prices are kept in US cents, and an unlock costs one credit per cent
  * (the server's `credit_cost` is `price_usd_cents`), so the number carries over
