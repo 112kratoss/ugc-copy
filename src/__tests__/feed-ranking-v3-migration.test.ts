@@ -403,7 +403,7 @@ describe('feed ranking v3 migration', () => {
     expect(refreshPost).not.toContain('session_item_id');
   });
 
-  it('adds creator negative feedback without touching candidate selection', () => {
+  it('adds creator negative feedback and rebuilds stale creator rows', () => {
     expect(migration).toContain('ADD COLUMN IF NOT EXISTS negative_feedback_count bigint NOT NULL DEFAULT 0');
     expect(migration).toContain('CHECK (negative_feedback_count >= 0)');
     expect(migration).toContain('ADD COLUMN IF NOT EXISTS negative_feedback_rate double precision NOT NULL DEFAULT 0');
@@ -414,9 +414,18 @@ describe('feed ranking v3 migration', () => {
       const start = definition.indexOf('WITH candidate_creators AS MATERIALIZED (');
       return definition.slice(start, definition.indexOf('rollup AS (', start));
     };
-    const previous = functionDefinition(starvationFreeMigration, 'refresh_creator_feed_stats');
-    expect(candidateSelection(refreshCreator)).toBe(candidateSelection(previous));
-    expect(candidateSelection(refreshCreator)).toContain('ORDER BY min(existing.updated_at) ASC NULLS FIRST');
+    // The window predicate is the one the starvation-free refresh used; the
+    // only addition is the UNION with existing rows, so a creator whose
+    // deliveries have all rolled out of the window is rebuilt to zero instead
+    // of keeping a stale 30d rendered_count (which would hold their next post
+    // out of the cold pool).
+    const previous = candidateSelection(functionDefinition(starvationFreeMigration, 'refresh_creator_feed_stats'));
+    const current = candidateSelection(refreshCreator);
+    expect(previous).toContain("AND facts.ranked_at >= p_as_of - interval '31 days'");
+    expect(current).toContain("AND facts.ranked_at >= p_as_of - interval '31 days'");
+    expect(current).toContain('UNION\n      SELECT stale.creator_user_id\n      FROM public.creator_feed_stats AS stale');
+    expect(current).toContain('ORDER BY min(existing.updated_at) ASC NULLS FIRST, creators.creator_user_id');
+    expect(current).toContain('LIMIT p_limit');
 
     expect(refreshCreator).toContain(
       'WHERE facts.not_interested_at IS NOT NULL\n          OR facts.hid_creator_at IS NOT NULL',

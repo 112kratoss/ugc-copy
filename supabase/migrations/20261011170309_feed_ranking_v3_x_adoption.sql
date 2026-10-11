@@ -75,16 +75,26 @@ BEGIN
   END IF;
 
   WITH candidate_creators AS MATERIALIZED (
-    SELECT facts.creator_user_id
-    FROM public.feed_delivery_facts AS facts
+    -- Creators with rendered deliveries in the window, plus every creator
+    -- that already has a stats row: once a creator's deliveries have all
+    -- rolled out of the 30-day window the row must be rebuilt to zero, or a
+    -- stale rendered_count keeps their next post out of the cold pool.
+    SELECT creators.creator_user_id
+    FROM (
+      SELECT facts.creator_user_id
+      FROM public.feed_delivery_facts AS facts
+      WHERE facts.creator_user_id IS NOT NULL
+        AND facts.rendered_at IS NOT NULL
+        AND facts.ranked_at >= p_as_of - interval '31 days'
+        AND facts.ranked_at <= p_as_of
+      UNION
+      SELECT stale.creator_user_id
+      FROM public.creator_feed_stats AS stale
+    ) AS creators
     LEFT JOIN public.creator_feed_stats AS existing
-      ON existing.creator_user_id = facts.creator_user_id
-    WHERE facts.creator_user_id IS NOT NULL
-      AND facts.rendered_at IS NOT NULL
-      AND facts.ranked_at >= p_as_of - interval '31 days'
-      AND facts.ranked_at <= p_as_of
-    GROUP BY facts.creator_user_id
-    ORDER BY min(existing.updated_at) ASC NULLS FIRST, facts.creator_user_id
+      ON existing.creator_user_id = creators.creator_user_id
+    GROUP BY creators.creator_user_id
+    ORDER BY min(existing.updated_at) ASC NULLS FIRST, creators.creator_user_id
     LIMIT p_limit
   ),
   windows(window_key, duration) AS (
