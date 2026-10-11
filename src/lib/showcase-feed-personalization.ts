@@ -109,6 +109,9 @@ type ActiveAlgorithmConfig = ActiveAlgorithmRow & {
 const FEED_SESSION_REUSE_TTL_MS = 2 * 60 * 1000;
 const FEED_SESSION_EXPIRY_MS = 2 * 60 * 60 * 1000;
 const FEED_HYDRATION_BATCH_SIZE = 60;
+const FEED_RANDOM_SEED_MODULUS = 2_147_483_647;
+const FEED_SHARED_SEED_BUCKET_MS = 10 * 60 * 1000;
+const COLD_CANDIDATE_RESERVED_PLACES = 10;
 
 export type RankedFeedFilters = {
   category: ShowcaseCategory;
@@ -117,7 +120,10 @@ export type RankedFeedFilters = {
   resourceFilter: ShowcaseResourceFilter;
 };
 
-function scoreComponents(entry: RankedShowcaseItem) {
+function scoreComponents(
+  entry: RankedShowcaseItem,
+  candidateRpc: RankedFeedRetrievalConfig['candidateRpc'],
+) {
   const { features } = entry;
   return {
     interest_match: features.interestMatch,
@@ -137,15 +143,18 @@ function scoreComponents(entry: RankedShowcaseItem) {
     // v3 RPC columns, under the names normalizeRankedFeedFeatureRow reads, so
     // a continuation page judges visibility at the level the session was
     // ranked at (is_following) and the cold-start draws can be replayed from
-    // the session seed.
-    is_following: features.isFollowing === true,
-    served_recently: features.servedRecently === true,
-    author_rendered_30d: features.authorRendered30d ?? null,
-    post_rendered_30d: features.postRendered30d ?? 0,
-    post_meaningful_30d: features.postMeaningful30d ?? 0,
-    post_age_hours: features.postAgeHours ?? null,
-    reports_7d: features.reports7d ?? 0,
-    sources: features.sources ?? [features.candidateSource],
+    // the session seed. Only the v3 RPC returns them: for a v1 or v2 ranking
+    // they would be the normalizer's defaults, stored as if measured.
+    ...(candidateRpc === 'v3' ? {
+      is_following: features.isFollowing === true,
+      served_recently: features.servedRecently === true,
+      author_rendered_30d: features.authorRendered30d ?? null,
+      post_rendered_30d: features.postRendered30d ?? 0,
+      post_meaningful_30d: features.postMeaningful30d ?? 0,
+      post_age_hours: features.postAgeHours ?? null,
+      reports_7d: features.reports7d ?? 0,
+      sources: features.sources ?? [features.candidateSource],
+    } : {}),
     // How the score was reached, under one key: featureRowFromSessionItem
     // spreads these components back into a feature row, and nesting keeps a
     // score part from ever being read as a feature.
@@ -291,15 +300,22 @@ async function loadViewerRelations({
  * recommendation-only creator rule. Read only when the version configures
  * that rule (a threshold of 1 can never be exceeded), from the 30-day window
  * the candidate RPC reads creator exposure and quality from. A creator with
- * no stats row has no evidence and is never dropped. Null when the read
- * fails: the rule cannot be evaluated, so nothing is cleared.
+ * no stats row, or with fewer rendered deliveries than the cold-start
+ * exposure threshold, has no evidence yet and is never dropped: a report
+ * counts two negatives, so at the 0.08 threshold one open report sinks any
+ * creator rendered fewer than 8 times, and those are the authors the cold
+ * pool and slot exist to surface. Null when the read fails: the rule cannot
+ * be evaluated, so nothing is cleared.
  */
 async function loadCreatorNegativeFeedbackRates({
   items,
+  minimumRenderedCount,
   serviceClient,
   thresholds,
 }: {
   items: ShowcaseFeedItem[];
+  /** The retrieval config's cold impression threshold. */
+  minimumRenderedCount: number;
   serviceClient: SupabaseClient;
   thresholds: FeedVisibilityThresholds;
 }): Promise<Map<string, number> | null> {
@@ -310,12 +326,14 @@ async function loadCreatorNegativeFeedbackRates({
   try {
     const { data, error } = await serviceClient
       .from('creator_feed_stats')
-      .select('creator_user_id, negative_feedback_rate')
+      .select('creator_user_id, negative_feedback_rate, rendered_count')
       .eq('window_key', '30d')
       .in('creator_user_id', creatorIds);
     if (error) throw error;
     for (const row of data ?? []) {
       const rate = Number(row.negative_feedback_rate);
+      const rendered = Number(row.rendered_count);
+      if (!Number.isFinite(rendered) || rendered < minimumRenderedCount) continue;
       if (Number.isFinite(rate)) rates.set(String(row.creator_user_id), rate);
     }
     return rates;
@@ -406,16 +424,19 @@ function optionalBoundedInteger(value: unknown, fallback: number, minimum: numbe
  * could not change what was actually retrieved. The v3 keys default to the
  * v3 RPC's own parameter defaults and bounds, and the two recommendation-only
  * visibility thresholds default to off, so a v1 or v2 row reads exactly as
- * before.
+ * before. Those thresholds are read for the v3 RPC only: it alone returns
+ * `is_following`, and without it every creator, followed or not, would be
+ * judged at the recommendations level.
  */
 export function normalizeRetrievalConfig(
   config: Record<string, unknown> | null | undefined,
 ): RankedFeedRetrievalConfig {
   const retrieval = config ?? {};
+  const candidateRpc: RankedFeedRetrievalConfig['candidateRpc'] = retrieval.candidate_rpc === 'v3'
+    ? 'v3'
+    : retrieval.candidate_rpc === 'v2' ? 'v2' : 'v1';
   return {
-    candidateRpc: retrieval.candidate_rpc === 'v3'
-      ? 'v3'
-      : retrieval.candidate_rpc === 'v2' ? 'v2' : 'v1',
+    candidateRpc,
     followingLimit: boundedInteger(retrieval.following_limit, 100, 0, 500),
     interestLimit: boundedInteger(retrieval.interest_limit, 150, 0, 500),
     trendingLimit: boundedInteger(retrieval.trending_limit, 100, 0, 500),
@@ -441,7 +462,7 @@ export function normalizeRetrievalConfig(
       1,
       SHOWCASE_FEED_ELIGIBLE_ITEM_LIMIT,
     ),
-    visibilityThresholds: normalizeFeedVisibilityThresholds(retrieval),
+    visibilityThresholds: normalizeFeedVisibilityThresholds(candidateRpc === 'v3' ? retrieval : null),
   };
 }
 
@@ -740,6 +761,7 @@ async function loadPersistedPage({
 async function persistRankedSession({
   algorithmVersionId,
   anonymousKeyHash,
+  candidateRpc,
   experimentAssignmentId,
   experimentId,
   experimentVariantId,
@@ -753,6 +775,8 @@ async function persistRankedSession({
 }: {
   algorithmVersionId: string;
   anonymousKeyHash: string | null;
+  /** The RPC `ranked` was retrieved with; only v3 rows carry the v3 columns. */
+  candidateRpc: RankedFeedRetrievalConfig['candidateRpc'];
   experimentAssignmentId: number | null;
   experimentId: string | null;
   experimentVariantId: string | null;
@@ -784,7 +808,7 @@ async function persistRankedSession({
       creator_user_id: entry.item.creator.id || null,
       candidate_source: entry.features.candidateSource,
       final_score: entry.score,
-      score_components: scoreComponents(entry),
+      score_components: scoreComponents(entry, candidateRpc),
     })),
     p_experiment: {
       assignment_id: experimentAssignmentId,
@@ -1012,6 +1036,61 @@ async function findReusableSession({
   return data as FeedSessionRow & { experiment_assignment_id: number | null };
 }
 
+/**
+ * Hydration keeps only the first `limit` rows of the pre-sort, and a
+ * cold-pool post (new, from an author with almost no exposure) scores near the
+ * bottom almost by definition: past the cut, the cold-start slot would have
+ * nothing left to draw from. So a sixth of the cut, at most 10 places, goes to
+ * the highest-ranked rows the cold pool retrieved. A cold row below the cut
+ * takes the place of the lowest-ranked other row inside it, which moves to
+ * just below the cut, first in line should hydration lose a row. A repeat, or
+ * a post served recently and passed over, never takes a place: neither can be
+ * the cold-start pick.
+ */
+function reserveColdCandidateRows(rows: RankedFeedFeatureRow[], limit: number) {
+  const places = Math.min(COLD_CANDIDATE_RESERVED_PLACES, Math.floor(limit / 6));
+  if (rows.length <= limit || places <= 0) return rows;
+  const reservable = (row: RankedFeedFeatureRow) => (
+    !row.seenRecently
+    && row.servedRecently !== true
+    && (row.sources ?? [row.candidateSource]).includes('cold')
+  );
+  const inside = rows.slice(0, limit);
+  const below = rows.slice(limit);
+  const promoted = below
+    .filter(reservable)
+    .slice(0, Math.max(0, places - inside.filter(reservable).length));
+  if (promoted.length === 0) return rows;
+
+  // A sixth of the cut leaves far more other rows inside it than places.
+  const demoted: RankedFeedFeatureRow[] = [];
+  for (let index = inside.length - 1; index >= 0 && demoted.length < promoted.length; index -= 1) {
+    if (!reservable(inside[index])) demoted.unshift(inside[index]);
+  }
+  const promotedRows = new Set(promoted);
+  const demotedRows = new Set(demoted);
+  return [
+    ...inside.filter((row) => !demotedRows.has(row)),
+    ...promoted,
+    ...demoted,
+    ...below.filter((row) => !promotedRows.has(row)),
+  ];
+}
+
+/**
+ * The seed the cold-start draws come from. A ranking a cursor can resume keeps
+ * a random seed, persisted with its session. A ranking no cursor resumes is
+ * run again for every page: the identityless bootstrap (cached, never
+ * persisted) and every offset > 0 ranking. Those share one seed per 10-minute
+ * bucket, so the next page is cut from the order the last one was. With a
+ * fresh seed the next ranking's slot could hold a different post, above the
+ * cut where it is never shown, and the previous pick could come round again.
+ */
+function rankingSeed({ identityless, offset }: { identityless: boolean; offset: number }) {
+  if (!identityless && offset === 0) return Math.floor(Math.random() * FEED_RANDOM_SEED_MODULUS);
+  return Math.floor(Date.now() / FEED_SHARED_SEED_BUCKET_MS) % FEED_RANDOM_SEED_MODULUS;
+}
+
 function mergeUniqueFeedItems(
   primaryItems: ShowcaseFeedItem[],
   fallbackItems: ShowcaseFeedItem[],
@@ -1157,13 +1236,17 @@ export async function getPersonalizedShowcaseFeedPage({
   // Hydration is budgeted, so the pre-sort must already respect the seen tier;
   // otherwise repeats consume the budget and never reach the reranker as the
   // last resort they are meant to be.
-  const configuredFeatureRows = featureRows
+  const sortedFeatureRows = featureRows
     ? [...featureRows].sort((left, right) => (
       Number(left.seenRecently) - Number(right.seenRecently)
       || scoreRankedFeedFeatures(right, algorithm.scoreWeights)
       - scoreRankedFeedFeatures(left, algorithm.scoreWeights)
     ))
     : null;
+  // Only the v3 RPC has a cold pool to keep places for.
+  const configuredFeatureRows = sortedFeatureRows && algorithm.retrieval.candidateRpc === 'v3'
+    ? reserveColdCandidateRows(sortedFeatureRows, algorithm.eligibleItemLimit)
+    : sortedFeatureRows;
   const hydratedFeatureItems = configuredFeatureRows?.length
     ? await timed('hydration', () => hydrateEligibleCandidates({
       eligibleItemLimit: algorithm.eligibleItemLimit,
@@ -1192,6 +1275,7 @@ export async function getPersonalizedShowcaseFeedPage({
     }),
     loadCreatorNegativeFeedbackRates({
       items: mergedCandidateItems,
+      minimumRenderedCount: algorithm.retrieval.coldImpressionThreshold,
       serviceClient,
       thresholds: visibilityThresholds,
     }),
@@ -1222,7 +1306,7 @@ export async function getPersonalizedShowcaseFeedPage({
     }));
   // Drawn before ranking and persisted with the session: the cold-start slot's
   // Thompson draws replay exactly from it.
-  const randomSeed = Math.floor(Math.random() * 2_147_483_647);
+  const randomSeed = rankingSeed({ identityless: !viewerUserId && !anonymousKeyHash, offset });
   const rankingStartedAt = performance.now();
   const ranked = rankAndDiversifyShowcaseItems({
     items: candidateItems,
@@ -1237,6 +1321,7 @@ export async function getPersonalizedShowcaseFeedPage({
   const persisted = await timed('persistence', () => persistRankedSession({
     algorithmVersionId: algorithm.id,
     anonymousKeyHash,
+    candidateRpc: algorithm.retrieval.candidateRpc,
     experimentAssignmentId,
     experimentId,
     experimentVariantId,

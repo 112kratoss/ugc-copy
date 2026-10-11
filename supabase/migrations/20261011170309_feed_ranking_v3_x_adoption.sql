@@ -76,9 +76,11 @@ BEGIN
 
   WITH candidate_creators AS MATERIALIZED (
     -- Creators with rendered deliveries in the window, plus every creator
-    -- that already has a stats row: once a creator's deliveries have all
-    -- rolled out of the 30-day window the row must be rebuilt to zero, or a
-    -- stale rendered_count keeps their next post out of the cold pool.
+    -- whose stats rows still hold counts: once a creator's deliveries have
+    -- all rolled out of the 30-day window the row must be rebuilt to zero, or
+    -- a stale rendered_count keeps their next post out of the cold pool. A
+    -- row already rebuilt to zero is left alone, so the candidates do not
+    -- grow with every creator ever measured.
     SELECT creators.creator_user_id
     FROM (
       SELECT facts.creator_user_id
@@ -90,6 +92,8 @@ BEGIN
       UNION
       SELECT stale.creator_user_id
       FROM public.creator_feed_stats AS stale
+      WHERE stale.rendered_count > 0
+         OR stale.negative_feedback_count > 0
     ) AS creators
     LEFT JOIN public.creator_feed_stats AS existing
       ON existing.creator_user_id = creators.creator_user_id

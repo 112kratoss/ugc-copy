@@ -973,6 +973,17 @@ describe('v3 retrieval config', () => {
     expect(normalizeRetrievalConfig({ candidate_limit: 300 })).toMatchObject({ candidateRpc: 'v1', ...v3Defaults });
     expect(normalizeRetrievalConfig({ candidate_rpc: 'v4' }).candidateRpc).toBe('v1');
   });
+
+  it('honours the recommendation thresholds only for the v3 RPC, the only one that reports follows', () => {
+    const thresholds = { recommendation_max_post_negative_risk: 0.12, recommendation_max_creator_negative_rate: 0.08 };
+    const off = v3Defaults.visibilityThresholds;
+
+    expect(normalizeRetrievalConfig({ candidate_rpc: 'v3', ...thresholds }).visibilityThresholds)
+      .toEqual({ recommendationMaxPostNegativeRisk: 0.12, recommendationMaxCreatorNegativeRate: 0.08 });
+    // Without is_following every creator would be judged as a stranger.
+    expect(normalizeRetrievalConfig({ candidate_rpc: 'v2', ...thresholds }).visibilityThresholds).toEqual(off);
+    expect(normalizeRetrievalConfig(thresholds).visibilityThresholds).toEqual(off);
+  });
 });
 
 describe('for-you-rules v3 wiring', () => {
@@ -984,8 +995,16 @@ describe('for-you-rules v3 wiring', () => {
   };
   type PersistedSession = { p_session: Record<string, unknown>; p_items: PersistedRankedItem[] };
   type TableRows = Record<string, Array<Record<string, unknown>>>;
+  type AlgorithmRow = {
+    id: string;
+    algorithm_key: string;
+    version: number;
+    weights: Record<string, unknown>;
+    retrieval_config: Record<string, unknown>;
+    diversity_config: Record<string, unknown>;
+  };
 
-  const V3_ALGORITHM = {
+  const V3_ALGORITHM: AlgorithmRow = {
     id: 'algorithm-v3',
     algorithm_key: 'for-you-rules',
     version: 3,
@@ -1032,12 +1051,14 @@ describe('for-you-rules v3 wiring', () => {
    * every read and the persisted session.
    */
   function v3Client({
+    algorithm = V3_ALGORITHM,
     candidates = [],
     failingTable = null,
-    retrievalConfig = FOR_YOU_RULES_V3_RETRIEVAL_CONFIG,
+    retrievalConfig = algorithm.retrieval_config,
     rows = {},
     session = null,
   }: {
+    algorithm?: AlgorithmRow;
     candidates?: Array<Record<string, unknown>>;
     failingTable?: string | null;
     retrievalConfig?: Record<string, unknown>;
@@ -1066,7 +1087,7 @@ describe('for-you-rules v3 wiring', () => {
       });
       query.maybeSingle = vi.fn(async () => ({
         data: table === 'feed_algorithm_versions'
-          ? { ...V3_ALGORITHM, retrieval_config: retrievalConfig }
+          ? { ...algorithm, retrieval_config: retrievalConfig }
           : table === 'feed_sessions' ? session : null,
         error: null,
       }));
@@ -1084,7 +1105,8 @@ describe('for-you-rules v3 wiring', () => {
       return query;
     });
     const rpc = vi.fn(async (name: string, payload: Record<string, unknown>) => {
-      if (name === 'get_ranked_feed_candidates_v3') return { data: candidates, error: null };
+      // Every version's candidate RPC answers with the same rows.
+      if (name.startsWith('get_ranked_feed_candidates')) return { data: candidates, error: null };
       if (name === 'persist_ranked_feed_session') {
         const persistedSession = payload as unknown as PersistedSession;
         persisted.push(persistedSession);
@@ -1104,19 +1126,27 @@ describe('for-you-rules v3 wiring', () => {
   function forYouPage(
     client: SupabaseClient,
     {
+      anonymousKeyHash = null,
       cursor = null,
       fallback = [],
+      offset = 0,
       viewerUserId = 'viewer-1',
-    }: { cursor?: string | null; fallback?: ShowcaseFeedItem[]; viewerUserId?: string | null } = {},
+    }: {
+      anonymousKeyHash?: string | null;
+      cursor?: string | null;
+      fallback?: ShowcaseFeedItem[];
+      offset?: number;
+      viewerUserId?: string | null;
+    } = {},
   ) {
     return getPersonalizedShowcaseFeedPage({
-      anonymousKeyHash: null,
+      anonymousKeyHash,
       cursor,
       fallbackItems: async () => fallback,
       filters: { category: 'all', toolSlug: null, unlockFilter: 'all', resourceFilter: 'all' },
       hydratePostIds: async (ids) => ids.map(item),
       limit: 12,
-      offset: 0,
+      offset,
       serviceClient: client,
       viewerUserId,
     });
@@ -1125,6 +1155,11 @@ describe('for-you-rules v3 wiring', () => {
   async function spyOnRanking() {
     const ranking = await import('@/lib/showcase-feed-ranking');
     return vi.spyOn(ranking, 'rankAndDiversifyShowcaseItems');
+  }
+
+  async function spyOnVisibility() {
+    const visibility = await import('@/lib/feed-visibility');
+    return vi.spyOn(visibility, 'filterFeedVisibility');
   }
 
   function persistedIds(session: PersistedSession | undefined) {
@@ -1387,10 +1422,10 @@ describe('for-you-rules v3 wiring', () => {
     ];
     const rows = {
       creator_feed_stats: [
-        { creator_user_id: 'creator-noisy-stranger', window_key: '30d', negative_feedback_rate: 0.2 },
-        { creator_user_id: 'creator-noisy-followed', window_key: '30d', negative_feedback_rate: 0.2 },
+        { creator_user_id: 'creator-noisy-stranger', window_key: '30d', negative_feedback_rate: 0.2, rendered_count: 100 },
+        { creator_user_id: 'creator-noisy-followed', window_key: '30d', negative_feedback_rate: 0.2, rendered_count: 100 },
         // Another window never counts.
-        { creator_user_id: 'creator-calm', window_key: '7d', negative_feedback_rate: 0.9 },
+        { creator_user_id: 'creator-calm', window_key: '7d', negative_feedback_rate: 0.9, rendered_count: 100 },
       ],
     };
     const v3 = v3Client({ candidates, rows });
@@ -1456,5 +1491,155 @@ describe('for-you-rules v3 wiring', () => {
     expect(page.items.map((entry) => entry.id)).toEqual(['still-fine', 'risky-followed']);
     expect(page.items.map((entry) => entry.recommendation?.deliveryId)).toEqual(['912', '915']);
     expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('judges a creator\'s negative rate only once the creator has the cold-start threshold\'s exposure', async () => {
+    const visibilitySpy = await spyOnVisibility();
+    const { client, persisted } = v3Client({
+      candidates: [v3Candidate('new-author'), v3Candidate('known-author')],
+      rows: {
+        creator_feed_stats: [
+          // One open report is two negatives: (2 + 0.2) / (7 + 20) is past 0.08 already.
+          { creator_user_id: 'creator-new-author', window_key: '30d', negative_feedback_rate: 0.11, rendered_count: 7 },
+          { creator_user_id: 'creator-known-author', window_key: '30d', negative_feedback_rate: 0.11, rendered_count: 60 },
+        ],
+      },
+    });
+
+    await forYouPage(client);
+
+    expect(persistedIds(persisted[0])).toEqual(['new-author']);
+    expect(visibilitySpy.mock.results[0].value.dropped).toEqual([
+      { postId: 'known-author', reason: 'creator_negative_feedback' },
+    ]);
+  });
+
+  it.each([
+    ['v1', {}],
+    ['v2', { candidate_rpc: 'v2' }],
+  ])('keeps the v3 columns and the recommendation rules out of a %s session', async (_label, retrievalConfig) => {
+    const { client, persisted, reads } = v3Client({
+      algorithm: { ...V3_ALGORITHM, id: 'algorithm-old', version: 1, weights: {}, diversity_config: {} },
+      candidates: [
+        v3Candidate('followed', { is_following: true }),
+        // Past v3's post threshold: an older version never applies it.
+        v3Candidate('risky', { negative_feedback_risk: 0.5 }),
+      ],
+      retrievalConfig: {
+        ...retrievalConfig,
+        recommendation_max_post_negative_risk: 0.12,
+        recommendation_max_creator_negative_rate: 0.08,
+      },
+      rows: {
+        creator_feed_stats: [
+          { creator_user_id: 'creator-followed', window_key: '30d', negative_feedback_rate: 0.5, rendered_count: 500 },
+        ],
+      },
+    });
+
+    await forYouPage(client);
+
+    expect(persistedIds(persisted[0])).toEqual(['followed', 'risky']);
+    expect(reads.map((read) => read.table)).not.toContain('creator_feed_stats');
+    for (const entry of persisted[0].p_items) {
+      expect(entry.score_components.ranking).toMatchObject({ base: expect.any(Number), coldStart: null });
+      expect(entry.score_components).toHaveProperty('interest_match');
+      for (const key of [
+        'is_following', 'served_recently', 'author_rendered_30d', 'post_rendered_30d',
+        'post_meaningful_30d', 'post_age_hours', 'reports_7d', 'sources',
+      ]) {
+        expect(entry.score_components).not.toHaveProperty(key);
+      }
+    }
+  });
+
+  it('seeds every ranking no cursor can resume from a 10-minute bucket, and a resumable session at random', async () => {
+    const rankSpy = await spyOnRanking();
+    const now = vi.spyOn(Date, 'now');
+    vi.spyOn(Math, 'random').mockReturnValue(0.25);
+    const bucketStart = 2_000_000 * 600_000;
+    const candidates = ['a', 'b', 'c'].map((id) => v3Candidate(id));
+    const seedAt = async (at: number, options: Parameters<typeof forYouPage>[1]) => {
+      now.mockReturnValue(at);
+      await forYouPage(v3Client({ candidates }).client, options);
+      return rankSpy.mock.calls.at(-1)?.[0].seed;
+    };
+
+    // The cached identityless page 1, then two signed-out page 2 rankings
+    // minutes apart (one already carrying a key): one bucket, one seed.
+    expect(await seedAt(bucketStart + 60_000, { viewerUserId: null })).toBe(2_000_000);
+    expect(await seedAt(bucketStart + 4 * 60_000, { viewerUserId: null, offset: 12 })).toBe(2_000_000);
+    expect(await seedAt(bucketStart + 9 * 60_000, { viewerUserId: null, anonymousKeyHash: 'a'.repeat(64), offset: 12 }))
+      .toBe(2_000_000);
+    // A signed-in viewer paging by offset re-ranks too.
+    expect(await seedAt(bucketStart + 2 * 60_000, { offset: 24 })).toBe(2_000_000);
+    // The next bucket moves on.
+    expect(await seedAt(bucketStart + 10 * 60_000, { viewerUserId: null, offset: 12 })).toBe(2_000_001);
+    // A first page with an identity opens a session its cursor resumes: random.
+    expect(await seedAt(bucketStart + 60_000, {})).toBe(Math.floor(0.25 * 2_147_483_647));
+    expect(await seedAt(bucketStart + 60_000, { viewerUserId: null, anonymousKeyHash: 'a'.repeat(64) }))
+      .toBe(Math.floor(0.25 * 2_147_483_647));
+  });
+
+  it.each([
+    [60, 10],
+    [55, 15],
+  ])('keeps up to 10 of the 60 hydrated places for the cold pool (%i established, %i cold)', async (establishedCount, coldCount) => {
+    const rankSpy = await spyOnRanking();
+    // Every cold row scores below every established one.
+    const established = Array.from({ length: establishedCount }, (_, index) => v3Candidate(`est-${index}`, {
+      interest_match: 0.9 - index * 0.005,
+    }));
+    const cold = Array.from({ length: coldCount }, (_, index) => v3Candidate(`cold-${index}`, {
+      candidate_source: 'cold',
+      sources: ['cold', 'fresh'],
+      interest_match: 0,
+      smoothed_usefulness: 0,
+      freshness: 0,
+      engagement_depth: 0,
+      exploration_ucb: 0.5 - index * 0.01,
+      author_rendered_30d: 0,
+      post_age_hours: 2,
+      post_rendered_30d: 0,
+      post_meaningful_30d: 0,
+    }));
+    const rankedIds = async (retrievalConfig: Record<string, unknown>) => {
+      rankSpy.mockClear();
+      await forYouPage(v3Client({ candidates: [...cold, ...established], retrievalConfig }).client);
+      return rankSpy.mock.calls[0][0].items.map((entry) => entry.id).sort();
+    };
+    const ids = (rows: Array<{ post_id: string }>) => rows.map((row) => row.post_id);
+
+    // The ten best cold rows displace the lowest established ones.
+    expect(await rankedIds(FOR_YOU_RULES_V3_RETRIEVAL_CONFIG))
+      .toEqual([...ids(cold.slice(0, 10)), ...ids(established.slice(0, 50))].sort());
+    // v2 retrieves no cold pool and keeps the plain top 60.
+    expect(await rankedIds({ ...FOR_YOU_RULES_V3_RETRIEVAL_CONFIG, candidate_rpc: 'v2' }))
+      .toEqual([...ids(established), ...ids(cold.slice(0, 60 - establishedCount))].sort());
+  });
+
+  it('keeps no place for a cold post the viewer saw, or was served and passed over', async () => {
+    const rankSpy = await spyOnRanking();
+    const established = Array.from({ length: 60 }, (_, index) => v3Candidate(`est-${index}`, {
+      interest_match: 0.9 - index * 0.005,
+    }));
+    const coldRow = (postId: string, overrides: Record<string, unknown>) => v3Candidate(postId, {
+      candidate_source: 'cold', sources: ['cold'], interest_match: 0.1, author_rendered_30d: 0, post_age_hours: 2,
+      ...overrides,
+    });
+
+    await forYouPage(v3Client({
+      candidates: [
+        ...established,
+        coldRow('cold-seen', { seen_recently: true, last_seen_at: '2026-10-11T00:00:00.000Z' }),
+        coldRow('cold-served', { served_recently: true }),
+        coldRow('cold-unserved', { interest_match: 0.05 }),
+      ],
+    }).client);
+
+    const ids: string[] = rankSpy.mock.calls[0][0].items.map((entry) => entry.id);
+    expect(ids).toHaveLength(60);
+    expect(ids.filter((id) => id.startsWith('cold-'))).toEqual(['cold-unserved']);
+    expect(ids).not.toContain('est-59');
   });
 });

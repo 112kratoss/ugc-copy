@@ -107,7 +107,10 @@ export type RankedFeedDiversityConfig = {
   outOfNetworkMultiplier: number;
   /** v3: multiplier for a post served to the viewer recently but never seen. 1 = off. */
   servedPenalty: number;
-  /** v3: 1-based rank the Thompson-sampled cold-start pick is lifted to. 0 = off. */
+  /**
+   * v3: 1-based rank from which the Thompson-sampled cold-start pick takes the
+   * first position the diversity rules allow. 0 = off.
+   */
   coldStartSlotRank: number;
   coldStartMaxAgeHours: number;
   /** Authors with fewer rendered deliveries than this in 30 days are cold. */
@@ -169,7 +172,10 @@ export type RankedFeedScoreComponents = {
   oonMultiplier: number;
   /** k = same-creator posts ranked above before the decay. */
   authorDecay: { k: number; multiplier: number };
-  /** Set on every eligible post when the cold-start slot is on; null otherwise. */
+  /**
+   * Set on every eligible post when the cold-start slot is on; null otherwise.
+   * `lifted`: the pick was placed by the slot, not reached at its natural turn.
+   */
   coldStart: { theta: number; picked: boolean; lifted: boolean } | null;
 };
 
@@ -652,6 +658,10 @@ function isColdStartEligible(features: RankedFeedFeatureRow, diversityConfig: Ra
   const ageHours = features.postAgeHours;
   const authorRendered = features.authorRendered30d;
   return !features.seenRecently
+    // Served in the lookback and still unseen means passed over: a quick skip
+    // is sent instead of an impression. Lifting it again would put it back at
+    // the slot in every new session until the served window ends.
+    && features.servedRecently !== true
     && typeof ageHours === 'number'
     && Number.isFinite(ageHours)
     && ageHours <= diversityConfig.coldStartMaxAgeHours
@@ -666,26 +676,26 @@ function nonNegativeCount(value: number | undefined) {
 }
 
 /**
- * One Thompson-sampled cold-start slot per ranking (X's
- * `author_cold_start.rs`). Every eligible post draws θ ~ Beta(α0 + m, β0 + r − m)
- * over its 30-day meaningful (m) and rendered (r) deliveries, in ranked order
- * from the session seed. Of the two highest θ the higher-scored post is the
- * pick; it moves up to the slot only when it sits below it, and nothing else
- * is reordered.
+ * The one Thompson-sampled cold-start pick per ranking (X's
+ * `author_cold_start.rs`), drawn before the greedy pass places anything. Every
+ * eligible post draws θ ~ Beta(α0 + m, β0 + r − m) over its 30-day meaningful
+ * (m) and rendered (r) deliveries, in ranked order from the session seed. Of
+ * the two highest θ the higher-scored post is the pick. Null when the slot is
+ * off or nothing is eligible; the greedy pass places the pick.
  */
-function applyColdStartSlot(
-  selected: RankedShowcaseItem[],
+function drawColdStartPick(
+  ordered: RankedShowcaseItem[],
   diversityConfig: RankedFeedDiversityConfig,
   seed: number,
-) {
-  if (diversityConfig.coldStartSlotRank <= 0) return;
+): RankedShowcaseItem | null {
+  if (diversityConfig.coldStartSlotRank <= 0) return null;
   const priorAlpha = diversityConfig.coldStartPriorMean * diversityConfig.coldStartPriorStrength;
   const priorBeta = (1 - diversityConfig.coldStartPriorMean) * diversityConfig.coldStartPriorStrength;
-  if (!(priorAlpha > 0) || !(priorBeta > 0)) return;
+  if (!(priorAlpha > 0) || !(priorBeta > 0)) return null;
 
   const random = mulberry32(seed);
   const draws: Array<{ entry: RankedShowcaseItem; index: number; theta: number }> = [];
-  selected.forEach((entry, index) => {
+  ordered.forEach((entry, index) => {
     if (!isColdStartEligible(entry.features, diversityConfig)) return;
     const meaningful = nonNegativeCount(entry.features.postMeaningful30d);
     const rendered = nonNegativeCount(entry.features.postRendered30d);
@@ -693,19 +703,14 @@ function applyColdStartSlot(
     entry.components.coldStart = { theta, picked: false, lifted: false };
     draws.push({ entry, index, theta });
   });
-  if (draws.length === 0) return;
+  if (draws.length === 0) return null;
 
   // Highest θ first; a tie keeps the ranked order.
   draws.sort((left, right) => right.theta - left.theta || left.index - right.index);
   const [first, second] = draws;
   const pick = second && second.entry.score > first.entry.score ? second : first;
-  const slotIndex = diversityConfig.coldStartSlotRank - 1;
-  const lifted = pick.index > slotIndex;
-  pick.entry.components.coldStart = { theta: pick.theta, picked: true, lifted };
-  if (lifted) {
-    selected.splice(pick.index, 1);
-    selected.splice(slotIndex, 0, pick.entry);
-  }
+  pick.entry.components.coldStart = { theta: pick.theta, picked: true, lifted: false };
+  return pick.entry;
 }
 
 /**
@@ -720,12 +725,15 @@ function applyColdStartSlot(
  * how weak a choice it is. Repeats are the fastest way to make a small-catalog
  * feed feel dead, so the tier boundary is deliberately not negotiable.
  *
- * v3 adds X's post-scoring adjustments around that greedy pass, in this order:
+ * v3 adds X's post-scoring adjustments before that greedy pass, in this order:
  * the net-negative offset (only when a multiplier is configured), the served
  * penalty for a post served but never seen, the out-of-network discount, the
- * author decay with a re-sort, and after the greedy pass one Thompson-sampled
- * cold-start slot. Each is off at its default, and a version row without the
- * v3 keys ranks exactly as before.
+ * author decay with a re-sort, and one Thompson-sampled cold-start pick. The
+ * greedy pass places the pick: from the slot's rank on, it takes the first
+ * position where the same fatigue rules admit it, unless the exploration quota
+ * claims that position, so the slot never undoes a rule the pass enforces.
+ * Each is off at its default, and a version row without the v3 keys ranks
+ * exactly as before.
  */
 export function rankAndDiversifyShowcaseItems({
   featureRows,
@@ -779,6 +787,9 @@ export function rankAndDiversifyShowcaseItems({
     })
     .sort(compareRankedCandidates);
   applyAuthorDecay(remaining, config);
+  const coldStartPick = drawColdStartPick(remaining, config, seed);
+  const coldStartSlotIndex = config.coldStartSlotRank - 1;
+  let coldStartPending = coldStartPick !== null;
   const selected: RankedShowcaseItem[] = [];
 
   while (remaining.length > 0) {
@@ -797,6 +808,7 @@ export function rankAndDiversifyShowcaseItems({
         && canSelectWithoutFatigue(candidate, selected, config)
       ))
       : -1;
+    const explorationQuotaClaimed = nextIndex >= 0;
     if (nextIndex < 0) {
       nextIndex = findCandidate((candidate) => (
         canSelectWithoutFatigue(candidate, selected, config)
@@ -807,11 +819,28 @@ export function rankAndDiversifyShowcaseItems({
     if (nextIndex < 0) nextIndex = findCandidate(() => true);
     if (nextIndex < 0) nextIndex = 0;
 
+    // The cold-start slot. From its rank on, the pick (never a repeat, so
+    // always inside the seen tier) takes the first position the fatigue rules
+    // admit it to, unless the exploration quota claimed this one. A pick the
+    // pass reaches on its own, above the slot or at its natural turn, is not
+    // lifted.
+    if (
+      coldStartPick
+      && coldStartPending
+      && !explorationQuotaClaimed
+      && selected.length >= coldStartSlotIndex
+      && remaining[nextIndex] !== coldStartPick
+      && canSelectWithoutFatigue(coldStartPick, selected, config)
+    ) {
+      nextIndex = remaining.indexOf(coldStartPick);
+      if (coldStartPick.components.coldStart) coldStartPick.components.coldStart.lifted = true;
+    }
+
     const [next] = remaining.splice(nextIndex, 1);
+    if (next === coldStartPick) coldStartPending = false;
     selected.push(next);
   }
 
-  applyColdStartSlot(selected, config, seed);
   return selected;
 }
 

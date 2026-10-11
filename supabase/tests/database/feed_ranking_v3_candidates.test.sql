@@ -12,7 +12,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(76);
+select plan(78);
 
 -- ─── Surface ─────────────────────────────────────────────────────────────────
 
@@ -88,8 +88,15 @@ values
   ('f3b00000-0000-4000-8000-000000000007', 'f3a00000-0000-4000-8000-000000000002', 'spam', 'dismissed');
 
 -- E has been rendered 100 times in 30 days, so its new posts are not cold.
+-- None of those deliveries is in the fixture, so the creator refresh must
+-- rebuild the row to zero. X's row was rebuilt to zero two days ago.
 insert into public.creator_feed_stats (creator_user_id, window_key, rendered_count, meaningful_engagement_count, post_count, quality_rate)
 values ('f3a00000-0000-4000-8000-000000000007', '30d', 100, 50, 3, 0.5);
+insert into public.creator_feed_stats (
+  creator_user_id, window_key, rendered_count, meaningful_engagement_count, post_count, quality_rate,
+  negative_feedback_count, negative_feedback_rate, updated_at
+)
+values ('f3a00000-0000-4000-8000-000000000008', '30d', 0, 0, 0, 0.15, 0, 0.01, now() - interval '2 days');
 
 -- E's three posts all trend; by projected velocity 9 > 13 > 14.
 insert into public.post_feed_stats (post_id, window_key, rendered_count, meaningful_engagement_count, meaningful_engagement_rate)
@@ -274,6 +281,13 @@ select ok((select abs(negative_feedback_rate - 5.2 / 22.0) < 1e-9 from public.cr
 select is((select rendered_count from public.creator_feed_stats
   where creator_user_id = 'f3a00000-0000-4000-8000-000000000005' and window_key = '30d'),
   2::bigint, 'existing creator columns are still filled');
+select is((select rendered_count from public.creator_feed_stats
+  where creator_user_id = 'f3a00000-0000-4000-8000-000000000007' and window_key = '30d'),
+  0::bigint, 'a creator whose deliveries have all left the window is rebuilt to zero');
+-- Selected, X would have its row rewritten at p_as_of and gain 24h and 7d rows.
+select ok((select count(*) = 1 and bool_and(updated_at = now() - interval '2 days')
+  from public.creator_feed_stats where creator_user_id = 'f3a00000-0000-4000-8000-000000000008'),
+  'a creator whose rows hold no counts is not selected again');
 
 select lives_ok($$select public.refresh_post_feed_stats(now(), 1000)$$, 'the post refresh runs');
 select is((select impression_count from public.post_feed_stats

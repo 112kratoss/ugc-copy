@@ -42,7 +42,11 @@ export type FeedVisibilityCandidate = {
   isNsfw: boolean;
   /** The ranking feature in [0, 1]; null = no evidence, never drops. */
   negativeFeedbackRisk: number | null;
-  /** `creator_feed_stats.negative_feedback_rate`; null = no evidence, never drops. */
+  /**
+   * `creator_feed_stats.negative_feedback_rate`; null = no evidence, never
+   * drops. The feed passes null for a creator with fewer rendered deliveries
+   * than the cold-start exposure threshold: there a single report crosses it.
+   */
   creatorNegativeFeedbackRate: number | null;
 };
 

@@ -830,7 +830,7 @@ describe('cold-start slot', () => {
   });
 
   it('lifts nothing when no post is eligible', () => {
-    const items = [...established, ...['seen', 'unknown-author', 'too-old', 'exposed-author', 'unknown-age']
+    const items = [...established, ...['seen', 'served', 'unknown-author', 'too-old', 'exposed-author', 'unknown-age']
       .map((id) => item(id, `creator-${id}`))];
     const ineligible = {
       interestMatch: 0.1,
@@ -841,6 +841,7 @@ describe('cold-start slot', () => {
     const featureRows = [
       ...established.map((entry, index) => row(entry.id, { interestMatch: 0.9 - index * 0.05 })),
       row('seen', { ...ineligible, seenRecently: true }),
+      row('served', { ...ineligible, servedRecently: true }),
       row('unknown-author', { ...ineligible, authorRendered30d: null }),
       row('too-old', { ...ineligible, postAgeHours: 168.5 }),
       row('exposed-author', { ...ineligible, authorRendered30d: 60 }),
@@ -864,6 +865,123 @@ describe('cold-start slot', () => {
     const ranked = rankCold(7, { cold_start_slot_rank: 0 });
     expect(ranked.every((entry) => explainRankedFeedScore(entry).coldStart === null)).toBe(true);
     expect(ranked.slice(-3).map((entry) => entry.item.id)).toEqual(['cold-a', 'cold-b', 'cold-c']);
+  });
+
+  it('never picks a post served in the lookback and still unseen, as a quick skip leaves it', () => {
+    // Without the served rule both cold posts draw, and of the top two θ the
+    // skipped one scores higher even after its served penalty, so it would
+    // come back at the slot in every new session.
+    const items = [...established, item('skipped', 'creator-new-s'), item('unserved', 'creator-new-u')];
+    const cold = { isFollowing: false, candidateSource: 'cold' as const, authorRendered30d: 0, postAgeHours: 5 };
+    const ranked = rankAndDiversifyShowcaseItems({
+      items,
+      featureRows: [
+        ...established.map((entry, index) => row(entry.id, { interestMatch: 0.9 - index * 0.05 })),
+        row('skipped', { ...cold, interestMatch: 0.6, servedRecently: true }),
+        row('unserved', { ...cold, interestMatch: 0.1 }),
+      ],
+      scoreWeights: V3_WEIGHTS,
+      diversityConfig: v3Diversity(),
+      seed: 7,
+    });
+
+    expect(explainRankedFeedScore(byId(ranked, 'skipped')).coldStart).toBeNull();
+    expect(explainRankedFeedScore(byId(ranked, 'unserved')).coldStart).toMatchObject({ picked: true, lifted: true });
+    expect(ranked.findIndex((entry) => entry.item.id === 'unserved')).toBe(5);
+    expect(ranked.at(-1)?.item.id).toBe('skipped');
+  });
+
+  // The slot is placed by the greedy pass, so it cannot undo the pass's rules.
+  const sameCreatorNeighbours = (ranked: RankedShowcaseItem[]) => ranked
+    .filter((entry, index) => index > 0 && entry.item.creator.id === ranked[index - 1].item.creator.id)
+    .length;
+
+  it('takes the slot without leaving a same-creator pair where the pick was', () => {
+    // Greedy alone: A B A B A B A C A A. Splicing C up to index 5 used to give
+    // A B A B A C B A A A, joining two A posts where C had separated them.
+    const posts = [
+      ...Array.from({ length: 6 }, (_, index) => item(`a-${index}`, 'creator-a')),
+      ...Array.from({ length: 3 }, (_, index) => item(`b-${index}`, 'creator-b')),
+      item('cold', 'creator-new'),
+    ];
+    const featureRows = [
+      ...Array.from({ length: 6 }, (_, index) => row(`a-${index}`, { interestMatch: 0.9 - index * 0.01 })),
+      ...Array.from({ length: 3 }, (_, index) => row(`b-${index}`, { interestMatch: 0.6 - index * 0.01 })),
+      row('cold', { interestMatch: 0.1, isFollowing: false, candidateSource: 'cold', authorRendered30d: 0, postAgeHours: 5 }),
+    ];
+    const rank = (slot: number) => rankAndDiversifyShowcaseItems({
+      items: posts,
+      featureRows,
+      scoreWeights: V3_WEIGHTS,
+      diversityConfig: v3Diversity({ max_creator_per_20: 20, author_decay: 1, cold_start_slot_rank: slot }),
+      seed: 7,
+    });
+
+    const slotOff = rank(0);
+    expect(slotOff.map((entry) => entry.item.id))
+      .toEqual(['a-0', 'b-0', 'a-1', 'b-1', 'a-2', 'b-2', 'a-3', 'cold', 'a-4', 'a-5']);
+    const ranked = rank(6);
+    expect(ranked.map((entry) => entry.item.id))
+      .toEqual(['a-0', 'b-0', 'a-1', 'b-1', 'a-2', 'cold', 'a-3', 'b-2', 'a-4', 'a-5']);
+    expect(explainRankedFeedScore(byId(ranked, 'cold')).coldStart).toMatchObject({ picked: true, lifted: true });
+    // Only the pair the pass could not avoid either way: two A posts left over.
+    expect(sameCreatorNeighbours(slotOff)).toBe(1);
+    expect(sameCreatorNeighbours(ranked)).toBe(1);
+  });
+
+  it('waits past the slot until the fatigue rules admit the pick', () => {
+    // The cold author's older post ranks fifth (index 4), so the slot at index 5
+    // would put the same creator back to back; the pick takes index 6.
+    const posts = [...established, item('new-older', 'creator-new'), item('new-cold', 'creator-new')];
+    const ranked = rankAndDiversifyShowcaseItems({
+      items: posts,
+      featureRows: [
+        ...established.map((entry, index) => row(entry.id, { interestMatch: 0.9 - index * 0.05 })),
+        row('new-older', { interestMatch: 0.72, authorRendered30d: 3, postAgeHours: 500 }),
+        row('new-cold', { interestMatch: 0.1, candidateSource: 'cold', authorRendered30d: 3, postAgeHours: 2 }),
+      ],
+      scoreWeights: V3_WEIGHTS,
+      diversityConfig: v3Diversity(),
+      seed: 7,
+    });
+
+    expect(ranked.map((entry) => entry.item.id)).toEqual([
+      'est-0', 'est-1', 'est-2', 'est-3', 'new-older', 'est-4', 'new-cold', 'est-5', 'est-6', 'est-7',
+    ]);
+    expect(explainRankedFeedScore(byId(ranked, 'new-cold')).coldStart).toMatchObject({ picked: true, lifted: true });
+    expect(sameCreatorNeighbours(ranked)).toBe(0);
+  });
+
+  it('keeps a quota-forced exploration post in its block of 10, and never takes a position the quota claims', () => {
+    // Greedy alone serves the exploration post last in block one (index 9) and
+    // the cold post at the end. Splicing the cold post up to index 5 used to
+    // push the exploration post to index 10, leaving block one without one.
+    const posts = [
+      ...Array.from({ length: 12 }, (_, index) => item(`est-${index}`, `creator-est-${index}`)),
+      item('explore', 'creator-explore'),
+      item('cold', 'creator-new'),
+    ];
+    const featureRows = [
+      ...Array.from({ length: 12 }, (_, index) => row(`est-${index}`, { interestMatch: 0.9 - index * 0.02 })),
+      row('explore', { interestMatch: 0.3, candidateSource: 'exploration' }),
+      row('cold', { interestMatch: 0.1, isFollowing: false, candidateSource: 'cold', authorRendered30d: 0, postAgeHours: 5 }),
+    ];
+    const rank = (slot: number) => rankAndDiversifyShowcaseItems({
+      items: posts,
+      featureRows,
+      scoreWeights: V3_WEIGHTS,
+      diversityConfig: v3Diversity({ cold_start_slot_rank: slot }),
+      seed: 7,
+    }).map((entry) => entry.item.id);
+    const established12 = Array.from({ length: 12 }, (_, index) => `est-${index}`);
+
+    expect(rank(0)).toEqual([...established12.slice(0, 9), 'explore', ...established12.slice(9), 'cold']);
+    expect(rank(6)).toEqual([
+      ...established12.slice(0, 5), 'cold', ...established12.slice(5, 8), 'explore', ...established12.slice(8),
+    ]);
+    // A slot at rank 10 meets the quota's own position: the quota keeps it and
+    // the pick takes the next one.
+    expect(rank(10)).toEqual([...established12.slice(0, 9), 'explore', 'cold', ...established12.slice(9)]);
   });
 });
 

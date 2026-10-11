@@ -415,15 +415,19 @@ describe('feed ranking v3 migration', () => {
       return definition.slice(start, definition.indexOf('rollup AS (', start));
     };
     // The window predicate is the one the starvation-free refresh used; the
-    // only addition is the UNION with existing rows, so a creator whose
-    // deliveries have all rolled out of the window is rebuilt to zero instead
-    // of keeping a stale 30d rendered_count (which would hold their next post
-    // out of the cold pool).
+    // only addition is the UNION with existing rows that still hold counts,
+    // so a creator whose deliveries have all rolled out of the window is
+    // rebuilt to zero instead of keeping a stale 30d rendered_count (which
+    // would hold their next post out of the cold pool), and a row already
+    // rebuilt to zero is not selected again.
     const previous = candidateSelection(functionDefinition(starvationFreeMigration, 'refresh_creator_feed_stats'));
     const current = candidateSelection(refreshCreator);
     expect(previous).toContain("AND facts.ranked_at >= p_as_of - interval '31 days'");
     expect(current).toContain("AND facts.ranked_at >= p_as_of - interval '31 days'");
-    expect(current).toContain('UNION\n      SELECT stale.creator_user_id\n      FROM public.creator_feed_stats AS stale');
+    expect(current).toContain(
+      'UNION\n      SELECT stale.creator_user_id\n      FROM public.creator_feed_stats AS stale\n'
+      + '      WHERE stale.rendered_count > 0\n         OR stale.negative_feedback_count > 0\n    ) AS creators',
+    );
     expect(current).toContain('ORDER BY min(existing.updated_at) ASC NULLS FIRST, creators.creator_user_id');
     expect(current).toContain('LIMIT p_limit');
 
