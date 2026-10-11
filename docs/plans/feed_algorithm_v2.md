@@ -1,5 +1,7 @@
 # Feed Algorithm v2 — Analysis, Research, and Plan (rev 2)
 
+> **Status, 2026-10-11:** the ranking work continues in [`feed-algorithm-v3-x-adoption-2026-10-11.md`](feed-algorithm-v3-x-adoption-2026-10-11.md). `for-you-rules` v3 keeps v2's machinery (fact-based rates, strict unseen-first, UCB exploration, the capped creator prior) and adds what transfers from X's open-sourced For You algorithm; it is seeded `shadow` beside v2, and v1 stays active until an operator switches (`docs/feed-algorithm-operations.md`). Phase 2 below (content understanding: embeddings, the semantic pool, MMR) is still open; v3 lists it under its deferred items.
+
 _Date: 2026-07-28. Analysis of `for-you-rules-v1` and a phased plan toward platform-grade ranking. Rev 2 incorporates review corrections: the measurement and ranking contracts must be repaired before any ranking-signal work._
 
 ---

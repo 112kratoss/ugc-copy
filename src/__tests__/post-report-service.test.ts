@@ -1,7 +1,19 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { submitPostReportForRoute } from '@/lib/post-report-service';
+
+const loggerMocks = vi.hoisted(() => ({ logBackendError: vi.fn() }));
+
+vi.mock('@/lib/backend-logger', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/backend-logger')>()),
+  logBackendError: loggerMocks.logBackendError,
+}));
+
+const FEED_FEEDBACK_CALL = {
+  name: 'set_feed_post_feedback',
+  args: { p_user_id: 'reporter-1', p_post_id: 'post-1', p_is_active: true, p_reason: 'reported' },
+};
 
 function createAdminSupabaseMock(options?: {
   post?: { id: string; user_id?: string } | null;
@@ -10,6 +22,8 @@ function createAdminSupabaseMock(options?: {
   bundleError?: { message: string } | null;
   rateLimited?: boolean;
   insertError?: { message: string } | null;
+  feedbackError?: { message: string } | null;
+  feedbackRejects?: boolean;
 }) {
   const calls = {
     tables: [] as string[],
@@ -59,6 +73,11 @@ function createAdminSupabaseMock(options?: {
   const client = {
     rpc(name: string, args: Record<string, unknown>) {
       calls.rpc.push({ name, args });
+      if (name === 'set_feed_post_feedback') {
+        return options?.feedbackRejects
+          ? Promise.reject(new Error('fetch failed'))
+          : Promise.resolve({ data: null, error: options?.feedbackError ?? null });
+      }
       if (name !== 'check_backend_rate_limit') {
         throw new Error(`Unexpected RPC: ${name}`);
       }
@@ -100,6 +119,10 @@ function createAdminSupabaseMock(options?: {
 }
 
 describe('submitPostReportForRoute', () => {
+  beforeEach(() => {
+    loggerMocks.logBackendError.mockClear();
+  });
+
   it('rejects invalid reasons before creating an admin client', async () => {
     const createAdminSupabase = vi.fn();
 
@@ -176,6 +199,37 @@ describe('submitPostReportForRoute', () => {
         details: 'a'.repeat(1000),
       },
     ]);
+    // The stored report also hides the post from the reporter's own feed.
+    expect(admin.calls.rpc.map((call) => call.name)).toEqual([
+      'check_backend_rate_limit',
+      'set_feed_post_feedback',
+    ]);
+    expect(admin.calls.rpc[1]).toEqual(FEED_FEEDBACK_CALL);
+    expect(invalidateFeedCache).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { name: 'returns an error', options: { feedbackError: { message: 'permission denied' } } },
+    { name: 'rejects', options: { feedbackRejects: true } },
+  ])('keeps a stored report when hiding it from the feed $name', async ({ options }) => {
+    const admin = createAdminSupabaseMock(options);
+    const invalidateFeedCache = vi.fn();
+
+    const result = await submitPostReportForRoute({
+      postId: 'post-1',
+      reporterUserId: 'reporter-1',
+      readBody: vi.fn(async () => ({ reason: 'unsafe_content' })),
+      createAdminSupabase: vi.fn(() => admin.client),
+      invalidateFeedCache,
+    });
+
+    expect(result).toEqual({ ok: true, body: { success: true } });
+    expect(admin.calls.inserts).toHaveLength(1);
+    expect(admin.calls.rpc).toContainEqual(FEED_FEEDBACK_CALL);
+    expect(loggerMocks.logBackendError).toHaveBeenCalledWith(
+      'failed_to_hide_reported_post_from_feed',
+      { error: expect.anything() },
+    );
     expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 
@@ -195,6 +249,7 @@ describe('submitPostReportForRoute', () => {
       body: { error: 'Post not found.' },
     });
     expect(admin.calls.inserts).toEqual([]);
+    expect(admin.calls.rpc).not.toContainEqual(FEED_FEEDBACK_CALL);
   });
 
   // A report asks moderators to look at someone else's post. The clients leave
@@ -219,6 +274,7 @@ describe('submitPostReportForRoute', () => {
     });
     expect(admin.calls.selects).toEqual([{ table: 'posts', columns: 'id, user_id' }]);
     expect(admin.calls.inserts).toEqual([]);
+    expect(admin.calls.rpc).not.toContainEqual(FEED_FEEDBACK_CALL);
     expect(invalidateFeedCache).not.toHaveBeenCalled();
   });
 
@@ -290,6 +346,7 @@ describe('submitPostReportForRoute', () => {
         details: null,
       },
     ]);
+    expect(admin.calls.rpc).toContainEqual(FEED_FEEDBACK_CALL);
     expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 
@@ -335,6 +392,8 @@ describe('submitPostReportForRoute', () => {
       status: 500,
       body: { error: 'Failed to submit report.' },
     });
+    // Nothing is hidden from the feed for a report that was never stored.
+    expect(admin.calls.rpc).not.toContainEqual(FEED_FEEDBACK_CALL);
     expect(invalidateFeedCache).not.toHaveBeenCalled();
   });
 });

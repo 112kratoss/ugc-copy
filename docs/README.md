@@ -10,6 +10,7 @@ Live runbooks are at the root of this folder; everything dated or reference-only
 - [generation-model-catalog-operations.md](generation-model-catalog-operations.md) — model catalog releases: validate, stage, publish, rollback.
 - [model-onboarding.md](model-onboarding.md) — adding a generation model end to end: provider checks, code registration, the release, rollout.
 - [moderation-operations.md](moderation-operations.md) — staffed moderation queue and the service-role CLI.
+- [feed-algorithm-operations.md](feed-algorithm-operations.md) — For You ranking versions: the scorecard, activating a version and rolling back, experiments, kill switches.
 - [mobile-store-product-catalog.md](mobile-store-product-catalog.md) — IAP tier provisioning.
 - [post-resource-bundle-v1.md](post-resource-bundle-v1.md) — paid resource bundles.
 - [scaling-audit.md](scaling-audit.md) — scaling entry point; [scaling-certification-runbook.md](scaling-certification-runbook.md) and [supabase-performance-inspection.md](supabase-performance-inspection.md) sit beside it.
@@ -18,8 +19,8 @@ Live runbooks are at the root of this folder; everything dated or reference-only
 
 - `design/` — the design-system index and the web and mobile guides, the June 2026 UI-consistency research, and the mobile design-QA log.
 - `audits/` — dated audit reports and findings: Kie model scans, media delivery, performance, scaling findings, production audits.
-- `plans/` — open plans and scoping records only. When a plan's work ships, move it to `archive/` with a dated status line at the top, or delete it if the code, `AGENTS.md`, or an audit already holds the reasoning.
-- `research/` — prompt-enhancer, model-prompting, and media-architecture research.
+- `plans/` — open plans and scoping records only. When a plan's work ships, move it to `archive/` with a dated status line at the top, or delete it if the code, `AGENTS.md`, or an audit already holds the reasoning. For You ranking: [feed-algorithm-v3-x-adoption-2026-10-11.md](plans/feed-algorithm-v3-x-adoption-2026-10-11.md) — v3, what we take from X's For You algorithm (it continues [feed_algorithm_v2.md](plans/feed_algorithm_v2.md)).
+- `research/` — prompt-enhancer, model-prompting, media-architecture, and feed-ranking research. Feed ranking: [magicbooklet-feed-ranking-analysis-2026-10-11.md](research/magicbooklet-feed-ranking-analysis-2026-10-11.md) — how our For You ranking works today, with file and line references; [x-algorithm-analysis-2026-10-11.md](research/x-algorithm-analysis-2026-10-11.md) — X's open-sourced For You algorithm, read for what transfers to a small feed.
 - `model-api-references/` — captured provider API references, the input to model onboarding (its README carries the capture rules).
 - `scaling-certificates/` — exact-build capacity certificates.
 - `archive/` — shipped plans and dated audit journals; not current capacity claims.
