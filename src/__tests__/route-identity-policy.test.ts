@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
-import { ROUTE_IDENTITY_POLICY, routeIdentityPolicy } from '@/lib/route-identity-policy';
+import { GUEST_READABLE_REGISTERED_ROUTES, ROUTE_IDENTITY_POLICY, routeIdentityPolicy } from '@/lib/route-identity-policy';
 
 function listApiRoutes(dir: string, base = ''): string[] {
   const routes: string[] = [];
@@ -84,6 +84,32 @@ describe('route identity policy', () => {
     ]) {
       expect(routeIdentityPolicy(route)).toBe('registered');
     }
+  });
+
+  // A read listed there is admitted for a guest's token. That is only right for
+  // a path that is registered for its writes and whose GET needs no one.
+  it('lists as guest-readable only registered paths that have a read and a write', () => {
+    expect([...GUEST_READABLE_REGISTERED_ROUTES]).toEqual(['/api/showcase/posts/[postId]/comments']);
+
+    for (const route of GUEST_READABLE_REGISTERED_ROUTES) {
+      expect(routeIdentityPolicy(route), route).toBe('registered');
+      const source = fs.readFileSync(path.resolve(process.cwd(), `src/app${route}/route.ts`), 'utf8');
+      expect(source, route).toMatch(/export (?:async function|const) GET\b/);
+      expect(source, route).toMatch(/export (?:async function|const) (?:POST|PUT|PATCH|DELETE)\b/);
+    }
+  });
+
+  // The proxy admits that read on the route's word that it asks for no one.
+  it("keeps the comments read open to a request with no token, and its writes an account's", () => {
+    const adapter = fs.readFileSync(path.resolve(process.cwd(), 'src/lib/post-comments-route-adapter-service.ts'), 'utf8');
+    const read = adapter.slice(adapter.indexOf('async function handlePostCommentsGET'), adapter.indexOf('async function handlePostCommentsPOST'));
+    const write = adapter.slice(adapter.indexOf('async function handlePostCommentsPOST'), adapter.indexOf('async function handlePostCommentDELETE'));
+    const remove = adapter.slice(adapter.indexOf('async function handlePostCommentDELETE'));
+
+    expect(read).toContain('await getViewerUserId(request, dependencies)');
+    expect(read).not.toContain('requireViewerUserId');
+    expect(write).toContain('await requireViewerUserId(request, dependencies)');
+    expect(remove).toContain('await requireViewerUserId(request, dependencies)');
   });
 
   it('covers every route the mobile app actually calls', () => {

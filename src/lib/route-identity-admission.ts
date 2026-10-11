@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, isAuthRetryableFetchError, type User } from '@supabase/supabase-js';
-import { routeIdentityPolicyForPathname } from '@/lib/route-identity-policy';
+import { routeIdentityPolicyForRequest } from '@/lib/route-identity-policy';
 import {
   IDENTITY_ADMISSION_HEADER,
   IDENTITY_PROXY_TIMING_HEADER,
@@ -116,7 +116,7 @@ export async function evaluateUserFacingRouteIdentity(
     lifecycleMs,
     rejection,
   });
-  const policy = routeIdentityPolicyForPathname(request.nextUrl.pathname);
+  const policy = routeIdentityPolicyForRequest(request.nextUrl.pathname, request.method);
   if (!policy || policy === 'service') return result(null);
 
   // Public routes stay public when no token is supplied. If a caller does send
