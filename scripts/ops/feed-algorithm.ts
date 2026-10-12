@@ -1,13 +1,16 @@
 /**
  * For You ranking operations: list the algorithm versions and experiments,
- * read the scorecard, activate a version, start or stop an experiment.
+ * read the scorecard, check an experiment's sample ratio, activate a version,
+ * start or stop an experiment.
  *
- * Service role only. `list` and `scorecard` only read. `activate` and
- * `experiment start|stop` print their plan and change nothing without
- * `--apply`; each write is one service-role RPC (plan
+ * Service role only. `list`, `scorecard` and `experiment srm` only read.
+ * `activate` and `experiment start|stop` print their plan and change nothing
+ * without `--apply`; each write is one service-role RPC (plan
  * docs/plans/feed-algorithm-v3-x-adoption-2026-10-11.md §2.4–§2.6), and the
- * CLI refuses up front what those RPCs would refuse. Nothing here prints the
- * service-role key or the database URL.
+ * CLI refuses up front what those RPCs would refuse. The scorecard's viewer,
+ * position and format sections and `experiment srm` read the v4 functions
+ * (docs/plans/feed-algorithm-v4-industry-parity-2026-10-12.md §2.8). Nothing
+ * here prints the service-role key or the database URL.
  *
  * Runbook: docs/feed-algorithm-operations.md.
  */
@@ -24,6 +27,10 @@ const MAX_SCORECARD_DAYS = 30;
 const MAX_EXPERIMENT_KEY_LENGTH = 100;
 const RUNBOOK_PATH = 'docs/feed-algorithm-operations.md';
 const DASH = '–';
+/** Below this p-value an experiment's assignment is called skewed. */
+export const SAMPLE_RATIO_P_THRESHOLD = 0.01;
+/** The chi-square approximation needs every expected count at least this large. */
+const SAMPLE_RATIO_MIN_EXPECTED = 5;
 
 /** `activate_feed_algorithm_version` takes only these targets (plan §2.4). */
 // A retired version can be activated again: that is how a rollback works. The
@@ -44,13 +51,17 @@ Usage:
   npm run ops:feed-algorithm -- experiment start --key <experiment_key> --control <version> --treatment <version>
       [--algorithm-key for-you-rules] [--traffic-bps 10000] [--treatment-bps 5000] [--apply]
   npm run ops:feed-algorithm -- experiment stop --key <experiment_key> [--status completed|cancelled|paused] [--apply]
+  npm run ops:feed-algorithm -- experiment srm --key <experiment_key>
 
 Environment:
   SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)
   SUPABASE_SERVICE_ROLE_KEY
 
 Notes:
-  - list and scorecard only read. activate and experiment print their plan and change nothing without --apply.
+  - list, scorecard and experiment srm only read. activate and experiment start|stop print their plan and
+    change nothing without --apply.
+  - scorecard adds viewer-grain, position and format sections; experiment srm compares each variant's
+    assigned viewers with its allocation (chi-square). Both need the feed ranking v4 migration.
   - --days is 1-30. Basis points: 10000 = 100%. --traffic-bps is the share of viewers enrolled;
     --treatment-bps is the treatment's share of enrolled viewers (control gets the rest). Both 1-10000.
   - Runbook: ${RUNBOOK_PATH}
@@ -79,7 +90,8 @@ export type FeedAlgorithmCommand =
       experimentKey: string;
       status: ExperimentStopStatus;
       apply: boolean;
-    };
+    }
+  | { command: 'experiment-srm'; experimentKey: string };
 
 /** A malformed command line: printed with the usage, exit 1. */
 export class FeedAlgorithmUsageError extends Error {
@@ -239,9 +251,13 @@ export function parseFeedAlgorithmArgs(argv: readonly string[]): FeedAlgorithmCo
           apply: flags.get('--apply') === true,
         };
       }
+      if (subcommand === 'srm') {
+        const flags = parseFlags(tokens, ['--key'], false);
+        return { command: 'experiment-srm', experimentKey: requireText(flags, '--key') };
+      }
       throw new FeedAlgorithmUsageError(
         subcommand === undefined
-          ? 'Missing experiment command: start or stop.'
+          ? 'Missing experiment command: start or stop to change an experiment, srm to check one.'
           : `Unknown experiment command: ${subcommand}`,
       );
     }
@@ -371,10 +387,11 @@ export function feedAlgorithmVersionLabel(version: { algorithmKey: string; versi
 
 type DatabaseError = { message?: string; code?: string };
 
-function describeError(error: DatabaseError): string {
+/** `migration`: the feed ranking migration that adds the function called. */
+function describeError(error: DatabaseError, migration: 'v3' | 'v4' = 'v3'): string {
   const message = error.message || 'unknown error';
   if (error.code === 'PGRST202') {
-    return `${message} (is the feed ranking v3 migration applied?)`;
+    return `${message} (is the feed ranking ${migration} migration applied?)`;
   }
   return error.code ? `${message} (${error.code})` : message;
 }
@@ -407,9 +424,10 @@ async function callRpc(
   client: SupabaseClient,
   name: string,
   args: Record<string, unknown>,
+  migration: 'v3' | 'v4' = 'v3',
 ): Promise<unknown> {
   const { data, error } = await client.rpc(name, args);
-  if (error) throw new Error(`${name} failed: ${describeError(error)}`);
+  if (error) throw new Error(`${name} failed: ${describeError(error, migration)}`);
   return data;
 }
 
@@ -527,7 +545,7 @@ export type ScorecardRate = {
   label: string;
   numerator: number;
   denominator: number;
-  unit: 'percent' | 'per_1k';
+  unit: 'percent' | 'per_1k' | 'seconds';
   /** In `unit`; null when the denominator is zero. */
   value: number | null;
 };
@@ -601,13 +619,15 @@ function rateOf(numerator: number, denominator: number, multiplier: number): num
   return denominator > 0 ? (numerator / denominator) * multiplier : null;
 }
 
+function percent(label: string, numerator: number, denominator: number): ScorecardRate {
+  return { label, numerator, denominator, unit: 'percent', value: rateOf(numerator, denominator, 100) };
+}
+
+function perThousand(label: string, numerator: number, denominator: number): ScorecardRate {
+  return { label, numerator, denominator, unit: 'per_1k', value: rateOf(numerator, denominator, 1000) };
+}
+
 export function computeScorecardRates(counts: ScorecardCounts): ScorecardRate[] {
-  const percent = (label: string, numerator: number, denominator: number): ScorecardRate => ({
-    label, numerator, denominator, unit: 'percent', value: rateOf(numerator, denominator, 100),
-  });
-  const perThousand = (label: string, numerator: number, denominator: number): ScorecardRate => ({
-    label, numerator, denominator, unit: 'per_1k', value: rateOf(numerator, denominator, 1000),
-  });
   return [
     percent('rendered / served', counts.rendered, counts.served),
     percent('qualified / rendered', counts.qualified, counts.rendered),
@@ -622,7 +642,86 @@ export function computeScorecardRates(counts: ScorecardCounts): ScorecardRate[] 
 
 export function formatScorecardRate(rate: ScorecardRate): string {
   if (rate.value === null) return DASH;
-  return rate.unit === 'percent' ? `${rate.value.toFixed(1)}%` : rate.value.toFixed(1);
+  if (rate.unit === 'percent') return `${rate.value.toFixed(1)}%`;
+  return rate.unit === 'seconds' ? `${rate.value.toFixed(1)} s` : rate.value.toFixed(1);
+}
+
+// ---------------------------------------------------------------------------
+// Arms: a version and an experiment variant, the grain of every section
+
+type ArmColumns = {
+  algorithmVersionId: string | null;
+  algorithmLabel: string | null;
+  experimentVariantId: string | null;
+  variantKey: string | null;
+};
+
+export type ScorecardArm = {
+  versionLabel: string;
+  /** `no experiment`, `<experiment_key>/<variant_key>`, or `variant <key>` if the experiment is gone. */
+  armLabel: string;
+  inExperiment: boolean;
+};
+
+type ResolvedArm = { order: number; arm: ScorecardArm };
+
+/**
+ * Labels a row's version (joined from `feed_algorithm_versions`, else the
+ * function's own label) and its experiment arm; `order` is the version's
+ * place in the version list.
+ */
+function scorecardArmResolver(
+  versions: readonly FeedAlgorithmVersion[],
+  experiments: readonly FeedExperiment[],
+): (row: ArmColumns) => ResolvedArm {
+  const versionOrder = new Map(versions.map((version, index) => [version.id, index]));
+  const versionLabels = versionLabelsById(versions);
+  const armLabels = new Map<string, string>();
+  for (const experiment of experiments) {
+    for (const variant of experiment.variants) {
+      armLabels.set(variant.id, `${experiment.experimentKey}/${variant.variantKey}`);
+    }
+  }
+  return (row) => ({
+    order: (row.algorithmVersionId ? versionOrder.get(row.algorithmVersionId) : undefined)
+      ?? Number.MAX_SAFE_INTEGER,
+    arm: {
+      versionLabel: (row.algorithmVersionId ? versionLabels.get(row.algorithmVersionId) : undefined)
+        ?? row.algorithmLabel ?? row.algorithmVersionId ?? 'unknown version',
+      armLabel: row.experimentVariantId === null
+        ? 'no experiment'
+        : armLabels.get(row.experimentVariantId) ?? `variant ${row.variantKey ?? row.experimentVariantId}`,
+      inExperiment: row.experimentVariantId !== null,
+    },
+  });
+}
+
+function armColumns(row: Row): ArmColumns {
+  return {
+    algorithmVersionId: optionalString(row, 'algorithm_version_id'),
+    algorithmLabel: optionalString(row, 'algorithm_label'),
+    experimentVariantId: optionalString(row, 'experiment_variant_id'),
+    variantKey: optionalString(row, 'variant_key'),
+  };
+}
+
+function groupByArm<T extends ArmColumns>(rows: readonly T[]): T[][] {
+  const arms = new Map<string, T[]>();
+  for (const row of rows) {
+    const key = `${row.algorithmVersionId ?? ''}|${row.experimentVariantId ?? ''}`;
+    const members = arms.get(key);
+    if (members) members.push(row);
+    else arms.set(key, [row]);
+  }
+  return [...arms.values()];
+}
+
+/** Version list order, then label, then outside-experiment first, then arm. */
+function compareArms(left: ResolvedArm, right: ResolvedArm): number {
+  return left.order - right.order
+    || left.arm.versionLabel.localeCompare(right.arm.versionLabel)
+    || Number(left.arm.inExperiment) - Number(right.arm.inExperiment)
+    || left.arm.armLabel.localeCompare(right.arm.armLabel);
 }
 
 function combineScorecardRows(rows: readonly ScorecardRow[]): ScorecardCounts {
@@ -667,39 +766,16 @@ export function buildScorecardLines(
   versions: readonly FeedAlgorithmVersion[],
   experiments: readonly FeedExperiment[],
 ): ScorecardLine[] {
-  const versionOrder = new Map(versions.map((version, index) => [version.id, index]));
-  const versionLabels = versionLabelsById(versions);
-  const armLabels = new Map<string, string>();
-  for (const experiment of experiments) {
-    for (const variant of experiment.variants) {
-      armLabels.set(variant.id, `${experiment.experimentKey}/${variant.variantKey}`);
-    }
-  }
-
-  const arms = new Map<string, ScorecardRow[]>();
-  for (const row of rawRows.map((value) => normalizeScorecardRow(value))) {
-    const key = `${row.algorithmVersionId ?? ''}|${row.experimentVariantId ?? ''}`;
-    const members = arms.get(key);
-    if (members) members.push(row);
-    else arms.set(key, [row]);
-  }
-
+  const resolveArm = scorecardArmResolver(versions, experiments);
   const lines: Array<{ line: ScorecardLine; order: number }> = [];
-  for (const members of arms.values()) {
-    const head = members[0];
-    const joinedLabel = head.algorithmVersionId ? versionLabels.get(head.algorithmVersionId) : undefined;
+  for (const members of groupByArm(rawRows.map((value) => normalizeScorecardRow(value)))) {
+    const { order, arm } = resolveArm(members[0]);
     const describe = (rows: readonly ScorecardRow[], source: string | null) => {
       const counts = combineScorecardRows(rows);
       lines.push({
-        order: (head.algorithmVersionId ? versionOrder.get(head.algorithmVersionId) : undefined)
-          ?? Number.MAX_SAFE_INTEGER,
+        order,
         line: {
-          versionLabel: joinedLabel ?? head.algorithmLabel ?? head.algorithmVersionId ?? 'unknown version',
-          armLabel: head.experimentVariantId === null
-            ? 'no experiment'
-            : armLabels.get(head.experimentVariantId)
-              ?? `variant ${head.variantKey ?? head.experimentVariantId}`,
-          inExperiment: head.experimentVariantId !== null,
+          ...arm,
           source,
           counts,
           distinctViewersExact: rows.length === 1,
@@ -769,6 +845,576 @@ export function formatScorecard(
     ]), ['left', 'right', 'right']));
   }
   return output;
+}
+
+// ---------------------------------------------------------------------------
+// Scorecard v2: viewer grain, position buckets and formats (plan v4 §2.8)
+
+export const SCORECARD_SECTION_FUNCTIONS = [
+  'feed_scorecard_viewers',
+  'feed_scorecard_positions',
+  'feed_scorecard_formats',
+] as const;
+export type ScorecardSectionFunction = (typeof SCORECARD_SECTION_FUNCTIONS)[number];
+
+/** A section's rows, or why the database has none to give (its function is missing). */
+export type ScorecardSectionResult = { rows: readonly unknown[] } | { unavailable: string };
+
+export type ScorecardV2Sections = Record<ScorecardSectionFunction, ScorecardSectionResult>;
+
+/** The scorecard's position buckets, top of the feed first (1-based, as shown). */
+export const SCORECARD_POSITION_BUCKETS: readonly string[] = ['1-3', '4-6', '7-12', '13+'];
+
+function sectionColumn(row: Row, column: string, source: string): unknown {
+  // A missing column is a contract mismatch with the SQL, not a zero.
+  if (!(column in row)) throw new Error(`${source} returned no ${column} column.`);
+  return row[column];
+}
+
+function sectionCount(row: Row, column: string, source: string): number {
+  const raw = sectionColumn(row, column, source);
+  if (raw === null) return 0;
+  const value = numberFrom(raw);
+  if (value === null || value < 0) throw new Error(`${source} returned an invalid ${column}.`);
+  return value;
+}
+
+/** A non-negative ratio; null when the function had no denominator. */
+function sectionRatio(row: Row, column: string, source: string): number | null {
+  const raw = sectionColumn(row, column, source);
+  if (raw === null) return null;
+  const value = numberFrom(raw);
+  if (value === null || value < 0) throw new Error(`${source} returned an invalid ${column}.`);
+  return value;
+}
+
+export type ViewerRateCounts = {
+  /** Viewers served on a day whose next day is a whole day inside the window, and those served again then. */
+  d1EligibleViewers: number;
+  d1ReturnedViewers: number;
+  /** The same seven days out. */
+  d7EligibleViewers: number;
+  d7ReturnedViewers: number;
+  /** Signed-in viewers served, and those with a completed generation within 7 days of their first serve. */
+  signedInViewers: number;
+  meaningfulCreators7d: number;
+};
+
+export type ViewerScorecardLine = ScorecardArm & ViewerRateCounts & {
+  viewers: number;
+  sessions: number;
+  sessionsPerViewer: number | null;
+  renderedPerViewer: number | null;
+  meaningfulPerViewer: number | null;
+  /** D1 return, D7 return and 7-day meaningful creation, from the counts. */
+  rates: ScorecardRate[];
+};
+
+/**
+ * The viewer-grain rates from the counts `feed_scorecard_viewers` returns with
+ * them, so each prints its numerator and denominator as the delivery block does.
+ */
+export function computeViewerRates(counts: ViewerRateCounts): ScorecardRate[] {
+  return [
+    percent('D1 return', counts.d1ReturnedViewers, counts.d1EligibleViewers),
+    percent('D7 return', counts.d7ReturnedViewers, counts.d7EligibleViewers),
+    percent('7-day meaningful creation', counts.meaningfulCreators7d, counts.signedInViewers),
+  ];
+}
+
+const VIEWERS_SOURCE = 'feed_scorecard_viewers';
+const POSITIONS_SOURCE = 'feed_scorecard_positions';
+const FORMATS_SOURCE = 'feed_scorecard_formats';
+
+/** One line per version and arm from `feed_scorecard_viewers`. */
+export function buildViewerScorecardLines(
+  rawRows: readonly unknown[],
+  versions: readonly FeedAlgorithmVersion[],
+  experiments: readonly FeedExperiment[],
+): ViewerScorecardLine[] {
+  const resolveArm = scorecardArmResolver(versions, experiments);
+  return rawRows
+    .map((value) => {
+      const row = asRow(value, VIEWERS_SOURCE);
+      const resolved = resolveArm(armColumns(row));
+      const counts: ViewerRateCounts = {
+        d1EligibleViewers: sectionCount(row, 'd1_eligible_viewers', VIEWERS_SOURCE),
+        d1ReturnedViewers: sectionCount(row, 'd1_returned_viewers', VIEWERS_SOURCE),
+        d7EligibleViewers: sectionCount(row, 'd7_eligible_viewers', VIEWERS_SOURCE),
+        d7ReturnedViewers: sectionCount(row, 'd7_returned_viewers', VIEWERS_SOURCE),
+        signedInViewers: sectionCount(row, 'signed_in_viewers', VIEWERS_SOURCE),
+        meaningfulCreators7d: sectionCount(row, 'meaningful_creators_7d', VIEWERS_SOURCE),
+      };
+      return {
+        ...resolved,
+        line: {
+          ...resolved.arm,
+          viewers: sectionCount(row, 'viewers', VIEWERS_SOURCE),
+          sessions: sectionCount(row, 'sessions', VIEWERS_SOURCE),
+          sessionsPerViewer: sectionRatio(row, 'sessions_per_viewer', VIEWERS_SOURCE),
+          renderedPerViewer: sectionRatio(row, 'rendered_per_viewer', VIEWERS_SOURCE),
+          meaningfulPerViewer: sectionRatio(row, 'meaningful_per_viewer', VIEWERS_SOURCE),
+          ...counts,
+          rates: computeViewerRates(counts),
+        },
+      };
+    })
+    .sort(compareArms)
+    .map(({ line }) => line);
+}
+
+export type PositionBucketCounts = {
+  served: number;
+  rendered: number;
+  meaningful: number;
+  quickSkips: number;
+};
+
+export type PositionBucketLine = PositionBucketCounts & { bucket: string; rates: ScorecardRate[] };
+
+export type PositionScorecardLine = ScorecardArm & { buckets: PositionBucketLine[] };
+
+export function computePositionBucketRates(counts: PositionBucketCounts): ScorecardRate[] {
+  return [
+    percent('rendered / served', counts.rendered, counts.served),
+    percent('meaningful / rendered', counts.meaningful, counts.rendered),
+    percent('quick skips / rendered', counts.quickSkips, counts.rendered),
+  ];
+}
+
+function bucketOrder(bucket: string): number {
+  const index = SCORECARD_POSITION_BUCKETS.indexOf(bucket);
+  return index === -1 ? SCORECARD_POSITION_BUCKETS.length : index;
+}
+
+/** One line per version and arm from `feed_scorecard_positions`, buckets top first. */
+export function buildPositionScorecardLines(
+  rawRows: readonly unknown[],
+  versions: readonly FeedAlgorithmVersion[],
+  experiments: readonly FeedExperiment[],
+): PositionScorecardLine[] {
+  const resolveArm = scorecardArmResolver(versions, experiments);
+  const rows = rawRows.map((value) => {
+    const row = asRow(value, POSITIONS_SOURCE);
+    const bucket = sectionColumn(row, 'position_bucket', POSITIONS_SOURCE);
+    if (typeof bucket !== 'string' || !bucket) {
+      throw new Error(`${POSITIONS_SOURCE} returned an invalid position_bucket.`);
+    }
+    const counts: PositionBucketCounts = {
+      served: sectionCount(row, 'served', POSITIONS_SOURCE),
+      rendered: sectionCount(row, 'rendered', POSITIONS_SOURCE),
+      meaningful: sectionCount(row, 'meaningful', POSITIONS_SOURCE),
+      quickSkips: sectionCount(row, 'quick_skips', POSITIONS_SOURCE),
+    };
+    return { ...armColumns(row), bucket, counts };
+  });
+  return groupByArm(rows)
+    .map((members) => {
+      const resolved = resolveArm(members[0]);
+      return {
+        ...resolved,
+        line: {
+          ...resolved.arm,
+          buckets: members
+            .map(({ bucket, counts }) => ({ bucket, ...counts, rates: computePositionBucketRates(counts) }))
+            .sort((left, right) => (
+              bucketOrder(left.bucket) - bucketOrder(right.bucket) || left.bucket.localeCompare(right.bucket)
+            )),
+        },
+      };
+    })
+    .sort(compareArms)
+    .map(({ line }) => line);
+}
+
+export type FormatCounts = {
+  rendered: number;
+  meaningful: number;
+  quickSkips: number;
+  /** Σ dwell_ms_max over the rendered deliveries. */
+  attentionMs: number;
+  videoHalfCompletions: number;
+};
+
+export type FormatLine = FormatCounts & {
+  /** `posts.category`; `unknown` when the function returns none. */
+  category: string;
+  rates: ScorecardRate[];
+};
+
+export type FormatScorecardLine = ScorecardArm & { formats: FormatLine[] };
+
+export function computeFormatRates(category: string, counts: FormatCounts): ScorecardRate[] {
+  const attentionSeconds = counts.attentionMs / 1000;
+  return [
+    percent('meaningful / rendered', counts.meaningful, counts.rendered),
+    percent('quick skips / rendered', counts.quickSkips, counts.rendered),
+    {
+      label: 'attention per rendered',
+      numerator: attentionSeconds,
+      denominator: counts.rendered,
+      unit: 'seconds',
+      value: rateOf(attentionSeconds, counts.rendered, 1),
+    },
+    // Only a video has progress to half-complete: other formats have no rate.
+    percent(
+      'video half-completions / rendered',
+      counts.videoHalfCompletions,
+      category === 'video' ? counts.rendered : 0,
+    ),
+  ];
+}
+
+/** One line per version and arm from `feed_scorecard_formats`, busiest format first. */
+export function buildFormatScorecardLines(
+  rawRows: readonly unknown[],
+  versions: readonly FeedAlgorithmVersion[],
+  experiments: readonly FeedExperiment[],
+): FormatScorecardLine[] {
+  const resolveArm = scorecardArmResolver(versions, experiments);
+  const rows = rawRows.map((value) => {
+    const row = asRow(value, FORMATS_SOURCE);
+    const category = sectionColumn(row, 'category', FORMATS_SOURCE);
+    const counts: FormatCounts = {
+      rendered: sectionCount(row, 'rendered', FORMATS_SOURCE),
+      meaningful: sectionCount(row, 'meaningful', FORMATS_SOURCE),
+      quickSkips: sectionCount(row, 'quick_skips', FORMATS_SOURCE),
+      attentionMs: sectionCount(row, 'attention_ms', FORMATS_SOURCE),
+      videoHalfCompletions: sectionCount(row, 'video_half_completions', FORMATS_SOURCE),
+    };
+    return { ...armColumns(row), category: typeof category === 'string' && category ? category : 'unknown', counts };
+  });
+  return groupByArm(rows)
+    .map((members) => {
+      const resolved = resolveArm(members[0]);
+      return {
+        ...resolved,
+        line: {
+          ...resolved.arm,
+          formats: members
+            .map(({ category, counts }) => ({ category, ...counts, rates: computeFormatRates(category, counts) }))
+            .sort((left, right) => right.rendered - left.rendered || left.category.localeCompare(right.category)),
+        },
+      };
+    })
+    .sort(compareArms)
+    .map(({ line }) => line);
+}
+
+function formatRatio(value: number | null, digits: number): string {
+  return value === null ? DASH : value.toFixed(digits);
+}
+
+function sectionRateCells(rates: readonly ScorecardRate[]): string[] {
+  return rates.map(formatScorecardRate);
+}
+
+/**
+ * The viewer, position and format sections, after the delivery-grain block.
+ * Builds every line before returning, so a contract mismatch prints nothing.
+ */
+export function formatScorecardV2(
+  sections: ScorecardV2Sections,
+  days: number,
+  versions: readonly FeedAlgorithmVersion[],
+  experiments: readonly FeedExperiment[],
+): string[] {
+  const period = `${days} ${days === 1 ? 'day' : 'days'}`;
+  const output: string[] = [];
+  const unavailable = (section: ScorecardSectionResult) => (
+    'unavailable' in section ? [`  Not available: ${section.unavailable}`] : null
+  );
+  const rowsOf = (section: ScorecardSectionResult) => ('rows' in section ? section.rows : []);
+
+  output.push(
+    '',
+    `Viewer grain (feed_scorecard_viewers): each viewer once per version and arm, last ${period}.`,
+  );
+  const viewerLines = buildViewerScorecardLines(rowsOf(sections.feed_scorecard_viewers), versions, experiments);
+  const viewersMissing = unavailable(sections.feed_scorecard_viewers);
+  if (viewersMissing) output.push(...viewersMissing);
+  else if (viewerLines.length === 0) output.push(`  No viewer was served in the last ${period}.`);
+  for (const line of viewerLines) {
+    output.push(
+      '',
+      `${line.versionLabel} · ${line.armLabel}`,
+      `  viewers ${line.viewers} · sessions ${line.sessions} · sessions per viewer ${formatRatio(line.sessionsPerViewer, 2)}`,
+      `  rendered per viewer ${formatRatio(line.renderedPerViewer, 1)}`
+        + ` · meaningful per viewer ${formatRatio(line.meaningfulPerViewer, 1)}`,
+      ...alignColumns(line.rates.map((rate) => [
+        `  ${rate.label}`,
+        `${rate.numerator} / ${rate.denominator}`,
+        formatScorecardRate(rate),
+      ]), ['left', 'right', 'right']),
+    );
+    if (line.viewers > 0) {
+      output.push(
+        `  With ${line.viewers} ${line.viewers === 1 ? 'viewer' : 'viewers'}, one viewer moves each rate `
+        + `by ${(100 / line.viewers).toFixed(1)} points or more.`,
+      );
+    }
+  }
+
+  output.push(
+    '',
+    `Position buckets (feed_scorecard_positions): 1 is the top of the feed, last ${period}.`,
+  );
+  const positionLines = buildPositionScorecardLines(rowsOf(sections.feed_scorecard_positions), versions, experiments);
+  const positionsMissing = unavailable(sections.feed_scorecard_positions);
+  if (positionsMissing) output.push(...positionsMissing);
+  else if (positionLines.length === 0) output.push(`  No deliveries were served in the last ${period}.`);
+  for (const line of positionLines) {
+    output.push('', `${line.versionLabel} · ${line.armLabel}`);
+    output.push(...alignColumns([
+      ['  BUCKET', 'SERVED', 'RENDERED', 'MEANINGFUL', 'QUICK SKIPS',
+        'RENDERED / SERVED', 'MEANINGFUL / RENDERED', 'QUICK SKIPS / RENDERED'],
+      ...line.buckets.map((bucket) => [
+        `  ${bucket.bucket}`,
+        String(bucket.served),
+        String(bucket.rendered),
+        String(bucket.meaningful),
+        String(bucket.quickSkips),
+        ...sectionRateCells(bucket.rates),
+      ]),
+    ], ['left', 'right', 'right', 'right', 'right', 'right', 'right', 'right']));
+  }
+
+  output.push('', `Formats (feed_scorecard_formats): by the post's category, last ${period}.`);
+  const formatLines = buildFormatScorecardLines(rowsOf(sections.feed_scorecard_formats), versions, experiments);
+  const formatsMissing = unavailable(sections.feed_scorecard_formats);
+  if (formatsMissing) output.push(...formatsMissing);
+  else if (formatLines.length === 0) output.push(`  No deliveries were rendered in the last ${period}.`);
+  for (const line of formatLines) {
+    output.push('', `${line.versionLabel} · ${line.armLabel}`);
+    output.push(...alignColumns([
+      ['  FORMAT', 'RENDERED', 'MEANINGFUL / RENDERED', 'QUICK SKIPS / RENDERED',
+        'ATTENTION / RENDERED', 'VIDEO HALF-COMPLETIONS / RENDERED'],
+      ...line.formats.map((format) => [
+        `  ${format.category}`,
+        String(format.rendered),
+        ...sectionRateCells(format.rates),
+      ]),
+    ], ['left', 'right', 'right', 'right', 'right', 'right']));
+  }
+  return output;
+}
+
+async function loadScorecardSection(
+  client: SupabaseClient,
+  name: ScorecardSectionFunction,
+  days: number,
+): Promise<ScorecardSectionResult> {
+  const { data, error } = await client.rpc(name, { p_days: days });
+  if (error) {
+    // The delivery-grain block above still stands without the v4 sections.
+    if (error.code === 'PGRST202') {
+      return { unavailable: `${name} is not in the database (is the feed ranking v4 migration applied?)` };
+    }
+    throw new Error(`${name} failed: ${describeError(error, 'v4')}`);
+  }
+  if (data !== null && !Array.isArray(data)) throw new Error(`${name} did not return rows.`);
+  return { rows: data ?? [] };
+}
+
+// ---------------------------------------------------------------------------
+// Sample ratio (plan v4 §2.8, feed_experiment_assignment_counts)
+
+const LANCZOS = [
+  0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313,
+  -176.61502916214059, 12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6,
+  1.5056327351493116e-7,
+];
+
+/** ln Γ(x) for x > 0 (Lanczos, g = 7). */
+function logGamma(x: number): number {
+  if (x < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * x)) - logGamma(1 - x);
+  const shifted = x - 1;
+  let series = LANCZOS[0];
+  for (let index = 1; index < LANCZOS.length; index += 1) series += LANCZOS[index] / (shifted + index);
+  const t = shifted + 7.5;
+  return 0.5 * Math.log(2 * Math.PI) + (shifted + 0.5) * Math.log(t) - t + Math.log(series);
+}
+
+/** Q(a, x) = Γ(a, x) / Γ(a), by its series below a + 1 and its continued fraction above. */
+function regularizedUpperGamma(a: number, x: number): number {
+  if (x <= 0) return 1;
+  const prefactor = Math.exp(-x + a * Math.log(x) - logGamma(a));
+  if (x < a + 1) {
+    let term = 1 / a;
+    let sum = term;
+    for (let n = 1; n < 1000; n += 1) {
+      term *= x / (a + n);
+      sum += term;
+      if (Math.abs(term) < Math.abs(sum) * 1e-15) break;
+    }
+    return Math.max(0, 1 - prefactor * sum);
+  }
+  const tiny = 1e-300;
+  let b = x + 1 - a;
+  let c = 1 / tiny;
+  let d = 1 / b;
+  let fraction = d;
+  for (let n = 1; n < 1000; n += 1) {
+    const an = -n * (n - a);
+    b += 2;
+    d = an * d + b;
+    if (Math.abs(d) < tiny) d = tiny;
+    c = b + an / c;
+    if (Math.abs(c) < tiny) c = tiny;
+    d = 1 / d;
+    const delta = d * c;
+    fraction *= delta;
+    if (Math.abs(delta - 1) < 1e-15) break;
+  }
+  return Math.min(1, prefactor * fraction);
+}
+
+/** P(X ≥ statistic) for X chi-square distributed with the given degrees of freedom. */
+export function chiSquareSurvival(statistic: number, degreesOfFreedom: number): number {
+  if (!(degreesOfFreedom > 0)) throw new Error('Degrees of freedom must be positive.');
+  if (!(statistic > 0)) return 1;
+  return regularizedUpperGamma(degreesOfFreedom / 2, statistic / 2);
+}
+
+export type SampleRatioVerdict = 'skewed' | 'matches' | 'too_few' | 'empty' | 'untestable';
+
+export type SampleRatioVariant = {
+  variantKey: string;
+  allocationBasisPoints: number;
+  observed: number;
+  /** The observed total split by allocation. */
+  expected: number;
+};
+
+export type SampleRatioCheck = {
+  variants: SampleRatioVariant[];
+  observedTotal: number;
+  /** Pearson's Σ (observed − expected)² / expected; null when no test ran. */
+  statistic: number | null;
+  degreesOfFreedom: number;
+  pValue: number | null;
+  verdict: SampleRatioVerdict;
+};
+
+/**
+ * Pearson's chi-square goodness of fit of the observed counts to the
+ * allocation. Skewed below p 0.01; `too_few` when an expected count is under
+ * 5, where the approximation does not hold; skewed outright when an arm
+ * allocated nothing has viewers.
+ */
+export function checkSampleRatio(
+  variants: ReadonlyArray<{ variantKey: string; allocationBasisPoints: number; observed: number }>,
+): SampleRatioCheck {
+  const observedTotal = variants.reduce((sum, variant) => sum + variant.observed, 0);
+  const allocationTotal = variants.reduce((sum, variant) => sum + Math.max(0, variant.allocationBasisPoints), 0);
+  const withExpected = variants.map((variant) => ({
+    ...variant,
+    expected: allocationTotal > 0 ? (observedTotal * Math.max(0, variant.allocationBasisPoints)) / allocationTotal : 0,
+  }));
+  const tested = withExpected.filter((variant) => variant.expected > 0);
+  const untested = { variants: withExpected, observedTotal, statistic: null, pValue: null };
+  if (observedTotal === 0) return { ...untested, degreesOfFreedom: 0, verdict: 'empty' };
+  if (withExpected.some((variant) => variant.expected === 0 && variant.observed > 0)) {
+    return { ...untested, degreesOfFreedom: 0, verdict: 'skewed' };
+  }
+  if (tested.length < 2) return { ...untested, degreesOfFreedom: 0, verdict: 'untestable' };
+
+  const statistic = tested.reduce(
+    (sum, variant) => sum + ((variant.observed - variant.expected) ** 2) / variant.expected,
+    0,
+  );
+  const degreesOfFreedom = tested.length - 1;
+  const pValue = chiSquareSurvival(statistic, degreesOfFreedom);
+  const verdict: SampleRatioVerdict = tested.some((variant) => variant.expected < SAMPLE_RATIO_MIN_EXPECTED)
+    ? 'too_few'
+    : pValue < SAMPLE_RATIO_P_THRESHOLD ? 'skewed' : 'matches';
+  return { variants: withExpected, observedTotal, statistic, degreesOfFreedom, pValue, verdict };
+}
+
+export function sampleRatioVerdictText(check: SampleRatioCheck, subject: 'assignment' | 'exposure'): string {
+  switch (check.verdict) {
+    case 'skewed':
+      return `${subject} is skewed — do not read this experiment.`;
+    case 'matches':
+      return `${subject} matches the allocation (p ≥ ${SAMPLE_RATIO_P_THRESHOLD}).`;
+    case 'too_few':
+      return `too few viewers to test ${subject}: an expected count is under ${SAMPLE_RATIO_MIN_EXPECTED}. `
+        + 'Check again later.';
+    case 'empty':
+      return subject === 'assignment'
+        ? 'no viewer is assigned yet: nothing to check.'
+        : 'no assigned viewer has been served yet: nothing to check.';
+    case 'untestable':
+      return `fewer than two variants have an allocation: there is no ${subject} ratio to check.`;
+  }
+}
+
+function formatPValue(pValue: number): string {
+  return pValue < 0.0001 ? 'p < 0.0001' : `p = ${pValue.toFixed(4)}`;
+}
+
+function describeChiSquare(check: SampleRatioCheck): string {
+  if (check.statistic === null || check.pValue === null) return `${check.observedTotal} viewers, no test.`;
+  const freedom = `${check.degreesOfFreedom} ${check.degreesOfFreedom === 1 ? 'degree' : 'degrees'} of freedom`;
+  return `chi-square ${check.statistic.toFixed(2)} with ${freedom}, ${formatPValue(check.pValue)}.`;
+}
+
+export type ExperimentAssignmentCount = {
+  variantKey: string;
+  allocationBasisPoints: number;
+  assignedViewers: number;
+  exposedViewers: number;
+};
+
+const ASSIGNMENT_COUNTS_SOURCE = 'feed_experiment_assignment_counts';
+
+function normalizeAssignmentCount(value: unknown): ExperimentAssignmentCount {
+  const row = asRow(value, ASSIGNMENT_COUNTS_SOURCE);
+  return {
+    variantKey: requiredString(row, 'variant_key', ASSIGNMENT_COUNTS_SOURCE),
+    allocationBasisPoints: requiredWholeNumber(row, 'allocation_basis_points', ASSIGNMENT_COUNTS_SOURCE),
+    assignedViewers: sectionCount(row, 'assigned_viewers', ASSIGNMENT_COUNTS_SOURCE),
+    exposedViewers: sectionCount(row, 'exposed_viewers', ASSIGNMENT_COUNTS_SOURCE),
+  };
+}
+
+export function formatSampleRatio(
+  experiment: Pick<FeedExperiment, 'experimentKey' | 'status'>,
+  counts: readonly ExperimentAssignmentCount[],
+): string[] {
+  const lines = [
+    `Sample ratio check: experiment ${experiment.experimentKey} (${experiment.status}), `
+    + `from ${ASSIGNMENT_COUNTS_SOURCE}.`,
+  ];
+  if (counts.length === 0) {
+    lines.push(`  ${ASSIGNMENT_COUNTS_SOURCE} returned no variants.`);
+    return lines;
+  }
+  const check = (pick: (count: ExperimentAssignmentCount) => number) => checkSampleRatio(counts.map((count) => ({
+    variantKey: count.variantKey,
+    allocationBasisPoints: count.allocationBasisPoints,
+    observed: pick(count),
+  })));
+  const assignment = check((count) => count.assignedViewers);
+  const exposure = check((count) => count.exposedViewers);
+  lines.push(...alignColumns([
+    ['  VARIANT', 'ALLOCATION', 'ASSIGNED', 'EXPECTED', 'EXPOSED', 'EXPECTED'],
+    ...counts.map((count, index) => [
+      `  ${count.variantKey}`,
+      formatBasisPoints(count.allocationBasisPoints),
+      String(count.assignedViewers),
+      assignment.variants[index].expected.toFixed(1),
+      String(count.exposedViewers),
+      exposure.variants[index].expected.toFixed(1),
+    ]),
+  ], ['left', 'right', 'right', 'right', 'right', 'right']));
+  lines.push(
+    `  Assignment (viewers assigned a variant): ${describeChiSquare(assignment)}`,
+    `  Verdict: ${sampleRatioVerdictText(assignment, 'assignment')}`,
+    `  Exposure (assigned viewers served at least once): ${describeChiSquare(exposure)}`,
+    `  Verdict: ${sampleRatioVerdictText(exposure, 'exposure')}`,
+  );
+  return lines;
 }
 
 // ---------------------------------------------------------------------------
@@ -874,16 +1520,24 @@ async function runScorecard(
   command: Extract<FeedAlgorithmCommand, { command: 'scorecard' }>,
   output: FeedAlgorithmCliOutput,
 ) {
-  const [rows, versions, experiments] = await Promise.all([
+  const [rows, versions, experiments, viewers, positions, formats] = await Promise.all([
     callRpc(client, 'feed_algorithm_scorecard', { p_days: command.days }),
     loadVersions(client),
     loadExperiments(client),
+    loadScorecardSection(client, 'feed_scorecard_viewers', command.days),
+    loadScorecardSection(client, 'feed_scorecard_positions', command.days),
+    loadScorecardSection(client, 'feed_scorecard_formats', command.days),
   ]);
   if (rows !== null && !Array.isArray(rows)) {
     throw new Error('feed_algorithm_scorecard did not return rows.');
   }
   const lines = buildScorecardLines(rows ?? [], command.by, versions, experiments);
-  logLines(output, formatScorecard(lines, command.days, command.by));
+  const sections = formatScorecardV2({
+    feed_scorecard_viewers: viewers,
+    feed_scorecard_positions: positions,
+    feed_scorecard_formats: formats,
+  }, command.days, versions, experiments);
+  logLines(output, [...formatScorecard(lines, command.days, command.by), ...sections]);
 }
 
 async function runActivate(
@@ -1054,6 +1708,32 @@ async function runExperimentStop(
   printResult(output, 'set_feed_experiment_status', result);
 }
 
+async function runExperimentSrm(
+  client: SupabaseClient,
+  command: Extract<FeedAlgorithmCommand, { command: 'experiment-srm' }>,
+  output: FeedAlgorithmCliOutput,
+) {
+  const experiments = await loadExperiments(client);
+  const experiment = experiments.find((candidate) => candidate.experimentKey === command.experimentKey);
+  if (!experiment) {
+    throw new Error(`No feed experiment ${command.experimentKey}. Run list to see the experiments.`);
+  }
+  const rows = await callRpc(
+    client,
+    'feed_experiment_assignment_counts',
+    { p_experiment_key: command.experimentKey },
+    'v4',
+  );
+  if (rows !== null && !Array.isArray(rows)) {
+    throw new Error('feed_experiment_assignment_counts did not return rows.');
+  }
+  const counts = (rows ?? [])
+    .map((row: unknown) => normalizeAssignmentCount(row))
+    // Same order the feed buckets them in (src/lib/feed-experiments.ts).
+    .sort((left, right) => left.variantKey.localeCompare(right.variantKey));
+  logLines(output, formatSampleRatio(experiment, counts));
+}
+
 /**
  * Runs one command and resolves to the process exit code: 0 on success, 1 on
  * a usage error (printed with the usage), a refusal or a database error.
@@ -1098,6 +1778,9 @@ export async function runFeedAlgorithmCli(
         break;
       case 'experiment-stop':
         await runExperimentStop(client, command, output);
+        break;
+      case 'experiment-srm':
+        await runExperimentSrm(client, command, output);
         break;
     }
     return 0;
