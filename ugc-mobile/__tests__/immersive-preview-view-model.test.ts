@@ -116,6 +116,29 @@ describe('immersive preview view model', () => {
     expect(other.previewUrl).toBeNull();
   });
 
+  it('reads a post\'s description as its story when it has no body, as the owner view does', () => {
+    const [captionOnly, both, neither] = buildImmersiveShowcaseItems('showcase-feed', [
+      showcaseItem({ id: 'caption-only', body: '', description: '  Written in the web composer.  ' }),
+      showcaseItem({ id: 'both', body: 'The body wins.', description: 'A separate caption.' }),
+      showcaseItem({ id: 'neither', body: '' }),
+    ]);
+
+    expect(captionOnly.details?.body).toBe('Written in the web composer.');
+    expect(both.details?.body).toBe('The body wins.');
+    expect(neither.details?.body).toBe('');
+  });
+
+  it('labels a motion post Motion, which its video category alone would not', () => {
+    const [motion] = buildImmersiveShowcaseItems('showcase-feed', [showcaseItem({
+      category: 'video',
+      mediaKind: 'video',
+      mediaUrl: 'https://cdn.example.com/dance.mp4',
+      creationMode: 'motion',
+    })]);
+
+    expect(motion).toMatchObject({ badge: 'Motion', recreateTool: 'motion' });
+  });
+
   it('builds the shared text-post viewer route for public and owner posts', () => {
     expect(textPostViewerHref({ postId: 'post-1' })).toBe('/post/post-1');
     expect(textPostViewerHref({ postId: 'private/post', source: 'profile-posts' }))

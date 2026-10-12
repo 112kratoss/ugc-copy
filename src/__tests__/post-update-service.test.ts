@@ -14,7 +14,7 @@ import {
   type PostUpdateDependencies,
 } from '@/lib/post-update-service';
 import type { SourceToolOption } from '@/lib/source-tools';
-import { TITLE_MAX_LENGTH } from '@/lib/posts-server';
+import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH } from '@/lib/posts-server';
 import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
 import { DefinitiveSupabaseMutationRejection } from '@/lib/upload-byte-admission';
 
@@ -2002,7 +2002,7 @@ describe('updateOwnerPostForRoute', () => {
     });
   });
 
-  describe('title length', () => {
+  describe('title and body length', () => {
     const grandfatheredTitle = 'g'.repeat(TITLE_MAX_LENGTH + 9);
 
     function buildDependencies() {
@@ -2131,6 +2131,77 @@ describe('updateOwnerPostForRoute', () => {
 
       expect(result).toMatchObject({ ok: false, status: 400, body: { field: 'title' } });
       expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    });
+
+    it('rejects an edit that sets a post text longer than the limit', async () => {
+      const { client } = createSupabaseMock({ post: postWithTitle('Short enough') });
+      const dependencies = buildDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          title: 'Short enough',
+          body: 'x'.repeat(BODY_MAX_LENGTH + 1),
+          visibility: 'private',
+          resourceBundle: { accessMode: 'none' },
+        },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: 400,
+        body: { error: `Post text is limited to ${BODY_MAX_LENGTH} characters.`, field: 'body' },
+      });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    });
+
+    it('accepts a post text of exactly the limit', async () => {
+      const { client } = createSupabaseMock({ post: postWithTitle('Short enough') });
+      const dependencies = buildDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          title: 'Short enough',
+          body: 'x'.repeat(BODY_MAX_LENGTH),
+          visibility: 'private',
+          resourceBundle: { accessMode: 'none' },
+        },
+        dependencies,
+      });
+
+      expect(result.ok).toBe(true);
+    });
+
+    // Edits never checked the text before, so a longer one may be stored; the
+    // whole-draft PATCH resends it and must not block a change elsewhere.
+    it('still saves a post whose stored text exceeds the limit when the text is unchanged', async () => {
+      const longStoredText = 'b'.repeat(BODY_MAX_LENGTH + 40);
+      const { client } = createSupabaseMock({
+        post: { ...postWithTitle('Short enough'), body: longStoredText },
+      });
+      const dependencies = buildDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          title: 'Short enough, now retitled',
+          body: longStoredText,
+          visibility: 'private',
+          resourceBundle: { accessMode: 'none' },
+        },
+        dependencies,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalled();
     });
   });
 });

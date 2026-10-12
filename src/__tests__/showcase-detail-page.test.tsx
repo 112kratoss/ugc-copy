@@ -145,6 +145,10 @@ describe('Showcase detail page', () => {
     clientAuth.current = { session: null, user: null };
     isUserRelationshipBlockedMock.mockReset().mockResolvedValue(false);
     stubPageFetch();
+    // The reference lookup runs only after a missed post read now, so a test's
+    // Once answer can go unread; a reset keeps it from reaching the next test.
+    getPostReferenceForShowcaseIdMock.mockReset();
+    getPublicPostDetailMock.mockReset();
     getPostReferenceForShowcaseIdMock.mockResolvedValue({
       id: 'post-1',
       generation_id: 'gen-1',
@@ -808,7 +812,20 @@ describe('Showcase detail page', () => {
     });
   });
 
+  it('opens a post with one read of its row and no legacy reference lookup', async () => {
+    render(await ShowcaseDetailPage({
+      params: Promise.resolve({ id: 'post-1' }),
+    }));
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Shared creation' })).toBeInTheDocument();
+    expect(getPublicPostDetailMock).toHaveBeenCalledTimes(1);
+    expect(getPublicPostDetailMock).toHaveBeenCalledWith('post-1');
+    expect(getPostReferenceForShowcaseIdMock).not.toHaveBeenCalled();
+  });
+
   it('redirects legacy generation ids to their post ids', async () => {
+    // No post has the generation's id, so the post read misses first.
+    getPublicPostDetailMock.mockResolvedValueOnce(null);
     getPostReferenceForShowcaseIdMock.mockResolvedValueOnce({
       id: 'post-1',
       generation_id: 'gen-1',
@@ -821,9 +838,12 @@ describe('Showcase detail page', () => {
     await expect(ShowcaseDetailPage({
       params: Promise.resolve({ id: 'gen-1' }),
     })).rejects.toThrow('NEXT_REDIRECT:/showcase/post-1');
+    expect(getPublicPostDetailMock).toHaveBeenCalledWith('gen-1');
+    expect(getPostReferenceForShowcaseIdMock).toHaveBeenCalledWith('gen-1');
   });
 
   it('returns notFound for private or missing posts', async () => {
+    getPublicPostDetailMock.mockResolvedValueOnce(null);
     getPostReferenceForShowcaseIdMock.mockResolvedValueOnce(null);
 
     await expect(ShowcaseDetailPage({
@@ -831,15 +851,69 @@ describe('Showcase detail page', () => {
     })).rejects.toThrow('NEXT_NOT_FOUND');
   });
 
-  it('renders text-only posts without a media url', async () => {
+  it('answers not-found, not a redirect to itself, for a post whose row exists but cannot be shown', async () => {
+    // A media post with no readable media is one: the reference still finds
+    // its row under the same id.
+    getPublicPostDetailMock.mockResolvedValueOnce(null);
     getPostReferenceForShowcaseIdMock.mockResolvedValueOnce({
-      id: 'post-text',
-      generation_id: null,
+      id: 'post-1',
+      generation_id: 'gen-1',
       visibility: 'public',
-      category: 'text',
-      prompt: 'Keep it tight.',
-      source_kind: 'manual',
+      category: 'image',
+      prompt: 'Prompt',
+      source_kind: 'magicbooklet',
     });
+
+    await expect(ShowcaseDetailPage({
+      params: Promise.resolve({ id: 'post-1' }),
+    })).rejects.toThrow('NEXT_NOT_FOUND');
+    expect(mockRedirect).not.toHaveBeenCalled();
+  });
+
+  it('builds metadata from the post read alone, and names a legacy id a redirect', async () => {
+    await generateMetadata({ params: Promise.resolve({ id: 'post-1' }) });
+    expect(getPostReferenceForShowcaseIdMock).not.toHaveBeenCalled();
+
+    getPublicPostDetailMock.mockResolvedValueOnce(null);
+    getPostReferenceForShowcaseIdMock.mockResolvedValueOnce({
+      id: 'post-1',
+      generation_id: 'gen-1',
+      visibility: 'public',
+      category: 'image',
+      prompt: 'Prompt',
+      source_kind: 'magicbooklet',
+    });
+    await expect(generateMetadata({ params: Promise.resolve({ id: 'gen-1' }) })).resolves.toMatchObject({
+      title: 'Creation Redirect',
+      robots: { index: false, follow: true },
+    });
+
+    getPublicPostDetailMock.mockResolvedValueOnce(null);
+    getPostReferenceForShowcaseIdMock.mockResolvedValueOnce(null);
+    await expect(generateMetadata({ params: Promise.resolve({ id: 'missing' }) })).resolves.toEqual({
+      title: 'Creation Not Found',
+    });
+  });
+
+  it('labels a motion post a motion creation, as its feed card does', async () => {
+    const detail = await getPublicPostDetailMock('post-1');
+    getPublicPostDetailMock.mockReset().mockResolvedValue({
+      ...detail,
+      mediaKind: 'video',
+      category: 'video',
+      creationMode: 'motion',
+    });
+
+    render(await ShowcaseDetailPage({
+      params: Promise.resolve({ id: 'post-1' }),
+    }));
+
+    const head = screen.getByTestId('canonical-post-head');
+    expect(head).toHaveTextContent('Motion creation');
+    expect(head).not.toHaveTextContent('Video creation');
+  });
+
+  it('renders text-only posts without a media url', async () => {
     getPublicPostDetailMock.mockResolvedValueOnce({
       id: 'post-text',
       generationId: null,
@@ -900,14 +974,6 @@ describe('Showcase detail page', () => {
   });
 
   it('pitches a text post recipe once, in the document column', async () => {
-    getPostReferenceForShowcaseIdMock.mockResolvedValueOnce({
-      id: 'post-text',
-      generation_id: null,
-      visibility: 'public',
-      category: 'text',
-      prompt: null,
-      source_kind: 'manual',
-    });
     getPublicPostDetailMock.mockResolvedValueOnce({
       id: 'post-text',
       generationId: null,

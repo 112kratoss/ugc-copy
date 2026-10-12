@@ -16,8 +16,21 @@ const helperMocks = vi.hoisted(() => ({
   createServiceClient: vi.fn(),
   resolveStoredMediaUrl: vi.fn(),
 }));
+const detailMocks = vi.hoisted(() => ({
+  getPostResourceBundleDetailByPostId: vi.fn(),
+  loadPostMediaItemsMap: vi.fn(),
+}));
 
 vi.mock('@/lib/server-helpers', () => helperMocks);
+// The detail read's own neighbours, so it can be read to the end.
+vi.mock('@/lib/post-resource-bundles-server', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/post-resource-bundles-server')>()),
+  getPostResourceBundleDetailByPostId: detailMocks.getPostResourceBundleDetailByPostId,
+}));
+vi.mock('@/lib/post-media', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/post-media')>()),
+  loadPostMediaItemsMap: detailMocks.loadPostMediaItemsMap,
+}));
 
 import {
   getPostReferenceForShowcaseId,
@@ -105,4 +118,88 @@ describe('public post moderation boundary', () => {
       });
     },
   );
+});
+
+describe('public post detail read', () => {
+  function postRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'post-1',
+      user_id: 'user-1',
+      generation_id: null,
+      visibility: 'public',
+      output_url: null,
+      showcase_asset_path: null,
+      prompt: null,
+      title: 'Dance loop',
+      description: null,
+      body: null,
+      category: 'video',
+      creation_mode: null,
+      save_count: 0,
+      remix_count: 0,
+      share_count: 0,
+      share_visit_count: 0,
+      comment_count: 0,
+      source_kind: 'magicbooklet',
+      source_tool: null,
+      review_status: 'visible',
+      is_nsfw: false,
+      created_at: '2026-10-01T00:00:00.000Z',
+      post_format: 'media',
+      ...overrides,
+    };
+  }
+
+  /** Answers the post row; the creator and the generation read find nothing. */
+  function useClientFor(row: Record<string, unknown>) {
+    const client = {
+      from(table: string) {
+        const query = {
+          select: () => query,
+          eq: () => query,
+          is: () => query,
+          in: () => query,
+          maybeSingle: async () => ({ data: table === 'posts' ? row : null, error: null }),
+        };
+        return query;
+      },
+    };
+    helperMocks.createServiceClient.mockReturnValue(client);
+  }
+
+  beforeEach(() => {
+    helperMocks.createServiceClient.mockReset();
+    detailMocks.getPostResourceBundleDetailByPostId.mockReset().mockResolvedValue(null);
+    detailMocks.loadPostMediaItemsMap.mockReset().mockResolvedValue(new Map([[
+      'post-1',
+      [{ id: 'media-1', url: 'https://cdn.example.com/dance.mp4', mediaKind: 'video', sortOrder: 0 }],
+    ]]));
+  });
+
+  it('says a motion post is one, which its category alone cannot', async () => {
+    useClientFor(postRow({ creation_mode: 'motion' }));
+    await expect(getPublicPostDetail('post-1')).resolves.toMatchObject({
+      category: 'video',
+      creationMode: 'motion',
+    });
+
+    useClientFor(postRow());
+    await expect(getPublicPostDetail('post-1')).resolves.toMatchObject({ creationMode: null });
+  });
+
+  it('hands the row\'s NSFW flag to the recipe read, which then need not read posts again', async () => {
+    useClientFor(postRow());
+    await getPublicPostDetail('post-1', { viewerUserId: 'viewer-1', countryCode: 'IN' });
+    expect(detailMocks.getPostResourceBundleDetailByPostId).toHaveBeenCalledWith('post-1', {
+      viewerUserId: 'viewer-1',
+      countryCode: 'IN',
+      isNsfw: false,
+    });
+
+    useClientFor(postRow({ is_nsfw: true }));
+    await expect(getPublicPostDetail('post-1')).resolves.toMatchObject({ isNsfw: true, nsfwRevealed: false });
+    expect(detailMocks.getPostResourceBundleDetailByPostId).toHaveBeenLastCalledWith('post-1', expect.objectContaining({
+      isNsfw: true,
+    }));
+  });
 });

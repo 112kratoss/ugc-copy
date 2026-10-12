@@ -43,15 +43,23 @@ function normalizeComparableText(value: string): string {
 
 function getPostTypeLabel({
   category,
+  creationMode,
   mediaKind,
   postFormat,
 }: {
   category: string;
+  creationMode: 'motion' | null;
   mediaKind: string | null;
   postFormat: string;
 }): string {
   if (postFormat === 'text' || category === 'text') {
     return 'Tip / note';
+  }
+
+  // A motion post is a video by category, so it has to be asked first; the
+  // feed card names it the same way (`getPostFeedTitle`).
+  if (creationMode === 'motion') {
+    return 'Motion creation';
   }
 
   if (mediaKind === 'video') {
@@ -86,6 +94,7 @@ export default function ShowcaseDetailBody({
   const viewerIsOwner = Boolean(viewerUserId && viewerUserId === detail.creator.id);
   const postTypeLabel = getPostTypeLabel({
     category: detail.category,
+    creationMode: detail.creationMode,
     mediaKind: detail.mediaKind,
     postFormat: detail.postFormat,
   });
@@ -123,7 +132,7 @@ export default function ShowcaseDetailBody({
     title: detail.title,
     prompt: detail.prompt,
     body: detail.body,
-    creationMode: null,
+    creationMode: detail.creationMode,
     mediaKind: detail.mediaKind,
     category: detail.category,
   }, previewKind);

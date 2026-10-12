@@ -19,6 +19,7 @@ import {
   type ShowcasePublishServiceDependencies,
 } from '@/lib/showcase-publish-service';
 import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
+import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH } from '@/lib/posts-server';
 
 function createCanonicalTemplateAdminClientMock({
   generation,
@@ -566,6 +567,161 @@ describe('publishGenerationToShowcaseForRoute', () => {
 
     expect(result).toMatchObject({ ok: true });
     expect(publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledTimes(1);
+  });
+
+  describe('title and text length', () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: null,
+      description: null,
+      prompt: 'Original prompt',
+    };
+    const dependencies = (publish: ShowcasePublishServiceDependencies['publishGenerationPostWithResourceBundleAtomically']) => ({
+      ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+        outputUrl: mediaGeneration.outputUrl,
+        createdLocation: null,
+      })),
+      listSourceToolsCatalog: vi.fn(async () => []),
+      publishGenerationPostWithResourceBundleAtomically: publish,
+    }) satisfies Partial<ShowcasePublishServiceDependencies>;
+
+    it('rejects a compose submission whose title is over the limit', async () => {
+      const publish = vi.fn();
+      const result = await publishGenerationToShowcaseForRoute({
+        adminSupabase: createAdminClientMock(generation).client,
+        body: {
+          generationId: 'gen-1',
+          visibility: 'private',
+          title: 't'.repeat(TITLE_MAX_LENGTH + 1),
+          resourceBundle: { accessMode: 'none' },
+        },
+        userId: 'user-1',
+        dependencies: dependencies(publish),
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: 400,
+        body: { error: `Titles are limited to ${TITLE_MAX_LENGTH} characters.`, field: 'title' },
+      });
+      expect(publish).not.toHaveBeenCalled();
+    });
+
+    it('rejects a compose submission whose text is over the limit', async () => {
+      const publish = vi.fn();
+      const result = await publishGenerationToShowcaseForRoute({
+        adminSupabase: createAdminClientMock(generation).client,
+        body: {
+          generationId: 'gen-1',
+          visibility: 'private',
+          title: 'Golden hour study',
+          body: 'b'.repeat(BODY_MAX_LENGTH + 1),
+          resourceBundle: { accessMode: 'none' },
+        },
+        userId: 'user-1',
+        dependencies: dependencies(publish),
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: 400,
+        body: { error: `Post text is limited to ${BODY_MAX_LENGTH} characters.`, field: 'body' },
+      });
+      expect(publish).not.toHaveBeenCalled();
+    });
+
+    // A flip writes nothing new; an older post may carry what is now too long.
+    it('still flips the visibility of a post whose stored title and text predate the limits', async () => {
+      const publish = vi.fn(async () => ({
+        postId: 'post-1',
+        visibility: 'private' as const,
+        bundleId: null,
+        bundleStatus: null,
+      }));
+      const result = await publishGenerationToShowcaseForRoute({
+        adminSupabase: createAdminClientMock(generation).client,
+        body: { generationId: 'gen-1', visibility: 'private' },
+        userId: 'user-1',
+        dependencies: {
+          ...dependencies(publish),
+          loadExistingGenerationPostContent: vi.fn(async () => ({
+            title: 'o'.repeat(TITLE_MAX_LENGTH + 5),
+            description: null,
+            prompt: null,
+            body: 'p'.repeat(BODY_MAX_LENGTH + 5),
+            category: 'image',
+            resourcePromptText: null,
+            resourceNotesMarkdown: null,
+          })),
+        },
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      expect(publish).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // A cleared description stays cleared: the generation's own is only a new
+  // post's starting point, and copying it back would put the caption the
+  // cleanup removed (20261012194135) above the body a second time.
+  it('keeps a stored post\'s empty description through a visibility flip rather than taking the generation\'s', async () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'Sunset v1',
+      description: 'Here is how I lit it.',
+      prompt: 'Original prompt',
+    };
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => ({
+      postId: 'post-1',
+      visibility: 'private' as const,
+      bundleId: null,
+      bundleStatus: null,
+    }));
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: createAdminClientMock(generation).client,
+      body: { generationId: 'gen-1', visibility: 'private' },
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+          outputUrl: mediaGeneration.outputUrl,
+          createdLocation: null,
+        })),
+        listSourceToolsCatalog: vi.fn(async () => []),
+        publishGenerationPostWithResourceBundleAtomically,
+        loadExistingGenerationPostContent: vi.fn(async () => ({
+          title: 'Golden hour study',
+          description: null,
+          prompt: null,
+          body: 'Here is how I lit it.',
+          category: 'image',
+          resourcePromptText: null,
+          resourceNotesMarkdown: null,
+        })),
+      } satisfies Partial<ShowcasePublishServiceDependencies>,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      post: expect.objectContaining({
+        description: null,
+        body: 'Here is how I lit it.',
+      }),
+    }));
   });
 
   // The post row is written with upsert semantics, so a visibility-only

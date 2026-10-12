@@ -733,6 +733,7 @@
           "title": "Launch frame",
           "prompt": "Create a bright launch visual.",
           "body": "Reusable launch notes.",
+          "description": "A clean launch visual.",
           "category": "image",
           "creationMode": null,
           "postFormat": "media",

@@ -54,6 +54,12 @@ let postRow: Record<string, unknown> | null;
 let purchasedRevisionRow: Record<string, unknown> | null;
 let purchasedMediaRows: Record<string, unknown>[];
 
+// Calls through, so a test can see whether the bundle read asked posts itself.
+vi.mock('@/lib/nsfw-content-server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/nsfw-content-server')>();
+  return { ...actual, loadNsfwPostIds: vi.fn(actual.loadNsfwPostIds) };
+});
+
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({
     async rpc(name: string, args: Record<string, unknown>) {
@@ -428,6 +434,34 @@ describe('post resource bundle server access', () => {
 
     expect(detail?.viewerCanAccess).toBe(false);
     expect(detail?.resources).toBeNull();
+  });
+
+  it('takes the post\'s NSFW flag from a caller that has just read its row', async () => {
+    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+    const { loadNsfwPostIds } = await import('@/lib/nsfw-content-server');
+    // A mocked module outlives resetModules, so the spy still holds earlier tests' calls.
+    vi.mocked(loadNsfwPostIds).mockClear();
+
+    await expect(getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null }))
+      .resolves.toMatchObject({ id: 'bundle-1' });
+    expect(loadNsfwPostIds).toHaveBeenCalledTimes(1);
+
+    vi.mocked(loadNsfwPostIds).mockClear();
+    await expect(getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null, isNsfw: false }))
+      .resolves.toMatchObject({ id: 'bundle-1' });
+    // The post page passes the row it read; it costs no second posts read.
+    expect(loadNsfwPostIds).not.toHaveBeenCalled();
+  });
+
+  it('keeps an NSFW post\'s recipe from a viewer who has not revealed it, on the caller\'s flag', async () => {
+    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+    const { loadNsfwPostIds } = await import('@/lib/nsfw-content-server');
+    vi.mocked(loadNsfwPostIds).mockClear();
+
+    // The fixture row is not marked NSFW, so only the caller's flag can hide it.
+    await expect(getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null, isNsfw: true }))
+      .resolves.toBeNull();
+    expect(loadNsfwPostIds).not.toHaveBeenCalled();
   });
 
   it('grants access on entitlement alone, never on the shape of the bundle id', async () => {

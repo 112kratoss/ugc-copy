@@ -4,7 +4,7 @@ import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
 import { ApiError, createApiClient, type MagicbookletApiClient } from '../lib/api-client';
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
-import { buildImmersiveGenerationItems } from '../lib/immersive-preview-view-model';
+import { buildImmersiveGenerationItems, buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
 import { buildShowcaseFeedEventRequest } from '../lib/showcase-feed-events';
 import type { ShowcaseFeedEventRequest, ShowcaseFeedEventType } from '../lib/types';
 import { getShowcaseViewerImageUrl } from '../lib/showcase-media';
@@ -109,6 +109,18 @@ it('opens an owner image on its display rendition and keeps the original for dow
   const [item] = buildImmersiveGenerationItems('profile-creations', image ? [image] : [], { creatorLabel: '@owner' });
   expect(getShowcaseViewerImageUrl(item.mediaItems[0])).toBe('https://cdn.example.test/generation-1-display.webp');
   expect(item.mediaItems[0].url).toBe('https://cdn.example.test/generation-1.png');
+});
+
+it('shows the caption a post read by id carries as its story when it has no body', async () => {
+  // Contract payload to details page: the by-id read is where the web
+  // composer's description reaches the app at all.
+  const { item } = await clientForEndpoint('getShowcasePost').getShowcasePost('post-1');
+  expect(item.description).toBe('A clean launch visual.');
+
+  const [withBody] = buildImmersiveShowcaseItems('showcase-feed', [item]);
+  expect(withBody.details?.body).toBe('Reusable launch notes.');
+  const [withoutBody] = buildImmersiveShowcaseItems('showcase-feed', [{ ...item, body: '' }]);
+  expect(withoutBody.details?.body).toBe('A clean launch visual.');
 });
 
 it('plays an audio creation from the owner library as sound, never as a picture', async () => {

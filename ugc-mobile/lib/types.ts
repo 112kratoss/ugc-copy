@@ -892,6 +892,8 @@ export interface ShowcaseFeedItem {
   title: string;
   prompt: string;
   body: string;
+  /** The creator's caption. Set by the by-id read; feed pages leave it out. */
+  description?: string;
   category: 'image' | 'video' | 'text';
   creationMode?: 'motion' | null;
   postFormat: 'text' | 'media' | 'mixed';

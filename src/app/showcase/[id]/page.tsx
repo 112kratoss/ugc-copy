@@ -166,21 +166,22 @@ async function isBlockedBetween(viewerUserId: string | null, creatorId: string |
 
 export async function generateMetadata({ params }: ShowcaseDetailPageProps): Promise<Metadata> {
   const { id } = await params;
-  const reference = await getPostReferenceForShowcaseId(id);
-
-  if (reference && reference.id !== id) {
-    return {
-      title: 'Creation Redirect',
-      robots: {
-        index: false,
-        follow: true,
-      },
-    };
-  }
-
-  const detail = reference ? await getPublicPostDetail(reference.id) : null;
+  // As the page reads it: the post's own row first, the legacy reference only
+  // when no post has this id.
+  const detail = await getPublicPostDetail(id);
 
   if (!detail) {
+    const reference = await getPostReferenceForShowcaseId(id);
+    if (reference && reference.id !== id) {
+      return {
+        title: 'Creation Redirect',
+        robots: {
+          index: false,
+          follow: true,
+        },
+      };
+    }
+
     return {
       title: 'Creation Not Found',
     };
@@ -214,28 +215,27 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
     from: returnFrom,
     returnTo,
   });
-  const reference = await getPostReferenceForShowcaseId(id);
-
-  if (!reference) {
-    notFound();
-  }
-
-  if (reference.id !== id) {
-    redirect(buildShowcaseDetailPath(reference.id, {
-      from: returnContext.source,
-      returnTo: returnContext.href,
-    }));
-  }
 
   // Independent of each other, so pay for one round trip rather than two.
   const [auth, headerStore] = await Promise.all([getServerAuthState(), headers()]);
   const viewerUserId = auth.session?.user?.id ?? null;
-  const detail = await getPublicPostDetail(reference.id, {
+  // A post id is the common case, so its row is read first and only a miss
+  // looks for a legacy generation id to redirect: an ordinary open reads the
+  // post once, not once to resolve the id and again to show it.
+  const detail = await getPublicPostDetail(id, {
     viewerUserId,
     countryCode: headerStore.get('x-vercel-ip-country'),
   });
 
   if (!detail) {
+    const reference = await getPostReferenceForShowcaseId(id);
+    if (reference && reference.id !== id) {
+      redirect(buildShowcaseDetailPath(reference.id, {
+        from: returnContext.source,
+        returnTo: returnContext.href,
+      }));
+    }
+
     notFound();
   }
 

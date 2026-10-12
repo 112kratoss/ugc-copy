@@ -594,7 +594,10 @@ function showcaseToImmersiveItem(
     details: {
       title,
       prompt: item.prompt.trim(),
-      body: item.body.trim(),
+      // A caption written in the web composer's description field, on a post
+      // with no body, is still the post's story; the owner view reads it the
+      // same way.
+      body: item.body.trim() || item.description?.trim() || '',
       categoryLabel: categoryLabel(item.category, item.postFormat),
       sourceLabel: 'Showcase',
       toolLabel: item.sourceTool?.trim() || null,

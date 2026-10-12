@@ -125,6 +125,8 @@ export interface ShowcaseFeedItem {
     title: string;
     prompt: string;
     body: string;
+    /** The creator's caption. Set by the by-id read; feed pages leave it out. */
+    description?: string;
     category: ShowcaseItemCategory;
     creationMode?: 'motion' | null;
     postFormat: ShowcasePostFormat;
@@ -289,7 +291,7 @@ export function sanitizeShowcaseFeedItem(item: ShowcaseFeedItem): ShowcaseFeedIt
     const publicContent = sanitizePublicPostContent({
         prompt: item.prompt,
         body: item.body,
-        description: '',
+        description: item.description ?? '',
         hasRecipe: Boolean(asset),
         isPaidRecipe: asset?.accessMode === 'paid',
     });
@@ -298,6 +300,7 @@ export function sanitizeShowcaseFeedItem(item: ShowcaseFeedItem): ShowcaseFeedIt
         ...item,
         prompt: publicContent.prompt,
         body: publicContent.body,
+        ...(item.description === undefined ? {} : { description: publicContent.description }),
         asset,
     };
 }
