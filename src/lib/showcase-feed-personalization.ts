@@ -2,7 +2,16 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { logBackendError } from '@/lib/backend-logger';
 import { resolveFeedExperimentAssignment } from '@/lib/feed-experiments';
+import {
+  filterFeedVisibility,
+  normalizeFeedVisibilityThresholds,
+  type FeedViewerRelations,
+  type FeedVisibilityCandidate,
+  type FeedVisibilityThresholds,
+} from '@/lib/feed-visibility';
+import { loadBlockedCreatorIds } from '@/lib/moderation-service';
 import type {
   ShowcaseCategory,
   ShowcaseFeedItem,
@@ -16,9 +25,11 @@ import {
   SHOWCASE_FEED_CANDIDATE_LIMIT,
   SHOWCASE_FEED_ELIGIBLE_ITEM_LIMIT,
   SHOWCASE_FEED_FALLBACK_ALGORITHM_VERSION,
+  buildFallbackRankedFeedFeatures,
   buildRecommendationContext,
   decodeRankedFeedCursor,
   encodeRankedFeedCursor,
+  explainRankedFeedScore,
   normalizeRankedFeedDiversityConfig,
   normalizeRankedFeedFeatureRow,
   normalizeRankedFeedScoreWeights,
@@ -59,8 +70,8 @@ type ActiveAlgorithmRow = {
   diversity_config: Record<string, unknown>;
 };
 
-type RankedFeedRetrievalConfig = {
-  candidateRpc: 'v1' | 'v2';
+export type RankedFeedRetrievalConfig = {
+  candidateRpc: 'v1' | 'v2' | 'v3';
   followingLimit: number;
   interestLimit: number;
   trendingLimit: number;
@@ -70,6 +81,20 @@ type RankedFeedRetrievalConfig = {
   seenPenalty: number;
   creatorPriorCap: number;
   explorationConfidence: number;
+  // v3 retrieval (`get_ranked_feed_candidates_v3`); only the v3 call reads them.
+  coldLimit: number;
+  coldMaxAgeHours: number;
+  /** Authors with fewer rendered deliveries than this in 30 days feed the cold pool. */
+  coldImpressionThreshold: number;
+  /** Bounds every pool: cost, not freshness. */
+  maxAgeDays: number;
+  servedLookbackHours: number;
+  trendingPerAuthorCap: number;
+  /** creator_quality for a creator with no stats row yet. */
+  creatorPriorMean: number;
+  sessionItemLimit: number;
+  /** The visibility stage's recommendation-only thresholds; 1 = off. */
+  visibilityThresholds: FeedVisibilityThresholds;
 };
 
 type ActiveAlgorithmConfig = ActiveAlgorithmRow & {
@@ -84,6 +109,9 @@ type ActiveAlgorithmConfig = ActiveAlgorithmRow & {
 const FEED_SESSION_REUSE_TTL_MS = 2 * 60 * 1000;
 const FEED_SESSION_EXPIRY_MS = 2 * 60 * 60 * 1000;
 const FEED_HYDRATION_BATCH_SIZE = 60;
+const FEED_RANDOM_SEED_MODULUS = 2_147_483_647;
+const FEED_SHARED_SEED_BUCKET_MS = 10 * 60 * 1000;
+const COLD_CANDIDATE_RESERVED_PLACES = 10;
 
 export type RankedFeedFilters = {
   category: ShowcaseCategory;
@@ -92,7 +120,11 @@ export type RankedFeedFilters = {
   resourceFilter: ShowcaseResourceFilter;
 };
 
-function scoreComponents(features: RankedFeedFeatureRow) {
+function scoreComponents(
+  entry: RankedShowcaseItem,
+  candidateRpc: RankedFeedRetrievalConfig['candidateRpc'],
+) {
+  const { features } = entry;
   return {
     interest_match: features.interestMatch,
     creator_affinity: features.creatorAffinity,
@@ -108,6 +140,25 @@ function scoreComponents(features: RankedFeedFeatureRow) {
     exploration_ucb: features.explorationUcb,
     seen_recently: features.seenRecently,
     semantic_cluster: features.semanticCluster ?? null,
+    // v3 RPC columns, under the names normalizeRankedFeedFeatureRow reads, so
+    // a continuation page judges visibility at the level the session was
+    // ranked at (is_following) and the cold-start draws can be replayed from
+    // the session seed. Only the v3 RPC returns them: for a v1 or v2 ranking
+    // they would be the normalizer's defaults, stored as if measured.
+    ...(candidateRpc === 'v3' ? {
+      is_following: features.isFollowing === true,
+      served_recently: features.servedRecently === true,
+      author_rendered_30d: features.authorRendered30d ?? null,
+      post_rendered_30d: features.postRendered30d ?? 0,
+      post_meaningful_30d: features.postMeaningful30d ?? 0,
+      post_age_hours: features.postAgeHours ?? null,
+      reports_7d: features.reports7d ?? 0,
+      sources: features.sources ?? [features.candidateSource],
+    } : {}),
+    // How the score was reached, under one key: featureRowFromSessionItem
+    // spreads these components back into a feature row, and nesting keeps a
+    // score part from ever being read as a feature.
+    ranking: explainRankedFeedScore(entry),
   };
 }
 
@@ -158,48 +209,164 @@ function attachRecommendations(
   });
 }
 
-async function filterActiveViewerFeedback({
+function uniqueCreatorIds(items: ShowcaseFeedItem[]) {
+  return Array.from(new Set(
+    items.map((item) => item.creator.id).filter((id): id is string => Boolean(id)),
+  ));
+}
+
+/** Creators the viewer follows, as the candidate rows report it (`is_following`). */
+function followedCreatorIds(
+  items: ShowcaseFeedItem[],
+  isFollowing: (postId: string) => boolean,
+) {
+  return new Set(uniqueCreatorIds(items.filter((item) => isFollowing(item.id))));
+}
+
+/**
+ * The viewer's relations to a set of candidates, read together: blocks in
+ * either direction, active not-interested and hide-creator feedback, and the
+ * posts the viewer reported. This read skips reports a moderator dismissed;
+ * filing a report also writes the reporter's not-interested row
+ * (`post-report-service.ts`), which keeps hiding the post regardless.
+ * A signed-out viewer has none of these to load. Any failed read returns null,
+ * which the visibility stage treats as "nothing can be cleared" — the same
+ * fail-closed rule as the feedback filter this replaced.
+ */
+async function loadViewerRelations({
+  followingCreatorIds,
   items,
   serviceClient,
   viewerUserId,
 }: {
+  followingCreatorIds: Set<string>;
   items: ShowcaseFeedItem[];
   serviceClient: SupabaseClient;
   viewerUserId: string | null;
-}): Promise<ShowcaseFeedItem[] | null> {
-  if (!viewerUserId || items.length === 0) return items;
+}): Promise<FeedViewerRelations | null> {
+  const relations: FeedViewerRelations = {
+    viewerUserId,
+    followingCreatorIds,
+    blockedCreatorIds: new Set(),
+    hiddenPostIds: new Set(),
+    hiddenCreatorIds: new Set(),
+    reportedPostIds: new Set(),
+  };
+  if (!viewerUserId || items.length === 0) return relations;
 
-  const creatorIds = Array.from(new Set(
-    items.map((item) => item.creator.id).filter((id): id is string => Boolean(id)),
-  ));
-  const [postFeedback, creatorFeedback] = await Promise.all([
-    serviceClient
-      .from('feed_user_post_feedback')
-      .select('post_id')
-      .eq('user_id', viewerUserId)
-      .eq('is_active', true)
-      .in('post_id', items.map((item) => item.id)),
-    creatorIds.length
-      ? serviceClient
-        .from('feed_user_creator_feedback')
-        .select('creator_user_id')
+  const postIds = items.map((item) => item.id);
+  const creatorIds = uniqueCreatorIds(items);
+  try {
+    const [postFeedback, creatorFeedback, reports, blockedCreatorIds] = await Promise.all([
+      serviceClient
+        .from('feed_user_post_feedback')
+        .select('post_id')
         .eq('user_id', viewerUserId)
         .eq('is_active', true)
-        .in('creator_user_id', creatorIds)
-      : Promise.resolve({ data: [], error: null }),
-  ]);
-  if (postFeedback.error || creatorFeedback.error) return null;
+        .in('post_id', postIds),
+      creatorIds.length
+        ? serviceClient
+          .from('feed_user_creator_feedback')
+          .select('creator_user_id')
+          .eq('user_id', viewerUserId)
+          .eq('is_active', true)
+          .in('creator_user_id', creatorIds)
+        : Promise.resolve({ data: [], error: null }),
+      serviceClient
+        .from('post_reports')
+        .select('post_id')
+        .eq('reporter_user_id', viewerUserId)
+        .neq('status', 'dismissed')
+        .in('post_id', postIds),
+      // Throws on a failed read, which lands in the catch below.
+      loadBlockedCreatorIds({ adminSupabase: serviceClient, creatorIds, viewerUserId }),
+    ]);
+    const readError = postFeedback.error ?? creatorFeedback.error ?? reports.error;
+    if (readError) throw readError;
 
-  const hiddenPostIds = new Set(
-    (postFeedback.data ?? []).map((row) => String(row.post_id)),
-  );
-  const hiddenCreatorIds = new Set(
-    (creatorFeedback.data ?? []).map((row) => String(row.creator_user_id)),
-  );
-  return items.filter((item) => (
-    !hiddenPostIds.has(item.id)
-    && (!item.creator.id || !hiddenCreatorIds.has(item.creator.id))
-  ));
+    relations.blockedCreatorIds = blockedCreatorIds;
+    for (const row of postFeedback.data ?? []) relations.hiddenPostIds.add(String(row.post_id));
+    for (const row of creatorFeedback.data ?? []) relations.hiddenCreatorIds.add(String(row.creator_user_id));
+    for (const row of reports.data ?? []) relations.reportedPostIds.add(String(row.post_id));
+    return relations;
+  } catch (error) {
+    logBackendError('error_loading_feed_viewer_relations', { error });
+    return null;
+  }
+}
+
+/**
+ * `creator_feed_stats.negative_feedback_rate` per candidate creator, for the
+ * recommendation-only creator rule. Read only when the version configures
+ * that rule (a threshold of 1 can never be exceeded), from the 30-day window
+ * the candidate RPC reads creator exposure and quality from. A creator with
+ * no stats row, or with fewer rendered deliveries than the cold-start
+ * exposure threshold, has no evidence yet and is never dropped: a report
+ * counts two negatives, so at the 0.08 threshold one open report sinks any
+ * creator rendered fewer than 8 times, and those are the authors the cold
+ * pool and slot exist to surface. Null when the read fails: the rule cannot
+ * be evaluated, so nothing is cleared.
+ */
+async function loadCreatorNegativeFeedbackRates({
+  items,
+  minimumRenderedCount,
+  serviceClient,
+  thresholds,
+}: {
+  items: ShowcaseFeedItem[];
+  /** The retrieval config's cold impression threshold. */
+  minimumRenderedCount: number;
+  serviceClient: SupabaseClient;
+  thresholds: FeedVisibilityThresholds;
+}): Promise<Map<string, number> | null> {
+  const rates = new Map<string, number>();
+  const creatorIds = uniqueCreatorIds(items);
+  if (thresholds.recommendationMaxCreatorNegativeRate >= 1 || creatorIds.length === 0) return rates;
+
+  try {
+    const { data, error } = await serviceClient
+      .from('creator_feed_stats')
+      .select('creator_user_id, negative_feedback_rate, rendered_count')
+      .eq('window_key', '30d')
+      .in('creator_user_id', creatorIds);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      const rate = Number(row.negative_feedback_rate);
+      const rendered = Number(row.rendered_count);
+      if (!Number.isFinite(rendered) || rendered < minimumRenderedCount) continue;
+      if (Number.isFinite(rate)) rates.set(String(row.creator_user_id), rate);
+    }
+    return rates;
+  } catch (error) {
+    logBackendError('error_loading_feed_creator_negative_feedback_rates', { error });
+    return null;
+  }
+}
+
+/**
+ * A hydrated item as the visibility stage sees it. Hydration only returns
+ * public, unarchived posts whose review status is visible
+ * (`fetchPostRowsByIds`/`fetchPostRows` and `resolvePostRowsToFeedItems` in
+ * `showcase-feed.ts`), and feed items do not carry those columns, so the
+ * candidate states the values hydration enforced; left undefined, every post
+ * would drop as `post_not_public`.
+ */
+function visibilityCandidate(
+  item: ShowcaseFeedItem,
+  negativeFeedbackRisk: number | null,
+  creatorNegativeFeedbackRate: number | null,
+): FeedVisibilityCandidate & { item: ShowcaseFeedItem } {
+  return {
+    item,
+    postId: item.id,
+    creatorId: item.creator.id || null,
+    visibility: item.visibility ?? 'public',
+    archivedAt: null,
+    reviewStatus: 'visible',
+    isNsfw: item.isNsfw === true,
+    negativeFeedbackRisk,
+    creatorNegativeFeedbackRate,
+  };
 }
 
 function buildPage({
@@ -244,17 +411,32 @@ function boundedFraction(value: unknown, fallback: number) {
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
 }
 
+// For the v3 keys a JSON null is a missing key, as in the ranking module's
+// diversity config: `Number(null)` is 0, which would switch a pool or a
+// window off rather than leave it at its default.
+function optionalBoundedInteger(value: unknown, fallback: number, minimum: number, maximum: number) {
+  return boundedInteger(value ?? undefined, fallback, minimum, maximum);
+}
+
 /**
  * Retrieval is configuration-driven from v2 onward. v1 hard-coded its pool
  * sizes in SQL and ignored these values, which is why a re-weighted variant
- * could not change what was actually retrieved.
+ * could not change what was actually retrieved. The v3 keys default to the
+ * v3 RPC's own parameter defaults and bounds, and the two recommendation-only
+ * visibility thresholds default to off, so a v1 or v2 row reads exactly as
+ * before. Those thresholds are read for the v3 RPC only: it alone returns
+ * `is_following`, and without it every creator, followed or not, would be
+ * judged at the recommendations level.
  */
-function normalizeRetrievalConfig(
+export function normalizeRetrievalConfig(
   config: Record<string, unknown> | null | undefined,
 ): RankedFeedRetrievalConfig {
   const retrieval = config ?? {};
+  const candidateRpc: RankedFeedRetrievalConfig['candidateRpc'] = retrieval.candidate_rpc === 'v3'
+    ? 'v3'
+    : retrieval.candidate_rpc === 'v2' ? 'v2' : 'v1';
   return {
-    candidateRpc: retrieval.candidate_rpc === 'v2' ? 'v2' : 'v1',
+    candidateRpc,
     followingLimit: boundedInteger(retrieval.following_limit, 100, 0, 500),
     interestLimit: boundedInteger(retrieval.interest_limit, 150, 0, 500),
     trendingLimit: boundedInteger(retrieval.trending_limit, 100, 0, 500),
@@ -267,10 +449,25 @@ function normalizeRetrievalConfig(
       const parsed = Number(retrieval.exploration_confidence);
       return Number.isFinite(parsed) && parsed >= 0 && parsed <= 5 ? parsed : 1.5;
     })(),
+    coldLimit: optionalBoundedInteger(retrieval.cold_limit, 50, 0, 500),
+    coldMaxAgeHours: optionalBoundedInteger(retrieval.cold_max_age_hours, 168, 0, 8760),
+    coldImpressionThreshold: optionalBoundedInteger(retrieval.cold_impression_threshold, 60, 0, 100_000),
+    maxAgeDays: optionalBoundedInteger(retrieval.max_age_days, 365, 1, 3650),
+    servedLookbackHours: optionalBoundedInteger(retrieval.served_lookback_hours, 6, 0, 8760),
+    trendingPerAuthorCap: optionalBoundedInteger(retrieval.trending_per_author_cap, 5, 1, 50),
+    creatorPriorMean: boundedFraction(retrieval.creator_prior_mean ?? undefined, 0.15),
+    sessionItemLimit: boundedInteger(
+      retrieval.session_item_limit,
+      SHOWCASE_FEED_ELIGIBLE_ITEM_LIMIT,
+      1,
+      SHOWCASE_FEED_ELIGIBLE_ITEM_LIMIT,
+    ),
+    visibilityThresholds: normalizeFeedVisibilityThresholds(candidateRpc === 'v3' ? retrieval : null),
   };
 }
 
 function normalizeAlgorithmConfig(row: ActiveAlgorithmRow): ActiveAlgorithmConfig {
+  const retrieval = normalizeRetrievalConfig(row.retrieval_config);
   return {
     ...row,
     algorithmVersion: `${row.algorithm_key}-v${row.version}`,
@@ -280,15 +477,10 @@ function normalizeAlgorithmConfig(row: ActiveAlgorithmRow): ActiveAlgorithmConfi
       1,
       SHOWCASE_FEED_CANDIDATE_LIMIT,
     ),
-    eligibleItemLimit: boundedInteger(
-      row.retrieval_config?.session_item_limit,
-      SHOWCASE_FEED_ELIGIBLE_ITEM_LIMIT,
-      1,
-      SHOWCASE_FEED_ELIGIBLE_ITEM_LIMIT,
-    ),
+    eligibleItemLimit: retrieval.sessionItemLimit,
     scoreWeights: normalizeRankedFeedScoreWeights(row.weights),
     diversityConfig: normalizeRankedFeedDiversityConfig(row.diversity_config),
-    retrieval: normalizeRetrievalConfig(row.retrieval_config),
+    retrieval,
   };
 }
 
@@ -467,15 +659,36 @@ async function loadPersistedPage({
       hydrationOffset += hydrationRows.length;
       const hydrated = await timed('session_hydration', () =>
         hydratePostIds(hydrationRows.map((row) => row.post_id)));
-      const feedbackFiltered = await timed('session_feedback', () => filterActiveViewerFeedback({
+      const persistedFeatures = new Map(
+        hydrationRows.map((row) => [row.post_id, featureRowFromSessionItem(row)]),
+      );
+      const relations = await timed('session_feedback', () => loadViewerRelations({
+        followingCreatorIds: followedCreatorIds(
+          hydrated,
+          (postId) => persistedFeatures.get(postId)?.isFollowing === true,
+        ),
         items: hydrated,
         serviceClient,
         viewerUserId,
       }));
-      if (!feedbackFiltered) return null;
-      hydrationHasGaps ||= feedbackFiltered.length < hydrationRows.length;
+      if (!relations) return null;
+      // The session holds only posts that cleared the visibility stage when it
+      // was ranked; this re-applies it for whatever changed since (a block, a
+      // hide, a report, a take-down). The persisted risk and follow state keep
+      // the recommendation-only rules where ranking left them, and the creator
+      // rate is not read again: every post here already passed that rule.
+      const visibleItems = filterFeedVisibility(
+        hydrated.map((item) => visibilityCandidate(
+          item,
+          persistedFeatures.get(item.id)?.negativeFeedbackRisk ?? null,
+          null,
+        )),
+        relations,
+        algorithm.retrieval.visibilityThresholds,
+      ).kept.map((candidate) => candidate.item);
+      hydrationHasGaps ||= visibleItems.length < hydrationRows.length;
 
-      const itemById = new Map(feedbackFiltered.map((item) => [item.id, item]));
+      const itemById = new Map(visibleItems.map((item) => [item.id, item]));
       for (const row of hydrationRows) {
         const hydratedItem = itemById.get(row.post_id);
         if (hydratedItem) eligibleRows.push({ item: hydratedItem, row });
@@ -548,18 +761,22 @@ async function loadPersistedPage({
 async function persistRankedSession({
   algorithmVersionId,
   anonymousKeyHash,
+  candidateRpc,
   experimentAssignmentId,
   experimentId,
   experimentVariantId,
   filters,
   limit,
   offset,
+  randomSeed,
   ranked,
   serviceClient,
   viewerUserId,
 }: {
   algorithmVersionId: string;
   anonymousKeyHash: string | null;
+  /** The RPC `ranked` was retrieved with; only v3 rows carry the v3 columns. */
+  candidateRpc: RankedFeedRetrievalConfig['candidateRpc'];
   experimentAssignmentId: number | null;
   experimentId: string | null;
   experimentVariantId: string | null;
@@ -567,6 +784,8 @@ async function persistRankedSession({
   /** The slice this request will actually return; only it gets delivery facts. */
   limit: number;
   offset: number;
+  /** The seed `ranked` was ranked with, so the session replays exactly. */
+  randomSeed: number;
   ranked: RankedShowcaseItem[];
   serviceClient: SupabaseClient;
   viewerUserId: string | null;
@@ -580,7 +799,7 @@ async function persistRankedSession({
       anonymous_key_hash: viewerUserId ? null : anonymousKeyHash,
       filters,
       algorithm_version_id: algorithmVersionId,
-      random_seed: Math.floor(Math.random() * 2_147_483_647),
+      random_seed: randomSeed,
       expires_at: new Date(now.getTime() + FEED_SESSION_EXPIRY_MS).toISOString(),
       served_at: now.toISOString(),
     },
@@ -589,7 +808,7 @@ async function persistRankedSession({
       creator_user_id: entry.item.creator.id || null,
       candidate_source: entry.features.candidateSource,
       final_score: entry.score,
-      score_components: scoreComponents(entry.features),
+      score_components: scoreComponents(entry, candidateRpc),
     })),
     p_experiment: {
       assignment_id: experimentAssignmentId,
@@ -701,30 +920,43 @@ async function loadCandidateFeatures({
     : category;
   const asOf = new Date().toISOString();
   const { retrieval } = algorithm;
-  const { data, error } = retrieval.candidateRpc === 'v2'
-    ? await serviceClient.rpc('get_ranked_feed_candidates_v2', {
-      p_viewer_user_id: viewerUserId,
-      // Anonymous viewers get seen suppression too; without the hash their
-      // repeat history is invisible and the feed loops for exactly the
-      // audience least likely to tolerate it.
-      p_anonymous_key_hash: viewerUserId ? null : anonymousKeyHash,
-      p_category: rpcCategory,
-      p_following_limit: retrieval.followingLimit,
-      p_interest_limit: retrieval.interestLimit,
-      p_trending_limit: retrieval.trendingLimit,
-      p_recent_limit: retrieval.recentLimit,
-      p_exploration_limit: retrieval.explorationLimit,
-      p_seen_lookback_days: retrieval.seenLookbackDays,
-      p_creator_prior_cap: retrieval.creatorPriorCap,
-      p_exploration_confidence: retrieval.explorationConfidence,
-      p_as_of: asOf,
+  // v3 takes every v2 parameter, plus its own.
+  const poolParameters = {
+    p_viewer_user_id: viewerUserId,
+    // Anonymous viewers get seen suppression too; without the hash their
+    // repeat history is invisible and the feed loops for exactly the
+    // audience least likely to tolerate it.
+    p_anonymous_key_hash: viewerUserId ? null : anonymousKeyHash,
+    p_category: rpcCategory,
+    p_following_limit: retrieval.followingLimit,
+    p_interest_limit: retrieval.interestLimit,
+    p_trending_limit: retrieval.trendingLimit,
+    p_recent_limit: retrieval.recentLimit,
+    p_exploration_limit: retrieval.explorationLimit,
+    p_seen_lookback_days: retrieval.seenLookbackDays,
+    p_creator_prior_cap: retrieval.creatorPriorCap,
+    p_exploration_confidence: retrieval.explorationConfidence,
+    p_as_of: asOf,
+  };
+  const { data, error } = retrieval.candidateRpc === 'v3'
+    ? await serviceClient.rpc('get_ranked_feed_candidates_v3', {
+      ...poolParameters,
+      p_cold_limit: retrieval.coldLimit,
+      p_cold_max_age_hours: retrieval.coldMaxAgeHours,
+      p_cold_impression_threshold: retrieval.coldImpressionThreshold,
+      p_max_age_days: retrieval.maxAgeDays,
+      p_served_lookback_hours: retrieval.servedLookbackHours,
+      p_trending_per_author_cap: retrieval.trendingPerAuthorCap,
+      p_creator_prior_mean: retrieval.creatorPriorMean,
     })
-    : await serviceClient.rpc('get_ranked_feed_candidates', {
-      p_viewer_user_id: viewerUserId,
-      p_category: rpcCategory,
-      p_limit: algorithm.candidateLimit,
-      p_as_of: asOf,
-    });
+    : retrieval.candidateRpc === 'v2'
+      ? await serviceClient.rpc('get_ranked_feed_candidates_v2', poolParameters)
+      : await serviceClient.rpc('get_ranked_feed_candidates', {
+        p_viewer_user_id: viewerUserId,
+        p_category: rpcCategory,
+        p_limit: algorithm.candidateLimit,
+        p_as_of: asOf,
+      });
   if (error) return null;
   return ((data ?? []) as RankedCandidateRpcRow[])
     .map(normalizeRankedFeedFeatureRow)
@@ -802,6 +1034,61 @@ async function findReusableSession({
     .maybeSingle();
   if (error || !data?.id) return null;
   return data as FeedSessionRow & { experiment_assignment_id: number | null };
+}
+
+/**
+ * Hydration keeps only the first `limit` rows of the pre-sort, and a
+ * cold-pool post (new, from an author with almost no exposure) scores near the
+ * bottom almost by definition: past the cut, the cold-start slot would have
+ * nothing left to draw from. So a sixth of the cut, at most 10 places, goes to
+ * the highest-ranked rows the cold pool retrieved. A cold row below the cut
+ * takes the place of the lowest-ranked other row inside it, which moves to
+ * just below the cut, first in line should hydration lose a row. A repeat, or
+ * a post served recently and passed over, never takes a place: neither can be
+ * the cold-start pick.
+ */
+function reserveColdCandidateRows(rows: RankedFeedFeatureRow[], limit: number) {
+  const places = Math.min(COLD_CANDIDATE_RESERVED_PLACES, Math.floor(limit / 6));
+  if (rows.length <= limit || places <= 0) return rows;
+  const reservable = (row: RankedFeedFeatureRow) => (
+    !row.seenRecently
+    && row.servedRecently !== true
+    && (row.sources ?? [row.candidateSource]).includes('cold')
+  );
+  const inside = rows.slice(0, limit);
+  const below = rows.slice(limit);
+  const promoted = below
+    .filter(reservable)
+    .slice(0, Math.max(0, places - inside.filter(reservable).length));
+  if (promoted.length === 0) return rows;
+
+  // A sixth of the cut leaves far more other rows inside it than places.
+  const demoted: RankedFeedFeatureRow[] = [];
+  for (let index = inside.length - 1; index >= 0 && demoted.length < promoted.length; index -= 1) {
+    if (!reservable(inside[index])) demoted.unshift(inside[index]);
+  }
+  const promotedRows = new Set(promoted);
+  const demotedRows = new Set(demoted);
+  return [
+    ...inside.filter((row) => !demotedRows.has(row)),
+    ...promoted,
+    ...demoted,
+    ...below.filter((row) => !promotedRows.has(row)),
+  ];
+}
+
+/**
+ * The seed the cold-start draws come from. A ranking a cursor can resume keeps
+ * a random seed, persisted with its session. A ranking no cursor resumes is
+ * run again for every page: the identityless bootstrap (cached, never
+ * persisted) and every offset > 0 ranking. Those share one seed per 10-minute
+ * bucket, so the next page is cut from the order the last one was. With a
+ * fresh seed the next ranking's slot could hold a different post, above the
+ * cut where it is never shown, and the previous pick could come round again.
+ */
+function rankingSeed({ identityless, offset }: { identityless: boolean; offset: number }) {
+  if (!identityless && offset === 0) return Math.floor(Math.random() * FEED_RANDOM_SEED_MODULUS);
+  return Math.floor(Date.now() / FEED_SHARED_SEED_BUCKET_MS) % FEED_RANDOM_SEED_MODULUS;
 }
 
 function mergeUniqueFeedItems(
@@ -949,13 +1236,17 @@ export async function getPersonalizedShowcaseFeedPage({
   // Hydration is budgeted, so the pre-sort must already respect the seen tier;
   // otherwise repeats consume the budget and never reach the reranker as the
   // last resort they are meant to be.
-  const configuredFeatureRows = featureRows
+  const sortedFeatureRows = featureRows
     ? [...featureRows].sort((left, right) => (
       Number(left.seenRecently) - Number(right.seenRecently)
       || scoreRankedFeedFeatures(right, algorithm.scoreWeights)
       - scoreRankedFeedFeatures(left, algorithm.scoreWeights)
     ))
     : null;
+  // Only the v3 RPC has a cold pool to keep places for.
+  const configuredFeatureRows = sortedFeatureRows && algorithm.retrieval.candidateRpc === 'v3'
+    ? reserveColdCandidateRows(sortedFeatureRows, algorithm.eligibleItemLimit)
+    : sortedFeatureRows;
   const hydratedFeatureItems = configuredFeatureRows?.length
     ? await timed('hydration', () => hydrateEligibleCandidates({
       eligibleItemLimit: algorithm.eligibleItemLimit,
@@ -967,31 +1258,77 @@ export async function getPersonalizedShowcaseFeedPage({
   const filteredFallbackItems = fallbackTarget > 0
     ? await timed('fallback', () => fallbackItems(algorithm.eligibleItemLimit))
     : [];
-  const feedbackFilteredCandidateItems = await timed('feedback', () => filterActiveViewerFeedback({
-    items: mergeUniqueFeedItems(hydratedFeatureItems, filteredFallbackItems),
-    serviceClient,
-    viewerUserId,
-  }));
-  const candidateItems = (feedbackFilteredCandidateItems ?? [])
+  const mergedCandidateItems = mergeUniqueFeedItems(hydratedFeatureItems, filteredFallbackItems);
+  const featureRowsByPostId = new Map(
+    (configuredFeatureRows ?? []).map((row) => [row.postId, row]),
+  );
+  const { visibilityThresholds } = algorithm.retrieval;
+  const [relations, creatorNegativeFeedbackRates] = await timed('feedback', () => Promise.all([
+    loadViewerRelations({
+      followingCreatorIds: followedCreatorIds(
+        mergedCandidateItems,
+        (postId) => featureRowsByPostId.get(postId)?.isFollowing === true,
+      ),
+      items: mergedCandidateItems,
+      serviceClient,
+      viewerUserId,
+    }),
+    loadCreatorNegativeFeedbackRates({
+      items: mergedCandidateItems,
+      minimumRenderedCount: algorithm.retrieval.coldImpressionThreshold,
+      serviceClient,
+      thresholds: visibilityThresholds,
+    }),
+  ]));
+  // The visibility stage runs before scoring, so a blocked, hidden or
+  // reported post never takes a session slot or a delivery fact. If either
+  // read failed nothing can be cleared, and every candidate drops.
+  const candidateItems = filterFeedVisibility(
+    mergedCandidateItems.map((item) => visibilityCandidate(
+      item,
+      featureRowsByPostId.get(item.id)?.negativeFeedbackRisk ?? null,
+      item.creator.id ? creatorNegativeFeedbackRates?.get(item.creator.id) ?? null : null,
+    )),
+    creatorNegativeFeedbackRates ? relations : null,
+    visibilityThresholds,
+  ).kept
+    .map((candidate) => candidate.item)
     .slice(0, algorithm.eligibleItemLimit);
+  const now = new Date();
+  // Recent top-up posts arrive outside ranked retrieval. They are scored from
+  // the same synthetic features as before; `sources` records the pool they
+  // actually came from.
+  const topUpFeatureRows = candidateItems
+    .filter((item) => !featureRowsByPostId.has(item.id))
+    .map((item): RankedFeedFeatureRow => ({
+      ...buildFallbackRankedFeedFeatures(item, now),
+      sources: ['fresh'],
+    }));
+  // Drawn before ranking and persisted with the session: the cold-start slot's
+  // Thompson draws replay exactly from it.
+  const randomSeed = rankingSeed({ identityless: !viewerUserId && !anonymousKeyHash, offset });
   const rankingStartedAt = performance.now();
   const ranked = rankAndDiversifyShowcaseItems({
     items: candidateItems,
-    featureRows: configuredFeatureRows ?? [],
+    featureRows: [...(configuredFeatureRows ?? []), ...topUpFeatureRows],
+    now,
     scoreWeights: algorithm.scoreWeights,
     diversityConfig: algorithm.diversityConfig,
     seenPenalty: algorithm.retrieval.seenPenalty,
+    seed: randomSeed,
   }).slice(0, algorithm.eligibleItemLimit);
   onPhaseTiming?.('ranking', performance.now() - rankingStartedAt);
   const persisted = await timed('persistence', () => persistRankedSession({
     algorithmVersionId: algorithm.id,
     anonymousKeyHash,
+    candidateRpc: algorithm.retrieval.candidateRpc,
     experimentAssignmentId,
     experimentId,
     experimentVariantId,
     filters,
     limit,
     offset,
+    randomSeed,
     ranked,
     serviceClient,
     viewerUserId,

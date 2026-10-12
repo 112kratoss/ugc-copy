@@ -163,6 +163,26 @@ export async function submitPostReportForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to submit report.' } };
   }
 
+  // A report also takes the post out of the reporter's own feed, through the
+  // same hard exclusion a "not interested" writes (`feed_user_post_feedback`,
+  // read by the candidate SQL and the feed's visibility stage). The RPC is
+  // service-role only. The report is already stored, so a failure here is
+  // logged and never fails it: the visibility stage drops posts the viewer
+  // reported straight from `post_reports` as well.
+  try {
+    const { error: feedbackError } = await adminSupabase.rpc('set_feed_post_feedback', {
+      p_user_id: reporterUserId,
+      p_post_id: postId,
+      p_is_active: true,
+      p_reason: 'reported',
+    });
+    if (feedbackError) {
+      logBackendError('failed_to_hide_reported_post_from_feed', { error: feedbackError });
+    }
+  } catch (feedbackError) {
+    logBackendError('failed_to_hide_reported_post_from_feed', { error: feedbackError });
+  }
+
   invalidateFeedCache();
 
   return { ok: true, body: { success: true } };

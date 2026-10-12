@@ -37,6 +37,7 @@
     "ops:external-gates": "node scripts/ops/production-external-gates.mjs",
     "ops:generation-model-catalog": "tsx --env-file-if-exists=.env.local scripts/ops/generation-model-catalog.ts",
     "ops:moderation": "tsx --env-file-if-exists=.env.local scripts/ops/moderation-ops.ts",
+    "ops:feed-algorithm": "tsx --env-file-if-exists=.env.local scripts/ops/feed-algorithm.ts",
     "admin:credentials": "tsx scripts/ops/admin-credentials.ts",
     "dev": "next dev --webpack",
     "dev:turbo": "next dev",

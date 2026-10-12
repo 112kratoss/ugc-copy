@@ -220,6 +220,12 @@ describe('/api/posts/[postId]/report route', () => {
         details: null,
       },
     ]);
+    expect(rpcMock).toHaveBeenCalledWith('set_feed_post_feedback', {
+      p_user_id: 'reporter-1',
+      p_post_id: 'post-1',
+      p_is_active: true,
+      p_reason: 'reported',
+    });
     expect(showcaseCacheMocks.invalidate).toHaveBeenCalledOnce();
   });
 
@@ -258,6 +264,7 @@ describe('/api/posts/[postId]/report route', () => {
       p_limit: 10,
       p_window_seconds: 600,
     });
+    expect(rpcMock).not.toHaveBeenCalledWith('set_feed_post_feedback', expect.anything());
     expect(insertedReports).toEqual([]);
     expect(showcaseCacheMocks.invalidate).not.toHaveBeenCalled();
   });
