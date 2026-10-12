@@ -1,21 +1,25 @@
 -- Feed ranking v4 (20261012061058_feed_ranking_v4_industry_parity.sql).
 --
--- Content: embeddings are 384-dimensional, clusters and near-duplicate marks
--- are written through their RPCs, and the job's pending list sees missing and
--- stale embeddings. Retrieval: a taste vector from the viewer's positive
--- deliveries yields a semantic pool and a semantic_similarity feature; a
--- near-duplicate or a labelled author reaches only the author's followers.
--- Signals: a server-written comment stamps commented_at and counts as
--- meaningful everywhere downstream, and interest weights gain a
--- semantic_cluster dimension. Measurement: feed_viewer_daily keeps a row per
--- viewer and day, the new scorecards read it, retention prunes it, and a
--- draft version takes the next number. Every RPC is called as service_role,
--- the only role allowed to, so a missing table grant fails here.
+-- Content: embeddings are 384-dimensional, a post with no text of its own is
+-- stored without a vector and read as no embedding, clusters and
+-- near-duplicate marks are written through their RPCs, and the job's pending
+-- list sees missing and stale embeddings, never-embedded first. Retrieval: a
+-- taste vector from the viewer's positive deliveries yields a semantic pool
+-- and a semantic_similarity feature; a near-duplicate or a labelled author
+-- reaches only the author's followers, until the duplicate's canonical
+-- leaves the feed. Signals: a server-written comment stamps commented_at and
+-- counts as meaningful everywhere downstream, with or without a delivery,
+-- interest weights gain a semantic_cluster dimension, and a succeeded
+-- creation counts. Measurement: feed_viewer_daily keeps a row per viewer and
+-- day without losing pruned visits, the new scorecards read it, retention
+-- prunes it, and a draft version takes the next number. Every RPC is called
+-- as service_role, the only role allowed to, so a missing table grant fails
+-- here.
 
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(94);
+select plan(107);
 
 -- ─── Surface ─────────────────────────────────────────────────────────────────
 
@@ -42,6 +46,8 @@ select unnest(array[
   'public.replace_feed_semantic_clusters(text,jsonb)'::regprocedure,
   'public.assign_post_semantic_clusters(jsonb)'::regprocedure,
   'public.mark_post_near_duplicates(jsonb)'::regprocedure,
+  'public.clear_orphaned_near_duplicate_marks(integer)'::regprocedure,
+  'public.get_ranked_feed_candidates(uuid,text,integer,timestamptz)'::regprocedure,
   'public.upsert_account_labels(jsonb)'::regprocedure,
   'public.delete_expired_account_labels(timestamptz)'::regprocedure
 ]) as fn;
@@ -88,16 +94,19 @@ select ('f4a00000-0000-4000-8000-00000000000' || n)::uuid,
 from generate_series(1, 6) as n;
 
 -- Posts f4b…NN, all public text posts. A, B and C are ten days old (not cold).
-insert into public.posts (id, user_id, visibility, category, source_kind, post_format, review_status, body, is_nsfw, created_at)
+-- N, never embedded, has not changed since the day it was posted; every other
+-- post changed just now (C's edit is what makes it pending again).
+insert into public.posts (id, user_id, visibility, category, source_kind, post_format, review_status, body, is_nsfw, created_at, updated_at)
 values
-  ('f4b00000-0000-4000-8000-000000000001', 'f4a00000-0000-4000-8000-000000000003', 'public', 'text', 'external', 'text', 'visible', 'A: what the viewer saved', false, now() - interval '10 days'),
-  ('f4b00000-0000-4000-8000-000000000002', 'f4a00000-0000-4000-8000-000000000003', 'public', 'text', 'external', 'text', 'visible', 'B: close to A', false, now() - interval '10 days'),
-  ('f4b00000-0000-4000-8000-000000000003', 'f4a00000-0000-4000-8000-000000000003', 'public', 'text', 'external', 'text', 'visible', 'C: unlike A, edited since its embedding', false, now() - interval '10 days'),
-  ('f4b00000-0000-4000-8000-000000000004', 'f4a00000-0000-4000-8000-000000000002', 'public', 'text', 'external', 'text', 'visible', 'D: a near-duplicate of E', false, now() - interval '2 days'),
-  ('f4b00000-0000-4000-8000-000000000005', 'f4a00000-0000-4000-8000-000000000003', 'public', 'text', 'external', 'text', 'visible', 'E: the canonical, older post', false, now() - interval '5 days'),
-  ('f4b00000-0000-4000-8000-000000000006', 'f4a00000-0000-4000-8000-000000000004', 'public', 'text', 'external', 'text', 'visible', 'L1: by a labelled account', false, now() - interval '2 days'),
-  ('f4b00000-0000-4000-8000-000000000007', 'f4a00000-0000-4000-8000-000000000006', 'public', 'text', 'external', 'text', 'visible', 'X1: by an account whose label expired', false, now() - interval '2 days'),
-  ('f4b00000-0000-4000-8000-000000000008', 'f4a00000-0000-4000-8000-000000000003', 'public', 'text', 'external', 'text', 'visible', 'N: never embedded', false, now() - interval '1 day');
+  ('f4b00000-0000-4000-8000-000000000001', 'f4a00000-0000-4000-8000-000000000003', 'public', 'text', 'external', 'text', 'visible', 'A: what the viewer saved', false, now() - interval '10 days', now()),
+  ('f4b00000-0000-4000-8000-000000000002', 'f4a00000-0000-4000-8000-000000000003', 'public', 'text', 'external', 'text', 'visible', 'B: close to A', false, now() - interval '10 days', now()),
+  ('f4b00000-0000-4000-8000-000000000003', 'f4a00000-0000-4000-8000-000000000003', 'public', 'text', 'external', 'text', 'visible', 'C: unlike A, edited since its embedding', false, now() - interval '10 days', now()),
+  ('f4b00000-0000-4000-8000-000000000004', 'f4a00000-0000-4000-8000-000000000002', 'public', 'text', 'external', 'text', 'visible', 'D: a near-duplicate of E', false, now() - interval '2 days', now()),
+  ('f4b00000-0000-4000-8000-000000000005', 'f4a00000-0000-4000-8000-000000000003', 'public', 'text', 'external', 'text', 'visible', 'E: the canonical, older post', false, now() - interval '5 days', now()),
+  ('f4b00000-0000-4000-8000-000000000006', 'f4a00000-0000-4000-8000-000000000004', 'public', 'text', 'external', 'text', 'visible', 'L1: by a labelled account', false, now() - interval '2 days', now()),
+  ('f4b00000-0000-4000-8000-000000000007', 'f4a00000-0000-4000-8000-000000000006', 'public', 'text', 'external', 'text', 'visible', 'X1: by an account whose label expired', false, now() - interval '2 days', now()),
+  ('f4b00000-0000-4000-8000-000000000008', 'f4a00000-0000-4000-8000-000000000003', 'public', 'text', 'external', 'text', 'visible', 'N: never embedded', false, now() - interval '1 day', now() - interval '1 day'),
+  ('f4b00000-0000-4000-8000-000000000009', 'f4a00000-0000-4000-8000-000000000002', 'public', 'text', 'external', 'text', 'visible', 'U: checked as text-empty', false, now() - interval '3 days', now());
 
 insert into public.follows (follower_id, following_id)
 values
@@ -144,6 +153,17 @@ join (values
   ('f4b00000-0000-4000-8000-000000000007'::uuid, 'e6')
 ) as fixture(post_id, vector_name) on fixture.post_id = p.id
 join v4_vectors as v on v.name = fixture.vector_name;
+
+-- U as embed-post leaves a post with no title, description, body or prompt:
+-- text-empty, no vector, checked at its current version. Its cluster and its
+-- mark (a duplicate of A) are left from an embedding of an earlier text.
+insert into public.post_content_embeddings (
+  post_id, embedding_model, content_hash, embedding, text_empty, cluster_id, canonical_post_id, embedded_at, updated_at
+)
+select p.id, 'gte-small', repeat('b', 64), null, true, 8, 'f4b00000-0000-4000-8000-000000000001',
+  now() - interval '1 day', p.updated_at
+from public.posts as p
+where p.id = 'f4b00000-0000-4000-8000-000000000009';
 
 -- D, E and L1 all trend.
 insert into public.post_feed_stats (post_id, window_key, rendered_count, meaningful_engagement_count, meaningful_engagement_rate)
@@ -207,14 +227,28 @@ cross join lateral (values
 ) as fact(delivery_id, session_id, viewer_user_id, anonymous_key_hash, post_id, creator_user_id, position,
   served_at, rendered_at, saved_at);
 
--- A creation by V an hour after V's first serve in the window.
+-- A creation by V an hour after V's first serve in the window, settled the
+-- way the generation pipeline settles one (20260621235959).
 insert into public.generations (user_id, status, category, prompt, created_at, completed_at)
-select 'f4a00000-0000-4000-8000-000000000001', 'completed', 'image', 'feed v4 fixture',
+select 'f4a00000-0000-4000-8000-000000000001', 'succeeded', 'image', 'feed v4 fixture',
   day2 + interval '1 hour', day2 + interval '2 hours'
 from v4_clock;
 
 insert into public.feed_algorithm_versions (algorithm_key, version, status)
 values ('v4-pgtap-fixture', 1, 'shadow'), ('v4-pgtap-fixture', 2, 'draft');
+
+-- 5: another anonymous viewer saved U yesterday, its only positive delivery,
+-- under the fixture's own version so v4's rollups and scorecards see none of it.
+insert into public.feed_delivery_facts (
+  delivery_id, session_id, algorithm_version_id, viewer_user_id, anonymous_key_hash, post_id, creator_user_id,
+  position, candidate_source, final_score, surface, mode, ranked_at, served_at, rendered_at, saved_at
+)
+select 9400000005, gen_random_uuid(), versions.id, null, repeat('d', 64),
+  'f4b00000-0000-4000-8000-000000000009', 'f4a00000-0000-4000-8000-000000000002',
+  0, 'fresh', 0.5, 'feed', 'for-you', v4_clock.day1, v4_clock.day1, v4_clock.day1, v4_clock.day1
+from v4_clock
+join public.feed_algorithm_versions as versions
+  on versions.algorithm_key = 'v4-pgtap-fixture' and versions.version = 1;
 
 -- ─── Embeddings ──────────────────────────────────────────────────────────────
 
@@ -228,6 +262,13 @@ select throws_ok($$insert into public.post_content_embeddings (post_id, embeddin
   select 'f4b00000-0000-4000-8000-000000000008', 'gte-small', repeat('a', 64), vec::extensions.vector
   from v4_vectors where name = 'wide'$$,
   '22000', null, 'a 1536-dimension vector does not fit the column');
+select throws_ok($$insert into public.post_content_embeddings (post_id, embedding_model, content_hash, embedding)
+  values ('f4b00000-0000-4000-8000-000000000008', 'gte-small', repeat('a', 64), null)$$,
+  '23514', null, 'only a text-empty row may lack a vector');
+select throws_ok($$insert into public.post_content_embeddings (post_id, embedding_model, content_hash, embedding, text_empty)
+  select 'f4b00000-0000-4000-8000-000000000008', 'gte-small', repeat('a', 64), vec::extensions.vector(384), true
+  from v4_vectors where name = 'e1'$$,
+  '23514', null, 'a text-empty row has no vector');
 
 set local role service_role;
 select is((select post_id from public.match_post_content_embeddings(
@@ -292,7 +333,12 @@ select ok((select canonical_post_id is null from public.post_content_embeddings
 select is((select array_agg(post_id order by post_id) from public.list_posts_pending_embedding(200)
   where post_id::text like 'f4b00000-%'),
   array['f4b00000-0000-4000-8000-000000000003', 'f4b00000-0000-4000-8000-000000000008']::uuid[],
-  'the pending list holds the never-embedded post and the one edited since');
+  'the pending list holds the never-embedded post and the one edited since, not one checked as text-empty');
+select is((select array_agg(pending.post_id order by pending.listed)
+    from public.list_posts_pending_embedding(200) with ordinality as pending(post_id, updated_at, listed)
+    where pending.post_id::text like 'f4b00000-%'),
+  array['f4b00000-0000-4000-8000-000000000008', 'f4b00000-0000-4000-8000-000000000003']::uuid[],
+  'a never-embedded post comes before one changed more recently');
 select throws_ok($$select * from public.list_posts_pending_embedding(0)$$,
   'P0001', 'Pending embedding limit must be between 1 and 1000', 'the pending list is bounded');
 
@@ -386,6 +432,9 @@ select ok((select bool_and(not taste_available) from v4_anonymous)
   'signed out: a delivery without a positive outcome is no taste, and near-duplicates stay out');
 select ok((select bool_and(candidate_source = sources[1]) from v4_signed_in),
   'candidate_source is always the highest-priority source');
+select ok((select semantic_cluster is null from v4_signed_in where post_id = 'f4b00000-0000-4000-8000-000000000009')
+    and exists(select 1 from v4_other where post_id = 'f4b00000-0000-4000-8000-000000000009'),
+  'a text-empty row is no embedding: the cluster and near-duplicate mark left from an earlier one are ignored');
 
 set local role service_role;
 select throws_ok($$select * from public.get_ranked_feed_candidates_v4(p_semantic_limit => 501)$$,
@@ -396,7 +445,38 @@ select throws_ok($$select * from public.get_ranked_feed_candidates_v4(p_taste_lo
   'P0001', 'Taste lookback days must be between 1 and 365', 'the taste lookback is bounded');
 select throws_ok($$select * from public.get_ranked_feed_candidates_v4(p_taste_limit => 201)$$,
   'P0001', 'Taste limit must be between 1 and 200', 'the taste sample is bounded');
+select ok((select bool_and(not taste_available) from public.get_ranked_feed_candidates_v4(
+    p_anonymous_key_hash => repeat('d', 64), p_as_of => now())),
+  'a saved post without a vector gives no taste');
 reset role;
+
+-- ─── A near-duplicate whose canonical left the feed ──────────────────────────
+
+create temporary table v4_canonical_gone as
+select * from public.get_ranked_feed_candidates_v4() with no data;
+grant select, insert on v4_canonical_gone to service_role;
+
+update public.posts set archived_at = now() where id = 'f4b00000-0000-4000-8000-000000000005';
+set local role service_role;
+insert into v4_canonical_gone
+select * from public.get_ranked_feed_candidates_v4(
+  p_viewer_user_id => 'f4a00000-0000-4000-8000-000000000005', p_as_of => now());
+reset role;
+select ok(exists(select 1 from v4_canonical_gone where post_id = 'f4b00000-0000-4000-8000-000000000004'),
+  'once its canonical is archived, a near-duplicate reaches viewers who do not follow its author again');
+
+set local role service_role;
+select is(public.clear_orphaned_near_duplicate_marks(1000), 1,
+  'the job''s pass clears the one mark whose canonical left the feed');
+select throws_ok($$select public.clear_orphaned_near_duplicate_marks(0)$$,
+  'P0001', 'Orphaned near-duplicate limit must be between 1 and 10000', 'the pass is bounded');
+reset role;
+select ok((select canonical_post_id is null and near_duplicate_similarity is null
+    from public.post_content_embeddings where post_id = 'f4b00000-0000-4000-8000-000000000004')
+  and (select canonical_post_id = 'f4b00000-0000-4000-8000-000000000001'
+    from public.post_content_embeddings where post_id = 'f4b00000-0000-4000-8000-000000000009'),
+  'the duplicate is released, and a mark whose canonical is still in the feed stays');
+update public.posts set archived_at = null where id = 'f4b00000-0000-4000-8000-000000000005';
 
 -- ─── The comment event ───────────────────────────────────────────────────────
 
@@ -452,6 +532,14 @@ select is((public.record_showcase_feed_events(
     'eventType', 'comment', 'sourceSurface', 'feed', 'occurredAt', now())),
   true
 )->'outcomes'->0->>'status'), '401', 'a server-written comment needs a signed-in viewer');
+-- W comments on B from outside the feed: no delivery to name.
+select is((public.record_showcase_feed_events(
+  'f4a00000-0000-4000-8000-000000000005', null,
+  jsonb_build_array(jsonb_build_object(
+    'clientEventId', 'feed-v4-undelivered-comment', 'postId', 'f4b00000-0000-4000-8000-000000000002',
+    'eventType', 'comment', 'sourceSurface', 'feed', 'occurredAt', now())),
+  true
+)->>'recorded'), '1', 'a server action records a comment that has no delivery');
 select throws_ok($$select public.record_showcase_feed_events(
   'f4a00000-0000-4000-8000-000000000001', null,
   '[{"clientEventId": "x", "postId": "f4b00000-0000-4000-8000-000000000003", "eventType": "open"}]', null)$$,
@@ -465,6 +553,9 @@ select lives_ok($$select public.refresh_post_feed_stats(now(), 1000)$$, 'the pos
 select ok((select comment_count = 1 and abs(usefulness_score - 3.0 / 25.0) < 1e-9 from public.post_feed_stats
   where post_id = 'f4b00000-0000-4000-8000-000000000003' and window_key = '7d'),
   'comments are counted and weigh 1.0 in usefulness');
+select is((select comment_count from public.post_feed_stats
+    where post_id = 'f4b00000-0000-4000-8000-000000000002' and window_key = '7d'),
+  1::bigint, 'a server-written comment counts without a delivery');
 select lives_ok($$select public.refresh_post_feed_engagement_stats(now(), 1000)$$, 'the engagement refresh runs');
 select is((select meaningful_engagement_count from public.post_feed_stats
   where post_id = 'f4b00000-0000-4000-8000-000000000003' and window_key = '7d'),
@@ -482,6 +573,10 @@ select ok((select weight between 2.99 and 3.0 from public.user_interest_weights
   where user_id = 'f4a00000-0000-4000-8000-000000000001'
     and dimension_type = 'category' and dimension_value = 'text'),
   'the comment still writes the category, with the same weight');
+select ok((select weight between 2.8 and 3.0 from public.user_interest_weights
+  where user_id = 'f4a00000-0000-4000-8000-000000000001'
+    and dimension_type = 'category' and dimension_value = 'image'),
+  'a succeeded creation seeds its category');
 select ok(public.refresh_feed_delivery_fact_daily(now(), 3, 400) is not null, 'the fact rollup runs');
 select is((select comment_count || '/' || deliveries from public.feed_delivery_fact_daily
   where algorithm_version_id = (select version_id from v4_clock)
@@ -510,6 +605,27 @@ select is((select string_agg(viewer_key || ':' || (fact_date - (select day1 from
   'sessions, serves and outcomes per viewer and day, a fact-less session counting as a visit');
 select ok((select viewer_user_id is null and experiment_variant_id is null from public.feed_viewer_daily
   where viewer_key = 'anon:' || repeat('a', 64)), 'a signed-out viewer is keyed by its hash');
+
+-- Stand-in for a fact-less visit counted on V's day before its session was
+-- pruned (about two days after it expires): the next refresh cannot see it.
+reset role;
+update public.feed_viewer_daily set sessions = sessions + 1
+where viewer_key = 'f4a00000-0000-4000-8000-000000000001'
+  and fact_date = (select day1 from v4_clock)::date
+  and algorithm_version_id = (select version_id from v4_clock);
+set local role service_role;
+do $$ begin perform public.refresh_feed_viewer_daily(now(), 3); end $$;
+select is((select sessions from public.feed_viewer_daily
+    where viewer_key = 'f4a00000-0000-4000-8000-000000000001'
+      and fact_date = (select day1 from v4_clock)::date
+      and algorithm_version_id = (select version_id from v4_clock)),
+  3, 'a refresh never lowers a day''s session count');
+reset role;
+update public.feed_viewer_daily set sessions = sessions - 1
+where viewer_key = 'f4a00000-0000-4000-8000-000000000001'
+  and fact_date = (select day1 from v4_clock)::date
+  and algorithm_version_id = (select version_id from v4_clock);
+set local role service_role;
 
 select is((select viewers || '/' || sessions || '/' || d1_eligible_viewers || '/' || d1_returned_viewers
     || '/' || d1_return_rate || '/' || signed_in_viewers || '/' || meaningful_creators_7d

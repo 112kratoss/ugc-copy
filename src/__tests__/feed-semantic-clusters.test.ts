@@ -177,6 +177,24 @@ describe('pairNearDuplicates', () => {
     ]);
   });
 
+  it('never pairs a post with no text of its own, from either side', () => {
+    // Two untitled posts by different authors embed their tool and category
+    // lines alone: identical, but not reposts of each other.
+    const empty = (postId: string, day: number): NearDuplicatePost => ({ ...post(postId, day), textEmpty: true });
+    expect(pairNearDuplicates({
+      queries: [
+        { postId: 'untitled-new', matches: [{ postId: 'untitled-old', similarity: 1 }] },
+        { postId: 'titled-new', matches: [{ postId: 'untitled-old', similarity: 0.99 }] },
+      ],
+      posts: [empty('untitled-old', 1), empty('untitled-new', 5), post('titled-new', 6)],
+    })).toEqual([]);
+    // The same pair with words of their own is a duplicate.
+    expect(pairNearDuplicates({
+      queries: [{ postId: 'untitled-new', matches: [{ postId: 'untitled-old', similarity: 1 }] }],
+      posts: [post('untitled-old', 1), post('untitled-new', 5)],
+    })).toEqual([{ postId: 'untitled-new', canonicalPostId: 'untitled-old', similarity: 1 }]);
+  });
+
   it('follows a stored duplicate to its canonical', () => {
     expect(pairNearDuplicates({
       queries: [{ postId: 'fresh', matches: [{ postId: 'dup', similarity: 0.98 }] }],

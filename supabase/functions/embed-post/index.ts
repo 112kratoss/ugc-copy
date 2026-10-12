@@ -3,7 +3,8 @@
 //
 //   POST { "postIds": ["<uuid>", ...] }            1 to 25 ids
 //   Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>
-//   200 { "embedded": n, "skipped": n, "failed": [{ "postId": "<uuid>", "error": "..." }] }
+//   200 { "embedded": n, "skipped": n, "skipped_empty": ["<uuid>", ...],
+//         "deferred": ["<uuid>", ...], "failed": [{ "postId": "<uuid>", "error": "..." }] }
 //
 // verify_jwt is off for this function (supabase/config.toml), so the bearer
 // check below, in constant time, is the only gate. Each post's title,
@@ -19,6 +20,16 @@
 // skip (text unchanged, counters or flags edited) stamps it too, or the post
 // would be listed again on every run.
 //
+// A post with no title, description, body or prompt is not embedded: its text
+// would be only the tool and category lines, the same for every untitled post
+// of a kind, and those would all pair as near-duplicates of the oldest. Its
+// row is written with text_empty and no vector, which the readers skip and
+// the job's pending list counts as checked; it is reported under
+// skipped_empty. gte-small runs on this isolate's CPU, which Supabase bounds
+// per request, so no post is started once 1.2 s have passed since the first
+// one was: the rest come back untouched under deferred, still pending, for
+// the next run.
+//
 // No imports: posts and embeddings go through PostgREST with the service-role
 // key, so src/__tests__/embed-post-function.test.ts can load this module under
 // Node with stand-ins for Deno, Supabase.ai and fetch. The key and the post
@@ -28,6 +39,8 @@ export const EMBEDDING_MODEL = 'gte-small';
 export const EMBEDDING_DIMENSIONS = 384;
 export const MAX_POST_IDS = 25;
 export const MAX_EMBEDDING_TEXT_CHARS = 2_000;
+/** No post is started once this much time has passed since the first one was. */
+export const EMBEDDING_TIME_BUDGET_MS = 1_200;
 
 const MAX_REQUEST_BYTES = 16 * 1024;
 const POSTGREST_TIMEOUT_MS = 10_000;
@@ -50,14 +63,18 @@ export type StoredEmbedding = {
   post_id: string;
   embedding_model: string;
   content_hash: string;
+  text_empty: boolean;
 };
 
+/** Every row carries the same keys: PostgREST's bulk upsert requires it. */
 export type EmbeddingUpsertRow = {
   post_id: string;
   embedding_model: string;
   embedding_dimensions: number;
   content_hash: string;
-  embedding: string;
+  /** pgvector text, or null for a post with nothing to embed. */
+  embedding: string | null;
+  text_empty: boolean;
   embedded_at: string;
   updated_at: string;
 };
@@ -74,6 +91,10 @@ export type EmbedPostFailure = { postId: string; error: string };
 export type EmbedPostResult = {
   embedded: number;
   skipped: number;
+  /** Posts with no title, description, body or prompt: recorded without a vector. */
+  skipped_empty: string[];
+  /** Posts not started within the time budget: untouched, still pending. */
+  deferred: string[];
   failed: EmbedPostFailure[];
 };
 
@@ -82,6 +103,8 @@ export type EmbedPostDependencies = {
   store: EmbedPostStore | null;
   embed: (text: string) => Promise<ArrayLike<number>>;
   now?: () => Date;
+  /** Milliseconds, for the time budget; performance.now by default. */
+  clock?: () => number;
 };
 
 type AiSession = {
@@ -138,6 +161,15 @@ function presentText(value: string | null | undefined): string | null {
 }
 
 /**
+ * Whether the post has words of its own to embed: a title, description, body
+ * or prompt. The tool and category lines alone describe a kind of post, not
+ * this one.
+ */
+export function hasEmbeddableText(post: EmbedPostRow): boolean {
+  return [post.title, post.description, post.body, post.prompt].some((value) => presentText(value) !== null);
+}
+
+/**
  * title, description, body, prompt, "tool: <slug>", "category: <category>",
  * empty parts dropped, joined by newlines, cut to 2,000 characters (code
  * points, so a surrogate pair is never split).
@@ -189,6 +221,7 @@ async function readBoundedBody(request: Request): Promise<string | null> {
 
 export function createEmbedPostHandler(dependencies: EmbedPostDependencies) {
   const now = dependencies.now ?? (() => new Date());
+  const clock = dependencies.clock ?? (() => performance.now());
 
   return async function handleEmbedPost(request: Request): Promise<Response> {
     if (request.method !== 'POST') {
@@ -238,12 +271,22 @@ export function createEmbedPostHandler(dependencies: EmbedPostDependencies) {
 
     const postsById = new Map(posts.map((post) => [post.id.toLowerCase(), post]));
     const storedById = new Map(stored.map((row) => [row.post_id.toLowerCase(), row]));
-    const result: EmbedPostResult = { embedded: 0, skipped: 0, failed: [] };
+    const result: EmbedPostResult = { embedded: 0, skipped: 0, skipped_empty: [], deferred: [], failed: [] };
     const upserts: EmbeddingUpsertRow[] = [];
+    const textEmptyIds = new Set<string>();
 
     // One at a time: gte-small runs on this isolate's CPU, so parallel runs
-    // would only contend for it.
-    for (const postId of parsed.postIds) {
+    // would only contend for it. That CPU is bounded per request, so past the
+    // budget no further post is started (the first always is, so every
+    // request makes progress).
+    const startedAt = clock();
+    for (let index = 0; index < parsed.postIds.length; index += 1) {
+      const postId = parsed.postIds[index];
+      if (index > 0 && clock() - startedAt > EMBEDDING_TIME_BUDGET_MS) {
+        result.deferred = parsed.postIds.slice(index);
+        break;
+      }
+
       const post = postsById.get(postId);
       if (!post) {
         result.failed.push({ postId, error: 'Post not found' });
@@ -251,15 +294,38 @@ export function createEmbedPostHandler(dependencies: EmbedPostDependencies) {
       }
 
       const text = buildEmbeddingText(post);
+      const textEmpty = !hasEmbeddableText(post);
       const contentHash = await sha256Hex(text);
       const existing = storedById.get(postId);
-      if (existing && existing.embedding_model === EMBEDDING_MODEL && existing.content_hash === contentHash) {
+      if (
+        existing
+        && existing.embedding_model === EMBEDDING_MODEL
+        && existing.content_hash === contentHash
+        && (existing.text_empty === true) === textEmpty
+      ) {
         try {
           await store.markChecked(postId, post.updated_at);
-          result.skipped += 1;
+          if (textEmpty) textEmptyIds.add(postId);
+          else result.skipped += 1;
         } catch {
           result.failed.push({ postId, error: 'Failed to record the unchanged text' });
         }
+        continue;
+      }
+
+      // Nothing of its own to embed: a row without a vector records the
+      // check, so the post is not listed again until it changes.
+      if (textEmpty) {
+        upserts.push({
+          post_id: postId,
+          embedding_model: EMBEDDING_MODEL,
+          embedding_dimensions: EMBEDDING_DIMENSIONS,
+          content_hash: contentHash,
+          embedding: null,
+          text_empty: true,
+          embedded_at: now().toISOString(),
+          updated_at: post.updated_at,
+        });
         continue;
       }
 
@@ -280,6 +346,7 @@ export function createEmbedPostHandler(dependencies: EmbedPostDependencies) {
         embedding_dimensions: EMBEDDING_DIMENSIONS,
         content_hash: contentHash,
         embedding,
+        text_empty: false,
         embedded_at: now().toISOString(),
         updated_at: post.updated_at,
       });
@@ -288,13 +355,17 @@ export function createEmbedPostHandler(dependencies: EmbedPostDependencies) {
     if (upserts.length > 0) {
       try {
         await store.upsertEmbeddings(upserts);
-        result.embedded = upserts.length;
+        for (const row of upserts) {
+          if (row.text_empty) textEmptyIds.add(row.post_id);
+          else result.embedded += 1;
+        }
       } catch {
         for (const row of upserts) {
           result.failed.push({ postId: row.post_id, error: 'Failed to store the embedding' });
         }
       }
     }
+    result.skipped_empty = parsed.postIds.filter((postId) => textEmptyIds.has(postId));
 
     return jsonResponse(result, 200);
   };
@@ -334,7 +405,7 @@ export function createPostgrestStore(input: {
     },
     async loadStoredEmbeddings(postIds) {
       const query = new URLSearchParams({
-        select: 'post_id,embedding_model,content_hash',
+        select: 'post_id,embedding_model,content_hash,text_empty',
         post_id: idList(postIds),
       });
       const response = await request(`/post_content_embeddings?${query}`, {

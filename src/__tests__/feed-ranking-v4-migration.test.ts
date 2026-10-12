@@ -29,6 +29,11 @@ const interestMigration = readMigration('_track_empty_interest_refreshes.sql');
 const factDailyMigration = readMigration('_feed_delivery_fact_daily.sql');
 const retentionClampMigration = readMigration('_report_feed_retention_clamp.sql');
 const personalizationMigration = readMigration('_feed_personalization_system.sql');
+const limitFirstMigration = readMigration('_feed_ranking_limit_first_pools.sql');
+const v2Migration = readMigration('_feed_ranking_v2.sql');
+
+/** The four server-written event types, counted with or without a delivery. */
+const SERVER_WRITTEN_TYPES = "('comment', 'follow', 'remix_complete', 'purchase')";
 
 /** Every `CREATE OR REPLACE FUNCTION public.<name>(` statement, through its closing `$$;`. */
 function functionDefinitions(sql: string, name: string): string[] {
@@ -213,6 +218,8 @@ const FUNCTION_SIGNATURES: Record<string, string> = {
   mark_post_near_duplicates: 'jsonb',
   upsert_account_labels: 'jsonb',
   delete_expired_account_labels: 'timestamptz',
+  clear_orphaned_near_duplicate_marks: 'integer',
+  get_ranked_feed_candidates: 'uuid, text, integer, timestamptz',
 };
 
 /** Signatures too long for one line are written over three. */
@@ -255,8 +262,9 @@ describe('feed ranking v4 migration', () => {
     expect(migration).toContain('ON CONFLICT (algorithm_key, version) DO NOTHING;');
     const topLevel = migration.replace(/\$\$[\s\S]*?\$\$/g, '');
     expect(topLevel).not.toMatch(/UPDATE public\.feed_algorithm_versions/);
-    // Earlier retrieval functions are left alone.
-    expect(migration).not.toMatch(/FUNCTION public\.get_ranked_feed_candidates(_v2|_v3)?\(/);
+    // v2 and v3 are left alone; v1 is re-created for its interest pool only
+    // (pinned below).
+    expect(migration).not.toMatch(/FUNCTION public\.get_ranked_feed_candidates_v[23]\(/);
     expect(migration).not.toMatch(/FUNCTION public\.feed_algorithm_scorecard\(/);
   });
 
@@ -360,6 +368,38 @@ describe('feed ranking v4 migration', () => {
       'DROP TRIGGER IF EXISTS post_content_embeddings_set_updated_at\n  ON public.post_content_embeddings;',
     );
     expect(migration).not.toMatch(/CREATE TRIGGER post_content_embeddings_set_updated_at/);
+  });
+
+  it('stores a post with no text of its own without a vector, and every reader skips that row', () => {
+    expect(migration).toContain(
+      'ALTER TABLE public.post_content_embeddings\n  ADD COLUMN IF NOT EXISTS text_empty boolean NOT NULL DEFAULT false;',
+    );
+    expect(migration).toContain('ALTER TABLE public.post_content_embeddings\n  ALTER COLUMN embedding DROP NOT NULL;');
+    expect(migration).toContain(
+      'DROP CONSTRAINT IF EXISTS post_content_embeddings_text_empty_check;\n'
+        + 'ALTER TABLE public.post_content_embeddings\n'
+        + '  ADD CONSTRAINT post_content_embeddings_text_empty_check\n'
+        + '    CHECK (text_empty = (embedding IS NULL));',
+    );
+
+    expect(functionDefinition(migration, 'match_post_content_embeddings')).toContain(
+      'WHERE embeddings.embedding_model = p_embedding_model\n    AND embeddings.embedding IS NOT NULL\n',
+    );
+    // Taste (which posts, and their mean), the eligible join behind cluster
+    // and canonical, and the semantic scores.
+    for (const fragment of [
+      "          AND taste_embeddings.embedding_model = 'gte-small'\n          AND taste_embeddings.embedding IS NOT NULL\n",
+      "     AND taste_embeddings.embedding_model = 'gte-small'\n     AND taste_embeddings.embedding IS NOT NULL\n    HAVING count(*) > 0",
+      "     AND embeddings.embedding_model = 'gte-small'\n     AND embeddings.embedding IS NOT NULL\n    WHERE p.visibility = 'public'",
+      "       AND semantic_embeddings.embedding_model = 'gte-small'\n       AND semantic_embeddings.embedding IS NOT NULL\n",
+    ]) {
+      expect(v4Candidates.split(fragment), fragment).toHaveLength(2);
+    }
+    expect(v4Candidates.match(/post_content_embeddings AS /g)).toHaveLength(4);
+    expect(v4Candidates.match(/\.embedding IS NOT NULL/g)).toHaveLength(4);
+    // The pending list reads a text-empty row as a check like any other, or
+    // it would hand the post back on every run.
+    expect(functionDefinition(migration, 'list_posts_pending_embedding')).not.toContain('embedding IS');
   });
 
   it('recreates the match function at 384 dimensions with the same semantics', () => {
@@ -537,8 +577,19 @@ describe('feed ranking v4 migration', () => {
     expect(batch).not.toContain('p_authoritative boolean DEFAULT');
   });
 
-  it('counts comments in v1 post stats and weighs them 1.0 in usefulness', () => {
+  it('counts comments in v1 post stats, weighs them 1.0 in usefulness, and counts server-written events without a delivery', () => {
     let expected = functionDefinition(v3Migration, 'refresh_post_feed_stats');
+    expected = replaceOnce(
+      expected,
+      '          AND recent_event.delivery_fact_id IS NOT NULL\n',
+      '          AND (\n            recent_event.delivery_fact_id IS NOT NULL\n'
+        + `            OR recent_event.event_type IN ${SERVER_WRITTEN_TYPES}\n          )\n`,
+    );
+    expected = replaceOnce(
+      expected,
+      '     AND events.delivery_fact_id IS NOT NULL\n',
+      `     AND (\n       events.delivery_fact_id IS NOT NULL\n       OR events.event_type IN ${SERVER_WRITTEN_TYPES}\n     )\n`,
+    );
     expected = insertAfter(
       expected,
       "      count(events.id) FILTER (WHERE events.event_type = 'share')::bigint AS share_count,\n",
@@ -585,8 +636,27 @@ describe('feed ranking v4 migration', () => {
     }
   });
 
-  it('adds the comment weight and the semantic_cluster dimension to interest weights, nothing else', () => {
+  it('adds the comment weight, the semantic_cluster dimension, undelivered server events and succeeded creations to interest weights, nothing else', () => {
     let expected = functionDefinition(interestMigration, 'refresh_user_interest_weights');
+    expected = replaceOnce(
+      expected,
+      '        -- delivery_fact_id keeps the full configured interest window usable.\n'
+        + '        AND events.delivery_fact_id IS NOT NULL\n',
+      '        -- delivery_fact_id keeps the full configured interest window usable.\n'
+        + '        AND (\n          events.delivery_fact_id IS NOT NULL\n'
+        + `          OR events.event_type IN ${SERVER_WRITTEN_TYPES}\n        )\n`,
+    );
+    expected = replaceOnce(
+      expected,
+      '    WHERE events.viewer_user_id = ANY(v_user_ids)\n      AND events.delivery_fact_id IS NOT NULL\n',
+      '    WHERE events.viewer_user_id = ANY(v_user_ids)\n'
+        + '      AND (\n        events.delivery_fact_id IS NOT NULL\n'
+        + `        OR events.event_type IN ${SERVER_WRITTEN_TYPES}\n      )\n`,
+    );
+    // Generations settle as 'succeeded' (20260621235959); 'completed' never
+    // occurs, so the creation signal was always empty.
+    expect(expected.split("generations.status = 'completed'")).toHaveLength(3);
+    expected = expected.replaceAll("generations.status = 'completed'", "generations.status IN ('succeeded', 'completed')");
     expected = insertAfter(expected, '      posts.source_tool_slug,\n', '      embeddings.cluster_id AS semantic_cluster_id,\n');
     expected = insertAfter(
       expected,
@@ -598,7 +668,8 @@ describe('feed ranking v4 migration', () => {
       '    JOIN public.posts AS posts ON posts.id = events.post_id\n',
       '    LEFT JOIN public.post_content_embeddings AS embeddings\n'
         + '      ON embeddings.post_id = events.post_id\n'
-        + "     AND embeddings.embedding_model = 'gte-small'\n",
+        + "     AND embeddings.embedding_model = 'gte-small'\n"
+        + '     AND embeddings.embedding IS NOT NULL\n',
     );
     expected = insertAfter(
       expected,
@@ -661,6 +732,15 @@ describe('feed ranking v4 migration', () => {
     expect(refresh).toContain('count(DISTINCT combined.session_id)::integer');
     expect(refresh).toContain('facts.commented_at\n        ), false)');
     expect(refresh).toContain('ON CONFLICT ON CONSTRAINT feed_viewer_daily_grain DO UPDATE');
+    // A fact-less session is pruned about two days after it expires, before
+    // the oldest day of the window is re-read for the last time: a refresh
+    // never lowers a day's session count. Everything else comes from facts,
+    // kept for months, and is assigned.
+    expect(refresh).toContain('      sessions = greatest(target.sessions, EXCLUDED.sessions),\n');
+    expect(refresh).toContain('INSERT INTO public.feed_viewer_daily AS target (');
+    for (const column of ['served', 'rendered', 'qualified', 'meaningful', 'quick_skips', 'negatives', 'saves', 'remix_starts', 'comments']) {
+      expect(refresh).toContain(`      ${column} = EXCLUDED.${column},\n`);
+    }
   });
 
   it('prunes the viewer rollup at 400 days under the facts clamp, reporting what it applied', () => {
@@ -746,7 +826,19 @@ describe('feed ranking v4 migration', () => {
   });
 
   it('lets only the following pool return a near-duplicate or a labelled author', () => {
-    expect(v4Candidates).toContain('(p_exclude_near_duplicates AND embeddings.canonical_post_id IS NOT NULL)');
+    // A mark holds a post back only while its canonical is still in the feed.
+    expect(v4Candidates).toContain(
+      '          p_exclude_near_duplicates\n'
+        + '          AND embeddings.canonical_post_id IS NOT NULL\n'
+        + '          AND EXISTS (\n'
+        + '            SELECT 1\n'
+        + '            FROM public.posts AS canonical_posts\n'
+        + '            WHERE canonical_posts.id = embeddings.canonical_post_id\n'
+        + "              AND canonical_posts.visibility = 'public'\n"
+        + '              AND canonical_posts.archived_at IS NULL\n'
+        + "              AND canonical_posts.review_status = 'visible'\n"
+        + '          )\n',
+    );
     expect(v4Candidates).toContain(
       'p_exclude_labelled_accounts\n          AND EXISTS (\n            SELECT 1\n            FROM public.account_labels AS labels\n'
         + '            WHERE labels.user_id = p.user_id\n              AND labels.expires_at > p_as_of',
@@ -831,11 +923,15 @@ describe('feed ranking v4 migration', () => {
 
   it('never orders by a literal ranking weight', () => {
     const weightedTerm = /(?:^|[^\w.])\d+(?:\.\d+)?(?:::double precision)?\s*\*|\*\s*\d/;
-    // Positive control: v1's retrieval orders by its weights written as literals.
-    const v1Candidates = functionDefinition(readMigration('_feed_ranking_limit_first_pools.sql'), 'get_ranked_feed_candidates');
+    // Positive control: v1's retrieval orders by its weights written as
+    // literals -- in its own migration and in the copy re-created here, which
+    // is pinned to it byte for byte but for one predicate. Nothing else may.
+    const v1Candidates = functionDefinition(limitFirstMigration, 'get_ranked_feed_candidates');
     expect(orderByClauses(v1Candidates).some((clause) => weightedTerm.test(clause))).toBe(true);
+    const v1Copy = functionDefinition(migration, 'get_ranked_feed_candidates');
+    expect(orderByClauses(v1Copy).some((clause) => weightedTerm.test(clause))).toBe(true);
 
-    const clauses = orderByClauses(migration);
+    const clauses = orderByClauses(migration.replace(v1Copy, ''));
     expect(clauses.length).toBeGreaterThan(20);
     for (const clause of clauses) {
       expect(clause).not.toMatch(weightedTerm);
@@ -863,7 +959,9 @@ describe('feed ranking v4 migration', () => {
     expect(viewers).toContain('week_later.day_date = viewer_days.day_date + 7');
     expect(viewers).toContain('bool_or(day_returns.day_date < v_window_end - 1) AS d1_eligible');
     expect(viewers).toContain('bool_or(day_returns.day_date < v_window_end - 7) AS d7_eligible');
-    expect(viewers).toContain("AND generations.status = 'completed'");
+    // Generations settle as 'succeeded'; 'completed' alone matched none.
+    expect(viewers).toContain("AND generations.status IN ('succeeded', 'completed')");
+    expect(migration).not.toContain("generations.status = 'completed'");
     expect(viewers).toContain("AND generations.created_at < per_viewer.viewer_first_served_at + interval '7 days'");
 
     const positions = functionDefinition(migration, 'feed_scorecard_positions');
@@ -927,7 +1025,9 @@ describe('feed ranking v4 migration', () => {
     expect(pending).toContain("OR embeddings.embedding_model <> 'gte-small'");
     expect(pending).toContain('OR posts.updated_at > embeddings.updated_at');
     expect(pending).toContain("AND posts.review_status = 'visible'");
-    expect(pending).toContain('ORDER BY posts.updated_at DESC, posts.id DESC\n  LIMIT p_limit;');
+    // Never-embedded posts first: a save or share moves posts.updated_at, and
+    // those re-listed posts (skipped by their hash) must not crowd them out.
+    expect(pending).toContain('ORDER BY (embeddings.post_id IS NULL) DESC, posts.updated_at DESC, posts.id DESC\n  LIMIT p_limit;');
 
     const replace = functionDefinition(migration, 'replace_feed_semantic_clusters');
     expect(replace).toContain("RAISE EXCEPTION 'Semantic cluster centroids must be arrays of 384 numbers';");
@@ -952,8 +1052,52 @@ describe('feed ranking v4 migration', () => {
     expect(expired).toContain('p_as_of timestamptz DEFAULT now()');
     expect(expired).toContain('WHERE labels.expires_at <= p_as_of;');
 
-    for (const definition of [pending, replace, assign, mark, labels, expired]) {
+    // A duplicate whose canonical left the feed is released, as the candidate
+    // RPC already treats it.
+    const orphaned = functionDefinition(migration, 'clear_orphaned_near_duplicate_marks');
+    expect(orphaned).toContain('p_limit integer DEFAULT 1000');
+    expect(orphaned).toContain("RAISE EXCEPTION 'Orphaned near-duplicate limit must be between 1 and 10000';");
+    expect(orphaned).toContain(
+      '      AND NOT EXISTS (\n'
+        + '        SELECT 1\n'
+        + '        FROM public.posts AS canonical_posts\n'
+        + '        WHERE canonical_posts.id = duplicates.canonical_post_id\n'
+        + "          AND canonical_posts.visibility = 'public'\n"
+        + '          AND canonical_posts.archived_at IS NULL\n'
+        + "          AND canonical_posts.review_status = 'visible'\n"
+        + '      )\n',
+    );
+    expect(orphaned).toContain('    LIMIT p_limit\n');
+    expect(orphaned).toContain('  SET canonical_post_id = NULL,\n      near_duplicate_similarity = NULL\n');
+
+    for (const definition of [pending, replace, assign, mark, labels, expired, orphaned]) {
       expect(definition).toContain('RAISE EXCEPTION');
+    }
+  });
+
+  it('re-creates v1 with its interest pool walking only the weights it can match, nothing else changed', () => {
+    const original = functionDefinition(limitFirstMigration, 'get_ranked_feed_candidates');
+    expect(functionDefinition(migration, 'get_ranked_feed_candidates')).toBe(insertAfter(
+      original,
+      '      WHERE p_viewer_user_id IS NOT NULL\n        AND w.user_id = p_viewer_user_id\n        AND w.weight > 0\n',
+      "        AND w.dimension_type IN ('category', 'media_type', 'source_tool', 'creator')\n",
+    ));
+    // Those are exactly the dimensions its lateral scan can match: a
+    // semantic_cluster or resource_kind row would match no post and scan on to
+    // the end of the catalog.
+    const pool = original.slice(original.indexOf('  interest_pool AS ('), original.indexOf('  trending_pool AS ('));
+    expect(pool).toContain('FROM public.user_interest_weights AS w\n      JOIN LATERAL (');
+    expect([...pool.matchAll(/\(w\.dimension_type = '([a-z_]+)'/g)].map((match) => match[1]))
+      .toEqual(['category', 'media_type', 'source_tool', 'creator']);
+
+    // v2 and v3 probe the weights once per eligible post instead of walking
+    // them, so a new dimension adds no scan there; they stay as they are.
+    for (const [sql, name] of [[v2Migration, 'get_ranked_feed_candidates_v2'], [v3Migration, 'get_ranked_feed_candidates_v3']]) {
+      const definition = functionDefinition(sql, name);
+      const interestPool = definition.slice(definition.indexOf('  interest_pool AS ('), definition.indexOf('\n  ),', definition.indexOf('  interest_pool AS (')));
+      expect(interestPool, name).toContain('FROM eligible AS e');
+      expect(interestPool, name).not.toContain('JOIN LATERAL');
+      expect(interestPool, name).toContain('FROM public.user_interest_weights AS interest\n        WHERE interest.user_id = p_viewer_user_id');
     }
   });
 

@@ -83,6 +83,11 @@ function fakeDb({
         filters.push((row) => values.includes(row[column]));
         return query;
       },
+      not(column: string, operator: string, value: unknown) {
+        if (operator !== 'is' || value !== null) throw new Error(`Unexpected filter not.${operator}`);
+        filters.push((row) => row[column] !== null && row[column] !== undefined);
+        return query;
+      },
       order(column: string, { ascending }: { ascending: boolean }) {
         orderings.push({ column, ascending });
         return query;
@@ -125,10 +130,27 @@ function fakeDb({
       case 'assign_post_semantic_clusters':
       case 'mark_post_near_duplicates':
         return { data: null, error: null };
+      case 'clear_orphaned_near_duplicate_marks': {
+        // As the migration's: a canonical still in the feed is public,
+        // unarchived and visible (a fixture post without those fields is).
+        const inFeed = (id: unknown) => tables.posts.some((post) => (
+          post.id === id
+          && (post.visibility ?? 'public') === 'public'
+          && !post.archived_at
+          && (post.review_status ?? 'visible') === 'visible'
+        ));
+        const orphaned = tables.post_content_embeddings
+          .filter((row) => row.canonical_post_id && !inFeed(row.canonical_post_id))
+          .slice(0, Number(args.p_limit));
+        for (const row of orphaned) Object.assign(row, { canonical_post_id: null });
+        return { data: orphaned.length, error: null };
+      }
       case 'match_post_content_embeddings': {
         const query = args.p_query_embedding as number[];
         const norm = (values: number[]) => Math.hypot(...values);
         const matches = tables.post_content_embeddings
+          // As the migration's: a row without a vector is never a match.
+          .filter((row) => row.embedding !== null)
           .map((row) => {
             const stored = JSON.parse(String(row.embedding)) as number[];
             const similarity = stored.reduce((sum, value, index) => sum + value * query[index], 0) / (norm(stored) * norm(query));
@@ -147,11 +169,13 @@ function fakeDb({
   return { client: { from, rpc } as unknown as SupabaseClient, tables, rpc, rpcCalls };
 }
 
-function embeddingRow(id: string, values: number[], embeddedAt: string, canonical: string | null = null): Row {
+function embeddingRow(id: string, values: number[] | null, embeddedAt: string, canonical: string | null = null): Row {
   return {
     post_id: id,
     embedding_model: 'gte-small',
-    embedding: JSON.stringify(values),
+    // A post with no text of its own is stored without a vector.
+    embedding: values ? JSON.stringify(values) : null,
+    text_empty: values === null,
     canonical_post_id: canonical,
     embedded_at: embeddedAt,
   };
@@ -169,7 +193,18 @@ function embedPost(
     vectors = new Map<string, number[]>(),
     skippedPerBatch = 0,
     failedPerBatch = 0,
-  }: { status?: number | ((call: number) => number); vectors?: Map<string, number[]>; skippedPerBatch?: number; failedPerBatch?: number } = {},
+    emptyPerBatch = 0,
+    deferredPerBatch = 0,
+  }: {
+    status?: number | ((call: number) => number);
+    vectors?: Map<string, number[]>;
+    skippedPerBatch?: number;
+    failedPerBatch?: number;
+    /** Posts after the failed and skipped ones that have no text of their own. */
+    emptyPerBatch?: number;
+    /** The batch's last posts, not started within the function's time budget. */
+    deferredPerBatch?: number;
+  } = {},
 ) {
   let calls = 0;
   let inFlight = 0;
@@ -183,18 +218,30 @@ function embedPost(
     const answer = typeof status === 'function' ? status(calls) : status;
     if (answer !== 200) return new Response('unavailable', { status: answer });
     const { postIds } = JSON.parse(String(init.body)) as { postIds: string[] };
-    const failed = postIds.slice(0, failedPerBatch);
-    const skipped = postIds.slice(failedPerBatch, failedPerBatch + skippedPerBatch);
-    const embedded = postIds.slice(failedPerBatch + skippedPerBatch);
-    for (const id of embedded) {
-      const row = embeddingRow(id, vectors.get(id) ?? vector(300), '2026-10-01T12:00:05.000Z');
+    const started = postIds.slice(0, Math.max(0, postIds.length - deferredPerBatch));
+    const deferred = postIds.slice(started.length);
+    const failed = started.slice(0, failedPerBatch);
+    const skipped = started.slice(failedPerBatch, failedPerBatch + skippedPerBatch);
+    const empty = started.slice(failedPerBatch + skippedPerBatch, failedPerBatch + skippedPerBatch + emptyPerBatch);
+    const embedded = started.slice(failedPerBatch + skippedPerBatch + emptyPerBatch);
+    for (const id of [...empty, ...embedded]) {
+      const row = embeddingRow(
+        id,
+        empty.includes(id) ? null : vectors.get(id) ?? vector(300),
+        '2026-10-01T12:00:05.000Z',
+      );
       const existing = db.tables.post_content_embeddings.find((entry) => entry.post_id === id);
-      if (existing) Object.assign(existing, { embedding: row.embedding, embedded_at: row.embedded_at });
-      else db.tables.post_content_embeddings.push(row);
+      if (existing) {
+        Object.assign(existing, { embedding: row.embedding, text_empty: row.text_empty, embedded_at: row.embedded_at });
+      } else {
+        db.tables.post_content_embeddings.push(row);
+      }
     }
     return Response.json({
       embedded: embedded.length,
       skipped: skipped.length,
+      skipped_empty: empty,
+      deferred,
       failed: failed.map((id) => ({ postId: id, error: 'post not found' })),
     });
   });
@@ -228,6 +275,9 @@ describe('requestPostEmbeddings', () => {
       ok: true,
       embedded: 1,
       skipped: 1,
+      // An answer from a function without the two lists reads as neither.
+      skippedEmpty: [],
+      deferred: [],
       failed: [{ postId: 'p3', error: 'no text' }],
     });
     expect(fetchImpl).toHaveBeenCalledWith(config.url, expect.objectContaining({
@@ -236,6 +286,25 @@ describe('requestPostEmbeddings', () => {
       body: JSON.stringify({ postIds: ['p1', 'p2', 'p3'] }),
       signal: expect.any(AbortSignal),
     }));
+  });
+
+  it('reads the posts the function recorded as text-empty and the ones it deferred', async () => {
+    const fetchImpl = vi.fn(async () => Response.json({
+      embedded: 1,
+      skipped: 0,
+      skipped_empty: ['p2'],
+      deferred: ['p3', 'p4'],
+      failed: [],
+    }));
+
+    await expect(requestPostEmbeddings(['p1', 'p2', 'p3', 'p4'], { config, fetchImpl })).resolves.toEqual({
+      ok: true,
+      embedded: 1,
+      skipped: 0,
+      skippedEmpty: ['p2'],
+      deferred: ['p3', 'p4'],
+      failed: [],
+    });
   });
 
   it('reports a refused, unreadable or failed request instead of throwing', async () => {
@@ -301,29 +370,67 @@ describe('parseEmbeddingVector', () => {
 });
 
 describe('runFeedEmbeddingJob', () => {
-  it('sends pending posts to embed-post 25 at a time, one after another, and passes its counts through', async () => {
-    const pending = Array.from({ length: 60 }, (_, index) => postId(index + 1));
+  it('sends pending posts to embed-post 8 at a time, one after another, and passes its counts through', async () => {
+    const pending = Array.from({ length: 20 }, (_, index) => postId(index + 1));
     const db = fakeDb({ pending });
     const embed = embedPost(db, { skippedPerBatch: 1 });
 
     const summary = await runFeedEmbeddingJob(db.client, { now: NOW, env: ENV, fetchImpl: embed.fetchImpl });
 
+    // Eight inferences fit the function's 1.2 s budget; 25 would not.
+    expect(FEED_EMBEDDING_BATCH_SIZE).toBe(8);
     expect(embed.fetchImpl.mock.calls.map(([, init]) => (JSON.parse(String(init.body)) as { postIds: string[] }).postIds))
-      .toEqual([pending.slice(0, 25), pending.slice(25, 50), pending.slice(50)]);
+      .toEqual([pending.slice(0, 8), pending.slice(8, 16), pending.slice(16)]);
     expect(embed.maxInFlight()).toBe(1);
     expect(db.rpcCalls[0]).toEqual(['list_posts_pending_embedding', { p_limit: FEED_EMBEDDING_PENDING_LIMIT }]);
     // A content hash the function already has is a skip, passed straight through.
     expect(summary).toMatchObject({
-      pending: 60,
+      pending: 20,
       deferred: 0,
-      embedded: 57,
+      embedded: 17,
       skipped: 3,
+      skippedEmpty: 0,
       failed: 0,
       batches: 3,
       batchesFailed: 0,
-      freshEmbeddings: 57,
+      freshEmbeddings: 17,
     });
-    expect(FEED_EMBEDDING_BATCH_SIZE).toBe(25);
+  });
+
+  it('counts posts the function deferred apart from failures, and never fails a run for them', async () => {
+    const pending = Array.from({ length: 16 }, (_, index) => postId(index + 1));
+    const db = fakeDb({ pending });
+    // Every request runs out of time with three posts unstarted.
+    const embed = embedPost(db, { deferredPerBatch: 3 });
+
+    const summary = await runFeedEmbeddingJob(db.client, { now: NOW, env: ENV, fetchImpl: embed.fetchImpl });
+
+    expect(summary).toMatchObject({ pending: 16, embedded: 10, deferred: 6, failed: 0, batches: 2, batchesFailed: 0 });
+    // They stay pending for the next run: nothing is written for them.
+    expect(db.tables.post_content_embeddings.map((row) => row.post_id))
+      .toEqual([...pending.slice(0, 5), ...pending.slice(8, 13)]);
+    expect(loggerMocks.logBackendWarning).not.toHaveBeenCalled();
+
+    const allDeferred = fakeDb({ pending: [postId(1), postId(2)] });
+    await expect(runFeedEmbeddingJob(allDeferred.client, {
+      now: NOW,
+      env: ENV,
+      fetchImpl: embedPost(allDeferred, { deferredPerBatch: 2 }).fetchImpl,
+    })).resolves.toMatchObject({ embedded: 0, deferred: 2, failed: 0 });
+  });
+
+  it('counts a post with no text of its own, and never clusters or matches it', async () => {
+    const db = fakeDb({ pending: [postId(1), postId(2), postId(3)] });
+    const embed = embedPost(db, { emptyPerBatch: 2 });
+
+    const summary = await runFeedEmbeddingJob(db.client, { now: NOW, env: ENV, fetchImpl: embed.fetchImpl });
+
+    expect(summary).toMatchObject({ embedded: 1, skippedEmpty: 2, failed: 0, freshEmbeddings: 1 });
+    expect(summary.nearDuplicates.checked).toBe(1);
+    const matched = db.rpcCalls.filter(([name]) => name === 'match_post_content_embeddings');
+    expect(matched).toHaveLength(1);
+    expect(db.tables.post_content_embeddings.filter((row) => row.text_empty).map((row) => row.post_id))
+      .toEqual([postId(1), postId(2)]);
   });
 
   it('counts a failed request and a failed post, logs both, and carries on', async () => {
@@ -333,9 +440,11 @@ describe('runFeedEmbeddingJob', () => {
 
     const summary = await runFeedEmbeddingJob(db.client, { now: NOW, env: ENV, fetchImpl: embed.fetchImpl });
 
-    expect(summary).toMatchObject({ embedded: 33, skipped: 0, failed: 25 + 2, batches: 3, batchesFailed: 1 });
+    // Eight requests: the first refused (8 posts), each of the other seven
+    // with one failed post.
+    expect(summary).toMatchObject({ embedded: 45, skipped: 0, failed: 8 + 7, batches: 8, batchesFailed: 1 });
     expect(loggerMocks.logBackendWarning).toHaveBeenCalledWith('feed_embedding_batch_failed', {
-      posts: 25,
+      posts: 8,
       error: 'embed-post answered 503',
     });
     expect(loggerMocks.logBackendWarning).toHaveBeenCalledWith('feed_embedding_posts_failed', expect.objectContaining({
@@ -368,7 +477,7 @@ describe('runFeedEmbeddingJob', () => {
       clock: () => elapsed,
     });
 
-    expect(summary).toMatchObject({ batches: 2, embedded: 50, deferred: 50 });
+    expect(summary).toMatchObject({ batches: 2, embedded: 16, deferred: 84 });
   });
 
   it('refuses to run without the function configuration', async () => {
@@ -390,8 +499,13 @@ describe('runFeedEmbeddingJob', () => {
       freshEmbeddings: 0,
       clustering: { status: 'no_fresh_embeddings' },
       nearDuplicates: { checked: 0, marked: 0 },
+      orphanedMarksCleared: 0,
     });
-    expect(db.rpcCalls.map(([name]) => name)).toEqual(['list_posts_pending_embedding']);
+    // The orphaned-mark pass runs every run, as one call.
+    expect(db.rpcCalls).toEqual([
+      ['list_posts_pending_embedding', { p_limit: FEED_EMBEDDING_PENDING_LIMIT }],
+      ['clear_orphaned_near_duplicate_marks', { p_limit: 1_000 }],
+    ]);
   });
 
   it('clusters once 20 embeddings exist and assigns every post', async () => {
@@ -502,6 +616,71 @@ describe('runFeedEmbeddingJob near-duplicate clearing', () => {
   });
 });
 
+describe('runFeedEmbeddingJob text-empty posts', () => {
+  it('pairs no post whose row turned text-empty after its vector was read', async () => {
+    const original = vector(5, 0);
+    // Post 2's vector was read as fresh, then an edit emptied its text: the
+    // row the pairing reads says so (the stand-in keeps the vector to
+    // reproduce that moment).
+    const emptied = { ...embeddingRow(postId(2), original, '2026-10-01T11:59:00.000Z'), text_empty: true };
+    const db = fakeDb({
+      embeddings: [embeddingRow(postId(1), original, '2026-09-01T00:00:00.000Z'), emptied],
+      posts: [{ id: postId(1), created_at: '2026-09-01T00:00:00.000Z' }, { id: postId(2), created_at: '2026-10-01T11:00:00.000Z' }],
+    });
+
+    const summary = await runFeedEmbeddingJob(db.client, { now: NOW, env: ENV, fetchImpl: vi.fn() });
+
+    expect(summary.nearDuplicates).toEqual({ checked: 1, marked: 0, cleared: 0, matchFailures: 0 });
+    expect(db.rpcCalls.map(([name]) => name)).not.toContain('mark_post_near_duplicates');
+  });
+});
+
+describe('runFeedEmbeddingJob orphaned near-duplicates', () => {
+  it('releases a duplicate whose canonical left the feed, re-embedded or not', async () => {
+    const db = fakeDb({
+      embeddings: [
+        embeddingRow(postId(1), vector(5, 0), '2026-09-01T00:00:00.000Z'),
+        embeddingRow(postId(2), vector(5, 0), '2026-09-02T00:00:00.000Z', postId(1)),
+        embeddingRow(postId(3), vector(9, 0), '2026-09-01T00:00:00.000Z'),
+        embeddingRow(postId(4), vector(9, 0), '2026-09-02T00:00:00.000Z', postId(3)),
+      ],
+      posts: [
+        // Archived since post 2 was marked a duplicate of it.
+        { id: postId(1), created_at: '2026-09-01T00:00:00.000Z', archived_at: '2026-10-01T10:00:00.000Z' },
+        { id: postId(2), created_at: '2026-09-02T00:00:00.000Z' },
+        { id: postId(3), created_at: '2026-09-01T00:00:00.000Z' },
+        { id: postId(4), created_at: '2026-09-02T00:00:00.000Z' },
+      ],
+      runs: [{ job_name: 'feed-embeddings', status: 'succeeded', started_at: '2026-10-01T11:50:00.000Z' }],
+    });
+
+    const summary = await runFeedEmbeddingJob(db.client, { now: NOW, env: ENV, fetchImpl: vi.fn() });
+
+    expect(summary.orphanedMarksCleared).toBe(1);
+    expect(db.rpcCalls.filter(([name]) => name === 'clear_orphaned_near_duplicate_marks')).toHaveLength(1);
+    expect(db.tables.post_content_embeddings.map((row) => [row.post_id, row.canonical_post_id])).toEqual([
+      [postId(1), null],
+      [postId(2), null],
+      [postId(3), null],
+      [postId(4), postId(3)],
+    ]);
+  });
+
+  it('fails the run when the pass cannot run', async () => {
+    const db = fakeDb();
+    const rpc = db.client.rpc.bind(db.client);
+    const client = {
+      from: db.client.from,
+      rpc: (name: string, args: Row) => (name === 'clear_orphaned_near_duplicate_marks'
+        ? Promise.resolve({ data: null, error: { message: 'permission denied' } })
+        : rpc(name, args)),
+    } as unknown as SupabaseClient;
+
+    await expect(runFeedEmbeddingJob(client, { now: NOW, env: ENV, fetchImpl: vi.fn() }))
+      .rejects.toThrow('Feed embeddings RPC clear_orphaned_near_duplicate_marks failed: permission denied');
+  });
+});
+
 describe('hasFeedEmbeddingWork', () => {
   it('has work while posts wait for an embedding', async () => {
     const db = fakeDb({ pending: [postId(1)] });
@@ -528,6 +707,12 @@ describe('hasFeedEmbeddingWork', () => {
     await expect(hasFeedEmbeddingWork(fakeDb({
       runs,
       embeddings: [embeddingRow(postId(1), vector(0), '2026-10-01T11:40:00.000Z')],
+    }).client, { now: NOW })).resolves.toBe(false);
+  });
+
+  it('has no work for a fresh row without a vector: a text-empty post is never clustered or matched', async () => {
+    await expect(hasFeedEmbeddingWork(fakeDb({
+      embeddings: [embeddingRow(postId(1), null, '2026-10-01T11:55:00.000Z')],
     }).client, { now: NOW })).resolves.toBe(false);
   });
 

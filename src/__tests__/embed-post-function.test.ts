@@ -10,6 +10,8 @@ import {
   createPostgrestStore,
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MODEL,
+  EMBEDDING_TIME_BUDGET_MS,
+  hasEmbeddableText,
   MAX_EMBEDDING_TEXT_CHARS,
   MAX_POST_IDS,
   parsePostIds,
@@ -109,9 +111,17 @@ function handlerFor(
   store: MemoryStore | null,
   embed: Mock<Embed> = vi.fn<Embed>(async () => unitVector()),
   serviceRoleKey: string | null = SERVICE_ROLE_KEY,
+  clock: () => number = () => 0,
 ) {
-  return { handle: createEmbedPostHandler({ serviceRoleKey, store, embed, now: () => NOW }), embed };
+  return { handle: createEmbedPostHandler({ serviceRoleKey, store, embed, now: () => NOW, clock }), embed };
 }
+
+/** A post with nothing of its own to embed: only its tool and category. */
+function untitled(index: number, overrides: Partial<EmbedPostRow> = {}): EmbedPostRow {
+  return post(index, { title: null, description: '  ', prompt: '', body: null, source_tool_slug: 'magicbooklet', ...overrides });
+}
+
+const NOTHING_ELSE = { skipped_empty: [], deferred: [] };
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -220,14 +230,14 @@ describe('embed-post batch bounds', () => {
     const ids = posts.map((row) => row.id);
     const response = await handle(request({ postIds: ids }));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ embedded: 25, skipped: 0, failed: [] });
+    expect(await response.json()).toEqual({ embedded: 25, skipped: 0, failed: [], ...NOTHING_ELSE });
     expect(embed).toHaveBeenCalledTimes(25);
 
     const repeated = new MemoryStore([post(1)]);
     const second = handlerFor(repeated);
     expect(parsePostIds({ postIds: [postId(1), postId(1).toUpperCase()] })).toEqual({ ok: true, postIds: [postId(1)] });
     expect(await (await second.handle(request({ postIds: [postId(1), postId(1)] }))).json())
-      .toEqual({ embedded: 1, skipped: 0, failed: [] });
+      .toEqual({ embedded: 1, skipped: 0, failed: [], ...NOTHING_ELSE });
     expect(second.embed).toHaveBeenCalledTimes(1);
   });
 });
@@ -256,11 +266,16 @@ describe('embed-post text and hash', () => {
   it('skips a post whose stored hash matches, without embedding it, and records the check', async () => {
     const unchanged = post(1);
     const store = new MemoryStore([unchanged], [
-      { post_id: unchanged.id, embedding_model: EMBEDDING_MODEL, content_hash: sha256(buildEmbeddingText(unchanged)) },
+      {
+        post_id: unchanged.id,
+        embedding_model: EMBEDDING_MODEL,
+        content_hash: sha256(buildEmbeddingText(unchanged)),
+        text_empty: false,
+      },
     ]);
     const { handle, embed } = handlerFor(store);
     const response = await handle(request({ postIds: [unchanged.id] }));
-    expect(await response.json()).toEqual({ embedded: 0, skipped: 1, failed: [] });
+    expect(await response.json()).toEqual({ embedded: 0, skipped: 1, failed: [], ...NOTHING_ELSE });
     expect(embed).not.toHaveBeenCalled();
     expect(store.upserts).toEqual([]);
     // The job lists a post whose posts.updated_at is newer than its row; the
@@ -272,12 +287,17 @@ describe('embed-post text and hash', () => {
     const edited = post(1);
     const otherModel = post(2);
     const store = new MemoryStore([edited, otherModel], [
-      { post_id: edited.id, embedding_model: EMBEDDING_MODEL, content_hash: sha256('the old text') },
-      { post_id: otherModel.id, embedding_model: 'text-embedding-3-small', content_hash: sha256(buildEmbeddingText(otherModel)) },
+      { post_id: edited.id, embedding_model: EMBEDDING_MODEL, content_hash: sha256('the old text'), text_empty: false },
+      {
+        post_id: otherModel.id,
+        embedding_model: 'text-embedding-3-small',
+        content_hash: sha256(buildEmbeddingText(otherModel)),
+        text_empty: false,
+      },
     ]);
     const { handle, embed } = handlerFor(store);
     expect(await (await handle(request({ postIds: [edited.id, otherModel.id] }))).json())
-      .toEqual({ embedded: 2, skipped: 0, failed: [] });
+      .toEqual({ embedded: 2, skipped: 0, failed: [], ...NOTHING_ELSE });
     expect(embed).toHaveBeenCalledTimes(2);
     expect(store.checked).toEqual([]);
   });
@@ -302,6 +322,7 @@ describe('embed-post upsert', () => {
       'embedding_dimensions',
       'embedding_model',
       'post_id',
+      'text_empty',
       'updated_at',
     ]);
     expect(upserted).toMatchObject({
@@ -309,12 +330,13 @@ describe('embed-post upsert', () => {
       embedding_model: 'gte-small',
       embedding_dimensions: 384,
       content_hash: sha256(text),
+      text_empty: false,
       embedded_at: NOW.toISOString(),
       updated_at: row.updated_at,
     });
     expect(upserted).not.toHaveProperty('cluster_id');
     expect(upserted).not.toHaveProperty('canonical_post_id');
-    const numbers = JSON.parse(upserted.embedding) as number[];
+    const numbers = JSON.parse(String(upserted.embedding)) as number[];
     expect(numbers).toHaveLength(384);
     expect(numbers).toEqual(Array.from(Float32Array.from(vector)));
   });
@@ -326,6 +348,163 @@ describe('embed-post upsert', () => {
   });
 });
 
+describe('embed-post posts with no text of their own', () => {
+  it('counts only a title, description, body or prompt as text to embed', () => {
+    expect(hasEmbeddableText(untitled(1))).toBe(false);
+    expect(hasEmbeddableText(untitled(1, { category: 'video', source_tool_slug: 'kling' }))).toBe(false);
+    expect(hasEmbeddableText(untitled(1, { title: 'A cat' }))).toBe(true);
+    expect(hasEmbeddableText(untitled(1, { prompt: ' a cat on a skateboard ' }))).toBe(true);
+    expect(hasEmbeddableText(untitled(1, { body: 'Body' }))).toBe(true);
+    expect(hasEmbeddableText(untitled(1, { description: 'Description' }))).toBe(true);
+  });
+
+  it('never embeds the tool and category lines alone: it records the post without a vector', async () => {
+    // Every untitled image from the same tool has this one text, so their
+    // embeddings would be identical and pair as near-duplicates of the oldest.
+    const first = untitled(1);
+    const second = untitled(2);
+    expect(buildEmbeddingText(first)).toBe('tool: magicbooklet\ncategory: image');
+    expect(buildEmbeddingText(second)).toBe(buildEmbeddingText(first));
+
+    const titled = post(3);
+    const store = new MemoryStore([first, titled, second]);
+    const { handle, embed } = handlerFor(store);
+    const response = await handle(request({ postIds: [first.id, titled.id, second.id] }));
+
+    expect(await response.json()).toEqual({
+      embedded: 1,
+      skipped: 0,
+      skipped_empty: [first.id, second.id],
+      deferred: [],
+      failed: [],
+    });
+    expect(embed).toHaveBeenCalledTimes(1);
+    expect(embed).toHaveBeenCalledWith(buildEmbeddingText(titled));
+    expect(store.upserts).toHaveLength(1);
+    const rows = new Map(store.upserts[0].map((row) => [row.post_id, row]));
+    expect(rows.get(first.id)).toEqual({
+      post_id: first.id,
+      embedding_model: 'gte-small',
+      embedding_dimensions: 384,
+      content_hash: sha256('tool: magicbooklet\ncategory: image'),
+      embedding: null,
+      text_empty: true,
+      embedded_at: NOW.toISOString(),
+      updated_at: first.updated_at,
+    });
+    expect(rows.get(second.id)).toMatchObject({ embedding: null, text_empty: true });
+    expect(rows.get(titled.id)).toMatchObject({ text_empty: false });
+    expect(rows.get(titled.id)?.embedding).toEqual(expect.any(String));
+    // One upsert of rows that all carry the same keys, as PostgREST requires.
+    for (const row of store.upserts[0]) {
+      expect(Object.keys(row).sort()).toEqual(Object.keys(rows.get(titled.id) as EmbeddingUpsertRow).sort());
+    }
+  });
+
+  it('skips an unchanged text-empty post by its hash, and still reports it', async () => {
+    const empty = untitled(1);
+    const store = new MemoryStore([empty], [{
+      post_id: empty.id,
+      embedding_model: EMBEDDING_MODEL,
+      content_hash: sha256(buildEmbeddingText(empty)),
+      text_empty: true,
+    }]);
+    const { handle, embed } = handlerFor(store);
+
+    expect(await (await handle(request({ postIds: [empty.id] }))).json())
+      .toEqual({ embedded: 0, skipped: 0, skipped_empty: [empty.id], deferred: [], failed: [] });
+    expect(embed).not.toHaveBeenCalled();
+    expect(store.upserts).toEqual([]);
+    expect(store.checked).toEqual([{ postId: empty.id, updatedAt: empty.updated_at }]);
+  });
+
+  it('replaces a stored vector of the same lines with a text-empty row, and embeds a post once it has words', async () => {
+    const emptied = untitled(1);
+    const titledSince = untitled(2, { title: 'Now it has a title' });
+    const store = new MemoryStore([emptied, titledSince], [
+      // Same hash, but a vector: written before the rule, it must not stay.
+      { post_id: emptied.id, embedding_model: EMBEDDING_MODEL, content_hash: sha256(buildEmbeddingText(emptied)), text_empty: false },
+      { post_id: titledSince.id, embedding_model: EMBEDDING_MODEL, content_hash: sha256(buildEmbeddingText(untitled(2))), text_empty: true },
+    ]);
+    const { handle, embed } = handlerFor(store);
+
+    expect(await (await handle(request({ postIds: [emptied.id, titledSince.id] }))).json())
+      .toEqual({ embedded: 1, skipped: 0, skipped_empty: [emptied.id], deferred: [], failed: [] });
+    expect(embed).toHaveBeenCalledTimes(1);
+    expect(embed).toHaveBeenCalledWith('Now it has a title\ntool: magicbooklet\ncategory: image');
+    expect(store.upserts[0].map((row) => [row.post_id, row.text_empty, row.embedding === null])).toEqual([
+      [emptied.id, true, true],
+      [titledSince.id, false, false],
+    ]);
+    expect(store.checked).toEqual([]);
+  });
+
+  it('fails a text-empty post whose row could not be written, instead of reporting it', async () => {
+    const store = new MemoryStore([untitled(1)]);
+    store.failUpsert = true;
+    const { handle } = handlerFor(store);
+
+    expect(await (await handle(request({ postIds: [postId(1)] }))).json()).toEqual({
+      embedded: 0,
+      skipped: 0,
+      skipped_empty: [],
+      deferred: [],
+      failed: [{ postId: postId(1), error: 'Failed to store the embedding' }],
+    });
+  });
+});
+
+describe('embed-post time budget', () => {
+  it('starts no post once 1.2 s have passed since the first, and leaves the rest untouched', async () => {
+    const posts = Array.from({ length: 6 }, (_, index) => post(index + 1));
+    const unchanged = posts[1];
+    const store = new MemoryStore(posts, [{
+      post_id: unchanged.id,
+      embedding_model: EMBEDDING_MODEL,
+      content_hash: sha256(buildEmbeddingText(unchanged)),
+      text_empty: false,
+    }]);
+    let elapsed = 0;
+    // Each inference takes 500 ms; a skip takes none.
+    const embed = vi.fn<Embed>(async () => {
+      elapsed += 500;
+      return unitVector();
+    });
+    const { handle } = handlerFor(store, embed, SERVICE_ROLE_KEY, () => elapsed);
+
+    const body = await (await handle(request({ postIds: posts.map((row) => row.id) }))).json();
+
+    // 0 ms: post 1; 500: post 2 (a skip); 500: post 3; 1,000: post 4;
+    // 1,500 > 1,200: posts 5 and 6 are not started.
+    expect(EMBEDDING_TIME_BUDGET_MS).toBe(1_200);
+    expect(body).toEqual({
+      embedded: 3,
+      skipped: 1,
+      skipped_empty: [],
+      deferred: [postId(5), postId(6)],
+      failed: [],
+    });
+    expect(embed).toHaveBeenCalledTimes(3);
+    expect(store.upserts[0].map((row) => row.post_id)).toEqual([postId(1), postId(3), postId(4)]);
+    expect(store.checked.map((entry) => entry.postId)).toEqual([postId(2)]);
+  });
+
+  it('always starts the first post, so every request makes progress', async () => {
+    const store = new MemoryStore([post(1), post(2)]);
+    let calls = 0;
+    // Already past the budget at the first check.
+    const { handle, embed } = handlerFor(store, undefined, SERVICE_ROLE_KEY, () => (calls++ === 0 ? 0 : 10_000));
+
+    expect(await (await handle(request({ postIds: [postId(1), postId(2)] }))).json())
+      .toEqual({ embedded: 1, skipped: 0, skipped_empty: [], deferred: [postId(2)], failed: [] });
+    expect(embed).toHaveBeenCalledTimes(1);
+  });
+
+  it('measures the budget with performance.now in the edge runtime', () => {
+    expect(functionSource).toContain('const clock = dependencies.clock ?? (() => performance.now());');
+  });
+});
+
 describe('embed-post response', () => {
   it('reports embedded, skipped and failed posts, each failure by id', async () => {
     const good = post(1);
@@ -333,7 +512,12 @@ describe('embed-post response', () => {
     const broken = post(3);
     const wrongWidth = post(4);
     const store = new MemoryStore([good, unchanged, broken, wrongWidth], [
-      { post_id: unchanged.id, embedding_model: EMBEDDING_MODEL, content_hash: sha256(buildEmbeddingText(unchanged)) },
+      {
+        post_id: unchanged.id,
+        embedding_model: EMBEDDING_MODEL,
+        content_hash: sha256(buildEmbeddingText(unchanged)),
+        text_empty: false,
+      },
     ]);
     const embed = vi.fn<Embed>(async (text: string) => {
       if (text.startsWith('Title 3')) throw new Error(`model failed on ${text}`);
@@ -348,6 +532,8 @@ describe('embed-post response', () => {
     expect(body).toEqual({
       embedded: 1,
       skipped: 1,
+      skipped_empty: [],
+      deferred: [],
       failed: [
         { postId: broken.id, error: 'Embedding failed' },
         { postId: wrongWidth.id, error: 'Embedding failed' },
@@ -365,6 +551,8 @@ describe('embed-post response', () => {
     expect(await (await handle(request({ postIds: [postId(1), postId(2)] }))).json()).toEqual({
       embedded: 0,
       skipped: 0,
+      skipped_empty: [],
+      deferred: [],
       failed: [
         { postId: postId(1), error: 'Failed to store the embedding' },
         { postId: postId(2), error: 'Failed to store the embedding' },
@@ -412,7 +600,7 @@ describe('embed-post PostgREST store', () => {
     );
     expect(urls[0].searchParams.get('id')).toBe(`in.(${postId(1)},${postId(2)})`);
     expect(urls[1].pathname).toBe('/rest/v1/post_content_embeddings');
-    expect(urls[1].searchParams.get('select')).toBe('post_id,embedding_model,content_hash');
+    expect(urls[1].searchParams.get('select')).toBe('post_id,embedding_model,content_hash,text_empty');
     expect(urls[2].pathname).toBe('/rest/v1/post_content_embeddings');
     expect(urls[2].searchParams.get('on_conflict')).toBe('post_id');
     expect(calls[2].init.method).toBe('POST');
@@ -480,7 +668,7 @@ describe('embed-post in the edge runtime', () => {
     const handler = serve.mock.calls[0][0] as (request: Request) => Promise<Response>;
 
     const first = await handler(request({ postIds: [row.id] }));
-    expect(await first.json()).toEqual({ embedded: 1, skipped: 0, failed: [] });
+    expect(await first.json()).toEqual({ embedded: 1, skipped: 0, failed: [], ...NOTHING_ELSE });
     await handler(request({ postIds: [row.id] }));
     expect(sessions).toEqual(['gte-small']);
     expect(run).toHaveBeenCalledWith(buildEmbeddingText(row), { mean_pool: true, normalize: true });

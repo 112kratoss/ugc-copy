@@ -28,6 +28,10 @@ const EVENT_TYPES = new Set<ShowcaseFeedEventType>([
 ]);
 const SOURCE_SURFACES = new Set(['showcase', 'showcase-reel', 'feed']);
 const SAFE_IDENTIFIER_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+// The server's own event ids (`authoritativeClientEventId`), any case. A
+// client that took one first would make the server's write read as a
+// duplicate, suppressing another viewer's signal.
+const SERVER_EVENT_ID_PATTERN = /^srv:/i;
 const UUID_IDENTIFIER_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BIGINT_IDENTIFIER_PATTERN = /^[1-9][0-9]{0,18}$/;
 const POSTGRES_BIGINT_MAX = BigInt('9223372036854775807');
@@ -221,6 +225,9 @@ export function parseShowcaseFeedEventPayload(value: unknown): ShowcaseFeedEvent
 
   if (!clientEventId || !postId || !eventType || !sourceSurface) {
     return { ok: false, status: 400, body: { error: 'Feed event is missing a valid ID, post, type, or surface.' } };
+  }
+  if (SERVER_EVENT_ID_PATTERN.test(clientEventId)) {
+    return { ok: false, status: 400, body: { error: 'Feed event ID uses a prefix reserved for the server.' } };
   }
   if (feedSessionId === undefined || deliveryId === undefined || position === undefined || durationMs === undefined || progress === undefined) {
     return { ok: false, status: 400, body: { error: 'Feed event contains an invalid optional field.' } };
@@ -888,6 +895,39 @@ function errorCode(error: unknown) {
 }
 
 /**
+ * After a unique-key conflict: the row holding this action's client event id,
+ * when it is this action written before (the same type, viewer and post) —
+ * a duplicate. Null when no row holds the id (the conflict was another key).
+ * A row of any other event under the id is not this action: reporting a
+ * duplicate would drop the signal without a trace, so it throws.
+ */
+async function existingAuthoritativeFeedEvent(
+  serviceClient: SupabaseClient,
+  { clientEventId, eventType, postId, viewerUserId }: {
+    clientEventId: string;
+    eventType: AuthoritativeFeedEventType;
+    postId: string;
+    viewerUserId: string;
+  },
+): Promise<AuthoritativeFeedEventResult | null> {
+  const { data, error } = await serviceClient
+    .from('feed_events')
+    .select('event_type, viewer_user_id, post_id, session_item_id')
+    .eq('client_event_id', clientEventId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  if (
+    data.event_type !== eventType
+    || String(data.viewer_user_id ?? '').toLowerCase() !== viewerUserId
+    || String(data.post_id ?? '').toLowerCase() !== postId
+  ) {
+    throw new Error('Feed event ID is already used by a different event');
+  }
+  return { status: 'duplicate', deliveryId: data.session_item_id ? String(data.session_item_id) : null };
+}
+
+/**
  * The delivery when it is one of this post, served to this viewer in a session
  * that began before the action; otherwise null. A pruned session or item reads
  * as no delivery.
@@ -1045,10 +1085,13 @@ async function writeAuthoritativeFeedEvent(
     occurred_at: occurredAt,
   });
 
+  const action = { clientEventId, eventType: input.eventType, postId, viewerUserId };
   const { error } = await insert(delivery);
   if (!error) return { status: 'recorded', deliveryId: delivery?.deliveryId ?? null };
   if (!delivery) {
-    if (errorCode(error) === '23505') return { status: 'duplicate', deliveryId: null };
+    // Without a delivery only the client event id can conflict.
+    const existing = errorCode(error) === '23505' ? await existingAuthoritativeFeedEvent(serviceClient, action) : null;
+    if (existing) return existing;
     throw error;
   }
 
@@ -1057,19 +1100,15 @@ async function writeAuthoritativeFeedEvent(
   // delivery (one per delivery). Only the first is a duplicate; the second,
   // like a delivery pruned since it was checked, is written without one.
   if (errorCode(error) === '23505') {
-    const { data: existing, error: existingError } = await serviceClient
-      .from('feed_events')
-      .select('session_item_id')
-      .eq('client_event_id', clientEventId)
-      .maybeSingle();
-    if (existingError) throw existingError;
-    if (existing) {
-      return { status: 'duplicate', deliveryId: existing.session_item_id ? String(existing.session_item_id) : null };
-    }
+    const existing = await existingAuthoritativeFeedEvent(serviceClient, action);
+    if (existing) return existing;
   }
   const { error: retryError } = await insert(null);
   if (!retryError) return { status: 'recorded', deliveryId: null };
-  if (errorCode(retryError) === '23505') return { status: 'duplicate', deliveryId: null };
+  const existing = errorCode(retryError) === '23505'
+    ? await existingAuthoritativeFeedEvent(serviceClient, action)
+    : null;
+  if (existing) return existing;
   throw retryError;
 }
 

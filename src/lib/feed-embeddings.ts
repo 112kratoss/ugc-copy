@@ -28,10 +28,14 @@ import {
 
 export const FEED_EMBEDDING_MODEL = 'gte-small';
 export const FEED_EMBEDDING_DIMENSIONS = 384;
-/** Posts sent to the edge function per job run, newest first. */
+/** Posts sent to the edge function per job run, never-embedded first, then newest. */
 export const FEED_EMBEDDING_PENDING_LIMIT = 200;
-/** Posts per edge-function request (the function accepts 1–25). */
-export const FEED_EMBEDDING_BATCH_SIZE = 25;
+/**
+ * Posts per edge-function request (the function accepts 1–25). gte-small runs
+ * on the function's per-request CPU budget: it starts no post 1.2 s after its
+ * first and hands the rest back as deferred, so a request is sized to finish.
+ */
+export const FEED_EMBEDDING_BATCH_SIZE = 8;
 export const FEED_EMBEDDING_REQUEST_TIMEOUT_MS = 20_000;
 /** The publish hook's request: fire-and-forget, so short. */
 export const FEED_EMBEDDING_PUBLISH_TIMEOUT_MS = 3_000;
@@ -60,6 +64,8 @@ const FEED_EMBEDDING_READ_PAGE = 1_000;
 const FEED_EMBEDDING_IN_FILTER_CHUNK = 100;
 const FEED_EMBEDDING_WRITE_CHUNK = 1_000;
 const FEED_NEAR_DUPLICATE_CONCURRENCY = 4;
+/** Marks cleared per run when their canonical left the feed (the RPC allows 1–10,000). */
+const FEED_ORPHANED_MARK_CLEAR_LIMIT = 1_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type EmbedPostFunctionConfig = { url: string; serviceRoleKey: string };
@@ -67,18 +73,33 @@ export type EmbedPostFunctionConfig = { url: string; serviceRoleKey: string };
 type FetchImpl = (input: string, init: RequestInit) => Promise<Response>;
 
 export type EmbedPostBatchResult =
-  | { ok: true; embedded: number; skipped: number; failed: Array<{ postId: string; error: string }> }
+  | {
+    ok: true;
+    embedded: number;
+    skipped: number;
+    /** Posts with no title, description, body or prompt, recorded without a vector. */
+    skippedEmpty: string[];
+    /** Posts the function did not start within its time budget: still pending. */
+    deferred: string[];
+    failed: Array<{ postId: string; error: string }>;
+  }
   | { ok: false; error: string };
 
 export type FeedEmbeddingJobSummary = {
   asOf: string;
   /** Posts `list_posts_pending_embedding` returned. */
   pending: number;
-  /** Pending posts left for the next run once the request budget was spent. */
+  /**
+   * Pending posts left for the next run: those not sent once the run's request
+   * budget was spent, and those the function deferred to stay inside its own.
+   * Never a failure.
+   */
   deferred: number;
   /** Posts the edge function embedded, skipped (content hash unchanged) and failed. */
   embedded: number;
   skipped: number;
+  /** Posts with no text of their own to embed, recorded as text-empty. */
+  skippedEmpty: number;
   failed: number;
   batches: number;
   batchesFailed: number;
@@ -90,8 +111,13 @@ export type FeedEmbeddingJobSummary = {
     clusters: number;
     assigned: number;
   };
-  /** Posts checked, newly marked duplicates, marks cleared, and match calls that failed. */
+  /**
+   * Posts checked, newly marked duplicates, marks cleared (a re-embedded
+   * duplicate that no longer matches), and match calls that failed.
+   */
   nearDuplicates: { checked: number; marked: number; cleared: number; matchFailures: number };
+  /** Marks cleared because their canonical post left the feed (one RPC a run). */
+  orphanedMarksCleared: number;
 };
 
 /**
@@ -127,6 +153,11 @@ function nonNegativeCount(value: unknown) {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
+/** The post ids of an answer's id list; absent (an older function) reads as none. */
+function postIdList(value: unknown) {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
 /** One POST of 1–25 post ids to `embed-post`. Never throws. */
 export async function requestPostEmbeddings(
   postIds: readonly string[],
@@ -160,7 +191,14 @@ export async function requestPostEmbeddings(
         error: typeof record.error === 'string' ? record.error : 'unknown',
       };
     });
-    return { ok: true, embedded, skipped, failed };
+    return {
+      ok: true,
+      embedded,
+      skipped,
+      skippedEmpty: postIdList(body.skipped_empty),
+      deferred: postIdList(body.deferred),
+      failed,
+    };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }
@@ -242,11 +280,16 @@ export function parseEmbeddingVector(value: unknown): number[] | null {
 
 type FreshEmbedding = { postId: string; embedding: number[]; canonicalPostId: string | null };
 
+/**
+ * Every read of vectors skips a text-empty row (a post with no text of its
+ * own, recorded without one): it is never clustered, matched or paired.
+ */
 async function loadFreshEmbeddings(client: SupabaseClient, since: string): Promise<FreshEmbedding[]> {
   const { data, error } = await client
     .from('post_content_embeddings')
     .select('post_id, embedding, canonical_post_id')
     .eq('embedding_model', FEED_EMBEDDING_MODEL)
+    .not('embedding', 'is', null)
     .gt('embedded_at', since)
     .order('embedded_at', { ascending: false })
     .limit(FEED_NEAR_DUPLICATE_CHECK_LIMIT);
@@ -292,6 +335,7 @@ async function loadClusteringSample(client: SupabaseClient) {
       .from('post_content_embeddings')
       .select('post_id, embedding')
       .eq('embedding_model', FEED_EMBEDDING_MODEL)
+      .not('embedding', 'is', null)
       .order('embedded_at', { ascending: false })
       .order('post_id', { ascending: true })
       .range(offset, end);
@@ -440,18 +484,26 @@ async function markNearDuplicates(
     return { checked: queries.length, marked: 0, cleared: cleared.length, matchFailures };
   }
 
+  // Who points at whom is read whole, text-empty rows included, because
+  // mark_post_near_duplicates checks for chains against every stored mark.
   const [postRows, embeddingRows, canonicalRows] = await Promise.all([
     selectInChunks(client, 'posts', 'id, created_at', 'id', involved),
-    selectInChunks(client, 'post_content_embeddings', 'post_id, canonical_post_id', 'post_id', involved),
+    selectInChunks(client, 'post_content_embeddings', 'post_id, canonical_post_id, text_empty', 'post_id', involved),
     selectInChunks(client, 'post_content_embeddings', 'canonical_post_id', 'canonical_post_id', involved),
   ]);
-  const storedCanonical = new Map(embeddingRows.map((row) => [
-    String(row.post_id),
-    typeof row.canonical_post_id === 'string' ? row.canonical_post_id : null,
-  ]));
+  const storedEmbeddings = new Map(embeddingRows.map((row) => [String(row.post_id), {
+    canonicalPostId: typeof row.canonical_post_id === 'string' ? row.canonical_post_id : null,
+    // Emptied since its vector was read for this run.
+    textEmpty: row.text_empty === true,
+  }]));
   const posts: NearDuplicatePost[] = postRows.flatMap((row) => (
     typeof row.id === 'string' && typeof row.created_at === 'string'
-      ? [{ postId: row.id, createdAt: row.created_at, canonicalPostId: storedCanonical.get(row.id) ?? null }]
+      ? [{
+        postId: row.id,
+        createdAt: row.created_at,
+        canonicalPostId: storedEmbeddings.get(row.id)?.canonicalPostId ?? null,
+        textEmpty: storedEmbeddings.get(row.id)?.textEmpty ?? false,
+      }]
       : []
   ));
   const marks = pairNearDuplicates({
@@ -463,6 +515,22 @@ async function markNearDuplicates(
   });
   await writeNearDuplicateMarks(client, marks, cleared);
   return { checked: queries.length, marked: marks.length, cleared: cleared.length, matchFailures };
+}
+
+/**
+ * Clears the marks whose canonical post is no longer public, unarchived and
+ * visible: one statement a run. The candidate RPC already ignores such a
+ * mark; this keeps the stored ones true for the next pairing, which would
+ * otherwise never revisit a duplicate that is not re-embedded.
+ */
+async function clearOrphanedNearDuplicateMarks(client: SupabaseClient) {
+  const { data, error } = await client.rpc('clear_orphaned_near_duplicate_marks', {
+    p_limit: FEED_ORPHANED_MARK_CLEAR_LIMIT,
+  });
+  if (error) {
+    throw new Error(`Feed embeddings RPC clear_orphaned_near_duplicate_marks failed: ${errorMessage(error)}`);
+  }
+  return nonNegativeCount(Number(data)) ?? 0;
 }
 
 /**
@@ -500,6 +568,7 @@ export async function hasFeedEmbeddingWork(client: SupabaseClient, { now = new D
     .from('post_content_embeddings')
     .select('post_id')
     .eq('embedding_model', FEED_EMBEDDING_MODEL)
+    .not('embedding', 'is', null)
     .gt('embedded_at', since)
     .limit(1);
   if (error) throw new Error(`Feed embeddings could not read fresh embeddings: ${errorMessage(error)}`);
@@ -509,15 +578,17 @@ export async function hasFeedEmbeddingWork(client: SupabaseClient, { now = new D
 /**
  * One run of the `feed-embeddings` job:
  *
- * 1. up to 200 pending posts (no embedding, or edited since) go to `embed-post`
- *    25 at a time, one request after another, each given 20 s, none started
- *    past the first 60 s; a failed request or post is logged and counted, and
- *    a run whose every request failed fails, so job health shows an
- *    unreachable function;
- * 2. once 20 embeddings exist, the newest ≤ 5,000 are re-clustered (at most
+ * 1. up to 200 pending posts (no embedding first, then edited since) go to
+ *    `embed-post` 8 at a time, one request after another, each given 20 s,
+ *    none started past the first 60 s; a failed request or post is logged and
+ *    counted, and a run whose every request failed fails, so job health shows
+ *    an unreachable function. A post the function deferred (its CPU budget)
+ *    or recorded as text-empty is counted, never failed;
+ * 2. marks whose canonical post left the feed are cleared (one RPC);
+ * 3. once 20 embeddings exist, the newest ≤ 5,000 are re-clustered (at most
  *    hourly, warm-started so cluster ids stay put) and every post is assigned;
  *    in between, a new post joins its nearest cluster;
- * 3. every post embedded since the last succeeded run is matched against the
+ * 4. every post embedded since the last succeeded run is matched against the
  *    rest (cosine ≥ 0.95), and the newer of each pair is marked a duplicate of
  *    the family's oldest post.
  */
@@ -547,13 +618,14 @@ export async function runFeedEmbeddingJob(
   const pending = await listPendingPostIds(client, FEED_EMBEDDING_PENDING_LIMIT);
   let embedded = 0;
   let skipped = 0;
+  let skippedEmpty = 0;
   let failed = 0;
   let batches = 0;
   let batchesFailed = 0;
   let deferred = 0;
   for (let offset = 0; offset < pending.length; offset += FEED_EMBEDDING_BATCH_SIZE) {
     if (batches > 0 && clock() - startedAtMs >= FEED_EMBEDDING_REQUEST_BUDGET_MS) {
-      deferred = pending.length - offset;
+      deferred += pending.length - offset;
       break;
     }
     const batch = pending.slice(offset, offset + FEED_EMBEDDING_BATCH_SIZE);
@@ -567,6 +639,9 @@ export async function runFeedEmbeddingJob(
     }
     embedded += result.embedded;
     skipped += result.skipped;
+    skippedEmpty += result.skippedEmpty.length;
+    // Left pending by the function; the next run sends them again.
+    deferred += result.deferred.length;
     failed += result.failed.length;
     if (result.failed.length > 0) {
       logBackendWarning('feed_embedding_posts_failed', {
@@ -580,6 +655,7 @@ export async function runFeedEmbeddingJob(
     throw new Error(`Feed embeddings could not reach embed-post: all ${batches} request(s) failed`);
   }
 
+  const orphanedMarksCleared = await clearOrphanedNearDuplicateMarks(client);
   const fresh = await loadFreshEmbeddings(client, since);
   const clustering: FeedEmbeddingJobSummary['clustering'] = fresh.length > 0
     ? await refreshClusters(client, fresh, now)
@@ -594,11 +670,13 @@ export async function runFeedEmbeddingJob(
     deferred,
     embedded,
     skipped,
+    skippedEmpty,
     failed,
     batches,
     batchesFailed,
     freshEmbeddings: fresh.length,
     clustering,
     nearDuplicates,
+    orphanedMarksCleared,
   };
 }

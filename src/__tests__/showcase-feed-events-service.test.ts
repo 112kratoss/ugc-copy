@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
+  parseShowcaseFeedEventBatchPayload,
   recordShowcaseFeedEvent,
   recordShowcaseFeedEvents,
   type ShowcaseFeedEventPayload,
@@ -147,6 +148,34 @@ function createServiceClient({
     rpc,
   };
 }
+
+describe('client feed event ids', () => {
+  const event = (clientEventId: string) => ({
+    clientEventId,
+    postId: '30000000-0000-4000-8000-000000000001',
+    eventType: 'open',
+    sourceSurface: 'feed',
+    occurredAt: new Date().toISOString(),
+  });
+
+  it('refuses an id in the server\'s srv: namespace, alone or in a batch', () => {
+    // recordAuthoritativeFeedEvent writes comment, follow, remix and purchase
+    // events under srv:<type>:<key>; a client holding one first would make
+    // the server's write a duplicate.
+    expect(parseShowcaseFeedEventBatchPayload(event('srv:follow:viewer:post:-'))).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Feed event ID uses a prefix reserved for the server.' },
+    });
+    expect(parseShowcaseFeedEventBatchPayload({ events: [event('SRV:comment:key')] })).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Feed event batch contained no valid events.' },
+    });
+    const batch = parseShowcaseFeedEventBatchPayload({ events: [event('srv:purchase:key'), event('event-2')] });
+    expect(batch.ok && batch.payloads.map((payload) => payload.clientEventId)).toEqual(['event-2']);
+  });
+});
 
 describe('recordShowcaseFeedEvent idempotency', () => {
   it('rejects a mismatched replay before mutating feed preferences', async () => {

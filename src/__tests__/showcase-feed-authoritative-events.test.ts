@@ -207,6 +207,63 @@ describe('recordAuthoritativeFeedEvent', () => {
     expect(db.tables.feed_events).toHaveLength(2);
   });
 
+  it('reports no duplicate when the server id is held by another event: the signal is not dropped silently', async () => {
+    // A client claimed the ids before the parser reserved them: same post,
+    // another viewer and type.
+    const claimed = (clientEventId: string, sessionItemId: string | null) => ({
+      client_event_id: clientEventId,
+      session_item_id: sessionItemId,
+      viewer_user_id: OTHER_VIEWER,
+      post_id: POST,
+      event_type: 'save',
+    });
+    const db = feedTables({
+      feed_events: [
+        claimed(`srv:follow:${VIEWER}:${POST}:-`, null),
+        claimed(`srv:comment:${VIEWER}:${POST}:501`, '502'),
+      ],
+    });
+
+    // Without a delivery: the client event id is the only key that conflicts.
+    await expect(recordAuthoritativeFeedEvent(db.client, {
+      eventType: 'follow',
+      viewerUserId: VIEWER,
+      postId: POST,
+      occurredAt: '2026-10-01T09:00:00.000Z',
+    })).resolves.toEqual({ status: 'failed', reason: 'error' });
+    // With one: neither attributed nor retried without it.
+    await expect(recordAuthoritativeFeedEvent(db.client, {
+      eventType: 'comment',
+      viewerUserId: VIEWER,
+      postId: POST,
+      deliveryId: '501',
+      occurredAt: '2026-10-01T09:00:00.000Z',
+    })).resolves.toEqual({ status: 'failed', reason: 'error' });
+
+    expect(db.tables.feed_events).toHaveLength(2);
+    expect(loggerMocks.logBackendWarning).toHaveBeenCalledTimes(2);
+    expect(loggerMocks.logBackendWarning).toHaveBeenCalledWith('authoritative_feed_event_failed', expect.objectContaining({
+      eventType: 'follow',
+      error: new Error('Feed event ID is already used by a different event'),
+    }));
+  });
+
+  it('is a duplicate only of the same action: same type, viewer and post', async () => {
+    const write = (eventType: 'comment' | 'follow', viewerUserId: string) => recordAuthoritativeFeedEvent(feedTables({
+      feed_events: [{
+        client_event_id: `srv:${eventType}:same-key`,
+        session_item_id: null,
+        viewer_user_id: VIEWER,
+        post_id: POST,
+        event_type: 'comment',
+      }],
+    }).client, { eventType, viewerUserId, postId: POST, actionKey: 'same-key', occurredAt: '2026-10-01T09:00:00.000Z' });
+
+    await expect(write('comment', VIEWER)).resolves.toEqual({ status: 'duplicate', deliveryId: null });
+    await expect(write('follow', VIEWER)).resolves.toEqual({ status: 'failed', reason: 'error' });
+    await expect(write('comment', OTHER_VIEWER)).resolves.toEqual({ status: 'failed', reason: 'error' });
+  });
+
   it('writes a second action from a delivery already credited without the delivery', async () => {
     const db = feedTables();
     const remix = (generationId: string) => recordAuthoritativeFeedEvent(db.client, {
@@ -352,6 +409,23 @@ describe('recordAuthoritativeFeedEvent', () => {
       eventType: 'comment',
       timeoutMs: 25,
     }));
+  });
+
+  it('keeps the server\'s event ids to the server: the client parser refuses a srv: id', () => {
+    for (const clientEventId of [`srv:follow:${VIEWER}:${POST}:-`, 'SRV:comment:x', 'Srv:anything']) {
+      expect(parseShowcaseFeedEventPayload({
+        clientEventId,
+        postId: POST,
+        eventType: 'open',
+        sourceSurface: 'feed',
+      })).toEqual({ ok: false, status: 400, body: { error: 'Feed event ID uses a prefix reserved for the server.' } });
+    }
+    expect(parseShowcaseFeedEventPayload({
+      clientEventId: 'client:srv:open',
+      postId: POST,
+      eventType: 'open',
+      sourceSurface: 'feed',
+    }).ok).toBe(true);
   });
 
   it('keeps the four types server-only: the client parser refuses every one', () => {

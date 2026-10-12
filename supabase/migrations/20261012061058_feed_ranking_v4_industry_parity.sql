@@ -16,10 +16,20 @@
 --    v4's interest_match reads it.
 -- 3. post_content_embeddings moves to 384 dimensions (gte-small, computed by
 --    the embed-post edge function) and gains cluster and near-duplicate
---    columns; its updated_at becomes the version of the text embedded. Its
---    rows are regenerable and production holds none.
+--    columns and a text_empty flag (a post with no title, description, body
+--    or prompt is recorded without a vector); its updated_at becomes the
+--    version of the text embedded. Its rows are regenerable and production
+--    holds none.
 -- 4. refresh_feed_delivery_fact_daily runs as its caller, like every other
 --    feed refresh, instead of as its owner.
+-- 5. The server-written comment, follow, remix_complete and purchase count
+--    in post stats and interest weights without a delivery; every other
+--    event still needs one. Interest weights and the viewer scorecard read
+--    a creation as the generation pipeline settles it ('succeeded'; the
+--    older 'completed' too).
+-- 6. get_ranked_feed_candidates (v1) is re-created with its interest pool
+--    limited to the four dimensions it can match, so the new
+--    semantic_cluster weights never each drive a scan of the catalog.
 --
 -- Everything else is additive: feed_semantic_clusters, account_labels,
 -- feed_viewer_daily and its refresh (pruned at 400 days by
@@ -28,8 +38,9 @@
 -- create_feed_algorithm_version_draft, the RPCs the embeddings and safety
 -- label jobs call, and for-you-rules v4 as 'shadow'. Every function is
 -- SECURITY INVOKER with search_path pinned to public, pg_temp and is callable
--- by the service role only. No ranking weight appears in SQL: TypeScript
--- remains the only scorer.
+-- by the service role only. No new ranking weight appears in SQL (v1's
+-- re-created body keeps its own, unchanged): TypeScript remains the only
+-- scorer.
 
 -- ─── Content embeddings at 384 dimensions ───────────────────────────────────
 --
@@ -159,6 +170,23 @@ ALTER TABLE public.post_content_embeddings
   ADD CONSTRAINT post_content_embeddings_canonical_not_self_check
     CHECK (canonical_post_id IS NULL OR canonical_post_id <> post_id);
 
+-- A post with no title, description, body or prompt has nothing to embed:
+-- the model would see only its tool and category lines, so every untitled
+-- post would embed alike and pair as a near-duplicate of the oldest one.
+-- embed-post records such a post with text_empty and no vector, which keeps
+-- it off the pending list until it changes. Every reader skips a row without
+-- a vector (pgvector's indexes leave NULLs out); a cluster or near-duplicate
+-- mark left on one from an earlier embedding is ignored with it.
+ALTER TABLE public.post_content_embeddings
+  ADD COLUMN IF NOT EXISTS text_empty boolean NOT NULL DEFAULT false;
+ALTER TABLE public.post_content_embeddings
+  ALTER COLUMN embedding DROP NOT NULL;
+ALTER TABLE public.post_content_embeddings
+  DROP CONSTRAINT IF EXISTS post_content_embeddings_text_empty_check;
+ALTER TABLE public.post_content_embeddings
+  ADD CONSTRAINT post_content_embeddings_text_empty_check
+    CHECK (text_empty = (embedding IS NULL));
+
 CREATE INDEX IF NOT EXISTS post_content_embeddings_cluster_idx
   ON public.post_content_embeddings (cluster_id);
 
@@ -186,10 +214,13 @@ COMMENT ON COLUMN public.post_content_embeddings.canonical_post_id IS
   'The older post this one near-duplicates (cosine >= 0.95). A marked post is recommended only to followers of its author.';
 COMMENT ON COLUMN public.post_content_embeddings.near_duplicate_similarity IS
   'Cosine similarity to canonical_post_id when it was marked.';
+COMMENT ON COLUMN public.post_content_embeddings.text_empty IS
+  'The post had no title, description, body or prompt when last checked, so it has no embedding (embedding is NULL exactly when this is true).';
 
 -- Function signatures ignore type modifiers, so this drops the 1536 version
 -- and the replacement checks the width itself. Otherwise the same function:
--- public, visible, unarchived posts of one model, nearest first.
+-- public, visible, unarchived posts of one model, nearest first -- and only
+-- rows with a vector, now that a text-empty post has none.
 DROP FUNCTION IF EXISTS public.match_post_content_embeddings(
   extensions.vector, text, double precision, integer
 );
@@ -230,6 +261,7 @@ BEGIN
   FROM public.post_content_embeddings AS embeddings
   JOIN public.posts AS posts ON posts.id = embeddings.post_id
   WHERE embeddings.embedding_model = p_embedding_model
+    AND embeddings.embedding IS NOT NULL
     AND posts.visibility = 'public'
     AND posts.archived_at IS NULL
     AND posts.review_status = 'visible'
@@ -983,7 +1015,10 @@ COMMENT ON FUNCTION public.record_showcase_feed_events(uuid, text, jsonb) IS
 
 -- Reproduced from 20261011170309_feed_ranking_v3_x_adoption.sql with comment
 -- events counted into comment_count and weighted 1.0 in the usefulness
--- numerator, as a save is.
+-- numerator, as a save is, and the four server-written types (comment,
+-- follow, remix_complete, purchase) counted with or without a delivery: their
+-- writer is the action itself, never a client, and an action taken outside
+-- the feed has no delivery to name. Every other event still needs one.
 CREATE OR REPLACE FUNCTION public.refresh_post_feed_stats(
   p_as_of timestamptz DEFAULT timezone('utc'::text, now()),
   p_limit integer DEFAULT 1000
@@ -1018,7 +1053,10 @@ BEGIN
         SELECT 1
         FROM public.feed_events AS recent_event
         WHERE recent_event.post_id = p.id
-          AND recent_event.delivery_fact_id IS NOT NULL
+          AND (
+            recent_event.delivery_fact_id IS NOT NULL
+            OR recent_event.event_type IN ('comment', 'follow', 'remix_complete', 'purchase')
+          )
           AND recent_event.occurred_at >= p_as_of - interval '31 days'
           AND recent_event.occurred_at <= p_as_of
       )
@@ -1075,7 +1113,10 @@ BEGIN
     CROSS JOIN windows
     LEFT JOIN public.feed_events AS events
       ON events.post_id = candidates.post_id
-     AND events.delivery_fact_id IS NOT NULL
+     AND (
+       events.delivery_fact_id IS NOT NULL
+       OR events.event_type IN ('comment', 'follow', 'remix_complete', 'purchase')
+     )
      AND events.occurred_at >= p_as_of - windows.duration
      AND events.occurred_at <= p_as_of
     GROUP BY candidates.post_id, windows.window_key
@@ -1626,11 +1667,16 @@ GRANT EXECUTE ON FUNCTION public.refresh_creator_feed_stats(timestamptz, integer
 COMMENT ON FUNCTION public.refresh_creator_feed_stats(timestamptz, integer) IS
   'Refreshes bounded creator quality and negative-feedback aggregates from durable delivery facts and post reports.';
 
--- Reproduced from 20261005170739_track_empty_interest_refreshes.sql with two
--- additions and nothing else changed: a comment weighs 3.0, as a save does,
--- and every weighted event on a clustered post also writes the
+-- Reproduced from 20261005170739_track_empty_interest_refreshes.sql with these
+-- changes and nothing else: a comment weighs 3.0, as a save does; every
+-- weighted event on a clustered post with a vector also writes the
 -- semantic_cluster dimension ('c' || cluster_id), with the same weight and
--- decay as its category.
+-- decay as its category; the four server-written types (comment, follow,
+-- remix_complete, purchase) count with or without a delivery, as in
+-- refresh_post_feed_stats; and a creation counts once it has 'succeeded',
+-- which is how the generation pipeline settles one
+-- (20260621235959_atomic_generation_success_settlement.sql), as well as
+-- under the older 'completed'.
 CREATE OR REPLACE FUNCTION public.refresh_user_interest_weights(
   p_as_of timestamptz DEFAULT timezone('utc'::text, now()),
   p_lookback_days integer DEFAULT 90,
@@ -1677,7 +1723,10 @@ BEGIN
       WHERE events.viewer_user_id IS NOT NULL
         -- Session pruning clears session_item_id after two days; the immutable
         -- delivery_fact_id keeps the full configured interest window usable.
-        AND events.delivery_fact_id IS NOT NULL
+        AND (
+          events.delivery_fact_id IS NOT NULL
+          OR events.event_type IN ('comment', 'follow', 'remix_complete', 'purchase')
+        )
         AND events.occurred_at >= p_as_of - make_interval(days => p_lookback_days)
         AND events.occurred_at <= p_as_of
 
@@ -1688,7 +1737,7 @@ BEGIN
       SELECT generations.user_id
       FROM public.generations AS generations
       WHERE generations.user_id IS NOT NULL
-        AND generations.status = 'completed'
+        AND generations.status IN ('succeeded', 'completed')
         AND generations.completed_at >= p_as_of - make_interval(days => p_lookback_days)
         AND generations.completed_at <= p_as_of
     ) AS active
@@ -1758,8 +1807,12 @@ BEGIN
     LEFT JOIN public.post_content_embeddings AS embeddings
       ON embeddings.post_id = events.post_id
      AND embeddings.embedding_model = 'gte-small'
+     AND embeddings.embedding IS NOT NULL
     WHERE events.viewer_user_id = ANY(v_user_ids)
-      AND events.delivery_fact_id IS NOT NULL
+      AND (
+        events.delivery_fact_id IS NOT NULL
+        OR events.event_type IN ('comment', 'follow', 'remix_complete', 'purchase')
+      )
       AND events.occurred_at >= p_as_of - make_interval(days => p_lookback_days)
       AND events.occurred_at <= p_as_of
   ),
@@ -1781,7 +1834,7 @@ BEGIN
     FROM public.generations AS generations
     LEFT JOIN public.template_runs AS runs ON runs.id = generations.template_run_id
     WHERE generations.user_id = ANY(v_user_ids)
-      AND generations.status = 'completed'
+      AND generations.status IN ('succeeded', 'completed')
       AND generations.completed_at >= p_as_of - make_interval(days => p_lookback_days)
       AND generations.completed_at <= p_as_of
       AND public.normalize_feed_interest_category(generations.category) IS NOT NULL
@@ -2159,7 +2212,11 @@ COMMENT ON TABLE public.feed_viewer_daily IS
 -- facts (bucketed by ranked_at, as the fact rollup is) and from sessions that
 -- produced no fact at all, which still count as a visit. A session with facts
 -- is counted through them, so no session is counted twice. Assignment, not
--- accumulation: the window is re-read in full each run.
+-- accumulation: the window is re-read in full each run -- except sessions,
+-- which never go down. Facts are kept for months, but a session row is
+-- pruned about two days after it expires, so by the time the oldest day of
+-- the default three-day window is re-read its fact-less visits may be gone;
+-- the count already written for that day is kept instead.
 CREATE OR REPLACE FUNCTION public.refresh_feed_viewer_daily(
   p_as_of timestamptz DEFAULT timezone('utc'::text, now()),
   p_days integer DEFAULT 3
@@ -2339,7 +2396,7 @@ BEGIN
   ON CONFLICT ON CONSTRAINT feed_viewer_daily_grain DO UPDATE
   SET viewer_user_id = EXCLUDED.viewer_user_id,
       experiment_id = EXCLUDED.experiment_id,
-      sessions = EXCLUDED.sessions,
+      sessions = greatest(target.sessions, EXCLUDED.sessions),
       served = EXCLUDED.served,
       rendered = EXCLUDED.rendered,
       qualified = EXCLUDED.qualified,
@@ -2636,6 +2693,387 @@ COMMENT ON FUNCTION public.prune_feed_personalization_data(
 ) IS
   'Prunes expired feed telemetry in bounded batches: events, sessions, assignments, stale interests, inactive feedback, delivery facts and the viewer-grain rollup; fact and viewer-rollup retention are clamped upward and the applied values reported.';
 
+-- ─── Candidate retrieval v1: the interest pool ──────────────────────────────
+--
+-- v1's interest pool (20260809140000_feed_ranking_limit_first_pools.sql)
+-- walks the viewer's weight rows and runs one bounded scan of the posts per
+-- row, stopping when the scan has found its LIMIT of matches. A row of a
+-- dimension the pool cannot match -- semantic_cluster, written from this
+-- migration on, or resource_kind -- finds none, so its scan runs to the end
+-- of the catalog: one full scan per such row. The latest body, byte for byte,
+-- with one predicate added to the weight rows it walks: only the four
+-- dimensions its match covers. Its other weights and its ORDER BY are v1's
+-- own and unchanged. Grants and comment restated as 20260711064036 set them.
+CREATE OR REPLACE FUNCTION public.get_ranked_feed_candidates(
+  p_viewer_user_id uuid DEFAULT NULL,
+  p_category text DEFAULT NULL,
+  p_limit integer DEFAULT 300,
+  p_as_of timestamptz DEFAULT timezone('utc'::text, now())
+)
+RETURNS TABLE (
+  post_id uuid,
+  interest_match double precision,
+  creator_affinity double precision,
+  smoothed_usefulness double precision,
+  freshness double precision,
+  relevant_trend double precision,
+  exploration_bonus double precision,
+  quick_skip_risk double precision,
+  negative_feedback_risk double precision,
+  candidate_source text
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF p_limit IS NULL OR p_limit < 1 OR p_limit > 500 THEN
+    RAISE EXCEPTION 'Feed candidate limit must be between 1 and 500';
+  END IF;
+
+  IF p_as_of IS NULL THEN
+    RAISE EXCEPTION 'Feed candidate timestamp is required';
+  END IF;
+
+  RETURN QUERY
+  WITH
+  viewer_hidden_posts AS MATERIALIZED (
+    -- Materialising *this* is the point. The old shape materialised the
+    -- catalog; this materialises the viewer's own suppression list, which is
+    -- bounded by their behaviour rather than by how many posts exist. Left as a
+    -- correlated NOT EXISTS it became 12,500 index probes inside one pool,
+    -- evaluated before any LIMIT could apply, and it forced a bitmap scan that
+    -- could not stop early.
+    SELECT post_feedback.post_id
+    FROM public.feed_user_post_feedback AS post_feedback
+    WHERE p_viewer_user_id IS NOT NULL
+      AND post_feedback.user_id = p_viewer_user_id
+      AND post_feedback.is_active = true
+  ),
+  viewer_hidden_creators AS MATERIALIZED (
+    SELECT creator_feedback.creator_user_id
+    FROM public.feed_user_creator_feedback AS creator_feedback
+    WHERE p_viewer_user_id IS NOT NULL
+      AND creator_feedback.user_id = p_viewer_user_id
+      AND creator_feedback.is_active = true
+  ),
+  following_pool AS (
+    -- Bounded by the viewer's follow count, not by the catalog: one index scan
+    -- per followed creator, each stopping at the pool limit.
+    SELECT e.id AS post_id, 'following'::text AS source, 1 AS source_priority
+    FROM public.follows AS f
+    JOIN LATERAL (
+      SELECT p.id, p.created_at
+      FROM public.posts AS p
+      WHERE p.user_id = f.following_id
+        AND p.visibility = 'public'
+        AND p.archived_at IS NULL
+        AND p.review_status = 'visible'
+        AND (p_category IS NULL OR p.category = p_category)
+        AND NOT EXISTS (SELECT 1 FROM viewer_hidden_posts AS h WHERE h.post_id = p.id)
+        AND NOT EXISTS (SELECT 1 FROM viewer_hidden_creators AS h WHERE h.creator_user_id = p.user_id)
+      ORDER BY p.created_at DESC, p.id DESC
+      LIMIT LEAST(p_limit, 100)
+    ) AS e ON true
+    WHERE p_viewer_user_id IS NOT NULL
+      AND f.follower_id = p_viewer_user_id
+    ORDER BY e.created_at DESC, e.id DESC
+    LIMIT LEAST(p_limit, 100)
+  ),
+  interest_pool AS (
+    -- Driven from the viewer's interest weights rather than from the catalog.
+    -- The old form scanned every eligible post and computed max(weight) per row
+    -- to sort by it; this walks one bounded index scan per weight and keeps the
+    -- weight alongside, which produces the same ordering key without the scan.
+    SELECT ranked.post_id, 'interest'::text AS source, 2 AS source_priority
+    FROM (
+      SELECT
+        e.id AS post_id,
+        max(w.weight) AS match_weight,
+        max(e.created_at) AS created_at
+      FROM public.user_interest_weights AS w
+      JOIN LATERAL (
+        SELECT p.id, p.created_at
+        FROM public.posts AS p
+        WHERE p.visibility = 'public'
+          AND p.archived_at IS NULL
+          AND p.review_status = 'visible'
+          AND (p_category IS NULL OR p.category = p_category)
+          AND (
+            (w.dimension_type = 'category' AND p.category = w.dimension_value)
+            OR (w.dimension_type = 'media_type' AND w.dimension_value IN (p.category, p.post_format))
+            OR (w.dimension_type = 'source_tool' AND p.source_tool_slug = w.dimension_value)
+            OR (w.dimension_type = 'creator' AND w.dimension_value = p.user_id::text)
+          )
+          AND NOT EXISTS (SELECT 1 FROM viewer_hidden_posts AS h WHERE h.post_id = p.id)
+          AND NOT EXISTS (SELECT 1 FROM viewer_hidden_creators AS h WHERE h.creator_user_id = p.user_id)
+        ORDER BY p.created_at DESC, p.id DESC
+        LIMIT LEAST(p_limit, 150)
+      ) AS e ON true
+      WHERE p_viewer_user_id IS NOT NULL
+        AND w.user_id = p_viewer_user_id
+        AND w.weight > 0
+        AND w.dimension_type IN ('category', 'media_type', 'source_tool', 'creator')
+      GROUP BY e.id
+    ) AS ranked
+    ORDER BY ranked.match_weight DESC NULLS LAST, ranked.created_at DESC, ranked.post_id DESC
+    LIMIT LEAST(p_limit, 150)
+  ),
+  trending_pool AS (
+    -- Driven from the stats index in usefulness order, so the scan stops as
+    -- soon as the pool is full instead of ranking the whole catalog.
+    SELECT p.id AS post_id, 'trending'::text AS source, 3 AS source_priority
+    FROM public.post_feed_stats AS stats
+    JOIN public.posts AS p ON p.id = stats.post_id
+    WHERE stats.window_key = '24h'
+      AND p.visibility = 'public'
+      AND p.archived_at IS NULL
+      AND p.review_status = 'visible'
+      AND (p_category IS NULL OR p.category = p_category)
+      AND NOT EXISTS (SELECT 1 FROM viewer_hidden_posts AS h WHERE h.post_id = p.id)
+      AND NOT EXISTS (SELECT 1 FROM viewer_hidden_creators AS h WHERE h.creator_user_id = p.user_id)
+    ORDER BY stats.usefulness_score DESC,
+      stats.impression_count DESC,
+      p.created_at DESC,
+      p.id DESC
+    LIMIT LEAST(p_limit, 100)
+  ),
+  recent_pool AS (
+    SELECT p.id AS post_id, 'recent'::text AS source, 4 AS source_priority
+    FROM public.posts AS p
+    WHERE p.visibility = 'public'
+      AND p.archived_at IS NULL
+      AND p.review_status = 'visible'
+      AND (p_category IS NULL OR p.category = p_category)
+      AND NOT EXISTS (SELECT 1 FROM viewer_hidden_posts AS h WHERE h.post_id = p.id)
+      AND NOT EXISTS (SELECT 1 FROM viewer_hidden_creators AS h WHERE h.creator_user_id = p.user_id)
+    ORDER BY p.created_at DESC, p.id DESC
+    LIMIT LEAST(p_limit, 150)
+  ),
+  exploration_pool AS (
+    -- Least-seen first, driven from the impressions index. Posts with no stats
+    -- row are the least-seen of all, so they are unioned in rather than lost to
+    -- the inner join the index scan requires.
+    SELECT sub.post_id, 'exploration'::text AS source, 5 AS source_priority
+    FROM (
+      (
+      SELECT p.id AS post_id, coalesce(stats.impression_count, 0) AS impression_count,
+             p.created_at, p.id AS tiebreak_id
+      FROM public.post_feed_stats AS stats
+      JOIN public.posts AS p ON p.id = stats.post_id
+      WHERE stats.window_key = '30d'
+        AND p.visibility = 'public'
+        AND p.archived_at IS NULL
+        AND p.review_status = 'visible'
+        AND (p_category IS NULL OR p.category = p_category)
+        AND NOT EXISTS (SELECT 1 FROM viewer_hidden_posts AS h WHERE h.post_id = p.id)
+        AND NOT EXISTS (SELECT 1 FROM viewer_hidden_creators AS h WHERE h.creator_user_id = p.user_id)
+      ORDER BY stats.impression_count ASC, p.created_at DESC, p.id DESC
+      LIMIT LEAST(p_limit, 100)
+      )
+
+      UNION ALL
+
+      (
+      -- Posts with no 30d stats row are the least-seen of all, and the inner
+      -- join above cannot reach them. The anti-join that finds them is bounded
+      -- to the newest page of eligible posts rather than run over the catalog:
+      -- unbounded it cost 151,808 buffers here to return zero rows, because it
+      -- probed the stats index once per post.
+      --
+      -- The bound is sound rather than merely cheap: a post lacks a stats row
+      -- only until `refresh_post_feed_stats` next runs, so the unrated
+      -- population is by construction the most recent posts. A post old enough
+      -- to fall outside this window and still have no stats row is one the
+      -- refresh job has failed on, which is F13's territory and is reported by
+      -- the feed-maintenance job rather than papered over by the feed.
+      SELECT recent_unrated.id AS post_id, 0 AS impression_count,
+             recent_unrated.created_at, recent_unrated.id AS tiebreak_id
+      FROM (
+        SELECT p.id, p.created_at
+        FROM public.posts AS p
+        WHERE p.visibility = 'public'
+          AND p.archived_at IS NULL
+          AND p.review_status = 'visible'
+          AND (p_category IS NULL OR p.category = p_category)
+          AND NOT EXISTS (SELECT 1 FROM viewer_hidden_posts AS h WHERE h.post_id = p.id)
+          AND NOT EXISTS (SELECT 1 FROM viewer_hidden_creators AS h WHERE h.creator_user_id = p.user_id)
+        ORDER BY p.created_at DESC, p.id DESC
+        LIMIT LEAST(p_limit, 100)
+      ) AS recent_unrated
+      WHERE NOT EXISTS (
+        SELECT 1 FROM public.post_feed_stats AS stats
+        WHERE stats.post_id = recent_unrated.id AND stats.window_key = '30d'
+      )
+      ORDER BY recent_unrated.created_at DESC, recent_unrated.id DESC
+      LIMIT LEAST(p_limit, 100)
+      )
+    ) AS sub
+    ORDER BY sub.impression_count ASC, sub.created_at DESC, sub.tiebreak_id DESC
+    LIMIT LEAST(p_limit, 100)
+  ),
+  pooled AS (
+    SELECT * FROM following_pool
+    UNION ALL
+    SELECT * FROM interest_pool
+    UNION ALL
+    SELECT * FROM trending_pool
+    UNION ALL
+    SELECT * FROM recent_pool
+    UNION ALL
+    SELECT * FROM exploration_pool
+  ),
+  deduplicated AS (
+    SELECT DISTINCT ON (pool.post_id)
+      pool.post_id,
+      pool.source
+    FROM pooled AS pool
+    ORDER BY pool.post_id, pool.source_priority
+  ),
+  candidate_posts AS (
+    -- Replaces the old `eligible` CTE in the scoring stage. Eligibility was
+    -- already applied by whichever pool produced the row, so this is a
+    -- primary-key lookup over at most a few hundred ids.
+    SELECT
+      p.id,
+      p.user_id AS creator_id,
+      p.category,
+      p.post_format,
+      p.source_tool_slug,
+      p.created_at
+    FROM public.posts AS p
+    JOIN deduplicated AS d ON d.post_id = p.id
+  ),
+  components AS (
+    SELECT
+      e.id AS post_id,
+      least(1.0::double precision, greatest(0.0::double precision, coalesce(interest.value, 0)))
+        AS interest_match,
+      least(1.0::double precision, greatest(0.0::double precision, coalesce(affinity.value, 0)))
+        AS creator_affinity,
+      coalesce(stats_7d.usefulness_score, 0.08::double precision)
+        AS smoothed_usefulness,
+      least(
+        1.0::double precision,
+        power(
+          0.5::double precision,
+          greatest(0.0::double precision, extract(epoch FROM (p_as_of - e.created_at))::double precision)
+            / 259200.0::double precision
+        )
+      ) AS freshness,
+      least(
+        1.0::double precision,
+        greatest(
+          0.0::double precision,
+          coalesce(stats_24h.usefulness_score, 0.0::double precision)
+            * (
+              ln(1.0::double precision + coalesce(stats_24h.impression_count, 0)::double precision)
+              / ln(101.0::double precision)
+            )
+        )
+      ) AS relevant_trend,
+      1.0::double precision
+        / sqrt(1.0::double precision + coalesce(stats_30d.impression_count, 0)::double precision / 20.0::double precision)
+        AS exploration_bonus,
+      least(
+        1.0::double precision,
+        (coalesce(stats_7d.quick_skip_count, 0)::double precision + 1.25::double precision)
+          / (coalesce(stats_7d.impression_count, 0)::double precision + 5.0::double precision)
+      ) AS quick_skip_risk,
+      least(
+        1.0::double precision,
+        (
+          coalesce(stats_7d.not_interested_count, 0)::double precision
+          + coalesce(stats_7d.hide_creator_count, 0)::double precision
+          + (2.0::double precision * coalesce(stats_7d.report_count, 0)::double precision)
+          + 0.2::double precision
+        ) / (coalesce(stats_7d.impression_count, 0)::double precision + 20.0::double precision)
+      ) AS negative_feedback_risk,
+      d.source AS candidate_source
+    FROM deduplicated AS d
+    JOIN candidate_posts AS e ON e.id = d.post_id
+    LEFT JOIN public.post_feed_stats AS stats_24h
+      ON stats_24h.post_id = e.id AND stats_24h.window_key = '24h'
+    LEFT JOIN public.post_feed_stats AS stats_7d
+      ON stats_7d.post_id = e.id AND stats_7d.window_key = '7d'
+    LEFT JOIN public.post_feed_stats AS stats_30d
+      ON stats_30d.post_id = e.id AND stats_30d.window_key = '30d'
+    LEFT JOIN LATERAL (
+      SELECT least(
+        1.0::double precision,
+        greatest(
+          0.0::double precision,
+          coalesce(sum(greatest(i.weight, 0.0::double precision)), 0.0::double precision)
+            / 10.0::double precision
+        )
+      ) AS value
+      FROM public.user_interest_weights AS i
+      WHERE i.user_id = p_viewer_user_id
+        AND (
+          (i.dimension_type = 'category' AND i.dimension_value = e.category)
+          OR (i.dimension_type = 'media_type' AND i.dimension_value IN (e.category, e.post_format))
+          OR (i.dimension_type = 'source_tool' AND i.dimension_value = e.source_tool_slug)
+        )
+    ) AS interest ON true
+    LEFT JOIN LATERAL (
+      SELECT least(
+        1.0::double precision,
+        (
+          CASE WHEN EXISTS (
+            SELECT 1
+            FROM public.follows AS f
+            WHERE f.follower_id = p_viewer_user_id
+              AND f.following_id = e.creator_id
+          ) THEN 0.75::double precision ELSE 0.0::double precision END
+        ) + greatest(
+          0.0::double precision,
+          coalesce((
+            SELECT max(i.weight) / 10.0::double precision
+            FROM public.user_interest_weights AS i
+            WHERE i.user_id = p_viewer_user_id
+              AND i.dimension_type = 'creator'
+              AND i.dimension_value = e.creator_id::text
+          ), 0.0::double precision)
+        )
+      ) AS value
+    ) AS affinity ON true
+  )
+  SELECT
+    c.post_id,
+    c.interest_match,
+    c.creator_affinity,
+    c.smoothed_usefulness,
+    c.freshness,
+    c.relevant_trend,
+    c.exploration_bonus,
+    c.quick_skip_risk,
+    c.negative_feedback_risk,
+    c.candidate_source
+  FROM components AS c
+  ORDER BY (
+      0.35::double precision * c.interest_match
+      + 0.15::double precision * c.creator_affinity
+      + 0.15::double precision * c.smoothed_usefulness
+      + 0.15::double precision * c.freshness
+      + 0.10::double precision * c.relevant_trend
+      + 0.10::double precision * c.exploration_bonus
+      - 0.35::double precision * c.quick_skip_risk
+      - 0.80::double precision * c.negative_feedback_risk
+    ) DESC,
+    c.post_id DESC
+  LIMIT p_limit;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_ranked_feed_candidates(uuid, text, integer, timestamptz)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_ranked_feed_candidates(uuid, text, integer, timestamptz)
+  TO service_role;
+
+COMMENT ON FUNCTION public.get_ranked_feed_candidates(uuid, text, integer, timestamptz) IS
+  'Retrieves bounded multi-pool candidates and explainable score components; service role only.';
+
 -- ─── Candidate retrieval v4 ──────────────────────────────────────────────────
 --
 -- A copy of get_ranked_feed_candidates_v3 (20261011170309) with these changes:
@@ -2645,9 +3083,12 @@ COMMENT ON FUNCTION public.prune_feed_personalization_data(
 --     purchased or meaningfully engaged with. taste_available says whether
 --     the viewer has one.
 --   * eligible carries each post's semantic cluster and a recommendable flag:
---     a near-duplicate of an older post, or a post by an account with an
---     active label, is not recommendable. Only the following pool may return
---     a post that is not; every other pool requires it.
+--     a near-duplicate of an older post that is still in the feed (public,
+--     unarchived, visible), or a post by an account with an active label, is
+--     not recommendable. Only the following pool may return a post that is
+--     not; every other pool requires it.
+--   * an embedding row without a vector (a text-empty post) counts as no
+--     embedding everywhere: no taste, no similarity, no cluster, no mark.
 --   * a semantic pool (priority 4, between affinity and trending): the
 --     eligible posts nearest the taste vector, at least
 --     p_semantic_min_similarity, up to p_semantic_limit.
@@ -2875,6 +3316,7 @@ BEGIN
         FROM public.post_content_embeddings AS taste_embeddings
         WHERE taste_embeddings.post_id = facts.post_id
           AND taste_embeddings.embedding_model = 'gte-small'
+          AND taste_embeddings.embedding IS NOT NULL
       )
     ORDER BY facts.served_at DESC, facts.delivery_id DESC
     LIMIT p_taste_limit
@@ -2888,6 +3330,7 @@ BEGIN
     JOIN public.post_content_embeddings AS taste_embeddings
       ON taste_embeddings.post_id = taste_facts.post_id
      AND taste_embeddings.embedding_model = 'gte-small'
+     AND taste_embeddings.embedding IS NOT NULL
     HAVING count(*) > 0
   ),
   eligible AS MATERIALIZED (
@@ -2903,10 +3346,24 @@ BEGIN
       (served.post_id IS NOT NULL) AS served_recently,
       embeddings.cluster_id,
       -- May this post reach a viewer who does not follow its author? Not a
-      -- near-duplicate of an older post, and not a post by an account with
-      -- an active safety label. Every pool but following requires it.
+      -- near-duplicate of an older post that is still in the feed, and not a
+      -- post by an account with an active safety label. Every pool but
+      -- following requires it. A mark whose canonical was archived, hidden
+      -- or made private no longer holds the duplicate back (the
+      -- feed-embeddings job clears such marks too).
       NOT (
-        (p_exclude_near_duplicates AND embeddings.canonical_post_id IS NOT NULL)
+        (
+          p_exclude_near_duplicates
+          AND embeddings.canonical_post_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM public.posts AS canonical_posts
+            WHERE canonical_posts.id = embeddings.canonical_post_id
+              AND canonical_posts.visibility = 'public'
+              AND canonical_posts.archived_at IS NULL
+              AND canonical_posts.review_status = 'visible'
+          )
+        )
         OR (
           p_exclude_labelled_accounts
           AND EXISTS (
@@ -2923,6 +3380,7 @@ BEGIN
     LEFT JOIN public.post_content_embeddings AS embeddings
       ON embeddings.post_id = p.id
      AND embeddings.embedding_model = 'gte-small'
+     AND embeddings.embedding IS NOT NULL
     WHERE p.visibility = 'public'
       AND p.archived_at IS NULL
       AND p.review_status = 'visible'
@@ -2998,6 +3456,7 @@ BEGIN
       JOIN public.post_content_embeddings AS semantic_embeddings
         ON semantic_embeddings.post_id = e.id
        AND semantic_embeddings.embedding_model = 'gte-small'
+       AND semantic_embeddings.embedding IS NOT NULL
       CROSS JOIN taste
       WHERE EXISTS (SELECT 1 FROM taste)
     ) AS scored
@@ -3390,9 +3849,10 @@ COMMENT ON FUNCTION public.get_ranked_feed_candidates_v4(
 --                    (so d + 1 is a whole day inside the window)
 --   d7_return_rate   the same with d + 7
 --   meaningful_creation_7d_rate
---                    signed-in viewers who started a generation that
---                    completed within 7 days of their first serve in the
---                    window, over signed-in viewers served
+--                    signed-in viewers who started a generation within 7
+--                    days of their first serve in the window that has
+--                    since succeeded ('succeeded', or the older
+--                    'completed'), over signed-in viewers served
 -- A return counts whichever version served the return. The eligible and
 -- returned counts behind each rate come back too.
 CREATE OR REPLACE FUNCTION public.feed_scorecard_viewers(p_days integer DEFAULT 7)
@@ -3500,7 +3960,7 @@ BEGIN
           SELECT 1
           FROM public.generations AS generations
           WHERE generations.user_id = per_viewer.viewer_user_id
-            AND generations.status = 'completed'
+            AND generations.status IN ('succeeded', 'completed')
             AND generations.created_at >= per_viewer.viewer_first_served_at
             AND generations.created_at < per_viewer.viewer_first_served_at + interval '7 days'
         )
@@ -3892,7 +4352,12 @@ COMMENT ON FUNCTION public.create_feed_algorithm_version_draft(text, text, jsonb
 -- Posts the job should send to the embed-post edge function: public, visible
 -- and unarchived, with no gte-small embedding or with text edited since its
 -- embedding (post_content_embeddings.updated_at holds the posts.updated_at
--- the embedding was computed from). Most recently changed first.
+-- the embedding was computed from or checked against). A text-empty row is
+-- a check like any other: the post comes back only once it changes. Posts
+-- never embedded come first, then the most recently changed: posts.updated_at
+-- also moves for a save or a share, which re-lists a post whose text is
+-- unchanged (embed-post skips it by its hash), and those must not crowd out
+-- a post that has no embedding at all.
 CREATE OR REPLACE FUNCTION public.list_posts_pending_embedding(p_limit integer DEFAULT 200)
 RETURNS TABLE (post_id uuid, updated_at timestamptz)
 LANGUAGE plpgsql
@@ -3918,7 +4383,7 @@ BEGIN
       OR embeddings.embedding_model <> 'gte-small'
       OR posts.updated_at > embeddings.updated_at
     )
-  ORDER BY posts.updated_at DESC, posts.id DESC
+  ORDER BY (embeddings.post_id IS NULL) DESC, posts.updated_at DESC, posts.id DESC
   LIMIT p_limit;
 END;
 $$;
@@ -3929,7 +4394,7 @@ GRANT EXECUTE ON FUNCTION public.list_posts_pending_embedding(integer)
   TO service_role;
 
 COMMENT ON FUNCTION public.list_posts_pending_embedding(integer) IS
-  'Up to 1000 public, visible posts with no gte-small embedding or edited since it, most recently changed first; service role only.';
+  'Up to 1000 public, visible posts with no gte-small embedding or edited since it, never-embedded first, then most recently changed; service role only.';
 
 -- Replaces one model's clusters in a single statement block: delete them all,
 -- insert the given ones. p_clusters is [{"cluster_id": int, "centroid": [384
@@ -4235,6 +4700,60 @@ GRANT EXECUTE ON FUNCTION public.mark_post_near_duplicates(jsonb)
 
 COMMENT ON FUNCTION public.mark_post_near_duplicates(jsonb) IS
   'Sets or clears canonical_post_id and near_duplicate_similarity for up to 10000 posts, refusing self-references and chains; returns how many changed. Service role only.';
+
+-- Clears the mark of up to p_limit near-duplicates whose canonical post has
+-- left the feed (it is no longer public, unarchived and visible), one
+-- statement a run of the feed-embeddings job, and returns how many it
+-- cleared. get_ranked_feed_candidates_v4 already ignores such a mark; this
+-- keeps the stored ones true for the job's next pairing, which would
+-- otherwise never revisit a duplicate that is not re-embedded. A deleted
+-- canonical needs nothing: the foreign key sets the mark NULL.
+CREATE OR REPLACE FUNCTION public.clear_orphaned_near_duplicate_marks(p_limit integer DEFAULT 1000)
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_cleared integer := 0;
+BEGIN
+  IF p_limit IS NULL OR p_limit < 1 OR p_limit > 10000 THEN
+    RAISE EXCEPTION 'Orphaned near-duplicate limit must be between 1 and 10000';
+  END IF;
+
+  WITH orphaned AS (
+    SELECT duplicates.post_id
+    FROM public.post_content_embeddings AS duplicates
+    WHERE duplicates.canonical_post_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.posts AS canonical_posts
+        WHERE canonical_posts.id = duplicates.canonical_post_id
+          AND canonical_posts.visibility = 'public'
+          AND canonical_posts.archived_at IS NULL
+          AND canonical_posts.review_status = 'visible'
+      )
+    ORDER BY duplicates.post_id
+    LIMIT p_limit
+  )
+  UPDATE public.post_content_embeddings AS embeddings
+  SET canonical_post_id = NULL,
+      near_duplicate_similarity = NULL
+  FROM orphaned
+  WHERE embeddings.post_id = orphaned.post_id;
+
+  GET DIAGNOSTICS v_cleared = ROW_COUNT;
+  RETURN v_cleared;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.clear_orphaned_near_duplicate_marks(integer)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.clear_orphaned_near_duplicate_marks(integer)
+  TO service_role;
+
+COMMENT ON FUNCTION public.clear_orphaned_near_duplicate_marks(integer) IS
+  'Clears the near-duplicate mark of up to 10000 posts whose canonical post is no longer public, unarchived and visible; returns how many it cleared. Service role only.';
 
 -- ─── The safety-label pass ───────────────────────────────────────────────────
 

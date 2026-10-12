@@ -245,6 +245,11 @@ export type NearDuplicatePost = {
   createdAt: string;
   /** The stored `canonical_post_id`: set when the post is already a duplicate. */
   canonicalPostId: string | null;
+  /**
+   * The post has no title, description, body or prompt (its stored row is
+   * text-empty): what it would be compared on is only its tool and category.
+   */
+  textEmpty?: boolean;
 };
 
 export type NearDuplicateMark = {
@@ -262,7 +267,9 @@ export type NearDuplicateMark = {
  * duplicate, so a post that matches a stored duplicate is credited to that
  * duplicate's canonical. A post that is already a canonical for others is
  * never marked, and a post already marked keeps its mark. Pairs involving a
- * post the caller did not describe (in `posts`) are ignored.
+ * post the caller did not describe (in `posts`), or a text-empty one, are
+ * ignored: two posts with no words of their own match on their tool and
+ * category alone, whoever made them.
  */
 export function pairNearDuplicates({
   queries,
@@ -289,11 +296,12 @@ export function pairNearDuplicates({
     neighbours.set(from, edges);
   };
   for (const query of queries) {
-    if (!byId.has(query.postId)) continue;
+    if (!byId.has(query.postId) || byId.get(query.postId)?.textEmpty) continue;
     for (const match of query.matches) {
       if (
         match.postId === query.postId
         || !byId.has(match.postId)
+        || byId.get(match.postId)?.textEmpty
         || !Number.isFinite(match.similarity)
         || match.similarity < threshold
       ) continue;
@@ -347,7 +355,9 @@ export function pairNearDuplicates({
 /**
  * Freshly (re)embedded posts that carry a stored duplicate mark but no longer
  * match any other post at the threshold — an edit took them out of their
- * family, or their canonical left the feed — so their mark is cleared.
+ * family — so their mark is cleared. A duplicate whose canonical left the
+ * feed is released by `clear_orphaned_near_duplicate_marks` instead, whether
+ * or not it was re-embedded.
  */
 export function staleNearDuplicateMarks({
   queries,
