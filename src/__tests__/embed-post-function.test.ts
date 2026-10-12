@@ -172,7 +172,7 @@ describe('embed-post authorisation', () => {
     }
 
     it('is accepted when the capability check passes, and is passed without the scheme', async () => {
-      const authorize = vi.fn(async (_bearer: string) => true);
+      const authorize = vi.fn(async () => true);
       const { handle, store } = capableHandler(authorize);
       const response = await handle(request({ postIds: [postId(1)] }, 'Bearer sb_secret_other_spelling'));
       expect(response.status).toBe(200);
@@ -195,7 +195,7 @@ describe('embed-post authorisation', () => {
     });
 
     it('never runs the capability check for the runtime key itself, nor for a header without the scheme', async () => {
-      const authorize = vi.fn(async (_bearer: string) => true);
+      const authorize = vi.fn(async () => true);
       const { handle } = capableHandler(authorize);
       expect((await handle(request({ postIds: [postId(1)] }))).status).toBe(200);
       expect((await handle(request({ postIds: [postId(1)] }, SERVICE_ROLE_KEY))).status).toBe(401);
@@ -208,7 +208,7 @@ describe('embed-post authorisation', () => {
     const supabaseUrl = 'https://project.supabase.co/';
 
     function fetchAnswering(status: number) {
-      return vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(status === 200 ? '[]' : '{"message":"permission denied"}', { status }));
+      return vi.fn<(url: string | URL | Request, init?: RequestInit) => Promise<Response>>(async () => new Response(status === 200 ? '[]' : '{"message":"permission denied"}', { status }));
     }
 
     it('probes a service-role-only table with the presented credential as apikey and bearer', async () => {
