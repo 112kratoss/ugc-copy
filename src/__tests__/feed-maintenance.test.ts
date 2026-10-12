@@ -18,6 +18,13 @@ function createRpcClient(results: Record<string, { data: unknown; error: unknown
   return { client: { rpc }, rpc };
 }
 
+const LABELS_SUMMARY = { nsfwAccounts: 1, negativeFeedbackAccounts: 2, labelsUpserted: 3, expiredDeleted: 4 };
+
+/** The v4 label pass as the chain sees it; its own reads and RPCs are tested in feed-safety-labels.test.ts. */
+function labelPass(result: Promise<typeof LABELS_SUMMARY> | (() => Promise<typeof LABELS_SUMMARY>) = async () => LABELS_SUMMARY) {
+  return vi.fn(typeof result === 'function' ? result : () => result);
+}
+
 describe('maintainFeedPersonalization', () => {
   it('refreshes bounded stats and interests before pruning expired feed data', async () => {
     const db = createRpcClient({
@@ -34,6 +41,7 @@ describe('maintainFeedPersonalization', () => {
         },
         error: null,
       },
+      refresh_feed_viewer_daily: { data: 41, error: null },
       prune_feed_personalization_data: {
         data: {
           skipped: false,
@@ -50,10 +58,12 @@ describe('maintainFeedPersonalization', () => {
     });
     const now = new Date('2026-07-11T07:20:00.000Z');
     const invalidateFeedCache = vi.fn();
+    const refreshAccountLabels = labelPass();
 
     await expect(maintainFeedPersonalization(db.client as never, {
       now,
       invalidateFeedCache,
+      refreshAccountLabels,
     })).resolves.toEqual({
       asOf: '2026-07-11T07:20:00.000Z',
       postStatsRefreshed: 37,
@@ -66,6 +76,8 @@ describe('maintainFeedPersonalization', () => {
         fromDate: '2026-07-08',
         retentionDays: 400,
       },
+      accountLabels: LABELS_SUMMARY,
+      viewerDaily: { rowsRefreshed: 41, lookbackDays: 3 },
       retention: {
         skipped: false,
         events_deleted: 8,
@@ -104,6 +116,11 @@ describe('maintainFeedPersonalization', () => {
         p_lookback_days: 3,
         p_retention_days: 400,
       }],
+      // v4: the viewer-grain rollup, also before the prune.
+      ['refresh_feed_viewer_daily', {
+        p_as_of: '2026-07-11T07:20:00.000Z',
+        p_days: 3,
+      }],
       ['prune_feed_personalization_data', {
         p_as_of: '2026-07-11T07:20:00.000Z',
         // Brought down from 90 with the facts. The prune RPC rejects fact
@@ -119,6 +136,88 @@ describe('maintainFeedPersonalization', () => {
       }],
     ]);
     expect(invalidateFeedCache).toHaveBeenCalledOnce();
+    expect(refreshAccountLabels).toHaveBeenCalledOnce();
+    expect(refreshAccountLabels).toHaveBeenCalledWith(db.client, { now });
+  });
+
+  it('renews account labels after creator stats and before the interest refresh', async () => {
+    const calls: string[] = [];
+    const db = createRpcClient({
+      refresh_post_feed_stats: { data: 0, error: null },
+      refresh_post_feed_engagement_stats: { data: 0, error: null },
+      refresh_creator_feed_stats: { data: 0, error: null },
+      refresh_user_interest_weights: { data: 0, error: null },
+      refresh_feed_delivery_fact_daily: { data: {}, error: null },
+      refresh_feed_viewer_daily: { data: { rows_refreshed: 7 }, error: null },
+      prune_feed_personalization_data: { data: { skipped: false }, error: null },
+    });
+    db.rpc.mockImplementation(async (name: string) => {
+      calls.push(name);
+      return {
+        refresh_feed_viewer_daily: { data: { rows_refreshed: 7 }, error: null },
+        refresh_feed_delivery_fact_daily: { data: {}, error: null },
+        prune_feed_personalization_data: { data: { skipped: false }, error: null },
+      }[name] ?? { data: 0, error: null };
+    });
+
+    const summary = await maintainFeedPersonalization(db.client as never, {
+      now: new Date('2026-07-11T07:20:00.000Z'),
+      invalidateFeedCache: () => calls.push('invalidate-feed-cache'),
+      refreshAccountLabels: labelPass(async () => {
+        calls.push('account-labels');
+        return LABELS_SUMMARY;
+      }),
+    });
+
+    expect(calls).toEqual([
+      'refresh_post_feed_stats',
+      'refresh_post_feed_engagement_stats',
+      'refresh_creator_feed_stats',
+      'invalidate-feed-cache',
+      'account-labels',
+      'refresh_user_interest_weights',
+      'refresh_feed_delivery_fact_daily',
+      'refresh_feed_viewer_daily',
+      'prune_feed_personalization_data',
+    ]);
+    expect(summary.viewerDaily).toEqual({ rowsRefreshed: 7, lookbackDays: 3 });
+  });
+
+  it.each([
+    ['the account label pass', 'labels'],
+    ['the viewer-grain rollup', 'viewer-daily'],
+  ])('lets every other phase and the prune run when %s fails, then fails the run', async (_label, failing) => {
+    const db = createRpcClient({
+      refresh_post_feed_stats: { data: 0, error: null },
+      refresh_post_feed_engagement_stats: { data: 0, error: null },
+      refresh_creator_feed_stats: { data: 0, error: null },
+      refresh_user_interest_weights: { data: 0, error: null },
+      refresh_feed_delivery_fact_daily: { data: {}, error: null },
+      refresh_feed_viewer_daily: failing === 'viewer-daily'
+        ? { data: null, error: { message: 'relation "feed_viewer_daily" does not exist' } }
+        : { data: 3, error: null },
+      prune_feed_personalization_data: { data: { skipped: false }, error: null },
+    });
+    const refreshAccountLabels = failing === 'labels'
+      ? labelPass(async () => { throw new Error('Feed maintenance RPC upsert_account_labels failed: boom'); })
+      : labelPass();
+
+    await expect(maintainFeedPersonalization(db.client as never, {
+      now: new Date('2026-07-11T07:20:00.000Z'),
+      invalidateFeedCache: vi.fn(),
+      refreshAccountLabels,
+    })).rejects.toThrow(failing === 'labels'
+      ? 'Feed maintenance RPC upsert_account_labels failed: boom'
+      : 'Feed maintenance RPC refresh_feed_viewer_daily failed: relation "feed_viewer_daily" does not exist');
+    expect(db.rpc.mock.calls.map(([name]) => name)).toEqual([
+      'refresh_post_feed_stats',
+      'refresh_post_feed_engagement_stats',
+      'refresh_creator_feed_stats',
+      'refresh_user_interest_weights',
+      'refresh_feed_delivery_fact_daily',
+      'refresh_feed_viewer_daily',
+      'prune_feed_personalization_data',
+    ]);
   });
 
   it('stops before pruning when an aggregate refresh fails', async () => {
@@ -137,6 +236,7 @@ describe('maintainFeedPersonalization', () => {
     await expect(maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-07-11T07:20:00.000Z'),
       invalidateFeedCache,
+      refreshAccountLabels: labelPass(),
     })).rejects.toThrow(
       'Feed maintenance RPC refresh_user_interest_weights failed: statement timeout',
     );
@@ -165,6 +265,7 @@ describe('maintainFeedPersonalization', () => {
         data: { buckets_refreshed: 0, buckets_pruned: 0, from_date: null, retention_days: 400 },
         error: null,
       },
+      refresh_feed_viewer_daily: { data: 0, error: null },
       prune_feed_personalization_data: {
         data: {
           skipped: false,
@@ -186,6 +287,7 @@ describe('maintainFeedPersonalization', () => {
     const summary = await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-08-09T15:00:00.000Z'),
       invalidateFeedCache: vi.fn(),
+      refreshAccountLabels: labelPass(),
     });
 
     expect(logBackendWarning).toHaveBeenCalledWith('feed_retention_clamped', {
@@ -207,6 +309,7 @@ describe('maintainFeedPersonalization', () => {
         data: { buckets_refreshed: 0, buckets_pruned: 0, from_date: null, retention_days: 400 },
         error: null,
       },
+      refresh_feed_viewer_daily: { data: 0, error: null },
       prune_feed_personalization_data: {
         data: {
           skipped: false,
@@ -228,6 +331,7 @@ describe('maintainFeedPersonalization', () => {
     await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-08-09T15:00:00.000Z'),
       invalidateFeedCache: vi.fn(),
+      refreshAccountLabels: labelPass(),
     });
 
     expect(logBackendWarning).not.toHaveBeenCalled();

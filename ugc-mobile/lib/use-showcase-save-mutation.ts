@@ -21,6 +21,8 @@ interface SaveVariables {
   shouldSave: boolean;
   /** Which tap this was, per post. See `createShowcaseSaveIntentLedger`. */
   intentSeq: number;
+  /** Told the state the server settled on, unless a later tap overtook this one. */
+  onSaved?: (isSaved: boolean) => void;
 }
 
 /**
@@ -92,6 +94,9 @@ export function useShowcaseSaveMutation({
         invalidateQueries: (filters) => queryClient.invalidateQueries(filters),
       });
       void AccessibilityInfo.announceForAccessibility(result.isSaved ? 'Saved' : 'Removed from saved');
+      // After the guard above, as the reel's own: an overtaken tap does not
+      // report itself to ranking. A failed one never gets here.
+      variables.onSaved?.(result.isSaved);
     },
     onSettled: (_result, _error, variables) => {
       showcaseSaveIntents.close(variables.postId, variables.intentSeq);
@@ -100,7 +105,17 @@ export function useShowcaseSaveMutation({
 
   const { mutate } = mutation;
 
-  const toggleSave = useCallback((options: { postId: string; isSaved: boolean; saveCount: number }) => {
+  const toggleSave = useCallback((options: {
+    postId: string;
+    isSaved: boolean;
+    saveCount: number;
+    /**
+     * Told the state the server settled on, once it has answered this tap and
+     * no later tap overtook it: Home reports the save to the feed's ranking
+     * here, as the reel does.
+     */
+    onSaved?: (isSaved: boolean) => void;
+  }) => {
     if (!user) {
       router.push('/auth' as never);
       return;
@@ -122,6 +137,7 @@ export function useShowcaseSaveMutation({
       previousSaveCount: options.saveCount,
       shouldSave: !options.isSaved,
       intentSeq,
+      onSaved: options.onSaved,
     });
   }, [mutate, user]);
 

@@ -12,6 +12,7 @@ import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { IMMERSIVE_HORIZONTAL_LIST_TUNING } from '@/lib/media-performance';
 import { useMediaZoomTileShaped } from '@/lib/media-zoom-tile-shape';
 import { useReducedMotion } from '@/lib/motion';
+import { measureSourceVideoProgress } from '@/lib/showcase-media-progress';
 import {
   getShowcaseFeedStreamUrl,
   getShowcaseMediaPreviewUrl,
@@ -39,6 +40,12 @@ type ShowcaseMediaPreviewProps = {
   videoActivation?: VideoActivation;
   /** Whether the video on show holds a drawn player; see FeedVideoPreview's `onReadyChange`. */
   onVideoReadyChange?: (ready: boolean) => void;
+  /**
+   * How far the video on show has played while it plays inline, as a share of
+   * the post's video and that video's length (a teaser is measured against the
+   * whole clip: `measureSourceVideoProgress`). Home's feed telemetry.
+   */
+  onVideoProgress?: (progress: number, durationMs: number | null) => void;
   videoBackdrop?: 'solid' | 'none';
   videoContentFit?: 'cover' | 'contain';
   /**
@@ -72,6 +79,7 @@ export function ShowcaseMediaPreview({
   recyclingKey,
   videoActivation = 'never',
   onVideoReadyChange,
+  onVideoProgress,
   videoBackdrop = 'solid',
   videoContentFit = 'contain',
   watchdog = false,
@@ -99,6 +107,7 @@ export function ShowcaseMediaPreview({
         recyclingKey={recyclingKey}
         videoActivation={resolvedVideoActivation}
         onVideoReadyChange={onVideoReadyChange}
+        onVideoProgress={onVideoProgress}
         videoBackdrop={videoBackdrop}
         videoContentFit={videoContentFit}
         watchdog={watchdog}
@@ -121,6 +130,7 @@ export function ShowcaseMediaPreview({
       recyclingKey={recyclingKey}
       videoActivation={resolvedVideoActivation}
       onVideoReadyChange={onVideoReadyChange}
+      onVideoProgress={onVideoProgress}
       videoBackdrop={videoBackdrop}
       videoContentFit={videoContentFit}
       watchdog={watchdog}
@@ -141,6 +151,7 @@ function ShowcaseMediaCarousel({
   recyclingKey,
   videoActivation = 'never',
   onVideoReadyChange,
+  onVideoProgress,
   videoBackdrop = 'solid',
   videoContentFit = 'contain',
   watchdog = false,
@@ -176,6 +187,7 @@ function ShowcaseMediaCarousel({
               recyclingKey={`${recyclingKey}:${mediaItem.id}`}
               videoActivation={currentIndex === index ? videoActivation : 'never'}
               onVideoReadyChange={currentIndex === index ? onVideoReadyChange : undefined}
+              onVideoProgress={currentIndex === index ? onVideoProgress : undefined}
               videoBackdrop={videoBackdrop}
               videoContentFit={videoContentFit}
               watchdog={watchdog && currentIndex === index}
@@ -267,6 +279,7 @@ function ShowcaseMediaSlide({
   recyclingKey,
   videoActivation,
   onVideoReadyChange,
+  onVideoProgress,
   videoBackdrop,
   videoContentFit,
   watchdog,
@@ -283,6 +296,7 @@ function ShowcaseMediaSlide({
   recyclingKey: string;
   videoActivation: VideoActivation;
   onVideoReadyChange?: (ready: boolean) => void;
+  onVideoProgress?: (progress: number, durationMs: number | null) => void;
   videoBackdrop: 'solid' | 'none';
   videoContentFit: 'cover' | 'contain';
   watchdog: boolean;
@@ -316,6 +330,11 @@ function ShowcaseMediaSlide({
 
   if (item.mediaKind === 'video') {
     const streamUrl = getShowcaseFeedStreamUrl(item);
+    // The server's teaser is the head of a long clip, not the clip: what it
+    // plays is measured against the source.
+    const teaserUrl = item.preview?.teaserUrl ?? item.teaserUrl ?? null;
+    const playingTeaser = Boolean(teaserUrl) && streamUrl === teaserUrl;
+    const sourceDurationSeconds = item.durationSeconds ?? item.preview?.durationSeconds;
     return (
       <View style={{ width, height }}>
         <FeedVideoPreview
@@ -332,6 +351,15 @@ function ShowcaseMediaSlide({
           active={videoActivation === 'visible' || (videoActivation === 'when-poster-missing' && !usablePreviewUrl)}
           prepared={videoActivation === 'prepared'}
           onReadyChange={onVideoReadyChange}
+          onPlaybackTime={onVideoProgress ? (currentTimeSeconds, streamDurationSeconds) => {
+            const sample = measureSourceVideoProgress({
+              currentTimeSeconds,
+              streamDurationSeconds,
+              teaser: playingTeaser,
+              sourceDurationSeconds,
+            });
+            if (sample) onVideoProgress(sample.progress, sample.durationMs);
+          } : undefined}
           height={height}
           radius={radius}
           outlined={outlined}

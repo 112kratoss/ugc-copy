@@ -9,6 +9,9 @@ import {
   FOR_YOU_RULES_V3_DIVERSITY_CONFIG,
   FOR_YOU_RULES_V3_RETRIEVAL_CONFIG,
   FOR_YOU_RULES_V3_WEIGHTS,
+  FOR_YOU_RULES_V4_DIVERSITY_CONFIG,
+  FOR_YOU_RULES_V4_RETRIEVAL_CONFIG,
+  FOR_YOU_RULES_V4_WEIGHTS,
   decodeRankedFeedCursor,
   encodeRankedFeedCursor,
   explainRankedFeedScore,
@@ -971,7 +974,7 @@ describe('v3 retrieval config', () => {
   it('leaves v1 and v2 rows on their own RPC with the v3 keys inert', () => {
     expect(normalizeRetrievalConfig({ candidate_rpc: 'v2' })).toMatchObject({ candidateRpc: 'v2', ...v3Defaults });
     expect(normalizeRetrievalConfig({ candidate_limit: 300 })).toMatchObject({ candidateRpc: 'v1', ...v3Defaults });
-    expect(normalizeRetrievalConfig({ candidate_rpc: 'v4' }).candidateRpc).toBe('v1');
+    expect(normalizeRetrievalConfig({ candidate_rpc: 'v5' }).candidateRpc).toBe('v1');
   });
 
   it('honours the recommendation thresholds only for the v3 RPC, the only one that reports follows', () => {
@@ -1641,5 +1644,305 @@ describe('for-you-rules v3 wiring', () => {
     expect(ids).toHaveLength(60);
     expect(ids.filter((id) => id.startsWith('cold-'))).toEqual(['cold-unserved']);
     expect(ids).not.toContain('est-59');
+  });
+
+  // -------------------------------------------------------------------------
+  // v4: taste-vector retrieval, semantic features and account labels.
+  // -------------------------------------------------------------------------
+
+  const V4_ALGORITHM: AlgorithmRow = {
+    id: 'algorithm-v4',
+    algorithm_key: 'for-you-rules',
+    version: 4,
+    weights: FOR_YOU_RULES_V4_WEIGHTS,
+    retrieval_config: FOR_YOU_RULES_V4_RETRIEVAL_CONFIG,
+    diversity_config: FOR_YOU_RULES_V4_DIVERSITY_CONFIG,
+  };
+
+  /** A get_ranked_feed_candidates_v4 row: v3's columns, then v4's. */
+  function v4Candidate(postId: string, overrides: Record<string, unknown> = {}) {
+    return v3Candidate(postId, {
+      semantic_similarity: 0.3,
+      semantic_cluster: 'c4',
+      taste_available: true,
+      ...overrides,
+    });
+  }
+
+  it('calls get_ranked_feed_candidates_v4 with every v3 parameter and every v4 one', async () => {
+    const { client, rpc } = v3Client({
+      algorithm: V4_ALGORITHM,
+      candidates: [v4Candidate('post-a')],
+      retrievalConfig: {
+        ...FOR_YOU_RULES_V4_RETRIEVAL_CONFIG,
+        cold_limit: 40,
+        semantic_limit: 120,
+        semantic_min_similarity: -0.25,
+        taste_lookback_days: 30,
+        taste_limit: 20,
+        exclude_near_duplicates: false,
+        exclude_labelled_accounts: false,
+      },
+    });
+
+    await forYouPage(client);
+
+    // Exact: a parameter the code forgot, or one the RPC does not take, fails.
+    expect(rpc).toHaveBeenCalledWith('get_ranked_feed_candidates_v4', {
+      p_viewer_user_id: 'viewer-1',
+      p_anonymous_key_hash: null,
+      p_category: null,
+      p_following_limit: 100,
+      p_interest_limit: 150,
+      p_trending_limit: 100,
+      p_recent_limit: 150,
+      p_exploration_limit: 100,
+      p_seen_lookback_days: 14,
+      p_creator_prior_cap: 0.15,
+      p_exploration_confidence: 1.5,
+      p_as_of: expect.any(String),
+      p_cold_limit: 40,
+      p_cold_max_age_hours: 168,
+      p_cold_impression_threshold: 60,
+      p_max_age_days: 365,
+      p_served_lookback_hours: 6,
+      p_trending_per_author_cap: 5,
+      p_creator_prior_mean: 0.15,
+      p_semantic_limit: 120,
+      p_semantic_min_similarity: -0.25,
+      p_taste_lookback_days: 30,
+      p_taste_limit: 20,
+      p_exclude_near_duplicates: false,
+      p_exclude_labelled_accounts: false,
+    });
+    expect(rpc.mock.calls.map(([name]) => name)).toEqual([
+      'get_ranked_feed_candidates_v4',
+      'persist_ranked_feed_session',
+    ]);
+  });
+
+  it('passes the seeded v4 parameters for an anonymous viewer', async () => {
+    const { client, rpc } = v3Client({ algorithm: V4_ALGORITHM, candidates: [v4Candidate('post-a')] });
+
+    await forYouPage(client, { anonymousKeyHash: 'a'.repeat(64), viewerUserId: null });
+
+    expect(rpc).toHaveBeenCalledWith('get_ranked_feed_candidates_v4', expect.objectContaining({
+      p_viewer_user_id: null,
+      p_anonymous_key_hash: 'a'.repeat(64),
+      p_semantic_limit: 150,
+      p_semantic_min_similarity: 0,
+      p_taste_lookback_days: 90,
+      p_taste_limit: 50,
+      p_exclude_near_duplicates: true,
+      p_exclude_labelled_accounts: true,
+    }));
+  });
+
+  it('carries the semantic columns into the feature rows, the score and score_components', async () => {
+    const rankSpy = await spyOnRanking();
+    const { client, persisted } = v3Client({
+      algorithm: V4_ALGORITHM,
+      candidates: [
+        v4Candidate('close', { candidate_source: 'semantic', sources: ['semantic', 'fresh'], semantic_similarity: 0.82 }),
+        v4Candidate('far', { semantic_similarity: 0, semantic_cluster: null }),
+      ],
+    });
+
+    const page = await forYouPage(client);
+
+    const features = new Map(rankSpy.mock.calls[0][0].featureRows.map((row) => [row.postId, row]));
+    expect(features.get('close')).toMatchObject({
+      candidateSource: 'semantic', semanticSimilarity: 0.82, semanticCluster: 'c4', tasteAvailable: true,
+    });
+    expect(features.get('far')).toMatchObject({ semanticSimilarity: 0, semanticCluster: null });
+    // 0.14 × 0.82 is the whole difference between the two otherwise equal rows.
+    const ranked: RankedShowcaseItem[] = rankSpy.mock.results[0].value;
+    const base = new Map(ranked.map((entry) => [entry.item.id, entry.components.base]));
+    expect((base.get('close') ?? 0) - (base.get('far') ?? 0)).toBeCloseTo(0.14 * 0.82, 12);
+
+    const components = new Map(persisted[0].p_items.map((entry) => [entry.post_id, entry.score_components]));
+    expect(components.get('close')).toMatchObject({
+      semantic_similarity: 0.82, semantic_cluster: 'c4', taste_available: true, sources: ['semantic', 'fresh'],
+    });
+    expect(components.get('far')).toMatchObject({ semantic_similarity: 0, semantic_cluster: null });
+    expect(page.items.find((entry) => entry.id === 'close')?.recommendation).toMatchObject({
+      candidateSource: 'semantic',
+      reason: 'Close to what you saved',
+      algorithmVersion: 'for-you-rules-v4',
+    });
+  });
+
+  it('keeps the v4 columns out of a v3 session, even when the RPC row carries them', async () => {
+    const { client, persisted } = v3Client({ candidates: [v4Candidate('post-a', { semantic_similarity: 0.9 })] });
+
+    await forYouPage(client);
+
+    expect(persisted[0].p_items[0].score_components).toMatchObject({ is_following: false });
+    expect(persisted[0].p_items[0].score_components).not.toHaveProperty('semantic_similarity');
+    expect(persisted[0].p_items[0].score_components).not.toHaveProperty('taste_available');
+  });
+
+  it('drops a labelled stranger from a v4 page and keeps a labelled creator the viewer follows', async () => {
+    const visibilitySpy = await spyOnVisibility();
+    const { client, persisted, reads } = v3Client({
+      algorithm: V4_ALGORITHM,
+      candidates: [
+        v4Candidate('plain'),
+        v4Candidate('labelled-stranger'),
+        v4Candidate('labelled-followed', { is_following: true, candidate_source: 'following' }),
+      ],
+      rows: {
+        account_labels: [
+          { user_id: 'creator-labelled-stranger', label: 'nsfw_account' },
+          { user_id: 'creator-labelled-followed', label: 'negative_feedback_account' },
+        ],
+      },
+    });
+
+    await forYouPage(client);
+
+    expect(persistedIds(persisted[0])).toEqual(['labelled-followed', 'plain']);
+    expect(visibilitySpy.mock.results[0].value.dropped).toEqual([
+      { postId: 'labelled-stranger', reason: 'labelled_account' },
+    ]);
+    const labelRead = reads.find((read) => read.table === 'account_labels');
+    expect(labelRead?.filters).toEqual([
+      ['in', 'user_id', ['creator-plain', 'creator-labelled-stranger', 'creator-labelled-followed']],
+    ]);
+  });
+
+  it('reads no labels for a v3 ranking', async () => {
+    const { client, persisted, reads } = v3Client({
+      candidates: [v3Candidate('labelled-stranger')],
+      rows: { account_labels: [{ user_id: 'creator-labelled-stranger', label: 'spam_account' }] },
+    });
+
+    await forYouPage(client);
+
+    expect(reads.map((read) => read.table)).not.toContain('account_labels');
+    expect(persistedIds(persisted[0])).toEqual(['labelled-stranger']);
+  });
+
+  it('empties a v4 page when the labels cannot be read, as for the other relation reads', async () => {
+    const { client, persisted } = v3Client({
+      algorithm: V4_ALGORITHM,
+      candidates: [v4Candidate('post-a'), v4Candidate('post-b')],
+      failingTable: 'account_labels',
+    });
+
+    const page = await forYouPage(client);
+
+    expect(page.items).toEqual([]);
+    expect(persisted).toEqual([]);
+    expect(loggerMocks.logBackendError).toHaveBeenCalledWith(
+      'error_loading_feed_author_labels',
+      expect.anything(),
+    );
+  });
+
+  it('re-applies the labels on a v4 continuation page, and fails it closed when they cannot be read', async () => {
+    const sessionRow = (postId: string, position: number, components: Record<string, unknown> = {}) => ({
+      id: 900 + position,
+      session_id: 'session-v4',
+      post_id: postId,
+      position,
+      candidate_source: 'fresh',
+      final_score: 0.5,
+      score_components: { negative_feedback_risk: 0.01, is_following: false, ...components },
+    });
+    const session = {
+      id: 'session-v4',
+      viewer_user_id: 'viewer-1',
+      anonymous_key_hash: null,
+      algorithm_version_id: 'algorithm-v4',
+      created_at: new Date().toISOString(),
+      expires_at: '2099-01-01T00:00:00.000Z',
+    };
+    const rows = {
+      feed_session_items: [
+        sessionRow('still-fine', 12),
+        sessionRow('labelled-since', 13),
+        sessionRow('labelled-followed', 14, { is_following: true }),
+      ],
+      account_labels: [
+        { user_id: 'creator-labelled-since', label: 'spam_account' },
+        { user_id: 'creator-labelled-followed', label: 'spam_account' },
+      ],
+    };
+    const cursor = encodeRankedFeedCursor({ sessionId: 'session-v4', position: 12 });
+
+    const page = await forYouPage(v3Client({ algorithm: V4_ALGORITHM, session, rows }).client, { cursor });
+
+    expect(page.items.map((entry) => entry.id)).toEqual(['still-fine', 'labelled-followed']);
+
+    const failing = await forYouPage(
+      v3Client({ algorithm: V4_ALGORITHM, session, rows, failingTable: 'account_labels' }).client,
+      { cursor },
+    );
+    expect(failing.items).toEqual([]);
+    expect(failing.pageInfo.hasMore).toBe(false);
+  });
+});
+
+describe('v4 retrieval config', () => {
+  const v4Defaults = {
+    semanticLimit: 150,
+    semanticMinSimilarity: 0,
+    tasteLookbackDays: 90,
+    tasteLimit: 50,
+    excludeNearDuplicates: true,
+    excludeLabelledAccounts: true,
+  };
+
+  it('reads every seeded v4 key, and the v3 thresholds with them', () => {
+    expect(normalizeRetrievalConfig(FOR_YOU_RULES_V4_RETRIEVAL_CONFIG)).toMatchObject({
+      candidateRpc: 'v4',
+      ...v4Defaults,
+      coldLimit: 50,
+      visibilityThresholds: { recommendationMaxPostNegativeRisk: 0.12, recommendationMaxCreatorNegativeRate: 0.08 },
+    });
+  });
+
+  it('reads the v4 keys within their bounds, inclusive', () => {
+    expect(normalizeRetrievalConfig({
+      candidate_rpc: 'v4',
+      semantic_limit: 0,
+      semantic_min_similarity: -1,
+      taste_lookback_days: 365,
+      taste_limit: 200,
+      exclude_near_duplicates: false,
+      exclude_labelled_accounts: false,
+    })).toMatchObject({
+      semanticLimit: 0,
+      semanticMinSimilarity: -1,
+      tasteLookbackDays: 365,
+      tasteLimit: 200,
+      excludeNearDuplicates: false,
+      excludeLabelledAccounts: false,
+    });
+    expect(normalizeRetrievalConfig({ candidate_rpc: 'v4', semantic_limit: 500, semantic_min_similarity: 1, taste_lookback_days: 1, taste_limit: 1 }))
+      .toMatchObject({ semanticLimit: 500, semanticMinSimilarity: 1, tasteLookbackDays: 1, tasteLimit: 1 });
+  });
+
+  it('falls back to the RPC defaults outside each bound, for null, and for a non-boolean switch', () => {
+    expect(normalizeRetrievalConfig({
+      candidate_rpc: 'v4',
+      semantic_limit: 501,
+      semantic_min_similarity: 1.5,
+      taste_lookback_days: 0,
+      taste_limit: 201,
+      exclude_near_duplicates: 'false',
+      exclude_labelled_accounts: 0,
+    })).toMatchObject(v4Defaults);
+    expect(normalizeRetrievalConfig({
+      candidate_rpc: 'v4',
+      semantic_limit: null,
+      semantic_min_similarity: null,
+      taste_lookback_days: null,
+      taste_limit: 12.5,
+      exclude_near_duplicates: null,
+      exclude_labelled_accounts: null,
+    })).toMatchObject(v4Defaults);
+    expect(normalizeRetrievalConfig({ candidate_rpc: 'v4', semantic_min_similarity: true }).semanticMinSimilarity).toBe(0);
   });
 });

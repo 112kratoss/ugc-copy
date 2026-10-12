@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   createServiceClient: vi.fn(),
   runAccountDeletionResweepsBackendJob: vi.fn(),
   runBackendAlertDeliveryJob: vi.fn(),
+  runFeedEmbeddingsBackendJob: vi.fn(),
   runFeedMaintenanceBackendJob: vi.fn(),
   runGenerationCompletionsBackendJob: vi.fn(),
   runMediaPreviewRepairBackendJob: vi.fn(),
@@ -37,6 +38,9 @@ vi.mock('@/lib/backend-job-executions', async () => {
     ),
     runBackendAlertDeliveryJob: (...args: unknown[]) => (
       mocks.runBackendAlertDeliveryJob(...args)
+    ),
+    runFeedEmbeddingsBackendJob: (...args: unknown[]) => (
+      mocks.runFeedEmbeddingsBackendJob(...args)
     ),
     runFeedMaintenanceBackendJob: (...args: unknown[]) => (
       mocks.runFeedMaintenanceBackendJob(...args)
@@ -85,6 +89,15 @@ describe('/api/cron/backend-jobs route', () => {
       skipped: true,
       reason: 'alert_delivery_not_configured',
       summary: { configured: false },
+    });
+    mocks.runFeedEmbeddingsBackendJob.mockReset();
+    mocks.runFeedEmbeddingsBackendJob.mockResolvedValue({
+      success: true,
+      job: 'feed-embeddings',
+      route: '/api/cron/feed-embeddings',
+      status: 'skipped',
+      skipped: true,
+      reason: 'no_posts_pending_embedding',
     });
     mocks.runFeedMaintenanceBackendJob.mockReset();
     mocks.runFeedMaintenanceBackendJob.mockResolvedValue({
@@ -195,6 +208,11 @@ describe('/api/cron/backend-jobs route', () => {
       ...expectedOptions,
       requestId: 'iad1::scheduler-1:mobile-push-receipts',
     });
+    // Feed v4: posts are embedded, clustered and de-duplicated every tick.
+    expect(mocks.runFeedEmbeddingsBackendJob).toHaveBeenCalledWith({
+      ...expectedOptions,
+      requestId: 'iad1::scheduler-1:feed-embeddings',
+    });
     // F14: both are dedicated crons now. Vercel invokes their routes directly,
     // so the shared scheduler must leave them alone -- running them here too
     // would put the memory-heavy work straight back into this invocation.
@@ -203,7 +221,7 @@ describe('/api/cron/backend-jobs route', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       scheduler: '/api/cron/backend-jobs',
-      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'mobile-push-receipts', 'workflow-run-steps'],
+      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-embeddings', 'mobile-push-receipts', 'workflow-run-steps'],
     });
   });
 
@@ -264,6 +282,7 @@ describe('/api/cron/backend-jobs route', () => {
       results: [
         expect.objectContaining({ job: 'account-deletion-resweeps', status: 'skipped' }),
         expect.objectContaining({ job: 'backend-alert-delivery', status: 'skipped' }),
+        expect.objectContaining({ job: 'feed-embeddings', status: 'skipped' }),
         expect.objectContaining({ job: 'mobile-push-receipts', status: 'succeeded' }),
         expect.objectContaining({ job: 'workflow-run-steps', status: 'succeeded' }),
       ],
@@ -286,7 +305,7 @@ describe('/api/cron/backend-jobs route', () => {
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMobilePushReceiptsBackendJob).toHaveBeenCalledTimes(1);
     await expect(response.json()).resolves.toMatchObject({
-      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'mobile-push-receipts', 'workflow-run-steps'],
+      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-embeddings', 'mobile-push-receipts', 'workflow-run-steps'],
     });
   });
 
@@ -311,7 +330,7 @@ describe('/api/cron/backend-jobs route', () => {
     });
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
-      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-maintenance', 'mobile-push-receipts', 'workflow-run-steps'],
+      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-embeddings', 'feed-maintenance', 'mobile-push-receipts', 'workflow-run-steps'],
     });
   });
 
@@ -340,6 +359,7 @@ describe('/api/cron/backend-jobs route', () => {
       dueJobs: [
         'account-deletion-resweeps',
         'backend-alert-delivery',
+        'feed-embeddings',
         'mobile-push-receipts',
         'referral-reward-reconciliation',
         'workflow-run-steps',
@@ -370,6 +390,7 @@ describe('/api/cron/backend-jobs route', () => {
       results: [
         expect.objectContaining({ job: 'account-deletion-resweeps', status: 'skipped' }),
         expect.objectContaining({ status: 'skipped' }),
+        expect.objectContaining({ job: 'feed-embeddings', status: 'skipped' }),
         expect.objectContaining({ job: 'mobile-push-receipts', status: 'failed' }),
         expect.objectContaining({ job: 'workflow-run-steps', status: 'skipped' }),
       ],

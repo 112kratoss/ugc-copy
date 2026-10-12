@@ -53,6 +53,12 @@ interface PostCommentsProps {
     onCommentCountChange?: (commentCount: number) => void;
     /** Loads the first page immediately instead of waiting for a "load" tap. */
     autoLoad?: boolean;
+    /**
+     * The feed delivery the thread was opened from, sent with each new comment
+     * so the server can credit it to the ranked card that showed the post.
+     * Absent wherever the post was not reached through a ranked feed.
+     */
+    deliveryId?: string | null;
 }
 
 function emptyReplyPageState(): ReplyPageState {
@@ -74,6 +80,7 @@ export default function PostComments({
     commentCount,
     onCommentCountChange,
     autoLoad = true,
+    deliveryId = null,
 }: PostCommentsProps) {
     const { session, user } = useAuth();
     const accessToken = session?.access_token ?? null;
@@ -313,7 +320,7 @@ export default function PostComments({
             const response = await fetch(`/api/showcase/posts/${encodeURIComponent(postId)}/comments`, {
                 method: 'POST',
                 headers: authHeaders(true),
-                body: JSON.stringify({ body, parentId }),
+                body: JSON.stringify({ body, parentId, ...(deliveryId ? { deliveryId } : {}) }),
             });
             const data = await response.json() as {
                 comment?: PostComment;
@@ -366,6 +373,7 @@ export default function PostComments({
     }, [
         accessToken,
         authHeaders,
+        deliveryId,
         draft,
         loadPage,
         loadReplies,

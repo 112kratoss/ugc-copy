@@ -172,6 +172,94 @@ describe('profile follow service', () => {
     expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
   });
 
+  describe('the follow feed event', () => {
+    const POST_ID = '30000000-0000-4000-8000-000000000001';
+
+    it('records a new follow from a feed card against that card, behind the answer', async () => {
+      const client = createClient();
+      const runAfterResponse = vi.fn();
+      const scheduleFeedEvent = vi.fn(async () => undefined);
+
+      const result = await updateCreatorFollowForRoute({
+        adminSupabase: client.client,
+        followerId: 'follower-1',
+        body: { followingId: 'creator-1', following: true, postId: POST_ID, deliveryId: '812' },
+        runAfterResponse,
+        scheduleFeedEvent,
+      });
+
+      expect(result).toEqual({ ok: true, body: { following: true } });
+      expect(scheduleFeedEvent).toHaveBeenCalledTimes(1);
+      expect(scheduleFeedEvent).toHaveBeenCalledWith(runAfterResponse, client.client, {
+        eventType: 'follow',
+        viewerUserId: 'follower-1',
+        postId: POST_ID,
+        deliveryId: '812',
+        // Only a post of the creator followed can carry the follow.
+        expectedCreatorUserId: 'creator-1',
+      });
+    });
+
+    it('takes either half of the attribution alone, and ignores malformed values', async () => {
+      const scheduleFeedEvent = vi.fn(async () => undefined);
+
+      await updateCreatorFollowForRoute({
+        adminSupabase: createClient().client,
+        followerId: 'follower-1',
+        body: { followingId: 'creator-1', following: true, deliveryId: '812', postId: 'not-a-post' },
+        scheduleFeedEvent,
+      });
+      await updateCreatorFollowForRoute({
+        adminSupabase: createClient().client,
+        followerId: 'follower-1',
+        body: { followingId: 'creator-1', following: true, postId: POST_ID, deliveryId: -4 },
+        scheduleFeedEvent,
+      });
+
+      expect(scheduleFeedEvent.mock.calls.map((call) => (call as unknown[])[2])).toEqual([
+        expect.objectContaining({ postId: null, deliveryId: '812' }),
+        expect.objectContaining({ postId: POST_ID, deliveryId: null }),
+      ]);
+    });
+
+    it('writes nothing for a follow from a profile, a repeat follow, or an unfollow', async () => {
+      const scheduleFeedEvent = vi.fn(async () => undefined);
+
+      await updateCreatorFollowForRoute({
+        adminSupabase: createClient().client,
+        followerId: 'follower-1',
+        body: { followingId: 'creator-1', following: true },
+        scheduleFeedEvent,
+      });
+      await updateCreatorFollowForRoute({
+        adminSupabase: createClient({ initialFollows: [{ follower_id: 'follower-1', following_id: 'creator-1' }] }).client,
+        followerId: 'follower-1',
+        body: { followingId: 'creator-1', following: true, postId: POST_ID },
+        scheduleFeedEvent,
+      });
+      await updateCreatorFollowForRoute({
+        adminSupabase: createClient({ initialFollows: [{ follower_id: 'follower-1', following_id: 'creator-1' }] }).client,
+        followerId: 'follower-1',
+        body: { followingId: 'creator-1', following: false, postId: POST_ID },
+        scheduleFeedEvent,
+      });
+
+      expect(scheduleFeedEvent).not.toHaveBeenCalled();
+    });
+
+    it('never fails the follow when its feed event cannot be written', async () => {
+      // The real writer, against a client with no posts or feed tables at all.
+      const client = createClient();
+
+      await expect(updateCreatorFollowForRoute({
+        adminSupabase: client.client,
+        followerId: 'follower-1',
+        body: { followingId: 'creator-1', following: true, postId: POST_ID },
+      })).resolves.toEqual({ ok: true, body: { following: true } });
+      expect(client.followRows).toEqual([{ follower_id: 'follower-1', following_id: 'creator-1' }]);
+    });
+  });
+
   it('accepts a concurrent duplicate only after confirming the same follow exists', async () => {
     const client = createClient();
     const insert = client.insertFollow.getMockImplementation()!;

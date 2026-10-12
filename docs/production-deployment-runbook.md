@@ -187,7 +187,7 @@ This probe does not replace the provider-dashboard gate. After it passes, send t
 2. Commit and push the reviewed code to `main` once.
 3. `Quality` replays all migrations, runs database behavior tests, and verifies the web, E2E, and mobile gates.
 4. A successful `Quality` run triggers `Production release` for its exact SHA.
-5. The release workflow refuses stale SHAs, previews and applies Supabase migrations, and deploys `kie-webhook`.
+5. The release workflow refuses stale SHAs, previews and applies Supabase migrations, and deploys both edge functions (`kie-webhook`, `embed-post`).
 6. It creates a production-configured Vercel deployment with `--skip-domain` and `--force`, then verifies public and protected health plus `/api/app-version` and checks that `buildId` equals the quality-verified SHA. `--force` builds without Vercel's build cache: a restored cache once shipped #151's route-only stylesheet without the new `/models` classes, which a fresh build of the same commit had.
 7. It re-checks that `main` has not advanced, promotes the staged deployment, and verifies the production domain serves the same SHA.
    Protected health must identify that exact SHA and report `ok`. The staged
@@ -457,7 +457,7 @@ A queued copy still present a day after it was queued fails the job's run, which
 
 ## Durable Queue Graduation Decision
 
-Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `media-preview-repair`, `media-upload-reclaim`, `mobile-push-receipts`, `operational-data-retention`, `referral-reward-reconciliation`, `showcase-media-revocations`, and `workflow-run-steps`.
+Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-embeddings`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `media-preview-repair`, `media-upload-reclaim`, `mobile-push-receipts`, `operational-data-retention`, `referral-reward-reconciliation`, `showcase-media-revocations`, and `workflow-run-steps`.
 
 This is the cost-efficient production baseline for the current workload because the jobs are idempotent, lock-protected in Supabase, bounded by 300-second function limits, and tolerant of the current ten-minute or hourly cadence. The single `/api/cron/backend-jobs` scheduler keeps Vercel cron invocations at 144 per day while logical jobs can still run at their own cadence.
 

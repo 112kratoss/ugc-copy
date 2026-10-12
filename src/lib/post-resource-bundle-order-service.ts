@@ -29,6 +29,87 @@ import {
   POST_RESOURCE_WEB_CASH_MIN_TOKENS,
   isPostResourceWebCashEligible,
 } from '@/lib/post-resource-commerce';
+import {
+  AUTHORITATIVE_FEED_EVENT_TIMEOUT_MS,
+  recordAuthoritativeFeedEvent,
+  type AuthoritativeFeedEventResult,
+} from '@/lib/showcase-feed-events-service';
+
+/**
+ * A purchase is credited to the delivery the buyer opened the post's
+ * resources (or the post) from: their latest `resource_open` or `open` of it
+ * within this window.
+ */
+export const BUNDLE_PURCHASE_DELIVERY_LOOKBACK_HOURS = 24;
+
+/**
+ * v4's server-written `purchase` feed event for a settled bundle purchase.
+ *
+ * Every settlement path calls it once its purchase is recorded — the buyer's
+ * own verify, Razorpay's webhook, the app store and credit unlocks — so it is
+ * written once per buyer and post however many of them report the same
+ * purchase. Given a Razorpay order id it reads the buyer and the post from the
+ * order. Telemetry on a payment: it never throws and waits no longer than the
+ * feed event timeout, the order read included.
+ */
+export async function recordPostResourceBundlePurchaseFeedEvent(
+  adminSupabase: SupabaseClient,
+  purchase: { buyerUserId: string; postId: string } | { razorpayOrderId: string },
+  { timeoutMs = AUTHORITATIVE_FEED_EVENT_TIMEOUT_MS }: { timeoutMs?: number } = {},
+): Promise<AuthoritativeFeedEventResult> {
+  const startedAtMs = Date.now();
+  let buyerUserId: string;
+  let postId: string;
+  if ('razorpayOrderId' in purchase) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const order = await Promise.race([
+        adminSupabase
+          .from('post_resource_bundle_orders')
+          .select('buyer_user_id, post_resource_bundles(post_id)')
+          .eq('razorpay_order_id', purchase.razorpayOrderId)
+          .maybeSingle()
+          .then(({ data, error }) => {
+            if (error) throw error;
+            return data as { buyer_user_id?: unknown; post_resource_bundles?: unknown } | null;
+          }),
+        new Promise<'timeout'>((resolve) => {
+          timer = setTimeout(() => resolve('timeout'), timeoutMs);
+        }),
+      ]);
+      if (order === 'timeout') return { status: 'failed', reason: 'timeout' };
+      const bundle = Array.isArray(order?.post_resource_bundles)
+        ? order.post_resource_bundles[0]
+        : order?.post_resource_bundles;
+      const bundlePostId = bundle && typeof bundle === 'object' ? (bundle as { post_id?: unknown }).post_id : null;
+      if (typeof order?.buyer_user_id !== 'string' || typeof bundlePostId !== 'string') {
+        return { status: 'skipped', reason: 'invalid_input' };
+      }
+      buyerUserId = order.buyer_user_id;
+      postId = bundlePostId;
+    } catch (error) {
+      logBackendError('failed_to_load_bundle_order_for_feed_event', { error });
+      return { status: 'failed', reason: 'error' };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  } else {
+    ({ buyerUserId, postId } = purchase);
+  }
+
+  return recordAuthoritativeFeedEvent(adminSupabase, {
+    eventType: 'purchase',
+    viewerUserId: buyerUserId,
+    postId,
+    // A bundle is bought once per buyer: every settlement path's report is the one purchase.
+    actionKey: `${buyerUserId}:${postId}`,
+    inferDeliveryFrom: {
+      eventTypes: ['resource_open', 'open'],
+      withinHours: BUNDLE_PURCHASE_DELIVERY_LOOKBACK_HOURS,
+    },
+    timeoutMs: Math.max(1, timeoutMs - (Date.now() - startedAtMs)),
+  });
+}
 
 type BundleForOrder = {
   id: string;

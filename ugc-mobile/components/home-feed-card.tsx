@@ -36,6 +36,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   onRemix,
   onShare,
   onAssetPress,
+  onVideoProgress,
   remixLoading,
 }: {
   card: HomeFeedCard;
@@ -53,6 +54,8 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   onShare: () => void;
   /** Opens the post's details, where the recipe is. */
   onAssetPress: () => void;
+  /** How far the card's video has played inline, for the feed's ranking (Home). */
+  onVideoProgress?: (progress: number, durationMs: number | null) => void;
   remixLoading?: boolean;
 }) {
   const theme = useAppTheme();
@@ -128,6 +131,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
             recyclingKey={`home-feed:${card.id}`}
             videoActivation={videoActivation}
             onVideoReadyChange={reportVideoReady}
+            onVideoProgress={onVideoProgress}
             videoBackdrop="none"
             videoContentFit="cover"
           />

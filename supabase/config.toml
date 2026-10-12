@@ -391,6 +391,11 @@ deno_version = 2
 [functions.kie-webhook]
 verify_jwt = false
 
+# Called only by the feed-embeddings job and the publish hook, with the
+# service-role key as the bearer; the function compares it in constant time.
+[functions.embed-post]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

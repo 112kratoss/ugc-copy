@@ -554,15 +554,37 @@ describe('processRazorpayWebhookForRoute', () => {
       bundleRpcMode: 'success',
     });
     const invalidateMarketplaceResourceListCache = vi.fn();
+    const recordPurchaseFeedEvent = vi.fn(async () => ({ status: 'recorded' as const, deliveryId: null }));
 
     const result = await processRazorpayWebhookForRoute({
       createAdminSupabase: () => admin.client,
       rawBody: paymentCapturedBody(),
       invalidateMarketplaceResourceListCache,
+      recordPurchaseFeedEvent,
     });
 
     expect(result).toEqual({ status: 200, body: 'OK' });
     expect(invalidateMarketplaceResourceListCache).toHaveBeenCalledTimes(1);
+    // v4's server-written purchase event; the buyer's own verify writing it
+    // first makes this one a duplicate.
+    expect(recordPurchaseFeedEvent).toHaveBeenCalledTimes(1);
+    expect(recordPurchaseFeedEvent).toHaveBeenCalledWith(admin.client, { razorpayOrderId: 'order_123' });
+  });
+
+  it('acknowledges a completed bundle purchase even when its feed event fails', async () => {
+    const admin = createAdminSupabaseMock({
+      bundleOrder: { id: 'bundle-order-1', buyer_user_id: 'user-1', status: 'created' },
+      bundleRpcMode: 'success',
+    });
+
+    const result = await processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+      invalidateMarketplaceResourceListCache: vi.fn(),
+      recordPurchaseFeedEvent: vi.fn(async () => ({ status: 'failed' as const, reason: 'error' as const })),
+    });
+
+    expect(result).toEqual({ status: 200, body: 'OK' });
   });
 
   it('accepts an add_credits false result only after verifying concurrent durable settlement', async () => {

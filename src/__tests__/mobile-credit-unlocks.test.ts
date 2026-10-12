@@ -449,12 +449,17 @@ describe('credit-funded mobile unlocks', () => {
   it('unlocks a paid post resource bundle by spending credits', async () => {
     const fakeSupabase = createBundleCreditSupabase({ credits: 1000 });
     const invalidateMarketplaceResourceListCache = vi.fn();
+    const recordPurchaseFeedEvent = vi.fn(async () => ({ status: 'recorded' as const, deliveryId: null }));
+    const deferred: Array<() => Promise<unknown>> = [];
 
     await expect(unlockPostResourceBundleWithCredits({
       adminSupabase: fakeSupabase.client,
       userId,
       postId: 'post-1',
       invalidateMarketplaceResourceListCache,
+      notifyPostResourceUnlockCompleted: vi.fn(async () => null),
+      recordPurchaseFeedEvent,
+      runAfterResponse: (task) => { deferred.push(task); },
     })).resolves.toMatchObject({
       success: true,
       entitlement: 'post_resource_unlock',
@@ -464,6 +469,11 @@ describe('credit-funded mobile unlocks', () => {
     });
     expect(fakeSupabase.bundlePurchases).toEqual([{ bundle_id: 'bundle-1', buyer_user_id: userId }]);
     expect(invalidateMarketplaceResourceListCache).toHaveBeenCalledOnce();
+    // v4's purchase feed event rides behind the answer with the notifications.
+    expect(recordPurchaseFeedEvent).not.toHaveBeenCalled();
+    expect(deferred).toHaveLength(1);
+    await deferred[0]();
+    expect(recordPurchaseFeedEvent).toHaveBeenCalledWith(fakeSupabase.client, { buyerUserId: userId, postId: 'post-1' });
   });
 
   it('returns already processed when the user already owns the bundle', async () => {
@@ -472,12 +482,14 @@ describe('credit-funded mobile unlocks', () => {
       purchases: [{ bundle_id: 'bundle-1', buyer_user_id: userId }],
     });
     const invalidateMarketplaceResourceListCache = vi.fn();
+    const recordPurchaseFeedEvent = vi.fn();
 
     await expect(unlockPostResourceBundleWithCredits({
       adminSupabase: fakeSupabase.client,
       userId,
       postId: 'post-1',
       invalidateMarketplaceResourceListCache,
+      recordPurchaseFeedEvent,
     })).resolves.toMatchObject({
       success: true,
       entitlement: 'post_resource_unlock',
@@ -486,6 +498,7 @@ describe('credit-funded mobile unlocks', () => {
       alreadyProcessed: true,
     });
     expect(invalidateMarketplaceResourceListCache).not.toHaveBeenCalled();
+    expect(recordPurchaseFeedEvent).not.toHaveBeenCalled();
   });
 
   it('rejects unlocks when the user does not have enough credits', async () => {

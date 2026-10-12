@@ -87,6 +87,12 @@ type PostCommentsProps = {
   authReturnTo?: string;
   initialReplyToId?: string | null;
   unavailableMessage?: string | null;
+  /**
+   * The feed delivery the thread was opened from (a ranked Home card, the reel
+   * it opened), sent with each new comment so the server can credit it to that
+   * delivery. Absent anywhere the post was not reached through a ranked feed.
+   */
+  deliveryId?: string | null;
 };
 
 export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(function PostComments({
@@ -103,6 +109,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   authReturnTo,
   initialReplyToId,
   unavailableMessage,
+  deliveryId,
 }, ref) {
   const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
@@ -313,7 +320,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       const parentId = replyTo
         ? replyTo.parentId ?? replyTo.id
         : null;
-      const response = await api.createPostComment(postId, { body, parentId });
+      const response = await api.createPostComment(postId, { body, parentId, deliveryId });
       setDraft('');
       setReplyTo(null);
 
@@ -355,7 +362,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     } finally {
       setSubmitting(false);
     }
-  }, [api, commentsQuery, commentsQueryKey, draft, postId, publishCommentCount, queryClient, replyTo, requireSignIn, submitting, user?.id]);
+  }, [api, commentsQuery, commentsQueryKey, deliveryId, draft, postId, publishCommentCount, queryClient, replyTo, requireSignIn, submitting, user?.id]);
 
   const removeComment = useCallback((comment: PostComment, asOwner: boolean) => {
     void showConfirmDialog({

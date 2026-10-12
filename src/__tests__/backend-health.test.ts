@@ -285,6 +285,15 @@ describe('collectBackendHealth', () => {
             error_message: null,
           },
           {
+            job_name: 'feed-embeddings',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:20.000Z',
+            duration_ms: 20000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
             job_name: 'feed-maintenance',
             status: 'succeeded',
             started_at: '2026-06-21T09:20:00.000Z',
@@ -388,8 +397,8 @@ describe('collectBackendHealth', () => {
       cadenceMinutes: 10,
       dailyInvocations: 144,
       dailyInvocationBudget: 456,
-      logicalDailyInvocations: 939,
-      coveredJobCount: 12,
+      logicalDailyInvocations: 1083,
+      coveredJobCount: 13,
       coveredJobs: expect.arrayContaining([
         expect.objectContaining({
           name: 'account-deletion-resweeps',
@@ -398,6 +407,11 @@ describe('collectBackendHealth', () => {
         }),
         expect.objectContaining({
           name: 'backend-alert-delivery',
+          cadenceMinutes: 10,
+          dailyInvocations: 144,
+        }),
+        expect.objectContaining({
+          name: 'feed-embeddings',
           cadenceMinutes: 10,
           dailyInvocations: 144,
         }),
@@ -433,7 +447,12 @@ describe('collectBackendHealth', () => {
         }),
       ]),
     });
-    expect(health.jobs).toHaveLength(12);
+    expect(health.jobs).toHaveLength(13);
+    expect(health.jobs.find((job) => job.name === 'feed-embeddings')).toMatchObject({
+      status: 'ok',
+      dailyInvocations: 144,
+      expectedMaxAgeMinutes: 30,
+    });
     expect(health.jobs.find((job) => job.name === 'media-upload-reclaim')).toMatchObject({
       status: 'ok',
       dailyInvocations: 1,
@@ -1096,6 +1115,15 @@ describe('collectBackendHealth', () => {
             finished_at: '2026-06-21T09:59:01.000Z',
             duration_ms: 1000,
             skip_reason: 'alert_delivery_not_configured',
+            error_message: null,
+          },
+          {
+            job_name: 'feed-embeddings',
+            status: 'skipped',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
+            duration_ms: 1000,
+            skip_reason: 'no_posts_pending_embedding',
             error_message: null,
           },
           {

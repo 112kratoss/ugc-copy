@@ -73,6 +73,34 @@ export const FOR_YOU_RULES_V3_DIVERSITY_CONFIG = {
   cold_start_prior_strength: 50,
 } as const;
 
+/**
+ * The `for-you-rules` v4 row as seeded (plan
+ * `docs/plans/feed-algorithm-v4-industry-parity-2026-10-12.md` §2.10): v3's
+ * JSON with interest_match lowered to 0.16, semantic_similarity at 0.14, the
+ * v4 candidate RPC with its taste-vector and safety keys, and v3's diversity
+ * unchanged (`max_semantic_cluster_per_20` now has clusters to act on).
+ */
+export const FOR_YOU_RULES_V4_WEIGHTS = {
+  ...FOR_YOU_RULES_V3_WEIGHTS,
+  interest_match: 0.16,
+  semantic_similarity: 0.14,
+} as const;
+
+export const FOR_YOU_RULES_V4_RETRIEVAL_CONFIG = {
+  ...FOR_YOU_RULES_V3_RETRIEVAL_CONFIG,
+  candidate_rpc: 'v4',
+  semantic_limit: 150,
+  semantic_min_similarity: 0.0,
+  taste_lookback_days: 90,
+  taste_limit: 50,
+  exclude_near_duplicates: true,
+  exclude_labelled_accounts: true,
+} as const;
+
+export const FOR_YOU_RULES_V4_DIVERSITY_CONFIG = {
+  ...FOR_YOU_RULES_V3_DIVERSITY_CONFIG,
+} as const;
+
 export type RankedFeedScoreWeights = {
   interestMatch: number;
   creatorAffinity: number;
@@ -89,6 +117,8 @@ export type RankedFeedScoreWeights = {
   creatorQuality: number;
   /** v2: Bayesian UCB replacing v1's lowest-impressions exploration bonus. */
   explorationUcb: number;
+  /** v4: cosine similarity of the post to the viewer's taste vector. */
+  semanticSimilarity: number;
 };
 
 export type RankedFeedDiversityConfig = {
@@ -156,6 +186,11 @@ export type RankedFeedFeatureRow = {
   reports7d?: number;
   /** Every pool that retrieved the post, by dedup priority. Missing = [candidateSource]. */
   sources?: ShowcaseFeedCandidateSource[];
+  // v4 RPC columns, optional for the same reason as v3's.
+  /** Cosine similarity to the viewer's taste vector in [0, 1]; 0 without taste or embedding. Missing = 0. */
+  semanticSimilarity?: number;
+  /** The viewer had a taste vector when the post was retrieved. Missing = false. */
+  tasteAvailable?: boolean;
 };
 
 /** How one item's `score` was reached; persisted with the delivery facts. */
@@ -201,6 +236,7 @@ export const DEFAULT_RANKED_FEED_SCORE_WEIGHTS: RankedFeedScoreWeights = {
   attentionSecondsNorm: 0,
   creatorQuality: 0,
   explorationUcb: 0,
+  semanticSimilarity: 0,
 };
 
 // The v3 keys default to off (multipliers 1, slot rank 0), so a version row
@@ -274,6 +310,7 @@ export function normalizeRankedFeedScoreWeights(
     attentionSecondsNorm: finiteConfigNumber(weights.attention_seconds_norm, DEFAULT_RANKED_FEED_SCORE_WEIGHTS.attentionSecondsNorm, -10, 10),
     creatorQuality: finiteConfigNumber(weights.creator_quality, DEFAULT_RANKED_FEED_SCORE_WEIGHTS.creatorQuality, -10, 10),
     explorationUcb: finiteConfigNumber(weights.exploration_ucb, DEFAULT_RANKED_FEED_SCORE_WEIGHTS.explorationUcb, -10, 10),
+    semanticSimilarity: finiteConfigNumber(weights.semantic_similarity, DEFAULT_RANKED_FEED_SCORE_WEIGHTS.semanticSimilarity, -10, 10),
   };
 }
 
@@ -378,6 +415,8 @@ export function scoreRankedFeedFeatures(
     + weights.attentionSecondsNorm * clampUnit(features.attentionSecondsNorm)
     + weights.creatorQuality * clampUnit(features.creatorQuality)
     + weights.explorationUcb * clampUnit(features.explorationUcb)
+    // Last, so a version without the key adds an exact 0 to the v1–v3 sum.
+    + weights.semanticSimilarity * clampUnit(features.semanticSimilarity ?? 0)
   );
 }
 
@@ -478,6 +517,9 @@ export function buildFallbackRankedFeedFeatures(
     postAgeHours: ageHoursAt(item.createdAt, now),
     reports7d: 0,
     sources: [candidateSource],
+    // Nothing is known about the viewer's taste outside ranked retrieval.
+    semanticSimilarity: 0,
+    tasteAvailable: false,
   };
 }
 
@@ -557,6 +599,8 @@ export function normalizeRankedFeedFeatureRow(value: Record<string, unknown>): R
     postAgeHours: postAgeHours === null ? null : Math.max(0, postAgeHours),
     reports7d: optionalCount('reports_7d', 'reports7d') ?? 0,
     sources,
+    semanticSimilarity: clampUnit(numberValue('semantic_similarity', 'semanticSimilarity')),
+    tasteAvailable: value.taste_available === true || value.tasteAvailable === true,
   };
 }
 
@@ -567,7 +611,7 @@ function sourceReason(source: ShowcaseFeedCandidateSource) {
     case 'affinity':
       return 'Matches what you save and create';
     case 'semantic':
-      return 'Similar to posts you found useful';
+      return 'Close to what you saved';
     case 'trending':
       return 'Popular with creators now';
     case 'exploration':

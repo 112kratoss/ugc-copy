@@ -10,7 +10,15 @@ import { runFeedMaintenanceBackendJob } from '@/lib/backend-job-executions';
 import { maintainFeedPersonalization } from '@/lib/feed-maintenance';
 const configPath = process.env.AUDIT_STORAGE_CONFIG;
 const connectionString = process.env.SUPABASE_TEST_DB_URL;
-const order = ['refresh_post_feed_stats', 'refresh_post_feed_engagement_stats', 'refresh_creator_feed_stats', 'refresh_user_interest_weights', 'refresh_feed_delivery_fact_daily', 'prune_feed_personalization_data'];
+const order = ['refresh_post_feed_stats', 'refresh_post_feed_engagement_stats', 'refresh_creator_feed_stats', 'upsert_account_labels', 'delete_expired_account_labels', 'refresh_user_interest_weights', 'refresh_feed_delivery_fact_daily', 'refresh_feed_viewer_daily', 'prune_feed_personalization_data'];
+// v4's isolated phases: their failure is held until every other phase and the
+// prune have run. A failed upsert ends the label pass before its expiry sweep.
+const deferredPhases: Record<string, string[]> = {
+  upsert_account_labels: ['delete_expired_account_labels'],
+  delete_expired_account_labels: [],
+  refresh_feed_viewer_daily: [],
+};
+const rollupIndex = order.indexOf('refresh_feed_delivery_fact_daily');
 
 describe.skipIf(!configPath || !connectionString)('feed maintenance interruptions with actual PostgREST', () => {
   let db: Client;
@@ -74,9 +82,12 @@ describe.skipIf(!configPath || !connectionString)('feed maintenance interruption
   it.each(order)('preserves retryability after %s fails', async phase => {
     fail = phase;
     await expect(run()).rejects.toThrow(`Feed maintenance RPC ${phase} failed`);
-    expect(calls).toEqual(order.slice(0, order.indexOf(phase) + 1));
+    const skipped = deferredPhases[phase];
+    expect(calls).toEqual(skipped
+      ? order.filter((name) => !skipped.includes(name))
+      : order.slice(0, order.indexOf(phase) + 1));
     expect(invalidation).toHaveBeenCalledTimes(order.indexOf(phase) > 2 ? 1 : 0);
-    if (phase === 'prune_feed_personalization_data') expect(await rollups()).toEqual([{ deliveries: '2', opens: '1' }]);
+    if (phase === 'prune_feed_personalization_data' || skipped) expect(await rollups()).toEqual([{ deliveries: '2', opens: '1' }]);
     else expect(await rollups()).toEqual([]);
     fail = null; calls = [];
     expect(await run()).toMatchObject({ asOf: now.toISOString(), userInterestProfilesRefreshed: 1, dailyRollup: { bucketsRefreshed: 1 } });
@@ -98,7 +109,7 @@ describe.skipIf(!configPath || !connectionString)('feed maintenance interruption
       });
       const exited = new Promise(resolve => child.once('exit', (_code, signal) => resolve(signal)));
       child.kill('SIGKILL'); expect(await exited).toBe('SIGKILL');
-      if (order.indexOf(phase) >= 4) expect(await rollups()).toEqual([{ deliveries: '2', opens: '1' }]);
+      if (order.indexOf(phase) >= rollupIndex) expect(await rollups()).toEqual([{ deliveries: '2', opens: '1' }]);
       else expect(await rollups()).toEqual([]);
       await run();
       expect(await rollups()).toEqual([{ deliveries: '2', opens: '1' }]);

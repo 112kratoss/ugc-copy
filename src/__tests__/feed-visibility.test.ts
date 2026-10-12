@@ -20,6 +20,7 @@ function candidate(overrides: Partial<FeedVisibilityCandidate> = {}): FeedVisibi
     isNsfw: false,
     negativeFeedbackRisk: 0.01,
     creatorNegativeFeedbackRate: 0.01,
+    authorLabels: [],
     ...overrides,
   };
 }
@@ -95,6 +96,40 @@ describe('evaluateFeedVisibility', () => {
       relations(),
       V3_THRESHOLDS,
     ).reason).toBe('creator_negative_feedback');
+  });
+
+  it('drops a labelled account from recommendations only, whatever the label', () => {
+    for (const label of ['nsfw_account', 'negative_feedback_account', 'spam_account']) {
+      const labelled = candidate({ authorLabels: [label] });
+
+      expect(evaluateFeedVisibility(labelled, relations(), V3_THRESHOLDS)).toEqual({
+        action: 'drop',
+        reason: 'labelled_account',
+        level: 'recommendations',
+      });
+      // A follower chose the account; the label does not take it away.
+      expect(evaluateFeedVisibility(
+        labelled,
+        relations({ followingCreatorIds: new Set(['creator-1']) }),
+        V3_THRESHOLDS,
+      )).toEqual({ action: 'show', reason: null, level: 'home' });
+    }
+    // At the default thresholds too: the label rule has no threshold to switch off.
+    expect(evaluateFeedVisibility(candidate({ authorLabels: ['spam_account'] }), relations()).reason)
+      .toBe('labelled_account');
+  });
+
+  it('judges the label after NSFW and before the creator and post rates', () => {
+    expect(evaluateFeedVisibility(
+      candidate({ isNsfw: true, authorLabels: ['nsfw_account'] }),
+      relations(),
+      V3_THRESHOLDS,
+    ).reason).toBe('nsfw');
+    expect(evaluateFeedVisibility(
+      candidate({ authorLabels: ['negative_feedback_account'], negativeFeedbackRisk: 0.9, creatorNegativeFeedbackRate: 0.5 }),
+      relations(),
+      V3_THRESHOLDS,
+    ).reason).toBe('labelled_account');
   });
 
   it('drops NSFW at the home level too', () => {

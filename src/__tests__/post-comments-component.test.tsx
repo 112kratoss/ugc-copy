@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PostComments from '@/components/PostComments';
 import type { PostComment, PostCommentsPage } from '@/lib/post-comments-client';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
+
 const { authState } = vi.hoisted(() => ({
     authState: {
         session: null as { access_token: string } | null,
@@ -300,6 +302,39 @@ describe('PostComments', () => {
         expect(fetchMock.mock.calls.some(([input]) => (
             String(input).includes('parentId=root-1')
         ))).toBe(true);
+    });
+
+    // Feed ranking v4, §4: a comment written under a ranked feed card names the
+    // delivery that showed it, in the field the app sends too
+    // (`contracts/mobile-api-v1.json`, `createPostComment.request`).
+    it('sends the feed delivery with a new comment, as the shared contract pins it', async () => {
+        authState.session = { access_token: 'token-1' };
+        authState.user = { id: 'viewer-1', email: 'viewer@example.com', user_metadata: {} };
+        const pinned = mobileApiContract.endpoints.createPostComment.request;
+        const posted: unknown[] = [];
+        vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            if (init?.method === 'POST') {
+                posted.push(JSON.parse(String(init.body)));
+                return jsonResponse({ success: true, comment: comment({ id: 'comment-new', body: pinned.body }), commentCount: 1 }, 201);
+            }
+            return jsonResponse(page([]));
+        }));
+
+        const { unmount } = render(
+            <PostComments postId="post-1" postCreatorId="post-owner" commentCount={0} deliveryId={pinned.deliveryId} />
+        );
+        fireEvent.change(await screen.findByRole('textbox', { name: 'Write a comment' }), { target: { value: pinned.body } });
+        fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+        await waitFor(() => expect(posted).toHaveLength(1));
+        expect(posted[0]).toEqual(pinned);
+        unmount();
+
+        // Reached any other way, the thread sends the body it always sent.
+        render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={0} />);
+        fireEvent.change(await screen.findByRole('textbox', { name: 'Write a comment' }), { target: { value: 'Plain' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+        await waitFor(() => expect(posted).toHaveLength(2));
+        expect(posted[1]).toEqual({ body: 'Plain', parentId: null });
     });
 
     it('submits the selected moderation reason and optional details', async () => {

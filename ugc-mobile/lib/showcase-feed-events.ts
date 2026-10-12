@@ -32,6 +32,20 @@ export const SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY = Object.freeze({
   minimumViewTime: 1000,
 });
 
+/**
+ * The qualified impression's visibility (half the card on screen), reported the
+ * moment it starts and the moment it ends. A card's dwell is measured between
+ * the two (`lib/feed-attention-view-model.ts`), and only a stretch of the
+ * impression's own second or more counts. The impression's config cannot time
+ * it: its `minimumViewTime` holds every report back, so a card that leaves a
+ * moment after a flick begins is reported gone up to a second late, which would
+ * lengthen almost every dwell by most of a second.
+ */
+export const SHOWCASE_DWELL_VIEWABILITY = Object.freeze({
+  itemVisiblePercentThreshold: SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.itemVisiblePercentThreshold,
+  minimumViewTime: 0,
+});
+
 export interface ShowcaseFeedEventTarget {
   postId: string;
   recommendation?: ShowcaseRecommendationMetadata | null;

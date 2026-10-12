@@ -1,10 +1,13 @@
 'use client';
 
 import {
+  createContext,
   Fragment,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -15,6 +18,7 @@ import { Ban, EyeOff, Flag, MoreHorizontal, ShieldAlert, UserRoundX } from 'luci
 
 import { hideCreatorLabel } from '@/lib/hide-creator-label';
 import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
+import { createShowcaseMediaProgressTracker } from '@/lib/showcase-media-progress';
 
 export type ShowcaseFeedbackAction = 'not_interested' | 'hide_creator';
 export type ShowcaseFeedEventType =
@@ -27,6 +31,7 @@ export type ShowcaseFeedEventType =
   | 'unsave'
   | 'share'
   | 'remix_start'
+  | 'resource_open'
   | ShowcaseFeedbackAction;
 export type ShowcaseEventSourceSurface = 'showcase' | 'showcase-reel' | 'feed';
 
@@ -65,6 +70,7 @@ const DELIVERY_REQUIRED_EVENT_TYPES = new Set<ShowcaseFeedEventType>([
   'quick_skip',
   'share',
   'remix_start',
+  'resource_open',
 ]);
 
 function createClientEventId(): string {
@@ -115,6 +121,7 @@ const BATCHED_EVENT_TYPES = new Set<ShowcaseFeedEventType>([
   'dwell',
   'media_progress',
   'quick_skip',
+  'resource_open',
 ]);
 
 type QueuedFeedEvent = { accessToken: string | null; body: Record<string, unknown> };
@@ -178,6 +185,7 @@ export function flushShowcaseFeedEvents(): Promise<void> {
 /**
  * The queue is module state, so it would otherwise leak across tests: events a
  * test queued and never flushed would ride along into the next one's assertions.
+ * The deliveries that already reported a dwell or a resource open are too.
  */
 export function resetShowcaseFeedEventQueueForTests() {
   if (feedEventFlushTimer !== null) {
@@ -185,6 +193,8 @@ export function resetShowcaseFeedEventQueueForTests() {
     feedEventFlushTimer = null;
   }
   pendingFeedEvents = [];
+  dwellDeliveryIds.clear();
+  resourceOpenDeliveryIds.clear();
 }
 
 function bindFeedEventUnloadFlush() {
@@ -265,6 +275,161 @@ export async function sendShowcaseFeedEvent({
   }
 }
 
+/**
+ * What a feed card reports about the attention it was given beyond its
+ * impression: how long it was read (`dwell`) and how far its inline video
+ * played (`media_progress`). `createFeedCardAttention` is the bookkeeping, pure
+ * so its timing is testable without a browser; `QualifiedImpressionBoundary`
+ * feeds it the card's visibility and playback and sends what it returns.
+ */
+
+/**
+ * Below this a stretch on screen is a pass, not a read. It is the qualified
+ * impression's own second (half the card on screen for a second), so a card
+ * that reports a dwell has always qualified for its impression too.
+ */
+export const FEED_DWELL_MIN_MS = 1_000;
+
+/** The longest dwell one card reports: a tab left open on a card is not two minutes of reading. */
+export const FEED_DWELL_MAX_MS = 120_000;
+
+export type FeedCardAttentionEvent =
+  | { eventType: 'dwell'; durationMs: number }
+  | { eventType: 'media_progress'; progress: number; durationMs: number | null };
+
+/**
+ * A delivery reports one dwell and one resource open, however often its card
+ * mounts: the windowed list unmounts a card that scrolls far away and mounts it
+ * afresh on the way back, and a lane left and returned to brings the same
+ * deliveries back. Remembered for the page's life, oldest forgotten first.
+ */
+const DELIVERY_MEMORY_LIMIT = 2_000;
+const dwellDeliveryIds = new Set<string>();
+const resourceOpenDeliveryIds = new Set<string>();
+
+function rememberDelivery(deliveryIds: Set<string>, deliveryId: string) {
+  deliveryIds.add(deliveryId);
+  if (deliveryIds.size <= DELIVERY_MEMORY_LIMIT) return;
+  const oldest = deliveryIds.values().next().value;
+  if (oldest !== undefined) deliveryIds.delete(oldest);
+}
+
+export interface FeedCardAttention {
+  /** Half of the card is on screen (true), or no longer is (false). */
+  setQualified(qualified: boolean, now: number): FeedCardAttentionEvent[];
+  /** The tab was hidden or the page is going away: what was running ends here. */
+  pageHidden(now: number): FeedCardAttentionEvent[];
+  /** The tab is back: a card still half on screen starts a new stretch. */
+  pageShown(now: number): FeedCardAttentionEvent[];
+  /** A playback sample of the card's inline video, as a share of the post's video. */
+  recordVideoProgress(progress: number, durationMs: number | null): FeedCardAttentionEvent[];
+  /** The card unmounted, or shows another delivery now. */
+  end(now: number): FeedCardAttentionEvent[];
+}
+
+/**
+ * One delivery's attention. Its dwell is the first stretch of qualified
+ * visibility that lasts at least a second, measured to the moment it ends (the
+ * card scrolls away, the tab is hidden, the card unmounts) and capped at two
+ * minutes; a shorter stretch reports nothing, and the next one may still
+ * qualify. Its progress keeps the furthest point the video reached and is sent
+ * as the reels send theirs: at each milestone, and again whenever the card
+ * leaves view or the page is hidden. The server keeps the maximum.
+ */
+export function createFeedCardAttention({
+  deliveryId,
+  pageVisible = true,
+}: {
+  deliveryId: string;
+  pageVisible?: boolean;
+}): FeedCardAttention {
+  let qualified = false;
+  let visible = pageVisible;
+  let visibleSince: number | null = null;
+  const progress = createShowcaseMediaProgressTracker();
+
+  const startStretch = (now: number) => {
+    if (!qualified || !visible || visibleSince !== null || dwellDeliveryIds.has(deliveryId)) return;
+    visibleSince = now;
+  };
+
+  const endStretch = (now: number, events: FeedCardAttentionEvent[]) => {
+    if (visibleSince === null) return;
+    const elapsed = now - visibleSince;
+    visibleSince = null;
+    if (elapsed < FEED_DWELL_MIN_MS || dwellDeliveryIds.has(deliveryId)) return;
+    rememberDelivery(dwellDeliveryIds, deliveryId);
+    events.push({ eventType: 'dwell', durationMs: Math.min(FEED_DWELL_MAX_MS, Math.round(elapsed)) });
+  };
+
+  const flushProgress = (events: FeedCardAttentionEvent[]) => {
+    const flush = progress.takeFlush();
+    if (flush) events.push({ eventType: 'media_progress', progress: flush.progress, durationMs: flush.durationMs });
+  };
+
+  const close = (now: number) => {
+    const events: FeedCardAttentionEvent[] = [];
+    endStretch(now, events);
+    flushProgress(events);
+    return events;
+  };
+
+  return {
+    setQualified(next, now) {
+      qualified = next;
+      if (!next) return close(now);
+      startStretch(now);
+      return [];
+    },
+    pageHidden(now) {
+      visible = false;
+      return close(now);
+    },
+    pageShown(now) {
+      visible = true;
+      startStretch(now);
+      return [];
+    },
+    recordVideoProgress(value, durationMs) {
+      const events: FeedCardAttentionEvent[] = [];
+      if (progress.record(value, durationMs)) flushProgress(events);
+      return events;
+    },
+    end: close,
+  };
+}
+
+/**
+ * Reports that a card's resources were opened (its recipe chip, its unlock
+ * bag, the unlock a Remix tap was sent to): once per delivery, however many
+ * times the viewer opens them. Nothing without a delivery to credit.
+ */
+export function sendShowcaseResourceOpenEvent(input: Omit<ShowcaseFeedEventInput, 'eventType'>) {
+  const deliveryId = getShowcaseRecommendation(input.item)?.deliveryId;
+  if (!deliveryId || resourceOpenDeliveryIds.has(deliveryId)) return;
+  rememberDelivery(resourceOpenDeliveryIds, deliveryId);
+  void sendShowcaseFeedEvent({ ...input, eventType: 'resource_open' }).catch(() => {
+    resourceOpenDeliveryIds.delete(deliveryId);
+  });
+}
+
+/** What a card's own controls report through its boundary. */
+export interface FeedCardTelemetry {
+  /** A playback sample of the card's inline video: share of the post's video, and its length. */
+  reportVideoProgress: (progress: number, durationMs: number | null) => void;
+}
+
+const FeedCardTelemetryContext = createContext<FeedCardTelemetry | null>(null);
+
+/** The telemetry of the boundary a card sits in; null outside one that tracks attention. */
+export function useFeedCardTelemetry() {
+  return useContext(FeedCardTelemetryContext);
+}
+
+function isPageHidden() {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
+
 interface QualifiedImpressionBoundaryProps {
   item: ShowcaseFeedItem;
   feedSessionId?: string | null;
@@ -272,6 +437,13 @@ interface QualifiedImpressionBoundaryProps {
   position: number;
   /** Where the card is shown; the Home feed sends 'feed'. */
   sourceSurface?: ShowcaseEventSourceSurface;
+  /**
+   * Report how long the card was read (one `dwell` per delivery) and how far
+   * its inline video played (`media_progress`, through `useFeedCardTelemetry`).
+   * The Home feed's single column asks for it; the Explore grid, which shows
+   * many tiles at once, does not.
+   */
+  trackAttention?: boolean;
   className?: string;
   children: ReactNode;
 }
@@ -282,11 +454,70 @@ export function QualifiedImpressionBoundary({
   accessToken,
   position,
   sourceSurface = 'showcase',
+  trackAttention = false,
   className,
   children,
 }: QualifiedImpressionBoundaryProps) {
   const boundaryRef = useRef<HTMLDivElement | null>(null);
   const sentImpressionKeyRef = useRef<string | null>(null);
+  const attentionRef = useRef<FeedCardAttention | null>(null);
+  // What attention events are sent with, kept current for the listeners below
+  // without subscribing them again. Written after render, read only by them.
+  const eventContextRef = useRef({ item, feedSessionId, accessToken, position, sourceSurface });
+  useEffect(() => {
+    eventContextRef.current = { item, feedSessionId, accessToken, position, sourceSurface };
+  });
+  const deliveryId = trackAttention ? getShowcaseRecommendation(item)?.deliveryId ?? null : null;
+
+  const sendAttention = useCallback((events: FeedCardAttentionEvent[]) => {
+    const context = eventContextRef.current;
+    for (const event of events) {
+      void sendShowcaseFeedEvent({
+        item: context.item,
+        eventType: event.eventType,
+        sourceSurface: context.sourceSurface,
+        accessToken: context.accessToken,
+        feedSessionId: context.feedSessionId,
+        fallbackPosition: context.position,
+        durationMs: event.durationMs ?? undefined,
+        progress: event.eventType === 'media_progress' ? event.progress : undefined,
+      }).catch(() => undefined);
+    }
+  }, []);
+
+  // One attention per delivery. A card that comes to show another delivery
+  // closes the first one's with its own item: every cleanup runs before the
+  // effect above hands the context the new item.
+  useEffect(() => {
+    if (!deliveryId) return;
+    const attention = createFeedCardAttention({ deliveryId, pageVisible: !isPageHidden() });
+    attentionRef.current = attention;
+    // The page going away is a card leaving view: what the card was given is
+    // sent then, and the queue flushed, rather than lost with the tab.
+    const leavePage = () => {
+      sendAttention(attention.pageHidden(Date.now()));
+      void flushShowcaseFeedEvents();
+    };
+    const onVisibilityChange = () => {
+      if (isPageHidden()) leavePage();
+      else sendAttention(attention.pageShown(Date.now()));
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pagehide', leavePage);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', leavePage);
+      if (attentionRef.current === attention) attentionRef.current = null;
+      sendAttention(attention.end(Date.now()));
+    };
+  }, [deliveryId, sendAttention]);
+
+  const telemetry = useMemo<FeedCardTelemetry | null>(() => (deliveryId ? {
+    reportVideoProgress: (progress, durationMs) => {
+      const attention = attentionRef.current;
+      if (attention) sendAttention(attention.recordVideoProgress(progress, durationMs));
+    },
+  } : null), [deliveryId, sendAttention]);
 
   useEffect(() => {
     const boundary = boundaryRef.current;
@@ -310,6 +541,8 @@ export function QualifiedImpressionBoundary({
       const isQualifiedVisibility = Boolean(
         entry?.isIntersecting && entry.intersectionRatio >= 0.5
       );
+      const attention = attentionRef.current;
+      if (attention) sendAttention(attention.setQualified(isQualifiedVisibility, Date.now()));
 
       if (!isQualifiedVisibility) {
         cancelQualification();
@@ -349,7 +582,7 @@ export function QualifiedImpressionBoundary({
       cancelQualification();
       observer.disconnect();
     };
-  }, [accessToken, feedSessionId, item, position, sourceSurface]);
+  }, [accessToken, feedSessionId, item, position, sendAttention, sourceSurface]);
 
   return (
     <div
@@ -357,7 +590,9 @@ export function QualifiedImpressionBoundary({
       className={className}
       data-showcase-post-id={item.id}
     >
-      {children}
+      <FeedCardTelemetryContext.Provider value={telemetry}>
+        {children}
+      </FeedCardTelemetryContext.Provider>
     </div>
   );
 }

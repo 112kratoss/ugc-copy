@@ -12,6 +12,7 @@ import {
   notifyPostResourceUnlockCompleted,
 } from '@/lib/mobile-notifications';
 import { invalidateMarketplaceResourceListCache as defaultInvalidateMarketplaceResourceListCache } from '@/lib/marketplace-resource-list-cache';
+import { recordPostResourceBundlePurchaseFeedEvent } from '@/lib/post-resource-bundle-order-service';
 import {
   EXTERNAL_API_REQUEST_TIMEOUT_MS,
   fetchWithProviderTimeout,
@@ -687,6 +688,7 @@ export async function completeMobilePurchase({
   storeReportedPrice = null,
   storeReportedCurrency = null,
   invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
+  recordPurchaseFeedEvent = recordPostResourceBundlePurchaseFeedEvent,
   runAfterResponse,
 }: {
   adminSupabase: SupabaseClient;
@@ -698,6 +700,7 @@ export async function completeMobilePurchase({
   storeReportedPrice?: number | null;
   storeReportedCurrency?: string | null;
   invalidateMarketplaceResourceListCache?: () => void;
+  recordPurchaseFeedEvent?: typeof recordPostResourceBundlePurchaseFeedEvent;
   /**
    * The purchase sync and the restore pass one: the app is waiting on their
    * answer with the store's charge already taken. The RevenueCat webhook
@@ -807,13 +810,18 @@ export async function completeMobilePurchase({
   if (!alreadyProcessed) {
     if (!ownerUserId || !bundleId) throw new MobileCommerceError('Failed to unlock post resources.', 500);
     invalidateMarketplaceResourceListCache();
-    await sendPurchaseNotification(runAfterResponse, () => notifyPostResourceUnlockCompleted(adminSupabase, {
-      buyerUserId: userId,
-      ownerUserId,
-      postId: settledResourceId,
-      bundleId,
-      alreadyProcessed: false,
-    }));
+    // The purchase's feed event rides with its notifications: neither can
+    // reject, and neither holds the answer when it can go out after it.
+    await sendPurchaseNotification(runAfterResponse, () => Promise.all([
+      notifyPostResourceUnlockCompleted(adminSupabase, {
+        buyerUserId: userId,
+        ownerUserId,
+        postId: settledResourceId,
+        bundleId,
+        alreadyProcessed: false,
+      }),
+      recordPurchaseFeedEvent(adminSupabase, { buyerUserId: userId, postId: settledResourceId }),
+    ]));
   }
   return {
     success: true,
@@ -1071,6 +1079,7 @@ export async function unlockPostResourceBundleWithCredits({
   postId,
   invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
   notifyPostResourceUnlockCompleted: notifyUnlockCompleted = notifyPostResourceUnlockCompleted,
+  recordPurchaseFeedEvent = recordPostResourceBundlePurchaseFeedEvent,
   runAfterResponse,
 }: {
   adminSupabase: SupabaseClient;
@@ -1078,6 +1087,7 @@ export async function unlockPostResourceBundleWithCredits({
   postId: string;
   invalidateMarketplaceResourceListCache?: () => void;
   notifyPostResourceUnlockCompleted?: typeof notifyPostResourceUnlockCompleted;
+  recordPurchaseFeedEvent?: typeof recordPostResourceBundlePurchaseFeedEvent;
   /**
    * The route passes one so the notifications stop holding the answer back;
    * without it they are sent before this returns.
@@ -1126,14 +1136,18 @@ export async function unlockPostResourceBundleWithCredits({
     }
     invalidateMarketplaceResourceListCache();
     // The credits are spent and the unlock is recorded; what is left is telling
-    // both people, and the buyer is waiting on this answer.
-    await sendPurchaseNotification(runAfterResponse, () => notifyUnlockCompleted(adminSupabase, {
-      buyerUserId: userId,
-      ownerUserId,
-      postId,
-      bundleId,
-      alreadyProcessed: false,
-    }));
+    // both people, and the buyer is waiting on this answer. The purchase's feed
+    // event rides with the notifications and, like them, never rejects.
+    await sendPurchaseNotification(runAfterResponse, () => Promise.all([
+      notifyUnlockCompleted(adminSupabase, {
+        buyerUserId: userId,
+        ownerUserId,
+        postId,
+        bundleId,
+        alreadyProcessed: false,
+      }),
+      recordPurchaseFeedEvent(adminSupabase, { buyerUserId: userId, postId }),
+    ]));
   }
 
   return {

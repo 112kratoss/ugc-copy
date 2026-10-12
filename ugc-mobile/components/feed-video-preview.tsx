@@ -13,6 +13,7 @@ import {
   acceptVideoReturn,
   claimReturnedVideoPlayer,
   isVideoLoanHeld,
+  isVideoPlayerOnLoan,
   isVideoReturnPending,
   lenderUnmounting,
   reportReturnedVideoDrawn,
@@ -44,6 +45,12 @@ const absoluteFill = {
   position: 'absolute' as const,
   inset: 0,
 };
+
+/**
+ * How often a playing tile reports its time when asked to (`onPlaybackTime`):
+ * the reel's own interval, fine enough for its progress milestones.
+ */
+const FEED_PREVIEW_TIME_UPDATE_INTERVAL_SECONDS = 0.25;
 
 // Fabric can apply a queued VideoView mount after React has already unmounted
 // the layer. Releasing the SharedObject in that same commit leaves Android
@@ -95,6 +102,7 @@ export function FeedVideoPreview({
   videoContentFit = 'contain',
   watchdog = false,
   diagnosticsSurface = 'feed',
+  onPlaybackTime,
 }: {
   /** Source of record — identity, cache keys, downloads. Never streamed here. */
   url: string;
@@ -146,6 +154,12 @@ export function FeedVideoPreview({
   watchdog?: boolean;
   /** Where the tile is drawn, for the media diagnostics log. */
   diagnosticsSurface?: string;
+  /**
+   * Playback samples while this tile plays: seconds into the stream and the
+   * stream's length. Home reports how far its inline clips play with them.
+   * Without it the player reports no time, as a tile always has.
+   */
+  onPlaybackTime?: (currentTimeSeconds: number, durationSeconds: number) => void;
 }) {
   const theme = useAppTheme();
   const { source: streamSource, requestKey } = useMediaSource(streamUrl || '');
@@ -325,6 +339,7 @@ export function FeedVideoPreview({
           playing={canPlay}
           onFirstFrame={handleFirstFrame}
           onPlaybackError={handlePlaybackError}
+          onPlaybackTime={onPlaybackTime}
         />
       ) : null}
 
@@ -408,6 +423,7 @@ function FeedVideoPlayerLayer({
   playing,
   onFirstFrame,
   onPlaybackError,
+  onPlaybackTime,
 }: {
   source: { uri: string; headers?: Record<string, string> };
   /** Offered to the zoom out of this tile under this stream; null offers nothing. */
@@ -420,6 +436,7 @@ function FeedVideoPlayerLayer({
   playing: boolean;
   onFirstFrame: () => void;
   onPlaybackError: (errored: boolean) => void;
+  onPlaybackTime?: (currentTimeSeconds: number, durationSeconds: number) => void;
 }) {
   // The player a reel closing into this tile handed back is carried on with in
   // place of a new one. A new one showed the poster — the clip's first frame —
@@ -539,6 +556,33 @@ function FeedVideoPlayerLayer({
       subscription.remove();
     };
   }, [metricsKey, player]);
+
+  // The time, for whoever asked for it, only while this tile itself plays: a
+  // prepared tile stays silent (on Android the player's clock ticks whether or
+  // not the clip moves), and a reel still handing the player back reads it
+  // itself until it has gone.
+  const playbackTimeRef = useRef(onPlaybackTime);
+  useEffect(() => {
+    playbackTimeRef.current = onPlaybackTime;
+  }, [onPlaybackTime]);
+  const reportsPlaybackTime = Boolean(onPlaybackTime);
+  useEffect(() => {
+    if (!reportsPlaybackTime || !playing || returning) return undefined;
+    player.timeUpdateEventInterval = FEED_PREVIEW_TIME_UPDATE_INTERVAL_SECONDS;
+    const subscription = player.addListener('timeUpdate', (event) => {
+      playbackTimeRef.current?.(event.currentTime, player.duration);
+    });
+    return () => {
+      subscription.remove();
+      // Out on loan, the player is the reel's now, and the reel reads its time.
+      if (isVideoPlayerOnLoan(player)) return;
+      try {
+        player.timeUpdateEventInterval = 0;
+      } catch {
+        // The native player may already be gone during a development reload.
+      }
+    };
+  }, [player, playing, reportsPlaybackTime, returning]);
 
   useEffect(() => {
     // A source that failed before this effect subscribed never sends a

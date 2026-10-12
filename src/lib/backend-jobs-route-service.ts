@@ -6,6 +6,7 @@ import {
   getBackendJobRequestId,
   runAccountDeletionResweepsBackendJob,
   runBackendAlertDeliveryJob,
+  runFeedEmbeddingsBackendJob,
   runFeedMaintenanceBackendJob,
   runGenerationCompletionsBackendJob,
   runGenerationModelVerificationBackendJob,
@@ -32,6 +33,7 @@ type BackendJobsRouteDependencies = {
   getDueBackendJobs?: (timestampMs: number) => BackendJobDefinition[];
   runAccountDeletionResweepsBackendJob?: typeof runAccountDeletionResweepsBackendJob;
   runBackendAlertDeliveryJob?: typeof runBackendAlertDeliveryJob;
+  runFeedEmbeddingsBackendJob?: typeof runFeedEmbeddingsBackendJob;
   runFeedMaintenanceBackendJob?: typeof runFeedMaintenanceBackendJob;
   runGenerationCompletionsBackendJob?: typeof runGenerationCompletionsBackendJob;
   runGenerationModelVerificationBackendJob?: typeof runGenerationModelVerificationBackendJob;
@@ -75,6 +77,8 @@ function resolveDependencies(dependencies: BackendJobsRouteDependencies | undefi
       ?? runAccountDeletionResweepsBackendJob,
     runBackendAlertDeliveryJob: dependencies?.runBackendAlertDeliveryJob
       ?? runBackendAlertDeliveryJob,
+    runFeedEmbeddingsBackendJob: dependencies?.runFeedEmbeddingsBackendJob
+      ?? runFeedEmbeddingsBackendJob,
     runFeedMaintenanceBackendJob: dependencies?.runFeedMaintenanceBackendJob
       ?? runFeedMaintenanceBackendJob,
     runGenerationCompletionsBackendJob: dependencies?.runGenerationCompletionsBackendJob
@@ -120,6 +124,8 @@ async function runDueBackendJob(
       return options.dependencies.runAccountDeletionResweepsBackendJob(runOptions);
     case 'backend-alert-delivery':
       return options.dependencies.runBackendAlertDeliveryJob(runOptions);
+    case 'feed-embeddings':
+      return options.dependencies.runFeedEmbeddingsBackendJob(runOptions);
     case 'feed-maintenance':
       return options.dependencies.runFeedMaintenanceBackendJob(runOptions);
     case 'generation-completions':

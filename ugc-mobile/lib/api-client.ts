@@ -1,6 +1,8 @@
 import type {
   AppVersionResponse,
+  CreatePostCommentBody,
   CreatePostResponse,
+  CreatorFollowAttribution,
   CreatorProfileResponse,
   GenerationListItem,
   GenerationListResponse,
@@ -874,10 +876,12 @@ export function createApiClient({
       request<PostCommentsResponse>(
         `/api/showcase/posts/${encodeURIComponent(postId)}/comments${buildQuery(params)}`
       ),
-    createPostComment: (postId: string, body: { body: string; parentId?: string | null }) =>
+    createPostComment: (postId: string, body: CreatePostCommentBody) =>
       request<CreatePostCommentResponse>(
         `/api/showcase/posts/${encodeURIComponent(postId)}/comments`,
-        { method: 'POST', body: JSON.stringify(body) }
+        // The delivery only when there is one: a thread opened anywhere but a
+        // ranked feed sends the body it always sent.
+        { method: 'POST', body: JSON.stringify({ ...body, deliveryId: body.deliveryId || undefined }) }
       ),
     deletePostComment: (postId: string, commentId: string) =>
       request<DeletePostCommentResponse>(
@@ -939,10 +943,15 @@ export function createApiClient({
       }),
     getCreatorFollowState: (followingId: string) =>
       request<{ following: boolean }>(`/api/profile/follow${buildQuery({ followingId })}`),
-    setCreatorFollowing: (followingId: string, following: boolean) =>
+    setCreatorFollowing: (followingId: string, following: boolean, attribution?: CreatorFollowAttribution | null) =>
       request<{ following: boolean }>('/api/profile/follow', {
         method: 'POST',
-        body: JSON.stringify({ followingId, following }),
+        body: JSON.stringify({
+          followingId,
+          following,
+          ...(attribution?.postId ? { postId: attribution.postId } : {}),
+          ...(attribution?.postId && attribution.deliveryId ? { deliveryId: attribution.deliveryId } : {}),
+        }),
       }),
     saveShowcasePost: (postId: string, options: SaveShowcasePostOptions) =>
       request<SaveShowcasePostResponse>('/api/showcase/save', {

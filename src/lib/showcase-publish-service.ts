@@ -46,6 +46,7 @@ import {
   isCreatorProfileReadinessError,
 } from '@/lib/marketplace-trust';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
+import { requestPostEmbedding } from '@/lib/feed-embeddings';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import {
   getPublicUgcSafetyViolation,
@@ -129,6 +130,8 @@ export type ShowcasePublishServiceDependencies = {
   loadFrozenSoldGenerationBundleForQuality: typeof loadFrozenSoldGenerationBundleForQuality;
   loadExistingGenerationPostContent: typeof loadExistingGenerationPostContent;
   ensureGenerationPostCoverMedia: typeof ensureGenerationPostCoverMedia;
+  /** Feed v4: asks the `embed-post` function for the published post's embedding. */
+  requestPostEmbedding: typeof requestPostEmbedding;
 };
 
 export type ShowcasePublishServiceResult =
@@ -186,6 +189,7 @@ function resolveDependencies(
       dependencies?.loadExistingGenerationPostContent ?? loadExistingGenerationPostContent,
     ensureGenerationPostCoverMedia:
       dependencies?.ensureGenerationPostCoverMedia ?? ensureGenerationPostCoverMedia,
+    requestPostEmbedding: dependencies?.requestPostEmbedding ?? requestPostEmbedding,
   };
 }
 
@@ -903,6 +907,20 @@ export async function publishGenerationToShowcaseForRoute({
   }
 
   invalidateShowcaseFeedCache();
+
+  // Feed v4: embed the public post now rather than at the next embeddings run,
+  // so it is clustered and checked for near-duplicates within minutes.
+  // Fire-and-forget: the request never rejects, gives up after a few seconds,
+  // is a no-op without the function's configuration, and the job embeds the
+  // post anyway if it is lost — publishing never waits on it or fails by it.
+  if (effectiveVisibility === 'public' && postId) {
+    const publishedPostId = postId;
+    void Promise.resolve()
+      .then(() => resolvedDependencies.requestPostEmbedding(publishedPostId))
+      .catch((error: unknown) => {
+        logBackendError('failed_to_request_post_embedding', { error });
+      });
+  }
 
   if (effectiveVisibility === 'private' && hasShowcaseAssetColumn && generation.showcase_asset_path) {
     const removal = await removeGenerationShowcaseDerivative({

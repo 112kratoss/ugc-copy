@@ -206,6 +206,7 @@ describe('verifyPostResourceBundlePaymentForRoute', () => {
   it('completes an owned created bundle order after signature verification', async () => {
     const admin = createAdminSupabaseMock();
     const invalidateMarketplaceResourceListCache = vi.fn();
+    const recordPurchaseFeedEvent = vi.fn(async () => ({ status: 'recorded' as const, deliveryId: null }));
 
     const result = await verifyPostResourceBundlePaymentForRoute({
       adminSupabase: admin.client,
@@ -213,6 +214,7 @@ describe('verifyPostResourceBundlePaymentForRoute', () => {
       keySecret: 'test-secret',
       readBody: vi.fn(async () => validBody()),
       invalidateMarketplaceResourceListCache,
+      recordPurchaseFeedEvent,
     });
 
     expect(result).toEqual({
@@ -231,19 +233,41 @@ describe('verifyPostResourceBundlePaymentForRoute', () => {
       },
     });
     expect(invalidateMarketplaceResourceListCache).toHaveBeenCalledTimes(1);
+    // v4's server-written purchase event, once the purchase is settled.
+    expect(recordPurchaseFeedEvent).toHaveBeenCalledTimes(1);
+    expect(recordPurchaseFeedEvent).toHaveBeenCalledWith(admin.client, { razorpayOrderId: 'order_bundle_123' });
   });
 
-  it('treats already paid orders as idempotently processed', async () => {
-    const admin = createAdminSupabaseMock({
-      order: { id: 'order-row', buyer_user_id: 'buyer-1', status: 'paid' },
-    });
+  it('answers a settled purchase even when its feed event fails', async () => {
+    const admin = createAdminSupabaseMock();
 
     const result = await verifyPostResourceBundlePaymentForRoute({
       adminSupabase: admin.client,
       buyerUserId: 'buyer-1',
       keySecret: 'test-secret',
       readBody: vi.fn(async () => validBody()),
+      invalidateMarketplaceResourceListCache: vi.fn(),
+      recordPurchaseFeedEvent: vi.fn(async () => ({ status: 'failed' as const, reason: 'error' as const })),
     });
+
+    expect(result).toEqual({ ok: true, body: { success: true } });
+  });
+
+  it('treats already paid orders as idempotently processed', async () => {
+    const admin = createAdminSupabaseMock({
+      order: { id: 'order-row', buyer_user_id: 'buyer-1', status: 'paid' },
+    });
+    const recordPurchaseFeedEvent = vi.fn();
+
+    const result = await verifyPostResourceBundlePaymentForRoute({
+      adminSupabase: admin.client,
+      buyerUserId: 'buyer-1',
+      keySecret: 'test-secret',
+      readBody: vi.fn(async () => validBody()),
+      recordPurchaseFeedEvent,
+    });
+    // Whoever settled it first wrote its feed event.
+    expect(recordPurchaseFeedEvent).not.toHaveBeenCalled();
 
     expect(result).toEqual({
       ok: true,

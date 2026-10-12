@@ -1,4 +1,5 @@
 import type { ImmersivePreviewItem } from './immersive-preview-view-model';
+import type { CreatorFollowAttribution } from './types';
 
 export interface ReelCaption {
   /** The post's name. Empty for untitled posts. */
@@ -48,6 +49,18 @@ export function getReelFollowTarget(
   if (!creatorId) return null;
   if (viewerId && creatorId === viewerId) return null;
   return { creatorId };
+}
+
+/**
+ * The post a reel's Follow is pressed on, and the feed delivery that showed it
+ * when a ranked feed did, for the server to credit the follow to
+ * (`useCreatorFollow`). Null for anything that is not a showcase post.
+ */
+export function getReelFollowAttribution(
+  item: Pick<ImmersivePreviewItem, 'sourceType' | 'showcasePostId' | 'recommendation'>
+): CreatorFollowAttribution | null {
+  if (item.sourceType !== 'showcase' || !item.showcasePostId) return null;
+  return { postId: item.showcasePostId, deliveryId: item.recommendation?.deliveryId ?? null };
 }
 
 /**

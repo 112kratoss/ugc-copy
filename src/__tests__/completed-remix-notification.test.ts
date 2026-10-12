@@ -2,9 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 const notify = vi.hoisted(() => vi.fn());
+const recordFeedEvent = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/mobile-notifications', () => ({
   createMobileNotification: notify,
   buildMobileNotificationDeepLink: ({ postId }: { postId: string }) => `/post/${postId}`,
+}));
+vi.mock('@/lib/showcase-feed-events-service', () => ({
+  recordAuthoritativeFeedEvent: recordFeedEvent,
 }));
 import { hasAnswered } from '@/__tests__/fixtures/mobile-notification-history';
 import { notifyCompletedRemix } from '@/lib/completed-remix-notification';
@@ -20,7 +24,45 @@ function client(remix: unknown) {
 const recorded = { generation_id: 'output', post_id: 'post', actor_user_id: 'reader', posts: { user_id: 'creator' } };
 
 describe('completed remix notifications', () => {
-  beforeEach(() => { notify.mockReset().mockResolvedValue(null); });
+  beforeEach(() => {
+    notify.mockReset().mockResolvedValue(null);
+    recordFeedEvent.mockReset().mockResolvedValue({ status: 'recorded', deliveryId: null });
+  });
+
+  it('records the finished remix as the remixer\'s remix_complete on the original, once per output', async () => {
+    const { db } = client({ ...recorded, completed_at: '2026-10-01T09:00:00.000Z' });
+    await notifyCompletedRemix(db, 'prediction');
+    expect(recordFeedEvent).toHaveBeenCalledTimes(1);
+    expect(recordFeedEvent).toHaveBeenCalledWith(db, {
+      eventType: 'remix_complete',
+      viewerUserId: 'reader',
+      postId: 'post',
+      // A retried settlement carries the same output, so it is a duplicate.
+      actionKey: 'output',
+      occurredAt: '2026-10-01T09:00:00.000Z',
+      // Credited to the delivery the remix was started from.
+      inferDeliveryFrom: { eventTypes: ['remix_start'], withinHours: 48 },
+    });
+  });
+
+  it.each([
+    [null],
+    [{ ...recorded, actor_user_id: 'creator' }],
+    [{ ...recorded, posts: null }],
+  ])('records no feed event without an eligible completion, or for a self-remix', async (remix) => {
+    const { db } = client(remix);
+    await notifyCompletedRemix(db, 'prediction');
+    expect(recordFeedEvent).not.toHaveBeenCalled();
+  });
+
+  it('still notifies, and never fails settlement, when the feed event fails', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { db } = client(recorded);
+    recordFeedEvent.mockRejectedValue(new Error('feed events unavailable'));
+    await expect(notifyCompletedRemix(db, 'prediction')).resolves.toBeUndefined();
+    expect(notify).toHaveBeenCalledTimes(1);
+    log.mockRestore();
+  });
 
   it('notifies from recorded completion with a stable output dedupe key', async () => {
     const { db, query } = client(recorded);

@@ -481,6 +481,30 @@ describe('comments sheet', () => {
     expect(updated.pages[0].comments.map((item) => item.id)).toContain('reply-created');
   });
 
+  // Feed ranking v4, §4: a comment written under a ranked card (Home's sheet,
+  // the reel it opened, a text post opened from Home) names that delivery.
+  it("credits a comment to the feed delivery it was written under", async () => {
+    pages = [page([])];
+    createPostComment.mockResolvedValue({
+      comment: comment({ id: 'comment-created', body: 'Fresh thought' }),
+      commentCount: 1,
+    });
+    const tree = renderSheet({ deliveryId: '9001' });
+
+    renderer.act(() => {
+      tree.root.find((node) => String(node.type) === 'textinput').props.onChangeText('Fresh thought');
+    });
+    await renderer.act(async () => {
+      await pressable(tree.root, 'Post comment').props.onPress();
+    });
+
+    expect(createPostComment).toHaveBeenCalledWith('post-1', {
+      body: 'Fresh thought',
+      parentId: null,
+      deliveryId: '9001',
+    });
+  });
+
   it('publishes updated counts to showcase, saved, owner, source, and detail caches', async () => {
     const onCommentCountChange = vi.fn();
     pages = [page([])];

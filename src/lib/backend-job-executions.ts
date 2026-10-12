@@ -24,6 +24,7 @@ import {
   type BackendJobRunHandle,
 } from '@/lib/backend-job-runs';
 import { BACKEND_JOBS_BY_NAME, type BackendJobDefinition } from '@/lib/backend-jobs';
+import { hasFeedEmbeddingWork, runFeedEmbeddingJob } from '@/lib/feed-embeddings';
 import { maintainFeedPersonalization } from '@/lib/feed-maintenance';
 import { pruneOperationalBackendData } from '@/lib/operational-data-retention';
 import {
@@ -506,6 +507,28 @@ export function runBackendAlertDeliveryJob(options: {
     hasWork: async () => hasConfiguredBackendAlertDelivery(),
     onNoWork: async () => getBackendAlertDeliveryNotConfiguredSummary(),
     run: (client, context) => deliverBackendAlerts(client, { now: new Date(context.startedAtMs) }),
+  });
+}
+
+export function runFeedEmbeddingsBackendJob(options: {
+  requestId?: string;
+  startedAtMs?: number;
+  serviceClient?: SupabaseClient;
+  triggerRoute?: string;
+} = {}) {
+  const job = BACKEND_JOBS_BY_NAME['feed-embeddings'];
+  return runManagedBackendJob({
+    ...options,
+    job,
+    messages: {
+      started: 'feed_embeddings_started',
+      skippedNoWork: 'feed_embeddings_skipped_no_work',
+      skippedLocked: 'feed_embeddings_skipped',
+      completed: 'feed_embeddings_completed',
+      failed: 'feed_embeddings_failed',
+    },
+    hasWork: (client, context) => hasFeedEmbeddingWork(client, { now: new Date(context.startedAtMs) }),
+    run: (client, context) => runFeedEmbeddingJob(client, { now: new Date(context.startedAtMs) }),
   });
 }
 

@@ -8,6 +8,7 @@ import {
   settleCreditPurchaseReferralRewards,
 } from '@/lib/credit-referral-integration';
 import { invalidateMarketplaceResourceListCache as defaultInvalidateMarketplaceResourceListCache } from '@/lib/marketplace-resource-list-cache';
+import { recordPostResourceBundlePurchaseFeedEvent } from '@/lib/post-resource-bundle-order-service';
 import {
   RAZORPAY_WEBHOOK_PROCESSING_SERVICE_NAME,
   recordPaymentWebhookProcessingFailure,
@@ -88,6 +89,7 @@ type ProcessRazorpayWebhookParams = {
   createAdminSupabase: () => SupabaseClient;
   rawBody: string;
   invalidateMarketplaceResourceListCache?: () => void;
+  recordPurchaseFeedEvent?: typeof recordPostResourceBundlePurchaseFeedEvent;
 };
 
 function parseWebhookEvent(rawBody: string): RazorpayWebhookEvent {
@@ -113,6 +115,7 @@ export async function processRazorpayWebhookForRoute({
   createAdminSupabase,
   rawBody,
   invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
+  recordPurchaseFeedEvent = recordPostResourceBundlePurchaseFeedEvent,
 }: ProcessRazorpayWebhookParams): Promise<RazorpayWebhookRouteResult> {
   const event = parseWebhookEvent(rawBody);
   let supabaseAdmin: SupabaseClient | null = null;
@@ -708,6 +711,9 @@ export async function processRazorpayWebhookForRoute({
     invalidateMarketplaceResourceListCache();
 
     logBackendInfo('razorpay_webhook_bundle_purchase_completed', { buyerUserId: typedBundleOrder.buyer_user_id, orderId });
+    // Telemetry on a settled purchase: it never fails the webhook, and the
+    // buyer's own verify writing the same purchase first makes this a duplicate.
+    await recordPurchaseFeedEvent(getSupabaseAdmin(), { razorpayOrderId: orderId });
     return { handled: true, shouldRetry: false };
   }
 

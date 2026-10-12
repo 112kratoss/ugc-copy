@@ -403,6 +403,63 @@ describe('ShowcaseMediaPreview', () => {
     });
   });
 
+  // Feed ranking v4, §4: Home reports how far a card's video played inline, as
+  // a share of the post's video: a teaser is the head of a long clip.
+  describe('inline progress', () => {
+    function renderVideo(overrides: Partial<ShowcaseMediaItem>, onVideoProgress?: (progress: number, durationMs: number | null) => void) {
+      const tree = renderPreview(
+        <ShowcaseMediaPreview
+          accent="#fb7185"
+          height={180}
+          mediaItems={[media({
+            id: 'video-1',
+            url: 'https://cdn.example.com/original.mp4',
+            previewUrl: 'https://cdn.example.com/poster.webp',
+            mediaKind: 'video',
+            contentType: 'video/mp4',
+            ...overrides,
+          })]}
+          radius={12}
+          recyclingKey="home-feed:video-1"
+          videoActivation="visible"
+          onVideoProgress={onVideoProgress}
+          width={160}
+        />
+      );
+      return findAllByNodeType(tree, 'feed-video-preview')[0];
+    }
+
+    it("reports a clip streamed whole against its own length", () => {
+      const onVideoProgress = vi.fn();
+      const video = renderVideo({ feedStreamUrl: 'https://cdn.example.com/clip.feed.mp4', durationSeconds: 12 }, onVideoProgress);
+
+      video.props.onPlaybackTime(3, 12);
+      expect(onVideoProgress).toHaveBeenCalledWith(0.25, 12_000);
+    });
+
+    it("reports a teaser's play against the whole clip it opens", () => {
+      const onVideoProgress = vi.fn();
+      const teaser = 'https://cdn.example.com/clip.teaser.mp4';
+      const video = renderVideo({ teaserUrl: teaser, feedStreamUrl: teaser, durationSeconds: 95.5 }, onVideoProgress);
+
+      video.props.onPlaybackTime(7.9, 8);
+      expect(onVideoProgress).toHaveBeenCalledWith(7.9 / 95.5, 95_500);
+    });
+
+    it('reports nothing for a teaser of a clip whose length is unknown', () => {
+      const onVideoProgress = vi.fn();
+      const teaser = 'https://cdn.example.com/clip.teaser.mp4';
+      const video = renderVideo({ teaserUrl: teaser, feedStreamUrl: teaser, durationSeconds: null }, onVideoProgress);
+
+      video.props.onPlaybackTime(4, 8);
+      expect(onVideoProgress).not.toHaveBeenCalled();
+    });
+
+    it('asks a tile for no time where no one listens', () => {
+      expect(renderVideo({ feedStreamUrl: 'https://cdn.example.com/clip.feed.mp4' }).props.onPlaybackTime).toBeUndefined();
+    });
+  });
+
   it('does not disguise a legacy post-level source URL as an image preview', () => {
     const previews = getShowcasePreviewMediaItems(item({ mediaItems: undefined }));
 

@@ -536,6 +536,66 @@
         }
       }
     },
+    "recordShowcaseFeedEvents": {
+      "method": "POST",
+      "path": "/api/showcase/feed/events",
+      "auth": "optional",
+      "cacheControl": "private, no-store",
+      "request": {
+        "events": [
+          {
+            "clientEventId": "showcase:dwell-1",
+            "feedSessionId": "0d8b7c6a-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+            "deliveryId": "9001",
+            "postId": "5f0c6a52-8d1e-4b7a-9c3f-1a2b3c4d5e6f",
+            "eventType": "dwell",
+            "position": 3,
+            "durationMs": 4200,
+            "sourceSurface": "feed",
+            "metadata": {
+              "algorithmVersion": "for-you-rules:4",
+              "surface": "home-feed"
+            },
+            "occurredAt": "2026-10-12T09:00:00.000Z"
+          },
+          {
+            "clientEventId": "showcase:progress-1",
+            "feedSessionId": "0d8b7c6a-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+            "deliveryId": "9001",
+            "postId": "5f0c6a52-8d1e-4b7a-9c3f-1a2b3c4d5e6f",
+            "eventType": "media_progress",
+            "position": 3,
+            "durationMs": 95500,
+            "progress": 0.5,
+            "sourceSurface": "feed",
+            "metadata": {
+              "algorithmVersion": "for-you-rules:4",
+              "surface": "home-feed"
+            },
+            "occurredAt": "2026-10-12T09:00:00.000Z"
+          },
+          {
+            "clientEventId": "showcase:resource-1",
+            "feedSessionId": "0d8b7c6a-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+            "deliveryId": "9001",
+            "postId": "5f0c6a52-8d1e-4b7a-9c3f-1a2b3c4d5e6f",
+            "eventType": "resource_open",
+            "position": 3,
+            "sourceSurface": "feed",
+            "metadata": {
+              "algorithmVersion": "for-you-rules:4",
+              "surface": "home-feed"
+            },
+            "occurredAt": "2026-10-12T09:00:00.000Z"
+          }
+        ]
+      },
+      "response": {
+        "success": true,
+        "recorded": 3,
+        "rejected": 0
+      }
+    },
     "searchPublicContent": {
       "method": "GET",
       "path": "/api/search",
@@ -740,6 +800,11 @@
       "path": "/api/showcase/posts/:postId/comments",
       "auth": "required",
       "cacheControl": "private, no-store",
+      "request": {
+        "body": "Saving this for later.",
+        "parentId": null,
+        "deliveryId": "9001"
+      },
       "response": {
         "success": true,
         "commentCount": 3,
@@ -768,6 +833,21 @@
         "success": true,
         "status": "removed_by_author",
         "commentCount": 1
+      }
+    },
+    "setCreatorFollowing": {
+      "method": "POST",
+      "path": "/api/profile/follow",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "request": {
+        "followingId": "creator-1",
+        "following": true,
+        "postId": "5f0c6a52-8d1e-4b7a-9c3f-1a2b3c4d5e6f",
+        "deliveryId": "9001"
+      },
+      "response": {
+        "following": true
       }
     },
     "saveShowcasePost": {

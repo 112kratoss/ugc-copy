@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { normalizeShowcaseCategory } from '@/lib/showcase';
+import { parseShowcaseFeedEventBatchPayload } from '@/lib/showcase-feed-events-service';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
@@ -12,6 +13,8 @@ import type {
   MobileCompatibilityErrorResponse,
   MobileNotificationsResponse,
   PublicSearchResponse,
+  ShowcaseFeedEventBatchResponse,
+  ShowcaseFeedEventRequest,
 } from '../../ugc-mobile/lib/types';
 
 type MobileApiContractEndpoint<Response> = {
@@ -48,6 +51,15 @@ type MobileApiContractFixture = {
     }>;
     mobileNotifications: MobileApiContractEndpoint<MobileNotificationsResponse>;
     searchPublicContent: MobileApiContractEndpoint<PublicSearchResponse>;
+    recordShowcaseFeedEvents: MobileApiContractEndpoint<ShowcaseFeedEventBatchResponse> & {
+      request: { events: Array<ShowcaseFeedEventRequest & { occurredAt: string }> };
+    };
+    createPostComment: MobileApiContractEndpoint<unknown> & {
+      request: { body: string; parentId: string | null; deliveryId: string };
+    };
+    setCreatorFollowing: MobileApiContractEndpoint<{ following: boolean }> & {
+      request: { followingId: string; following: boolean; postId: string; deliveryId: string };
+    };
   };
 };
 
@@ -70,12 +82,14 @@ const expectedEndpointKeys = [
   'getMotionGeneration',
   'enhancePrompt',
   'getShowcaseFeed',
+  'recordShowcaseFeedEvents',
   'searchPublicContent',
   'getSavedMedia',
   'getShowcasePost',
   'listPostComments',
   'createPostComment',
   'deletePostComment',
+  'setCreatorFollowing',
   'saveShowcasePost',
   'remixShowcasePost',
   'shareShowcasePost',
@@ -236,6 +250,55 @@ describe('shared mobile API v1 contract fixture', () => {
       category: 'commerce',
       isRead: false,
     });
+  });
+
+  // Feed ranking v4 (docs/plans/feed-algorithm-v4-industry-parity-2026-10-12.md
+  // §4): a comment or a follow started from a ranked card names the delivery
+  // that showed it, and a follow the post it was pressed on. Both are optional:
+  // a client that sends neither is answered exactly as before.
+  it('pins the delivery a comment or a follow from a feed card carries', () => {
+    expect(contract.endpoints.createPostComment).toMatchObject({
+      method: 'POST',
+      path: '/api/showcase/posts/:postId/comments',
+      request: { body: 'Saving this for later.', parentId: null, deliveryId: '9001' },
+    });
+    expect(contract.endpoints.setCreatorFollowing).toMatchObject({
+      method: 'POST',
+      path: '/api/profile/follow',
+      auth: 'required',
+      request: {
+        followingId: 'creator-1',
+        following: true,
+        postId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+        deliveryId: '9001',
+      },
+      response: { following: true },
+    });
+  });
+
+  // The attention the Home feed now reports (dwell, inline video progress, a
+  // card's resources opened) travels in the batch the app's queue sends. No new
+  // event type: the server takes every one of them as the app writes it.
+  it('accepts every feed event the app batches from the Home feed', () => {
+    const { events } = contract.endpoints.recordShowcaseFeedEvents.request;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(Date.parse(events[0].occurredAt) + 60_000));
+    try {
+      const parsed = parseShowcaseFeedEventBatchPayload(contract.endpoints.recordShowcaseFeedEvents.request);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      expect(parsed.batched).toBe(true);
+      expect(parsed.payloads.map((payload) => [payload.eventType, payload.deliveryId, payload.durationMs, payload.progress]))
+        .toEqual([
+          ['dwell', '9001', 4200, null],
+          ['media_progress', '9001', 95500, 0.5],
+          ['resource_open', '9001', null, null],
+        ]);
+    } finally {
+      vi.useRealTimers();
+    }
+    const batch: ShowcaseFeedEventBatchResponse = contract.endpoints.recordShowcaseFeedEvents.response;
+    expect(batch).toEqual({ success: true, recorded: events.length, rejected: 0 });
   });
 });
 

@@ -60,7 +60,7 @@ function readSaveState(client: QueryClient) {
   return { isSaved: item?.isSaved, saveCount: item?.saveCount };
 }
 
-type Toggle = (options: { postId: string; isSaved: boolean; saveCount: number }) => void;
+type Toggle = (options: { postId: string; isSaved: boolean; saveCount: number; onSaved?: (isSaved: boolean) => void }) => void;
 
 /**
  * Mounts `surfaceCount` independent copies of the real hook against one real
@@ -104,8 +104,8 @@ async function mountSaveSurfaces(surfaceCount = 1) {
     client,
     postId,
     states,
-    tap: async (isSaved: boolean, saveCount: number, surface = 0) => {
-      await act(async () => { toggles[surface]({ postId, isSaved, saveCount }); });
+    tap: async (isSaved: boolean, saveCount: number, surface = 0, onSaved?: (isSaved: boolean) => void) => {
+      await act(async () => { toggles[surface]({ postId, isSaved, saveCount, onSaved }); });
     },
     cleanup: () => { unsubscribe(); tree.unmount(); client.clear(); },
   };
@@ -216,6 +216,55 @@ describe('a save on one surface overtaken by a save on another', () => {
     // the shared ledger tells it the viewer has since spoken for this post.
     expect(surface.states).toEqual([false, true, false]);
     expect(readSaveState(surface.client)).toEqual({ isSaved: false, saveCount: 4 });
+
+    surface.cleanup();
+  });
+});
+
+// Feed ranking v4, §4: Home reports its saves to the feed's ranking, as the
+// reel does, through the tap's `onSaved` (`components/home-dashboard.tsx`).
+describe('a save reported to the feed', () => {
+  it('reports the state the server settled on, once it has answered', async () => {
+    const pending = deferResponses();
+    const surface = await mountSaveSurfaces();
+    const onSaved = vi.fn();
+
+    await surface.tap(false, 4, 0, onSaved);
+    expect(onSaved).not.toHaveBeenCalled();
+    await act(async () => { pending[0].resolve({ isSaved: true, saveCount: 5 }); });
+
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(onSaved).toHaveBeenCalledWith(true);
+
+    surface.cleanup();
+  });
+
+  it('reports nothing for a save that failed', async () => {
+    const pending = deferResponses();
+    const surface = await mountSaveSurfaces();
+    const onSaved = vi.fn();
+
+    await surface.tap(false, 4, 0, onSaved);
+    await act(async () => { pending[0].reject(new Error('offline')); });
+
+    expect(onSaved).not.toHaveBeenCalled();
+
+    surface.cleanup();
+  });
+
+  it('reports only the last of two quick taps, with its own answer', async () => {
+    const pending = deferResponses();
+    const surface = await mountSaveSurfaces();
+    const first = vi.fn();
+    const second = vi.fn();
+
+    await surface.tap(false, 4, 0, first);
+    await surface.tap(true, 5, 0, second);
+    await act(async () => { pending[0].resolve({ isSaved: true, saveCount: 5 }); });
+    await act(async () => { pending[1].resolve({ isSaved: false, saveCount: 4 }); });
+
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledWith(false);
 
     surface.cleanup();
   });
