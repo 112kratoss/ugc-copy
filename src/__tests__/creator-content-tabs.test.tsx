@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CreatorContentTabs } from '@/app/creators/[username]/CreatorContentTabs';
@@ -13,11 +13,13 @@ const authState = vi.hoisted(() => ({
   session: null as { access_token: string } | null,
   user: null as { id: string } | null,
 }));
+// The query the page is opened with; empty unless a test opens a link.
+const searchState = vi.hoisted(() => ({ search: '' }));
 
 vi.mock('next/navigation', () => ({
   usePathname: () => '/creators/creator-name',
   useRouter: () => ({ push: routerPush, replace: routerReplace }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(searchState.search),
 }));
 
 vi.mock('@/components/AuthProvider', () => ({
@@ -43,6 +45,9 @@ vi.mock('@/app/showcase/ShowcaseReelViewer', () => ({
     onReportUser,
     onBlockUser,
     originLabel,
+    selectedItemStatus,
+    onRetrySelectedItem,
+    loadMoreError,
   }: {
     isOpen: boolean;
     items: ShowcaseFeedItem[];
@@ -52,12 +57,20 @@ vi.mock('@/app/showcase/ShowcaseReelViewer', () => ({
     onReportContent?: ReelHandler;
     onReportUser?: ReelHandler;
     onBlockUser?: ReelHandler;
+    selectedItemStatus?: string | null;
+    onRetrySelectedItem?: () => void;
+    loadMoreError?: string | null;
   }) => {
     const openItem = reelItems.find((candidate) => candidate.id === selectedItemId);
     return isOpen ? (
       <div role="dialog" aria-label="Creator immersive viewer">
         <span>{selectedItemId}</span>
         <span>Closes to {originLabel ?? 'Explore'}</span>
+        {selectedItemStatus ? <span>Linked post: {selectedItemStatus}</span> : null}
+        {selectedItemStatus === 'failed' && onRetrySelectedItem
+          ? <button type="button" onClick={onRetrySelectedItem}>Try again</button>
+          : null}
+        {loadMoreError ? <span role="alert">{loadMoreError}</span> : null}
         {onFeedback ? <button type="button">Feed rows</button> : null}
         {openItem && onReportContent ? <button type="button" onClick={() => void onReportContent(openItem)}>Report content</button> : null}
         {openItem && onReportUser ? <button type="button" onClick={() => void onReportUser(openItem)}>Report user</button> : null}
@@ -172,6 +185,7 @@ describe('CreatorContentTabs', () => {
     routerReplace.mockReset();
     authState.session = null;
     authState.user = null;
+    searchState.search = '';
     resetFeedbackState();
     window.history.replaceState(null, '', '/creators/creator-name');
   });
@@ -235,6 +249,93 @@ describe('CreatorContentTabs', () => {
 
     expect((await screen.findAllByText('Second Page Frame')).length).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledWith('/api/creators/creator-name?limit=24&offset=24', undefined);
+  });
+
+  // The reel's own paging asked again at once after a failed page, without end,
+  // and the error was drawn behind it, under the grid.
+  it('tells the reel when a page fails to load', async () => {
+    vi.stubGlobal('IntersectionObserver', undefined);
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, json: async () => ({ error: 'Failed' }) })));
+    render(
+      <CreatorContentTabs
+        initialData={{
+          ...initialData,
+          pageInfo: { hasMore: true, limit: 24, offset: 0, nextOffset: 24, nextLimit: 48 },
+        }}
+        profilePath="/creators/creator-name"
+      />
+    );
+    fireEvent.click(screen.getAllByRole('button', { name: /campaign frame/i })[0]);
+    const reel = await screen.findByRole('dialog', { name: /creator immersive viewer/i });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more posts' }));
+
+    expect(await within(reel).findByRole('alert')).toHaveTextContent('Could not load more posts.');
+  });
+
+  // A `?post=` link to a post the page does not hold is read on its own. When
+  // it was gone, or someone else's, the page opened nothing and said nothing.
+  describe('a linked post the page does not hold', () => {
+    const linkTo = (postId: string) => {
+      searchState.search = `?post=${postId}`;
+      window.history.replaceState(null, '', `/creators/creator-name?post=${postId}`);
+    };
+    const answerPost = (answer: () => { ok: boolean; status: number; json: () => Promise<unknown> }) => {
+      vi.stubGlobal('fetch', vi.fn(async (input: string) => (
+        input.startsWith('/api/showcase/posts/') ? answer() : { ok: true, status: 200, json: async () => ({}) }
+      )));
+    };
+    const renderPage = () => render(<CreatorContentTabs initialData={initialData} profilePath="/creators/creator-name" />);
+
+    it('opens the reel on the read, and says when the post is gone', async () => {
+      linkTo('item-gone');
+      answerPost(() => ({ ok: false, status: 404, json: async () => ({ error: 'Post not found.' }) }));
+      renderPage();
+
+      const reel = await screen.findByRole('dialog', { name: /creator immersive viewer/i });
+      expect(reel).toHaveTextContent('item-gone');
+      await waitFor(() => expect(reel).toHaveTextContent('Linked post: unavailable'));
+    });
+
+    it("says that someone else's post is not on this page", async () => {
+      linkTo('item-other');
+      answerPost(() => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          item: {
+            ...items[0],
+            id: 'item-other',
+            creator: { id: 'creator-9', username: 'someone-else', name: 'Someone Else', avatar: null },
+          },
+        }),
+      }));
+      renderPage();
+
+      const reel = await screen.findByRole('dialog', { name: /creator immersive viewer/i });
+      await waitFor(() => expect(reel).toHaveTextContent('Linked post: unavailable'));
+    });
+
+    it('offers Try again when the read fails, and opens the post when it comes', async () => {
+      linkTo('item-late');
+      let failing = true;
+      answerPost(() => (failing
+        ? { ok: false, status: 503, json: async () => ({ error: 'Busy' }) }
+        : { ok: true, status: 200, json: async () => ({ success: true, item: { ...items[0], id: 'item-late', title: 'Late Frame' } }) }));
+      renderPage();
+
+      const reel = await screen.findByRole('dialog', { name: /creator immersive viewer/i });
+      await waitFor(() => expect(reel).toHaveTextContent('Linked post: failed'));
+
+      failing = false;
+      fireEvent.click(within(reel).getByRole('button', { name: 'Try again' }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).not.toHaveTextContent('Linked post:');
+      });
+      expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('item-late');
+    });
   });
 
   // The reel opened from a creator's page had no ⋯ at all. It carries the three

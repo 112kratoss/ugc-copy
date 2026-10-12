@@ -88,6 +88,7 @@ interface OwnerPost {
   ownerPath: string;
   resourcePath: string | null;
   canShare: boolean;
+  commentCount?: number;
   bundle: {
     id: string;
     accessMode: 'free' | 'paid';
@@ -225,7 +226,9 @@ function mapOwnerPostToFeedItem(post: OwnerPost, creator: ShowcaseCreator): Show
     postFormat: post.postFormat,
     saveCount: 0,
     remixCount: 0,
-    commentCount: 0,
+    commentCount: post.commentCount ?? 0,
+    // The reel takes comments on public posts only, as the server does.
+    visibility: post.visibility === 'unlisted' ? 'unlisted' : 'public',
     createdAt: post.createdAt,
     creator,
     sourceKind: post.sourceKind,
@@ -603,6 +606,20 @@ export default function OwnerProfileMediaHub({
     setSelectedMediaIndex(0);
     updateLocation({ postId: id, mediaIndex: 0 }, 'replace');
   };
+
+  // A thread read in the reel reports the post's comment count; the lists'
+  // copies follow it, so the reel opened on that post again says the same.
+  const updateCommentCount = useCallback((postId: string, commentCount: number) => {
+    const withCount = (current: ShowcaseFeedItem[]) => {
+      const index = current.findIndex((candidate) => candidate.id === postId);
+      if (index < 0 || current[index].commentCount === commentCount) return current;
+      const next = current.slice();
+      next[index] = { ...current[index], commentCount };
+      return next;
+    };
+    setProfilePostItems(withCount);
+    setProfileSavedItems(withCount);
+  }, [setProfilePostItems, setProfileSavedItems]);
 
   const closePost = () => {
     setSelectedPostId(null);
@@ -1074,9 +1091,11 @@ export default function OwnerProfileMediaHub({
           accessToken={accessToken}
           hasMoreItems={activePageInfo.hasMore}
           isLoadingMoreItems={loadingMoreTab === activeTab}
+          loadMoreError={errors[activeTab] ?? null}
           onLoadMoreItems={loadMore}
           onClose={closePost}
           onSelectItemId={selectPost}
+          onCommentCountChange={updateCommentCount}
           onMediaIndexChange={(index) => {
             setSelectedMediaIndex(index);
             updateLocation({ postId: selectedPostId, mediaIndex: index }, 'replace');

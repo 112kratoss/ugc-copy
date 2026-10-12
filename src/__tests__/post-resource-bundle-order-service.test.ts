@@ -527,7 +527,7 @@ describe('createPostResourceBundleOrderForRoute', () => {
       ok: false,
       status: 400,
       body: {
-        error: 'Recipes below 100 tokens can only be unlocked with credits.',
+        error: 'Recipes below 100 credits can only be unlocked with credits.',
         code: 'CREDITS_ONLY_PRICE',
         creditCost: 90,
         cashMinimumTokens: 100,
@@ -535,6 +535,38 @@ describe('createPostResourceBundleOrderForRoute', () => {
     });
     expect(admin.rpcCalls.map((call) => call.fn)).not.toContain('get_post_resource_bundle_cash_quote');
     expect(getPostResourceBundlePriceQuote).not.toHaveBeenCalled();
+    expect(createRazorpayOrder).not.toHaveBeenCalled();
+  });
+
+  // The price the locked quote reads can have dropped below the cash minimum
+  // since the bundle was first read; that refusal names credits too, not tokens.
+  it('refuses cash in credits when the locked quote finds a credits-only price', async () => {
+    const admin = createAdminSupabaseMock({
+      cashQuote: createCashQuote({ status: 'credits_only', price_usd_cents: 90 }),
+    });
+    const createRazorpayOrder = vi.fn();
+
+    const result = await createPostResourceBundleOrderForRoute({
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      countryHeader: 'IN',
+      readBody: vi.fn(async () => ({ locale: 'en-IN' })),
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      getPostResourceBundlePriceQuote: vi.fn(),
+      createRazorpayOrder,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: {
+        error: 'Recipes below 100 credits can only be unlocked with credits.',
+        code: 'CREDITS_ONLY_PRICE',
+        creditCost: 90,
+        cashMinimumTokens: 100,
+      },
+    });
     expect(createRazorpayOrder).not.toHaveBeenCalled();
   });
 

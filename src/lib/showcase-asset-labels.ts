@@ -1,6 +1,6 @@
 import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { getBundleAccessLabel } from '@/lib/post-resource-bundles';
-import { isGenerationRecipeAssetId, type ShowcaseFeedItem } from '@/lib/showcase';
+import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 /**
  * What a recipe that costs nothing is called wherever a post is listed. The app
@@ -14,7 +14,7 @@ export const FREE_RECIPE_LABEL = 'Free recipe';
  * about which posts are for sale.
  */
 export function isFreeRecipeAsset(asset: NonNullable<ShowcaseFeedItem['asset']>): boolean {
-    if (isGenerationRecipeAssetId(asset.id) || asset.accessMode === 'free') {
+    if (asset.accessMode === 'free') {
         return true;
     }
 
@@ -27,10 +27,6 @@ export function isFreeRecipeAsset(asset: NonNullable<ShowcaseFeedItem['asset']>)
  * like "Free recipe" vs "Free unlock".
  */
 export function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
-    if (isGenerationRecipeAssetId(asset.id)) {
-        return FREE_RECIPE_LABEL;
-    }
-
     if (asset.priceQuote) {
         return formatBundleAccessLabel({
             accessMode: asset.accessMode,

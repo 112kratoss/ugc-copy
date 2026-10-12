@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import OwnerProfileMediaHub from '@/app/profile/OwnerProfileMediaHub';
@@ -27,6 +27,7 @@ vi.mock('next/dynamic', () => ({
     onReportUser,
     onBlockUser,
     originLabel,
+    loadMoreError,
   }: {
     isOpen: boolean;
     items: ShowcaseFeedItem[];
@@ -37,11 +38,14 @@ vi.mock('next/dynamic', () => ({
     onReportContent?: ReelHandler;
     onReportUser?: ReelHandler;
     onBlockUser?: ReelHandler;
+    loadMoreError?: string | null;
   }) {
     const item = items.find((candidate) => candidate.id === selectedItemId);
     return isOpen && item ? (
       <div role="dialog" aria-label={`${item.title} Showcase reel`}>
         <span>{item.title}</span>
+        <span>{item.commentCount} comments · {item.visibility ?? 'public'}</span>
+        {loadMoreError ? <span role="alert">{loadMoreError}</span> : null}
         <a href={buildDetailPath(item.id, 'resources')}>Post details</a>
         <span>Closes to {originLabel ?? 'Explore'}</span>
         {onFeedback ? <button type="button">Feed rows</button> : null}
@@ -310,6 +314,52 @@ describe('OwnerProfileMediaHub', () => {
   // The reel opened from your own profile had no ⋯ at all. Saved posts are
   // other people's, so their reel carries the three safety rows, as the app's
   // does; the reel over your own posts still has none.
+  // The reel takes comments on public posts only; the owner's unlisted post
+  // reached it as public, with no comment count.
+  it("hands the reel the owner's post with its visibility and comment count", async () => {
+    const baseFetch = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/posts?')) {
+        return response({
+          posts: [{ ...publicPost, id: 'post-unlisted', title: 'Unlisted post', visibility: 'unlisted', commentCount: 4 }],
+          pageInfo: { hasMore: false, nextOffset: null },
+        });
+      }
+      return baseFetch(input);
+    }));
+    render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /open unlisted post/i }));
+
+    expect(screen.getByRole('dialog', { name: /unlisted post showcase reel/i }))
+      .toHaveTextContent('4 comments · unlisted');
+  });
+
+  // The reel's own paging asked again at once after a failed page, without end.
+  it('tells the reel when a page of saved posts fails to load', async () => {
+    const baseFetch = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/saved-media?limit=24&offset=0')) {
+        return response({ items: [savedPost], pageInfo: { hasMore: true, nextOffset: 24 } });
+      }
+      if (url.startsWith('/api/showcase/saved-media?limit=24&offset=24')) {
+        return response({ error: 'Could not load saved posts.' }, false);
+      }
+      return baseFetch(input);
+    }));
+    render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} />);
+    await screen.findByRole('button', { name: /open public post/i });
+    fireEvent.click(screen.getByRole('tab', { name: /saved/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /open saved inspiration/i }));
+    const reel = screen.getByRole('dialog', { name: /saved inspiration showcase reel/i });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more saved' }));
+
+    expect(await within(reel).findByRole('alert')).toHaveTextContent('Could not load saved posts.');
+  });
+
   describe("the Saved reel's safety rows", () => {
     const owner = { id: 'owner-1', username: 'owner', name: 'Owner', avatar: null };
     const secondSavedPost: ShowcaseFeedItem = { ...savedPost, id: 'saved-post-2', title: 'Second by the same creator' };

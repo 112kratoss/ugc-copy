@@ -1,10 +1,14 @@
-import type { AnchorHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { AnchorHTMLAttributes, ComponentProps, HTMLAttributes, ReactNode } from 'react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseReelViewer from '@/app/showcase/ShowcaseReelViewer';
+import {
+  flushShowcaseFeedEvents,
+  resetShowcaseFeedEventQueueForTests,
+} from '@/app/showcase/ShowcaseFeedInteraction';
 import FeedbackViewport from '@/components/FeedbackViewport';
-import { requestConfirmation } from '@/components/feedback-state';
+import { requestConfirmation, resetFeedbackState } from '@/components/feedback-state';
 import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
 
 vi.mock('next/link', () => ({
@@ -74,6 +78,57 @@ vi.mock('@/components/PublicShareButton', () => ({
     </button>
   ),
 }));
+
+// Stands in for the thread: shows what the reel hands it, posts a comment the
+// way the real one reports it (a new count), and has a field to type in.
+vi.mock('@/components/PostComments', () => ({
+  default: ({
+    postId,
+    commentCount,
+    deliveryId,
+    onCommentCountChange,
+  }: {
+    postId: string;
+    commentCount: number;
+    deliveryId?: string | null;
+    onCommentCountChange?: (commentCount: number) => void;
+  }) => (
+    <div data-testid="post-comments" data-post-id={postId} data-delivery-id={deliveryId ?? ''}>
+      <span>Thread of {commentCount}</span>
+      <textarea aria-label="Write a comment" />
+      <button type="button" onClick={() => onCommentCountChange?.(commentCount + 1)}>Post a comment</button>
+    </div>
+  ),
+}));
+
+type ReelProps = ComponentProps<typeof ShowcaseReelViewer>;
+
+const ranked = (deliveryId: string, position = 0): ShowcaseFeedItem['recommendation'] => ({
+  deliveryId,
+  position,
+  reason: 'Inspired by your saves',
+  algorithmVersion: 'feed-v4',
+});
+
+/** The events the reel queued, as the server receives them. */
+function sentFeedEvents(fetchMock: { mock: { calls: unknown[][] } }) {
+  return fetchMock.mock.calls
+    .filter(([input]) => String(input) === '/api/showcase/feed/events')
+    .flatMap(([, request]) => {
+      const body = JSON.parse(String((request as RequestInit | undefined)?.body)) as {
+        events?: Array<Record<string, unknown>>;
+      };
+      return body.events ?? [];
+    });
+}
+
+/** The funnel events the page sends (`trackProductEvent`), as a test can hear them. */
+function listenForProductEvents() {
+  const heard: Array<{ eventName: string; parameters: Record<string, unknown> }> = [];
+  const listener = (event: Event) => heard.push((event as CustomEvent).detail);
+  window.addEventListener('magicbooklet:product-event', listener);
+  return { heard, stop: () => window.removeEventListener('magicbooklet:product-event', listener) };
+}
 
 function createShowcaseItem(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem {
   return {
@@ -265,6 +320,41 @@ function renderFreeReel() {
   );
 }
 
+function reelProps(overrides: Partial<ReelProps> = {}): ReelProps {
+  return {
+    isOpen: true,
+    items: [createShowcaseItem()],
+    selectedItemId: 'post-1',
+    savedItemIds: new Set(),
+    savingItemIds: new Set(),
+    accessToken: null,
+    hasMoreItems: false,
+    isLoadingMoreItems: false,
+    onLoadMoreItems: vi.fn(),
+    onClose: vi.fn(),
+    onSelectItemId: vi.fn(),
+    onToggleSave: vi.fn(),
+    onRemix: vi.fn(),
+    buildDetailPath: (id, section) => section ? `/showcase/${id}#${section}` : `/showcase/${id}`,
+    ...overrides,
+  };
+}
+
+/** Answers the recipe's access check (no access unless given), and whatever else is listed. */
+function stubRequests(answers: Record<string, (init?: RequestInit) => Response | Promise<Response>> = {}) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const answer = answers[url];
+    if (answer) return answer(init);
+    if (url.endsWith('/resource-bundle')) {
+      return new Response(JSON.stringify({ bundle: { viewerCanAccess: false, viewerIsOwner: false, resources: null } }));
+    }
+    return new Response(JSON.stringify({ success: true }));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
 describe('ShowcaseReelViewer pagination', () => {
   beforeEach(() => {
     mockPush.mockClear();
@@ -273,6 +363,8 @@ describe('ShowcaseReelViewer pagination', () => {
     authState.credits = null;
     authState.user = null;
     vi.unstubAllGlobals();
+    resetShowcaseFeedEventQueueForTests();
+    resetFeedbackState();
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
       configurable: true,
       value: vi.fn(),
@@ -331,6 +423,7 @@ describe('ShowcaseReelViewer pagination', () => {
 
     const reelActions = [
       screen.getByRole('button', { name: 'Save Campaign Frame' }),
+      screen.getByRole('button', { name: /show comments on campaign frame/i }),
       screen.getByRole('button', { name: 'Share' }),
       screen.getByRole('button', { name: 'Remix' }),
     ];
@@ -1006,185 +1099,53 @@ describe('ShowcaseReelViewer pagination', () => {
     expect(await screen.findByText(/added to your recipes/i)).toBeInTheDocument();
   });
 
-  it('shows public generation recipes inline without purchase', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = input.toString();
-
-      if (url.endsWith('/resource-bundle')) {
-        return new Response(JSON.stringify({
-          bundle: {
-            viewerCanAccess: true,
-            viewerIsOwner: false,
-            resources: {
-              promptText: 'public recipe prompt',
-              notesMarkdown: 'public recipe notes',
-              workflowShareUrl: null,
-              attachments: [],
-              allowRemix: true,
-              items: [
-                {
-                  type: 'prompt',
-                  role: 'primary',
-                  sectionId: null,
-                  title: 'Prompt',
-                  description: null,
-                  textContent: 'public recipe prompt',
-                  externalUrl: null,
-                  storagePath: null,
-                  contentType: null,
-                  sizeBytes: null,
-                  workflowSnapshot: null,
-                  sortOrder: 0,
-                  isPrimary: true,
-                  remixUse: 'none',
-                },
-                {
-                  type: 'reference_image',
-                  role: 'style_reference',
-                  sectionId: null,
-                  title: '@alisa',
-                  description: null,
-                  textContent: null,
-                  externalUrl: null,
-                  storagePath: 'generated_images/user-1/reference.png',
-                  contentType: 'image/png',
-                  sizeBytes: null,
-                  workflowSnapshot: null,
-                  sortOrder: 1,
-                  isPrimary: false,
-                  remixUse: 'reference_only',
-                },
-                {
-                  type: 'note',
-                  role: 'other',
-                  sectionId: null,
-                  title: 'Notes',
-                  description: null,
-                  textContent: 'public recipe notes',
-                  externalUrl: null,
-                  storagePath: null,
-                  contentType: null,
-                  sizeBytes: null,
-                  workflowSnapshot: null,
-                  sortOrder: 2,
-                  isPrimary: false,
-                  remixUse: 'none',
-                },
-              ],
-            },
+  // A recipe the reader has unlocked opens in the reel: its prompt (once), its
+  // notes, its references, and a reference image larger on a tap.
+  it("shows an unlocked recipe's prompt, notes and references, and opens a reference image larger", async () => {
+    authState.session = { access_token: 'token-1' };
+    stubRequests({
+      '/api/posts/post-1/resource-bundle': () => new Response(JSON.stringify({
+        bundle: {
+          viewerCanAccess: true,
+          viewerIsOwner: false,
+          resources: {
+            promptText: 'unlocked recipe prompt',
+            notesMarkdown: 'unlocked recipe notes',
+            workflowShareUrl: null,
+            attachments: [],
+            allowRemix: true,
+            items: [
+              {
+                type: 'reference_image',
+                role: 'style_reference',
+                sectionId: null,
+                title: '@alisa',
+                description: null,
+                textContent: null,
+                externalUrl: null,
+                storagePath: 'generated_images/user-1/reference.png',
+                contentType: 'image/png',
+                sizeBytes: null,
+                workflowSnapshot: null,
+                sortOrder: 1,
+                isPrimary: false,
+                remixUse: 'reference_only',
+              },
+            ],
           },
-        }));
-      }
-
-      if (url.endsWith('/file-url')) {
-        return new Response(JSON.stringify({
-          success: true,
-          signedUrl: 'https://signed.example.com/reference.png',
-        }));
-      }
-
-      return new Response(JSON.stringify({ error: 'Unexpected request' }), { status: 500 });
+        },
+      })),
+      '/api/posts/post-1/resource-bundle/file-url': () => new Response(JSON.stringify({
+        success: true,
+        signedUrl: 'https://signed.example.com/reference.png',
+      })),
     });
-    vi.stubGlobal('fetch', fetchMock);
 
-    render(
-      <ShowcaseReelViewer
-        isOpen
-        items={[
-          createShowcaseItem({
-            id: 'post-1',
-            title: 'Public Recipe Frame',
-            prompt: 'public recipe prompt',
-            asset: {
-              ...paidAsset,
-              id: 'generation-recipe:post-1',
-              title: 'Creation recipe',
-              accessMode: 'free',
-              priceUsdCents: 0,
-              priceQuote: {
-                currency: 'USD',
-                amountSubunits: 0,
-                formatted: '$0.00',
-                note: null,
-              },
-              resourceKinds: ['prompt', 'files', 'notes', 'remix'],
-              itemCounts: {
-                prompt: 1,
-                reference_image: 1,
-                note: 1,
-                remix_access: 1,
-              },
-              lockedPreview: {
-                resourceKinds: ['prompt', 'files', 'notes', 'remix'],
-                attachmentPreviews: [],
-                itemCounts: {
-                  prompt: 1,
-                  reference_image: 1,
-                  note: 1,
-                  remix_access: 1,
-                },
-                itemPreviews: [
-                  {
-                    type: 'prompt',
-                    title: 'Prompt',
-                    role: 'primary',
-                    sectionId: null,
-                    remixUse: 'none',
-                  },
-                  {
-                    type: 'reference_image',
-                    title: '@alisa',
-                    role: 'style_reference',
-                    sectionId: null,
-                    contentType: 'image/png',
-                    remixUse: 'reference_only',
-                  },
-                  {
-                    type: 'note',
-                    title: 'Notes',
-                    role: 'other',
-                    sectionId: null,
-                    remixUse: 'none',
-                  },
-                  {
-                    type: 'remix_access',
-                    title: 'Remix access',
-                    role: 'other',
-                    sectionId: null,
-                    remixUse: 'direct_remix',
-                  },
-                ],
-                sectionCount: 0,
-                sectionPreviews: [],
-                hasPrompt: true,
-                hasNotes: true,
-                hasWorkflow: false,
-                hasRemix: true,
-                updatedAt: '2026-04-02T10:00:00.000Z',
-              },
-            },
-            canRemix: true,
-          }),
-        ]}
-        selectedItemId="post-1"
-        savedItemIds={new Set()}
-        savingItemIds={new Set()}
-        accessToken={null}
-        hasMoreItems={false}
-        isLoadingMoreItems={false}
-        onLoadMoreItems={vi.fn()}
-        onClose={vi.fn()}
-        onSelectItemId={vi.fn()}
-        onToggleSave={vi.fn()}
-        onRemix={vi.fn()}
-        buildDetailPath={(id, section) => section ? `/showcase/${id}#${section}` : `/showcase/${id}`}
-      />
-    );
+    renderPaidReel();
 
-    expect(screen.getAllByText(/creation recipe includes 1 prompt, 1 reference image, 1 note, 1 remix access/i).length).toBeGreaterThan(0);
-    expect(await screen.findByText(/public recipe prompt/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/public recipe prompt/i)).toHaveLength(1);
-    expect(screen.getByText(/public recipe notes/i)).toBeInTheDocument();
+    expect(await screen.findByText('unlocked recipe prompt')).toBeInTheDocument();
+    expect(screen.getAllByText('unlocked recipe prompt')).toHaveLength(1);
+    expect(screen.getByText('unlocked recipe notes')).toBeInTheDocument();
     expect(screen.getByText(/remix access is included/i)).toBeInTheDocument();
     expect(screen.getByText('@alisa')).toBeInTheDocument();
 
@@ -1256,7 +1217,7 @@ describe('ShowcaseReelViewer pagination', () => {
     });
   });
 
-  it('unlocks with tokens and shows a compact success state', async () => {
+  it('unlocks with credits once the reader says yes, and shows a compact success state', async () => {
     authState.session = { access_token: 'token-1' };
     authState.credits = 1200;
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -1286,9 +1247,16 @@ describe('ShowcaseReelViewer pagination', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
+    render(<FeedbackViewport />);
     renderPaidReel();
     fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
     fireEvent.click(screen.getByRole('button', { name: /use [\d,]+ credits/i }));
+
+    // The spend cannot be undone, so it is asked first, as the post page asks.
+    const question = await screen.findByRole('alertdialog', { name: 'Unlock this recipe?' });
+    expect(question).toHaveTextContent('900 credits will come off your balance right away.');
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/unlock-with-credits', expect.anything());
+    fireEvent.click(within(question).getByRole('button', { name: 'Use 900 credits' }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/unlock-with-credits', expect.objectContaining({
@@ -1300,5 +1268,617 @@ describe('ShowcaseReelViewer pagination', () => {
     fireEvent.click(screen.getByRole('button', { name: /view recipe details/i }));
     expect(screen.getByText(/revealed prompt/i)).toBeInTheDocument();
     expect(screen.getByText(/revealed notes/i)).toBeInTheDocument();
+  });
+
+  describe('comments in the reel', () => {
+    it('opens the thread from a count on the rail, credited to the delivery that showed the post', () => {
+      const onCommentCountChange = vi.fn();
+      render(<ShowcaseReelViewer {...reelProps({
+        items: [createShowcaseItem({ commentCount: 2, recommendation: ranked('delivery-7') })],
+        onCommentCountChange,
+      })} />);
+
+      expect(screen.queryByTestId('post-comments')).not.toBeInTheDocument();
+      const toggle = screen.getByRole('button', { name: 'Show comments on Campaign Frame (2)' });
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      expect(toggle).toHaveTextContent('2');
+
+      fireEvent.click(toggle);
+
+      const thread = screen.getByTestId('post-comments');
+      expect(thread).toHaveAttribute('data-post-id', 'post-1');
+      expect(thread).toHaveAttribute('data-delivery-id', 'delivery-7');
+      expect(screen.getByRole('button', { name: 'Hide comments on Campaign Frame (2)' }))
+        .toHaveAttribute('aria-expanded', 'true');
+
+      // A comment posted in the thread moves the count on the rail, and the host hears it.
+      fireEvent.click(within(thread).getByRole('button', { name: 'Post a comment' }));
+      expect(screen.getByRole('button', { name: 'Hide comments on Campaign Frame (3)' })).toHaveTextContent('3');
+      expect(onCommentCountChange).toHaveBeenCalledWith('post-1', 3);
+
+      fireEvent.click(screen.getByRole('button', { name: /hide comments on campaign frame/i }));
+      expect(screen.queryByTestId('post-comments')).not.toBeInTheDocument();
+    });
+
+    it('shortens a large count as the feed card does', () => {
+      render(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ commentCount: 1234 })] })} />);
+
+      expect(screen.getByRole('button', { name: /show comments on campaign frame/i })).toHaveTextContent('1.2K');
+    });
+
+    it('takes no comments on an unlisted post, as the server takes none', () => {
+      render(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ visibility: 'unlisted' })] })} />);
+
+      expect(screen.queryByRole('button', { name: /comments on campaign frame/i })).not.toBeInTheDocument();
+    });
+
+    it('closes the thread when the reel moves on', () => {
+      const props = reelProps({
+        items: [
+          createShowcaseItem({ id: 'post-1', title: 'First Frame' }),
+          createShowcaseItem({ id: 'post-2', title: 'Second Frame' }),
+        ],
+      });
+      const { rerender } = render(<ShowcaseReelViewer {...props} />);
+      fireEvent.click(screen.getByRole('button', { name: /show comments on first frame/i }));
+      expect(screen.getByTestId('post-comments')).toBeInTheDocument();
+
+      fireEvent.keyDown(document.body, { key: 'ArrowDown' });
+      expect(props.onSelectItemId).toHaveBeenCalledWith('post-2');
+      rerender(<ShowcaseReelViewer {...props} selectedItemId="post-2" />);
+      expect(screen.queryByTestId('post-comments')).not.toBeInTheDocument();
+
+      rerender(<ShowcaseReelViewer {...props} selectedItemId="post-1" />);
+      expect(screen.queryByTestId('post-comments')).not.toBeInTheDocument();
+    });
+
+    // The arrows move the caret and Escape keeps the draft. Both reached the
+    // reel, which would turn to another post or close under the writer.
+    it('leaves the keys typed in the comment box to the box', () => {
+      const props = reelProps({
+        items: [
+          createShowcaseItem({ id: 'post-1', title: 'First Frame' }),
+          createShowcaseItem({ id: 'post-2', title: 'Second Frame' }),
+        ],
+      });
+      render(<ShowcaseReelViewer {...props} />);
+      fireEvent.click(screen.getByRole('button', { name: /show comments on first frame/i }));
+      const field = screen.getByRole('textbox', { name: 'Write a comment' });
+
+      fireEvent.keyDown(field, { key: 'ArrowDown' });
+      fireEvent.keyDown(field, { key: 'ArrowLeft' });
+      fireEvent.keyDown(field, { key: 'Escape' });
+
+      expect(props.onSelectItemId).not.toHaveBeenCalled();
+      expect(props.onClose).not.toHaveBeenCalled();
+    });
+
+    it('scrolls the details under a finger instead of turning the post', () => {
+      const props = reelProps({
+        items: [
+          createShowcaseItem({ id: 'post-1', title: 'First Frame' }),
+          createShowcaseItem({ id: 'post-2', title: 'Second Frame' }),
+        ],
+      });
+      const { container } = render(<ShowcaseReelViewer {...props} />);
+      const details = container.querySelector('[data-reel-scroll-region="details"]') as HTMLElement;
+      const media = container.querySelector('section') as HTMLElement;
+
+      fireEvent.touchStart(details, { touches: [{ clientX: 100, clientY: 400 }] });
+      fireEvent.touchEnd(details, { changedTouches: [{ clientX: 100, clientY: 200 }] });
+      expect(props.onSelectItemId).not.toHaveBeenCalled();
+
+      // The same swipe over the media turns the post.
+      fireEvent.touchStart(media, { touches: [{ clientX: 100, clientY: 400 }] });
+      fireEvent.touchEnd(media, { changedTouches: [{ clientX: 100, clientY: 200 }] });
+      expect(props.onSelectItemId).toHaveBeenCalledWith('post-2');
+    });
+  });
+
+  describe('Follow in the reel', () => {
+    const followAnswers = (
+      following: boolean,
+      answerFollow: () => Response = () => new Response(JSON.stringify({ following: !following })),
+    ) => ({
+      '/api/profile/follow?followingId=creator-1': () => new Response(JSON.stringify({ following })),
+      '/api/profile/follow': answerFollow,
+    });
+
+    it('asks whom the viewer follows, then follows the creator for the post and the delivery that showed it', async () => {
+      authState.session = { access_token: 'token-1' };
+      authState.user = { id: 'viewer-1' };
+      const fetchMock = stubRequests(followAnswers(false));
+      render(<ShowcaseReelViewer {...reelProps({
+        items: [createShowcaseItem({ recommendation: ranked('delivery-9') })],
+      })} />);
+
+      const follow = await screen.findByRole('button', { name: 'Follow Creator Name' });
+      expect(follow).toHaveAttribute('aria-pressed', 'false');
+      expect(fetchMock).toHaveBeenCalledWith('/api/profile/follow?followingId=creator-1', {
+        headers: { Authorization: 'Bearer token-1' },
+      });
+
+      fireEvent.click(follow);
+
+      expect(await screen.findByRole('button', { name: 'Following Creator Name' })).toHaveAttribute('aria-pressed', 'true');
+      const sent = fetchMock.mock.calls.find(([input, init]) => (
+        String(input) === '/api/profile/follow' && init?.method === 'POST'
+      ));
+      expect(sent?.[1]?.headers).toEqual({ Authorization: 'Bearer token-1', 'Content-Type': 'application/json' });
+      expect(JSON.parse(String(sent?.[1]?.body))).toEqual({
+        followingId: 'creator-1',
+        following: true,
+        postId: 'post-1',
+        deliveryId: 'delivery-9',
+      });
+    });
+
+    it('unfollows a creator the viewer follows', async () => {
+      authState.session = { access_token: 'token-1' };
+      authState.user = { id: 'viewer-1' };
+      const fetchMock = stubRequests(followAnswers(true));
+      render(<ShowcaseReelViewer {...reelProps()} />);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Following Creator Name' }));
+
+      expect(await screen.findByRole('button', { name: 'Follow Creator Name' })).toHaveAttribute('aria-pressed', 'false');
+      const sent = fetchMock.mock.calls.find(([input, init]) => (
+        String(input) === '/api/profile/follow' && init?.method === 'POST'
+      ));
+      expect(JSON.parse(String(sent?.[1]?.body))).toMatchObject({ followingId: 'creator-1', following: false, postId: 'post-1' });
+    });
+
+    it('puts the button back and says so when the follow fails', async () => {
+      authState.session = { access_token: 'token-1' };
+      authState.user = { id: 'viewer-1' };
+      stubRequests(followAnswers(false, () => new Response(JSON.stringify({ error: 'Failed' }), { status: 500 })));
+      render(<ShowcaseReelViewer {...reelProps()} />);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Follow Creator Name' }));
+
+      expect(await screen.findByText('Could not update follow. Please try again.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Follow Creator Name' })).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('sends a signed-out viewer to sign in and back to the post', () => {
+      window.history.replaceState(null, '', '/showcase?post=post-1');
+      try {
+        const fetchMock = stubRequests();
+        render(<ShowcaseReelViewer {...reelProps()} />);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Follow Creator Name' }));
+
+        expect(mockPush).toHaveBeenCalledWith(`/login?returnUrl=${encodeURIComponent('/showcase?post=post-1')}`);
+        expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/profile/follow'))).toBe(false);
+      } finally {
+        window.history.replaceState(null, '', '/');
+      }
+    });
+
+    it("has no Follow on the viewer's own post, and asks nothing", () => {
+      authState.session = { access_token: 'token-1' };
+      authState.user = { id: 'creator-1' };
+      const fetchMock = stubRequests();
+      render(<ShowcaseReelViewer {...reelProps()} />);
+
+      expect(screen.queryByRole('button', { name: /^follow/i })).not.toBeInTheDocument();
+      expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/profile/follow'))).toBe(false);
+    });
+  });
+
+  describe('Remix behind a recipe unlock', () => {
+    const lockedRemix = (
+      asset: NonNullable<ShowcaseFeedItem['asset']>,
+      overrides: Partial<ShowcaseFeedItem> = {},
+    ) => createShowcaseItem({
+      canRemix: false,
+      remixCapability: 'unlock_required',
+      remixTarget: 'image',
+      asset: { ...asset, allowRemix: true },
+      ...overrides,
+    });
+    const accessAnswer = () => new Response(JSON.stringify({
+      bundle: {
+        viewerCanAccess: true,
+        viewerIsOwner: false,
+        resources: { promptText: 'recipe prompt', notesMarkdown: null, workflowShareUrl: null, attachments: [], allowRemix: true },
+      },
+    }));
+
+    it('offers Remix on a paid recipe that includes it, and opens the checkout first', () => {
+      authState.session = { access_token: 'token-1' };
+      authState.credits = 1200;
+      stubRequests();
+      const onRemix = vi.fn();
+      render(<ShowcaseReelViewer {...reelProps({ items: [lockedRemix(paidAsset)], onRemix })} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remix: unlock the recipe for Campaign Frame first' }));
+
+      expect(onRemix).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: /pay with cash/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeInTheDocument();
+    });
+
+    it('gets a free recipe that includes remix on the first tap, and remixes on the next', async () => {
+      authState.session = { access_token: 'token-1' };
+      let unlocked = false;
+      const fetchMock = stubRequests({
+        '/api/posts/post-1/resource-bundle/unlock-free': () => {
+          unlocked = true;
+          return new Response(JSON.stringify({ success: true }));
+        },
+        '/api/posts/post-1/resource-bundle': () => unlocked
+          ? accessAnswer()
+          : new Response(JSON.stringify({ bundle: { viewerCanAccess: false, viewerIsOwner: false, resources: null } })),
+      });
+      const onRemix = vi.fn();
+      render(<ShowcaseReelViewer {...reelProps({ items: [lockedRemix(freeAsset)], onRemix })} />);
+
+      fireEvent.click(screen.getByRole('button', { name: /remix: unlock the recipe/i }));
+
+      expect(await screen.findByText(/added to your recipes/i)).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/unlock-free', expect.objectContaining({
+        method: 'POST',
+      }));
+      expect(onRemix).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remix' }));
+      expect(onRemix).toHaveBeenCalledWith('post-1');
+    });
+
+    it('remixes at once for a reader who already has the recipe', async () => {
+      authState.session = { access_token: 'token-1' };
+      stubRequests({ '/api/posts/post-1/resource-bundle': accessAnswer });
+      const onRemix = vi.fn();
+      render(<ShowcaseReelViewer {...reelProps({ items: [lockedRemix(paidAsset)], onRemix })} />);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Remix' }));
+
+      expect(onRemix).toHaveBeenCalledWith('post-1');
+    });
+
+    it('offers no Remix when the recipe leaves it out, or when the remix opens elsewhere', () => {
+      stubRequests();
+      const { unmount } = render(<ShowcaseReelViewer {...reelProps({
+        items: [createShowcaseItem({ canRemix: false, remixCapability: 'unlock_required', asset: paidAsset })],
+      })} />);
+      expect(screen.queryByRole('button', { name: /remix/i })).not.toBeInTheDocument();
+      unmount();
+
+      render(<ShowcaseReelViewer {...reelProps({ items: [lockedRemix(paidAsset, { remixTarget: 'workflow' })] })} />);
+      expect(screen.queryByRole('button', { name: /remix/i })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("the reel's own unlock", () => {
+    it('offers credits alone below the cash minimum, where the server refuses cash', () => {
+      authState.session = { access_token: 'token-1' };
+      authState.credits = 1200;
+      stubRequests();
+      render(<ShowcaseReelViewer {...reelProps({
+        items: [createShowcaseItem({
+          asset: {
+            ...paidAsset,
+            priceUsdCents: 90,
+            priceQuote: { currency: 'USD', amountSubunits: 90, formatted: '$0.90', note: null },
+          },
+        })],
+      })} />);
+
+      fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$0\.90/i })[0]);
+
+      expect(screen.queryByRole('button', { name: /pay with cash/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Use 90 credits' })).toBeInTheDocument();
+      expect(screen.queryByTestId('showcase-reel-razorpay-checkout')).not.toBeInTheDocument();
+    });
+
+    it('spends nothing when the reader says no', async () => {
+      authState.session = { access_token: 'token-1' };
+      authState.credits = 1200;
+      const fetchMock = stubRequests();
+      render(<FeedbackViewport />);
+      renderPaidReel();
+
+      fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+      fireEvent.click(screen.getByRole('button', { name: 'Use 900 credits' }));
+      const question = await screen.findByRole('alertdialog', { name: 'Unlock this recipe?' });
+      fireEvent.click(within(question).getByRole('button', { name: 'Cancel' }));
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+      expect(fetchMock).not.toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/unlock-with-credits', expect.anything());
+    });
+
+    // The post page's panel reports these; a recipe bought in the reel never
+    // reached the funnel.
+    it('reports a credit unlock to the funnel as the post page does', async () => {
+      authState.session = { access_token: 'token-1' };
+      authState.credits = 1200;
+      stubRequests({
+        '/api/posts/post-1/resource-bundle/unlock-with-credits': () => new Response(JSON.stringify({ success: true, credits: 300 })),
+      });
+      // No viewport is mounted, so the question falls back to the browser's own.
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const funnel = listenForProductEvents();
+      try {
+        renderPaidReel();
+        fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+        fireEvent.click(screen.getByRole('button', { name: 'Use 900 credits' }));
+
+        await waitFor(() => {
+          expect(funnel.heard.map(({ eventName }) => eventName)).toEqual(['recipe_unlock_started', 'recipe_unlock_succeeded']);
+        });
+        expect(funnel.heard[1].parameters).toEqual({ method: 'credits', post_id: 'post-1' });
+        expect(confirm).toHaveBeenCalledWith(expect.stringContaining('900 credits will come off your balance right away.'));
+      } finally {
+        funnel.stop();
+        confirm.mockRestore();
+      }
+    });
+
+    it('reports a free unlock that failed to the funnel', async () => {
+      authState.session = { access_token: 'token-1' };
+      stubRequests({
+        '/api/posts/post-1/resource-bundle/unlock-free': () => new Response(JSON.stringify({ error: 'Unavailable' }), { status: 500 }),
+      });
+      const funnel = listenForProductEvents();
+      try {
+        renderFreeReel();
+        fireEvent.click(screen.getAllByRole('button', { name: /get free recipe/i })[0]);
+
+        await waitFor(() => {
+          expect(funnel.heard.map(({ eventName }) => eventName)).toEqual(['recipe_unlock_started', 'recipe_unlock_failed']);
+        });
+        expect(funnel.heard[0].parameters).toEqual({ method: 'free', post_id: 'post-1' });
+      } finally {
+        funnel.stop();
+      }
+    });
+
+    it('reports a cash checkout to the funnel', async () => {
+      authState.session = { access_token: 'token-1' };
+      authState.credits = 1200;
+      stubRequests({
+        '/api/posts/post-1/resource-bundle/order': () => new Response(JSON.stringify({ error: 'Failed to start checkout.' }), { status: 500 }),
+      });
+      const funnel = listenForProductEvents();
+      try {
+        renderPaidReel();
+        fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+        fireEvent.click(screen.getByRole('button', { name: /pay with cash/i }));
+
+        await waitFor(() => {
+          expect(funnel.heard.map(({ eventName }) => eventName)).toEqual(['recipe_checkout_started', 'recipe_checkout_failed']);
+        });
+        expect(funnel.heard[0].parameters).toEqual({ method: 'razorpay', post_id: 'post-1' });
+      } finally {
+        funnel.stop();
+      }
+    });
+  });
+
+  // A failed page left `hasMoreItems` true and loading ended, so the reel asked
+  // again at once, and again, for as long as the request kept failing.
+  describe('a page that fails to load', () => {
+    it('stops asking on its own, says so, and asks again on Retry', () => {
+      const onLoadMoreItems = vi.fn();
+      const props = reelProps({
+        items: [
+          createShowcaseItem({ id: 'post-1', title: 'First Frame' }),
+          createShowcaseItem({ id: 'post-2', title: 'Second Frame' }),
+          createShowcaseItem({ id: 'post-3', title: 'Third Frame' }),
+        ],
+        hasMoreItems: true,
+        onLoadMoreItems,
+      });
+      const { rerender } = render(<ShowcaseReelViewer {...props} />);
+      // Three posts left: the reel asks for the next page.
+      expect(onLoadMoreItems).toHaveBeenCalledTimes(1);
+
+      // The host's request runs, then fails.
+      rerender(<ShowcaseReelViewer {...props} isLoadingMoreItems />);
+      rerender(<ShowcaseReelViewer {...props} loadMoreError="Could not load more posts." />);
+      expect(onLoadMoreItems).toHaveBeenCalledTimes(1);
+
+      const notice = screen.getByRole('alert');
+      expect(notice).toHaveTextContent('Could not load more posts.');
+      fireEvent.click(within(notice).getByRole('button', { name: 'Retry' }));
+      expect(onLoadMoreItems).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('feed events from the reel', () => {
+    const twoRanked = [
+      createShowcaseItem({ id: 'post-1', title: 'First Frame', recommendation: ranked('delivery-1', 0) }),
+      createShowcaseItem({ id: 'post-2', title: 'Second Frame', recommendation: ranked('delivery-2', 1) }),
+    ];
+    const advance = async (ms: number) => {
+      await act(async () => {
+        vi.advanceTimersByTime(ms);
+        await Promise.resolve();
+      });
+    };
+    const drain = async () => {
+      await act(async () => {
+        await flushShowcaseFeedEvents();
+      });
+    };
+
+    it('sends open for the post it opened on alone, and one impression per delivery', async () => {
+      vi.useFakeTimers();
+      const fetchMock = stubRequests();
+      try {
+        const props = reelProps({ items: twoRanked, accessToken: 'token-1', feedSessionId: 'session-1' });
+        const { rerender, unmount } = render(<ShowcaseReelViewer {...props} />);
+        await advance(1200);
+        rerender(<ShowcaseReelViewer {...props} selectedItemId="post-2" />);
+        await advance(1200);
+        rerender(<ShowcaseReelViewer {...props} selectedItemId="post-1" />);
+        await advance(1200);
+        unmount();
+        await drain();
+
+        expect(sentFeedEvents(fetchMock).map(({ eventType, postId }) => `${eventType}:${postId}`)).toEqual([
+          'open:post-1',
+          'impression:post-1',
+          'dwell:post-1',
+          'impression:post-2',
+          'dwell:post-2',
+          'dwell:post-1',
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps timing the post on screen through a token refresh, a new session id and an earlier post leaving', async () => {
+      vi.useFakeTimers();
+      const fetchMock = stubRequests();
+      try {
+        const earlier = createShowcaseItem({ id: 'post-0', title: 'Earlier Frame', recommendation: ranked('delivery-0', 0) });
+        const props = reelProps({
+          items: [earlier, ...twoRanked],
+          accessToken: 'token-1',
+          feedSessionId: 'session-1',
+        });
+        const { rerender, unmount } = render(<ShowcaseReelViewer {...props} />);
+        await advance(400);
+        rerender(<ShowcaseReelViewer {...props} items={twoRanked} accessToken="token-2" feedSessionId="session-2" />);
+        await advance(900);
+        unmount();
+        await drain();
+
+        const events = sentFeedEvents(fetchMock);
+        expect(events.map(({ eventType, postId }) => `${eventType}:${postId}`)).toEqual([
+          'open:post-1',
+          'impression:post-1',
+          'dwell:post-1',
+        ]);
+        expect(events[2]).toMatchObject({ durationMs: 1300, feedSessionId: 'session-2' });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('files nothing for a post flicked past in under 250 ms', async () => {
+      vi.useFakeTimers();
+      const fetchMock = stubRequests();
+      try {
+        const props = reelProps({ items: twoRanked, accessToken: 'token-1', feedSessionId: 'session-1' });
+        const { rerender, unmount } = render(<ShowcaseReelViewer {...props} />);
+        await advance(1200);
+        rerender(<ShowcaseReelViewer {...props} selectedItemId="post-2" />);
+        await advance(100);
+        unmount();
+        await drain();
+
+        expect(sentFeedEvents(fetchMock).map(({ eventType, postId }) => `${eventType}:${postId}`)).toEqual([
+          'open:post-1',
+          'impression:post-1',
+          'dwell:post-1',
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports the recipe opened once per delivery, however often it is opened', async () => {
+      authState.session = { access_token: 'token-1' };
+      authState.credits = 1200;
+      const fetchMock = stubRequests();
+      render(<ShowcaseReelViewer {...reelProps({
+        items: [createShowcaseItem({ asset: paidAsset, recommendation: ranked('delivery-5', 3) })],
+        accessToken: 'token-1',
+        feedSessionId: 'session-1',
+      })} />);
+
+      const railButton = screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0];
+      fireEvent.click(railButton);
+      fireEvent.click(railButton);
+      await drain();
+
+      expect(sentFeedEvents(fetchMock).filter(({ eventType }) => eventType === 'resource_open')).toEqual([
+        expect.objectContaining({
+          postId: 'post-1',
+          deliveryId: 'delivery-5',
+          sourceSurface: 'showcase-reel',
+          feedSessionId: 'session-1',
+        }),
+      ]);
+    });
+  });
+
+  describe('the details panel', () => {
+    const details = (container: HTMLElement) => container.querySelector('[data-reel-scroll-region="details"]') as HTMLElement;
+    const prompt = 'A creator-style product shot by a bright window.';
+
+    it('prints the body and the prompt once each', () => {
+      const { container } = render(<ShowcaseReelViewer {...reelProps({
+        items: [createShowcaseItem({ body: 'A caption from the creator.' })],
+      })} />);
+
+      expect(within(details(container)).getAllByText('A caption from the creator.')).toHaveLength(1);
+      expect(within(details(container)).getAllByText(prompt)).toHaveLength(1);
+    });
+
+    it('prints the prompt once when the post has no body', () => {
+      const { container } = render(<ShowcaseReelViewer {...reelProps()} />);
+
+      expect(within(details(container)).getAllByText(prompt)).toHaveLength(1);
+    });
+
+    it('copies the prompt it shows', async () => {
+      const writeText = vi.fn(async () => undefined);
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+      try {
+        render(<ShowcaseReelViewer {...reelProps()} />);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Copy the prompt' }));
+
+        expect(writeText).toHaveBeenCalledWith(prompt);
+        expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+      } finally {
+        Reflect.deleteProperty(navigator, 'clipboard');
+      }
+    });
+  });
+
+  // A `?post=` link to a post outside the loaded pages opened nothing while
+  // it was read, and nothing at all when the post was gone.
+  describe('a linked post that is not in the list', () => {
+    const missing = (overrides: Partial<ReelProps>) => reelProps({ selectedItemId: 'post-gone', ...overrides });
+
+    it('opens on the read while it runs', () => {
+      render(<ShowcaseReelViewer {...missing({ selectedItemStatus: 'loading' })} />);
+
+      expect(screen.getByRole('dialog', { name: 'Explore reel viewer' })).toBeInTheDocument();
+      expect(screen.getByRole('status')).toHaveTextContent('Loading post');
+    });
+
+    it("says a deleted or hidden post isn't available, and goes back to where it came from", () => {
+      const props = missing({ selectedItemStatus: 'unavailable', originLabel: 'Creator' });
+      render(<ShowcaseReelViewer {...props} />);
+
+      expect(screen.getByRole('heading', { name: /this post isn.t available/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Back to Creator' }));
+      expect(props.onClose).toHaveBeenCalledTimes(1);
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      expect(props.onClose).toHaveBeenCalledTimes(2);
+    });
+
+    it('offers Try again when the read failed', () => {
+      const onRetrySelectedItem = vi.fn();
+      render(<ShowcaseReelViewer {...missing({ selectedItemStatus: 'failed', onRetrySelectedItem })} />);
+
+      expect(screen.getByRole('heading', { name: /couldn.t load this post/i })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+      expect(onRetrySelectedItem).toHaveBeenCalledTimes(1);
+    });
+
+    it('draws nothing for a post it was told nothing about', () => {
+      const { container } = render(<ShowcaseReelViewer {...missing({})} />);
+
+      expect(container).toBeEmptyDOMElement();
+    });
   });
 });
