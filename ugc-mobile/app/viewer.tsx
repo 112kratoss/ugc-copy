@@ -71,7 +71,7 @@ import {
   isImmersiveDetailsSlidePageIndex,
   type ImmersiveSlidePage,
 } from '@/lib/immersive-slide-pages';
-import { getReelFollowTarget } from '@/lib/reel-overlay-view-model';
+import { getReelFollowAttribution, getReelFollowTarget } from '@/lib/reel-overlay-view-model';
 import { startShowcaseRemix } from '@/lib/remix-start';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { useCreatorFollow } from '@/lib/use-creator-follow';
@@ -1358,6 +1358,8 @@ function ImmersivePreviewViewer() {
           postId={activeItem.showcasePostId}
           postCreatorId={activeItem.creatorId ?? null}
           commentCount={activeItem.commentCount}
+          // A post the reel reached through a ranked feed credits its comments to that delivery.
+          deliveryId={activeItem.recommendation?.deliveryId ?? null}
           initialReplyToId={commentsReplyToId}
           onClose={() => {
             setCommentsReplyToId(null);
@@ -1597,7 +1599,12 @@ function ImmersiveSlide({
   const doubleTapHeart = useDoubleTapSaveHeartAnimation({ height, width });
   const { user } = useAuth();
   const followTarget = getReelFollowTarget(item, user?.id ?? null);
-  const follow = useCreatorFollow({ creatorId: followTarget?.creatorId ?? null, enabled: active && Boolean(followTarget) });
+  const follow = useCreatorFollow({
+    creatorId: followTarget?.creatorId ?? null,
+    enabled: active && Boolean(followTarget),
+    // The post the Follow is pressed on, and the feed delivery that showed it.
+    attribution: getReelFollowAttribution(item),
+  });
   const [captionExpanded, setCaptionExpanded] = useState(false);
   useEffect(() => {
     setCaptionExpanded(false);

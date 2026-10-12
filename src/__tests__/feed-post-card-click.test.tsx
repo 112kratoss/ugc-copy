@@ -1,13 +1,23 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import FeedPostCard from '@/app/feed/FeedPostCard';
+import {
+    flushShowcaseFeedEvents,
+    QualifiedImpressionBoundary,
+    resetShowcaseFeedEventQueueForTests,
+} from '@/app/showcase/ShowcaseFeedInteraction';
 import { buildPostFeedCard } from '@/lib/post-feed-presentation';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { ShowcaseAssetSummary, ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
 
+const postCommentsProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
+
 vi.mock('@/components/PostComments', () => ({
-    default: () => <div data-testid="post-comments"><textarea aria-label="Write a comment" /></div>,
+    default: (props: Record<string, unknown>) => {
+        postCommentsProps.current = props;
+        return <div data-testid="post-comments"><textarea aria-label="Write a comment" /></div>;
+    },
 }));
 
 vi.mock('@/components/PublicShareButton', () => ({
@@ -418,5 +428,139 @@ describe("FeedPostCard's recipe chip", () => {
         fireEvent.click(screen.getByRole('link', { name: 'Free recipe: A launch frame' }));
 
         expect(onOpenPost).not.toHaveBeenCalled();
+    });
+
+    it('tells the feed the card’s resources were opened', () => {
+        const onOpenResources = vi.fn();
+        renderCard({ asset: recipe({ accessMode: 'paid', priceUsdCents: 250 }), canRemix: true }, { onOpenResources });
+
+        fireEvent.click(screen.getByRole('link', { name: '$2.50 recipe: A launch frame' }));
+
+        expect(onOpenResources).toHaveBeenCalledWith('post-1');
+    });
+});
+
+// Feed ranking v4, §4: what a Home card reports past its impression.
+describe("FeedPostCard's feed telemetry", () => {
+    beforeEach(() => {
+        vi.stubGlobal('IntersectionObserver', IntersectionObserverMock);
+        postCommentsProps.current = null;
+        resetShowcaseFeedEventQueueForTests();
+    });
+
+    afterEach(() => {
+        cleanup();
+        resetShowcaseFeedEventQueueForTests();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    const ranked = { recommendation: { deliveryId: '9001', position: 4, reason: 'Popular with creators like you', algorithmVersion: 'for-you-rules:4' } };
+
+    it("credits a comment written under a ranked card to the card's delivery", () => {
+        renderCard(ranked, { commentsOpen: true });
+
+        expect(postCommentsProps.current).toMatchObject({ postId: 'post-1', deliveryId: '9001' });
+    });
+
+    it('sends no delivery with a comment under an unranked card', () => {
+        renderCard({}, { commentsOpen: true });
+
+        expect(postCommentsProps.current).toMatchObject({ postId: 'post-1', deliveryId: null });
+    });
+
+    function renderInBoundary(media: Partial<ShowcaseMediaItem>) {
+        const card = buildPostFeedCard(feedItem({
+            ...ranked,
+            category: 'video',
+            mediaKind: 'video',
+            mediaItems: [mediaItem({ mediaKind: 'video', contentType: 'video/mp4', ...media })],
+        }));
+        const noop = vi.fn();
+        return render(
+            <QualifiedImpressionBoundary item={card.item} feedSessionId={null} accessToken={null} position={0} sourceSurface="feed" trackAttention>
+                <FeedPostCard
+                    card={card}
+                    isSaved={false}
+                    saving={false}
+                    expanded={false}
+                    commentsOpen={false}
+                    accessToken={null}
+                    cardIndex={0}
+                    onToggleExpanded={noop}
+                    onToggleComments={noop}
+                    onToggleSave={noop}
+                    onCommentCountChange={noop}
+                    onOpenMedia={noop}
+                    onOpenPost={noop}
+                    onPrefetchPost={noop}
+                    onFeedback={noop}
+                    onRemix={noop}
+                    onReportContent={noop}
+                    onReportUser={noop}
+                    onBlockUser={noop}
+                />
+            </QualifiedImpressionBoundary>
+        );
+    }
+
+    function playTo(video: HTMLVideoElement, currentTime: number, duration: number) {
+        Object.defineProperty(video, 'currentTime', { configurable: true, value: currentTime });
+        Object.defineProperty(video, 'duration', { configurable: true, value: duration });
+        fireEvent.timeUpdate(video);
+    }
+
+    function sentEvents(fetchMock: ReturnType<typeof vi.fn>) {
+        return fetchMock.mock.calls.flatMap(([, init]) => (
+            JSON.parse(String((init as RequestInit).body)) as { events: Array<Record<string, unknown>> }
+        ).events);
+    }
+
+    it('reports how far its inline video played, at each milestone and as it goes', async () => {
+        const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true })));
+        vi.stubGlobal('fetch', fetchMock);
+        const { container, unmount } = renderInBoundary({ url: 'https://cdn.example.test/clip.mp4', feedStreamUrl: 'https://cdn.example.test/clip.feed.mp4', durationSeconds: 12 });
+        const video = container.querySelector('video') as HTMLVideoElement;
+
+        playTo(video, 1, 12);
+        playTo(video, 3.6, 12);
+        await act(async () => {
+            await flushShowcaseFeedEvents();
+        });
+        expect(sentEvents(fetchMock)).toEqual([expect.objectContaining({
+            eventType: 'media_progress',
+            progress: 0.3,
+            durationMs: 12_000,
+            deliveryId: '9001',
+            sourceSurface: 'feed',
+        })]);
+
+        playTo(video, 4.2, 12);
+        unmount();
+        await act(async () => {
+            await flushShowcaseFeedEvents();
+        });
+        // The rest of the way it got, sent as the card goes.
+        expect(sentEvents(fetchMock).at(-1)).toMatchObject({ eventType: 'media_progress', progress: 4.2 / 12, durationMs: 12_000 });
+    });
+
+    it("measures a teaser's play against the whole clip it opens", async () => {
+        const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true })));
+        vi.stubGlobal('fetch', fetchMock);
+        const teaser = 'https://cdn.example.test/clip.teaser.mp4';
+        const { container, unmount } = renderInBoundary({ url: 'https://cdn.example.test/clip.mp4', teaserUrl: teaser, feedStreamUrl: teaser, durationSeconds: 95.5 });
+
+        // The whole eight-second teaser, looped: not the clip watched to its end.
+        playTo(container.querySelector('video') as HTMLVideoElement, 7.9, 8);
+        unmount();
+        await act(async () => {
+            await flushShowcaseFeedEvents();
+        });
+
+        expect(sentEvents(fetchMock)).toEqual([expect.objectContaining({
+            eventType: 'media_progress',
+            progress: 7.9 / 95.5,
+            durationMs: 95_500,
+        })]);
     });
 });

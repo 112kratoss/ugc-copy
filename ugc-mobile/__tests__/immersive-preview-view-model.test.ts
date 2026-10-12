@@ -124,6 +124,10 @@ describe('immersive preview view model', () => {
       .toBe('/post/saved-post?source=profile-saved');
     expect(textPostViewerHref({ postId: 'saved/post', source: 'profile-saved', comments: true }))
       .toBe('/post/saved%2Fpost?source=profile-saved&comments=saved%2Fpost');
+    // A Home card's delivery rides along, for the comments written there.
+    expect(textPostViewerHref({ postId: 'post-1', comments: true, deliveryId: '9001' }))
+      .toBe('/post/post-1?comments=post-1&deliveryId=9001');
+    expect(textPostViewerHref({ postId: 'post-1', deliveryId: null })).toBe('/post/post-1');
   });
 
   it('opens showcase-feed text posts in the reading screen from every surface', () => {

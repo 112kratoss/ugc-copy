@@ -1,14 +1,22 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  createFeedCardAttention,
+  FEED_DWELL_MAX_MS,
+  flushShowcaseFeedEvents,
   QualifiedImpressionBoundary,
+  resetShowcaseFeedEventQueueForTests,
+  sendShowcaseResourceOpenEvent,
   ShowcaseFeedbackMenu,
+  useFeedCardTelemetry,
+  type FeedCardTelemetry,
 } from '@/app/showcase/ShowcaseFeedInteraction';
+import { sourceVideoProgress } from '@/app/showcase/ShowcaseMediaCarousel';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 function createShowcaseItem(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem {
@@ -554,5 +562,314 @@ describe('showcase feed interactions', () => {
     fireEvent.click(screen.getByRole('button', { name: /more actions for campaign frame/i }));
     expect(screen.getByRole('menuitem', { name: /not interested/i })).toHaveTextContent(/for this visit/i);
     expect(screen.getByRole('menuitem', { name: /hide @creator-name/i })).toHaveTextContent(/for this visit/i);
+  });
+});
+
+// Feed ranking v4, §4 (docs/plans/feed-algorithm-v4-industry-parity-2026-10-12.md):
+// a Home card reports how long it was read and how far its inline video
+// played, and a card's resources opening, each credited to its delivery.
+describe('feed card attention', () => {
+  beforeEach(() => resetShowcaseFeedEventQueueForTests());
+  afterEach(() => resetShowcaseFeedEventQueueForTests());
+
+  it('reports one dwell per delivery, when a stretch of at least a second ends', () => {
+    const attention = createFeedCardAttention({ deliveryId: 'delivery-1' });
+
+    expect(attention.setQualified(true, 10_000)).toEqual([]);
+    expect(attention.setQualified(false, 14_200)).toEqual([{ eventType: 'dwell', durationMs: 4_200 }]);
+
+    // Read again: the delivery has reported its dwell.
+    attention.setQualified(true, 20_000);
+    expect(attention.setQualified(false, 30_000)).toEqual([]);
+
+    // So has a card that mounts afresh for it (the windowed list, a lane revisited).
+    const remounted = createFeedCardAttention({ deliveryId: 'delivery-1' });
+    remounted.setQualified(true, 40_000);
+    expect(remounted.end(45_000)).toEqual([]);
+
+    // Another delivery of the same post is another dwell.
+    const next = createFeedCardAttention({ deliveryId: 'delivery-2' });
+    next.setQualified(true, 50_000);
+    expect(next.end(52_500)).toEqual([{ eventType: 'dwell', durationMs: 2_500 }]);
+  });
+
+  it('reports nothing for a pass under a second, and lets a later stretch count', () => {
+    const attention = createFeedCardAttention({ deliveryId: 'delivery-1' });
+
+    attention.setQualified(true, 0);
+    expect(attention.setQualified(false, 999)).toEqual([]);
+    attention.setQualified(true, 2_000);
+    expect(attention.setQualified(false, 3_500)).toEqual([{ eventType: 'dwell', durationMs: 1_500 }]);
+  });
+
+  it('caps a dwell at two minutes', () => {
+    const attention = createFeedCardAttention({ deliveryId: 'delivery-1' });
+
+    attention.setQualified(true, 0);
+    expect(attention.setQualified(false, 10 * 60_000)).toEqual([{ eventType: 'dwell', durationMs: FEED_DWELL_MAX_MS }]);
+    expect(FEED_DWELL_MAX_MS).toBe(120_000);
+  });
+
+  it('ends the stretch when the tab is hidden, and counts nothing while it is', () => {
+    const attention = createFeedCardAttention({ deliveryId: 'delivery-1' });
+
+    attention.setQualified(true, 0);
+    expect(attention.pageHidden(400)).toEqual([]);
+    // Back on the tab with the card still on screen: a new stretch from here.
+    expect(attention.pageShown(60_000)).toEqual([]);
+    expect(attention.setQualified(false, 61_600)).toEqual([{ eventType: 'dwell', durationMs: 1_600 }]);
+
+    const hidden = createFeedCardAttention({ deliveryId: 'delivery-2', pageVisible: false });
+    hidden.setQualified(true, 0);
+    expect(hidden.end(5_000)).toEqual([]);
+  });
+
+  it('sends inline progress at each milestone and the rest when the card leaves view', () => {
+    const attention = createFeedCardAttention({ deliveryId: 'delivery-1' });
+
+    expect(attention.recordVideoProgress(0.1, 8_000)).toEqual([]);
+    expect(attention.recordVideoProgress(0.3, 8_000)).toEqual([
+      { eventType: 'media_progress', progress: 0.3, durationMs: 8_000 },
+    ]);
+    // A looping clip wraps to the start: the furthest point is kept.
+    expect(attention.recordVideoProgress(0.05, 8_000)).toEqual([]);
+    expect(attention.recordVideoProgress(0.4, 8_000)).toEqual([]);
+    expect(attention.setQualified(false, 1_000)).toEqual([
+      { eventType: 'media_progress', progress: 0.4, durationMs: 8_000 },
+    ]);
+    expect(attention.end(2_000)).toEqual([]);
+    expect(attention.recordVideoProgress(1, 8_000)).toEqual([
+      { eventType: 'media_progress', progress: 1, durationMs: 8_000 },
+    ]);
+  });
+
+  it("measures a teaser's progress against the post's video, and an unknown length not at all", () => {
+    // Four seconds into the eight-second head of a 95.5 s clip.
+    expect(sourceVideoProgress({ currentTime: 4, streamDuration: 8, teaser: true, sourceDurationSeconds: 95.5 }))
+      .toEqual({ progress: 4 / 95.5, durationMs: 95_500 });
+    expect(sourceVideoProgress({ currentTime: 4, streamDuration: 8, teaser: true, sourceDurationSeconds: null })).toBeNull();
+    // The whole clip streaming: its own length.
+    expect(sourceVideoProgress({ currentTime: 6, streamDuration: 12, teaser: false, sourceDurationSeconds: 95.5 }))
+      .toEqual({ progress: 0.5, durationMs: 12_000 });
+    expect(sourceVideoProgress({ currentTime: 3, streamDuration: Number.NaN, teaser: false, sourceDurationSeconds: null })).toBeNull();
+  });
+
+  it('reports a card’s resources opening once per delivery, and never without one', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true, recorded: 1, rejected: 0 })));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const input = { item: createShowcaseItem(), sourceSurface: 'feed' as const, accessToken: 'token-1', feedSessionId: 'session-1', fallbackPosition: 2 };
+      sendShowcaseResourceOpenEvent(input);
+      sendShowcaseResourceOpenEvent(input);
+      sendShowcaseResourceOpenEvent({ ...input, item: createShowcaseItem({ id: 'post-2', recommendation: undefined }) });
+      await flushShowcaseFeedEvents();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [, request] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(JSON.parse(String(request.body))).toEqual({
+        events: [expect.objectContaining({
+          eventType: 'resource_open',
+          deliveryId: 'delivery-1',
+          postId: 'post-1',
+          sourceSurface: 'feed',
+          feedSessionId: 'session-1',
+        })],
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('QualifiedImpressionBoundary attention', () => {
+  let observerCallback: IntersectionObserverCallback | null = null;
+  let observedElement: Element | null = null;
+  let visibility: DocumentVisibilityState = 'visible';
+  // What the boundary hands the card inside it, read after render.
+  const probe: { telemetry: FeedCardTelemetry | null } = { telemetry: null };
+
+  function TelemetryProbe() {
+    const telemetry = useFeedCardTelemetry();
+    useEffect(() => {
+      probe.telemetry = telemetry;
+    }, [telemetry]);
+    return null;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-12T09:00:00.000Z'));
+    resetShowcaseFeedEventQueueForTests();
+    observerCallback = null;
+    observedElement = null;
+    probe.telemetry = null;
+    visibility = 'visible';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ success: true }))));
+    vi.stubGlobal('IntersectionObserver', vi.fn(function IntersectionObserverMock(
+      callback: IntersectionObserverCallback
+    ) {
+      observerCallback = callback;
+      return {
+        root: null,
+        rootMargin: '0px',
+        thresholds: [0.5],
+        observe: vi.fn((element: Element) => { observedElement = element; }),
+        unobserve: vi.fn(),
+        disconnect: vi.fn(),
+        takeRecords: vi.fn(() => []),
+      } satisfies IntersectionObserver;
+    }));
+  });
+
+  afterEach(() => {
+    cleanupBoundary?.();
+    cleanupBoundary = null;
+    resetShowcaseFeedEventQueueForTests();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    delete (document as { visibilityState?: DocumentVisibilityState }).visibilityState;
+  });
+
+  let cleanupBoundary: (() => void) | null = null;
+
+  function renderAttentionBoundary(trackAttention = true) {
+    const result = render(
+      <QualifiedImpressionBoundary
+        item={createShowcaseItem()}
+        feedSessionId="session-1"
+        accessToken="token-1"
+        position={0}
+        sourceSurface="feed"
+        trackAttention={trackAttention}
+      >
+        <TelemetryProbe />
+      </QualifiedImpressionBoundary>
+    );
+    cleanupBoundary = result.unmount;
+    return result;
+  }
+
+  function reportVisibility(ratio: number) {
+    observerCallback?.([{
+      isIntersecting: ratio > 0,
+      intersectionRatio: ratio,
+      target: observedElement,
+    } as IntersectionObserverEntry], {} as IntersectionObserver);
+  }
+
+  function sentEvents() {
+    return vi.mocked(fetch).mock.calls.flatMap(([, init]) => {
+      const body = JSON.parse(String((init as RequestInit).body)) as { events?: Array<Record<string, unknown>> };
+      return body.events ?? [body];
+    });
+  }
+
+  it('sends the dwell of a card that leaves view, with its delivery', async () => {
+    renderAttentionBoundary();
+
+    act(() => {
+      reportVisibility(0.8);
+      vi.advanceTimersByTime(4_200);
+      reportVisibility(0.2);
+    });
+    await act(async () => {
+      await flushShowcaseFeedEvents();
+    });
+
+    expect(sentEvents()).toEqual([
+      expect.objectContaining({ eventType: 'impression', deliveryId: 'delivery-1' }),
+      expect.objectContaining({
+        eventType: 'dwell',
+        durationMs: 4_200,
+        deliveryId: 'delivery-1',
+        postId: 'post-1',
+        sourceSurface: 'feed',
+        feedSessionId: 'session-1',
+        position: 7,
+      }),
+    ]);
+
+    // On screen again and gone again: the delivery's dwell is already in.
+    act(() => {
+      reportVisibility(1);
+      vi.advanceTimersByTime(5_000);
+      reportVisibility(0);
+    });
+    await act(async () => {
+      await flushShowcaseFeedEvents();
+    });
+    expect(sentEvents().filter((event) => event.eventType === 'dwell')).toHaveLength(1);
+  });
+
+  it('ends the stretch when the card unmounts', async () => {
+    const { unmount } = renderAttentionBoundary();
+
+    act(() => {
+      reportVisibility(0.6);
+      vi.advanceTimersByTime(3_000);
+    });
+    unmount();
+    cleanupBoundary = null;
+    await act(async () => {
+      await flushShowcaseFeedEvents();
+    });
+
+    expect(sentEvents()).toContainEqual(expect.objectContaining({ eventType: 'dwell', durationMs: 3_000 }));
+  });
+
+  it('sends what the card was given at once when the tab is hidden', async () => {
+    renderAttentionBoundary();
+
+    act(() => {
+      reportVisibility(1);
+      vi.advanceTimersByTime(2_500);
+    });
+    vi.mocked(fetch).mockClear();
+    await act(async () => {
+      visibility = 'hidden';
+      document.dispatchEvent(new Event('visibilitychange'));
+      await Promise.resolve();
+    });
+
+    // Flushed with the page going away, not two seconds later.
+    expect(sentEvents()).toContainEqual(expect.objectContaining({ eventType: 'dwell', durationMs: 2_500 }));
+  });
+
+  it("passes a card's inline video progress through to its delivery", async () => {
+    renderAttentionBoundary();
+    expect(probe.telemetry).not.toBeNull();
+
+    act(() => {
+      probe.telemetry?.reportVideoProgress(0.1, 20_000);
+      probe.telemetry?.reportVideoProgress(0.3, 20_000);
+    });
+    await act(async () => {
+      await flushShowcaseFeedEvents();
+    });
+
+    expect(sentEvents()).toEqual([expect.objectContaining({
+      eventType: 'media_progress',
+      progress: 0.3,
+      durationMs: 20_000,
+      deliveryId: 'delivery-1',
+      sourceSurface: 'feed',
+    })]);
+  });
+
+  it("reports neither for the Explore grid's tiles", async () => {
+    renderAttentionBoundary(false);
+    expect(probe.telemetry).toBeNull();
+
+    act(() => {
+      reportVisibility(1);
+      vi.advanceTimersByTime(6_000);
+      reportVisibility(0);
+    });
+    await act(async () => {
+      await flushShowcaseFeedEvents();
+    });
+
+    expect(sentEvents().map((event) => event.eventType)).toEqual(['impression']);
   });
 });

@@ -3,6 +3,7 @@ import { useCallback } from 'react';
 
 import type { MagicbookletApiClient } from './api-client';
 import { useAuth } from './auth';
+import type { CreatorFollowAttribution } from './types';
 
 const FOLLOW_STATE_STALE_MS = 1000 * 60 * 5;
 
@@ -38,7 +39,19 @@ export function prefetchCreatorFollowState(
  * screen's own follow button behaves. The creator profile's cache is
  * invalidated afterwards so the two surfaces agree.
  */
-export function useCreatorFollow({ creatorId, enabled }: { creatorId: string | null; enabled: boolean }) {
+export function useCreatorFollow({
+  creatorId,
+  enabled,
+  attribution = null,
+}: {
+  creatorId: string | null;
+  enabled: boolean;
+  /**
+   * The post the Follow was pressed on and the feed delivery that showed it,
+   * sent with the request so the server can credit the follow to them.
+   */
+  attribution?: CreatorFollowAttribution | null;
+}) {
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const queryKey = creatorFollowStateQueryKey(creatorId);
@@ -52,7 +65,7 @@ export function useCreatorFollow({ creatorId, enabled }: { creatorId: string | n
   });
 
   const mutation = useMutation({
-    mutationFn: (following: boolean) => api.setCreatorFollowing(creatorId!, following),
+    mutationFn: (following: boolean) => api.setCreatorFollowing(creatorId!, following, attribution),
     onMutate: async (following) => {
       await queryClient.cancelQueries({ queryKey });
       const previous = queryClient.getQueryData<{ following: boolean }>(queryKey);

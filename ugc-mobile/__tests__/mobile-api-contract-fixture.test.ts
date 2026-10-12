@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
 import { ApiError, createApiClient, type MagicbookletApiClient } from '../lib/api-client';
+import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
 import { buildImmersiveGenerationItems } from '../lib/immersive-preview-view-model';
+import { buildShowcaseFeedEventRequest } from '../lib/showcase-feed-events';
+import type { ShowcaseFeedEventRequest, ShowcaseFeedEventType } from '../lib/types';
 import { getShowcaseViewerImageUrl } from '../lib/showcase-media';
 import { isAmbiguousGenerationStartFailure } from '../lib/generation-attempts';
 
@@ -161,8 +164,25 @@ const successCases: Array<{
   { key: 'getSavedMedia', call: (api) => api.getSavedMedia({ limit: 10 }) },
   { key: 'getShowcasePost', call: (api) => api.getShowcasePost('post-1') },
   { key: 'listPostComments', call: (api) => api.listPostComments('post-1', { sort: 'top', limit: 20 }) },
-  { key: 'createPostComment', call: (api) => api.createPostComment('post-1', { body: 'Nice work' }) },
+  {
+    key: 'createPostComment',
+    call: (api) => api.createPostComment('post-1', { body: 'Saving this for later.', parentId: null, deliveryId: '9001' }),
+  },
   { key: 'deletePostComment', call: (api) => api.deletePostComment('post-1', 'comment-1') },
+  {
+    key: 'setCreatorFollowing',
+    call: (api) => api.setCreatorFollowing('creator-1', true, {
+      postId: '5f0c6a52-8d1e-4b7a-9c3f-1a2b3c4d5e6f',
+      deliveryId: '9001',
+    }),
+  },
+  {
+    key: 'recordShowcaseFeedEvents',
+    call: (api) => api.recordShowcaseFeedEvents(
+      mobileApiContract.endpoints.recordShowcaseFeedEvents.request.events as Array<ShowcaseFeedEventRequest & { occurredAt: string }>,
+      { accessToken: 'captured-token' },
+    ),
+  },
   { key: 'saveShowcasePost', call: (api) => api.saveShowcasePost('post-1', { shouldSave: true }) },
   { key: 'remixShowcasePost', call: (api) => api.remixShowcasePost('post-1') },
   { key: 'shareShowcasePost', call: (api) => api.shareShowcasePost('post-1', { sourceSurface: 'showcase-reel' }) },
@@ -342,16 +362,6 @@ const extendedOperationCases: Array<{
       sourceSurface: 'showcase',
     }),
   },
-  {
-    key: 'recordShowcaseFeedEvents',
-    call: (api) => api.recordShowcaseFeedEvents([{
-      clientEventId: 'feed-event-batch-1',
-      postId: 'post-1',
-      eventType: 'impression',
-      sourceSurface: 'showcase',
-      occurredAt: '2026-08-12T00:00:00.000Z',
-    }], { accessToken: 'captured-token' }),
-  },
   { key: 'getCreatorProfile', call: (api) => api.getCreatorProfile('creator-one') },
   { key: 'searchPublicContent', call: (api) => api.searchPublicContent({ query: 'product', type: 'top' }) },
   { key: 'reportPost', call: (api) => api.reportPost('post-1', { reason: 'unsafe_content' }) },
@@ -374,7 +384,6 @@ const extendedOperationCases: Array<{
   { key: 'blockUser', call: (api) => api.blockUser('creator-1') },
   { key: 'unblockUser', call: (api) => api.unblockUser('creator-1') },
   { key: 'getCreatorFollowState', call: (api) => api.getCreatorFollowState('creator-1') },
-  { key: 'setCreatorFollowing', call: (api) => api.setCreatorFollowing('creator-1', true) },
   { key: 'getRemixSourceBundle', call: (api) => api.getRemixSourceBundle('generation-1') },
   { key: 'fetchModelCatalogCurrent', call: (api) => api.fetchModelCatalogCurrent('platform=mobile') },
   { key: 'fetchModelCatalogPage', call: (api) => api.fetchModelCatalogPage('platform=mobile&revision=test&kind=image') },
@@ -535,6 +544,60 @@ describe('mobile shared API v1 contract fixture', () => {
     await expect(api.getMarketplaceResourceDetail('missing-resource', { postId: 'post-1' })).resolves.toEqual(
       fallbackEndpoint.response
     );
+  });
+
+  // Feed ranking v4, §4: what Home now reports, built the way Home builds it,
+  // is the batch the contract pins and the server's parser takes
+  // (`src/__tests__/mobile-api-contract-fixture.test.ts`).
+  it('builds the Home feed attention events the contract pins', () => {
+    const pinned = mobileApiContract.endpoints.recordShowcaseFeedEvents.request.events;
+    const item = {
+      postId: pinned[0].postId,
+      recommendation: { deliveryId: pinned[0].deliveryId, position: pinned[0].position, algorithmVersion: 'for-you-rules:4' },
+    };
+    const tracker = createFeedAttentionTracker<typeof item>((target) => target.recommendation.deliveryId);
+    tracker.setActive(true, 0);
+    tracker.setVisible([item], 1_000);
+    const progress = tracker.recordProgress(item, 0.5, 95_500);
+    const dwell = tracker.setVisible([], 5_200);
+    const build = (eventType: ShowcaseFeedEventType, details = {}) => buildShowcaseFeedEventRequest(item, eventType, {
+      feedSessionId: pinned[0].feedSessionId,
+      algorithmVersion: item.recommendation.algorithmVersion,
+      sourceSurface: 'feed',
+    }, { ...details, metadata: { surface: 'home-feed' } });
+    const built = [
+      ...dwell.map((event) => build(event.eventType, feedAttentionEventDetails(event))),
+      ...progress.map((event) => build(event.eventType, feedAttentionEventDetails(event))),
+      build('resource_open'),
+    ];
+
+    // The queue stamps `occurredAt`; every event has its own id.
+    expect(built.map(({ clientEventId: _id, ...event }) => event))
+      .toEqual(pinned.map(({ clientEventId: _id, occurredAt: _at, ...event }) => event));
+  });
+
+  it('sends a comment and a follow with the delivery only when there is one', async () => {
+    const bodies: unknown[] = [];
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return jsonResponse({ success: true, following: false, comment: {}, commentCount: 1 });
+      }) as unknown as typeof fetch,
+    });
+
+    await api.createPostComment('post-1', { body: 'Plain', parentId: null, deliveryId: null });
+    await api.createPostComment('post-1', { body: 'Reply', parentId: 'comment-1' });
+    await api.setCreatorFollowing('creator-1', false);
+    await api.setCreatorFollowing('creator-1', true, { postId: 'post-1', deliveryId: null });
+
+    expect(bodies).toEqual([
+      { body: 'Plain', parentId: null },
+      { body: 'Reply', parentId: 'comment-1' },
+      { followingId: 'creator-1', following: false },
+      { followingId: 'creator-1', following: true, postId: 'post-1' },
+    ]);
   });
 
   it('sends auth for mobile showcase share calls so social notifications can identify the actor', async () => {

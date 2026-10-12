@@ -21,6 +21,7 @@ import {
     ShowcaseFeedbackMenu,
     getShowcaseFeedSessionId,
     sendShowcaseFeedEvent,
+    sendShowcaseResourceOpenEvent,
     type ShowcaseEventSourceSurface,
     type ShowcaseFeedbackAction,
 } from '@/app/showcase/ShowcaseFeedInteraction';
@@ -1687,6 +1688,14 @@ export default function ShowcaseClient({
                                                         <Link
                                                             href={buildCommunityDetailPath(item.id, 'resources')}
                                                             prefetch={false}
+                                                            // The tile's resources opened: once per delivery.
+                                                            onClick={() => sendShowcaseResourceOpenEvent({
+                                                                item,
+                                                                sourceSurface: 'showcase',
+                                                                accessToken: session?.access_token ?? null,
+                                                                feedSessionId,
+                                                                fallbackPosition: itemIndex,
+                                                            })}
                                                             className="ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full bg-amber-400 text-[#1a0d08] shadow-md transition hover:bg-amber-300"
                                                             aria-label={`${getAssetPurchaseCtaLabel(item.asset)} for ${item.title}`}
                                                             title={getAssetPurchaseCtaLabel(item.asset)}

@@ -7,7 +7,12 @@ import { memo } from 'react';
 import PostCommentAvatar from '@/components/PostCommentAvatar';
 import PostComments from '@/components/PostComments';
 import PublicShareButton from '@/components/PublicShareButton';
-import { ShowcaseFeedbackMenu, type ShowcaseFeedbackAction } from '@/app/showcase/ShowcaseFeedInteraction';
+import {
+    getShowcaseRecommendation,
+    ShowcaseFeedbackMenu,
+    useFeedCardTelemetry,
+    type ShowcaseFeedbackAction,
+} from '@/app/showcase/ShowcaseFeedInteraction';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { PostFeedCard } from '@/lib/post-feed-presentation';
@@ -92,6 +97,8 @@ interface FeedPostCardProps {
     onFeedback: (postId: string, action: ShowcaseFeedbackAction) => void;
     /** Starts the remix from the card. */
     onRemix: (postId: string) => void;
+    /** The recipe chip was followed to the post's resources. */
+    onOpenResources?: (postId: string) => void;
     /** Report content / Report user / Block user, as the app's card menu offers. */
     onReportContent: (postId: string) => void;
     onReportUser: (postId: string) => void;
@@ -129,11 +136,18 @@ function FeedPostCardView({
     onPrefetchPost,
     onFeedback,
     onRemix,
+    onOpenResources,
     onReportContent,
     onReportUser,
     onBlockUser,
 }: FeedPostCardProps) {
     const { item } = card;
+    // The boundary the card sits in reports how far its inline video played
+    // (`QualifiedImpressionBoundary`); outside one there is nothing to report.
+    const telemetry = useFeedCardTelemetry();
+    // A comment written under a ranked card is credited to the delivery that
+    // showed it; the server checks it belongs to the viewer.
+    const deliveryId = getShowcaseRecommendation(item)?.deliveryId ?? null;
     const mediaItems = (item.mediaItems ?? []).slice().sort((left, right) => left.sortOrder - right.sortOrder);
     const showMedia = card.kind !== 'text' && mediaItems.length > 0;
     const cover = mediaItems[0];
@@ -288,6 +302,7 @@ function FeedPostCardView({
                         // the tighter cap keeps the next post within reach.
                         viewportClassName="w-full max-h-[min(60vh,35rem)] rounded-2xl border border-[var(--ui-border-subtle)]"
                         onOpen={(mediaIndex) => onOpenMedia(item.id, mediaIndex)}
+                        onVideoProgress={telemetry?.reportVideoProgress}
                     />
                 </div>
             ) : null}
@@ -345,6 +360,7 @@ function FeedPostCardView({
                         href={buildShowcaseDetailPath(item.id, { ...detailContext, section: 'resources' })}
                         prefetch={false}
                         aria-label={`${card.recipeChip.label}: ${card.title}`}
+                        onClick={() => onOpenResources?.(item.id)}
                         className={`ui-focus-ring ml-auto inline-flex min-h-11 items-center gap-2 rounded-full px-3 text-xs font-bold transition ${
                             card.recipeChip.tone === 'paid'
                                 ? 'border border-amber-300/20 bg-amber-400/[0.08] text-amber-100 hover:border-amber-300/35'
@@ -365,6 +381,7 @@ function FeedPostCardView({
                         postId={item.id}
                         postCreatorId={item.creator.id}
                         commentCount={item.commentCount}
+                        deliveryId={deliveryId}
                         onCommentCountChange={(commentCount) => onCommentCountChange(item.id, commentCount)}
                     />
                 </div>

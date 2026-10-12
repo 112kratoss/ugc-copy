@@ -13,6 +13,7 @@ import {
   FEED_EVENT_QUEUE_STORAGE_KEY,
   FEED_EVENT_QUEUE_TRANSITION_DRAIN_MS,
   createFeedEventQueue,
+  isBatchedShowcaseFeedEventType,
   type FeedEventQueueStorage,
 } from '../lib/feed-event-queue';
 import { ApiError } from '../lib/api-client';
@@ -102,6 +103,23 @@ function createHarness({
 }
 
 describe('feed event queue', () => {
+  // Feed ranking v4, §4: what Home now reports rides the batch; what changes
+  // state on screen (a save, a hide) still goes on its own and answers.
+  it('batches the attention Home reports, and nothing that changes state', async () => {
+    for (const eventType of ['impression', 'open', 'dwell', 'media_progress', 'quick_skip', 'resource_open'] as const) {
+      expect(isBatchedShowcaseFeedEventType(eventType), eventType).toBe(true);
+    }
+    for (const eventType of ['save', 'unsave', 'share', 'remix_start', 'not_interested', 'hide_creator'] as const) {
+      expect(isBatchedShowcaseFeedEventType(eventType), eventType).toBe(false);
+    }
+
+    const harness = createHarness();
+    await harness.queue.enqueue({ ...event(1), eventType: 'resource_open', sourceSurface: 'feed' });
+    expect(harness.queue.getEntriesForTests().map((entry) => entry.event.eventType)).toEqual(['resource_open']);
+    await harness.queue.flush();
+    expect(harness.sendBatch.mock.calls[0][0]).toEqual([expect.objectContaining({ eventType: 'resource_open', deliveryId: 'delivery-1' })]);
+  });
+
   it('stamps occurrence time, persists a non-secret identity key, and never stores a token', async () => {
     const harness = createHarness();
     await harness.queue.enqueue(event(1));

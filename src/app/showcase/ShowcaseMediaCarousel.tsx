@@ -40,12 +40,48 @@ interface ShowcaseMediaCarouselProps {
   onMediaReady?: (item: ShowcaseMediaItem) => void;
   onMediaError?: (item: ShowcaseMediaItem) => void;
   onMediaRetry?: (item: ShowcaseMediaItem) => void;
-  /** Playback position samples for the active video (fraction 0..1, duration ms). */
+  /**
+   * Playback position samples for the active video, as a share of the post's
+   * video (0..1) and its length in ms. A feed teaser is measured against the
+   * source (`sourceVideoProgress`).
+   */
   onVideoProgress?: (progress: number, durationMs: number) => void;
 }
 
 const MEDIA_LOAD_TIMEOUT_MS = 15_000;
 const HAVE_METADATA = 1;
+
+/**
+ * A playback sample as a share of the post's own video. A feed may stream the
+ * server's teaser, the first eight seconds of a long clip, and a loop of that is
+ * not the video watched to its end: it is measured against the source's length,
+ * and not at all when that is unknown. Anything else that plays is the clip.
+ */
+export function sourceVideoProgress({
+  currentTime,
+  streamDuration,
+  teaser,
+  sourceDurationSeconds,
+}: {
+  /** Seconds into what is playing. */
+  currentTime: number;
+  /** Length in seconds of what is playing. */
+  streamDuration: number;
+  /** What is playing is the teaser rather than the clip. */
+  teaser: boolean;
+  /** The post's video length in seconds, as the server recorded it. */
+  sourceDurationSeconds: number | null | undefined;
+}): { progress: number; durationMs: number } | null {
+  if (!Number.isFinite(currentTime) || currentTime < 0) return null;
+  const durationSeconds = teaser ? sourceDurationSeconds : streamDuration;
+  if (typeof durationSeconds !== 'number' || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    return null;
+  }
+  return {
+    progress: Math.min(1, currentTime / durationSeconds),
+    durationMs: durationSeconds * 1000,
+  };
+}
 
 /**
  * The server's preview thumbhash (base64) as a data URL, drawn under the media
@@ -133,6 +169,10 @@ export default function ShowcaseMediaCarousel({
         renditionUrl: activeItem.preview?.renditionUrl ?? activeItem.renditionUrl ?? null,
       }))
     : '';
+  // The server's teaser is the head of a long clip, not the clip: progress
+  // through it is measured against the source (`sourceVideoProgress`).
+  const activeTeaserUrl = activeItem?.teaserUrl ?? activeItem?.preview?.teaserUrl ?? null;
+  const playingTeaser = Boolean(activeTeaserUrl) && activePlaybackUrl === activeTeaserUrl;
   const shouldPlayVideo = Boolean(activePlaybackUrl) && canPlayMotion && (
     mode === 'feed'
       ? isInteracting || (requestedAutoPlay && isInViewport)
@@ -491,9 +531,15 @@ export default function ShowcaseMediaCarousel({
                 onCanPlay={(event) => reportActiveVideoReady(event.currentTarget)}
                 onPlaying={(event) => reportActiveVideoReady(event.currentTarget)}
                 onTimeUpdate={(event) => {
+                  if (!onVideoProgress) return;
                   const media = event.currentTarget;
-                  if (!onVideoProgress || !Number.isFinite(media.duration) || media.duration <= 0) return;
-                  onVideoProgress(media.currentTime / media.duration, media.duration * 1000);
+                  const sample = sourceVideoProgress({
+                    currentTime: media.currentTime,
+                    streamDuration: media.duration,
+                    teaser: playingTeaser,
+                    sourceDurationSeconds: renderedActiveItem.durationSeconds ?? renderedActiveItem.preview?.durationSeconds,
+                  });
+                  if (sample) onVideoProgress(sample.progress, sample.durationMs);
                 }}
                 onError={reportActiveMediaError}
                 className={`h-full w-full ${frameFit === 'cover' ? 'object-cover' : 'object-contain'}`}

@@ -16,6 +16,7 @@ const auth = vi.hoisted(() => ({
     },
 }));
 const sendEventMock = vi.hoisted(() => vi.fn(async () => undefined));
+const resourceOpenMock = vi.hoisted(() => vi.fn());
 const requestRemixMock = vi.hoisted(() => vi.fn());
 const confirmMock = vi.hoisted(() => vi.fn<(request: { title: string; tone?: string }) => Promise<boolean>>(async () => true));
 
@@ -38,6 +39,7 @@ vi.mock('@/components/navigation-progress-state', () => ({
 vi.mock('@/app/showcase/ShowcaseFeedInteraction', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/app/showcase/ShowcaseFeedInteraction')>()),
     sendShowcaseFeedEvent: sendEventMock,
+    sendShowcaseResourceOpenEvent: resourceOpenMock,
 }));
 
 vi.mock('@/lib/showcase-remix-client', async (importOriginal) => ({
@@ -48,7 +50,7 @@ vi.mock('@/lib/showcase-remix-client', async (importOriginal) => ({
 // The card's menu and pill as plain buttons, so the test drives FeedClient's
 // own handlers rather than the menu's keyboard and portal plumbing.
 vi.mock('@/app/feed/FeedPostCard', () => ({
-    default: ({ card, remixing, onFeedback, onRemix, onReportContent, onReportUser, onBlockUser }: {
+    default: ({ card, remixing, onFeedback, onRemix, onReportContent, onReportUser, onBlockUser, onToggleSave, onOpenResources }: {
         card: { id: string; title: string };
         remixing: boolean;
         onFeedback: (postId: string, action: 'not_interested' | 'hide_creator') => void;
@@ -56,9 +58,13 @@ vi.mock('@/app/feed/FeedPostCard', () => ({
         onReportContent: (postId: string) => void;
         onReportUser: (postId: string) => void;
         onBlockUser: (postId: string) => void;
+        onToggleSave: (postId: string) => void;
+        onOpenResources?: (postId: string) => void;
     }) => (
         <article>
             <h3>{card.title}</h3>
+            <button type="button" onClick={() => onToggleSave(card.id)}>{`save:${card.id}`}</button>
+            <button type="button" onClick={() => onOpenResources?.(card.id)}>{`recipe:${card.id}`}</button>
             <button type="button" onClick={() => onFeedback(card.id, 'not_interested')}>{`not-interested:${card.id}`}</button>
             <button type="button" onClick={() => onFeedback(card.id, 'hide_creator')}>{`hide:${card.id}`}</button>
             <button type="button" disabled={remixing} onClick={() => onRemix(card.id)}>{`remix:${card.id}`}</button>
@@ -120,6 +126,7 @@ describe('FeedClient lanes and card actions', () => {
     beforeEach(() => {
         routerPush.mockClear();
         sendEventMock.mockClear();
+        resourceOpenMock.mockClear();
         requestRemixMock.mockReset();
         confirmMock.mockReset();
         confirmMock.mockResolvedValue(true);
@@ -240,6 +247,64 @@ describe('FeedClient lanes and card actions', () => {
         });
 
         await waitFor(() => expect(routerPush).toHaveBeenCalledWith('/showcase/post-1?from=community&returnTo=%2Ffeed#recipe'));
+        // The unlock the tap was sent to is the card's resources opening.
+        expect(resourceOpenMock).toHaveBeenCalledWith(expect.objectContaining({
+            item: expect.objectContaining({ id: 'post-1' }),
+            sourceSurface: 'feed',
+            accessToken: 'token',
+            fallbackPosition: 0,
+        }));
+    });
+
+    it('tells the ranker when the recipe chip opens a card’s resources', () => {
+        auth.state = { session: { access_token: 'token' }, user: { id: 'viewer-1' } };
+        render(<FeedClient initialFeed={feed} initialChipId="for-you" />);
+
+        fireEvent.click(screen.getByText('recipe:post-2'));
+
+        expect(resourceOpenMock).toHaveBeenCalledTimes(1);
+        expect(resourceOpenMock).toHaveBeenCalledWith(expect.objectContaining({
+            item: expect.objectContaining({ id: 'post-2' }),
+            sourceSurface: 'feed',
+            accessToken: 'token',
+            fallbackPosition: 1,
+        }));
+    });
+
+    // The Home feed's saves reached the ranker from Explore and the reel only.
+    it('tells the ranker about a save, and its undoing, once the server has it', async () => {
+        auth.state = { session: { access_token: 'token' }, user: { id: 'viewer-1' } };
+        const fetchMock = mockJsonFetch({ success: true, isSaved: true, saveCount: 1 });
+        render(<FeedClient initialFeed={feed} initialChipId="for-you" />);
+
+        fireEvent.click(screen.getByText('save:post-3'));
+
+        await waitFor(() => expect(sendEventMock).toHaveBeenCalledWith(expect.objectContaining({
+            item: expect.objectContaining({ id: 'post-3' }),
+            eventType: 'save',
+            sourceSurface: 'feed',
+            accessToken: 'token',
+            fallbackPosition: 2,
+        })));
+        expect(fetchMock).toHaveBeenCalledWith('/api/showcase/save', expect.objectContaining({ method: 'POST' }));
+
+        mockJsonFetch({ success: true, isSaved: false, saveCount: 0 });
+        fireEvent.click(screen.getByText('save:post-3'));
+        await waitFor(() => expect(sendEventMock).toHaveBeenCalledWith(expect.objectContaining({
+            item: expect.objectContaining({ id: 'post-3' }),
+            eventType: 'unsave',
+        })));
+    });
+
+    it('does not report a save the server refused', async () => {
+        auth.state = { session: { access_token: 'token' }, user: { id: 'viewer-1' } };
+        mockJsonFetch({ success: false, error: 'Nope' }, false, 500);
+        render(<FeedClient initialFeed={feed} initialChipId="for-you" />);
+
+        fireEvent.click(screen.getByText('save:post-1'));
+
+        expect(await screen.findByText('Could not update that save. Try again.')).toBeInTheDocument();
+        expect(sendEventMock).not.toHaveBeenCalled();
     });
 
     it('recognises the unlock code by the same name the server sends', () => {

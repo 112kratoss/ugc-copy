@@ -852,6 +852,23 @@ export interface ShowcaseFeedEventRequest {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Where a follow was pressed: the post on screen and, when a ranked feed
+ * showed it, that delivery. The server credits the follow to it; both fields
+ * are optional on the wire (`contracts/mobile-api-v1.json`, `setCreatorFollowing`).
+ */
+export interface CreatorFollowAttribution {
+  postId: string;
+  deliveryId?: string | null;
+}
+
+/** A new comment, and the feed delivery it was written under when there is one. */
+export interface CreatePostCommentBody {
+  body: string;
+  parentId?: string | null;
+  deliveryId?: string | null;
+}
+
 export interface ShowcaseFeedEventResponse {
   success: boolean;
   accepted?: boolean;

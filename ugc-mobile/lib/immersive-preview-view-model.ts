@@ -205,10 +205,16 @@ export function immersiveViewerHref({
 
 export function textPostViewerHref({
   comments = false,
+  deliveryId,
   postId,
   source,
 }: {
   comments?: boolean;
+  /**
+   * The feed delivery the post was opened from, for the comments written on
+   * its screen to be credited to (Home's text cards). Opaque to the screen.
+   */
+  deliveryId?: string | null;
   postId: string;
   source?: 'profile-posts' | 'profile-saved';
 }) {
@@ -216,6 +222,7 @@ export function textPostViewerHref({
   const params = [
     ...(source ? [['source', source]] : []),
     ...(comments ? [['comments', postId]] : []),
+    ...(deliveryId ? [['deliveryId', deliveryId]] : []),
   ];
   return params.length
     ? `${pathname}?${params

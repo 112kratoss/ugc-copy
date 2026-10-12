@@ -967,3 +967,99 @@ describe('FeedVideoPreview taking back the player of a reel closing into it', ()
     expect(video.props.player).toBe(videoState.player);
   });
 });
+
+// Feed ranking v4, §4: Home reports how far its inline clips play. A tile asked
+// for its time samples it only while it plays, at the reel's interval.
+describe('FeedVideoPreview playback time', () => {
+  const props = {
+    url: 'https://cdn.example.com/video.mp4',
+    streamUrl: 'https://cdn.example.com/video.feed.abc.mp4',
+    previewUrl: 'https://cdn.example.com/video-poster.jpg',
+    height: 260,
+    radius: 8,
+    accent: '#d946ef',
+  };
+  type MockPlayer = typeof videoState.player & { timeUpdateEventInterval?: number; duration?: number };
+  const player = () => videoState.player as MockPlayer;
+
+  function timeListeners() {
+    return (videoState.player.addListener.mock.calls as unknown as Array<[string, (event: { currentTime: number }) => void]>)
+      .filter(([event]) => event === 'timeUpdate')
+      .map(([, listener]) => listener);
+  }
+
+  beforeEach(() => {
+    focusState.focused = true;
+    videoState.player.addListener.mockClear();
+    videoState.createVideoPlayer.mockClear();
+    delete player().timeUpdateEventInterval;
+    delete player().duration;
+    appState.currentState = 'active';
+    appState.listeners = [];
+  });
+
+  afterEach(() => {
+    resetVideoPlayerLoans();
+  });
+
+  it('samples its time while it plays, and stops when it no longer does', () => {
+    const onPlaybackTime = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...props} active onPlaybackTime={onPlaybackTime} />);
+    });
+
+    expect(player().timeUpdateEventInterval).toBe(0.25);
+    const [listener] = timeListeners();
+    expect(listener).toBeDefined();
+    player().duration = 12;
+    listener({ currentTime: 3 });
+    expect(onPlaybackTime).toHaveBeenCalledWith(3, 12);
+
+    // Prepared, not playing: the player keeps its frame and goes quiet.
+    const events = videoState.player.addListener.mock.calls as unknown as Array<[string]>;
+    const removals = videoState.player.addListener.mock.results
+      .filter((_result, index) => events[index][0] === 'timeUpdate')
+      .map((result) => (result.value as { remove: ReturnType<typeof vi.fn> }).remove);
+    renderer.act(() => tree.update(<FeedVideoPreview {...props} active={false} prepared onPlaybackTime={onPlaybackTime} />));
+    expect(removals[0]).toHaveBeenCalledTimes(1);
+    expect(player().timeUpdateEventInterval).toBe(0);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('reports no time where no one asked for it', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...props} active />);
+    });
+
+    expect(timeListeners()).toHaveLength(0);
+    expect(player().timeUpdateEventInterval).toBeUndefined();
+    renderer.act(() => tree.unmount());
+  });
+
+  it('samples nothing while only prepared', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...props} active={false} prepared onPlaybackTime={vi.fn()} />);
+    });
+
+    expect(videoState.createVideoPlayer).toHaveBeenCalledTimes(1);
+    expect(timeListeners()).toHaveLength(0);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('leaves the time to the reel its player went to', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...props} active onPlaybackTime={vi.fn()} />);
+    });
+    // Lent to the reel a tap opened, which reads the time itself.
+    lendVideoPlayer(videoState.player as unknown as Parameters<typeof lendVideoPlayer>[0], vi.fn());
+    player().timeUpdateEventInterval = 0.25;
+
+    renderer.act(() => tree.update(<FeedVideoPreview {...props} active={false} onPlaybackTime={vi.fn()} />));
+    expect(player().timeUpdateEventInterval).toBe(0.25);
+    renderer.act(() => tree.unmount());
+  });
+});

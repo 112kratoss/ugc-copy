@@ -59,11 +59,13 @@ const CREATOR_ROW_HEIGHT = 32;
  */
 export default function PostScreen() {
   const theme = useAppTheme();
-  const params = useLocalSearchParams<{ id: string; source?: string; comments?: string; replyTo?: string }>();
+  const params = useLocalSearchParams<{ id: string; source?: string; comments?: string; replyTo?: string; deliveryId?: string }>();
   const postId = Array.isArray(params.id) ? params.id[0] : params.id;
   const source = Array.isArray(params.source) ? params.source[0] : params.source;
   const requestedCommentsPostId = Array.isArray(params.comments) ? params.comments[0] : params.comments;
   const requestedReplyToId = Array.isArray(params.replyTo) ? params.replyTo[0] : params.replyTo;
+  // The feed delivery a Home card opened this post from: its comments are credited to it.
+  const deliveryId = (Array.isArray(params.deliveryId) ? params.deliveryId[0] : params.deliveryId) || null;
   const isOwnerPost = source === 'profile-posts';
   const showcaseSource = source === 'profile-saved' ? 'profile-saved' : 'showcase-feed';
   const { api, user } = useAuth();
@@ -327,6 +329,7 @@ export default function PostScreen() {
                 ref={commentsRef}
                 authReturnTo={authReturnTo}
                 commentCount={resolvedItem.commentCount}
+                deliveryId={deliveryId}
                 contentHeader={(
                   <TextPostContent
                     item={resolvedItem}

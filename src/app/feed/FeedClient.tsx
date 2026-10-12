@@ -24,6 +24,7 @@ import {
     getShowcaseFeedSessionId,
     QualifiedImpressionBoundary,
     sendShowcaseFeedEvent,
+    sendShowcaseResourceOpenEvent,
     type ShowcaseFeedbackAction,
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
@@ -230,6 +231,9 @@ export default function FeedClient({
         pendingFeedSnapshotRef.current = null;
         writeShowcaseClientSnapshot(pending.key, pending.snapshot);
     }, []);
+    // The lane's posts as last rendered, for the save event the request's
+    // answer sends: it arrives after the render that started it.
+    const feedItemsForEventsRef = useRef<ShowcaseFeedItem[]>(seedFeed.items);
 
     const {
         items,
@@ -251,8 +255,25 @@ export default function FeedClient({
             console.error('Failed to save feed post:', error);
             setLoadError('Could not update that save. Try again.');
         },
+        // The ranker hears a save from the Home feed as it does from Explore and
+        // the reel. Best effort: the hook never undoes a save for its failure.
+        onSuccess: ({ id, isSaved }) => {
+            const index = feedItemsForEventsRef.current.findIndex((candidate) => candidate.id === id);
+            if (index < 0) return;
+            return sendShowcaseFeedEvent({
+                item: feedItemsForEventsRef.current[index],
+                eventType: isSaved ? 'save' : 'unsave',
+                sourceSurface: 'feed',
+                accessToken,
+                feedSessionId,
+                fallbackPosition: index,
+            });
+        },
         sourceSurface: 'feed',
     });
+    useEffect(() => {
+        feedItemsForEventsRef.current = items;
+    }, [items]);
 
     const cards = useMemo(() => buildPostFeedCards(items), [items]);
 
@@ -502,6 +523,19 @@ export default function FeedClient({
             fallbackPosition: cardIndex,
         }).catch(() => undefined);
     }, [accessToken, feedSessionId]);
+    // The recipe chip opens the post at its resources: the ranker hears it once
+    // per delivery, as `resource_open`.
+    const handleOpenResources = useCallback((postId: string) => {
+        const cardIndex = cardsRef.current.findIndex((candidate) => candidate.id === postId);
+        if (cardIndex < 0) return;
+        sendShowcaseResourceOpenEvent({
+            item: cardsRef.current[cardIndex].item,
+            sourceSurface: 'feed',
+            accessToken,
+            feedSessionId,
+            fallbackPosition: cardIndex,
+        });
+    }, [accessToken, feedSessionId]);
     const handleOpenMedia = useCallback((postId: string, mediaIndex: number) => {
         const card = cardsRef.current.find((candidate) => candidate.id === postId);
         if (!card) return;
@@ -635,6 +669,15 @@ export default function FeedClient({
             if (error instanceof ShowcaseRemixRequestError
                 && (error.code === REMIX_UNLOCK_REQUIRED_CODE || error.status === 403)) {
                 // The creator put the remix behind an unlock; the post page sells it.
+                if (card) {
+                    sendShowcaseResourceOpenEvent({
+                        item: card.item,
+                        sourceSurface: 'feed',
+                        accessToken,
+                        feedSessionId,
+                        fallbackPosition: cardIndex,
+                    });
+                }
                 publishNavigationStart();
                 router.push(buildShowcaseDetailPath(postId, { ...detailContext, section: 'resources' }));
                 return;
@@ -827,6 +870,7 @@ export default function FeedClient({
                             feedSessionId={feedSessionId}
                             accessToken={accessToken}
                             sourceSurface="feed"
+                            trackAttention
                         >
                         <FeedPostCard
                             card={card}
@@ -853,6 +897,7 @@ export default function FeedClient({
                             onPrefetchPost={handlePrefetchPost}
                             onFeedback={handleFeedback}
                             onRemix={handleRemix}
+                            onOpenResources={handleOpenResources}
                             onReportContent={handleReportContent}
                             onReportUser={handleReportUser}
                             onBlockUser={handleBlockUser}

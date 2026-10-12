@@ -63,6 +63,39 @@ export function createShowcaseMediaProgressTracker() {
 
 export type ShowcaseMediaProgressTracker = ReturnType<typeof createShowcaseMediaProgressTracker>;
 
+/**
+ * A feed tile's playback sample as a share of the post's own video. A tile may
+ * stream the server's teaser, the first eight seconds of a long clip, and a
+ * loop of that is not the video watched to its end: it is measured against the
+ * source's length, and not at all when that is unknown. Anything else a tile
+ * streams is the whole clip. The reels play the whole clip and need none of it.
+ */
+export function measureSourceVideoProgress({
+  currentTimeSeconds,
+  streamDurationSeconds,
+  teaser,
+  sourceDurationSeconds,
+}: {
+  /** Seconds into what is playing. */
+  currentTimeSeconds: number;
+  /** Length in seconds of what is playing. */
+  streamDurationSeconds: number;
+  /** What is playing is the teaser rather than the clip. */
+  teaser: boolean;
+  /** The post's video length in seconds, as the server recorded it. */
+  sourceDurationSeconds: number | null | undefined;
+}): ShowcaseMediaProgressFlush | null {
+  if (!Number.isFinite(currentTimeSeconds) || currentTimeSeconds < 0) return null;
+  const durationSeconds = teaser ? sourceDurationSeconds : streamDurationSeconds;
+  if (typeof durationSeconds !== 'number' || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    return null;
+  }
+  return {
+    progress: Math.min(1, currentTimeSeconds / durationSeconds),
+    durationMs: Math.round(durationSeconds * 1000),
+  };
+}
+
 type ShowcaseMediaProgressSink = (progress: number, durationMs: number | null) => void;
 
 /**

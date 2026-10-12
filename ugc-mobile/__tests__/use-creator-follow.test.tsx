@@ -10,6 +10,8 @@ const { state } = vi.hoisted(() => ({
     mutate: vi.fn(),
     cache: new Map<string, unknown>(),
     invalidated: [] as unknown[],
+    mutationFn: null as ((following: boolean) => unknown) | null,
+    setCreatorFollowing: vi.fn(),
   },
 }));
 
@@ -18,14 +20,21 @@ vi.mock('@tanstack/react-query', () => ({
     state.queryArgs = args;
     return { data: state.queryData, isPending: state.queryData === undefined };
   },
-  useMutation: (args: { onMutate: (following: boolean) => Promise<unknown>; onError: (e: unknown, f: boolean, c: unknown) => void }) => ({
+  useMutation: (args: {
+    mutationFn: (following: boolean) => unknown;
+    onMutate: (following: boolean) => Promise<unknown>;
+    onError: (e: unknown, f: boolean, c: unknown) => void;
+  }) => {
+    state.mutationFn = args.mutationFn;
+    return {
     mutate: (following: boolean) => {
       state.mutate(following);
       void args.onMutate(following);
     },
     isPending: false,
     __onError: args.onError,
-  }),
+    };
+  },
   useQueryClient: () => ({
     cancelQueries: async () => undefined,
     getQueryData: (key: unknown[]) => state.cache.get(JSON.stringify(key)),
@@ -37,7 +46,7 @@ vi.mock('@tanstack/react-query', () => ({
 vi.mock('@/lib/auth', () => ({
   useAuth: () => ({
     user: state.user,
-    api: { getCreatorFollowState: vi.fn(), setCreatorFollowing: vi.fn() },
+    api: { getCreatorFollowState: vi.fn(), setCreatorFollowing: state.setCreatorFollowing },
   }),
 }));
 
@@ -47,12 +56,20 @@ import { creatorFollowStateQueryKey, prefetchCreatorFollowState, useCreatorFollo
 
 let latest: ReturnType<typeof useCreatorFollow> | null = null;
 
-function Host({ creatorId, enabled }: { creatorId: string | null; enabled: boolean }) {
-  latest = useCreatorFollow({ creatorId, enabled });
+function Host({ creatorId, enabled, attribution }: {
+  creatorId: string | null;
+  enabled: boolean;
+  attribution?: { postId: string; deliveryId?: string | null } | null;
+}) {
+  latest = useCreatorFollow({ creatorId, enabled, attribution });
   return null;
 }
 
-function render(props: { creatorId: string | null; enabled: boolean }) {
+function render(props: {
+  creatorId: string | null;
+  enabled: boolean;
+  attribution?: { postId: string; deliveryId?: string | null } | null;
+}) {
   act(() => {
     renderer.create(React.createElement(Host, props));
   });
@@ -67,6 +84,8 @@ describe('useCreatorFollow', () => {
     state.mutate.mockClear();
     state.cache.clear();
     state.invalidated.length = 0;
+    state.mutationFn = null;
+    state.setCreatorFollowing.mockClear();
     latest = null;
   });
 
@@ -107,6 +126,18 @@ describe('useCreatorFollow', () => {
     });
     expect(state.mutate).toHaveBeenCalledWith(true);
     expect(state.cache.get(JSON.stringify(['creator-follow-state', 'creator-1']))).toEqual({ following: true });
+  });
+
+  // Feed ranking v4, §4: a follow pressed on a post the feed showed names the
+  // post and the delivery, so the server can credit the follow to them.
+  it('sends the post the Follow was pressed on, and its feed delivery', () => {
+    render({ creatorId: 'creator-1', enabled: true, attribution: { postId: 'post-1', deliveryId: '9001' } });
+    state.mutationFn?.(true);
+    expect(state.setCreatorFollowing).toHaveBeenCalledWith('creator-1', true, { postId: 'post-1', deliveryId: '9001' });
+
+    render({ creatorId: 'creator-1', enabled: true });
+    state.mutationFn?.(false);
+    expect(state.setCreatorFollowing).toHaveBeenLastCalledWith('creator-1', false, null);
   });
 });
 

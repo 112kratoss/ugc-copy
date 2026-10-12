@@ -23,6 +23,8 @@ export const BATCHED_SHOWCASE_FEED_EVENT_TYPES = new Set<ShowcaseFeedEventType>(
   'dwell',
   'media_progress',
   'quick_skip',
+  // Telemetry like the rest: nothing on screen waits on its answer.
+  'resource_open',
 ]);
 
 export function isBatchedShowcaseFeedEventType(eventType: ShowcaseFeedEventType) {

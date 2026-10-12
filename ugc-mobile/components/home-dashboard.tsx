@@ -74,6 +74,13 @@ import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getShowcaseRemixAccess } from '@/lib/showcase-remix-access';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
 import {
+  createFeedAttentionTracker,
+  createFeedDeliveryOnceGate,
+  feedAttentionEventDetails,
+  type FeedAttentionEvent,
+} from '@/lib/feed-attention-view-model';
+import {
+  SHOWCASE_DWELL_VIEWABILITY,
   SHOWCASE_PLAYBACK_VIEWABILITY,
   SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
   buildShowcaseFeedEventRequest,
@@ -284,6 +291,34 @@ export function HomeDashboard() {
     if (!isFocused) void flushShowcaseFeedEvents();
   }, [isFocused]);
 
+  // How long each card was read and how far its inline video played, keyed by
+  // delivery (`lib/feed-attention-view-model.ts`).
+  const [attention] = useState(() => createFeedAttentionTracker<ShowcaseFeedItem>(
+    (item) => item.recommendation?.deliveryId
+  ));
+  const recordAttention = useCallback((events: FeedAttentionEvent<ShowcaseFeedItem>[]) => {
+    for (const event of events) {
+      recordFeedEvent(event.target, event.eventType, feedAttentionEventDetails(event));
+    }
+  }, [recordFeedEvent]);
+  // A card's resources (its recipe chip, the unlock sheet its Remix opens) are
+  // reported opened once per delivery.
+  const [resourceOpenGate] = useState(() => createFeedDeliveryOnceGate());
+  const recordResourceOpen = useCallback((item: ShowcaseFeedItem) => {
+    if (resourceOpenGate.pass(item.recommendation?.deliveryId)) recordFeedEvent(item, 'resource_open');
+  }, [recordFeedEvent, resourceOpenGate]);
+  // Where the cards at qualified visibility sit in the list, as last reported.
+  // FlashList reports indexes, and only when they change: a refresh or a
+  // removal that puts other posts at the same places says nothing, so the
+  // cards on screen are read again from these whenever the data changes.
+  const dwellIndexesRef = useRef<number[]>([]);
+  // A stretch on screen counts only while Home is in front: focused, with the
+  // app in the foreground. Leaving ends it, and the dwell goes then.
+  useEffect(() => {
+    recordAttention(attention.setActive(isFocused && foreground, Date.now()));
+  }, [attention, foreground, isFocused, recordAttention]);
+  useEffect(() => () => recordAttention(attention.setActive(false, Date.now())), [attention, recordAttention]);
+
   // Tints the dock from the card nearest it, and hands the neutral dock back
   // when this screen blurs so a tab with no media of its own inherits it.
   const reportAmbientMedia = useTabBarAmbientFeed(isFocused);
@@ -320,6 +355,14 @@ export function HomeDashboard() {
     }
   }, [recordFeedEvent]);
 
+  const onDwellViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<HomeFeedCard>> }) => {
+    const visible = viewableItems.filter((token) => token.isViewable && token.item);
+    dwellIndexesRef.current = visible
+      .map((token) => token.index)
+      .filter((index): index is number => typeof index === 'number');
+    recordAttention(attention.setVisible(visible.map((token) => token.item.item), Date.now()));
+  }, [attention, recordAttention]);
+
   // Built once from the first render's callbacks, which FlashList needs to stay
   // stable. State rather than a ref, which render may not read.
   const [viewabilityConfigCallbackPairs] = useState(() => [
@@ -330,6 +373,10 @@ export function HomeDashboard() {
     {
       viewabilityConfig: SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
       onViewableItemsChanged: onQualifiedViewableItemsChanged,
+    },
+    {
+      viewabilityConfig: SHOWCASE_DWELL_VIEWABILITY,
+      onViewableItemsChanged: onDwellViewableItemsChanged,
     },
   ]);
 
@@ -396,6 +443,12 @@ export function HomeDashboard() {
   }, [api, feedItems, requestedCommentsPostId, requestedReplyToId]);
 
   const cards = useMemo(() => buildHomeFeedCards(feedItems), [feedItems]);
+  useEffect(() => {
+    const visible = dwellIndexesRef.current
+      .map((index) => cards[index]?.item)
+      .filter((item): item is ShowcaseFeedItem => Boolean(item));
+    recordAttention(attention.setVisible(visible, Date.now()));
+  }, [attention, cards, recordAttention]);
   // The controller picks the prepared neighbours in card order, so it needs
   // the cards as the list shows them, after every page and refetch.
   useEffect(() => {
@@ -510,6 +563,9 @@ export function HomeDashboard() {
   const selectChip = (chipId: HomeFeedChipId) => {
     if (chipId === activeChipId) return;
     qualifiedImpressionsRef.current.clear();
+    // The lane's list is replaced: its cards leave view here.
+    dwellIndexesRef.current = [];
+    recordAttention(attention.setVisible([], Date.now()));
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
     playbackController.dispatch({ type: 'reset' });
@@ -550,6 +606,8 @@ export function HomeDashboard() {
       );
       router.push(textPostViewerHref({
         comments: options.comments,
+        // Comments written on the post's screen are credited to this delivery.
+        deliveryId: card.item.recommendation?.deliveryId,
         postId: card.item.id,
       }) as never);
       return;
@@ -587,6 +645,8 @@ export function HomeDashboard() {
     // it catches up on the refetch, so its answer is not asked a second time.
     const access = options.unlocked ? 'open' : getShowcaseRemixAccess(item);
     const openUnlockSheet = () => {
+      // The sheet offers the post's unlock: its resources, opened.
+      recordResourceOpen(item);
       setUnlockRemixItem(item);
       setUnlockRemixOpen(true);
     };
@@ -824,7 +884,13 @@ export function HomeDashboard() {
         onFeedbackOpen={() => setFeedbackItem(card.item)}
         feedbackMenu={feedbackMenu(card.item)}
         onCreatorOpen={() => openCreator(card.item)}
-        onSave={() => toggleSave({ postId: card.id, isSaved: card.isSaved, saveCount: card.item.saveCount })}
+        onSave={() => toggleSave({
+          postId: card.id,
+          isSaved: card.isSaved,
+          saveCount: card.item.saveCount,
+          // The ranker hears the save as the reel reports its own.
+          onSaved: (isSaved) => recordFeedEvent(card.item, isSaved ? 'save' : 'unsave'),
+        })}
         onComments={() => {
           if (getHomeFeedCardOpenTarget(card) === 'post') {
             openCard(card, { comments: true });
@@ -836,7 +902,13 @@ export function HomeDashboard() {
         onRemix={() => void remixItem(card.item)}
         remixLoading={remixingItemId === card.item.id}
         onShare={() => void shareItem(card.item)}
-        onAssetPress={() => openCard(card, { initialPage: 'details' })}
+        onAssetPress={() => {
+          recordResourceOpen(card.item);
+          openCard(card, { initialPage: 'details' });
+        }}
+        onVideoProgress={(progress, durationMs) => (
+          recordAttention(attention.recordProgress(card.item, progress, durationMs))
+        )}
       />
     </Reveal>
   );
@@ -983,6 +1055,7 @@ export function HomeDashboard() {
           postCreatorId={commentsItem.creator.id}
           postTitle={commentsItem.title}
           commentCount={commentsItem.commentCount}
+          deliveryId={commentsItem.recommendation?.deliveryId ?? null}
           initialReplyToId={commentsReplyToId}
           onClose={() => {
             setCommentsReplyToId(null);
