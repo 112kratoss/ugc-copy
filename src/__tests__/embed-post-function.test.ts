@@ -21,8 +21,8 @@ import {
   type EmbedPostRow,
   type EmbedPostStore,
   type EmbeddingUpsertRow,
-  type StoredEmbedding,
-} from '../../supabase/functions/embed-post/index';
+  createPostgrestAuthorizer,
+  type StoredEmbedding,} from '../../supabase/functions/embed-post/index';
 
 // supabase/functions/embed-post (docs/plans/feed-algorithm-v4-industry-parity-2026-10-12.md
 // §2.11). The module has no imports, so it loads under Node: the handler is
@@ -158,6 +158,85 @@ describe('embed-post authorisation', () => {
     expect((await handle(request({ postIds: [postId(1)] }))).status).toBe(200);
   });
 
+  // The Edge runtime injects one spelling of the service-role credential and
+  // Vercel holds another (legacy JWT vs secret key), so a bearer that is not
+  // the runtime's own key is judged by what it can do, never by its shape.
+  describe('a bearer that differs from the runtime key', () => {
+    function capableHandler(authorize: Mock<(bearer: string) => Promise<boolean>> | undefined, store = new MemoryStore([post(1)])) {
+      const embed = vi.fn<Embed>(async () => unitVector());
+      return {
+        handle: createEmbedPostHandler({ serviceRoleKey: SERVICE_ROLE_KEY, authorize, store, embed, now: () => NOW, clock: () => 0 }),
+        store,
+        embed,
+      };
+    }
+
+    it('is accepted when the capability check passes, and is passed without the scheme', async () => {
+      const authorize = vi.fn(async (_bearer: string) => true);
+      const { handle, store } = capableHandler(authorize);
+      const response = await handle(request({ postIds: [postId(1)] }, 'Bearer sb_secret_other_spelling'));
+      expect(response.status).toBe(200);
+      expect(authorize).toHaveBeenCalledWith('sb_secret_other_spelling');
+      expect(store.loadPostsCalls).toEqual([[postId(1)]]);
+    });
+
+    it('is refused when the capability check fails or throws', async () => {
+      for (const authorize of [vi.fn(async () => false), vi.fn(async () => { throw new Error('probe failed'); })]) {
+        const { handle, store } = capableHandler(authorize);
+        const response = await handle(request({ postIds: [postId(1)] }, 'Bearer sb_secret_other_spelling'));
+        expect(response.status).toBe(401);
+        expect(store.loadPostsCalls).toEqual([]);
+      }
+    });
+
+    it('is refused when no capability check is configured', async () => {
+      const { handle } = capableHandler(undefined);
+      expect((await handle(request({ postIds: [postId(1)] }, 'Bearer sb_secret_other_spelling'))).status).toBe(401);
+    });
+
+    it('never runs the capability check for the runtime key itself, nor for a header without the scheme', async () => {
+      const authorize = vi.fn(async (_bearer: string) => true);
+      const { handle } = capableHandler(authorize);
+      expect((await handle(request({ postIds: [postId(1)] }))).status).toBe(200);
+      expect((await handle(request({ postIds: [postId(1)] }, SERVICE_ROLE_KEY))).status).toBe(401);
+      expect((await handle(request({ postIds: [postId(1)] }, null))).status).toBe(401);
+      expect(authorize).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('createPostgrestAuthorizer', () => {
+    const supabaseUrl = 'https://project.supabase.co/';
+
+    function fetchAnswering(status: number) {
+      return vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(status === 200 ? '[]' : '{"message":"permission denied"}', { status }));
+    }
+
+    it('probes a service-role-only table with the presented credential as apikey and bearer', async () => {
+      const fetchMock = fetchAnswering(200);
+      const authorize = createPostgrestAuthorizer({ supabaseUrl, fetch: fetchMock as unknown as typeof fetch });
+      expect(await authorize('sb_secret_other_spelling')).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe('https://project.supabase.co/rest/v1/feed_semantic_clusters?select=cluster_id&limit=1');
+      expect(init?.method).toBe('GET');
+      expect(init?.headers).toEqual({ apikey: 'sb_secret_other_spelling', Authorization: 'Bearer sb_secret_other_spelling', Accept: 'application/json' });
+    });
+
+    it.each([401, 403, 404, 500])('answers false to a %s', async (status) => {
+      const authorize = createPostgrestAuthorizer({ supabaseUrl, fetch: fetchAnswering(status) as unknown as typeof fetch });
+      expect(await authorize('sb_secret_other_spelling')).toBe(false);
+    });
+
+    it('answers false when the probe throws, and never probes an empty or absurdly long credential', async () => {
+      const throwing = vi.fn(async () => { throw new Error('network'); });
+      const authorize = createPostgrestAuthorizer({ supabaseUrl, fetch: throwing as unknown as typeof fetch });
+      expect(await authorize('sb_secret_other_spelling')).toBe(false);
+      expect(await authorize('')).toBe(false);
+      expect(await authorize('x'.repeat(5000))).toBe(false);
+      expect(throwing).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('fails closed when the key is not configured', async () => {
     const { handle } = handlerFor(new MemoryStore([post(1)]), undefined, null);
     const response = await handle(request({ postIds: [postId(1)] }, 'Bearer '));
@@ -185,7 +264,8 @@ describe('embed-post authorisation', () => {
     expect(functionSource).toContain('result |= leftBytes[index] ^ rightBytes[index];');
     expect(functionSource).not.toContain('left.length !== right.length');
     expect(functionSource).not.toContain('charCodeAt');
-    expect(functionSource).toContain("await safeEqual(request.headers.get('authorization'), `Bearer ${serviceRoleKey}`)");
+    expect(functionSource).toContain("await safeEqual(authorization, `Bearer ${serviceRoleKey}`)");
+    expect(functionSource).toContain('authorize: supabaseUrl ? createPostgrestAuthorizer({ supabaseUrl, fetch }) : undefined');
   });
 
   it('is deployed without the gateway JWT check, beside kie-webhook', () => {

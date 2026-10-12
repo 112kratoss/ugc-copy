@@ -100,6 +100,15 @@ export type EmbedPostResult = {
 
 export type EmbedPostDependencies = {
   serviceRoleKey: string | null;
+  /**
+   * Whether a bearer other than the runtime's own key may call this function.
+   * The Edge runtime injects one spelling of the service-role credential and
+   * Vercel holds another (the legacy JWT and the new secret key are both
+   * valid for PostgREST but never equal), so a caller is authorised by what
+   * its credential can do, not by what it looks like: see
+   * createPostgrestAuthorizer.
+   */
+  authorize?: (bearer: string) => Promise<boolean>;
   store: EmbedPostStore | null;
   embed: (text: string) => Promise<ArrayLike<number>>;
   now?: () => Date;
@@ -233,8 +242,18 @@ export function createEmbedPostHandler(dependencies: EmbedPostDependencies) {
       return jsonResponse({ error: 'Service role key is not configured' }, 500);
     }
 
-    if (!await safeEqual(request.headers.get('authorization'), `Bearer ${serviceRoleKey}`)) {
-      return jsonResponse({ error: 'Unauthorized' }, 401);
+    const authorization = request.headers.get('authorization');
+    if (!await safeEqual(authorization, `Bearer ${serviceRoleKey}`)) {
+      const bearer = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length).trim() : '';
+      let capable = false;
+      if (bearer && dependencies.authorize) {
+        try {
+          capable = await dependencies.authorize(bearer);
+        } catch {
+          capable = false;
+        }
+      }
+      if (!capable) return jsonResponse({ error: 'Unauthorized' }, 401);
     }
 
     const store = dependencies.store;
@@ -371,6 +390,32 @@ export function createEmbedPostHandler(dependencies: EmbedPostDependencies) {
   };
 }
 
+/**
+ * Authorises a bearer by capability: only a service-role credential can read
+ * feed_semantic_clusters (RLS on, every client role revoked), so a 200 from
+ * PostgREST with the presented credential as both apikey and bearer proves
+ * the caller holds one. The runtime's own key never leaves this process here.
+ */
+export function createPostgrestAuthorizer(input: {
+  supabaseUrl: string;
+  fetch: typeof fetch;
+}): (bearer: string) => Promise<boolean> {
+  const probeUrl = `${input.supabaseUrl.replace(/\/+$/, '')}/rest/v1/feed_semantic_clusters?select=cluster_id&limit=1`;
+  return async function authorizeByCapability(bearer: string): Promise<boolean> {
+    if (!bearer || bearer.length > 4096) return false;
+    try {
+      const response = await input.fetch(probeUrl, {
+        method: 'GET',
+        headers: { apikey: bearer, Authorization: `Bearer ${bearer}`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(POSTGREST_TIMEOUT_MS),
+      });
+      return response.status === 200;
+    } catch {
+      return false;
+    }
+  };
+}
+
 /** The service-role client: PostgREST over fetch, authorised with the key. */
 export function createPostgrestStore(input: {
   supabaseUrl: string;
@@ -464,6 +509,7 @@ if (deno && typeof deno.serve === 'function') {
   const supabase = runtimeGlobals.Supabase;
   deno.serve(createEmbedPostHandler({
     serviceRoleKey,
+    authorize: supabaseUrl ? createPostgrestAuthorizer({ supabaseUrl, fetch }) : undefined,
     store: serviceRoleKey && supabaseUrl
       ? createPostgrestStore({ supabaseUrl, serviceRoleKey, fetch })
       : null,
