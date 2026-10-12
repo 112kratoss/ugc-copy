@@ -343,6 +343,23 @@ describe('comment menu', () => {
       canDelete: false, canRemove: false, canReport: false, onDelete: noop, onRemove: noop, onReport: noop,
     }))).toBe(false);
   });
+
+  it('ends with Block, naming the author, only when the sheet offers it', () => {
+    const onBlock = vi.fn();
+    const theirs = buildCommentMenu({
+      canDelete: false, canRemove: false, canReport: true, block: { authorLabel: '@batman', onBlock },
+      onDelete: noop, onRemove: noop, onReport: noop,
+    });
+    const blockRow = theirs.sections[0].items[1];
+
+    expect(theirs.sections[0].items.map((item) => item.label)).toEqual(['Report', 'Block @batman']);
+    expect(blockRow).toMatchObject({ kind: 'action', id: 'block', systemImage: 'nosign', destructive: true });
+    if (blockRow.kind === 'action') blockRow.onSelect();
+    expect(onBlock).toHaveBeenCalledTimes(1);
+    expect(buildCommentMenu({
+      canDelete: false, canRemove: false, canReport: true, block: null, onDelete: noop, onRemove: noop, onReport: noop,
+    }).sections[0].items.map((item) => item.label)).toEqual(['Report']);
+  });
 });
 
 describe('post visibility choices', () => {

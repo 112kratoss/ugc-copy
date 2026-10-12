@@ -37,6 +37,7 @@ const namedSymbols = new Set([
     canDelete: true,
     canRemove: true,
     canReport: true,
+    block: { authorLabel: '@creator', onBlock: noop },
     onDelete: noop,
     onRemove: noop,
     onReport: noop,

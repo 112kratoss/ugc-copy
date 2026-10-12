@@ -7,6 +7,11 @@ export interface CommentMenuInput {
   canRemove: boolean;
   /** Someone else wrote it. */
   canReport: boolean;
+  /**
+   * Given when the viewer may block the comment's author from here
+   * (`canBlockCommentAuthor`); the row names them.
+   */
+  block?: { authorLabel: string; onBlock: () => void } | null;
   onDelete: () => void;
   onRemove: () => void;
   onReport: () => void;
@@ -15,13 +20,14 @@ export interface CommentMenuInput {
 /**
  * The menu a comment's ••• opens (`lib/native-menu.ts`); a build without native
  * menus shows the same rows as the "Comment options" action sheet. Every row
- * still asks before it acts: Delete and Remove through a confirmation, Report
- * through the sheet of reasons that follows it.
+ * still asks before it acts: Delete, Remove and Block through a confirmation,
+ * Report through the sheet of reasons that follows it.
  */
 export function buildCommentMenu({
   canDelete,
   canRemove,
   canReport,
+  block,
   onDelete,
   onRemove,
   onReport,
@@ -52,6 +58,13 @@ export function buildCommentMenu({
             systemImage: 'flag',
             destructive: true,
             onSelect: onReport,
+          })] : []),
+          ...(block ? [menuAction({
+            id: 'block',
+            label: `Block ${block.authorLabel}`,
+            systemImage: 'nosign',
+            destructive: true,
+            onSelect: block.onBlock,
           })] : []),
         ],
       },
