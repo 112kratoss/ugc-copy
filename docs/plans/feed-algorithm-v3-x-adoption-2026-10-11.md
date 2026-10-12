@@ -1,5 +1,7 @@
 # Feed algorithm v3 — what we take from X's For You algorithm
 
+_Status 2026-10-12: shipped in #442 (`2f832f85`) and v3 activated in production at 04:26 UTC; v1 baseline recorded in the ops runbook's history. Continued by `feed-algorithm-v4-industry-parity-2026-10-12.md`._
+
 _Date: 2026-10-11. Design and implementation contract. Inputs: `docs/research/x-algorithm-analysis-2026-10-11.md` (X, commit cb45b55) and `docs/research/magicbooklet-feed-ranking-analysis-2026-10-11.md` (ours, at 31634288). Production was read once, read-only, on 2026-10-11: v1 `active` since 2026-07-11, v2 `shadow` since 2026-07-28, no experiment ever created; 39 posts from 4 creators, 7 follows, ~16 weekly viewers, 5,154 impressions / 875 quick skips / 9 saves / 51 remix starts in 30 days, 0 embeddings._
 
 ## 1. Decision
