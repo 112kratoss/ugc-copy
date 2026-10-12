@@ -207,10 +207,6 @@ export type ShowcaseFeedEventType =
     | 'hide_creator'
     | 'report';
 
-export function isGenerationRecipeAssetId(value: string | null | undefined): boolean {
-    return Boolean(value?.startsWith(GENERATION_RECIPE_ASSET_ID_PREFIX));
-}
-
 export function sanitizeShowcaseAssetSummary(
     asset: ShowcaseAssetSummary | null | undefined
 ): ShowcaseAssetSummary | null {

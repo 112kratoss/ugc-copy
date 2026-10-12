@@ -462,6 +462,16 @@
       "path": "/api/posts/:postId/resource-bundle/file-url",
       "auth": "required"
     },
+    "getPostResourceFileUrls": {
+      "method": "POST",
+      "path": "/api/posts/:postId/resource-bundle/file-url",
+      "auth": "required"
+    },
+    "resolvePostResourceFileUrl": {
+      "method": "POST",
+      "path": "/api/posts/:postId/resource-bundle/file-url",
+      "auth": "required"
+    },
     "syncMobilePurchase": {
       "method": "POST",
       "path": "/api/mobile/commerce/sync",

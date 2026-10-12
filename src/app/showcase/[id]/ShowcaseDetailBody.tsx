@@ -5,7 +5,11 @@ import { BookText, ShoppingBag } from 'lucide-react';
 import PostCommentAvatar from '@/components/PostCommentAvatar';
 import { formatRelativeTime, getPostFeedTitle, type PostPreviewKind } from '@/lib/post-feed-presentation';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
-import { getPostResourceKindLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
+import {
+  formatPostResourcePriceLabel,
+  getPostResourceKindLabel,
+  type PostResourceKind,
+} from '@/lib/post-resource-bundles';
 import { getPublicPostMetaDescription, type PublicPostDetail } from '@/lib/public-posts';
 import type { ShowcaseReturnContext } from '@/lib/share';
 
@@ -401,7 +405,7 @@ export default function ShowcaseDetailBody({
                     <ShoppingBag className="h-4 w-4 shrink-0" aria-hidden="true" />
                     <span className="truncate">
                       {lockedViewer && bundle.accessMode !== 'free'
-                        ? `${bundle.priceQuote.formatted} recipe`
+                        ? formatPostResourcePriceLabel(bundle.priceUsdCents, bundle.priceQuote.formatted)
                         : bundle.accessMode === 'free'
                           ? 'Free recipe'
                           : 'Recipe unlocked'}
@@ -459,7 +463,9 @@ export default function ShowcaseDetailBody({
         >
           <span>
             <span className="block text-sm font-bold">
-              {bundle.accessMode === 'free' ? 'View free recipe' : `Unlock recipe for ${bundle.priceQuote.formatted}`}
+              {bundle.accessMode === 'free'
+                ? 'View free recipe'
+                : `Unlock recipe for ${formatPostResourcePriceLabel(bundle.priceUsdCents, bundle.priceQuote.formatted)}`}
             </span>
             <span className="block text-xs font-medium text-slate-800">{previewKindSummary}</span>
           </span>

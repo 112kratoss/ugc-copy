@@ -38,7 +38,7 @@ import {
     getShowcaseItemMediaItems,
 } from '@/lib/showcase';
 import {
-    getBundleAccessLabel,
+    formatPostResourcePriceLabel,
     getPostResourceKindLabel,
     isPostResourceKind,
     type PostResourceKind,
@@ -187,7 +187,7 @@ function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>)
         return 'View free recipe';
     }
 
-    return `Unlock for ${asset.priceQuote?.formatted ?? getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+(?:unlock|recipe)$/i, '')}`;
+    return `Unlock for ${formatPostResourcePriceLabel(asset.priceUsdCents, asset.priceQuote?.formatted)}`;
 }
 
 /**

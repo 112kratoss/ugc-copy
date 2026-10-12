@@ -1057,6 +1057,44 @@ describe('Showcase detail page', () => {
     ).toBeTruthy();
   });
 
+  // One price wherever a locked recipe is pitched: both ways to pay when it can
+  // be bought with cash, credits alone when it is credits-only (a cash figure
+  // there named a price no checkout takes).
+  it.each([
+    { priceUsdCents: 900, formatted: '₹750.00', label: '₹750.00 · 900 credits' },
+    { priceUsdCents: 50, formatted: '$0.50', label: '50 credits' },
+  ])('prices a locked $priceUsdCents-credit recipe as "$label" in the rail and the bottom bar', async ({
+    priceUsdCents,
+    formatted,
+    label,
+  }) => {
+    const detail = await getPublicPostDetailMock('post-1');
+    getPublicPostDetailMock.mockResolvedValueOnce({
+      ...detail,
+      resourceBundle: {
+        id: 'bundle-1',
+        accessMode: 'paid',
+        priceQuote: { formatted, note: null },
+        resourceKinds: ['prompt'],
+        lockedPreview: null,
+        viewerCanAccess: false,
+        viewerIsOwner: false,
+        salesCount: 0,
+        resources: null,
+        title: 'Recipe',
+        summary: '',
+        previewText: '',
+        priceUsdCents,
+        status: 'published',
+      },
+    });
+
+    render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+    expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent(`${label}Unlock`);
+    expect(screen.getByText(`Unlock recipe for ${label}`)).toBeInTheDocument();
+  });
+
   it('forwards purchase-time proof media when the buyer opens an older revision', async () => {
     const purchasedMediaItems = [
       { id: 'old-media-1', mediaKey: 'old-output-1', url: 'https://cdn.example.com/old-1.jpg', mediaKind: 'image', contentType: 'image/jpeg', originalName: 'old-1.jpg', width: 800, height: 1000, durationSeconds: null, sortOrder: 0 },

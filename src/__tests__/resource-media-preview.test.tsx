@@ -1,8 +1,70 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, expect, it, vi } from 'vitest';
-import ResourceMediaPreview from '@/components/ResourceMediaPreview';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import ResourceMediaPreview, { createBatchedUrlResolver } from '@/components/ResourceMediaPreview';
 
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
+
+describe('createBatchedUrlResolver', () => {
+  it('answers the keys asked for in one tick with one load, and fails a key it leaves out', async () => {
+    const load = vi.fn(async (keys: string[]) => new Map(keys.filter(key => key !== 'gone').map(key => [key, `/${key}.png`])));
+    const resolve = createBatchedUrlResolver(load, 25);
+
+    const results = await Promise.allSettled([resolve('a'), resolve('b'), resolve('a'), resolve('gone')]);
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(load.mock.calls[0][0]).toEqual(['a', 'b', 'gone']);
+    expect(results.map(result => result.status === 'fulfilled' ? result.value : 'failed'))
+      .toEqual(['/a.png', '/b.png', '/a.png', 'failed']);
+  });
+
+  it('splits one tick into loads of at most the batch size', async () => {
+    const load = vi.fn(async (keys: string[]) => new Map(keys.map(key => [key, `/${key}`])));
+    const resolve = createBatchedUrlResolver(load, 2);
+
+    await Promise.all(['a', 'b', 'c'].map(key => resolve(key)));
+
+    expect(load.mock.calls.map(([keys]) => keys)).toEqual([['a', 'b'], ['c']]);
+  });
+
+  it('lets each caller abort alone, and aborts the shared load once every caller has', async () => {
+    const signals: AbortSignal[] = [];
+    const load = vi.fn((_keys: string[], signal: AbortSignal) => {
+      signals.push(signal);
+      return new Promise<ReadonlyMap<string, string>>(() => {});
+    });
+    const resolve = createBatchedUrlResolver(load, 25);
+    const first = new AbortController();
+    const second = new AbortController();
+    const firstUrl = resolve('a', first.signal);
+    const secondUrl = resolve('b', second.signal);
+    await Promise.resolve();
+    expect(load).toHaveBeenCalledTimes(1);
+
+    first.abort();
+    await expect(firstUrl).rejects.toBeDefined();
+    expect(signals[0].aborted).toBe(false);
+    second.abort();
+    await expect(secondUrl).rejects.toBeDefined();
+    expect(signals[0].aborted).toBe(true);
+
+    // A caller gone before its tick is flushed never reaches a load.
+    const third = new AbortController();
+    const thirdUrl = resolve('c', third.signal);
+    third.abort();
+    await expect(thirdUrl).rejects.toBeDefined();
+    await Promise.resolve();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails every caller in a load that fails', async () => {
+    const resolve = createBatchedUrlResolver(async () => { throw new Error('Rate limited'); }, 25);
+
+    const results = await Promise.allSettled([resolve('a'), resolve('b')]);
+
+    expect(results.map(result => result.status === 'rejected' ? (result.reason as Error).message : 'ok'))
+      .toEqual(['Rate limited', 'Rate limited']);
+  });
+});
 
 it('renews failed audio through the authorized resolver and leaves retry paused', async () => {
   const resolveUrl = vi.fn().mockResolvedValueOnce('/expired.wav').mockResolvedValueOnce('/fresh.wav');

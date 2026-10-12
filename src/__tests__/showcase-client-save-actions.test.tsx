@@ -625,6 +625,27 @@ describe('ShowcaseClient save actions', () => {
 
     const unlockLink = screen.getByRole('link', { name: /unlock for \$9\.00/i });
     expect(unlockLink).toHaveAttribute('href', expect.stringContaining('#recipe'));
+    // Both ways to pay, as the post page names them.
+    expect(unlockLink).toHaveAccessibleName(/^Unlock for \$9\.00 · 900 credits for /);
+  });
+
+  it('prices a credits-only recipe in credits alone, with no cash figure the checkout refuses', () => {
+    renderShowcase(createShowcaseItem({
+      asset: {
+        id: 'bundle-1',
+        postId: 'post-1',
+        title: 'Prompt pack',
+        accessMode: 'paid',
+        priceUsdCents: 50,
+        priceQuote: { currency: 'USD', amountSubunits: 50, formatted: '$0.50', note: null },
+        previewText: 'Unlock the exact reusable prompt.',
+        allowRemix: false,
+        resourceKinds: ['prompt'],
+      },
+    }));
+
+    expect(screen.getByRole('link', { name: /^unlock for 50 credits for /i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /\$0\.50/ })).not.toBeInTheDocument();
   });
 
   it('disables prefetching for community card detail and creator links', async () => {

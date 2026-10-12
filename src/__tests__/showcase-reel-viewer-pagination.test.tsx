@@ -1551,6 +1551,13 @@ describe('ShowcaseReelViewer pagination', () => {
   });
 
   describe("the reel's own unlock", () => {
+    it('names both ways to pay for a recipe that can be bought with cash', () => {
+      stubRequests();
+      renderPaidReel();
+
+      expect(screen.getAllByRole('button', { name: 'Unlock for $9.00 · 900 credits' }).length).toBeGreaterThan(0);
+    });
+
     it('offers credits alone below the cash minimum, where the server refuses cash', () => {
       authState.session = { access_token: 'token-1' };
       authState.credits = 1200;
@@ -1565,7 +1572,9 @@ describe('ShowcaseReelViewer pagination', () => {
         })],
       })} />);
 
-      fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$0\.90/i })[0]);
+      // Priced in credits alone: no cash figure the checkout would refuse.
+      expect(screen.queryByRole('button', { name: /\$0\.90/ })).not.toBeInTheDocument();
+      fireEvent.click(screen.getAllByRole('button', { name: /unlock for 90 credits/i })[0]);
 
       expect(screen.queryByRole('button', { name: /pay with cash/i })).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Use 90 credits' })).toBeInTheDocument();

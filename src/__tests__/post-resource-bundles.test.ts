@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPostResourceBundleLockedPreview,
   formatPostResourceBundleCountSummary,
+  formatPostResourceCreditAmount,
+  formatPostResourceDownloadName,
   formatPostResourceItemCountSummary,
+  formatPostResourcePriceLabel,
   normalizePostResourceItems,
   normalizePostResourceSections,
   resolvePostRemixCapability,
@@ -530,5 +533,40 @@ describe('post resource bundle validation', () => {
       capability: 'unsupported',
       target: null,
     });
+  });
+});
+
+describe('recipe price labels', () => {
+  it('names both ways to pay for a cash-eligible recipe and credits alone below the cash minimum', () => {
+    expect(formatPostResourcePriceLabel(900, '$9.00')).toBe('$9.00 · 900 credits');
+    // The viewer's own quote is the cash part when there is one.
+    expect(formatPostResourcePriceLabel(1500, '₹1,250.00')).toBe('₹1,250.00 · 1,500 credits');
+    expect(formatPostResourcePriceLabel(1500)).toBe('$15.00 · 1,500 credits');
+    expect(formatPostResourcePriceLabel(100, null)).toBe('$1.00 · 100 credits');
+    // Below 100 credits there is no cash checkout, so no cash figure either.
+    expect(formatPostResourcePriceLabel(50, '$0.50')).toBe('50 credits');
+    expect(formatPostResourcePriceLabel(99)).toBe('99 credits');
+  });
+
+  it('groups thousands the same way everywhere and counts one credit as one', () => {
+    expect(formatPostResourceCreditAmount(1500)).toBe('1,500 credits');
+    expect(formatPostResourceCreditAmount(1)).toBe('1 credit');
+    expect(formatPostResourceCreditAmount(-5)).toBe('0 credits');
+  });
+});
+
+describe('resource download names', () => {
+  it('adds the extension of the content type to a title that has none', () => {
+    expect(formatPostResourceDownloadName('Reference 1', 'image/png')).toBe('Reference 1.png');
+    expect(formatPostResourceDownloadName('Brief', 'application/pdf; charset=binary')).toBe('Brief.pdf');
+    expect(formatPostResourceDownloadName('  ', 'video/quicktime')).toBe('Resource file.mov');
+  });
+
+  it('keeps a title that already ends in an extension of its type, and an unknown type as it is', () => {
+    expect(formatPostResourceDownloadName('frame.JPEG', 'image/jpeg')).toBe('frame.JPEG');
+    expect(formatPostResourceDownloadName('notes.markdown', 'text/markdown')).toBe('notes.markdown');
+    expect(formatPostResourceDownloadName('Blob', 'application/octet-stream')).toBe('Blob');
+    expect(formatPostResourceDownloadName('Element 1', null)).toBe('Element 1');
+    expect(formatPostResourceDownloadName('Element 1', 'constructor')).toBe('Element 1');
   });
 });

@@ -77,6 +77,37 @@ describe('post resource file-url route adapter service', () => {
     expect(createServiceClient).not.toHaveBeenCalled();
   });
 
+  it('hands a batch body to the service unchanged and answers its files privately', async () => {
+    const files = [
+      { storagePath: 'user-1/refs/a.png', url: 'https://signed.example.com/a.png', expiresAt: '2026-06-22T06:10:00.000Z' },
+      { storagePath: 'user-1/refs/b.mp4', url: 'https://signed.example.com/b.mp4', expiresAt: '2026-06-22T06:10:00.000Z' },
+    ];
+    createPostResourceFileReadUrlForRoute.mockResolvedValueOnce({ ok: true, body: { files } });
+    const body = { storagePaths: files.map((file) => file.storagePath), disposition: 'inline' };
+
+    const response = await postPostResourceFileUrlRouteResponse({
+      request: new Request('http://localhost/api/posts/post-1/resource-bundle/file-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-request-id': 'file-url-batch-1' },
+        body: JSON.stringify(body),
+      }),
+      context: createContext(),
+      dependencies: {
+        createPostResourceFileReadUrlForRoute,
+        createServiceClient,
+        createUserClient,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('file-url-batch-1');
+    await expect(response.json()).resolves.toEqual({ files });
+    expect(createPostResourceFileReadUrlForRoute).toHaveBeenCalledTimes(1);
+    expect(createPostResourceFileReadUrlForRoute).toHaveBeenCalledWith(expect.objectContaining({ body }));
+    expect(createServiceClient).not.toHaveBeenCalled();
+  });
+
   it('uses anonymous IP rate-limit keys and tolerates malformed JSON bodies', async () => {
     userSupabase.auth.getUser.mockResolvedValueOnce({
       data: { user: null },

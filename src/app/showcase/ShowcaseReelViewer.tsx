@@ -45,7 +45,7 @@ import {
 } from '@/lib/showcase-media-progress';
 import {
   formatPostResourceBundleCountSummary,
-  getBundleAccessLabel,
+  formatPostResourcePriceLabel,
   getPostResourceKindLabel,
   isPostResourceKind,
   type PostResourceAttachment,
@@ -53,7 +53,7 @@ import {
   type PostResourceKind,
   type PostResourceSection,
 } from '@/lib/post-resource-bundles';
-import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
+import { FREE_RECIPE_LABEL, isFreeRecipeAsset } from '@/lib/showcase-asset-labels';
 import { formatCompactCount } from '@/lib/post-feed-presentation';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import { trackProductEvent } from '@/lib/product-analytics';
@@ -180,15 +180,12 @@ function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
-function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
-  if (asset.priceQuote) {
-    return formatBundleAccessLabel({
-      accessMode: asset.accessMode,
-      priceQuote: asset.priceQuote,
-    }).replace(/\s+unlock$/i, ' recipe');
-  }
+function getAssetPriceLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
+  return formatPostResourcePriceLabel(asset.priceUsdCents, asset.priceQuote?.formatted);
+}
 
-  return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+unlock$/i, ' recipe');
+function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
+  return isFreeRecipeAsset(asset) ? FREE_RECIPE_LABEL : getAssetPriceLabel(asset);
 }
 
 function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
@@ -196,7 +193,7 @@ function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>)
     return 'Get free recipe';
   }
 
-  return `Unlock for ${asset.priceQuote?.formatted ?? getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+(?:unlock|recipe)$/i, '')}`;
+  return `Unlock for ${getAssetPriceLabel(asset)}`;
 }
 
 function getItemSummary(item: ShowcaseFeedItem): string {
@@ -906,9 +903,7 @@ export default function ShowcaseReelViewer({
   const hasReelUnlockAccess = unlockSuccessItemId === item.id;
   const isFreeUnlock = Boolean(item.asset && (item.asset.accessMode === 'free' || item.asset.priceUsdCents === 0));
   const reelRecipeActionLabel = hasReelUnlockAccess ? 'View recipe' : unlockCtaLabel;
-  const priceLabel = item.asset
-    ? item.asset.priceQuote?.formatted ?? getAssetAccessLabel(item.asset).replace(/\s+(?:unlock|recipe)$/i, '')
-    : '';
+  const priceLabel = item.asset ? getAssetPriceLabel(item.asset) : '';
   const tokenCost = item.asset ? Math.max(0, item.asset.priceUsdCents) : 0;
   const formattedCreditCost = tokenCost.toLocaleString();
   // Below the cash minimum a recipe is credits-only, and the server refuses a

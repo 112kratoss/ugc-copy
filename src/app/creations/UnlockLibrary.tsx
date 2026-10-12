@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Archive, ArrowRight, BadgeCheck, Loader2, PackageOpen, Sparkles } from 'lucide-react';
 
 import StudioCard, { STUDIO_GRID_CLASS, StudioChip, StudioKindBadge } from '@/app/creations/StudioCard';
-import { formatUsdCents } from '@/lib/post-resource-bundles';
+import { formatPostResourceCreditAmount } from '@/lib/post-resource-bundles';
 import { supabase } from '@/lib/supabase';
 
 type UnlockItem = {
@@ -248,10 +248,9 @@ export default function UnlockLibrary() {
             )}
             chips={(
               <>
+                {/* What was paid, in the credits it was paid with, written as the app writes it. */}
                 <StudioChip tone={item.purchasePriceUsdCents > 0 ? 'emerald' : 'sky'}>
-                  {item.purchasePriceUsdCents > 0
-                    ? `${item.purchasePriceUsdCents} credits (${formatUsdCents(item.purchasePriceUsdCents)})`
-                    : 'Free'}
+                  {item.purchasePriceUsdCents > 0 ? formatPostResourceCreditAmount(item.purchasePriceUsdCents) : 'Free'}
                 </StudioChip>
                 <UnlockStateBadge item={item} />
               </>

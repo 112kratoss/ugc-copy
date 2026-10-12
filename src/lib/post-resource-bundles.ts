@@ -1,5 +1,6 @@
 import type { SerializedWorkflowCanvasGraph } from '@/lib/workflow-canvas';
 import { normalizePostMediaKey } from '@/lib/post-media-key';
+import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import { resolveRemixTool } from '@/lib/remix-tools';
 import { getCanonicalStoredMediaLocation, parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 
@@ -803,6 +804,91 @@ export function getBundleAccessLabel(
   }
 
   return `${formatUsdCents(priceUsdCents)} recipe`;
+}
+
+/** Grouped the same on the server and in every browser, as the app writes it. */
+export function formatPostResourceCreditAmount(credits: number): string {
+  const amount = Math.max(0, Math.round(credits));
+  return `${amount.toLocaleString('en-US')} ${amount === 1 ? 'credit' : 'credits'}`;
+}
+
+/**
+ * The one price a paid recipe shows on the web: "$9.00 · 900 credits" when it
+ * can be bought with cash, "50 credits" when it is credits-only. A cash figure
+ * on a credits-only recipe named a price no checkout would take. `cashLabel` is
+ * the viewer's quote (rupees in India); without one the cash part is in USD.
+ */
+export function formatPostResourcePriceLabel(priceUsdCents: number, cashLabel?: string | null): string {
+  const credits = Math.max(0, Math.round(priceUsdCents));
+  const creditLabel = formatPostResourceCreditAmount(credits);
+  return isPostResourceWebCashEligible(credits)
+    ? `${cashLabel?.trim() || formatUsdCents(credits)} · ${creditLabel}`
+    : creditLabel;
+}
+
+/** The file-url route signs at most this many files in one request. */
+export const POST_RESOURCE_FILE_URL_BATCH_LIMIT = 25;
+/** `inline` opens a file in the browser; `attachment`, the default, saves it. */
+export type PostResourceFileDisposition = 'inline' | 'attachment';
+export interface PostResourceSignedFileUrl {
+  storagePath: string;
+  url: string;
+  expiresAt?: string;
+}
+
+const DOWNLOAD_EXTENSIONS_BY_CONTENT_TYPE = new Map<string, readonly string[]>([
+  ['application/json', ['json', 'workflow']],
+  ['application/pdf', ['pdf']],
+  ['application/zip', ['zip']],
+  ['application/x-zip-compressed', ['zip']],
+  ['application/gzip', ['gz']],
+  ['application/x-gzip', ['gz']],
+  ['application/csv', ['csv']],
+  ['application/yaml', ['yaml', 'yml']],
+  ['application/x-yaml', ['yaml', 'yml']],
+  ['text/plain', ['txt']],
+  ['text/markdown', ['md', 'markdown']],
+  ['text/x-markdown', ['md', 'markdown']],
+  ['text/csv', ['csv']],
+  ['text/comma-separated-values', ['csv']],
+  ['text/yaml', ['yaml', 'yml']],
+  ['text/x-yaml', ['yaml', 'yml']],
+  ['image/jpeg', ['jpg', 'jpeg']],
+  ['image/png', ['png']],
+  ['image/webp', ['webp']],
+  ['image/gif', ['gif']],
+  ['image/heic', ['heic']],
+  ['image/heif', ['heif']],
+  ['video/mp4', ['mp4']],
+  ['video/x-m4v', ['m4v']],
+  ['video/quicktime', ['mov']],
+  ['video/webm', ['webm']],
+  ['audio/mpeg', ['mp3']],
+  ['audio/wav', ['wav']],
+  ['audio/x-wav', ['wav']],
+  ['audio/mp4', ['m4a']],
+  ['audio/aac', ['aac']],
+  ['audio/ogg', ['ogg']],
+  ['audio/flac', ['flac']],
+]);
+
+/**
+ * The name a downloaded resource file is saved under. Titles are labels
+ * ("Reference 1"), so a file saved under the title alone had no extension and
+ * nothing would open it; the stored content type supplies one.
+ */
+export function formatPostResourceDownloadName(
+  title: string | null | undefined,
+  contentType: string | null | undefined,
+): string {
+  const name = title?.trim() || 'Resource file';
+  const extensions = DOWNLOAD_EXTENSIONS_BY_CONTENT_TYPE.get(contentType?.split(';')[0].trim().toLowerCase() ?? '');
+  if (!extensions) {
+    return name;
+  }
+
+  const lowerName = name.toLowerCase();
+  return extensions.some((extension) => lowerName.endsWith(`.${extension}`)) ? name : `${name}.${extensions[0]}`;
 }
 
 export function formatUnlockCountLabel(

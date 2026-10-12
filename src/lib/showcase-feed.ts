@@ -36,7 +36,6 @@ import {
 } from '@/lib/generation-preview-info';
 import {
   MAGICBOOKLET_SOURCE_KIND,
-  isGenerationRecipeAssetId,
   normalizeShowcaseSourceKind,
   sanitizeShowcaseFeedPage,
   type RawShowcaseSourceKind,
@@ -682,7 +681,9 @@ export async function resolvePostRowsToFeedItems(
         sourceKind: normalizeShowcaseSourceKind(post.source_kind),
         resourceBundle: asset
           ? {
-              viewerCanAccess: isGenerationRecipeAssetId(asset.id),
+              // Built without a viewer, so nothing is unlocked here; a caller
+              // that knows the viewer adds their access (attachViewerStateToFeed).
+              viewerCanAccess: false,
               allowRemix: asset.allowRemix,
               items: asset.lockedPreview?.itemPreviews ?? [],
             }
@@ -1318,7 +1319,7 @@ async function attachViewerStateToFeed(
       feed.items
         .filter((item) => item.asset?.allowRemix)
         .map((item) => item.asset?.id)
-        .filter((bundleId): bundleId is string => Boolean(bundleId) && !isGenerationRecipeAssetId(bundleId))
+        .filter((bundleId): bundleId is string => Boolean(bundleId))
     )
   );
   const loadSavedIds = async () => {
@@ -1415,8 +1416,7 @@ async function attachViewerStateToFeed(
       if (item.isNsfw && !item.nsfwRevealed) return { ...item, isSaved: savedIdSet.has(item.id) };
       const viewerCanAccessBundle = Boolean(
         item.asset && (
-          isGenerationRecipeAssetId(item.asset.id)
-          || item.creator.id === viewerUserId
+          item.creator.id === viewerUserId
           || purchasedBundleIdSet.has(item.asset.id)
         )
       );

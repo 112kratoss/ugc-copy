@@ -17,6 +17,81 @@ type Props = {
   className?: string;
 };
 
+type BatchedRequest = {
+  key: string;
+  settled: boolean;
+  resolve: (url: string) => void;
+  reject: (reason: unknown) => void;
+  /** Set once the request is on the wire; called when this caller stops waiting. */
+  leave?: () => void;
+};
+
+/**
+ * Turns a loader that resolves many URLs in one request into the per-preview
+ * `resolveUrl` below. Previews that ask in the same tick (a panel's previews
+ * mount together) share one request of at most `maxBatchSize` keys, where each
+ * used to sign its own. Each caller still aborts alone; the shared request is
+ * aborted once every caller in it has gone. A key the loader leaves out fails
+ * its preview, whose Reload asks again.
+ */
+export function createBatchedUrlResolver(
+  load: (keys: string[], signal: AbortSignal) => Promise<ReadonlyMap<string, string>>,
+  maxBatchSize: number,
+): (key: string, signal?: AbortSignal) => Promise<string> {
+  let queued: BatchedRequest[] = [];
+
+  const send = (requests: BatchedRequest[]) => {
+    const controller = new AbortController();
+    let waiting = requests.length;
+    for (const request of requests) {
+      request.leave = () => {
+        waiting -= 1;
+        if (waiting === 0) controller.abort();
+      };
+    }
+    load(Array.from(new Set(requests.map(request => request.key))), controller.signal).then(urls => {
+      for (const request of requests) {
+        const url = urls.get(request.key);
+        if (url) request.resolve(url);
+        else request.reject(new Error('Resource unavailable'));
+      }
+    }, (error: unknown) => {
+      for (const request of requests) request.reject(error);
+    });
+  };
+
+  const batchSize = Math.max(1, Math.floor(maxBatchSize));
+  const flush = () => {
+    const requests = queued.filter(request => !request.settled);
+    queued = [];
+    const keys = Array.from(new Set(requests.map(request => request.key)));
+    for (let start = 0; start < keys.length; start += batchSize) {
+      const chunk = new Set(keys.slice(start, start + batchSize));
+      send(requests.filter(request => chunk.has(request.key)));
+    }
+  };
+
+  return (key, signal) => new Promise<string>((resolve, reject) => {
+    const request: BatchedRequest = {
+      key,
+      settled: false,
+      resolve: url => { if (!request.settled) { request.settled = true; resolve(url); } },
+      reject: reason => { if (!request.settled) { request.settled = true; reject(reason); } },
+    };
+    if (signal?.aborted) {
+      request.reject(signal.reason);
+      return;
+    }
+    signal?.addEventListener('abort', () => {
+      if (request.settled) return;
+      request.reject(signal.reason);
+      request.leave?.();
+    }, { once: true });
+    queued.push(request);
+    if (queued.length === 1) queueMicrotask(flush);
+  });
+}
+
 /** Each explicit retry resolves its source again and leaves playback paused. */
 export default function ResourceMediaPreview(props: Props) {
   return <Session key={JSON.stringify([props.mediaType, props.url])} {...props} />;
