@@ -11,6 +11,7 @@ import { ResourceAction } from '@/components/resource-action';
 import { CreatorAvatar, Pill } from '@/components/ui';
 import { SaveHeart } from '@/components/save-heart';
 import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
+import { showActionSheet } from '@/lib/action-sheet';
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { formatCompactCount } from '@/lib/home-view-model';
@@ -55,6 +56,7 @@ const DETAILS_TITLE_MAX_LINES = 6;
  */
 export function PostDetailsPage({
   active,
+  authReturnTo,
   bottomInset,
   height,
   hostRendersPostText = false,
@@ -73,6 +75,11 @@ export function PostDetailsPage({
   width,
 }: {
   active: boolean;
+  /**
+   * Where "Sign in to unlock" comes back to: the screen this page is on.
+   * Without it, sign-in ends on Home and the reader has lost the post.
+   */
+  authReturnTo?: string;
   bottomInset: number;
   height: number;
   /**
@@ -99,7 +106,7 @@ export function PostDetailsPage({
   const theme = useAppTheme();
   const details = item.details;
   const unlock = details?.unlock ?? null;
-  const { api, user } = useAuth();
+  const { api, updateCredits, user } = useAuth();
   const queryClient = useQueryClient();
   const [fileLoadingPath, setFileLoadingPath] = useState<string | null>(null);
   const [resourceError, setResourceError] = useState<string | null>(null);
@@ -122,7 +129,12 @@ export function PostDetailsPage({
       }
       return api.unlockBundleWithCredits(unlock.postId);
     },
-    onSuccess: async () => {
+    onSuccess: async (result) => {
+      // A credit unlock answers with the balance it left; applied here, as the
+      // marketplace applies it, Create and Pricing stop showing the old one.
+      if (result && 'credits' in result && typeof result.credits === 'number') {
+        updateCredits(result.credits);
+      }
       if (unlock) await refreshUnlockedBundleCaches(queryClient, unlock);
       haptic.select();
     },
@@ -384,10 +396,22 @@ export function PostDetailsPage({
                       primary
                       onPress={() => {
                         if (!user) {
-                          router.push('/auth');
+                          router.push((authReturnTo ? { pathname: '/auth', params: { returnTo: authReturnTo } } : '/auth') as never);
                           return;
                         }
-                        unlockMutation.mutate();
+                        if (unlock.accessMode === 'free') {
+                          unlockMutation.mutate();
+                          return;
+                        }
+                        // A paid unlock spends the balance at once and cannot
+                        // be undone, so it asks first, in the words the
+                        // marketplace uses (`app/marketplace/[assetId].tsx`).
+                        const price = unlockPriceLabel ?? unlock.priceLabel;
+                        showActionSheet({
+                          title: 'Unlock this resource?',
+                          message: `${price} will come off your credit balance right away.`,
+                          actions: [{ label: `Unlock for ${price}`, onPress: () => unlockMutation.mutate() }],
+                        });
                       }}
                     />
                     {unlockError ? <ErrorText message={unlockError} /> : null}

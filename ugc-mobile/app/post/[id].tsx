@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Platform,
   Pressable,
   Share,
   Text,
@@ -21,6 +22,7 @@ import { FeedCardAction } from '@/components/feed-card-shell';
 import { PostDetailsPage } from '@/components/post-details-page';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { ViewerActionsMenu, ViewerActionsMenuProvider } from '@/components/viewer-actions-menu';
+import { ApiError } from '@/lib/api-client';
 import { env } from '@/lib/env';
 import { useAuth } from '@/lib/auth';
 import {
@@ -32,6 +34,7 @@ import {
 } from '@/lib/immersive-preview-view-model';
 import { readCachedImmersiveSourceData, readCachedProfile } from '@/lib/immersive-preview-source-data';
 import { getCommentCountLabel } from '@/lib/comments-view-model';
+import { canRevealNsfwInApp } from '@/lib/nsfw-reveal-policy';
 import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -83,6 +86,9 @@ export default function PostScreen() {
   const [pageIndex, setPageIndex] = useState(0);
   const [commentCountOverride, setCommentCountOverride] = useState<number | null>(null);
   const [restoredReplyToId, setRestoredReplyToId] = useState<string | null>(null);
+  // Whether `NsfwPostNotice` is showing a covered post's original right now:
+  // the thread waits for it.
+  const [nsfwRevealed, setNsfwRevealed] = useState(false);
 
   const profileQuery = useQuery({
     queryKey: ['profile', user?.id],
@@ -141,15 +147,22 @@ export default function PostScreen() {
 
     const post = showcasePostQuery.data?.item;
     if (!post) return null;
-    return buildImmersiveShowcaseItems(showcaseSource, [post])[0] ?? null;
+    // With the viewer's id, as the reel builds it: the creator gets Edit post
+    // on their own post wherever they opened it from.
+    return buildImmersiveShowcaseItems(showcaseSource, [post], user?.id ?? null)[0] ?? null;
   }, [isOwnerPost, ownerPostQuery.data, profileQuery.data, showcasePostQuery.data, showcaseSource, user]);
 
   const postQueryIsError = isOwnerPost ? ownerPostQuery.isError : showcasePostQuery.isError;
+  const postQueryError = isOwnerPost ? ownerPostQuery.error : showcasePostQuery.error;
+  // A 404 is the post being gone: deleted, made private, or behind a block.
+  // Anything else (offline, a timeout, a 429, a 5xx) may answer next time.
+  const postIsGone = postQueryError instanceof ApiError && postQueryError.status === 404;
   const refetchPost = isOwnerPost ? ownerPostQuery.refetch : showcasePostQuery.refetch;
 
   useEffect(() => {
     setCommentCountOverride(null);
     setRestoredReplyToId(null);
+    setNsfwRevealed(false);
     restoredCommentContextRef.current = null;
   }, [item?.id]);
 
@@ -162,17 +175,33 @@ export default function PostScreen() {
     };
   }, [commentCountOverride, item]);
 
-  const { toggleSave, isSaving } = useShowcaseSaveMutation({ sourceSurface: 'mobile-post-page' });
+  // Where sign-in comes back to from every action on this screen (save,
+  // comment, report, block, unlock): this post, opened the way it was.
+  const authReturnTo = postId
+    ? textPostViewerHref({
+        postId,
+        source: isOwnerPost
+          ? 'profile-posts'
+          : showcaseSource === 'profile-saved'
+            ? 'profile-saved'
+            : undefined,
+      })
+    : undefined;
 
+  const { toggleSave, isSaving } = useShowcaseSaveMutation({ sourceSurface: 'mobile-post-page', authReturnTo });
+
+  // A covered NSFW post has no details page: everything one would show is
+  // what the cover leaves out.
   const pages = useMemo<Array<'post' | 'details'>>(
-    () => (item && hasImmersiveDetailsPage(item) ? ['post', 'details'] : ['post']),
+    () => (item && hasImmersiveDetailsPage(item) && !isCoveredNsfwPost(item) ? ['post', 'details'] : ['post']),
     [item]
   );
 
   const goToPage = useCallback((index: number) => {
+    if (index >= pages.length) return;
     setPageIndex(index);
     pagerRef.current?.scrollToOffset({ offset: index * width, animated: true });
-  }, [width]);
+  }, [pages.length, width]);
   const showPost = useCallback(() => goToPage(0), [goToPage]);
   const onDetailsPage = pageIndex === 1;
   // Back from the details page returns to the post; only from the post does it
@@ -226,13 +255,22 @@ export default function PostScreen() {
       <View style={{ flex: 1, backgroundColor: theme.colors.app }}>
         <BackControl topInset={topInset} />
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: appTheme.spacing.panel, gap: appTheme.spacing.gap }}>
-          {postQueryIsError ? (
+          {postQueryIsError && postIsGone ? (
             <>
               <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800', textAlign: 'center' }}>
                 This post isn&apos;t available
               </Text>
               <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm, textAlign: 'center' }}>
-                It may have been deleted or made private. Check your connection and try again.
+                It may have been deleted or made private.
+              </Text>
+            </>
+          ) : postQueryIsError ? (
+            <>
+              <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800', textAlign: 'center' }}>
+                Couldn&apos;t load this post
+              </Text>
+              <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm, textAlign: 'center' }}>
+                Check your connection and try again.
               </Text>
               <Pressable
                 accessibilityRole="button"
@@ -274,19 +312,20 @@ export default function PostScreen() {
   }
 
   const resolvedItem = displayItem ?? item;
-  const authReturnTo = textPostViewerHref({
-    postId: resolvedItem.id,
-    source: isOwnerPost
-      ? 'profile-posts'
-      : showcaseSource === 'profile-saved'
-        ? 'profile-saved'
-        : undefined,
-  });
+  // Gate the content, not the page: a covered NSFW post keeps its byline, the
+  // ⋮ (Report, Block, owner tools), save and share, with the notice where its
+  // text would be. Its thread stays hidden until the notice reveals it.
+  const nsfwCovered = isCoveredNsfwPost(resolvedItem);
+  const commentsHidden = nsfwCovered && !nsfwRevealed;
+  const commentsHiddenMessage = canRevealNsfwInApp(Platform.OS)
+    ? 'Comments appear once you reveal this post.'
+    : 'Comments stay hidden on mature posts in this app.';
 
   // The screen's side of the post's actions, for the native menu on its ⋮
   // (`components/viewer-actions-menu.tsx`) and for the sheet below, which
   // stands in for it where native menus are missing.
   const actionCallbacks = {
+    authReturnTo,
     onComments: openComments,
     onDetails: () => goToPage(1),
     onRecreate: () => undefined,
@@ -295,12 +334,6 @@ export default function PostScreen() {
     onDeleted: leavePost,
   };
 
-  if (resolvedItem.isNsfw && !resolvedItem.nsfwRevealed) return (
-    <View style={{ flex: 1, paddingTop: topInset + 48, backgroundColor: theme.colors.app }}>
-      <BackControl topInset={topInset} />
-      <NsfwPostNotice key={postId} postId={postId!} />
-    </View>
-  );
   return (
     <ViewerActionsMenuProvider callbacksFor={() => actionCallbacks}>
     <View style={{ flex: 1, backgroundColor: theme.colors.app }}>
@@ -333,6 +366,15 @@ export default function PostScreen() {
                 contentHeader={(
                   <TextPostContent
                     item={resolvedItem}
+                    commentsHidden={commentsHidden}
+                    nsfwNotice={nsfwCovered ? (
+                      <NsfwPostNotice
+                        key={resolvedItem.id}
+                        postId={resolvedItem.id}
+                        width={width - appTheme.spacing.panel * 2}
+                        onRevealedChange={setNsfwRevealed}
+                      />
+                    ) : null}
                     topInset={topInset}
                     saving={isSaving}
                     onActionsOpen={() => setActionsVisible(true)}
@@ -354,7 +396,7 @@ export default function PostScreen() {
                     onShare={() => void shareItem()}
                   />
                 )}
-                enabled={resolvedItem.canComment && Boolean(resolvedItem.showcasePostId)}
+                enabled={resolvedItem.canComment && Boolean(resolvedItem.showcasePostId) && !commentsHidden}
                 initialReplyToId={restoredReplyToId}
                 onCommentCountChange={setCommentCountOverride}
                 postCreatorId={resolvedItem.creatorId ?? null}
@@ -362,7 +404,7 @@ export default function PostScreen() {
                 postTitle={resolvedItem.title}
                 presentation="inline"
                 unavailableMessage={resolvedItem.canComment
-                  ? null
+                  ? commentsHidden ? commentsHiddenMessage : null
                   : resolvedItem.archivedAt
                     ? 'Comments are unavailable while this post is archived.'
                     : 'Comments become available when this post is public.'}
@@ -371,6 +413,7 @@ export default function PostScreen() {
           ) : (
             <PostDetailsPage
               active={pageIndex === 1}
+              authReturnTo={authReturnTo}
               bottomInset={bottomInset}
               height={height}
               hostRendersPostText
@@ -457,8 +500,18 @@ function BackControl({ topInset }: { topInset: number }) {
   );
 }
 
+/**
+ * A post its creator marked NSFW, as the server sends it before a reveal: the
+ * creator, the counts and the post's own actions, none of its content.
+ */
+function isCoveredNsfwPost(item: { isNsfw?: boolean; nsfwRevealed?: boolean }) {
+  return Boolean(item.isNsfw && !item.nsfwRevealed);
+}
+
 function TextPostContent({
   item,
+  commentsHidden = false,
+  nsfwNotice,
   topInset,
   saving,
   onActionsOpen,
@@ -469,6 +522,13 @@ function TextPostContent({
   onShare,
 }: {
   item: Parameters<typeof buildTextPostPage>[0];
+  /** The thread is held back, so nothing here offers to open it. */
+  commentsHidden?: boolean;
+  /**
+   * Drawn in place of the title and body while the post is an NSFW cover. The
+   * cover has no details page, so Details goes with them.
+   */
+  nsfwNotice?: React.ReactNode;
   topInset: number;
   saving: boolean;
   onActionsOpen: () => void;
@@ -482,7 +542,13 @@ function TextPostContent({
   const content = buildTextPostPage(item);
   const stateChip = getViewerStateChip(item);
   const slots = getViewerActionSlots(item);
-  const hasDetails = hasImmersiveDetailsPage(item);
+  const hasDetails = !nsfwNotice && hasImmersiveDetailsPage(item);
+  // Menu rows for what the page is not showing: a details page it does not
+  // have, a thread it is holding back.
+  const excludeActions = [
+    ...(hasDetails ? [] : ['view-details']),
+    ...(commentsHidden ? ['comment'] : []),
+  ];
 
   return (
     <View
@@ -514,6 +580,7 @@ function TextPostContent({
         </Pressable>
         <ViewerActionsMenu
           item={item}
+          excludeActions={excludeActions}
           accessibilityLabel={`More options for ${content.title}`}
           trigger={{
             width: 28,
@@ -545,51 +612,55 @@ function TextPostContent({
         />
       </View>
 
-      {/* The same size the details page gives the same post's title: 25/31 was
-          a step the ramp does not have, and the two pages of one screen were
-          setting one title two ways. */}
-      <Text selectable style={{ color: theme.colors.text, ...appTheme.type.pageTitle, fontWeight: '800' }}>
-        {content.title}
-      </Text>
-
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-        <View
-          style={{
-            alignSelf: 'flex-start',
-            borderRadius: appTheme.radii.pill,
-            backgroundColor: theme.colors.surfaceStrong,
-            paddingHorizontal: 10,
-            paddingVertical: 5,
-          }}
-        >
-          <Text style={{ color: theme.colors.textSecondary, fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
-            {content.flairLabel}
+      {nsfwNotice ?? (
+        <>
+          {/* The same size the details page gives the same post's title: 25/31 was
+              a step the ramp does not have, and the two pages of one screen were
+              setting one title two ways. */}
+          <Text selectable style={{ color: theme.colors.text, ...appTheme.type.pageTitle, fontWeight: '800' }}>
+            {content.title}
           </Text>
-        </View>
-        {stateChip ? (
-          <View
-            style={{
-              alignSelf: 'flex-start',
-              borderRadius: appTheme.radii.pill,
-              borderWidth: 1,
-              borderColor: theme.semantic[stateChip.tone].border,
-              backgroundColor: theme.semantic[stateChip.tone].background,
-              paddingHorizontal: 10,
-              paddingVertical: 5,
-            }}
-          >
-            <Text style={{ color: theme.semantic[stateChip.tone].foreground, fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
-              {stateChip.label}
-            </Text>
-          </View>
-        ) : null}
-      </View>
 
-      {content.body ? (
-        <Text selectable style={{ color: theme.colors.text, ...appTheme.type.body, lineHeight: 26 }}>
-          {content.body}
-        </Text>
-      ) : null}
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+            <View
+              style={{
+                alignSelf: 'flex-start',
+                borderRadius: appTheme.radii.pill,
+                backgroundColor: theme.colors.surfaceStrong,
+                paddingHorizontal: 10,
+                paddingVertical: 5,
+              }}
+            >
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
+                {content.flairLabel}
+              </Text>
+            </View>
+            {stateChip ? (
+              <View
+                style={{
+                  alignSelf: 'flex-start',
+                  borderRadius: appTheme.radii.pill,
+                  borderWidth: 1,
+                  borderColor: theme.semantic[stateChip.tone].border,
+                  backgroundColor: theme.semantic[stateChip.tone].background,
+                  paddingHorizontal: 10,
+                  paddingVertical: 5,
+                }}
+              >
+                <Text style={{ color: theme.semantic[stateChip.tone].foreground, fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
+                  {stateChip.label}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          {content.body ? (
+            <Text selectable style={{ color: theme.colors.text, ...appTheme.type.body, lineHeight: 26 }}>
+              {content.body}
+            </Text>
+          ) : null}
+        </>
+      )}
 
       <View style={{ height: 1, backgroundColor: theme.colors.borderSubtle, marginTop: 4 }} />
 
@@ -609,6 +680,7 @@ function TextPostContent({
             );
           }
           if (slot.id === 'comment') {
+            if (commentsHidden) return null;
             return (
               <FeedCardAction
                 key={slot.id}

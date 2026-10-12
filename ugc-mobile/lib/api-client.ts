@@ -904,7 +904,16 @@ export function createApiClient({
       request<CreatorProfileResponse>(`/api/creators/${encodeURIComponent(username)}${buildQuery(params)}`),
     reportPost: (
       postId: string,
-      body: { reason: 'spam' | 'stolen_content' | 'misleading_unlock' | 'unsafe_content' | 'payment_issue' | 'other'; details?: string }
+      body: {
+        reason: 'spam' | 'stolen_content' | 'misleading_unlock' | 'unsafe_content' | 'payment_issue' | 'other';
+        details?: string;
+        /**
+         * The post's recipe (`post_resource_bundles.id`) when the report is
+         * about it; the server checks it belongs to the post and files it with
+         * the report.
+         */
+        bundleId?: string;
+      }
     ) => request<{ success: true }>(`/api/posts/${encodeURIComponent(postId)}/report`, {
       method: 'POST',
       body: JSON.stringify(body),

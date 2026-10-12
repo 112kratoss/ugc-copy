@@ -101,6 +101,23 @@ describe('mobile api client caching', () => {
     }
   });
 
+  it('names the recipe a post report is about, and sends no bundle otherwise', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ success: true }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.reportPost('post-1', { reason: 'misleading_unlock', details: 'Not what it says', bundleId: 'bundle-1' });
+    await api.reportPost('post-1', { reason: 'spam' });
+
+    const bodies = (fetcher.mock.calls as unknown as Array<[string, RequestInit]>)
+      .map(([, init]) => JSON.parse(String(init.body)));
+    expect(bodies[0]).toEqual({ reason: 'misleading_unlock', details: 'Not what it says', bundleId: 'bundle-1' });
+    expect(bodies[1]).toEqual({ reason: 'spam' });
+  });
+
   it('sends an explicit confirmation and transient Apple authorization when deleting an account', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ success: true, deleted: true }));
     const api = createApiClient({

@@ -40,6 +40,12 @@ export interface ViewerActionCallbacks {
   onBlocked?: (userId: string) => void;
   onUnlockRemix?: () => void;
   onSourceRefresh: () => void;
+  /**
+   * Where sign-in comes back to when a signed-out reader picks an action that
+   * needs an account (Report, Block): the screen showing this item. Without
+   * it, sign-in ends on Home and the reader has lost the post.
+   */
+  authReturnTo?: string;
 }
 
 /**
@@ -50,12 +56,12 @@ export interface ViewerActionCallbacks {
  */
 type PostReportReason = Parameters<ReturnType<typeof createApiClient>['reportPost']>[1]['reason'];
 
-const POST_REPORT_REASONS: Array<{ label: string; value: PostReportReason }> = [
+const POST_REPORT_REASONS: Array<{ label: string; value: PostReportReason; aboutRecipe?: boolean }> = [
   { label: 'Spam', value: 'spam' },
   { label: 'Stolen content', value: 'stolen_content' },
-  { label: 'Misleading recipe', value: 'misleading_unlock' },
+  { label: 'Misleading recipe', value: 'misleading_unlock', aboutRecipe: true },
   { label: 'Unsafe content', value: 'unsafe_content' },
-  { label: 'Payment issue', value: 'payment_issue' },
+  { label: 'Payment issue', value: 'payment_issue', aboutRecipe: true },
   { label: 'Something else', value: 'other' },
 ];
 
@@ -72,6 +78,7 @@ export function useViewerActionHandlers({
   onBlocked,
   onUnlockRemix,
   onSourceRefresh,
+  authReturnTo,
 }: ViewerActionCallbacks & { item: ImmersivePreviewItem; onClose?: () => void }) {
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
@@ -154,7 +161,7 @@ export function useViewerActionHandlers({
 
     const requireSignedIn = () => {
       if (user) return true;
-      router.push('/auth');
+      router.push((authReturnTo ? { pathname: '/auth', params: { returnTo: authReturnTo } } : '/auth') as never);
       return false;
     };
 
@@ -297,12 +304,16 @@ export function useViewerActionHandlers({
     if (action === 'report-content' && item.showcasePostId) {
       if (!requireSignedIn()) return;
       const postId = item.showcasePostId;
-      // The same six reasons the web post page offers, so a stolen-work or
-      // misleading-recipe report reaches moderation filed as one.
+      // The recipe's own id (`post_resource_bundles.id`), so a report about
+      // it reaches moderation with the recipe it concerns, as the web's does.
+      const bundleId = item.details?.unlock?.resourceId;
+      // The web post page's reasons, so a stolen-work or misleading-recipe
+      // report reaches moderation filed as one. The two about a recipe are
+      // offered only on a post that has one.
       showActionSheet({
         title: 'Why are you reporting this?',
         message: 'Choose the closest reason so the moderation team can review it correctly.',
-        actions: POST_REPORT_REASONS.map((reason) => ({
+        actions: POST_REPORT_REASONS.filter((reason) => bundleId || !reason.aboutRecipe).map((reason) => ({
           label: reason.label,
           onPress: () => {
             void (async () => {
@@ -310,6 +321,7 @@ export function useViewerActionHandlers({
                 await api.reportPost(postId, {
                   reason: reason.value,
                   details: 'Reported from the mobile Showcase viewer.',
+                  ...(reason.aboutRecipe && bundleId ? { bundleId } : {}),
                 });
                 haptic.success();
                 showMessageDialog({
@@ -337,7 +349,9 @@ export function useViewerActionHandlers({
         if (!confirmed) return;
         try {
           await api.reportUser(item.creatorId!, {
-            reason: 'unsafe_content',
+            // The reason the web files a creator under from its feed, Explore
+            // and reel (`src/lib/moderation-client.ts`), so moderators see one.
+            reason: 'harassment',
             sourceSurface: 'showcase-reel',
             details: item.showcasePostId ? `Reported from post ${item.showcasePostId}.` : undefined,
           });

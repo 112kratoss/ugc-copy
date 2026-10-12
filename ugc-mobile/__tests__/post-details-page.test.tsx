@@ -6,10 +6,14 @@ import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 
 type MockProps = { children?: React.ReactNode; label?: string } & Record<string, unknown>;
 
-const { bundleContentProps, queryState, mutationState } = vi.hoisted(() => ({
+const { authState, bundleContentProps, mutationOptions, queryState, mutationState, router, showActionSheet } = vi.hoisted(() => ({
+  authState: { user: { id: 'viewer-1' } as { id: string } | null, api: {}, updateCredits: vi.fn() },
   bundleContentProps: vi.fn(),
+  mutationOptions: { current: null as { onSuccess?: (result: unknown) => Promise<void> } | null },
   queryState: { current: { data: undefined as unknown, isError: false, error: null as unknown, refetch: vi.fn() } },
   mutationState: { mutate: vi.fn(), isPending: false, error: null as unknown },
+  router: { push: vi.fn() },
+  showActionSheet: vi.fn(),
 }));
 
 vi.mock('react-native', () => ({
@@ -42,17 +46,22 @@ vi.mock('lucide-react-native', () => {
 
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
 vi.mock('expo-haptics', () => ({ selectionAsync: vi.fn() }));
-vi.mock('expo-router', () => ({ router: { push: vi.fn() } }));
+vi.mock('expo-router', () => ({ router }));
 
 vi.mock('@tanstack/react-query', () => ({
   useQuery: () => queryState.current,
-  useMutation: () => mutationState,
+  useMutation: (options: { onSuccess?: (result: unknown) => Promise<void> }) => {
+    mutationOptions.current = options;
+    return mutationState;
+  },
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
 
 vi.mock('@/lib/auth', () => ({
-  useAuth: () => ({ user: { id: 'viewer-1' }, api: {} }),
+  useAuth: () => authState,
 }));
+
+vi.mock('@/lib/action-sheet', () => ({ showActionSheet }));
 
 vi.mock('@/components/generation-references', () => ({
   GenerationReferences: (props: MockProps) => React.createElement('generation-references', props),
@@ -171,6 +180,12 @@ describe('PostDetailsPage', () => {
   beforeEach(() => {
     bundleContentProps.mockClear();
     queryState.current = { data: undefined, isError: false, error: null, refetch: vi.fn() };
+    authState.user = { id: 'viewer-1' };
+    authState.updateCredits.mockClear();
+    mutationState.mutate.mockClear();
+    mutationOptions.current = null;
+    router.push.mockClear();
+    showActionSheet.mockClear();
   });
 
   it('shows no unlock button and no locked copy while the bundle is still loading', () => {
@@ -295,5 +310,92 @@ describe('PostDetailsPage', () => {
     expect(pressable(tree, 'Back to post')).toBeDefined();
     expect(textValues(tree)).not.toContain('Minnal Murali');
     expect(textValues(tree)).not.toContain("Creator's resources");
+  });
+});
+
+describe("unlocking the creator's resources", () => {
+  const lockedBundle = (priceUsdCents: number) => ({
+    data: { bundle: { viewerCanAccess: false, priceUsdCents, resources: null, lockedPreview: null } },
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+  const paidItem = () => {
+    const details = showcaseItem().details!;
+    return showcaseItem({
+      details: { ...details, unlock: { ...details.unlock!, accessMode: 'paid', priceLabel: '900 credits' } },
+    });
+  };
+
+  beforeEach(() => {
+    authState.user = { id: 'viewer-1' };
+    authState.updateCredits.mockClear();
+    mutationState.mutate.mockClear();
+    mutationOptions.current = null;
+    router.push.mockClear();
+    showActionSheet.mockClear();
+  });
+
+  it('asks before a paid unlock spends credits, and spends only on the confirmed action', () => {
+    queryState.current = lockedBundle(900);
+    const tree = render(page({ item: paidItem() }));
+
+    renderer.act(() => { pressable(tree, 'Unlock for 900 credits').props.onPress(); });
+    expect(mutationState.mutate).not.toHaveBeenCalled();
+    expect(showActionSheet).toHaveBeenCalledTimes(1);
+
+    // The marketplace's own words for the same spend.
+    const request = showActionSheet.mock.calls[0]?.[0] as {
+      title: string;
+      message: string;
+      actions: Array<{ label: string; onPress: () => void }>;
+    };
+    expect(request.title).toBe('Unlock this resource?');
+    expect(request.message).toBe('900 credits will come off your credit balance right away.');
+    expect(request.actions.map((action) => action.label)).toEqual(['Unlock for 900 credits']);
+
+    request.actions[0]!.onPress();
+    expect(mutationState.mutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes a free bundle in one tap', () => {
+    queryState.current = lockedBundle(0);
+    const tree = render(page());
+
+    renderer.act(() => { pressable(tree, 'Get resources — Free').props.onPress(); });
+    expect(showActionSheet).not.toHaveBeenCalled();
+    expect(mutationState.mutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies the balance a credit unlock leaves, and leaves it alone when none comes back', async () => {
+    queryState.current = lockedBundle(900);
+    render(page({ item: paidItem() }));
+
+    await mutationOptions.current?.onSuccess?.({ success: true, entitlement: 'post_resource_unlock', credits: 1100 });
+    expect(authState.updateCredits).toHaveBeenCalledWith(1100);
+
+    authState.updateCredits.mockClear();
+    await mutationOptions.current?.onSuccess?.({ success: true, alreadyProcessed: false });
+    expect(authState.updateCredits).not.toHaveBeenCalled();
+  });
+
+  it('sends a signed-out reader to sign in and back to the post', () => {
+    authState.user = null;
+    queryState.current = lockedBundle(900);
+    const tree = render(page({ item: paidItem(), authReturnTo: '/post/post-1' }));
+
+    renderer.act(() => { pressable(tree, 'Sign in to unlock').props.onPress(); });
+    expect(router.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/post/post-1' } });
+    expect(showActionSheet).not.toHaveBeenCalled();
+    expect(mutationState.mutate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the plain sign-in for a host that names no way back', () => {
+    authState.user = null;
+    queryState.current = lockedBundle(900);
+    const tree = render(page({ item: paidItem() }));
+
+    renderer.act(() => { pressable(tree, 'Sign in to unlock').props.onPress(); });
+    expect(router.push).toHaveBeenCalledWith('/auth');
   });
 });

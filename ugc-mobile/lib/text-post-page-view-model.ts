@@ -7,7 +7,6 @@ export interface TextPostPageContent {
   flairLabel: string;
   title: string;
   body: string;
-  commentLabel: string;
 }
 
 function normalize(value: string) {
@@ -25,7 +24,6 @@ function normalize(value: string) {
 export function buildTextPostPage(item: ImmersivePreviewItem, now = new Date()): TextPostPageContent {
   const title = item.title.trim();
   const body = item.displayText.trim();
-  const commentCount = Math.max(0, item.commentCount);
 
   return {
     handle: item.creatorLabel,
@@ -33,8 +31,5 @@ export function buildTextPostPage(item: ImmersivePreviewItem, now = new Date()):
     flairLabel: item.badge,
     title,
     body: normalize(body) === normalize(title) ? '' : body,
-    commentLabel: commentCount === 0
-      ? 'No comments yet'
-      : `${commentCount} ${commentCount === 1 ? 'comment' : 'comments'}`,
   };
 }

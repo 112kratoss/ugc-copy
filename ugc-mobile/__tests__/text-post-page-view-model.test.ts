@@ -52,10 +52,4 @@ describe('buildTextPostPage', () => {
 
     expect(page.body).toBe('');
   });
-
-  it('pluralises the comment label', () => {
-    expect(buildTextPostPage(textItem({ commentCount: 0 }), NOW).commentLabel).toBe('No comments yet');
-    expect(buildTextPostPage(textItem({ commentCount: 1 }), NOW).commentLabel).toBe('1 comment');
-    expect(buildTextPostPage(textItem({ commentCount: 12 }), NOW).commentLabel).toBe('12 comments');
-  });
 });
