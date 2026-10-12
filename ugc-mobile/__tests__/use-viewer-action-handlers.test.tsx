@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   showMessageDialog: vi.fn(),
   auth: {
     user: { id: 'viewer-1' } as { id: string } | null,
-    api: { reportPost: vi.fn(), reportUser: vi.fn(), blockUser: vi.fn() },
+    api: { reportPost: vi.fn(), reportUser: vi.fn(), blockUser: vi.fn(), saveShowcasePost: vi.fn() },
   },
   queryClient: { setQueryData: vi.fn(), setQueriesData: vi.fn(), invalidateQueries: vi.fn() },
 }));
@@ -32,6 +32,7 @@ vi.mock('@/lib/dialog', () => ({
 vi.mock('@/lib/haptics', () => ({ haptic: { error: vi.fn(), light: vi.fn(), select: vi.fn(), success: vi.fn() } }));
 vi.mock('@/lib/viewer-media-cache', () => ({ refreshViewerMediaCaches: vi.fn(async () => undefined) }));
 
+import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 import { useViewerActionHandlers, type ViewerActionCallbacks } from '@/lib/use-viewer-action-handlers';
 
 function postItem(overrides: Partial<ImmersivePreviewItem> = {}): ImmersivePreviewItem {
@@ -175,6 +176,59 @@ describe('Report content', () => {
       reason: 'spam',
       details: 'Reported from the mobile Showcase viewer.',
     });
+  });
+
+  it('hands the reported post to the screen once the report is filed, so the reel moves on', async () => {
+    const onReported = vi.fn();
+    const item = postItem();
+    mocks.auth.api.reportPost.mockResolvedValueOnce({ success: true });
+    mountHandlers(item, { onReported }).handleAction('report-content');
+
+    pickReason('Spam');
+    await vi.waitFor(() => expect(onReported).toHaveBeenCalledWith(item));
+    expect(mocks.showMessageDialog).toHaveBeenCalledWith(expect.objectContaining({ title: 'Report received' }));
+  });
+
+  it('keeps the post where it is when the report fails', async () => {
+    const onReported = vi.fn();
+    mocks.auth.api.reportPost.mockRejectedValueOnce(new Error('Network request failed'));
+    mountHandlers(postItem(), { onReported }).handleAction('report-content');
+
+    pickReason('Spam');
+    await vi.waitFor(() => expect(mocks.showErrorDialog).toHaveBeenCalledWith('Could not report content', expect.any(Error)));
+    expect(onReported).not.toHaveBeenCalled();
+  });
+});
+
+describe('Save from the menu', () => {
+  it("goes through the screen's own Save when it has one: no second request, no refresh of every feed", () => {
+    const onSave = vi.fn();
+    const item = postItem({ isSaved: false });
+    const handlers = mountHandlers(item, { onSave });
+
+    handlers.handleAction('save');
+    handlers.handleAction('unsave');
+
+    expect(onSave.mock.calls).toEqual([[item], [item]]);
+    expect(mocks.auth.api.saveShowcasePost).not.toHaveBeenCalled();
+    expect(refreshViewerMediaCaches).not.toHaveBeenCalled();
+  });
+
+  it('saves through the API where the screen has no Save of its own', async () => {
+    mocks.auth.api.saveShowcasePost.mockResolvedValueOnce({ success: true, isSaved: true, saveCount: 1 });
+    mountHandlers(postItem()).handleAction('save');
+
+    await vi.waitFor(() => expect(refreshViewerMediaCaches).toHaveBeenCalledTimes(1));
+    expect(mocks.auth.api.saveShowcasePost).toHaveBeenCalledWith('post-1', { shouldSave: true, sourceSurface: 'mobile-viewer-actions' });
+  });
+});
+
+describe('rows with nowhere to go', () => {
+  it('does nothing for the retired Open original post and Edit linked post rows', () => {
+    const handlers = mountHandlers(postItem({ linkedPostId: 'post-9' }));
+    handlers.handleAction('open-original');
+    handlers.handleAction('edit-linked');
+    expect(mocks.router.push).not.toHaveBeenCalled();
   });
 });
 

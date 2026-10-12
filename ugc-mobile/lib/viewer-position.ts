@@ -59,3 +59,28 @@ export function isDetailsPageCovering(
 export function settleViewerItem(position: ViewerPosition | null, item: ImmersivePreviewItem) {
   return position?.itemId === item.id ? position : initialViewerPosition(item);
 }
+
+/**
+ * Where the reel goes when posts leave it under the reader (Not interested,
+ * Hide, Report): the post on screen if it stays, else the first post after it
+ * that stays, else the nearest one before it. Chosen from the list as it was
+ * before the removal, which is the order the web's `removeAfterSafetyAction`
+ * keeps: pick the target, then remove. Resolving the position after the
+ * removal fell back to the post the reel was opened on, or the first post
+ * (audit 03-1).
+ */
+export function pickViewerItemAfterRemoval(
+  items: ImmersivePreviewItem[],
+  activeIndex: number,
+  isRemoved: (item: ImmersivePreviewItem) => boolean
+): ImmersivePreviewItem | null {
+  const active = items[activeIndex];
+  if (active && !isRemoved(active)) return active;
+  for (let index = activeIndex + 1; index < items.length; index += 1) {
+    if (!isRemoved(items[index])) return items[index];
+  }
+  for (let index = Math.min(activeIndex, items.length) - 1; index >= 0; index -= 1) {
+    if (!isRemoved(items[index])) return items[index];
+  }
+  return null;
+}

@@ -3,6 +3,7 @@
 (global as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 import React from 'react';
+import { Share } from 'react-native';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -335,6 +336,22 @@ describe('a written post', () => {
     renderScreen();
 
     expect(mocks.saveOptions.current?.authReturnTo).toBe('/post/post-1?source=profile-saved');
+  });
+
+  it('names this page in the link it shares, as the click it records does', async () => {
+    // Opened from Saved, the link used to say my-creations while the click said detail-page.
+    vi.mocked(Share.share).mockResolvedValue({ action: Share.sharedAction });
+    mocks.auth.api.shareShowcasePost.mockResolvedValue({ success: true });
+    mocks.params = { id: 'post-1', source: 'profile-saved' };
+    const tree = renderScreen();
+
+    const share = byType(tree, 'feed-card-action').find((node) => node.props.label === 'Share')!;
+    await renderer.act(async () => { (share.props.onPress as () => void)(); });
+
+    await vi.waitFor(() => expect(mocks.auth.api.shareShowcasePost).toHaveBeenCalledWith('post-1', { sourceSurface: 'detail-page' }));
+    expect(Share.share).toHaveBeenCalledWith(expect.objectContaining({
+      url: 'https://magicbooklet.test/showcase/post-1?s=detail-page',
+    }));
   });
 });
 

@@ -232,7 +232,8 @@ export default function PostScreen() {
 
   const shareItem = useCallback(async () => {
     if (!item) return;
-    const intent = getViewerShareIntent(item, env.siteUrl);
+    // The link names this page, as the click recorded below does.
+    const intent = getViewerShareIntent(item, env.siteUrl, 'detail-page');
     if (intent.kind === 'unavailable') return;
 
     if (intent.kind === 'publish') {

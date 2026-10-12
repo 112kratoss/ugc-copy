@@ -431,6 +431,61 @@ describe('ViewerActionSheet permanent delete', () => {
     );
   });
 
+  it("hands Save, a filed report and a signed-out reader's way back to the screen, as the native menu does", async () => {
+    const onSave = vi.fn();
+    const onReported = vi.fn();
+    const item = manualOwnerPostItem({
+      sourceType: 'showcase',
+      source: 'showcase-feed',
+      showcasePostId: 'post-123',
+      creatorId: 'creator-2',
+      creatorLabel: '@unsafe',
+      availableActions: ['save', 'share'],
+    });
+    // A new element each time, so an update renders the sheet again.
+    const sheet = () => (
+      <ViewerActionSheet
+        item={item}
+        authReturnTo="/viewer?source=showcase-feed&initialId=post-123"
+        onClose={vi.fn()}
+        onDetails={vi.fn()}
+        onRecreate={vi.fn()}
+        onReported={onReported}
+        onSave={onSave}
+        onShare={vi.fn()}
+        onSourceRefresh={vi.fn()}
+        visible
+      />
+    );
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(sheet());
+    });
+
+    renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Save').props.onPress());
+    expect(onSave).toHaveBeenCalledWith(item);
+    expect(authState.api.saveShowcasePost).not.toHaveBeenCalled();
+
+    authState.api.reportPost.mockResolvedValue({ success: true });
+    renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Report content').props.onPress());
+    const reasonButtons = alertState.alert.mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
+    renderer.act(() => reasonButtons.find((button) => button.text === 'Spam')?.onPress?.());
+    await vi.waitFor(() => expect(onReported).toHaveBeenCalledWith(item));
+
+    const signedIn = authState.user;
+    authState.user = null as unknown as typeof signedIn;
+    try {
+      renderer.act(() => tree!.update(sheet()));
+      renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Block user').props.onPress());
+      expect(routerState.push).toHaveBeenLastCalledWith({
+        pathname: '/auth',
+        params: { returnTo: '/viewer?source=showcase-feed&initialId=post-123' },
+      });
+    } finally {
+      authState.user = signedIn;
+    }
+  });
+
   it('submits offensive AI output from the generated-media viewer', async () => {
     authState.api.reportGeneration.mockResolvedValue({ success: true });
     let tree: renderer.ReactTestRenderer | undefined;

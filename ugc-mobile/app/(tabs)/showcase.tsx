@@ -41,20 +41,16 @@ import {
   type ShowcaseActivationEvent,
 } from '@/lib/showcase-feed-activation';
 import {
-  SHOWCASE_FEED_STALE_TIME_MS,
-  createShowcaseFeedQueryKey,
   createShowcaseFeedViewerQueryKey,
   createShowcasePostQueryKey,
   flattenShowcaseFeedPages,
-  getNextShowcaseFeedPageParam,
-  getShowcaseFeedPageParams,
   getShowcaseFeedSessionContext,
   normalizeShowcaseToolFilter,
   resolveMobileShowcaseFeedFilterId,
   type MobileShowcaseFeedFilterId,
   type ShowcaseFeedFilters,
-  type ShowcaseFeedPageParam,
 } from '@/lib/showcase-feed-query';
+import { serializeShowcaseFeedLane, showcaseFeedLaneQueryOptions } from '@/lib/showcase-feed-lane';
 import {
   SHOWCASE_ONSCREEN_VIEWABILITY,
   SHOWCASE_PLAYBACK_VIEWABILITY,
@@ -199,10 +195,12 @@ export default function ShowcaseScreen() {
     category: 'media',
     ...(activeTool ? { tool: activeTool } : {}),
   }), [activeFilter, activeTool]);
-  const queryKey = useMemo(
-    () => createShowcaseFeedQueryKey(queryFilters, user?.id),
-    [queryFilters, user?.id]
+  // The reel a tile opens reads and pages these very pages (`lane` below).
+  const laneQueryOptions = useMemo(
+    () => showcaseFeedLaneQueryOptions(api, queryFilters, user?.id),
+    [api, queryFilters, user?.id]
   );
+  const queryKey = laneQueryOptions.queryKey;
   const viewerFeedQueryKey = useMemo(
     () => createShowcaseFeedViewerQueryKey(user?.id),
     [user?.id]
@@ -380,16 +378,7 @@ export default function ShowcaseScreen() {
       onViewableItemsChanged: onQualifiedViewableItemsChanged,
     },
   ]);
-  const showcaseQuery = useInfiniteQuery({
-    queryKey,
-    initialPageParam: { offset: 0 } as ShowcaseFeedPageParam,
-    queryFn: ({ pageParam }) => api.getShowcaseFeed(getShowcaseFeedPageParams({
-      ...queryFilters,
-      ...pageParam,
-    })),
-    getNextPageParam: getNextShowcaseFeedPageParam,
-    staleTime: SHOWCASE_FEED_STALE_TIME_MS,
-  });
+  const showcaseQuery = useInfiniteQuery(laneQueryOptions);
   const feedSession = useMemo(
     () => getShowcaseFeedSessionContext(showcaseQuery.data?.pages),
     [showcaseQuery.data?.pages]
@@ -526,9 +515,12 @@ export default function ShowcaseScreen() {
       mediaOnly: true,
       feedSessionId: feedSession.feedSessionId,
       algorithmVersion: item.recommendation?.algorithmVersion ?? feedSession.algorithmVersion,
+      // The reel reads this grid's lane, its filters and tool, and pages on
+      // through it, rather than a For You session of its own.
+      lane: serializeShowcaseFeedLane(queryFilters),
       zoom,
     }) as never);
-  }, [queryClient, user?.id, recordFeedEvent, feedSession.feedSessionId, feedSession.algorithmVersion]);
+  }, [queryClient, user?.id, recordFeedEvent, feedSession.feedSessionId, feedSession.algorithmVersion, queryFilters]);
 
   const applyFeedFeedback = (item: ShowcaseFeedItem | null, eventType: 'not_interested' | 'hide_creator') => {
     if (!item) return;

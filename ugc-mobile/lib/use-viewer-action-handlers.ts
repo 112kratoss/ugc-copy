@@ -35,9 +35,17 @@ export interface ViewerActionCallbacks {
   onHideCreator?: () => void;
   onNotInterested?: () => void;
   onRecreate: () => void;
+  /**
+   * The screen's own Save, where it has one: the reel's is optimistic and
+   * tells the ranker. Without it the row saves through the API and refreshes
+   * every cache that shows the item.
+   */
+  onSave?: (item: ImmersivePreviewItem) => void;
   onShare: () => void;
   onDeleted?: (postId: string) => void;
   onBlocked?: (userId: string) => void;
+  /** A report about the post went through: the reel takes the post out and moves on, as the web's does. */
+  onReported?: (item: ImmersivePreviewItem) => void;
   onUnlockRemix?: () => void;
   onSourceRefresh: () => void;
   /**
@@ -73,9 +81,11 @@ export function useViewerActionHandlers({
   onHideCreator,
   onNotInterested,
   onRecreate,
+  onSave,
   onShare,
   onDeleted,
   onBlocked,
+  onReported,
   onUnlockRemix,
   onSourceRefresh,
   authReturnTo,
@@ -166,6 +176,10 @@ export function useViewerActionHandlers({
     };
 
     if (action === 'save' || action === 'unsave') {
+      if (onSave) {
+        onSave(item);
+        return;
+      }
       // A bookmark is reversible in place: no dialog, like the web.
       const shouldSave = action === 'save';
       void (async () => {
@@ -241,10 +255,6 @@ export function useViewerActionHandlers({
       router.push(immersiveViewerHref({ source: 'profile-posts', initialId: item.linkedPostId }) as never);
       return;
     }
-    if (action === 'edit-linked' && item.linkedPostId) {
-      router.push({ pathname: '/post/new', params: { postId: item.linkedPostId } } as never);
-      return;
-    }
     if (action === 'edit-linked-resources' && item.linkedPostId) {
       router.push({ pathname: '/post/new', params: { postId: item.linkedPostId, focus: 'resources' } } as never);
       return;
@@ -267,10 +277,6 @@ export function useViewerActionHandlers({
     }
     if (action === 'unlock-remix') {
       onUnlockRemix?.();
-      return;
-    }
-    if (action === 'open-original' && item.showcasePostId) {
-      router.push(immersiveViewerHref({ source: 'showcase-feed', initialId: item.showcasePostId }) as never);
       return;
     }
     if (action === 'comment') {
@@ -324,6 +330,7 @@ export function useViewerActionHandlers({
                   ...(reason.aboutRecipe && bundleId ? { bundleId } : {}),
                 });
                 haptic.success();
+                onReported?.(item);
                 showMessageDialog({
                   title: 'Report received',
                   message: 'Thank you. Our moderation team will review this content.',

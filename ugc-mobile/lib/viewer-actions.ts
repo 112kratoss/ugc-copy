@@ -138,14 +138,19 @@ export type ViewerShareIntent =
 
 export function getViewerShareIntent(
   item: ImmersivePreviewItem,
-  siteUrl: string
+  siteUrl: string,
+  /**
+   * The surface the share is made from, when it is not the item's source: the
+   * post page names itself, so the link says what the click it records says.
+   */
+  surface?: GenerationShareSourceSurface
 ): ViewerShareIntent {
   if (!item.canShare) {
     return { kind: 'unavailable' };
   }
 
   if (item.sharePath) {
-    const url = buildShareUrl(siteUrl, item.sharePath, getViewerShareSourceSurface(item.source));
+    const url = buildShareUrl(siteUrl, item.sharePath, surface ?? getViewerShareSourceSurface(item.source));
     return {
       kind: 'share',
       content: { title: item.title, message: `${item.title}\n${url}`, url },
@@ -364,14 +369,10 @@ export function getViewerActionLabel(action: string, sourceType?: ImmersivePrevi
       return 'Change visibility';
     case 'view-linked':
       return 'View linked post';
-    case 'edit-linked':
-      return 'Edit linked post';
     case 'edit-linked-resources':
       return 'Manage unlock';
     case 'change-linked-visibility':
       return 'Change visibility';
-    case 'open-original':
-      return 'Open original post';
     case 'view-details':
       return 'View details';
     case 'download':
@@ -456,7 +457,6 @@ export function getViewerActionGroupLabel(action: string) {
   if (
     action === 'publish'
     || action === 'view-linked'
-    || action === 'edit-linked'
     || action === 'edit-linked-resources'
     || action === 'change-linked-visibility'
   ) {

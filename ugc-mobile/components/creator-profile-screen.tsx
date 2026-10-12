@@ -311,7 +311,9 @@ export function CreatorProfileScreen({
     router.push(showcaseFeedItemOpenHref({
       item,
       source: 'creator-profile',
-      creatorUsername: data?.profile.username ?? username,
+      // The name this grid's pages are kept under, so the reel opens on them
+      // and on no other creator's (`['creator-profile', 'infinite', username]`).
+      creatorUsername: username,
       zoom,
     }) as never);
   };

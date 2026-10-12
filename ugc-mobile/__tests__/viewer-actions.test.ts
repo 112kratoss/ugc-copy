@@ -238,7 +238,6 @@ describe('immersive viewer actions', () => {
   it('groups creation-to-post actions separately from general media actions', () => {
     expect(getViewerActionGroupLabel('publish')).toBe('Creation to post');
     expect(getViewerActionGroupLabel('view-linked')).toBe('Creation to post');
-    expect(getViewerActionGroupLabel('edit-linked')).toBe('Creation to post');
     expect(getViewerActionGroupLabel('change-linked-visibility')).toBe('Creation to post');
     expect(getViewerActionGroupLabel('edit-post')).toBe('Your post');
     expect(getViewerActionGroupLabel('change-visibility')).toBe('Your post');
@@ -473,6 +472,21 @@ describe('viewer share intent', () => {
         message: 'Neon skyline\nhttps://magicbooklet.com/showcase/post-1?s=showcase-reel',
         url: 'https://magicbooklet.com/showcase/post-1?s=showcase-reel',
       },
+    });
+  });
+
+  it('names the surface it is shared from when that is not where the item came from', () => {
+    // The post page recorded its share click as detail-page while its link
+    // said showcase-reel (or my-creations from Saved and Profile).
+    const fromSaved = railItem({ source: 'profile-saved', sourceType: 'showcase', sharePath: '/showcase/post-1', title: 'Neon skyline' });
+    const intent = getViewerShareIntent(fromSaved, 'https://magicbooklet.com', 'detail-page');
+    expect(intent).toMatchObject({
+      kind: 'share',
+      content: { url: 'https://magicbooklet.com/showcase/post-1?s=detail-page' },
+    });
+    // Without one, the reel's source decides, as before.
+    expect(getViewerShareIntent(fromSaved, 'https://magicbooklet.com')).toMatchObject({
+      content: { url: 'https://magicbooklet.com/showcase/post-1?s=my-creations' },
     });
   });
 
