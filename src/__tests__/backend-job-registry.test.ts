@@ -87,6 +87,7 @@ describe('backend job registry', () => {
     expect(BACKEND_JOB_REGISTRY.map((job) => job.name).sort()).toEqual([
       'account-deletion-resweeps',
       'backend-alert-delivery',
+      'feed-embeddings',
       'feed-maintenance',
       'generation-completions',
       'generation-model-verification',
@@ -108,7 +109,10 @@ describe('backend job registry', () => {
         job.cadenceMinutes * job.maxMissedRunsBeforeDegraded,
       );
       expect(job.cadenceMinutes % BACKEND_JOB_SCHEDULER.cadenceMinutes).toBe(0);
-      expect(job.maxDurationSeconds).toBe(300);
+      // feed-embeddings bounds its own run well inside the scheduler's 300 s:
+      // a 60 s request budget, then clustering and the near-duplicate pass.
+      expect(job.maxDurationSeconds).toBe(job.name === 'feed-embeddings' ? 120 : 300);
+      expect(job.maxDurationSeconds).toBeLessThanOrEqual(BACKEND_JOB_SCHEDULER.maxDurationSeconds);
       expect(job.lockTtlSeconds).toBeGreaterThan(0);
       expect(job.lockTtlSeconds).toBeGreaterThanOrEqual(job.maxDurationSeconds);
       expect(job.noWorkSkipReason).toMatch(/\S/);
@@ -127,7 +131,9 @@ describe('backend job registry', () => {
     // its leased queue cannot sit for an hour after publish stopped doing work.
     // Showcase media revocations retry hourly (+24/day) inside the shared
     // scheduler invocation, so they add no Vercel cron invocation of their own.
-    expect(logicalDailyRuns).toBe(939);
+    // So does feed-embeddings every ten minutes (+144/day): logical runs, not
+    // Vercel invocations.
+    expect(logicalDailyRuns).toBe(1083);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBe(144);
     // The budget bounds real Vercel cron invocations, not logical job runs, so
     // it has to be measured across every entry now that F14 added two. Checking
@@ -153,18 +159,21 @@ describe('backend job registry', () => {
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:00:00.000Z')).map((job) => job.name)).toEqual([
       'account-deletion-resweeps',
       'backend-alert-delivery',
+      'feed-embeddings',
       'mobile-push-receipts',
       'workflow-run-steps',
     ]);
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:10:00.000Z')).map((job) => job.name)).toEqual([
       'account-deletion-resweeps',
       'backend-alert-delivery',
+      'feed-embeddings',
       'mobile-push-receipts',
       'workflow-run-steps',
     ]);
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:20:00.000Z')).map((job) => job.name)).toEqual([
       'account-deletion-resweeps',
       'backend-alert-delivery',
+      'feed-embeddings',
       'feed-maintenance',
       'mobile-push-receipts',
       'workflow-run-steps',
@@ -172,6 +181,7 @@ describe('backend job registry', () => {
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:40:00.000Z')).map((job) => job.name)).toEqual([
       'account-deletion-resweeps',
       'backend-alert-delivery',
+      'feed-embeddings',
       'mobile-push-receipts',
       'referral-reward-reconciliation',
       'workflow-run-steps',

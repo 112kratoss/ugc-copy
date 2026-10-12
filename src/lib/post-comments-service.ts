@@ -9,12 +9,17 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import {
   isUserRelationshipBlocked,
   loadBlockedCreatorIds,
   loadViewerBlockRelationships,
 } from '@/lib/moderation-service';
 import { getCreatorDisplayName } from '@/lib/profile';
+import {
+  parseFeedDeliveryIdField,
+  scheduleAuthoritativeFeedEvent,
+} from '@/lib/showcase-feed-events-service';
 
 export const POST_COMMENT_PAGE_SIZE = 20;
 export const POST_COMMENT_MAX_PAGE_SIZE = 50;
@@ -450,12 +455,20 @@ export async function createPostCommentForRoute({
   readBody,
   createAdminSupabase,
   checkRelationshipBlocked = isUserRelationshipBlocked,
+  runAfterResponse,
+  scheduleFeedEvent = scheduleAuthoritativeFeedEvent,
 }: {
   postId: string;
   authorUserId: string;
   readBody: () => Promise<unknown>;
   createAdminSupabase: () => SupabaseClient;
   checkRelationshipBlocked?: typeof isUserRelationshipBlocked;
+  /**
+   * The route passes one so the comment's feed event is written behind the
+   * answer; without it the event is written, bounded by its timeout, first.
+   */
+  runAfterResponse?: RunAfterResponse;
+  scheduleFeedEvent?: typeof scheduleAuthoritativeFeedEvent;
 }): Promise<
   PostCommentsRouteResult<{ success: true; comment: PostCommentItem; commentCount: number }>
 > {
@@ -471,7 +484,7 @@ export async function createPostCommentForRoute({
     return { ok: false, status: 400, body: { error: 'Request body must be valid JSON.' } };
   }
   const payload = raw && typeof raw === 'object' && !Array.isArray(raw)
-    ? (raw as { body?: unknown; parentId?: unknown })
+    ? (raw as { body?: unknown; parentId?: unknown; deliveryId?: unknown })
     : {};
 
   const body = normalizePostCommentBody(payload.body);
@@ -582,6 +595,18 @@ export async function createPostCommentForRoute({
     comment_count: number;
     parent_reply_count: number;
   };
+
+  // The comment is recorded. Its feed event (v4's `comment` signal, attributed
+  // to the feed delivery the client commented from when it sent one) is
+  // telemetry: it never fails or holds this answer, and is written once per
+  // commenter, post and delivery however many comments follow.
+  await scheduleFeedEvent(runAfterResponse, adminSupabase, {
+    eventType: 'comment',
+    viewerUserId: authorUserId,
+    postId: normalizedPostId,
+    deliveryId: parseFeedDeliveryIdField(payload.deliveryId),
+    occurredAt: created.created_at,
+  });
 
   const profiles = await loadCommentAuthors(adminSupabase, [authorUserId]);
 

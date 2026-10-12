@@ -8,6 +8,9 @@ import {
   FOR_YOU_RULES_V3_DIVERSITY_CONFIG,
   FOR_YOU_RULES_V3_RETRIEVAL_CONFIG,
   FOR_YOU_RULES_V3_WEIGHTS,
+  FOR_YOU_RULES_V4_DIVERSITY_CONFIG,
+  FOR_YOU_RULES_V4_RETRIEVAL_CONFIG,
+  FOR_YOU_RULES_V4_WEIGHTS,
   normalizeRankedFeedDiversityConfig,
   normalizeRankedFeedScoreWeights,
 } from '@/lib/showcase-feed-ranking';
@@ -102,8 +105,12 @@ function sqlValue(expression: string): unknown {
   throw new Error(`Unreadable value in the v3 seed: ${text}`);
 }
 
-/** Every `INSERT INTO public.feed_algorithm_versions` row, column by column. */
-function seededAlgorithmRows(sql: string) {
+/**
+ * Every `INSERT INTO public.feed_algorithm_versions` row, column by column.
+ * With `literalOnly`, a statement whose values are not literals (the v4
+ * migration's draft function inserts its parameters) is skipped, not read.
+ */
+function seededAlgorithmRows(sql: string, { literalOnly = false }: { literalOnly?: boolean } = {}) {
   const rows: Array<Record<string, unknown>> = [];
   const statement = 'INSERT INTO public.feed_algorithm_versions';
   for (let start = sql.indexOf(statement); start >= 0; start = sql.indexOf(statement, start + 1)) {
@@ -112,6 +119,14 @@ function seededAlgorithmRows(sql: string) {
     const valuesOpen = sql.indexOf('(', sql.indexOf('VALUES', columnsOpen));
     const values = topLevelItems(parenthesized(sql, valuesOpen));
     expect(values, 'one value per seeded column').toHaveLength(columns.length);
+    if (literalOnly) {
+      try {
+        rows.push(Object.fromEntries(columns.map((column, index) => [column, sqlValue(values[index])])));
+      } catch {
+        // Not a seed: an insert of variables inside a function body.
+      }
+      continue;
+    }
     rows.push(Object.fromEntries(columns.map((column, index) => [column, sqlValue(values[index])])));
   }
   return rows;
@@ -158,10 +173,22 @@ describe('for-you-rules v3: the seeded row equals the TypeScript exports', () =>
 
 describe('for-you-rules v3: every seeded key round-trips through its normalizer', () => {
   // toEqual in both directions: no key is clamped or dropped, and the
-  // normalizer reads nothing the seeded row leaves to a default.
+  // normalizer reads nothing the seeded row leaves to a default — apart from
+  // the keys v4 added after v3 was seeded, which only a v4 row sets (they
+  // round-trip in showcase-feed-ranking-v4.test.ts).
   it('reads every retrieval_config key at its seeded value', () => {
+    const v4Keys = new Set([
+      'semanticLimit',
+      'semanticMinSimilarity',
+      'tasteLookbackDays',
+      'tasteLimit',
+      'excludeNearDuplicates',
+      'excludeLabelledAccounts',
+    ]);
     const { visibilityThresholds, ...retrieval } = normalizeRetrievalConfig(FOR_YOU_RULES_V3_RETRIEVAL_CONFIG);
-    expect({ ...retrieval, ...visibilityThresholds })
+    const v3Retrieval = Object.fromEntries(Object.entries(retrieval).filter(([key]) => !v4Keys.has(key)));
+    expect(Object.keys(retrieval).filter((key) => v4Keys.has(key))).toHaveLength(v4Keys.size);
+    expect({ ...v3Retrieval, ...visibilityThresholds })
       .toEqual(camelCaseKeys(FOR_YOU_RULES_V3_RETRIEVAL_CONFIG));
   });
 
@@ -171,7 +198,57 @@ describe('for-you-rules v3: every seeded key round-trips through its normalizer'
   });
 
   it('reads every weight at its seeded value', () => {
-    expect(normalizeRankedFeedScoreWeights(FOR_YOU_RULES_V3_WEIGHTS))
-      .toEqual(camelCaseKeys(FOR_YOU_RULES_V3_WEIGHTS));
+    const { semanticSimilarity, ...weights } = normalizeRankedFeedScoreWeights(FOR_YOU_RULES_V3_WEIGHTS);
+    expect(weights).toEqual(camelCaseKeys(FOR_YOU_RULES_V3_WEIGHTS));
+    // v3 has no taste vector to weigh.
+    expect(semanticSimilarity).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v4: the seeded row (docs/plans/feed-algorithm-v4-industry-parity-2026-10-12.md
+// §2.10) and the FOR_YOU_RULES_V4_* exports must agree in the same way.
+// ---------------------------------------------------------------------------
+
+const v4MigrationName = fs.readdirSync(migrationsDirectory)
+  .find((name) => name.endsWith('_feed_ranking_v4_industry_parity.sql'));
+
+function seededV4Row() {
+  expect(v4MigrationName, 'the v4 migration is missing').toBeDefined();
+  const sql = withoutLineComments(
+    fs.readFileSync(path.join(migrationsDirectory, v4MigrationName as string), 'utf8'),
+  );
+  const rows = seededAlgorithmRows(sql, { literalOnly: true })
+    .filter((row) => row.algorithm_key === 'for-you-rules' && row.version === 4);
+  expect(rows, 'for-you-rules v4 is seeded exactly once').toHaveLength(1);
+  return rows[0];
+}
+
+describe('for-you-rules v4: the seeded row equals the TypeScript exports', () => {
+  const seeded = seededV4Row();
+
+  it('seeds v4 as shadow, so nothing serves it until an operator says so', () => {
+    expect(seeded.status).toBe('shadow');
+  });
+
+  it('seeds exactly FOR_YOU_RULES_V4_WEIGHTS', () => {
+    expect(seeded.weights).toEqual(FOR_YOU_RULES_V4_WEIGHTS);
+  });
+
+  it('seeds exactly FOR_YOU_RULES_V4_RETRIEVAL_CONFIG', () => {
+    expect(seeded.retrieval_config).toEqual(FOR_YOU_RULES_V4_RETRIEVAL_CONFIG);
+  });
+
+  it('seeds exactly FOR_YOU_RULES_V4_DIVERSITY_CONFIG', () => {
+    expect(seeded.diversity_config).toEqual(FOR_YOU_RULES_V4_DIVERSITY_CONFIG);
+  });
+
+  it('reads every seeded v4 key at its seeded value', () => {
+    const { visibilityThresholds, ...retrieval } = normalizeRetrievalConfig(seeded.retrieval_config as Record<string, unknown>);
+    expect({ ...retrieval, ...visibilityThresholds }).toEqual(camelCaseKeys(FOR_YOU_RULES_V4_RETRIEVAL_CONFIG));
+    expect(normalizeRankedFeedScoreWeights(seeded.weights as Record<string, unknown>))
+      .toEqual(camelCaseKeys(FOR_YOU_RULES_V4_WEIGHTS));
+    expect(normalizeRankedFeedDiversityConfig(seeded.diversity_config as Record<string, unknown>))
+      .toEqual(camelCaseKeys(FOR_YOU_RULES_V4_DIVERSITY_CONFIG));
   });
 });

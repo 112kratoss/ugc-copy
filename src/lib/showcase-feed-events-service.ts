@@ -1,7 +1,10 @@
 import 'server-only';
 
+import { createHash } from 'node:crypto';
+
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { logBackendWarning } from '@/lib/backend-logger';
 export { getFeedAnonymousKeyHash } from '@/lib/showcase-feed-identity';
 import type { ShowcaseFeedEventType } from '@/lib/showcase';
 
@@ -31,6 +34,9 @@ const POSTGRES_BIGINT_MAX = BigInt('9223372036854775807');
 const MAX_METADATA_BYTES = 4_096;
 const MAX_EVENT_AGE_MS = 24 * 60 * 60 * 1_000;
 const MAX_EVENT_FUTURE_MS = 5 * 60 * 1_000;
+// A client may never send these: the action that produces each is the only
+// writer (`recordAuthoritativeFeedEvent` below). `comment` is not even a
+// client type, so the parser already refuses it.
 const SERVER_AUTHORITATIVE_EVENT_TYPES = new Set<ShowcaseFeedEventType>([
   'follow',
   'remix_complete',
@@ -778,4 +784,361 @@ export async function recordShowcaseFeedEvents({
     body: { success: true, recorded, rejected },
     results,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Server-written events
+// ---------------------------------------------------------------------------
+
+/**
+ * The feed events no client may send, each written by the server action that
+ * makes it true: a comment created, a follow recorded, a remix finished, a
+ * purchase settled.
+ */
+export const AUTHORITATIVE_FEED_EVENT_TYPES = ['comment', 'follow', 'remix_complete', 'purchase'] as const;
+
+export type AuthoritativeFeedEventType = typeof AUTHORITATIVE_FEED_EVENT_TYPES[number];
+
+/**
+ * The longest a server-written event may hold the action it rides on. It is
+ * telemetry: past this the action answers without it.
+ */
+export const AUTHORITATIVE_FEED_EVENT_TIMEOUT_MS = 1_500;
+
+/** `feed_events.source_surface` for every server-written event. */
+export const AUTHORITATIVE_FEED_EVENT_SOURCE_SURFACE = 'server';
+
+/**
+ * Reads the optional `deliveryId` a client sends with an action taken from a
+ * feed card (`recommendation.deliveryId`, a bigint as a string). Anything
+ * malformed is null: a telemetry field never fails the action it rides on.
+ */
+export function parseFeedDeliveryIdField(value: unknown): string | null {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value > 0 ? String(value) : null;
+  }
+  return normalizeOptionalBigintIdentifier(typeof value === 'string' ? value.trim() : null) ?? null;
+}
+
+export type AuthoritativeFeedEventInput = {
+  eventType: AuthoritativeFeedEventType;
+  /** Who acted: the commenter, the follower, the remixer, the buyer. */
+  viewerUserId: string;
+  /**
+   * The post the action was taken on (for a remix, the original). May be left
+   * out when a `deliveryId` is given: the delivery's post is then the post.
+   */
+  postId?: string | null;
+  /**
+   * When set, the post must be this creator's or nothing is written: a follow
+   * is attributed only to a post of the creator who was followed.
+   */
+  expectedCreatorUserId?: string | null;
+  /**
+   * The delivery the client acted from (`recommendation.deliveryId`), when it
+   * sent one. Kept only when it is a delivery of this post to this viewer;
+   * anything else is dropped and the event is written without one.
+   */
+  deliveryId?: string | null;
+  occurredAt?: string | Date | null;
+  /**
+   * What makes this one action, so a retried action is written once. Default:
+   * the viewer, the post and the delivery — one comment or follow event per
+   * delivery, however many times the viewer acts from it.
+   */
+  actionKey?: string | null;
+  /**
+   * With no `deliveryId`: attribute the action to the delivery of the viewer's
+   * latest event of these types on the post within the window — the
+   * `remix_start` a finished remix began from, say.
+   */
+  inferDeliveryFrom?: { eventTypes: ShowcaseFeedEventType[]; withinHours: number } | null;
+  timeoutMs?: number;
+};
+
+export type AuthoritativeFeedEventResult =
+  | { status: 'recorded' | 'duplicate'; deliveryId: string | null }
+  | { status: 'skipped'; reason: 'invalid_input' | 'post_unavailable' | 'self_engagement' | 'creator_mismatch' }
+  | { status: 'failed'; reason: 'timeout' | 'error' };
+
+type AuthoritativeDelivery = {
+  deliveryId: string;
+  sessionId: string;
+  position: number | null;
+};
+
+const AUTHORITATIVE_FEED_EVENT_TYPE_SET: ReadonlySet<string> = new Set(AUTHORITATIVE_FEED_EVENT_TYPES);
+const CLIENT_EVENT_ID_MAX_LENGTH = 128;
+
+function authoritativeOccurredAt(value: AuthoritativeFeedEventInput['occurredAt'], nowMs: number) {
+  const parsed = value instanceof Date ? value.getTime() : typeof value === 'string' ? Date.parse(value) : Number.NaN;
+  // Never in the future: `feed_events_clock_skew_check` bounds it by receipt.
+  return new Date(Number.isFinite(parsed) ? Math.min(parsed, nowMs) : nowMs).toISOString();
+}
+
+function authoritativeClientEventId(eventType: AuthoritativeFeedEventType, key: string) {
+  const id = `srv:${eventType}:${key}`;
+  return id.length <= CLIENT_EVENT_ID_MAX_LENGTH
+    ? id
+    : `srv:${eventType}:${createHash('sha256').update(key).digest('hex')}`;
+}
+
+function errorCode(error: unknown) {
+  return error && typeof error === 'object' && 'code' in error ? (error as { code?: unknown }).code : undefined;
+}
+
+/**
+ * The delivery when it is one of this post, served to this viewer in a session
+ * that began before the action; otherwise null. A pruned session or item reads
+ * as no delivery.
+ */
+async function resolveAuthoritativeDelivery(
+  serviceClient: SupabaseClient,
+  { deliveryId, occurredAt, postId, viewerUserId }: {
+    deliveryId: string;
+    occurredAt: string;
+    postId: string;
+    viewerUserId: string;
+  },
+): Promise<AuthoritativeDelivery | null> {
+  const { data: item, error: itemError } = await serviceClient
+    .from('feed_session_items')
+    .select('id, session_id, post_id, position')
+    .eq('id', deliveryId)
+    .maybeSingle();
+  if (itemError || !item || String(item.post_id).toLowerCase() !== postId || !item.session_id) return null;
+
+  const { data: session, error: sessionError } = await serviceClient
+    .from('feed_sessions')
+    .select('id, viewer_user_id, created_at')
+    .eq('id', item.session_id)
+    .maybeSingle();
+  if (sessionError || !session || String(session.viewer_user_id).toLowerCase() !== viewerUserId) return null;
+  const createdAtMs = Date.parse(String(session.created_at));
+  if (!Number.isFinite(createdAtMs) || createdAtMs > Date.parse(occurredAt)) return null;
+
+  const position = Number(item.position);
+  return {
+    deliveryId,
+    sessionId: String(item.session_id),
+    position: Number.isInteger(position) && position >= 0 ? position : null,
+  };
+}
+
+/** The delivery of the viewer's latest event of these types on the post, in the window. */
+async function inferAuthoritativeDeliveryId(
+  serviceClient: SupabaseClient,
+  { eventTypes, occurredAt, postId, viewerUserId, withinHours }: {
+    eventTypes: ShowcaseFeedEventType[];
+    occurredAt: string;
+    postId: string;
+    viewerUserId: string;
+    withinHours: number;
+  },
+) {
+  if (eventTypes.length === 0 || !(withinHours > 0)) return null;
+  const since = new Date(Date.parse(occurredAt) - withinHours * 3_600_000).toISOString();
+  const { data, error } = await serviceClient
+    .from('feed_events')
+    .select('session_item_id')
+    .eq('viewer_user_id', viewerUserId)
+    .eq('post_id', postId)
+    .in('event_type', eventTypes)
+    .not('session_item_id', 'is', null)
+    .gte('occurred_at', since)
+    .order('occurred_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  return normalizeOptionalBigintIdentifier(String(data.session_item_id)) ?? null;
+}
+
+async function writeAuthoritativeFeedEvent(
+  serviceClient: SupabaseClient,
+  input: AuthoritativeFeedEventInput,
+): Promise<AuthoritativeFeedEventResult> {
+  const nowMs = Date.now();
+  if (
+    !AUTHORITATIVE_FEED_EVENT_TYPE_SET.has(input.eventType)
+    || typeof input.viewerUserId !== 'string'
+    || !UUID_IDENTIFIER_PATTERN.test(input.viewerUserId)
+  ) {
+    return { status: 'skipped', reason: 'invalid_input' };
+  }
+  const occurredAt = authoritativeOccurredAt(input.occurredAt, nowMs);
+  // A malformed client id is no delivery; the action itself still counts.
+  const requestedDeliveryId = parseFeedDeliveryIdField(input.deliveryId);
+
+  // Ids are compared as text below, and the database returns them lowercase.
+  const viewerUserId = input.viewerUserId.toLowerCase();
+  let postId = typeof input.postId === 'string' && UUID_IDENTIFIER_PATTERN.test(input.postId)
+    ? input.postId.toLowerCase()
+    : null;
+  if (!postId && requestedDeliveryId) {
+    const { data: item, error: itemError } = await serviceClient
+      .from('feed_session_items')
+      .select('post_id')
+      .eq('id', requestedDeliveryId)
+      .maybeSingle();
+    if (itemError) throw itemError;
+    postId = typeof item?.post_id === 'string' && UUID_IDENTIFIER_PATTERN.test(item.post_id)
+      ? item.post_id.toLowerCase()
+      : null;
+  }
+  if (!postId) return { status: 'skipped', reason: 'invalid_input' };
+
+  const { data: post, error: postError } = await serviceClient
+    .from('posts')
+    .select('id, user_id, visibility, archived_at')
+    .eq('id', postId)
+    .maybeSingle();
+  if (postError) throw postError;
+  const typedPost = post as FeedPostRow | null;
+  if (!typedPost || typedPost.visibility !== 'public' || typedPost.archived_at) {
+    return { status: 'skipped', reason: 'post_unavailable' };
+  }
+  const creatorUserId = String(typedPost.user_id).toLowerCase();
+  // A creator replying under their own post, or remixing it, says nothing
+  // about what the feed should show anyone.
+  if (creatorUserId === viewerUserId) {
+    return { status: 'skipped', reason: 'self_engagement' };
+  }
+  if (input.expectedCreatorUserId && creatorUserId !== input.expectedCreatorUserId.toLowerCase()) {
+    return { status: 'skipped', reason: 'creator_mismatch' };
+  }
+
+  const candidateDeliveryId = requestedDeliveryId ?? (input.inferDeliveryFrom
+    ? await inferAuthoritativeDeliveryId(serviceClient, {
+      ...input.inferDeliveryFrom,
+      occurredAt,
+      postId,
+      viewerUserId,
+    })
+    : null);
+  const delivery = candidateDeliveryId
+    ? await resolveAuthoritativeDelivery(serviceClient, {
+      deliveryId: candidateDeliveryId,
+      occurredAt,
+      postId,
+      viewerUserId,
+    })
+    : null;
+
+  const actionKey = typeof input.actionKey === 'string' && input.actionKey.trim()
+    ? input.actionKey.trim()
+    : `${viewerUserId}:${postId}:${delivery?.deliveryId ?? '-'}`;
+  const clientEventId = authoritativeClientEventId(input.eventType, actionKey);
+  const insert = (attached: AuthoritativeDelivery | null) => serviceClient.from('feed_events').insert({
+    client_event_id: clientEventId,
+    session_id: attached?.sessionId ?? null,
+    session_item_id: attached?.deliveryId ?? null,
+    viewer_user_id: viewerUserId,
+    anonymous_key_hash: null,
+    post_id: postId,
+    creator_user_id: typedPost.user_id,
+    event_type: input.eventType,
+    source_surface: AUTHORITATIVE_FEED_EVENT_SOURCE_SURFACE,
+    position: attached?.position ?? null,
+    duration_ms: null,
+    progress: null,
+    metadata: {},
+    occurred_at: occurredAt,
+  });
+
+  const { error } = await insert(delivery);
+  if (!error) return { status: 'recorded', deliveryId: delivery?.deliveryId ?? null };
+  if (!delivery) {
+    if (errorCode(error) === '23505') return { status: 'duplicate', deliveryId: null };
+    throw error;
+  }
+
+  // With a delivery a conflict is either this action written before (the
+  // client event id) or another action of the type already attributed to the
+  // delivery (one per delivery). Only the first is a duplicate; the second,
+  // like a delivery pruned since it was checked, is written without one.
+  if (errorCode(error) === '23505') {
+    const { data: existing, error: existingError } = await serviceClient
+      .from('feed_events')
+      .select('session_item_id')
+      .eq('client_event_id', clientEventId)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (existing) {
+      return { status: 'duplicate', deliveryId: existing.session_item_id ? String(existing.session_item_id) : null };
+    }
+  }
+  const { error: retryError } = await insert(null);
+  if (!retryError) return { status: 'recorded', deliveryId: null };
+  if (errorCode(retryError) === '23505') return { status: 'duplicate', deliveryId: null };
+  throw retryError;
+}
+
+/**
+ * Writes one server-authoritative feed event (`comment`, `follow`,
+ * `remix_complete`, `purchase`) on behalf of the action that makes it true.
+ *
+ * It bypasses the client allowlist, which refuses all four, and writes the row
+ * the way `recordShowcaseFeedEvent` does: a direct service-role insert, so the
+ * database's own triggers validate the delivery context and stamp the outcome
+ * on its delivery fact. The batch RPC refuses these types from any caller.
+ *
+ * Telemetry riding on a real action, so it can never fail or hold that action:
+ * it never throws, gives up after `timeoutMs`, and is written at most once per
+ * action — the client event id is derived from `actionKey`, so a retried
+ * action is a duplicate, not a second event.
+ */
+export async function recordAuthoritativeFeedEvent(
+  serviceClient: SupabaseClient,
+  input: AuthoritativeFeedEventInput,
+): Promise<AuthoritativeFeedEventResult> {
+  const timeoutMs = input.timeoutMs ?? AUTHORITATIVE_FEED_EVENT_TIMEOUT_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<AuthoritativeFeedEventResult>((resolve) => {
+    timer = setTimeout(() => resolve({ status: 'failed', reason: 'timeout' }), timeoutMs);
+  });
+  const write = writeAuthoritativeFeedEvent(serviceClient, input).catch((error: unknown) => {
+    logBackendWarning('authoritative_feed_event_failed', {
+      eventType: input.eventType,
+      postId: input.postId,
+      error,
+    });
+    return { status: 'failed', reason: 'error' } as const;
+  });
+
+  try {
+    const result = await Promise.race([write, timeout]);
+    if (result.status === 'failed' && result.reason === 'timeout') {
+      logBackendWarning('authoritative_feed_event_timed_out', {
+        eventType: input.eventType,
+        postId: input.postId,
+        timeoutMs,
+      });
+    }
+    return result;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Runs `recordAuthoritativeFeedEvent` once the caller has answered its request
+ * when the route hands over a scheduler (`after()`), so the action's answer
+ * never waits on it; without one, or when the scheduler refuses the task, it
+ * runs before this returns, bounded by its timeout.
+ */
+export async function scheduleAuthoritativeFeedEvent(
+  runAfterResponse: ((task: () => Promise<unknown>) => void) | undefined,
+  serviceClient: SupabaseClient,
+  input: AuthoritativeFeedEventInput,
+): Promise<void> {
+  const task = () => recordAuthoritativeFeedEvent(serviceClient, input);
+  if (runAfterResponse) {
+    try {
+      runAfterResponse(task);
+      return;
+    } catch (error) {
+      logBackendWarning('authoritative_feed_event_deferral_failed', { eventType: input.eventType, error });
+    }
+  }
+  await task();
 }

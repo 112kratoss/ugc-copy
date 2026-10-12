@@ -1622,6 +1622,35 @@ describe('mobile purchase notifications', () => {
   );
 
   it.each(settledPurchases)(
+    'writes the purchase feed event for $kind only when it is a post resource unlock, behind the answer',
+    async ({ authority, settlement }) => {
+      const history = createMobileNotificationHistory();
+      const { adminSupabase } = createSettledPurchaseClient({ status: 'completed', ...settlement }, history);
+      const recordPurchaseFeedEvent = vi.fn(async () => ({ status: 'recorded' as const, deliveryId: null }));
+      const deferred: Array<() => Promise<unknown>> = [];
+
+      await completeMobilePurchase({
+        adminSupabase,
+        userId,
+        authority,
+        provider: 'app_store',
+        transactionId: '1000000123456789',
+        invalidateMarketplaceResourceListCache: vi.fn(),
+        recordPurchaseFeedEvent,
+        runAfterResponse: (task) => { deferred.push(task); },
+      });
+
+      expect(recordPurchaseFeedEvent).not.toHaveBeenCalled();
+      await Promise.all(deferred.map((task) => task()));
+      if (authority.entitlementType === 'post_resource_unlock') {
+        expect(recordPurchaseFeedEvent).toHaveBeenCalledWith(adminSupabase, { buyerUserId: userId, postId: 'post-1' });
+      } else {
+        expect(recordPurchaseFeedEvent).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(settledPurchases)(
     'defers nothing for $kind that was already settled',
     async ({ authority, settlement, answer }) => {
       const history = createMobileNotificationHistory();

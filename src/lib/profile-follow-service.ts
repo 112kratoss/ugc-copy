@@ -12,6 +12,10 @@ import {
 import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
 import { notifyCreatorFollowed } from '@/lib/mobile-notifications';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
+import {
+  parseFeedDeliveryIdField,
+  scheduleAuthoritativeFeedEvent,
+} from '@/lib/showcase-feed-events-service';
 
 export type ProfileFollowServiceClient =
   Parameters<typeof enforceBackendRateLimit>[0]
@@ -53,6 +57,23 @@ function readFollowingIntent(value: unknown) {
       ? (value as { following: boolean }).following
       : null
     : null;
+}
+
+const FEED_POST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Where a follow from a feed card came from: the optional `postId` of the card
+ * and `deliveryId` of its delivery. Malformed values read as absent; they
+ * never fail the follow.
+ */
+function readFeedAttribution(value: unknown) {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as { postId?: unknown; deliveryId?: unknown }
+    : {};
+  const postId = typeof record.postId === 'string' && FEED_POST_ID_PATTERN.test(record.postId.trim())
+    ? record.postId.trim()
+    : null;
+  return { postId, deliveryId: parseFeedDeliveryIdField(record.deliveryId) };
 }
 
 function createRateLimitResult(error: BackendRateLimitError): ProfileFollowRouteResult {
@@ -148,9 +169,11 @@ export async function updateCreatorFollowForRoute({
   followerId,
   body,
   runAfterResponse,
+  scheduleFeedEvent = scheduleAuthoritativeFeedEvent,
 }: {
   adminSupabase: ProfileFollowClientInput;
   followerId: string;
+  /** `{ followingId, following, postId?, deliveryId? }`: the last two when followed from a feed card. */
   body: unknown;
   /**
    * Runs a task once the caller has answered its request. The route passes one
@@ -158,6 +181,7 @@ export async function updateCreatorFollowForRoute({
    * without it the notification is sent before this returns.
    */
   runAfterResponse?: RunAfterResponse;
+  scheduleFeedEvent?: typeof scheduleAuthoritativeFeedEvent;
 }): Promise<ProfileFollowRouteResult> {
   const followingId = readFollowingId(body);
   const following = readFollowingIntent(body);
@@ -227,6 +251,20 @@ export async function updateCreatorFollowForRoute({
         followingUserId: followingId,
         followerUsername,
       }));
+
+      // A follow from a feed card is a feed signal on that card's post. Only
+      // the request that inserted the follow writes it, behind the answer, and
+      // only to a post of the creator followed.
+      const attribution = readFeedAttribution(body);
+      if (attribution.postId || attribution.deliveryId) {
+        await scheduleFeedEvent(runAfterResponse, resolvedClient, {
+          eventType: 'follow',
+          viewerUserId: followerId,
+          postId: attribution.postId,
+          deliveryId: attribution.deliveryId,
+          expectedCreatorUserId: followingId,
+        });
+      }
     }
 
     return { ok: true, body: { following: true } };

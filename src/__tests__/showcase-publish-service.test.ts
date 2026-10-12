@@ -1230,6 +1230,82 @@ describe('publishGenerationToShowcaseForRoute', () => {
   });
 
 
+  describe('the feed v4 embedding hook', () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'A title',
+      description: null,
+      prompt: 'Original prompt',
+    };
+
+    function publish(
+      visibility: 'public' | 'unlisted' | 'private',
+      requestPostEmbedding: ShowcasePublishServiceDependencies['requestPostEmbedding'],
+    ) {
+      return publishGenerationToShowcaseForRoute({
+        adminSupabase: createAdminClientMock(generation).client,
+        body: { generationId: 'gen-1', visibility },
+        userId: 'user-1',
+        dependencies: {
+          ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+            outputUrl: mediaGeneration.outputUrl,
+            createdLocation: null,
+          })),
+          listSourceToolsCatalog: vi.fn(async () => [
+            { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+          ]),
+          getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+          publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
+            postId: 'post-1',
+            visibility,
+            bundleId: null,
+            bundleStatus: null,
+          })),
+          ensureGenerationPostCoverMedia: vi.fn(async () => ({ outcome: 'created' as const, error: null })),
+          requestPostEmbedding,
+        } satisfies Partial<ShowcasePublishServiceDependencies>,
+      });
+    }
+
+    it('asks for the embedding of a newly public post without waiting on it', async () => {
+      // A request that never answers: publishing must not wait for it.
+      const requestPostEmbedding = vi.fn(() => new Promise<void>(() => {}));
+
+      const result = await publish('public', requestPostEmbedding);
+
+      expect(result).toMatchObject({ ok: true, body: { postId: 'post-1', visibility: 'public' } });
+      await vi.waitFor(() => expect(requestPostEmbedding).toHaveBeenCalledWith('post-1'));
+      expect(requestPostEmbedding).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['unlisted', 'private'] as const)('asks for nothing when the post is %s', async (visibility) => {
+      const requestPostEmbedding = vi.fn(async () => undefined);
+
+      await expect(publish(visibility, requestPostEmbedding)).resolves.toMatchObject({ ok: true });
+      await Promise.resolve();
+      expect(requestPostEmbedding).not.toHaveBeenCalled();
+    });
+
+    it('never fails the publish when the request fails', async () => {
+      const requestPostEmbedding = vi.fn(async () => {
+        throw new Error('embed-post unreachable');
+      });
+
+      await expect(publish('public', requestPostEmbedding)).resolves.toMatchObject({ ok: true });
+      await vi.waitFor(() => expect(logBackendErrorMock).toHaveBeenCalledWith(
+        'failed_to_request_post_embedding',
+        expect.objectContaining({ error: expect.any(Error) }),
+      ));
+    });
+  });
+
   // The route's own suite caught this: a client that *throws* rather than
   // returning an error escaped the publish entirely and answered 500, for a
   // post that had already been written.

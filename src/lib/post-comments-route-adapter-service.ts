@@ -2,7 +2,7 @@ import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import {
@@ -11,6 +11,7 @@ import {
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import { getFeedNetworkKeyHash } from '@/lib/showcase-feed-identity';
 import {
   createPostCommentForRoute,
@@ -39,6 +40,7 @@ type PostCommentsRouteDependencies = {
   getFeedNetworkKeyHash?: typeof getFeedNetworkKeyHash;
   listPostCommentsForRoute?: typeof listPostCommentsForRoute;
   removePostCommentForRoute?: typeof removePostCommentForRoute;
+  runAfterResponse?: RunAfterResponse;
 };
 
 function resolveDependencies(dependencies: PostCommentsRouteDependencies | undefined) {
@@ -50,6 +52,7 @@ function resolveDependencies(dependencies: PostCommentsRouteDependencies | undef
     getFeedNetworkKeyHash: dependencies?.getFeedNetworkKeyHash ?? getFeedNetworkKeyHash,
     listPostCommentsForRoute: dependencies?.listPostCommentsForRoute ?? listPostCommentsForRoute,
     removePostCommentForRoute: dependencies?.removePostCommentForRoute ?? removePostCommentForRoute,
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
   };
 }
 
@@ -150,8 +153,12 @@ async function handlePostCommentsPOST(
     await dependencies.createPostCommentForRoute({
       postId,
       authorUserId,
+      // The body may carry `deliveryId`, the feed delivery the comment was
+      // written from; the service reads it with the comment itself.
       readBody: () => request.json(),
       createAdminSupabase: () => dependencies.createServiceClient(),
+      // The comment's feed event is written behind the answer.
+      runAfterResponse: dependencies.runAfterResponse,
     }),
   );
 }

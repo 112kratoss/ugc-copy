@@ -231,6 +231,101 @@ describe('v1 and v2 rank byte-for-byte as before v3', () => {
 });
 
 // ---------------------------------------------------------------------------
+// v3 parity: the v3 row must rank exactly as before v4. The same eighteen
+// candidates as v3-shaped RPC rows: creators a and d are followed, b, e, f and
+// g are cold, p05 was served and passed over, p11 is reported, and p18's
+// author exposure is unknown. The expected array was produced by the ranking
+// module as it stood at f06fb7b4, before v4, from this fixture — do not
+// regenerate it from the current code.
+// ---------------------------------------------------------------------------
+
+const V3_PARITY_SEED = 20261012;
+
+const V3_PARITY_COLUMNS: Record<string, Record<string, unknown>> = {
+  p01: { is_following: true, served_recently: false, author_rendered_30d: 400, post_rendered_30d: 90, post_meaningful_30d: 20, post_age_hours: 28, reports_7d: 0, sources: ['following', 'affinity'] },
+  p02: { is_following: true, served_recently: false, author_rendered_30d: 400, post_rendered_30d: 70, post_meaningful_30d: 9, post_age_hours: 52, reports_7d: 0, sources: ['following'] },
+  p03: { is_following: true, served_recently: true, author_rendered_30d: 400, post_rendered_30d: 150, post_meaningful_30d: 30, post_age_hours: 196, reports_7d: 0, sources: ['affinity', 'following'] },
+  p04: { is_following: true, served_recently: false, author_rendered_30d: 400, post_rendered_30d: 200, post_meaningful_30d: 25, post_age_hours: 316, reports_7d: 0, sources: ['trending', 'following'] },
+  p05: { is_following: false, served_recently: true, author_rendered_30d: 24, post_rendered_30d: 3, post_meaningful_30d: 0, post_age_hours: 6, reports_7d: 0, sources: ['fresh', 'cold'] },
+  p06: { is_following: false, served_recently: false, author_rendered_30d: 24, post_rendered_30d: 1, post_meaningful_30d: 1, post_age_hours: 11, reports_7d: 0, sources: ['exploration', 'cold'] },
+  p07: { is_following: false, served_recently: false, author_rendered_30d: 24, post_rendered_30d: 12, post_meaningful_30d: 2, post_age_hours: 146, reports_7d: 0, sources: ['semantic', 'cold'] },
+  p08: { is_following: false, served_recently: false, author_rendered_30d: 180, post_rendered_30d: 60, post_meaningful_30d: 12, post_age_hours: 170, reports_7d: 0, sources: ['affinity'] },
+  p09: { is_following: false, served_recently: false, author_rendered_30d: 180, post_rendered_30d: 40, post_meaningful_30d: 3, post_age_hours: 242, reports_7d: 0, sources: ['exploration'] },
+  p10: { is_following: true, served_recently: false, author_rendered_30d: 75, post_rendered_30d: 45, post_meaningful_30d: 9, post_age_hours: 98, reports_7d: 0, sources: ['trending', 'following'] },
+  p11: { is_following: false, served_recently: false, author_rendered_30d: 30, post_rendered_30d: 10, post_meaningful_30d: 0, post_age_hours: 16, reports_7d: 2, sources: ['fresh', 'cold'] },
+  p12: { is_following: false, served_recently: false, author_rendered_30d: 0, post_rendered_30d: 0, post_meaningful_30d: 0, post_age_hours: 74, reports_7d: 0, sources: ['mystery', 'cold'] },
+  p13: { is_following: false, served_recently: false, author_rendered_30d: 5, post_rendered_30d: 2, post_meaningful_30d: 1, post_age_hours: 3, reports_7d: 0, sources: ['exploration', 'cold'] },
+  p14: { is_following: true, served_recently: false, author_rendered_30d: 75, post_rendered_30d: 300, post_meaningful_30d: 40, post_age_hours: 386, reports_7d: 0, sources: ['following'] },
+  p17: { is_following: false, served_recently: false, author_rendered_30d: 30, post_rendered_30d: 8, post_meaningful_30d: 2, post_age_hours: 74, reports_7d: 0, sources: ['mystery'] },
+  p18: { is_following: false, served_recently: false, author_rendered_30d: null, post_rendered_30d: 5, post_meaningful_30d: 1, post_age_hours: 50, reports_7d: 0, sources: ['fresh'] },
+};
+
+const EXPECTED_V3: Array<[string, number]> = [
+  ['p01', 0.535],
+  ['p10', 0.4194],
+  ['p08', 0.3128999999999999],
+  ['p02', 0.290625],
+  ['p15', 0.20313152855066993],
+  ['p17', 0.195],
+  ['p18', 0.20250000000000007],
+  ['p07', 0.20100000000000007],
+  ['p04', 0.16843750000000002],
+  ['p13', 0.13409999999999997],
+  ['p06', 0.08109374999999999],
+  ['p11', 0.00006421396683673469],
+  ['p05', 0.037406249999999995],
+  ['p12', 0.195],
+  ['p16', 0.06537447966398917],
+  ['p14', 0.073675],
+  ['p09', 0.022425000000000007],
+  ['p03', 0.03420000000000001],
+];
+
+function rankV3ParityFixture(extraColumns: Record<string, unknown> = {}) {
+  const featureRows = PARITY_RPC_ROWS
+    .map((row) => normalizeRankedFeedFeatureRow({
+      ...row,
+      ...V3_PARITY_COLUMNS[row.post_id as string],
+      ...extraColumns,
+    }))
+    .filter((row): row is RankedFeedFeatureRow => Boolean(row));
+  return rankAndDiversifyShowcaseItems({
+    items: PARITY_ITEMS,
+    featureRows,
+    now: PARITY_NOW,
+    scoreWeights: normalizeRankedFeedScoreWeights(FOR_YOU_RULES_V3_WEIGHTS),
+    diversityConfig: normalizeRankedFeedDiversityConfig(FOR_YOU_RULES_V3_DIVERSITY_CONFIG),
+    seenPenalty: FOR_YOU_RULES_V3_RETRIEVAL_CONFIG.seen_penalty,
+    seed: V3_PARITY_SEED,
+  });
+}
+
+describe('v3 ranks byte-for-byte as before v4', () => {
+  it('reproduces the v3 order and every score', () => {
+    const ranked = rankV3ParityFixture().map((entry): [string, number] => [entry.item.id, entry.score]);
+    expect(ranked).toEqual(EXPECTED_V3);
+    expect(JSON.stringify(ranked)).toBe(JSON.stringify(EXPECTED_V3));
+  });
+
+  it('exercises every v3 adjustment, so the parity means something', () => {
+    const ranked = rankV3ParityFixture();
+    const byId = new Map(ranked.map((entry) => [entry.item.id, explainRankedFeedScore(entry)]));
+    expect(byId.get('p08')?.oonMultiplier).toBe(0.75);
+    expect(byId.get('p02')?.authorDecay).toEqual({ k: 1, multiplier: 0.625 });
+    expect(byId.get('p05')?.servedPenalty).toBe(0.5);
+    expect(byId.get('p03')?.seenPenalty).toBe(0.2);
+    expect(byId.get('p11')?.base).toBeLessThan(0);
+    expect(byId.get('p17')?.coldStart).toMatchObject({ picked: true, lifted: true });
+  });
+
+  it('ignores v4 columns on the rows while semantic_similarity carries no weight', () => {
+    const ranked = rankV3ParityFixture({ semantic_similarity: 0.9, taste_available: true })
+      .map((entry): [string, number] => [entry.item.id, entry.score]);
+    expect(JSON.stringify(ranked)).toBe(JSON.stringify(EXPECTED_V3));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
@@ -379,6 +474,8 @@ describe('v3 seeded row', () => {
       attentionSecondsNorm: 0.08,
       creatorQuality: 0.06,
       explorationUcb: 0.10,
+      // v4's key, absent from the v3 row, reads as 0.
+      semanticSimilarity: 0,
     });
   });
 });

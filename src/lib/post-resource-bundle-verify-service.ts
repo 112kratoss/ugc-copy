@@ -9,6 +9,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { invalidateMarketplaceResourceListCache as defaultInvalidateMarketplaceResourceListCache } from '@/lib/marketplace-resource-list-cache';
+import { recordPostResourceBundlePurchaseFeedEvent } from '@/lib/post-resource-bundle-order-service';
 import {
   createPendingPaymentResultBody,
   verifyRazorpayPaymentAgainstOrder,
@@ -67,6 +68,7 @@ export async function verifyPostResourceBundlePaymentForRoute({
   verifySignature = verifyRazorpayPaymentSignature,
   fetchPayment = defaultFetchRazorpayPayment,
   invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
+  recordPurchaseFeedEvent = recordPostResourceBundlePurchaseFeedEvent,
 }: {
   adminSupabase: SupabaseClient;
   buyerUserId: string;
@@ -76,6 +78,7 @@ export async function verifyPostResourceBundlePaymentForRoute({
   verifySignature?: typeof verifyRazorpayPaymentSignature;
   fetchPayment?: typeof defaultFetchRazorpayPayment;
   invalidateMarketplaceResourceListCache?: () => void;
+  recordPurchaseFeedEvent?: typeof recordPostResourceBundlePurchaseFeedEvent;
 }): Promise<PostResourceBundleVerifyRouteResult> {
   try {
     await enforceBackendRateLimit(adminSupabase, {
@@ -245,6 +248,9 @@ export async function verifyPostResourceBundlePaymentForRoute({
   }
 
   invalidateMarketplaceResourceListCache();
+  // The purchase is settled. Its feed event never fails this answer and holds
+  // it no longer than the event's short timeout.
+  await recordPurchaseFeedEvent(adminSupabase, { razorpayOrderId });
 
   return { ok: true, body: { success: true } };
 }

@@ -277,6 +277,33 @@ describe('createPostCommentRouteResponse', () => {
     });
   });
 
+  it('hands the service a scheduler, so the comment\'s feed event goes out behind the answer', async () => {
+    const runAfterResponse = vi.fn();
+    const createPostCommentForRoute = vi.fn(async ({ readBody }: { readBody: () => Promise<unknown> }) => {
+      // The body reaches the service whole, delivery id included.
+      await expect(readBody()).resolves.toEqual({ body: 'hello', deliveryId: '812' });
+      return { ok: false as const, status: 404 as const, body: { error: 'Post not found.' } };
+    });
+
+    await createPostCommentRouteResponse({
+      context: commentsContext(),
+      request: new Request(`http://localhost/api/showcase/posts/${POST_ID}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', authorization: 'Bearer token' },
+        body: JSON.stringify({ body: 'hello', deliveryId: '812' }),
+      }),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        createUserClient: () => createUserClient('author-1'),
+        createPostCommentForRoute,
+        runAfterResponse,
+      },
+    });
+
+    expect(createPostCommentForRoute).toHaveBeenCalledTimes(1);
+    expect(createPostCommentForRoute.mock.calls[0][0]).toMatchObject({ runAfterResponse });
+  });
+
   it('renders a rate limited create as a 429 with retry headers', async () => {
     const rateLimitError = new BackendRateLimitError({
       allowed: false,

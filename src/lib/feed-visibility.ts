@@ -7,8 +7,8 @@
  * - Rules run in a fixed order and the first drop wins, so every dropped post
  *   carries exactly one reason code.
  * - A post from a creator the viewer follows is judged at the `home` level;
- *   everything else at the stricter `recommendations` level, which adds the two
- *   negative-feedback rules.
+ *   everything else at the stricter `recommendations` level, which adds the
+ *   account-label rule and the two negative-feedback rules.
  * - Fail closed: when the viewer's relations could not be read (`null`), no
  *   post can be cleared, so every post drops as `not_evaluated`.
  * - NSFW drops at both levels. X lets followers see it behind a blur; For You
@@ -27,6 +27,7 @@ export type FeedVisibilityReason =
   | 'hidden_creator'
   | 'reported_by_viewer'
   | 'nsfw'
+  | 'labelled_account'
   | 'creator_negative_feedback'
   | 'post_negative_feedback'
   | 'not_evaluated';
@@ -48,6 +49,13 @@ export type FeedVisibilityCandidate = {
    * than the cold-start exposure threshold: there a single report crosses it.
    */
   creatorNegativeFeedbackRate: number | null;
+  /**
+   * The creator's active `account_labels` (`nsfw_account`,
+   * `negative_feedback_account`, `spam_account`). Any label keeps the post out
+   * of recommendations; a follower still sees it. Empty = no label, or labels
+   * were not read (only a v4 ranking reads them).
+   */
+  authorLabels: string[];
 };
 
 export type FeedViewerRelations = {
@@ -144,6 +152,14 @@ const FEED_VISIBILITY_RULES: readonly FeedVisibilityRule[] = [
     drops: (candidate, relations) => relations.reportedPostIds.has(candidate.postId),
   },
   { reason: 'nsfw', drops: (candidate) => candidate.isNsfw },
+  // Account-level safety (v4): a label propagated from the creator's content
+  // or negative rate. Before the rate rules, which judge the same creator by
+  // a single window.
+  {
+    reason: 'labelled_account',
+    level: 'recommendations',
+    drops: (candidate) => candidate.authorLabels.length > 0,
+  },
   {
     reason: 'creator_negative_feedback',
     level: 'recommendations',

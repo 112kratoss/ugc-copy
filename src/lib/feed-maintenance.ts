@@ -1,6 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendWarning } from '@/lib/backend-logger';
+import {
+  refreshAccountSafetyLabels,
+  type AccountSafetyLabelSummary,
+} from '@/lib/feed-safety-labels';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 const POST_STATS_REFRESH_LIMIT = 1000;
@@ -16,6 +20,12 @@ import {
   FEED_RETENTION_PRUNE_LIMIT,
   FEED_SESSION_RETENTION_DAYS,
 } from '@/lib/feed-retention-policy';
+
+/**
+ * Days of `feed_viewer_daily` recomputed per run: the same tail as the daily
+ * fact rollup, for the same reason — facts gain outcomes after the day ends.
+ */
+const FEED_VIEWER_DAILY_LOOKBACK_DAYS = FEED_FACT_DAILY_LOOKBACK_DAYS;
 
 type FeedRetentionSummary = {
   skipped: boolean;
@@ -39,6 +49,12 @@ export type FeedDailyRollupSummary = {
   retentionDays: number | null;
 };
 
+export type FeedViewerDailySummary = {
+  /** What `refresh_feed_viewer_daily` reported refreshing; null when it reports no count. */
+  rowsRefreshed: number | null;
+  lookbackDays: number;
+};
+
 export type FeedMaintenanceSummary = {
   asOf: string;
   postStatsRefreshed: number;
@@ -46,8 +62,23 @@ export type FeedMaintenanceSummary = {
   creatorStatsRefreshed: number;
   userInterestProfilesRefreshed: number;
   dailyRollup: FeedDailyRollupSummary;
+  /** v4: account labels renewed from content and creator stats. */
+  accountLabels: AccountSafetyLabelSummary;
+  /** v4: the viewer-grain daily rollup behind the scorecard. */
+  viewerDaily: FeedViewerDailySummary;
   retention: FeedRetentionSummary;
 };
+
+function viewerDailySummary(value: unknown): FeedViewerDailySummary {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+  const raw = typeof value === 'number' ? value : record?.rows_refreshed;
+  return {
+    rowsRefreshed: typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 ? raw : null,
+    lookbackDays: FEED_VIEWER_DAILY_LOOKBACK_DAYS,
+  };
+}
 
 function dailyRollupSummary(value: unknown): FeedDailyRollupSummary {
   const record = value && typeof value === 'object' && !Array.isArray(value)
@@ -99,12 +130,20 @@ function retentionSummary(value: unknown): FeedRetentionSummary {
  * Refreshes the bounded feed aggregates before deleting expired source telemetry.
  * The migration RPCs provide their own advisory locks; this service is additionally
  * wrapped by the shared backend-job lock at the scheduler boundary.
+ *
+ * v4 adds two phases, each isolated: the account safety labels (after creator
+ * stats, which they read) and the viewer-grain daily rollup (before the prune,
+ * like the fact rollup). A failure in either is held while every other phase
+ * still runs — a new phase must never starve the stats and the prune v1–v3
+ * depend on — and then fails the run with that phase's message, so job health
+ * still shows it.
  */
 export async function maintainFeedPersonalization(
   client: SupabaseClient,
   options: {
     now?: Date;
     invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
+    refreshAccountLabels?: typeof refreshAccountSafetyLabels;
   } = {},
 ): Promise<FeedMaintenanceSummary> {
   const now = options.now ?? new Date();
@@ -144,6 +183,19 @@ export async function maintainFeedPersonalization(
   }
   (options.invalidateFeedCache ?? invalidateShowcaseFeedCache)();
 
+  const deferredFailures: string[] = [];
+  let accountLabels: AccountSafetyLabelSummary = {
+    nsfwAccounts: 0,
+    negativeFeedbackAccounts: 0,
+    labelsUpserted: 0,
+    expiredDeleted: 0,
+  };
+  try {
+    accountLabels = await (options.refreshAccountLabels ?? refreshAccountSafetyLabels)(client, { now });
+  } catch (error) {
+    deferredFailures.push(errorMessage(error));
+  }
+
   const interestsResult = await client.rpc('refresh_user_interest_weights', {
     p_as_of: asOf,
     p_lookback_days: USER_INTEREST_LOOKBACK_DAYS,
@@ -168,6 +220,19 @@ export async function maintainFeedPersonalization(
     throw rpcError('refresh_feed_delivery_fact_daily', dailyRollupResult.error);
   }
 
+  // Before the prune, like the fact rollup: aggregate before deleting.
+  let viewerDaily = viewerDailySummary(null);
+  try {
+    const viewerDailyResult = await client.rpc('refresh_feed_viewer_daily', {
+      p_as_of: asOf,
+      p_days: FEED_VIEWER_DAILY_LOOKBACK_DAYS,
+    });
+    if (viewerDailyResult.error) throw rpcError('refresh_feed_viewer_daily', viewerDailyResult.error);
+    viewerDaily = viewerDailySummary(viewerDailyResult.data);
+  } catch (error) {
+    deferredFailures.push(errorMessage(error));
+  }
+
   const pruneResult = await client.rpc('prune_feed_personalization_data', {
     p_as_of: asOf,
     p_event_retention_days: FEED_EVENT_RETENTION_DAYS,
@@ -190,6 +255,10 @@ export async function maintainFeedPersonalization(
     });
   }
 
+  if (deferredFailures.length > 0) {
+    throw new Error(deferredFailures.join('; '));
+  }
+
   return {
     asOf,
     postStatsRefreshed,
@@ -206,6 +275,8 @@ export async function maintainFeedPersonalization(
       'refresh_user_interest_weights',
     ),
     dailyRollup: dailyRollupSummary(dailyRollupResult.data),
+    accountLabels,
+    viewerDaily,
     retention,
   };
 }

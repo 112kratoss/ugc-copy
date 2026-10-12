@@ -457,7 +457,7 @@ A queued copy still present a day after it was queued fails the job's run, which
 
 ## Durable Queue Graduation Decision
 
-Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `media-preview-repair`, `media-upload-reclaim`, `mobile-push-receipts`, `operational-data-retention`, `referral-reward-reconciliation`, `showcase-media-revocations`, and `workflow-run-steps`.
+Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-embeddings`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `media-preview-repair`, `media-upload-reclaim`, `mobile-push-receipts`, `operational-data-retention`, `referral-reward-reconciliation`, `showcase-media-revocations`, and `workflow-run-steps`.
 
 This is the cost-efficient production baseline for the current workload because the jobs are idempotent, lock-protected in Supabase, bounded by 300-second function limits, and tolerant of the current ten-minute or hourly cadence. The single `/api/cron/backend-jobs` scheduler keeps Vercel cron invocations at 144 per day while logical jobs can still run at their own cadence.
 

@@ -1,6 +1,7 @@
 export type BackendJobName =
   | 'account-deletion-resweeps'
   | 'backend-alert-delivery'
+  | 'feed-embeddings'
   | 'feed-maintenance'
   | 'generation-completions'
   | 'generation-model-verification'
@@ -219,6 +220,20 @@ export const BACKEND_JOB_REGISTRY = [
     lockTtlSeconds: 14 * 60,
     noWorkSkipReason: 'alert_delivery_not_configured',
     maxMissedRunsBeforeDegraded: 4,
+  }),
+  defineBackendJob({
+    // Feed v4 content understanding: new and edited posts are embedded by the
+    // `embed-post` Edge Function (the model runs there, not here), then
+    // clustered and checked for near-duplicates. Shared dispatch: the work is
+    // network-bound and bounded per run (200 posts, a 60 s request budget, at
+    // most 5,000 vectors clustered), so it cannot take the invocation down.
+    name: 'feed-embeddings',
+    route: '/api/cron/feed-embeddings',
+    schedule: '*/10 * * * *',
+    maxDurationSeconds: 120,
+    lockTtlSeconds: 600,
+    noWorkSkipReason: 'no_posts_pending_embedding',
+    maxMissedRunsBeforeDegraded: 3,
   }),
   defineBackendJob({
     name: 'feed-maintenance',

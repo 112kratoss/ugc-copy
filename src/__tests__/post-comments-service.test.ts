@@ -394,6 +394,92 @@ describe('post comments service', () => {
       });
     });
 
+    it('records the comment as a feed event, attributed to the delivery the client sent', async () => {
+      const { client } = createClient();
+      const runAfterResponse = vi.fn();
+      const scheduleFeedEvent = vi.fn(async () => undefined);
+
+      const result = await createPostCommentForRoute({
+        postId: POST_ID,
+        authorUserId: AUTHOR_ID,
+        readBody: async () => ({ body: 'from the feed', deliveryId: '812' }),
+        createAdminSupabase: () => client,
+        checkRelationshipBlocked: async () => false,
+        runAfterResponse,
+        scheduleFeedEvent,
+      });
+
+      expect(result).toMatchObject({ ok: true, status: 201 });
+      expect(scheduleFeedEvent).toHaveBeenCalledTimes(1);
+      expect(scheduleFeedEvent).toHaveBeenCalledWith(runAfterResponse, client, {
+        eventType: 'comment',
+        viewerUserId: AUTHOR_ID,
+        postId: POST_ID,
+        deliveryId: '812',
+        occurredAt: '2026-07-27T12:00:00.000Z',
+      });
+    });
+
+    it.each([
+      ['no delivery', {}],
+      ['a malformed delivery', { deliveryId: 'not-a-delivery' }],
+      ['a numeric zero', { deliveryId: 0 }],
+    ])('still posts the comment with %s, and records it without one', async (_label, extra) => {
+      const { client } = createClient();
+      const scheduleFeedEvent = vi.fn(async () => undefined);
+
+      const result = await createPostCommentForRoute({
+        postId: POST_ID,
+        authorUserId: AUTHOR_ID,
+        readBody: async () => ({ body: 'a comment', ...extra }),
+        createAdminSupabase: () => client,
+        checkRelationshipBlocked: async () => false,
+        scheduleFeedEvent,
+      });
+
+      expect(result).toMatchObject({ ok: true, status: 201 });
+      expect(scheduleFeedEvent).toHaveBeenCalledWith(undefined, client, expect.objectContaining({ deliveryId: null }));
+    });
+
+    it('writes no feed event for a comment that was refused', async () => {
+      const scheduleFeedEvent = vi.fn(async () => undefined);
+      const empty = createClient();
+      await createPostCommentForRoute({
+        postId: POST_ID,
+        authorUserId: AUTHOR_ID,
+        readBody: async () => ({ body: '  ', deliveryId: '812' }),
+        createAdminSupabase: () => empty.client,
+        checkRelationshipBlocked: async () => false,
+        scheduleFeedEvent,
+      });
+      const blocked = createClient();
+      await createPostCommentForRoute({
+        postId: POST_ID,
+        authorUserId: AUTHOR_ID,
+        readBody: async () => ({ body: 'hello', deliveryId: '812' }),
+        createAdminSupabase: () => blocked.client,
+        checkRelationshipBlocked: async () => true,
+        scheduleFeedEvent,
+      });
+
+      expect(scheduleFeedEvent).not.toHaveBeenCalled();
+    });
+
+    it('never fails the comment when its feed event cannot be written', async () => {
+      // The real writer, against a client with no feed_events table at all.
+      const { client } = createClient();
+
+      const result = await createPostCommentForRoute({
+        postId: POST_ID,
+        authorUserId: AUTHOR_ID,
+        readBody: async () => ({ body: 'still posted', deliveryId: '812' }),
+        createAdminSupabase: () => client,
+        checkRelationshipBlocked: async () => false,
+      });
+
+      expect(result).toMatchObject({ ok: true, status: 201, body: { commentCount: 3 } });
+    });
+
     it('rejects an empty comment before touching the database', async () => {
       const { client, state } = createClient();
 

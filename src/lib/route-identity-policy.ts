@@ -224,6 +224,7 @@ const SERVICE_ROUTES = [
   '/api/cron/account-deletion-resweeps',
   '/api/cron/backend-alert-delivery',
   '/api/cron/backend-jobs',
+  '/api/cron/feed-embeddings',
   '/api/cron/feed-maintenance',
   '/api/cron/generation-completions',
   '/api/cron/generation-model-verification',
