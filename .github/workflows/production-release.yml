@@ -151,11 +151,14 @@ jobs:
         shell: bash
         run: node .github/scripts/apply-supabase-migrations.mjs
 
-      - name: Deploy the generation webhook edge function
+      - name: Deploy the edge functions
         shell: bash
         run: |
           set -euo pipefail
           supabase functions deploy kie-webhook \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --use-api
+          supabase functions deploy embed-post \
             --project-ref "${SUPABASE_PROJECT_REF}" \
             --use-api
 

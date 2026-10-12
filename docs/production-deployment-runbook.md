@@ -187,7 +187,7 @@ This probe does not replace the provider-dashboard gate. After it passes, send t
 2. Commit and push the reviewed code to `main` once.
 3. `Quality` replays all migrations, runs database behavior tests, and verifies the web, E2E, and mobile gates.
 4. A successful `Quality` run triggers `Production release` for its exact SHA.
-5. The release workflow refuses stale SHAs, previews and applies Supabase migrations, and deploys `kie-webhook`.
+5. The release workflow refuses stale SHAs, previews and applies Supabase migrations, and deploys both edge functions (`kie-webhook`, `embed-post`).
 6. It creates a production-configured Vercel deployment with `--skip-domain` and `--force`, then verifies public and protected health plus `/api/app-version` and checks that `buildId` equals the quality-verified SHA. `--force` builds without Vercel's build cache: a restored cache once shipped #151's route-only stylesheet without the new `/models` classes, which a fresh build of the same commit had.
 7. It re-checks that `main` has not advanced, promotes the staged deployment, and verifies the production domain serves the same SHA.
    Protected health must identify that exact SHA and report `ok`. The staged
