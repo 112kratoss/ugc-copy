@@ -4,6 +4,8 @@ import { notFound, redirect } from 'next/navigation';
 import { after } from 'next/server';
 
 import { JsonLd } from '@/components/JsonLd';
+import { logBackendError } from '@/lib/backend-logger';
+import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { recordPostShareEvent } from '@/lib/post-share-events';
 import {
   getPostReferenceForShowcaseId,
@@ -29,6 +31,7 @@ import {
   isGenerationShareSourceSurface,
   type GenerationShareSourceSurface,
 } from '@/lib/share';
+import { createServiceClient } from '@/lib/server-helpers';
 import { getServerAuthState } from '@/lib/supabase-server';
 import ShowcaseDetailBody from './ShowcaseDetailBody';
 
@@ -138,6 +141,29 @@ function getShareVisitSurface(
   return isGenerationShareSourceSurface(value) ? value : 'detail-page';
 }
 
+/**
+ * A block either way hides the post, as the app's by-id read hides it
+ * (`attachViewerStateToFeed`) and as blocking promises ("You will stop seeing
+ * their posts"). It fails closed like that read: a relationship that could not
+ * be checked is treated as a block, never as clear.
+ */
+async function isBlockedBetween(viewerUserId: string | null, creatorId: string | null): Promise<boolean> {
+  if (!viewerUserId || !creatorId || creatorId === viewerUserId) {
+    return false;
+  }
+
+  try {
+    return await isUserRelationshipBlocked({
+      adminSupabase: createServiceClient(),
+      firstUserId: viewerUserId,
+      secondUserId: creatorId,
+    });
+  } catch (error) {
+    logBackendError('failed_to_verify_block_state_for_post_page', { error });
+    return true;
+  }
+}
+
 export async function generateMetadata({ params }: ShowcaseDetailPageProps): Promise<Metadata> {
   const { id } = await params;
   const reference = await getPostReferenceForShowcaseId(id);
@@ -203,12 +229,17 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
 
   // Independent of each other, so pay for one round trip rather than two.
   const [auth, headerStore] = await Promise.all([getServerAuthState(), headers()]);
+  const viewerUserId = auth.session?.user?.id ?? null;
   const detail = await getPublicPostDetail(reference.id, {
-    viewerUserId: auth.session?.user?.id ?? null,
+    viewerUserId,
     countryCode: headerStore.get('x-vercel-ip-country'),
   });
 
   if (!detail) {
+    notFound();
+  }
+
+  if (await isBlockedBetween(viewerUserId, detail.creator.id)) {
     notFound();
   }
 
@@ -239,8 +270,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
       ) : null}
       <ShowcaseDetailBody
         detail={detail}
-        viewerUserId={auth.session?.user?.id ?? null}
-        accessToken={auth.session?.access_token ?? null}
+        viewerUserId={viewerUserId}
         returnContext={returnContext}
       />
     </>

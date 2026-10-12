@@ -57,11 +57,12 @@ async function postModerationRequest(path: string, accessToken: string, body?: u
 
 /**
  * Where the action was asked for: the feed card, Explore's tile, Explore's
- * reel, a creator's page (its own menu and the reel opened from it), or the
- * reel opened from the viewer's saved posts. The moderation team reads it in a
- * report's note, as it reads the app's ("Reported from the mobile home feed.").
+ * reel, a creator's page (its own menu and the reel opened from it), the reel
+ * opened from the viewer's saved posts, or a post's own page. The moderation
+ * team reads it in a report's note, as it reads the app's ("Reported from the
+ * mobile home feed.").
  */
-export type SafetySurface = 'feed' | 'explore' | 'reel' | 'creator-page' | 'saved';
+export type SafetySurface = 'feed' | 'explore' | 'reel' | 'creator-page' | 'saved' | 'post-page';
 
 const POST_REPORT_NOTES: Record<SafetySurface, string> = {
   feed: 'Reported from the web home feed.',
@@ -69,6 +70,7 @@ const POST_REPORT_NOTES: Record<SafetySurface, string> = {
   reel: 'Reported from the web reel.',
   'creator-page': 'Reported from a creator page on the web.',
   saved: 'Reported from saved posts on the web profile.',
+  'post-page': 'Reported from a post page on the web.',
 };
 
 /** The post goes to the moderation team; the same reason and note shape the app sends. */
@@ -91,7 +93,9 @@ export function reportPostContent({
  * How each surface files a creator. The report endpoint accepts a short list
  * of surfaces (`REPORT_SOURCE_SURFACES`): `showcase` is what the app's Home
  * sends too, a reel names itself as the app's reel does, and a creator's page
- * files what the app's creator screen files, reason and note included.
+ * files what the app's creator screen files, reason and note included. The
+ * list has no post page, so that one files as the feed does and says where in
+ * its note.
  */
 const CREATOR_REPORTS: Record<SafetySurface, {
   reason: 'harassment' | 'unsafe_content';
@@ -107,6 +111,11 @@ const CREATOR_REPORTS: Record<SafetySurface, {
     details: "Reported from the creator's page on the web.",
   },
   saved: { reason: 'harassment', sourceSurface: 'showcase-reel' },
+  'post-page': {
+    reason: 'harassment',
+    sourceSurface: 'showcase',
+    details: 'Reported from a post page on the web.',
+  },
 };
 
 /** The creator goes to the moderation team, filed under the surface it was asked on. */

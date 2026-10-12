@@ -1,12 +1,38 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { EyeOff } from 'lucide-react';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import type { PublicPostDetail } from '@/lib/public-posts';
 
-export default function NsfwPostReveal({ postId }: { postId: string }) {
+const NsfwRevealContext = createContext<boolean | null>(null);
+
+/**
+ * Whether the post this sits under is revealed; `null` outside a gate, where
+ * nothing is hidden. The post page's engagement row reads it, so its link to
+ * the comments comes and goes with the thread it points at.
+ */
+export function useNsfwPostRevealed(): boolean | null {
+  return useContext(NsfwRevealContext);
+}
+
+/**
+ * Drawn where an NSFW post's media and writing go: it gates the content, not
+ * the page, so the byline, Report and Block, save and share stay reachable.
+ * `children` (the page's own actions) stay under it in both states;
+ * `afterReveal` (the conversation) is hidden with the post and shown under
+ * them once it is revealed.
+ */
+export default function NsfwPostReveal({
+  postId,
+  children,
+  afterReveal,
+}: {
+  postId: string;
+  children?: ReactNode;
+  afterReveal?: ReactNode;
+}) {
   const [detail, setDetail] = useState<PublicPostDetail | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [enabled, setEnabled] = useState(false);
@@ -58,21 +84,27 @@ export default function NsfwPostReveal({ postId }: { postId: string }) {
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Please retry.'); }
     finally { setBusy(false); }
   }
-  return <section className="mx-auto max-w-3xl rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 text-center">
-    <span className="inline-flex items-center gap-2 rounded-full border border-[var(--ui-border-default)] px-3 py-1 text-sm font-semibold"><EyeOff size={16} aria-hidden />NSFW · 18+</span>
-    {detail ? <div className="mt-5 space-y-5 text-left">
-      <h1 className="text-2xl font-semibold">{detail.title}</h1>
-      {detail.body ? <p className="whitespace-pre-wrap">{detail.body}</p> : null}
-      {detail.mediaItems.length ? <ShowcaseMediaCarousel mediaItems={detail.mediaItems} title={detail.title} /> : null}
-      <button type="button" className="min-h-11 underline" onClick={() => setDetail(null)}>Hide this post</button>
-    </div> : <>
-      <h1 className="mt-5 text-2xl font-semibold">Mature content</h1>
-      <p className="mt-3 text-sm text-[var(--ui-text-secondary)]">The creator marked this post NSFW. Its media and text stay hidden until you choose to reveal them.</p>
-      {!enabled ? <label className="mt-5 flex min-h-11 cursor-pointer items-center justify-center gap-3 text-sm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />I am 18 or older and want to view mature content.</label> : null}
-      <button type="button" disabled={busy || (!enabled && !confirmed)} onClick={() => void reveal()} className="mt-5 min-h-11 rounded-xl bg-[var(--ui-text-primary)] px-5 py-3 text-sm font-semibold text-[var(--ui-surface-1)] disabled:opacity-50">{busy ? 'Loading…' : 'Reveal post'}</button>
-      {!enabled ? <p className="mt-3 text-sm"><Link href={`/login?returnUrl=${encodeURIComponent(`/showcase/${postId}`)}`} className="underline">Sign in</Link> to manage your mature-content preference.</p> : null}
-    </>}
-    {error ? <p role="alert" className="mt-4 text-sm">{error}</p> : null}
-    {enabled ? <button type="button" onClick={() => void disable()} disabled={busy} className="mt-5 min-h-11 text-sm underline">Turn off mature content</button> : null}
-  </section>;
+  return <>
+    <section className="w-full rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 text-center">
+      <span className="inline-flex items-center gap-2 rounded-full border border-[var(--ui-border-default)] px-3 py-1 text-sm font-semibold"><EyeOff size={16} aria-hidden />NSFW · 18+</span>
+      {detail ? <div className="mt-5 space-y-5 text-left">
+        <h1 className="text-2xl font-semibold">{detail.title}</h1>
+        {detail.body ? <p className="whitespace-pre-wrap">{detail.body}</p> : null}
+        {detail.mediaItems.length ? <ShowcaseMediaCarousel mediaItems={detail.mediaItems} title={detail.title} /> : null}
+        <button type="button" className="min-h-11 underline" onClick={() => setDetail(null)}>Hide this post</button>
+      </div> : <>
+        <h1 className="mt-5 text-2xl font-semibold">Mature content</h1>
+        <p className="mt-3 text-sm text-[var(--ui-text-secondary)]">The creator marked this post NSFW. Its media and text stay hidden until you choose to reveal them.</p>
+        {!enabled ? <label className="mt-5 flex min-h-11 cursor-pointer items-center justify-center gap-3 text-sm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />I am 18 or older and want to view mature content.</label> : null}
+        <button type="button" disabled={busy || (!enabled && !confirmed)} onClick={() => void reveal()} className="mt-5 min-h-11 rounded-xl bg-[var(--ui-text-primary)] px-5 py-3 text-sm font-semibold text-[var(--ui-surface-1)] disabled:opacity-50">{busy ? 'Loading…' : 'Reveal post'}</button>
+        {!enabled ? <p className="mt-3 text-sm"><Link href={`/login?returnUrl=${encodeURIComponent(`/showcase/${postId}`)}`} className="underline">Sign in</Link> to manage your mature-content preference.</p> : null}
+      </>}
+      {error ? <p role="alert" className="mt-4 text-sm">{error}</p> : null}
+      {enabled ? <button type="button" onClick={() => void disable()} disabled={busy} className="mt-5 min-h-11 text-sm underline">Turn off mature content</button> : null}
+    </section>
+    <NsfwRevealContext.Provider value={detail !== null}>
+      {children}
+      {detail ? afterReveal : null}
+    </NsfwRevealContext.Provider>
+  </>;
 }

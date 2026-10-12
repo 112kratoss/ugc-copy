@@ -3,18 +3,17 @@ import Link from 'next/link';
 import { BookText, ShoppingBag } from 'lucide-react';
 
 import PostCommentAvatar from '@/components/PostCommentAvatar';
-import PostComments from '@/components/PostComments';
 import { formatRelativeTime, getPostFeedTitle, type PostPreviewKind } from '@/lib/post-feed-presentation';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { getPostResourceKindLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
 import { getPublicPostMetaDescription, type PublicPostDetail } from '@/lib/public-posts';
 import type { ShowcaseReturnContext } from '@/lib/share';
-import { isGenerationRecipeAssetId } from '@/lib/showcase';
 
 import PostResourceBundlePanel from './PostResourceBundlePanel';
 import ReportPostButton from './ReportPostButton';
 import ShowcaseDetailActions from './ShowcaseDetailActions';
 import ShowcaseDetailBackLink from './ShowcaseDetailBackLink';
+import { ShowcaseDetailCommentCountProvider, ShowcaseDetailComments } from './ShowcaseDetailCommentCount';
 import ShowcaseDetailEngagementRow from './ShowcaseDetailEngagementRow';
 
 /**
@@ -69,17 +68,18 @@ function getPostTypeLabel({
 export default function ShowcaseDetailBody({
   detail,
   viewerUserId,
-  accessToken,
   returnContext,
 }: {
   detail: PublicPostDetail;
   viewerUserId: string | null;
-  accessToken: string | null;
   returnContext?: ShowcaseReturnContext;
 }) {
-  if (detail.isNsfw && !detail.nsfwRevealed) return <div className="px-4 py-12"><NsfwPostReveal key={detail.id} postId={detail.id} /></div>;
+  // The server never reveals, so an NSFW post arrives as its cover: the
+  // creator, counts and visibility are real, the content is a placeholder. The
+  // gate takes the place of the content only; the byline, the rail (Report,
+  // Block, Owner tools) and the engagement row stay, as the app keeps them.
+  const isNsfwCovered = Boolean(detail.isNsfw && !detail.nsfwRevealed);
   const bundle = detail.resourceBundle;
-  const isPublicRecipeBundle = Boolean(bundle && isGenerationRecipeAssetId(bundle.id));
   const previewKinds = bundle?.lockedPreview?.resourceKinds ?? bundle?.resourceKinds ?? [];
   const previewKindSummary = formatResourceKinds(previewKinds);
   const lockedViewer = Boolean(bundle && !bundle.viewerCanAccess && !bundle.viewerIsOwner);
@@ -150,7 +150,6 @@ export default function ShowcaseDetailBody({
       priceUsdCents={bundle.priceUsdCents}
       priceNote={bundle.priceQuote.note}
       isFree={bundle.accessMode === 'free'}
-      isPublic={isPublicRecipeBundle}
       viewerCanAccess={bundle.viewerCanAccess}
       viewerIsOwner={bundle.viewerIsOwner}
       resourceKinds={bundle.resourceKinds}
@@ -210,13 +209,28 @@ export default function ShowcaseDetailBody({
       data-testid="canonical-post-comments"
       className="mt-8 w-full min-w-0 max-w-4xl scroll-mt-24"
     >
-      <PostComments
+      <ShowcaseDetailComments
         postId={detail.id}
         postCreatorId={detail.creator.id}
         commentCount={detail.commentCount}
       />
     </div>
   ) : null;
+  const engagementRow = (
+    <ShowcaseDetailEngagementRow
+      postId={detail.id}
+      generationId={detail.generationId}
+      creatorId={detail.creator.id}
+      title={displayTitle}
+      shareDescription={getPublicPostMetaDescription(detail)}
+      canRemix={detail.canRemix}
+      saveCount={detail.saveCount}
+      commentCount={detail.commentCount}
+      remixCount={detail.remixCount}
+      shareVisitCount={detail.shareVisitCount}
+      showComments={detail.visibility === 'public'}
+    />
+  );
 
   return (
     <div className="min-h-screen overflow-x-clip bg-[#050506] py-6 text-white">
@@ -273,15 +287,20 @@ export default function ShowcaseDetailBody({
                       <span>Unlisted</span>
                     </>
                   ) : null}
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-300/20 bg-sky-400/10 px-2.5 py-0.5 text-[11px] font-semibold text-sky-100">
-                    {isTextOnlyPost ? <BookText className="h-3 w-3" aria-hidden="true" /> : null}
-                    {postTypeLabel}
-                  </span>
+                  {isNsfwCovered ? null : (
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-300/20 bg-sky-400/10 px-2.5 py-0.5 text-[11px] font-semibold text-sky-100">
+                      {isTextOnlyPost ? <BookText className="h-3 w-3" aria-hidden="true" /> : null}
+                      {postTypeLabel}
+                    </span>
+                  )}
                 </div>
 
-                <h1 className="mt-4 text-balance text-2xl font-semibold tracking-tight text-white sm:text-3xl">
-                  {displayTitle}
-                </h1>
+                {/* On a covered post the gate holds the heading: "Mature content", then the title once revealed. */}
+                {isNsfwCovered ? null : (
+                  <h1 className="mt-4 text-balance text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+                    {displayTitle}
+                  </h1>
+                )}
 
                 {shouldRenderLede ? (
                   <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-300">
@@ -295,61 +314,61 @@ export default function ShowcaseDetailBody({
             aria-label="Post content"
             className="canonical-post-media min-w-0"
           >
-            {/*
-              * The post body: media as an attachment, the writing, then the
-              * engagement row. No card chrome — the post sits on the page.
-              */}
-            <article
-              data-testid={isTextOnlyPost ? 'text-detail-note' : 'media-detail-document'}
-              className="w-full max-w-4xl"
-            >
-                {/*
-                  * A bare wrapper: the carousel's viewport carries the frame
-                  * chrome and now shrinks to the media, so any background here
-                  * would show as bars beside a narrow portrait.
-                  */}
-                {!isTextOnlyPost && detailMediaItems.length > 0 ? (
-                  <div data-testid="media-detail-frame">
-                    <ShowcaseMediaCarousel
-                      mediaItems={detailMediaItems}
-                      title={displayTitle}
-                      mode="detail"
-                      allowFullscreen
-                      viewportClassName="canonical-post-media-viewport w-full border border-white/8"
-                    />
-                  </div>
-                ) : null}
+            <ShowcaseDetailCommentCountProvider key={detail.id} initialCount={detail.commentCount}>
+              {isNsfwCovered ? (
+                <div data-testid="nsfw-detail-gate" className="w-full max-w-4xl">
+                  <NsfwPostReveal key={detail.id} postId={detail.id} afterReveal={commentsBlock}>
+                    {engagementRow}
+                  </NsfwPostReveal>
+                </div>
+              ) : (
+                <>
+                  {/*
+                    * The post body: media as an attachment, the writing, then the
+                    * engagement row. No card chrome — the post sits on the page.
+                    */}
+                  <article
+                    data-testid={isTextOnlyPost ? 'text-detail-note' : 'media-detail-document'}
+                    className="w-full max-w-4xl"
+                  >
+                      {/*
+                        * A bare wrapper: the carousel's viewport carries the frame
+                        * chrome and now shrinks to the media, so any background here
+                        * would show as bars beside a narrow portrait.
+                        */}
+                      {!isTextOnlyPost && detailMediaItems.length > 0 ? (
+                        <div data-testid="media-detail-frame">
+                          <ShowcaseMediaCarousel
+                            mediaItems={detailMediaItems}
+                            title={displayTitle}
+                            mode="detail"
+                            allowFullscreen
+                            viewportClassName="canonical-post-media-viewport w-full border border-white/8"
+                          />
+                        </div>
+                      ) : null}
 
-                {/* First child on a text post — the masthead row already spaced it. */}
-                {isTextOnlyPost && shouldRenderTextNoteBody ? (
-                  <div className="whitespace-pre-wrap text-base leading-8 text-zinc-100">
-                    {publicText}
-                  </div>
-                ) : null}
+                      {/* First child on a text post — the masthead row already spaced it. */}
+                      {isTextOnlyPost && shouldRenderTextNoteBody ? (
+                        <div className="whitespace-pre-wrap text-base leading-8 text-zinc-100">
+                          {publicText}
+                        </div>
+                      ) : null}
 
-                {!isTextOnlyPost
-                  && detail.body
-                  && normalizeComparableText(detail.body) !== normalizeComparableText(displayTitle) ? (
-                  <div className="mt-5 whitespace-pre-wrap text-base leading-8 text-zinc-100">
-                    {detail.body}
-                  </div>
-                ) : null}
+                      {!isTextOnlyPost
+                        && detail.body
+                        && normalizeComparableText(detail.body) !== normalizeComparableText(displayTitle) ? (
+                        <div className="mt-5 whitespace-pre-wrap text-base leading-8 text-zinc-100">
+                          {detail.body}
+                        </div>
+                      ) : null}
 
-                <ShowcaseDetailEngagementRow
-                  postId={detail.id}
-                  generationId={detail.generationId}
-                  creatorId={detail.creator.id}
-                  title={displayTitle}
-                  shareDescription={getPublicPostMetaDescription(detail)}
-                  canRemix={detail.canRemix}
-                  saveCount={detail.saveCount}
-                  commentCount={detail.commentCount}
-                  remixCount={detail.remixCount}
-                  shareVisitCount={detail.shareVisitCount}
-                  showComments={detail.visibility === 'public'}
-                />
-            </article>
-            {commentsBlock}
+                      {engagementRow}
+                  </article>
+                  {commentsBlock}
+                </>
+              )}
+            </ShowcaseDetailCommentCountProvider>
             {recipeBlock}
           </section>
 
@@ -372,17 +391,15 @@ export default function ShowcaseDetailBody({
                   <span className="inline-flex min-w-0 items-center gap-2">
                     <ShoppingBag className="h-4 w-4 shrink-0" aria-hidden="true" />
                     <span className="truncate">
-                      {isPublicRecipeBundle
-                        ? 'Public recipe'
-                        : lockedViewer && bundle.accessMode !== 'free'
-                          ? `${bundle.priceQuote.formatted} recipe`
-                          : bundle.accessMode === 'free'
-                            ? 'Free recipe'
-                            : 'Recipe unlocked'}
+                      {lockedViewer && bundle.accessMode !== 'free'
+                        ? `${bundle.priceQuote.formatted} recipe`
+                        : bundle.accessMode === 'free'
+                          ? 'Free recipe'
+                          : 'Recipe unlocked'}
                     </span>
                   </span>
                   <span className="shrink-0 text-xs font-medium text-emerald-200/70">
-                    {lockedViewer && bundle.accessMode !== 'free' && !isPublicRecipeBundle ? 'Unlock' : 'View'}
+                    {lockedViewer && bundle.accessMode !== 'free' ? 'Unlock' : 'View'}
                   </span>
                 </Link>
               ) : null}
@@ -418,7 +435,7 @@ export default function ShowcaseDetailBody({
                 <ReportPostButton
                   postId={detail.id}
                   bundleId={detail.resourceBundle?.id ?? null}
-                  accessToken={accessToken}
+                  creator={detail.creator}
                 />
               )}
             </div>
@@ -433,7 +450,7 @@ export default function ShowcaseDetailBody({
         >
           <span>
             <span className="block text-sm font-bold">
-              {isPublicRecipeBundle ? 'View recipe' : bundle.accessMode === 'free' ? 'View free recipe' : `Unlock recipe for ${bundle.priceQuote.formatted}`}
+              {bundle.accessMode === 'free' ? 'View free recipe' : `Unlock recipe for ${bundle.priceQuote.formatted}`}
             </span>
             <span className="block text-xs font-medium text-slate-800">{previewKindSummary}</span>
           </span>
