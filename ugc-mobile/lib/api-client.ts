@@ -49,6 +49,9 @@ import type {
   PostResourceFileFinalizeResponse,
   PostResourceFileSignRequest,
   PostResourceFileSignResponse,
+  PostResourceBundleFreeUnlockResponse,
+  PostResourceFileDisposition,
+  PostResourceFileUrlBatchResponse,
   RemixSourceBundle,
   ShowcaseFeedEventRequest,
   ShowcaseFeedEventBatchResponse,
@@ -491,6 +494,116 @@ function isNotFoundError(error: unknown): error is ApiError {
   return error instanceof ApiError && error.status === 404;
 }
 
+/** The most paths the file-url route signs in one `{ storagePaths }` call. */
+export const POST_RESOURCE_FILE_URL_BATCH_LIMIT = 25;
+
+export interface PostResourceFileUrlOptions {
+  disposition?: PostResourceFileDisposition;
+}
+
+type FileUrlWaiter = { resolve: (url: string) => void; reject: (error: unknown) => void };
+
+/**
+ * Signs a bundle's files in as few calls as the server allows.
+ *
+ * Each reference preview signs its own file as it mounts, and on the server
+ * every signing loaded the whole entitlement again and counted against the
+ * viewer's signing limit: ten references, ten loads. The calls one render makes
+ * arrive in the same tick, so they wait one microtask and leave together as one
+ * `{ storagePaths }` request per post. A path asked for on its own, an explicit
+ * Open, still takes the single form.
+ *
+ * A server without the batch form answers it 400 ("Missing resource file
+ * path."), so a 400, or an answer with no `files`, falls back to the single
+ * form for each path. A path missing from the answer was not signed (it is not
+ * on this unlock, or storage refused it; the route leaves it out rather than
+ * failing the paths beside it), so it is refused here without asking again:
+ * an explicit Open asks for it on its own. Any other refusal (no access,
+ * nothing on the unlock, the signing limit) is the answer for every path in
+ * the batch.
+ */
+export function createPostResourceFileUrlResolver({
+  signMany,
+  signOne,
+}: {
+  signMany: (postId: string, storagePaths: string[], options: PostResourceFileUrlOptions) => Promise<PostResourceFileUrlBatchResponse>;
+  signOne: (postId: string, storagePath: string, options: PostResourceFileUrlOptions) => Promise<string>;
+}) {
+  const queues = new Map<string, Map<string, FileUrlWaiter[]>>();
+
+  function settle(waiters: Map<string, FileUrlWaiter[]>, storagePath: string, outcome: Promise<string>) {
+    const pending = waiters.get(storagePath) ?? [];
+    outcome.then(
+      (url) => pending.forEach((waiter) => waiter.resolve(url)),
+      (error: unknown) => pending.forEach((waiter) => waiter.reject(error)),
+    );
+  }
+
+  async function signChunk(
+    postId: string,
+    chunk: string[],
+    options: PostResourceFileUrlOptions,
+    waiters: Map<string, FileUrlWaiter[]>,
+  ) {
+    let answer: Partial<PostResourceFileUrlBatchResponse> | null = null;
+    try {
+      answer = await signMany(postId, chunk, options);
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 400) {
+        chunk.forEach((storagePath) => settle(waiters, storagePath, Promise.reject(error)));
+        return;
+      }
+    }
+
+    if (!answer || !Array.isArray(answer.files)) {
+      chunk.forEach((storagePath) => settle(waiters, storagePath, signOne(postId, storagePath, options)));
+      return;
+    }
+
+    const urls = new Map(answer.files
+      .filter((file) => typeof file?.storagePath === 'string' && typeof file.url === 'string' && file.url.length > 0)
+      .map((file) => [file.storagePath, file.url] as const));
+    for (const storagePath of chunk) {
+      const url = urls.get(storagePath);
+      settle(waiters, storagePath, url
+        ? Promise.resolve(url)
+        : Promise.reject(new ApiError('Resource file not found on this unlock.', 404)));
+    }
+  }
+
+  function flush(postId: string, options: PostResourceFileUrlOptions, waiters: Map<string, FileUrlWaiter[]>) {
+    const paths = [...waiters.keys()];
+    if (paths.length === 1) {
+      settle(waiters, paths[0], signOne(postId, paths[0], options));
+      return;
+    }
+    for (let start = 0; start < paths.length; start += POST_RESOURCE_FILE_URL_BATCH_LIMIT) {
+      const chunk = paths.slice(start, start + POST_RESOURCE_FILE_URL_BATCH_LIMIT);
+      // Nothing may leave a preview waiting forever; a settled waiter ignores this.
+      void signChunk(postId, chunk, options, waiters).catch((error: unknown) => {
+        chunk.forEach((storagePath) => settle(waiters, storagePath, Promise.reject(error)));
+      });
+    }
+  }
+
+  return (postId: string, storagePath: string, options: PostResourceFileUrlOptions = {}) => (
+    new Promise<string>((resolve, reject) => {
+      const key = `${postId}\n${options.disposition ?? ''}`;
+      let waiters = queues.get(key);
+      if (!waiters) {
+        const batch = new Map<string, FileUrlWaiter[]>();
+        waiters = batch;
+        queues.set(key, batch);
+        void Promise.resolve().then(() => {
+          queues.delete(key);
+          flush(postId, options, batch);
+        });
+      }
+      waiters.set(storagePath, [...(waiters.get(storagePath) ?? []), { resolve, reject }]);
+    })
+  );
+}
+
 async function parseResponse(response: Response) {
   const contentType = response.headers.get('content-type') ?? '';
   if (contentType.includes('application/json')) {
@@ -693,6 +806,26 @@ export function createApiClient({
 
     return promise;
   }
+
+  // `disposition` goes only when asked for, so a plain call keeps the body
+  // every server build has always taken.
+  const fileUrlBody = (paths: { storagePath: string } | { storagePaths: string[] }, options: PostResourceFileUrlOptions) => (
+    JSON.stringify({ ...paths, ...(options.disposition ? { disposition: options.disposition } : {}) })
+  );
+  const getPostResourceFileUrl = (postId: string, storagePath: string, options: PostResourceFileUrlOptions = {}) =>
+    request<{ success: boolean; signedUrl: string }>(`/api/posts/${postId}/resource-bundle/file-url`, {
+      method: 'POST',
+      body: fileUrlBody({ storagePath }, options),
+    });
+  const getPostResourceFileUrls = (postId: string, storagePaths: string[], options: PostResourceFileUrlOptions = {}) =>
+    request<PostResourceFileUrlBatchResponse>(`/api/posts/${postId}/resource-bundle/file-url`, {
+      method: 'POST',
+      body: fileUrlBody({ storagePaths }, options),
+    });
+  const resolvePostResourceFileUrl = createPostResourceFileUrlResolver({
+    signMany: getPostResourceFileUrls,
+    signOne: async (postId, storagePath, options) => (await getPostResourceFileUrl(postId, storagePath, options)).signedUrl,
+  });
 
   return {
     request,
@@ -1233,7 +1366,7 @@ export function createApiClient({
       }
     },
     unlockFreeBundle: (postId: string) =>
-      request<{ success: boolean; alreadyProcessed?: boolean }>(`/api/posts/${postId}/resource-bundle/unlock-free`, { method: 'POST' }),
+      request<PostResourceBundleFreeUnlockResponse>(`/api/posts/${postId}/resource-bundle/unlock-free`, { method: 'POST' }),
     unlockBundleWithCredits: (postId: string) =>
       request<MobileCommerceSyncResponse>(`/api/posts/${postId}/resource-bundle/unlock-with-credits`, { method: 'POST' }),
     listViewerUnlocks: (params?: { limit?: number; offset?: number }) => {
@@ -1250,11 +1383,13 @@ export function createApiClient({
         method: 'POST',
         body: JSON.stringify({ storagePath }),
       }),
-    getPostResourceFileUrl: (postId: string, storagePath: string) =>
-      request<{ success: boolean; signedUrl: string }>(`/api/posts/${postId}/resource-bundle/file-url`, {
-        method: 'POST',
-        body: JSON.stringify({ storagePath }),
-      }),
+    getPostResourceFileUrl,
+    getPostResourceFileUrls,
+    /**
+     * A signed URL for one of a post's bundle files, batched with every other
+     * path asked for in the same tick (`createPostResourceFileUrlResolver`).
+     */
+    resolvePostResourceFileUrl,
     syncMobilePurchase: (body: Record<string, unknown>) =>
       request<MobileCommerceSyncResponse>('/api/mobile/commerce/sync', {
         method: 'POST',

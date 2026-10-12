@@ -51,7 +51,7 @@ vi.mock('@/components/post-resource-references', () => ({
   ),
 }));
 
-import { PostResourceBundleContent } from '../components/post-resource-bundle-content';
+import { PostResourceBundleContent, ResourceRevisionSwitch } from '../components/post-resource-bundle-content';
 
 function item(overrides: Partial<PostResourceItem> & Pick<PostResourceItem, 'title' | 'type'>): PostResourceItem {
   return {
@@ -469,5 +469,29 @@ describe('PostResourceBundleContent', () => {
     expect(values).not.toContain('Prompt');
     expect(values).not.toContain('1 item');
     expect(values).toContain('A glossy product photo');
+  });
+});
+
+describe('ResourceRevisionSwitch', () => {
+  it('offers the latest and the purchased version, says which is showing, and switches', () => {
+    const onSelect = vi.fn();
+    const tree = renderContent(<ResourceRevisionSwitch selected="latest" onSelect={onSelect} />);
+
+    const latest = pressable(tree, 'Show latest unlock version');
+    const purchased = pressable(tree, 'Show purchased unlock version');
+    expect(textValues(tree)).toEqual(['Latest', 'Purchased']);
+    expect(latest?.props.accessibilityState).toEqual({ selected: true });
+    expect(purchased?.props.accessibilityState).toEqual({ selected: false });
+
+    renderer.act(() => purchased?.props.onPress());
+    expect(onSelect).toHaveBeenCalledWith('purchased');
+  });
+
+  it('reaches 44pt with a compact pill', () => {
+    const tree = renderContent(<ResourceRevisionSwitch selected="purchased" onSelect={vi.fn()} />);
+    const pill = pressable(tree, 'Show purchased unlock version');
+
+    expect(pill?.props.style.minHeight).toBe(36);
+    expect(pill?.props.hitSlop).toEqual({ top: 4, bottom: 4 });
   });
 });

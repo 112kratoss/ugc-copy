@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 
 const routerPush = vi.hoisted(() => vi.fn());
+const authUser = vi.hoisted(() => ({ current: { id: 'user-1' } as { id: string } | null }));
 
 vi.mock('expo-router', () => ({
   router: { push: routerPush, replace: vi.fn(), canGoBack: () => true },
@@ -40,7 +41,7 @@ vi.mock('@/components/skeleton', () => ({
 }));
 
 vi.mock('@/lib/auth', () => ({
-  useAuth: () => ({ user: { id: 'user-1' }, api: {} }),
+  useAuth: () => ({ user: authUser.current, api: {} }),
 }));
 
 vi.mock('@tanstack/react-query', () => ({
@@ -70,6 +71,7 @@ vi.mock('@tanstack/react-query', () => ({
 import UnlocksScreen from '../app/unlocks';
 
 beforeEach(() => {
+  authUser.current = { id: 'user-1' };
   routerPush.mockClear();
 });
 
@@ -100,5 +102,18 @@ describe('unlocks library (HIG S7)', () => {
 
     expect(tree.root.findAll((node) => String(node.type) === 'icon' && node.props.name === 'PackageOpen')).toHaveLength(1);
     expect(tree.root.findAll((node) => String(node.type) === 'image')).toHaveLength(0);
+  });
+
+  it('brings a signed-out reader back to the library after sign-in', () => {
+    authUser.current = null;
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(React.createElement(UnlocksScreen));
+    });
+
+    const signIn = tree.root.findAll((node) => String(node.type) === 'primary-button' && node.props.label === 'Sign in')[0];
+    if (!signIn) throw new Error('No sign-in button');
+    renderer.act(() => { (signIn.props.onPress as () => void)(); });
+    expect(routerPush).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/unlocks' } });
   });
 });

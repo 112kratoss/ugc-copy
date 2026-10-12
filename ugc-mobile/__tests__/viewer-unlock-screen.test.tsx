@@ -4,8 +4,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode; label?: string; title?: string; body?: string } & Record<string, unknown>;
 
-const { contentProps, unlockDetail } = vi.hoisted(() => ({
+const { authUser, contentProps, routerPush, unlockDetail } = vi.hoisted(() => ({
+  authUser: { current: { id: 'buyer-1' } as { id: string } | null },
   contentProps: vi.fn(),
+  routerPush: vi.fn(),
   unlockDetail: { current: null as Record<string, unknown> | null },
 }));
 
@@ -16,7 +18,7 @@ vi.mock('react-native', () => ({
 }));
 
 vi.mock('expo-router', () => ({
-  router: { push: vi.fn() },
+  router: { push: routerPush },
   useLocalSearchParams: () => ({ unlockId: 'unlock-1' }),
 }));
 
@@ -27,7 +29,7 @@ vi.mock('@tanstack/react-query', () => ({
 }));
 
 vi.mock('@/lib/auth', () => ({
-  useAuth: () => ({ user: { id: 'buyer-1' }, api: {} }),
+  useAuth: () => ({ user: authUser.current, api: {} }),
 }));
 
 vi.mock('@/components/media-preview', () => ({
@@ -39,6 +41,16 @@ vi.mock('@/components/post-resource-bundle-content', () => ({
     contentProps(props);
     return null;
   },
+  ResourceRevisionSwitch: ({ selected, onSelect }: { selected: string; onSelect: (revision: string) => void }) => React.createElement(
+    'view',
+    {},
+    ['latest', 'purchased'].map((revision) => React.createElement('pressable', {
+      key: revision,
+      accessibilityLabel: `Show ${revision} unlock version`,
+      accessibilityState: { selected: selected === revision },
+      onPress: () => onSelect(revision),
+    })),
+  ),
 }));
 
 vi.mock('@/components/ui', () => ({
@@ -73,8 +85,22 @@ function textValues(tree: renderer.ReactTestRenderer) {
     .flatMap((node) => typeof node.props.children === 'string' ? [node.props.children] : []);
 }
 
+function buttonLabels(tree: renderer.ReactTestRenderer) {
+  return tree.root.findAll((node) => String(node.type) === 'button').map((node) => node.props.children);
+}
+
+function renderScreen() {
+  let tree: renderer.ReactTestRenderer;
+  renderer.act(() => {
+    tree = renderer.create(<ViewerUnlockScreen />);
+  });
+  return tree!;
+}
+
 describe('viewer unlock revision switching', () => {
   beforeEach(() => {
+    authUser.current = { id: 'buyer-1' };
+    routerPush.mockClear();
     contentProps.mockClear();
     unlockDetail.current = {
       unlockId: 'unlock-1',
@@ -131,5 +157,42 @@ describe('viewer unlock revision switching', () => {
       resources: purchasedResources,
       mediaItems: purchasedMedia,
     }));
+  });
+
+  it('leads to the original post only while it is public or unlisted', () => {
+    unlockDetail.current = { ...unlockDetail.current!, post: { id: 'post-1', visibility: 'public', archivedAt: null, tombstoned: false } };
+    let tree = renderScreen();
+    expect(buttonLabels(tree)).toContain('View original post');
+    renderer.act(() => {
+      tree.root.find((node) => String(node.type) === 'button' && node.props.children === 'View original post').props.onPress();
+    });
+    expect(routerPush).toHaveBeenCalledWith('/showcase/post-1');
+
+    unlockDetail.current = { ...unlockDetail.current!, post: { id: 'post-1', visibility: 'unlisted', archivedAt: null } };
+    tree = renderScreen();
+    expect(buttonLabels(tree)).toContain('View original post');
+  });
+
+  it('says why, instead of a dead link, when the post went private or was archived', () => {
+    for (const post of [
+      { id: 'post-1', visibility: 'private', archivedAt: null },
+      { id: 'post-1', visibility: 'public', archivedAt: '2026-10-01T00:00:00.000Z' },
+      null,
+    ]) {
+      unlockDetail.current = { ...unlockDetail.current!, post, postVisibility: post?.visibility ?? null };
+      const tree = renderScreen();
+      expect(buttonLabels(tree)).not.toContain('View original post');
+      expect(textValues(tree)).toContain('This post is no longer public. Your unlock stays available here.');
+    }
+  });
+
+  it('brings a signed-out buyer back to this unlock after sign-in', () => {
+    authUser.current = null;
+    const tree = renderScreen();
+
+    renderer.act(() => {
+      tree.root.find((node) => String(node.type) === 'button' && node.props.children === 'Sign in').props.onPress();
+    });
+    expect(routerPush).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/unlock/unlock-1' } });
   });
 });

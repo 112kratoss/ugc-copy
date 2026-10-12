@@ -44,7 +44,12 @@ export default function UnlocksScreen() {
           title="Sign in to see your unlocks."
           body="Prompts, workflows, and files you unlock from other creators live here."
         />
-        <PrimaryButton label="Sign in" onPress={() => router.push('/auth')} accent="primary" />
+        {/* Back to this list afterwards; a bare /auth ended on Home. */}
+        <PrimaryButton
+          label="Sign in"
+          onPress={() => router.push({ pathname: '/auth', params: { returnTo: '/unlocks' } } as never)}
+          accent="primary"
+        />
       </Screen>
     );
   }

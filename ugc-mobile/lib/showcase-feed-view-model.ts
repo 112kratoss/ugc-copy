@@ -2,6 +2,7 @@ import type { ToolAccent } from '@/lib/theme';
 import type { ShowcaseFeedItem } from '@/lib/types';
 import type { PreviewViewerSource } from './immersive-preview-view-model';
 import { formatCompactCount } from './home-view-model';
+import { resourceKindLabel } from './post-resource-bundle-view-model';
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import { isTextOnlyShowcasePost } from './showcase-display';
 import { getShowcaseRemixAccess } from './showcase-remix-access';
@@ -238,15 +239,6 @@ function resourceSummary(kinds: string[] | undefined, allowRemix: boolean) {
   const unique = Array.from(new Set(labels));
   if (allowRemix && !unique.includes('Remix')) unique.push('Remix');
   return unique.length ? unique.join(' + ') : 'Creator resources';
-}
-
-function resourceKindLabel(kind: string) {
-  if (kind === 'prompt') return 'Prompt';
-  if (kind === 'workflow') return 'Workflow';
-  if (kind === 'files') return 'Files';
-  if (kind === 'notes') return 'Notes';
-  if (kind === 'remix') return 'Remix';
-  return '';
 }
 
 function cardHeight(item: ShowcaseFeedItem) {

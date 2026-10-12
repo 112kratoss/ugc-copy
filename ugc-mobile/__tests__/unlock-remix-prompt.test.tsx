@@ -31,7 +31,11 @@ const authState = vi.hoisted(() => ({
     unlockFreeBundle: vi.fn(),
     unlockBundleWithCredits: vi.fn(),
   },
+  credits: 5000 as number | null,
+  updateCredits: vi.fn(),
 }));
+
+const dialogState = vi.hoisted(() => ({ showConfirmDialog: vi.fn() }));
 
 vi.mock('expo-haptics', () => hapticsState);
 
@@ -68,6 +72,9 @@ vi.mock('@/lib/auth', () => ({
   useAuth: () => authState,
 }));
 
+// The sheet is an RN Modal, so it asks through the dialog, which draws above it.
+vi.mock('@/lib/dialog', () => dialogState);
+
 function lockedRemixItem(overrides: Partial<ImmersivePreviewItem> = {}): ImmersivePreviewItem {
   return {
     id: 'post-123',
@@ -102,6 +109,16 @@ function lockedRemixItem(overrides: Partial<ImmersivePreviewItem> = {}): Immersi
     visibility: 'public',
     availableActions: ['unlock-remix'],
     disabledActions: {},
+    resource: {
+      resourceId: 'asset-123',
+      postId: 'post-123',
+      title: 'Paid remix kit',
+      accessMode: 'paid',
+      priceUsdCents: 900,
+      previewText: 'Reusable prompt and remix access.',
+      allowRemix: true,
+      resourceKinds: ['prompt', 'remix'],
+    },
     details: {
       title: 'Paid remix post',
       prompt: 'make a launch post',
@@ -167,36 +184,102 @@ function renderPrompt(props: Partial<React.ComponentProps<typeof UnlockRemixProm
   return { invalidateSpy, onClose, onUnlocked, tree: tree! };
 }
 
+async function flush() {
+  await renderer.act(async () => {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 describe('UnlockRemixPrompt', () => {
   beforeEach(() => {
     authState.user = { id: 'user-123', email: 'creator@example.com' };
+    authState.credits = 5000;
+    authState.updateCredits.mockClear();
     authState.api.unlockFreeBundle.mockReset();
     authState.api.unlockBundleWithCredits.mockReset();
+    dialogState.showConfirmDialog.mockReset();
     hapticsState.selectionAsync.mockReset();
     routerState.push.mockReset();
   });
 
-  it('unlocks a paid resource and continues into remix', async () => {
-    authState.api.unlockBundleWithCredits.mockResolvedValue({ success: true });
+  it('asks before spending, then unlocks the paid resource and continues into remix', async () => {
+    authState.api.unlockBundleWithCredits.mockResolvedValue({ success: true, entitlement: 'post_resource_unlock', credits: 4100 });
+    dialogState.showConfirmDialog.mockResolvedValue(true);
     hapticsState.selectionAsync.mockResolvedValue(undefined);
     const { invalidateSpy, onClose, onUnlocked, tree } = renderPrompt();
 
-    await renderer.act(async () => {
-      // The button spends credits at once, so it says how many.
+    renderer.act(() => {
+      // The button says how many credits the confirmed spend takes.
       findPressableByAccessibilityLabel(tree.root, 'Unlock for 900 credits').props.onPress();
-      await Promise.resolve();
-      await Promise.resolve();
     });
+    await flush();
 
+    expect(dialogState.showConfirmDialog).toHaveBeenCalledWith({
+      title: 'Unlock this resource?',
+      message: '900 credits will come off your credit balance right away.',
+      confirmLabel: 'Unlock for 900 credits',
+    });
     expect(authState.api.unlockBundleWithCredits).toHaveBeenCalledWith('post-123');
+    expect(authState.updateCredits).toHaveBeenCalledWith(4100);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['post-resource-bundle', 'post-123', 'asset-123'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['marketplace-resource', 'asset-123'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['marketplace-resources'] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['showcase-feed'] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['immersive-preview-source'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['viewer-unlocks'] });
+    // Patched in place rather than refetched under the buyer.
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['showcase-feed'] });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['immersive-preview-source'] });
     expect(hapticsState.selectionAsync).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
     expect(onUnlocked).toHaveBeenCalledWith(expect.objectContaining({ id: 'post-123' }));
+  });
+
+  it('spends nothing when the confirmation is declined', async () => {
+    dialogState.showConfirmDialog.mockResolvedValue(false);
+    const { onClose, onUnlocked, tree } = renderPrompt();
+
+    renderer.act(() => {
+      findPressableByAccessibilityLabel(tree.root, 'Unlock for 900 credits').props.onPress();
+    });
+    await flush();
+
+    expect(authState.api.unlockBundleWithCredits).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onUnlocked).not.toHaveBeenCalled();
+  });
+
+  it('holds the spend and offers credits when the balance is short', () => {
+    authState.credits = 100;
+    const { onClose, tree } = renderPrompt();
+
+    const cta = findPressableByAccessibilityLabel(tree.root, 'Unlock for 900 credits');
+    expect(cta.props.disabled).toBe(true);
+    const texts = tree.root.findAll((node) => String(node.type) === 'text').map((node) => node.props.children);
+    expect(texts).toContain('You need 800 more credits for this unlock.');
+
+    renderer.act(() => {
+      findPressableByAccessibilityLabel(tree.root, 'Get credits').props.onPress();
+    });
+    // The sheet steps aside first: it is a Modal over the screen pricing opens on.
+    expect(onClose).toHaveBeenCalled();
+    expect(routerState.push).toHaveBeenCalledWith('/pricing');
+  });
+
+  it('takes a free unlock without asking', async () => {
+    authState.api.unlockFreeBundle.mockResolvedValue({ success: true, free: true, alreadyProcessed: false });
+    const details = lockedRemixItem().details!;
+    const { onUnlocked, tree } = renderPrompt({
+      item: lockedRemixItem({ details: { ...details, unlock: { ...details.unlock!, accessMode: 'free', priceLabel: 'Free' } } }),
+    });
+
+    renderer.act(() => {
+      findPressableByAccessibilityLabel(tree.root, 'Unlock to remix').props.onPress();
+    });
+    await flush();
+
+    expect(dialogState.showConfirmDialog).not.toHaveBeenCalled();
+    expect(authState.api.unlockFreeBundle).toHaveBeenCalledWith('post-123');
+    expect(onUnlocked).toHaveBeenCalled();
   });
 
   it('sends signed-out users to auth and brings them back to where they were', () => {

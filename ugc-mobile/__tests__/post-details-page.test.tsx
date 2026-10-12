@@ -6,10 +6,16 @@ import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 
 type MockProps = { children?: React.ReactNode; label?: string } & Record<string, unknown>;
 
-const { authState, bundleContentProps, mutationOptions, queryState, mutationState, router, showActionSheet } = vi.hoisted(() => ({
-  authState: { user: { id: 'viewer-1' } as { id: string } | null, api: {}, updateCredits: vi.fn() },
+const { authState, bundleContentProps, mutationOptions, queryOptions, queryState, mutationState, router, showActionSheet } = vi.hoisted(() => ({
+  authState: {
+    user: { id: 'viewer-1' } as { id: string } | null,
+    api: { resolvePostResourceFileUrl: vi.fn() },
+    credits: 2000 as number | null,
+    updateCredits: vi.fn(),
+  },
   bundleContentProps: vi.fn(),
-  mutationOptions: { current: null as { onSuccess?: (result: unknown) => Promise<void> } | null },
+  mutationOptions: { current: null as { onSuccess?: (result: unknown, variables: unknown) => Promise<void> } | null },
+  queryOptions: { current: null as { queryKey?: unknown[] } | null },
   queryState: { current: { data: undefined as unknown, isError: false, error: null as unknown, refetch: vi.fn() } },
   mutationState: { mutate: vi.fn(), isPending: false, error: null as unknown },
   router: { push: vi.fn() },
@@ -33,6 +39,7 @@ vi.mock('lucide-react-native', () => {
     X: icon('x'),
     ChevronLeft: icon('chevron-left'),
     Copy: icon('copy'),
+    Crown: icon('crown'),
     FileText: icon('file'),
     Lock: icon('lock'),
     MessageCircle: icon('message'),
@@ -49,12 +56,15 @@ vi.mock('expo-haptics', () => ({ selectionAsync: vi.fn() }));
 vi.mock('expo-router', () => ({ router }));
 
 vi.mock('@tanstack/react-query', () => ({
-  useQuery: () => queryState.current,
-  useMutation: (options: { onSuccess?: (result: unknown) => Promise<void> }) => {
+  useQuery: (options: { queryKey?: unknown[] }) => {
+    queryOptions.current = options;
+    return queryState.current;
+  },
+  useMutation: (options: { onSuccess?: (result: unknown, variables: unknown) => Promise<void> }) => {
     mutationOptions.current = options;
     return mutationState;
   },
-  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  useQueryClient: () => ({ invalidateQueries: vi.fn(), setQueriesData: vi.fn() }),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -82,9 +92,20 @@ vi.mock('@/components/post-resource-bundle-content', () => ({
     return null;
   },
   ResourceAction: ({ label, ...props }: MockProps) => React.createElement('pressable', { accessibilityLabel: label, ...props }, label),
+  ResourceRevisionSwitch: ({ selected, onSelect }: { selected: string; onSelect: (revision: string) => void }) => React.createElement(
+    'view',
+    {},
+    ['latest', 'purchased'].map((revision) => React.createElement('pressable', {
+      key: revision,
+      accessibilityLabel: `Show ${revision} unlock version`,
+      accessibilityState: { selected: selected === revision },
+      onPress: () => onSelect(revision),
+    })),
+  ),
 }));
 
 import { PostDetailsPage } from '@/components/post-details-page';
+import { formatUnlockDate } from '@/lib/unlock-library-view-model';
 
 function showcaseItem(overrides: Partial<ImmersivePreviewItem> = {}): ImmersivePreviewItem {
   return {
@@ -181,6 +202,7 @@ describe('PostDetailsPage', () => {
     bundleContentProps.mockClear();
     queryState.current = { data: undefined, isError: false, error: null, refetch: vi.fn() };
     authState.user = { id: 'viewer-1' };
+    authState.credits = 2000;
     authState.updateCredits.mockClear();
     mutationState.mutate.mockClear();
     mutationOptions.current = null;
@@ -329,6 +351,7 @@ describe("unlocking the creator's resources", () => {
 
   beforeEach(() => {
     authState.user = { id: 'viewer-1' };
+    authState.credits = 2000;
     authState.updateCredits.mockClear();
     mutationState.mutate.mockClear();
     mutationOptions.current = null;
@@ -371,11 +394,12 @@ describe("unlocking the creator's resources", () => {
     queryState.current = lockedBundle(900);
     render(page({ item: paidItem() }));
 
-    await mutationOptions.current?.onSuccess?.({ success: true, entitlement: 'post_resource_unlock', credits: 1100 });
+    const target = { postId: 'post-1', resourceId: 'asset-1', accessMode: 'paid', priceUsdCents: 900 };
+    await mutationOptions.current?.onSuccess?.({ success: true, entitlement: 'post_resource_unlock', credits: 1100 }, target);
     expect(authState.updateCredits).toHaveBeenCalledWith(1100);
 
     authState.updateCredits.mockClear();
-    await mutationOptions.current?.onSuccess?.({ success: true, alreadyProcessed: false });
+    await mutationOptions.current?.onSuccess?.({ success: true, alreadyProcessed: false }, target);
     expect(authState.updateCredits).not.toHaveBeenCalled();
   });
 
@@ -397,5 +421,178 @@ describe("unlocking the creator's resources", () => {
 
     renderer.act(() => { pressable(tree, 'Sign in to unlock').props.onPress(); });
     expect(router.push).toHaveBeenCalledWith('/auth');
+  });
+
+  it('holds the spend and offers credits when the known balance is short', () => {
+    authState.credits = 100;
+    queryState.current = lockedBundle(900);
+    const tree = render(page({ item: paidItem() }));
+
+    expect(pressable(tree, 'Unlock for 900 credits').props.disabled).toBe(true);
+    expect(textValues(tree)).toContain('You need 800 more credits for this unlock.');
+    renderer.act(() => { pressable(tree, 'Unlock for 900 credits').props.onPress(); });
+    expect(showActionSheet).not.toHaveBeenCalled();
+
+    renderer.act(() => { pressable(tree, 'Get credits').props.onPress(); });
+    expect(router.push).toHaveBeenCalledWith('/pricing');
+  });
+
+  it('offers no credits while the balance covers the price', () => {
+    queryState.current = lockedBundle(900);
+    const tree = render(page({ item: paidItem() }));
+
+    expect(pressable(tree, 'Unlock for 900 credits').props.disabled).toBe(false);
+    expect(pressable(tree, 'Get credits')).toBeUndefined();
+  });
+});
+
+describe('the bundle read', () => {
+  beforeEach(() => {
+    authState.user = { id: 'viewer-1' };
+    queryOptions.current = null;
+    queryState.current = { data: undefined, isError: false, error: null, refetch: vi.fn() };
+  });
+
+  it("is keyed by the viewer, so another account never sees this one's unlock", () => {
+    render(page());
+    expect(queryOptions.current?.queryKey).toEqual(['post-resource-bundle', 'post-1', 'asset-1', 'viewer-1']);
+
+    authState.user = null;
+    render(page());
+    expect(queryOptions.current?.queryKey).toEqual(['post-resource-bundle', 'post-1', 'asset-1', null]);
+  });
+});
+
+describe('the locked card', () => {
+  const updatedAt = '2026-10-03T10:00:00.000Z';
+  const lockedPaid = (overrides: Record<string, unknown> = {}) => ({
+    data: {
+      bundle: {
+        viewerCanAccess: false,
+        accessMode: 'paid',
+        priceUsdCents: 900,
+        salesCount: 12,
+        summary: 'Three looks from one prompt.',
+        previewText: 'A teaser',
+        resources: null,
+        lockedPreview: { updatedAt, sectionCount: 1, itemCounts: { prompt: 1, reference_image: 3 } },
+        ...overrides,
+      },
+    },
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+
+  beforeEach(() => {
+    authState.user = { id: 'viewer-1' };
+    authState.credits = 2000;
+  });
+
+  it("sells the recipe the way the web does: its record, what it includes and the creator's summary", () => {
+    queryState.current = lockedPaid();
+    const details = showcaseItem().details!;
+    const tree = render(page({
+      item: showcaseItem({ details: { ...details, unlock: { ...details.unlock!, accessMode: 'paid', priceLabel: '900 credits' } } }),
+    }));
+
+    const values = textValues(tree);
+    expect(values).toContain(`12 sold · Updated ${formatUnlockDate(updatedAt)}`);
+    expect(values).toContain('Includes 1 section, 1 prompt, 3 reference images');
+    expect(values).toContain('Three looks from one prompt.');
+    expect(values).not.toContain('A teaser');
+  });
+
+  it('counts a free recipe as opened, and falls back to the preview text without a summary', () => {
+    queryState.current = lockedPaid({ accessMode: 'free', priceUsdCents: 0, summary: '  ', salesCount: 4 });
+    const tree = render(page());
+
+    const values = textValues(tree);
+    expect(values).toContain(`4 opened · Updated ${formatUnlockDate(updatedAt)}`);
+    expect(values).toContain('A teaser');
+  });
+});
+
+describe('the unlocked card', () => {
+  const resources = (text: string) => ({
+    promptText: null,
+    notesMarkdown: null,
+    workflowShareUrl: null,
+    workflowSnapshot: null,
+    attachments: [],
+    allowRemix: false,
+    items: [
+      { id: `prompt-${text}`, type: 'prompt', title: 'Prompt', role: 'primary', sectionId: null, description: null, textContent: text, externalUrl: null, storagePath: null, contentType: null, sizeBytes: null, workflowSnapshot: null, sortOrder: 0, isPrimary: true, remixUse: 'none' },
+    ],
+  });
+  const unlocked = (overrides: Record<string, unknown> = {}) => ({
+    data: { bundle: { viewerCanAccess: true, viewerIsOwner: false, lockedPreview: null, resources: resources('Latest prompt'), ...overrides } },
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+  const lastContent = () => bundleContentProps.mock.calls.at(-1)?.[0] as {
+    mediaItems: unknown[];
+    resolveFileUrl: (storagePath: string) => Promise<string>;
+    resources: { items: Array<{ textContent: string }> };
+  };
+
+  beforeEach(() => {
+    bundleContentProps.mockClear();
+    authState.user = { id: 'viewer-1' };
+    authState.api.resolvePostResourceFileUrl.mockReset();
+  });
+
+  it("calls the creator's own recipe owner access, not an unlock", () => {
+    queryState.current = unlocked({ viewerIsOwner: true });
+    const tree = render(page());
+
+    expect(textValues(tree)).toContain('Owner access');
+    expect(textValues(tree)).not.toContain('Unlocked');
+  });
+
+  it('offers the version the buyer unlocked once the creator has edited it', () => {
+    const purchasedMedia = [{ id: 'proof-1', mediaKey: 'proof-key', url: 'https://cdn.test/proof.jpg', mediaKind: 'image', sortOrder: 0 }];
+    queryState.current = unlocked({
+      purchasedRevision: {
+        revisionNumber: 2,
+        purchasedAt: '2026-09-01T00:00:00.000Z',
+        title: 'Kit',
+        summary: '',
+        previewText: '',
+        accessMode: 'paid',
+        priceUsdCents: 500,
+        resources: resources('Purchased prompt'),
+        mediaItems: purchasedMedia,
+      },
+    });
+    const tree = render(page());
+
+    expect(textValues(tree)).toContain('The creator has updated this unlock since you bought it. You can read either version.');
+    expect(lastContent().resources.items[0]?.textContent).toBe('Latest prompt');
+
+    renderer.act(() => { pressable(tree, 'Show purchased unlock version').props.onPress(); });
+    expect(lastContent().resources.items[0]?.textContent).toBe('Purchased prompt');
+    expect(lastContent().mediaItems).toBe(purchasedMedia);
+    expect(pressable(tree, 'Show purchased unlock version').props.accessibilityState).toEqual({ selected: true });
+
+    renderer.act(() => { pressable(tree, 'Show latest unlock version').props.onPress(); });
+    expect(lastContent().resources.items[0]?.textContent).toBe('Latest prompt');
+  });
+
+  it('shows no version switch while the bundle is the one the buyer unlocked', () => {
+    queryState.current = unlocked();
+    const tree = render(page());
+
+    expect(pressable(tree, 'Show purchased unlock version')).toBeUndefined();
+  });
+
+  it("signs the bundle's files to open in place, through the batched signing", async () => {
+    authState.api.resolvePostResourceFileUrl.mockResolvedValue('https://storage.test/signed');
+    queryState.current = unlocked();
+    render(page());
+
+    await expect(lastContent().resolveFileUrl('refs/look.jpg')).resolves.toBe('https://storage.test/signed');
+    expect(authState.api.resolvePostResourceFileUrl).toHaveBeenCalledWith('post-1', 'refs/look.jpg', { disposition: 'inline' });
   });
 });

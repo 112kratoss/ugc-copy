@@ -13,7 +13,7 @@ const mutate = vi.hoisted(() => vi.fn());
 const showActionSheet = vi.hoisted(() => vi.fn());
 
 const authState = vi.hoisted(() => ({
-  api: {},
+  api: { resolvePostResourceFileUrl: vi.fn() },
   credits: 2000,
   updateCredits: vi.fn(),
   user: { id: 'user-1' } as { id: string } | null,
@@ -143,6 +143,29 @@ describe('marketplace asset screen (HIG S18)', () => {
     if (!getCredits) throw new Error('No Get credits button');
     renderer.act(() => { (getCredits.props.onPress as () => void)(); });
     expect(routerPush).toHaveBeenCalledWith('/pricing');
+  });
+
+  it('signs a signed-out buyer in and brings them back to this unlock', () => {
+    authState.user = null;
+    const tree = renderScreen();
+
+    const signIn = tree.root.findAll((node) => String(node.type) === 'primary-button'
+      && node.props.label === 'Sign in to unlock')[0];
+    if (!signIn) throw new Error('No sign-in button');
+    renderer.act(() => { (signIn.props.onPress as () => void)(); });
+    expect(routerPush).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/marketplace/asset-1' } });
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("signs the bundle's files to open in place, through the batched signing", async () => {
+    authState.api.resolvePostResourceFileUrl.mockResolvedValue('https://storage.test/signed');
+    const tree = renderScreen();
+
+    const content = tree.root.findAll((node) => String(node.type) === 'bundle-content')[0];
+    if (!content) throw new Error('No bundle content');
+    await expect((content.props.resolveFileUrl as (path: string) => Promise<string>)('refs/look.jpg'))
+      .resolves.toBe('https://storage.test/signed');
+    expect(authState.api.resolvePostResourceFileUrl).toHaveBeenCalledWith('post-1', 'refs/look.jpg', { disposition: 'inline' });
   });
 
   it('keeps a free unlock one tap, with no confirmation sheet', () => {
