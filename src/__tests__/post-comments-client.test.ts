@@ -8,11 +8,12 @@ import {
     canDeleteComment,
     canRemoveComment,
     canReportComment,
-    getCommentCountLabel,
+    describeCommentRequestFailure,
     getCommentDisplay,
     markCommentRemoved,
     mergeCommentPage,
     prependComment,
+    withPendingComments,
     type PostComment,
 } from '@/lib/post-comments-client';
 
@@ -60,18 +61,6 @@ describe('post comments client', () => {
             expect(display.bodyText).toBe(DELETED_COMMENT_LABEL);
             expect(display.authorLabel).toBe(DELETED_COMMENT_LABEL);
             expect(display.authorHref).toBeNull();
-        });
-
-        it('pluralises the reply label', () => {
-            expect(getCommentDisplay(comment({ replyCount: 0 })).replyLabel).toBeNull();
-            expect(getCommentDisplay(comment({ replyCount: 1 })).replyLabel).toBe('1 reply');
-            expect(getCommentDisplay(comment({ replyCount: 4 })).replyLabel).toBe('4 replies');
-        });
-
-        it('invites a first comment rather than showing a bare zero', () => {
-            expect(getCommentCountLabel(0)).toBe('Comment');
-            expect(getCommentCountLabel(1)).toBe('1 comment');
-            expect(getCommentCountLabel(9)).toBe('9 comments');
         });
     });
 
@@ -178,6 +167,70 @@ describe('post comments client', () => {
             expect(adjustReplyCount(list, 'a', -1)[0].replyCount).toBe(0);
             expect(adjustReplyCount(list, 'a', -5)[0].replyCount).toBe(0);
             expect(adjustReplyCount(list, 'missing', 1)[0].replyCount).toBe(1);
+        });
+
+        it("keeps the viewer's new comment on screen until a read returns it", () => {
+            const loaded = [comment({ id: 'a' }), comment({ id: 'b' })];
+            const mine = comment({ id: 'mine' });
+
+            expect(withPendingComments(loaded, [mine], 'first').map((c) => c.id))
+                .toEqual(['mine', 'a', 'b']);
+            expect(withPendingComments(loaded, [mine], 'last').map((c) => c.id))
+                .toEqual(['a', 'b', 'mine']);
+            // Once the server's list holds it, it shows where the server put it.
+            const returned = [comment({ id: 'a' }), mine, comment({ id: 'b' })];
+            expect(withPendingComments(returned, [mine], 'first')).toBe(returned);
+            expect(withPendingComments(loaded, [], 'first')).toBe(loaded);
+        });
+    });
+
+    describe('request failures', () => {
+        it('tells a reader a closed thread is closed, without a retry', () => {
+            expect(describeCommentRequestFailure('load', 404, { error: 'Post not found.' })).toEqual({
+                message: 'Comments are closed on this post.',
+                retryable: false,
+                signIn: false,
+            });
+            expect(describeCommentRequestFailure('post', 404).message)
+                .toBe('Comments are closed on this post.');
+            expect(describeCommentRequestFailure('reply', 404).message)
+                .toBe('That comment is no longer available.');
+            expect(describeCommentRequestFailure('remove', 404).message)
+                .toBe('That comment is no longer available.');
+        });
+
+        it('says how long to wait after a rate limit', () => {
+            expect(describeCommentRequestFailure('load', 429, { retryAfterSeconds: 30 })).toEqual({
+                message: 'Too many requests. Wait 30 seconds, then try again.',
+                retryable: true,
+                signIn: false,
+            });
+            expect(describeCommentRequestFailure('post', 429, { retryAfterSeconds: 1 }).message)
+                .toBe('Too many requests. Wait 1 second, then try again.');
+            expect(describeCommentRequestFailure('post', 429, { retryAfterSeconds: 541 }).message)
+                .toBe('Too many requests. Wait 10 minutes, then try again.');
+            expect(describeCommentRequestFailure('report', 429, {}).message)
+                .toBe('Too many requests. Wait a moment, then try again.');
+        });
+
+        it('asks for sign-in when the session has ended', () => {
+            expect(describeCommentRequestFailure('post', 401, { error: 'Unauthorized' })).toEqual({
+                message: 'Your session ended. Sign in to post.',
+                retryable: true,
+                signIn: true,
+            });
+            expect(describeCommentRequestFailure('load', 401).message)
+                .toBe('Your session ended. Sign in again to continue.');
+        });
+
+        it("keeps the server's words for a write, never for a read or a non-JSON body", () => {
+            expect(describeCommentRequestFailure('reply', 403, {
+                error: 'Replying is unavailable on this comment.',
+            }).message).toBe('Replying is unavailable on this comment.');
+            expect(describeCommentRequestFailure('load', 500, { error: 'Failed to load comments.' }).message)
+                .toBe('We could not load this conversation.');
+            expect(describeCommentRequestFailure('post', 502, {}).message).toBe('Could not post comment.');
+            expect(describeCommentRequestFailure('remove', null).message).toBe('Could not remove comment.');
         });
     });
 

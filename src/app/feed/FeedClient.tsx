@@ -493,10 +493,18 @@ export default function FeedClient({
         setCommentsOpenIds((current) => toggleInSet(current, id));
     }, []);
 
+    // An open thread reports its count after every page it loads, mostly
+    // unchanged. A new items array rebuilds every card and re-renders the
+    // whole feed, so it is made only when this post's count moved.
     const applyCommentCount = useCallback((postId: string, commentCount: number) => {
-        setItems((current) => current.map((item) => (item.id === postId
-            ? { ...item, commentCount: Math.max(0, commentCount) }
-            : item)));
+        const nextCount = Math.max(0, commentCount);
+        setItems((current) => {
+            const index = current.findIndex((item) => item.id === postId);
+            if (index < 0 || current[index].commentCount === nextCount) return current;
+            const next = [...current];
+            next[index] = { ...current[index], commentCount: nextCount };
+            return next;
+        });
     }, [setItems]);
 
     // The save hook returns a new toggleSave on every render; the cards get one

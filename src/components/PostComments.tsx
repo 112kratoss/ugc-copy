@@ -8,16 +8,22 @@ import PostCommentAvatar from '@/components/PostCommentAvatar';
 import { useAuth } from '@/components/AuthProvider';
 import {
     POST_COMMENT_MAX_LENGTH,
+    POST_COMMENTS_MAX_PAGE_SIZE,
+    POST_COMMENTS_PAGE_SIZE,
     adjustReplyCount,
     buildCommentThreads,
     buildCommentsQuery,
     canDeleteComment,
     canRemoveComment,
     canReportComment,
+    describeCommentRequestFailure,
     getCommentDisplay,
     markCommentRemoved,
     mergeCommentPage,
     prependComment,
+    withPendingComments,
+    type CommentRequestFailure,
+    type CommentRequestKind,
     type PostComment,
     type PostCommentSort,
     type PostCommentsPage,
@@ -39,11 +45,23 @@ const REPORT_REASONS = [
 
 type ReportReason = (typeof REPORT_REASONS)[number]['value'];
 
+/**
+ * One read of a comment list: the top level, or one comment's replies. A read
+ * that fails is kept so Retry repeats it instead of starting the list over.
+ */
+type ListRead =
+    | { kind: 'first-page' }
+    | { kind: 'next-page'; offset: number }
+    // After a mutation: everything loaded so far, read again from the top,
+    // because a new or removed comment moves every later offset.
+    | { kind: 'loaded-range'; count: number };
+
 interface ReplyPageState {
     hasLoaded: boolean;
     loading: boolean;
     nextOffset: number | null;
-    error: string | null;
+    error: CommentRequestFailure | null;
+    failedRead: ListRead | null;
 }
 
 interface PostCommentsProps {
@@ -51,8 +69,6 @@ interface PostCommentsProps {
     postCreatorId: string | null;
     commentCount: number;
     onCommentCountChange?: (commentCount: number) => void;
-    /** Loads the first page immediately instead of waiting for a "load" tap. */
-    autoLoad?: boolean;
     /**
      * The feed delivery the thread was opened from, sent with each new comment
      * so the server can credit it to the ranked card that showed the post.
@@ -67,6 +83,7 @@ function emptyReplyPageState(): ReplyPageState {
         loading: false,
         nextOffset: 0,
         error: null,
+        failedRead: null,
     };
 }
 
@@ -74,29 +91,52 @@ function isAbortError(error: unknown) {
     return error instanceof Error && error.name === 'AbortError';
 }
 
+/** Carries the reader-facing failure of an answered request to its catch. */
+class CommentRequestError extends Error {
+    readonly failure: CommentRequestFailure;
+
+    constructor(failure: CommentRequestFailure) {
+        super(failure.message);
+        this.name = 'CommentRequestError';
+        this.failure = failure;
+    }
+}
+
+function toFailure(kind: CommentRequestKind, error: unknown): CommentRequestFailure {
+    return error instanceof CommentRequestError
+        ? error.failure
+        : describeCommentRequestFailure(kind, null);
+}
+
+type CommentErrorBody = { error?: unknown; retryAfterSeconds?: unknown };
+
 export default function PostComments({
     postId,
     postCreatorId,
     commentCount,
     onCommentCountChange,
-    autoLoad = true,
     deliveryId = null,
 }: PostCommentsProps) {
     const { session, user } = useAuth();
     const accessToken = session?.access_token ?? null;
+    const viewerId = user?.id ?? null;
 
     const [sort, setSort] = useState<PostCommentSort>('top');
     const [comments, setComments] = useState<PostComment[]>([]);
+    // The viewer's own comments and replies posted while the thread is open,
+    // kept on screen until a server read returns them.
+    const [pendingComments, setPendingComments] = useState<PostComment[]>([]);
     const [repliesByParent, setRepliesByParent] = useState<Record<string, PostComment[]>>({});
+    const [pendingRepliesByParent, setPendingRepliesByParent] = useState<Record<string, PostComment[]>>({});
     const [replyPages, setReplyPages] = useState<Record<string, ReplyPageState>>({});
     const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
     const [nextOffset, setNextOffset] = useState<number | null>(0);
     const [resolvedCreatorId, setResolvedCreatorId] = useState(postCreatorId);
     const [totalCount, setTotalCount] = useState(commentCount);
     const [hasLoaded, setHasLoaded] = useState(false);
-    const [loading, setLoading] = useState(autoLoad);
-    const [loadError, setLoadError] = useState<string | null>(null);
-    const [actionError, setActionError] = useState<string | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState<CommentRequestFailure | null>(null);
+    const [actionError, setActionError] = useState<CommentRequestFailure | null>(null);
     const [statusMessage, setStatusMessage] = useState('');
     const [draft, setDraft] = useState('');
     const [replyTo, setReplyTo] = useState<PostComment | null>(null);
@@ -112,15 +152,34 @@ export default function PostComments({
     const topLevelAbortRef = useRef<AbortController | null>(null);
     const topLevelRequestIdRef = useRef(0);
     const replyRequestIdsRef = useRef<Record<string, number>>({});
+    const failedReadRef = useRef<ListRead | null>(null);
+    // The lists as last rendered. A mutation sizes its re-read from them; its
+    // own local patch is still queued when the re-read starts.
+    const commentsRef = useRef(comments);
+    const repliesByParentRef = useRef(repliesByParent);
+    // Requests read the token when they are sent. Supabase refreshes it about
+    // hourly and when a backgrounded tab wakes; the viewer is the same, so the
+    // thread must not start over.
+    const authRef = useRef({ accessToken, viewerId });
     const composerRef = useRef<HTMLTextAreaElement | null>(null);
     const reportReasonRef = useRef<HTMLSelectElement | null>(null);
+    const reportOpenerRef = useRef<HTMLButtonElement | null>(null);
 
     const authHeaders = useCallback((json = false) => {
         const headers: Record<string, string> = {};
         if (json) headers['Content-Type'] = 'application/json';
-        if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+        const token = authRef.current.accessToken;
+        if (token) headers.Authorization = `Bearer ${token}`;
         return headers;
-    }, [accessToken]);
+    }, []);
+
+    useEffect(() => {
+        commentsRef.current = comments;
+    }, [comments]);
+
+    useEffect(() => {
+        repliesByParentRef.current = repliesByParent;
+    }, [repliesByParent]);
 
     // Callers pass an inline arrow, so this callback has a new identity on every
     // render. Holding it in a ref keeps request callbacks stable.
@@ -135,57 +194,101 @@ export default function PostComments({
         onCommentCountChangeRef.current?.(normalized);
     }, []);
 
-    const loadPage = useCallback(async (
-        offset: number,
-        replace: boolean
-    ): Promise<PostCommentsPage | null> => {
+    const readList = useCallback(async (
+        parentId: string | null,
+        read: ListRead,
+        signal?: AbortSignal
+    ): Promise<{ page: PostCommentsPage; comments: PostComment[] }> => {
+        const kind: CommentRequestKind = parentId ? 'replies' : 'load';
+        const fetchPage = async (offset: number, limit: number) => {
+            // Replies are always oldest first; only the top level has a sort.
+            const query = buildCommentsQuery(parentId
+                ? { parentId, offset, limit }
+                : { offset, limit, sort });
+            const response = await fetch(
+                `/api/showcase/posts/${encodeURIComponent(postId)}/comments?${query}`,
+                { headers: authHeaders(), signal }
+            );
+            if (!response.ok) {
+                const body = await response.json().catch(() => null) as CommentErrorBody | null;
+                throw new CommentRequestError(
+                    describeCommentRequestFailure(kind, response.status, body)
+                );
+            }
+            return await response.json() as PostCommentsPage;
+        };
+
+        if (read.kind !== 'loaded-range') {
+            const page = await fetchPage(
+                read.kind === 'next-page' ? read.offset : 0,
+                POST_COMMENTS_PAGE_SIZE
+            );
+            return { page, comments: page.comments };
+        }
+
+        // The server answers at most 50 comments a read, and its nextOffset is
+        // a raw row offset past rows hidden from this viewer, so the reads
+        // chain on it exactly as "Load more" does.
+        const target = Math.max(read.count, POST_COMMENTS_PAGE_SIZE);
+        let received: PostComment[] = [];
+        let offset = 0;
+        for (;;) {
+            const page = await fetchPage(
+                offset,
+                Math.min(target - received.length, POST_COMMENTS_MAX_PAGE_SIZE)
+            );
+            received = mergeCommentPage(received, page.comments);
+            const { hasMore, nextOffset: pageNextOffset } = page.pageInfo;
+            if (
+                received.length >= target
+                || !hasMore
+                || pageNextOffset === null
+                || pageNextOffset <= offset
+            ) {
+                return { page, comments: received };
+            }
+            offset = pageNextOffset;
+        }
+    }, [authHeaders, postId, sort]);
+
+    const readTopLevel = useCallback(async (read: ListRead) => {
         const requestId = ++topLevelRequestIdRef.current;
         topLevelAbortRef.current?.abort();
         const controller = new AbortController();
         topLevelAbortRef.current = controller;
+        failedReadRef.current = null;
 
         setLoading(true);
         setLoadError(null);
 
         try {
-            const query = buildCommentsQuery({ offset, sort });
-            const response = await fetch(
-                `/api/showcase/posts/${encodeURIComponent(postId)}/comments?${query}`,
-                {
-                    headers: authHeaders(),
-                    signal: controller.signal,
-                }
-            );
-            if (!response.ok) throw new Error('Could not load comments');
+            const { page, comments: incoming } = await readList(null, read, controller.signal);
+            if (requestId !== topLevelRequestIdRef.current) return;
 
-            const page = await response.json() as PostCommentsPage;
-            if (requestId !== topLevelRequestIdRef.current) return null;
-
-            setComments((current) => mergeCommentPage(current, page.comments, replace));
+            // Only "Load more" adds to the list. A first page, or the loaded
+            // range read again, is the whole list as the server now has it.
+            setComments((current) => mergeCommentPage(
+                current,
+                incoming,
+                read.kind !== 'next-page'
+            ));
             setNextOffset(page.pageInfo.hasMore ? page.pageInfo.nextOffset : null);
             setResolvedCreatorId(page.postCreatorId ?? postCreatorId);
             setHasLoaded(true);
             publishCount(page.commentCount);
-            return page;
         } catch (error) {
-            if (isAbortError(error) || requestId !== topLevelRequestIdRef.current) {
-                return null;
-            }
+            if (isAbortError(error) || requestId !== topLevelRequestIdRef.current) return;
+            failedReadRef.current = read;
             setHasLoaded(true);
-            setLoadError('We could not load this conversation.');
-            return null;
+            setLoadError(toFailure('load', error));
         } finally {
             if (requestId === topLevelRequestIdRef.current) {
                 setLoading(false);
             }
         }
-    }, [authHeaders, postCreatorId, postId, publishCount, sort]);
+    }, [postCreatorId, publishCount, readList]);
 
-    const loadReplies = useCallback(async (
-        parentId: string,
-        offset: number,
-        replace: boolean
-    ): Promise<PostCommentsPage | null> => {
+    const readReplies = useCallback(async (parentId: string, read: ListRead) => {
         const requestId = (replyRequestIdsRef.current[parentId] ?? 0) + 1;
         replyRequestIdsRef.current[parentId] = requestId;
         setReplyPages((current) => ({
@@ -194,23 +297,21 @@ export default function PostComments({
                 ...(current[parentId] ?? emptyReplyPageState()),
                 loading: true,
                 error: null,
+                failedRead: null,
             },
         }));
 
         try {
-            const query = buildCommentsQuery({ parentId, offset });
-            const response = await fetch(
-                `/api/showcase/posts/${encodeURIComponent(postId)}/comments?${query}`,
-                { headers: authHeaders() }
-            );
-            if (!response.ok) throw new Error('Could not load replies');
-
-            const page = await response.json() as PostCommentsPage;
-            if (replyRequestIdsRef.current[parentId] !== requestId) return null;
+            const { page, comments: incoming } = await readList(parentId, read);
+            if (replyRequestIdsRef.current[parentId] !== requestId) return;
 
             setRepliesByParent((current) => ({
                 ...current,
-                [parentId]: mergeCommentPage(current[parentId] ?? [], page.comments, replace),
+                [parentId]: mergeCommentPage(
+                    current[parentId] ?? [],
+                    incoming,
+                    read.kind !== 'next-page'
+                ),
             }));
             setReplyPages((current) => ({
                 ...current,
@@ -219,30 +320,52 @@ export default function PostComments({
                     loading: false,
                     nextOffset: page.pageInfo.hasMore ? page.pageInfo.nextOffset : null,
                     error: null,
+                    failedRead: null,
                 },
             }));
-            return page;
-        } catch {
-            if (replyRequestIdsRef.current[parentId] !== requestId) return null;
+        } catch (error) {
+            if (replyRequestIdsRef.current[parentId] !== requestId) return;
             setReplyPages((current) => ({
                 ...current,
                 [parentId]: {
                     ...(current[parentId] ?? emptyReplyPageState()),
                     loading: false,
-                    error: 'Could not load replies.',
+                    error: toFailure('replies', error),
+                    failedRead: read,
                 },
             }));
-            return null;
         }
-    }, [authHeaders, postId]);
+    }, [readList]);
 
-    // Sort changes and authentication changes both require a clean, viewer-safe
-    // first page. Aborting the previous request prevents an older sort from
+    // Declared before the reset below so a new viewer's first read already
+    // carries their token. For the same viewer a new token changes nothing on
+    // screen; only a failed read is tried again with it, because a read sent
+    // with a token that expired on the way fails and the refresh is its one
+    // useful retry.
+    useEffect(() => {
+        const previous = authRef.current;
+        authRef.current = { accessToken, viewerId };
+        const failedRead = failedReadRef.current;
+        if (
+            failedRead
+            && accessToken
+            && previous.accessToken !== accessToken
+            && previous.viewerId === viewerId
+        ) {
+            void readTopLevel(failedRead);
+        }
+    }, [accessToken, readTopLevel, viewerId]);
+
+    // A different viewer (sign-in, sign-out, another account) or another sort
+    // needs a clean first page: which comments a viewer may see depends on
+    // their blocks. Aborting the previous request keeps an older sort from
     // overwriting the current selection.
     useEffect(() => {
         const replyRequestIds = replyRequestIdsRef.current;
         setComments([]);
+        setPendingComments([]);
         setRepliesByParent({});
+        setPendingRepliesByParent({});
         setReplyPages({});
         setExpandedIds(new Set());
         setNextOffset(0);
@@ -250,11 +373,7 @@ export default function PostComments({
         setHasLoaded(false);
         setLoadError(null);
         setActionError(null);
-        setLoading(autoLoad);
-
-        if (autoLoad) {
-            void loadPage(0, true);
-        }
+        void readTopLevel({ kind: 'first-page' });
 
         return () => {
             topLevelRequestIdRef.current += 1;
@@ -264,7 +383,7 @@ export default function PostComments({
                 replyRequestIds[parentId] += 1;
             }
         };
-    }, [accessToken, autoLoad, loadPage, postCreatorId, postId]);
+    }, [postCreatorId, postId, readTopLevel, viewerId]);
 
     useEffect(() => {
         setTotalCount(commentCount);
@@ -285,9 +404,24 @@ export default function PostComments({
     }, [postId]);
 
     useEffect(() => {
-        if (!reportTarget) return;
-        window.requestAnimationFrame(() => reportReasonRef.current?.focus());
+        if (reportTarget) {
+            window.requestAnimationFrame(() => reportReasonRef.current?.focus());
+            return;
+        }
+        // The form opens at the top of the thread. Closing it (Cancel, or a
+        // sent report) puts focus back on the Report button it came from, so a
+        // keyboard or screen-reader user keeps their place.
+        const opener = reportOpenerRef.current;
+        reportOpenerRef.current = null;
+        if (!opener) return;
+        window.requestAnimationFrame(() => {
+            if (opener.isConnected) opener.focus();
+        });
     }, [reportTarget]);
+
+    const retryFailedRead = useCallback(() => {
+        void readTopLevel(failedReadRef.current ?? { kind: 'first-page' });
+    }, [readTopLevel]);
 
     const toggleReplies = useCallback(async (parentId: string) => {
         if (expandedIds.has(parentId)) {
@@ -301,9 +435,9 @@ export default function PostComments({
 
         setExpandedIds((current) => new Set(current).add(parentId));
         if (!replyPages[parentId]?.hasLoaded) {
-            await loadReplies(parentId, 0, true);
+            await readReplies(parentId, { kind: 'first-page' });
         }
-    }, [expandedIds, loadReplies, replyPages]);
+    }, [expandedIds, readReplies, replyPages]);
 
     const submitComment = useCallback(async () => {
         const body = draft.trim();
@@ -315,6 +449,7 @@ export default function PostComments({
         // Be defensive if a stale client ever supplies a reply as the target:
         // the product supports one reply level, so normalize to the root.
         const parentId = replyTo?.parentId ?? replyTo?.id ?? null;
+        const kind: CommentRequestKind = parentId ? 'reply' : 'post';
 
         try {
             const response = await fetch(`/api/showcase/posts/${encodeURIComponent(postId)}/comments`, {
@@ -322,51 +457,53 @@ export default function PostComments({
                 headers: authHeaders(true),
                 body: JSON.stringify({ body, parentId, ...(deliveryId ? { deliveryId } : {}) }),
             });
-            const data = await response.json() as {
+            // A gateway's error page is not JSON, and its parse error is no
+            // message for a reader.
+            const data = await response.json().catch(() => ({})) as CommentErrorBody & {
                 comment?: PostComment;
                 commentCount?: number;
-                error?: string;
             };
             if (!response.ok || !data.comment) {
-                throw new Error(data.error || 'Could not post comment');
+                throw new CommentRequestError(
+                    describeCommentRequestFailure(kind, response.status, data)
+                );
             }
+            const posted = data.comment;
 
             setDraft('');
             setReplyTo(null);
 
+            let loadedCount = commentsRef.current.length;
             if (parentId) {
                 setComments((current) => adjustReplyCount(current, parentId, 1));
                 setExpandedIds((current) => new Set(current).add(parentId));
-
-                if (replyPages[parentId]?.hasLoaded) {
-                    setRepliesByParent((current) => ({
-                        ...current,
-                        [parentId]: mergeCommentPage(
-                            current[parentId] ?? [],
-                            [data.comment as PostComment]
-                        ),
-                    }));
-                }
+                setPendingRepliesByParent((current) => ({
+                    ...current,
+                    [parentId]: mergeCommentPage(current[parentId] ?? [], [posted]),
+                }));
             } else {
-                setComments((current) => prependComment(current, data.comment as PostComment));
+                setComments((current) => prependComment(current, posted));
+                setPendingComments((current) => prependComment(current, posted));
+                loadedCount += 1;
             }
 
             publishCount(data.commentCount ?? totalCount + 1);
             setStatusMessage(parentId ? 'Reply posted.' : 'Comment posted.');
             composerRef.current?.focus();
 
-            // Mutations can change top ranking and every following offset. A
-            // server refresh keeps page boundaries authoritative and prevents a
-            // later "Load more" from skipping or duplicating comments.
-            const refreshes: Array<Promise<PostCommentsPage | null>> = [loadPage(0, true)];
-            if (parentId) {
-                refreshes.push(loadReplies(parentId, 0, true));
+            // A new comment, or under Top a parent's new reply count, moves the
+            // offsets of everything after it. Reading the loaded range again
+            // keeps every page the reader opened and lets "Load more" continue
+            // without skipping or repeating a comment. A reply is the newest in
+            // its thread, so loaded replies keep their offsets; they are read
+            // only when this reply is what opened them.
+            const refreshes = [readTopLevel({ kind: 'loaded-range', count: loadedCount })];
+            if (parentId && !replyPages[parentId]?.hasLoaded) {
+                refreshes.push(readReplies(parentId, { kind: 'first-page' }));
             }
             await Promise.all(refreshes);
         } catch (submitError) {
-            setActionError(
-                submitError instanceof Error ? submitError.message : 'Could not post comment.'
-            );
+            setActionError(toFailure(kind, submitError));
         } finally {
             setSubmitting(false);
         }
@@ -375,10 +512,10 @@ export default function PostComments({
         authHeaders,
         deliveryId,
         draft,
-        loadPage,
-        loadReplies,
         postId,
         publishCount,
+        readReplies,
+        readTopLevel,
         replyPages,
         replyTo,
         submitting,
@@ -386,9 +523,13 @@ export default function PostComments({
     ]);
 
     const removeComment = useCallback(async (comment: PostComment, asOwner: boolean) => {
+        // A removed comment keeps a "[deleted]" row only while it holds
+        // replies; without replies it is simply gone.
         const confirmed = window.confirm(asOwner
             ? 'Remove this comment? It will be hidden from everyone viewing your post.'
-            : 'Delete your comment? It will be replaced with “[deleted]”. Replies to it stay visible.');
+            : comment.replyCount > 0
+                ? 'Delete your comment? It will be replaced with “[deleted]”. Replies to it stay visible.'
+                : 'Delete your comment? It will be removed.');
         if (!confirmed) return;
 
         setBusyCommentId(comment.id);
@@ -399,49 +540,58 @@ export default function PostComments({
                 `/api/showcase/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(comment.id)}`,
                 { method: 'DELETE', headers: authHeaders() }
             );
-            const data = await response.json() as {
+            // Not JSON from a gateway: see submitComment.
+            const data = await response.json().catch(() => ({})) as CommentErrorBody & {
                 status?: PostComment['status'];
                 commentCount?: number;
-                error?: string;
             };
             if (!response.ok || !data.status) {
-                throw new Error(data.error || 'Could not remove comment');
+                throw new CommentRequestError(
+                    describeCommentRequestFailure('remove', response.status, data)
+                );
             }
+            const status = data.status;
+            const parentId = comment.parentId;
 
-            if (comment.parentId) {
+            let loadedCount = commentsRef.current.length;
+            let loadedReplyCount = 0;
+            if (parentId) {
+                loadedReplyCount = markCommentRemoved(
+                    repliesByParentRef.current[parentId] ?? [],
+                    comment.id,
+                    status
+                ).length;
                 setRepliesByParent((current) => ({
                     ...current,
-                    [comment.parentId as string]: markCommentRemoved(
-                        current[comment.parentId as string] ?? [],
-                        comment.id,
-                        data.status as PostComment['status']
-                    ),
+                    [parentId]: markCommentRemoved(current[parentId] ?? [], comment.id, status),
                 }));
-                setComments((current) => adjustReplyCount(current, comment.parentId as string, -1));
+                setPendingRepliesByParent((current) => ({
+                    ...current,
+                    [parentId]: (current[parentId] ?? []).filter((reply) => reply.id !== comment.id),
+                }));
+                setComments((current) => adjustReplyCount(current, parentId, -1));
             } else {
-                setComments((current) => markCommentRemoved(
-                    current,
-                    comment.id,
-                    data.status as PostComment['status']
-                ));
+                loadedCount = markCommentRemoved(commentsRef.current, comment.id, status).length;
+                setComments((current) => markCommentRemoved(current, comment.id, status));
+                setPendingComments((current) => current.filter((item) => item.id !== comment.id));
             }
 
             publishCount(data.commentCount ?? Math.max(0, totalCount - 1));
             setStatusMessage(asOwner ? 'Comment removed.' : 'Comment deleted.');
 
-            const refreshes: Array<Promise<PostCommentsPage | null>> = [loadPage(0, true)];
-            if (comment.parentId) {
-                refreshes.push(loadReplies(comment.parentId, 0, true));
+            // A removal moves every later offset; read the loaded range again,
+            // for the same reasons as after a post.
+            const refreshes = [readTopLevel({ kind: 'loaded-range', count: loadedCount })];
+            if (parentId && replyPages[parentId]?.hasLoaded) {
+                refreshes.push(readReplies(parentId, { kind: 'loaded-range', count: loadedReplyCount }));
             }
             await Promise.all(refreshes);
         } catch (removeError) {
-            setActionError(
-                removeError instanceof Error ? removeError.message : 'Could not remove comment.'
-            );
+            setActionError(toFailure('remove', removeError));
         } finally {
             setBusyCommentId(null);
         }
-    }, [authHeaders, loadPage, loadReplies, postId, publishCount, totalCount]);
+    }, [authHeaders, postId, publishCount, readReplies, readTopLevel, replyPages, totalCount]);
 
     const submitReport = useCallback(async () => {
         if (!reportTarget || busyCommentId) return;
@@ -461,25 +611,42 @@ export default function PostComments({
                     details: reportDetails.trim() || undefined,
                 }),
             });
-            const data = await response.json().catch(() => null) as { error?: string } | null;
-            if (!response.ok) throw new Error(data?.error || 'Could not report comment');
+            const data = await response.json().catch(() => null) as CommentErrorBody | null;
+            if (!response.ok) {
+                throw new CommentRequestError(
+                    describeCommentRequestFailure('report', response.status, data)
+                );
+            }
 
             setReportTarget(null);
             setReportDetails('');
             setReportReason('spam');
             setStatusMessage('Report submitted for review.');
         } catch (reportError) {
-            setActionError(
-                reportError instanceof Error ? reportError.message : 'Could not report that comment.'
-            );
+            setActionError(toFailure('report', reportError));
         } finally {
             setBusyCommentId(null);
         }
     }, [authHeaders, busyCommentId, reportDetails, reportReason, reportTarget]);
 
+    const topLevelForDisplay = useMemo(
+        () => withPendingComments(comments, pendingComments, 'first'),
+        [comments, pendingComments]
+    );
+    const repliesForDisplay = useMemo(() => {
+        const merged = { ...repliesByParent };
+        for (const [parentId, pending] of Object.entries(pendingRepliesByParent)) {
+            merged[parentId] = withPendingComments(repliesByParent[parentId] ?? [], pending, 'last');
+        }
+        return merged;
+    }, [pendingRepliesByParent, repliesByParent]);
     const rows = useMemo(
-        () => buildCommentThreads({ topLevel: comments, repliesByParent, expandedIds }),
-        [comments, expandedIds, repliesByParent]
+        () => buildCommentThreads({
+            topLevel: topLevelForDisplay,
+            repliesByParent: repliesForDisplay,
+            expandedIds,
+        }),
+        [expandedIds, repliesForDisplay, topLevelForDisplay]
     );
 
     const canSubmit = draft.trim().length > 0 && !submitting && Boolean(accessToken);
@@ -658,14 +825,17 @@ export default function PostComments({
                     role="alert"
                     className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[rgba(255,124,139,0.34)] bg-[rgba(255,124,139,0.10)] px-4 py-3 text-sm text-[#ff7c8b]"
                 >
-                    <span>{actionError}</span>
-                    <button
-                        type="button"
-                        onClick={() => setActionError(null)}
-                        className="ui-focus-ring min-h-11 rounded-full px-3 text-xs font-bold hover:bg-white/5"
-                    >
-                        Dismiss
-                    </button>
+                    <span>{actionError.message}</span>
+                    <div className="flex flex-wrap items-center gap-1">
+                        {actionError.signIn ? <SignInLink href={loginHref} /> : null}
+                        <button
+                            type="button"
+                            onClick={() => setActionError(null)}
+                            className="ui-focus-ring min-h-11 rounded-full px-3 text-xs font-bold hover:bg-white/5"
+                        >
+                            Dismiss
+                        </button>
+                    </div>
                 </div>
             ) : null}
 
@@ -674,14 +844,21 @@ export default function PostComments({
                     role="alert"
                     className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[rgba(255,124,139,0.34)] bg-[rgba(255,124,139,0.10)] px-4 py-3 text-sm text-[#ff7c8b]"
                 >
-                    <span>{loadError}</span>
-                    <button
-                        type="button"
-                        onClick={() => void loadPage(0, true)}
-                        className="ui-focus-ring min-h-11 rounded-full border border-current px-4 text-xs font-bold"
-                    >
-                        Retry
-                    </button>
+                    <span>{loadError.message}</span>
+                    {loadError.signIn || loadError.retryable ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                            {loadError.signIn ? <SignInLink href={loginHref} /> : null}
+                            {loadError.retryable ? (
+                                <button
+                                    type="button"
+                                    onClick={retryFailedRead}
+                                    className="ui-focus-ring min-h-11 rounded-full border border-current px-4 text-xs font-bold"
+                                >
+                                    Retry
+                                </button>
+                            ) : null}
+                        </div>
+                    ) : null}
                 </div>
             ) : null}
 
@@ -723,11 +900,10 @@ export default function PostComments({
                                         {row.expanded && replyPage.nextOffset !== null && replyPage.hasLoaded ? (
                                             <button
                                                 type="button"
-                                                onClick={() => void loadReplies(
-                                                    parentId,
-                                                    replyPage.nextOffset as number,
-                                                    false
-                                                )}
+                                                onClick={() => void readReplies(parentId, {
+                                                    kind: 'next-page',
+                                                    offset: replyPage.nextOffset as number,
+                                                })}
                                                 disabled={replyPage.loading}
                                                 className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full px-3 text-xs font-bold text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] disabled:opacity-60"
                                             >
@@ -740,14 +916,20 @@ export default function PostComments({
                                     </div>
                                     {row.expanded && replyPage.error ? (
                                         <div className="flex flex-wrap items-center gap-2 pb-2 text-xs text-[#ff7c8b]">
-                                            <span>{replyPage.error}</span>
-                                            <button
-                                                type="button"
-                                                onClick={() => void loadReplies(parentId, 0, true)}
-                                                className="ui-focus-ring min-h-11 rounded-full px-3 font-bold hover:bg-[var(--ui-surface-2)]"
-                                            >
-                                                Retry replies
-                                            </button>
+                                            <span>{replyPage.error.message}</span>
+                                            {replyPage.error.signIn ? <SignInLink href={loginHref} /> : null}
+                                            {replyPage.error.retryable ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void readReplies(
+                                                        parentId,
+                                                        replyPage.failedRead ?? { kind: 'first-page' }
+                                                    )}
+                                                    className="ui-focus-ring min-h-11 rounded-full px-3 font-bold hover:bg-[var(--ui-surface-2)]"
+                                                >
+                                                    Retry replies
+                                                </button>
+                                            ) : null}
                                         </div>
                                     ) : null}
                                 </li>
@@ -804,6 +986,7 @@ export default function PostComments({
                                                 {user && !isReply ? (
                                                     <CommentAction
                                                         label="Reply"
+                                                        accessibleLabel={`Reply to ${display.authorLabel}`}
                                                         onClick={() => {
                                                             setReplyTo(comment);
                                                             window.requestAnimationFrame(() => {
@@ -815,6 +998,7 @@ export default function PostComments({
                                                 {canDeleteComment(comment, user?.id) ? (
                                                     <CommentAction
                                                         label="Delete"
+                                                        accessibleLabel="Delete your comment"
                                                         icon={<Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
                                                         busy={busyCommentId === comment.id}
                                                         onClick={() => void removeComment(comment, false)}
@@ -823,6 +1007,7 @@ export default function PostComments({
                                                 {canRemoveComment(comment, resolvedCreatorId, user?.id) ? (
                                                     <CommentAction
                                                         label="Remove"
+                                                        accessibleLabel={`Remove ${display.authorLabel}'s comment`}
                                                         icon={<Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
                                                         busy={busyCommentId === comment.id}
                                                         onClick={() => void removeComment(comment, true)}
@@ -831,9 +1016,11 @@ export default function PostComments({
                                                 {canReportComment(comment, user?.id) ? (
                                                     <CommentAction
                                                         label="Report"
+                                                        accessibleLabel={`Report ${display.authorLabel}'s comment`}
                                                         icon={<Flag className="h-3.5 w-3.5" aria-hidden="true" />}
                                                         busy={busyCommentId === comment.id}
-                                                        onClick={() => {
+                                                        onClick={(event) => {
+                                                            reportOpenerRef.current = event.currentTarget;
                                                             setReportTarget(comment);
                                                             setActionError(null);
                                                         }}
@@ -849,16 +1036,6 @@ export default function PostComments({
                 </ol>
             ) : null}
 
-            {!autoLoad && !hasLoaded ? (
-                <button
-                    type="button"
-                    onClick={() => void loadPage(0, true)}
-                    className="ui-focus-ring min-h-11 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 text-sm font-bold text-[var(--ui-text-secondary)]"
-                >
-                    Load comments
-                </button>
-            ) : null}
-
             {loading && hasLoaded ? (
                 <p className="flex items-center justify-center gap-2 py-3 text-sm text-[var(--ui-text-muted)]">
                     <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -867,7 +1044,7 @@ export default function PostComments({
             ) : !loadError && nextOffset !== null && hasLoaded ? (
                 <button
                     type="button"
-                    onClick={() => void loadPage(nextOffset, false)}
+                    onClick={() => void readTopLevel({ kind: 'next-page', offset: nextOffset })}
                     className="ui-focus-ring min-h-11 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:border-[var(--ui-border-strong)]"
                 >
                     Load more comments
@@ -877,22 +1054,37 @@ export default function PostComments({
     );
 }
 
+function SignInLink({ href }: { href: string }) {
+    return (
+        <Link
+            href={href}
+            className="ui-focus-ring inline-flex min-h-11 items-center rounded-full px-3 text-xs font-bold underline underline-offset-2 hover:bg-white/5"
+        >
+            Sign in
+        </Link>
+    );
+}
+
 function CommentAction({
     label,
+    accessibleLabel,
     icon,
     busy,
     onClick,
 }: {
     label: string;
+    /** Names the comment as well; a screen reader otherwise hears a column of identical buttons. */
+    accessibleLabel: string;
     icon?: React.ReactNode;
     busy?: boolean;
-    onClick: () => void;
+    onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
     return (
         <button
             type="button"
             onClick={onClick}
             disabled={busy}
+            aria-label={accessibleLabel}
             className="ui-focus-ring inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-xs font-bold text-[var(--ui-text-faint)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-secondary)] disabled:opacity-60"
         >
             {busy
