@@ -1,4 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+// vitest resolves next/link to the pages-router Link, which only navigates (and
+// only calls onNavigate) inside this context.
+import { RouterContext } from 'next/dist/shared/lib/router-context.shared-runtime';
+import type { NextRouter } from 'next/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import NewPostClient from '@/app/post/new/NewPostClient';
@@ -2827,8 +2831,8 @@ describe('NewPostClient', () => {
     }
 
     it('reports real byte progress while the upload is in flight', async () => {
-      // Uploads happen at submit, so this banner is the only feedback during the
-      // one stretch where the user is waiting on bytes.
+      // The file uploads on add and publish waits for it, so this bar is the
+      // only feedback while the user is waiting on bytes.
       let reportProgress: ((progress: { bytesSent: number; totalBytes: number; fraction: number }) => void) | null = null;
       let finishUpload: ((value: { signedUrl: string; storagePath: string }) => void) | null = null;
 
@@ -2970,13 +2974,13 @@ describe('NewPostClient', () => {
       ]);
     });
 
-    it('re-uploads after a server-side publish failure, because the server deleted the staged media', async () => {
-      // Every server-side failure path runs cleanupUploadedMedia, which deletes
-      // the staged objects the composer still holds paths to. Keeping them would
-      // make every retry skip the upload and fail on "Failed to load uploaded
-      // media" forever, with no way out but removing and re-adding the file.
+    it('re-uploads after a 5xx, because the server may have consumed the staged media', async () => {
+      // A 5xx can come after the server moved the staged file into the post and
+      // deleted it. Reusing that path would fail every retry, with no way out
+      // but removing and re-adding the file.
       enqueueResponse({
         ok: false,
+        status: 500,
         json: async () => ({ error: 'Failed to create post.' }),
       });
 
@@ -3012,6 +3016,270 @@ describe('NewPostClient', () => {
       expect(temporaryUploadMock).toHaveBeenCalledTimes(2);
     });
 
+    function enqueuePublished(postId: string) {
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          postId,
+          showcasePath: `/showcase/${postId}`,
+          resourceBundlePath: null,
+          visibility: 'public',
+          resourceBundleStatus: null,
+        }),
+      });
+    }
+
+    it('keeps staged uploads after a 4xx refusal, so the fixed retry does not upload again', async () => {
+      // Title, quality, safety and profile refusals come before the server
+      // touches a staged file. Forgetting the paths there made a one-word title
+      // fix cost a full re-upload of every file.
+      enqueueResponse({
+        ok: false,
+        status: 400,
+        json: async () => ({ error: 'Use a specific title instead of a placeholder.' }),
+      });
+
+      const { container } = render(<NewPostClient />);
+      attachFile(container, new File(['png-bytes'], 'proof.png', { type: 'image/png' }));
+      fillRequiredTitle();
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      await waitFor(() => {
+        expect(screen.getByText(/specific title instead of a placeholder/i)).toBeInTheDocument();
+      });
+
+      enqueuePublished('post-after-400');
+      fillRequiredTitle('A specific title for the retry');
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
+      const retry = fetchMock.mock.calls[2][1] as { body: FormData };
+      expect(JSON.parse(String(retry.body.get('mediaItems')))).toEqual([
+        expect.objectContaining({ storagePath: 'uploads/user-1/proof.png' }),
+      ]);
+    });
+
+    it('re-uploads after the Made With refusal, which the server raises after consuming the files', async () => {
+      // The catalog is checked only once the staged files are in the post, and
+      // the post is then deleted, so those paths are gone.
+      enqueueResponse({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: 'You reached the source tool creation limit of 10 per 24 hours.',
+          field: 'sourceTools',
+        }),
+      });
+
+      const { container } = render(<NewPostClient />);
+      attachFile(container, new File(['png-bytes'], 'proof.png', { type: 'image/png' }));
+      fillRequiredTitle();
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      await waitFor(() => {
+        expect(screen.getByText(/creation limit/i)).toBeInTheDocument();
+      });
+
+      enqueuePublished('post-after-catalog-refusal');
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('re-uploads new media after an edit save fails with a 5xx', async () => {
+      // The edit route consumes staged files the same way, and kept every path
+      // after any failure, so one 5xx stranded the retry.
+      enqueueResponse({ ok: false, status: 500, json: async () => ({ error: 'Failed to update post.' }) });
+
+      const { container } = render(<NewPostClient initialPost={{
+        id: 'post-edit-retry',
+        generationId: null,
+        title: 'An existing post with a real title',
+        description: '',
+        prompt: '',
+        body: '',
+        visibility: 'public',
+        category: 'image',
+        postFormat: 'media',
+        sourceKind: 'external',
+        sourceTool: null,
+        mediaUrl: null,
+        mediaKind: null,
+        archivedAt: null,
+        resourceBundle: { accessMode: 'none' },
+        hasPaidOrders: false,
+      }} />);
+      attachFile(container, new File(['png-bytes'], 'added.png', { type: 'image/png' }));
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      await waitFor(() => {
+        expect(screen.getByText(/failed to update post/i)).toBeInTheDocument();
+      });
+
+      enqueueResponse({ ok: true, json: async () => ({ success: true, postId: 'post-edit-retry', visibility: 'public' }) });
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(2);
+    });
+
+    function rejectWhenAborted(signal: AbortSignal | undefined) {
+      return new Promise<never>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => {
+          const cancelled = new Error('Upload cancelled.');
+          cancelled.name = 'UploadCancelledError';
+          reject(cancelled);
+        });
+      });
+    }
+
+    /** kept.png lands at once; hanging.png uploads until something aborts it. */
+    function mockOneHangingUpload(signals: Map<string, AbortSignal>) {
+      temporaryUploadMock.mockImplementation(async (
+        file: File,
+        _ownerUserId: string,
+        options?: { signal?: AbortSignal },
+      ) => {
+        if (options?.signal) signals.set(file.name, options.signal);
+        if (file.name === 'hanging.png') {
+          return rejectWhenAborted(options?.signal);
+        }
+        return {
+          signedUrl: `https://storage.example.test/signed/${file.name}`,
+          storagePath: `uploads/user-1/${file.name}`,
+        };
+      });
+    }
+
+    function attachKeptAndHanging(container: HTMLElement) {
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, {
+        target: {
+          files: [
+            new File(['kept'], 'kept.png', { type: 'image/png' }),
+            new File(['hanging'], 'hanging.png', { type: 'image/png' }),
+          ],
+        },
+      });
+    }
+
+    it('stops a removed file\'s upload, drops it from the bar, and publishes without it', async () => {
+      const signals = new Map<string, AbortSignal>();
+      mockOneHangingUpload(signals);
+      enqueuePublished('post-without-removed');
+
+      const { container } = render(<NewPostClient />);
+      attachKeptAndHanging(container);
+      expect(await screen.findByText(/uploading 1 of 2/i)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /remove media 2/i }));
+
+      // Only the removed file stops, and the bar no longer waits on its bytes.
+      expect(signals.get('hanging.png')?.aborted).toBe(true);
+      expect(signals.get('kept.png')?.aborted).toBe(false);
+      await waitFor(() => {
+        expect(screen.queryByRole('progressbar', { name: /media upload progress/i })).not.toBeInTheDocument();
+      });
+
+      // The removed upload never finishes on its own: had publish waited on it,
+      // nothing would be posted.
+      fillRequiredTitle();
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      const request = fetchMock.mock.calls[1][1] as { body: FormData };
+      expect(JSON.parse(String(request.body.get('mediaItems')))).toEqual([
+        expect.objectContaining({ storagePath: 'uploads/user-1/kept.png' }),
+      ]);
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('leaves out a file removed while publish is waiting on its upload', async () => {
+      const signals = new Map<string, AbortSignal>();
+      mockOneHangingUpload(signals);
+      enqueuePublished('post-removed-mid-publish');
+
+      const { container } = render(<NewPostClient />);
+      attachKeptAndHanging(container);
+      await screen.findByText(/uploading 1 of 2/i);
+
+      fillRequiredTitle();
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      await act(async () => {});
+      // Parked on hanging.png.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole('button', { name: /remove media 2/i }));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      // Publish held the list as it was when clicked; the removed file is
+      // neither uploaded again nor posted.
+      const request = fetchMock.mock.calls[1][1] as { body: FormData };
+      expect(JSON.parse(String(request.body.get('mediaItems')))).toEqual([
+        expect.objectContaining({ storagePath: 'uploads/user-1/kept.png' }),
+      ]);
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops every upload when the post switches to text', async () => {
+      const signals: AbortSignal[] = [];
+      temporaryUploadMock.mockImplementation(async (
+        _file: File,
+        _ownerUserId: string,
+        options?: { signal?: AbortSignal },
+      ) => {
+        if (options?.signal) signals.push(options.signal);
+        return rejectWhenAborted(options?.signal);
+      });
+
+      const { container } = render(<NewPostClient />);
+      attachFile(container, new File(['a'], 'first.png', { type: 'image/png' }));
+      attachFile(container, new File(['b'], 'second.png', { type: 'image/png' }));
+      await waitFor(() => expect(signals).toHaveLength(2));
+
+      fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+    });
+
+    it('still cancels every file at once, and keeps them all', async () => {
+      const signals: AbortSignal[] = [];
+      temporaryUploadMock.mockImplementation(async (
+        _file: File,
+        _ownerUserId: string,
+        options?: { signal?: AbortSignal },
+      ) => {
+        if (options?.signal) signals.push(options.signal);
+        return rejectWhenAborted(options?.signal);
+      });
+
+      const { container } = render(<NewPostClient />);
+      attachFile(container, new File(['a'], 'first.png', { type: 'image/png' }));
+      attachFile(container, new File(['b'], 'second.png', { type: 'image/png' }));
+      await waitFor(() => expect(signals).toHaveLength(2));
+
+      fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+      await waitFor(() => {
+        expect(screen.queryByRole('progressbar', { name: /media upload progress/i })).not.toBeInTheDocument();
+      });
+      expect(screen.getByText('2 of 5 media added')).toBeInTheDocument();
+    });
+
+    it('gives the reason an added file failed instead of promising a retry', async () => {
+      // A file the server refuses outright fails the same way at publish.
+      temporaryUploadMock.mockImplementation(async () => {
+        throw new Error('Image uploads must be 25MB or smaller.');
+      });
+
+      const { container } = render(<NewPostClient />);
+      attachFile(container, new File(['big'], 'huge.png', { type: 'image/png' }));
+
+      expect(await screen.findByText(
+        '1 of 1 uploads failed (huge.png). Image uploads must be 25MB or smaller.',
+      )).toBeInTheDocument();
+      expect(screen.queryByText(/retried when you publish/i)).not.toBeInTheDocument();
+    });
+
     it('names the files that failed instead of discarding the whole batch', async () => {
       // The old Promise.all rejected everything on the first failure, throwing
       // away uploads that had already succeeded and stranding their objects.
@@ -3045,5 +3313,299 @@ describe('NewPostClient', () => {
       expect(screen.getByText('2 of 5 media added')).toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
+  });
+
+  describe('leave guard', () => {
+    /** Whether the browser would ask before a reload or a closed tab. */
+    function leaveWouldPrompt() {
+      const event = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    }
+
+    function createSavedPost(): EditablePostDraft {
+      return {
+        id: 'post-guarded',
+        generationId: null,
+        title: 'A saved post with a real title',
+        description: '',
+        prompt: '',
+        body: 'The saved caption.',
+        visibility: 'public',
+        category: 'image',
+        postFormat: 'mixed',
+        sourceKind: 'external',
+        sourceTool: 'Pika Labs',
+        sourceToolSlug: 'pika-labs',
+        sourceTools: [{ toolLabel: 'Pika Labs', toolSlug: 'pika-labs' }],
+        mediaUrl: '/proof.png',
+        mediaKind: 'image',
+        mediaItems: [{
+          id: 'existing-media-1',
+          mediaKey: 'proof-a',
+          url: '/proof.png',
+          mediaKind: 'image',
+          contentType: 'image/png',
+          originalName: 'proof.png',
+          width: null,
+          height: null,
+          durationSeconds: null,
+          sortOrder: 0,
+        }],
+        archivedAt: null,
+        resourceBundle: { accessMode: 'none' },
+        hasPaidOrders: false,
+      };
+    }
+
+    it('guards a story typed before any title, and lets go once it is cleared', () => {
+      render(<NewPostClient />);
+      expect(leaveWouldPrompt()).toBe(false);
+
+      const caption = screen.getByRole('textbox', { name: /caption/i });
+      fireEvent.change(caption, { target: { value: 'A tip typed before its title.' } });
+      expect(leaveWouldPrompt()).toBe(true);
+
+      fireEvent.change(caption, { target: { value: '' } });
+      expect(leaveWouldPrompt()).toBe(false);
+    });
+
+    it('treats any changed field of an existing post as unsaved, and an undone one as saved', () => {
+      render(<NewPostClient initialPost={createSavedPost()} />);
+      // Opening a post is not an edit.
+      expect(leaveWouldPrompt()).toBe(false);
+
+      const nsfw = screen.getByRole('checkbox', { name: /mark as nsfw/i });
+      fireEvent.click(nsfw);
+      expect(leaveWouldPrompt()).toBe(true);
+      fireEvent.click(nsfw);
+      expect(leaveWouldPrompt()).toBe(false);
+
+      const caption = screen.getByRole('textbox', { name: /caption/i });
+      fireEvent.change(caption, { target: { value: 'An edited caption.' } });
+      expect(leaveWouldPrompt()).toBe(true);
+      fireEvent.change(caption, { target: { value: 'The saved caption.' } });
+      expect(leaveWouldPrompt()).toBe(false);
+
+      fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+      expect(leaveWouldPrompt()).toBe(true);
+    });
+
+    it('does not count what a linked creation fills in as unsaved work', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-guard-1' });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          generations: [{
+            id: 'gen-guard-1',
+            output_url: 'https://proxy.example.com/generated_images/user-1/output.jpg',
+            category: 'image',
+            model: 'nano-banana-2',
+            title: 'The creation title',
+            description: 'The creation description.',
+            prompt: 'A still life in morning light.',
+            paywallPrefill: null,
+          }],
+        }),
+      });
+
+      render(<NewPostClient />);
+      const titleInput = screen.getByRole('textbox', { name: /^title/i });
+      await waitFor(() => expect(titleInput).toHaveValue('The creation title'));
+      expect(leaveWouldPrompt()).toBe(false);
+
+      fireEvent.change(titleInput, { target: { value: 'A title of my own' } });
+      expect(leaveWouldPrompt()).toBe(true);
+    });
+
+    it('lets go once an edit is saved', async () => {
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-guarded', visibility: 'public' }),
+      });
+
+      render(<NewPostClient initialPost={createSavedPost()} />);
+      fireEvent.change(screen.getByRole('textbox', { name: /caption/i }), {
+        target: { value: 'An edited caption.' },
+      });
+      expect(leaveWouldPrompt()).toBe(true);
+
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      expect(await screen.findByText('Changes saved')).toBeInTheDocument();
+      expect(leaveWouldPrompt()).toBe(false);
+    });
+
+    it('asks before the Back link leaves unsaved changes, and only then', () => {
+      const linkRouter = {
+        push: vi.fn(),
+        replace: vi.fn(),
+        prefetch: vi.fn(async () => undefined),
+      };
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      render(
+        <RouterContext.Provider value={linkRouter as unknown as NextRouter}>
+          <NewPostClient />
+        </RouterContext.Provider>
+      );
+      const back = screen.getByRole('link', { name: /back to explore/i });
+
+      // Nothing typed: the link just goes.
+      fireEvent.click(back);
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(linkRouter.push).toHaveBeenCalledTimes(1);
+
+      fireEvent.change(screen.getByRole('textbox', { name: /caption/i }), {
+        target: { value: 'Words not yet published.' },
+      });
+      fireEvent.click(back);
+      expect(confirmSpy).toHaveBeenCalledWith('Leave this post? Your unsaved changes will be discarded.');
+      expect(linkRouter.push).toHaveBeenCalledTimes(1);
+
+      confirmSpy.mockReturnValue(true);
+      fireEvent.click(back);
+      expect(linkRouter.push).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('from this creation', () => {
+    function enqueueCreation(overrides: Record<string, unknown> = {}) {
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          generations: [{
+            id: 'gen-recipe-1',
+            output_url: 'https://proxy.example.com/generated_images/user-1/output.jpg',
+            category: 'image',
+            model: 'nano-banana-2',
+            title: 'Window display still',
+            description: '',
+            prompt: 'A product still lit like a window display.',
+            origin: 'creation',
+            input_media: [{
+              id: 'input-1',
+              generationId: 'gen-recipe-1',
+              mediaType: 'image',
+              role: 'reference',
+              label: 'Product',
+              url: 'https://proxy.example.com/generation_inputs/user-1/product.png',
+              storagePath: 'generation_inputs/user-1/product.png',
+              sourceGenerationId: null,
+              sortOrder: 0,
+              metadata: {},
+            }],
+            paywallPrefill: null,
+            ...overrides,
+          }],
+        }),
+      });
+    }
+
+    it('adds the exact prompt as a card and sends the saved references with the recipe', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+      enqueueCreation();
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          success: true,
+          postId: 'post-recipe-1',
+          showcasePath: '/showcase/post-recipe-1',
+          resourceBundlePath: '/showcase/post-recipe-1#recipe',
+          visibility: 'public',
+          resourceBundleStatus: 'published',
+        }),
+      });
+
+      render(<NewPostClient />);
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
+      });
+      // Offered inside a recipe only.
+      expect(screen.queryByRole('checkbox', { name: /include exact prompt/i })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+
+      const includePrompt = screen.getByRole('checkbox', { name: /include exact prompt/i });
+      expect(includePrompt).not.toBeChecked();
+      fireEvent.click(includePrompt);
+      expect(includePrompt).toBeChecked();
+      expect(screen.getByText('Prompt or script')).toBeInTheDocument();
+      fireEvent.click(includePrompt);
+      expect(screen.queryByText('Prompt or script')).not.toBeInTheDocument();
+      fireEvent.click(includePrompt);
+
+      fireEvent.click(screen.getByRole('checkbox', { name: /include creation references/i }));
+      fireEvent.change(screen.getByLabelText(/package preview, required/i), {
+        target: { value: 'The exact prompt and the product reference behind this still.' },
+      });
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      const payload = JSON.parse(String((fetchMock.mock.calls[2][1] as { body: string }).body));
+      expect(payload).toMatchObject({
+        generationId: 'gen-recipe-1',
+        includeGenerationReferences: true,
+        resourceBundle: { accessMode: 'free' },
+      });
+      expect(payload.resourceBundle.resources.items).toMatchObject([
+        { type: 'prompt', textContent: 'A product still lit like a window display.' },
+      ]);
+    });
+
+    it('sends no references unless asked, and offers none for a creation without saved inputs', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+      enqueueCreation({ input_media: [] });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          success: true,
+          postId: 'post-recipe-2',
+          showcasePath: '/showcase/post-recipe-2',
+          resourceBundlePath: '/showcase/post-recipe-2#recipe',
+          visibility: 'public',
+          resourceBundleStatus: 'published',
+        }),
+      });
+
+      render(<NewPostClient />);
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
+      });
+      fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
+      fireEvent.click(screen.getByRole('checkbox', { name: /include exact prompt/i }));
+      expect(screen.queryByRole('checkbox', { name: /include creation references/i })).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText(/package preview, required/i), {
+        target: { value: 'The exact prompt behind this window display still.' },
+      });
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      const payload = JSON.parse(String((fetchMock.mock.calls[2][1] as { body: string }).body));
+      expect(payload).not.toHaveProperty('includeGenerationReferences');
+    });
+  });
+
+  it('shows its own price rule instead of leaving an off-step price to the browser', async () => {
+    searchParamsState.value = new URLSearchParams({ resourceMode: 'paid' });
+    render(<NewPostClient />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.change(screen.getByRole('textbox', { name: /post body/i }), {
+      target: { value: 'A text post long enough to pass the public quality rule.' },
+    });
+    fillRequiredTitle();
+    fireEvent.click(screen.getByRole('button', { name: /add your first resource/i }));
+    fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
+    fireEvent.change(screen.getByLabelText(/resource title, required/i), { target: { value: 'The prompt' } });
+    fireEvent.change(screen.getByLabelText(/^protected content$/i), {
+      target: { value: 'The exact prompt behind this post.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save resource/i }));
+    // 95 fails the input's own step=10, which blocked submit with a browser
+    // bubble before the composer could say what it wants.
+    fireEvent.change(screen.getByRole('spinbutton', { name: /price in tokens/i }), { target: { value: '95' } });
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+    expect(await screen.findByText(/paid unlocks start at 10 tokens and go up in 10-token steps/i)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
