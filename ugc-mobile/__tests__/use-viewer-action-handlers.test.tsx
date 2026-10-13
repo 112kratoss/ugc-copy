@@ -178,6 +178,28 @@ describe('Report content', () => {
     });
   });
 
+  // The server files the report as that delivery's `report` feed event: the
+  // one the reel's impression went to.
+  it('names the delivery the reel showed a ranked post under, and none for a post read on its own', () => {
+    mountHandlers(postItem({
+      recommendation: { deliveryId: '812', position: 3, algorithmVersion: 'for-you-rules-v4' },
+    })).handleAction('report-content');
+    pickReason('Spam');
+    expect(mocks.auth.api.reportPost).toHaveBeenLastCalledWith('post-1', {
+      reason: 'spam',
+      details: 'Reported from the mobile Showcase viewer.',
+      deliveryId: '812',
+    });
+
+    mountHandlers(postItem()).handleAction('report-content');
+    pickReason('Spam');
+    expect(mocks.auth.api.reportPost).toHaveBeenLastCalledWith('post-1', {
+      reason: 'spam',
+      details: 'Reported from the mobile Showcase viewer.',
+    });
+    expect(mocks.auth.api.reportPost.mock.calls.at(-1)?.[1]).not.toHaveProperty('deliveryId');
+  });
+
   it('hands the reported post to the screen once the report is filed, so the reel moves on', async () => {
     const onReported = vi.fn();
     const item = postItem();

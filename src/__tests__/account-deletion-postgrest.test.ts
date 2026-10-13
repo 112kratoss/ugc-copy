@@ -69,7 +69,8 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
   const buyerFile = async (storagePath = owners[0] + '/audit-fixture.png') => {
     const result = await createViewerUnlockFileUrl({ adminSupabase: admin, body: { storagePath }, countryCode: 'IN', rateLimitKey: 'audit-' + owners[1], unlockId: purchase!, viewerUserId: owners[1] });
     expect(result.ok).toBe(true);
-    if (!result.ok) throw Error('Purchased file unavailable');
+    // The single-path form answers `{ success, signedUrl }`; `{ files }` is the batch form's.
+    if (!result.ok || !('signedUrl' in result.body)) throw Error('Purchased file unavailable');
     expect(['localhost', '127.0.0.1']).toContain(new URL(result.body.signedUrl).hostname);
     const response = await fetch(result.body.signedUrl);
     expect(response.status).toBe(200); expect(Buffer.from(await response.arrayBuffer())).toEqual(png);

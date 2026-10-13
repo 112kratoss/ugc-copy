@@ -3,6 +3,7 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { Image } from 'expo-image';
+import { Alert } from 'react-native';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
@@ -458,6 +459,43 @@ describe('Showcase screen', () => {
     });
 
     expect(queryState.fetchNextPage).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree!.unmount());
+  });
+
+  // The server files the report as that delivery's `report` feed event, the
+  // one way the ranker hears it.
+  it('names the delivery a ranked tile was reported from', async () => {
+    queryState.pages = [{
+      items: [{ ...feedItem(), recommendation: { deliveryId: '812', position: 0, algorithmVersion: 'for-you-rules-v4' } }],
+      pageInfo: { hasMore: false, nextOffset: null },
+    }];
+    authState.api.reportPost.mockReset();
+    authState.api.reportPost.mockResolvedValue({ success: true });
+    vi.mocked(Alert.alert).mockClear();
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ShowcaseScreen />);
+    });
+    // The tile's ⋮ menu, as its pin builds it.
+    const list = tree!.root.find((node) => String(node.type) === 'flash-list').props;
+    const cell = list.renderItem({ item: list.data[0], index: 0, target: 'Cell' }) as React.ReactElement<{
+      children: React.ReactElement<{ feedbackMenu: (item: unknown) => { sections: Array<{ items: Array<{ id?: string; onSelect?: () => void }> }> } }>;
+    }>;
+    const menu = cell.props.children.props.feedbackMenu(list.data[0].item);
+    const report = menu.sections.flatMap((section) => section.items).find((row) => row.id === 'report-content');
+    renderer.act(() => report?.onSelect?.());
+
+    const buttons = vi.mocked(Alert.alert).mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
+    await renderer.act(async () => {
+      buttons.find((button) => button.text === 'Report content')?.onPress?.();
+    });
+
+    expect(authState.api.reportPost).toHaveBeenCalledWith('post-1', {
+      reason: 'unsafe_content',
+      details: 'Reported from the mobile Showcase.',
+      deliveryId: '812',
+    });
     renderer.act(() => tree!.unmount());
   });
 

@@ -1060,17 +1060,19 @@ describe('PostResourceBundlePanel', () => {
       });
     });
 
-    it('signs previews one by one on the buyer library route, which answers one file a call', async () => {
+    it('signs previews in one request on the buyer library route too, which takes the same batch form', async () => {
       const fetchMock = stubFileUrlFetch();
       renderPanel({
         ...unlockedWith(mediaItems.slice(0, 2)),
         fileUrlEndpoint: '/api/me/unlocks/unlock-1/file-url',
       });
 
-      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
       expect(fetchMock.mock.calls.map(([url, init]) => [url, JSON.parse(String(init?.body))])).toEqual([
-        ['/api/me/unlocks/unlock-1/file-url', { storagePath: 'user-1/references/frame.png', disposition: 'inline' }],
-        ['/api/me/unlocks/unlock-1/file-url', { storagePath: 'user-1/references/motion.mp4', disposition: 'inline' }],
+        ['/api/me/unlocks/unlock-1/file-url', {
+          storagePaths: ['user-1/references/frame.png', 'user-1/references/motion.mp4'],
+          disposition: 'inline',
+        }],
       ]);
     });
 

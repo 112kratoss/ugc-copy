@@ -826,6 +826,24 @@ export function createApiClient({
     signMany: getPostResourceFileUrls,
     signOne: async (postId, storagePath, options) => (await getPostResourceFileUrl(postId, storagePath, options)).signedUrl,
   });
+  // The buyer-library route takes the same two forms and answers them the same
+  // way, by purchase instead of by post.
+  const viewerUnlockFileUrlPath = (unlockId: string) => `/api/me/unlocks/${encodeURIComponent(unlockId)}/file-url`;
+  const getViewerUnlockFileUrl = (unlockId: string, storagePath: string, options: PostResourceFileUrlOptions = {}) =>
+    request<{ success: boolean; signedUrl: string }>(viewerUnlockFileUrlPath(unlockId), {
+      method: 'POST',
+      body: fileUrlBody({ storagePath }, options),
+    });
+  const getViewerUnlockFileUrls = (unlockId: string, storagePaths: string[], options: PostResourceFileUrlOptions = {}) =>
+    request<PostResourceFileUrlBatchResponse>(viewerUnlockFileUrlPath(unlockId), {
+      method: 'POST',
+      body: fileUrlBody({ storagePaths }, options),
+    });
+  // The resolver gathers paths under the id it is handed: here the purchase's.
+  const resolveViewerUnlockFileUrl = createPostResourceFileUrlResolver({
+    signMany: getViewerUnlockFileUrls,
+    signOne: async (unlockId, storagePath, options) => (await getViewerUnlockFileUrl(unlockId, storagePath, options)).signedUrl,
+  });
 
   return {
     request,
@@ -1046,10 +1064,18 @@ export function createApiClient({
          * the report.
          */
         bundleId?: string;
+        /**
+         * The feed delivery the post was reported from, when a ranked feed
+         * showed it: the server files the report as that delivery's `report`
+         * feed event.
+         */
+        deliveryId?: string;
       }
     ) => request<{ success: true }>(`/api/posts/${encodeURIComponent(postId)}/report`, {
       method: 'POST',
-      body: JSON.stringify(body),
+      // The delivery only when there is one: a report from anywhere but a
+      // ranked feed sends the body it always sent.
+      body: JSON.stringify({ ...body, deliveryId: body.deliveryId || undefined }),
     }),
     reportUser: (
       userId: string,
@@ -1378,11 +1404,13 @@ export function createApiClient({
     },
     getViewerUnlock: (unlockId: string) =>
       request<ViewerUnlockDetailResponse>(`/api/me/unlocks/${encodeURIComponent(unlockId)}`),
-    getViewerUnlockFileUrl: (unlockId: string, storagePath: string) =>
-      request<{ success: boolean; signedUrl: string }>(`/api/me/unlocks/${encodeURIComponent(unlockId)}/file-url`, {
-        method: 'POST',
-        body: JSON.stringify({ storagePath }),
-      }),
+    getViewerUnlockFileUrl,
+    getViewerUnlockFileUrls,
+    /**
+     * A signed URL for one of a purchase's files, batched with every other
+     * path asked for in the same tick, as `resolvePostResourceFileUrl` is.
+     */
+    resolveViewerUnlockFileUrl,
     getPostResourceFileUrl,
     getPostResourceFileUrls,
     /**

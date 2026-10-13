@@ -4,15 +4,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode; label?: string; title?: string; body?: string } & Record<string, unknown>;
 
-const { authUser, contentProps, routerPush, unlockDetail } = vi.hoisted(() => ({
+const { authUser, contentProps, openURL, routerPush, unlockApi, unlockDetail } = vi.hoisted(() => ({
   authUser: { current: { id: 'buyer-1' } as { id: string } | null },
   contentProps: vi.fn(),
+  openURL: vi.fn(),
   routerPush: vi.fn(),
+  // One object for every render, as the real context provides.
+  unlockApi: { resolveViewerUnlockFileUrl: vi.fn() },
   unlockDetail: { current: null as Record<string, unknown> | null },
 }));
 
 vi.mock('react-native', () => ({
-  Linking: { openURL: vi.fn() },
+  Linking: { openURL },
   Pressable: ({ children, style: _style, ...props }: MockProps) => React.createElement('pressable', props, children),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
 }));
@@ -29,7 +32,7 @@ vi.mock('@tanstack/react-query', () => ({
 }));
 
 vi.mock('@/lib/auth', () => ({
-  useAuth: () => ({ user: authUser.current, api: {} }),
+  useAuth: () => ({ user: authUser.current, api: unlockApi }),
 }));
 
 vi.mock('@/components/media-preview', () => ({
@@ -184,6 +187,26 @@ describe('viewer unlock revision switching', () => {
       expect(buttonLabels(tree)).not.toContain('View original post');
       expect(textValues(tree)).toContain('This post is no longer public. Your unlock stays available here.');
     }
+  });
+
+  it("signs the purchase's files through the batched signing, to open in place", async () => {
+    unlockApi.resolveViewerUnlockFileUrl.mockReset();
+    unlockApi.resolveViewerUnlockFileUrl.mockResolvedValue('https://storage.test/signed');
+    openURL.mockClear();
+    renderScreen();
+
+    const props = contentProps.mock.calls.at(-1)?.[0] as {
+      resolveFileUrl: (storagePath: string) => Promise<string>;
+      onOpenFile: (file: { storagePath: string; title: string; contentType: string | null }) => Promise<void>;
+    };
+    await expect(props.resolveFileUrl('retained/look.jpg')).resolves.toBe('https://storage.test/signed');
+    expect(unlockApi.resolveViewerUnlockFileUrl).toHaveBeenCalledWith('unlock-1', 'retained/look.jpg', { disposition: 'inline' });
+
+    await renderer.act(async () => {
+      await props.onOpenFile({ storagePath: 'retained/guide.pdf', title: 'Guide', contentType: 'application/pdf' });
+    });
+    expect(unlockApi.resolveViewerUnlockFileUrl).toHaveBeenLastCalledWith('unlock-1', 'retained/guide.pdf', { disposition: 'inline' });
+    expect(openURL).toHaveBeenCalledWith('https://storage.test/signed');
   });
 
   it('brings a signed-out buyer back to this unlock after sign-in', () => {

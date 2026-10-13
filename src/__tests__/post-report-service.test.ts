@@ -3,11 +3,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { submitPostReportForRoute } from '@/lib/post-report-service';
 
-const loggerMocks = vi.hoisted(() => ({ logBackendError: vi.fn() }));
+const loggerMocks = vi.hoisted(() => ({ logBackendError: vi.fn(), logBackendWarning: vi.fn() }));
 
 vi.mock('@/lib/backend-logger', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/backend-logger')>()),
   logBackendError: loggerMocks.logBackendError,
+  logBackendWarning: loggerMocks.logBackendWarning,
 }));
 
 const FEED_FEEDBACK_CALL = {
@@ -16,7 +17,7 @@ const FEED_FEEDBACK_CALL = {
 };
 
 function createAdminSupabaseMock(options?: {
-  post?: { id: string; user_id?: string } | null;
+  post?: { id: string; user_id?: string; visibility?: string; archived_at?: string | null } | null;
   postError?: { message: string } | null;
   bundle?: { id: string } | null;
   bundleError?: { message: string } | null;
@@ -121,6 +122,7 @@ function createAdminSupabaseMock(options?: {
 describe('submitPostReportForRoute', () => {
   beforeEach(() => {
     loggerMocks.logBackendError.mockClear();
+    loggerMocks.logBackendWarning.mockClear();
   });
 
   it('rejects invalid reasons before creating an admin client', async () => {
@@ -371,6 +373,125 @@ describe('submitPostReportForRoute', () => {
       body: { error: 'Failed to validate unlock report.' },
     });
     expect(admin.calls.inserts).toEqual([]);
+  });
+
+  // v4's `report` feed event, written by this route as the comment route writes
+  // `comment`: the reason feed_delivery_facts.reported_at can fill at all.
+  describe('its feed event', () => {
+    it('records a stored report as a feed event, attributed to the delivery the client sent', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-13T08:00:00.000Z'));
+      try {
+        const admin = createAdminSupabaseMock();
+        const runAfterResponse = vi.fn();
+        const scheduleFeedEvent = vi.fn(async () => undefined);
+
+        const result = await submitPostReportForRoute({
+          postId: 'post-1',
+          reporterUserId: 'reporter-1',
+          readBody: vi.fn(async () => ({ reason: 'unsafe_content', deliveryId: '812' })),
+          createAdminSupabase: vi.fn(() => admin.client),
+          invalidateFeedCache: vi.fn(),
+          runAfterResponse,
+          scheduleFeedEvent,
+        });
+
+        expect(result).toEqual({ ok: true, body: { success: true } });
+        expect(scheduleFeedEvent).toHaveBeenCalledTimes(1);
+        expect(scheduleFeedEvent).toHaveBeenCalledWith(runAfterResponse, admin.client, {
+          eventType: 'report',
+          viewerUserId: 'reporter-1',
+          postId: 'post-1',
+          deliveryId: '812',
+          occurredAt: '2026-10-13T08:00:00.000Z',
+        });
+        // The stored report is the same with or without a delivery.
+        expect(admin.calls.inserts).toEqual([{
+          post_id: 'post-1',
+          bundle_id: null,
+          reporter_user_id: 'reporter-1',
+          reason: 'unsafe_content',
+          details: null,
+        }]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each([
+      ['no delivery', {}],
+      ['a malformed delivery', { deliveryId: 'not-a-delivery' }],
+      ['a numeric zero', { deliveryId: 0 }],
+    ])('still files the report with %s, and records it without one', async (_label, extra) => {
+      const admin = createAdminSupabaseMock();
+      const scheduleFeedEvent = vi.fn(async () => undefined);
+
+      const result = await submitPostReportForRoute({
+        postId: 'post-1',
+        reporterUserId: 'reporter-1',
+        readBody: vi.fn(async () => ({ reason: 'spam', ...extra })),
+        createAdminSupabase: vi.fn(() => admin.client),
+        invalidateFeedCache: vi.fn(),
+        scheduleFeedEvent,
+      });
+
+      expect(result).toEqual({ ok: true, body: { success: true } });
+      expect(scheduleFeedEvent).toHaveBeenCalledWith(undefined, admin.client, expect.objectContaining({
+        eventType: 'report',
+        postId: 'post-1',
+        deliveryId: null,
+      }));
+    });
+
+    it('writes no feed event for a report that was refused or never stored', async () => {
+      const scheduleFeedEvent = vi.fn(async () => undefined);
+      const refusals: Array<{ options: Parameters<typeof createAdminSupabaseMock>[0]; body: Record<string, unknown> }> = [
+        { options: {}, body: { reason: 'not-real' } },
+        { options: { rateLimited: true }, body: { reason: 'spam' } },
+        { options: { post: null }, body: { reason: 'spam' } },
+        { options: { post: { id: 'post-1', user_id: 'reporter-1' } }, body: { reason: 'spam' } },
+        { options: { bundle: null }, body: { reason: 'misleading_unlock', bundleId: 'bundle-2' } },
+        { options: { insertError: { message: 'insert failed' } }, body: { reason: 'spam' } },
+      ];
+
+      for (const { options, body } of refusals) {
+        const admin = createAdminSupabaseMock(options);
+        const result = await submitPostReportForRoute({
+          postId: 'post-1',
+          reporterUserId: 'reporter-1',
+          readBody: vi.fn(async () => ({ ...body, deliveryId: '812' })),
+          createAdminSupabase: vi.fn(() => admin.client),
+          invalidateFeedCache: vi.fn(),
+          scheduleFeedEvent,
+        });
+        expect(result.ok).toBe(false);
+      }
+
+      expect(scheduleFeedEvent).not.toHaveBeenCalled();
+    });
+
+    it('never fails the report when its feed event cannot be written', async () => {
+      // The real writer, against a client with no feed tables at all.
+      const postId = '30000000-0000-4000-8000-000000000001';
+      const admin = createAdminSupabaseMock({
+        post: { id: postId, user_id: '20000000-0000-4000-8000-000000000001', visibility: 'public', archived_at: null },
+      });
+
+      const result = await submitPostReportForRoute({
+        postId,
+        reporterUserId: '10000000-0000-4000-8000-000000000001',
+        readBody: vi.fn(async () => ({ reason: 'spam', deliveryId: '812' })),
+        createAdminSupabase: vi.fn(() => admin.client),
+        invalidateFeedCache: vi.fn(),
+      });
+
+      expect(result).toEqual({ ok: true, body: { success: true } });
+      expect(admin.calls.inserts).toHaveLength(1);
+      expect(loggerMocks.logBackendWarning).toHaveBeenCalledWith(
+        'authoritative_feed_event_failed',
+        expect.objectContaining({ eventType: 'report', postId }),
+      );
+    });
   });
 
   it('maps report insert errors to a stable failure', async () => {

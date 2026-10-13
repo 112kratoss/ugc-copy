@@ -1343,6 +1343,8 @@ export default function ShowcaseClient({
             accessToken: token,
             surface,
             onSend: clearFeedbackNotice,
+            // The tile's or the reel's delivery, so the ranker hears the report.
+            deliveryId: reportedItem.recommendation?.deliveryId,
         });
         if (outcome.status === 'done') {
             sessionHiddenPostIdsRef.current.add(reportedItem.id);

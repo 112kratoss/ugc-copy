@@ -78,14 +78,22 @@ export function reportPostContent({
   postId,
   accessToken,
   surface = 'feed',
+  deliveryId,
 }: {
   postId: string;
   accessToken: string;
   surface?: SafetySurface;
+  /**
+   * The feed delivery the post was reported from (`recommendation.deliveryId`),
+   * when a ranked feed showed it: the server files the report as that
+   * delivery's `report` feed event. Sent only when there is one.
+   */
+  deliveryId?: string | null;
 }) {
   return postModerationRequest(`/api/posts/${encodeURIComponent(postId)}/report`, accessToken, {
     reason: 'unsafe_content',
     details: POST_REPORT_NOTES[surface],
+    ...(deliveryId ? { deliveryId } : {}),
   });
 }
 

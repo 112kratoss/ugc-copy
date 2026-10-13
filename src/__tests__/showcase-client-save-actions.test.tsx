@@ -1623,6 +1623,24 @@ describe('ShowcaseClient save actions', () => {
     expect(screen.getByText('Second Frame')).toBeInTheDocument();
   });
 
+  // The server files the report as that delivery's `report` feed event, the
+  // one way the ranker hears it.
+  it('names the delivery a ranked tile was reported from', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderShowcase(createShowcaseItem({
+      recommendation: { deliveryId: '812', position: 0, reason: 'Based on your saves', algorithmVersion: 'for-you-rules-v4' },
+    }));
+
+    chooseFromTileMenu('Campaign Frame', /report content/i);
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Content reported and removed from your feed.');
+    expect(JSON.parse(String(requestTo('/api/posts/post-1/report')?.[1]?.body))).toEqual({
+      reason: 'unsafe_content',
+      details: 'Reported from the web Explore grid.',
+      deliveryId: '812',
+    });
+  });
+
   it('sends nothing and keeps the post when the confirmation is declined', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderShowcase(createShowcaseItem());
@@ -1872,6 +1890,26 @@ describe('ShowcaseClient save actions', () => {
     });
     expect(within(screen.getByRole('dialog')).getByRole('button', { name: /more actions for second frame/i }))
       .toBeInTheDocument();
+  });
+
+  it('names the delivery the reel showed when a ranked post is reported from it', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.spyOn(window.history, 'pushState');
+    renderShowcase(createShowcaseItem({
+      recommendation: { deliveryId: '812', position: 0, reason: 'Based on your saves', algorithmVersion: 'for-you-rules-v4' },
+    }));
+
+    fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+    const reel = await screen.findByRole('dialog');
+    fireEvent.click(await within(reel).findByRole('button', { name: /more actions for campaign frame/i }));
+    fireEvent.click(within(reel).getByRole('menuitem', { name: /report content/i }));
+
+    expect(await screen.findByText('Content reported and removed from your feed.')).toBeInTheDocument();
+    expect(JSON.parse(String(requestTo('/api/posts/post-1/report')?.[1]?.body))).toEqual({
+      reason: 'unsafe_content',
+      details: 'Reported from the web reel.',
+      deliveryId: '812',
+    });
   });
 
   it("offers the reel Not interested and nothing else on the viewer's own post", async () => {

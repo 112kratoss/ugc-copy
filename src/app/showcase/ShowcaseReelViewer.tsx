@@ -2,7 +2,7 @@
 
 import PostComments from '@/components/PostComments';
 import ResourceFileLink from '@/components/ResourceFileLink';
-import ResourceMediaPreview from '@/components/ResourceMediaPreview';
+import ResourceMediaPreview, { createBatchedUrlResolver } from '@/components/ResourceMediaPreview';
 
 import Link from 'next/link';
 import Script from 'next/script';
@@ -44,6 +44,7 @@ import {
   type ShowcaseMediaProgressTracker,
 } from '@/lib/showcase-media-progress';
 import {
+  POST_RESOURCE_FILE_URL_BATCH_LIMIT,
   formatPostResourceBundleCountSummary,
   formatPostResourcePriceLabel,
   getPostResourceKindLabel,
@@ -52,6 +53,7 @@ import {
   type PostResourceItem,
   type PostResourceKind,
   type PostResourceSection,
+  type PostResourceSignedFileUrl,
 } from '@/lib/post-resource-bundles';
 import { FREE_RECIPE_LABEL, isFreeRecipeAsset } from '@/lib/showcase-asset-labels';
 import { formatCompactCount } from '@/lib/post-feed-presentation';
@@ -687,7 +689,10 @@ export default function ShowcaseReelViewer({
     return () => window.clearTimeout(timer);
   }, [copiedPromptItemId]);
 
-  const fetchResourceFileUrl = useCallback(async (storagePath: string, signal?: AbortSignal): Promise<string> => {
+  const fetchResourceFileUrls = useCallback(async (
+    storagePaths: string[],
+    signal: AbortSignal,
+  ): Promise<ReadonlyMap<string, string>> => {
     if (!item?.id) throw new Error('Resource unavailable');
     const response = await fetch(`/api/posts/${item.id}/resource-bundle/file-url`, {
       method: 'POST', signal,
@@ -695,12 +700,21 @@ export default function ShowcaseReelViewer({
         'Content-Type': 'application/json',
         ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
       },
-      body: JSON.stringify({ storagePath }),
+      body: JSON.stringify({ storagePaths, disposition: 'inline' }),
     });
     const data = await response.json();
-    if (!response.ok || typeof data?.signedUrl !== 'string') throw new Error('Resource unavailable');
-    return data.signedUrl;
+    if (!response.ok || !Array.isArray(data?.files)) throw new Error('Resource unavailable');
+    return new Map((data.files as PostResourceSignedFileUrl[]).map((file) => [file.storagePath, file.url]));
   }, [item?.id, session?.access_token]);
+  // The recipe card's files are signed together, as the post page's panel
+  // signs its previews: the ones asked for in the same tick leave as one
+  // request (one entitlement load on the server, one count against the
+  // signing limit), where each preview used to sign its own. Inline, so Open
+  // shows a file the browser can show rather than saving it.
+  const fetchResourceFileUrl = useMemo(
+    () => createBatchedUrlResolver(fetchResourceFileUrls, POST_RESOURCE_FILE_URL_BATCH_LIMIT),
+    [fetchResourceFileUrls],
+  );
 
   useEffect(() => {
     // Reference previews cannot carry across reel items.

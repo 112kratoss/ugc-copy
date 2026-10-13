@@ -330,6 +330,11 @@ const extendedOperationCases: Array<{
   { key: 'listViewerUnlocks', call: (api) => api.listViewerUnlocks({ limit: 24, offset: 0 }) },
   { key: 'getViewerUnlock', call: (api) => api.getViewerUnlock('unlock-1') },
   { key: 'getViewerUnlockFileUrl', call: (api) => api.getViewerUnlockFileUrl('unlock-1', 'retained/file.zip') },
+  {
+    key: 'getViewerUnlockFileUrls',
+    call: (api) => api.getViewerUnlockFileUrls('unlock-1', ['retained/a.png', 'retained/b.png'], { disposition: 'inline' }),
+  },
+  { key: 'resolveViewerUnlockFileUrl', call: (api) => api.resolveViewerUnlockFileUrl('unlock-1', 'retained/file.zip') },
   { key: 'getOnboardingState', call: (api) => api.getOnboardingState() },
   { key: 'updateOnboardingState', call: (api) => api.updateOnboardingState({ status: 'in_progress' }) },
   { key: 'getWelcomeCredits', call: (api) => api.getWelcomeCredits() },

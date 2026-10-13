@@ -2,10 +2,11 @@ import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import {
   submitPostReportForRoute,
   type PostReportRouteResult,
@@ -15,6 +16,7 @@ import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 type PostReportRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
+  runAfterResponse?: RunAfterResponse;
   submitPostReportForRoute?: typeof submitPostReportForRoute;
 };
 
@@ -22,6 +24,7 @@ function resolveDependencies(dependencies: PostReportRouteDependencies | undefin
   return {
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
     submitPostReportForRoute: dependencies?.submitPostReportForRoute ?? submitPostReportForRoute,
   };
 }
@@ -59,8 +62,12 @@ async function handlePostReportPOST({
   return toJsonResponse(await dependencies.submitPostReportForRoute({
     postId,
     reporterUserId: user.id,
+    // The body may carry `deliveryId`, the feed delivery the post was reported
+    // from; the service reads it with the report itself.
     readBody: () => request.json(),
     createAdminSupabase: () => dependencies.createServiceClient(),
+    // The report's feed event is written behind the answer.
+    runAfterResponse: dependencies.runAfterResponse,
   }));
 }
 

@@ -118,6 +118,27 @@ describe('mobile api client caching', () => {
     expect(bodies[1]).toEqual({ reason: 'spam' });
   });
 
+  it('names the feed delivery a post was reported from, and sends no delivery otherwise', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ success: true }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.reportPost('post-1', { reason: 'unsafe_content', details: 'From the reel', deliveryId: '812' });
+    await api.reportPost('post-1', { reason: 'unsafe_content', deliveryId: '' });
+    await api.reportPost('post-1', { reason: 'spam' });
+
+    const bodies = (fetcher.mock.calls as unknown as Array<[string, RequestInit]>)
+      .map(([, init]) => JSON.parse(String(init.body)));
+    expect(bodies).toEqual([
+      { reason: 'unsafe_content', details: 'From the reel', deliveryId: '812' },
+      { reason: 'unsafe_content' },
+      { reason: 'spam' },
+    ]);
+  });
+
   it('sends an explicit confirmation and transient Apple authorization when deleting an account', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ success: true, deleted: true }));
     const api = createApiClient({
@@ -844,6 +865,66 @@ describe('mobile api client caching', () => {
     expect(url).toBe('https://magicbooklet.test/api/me/unlocks/unlock-1/file-url');
     expect(init.method).toBe('POST');
     expect(JSON.parse(String(init.body))).toEqual({ storagePath: 'creator/resource.zip' });
+  });
+
+  it("signs a purchase's files in one call per tick, inline when asked, on the buyer-library route", async () => {
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { storagePath?: string; storagePaths?: string[] };
+      if (body.storagePaths) {
+        return jsonResponse({ files: body.storagePaths.map((path) => ({ storagePath: path, url: `https://signed.test/${path}` })) });
+      }
+      return jsonResponse({ success: true, signedUrl: `https://signed.test/one/${body.storagePath}` });
+    });
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const urls = await Promise.all([
+      api.resolveViewerUnlockFileUrl('unlock-1', 'retained/a.png', { disposition: 'inline' }),
+      api.resolveViewerUnlockFileUrl('unlock-1', 'retained/b.mp4', { disposition: 'inline' }),
+    ]);
+    // An explicit Open asks for its one file on its own.
+    const opened = await api.resolveViewerUnlockFileUrl('unlock-1', 'retained/guide.pdf', { disposition: 'inline' });
+    await api.getViewerUnlockFileUrls('unlock-1', ['retained/c.png']);
+
+    const requests = (fetcher.mock.calls as unknown as Array<[string, RequestInit]>)
+      .map(([url, init]) => [url, init.method, JSON.parse(String(init.body))]);
+    expect(requests).toEqual([
+      ['https://magicbooklet.test/api/me/unlocks/unlock-1/file-url', 'POST', { storagePaths: ['retained/a.png', 'retained/b.mp4'], disposition: 'inline' }],
+      ['https://magicbooklet.test/api/me/unlocks/unlock-1/file-url', 'POST', { storagePath: 'retained/guide.pdf', disposition: 'inline' }],
+      ['https://magicbooklet.test/api/me/unlocks/unlock-1/file-url', 'POST', { storagePaths: ['retained/c.png'] }],
+    ]);
+    expect(urls).toEqual(['https://signed.test/retained/a.png', 'https://signed.test/retained/b.mp4']);
+    expect(opened).toBe('https://signed.test/one/retained/guide.pdf');
+  });
+
+  it('signs one purchase file per call on a server without the batch form', async () => {
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { storagePath?: string };
+      // What the buyer-library route answered before it learned `storagePaths`.
+      if (!body.storagePath) {
+        return new Response(JSON.stringify({ error: 'Missing resource file path.' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return jsonResponse({ success: true, signedUrl: `https://signed.test/one/${body.storagePath}` });
+    });
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const urls = await Promise.all([
+      api.resolveViewerUnlockFileUrl('unlock-1', 'retained/a.png'),
+      api.resolveViewerUnlockFileUrl('unlock-1', 'retained/b.png'),
+    ]);
+
+    expect(urls).toEqual(['https://signed.test/one/retained/a.png', 'https://signed.test/one/retained/b.png']);
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
   it('requests server-issued temporary media upload intents with JSON metadata', async () => {

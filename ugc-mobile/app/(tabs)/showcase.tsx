@@ -594,11 +594,16 @@ export default function ShowcaseScreen() {
       destructive: true,
     }).then(async (confirmed) => {
       if (!confirmed) return;
+      // The tile's delivery, so the ranker hears the report. Built outside the try: React Compiler skips a
+      // component with a conditional inside a try/catch.
+      const deliveryId = item.recommendation?.deliveryId;
+      const report = {
+        reason: 'unsafe_content' as const,
+        details: 'Reported from the mobile Showcase.',
+        ...(deliveryId ? { deliveryId } : {}),
+      };
       try {
-        await api.reportPost(item.id, {
-          reason: 'unsafe_content',
-          details: 'Reported from the mobile Showcase.',
-        });
+        await api.reportPost(item.id, report);
         queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
           { queryKey: viewerFeedQueryKey },
           (current) => removeShowcaseFeedItemsFromInfiniteData(current, { postId: item.id })

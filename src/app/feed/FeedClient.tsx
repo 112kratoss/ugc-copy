@@ -722,7 +722,16 @@ export default function FeedClient({
     const handleReportContent = useCallback(async (postId: string) => {
         const token = requireAccount();
         if (!token) return;
-        const outcome = await reportPostAfterConfirmation({ postId, accessToken: token, surface: 'feed', onSend: clearNotice });
+        // The card's delivery, so the ranker hears the report; the unranked
+        // 'recent' lane has none to send.
+        const deliveryId = cardsRef.current.find((card) => card.id === postId)?.item.recommendation?.deliveryId;
+        const outcome = await reportPostAfterConfirmation({
+            postId,
+            accessToken: token,
+            surface: 'feed',
+            onSend: clearNotice,
+            deliveryId,
+        });
         if (outcome.status === 'done') {
             hiddenRef.current.postIds.add(postId);
             removeFromLane((item) => item.id === postId);

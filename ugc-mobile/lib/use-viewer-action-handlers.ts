@@ -313,6 +313,9 @@ export function useViewerActionHandlers({
       // The recipe's own id (`post_resource_bundles.id`), so a report about
       // it reaches moderation with the recipe it concerns, as the web's does.
       const bundleId = item.details?.unlock?.resourceId;
+      // The delivery the reel's impression went to, so the ranker hears the
+      // report against the same delivery. A post read on its own has none.
+      const deliveryId = item.recommendation?.deliveryId;
       // The web post page's reasons, so a stolen-work or misleading-recipe
       // report reaches moderation filed as one. The two about a recipe are
       // offered only on a post that has one.
@@ -328,6 +331,7 @@ export function useViewerActionHandlers({
                   reason: reason.value,
                   details: 'Reported from the mobile Showcase viewer.',
                   ...(reason.aboutRecipe && bundleId ? { bundleId } : {}),
+                  ...(deliveryId ? { deliveryId } : {}),
                 });
                 haptic.success();
                 onReported?.(item);

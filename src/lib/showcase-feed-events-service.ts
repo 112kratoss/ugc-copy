@@ -800,9 +800,9 @@ export async function recordShowcaseFeedEvents({
 /**
  * The feed events no client may send, each written by the server action that
  * makes it true: a comment created, a follow recorded, a remix finished, a
- * purchase settled.
+ * purchase settled, a post reported.
  */
-export const AUTHORITATIVE_FEED_EVENT_TYPES = ['comment', 'follow', 'remix_complete', 'purchase'] as const;
+export const AUTHORITATIVE_FEED_EVENT_TYPES = ['comment', 'follow', 'remix_complete', 'purchase', 'report'] as const;
 
 export type AuthoritativeFeedEventType = typeof AUTHORITATIVE_FEED_EVENT_TYPES[number];
 
@@ -829,7 +829,7 @@ export function parseFeedDeliveryIdField(value: unknown): string | null {
 
 export type AuthoritativeFeedEventInput = {
   eventType: AuthoritativeFeedEventType;
-  /** Who acted: the commenter, the follower, the remixer, the buyer. */
+  /** Who acted: the commenter, the follower, the remixer, the buyer, the reporter. */
   viewerUserId: string;
   /**
    * The post the action was taken on (for a remix, the original). May be left
@@ -1114,12 +1114,14 @@ async function writeAuthoritativeFeedEvent(
 
 /**
  * Writes one server-authoritative feed event (`comment`, `follow`,
- * `remix_complete`, `purchase`) on behalf of the action that makes it true.
+ * `remix_complete`, `purchase`, `report`) on behalf of the action that makes
+ * it true.
  *
- * It bypasses the client allowlist, which refuses all four, and writes the row
+ * It bypasses the client allowlist, which refuses all five, and writes the row
  * the way `recordShowcaseFeedEvent` does: a direct service-role insert, so the
  * database's own triggers validate the delivery context and stamp the outcome
- * on its delivery fact. The batch RPC refuses these types from any caller.
+ * on its delivery fact (a report's `reported_at`). This insert is the only way
+ * a `report` reaches the table: the batch RPC refuses it from every caller.
  *
  * Telemetry riding on a real action, so it can never fail or hold that action:
  * it never throws, gives up after `timeoutMs`, and is written at most once per

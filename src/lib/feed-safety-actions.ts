@@ -59,7 +59,12 @@ export async function reportPostAfterConfirmation({
   accessToken,
   surface,
   onSend,
-}: FeedSafetyRequest & { postId: string }): Promise<FeedSafetyOutcome> {
+  deliveryId,
+}: FeedSafetyRequest & {
+  postId: string;
+  /** The feed delivery it was reported from, when a ranked feed showed it. */
+  deliveryId?: string | null;
+}): Promise<FeedSafetyOutcome> {
   const confirmed = await requestConfirmation({
     title: 'Report content?',
     message: 'Magicbooklet will send this post to the moderation team for a safety review.',
@@ -69,7 +74,7 @@ export async function reportPostAfterConfirmation({
   if (!confirmed) return { status: 'cancelled' };
   onSend?.();
   try {
-    await reportPostContent({ postId, accessToken, surface });
+    await reportPostContent({ postId, accessToken, surface, deliveryId });
     return {
       status: 'done',
       message: KEEPS_REPORTED_POST.has(surface)

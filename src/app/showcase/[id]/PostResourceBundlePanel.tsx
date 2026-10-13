@@ -767,7 +767,7 @@ export default function PostResourceBundlePanel({
     storagePaths: string[],
     signal: AbortSignal,
   ): Promise<ReadonlyMap<string, string>> => {
-    const response = await fetch(`/api/posts/${postId}/resource-bundle/file-url`, {
+    const response = await fetch(fileUrlEndpoint ?? `/api/posts/${postId}/resource-bundle/file-url`, {
       signal,
       method: 'POST',
       headers: {
@@ -783,17 +783,14 @@ export default function PostResourceBundlePanel({
     }
 
     return new Map((data.files as PostResourceSignedFileUrl[]).map((file) => [file.storagePath, file.url]));
-  }, [postId, session]);
+  }, [fileUrlEndpoint, postId, session]);
 
   // Every preview the panel draws is signed in one request (one entitlement
   // load on the server, one count against the signing limit) where each used
-  // to sign itself. The buyer-library route signs one file per call, so its
-  // previews still ask one by one.
+  // to sign itself. The buyer-library route takes the same batch form.
   const signPreviewUrl = useMemo(
-    () => fileUrlEndpoint
-      ? (storagePath: string, signal?: AbortSignal) => fetchResourceFileUrl(storagePath, signal, 'inline')
-      : createBatchedUrlResolver(fetchResourceFileUrls, POST_RESOURCE_FILE_URL_BATCH_LIMIT),
-    [fetchResourceFileUrl, fetchResourceFileUrls, fileUrlEndpoint]
+    () => createBatchedUrlResolver(fetchResourceFileUrls, POST_RESOURCE_FILE_URL_BATCH_LIMIT),
+    [fetchResourceFileUrls]
   );
 
   const resolveResourceFileUrl = async (

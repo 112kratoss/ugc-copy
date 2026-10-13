@@ -1136,8 +1136,10 @@ describe('ShowcaseReelViewer pagination', () => {
         },
       })),
       '/api/posts/post-1/resource-bundle/file-url': () => new Response(JSON.stringify({
-        success: true,
-        signedUrl: 'https://signed.example.com/reference.png',
+        files: [{
+          storagePath: 'generated_images/user-1/reference.png',
+          url: 'https://signed.example.com/reference.png',
+        }],
       })),
     });
 
@@ -1156,6 +1158,80 @@ describe('ShowcaseReelViewer pagination', () => {
 
     expect(screen.getByRole('dialog', { name: /reference image preview/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /close reference preview/i })).toBeInTheDocument();
+  });
+
+  // As the post page's panel does: the previews one render draws leave as one
+  // request, and Open shows the file instead of saving it.
+  it("signs the unlocked recipe's previews in one request and opens a file inline", async () => {
+    authState.session = { access_token: 'token-1' };
+    const reference = (storagePath: string, contentType: string) => ({
+      type: 'source_file',
+      role: 'style_reference',
+      sectionId: null,
+      title: storagePath.split('/').pop(),
+      description: null,
+      textContent: null,
+      externalUrl: null,
+      storagePath,
+      contentType,
+      sizeBytes: null,
+      workflowSnapshot: null,
+      sortOrder: 1,
+      isPrimary: false,
+      remixUse: 'reference_only',
+    });
+    const fetchMock = stubRequests({
+      '/api/posts/post-1/resource-bundle': () => new Response(JSON.stringify({
+        bundle: {
+          viewerCanAccess: true,
+          viewerIsOwner: false,
+          resources: {
+            promptText: 'unlocked recipe prompt',
+            notesMarkdown: null,
+            workflowShareUrl: null,
+            attachments: [{ kind: 'file', label: 'Guide', storagePath: 'user-1/resources/guide.pdf', contentType: 'application/pdf' }],
+            allowRemix: false,
+            items: [
+              reference('generated_images/user-1/frame.png', 'image/png'),
+              reference('generated_videos/user-1/motion.mp4', 'video/mp4'),
+            ],
+          },
+        },
+      })),
+      '/api/posts/post-1/resource-bundle/file-url': (init) => {
+        const { storagePaths } = JSON.parse(String(init?.body)) as { storagePaths: string[] };
+        return new Response(JSON.stringify({
+          files: storagePaths.map((storagePath) => ({ storagePath, url: `https://signed.example.com/${storagePath}` })),
+        }));
+      },
+    });
+    const fileUrlBodies = () => fetchMock.mock.calls
+      .filter(([input]) => String(input) === '/api/posts/post-1/resource-bundle/file-url')
+      .map(([, init]) => JSON.parse(String(init?.body)));
+    const tab = { opener: {}, closed: false, close: vi.fn(), location: { replace: vi.fn() } };
+    const open = vi.spyOn(window, 'open').mockImplementation(() => tab as unknown as Window);
+
+    try {
+      renderPaidReel();
+
+      expect(await screen.findByText('unlocked recipe prompt')).toBeInTheDocument();
+      await waitFor(() => {
+        expect(document.querySelector('img[src="https://signed.example.com/generated_images/user-1/frame.png"]')).not.toBeNull();
+      });
+      expect(document.querySelector('video')).toHaveAttribute('src', 'https://signed.example.com/generated_videos/user-1/motion.mp4');
+      expect(fileUrlBodies()).toEqual([{
+        storagePaths: ['generated_images/user-1/frame.png', 'generated_videos/user-1/motion.mp4'],
+        disposition: 'inline',
+      }]);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open Guide' }));
+      await waitFor(() => {
+        expect(tab.location.replace).toHaveBeenCalledWith('https://signed.example.com/user-1/resources/guide.pdf');
+      });
+      expect(fileUrlBodies()[1]).toEqual({ storagePaths: ['user-1/resources/guide.pdf'], disposition: 'inline' });
+    } finally {
+      open.mockRestore();
+    }
   });
 
   it('restores a paid purchase on entry without starting another checkout', async () => {

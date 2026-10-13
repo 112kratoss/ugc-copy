@@ -80,4 +80,29 @@ describe('viewer unlock detail routes', () => {
       body: { storagePath: 'buyer/path.pdf' },
     }));
   });
+
+  it('hands a batch body to the service unchanged and answers its files privately', async () => {
+    const files = [
+      { storagePath: 'creator-1/refs/a.png', url: 'https://signed.example.test/a.png', expiresAt: '2026-06-22T06:10:00.000Z' },
+      { storagePath: 'creator-1/refs/b.mp4', url: 'https://signed.example.test/b.mp4', expiresAt: '2026-06-22T06:10:00.000Z' },
+    ];
+    const createViewerUnlockFileUrl = vi.fn(async () => ({ ok: true as const, body: { files } }));
+    const body = { storagePaths: files.map((file) => file.storagePath), disposition: 'inline' };
+
+    const response = await postViewerUnlockFileUrlRouteResponse({
+      request: request('POST', body),
+      context: { params: Promise.resolve({ unlockId: UNLOCK_ID }) },
+      dependencies: {
+        createUserClient: authenticatedClient,
+        createServiceClient: (() => ({})) as never,
+        createViewerUnlockFileUrl: createViewerUnlockFileUrl as never,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    await expect(response.json()).resolves.toEqual({ files });
+    expect(createViewerUnlockFileUrl).toHaveBeenCalledTimes(1);
+    expect(createViewerUnlockFileUrl).toHaveBeenCalledWith(expect.objectContaining({ body }));
+  });
 });

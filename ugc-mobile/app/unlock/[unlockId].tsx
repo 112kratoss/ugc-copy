@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Linking, View } from 'react-native';
 
 import { MediaPreview } from '@/components/media-preview';
@@ -42,10 +42,13 @@ export default function ViewerUnlockScreen() {
   const activeVersionPrice = activeAccessMode === 'free' ? 'Free' : formatUnlockPrice(activePriceUsdCents);
   const activeMediaItems = selectedRevision?.mediaItems ?? detail?.mediaItems ?? [];
 
-  const resolveResourceFileUrl = async (storagePath: string) => {
+  // Memoized: every reference preview signs through this, and the previews
+  // one render mounts are signed together in one request. Inline, so a file
+  // the browser can show opens rather than downloads.
+  const resolveResourceFileUrl = useCallback(async (storagePath: string) => {
     if (!unlockId) throw new Error('Missing unlock identity.');
-    return (await api.getViewerUnlockFileUrl(unlockId, storagePath)).signedUrl;
-  };
+    return api.resolveViewerUnlockFileUrl(unlockId, storagePath, { disposition: 'inline' });
+  }, [api, unlockId]);
 
   const openResourceFile = async ({ storagePath }: { storagePath: string }) => {
     try {
