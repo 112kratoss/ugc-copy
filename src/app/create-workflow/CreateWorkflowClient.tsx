@@ -65,13 +65,14 @@ import { useWorkflowCanvasPersistence } from './useWorkflowCanvasPersistence';
 import { mergeWorkflowRunIntoNodes, useWorkflowCanvasRunState } from './useWorkflowCanvasRunState';
 import { useWorkflowCanvasSelection } from './useWorkflowCanvasSelection';
 import { useWorkflowRunPolling } from './useWorkflowRunPolling';
+import { useWorkflowRunPrices } from './useWorkflowRunPrices';
 import type {
   CanvasAnchoredPopupPosition,
   CanvasSelectionState,
   PreviewMediaState,
   WorkflowInspectorPanel,
 } from './workflowCanvasUiTypes';
-import { getNodeAnchoredPopupPosition, getNodeRunAffordance } from './workflowCanvasUiUtils';
+import { formatWorkflowRunPrice, getNodeAnchoredPopupPosition, getNodeRunAffordance } from './workflowCanvasUiUtils';
 import { WORKFLOW_ASSISTANT_COST } from '@/lib/workflow-assistant-client';
 
 function areViewportsEqual(
@@ -1098,6 +1099,21 @@ export default function CreateWorkflowClient({
     }
   }, [activeCanvasId, activeRun, activeRunId, authHeaders, handleRunUpdate]);
 
+  // Priced only where a Run control is on screen: the open run menu or context
+  // menu, and the selected node, whose run menu is the next thing opened.
+  const runPriceNodeIds = useMemo(() => [...new Set([
+    openNodeRunMenuId,
+    contextMenu?.target === 'node' ? contextMenu.nodeId ?? null : null,
+    selectedNode?.id ?? null,
+  ].filter((nodeId): nodeId is string => Boolean(nodeId)))], [contextMenu, openNodeRunMenuId, selectedNode?.id]);
+  const getRunPrice = useWorkflowRunPrices({
+    graph,
+    nodeIds: runPriceNodeIds,
+    catalogRevision: modelCatalogRevision,
+    accessToken: effectiveSession?.access_token ?? null,
+    enabled: Boolean(modelCatalogRevision) && !workflowAssistant.previewGraph,
+  });
+
   const nodeRunStateById = useMemo(() => {
     return Object.fromEntries(nodes.map((node) => {
       if (node.type === 'note' || node.type === 'group') {
@@ -1109,15 +1125,23 @@ export default function CreateWorkflowClient({
         graph,
         node,
       });
+      const canRunNode = isRunnableNode(node);
+      const isPriced = runPriceNodeIds.includes(node.id);
+      const nodePrice = formatWorkflowRunPrice(isPriced && canRunNode ? getRunPrice(node.id, 'node') : null);
+      const branchPrice = formatWorkflowRunPrice(isPriced ? getRunPrice(node.id, 'branch') : null);
+      const priceNotes = [...new Set([nodePrice.note, branchPrice.note].filter((note): note is string => Boolean(note)))];
 
       return [node.id, {
         canRunBranch: true,
-        canRunNode: isRunnableNode(node),
+        canRunNode,
         runBranchDisabled: Boolean(activeRunId) || Boolean(runAffordance?.runBranchDisabled),
         runNodeDisabled: Boolean(activeRunId) || Boolean(runAffordance?.runNodeDisabled),
+        runNodePriceLabel: nodePrice.label,
+        runBranchPriceLabel: branchPrice.label,
+        runPriceNote: priceNotes.length > 0 ? priceNotes.join(' ') : null,
       }];
     }));
-  }, [activeRunId, credits, graph, nodes]);
+  }, [activeRunId, credits, getRunPrice, graph, nodes, runPriceNodeIds]);
 
   const nodeActionRuntimeById = useMemo<Record<string, WorkflowNodeRuntimeData | undefined>>(() => {
     return Object.fromEntries(nodes.map((node) => {
@@ -1169,10 +1193,13 @@ export default function CreateWorkflowClient({
             }
           : undefined,
         runBranchDisabled: runState?.runBranchDisabled,
+        runBranchPriceLabel: runState?.runBranchPriceLabel ?? null,
         runMessage: activeRunId
           ? 'A workflow run is already in progress.'
           : runAffordance?.message ?? null,
         runNodeDisabled: runState?.runNodeDisabled,
+        runNodePriceLabel: runState?.runNodePriceLabel ?? null,
+        runPriceNote: runState?.runPriceNote ?? null,
         showPlayControl: node.type !== 'note' && node.type !== 'group' && node.type !== 'approval-gate',
         templatePathState: isTemplateDrawerOpen
           ? templateIssueNodeIds.has(node.id)
@@ -1524,7 +1551,6 @@ export default function CreateWorkflowClient({
                     }
                   }}
                   onDeleteSelection={() => deleteSelection()}
-                  onDuplicateSelection={() => undefined}
                   onOpenPreview={openPreviewMedia}
                   onRunBranch={() => {
                     if (selectedNode) {

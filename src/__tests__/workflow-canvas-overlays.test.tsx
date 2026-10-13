@@ -63,6 +63,48 @@ describe('WorkflowCanvasOverlays', () => {
     expect(onDeleteSelection).toHaveBeenCalledTimes(1);
   });
 
+  it('prices Run this step and Run from here beside each choice', () => {
+    const graph = createStarterGraph();
+    const node = graph.nodes.find((candidate) => candidate.type === 'video-generate')!;
+
+    render(
+      <WorkflowCanvasOverlays
+        contextMenu={{ x: 120, y: 120, target: 'node', nodeId: node.id }}
+        edges={graph.edges}
+        nodes={graph.nodes}
+        nodeRunStateById={{
+          [node.id]: {
+            canRunBranch: true,
+            canRunNode: true,
+            runBranchDisabled: false,
+            runNodeDisabled: false,
+            runNodePriceLabel: '30 credits',
+            runBranchPriceLabel: 'about 54 credits',
+            runPriceNote: 'A motion step is charged for its clip’s measured length.',
+          },
+        }}
+        onAddNote={vi.fn()}
+        onClearSelection={vi.fn()}
+        onCloseContextMenu={vi.fn()}
+        onClosePreview={vi.fn()}
+        onDeleteSelection={vi.fn()}
+        onEditNode={vi.fn()}
+        onFitView={vi.fn()}
+        onRunBranch={vi.fn()}
+        onRunNode={vi.fn()}
+        onSelectAll={vi.fn()}
+        preview={null}
+        selection={{ nodeIds: [node.id], edgeIds: [] }}
+        showSelectionHud={false}
+      />
+    );
+
+    const contextMenu = screen.getByTestId('canvas-context-menu');
+    expect(within(contextMenu).getByRole('button', { name: 'Run this step · 30 credits' })).toBeInTheDocument();
+    expect(within(contextMenu).getByRole('button', { name: 'Run from here · about 54 credits' })).toBeInTheDocument();
+    expect(within(contextMenu).getByText('A motion step is charged for its clip’s measured length.')).toBeInTheDocument();
+  });
+
   it('keeps the pane context menu focused on simple canvas actions', () => {
     const graph = createStarterGraph();
 

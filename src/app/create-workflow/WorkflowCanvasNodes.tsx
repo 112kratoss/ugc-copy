@@ -130,8 +130,14 @@ export interface WorkflowNodeRuntimeData {
   onRunBranch?: () => void;
   onRunNode?: () => void;
   runBranchDisabled?: boolean;
+  /** What Run from here costs, e.g. "40 credits". */
+  runBranchPriceLabel?: string | null;
   runMessage?: string | null;
   runNodeDisabled?: boolean;
+  /** What Run this step costs. */
+  runNodePriceLabel?: string | null;
+  /** Why a price is missing or only an estimate. */
+  runPriceNote?: string | null;
   showPlayControl?: boolean;
   isApproving?: boolean;
   templatePathState?: 'active' | 'dimmed' | 'output' | 'issue';
@@ -381,7 +387,7 @@ function NodeShell({
               {runtime.isRunMenuOpen && (
                 <div
                   data-testid="workflow-node-run-menu"
-                  className="nodrag nopan absolute left-1/2 top-0 w-44 -translate-x-1/2 -translate-y-full rounded-2xl border border-white/10 bg-[#090909]/95 p-2 shadow-[0_20px_48px_rgba(0,0,0,0.5)] backdrop-blur"
+                  className="nodrag nopan absolute left-1/2 top-0 w-60 -translate-x-1/2 -translate-y-full rounded-2xl border border-white/10 bg-[#090909]/95 p-2 shadow-[0_20px_48px_rgba(0,0,0,0.5)] backdrop-blur"
                   onMouseDown={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -397,7 +403,7 @@ function NodeShell({
                     {runtime.onRunNode && (
                       <button
                         type="button"
-                        aria-label="Run this step"
+                        aria-label={runtime.runNodePriceLabel ? `Run this step · ${runtime.runNodePriceLabel}` : 'Run this step'}
                         data-testid="workflow-node-run-node"
                         disabled={runtime.runNodeDisabled}
                         className="flex w-full items-center rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-left text-sm text-zinc-100 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-50"
@@ -408,12 +414,15 @@ function NodeShell({
                         }}
                       >
                         Run this step
+                        {runtime.runNodePriceLabel ? (
+                          <span className="text-zinc-400">{` · ${runtime.runNodePriceLabel}`}</span>
+                        ) : null}
                       </button>
                     )}
                     {runtime.onRunBranch && (
                       <button
                         type="button"
-                        aria-label="Run from here"
+                        aria-label={runtime.runBranchPriceLabel ? `Run from here · ${runtime.runBranchPriceLabel}` : 'Run from here'}
                         data-testid="workflow-node-run-branch"
                         disabled={runtime.runBranchDisabled}
                         className="flex w-full items-center rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-left text-sm text-zinc-100 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-50"
@@ -424,12 +433,20 @@ function NodeShell({
                         }}
                       >
                         Run from here
+                        {runtime.runBranchPriceLabel ? (
+                          <span className="text-zinc-400">{` · ${runtime.runBranchPriceLabel}`}</span>
+                        ) : null}
                       </button>
                     )}
                   </div>
                   {runtime.runMessage && (
                     <div className="mt-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-[11px] leading-relaxed text-zinc-400">
                       {runtime.runMessage}
+                    </div>
+                  )}
+                  {runtime.runPriceNote && (
+                    <div className="mt-2 px-1 text-[11px] leading-relaxed text-zinc-500">
+                      {runtime.runPriceNote}
                     </div>
                   )}
                 </div>

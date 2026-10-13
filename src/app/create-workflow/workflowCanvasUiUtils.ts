@@ -10,6 +10,7 @@ import type {
   CanvasAnchoredPopupPosition,
   PreviewMediaKind,
   WorkflowRunAffordance,
+  WorkflowRunPrice,
 } from './workflowCanvasUiTypes';
 
 export function areStringArraysEqual(a: string[], b: string[]): boolean {
@@ -82,6 +83,17 @@ export function formatHandleLabel(handle: string | null | undefined): string {
   }
 
   return handle.replace(/-/g, ' ');
+}
+
+/** The words beside Run ("12 credits"), and why when there is no price. */
+export function formatWorkflowRunPrice(price: WorkflowRunPrice | null): { label: string | null; note: string | null } {
+  if (!price) return { label: null, note: null };
+  if (price.status === 'pending') return { label: 'Calculating…', note: null };
+  if (price.status === 'unavailable') return { label: 'Cost unavailable', note: price.reason };
+  const credits = `${price.costCredits} ${price.costCredits === 1 ? 'credit' : 'credits'}`;
+  return price.approximate
+    ? { label: `about ${credits}`, note: 'A motion step is charged for its clip’s measured length.' }
+    : { label: credits, note: null };
 }
 
 export function getNodeRunAffordance({

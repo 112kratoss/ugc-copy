@@ -31,7 +31,7 @@ export default async function CreateMotionPage({
 
   return (
     <RequireAuth returnTo={returnTo}>
-      <CreateMotionClient prefill={prefill} />
+      <CreateMotionClient prefill={prefill} returnTo={returnTo} />
     </RequireAuth>
   );
 }

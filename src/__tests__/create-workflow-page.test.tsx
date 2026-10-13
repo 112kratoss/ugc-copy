@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CreateWorkflowPage from '@/app/create-workflow/page';
 import CreateWorkflowEntry from '@/app/create-workflow/CreateWorkflowEntry';
 import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
-import { createStarterGraph, type WorkflowCanvasRecord } from '@/lib/workflow-canvas';
+import { createStarterGraph, type VideoGenerateNodeData, type WorkflowCanvasRecord } from '@/lib/workflow-canvas';
 
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
@@ -81,6 +81,7 @@ vi.mock('@xyflow/react', async () => {
           onOpenRunMenu?: () => void;
           onRunBranch?: () => void;
           onRunNode?: () => void;
+          runNodePriceLabel?: string | null;
           showPlayControl?: boolean;
         };
       };
@@ -263,6 +264,7 @@ vi.mock('@xyflow/react', async () => {
               <button
                 type="button"
                 data-testid={`node-run-step-${node.id}`}
+                data-price-label={node.data.__runtime?.runNodePriceLabel ?? ''}
                 onClick={() => node.data.__runtime?.onRunNode?.()}
               >
                 Run step {node.data.title}
@@ -377,6 +379,7 @@ describe('CreateWorkflowPage', () => {
     graph: WorkflowCanvasRecord['graph'];
   }>;
   let lastRunRequest: { canvasId: string; mode: string; startNodeId: string; catalogRevision?: string | null } | null;
+  let quoteRequests: Array<{ kind?: string; modelId?: string; settings?: { duration?: number } }>;
   // What the catalog routes answer. A test moves these to play a release that
   // is published after the page has loaded.
   let publishedCatalogRevision: string;
@@ -428,6 +431,7 @@ describe('CreateWorkflowPage', () => {
       user: { id: 'user-1' },
     };
     lastRunRequest = null;
+    quoteRequests = [];
     publishedCatalogRevision = workflowCatalog.revision;
     modelsRemovedFromCatalog = [];
     currentRevisionReadFails = false;
@@ -736,6 +740,19 @@ describe('CreateWorkflowPage', () => {
           ok: true,
           json: async () => ({ success: true }),
         } as Response;
+      }
+
+      if (url.endsWith('/api/generation-models/quote') && method === 'POST') {
+        const payload = JSON.parse(String(init?.body || '{}')) as { kind?: string; modelId?: string; settings?: { duration?: number } };
+        quoteRequests.push(payload);
+        // Image 4, video 30, motion 3 a second: a branch total names every step in it.
+        const costCredits = payload.kind === 'image' ? 4 : payload.kind === 'video' ? 30 : 3 * Number(payload.settings?.duration ?? 0);
+        return new Response(JSON.stringify({
+          modelId: payload.modelId,
+          catalogRevision: publishedCatalogRevision,
+          normalizedSettings: {},
+          costCredits,
+        }), { headers: { 'Content-Type': 'application/json' } });
       }
 
       return {
@@ -1258,6 +1275,32 @@ describe('CreateWorkflowPage', () => {
       expect(new Headers(repeated[1]?.headers).get('Idempotency-Key'))
         .toBe(new Headers(unanswered[1]?.headers).get('Idempotency-Key'));
     }, 15_000);
+  });
+
+  it('prices Run this step and Run from here before anything is spent', async () => {
+    await renderLoadedPage();
+    const graph = canvasesById['canvas-1'].graph;
+    const promptNodeId = graph.nodes.find((node) => node.type === 'text-input')!.id;
+    const imageNodeId = graph.nodes.find((node) => node.type === 'image-generate')!.id;
+    const videoSeconds = (graph.nodes.find((node) => node.type === 'video-generate')!.data as VideoGenerateNodeData).duration;
+
+    fireEvent.click(screen.getByTestId(`node-context-${promptNodeId}`));
+    const contextMenu = await screen.findByTestId('canvas-context-menu');
+    // The prompt costs nothing; from it run the image, the video and the
+    // motion step, which is charged for the length of the video's clip.
+    expect(await within(contextMenu).findByRole('button', {
+      name: `Run from here · about ${4 + 30 + 3 * videoSeconds} credits`,
+    }, { timeout: 5_000 })).toBeInTheDocument();
+    expect(within(contextMenu).getByText('A motion step is charged for its clip’s measured length.')).toBeInTheDocument();
+    expect(quoteRequests.map((request) => request.kind).sort()).toEqual(['image', 'motion', 'video']);
+    expect(quoteRequests.find((request) => request.kind === 'motion')?.settings?.duration).toBe(videoSeconds);
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    fireEvent.click(screen.getByTestId(`node-run-menu-${imageNodeId}`));
+    await waitFor(() => expect(screen.getByTestId(`node-run-step-${imageNodeId}`)).toHaveAttribute('data-price-label', '4 credits'));
+    // Each step was quoted once, whichever Run control showed it.
+    expect(quoteRequests).toHaveLength(3);
+    expect(lastRunRequest).toBeNull();
   });
 
   it('deletes a node directly from the hover control', async () => {
