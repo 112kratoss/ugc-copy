@@ -156,6 +156,16 @@ let rpcAccesses: string[] = [];
 // Forces the fake to answer the top-sales RPC as missing, so the legacy
 // scan fallback for un-migrated databases stays covered.
 let topSalesRpcMissingState = false;
+// Every explicit `.range()` read of posts, with the predicates it carried.
+let postsRangeReads: Array<{
+  start: number;
+  end: number;
+  filters: Record<string, unknown>;
+  notEqual: Record<string, unknown>;
+}> = [];
+
+// What the database fills in for a column a fixture row leaves out.
+const POSTS_COLUMN_DEFAULTS: Record<string, unknown> = { review_status: 'visible', is_nsfw: false };
 
 function createPostRow(overrides: Partial<PostRow> & { id: string; created_at: string }): PostRow {
   return {
@@ -276,12 +286,51 @@ function createServiceClientMock() {
       tableAccesses.push(table);
       if (table === 'posts') {
         const filters: Record<string, unknown> = {};
+        const notEqual: Record<string, unknown> = {};
         const sorts: Array<{ column: keyof PostRow; ascending: boolean }> = [];
         let textFilter = false;
         let selectedColumns: string[] | null = null;
         const missingPostsError = {
           code: 'PGRST205',
           message: "Could not find the table 'public.posts'",
+        };
+        const columnValue = (row: PostRow, column: string) => (
+          (row as Record<string, unknown>)[column] ?? POSTS_COLUMN_DEFAULTS[column]
+        );
+
+        const read = async (start: number, end: number) => {
+          if (postsSchemaMissingState) {
+            return { data: null, error: missingPostsError };
+          }
+
+          const rows = [...postsState]
+            .filter((row) =>
+              Object.entries(filters).every(([key, value]) =>
+                key === 'archived_at' && value === null
+                  ? ((row as Record<string, unknown>)[key] ?? null) === null
+                  : Array.isArray(value)
+                    ? value.includes(columnValue(row, key))
+                    : columnValue(row, key) === value
+              )
+            )
+            .filter((row) => Object.entries(notEqual).every(([key, value]) => columnValue(row, key) !== value))
+            .filter((row) => !textFilter || row.category === 'text' || row.post_format === 'mixed')
+            .sort((left, right) => {
+              for (const sort of sorts) {
+                const comparison = compareValues(
+                  left[sort.column] as string | number | null | undefined,
+                  right[sort.column] as string | number | null | undefined,
+                );
+                if (comparison !== 0) {
+                  return sort.ascending ? comparison : -comparison;
+                }
+              }
+
+              return 0;
+            })
+            .slice(start, end + 1);
+
+          return { data: rows, error: null };
         };
 
         const query = {
@@ -294,7 +343,7 @@ function createServiceClientMock() {
           // A single-row read answers with the columns it asked for, as
           // PostgREST does, so a column the read leaves out is missing here too.
           async maybeSingle() {
-            const { data, error } = await query.range(0, 0);
+            const { data, error } = await read(0, 0);
             const row = data?.[0] ?? null;
             if (error || !row || !selectedColumns) return { data: row, error };
             return {
@@ -307,6 +356,10 @@ function createServiceClientMock() {
           },
           eq(column: string, value: unknown) {
             filters[column] = value;
+            return query;
+          },
+          neq(column: string, value: unknown) {
+            notEqual[column] = value;
             return query;
           },
           in(column: string, values: unknown[]) {
@@ -326,43 +379,14 @@ function createServiceClientMock() {
             return query;
           },
           async range(start: number, end: number) {
-            if (postsSchemaMissingState) {
-              return { data: null, error: missingPostsError };
-            }
-
-            const rows = [...postsState]
-              .filter((row) =>
-                Object.entries(filters).every(([key, value]) =>
-                  key === 'archived_at' && value === null
-                    ? ((row as Record<string, unknown>)[key] ?? null) === null
-                    : Array.isArray(value)
-                      ? value.includes((row as Record<string, unknown>)[key])
-                      : (row as Record<string, unknown>)[key] === value
-                )
-              )
-              .filter((row) => !textFilter || row.category === 'text' || row.post_format === 'mixed')
-              .sort((left, right) => {
-                for (const sort of sorts) {
-                  const comparison = compareValues(
-                    left[sort.column] as string | number | null | undefined,
-                    right[sort.column] as string | number | null | undefined,
-                  );
-                  if (comparison !== 0) {
-                    return sort.ascending ? comparison : -comparison;
-                  }
-                }
-
-                return 0;
-              })
-              .slice(start, end + 1);
-
-            return { data: rows, error: null };
+            postsRangeReads.push({ start, end, filters: { ...filters }, notEqual: { ...notEqual } });
+            return read(start, end);
           },
           then(
             resolve: (value: { data: PostRow[] | null; error: unknown }) => unknown,
             reject: (reason: unknown) => unknown,
           ) {
-            return query.range(0, Number.MAX_SAFE_INTEGER).then(resolve, reject);
+            return read(0, Number.MAX_SAFE_INTEGER).then(resolve, reject);
           },
         };
 
@@ -696,6 +720,7 @@ describe('showcase feed', () => {
     tableAccesses = [];
     rpcAccesses = [];
     topSalesRpcMissingState = false;
+    postsRangeReads = [];
     nextCacheState.invocations = [];
   });
 
@@ -1431,6 +1456,99 @@ describe('showcase feed', () => {
     expect(unfiltered.items[0].postFormat).toBe('text');
   });
 
+  it('reads a media sort lane page in one ranged query and answers with the page the scan built', async () => {
+    // Newest first: every fifth post a note, plus a taken-down, a flagged and
+    // an NSFW post, none of which a media lane shows. 29 posts are left.
+    postsState = Array.from({ length: 40 }, (_, index) => {
+      const id = `post-${String(index).padStart(2, '0')}`;
+      const created_at = new Date(Date.UTC(2026, 2, 20, 10) - index * 60_000).toISOString();
+      const counts = { save_count: index % 7, remix_count: index % 4 };
+      if (index % 5 === 0) {
+        return createPostRow({ id, created_at, ...counts, category: 'text', post_format: 'text', output_url: null, body: 'A note.' });
+      }
+      if (index === 7) return createPostRow({ id, created_at, ...counts, review_status: 'hidden' });
+      if (index === 13) return createPostRow({ id, created_at, ...counts, review_status: 'flagged' });
+      if (index === 21) return createPostRow({ id, created_at, ...counts, is_nsfw: true });
+      return createPostRow({ id, created_at, ...counts });
+    });
+    generationModelsState = [];
+    resourceBundlesState = [];
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const mediaRead = (offset: number) => ({
+      start: offset,
+      end: offset + 12,
+      filters: { visibility: 'public', archived_at: null, review_status: 'visible', is_nsfw: false },
+      notEqual: { post_format: 'text' },
+    });
+
+    // sort=recent&category=media&offset=12: one ranged read, no scan from the top.
+    const second = await getShowcaseFeedPage({ category: 'media', sort: 'recent', offset: 12, limit: 12, bypassCache: true });
+    expect(postsRangeReads).toEqual([mediaRead(12)]);
+    expect(second.items.map((item) => item.id)).toEqual([
+      'post-18', 'post-19', 'post-22', 'post-23', 'post-24', 'post-26',
+      'post-27', 'post-28', 'post-29', 'post-31', 'post-32', 'post-33',
+    ]);
+    expect(second.pageInfo).toEqual({ hasMore: true, nextOffset: 24, limit: 12, offset: 12 });
+
+    // Every post has the same tool, so the lane filtered by it holds the same
+    // posts and is still served by the filtered scan: each sort lane's pages
+    // must match it.
+    for (const sort of ['recent', 'top-saves', 'top-remixes'] as const) {
+      for (const offset of [0, 12, 24]) {
+        postsRangeReads = [];
+        const page = await getShowcaseFeedPage({ category: 'media', sort, offset, limit: 12, bypassCache: true });
+        expect(postsRangeReads).toEqual([mediaRead(offset)]);
+
+        postsRangeReads = [];
+        const scanned = await getShowcaseFeedPage({ category: 'media', sort, offset, limit: 12, tool: 'runway', bypassCache: true });
+        expect(postsRangeReads[0]).toMatchObject({ start: 0, end: 47, notEqual: {} });
+
+        expect(page.items.map((item) => item.id)).toEqual(scanned.items.map((item) => item.id));
+        expect(page.pageInfo).toEqual(scanned.pageInfo);
+        expect(page.items).toHaveLength(offset === 24 ? 5 : 12);
+      }
+    }
+  });
+
+  it('keeps filling For you\'s recent pool by the scan', async () => {
+    // The ranked lane is not a sort lane: its pool reads what it always read.
+    postsState = [
+      createPostRow({ id: 'note', created_at: '2026-03-21T10:00:00.000Z', category: 'text', post_format: 'text', output_url: null }),
+      createPostRow({ id: 'image', created_at: '2026-03-20T10:00:00.000Z' }),
+    ];
+    generationModelsState = [];
+    resourceBundlesState = [];
+    let pool: string[] = [];
+    const personalization = await import('@/lib/showcase-feed-personalization');
+    vi.spyOn(personalization, 'getPersonalizedShowcaseFeedPage').mockImplementation(async (options) => {
+      pool = (await options.fallbackItems(2)).map((item) => item.id);
+      return {
+        items: [],
+        feedSessionId: null,
+        algorithmVersion: 'test-v1',
+        pageInfo: { hasMore: false, nextOffset: null, nextCursor: null, limit: 2, offset: 0 },
+      };
+    });
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+    await getShowcaseFeedPage({
+      category: 'media',
+      sort: 'for-you',
+      offset: 0,
+      limit: 2,
+      anonymousKeyHash: 'a'.repeat(64),
+      bypassCache: true,
+    });
+
+    expect(pool).toEqual(['image']);
+    expect(postsRangeReads).toEqual([{
+      start: 0,
+      end: 47,
+      filters: { visibility: 'public', archived_at: null },
+      notEqual: {},
+    }]);
+  });
+
   it('returns mixed posts when filtering by text', async () => {
     postsState = [
       {
@@ -1526,6 +1644,57 @@ describe('showcase feed', () => {
 
     expect(page.items.map((item) => item.id)).toEqual(['older-paid']);
     expect(page.pageInfo.hasMore).toBe(false);
+  });
+
+  it('answers the remix filter with what you can remix: an open remix, or a recipe that sells one', async () => {
+    postsState = [
+      // A creation with no recipe and its remix open: the app badges it "Remixable".
+      createPostRow({ id: 'open-remix', created_at: '2026-03-20T10:04:00.000Z', generation_id: 'gen-open', source_kind: 'magicbooklet' }),
+      // A recipe that keeps remix behind its unlock: found through its kinds, as before.
+      createPostRow({ id: 'locked-remix', created_at: '2026-03-20T10:03:00.000Z', generation_id: 'gen-locked', source_kind: 'magicbooklet' }),
+      // Nothing to remix: a recipe of a prompt alone, and an imported post.
+      createPostRow({ id: 'prompt-recipe', created_at: '2026-03-20T10:02:00.000Z' }),
+      createPostRow({ id: 'imported', created_at: '2026-03-20T10:01:00.000Z' }),
+    ];
+    generationModelsState = [];
+    resourceBundlesState = [
+      {
+        id: 'bundle-locked-remix',
+        post_id: 'locked-remix',
+        title: 'Remix kit',
+        access_mode: 'paid',
+        price_usd_cents: 900,
+        preview_text: 'Start from this creation.',
+        allow_remix: true,
+        status: 'published',
+      },
+      {
+        id: 'bundle-prompt',
+        post_id: 'prompt-recipe',
+        title: 'The prompt',
+        access_mode: 'paid',
+        price_usd_cents: 900,
+        preview_text: 'The exact prompt.',
+        prompt_text: 'The exact prompt.',
+        allow_remix: false,
+        status: 'published',
+      },
+    ];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'media',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+      resource: 'remix',
+      bypassCache: true,
+    });
+
+    expect(page.items.map((item) => [item.id, item.canRemix, Boolean(item.asset)])).toEqual([
+      ['open-remix', true, false],
+      ['locked-remix', false, true],
+    ]);
   });
 
   it('sorts top sales across all candidate posts before slicing', async () => {

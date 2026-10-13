@@ -10,6 +10,7 @@ import {
   parseShowcaseFeedEventPayload,
   type ShowcaseFeedEventBatchRecordResult,
   type ShowcaseFeedEventPayload,
+  type ShowcaseFeedEventRecordResult,
 } from '@/lib/showcase-feed-events-service';
 
 const POST_ID = '72000000-0000-4000-8000-000000000001';
@@ -340,7 +341,12 @@ describe('showcase feed events route adapter', () => {
     });
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ success: true, recorded: 7, rejected: 0 });
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      recorded: 7,
+      rejected: 0,
+      results: [0, 1, 2, 3, 4, 5, 6].map((index) => ({ index, status: 200 })),
+    });
     expect(recordShowcaseFeedEvent).not.toHaveBeenCalled();
     expect(dependencies.recordShowcaseFeedEvents).toHaveBeenCalledTimes(1);
     expect(dependencies.recordShowcaseFeedEvents).toHaveBeenCalledWith(expect.objectContaining({
@@ -387,7 +393,18 @@ describe('showcase feed events route adapter', () => {
     });
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ success: true, recorded: 2, rejected: 0 });
+    // The counts are the database's; the malformed event never reached it and
+    // is reported in `results` alone, with the answer it would get on its own.
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      recorded: 2,
+      rejected: 0,
+      results: [
+        { index: 0, status: 200 },
+        { index: 1, status: 400, error: 'Feed event is missing a valid ID, post, type, or surface.' },
+        { index: 2, status: 200 },
+      ],
+    });
     expect(recordShowcaseFeedEvent).not.toHaveBeenCalled();
   });
 
@@ -473,7 +490,66 @@ describe('showcase feed events route adapter', () => {
     });
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ success: true, recorded: 1, rejected: 1 });
+    // The refused event is named, with its reason, inside the 200.
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      recorded: 1,
+      rejected: 1,
+      results: [
+        { index: 0, status: 200 },
+        { index: 1, status: 409, error: 'Feed event ID is already used by a different event.' },
+      ],
+    });
+  });
+
+  it('points each outcome at the event the client sent, past one refused while parsing', async () => {
+    const recordShowcaseFeedEvent = vi.fn();
+    const enforceBackendRateLimit = vi.fn(async () => ({
+      allowed: true, limit: 300, remaining: 299, retryAfterSeconds: 0, resetAt: new Date().toISOString(),
+    }));
+    const dependencies = batchDependencies(recordShowcaseFeedEvent, enforceBackendRateLimit);
+    // The database answers by event, so a payload sent out of place would
+    // come back with another event's outcome.
+    const outcomeByEventId: Record<string, ShowcaseFeedEventRecordResult> = {
+      'event-0': { ok: true, body: { success: true } },
+      'event-2': { ok: false, status: 403, body: { error: 'Feed session does not belong to this viewer.' } },
+      'event-3': { ok: true, body: { success: true, duplicate: true } },
+    };
+    const recordShowcaseFeedEvents = vi.fn(async (
+      { payloads }: { payloads: ShowcaseFeedEventPayload[] },
+    ): Promise<ShowcaseFeedEventBatchRecordResult> => ({
+      ok: true,
+      body: { success: true, recorded: 2, rejected: 1 },
+      results: payloads.map((payload) => outcomeByEventId[payload.clientEventId]),
+    }));
+
+    const response = await postShowcaseFeedEventRouteResponse({
+      request: batchRequest({
+        events: [batchEvent(0), { ...batchEvent(1), clientEventId: 'srv:follow:key' }, batchEvent(2), batchEvent(3)],
+      }),
+      dependencies: { ...dependencies, recordShowcaseFeedEvents },
+    });
+
+    expect(recordShowcaseFeedEvents).toHaveBeenCalledWith(expect.objectContaining({
+      payloads: [
+        expect.objectContaining({ clientEventId: 'event-0' }),
+        expect.objectContaining({ clientEventId: 'event-2' }),
+        expect.objectContaining({ clientEventId: 'event-3' }),
+      ],
+    }));
+    expect(response.status).toBe(200);
+    // A replayed event is already recorded, so it answers 200 like a new one.
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      recorded: 2,
+      rejected: 1,
+      results: [
+        { index: 0, status: 200 },
+        { index: 1, status: 400, error: 'Feed event ID uses a prefix reserved for the server.' },
+        { index: 2, status: 403, error: 'Feed session does not belong to this viewer.' },
+        { index: 3, status: 200 },
+      ],
+    });
   });
 
   it('returns 500 without a serial fallback when the batch RPC fails', async () => {

@@ -174,6 +174,11 @@ describe('client feed event ids', () => {
     });
     const batch = parseShowcaseFeedEventBatchPayload({ events: [event('srv:purchase:key'), event('event-2')] });
     expect(batch.ok && batch.payloads.map((payload) => payload.clientEventId)).toEqual(['event-2']);
+    // The batch reply names each event by its place in the request.
+    expect(batch.ok && batch.payloadIndexes).toEqual([1]);
+    expect(batch.ok && batch.refused).toEqual([
+      { index: 0, status: 400, error: 'Feed event ID uses a prefix reserved for the server.' },
+    ]);
   });
 });
 

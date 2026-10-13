@@ -100,8 +100,19 @@ export type ShowcaseFeedEventParseResult =
  */
 export const SHOWCASE_FEED_EVENT_BATCH_LIMIT = 25;
 
+/** One event's answer in a batch reply, at its place in the request's `events`. */
+export type ShowcaseFeedEventBatchOutcome = { index: number; status: number; error?: string };
+
 export type ShowcaseFeedEventBatchParseResult =
-  | { ok: true; batched: boolean; payloads: ShowcaseFeedEventPayload[] }
+  | {
+    ok: true;
+    batched: boolean;
+    payloads: ShowcaseFeedEventPayload[];
+    /** Where each payload sat in the request's `events`. */
+    payloadIndexes: number[];
+    /** The events refused while parsing, each with the answer it would get on its own. */
+    refused: ShowcaseFeedEventBatchOutcome[];
+  }
   | { ok: false; status: 400; body: { error: string } };
 
 /**
@@ -119,7 +130,7 @@ export function parseShowcaseFeedEventBatchPayload(value: unknown): ShowcaseFeed
   if (events === null) {
     const single = parseShowcaseFeedEventPayload(value);
     return single.ok
-      ? { ok: true, batched: false, payloads: [single.payload] }
+      ? { ok: true, batched: false, payloads: [single.payload], payloadIndexes: [0], refused: [] }
       : single;
   }
 
@@ -135,19 +146,26 @@ export function parseShowcaseFeedEventBatchPayload(value: unknown): ShowcaseFeed
   }
 
   const payloads: ShowcaseFeedEventPayload[] = [];
-  for (const event of events) {
-    const parsed = parseShowcaseFeedEventPayload(event);
+  const payloadIndexes: number[] = [];
+  const refused: ShowcaseFeedEventBatchOutcome[] = [];
+  for (let index = 0; index < events.length; index += 1) {
+    const parsed = parseShowcaseFeedEventPayload(events[index]);
     // One malformed event must not discard the rest of a watch session. The
     // batch is telemetry, and a client cannot retry what it has already
     // dropped from its queue.
-    if (parsed.ok) payloads.push(parsed.payload);
+    if (parsed.ok) {
+      payloads.push(parsed.payload);
+      payloadIndexes.push(index);
+    } else {
+      refused.push({ index, status: parsed.status, error: parsed.body.error });
+    }
   }
 
   if (payloads.length === 0) {
     return { ok: false, status: 400, body: { error: 'Feed event batch contained no valid events.' } };
   }
 
-  return { ok: true, batched: true, payloads };
+  return { ok: true, batched: true, payloads, payloadIndexes, refused };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

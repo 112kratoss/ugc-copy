@@ -149,7 +149,8 @@ async function fetchPostRows(
   sort: ShowcaseSort,
   offset: number,
   limit: number,
-  toolSlug: string | null
+  toolSlug: string | null,
+  mediaRowsOnly = false,
 ): Promise<PostRow[] | null> {
   const adminSupabase = createServiceClient();
   let query = adminSupabase
@@ -160,6 +161,16 @@ async function fetchPostRows(
 
   if (category === 'text') {
     query = query.or('category.eq.text,post_format.eq.mixed');
+  } else if (category === 'media' && mediaRowsOnly) {
+    // The rows `media` keeps once hydrated, so a page of them is the page the
+    // filtered scan built: media and mixed posts carry a cover (the
+    // public-surface check) and text posts none, hydration drops a post that
+    // is not `visible`, and an NSFW post is drawn covered, as a text card the
+    // media check leaves out.
+    query = query
+      .neq('post_format', 'text')
+      .eq('review_status', 'visible')
+      .eq('is_nsfw', false);
   } else if (category !== 'all' && category !== 'media' && category !== 'image' && category !== 'video') {
     query = query.eq('category', category);
   }
@@ -342,7 +353,12 @@ function itemMatchesUnlockFilters(
 
   if (resourceFilter !== 'all') {
     const resourceKinds = item.asset?.resourceKinds ?? (item.asset?.allowRemix ? ['remix'] : []);
-    if (!resourceKinds.includes(resourceFilter)) {
+    // `remix` means "you can remix it" on both clients: the app badges a post
+    // with no recipe and an open remix "Remixable", so its Remixable chip has
+    // to find that post. A recipe that keeps remix behind its unlock still
+    // matches through its kinds.
+    const remixIsOpen = resourceFilter === 'remix' && item.canRemix;
+    if (!resourceKinds.includes(resourceFilter) && !remixIsOpen) {
       return false;
     }
   }
@@ -815,6 +831,7 @@ async function collectFilteredFeedItems(params: {
   };
 }
 
+/** `forYouPool` is set only when For you fills its candidate pool from this page. */
 async function getShowcaseFeedPageBase(
   category: ShowcaseCategory,
   sort: ShowcaseSort,
@@ -823,9 +840,10 @@ async function getShowcaseFeedPageBase(
   toolSlug: string | null,
   unlockFilter: ShowcaseUnlockFilter,
   resourceFilter: ShowcaseResourceFilter,
-  hydrationCache?: ShowcaseFeedHydrationCache,
+  forYouPool?: { hydrationCache: ShowcaseFeedHydrationCache },
 ): Promise<ShowcaseFeedPage> {
   const adminSupabase = createServiceClient();
+  const hydrationCache = forYouPool?.hydrationCache;
   // Every top-sales variant goes through the RPC now, filters included. A null
   // means the database has not applied the function yet, and the legacy scan
   // below still serves those.
@@ -843,11 +861,22 @@ async function getShowcaseFeedPageBase(
     if (topSalesPage) return topSalesPage;
   }
 
+  // A sort lane's `media` page with nothing else to filter reads its rows in
+  // SQL (fetchPostRows), one ranged query, instead of scanning from the top
+  // and hydrating every earlier page again. For you's pool keeps the scan,
+  // which fills it to its target whatever hydration drops: the ranked lane's
+  // candidates are left exactly as they were.
+  const mediaRowsOnly = category === 'media'
+    && !forYouPool
+    && unlockFilter === 'all'
+    && resourceFilter === 'all'
+    && !toolSlug;
+
   const needsFilteredScan =
     sort === 'top-sales' ||
     unlockFilter !== 'all' ||
     resourceFilter !== 'all' ||
-    category === 'media' ||
+    (category === 'media' && !mediaRowsOnly) ||
     category === 'image' ||
     category === 'video';
 
@@ -871,7 +900,7 @@ async function getShowcaseFeedPageBase(
     return filteredPage;
   }
 
-  const posts = await fetchPostRows(category, sort, offset, limit + 1, toolSlug);
+  const posts = await fetchPostRows(category, sort, offset, limit + 1, toolSlug, mediaRowsOnly);
   if (posts === null) {
     return getLegacyShowcaseFeedPageBase(category, sort, offset, limit);
   }
@@ -1124,7 +1153,7 @@ async function getShowcaseForYouFeedPage(params: {
         params.toolSlug,
         params.unlockFilter,
         params.resourceFilter,
-        hydrationCache,
+        { hydrationCache },
       );
       return page.items.filter((item) => !item.isNsfw);
     },
