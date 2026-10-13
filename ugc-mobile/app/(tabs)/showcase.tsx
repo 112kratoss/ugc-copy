@@ -171,9 +171,58 @@ function runShowcaseActivation(
   if (next.activeIds !== previous.activeIds) setActiveVideoIds(next.activeIds);
 }
 
+/** Where the reader is in the list, as the last on-screen viewability report put it. */
+interface ShowcaseViewport {
+  /** The cards with any pixel on screen. */
+  onScreenCardIds: ReadonlySet<string>;
+  /** The highest list index among them; -1 while none is known. */
+  lastViewableIndex: number;
+}
+
+/**
+ * Which measured cover ratios may change their card's height now, and which
+ * wait.
+ *
+ * In this masonry a card that changes height re-places every card after it,
+ * and nothing holds the visible ones still (the list turns
+ * maintainVisibleContentPosition off). A card on screen waits, as
+ * `partitionAspectRatioUpdates` explains, and so does a card above the screen,
+ * whose change would move the cards being read. With optimizeItemArrangement
+ * each card starts where the shorter column ends, so a card past the last one
+ * on screen is below the screen, and so is every card it moves: only those take
+ * their ratio at once. A held ratio is therefore released when its card leaves
+ * through the bottom, never through the top (or by a refresh, which re-places
+ * every card anyway). With no card on screen, above and below cannot be told
+ * apart, and every ratio waits.
+ */
+export function partitionAspectRatiosByViewport(
+  ratios: Record<string, number>,
+  cards: ReadonlyArray<{ id: string }>,
+  viewport: ShowcaseViewport,
+): { apply: Record<string, number>; hold: Record<string, number> } {
+  const { apply: offScreen, hold } = partitionAspectRatioUpdates(ratios, viewport.onScreenCardIds);
+  const apply: Record<string, number> = {};
+  const below = new Set<string>();
+  if (viewport.lastViewableIndex >= 0) {
+    for (let index = viewport.lastViewableIndex + 1; index < cards.length; index += 1) {
+      below.add(cards[index].id);
+    }
+  }
+
+  for (const [cardId, aspectRatio] of Object.entries(offScreen)) {
+    if (below.has(cardId)) {
+      apply[cardId] = aspectRatio;
+    } else {
+      hold[cardId] = aspectRatio;
+    }
+  }
+
+  return { apply, hold };
+}
+
 export default function ShowcaseScreen() {
   const theme = useAppTheme();
-  const { api, user } = useAuth();
+  const { api, identityUserId, user } = useAuth();
   const queryClient = useQueryClient();
   const routeParams = useLocalSearchParams<{ filter?: string | string[]; tool?: string | string[] }>();
   const isFocused = useIsFocused();
@@ -196,14 +245,17 @@ export default function ShowcaseScreen() {
     ...(activeTool ? { tool: activeTool } : {}),
   }), [activeFilter, activeTool]);
   // The reel a tile opens reads and pages these very pages (`lane` below).
+  // Keyed by the backend identity, a guest's too (`user` is null for one): the
+  // server refuses a page's events and cursor from anyone but the identity it
+  // was ranked for, so a new identity has to fetch a lane of its own.
   const laneQueryOptions = useMemo(
-    () => showcaseFeedLaneQueryOptions(api, queryFilters, user?.id),
-    [api, queryFilters, user?.id]
+    () => showcaseFeedLaneQueryOptions(api, queryFilters, identityUserId),
+    [api, queryFilters, identityUserId]
   );
   const queryKey = laneQueryOptions.queryKey;
   const viewerFeedQueryKey = useMemo(
-    () => createShowcaseFeedViewerQueryKey(user?.id),
-    [user?.id]
+    () => createShowcaseFeedViewerQueryKey(identityUserId),
+    [identityUserId]
   );
   const activeToolLabel = useMemo(() => activeTool ? formatToolLabel(activeTool) : null, [activeTool]);
   // Playback lives outside React state: each pin subscribes to its own id, so
@@ -217,10 +269,10 @@ export default function ShowcaseScreen() {
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMorePageCountRef = useRef<number | null>(null);
-  // Which cards have any pixel on screen, and the ratios waiting for them to
-  // leave. See `partitionAspectRatioUpdates` for why a measurement cannot be
-  // applied to a card the reader is looking at.
-  const onScreenCardIdsRef = useRef<Set<string>>(new Set());
+  // Where the screen is in the list, and the ratios waiting for their cards to
+  // pass below it. See `partitionAspectRatiosByViewport` for why a measurement
+  // cannot be applied to a card on or above the screen.
+  const viewportRef = useRef<ShowcaseViewport>({ onScreenCardIds: new Set(), lastViewableIndex: -1 });
   const heldAspectRatiosRef = useRef<Record<string, number>>({});
   // One lock, many carousels: the feed stops scrolling vertically while any
   // card's media is being swiped sideways, so it counts holders rather than
@@ -291,7 +343,12 @@ export default function ShowcaseScreen() {
    * them, on top of a full-list re-render each time via extraData.
    */
   const applyAspectRatios = useCallback((updates: Record<string, number>) => {
-    const { apply, hold } = partitionAspectRatioUpdates(updates, onScreenCardIdsRef.current);
+    const { apply, hold } = partitionAspectRatiosByViewport(
+      updates,
+      // The list's own data: the order its viewability indices count in.
+      feedRef.current?.props.data ?? [],
+      viewportRef.current,
+    );
     if (Object.keys(hold).length) {
       heldAspectRatiosRef.current = { ...heldAspectRatiosRef.current, ...hold };
     }
@@ -299,12 +356,17 @@ export default function ShowcaseScreen() {
     setResolvedAspectRatios((current) => mergeAspectRatios(current, apply));
   }, []);
 
-  /** Lets go of every held ratio whose card has since left the screen. */
-  const releaseHeldAspectRatios = useCallback(() => {
+  /**
+   * Lets go of the held ratios whose cards are now below the screen, or of all
+   * of them at a refresh, which lays the grid out afresh anyway.
+   */
+  const releaseHeldAspectRatios = useCallback((cause: 'viewport' | 'refresh') => {
     const held = heldAspectRatiosRef.current;
     if (!Object.keys(held).length) return;
 
-    const { apply, hold } = partitionAspectRatioUpdates(held, onScreenCardIdsRef.current);
+    const { apply, hold } = cause === 'refresh'
+      ? { apply: held, hold: {} }
+      : partitionAspectRatiosByViewport(held, feedRef.current?.props.data ?? [], viewportRef.current);
     heldAspectRatiosRef.current = hold;
     if (!Object.keys(apply).length) return;
     setResolvedAspectRatios((current) => mergeAspectRatios(current, apply));
@@ -355,12 +417,14 @@ export default function ShowcaseScreen() {
   }, [recordFeedEvent]);
   const onScreenViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
     const onScreen = new Set<string>();
+    let lastViewableIndex = -1;
     for (const token of viewableItems) {
       if (!token.isViewable || !token.item) continue;
       onScreen.add(token.item.id);
+      if (typeof token.index === 'number') lastViewableIndex = Math.max(lastViewableIndex, token.index);
     }
-    onScreenCardIdsRef.current = onScreen;
-    releaseHeldAspectRatios();
+    viewportRef.current = { onScreenCardIds: onScreen, lastViewableIndex };
+    releaseHeldAspectRatios('viewport');
   }, [releaseHeldAspectRatios]);
   // Built once from the first render's callbacks, which FlashList needs to stay
   // stable. State rather than a ref, which render may not read.
@@ -499,7 +563,12 @@ export default function ShowcaseScreen() {
         pageParams: current.pageParams.slice(0, 1),
       };
     });
-    void showcaseQuery.refetch().finally(() => setPullRefreshing(false));
+    void showcaseQuery.refetch().finally(() => {
+      setPullRefreshing(false);
+      // Cards that left through the top kept their placeholder height until
+      // now; the refreshed page re-places every card anyway.
+      releaseHeldAspectRatios('refresh');
+    });
   };
 
   const openPost = useCallback((item: ShowcaseFeedItem, zoom: AppleZoomOpen | null = null) => {
@@ -628,7 +697,9 @@ export default function ShowcaseScreen() {
       if (!confirmed) return;
       try {
         await api.reportUser(item.creator.id!, {
-          reason: 'unsafe_content',
+          // The reason the web and this app's reel and Home file a creator
+          // under, so moderators see one.
+          reason: 'harassment',
           sourceSurface: 'showcase',
           details: `Reported from post ${item.id}.`,
         });
