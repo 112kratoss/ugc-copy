@@ -86,11 +86,8 @@ export function getPostMediaKind(
   return getShowcaseMediaKind(category, postFormat);
 }
 
-// The single server-side source of truth for how long a post title may be.
-// Both composers mirror this number for their character counters — web in
-// NewPostClient.tsx, mobile in post-new-view-model.ts — but this is the gate
-// that actually rejects, on create and on edit alike.
-export const TITLE_MAX_LENGTH = 100;
+// How long a post title may be; client components read it from post-limits.ts.
+export { TITLE_MAX_LENGTH } from '@/lib/post-limits';
 // The same for a post's text (its body). Edit and publish check this one;
 // create checks the same number in post-creation-submission-service.ts, and
 // both composers mirror it for their counters.

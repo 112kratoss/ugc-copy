@@ -264,3 +264,10 @@ export function parseModelCatalogPage(
  * references had already uploaded.
  */
 export const GENERATION_PROMPT_MAX_LENGTH = 10000;
+
+/**
+ * What one prompt enhancement debits. The enhancement service charges this
+ * value and every Enhance button, on the web and in the app, prints it, so the
+ * price a creator sees is the price taken. The app's buttons showed none.
+ */
+export const PROMPT_ENHANCEMENT_COST_CREDITS: number = 2;

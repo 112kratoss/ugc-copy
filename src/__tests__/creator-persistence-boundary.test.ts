@@ -25,4 +25,22 @@ describe('creator media persistence hooks', () => {
     // Capacity changes now preserve draft media; interaction tests cover that behavior.
     expect(source).not.toContain('eslint-disable-line react-hooks/exhaustive-deps');
   });
+
+  it('keeps creator storage out of the account menu until sign-out needs it', () => {
+    const source = readFileSync(join(projectRoot, 'src/components/AppShellAccount.tsx'), 'utf8');
+
+    // The account menu loads on every signed-in page; localforage would ride along.
+    expect(source).toContain("import('@/lib/persisted-media')");
+    expect(source).not.toMatch(/from ['"]@\/lib\/persisted-(media|creator-draft)['"]/);
+    expect(source).not.toMatch(/from ['"]localforage['"]/);
+  });
+
+  it('keeps creator media in the one current database', () => {
+    const source = readFileSync(join(projectRoot, 'src/lib/persisted-media.ts'), 'utf8');
+
+    // The earlier databases held files saved for no particular account.
+    expect(source.match(/createInstance\(/g)).toHaveLength(1);
+    expect(source).toContain("name: 'magicbooklet-persisted-media'");
+  });
 });
+

@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   fetchGenerationStatus,
+  fetchGenerationStatusWithRetry,
+  GenerationStatusRequestError,
   getGenerationStatusRetryDelayMs,
   waitForNextGenerationStatusPoll,
 } from '@/lib/generation-status-client';
@@ -26,6 +28,11 @@ describe('fetchGenerationStatus', () => {
       fetchImpl,
     })).rejects.toThrow('Your session has expired.');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await expect(fetchGenerationStatus({
+      url: '/api/generate-image?id=prediction-1',
+      accessToken: 'expired-token',
+      fetchImpl,
+    })).rejects.toBeInstanceOf(GenerationStatusRequestError);
   });
 
   it('uses a deterministic fallback for a non-JSON error response', async () => {
@@ -142,5 +149,122 @@ describe('fetchGenerationStatus', () => {
     });
     controller.abort();
     await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+  });
+});
+
+function statusResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+describe('fetchGenerationStatusWithRetry', () => {
+  const url = '/api/generate-video?id=prediction-9';
+  const noWait = [0, 0, 0];
+
+  it('rides out a server fault and returns the one answer that came through', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(statusResponse({ error: 'Failed to fetch generation status' }, 500))
+      .mockResolvedValueOnce(statusResponse({ status: 'processing', retryAfterMs: 15_000 }));
+
+    await expect(fetchGenerationStatusWithRetry({
+      url,
+      getAccessToken: () => 'token',
+      delaysMs: noWait,
+      fetchImpl,
+    })).resolves.toEqual({ status: 'processing', retryAfterMs: 15_000 });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads the token again after a 401 and retries with the fresh one', async () => {
+    const getAccessToken = vi.fn()
+      .mockResolvedValueOnce('expired-token')
+      .mockResolvedValueOnce('refreshed-token');
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(statusResponse({ error: 'Unauthorized: Please log in to check generation status' }, 401))
+      .mockResolvedValueOnce(statusResponse({ status: 'succeeded', output: 'https://cdn.test/out.mp4' }));
+
+    await expect(fetchGenerationStatusWithRetry({ url, getAccessToken, delaysMs: noWait, fetchImpl }))
+      .resolves.toMatchObject({ status: 'succeeded' });
+    expect(getAccessToken).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenNthCalledWith(1, url, { headers: { Authorization: 'Bearer expired-token' } });
+    expect(fetchImpl).toHaveBeenNthCalledWith(2, url, { headers: { Authorization: 'Bearer refreshed-token' } });
+  });
+
+  it('retries a dropped connection and a moment with no session', async () => {
+    const getAccessToken = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue('token');
+    const fetchImpl = vi.fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(statusResponse({ status: 'waiting' }));
+
+    await expect(fetchGenerationStatusWithRetry({ url, getAccessToken, delaysMs: noWait, fetchImpl }))
+      .resolves.toEqual({ status: 'waiting' });
+    expect(getAccessToken).toHaveBeenCalledTimes(3);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws the last error once every attempt has failed', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(statusResponse({ error: 'first' }, 503))
+      .mockResolvedValueOnce(statusResponse({ error: 'second' }, 502))
+      .mockResolvedValueOnce(statusResponse({ error: 'third' }, 500))
+      .mockResolvedValueOnce(statusResponse({ error: 'fourth' }, 504));
+
+    await expect(fetchGenerationStatusWithRetry({
+      url,
+      getAccessToken: () => 'token',
+      delaysMs: noWait,
+      fetchImpl,
+    })).rejects.toMatchObject({ message: 'fourth', status: 504 });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not retry an answer that would come back the same', async () => {
+    const fetchImpl = vi.fn(async () => statusResponse({ error: 'Generation not found' }, 404));
+
+    await expect(fetchGenerationStatusWithRetry({
+      url,
+      getAccessToken: () => 'token',
+      delaysMs: noWait,
+      fetchImpl,
+    })).rejects.toMatchObject({ message: 'Generation not found', status: 404 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits 2, 5 and 10 seconds between attempts by default', async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn(async () => statusResponse({ error: 'down' }, 503));
+    const outcome = fetchGenerationStatusWithRetry({ url, getAccessToken: () => 'token', fetchImpl })
+      .catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    await expect(outcome).resolves.toMatchObject({ status: 503 });
+  });
+
+  it('stops at once when the poll is cancelled during a wait', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => statusResponse({ error: 'down' }, 503));
+    const outcome = fetchGenerationStatusWithRetry({
+      url,
+      getAccessToken: () => 'token',
+      signal: controller.signal,
+      fetchImpl,
+    }).catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    await expect(outcome).resolves.toMatchObject({ name: 'AbortError' });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
