@@ -261,7 +261,8 @@ import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
 import { MediaCreationScreen } from '../components/media-creation-screen';
 import { PUSH_OFFER_STORAGE_KEY, resetPushOffersForTests } from '../lib/push-prompt';
 import { readCreatorSession, resetCreatorSessionForTests } from '../lib/creator-session-diagnostics';
-import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia } from '../lib/media';
+import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia, type UploadedMedia } from '../lib/media';
+import { UploadCancelledError } from '../lib/upload-file';
 import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
 import { catalogV2 } from './generation-model-catalog-v2-fixtures';
 import type { CatalogInputMode, CatalogInputSlot, GenerationModelCatalog, GenerationModelDescriptor } from '../lib/generation-model-catalog';
@@ -963,7 +964,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     const actionColumns = actionGrid.findAll(
       (node) =>
         node.props.accessibilityRole === 'button' &&
-        ['Reference', 'Templates', 'Enhance'].includes(node.props.accessibilityLabel) &&
+        ['Reference', 'Templates', 'Enhance · 2 credits'].includes(node.props.accessibilityLabel) &&
         node.props.style?.minHeight === 60,
     );
     expect(actionColumns).toHaveLength(3);
@@ -1989,7 +1990,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     renderer.act(() => {
-      findPressableByText(tree!.root, 'Enhance').props.onPress();
+      findPressableByText(tree!.root, 'Enhance · 2 credits').props.onPress();
     });
 
     const text = collectText(tree!.root);
@@ -2020,7 +2021,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       await findPressableByText(tree!.root, 'Reference').props.onPress();
     });
 
-    const thumbnail = tree!.root.find((node) => String(node.type) === 'stable-media-image' && node.props.url === 'https://cdn.example.com/hero.png');
+    // Drawn from the picker's own copy this session, not the signed link to the whole upload.
+    const thumbnail = tree!.root.find((node) => String(node.type) === 'stable-media-image' && node.props.url === 'file:///hero.png');
     expect(thumbnail.props).toEqual(expect.objectContaining({
       contentFit: 'cover',
       style: { width: '100%', height: '100%' },
@@ -2066,7 +2068,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(previews).toContainEqual(expect.objectContaining({
       props: expect.objectContaining({
         kind: 'video',
-        url: 'https://cdn.example.com/motion.mp4',
+        // The picker's own copy, while this session lasts.
+        url: 'file:///motion.mp4',
         letterbox: true,
         nativeControls: false,
       }),
@@ -2127,7 +2130,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     await renderer.act(async () => {
       await findPressableByText(tree!.root, 'Reference').props.onPress();
     });
-    const thumbnail = tree!.root.find((node) => String(node.type) === 'stable-media-image' && node.props.url === 'https://cdn.example.com/hero.png');
+    const thumbnail = tree!.root.find((node) => String(node.type) === 'stable-media-image' && node.props.url === 'file:///hero.png');
     expect(thumbnail.props).toEqual(expect.objectContaining({
       contentFit: 'cover',
       style: { width: '100%', height: '100%' },
@@ -2142,7 +2145,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     // preview was a 240pt card against the left edge (see media-preview.test).
     expect(tree!.root.findAll((node) => String(node.type) === 'media-preview')).toContainEqual(expect.objectContaining({
       props: expect.objectContaining({
-        url: 'https://cdn.example.com/hero.png',
+        url: 'file:///hero.png',
         height: 300,
         letterbox: true,
       }),
@@ -3241,7 +3244,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       tree!.root.findAll((node) => String(node.type) === 'textinput')[0].props.onChangeText('serum on a stone');
     });
     await renderer.act(async () => {
-      await findPressableByText(tree!.root, 'Enhance').props.onPress();
+      await findPressableByText(tree!.root, 'Enhance · 2 credits').props.onPress();
     });
 
     expect(aiDataConsentState.ensure).toHaveBeenCalledTimes(1);
@@ -3991,7 +3994,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(tree!.root.findAllByProps({ accessibilityLabel: 'Undo enhancement' })).toHaveLength(0);
 
     await renderer.act(async () => {
-      await findPressableByText(tree!.root, 'Enhance').props.onPress();
+      await findPressableByText(tree!.root, 'Enhance · 2 credits').props.onPress();
     });
 
     expect(authState.api.enhancePrompt).toHaveBeenCalledWith(expect.objectContaining({
@@ -4724,6 +4727,478 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(authState.api.quoteGenerationModel).toHaveBeenCalledTimes(1);
       expect(authState.api.quoteGenerationModel.mock.calls[0][0]).toMatchObject({ kind: 'motion', inputCounts: { images: 1, videos: 1 } });
       expect(generateButton(tree).props.accessibilityLabel).toBe('Generate · 8 credits');
+    });
+  });
+
+  describe('uploads, the result, the enhancer and the way back from sign-in', () => {
+    const memory = new Map<string, string>();
+    const ordinaryKey = creationDraftStorageKey(ordinaryDraftScope('user-123'));
+    // Past the quote's delay and the autosave's, and past every storage read a load makes.
+    const settle = () => renderer.act(async () => { await vi.advanceTimersByTimeAsync(450); });
+    const savedDrafts = (overrides: { image?: Record<string, unknown>; video?: Record<string, unknown>; motion?: Record<string, unknown> }) => JSON.stringify({
+      image: { ...createDefaultCreationDraft('image'), ...overrides.image },
+      video: { ...createDefaultCreationDraft('video'), ...overrides.video },
+      motion: { ...createDefaultCreationDraft('motion'), ...overrides.motion },
+      updatedAt: new Date().toISOString(),
+    });
+    const storedDrafts = () => JSON.parse(memory.get(ordinaryKey) ?? 'null');
+    const text = (tree: renderer.ReactTestRenderer) => collectText(tree.root).join('\n');
+    const labelled = (root: renderer.ReactTestInstance, label: string) => root.find((node) => (
+      String(node.type) === 'pressable' && node.props.accessibilityLabel === label
+    ));
+    const hasLabel = (root: renderer.ReactTestInstance, label: string) => root.findAll((node) => (
+      String(node.type) === 'pressable' && node.props.accessibilityLabel === label
+    )).length > 0;
+    const blocker = (tree: renderer.ReactTestRenderer) => collectText(tree.root.findByProps({ testID: 'creator-contextual-blocker' })).join(' ');
+    const open = async (element: React.ReactElement) => {
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(element); });
+      await settle();
+      return tree;
+    };
+    const typePrompt = async (tree: renderer.ReactTestRenderer, prompt: string, label = 'Generation prompt') => {
+      renderer.act(() => { tree.root.findByProps({ accessibilityLabel: label }).props.onChangeText(prompt); });
+      await settle();
+    };
+    // A press whose work is still running when the case looks: its first steps land, and nothing waits on the rest.
+    const pressAndLook = (pressable: renderer.ReactTestInstance) => renderer.act(async () => {
+      void pressable.props.onPress();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const pressGenerate = async (tree: renderer.ReactTestRenderer) => {
+      await renderer.act(async () => { void findPressableByLabelPrefix(tree.root, 'Generate ·').props.onPress(); });
+      await settle();
+    };
+    const started = (predictionId: string) => ({
+      success: true, predictionId, generationId: `gen-${predictionId}`, status: 'processing', remainingCredits: 990, cost: 8,
+    });
+    const pickedImage = (fileName: string, fileSize = 2048) => ({ uri: `file:///${fileName}`, fileName, mimeType: 'image/png', fileSize });
+    const uploaded = (fileName: string, extra: Partial<UploadedMedia> = {}): UploadedMedia => ({
+      signedUrl: `https://cdn.example.com/${fileName}`,
+      storagePath: `uploads/user-123/${fileName}`,
+      mimeType: 'image/png',
+      fileName,
+      kind: 'image',
+      durationSeconds: null,
+      sizeBytes: 2048,
+      ...extra,
+    });
+    const thumbnailUrl = (tree: renderer.ReactTestRenderer, name: string) => labelled(tree.root, `Open details for ${name}`)
+      .find((node) => String(node.type) === 'stable-media-image').props.url as string;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      memory.clear();
+      draftStorage.getItem.mockImplementation(async (key: string) => memory.get(key) ?? null);
+      draftStorage.setItem.mockImplementation(async (key: string, value: string) => { memory.set(key, value); });
+      draftStorage.removeItem.mockImplementation(async (key: string) => { memory.delete(key); });
+      quoteEchoingSettings();
+      authState.api.enhancePrompt.mockReset();
+    });
+
+    describe('picked references', () => {
+      it('upload two at a time, keep every one that arrives, and name the one that did not', async () => {
+        vi.mocked(pickMediaList).mockResolvedValue([pickedImage('alpha.png'), pickedImage('bravo.png'), pickedImage('charlie.png')] as never);
+        const finishes: Array<() => void> = [];
+        vi.mocked(uploadPickedMedia).mockImplementation((uri) => new Promise<UploadedMedia>((resolve, reject) => {
+          finishes.push(() => (uri === 'file:///bravo.png'
+            ? reject(new Error('Upload failed with status 500.'))
+            : resolve(uploaded(uri.replace('file:///', '')))));
+        }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        await pressAndLook(labelled(tree.root, 'Add reference images'));
+        // Two at once, each able to report its bytes and to be stopped, where the loop sent one at a time.
+        expect(uploadPickedMedia).toHaveBeenCalledTimes(2);
+        expect(vi.mocked(uploadPickedMedia).mock.calls[0][1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal), onProgress: expect.any(Function) }));
+        await renderer.act(async () => { finishes[0](); finishes[1](); });
+        expect(uploadPickedMedia).toHaveBeenCalledTimes(3);
+        await renderer.act(async () => { finishes[2](); });
+        await settle();
+
+        expect(labelled(tree.root, 'Open details for alpha')).toBeTruthy();
+        expect(labelled(tree.root, 'Open details for charlie')).toBeTruthy();
+        expect(hasLabel(tree.root, 'Open details for bravo')).toBe(false);
+        expect(blocker(tree)).toBe('Added 2 of 3. Could not add bravo.png. Upload failed with status 500.');
+        expect(storedDrafts().image.references.map((media: { fileName: string }) => media.fileName)).toEqual(['alpha.png', 'charlie.png']);
+      });
+
+      it('show on the add tile how far their bytes have got', async () => {
+        vi.mocked(pickMediaList).mockResolvedValue([pickedImage('alpha.png', 4096)] as never);
+        let finish: () => void = () => undefined;
+        vi.mocked(uploadPickedMedia).mockImplementation((_uri, options) => new Promise<UploadedMedia>((resolve) => {
+          options?.onProgress?.({ bytesSent: 1024, totalBytes: 4096, fraction: 0.25 });
+          finish = () => resolve(uploaded('alpha.png', { sizeBytes: 4096 }));
+        }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        await pressAndLook(labelled(tree.root, 'Add reference images'));
+        expect(collectText(tree.root.findByProps({ testID: 'reference-upload-progress' }))).toEqual(['25%']);
+        expect(labelled(tree.root, 'Uploading reference images, 25%').props.disabled).toBe(true);
+
+        await renderer.act(async () => { finish(); });
+        await settle();
+        expect(tree.root.findAllByProps({ testID: 'reference-upload-progress' })).toHaveLength(0);
+        expect(labelled(tree.root, 'Open details for alpha')).toBeTruthy();
+      });
+
+      it('get handles of their own when the same photo is picked again or two are named alike', async () => {
+        memory.set(ordinaryKey, savedDrafts({ image: { prompt: 'Put @bravo on the table', references: [stagedMedia('alpha'), stagedMedia('bravo')] } }));
+        vi.mocked(pickMediaList).mockResolvedValue([pickedImage('alpha.png')] as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('alpha.png'));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Add reference images').props.onPress(); });
+        await settle();
+        expect(storedDrafts().image.references.map((media: { handle: string }) => media.handle)).toEqual(['@alpha', '@bravo', '@alpha_2']);
+
+        renderer.act(() => { labelled(tree.root, 'Open details for Bravo').props.onPress(); });
+        renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Reference name for Bravo' }).props.onChangeText('Alpha'); });
+        await settle();
+        expect(storedDrafts().image.references.map((media: { handle: string }) => media.handle)).toEqual(['@alpha', '@alpha_3', '@alpha_2']);
+        expect(storedDrafts().image.prompt).toBe('Put @alpha_3 on the table');
+      });
+
+      it('are drawn from the picker’s copy this session, saved and sent as their link, and drawn from the link after a restart', async () => {
+        // A descriptor with input modes, as production publishes, so the run carries its references.
+        catalogState.catalog = parityCatalog([parityImageModel('wide-image', 'Wide Image', 5)]);
+        memory.set(ordinaryKey, savedDrafts({ image: { model: 'wide-image', catalogRevision: 'parity-rev' } }));
+        vi.mocked(pickMediaList).mockResolvedValue([pickedImage('hero.png')] as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('hero.png'));
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        const first = await open(<MediaCreationScreen initialTool="image" />);
+        await renderer.act(async () => { await labelled(first.root, 'Add reference images').props.onPress(); });
+        await typePrompt(first, 'A bottle beside @hero');
+
+        expect(thumbnailUrl(first, 'hero')).toBe('file:///hero.png');
+        expect(memory.get(ordinaryKey)).toContain('https://cdn.example.com/hero.png');
+        expect(memory.get(ordinaryKey)).not.toContain('file://');
+        await pressGenerate(first);
+        const request = JSON.stringify(authState.api.startGeneration.mock.calls[0][0]);
+        expect(request).toContain('https://cdn.example.com/hero.png');
+        expect(request).not.toContain('file://');
+        renderer.act(() => { first.unmount(); });
+
+        const second = await open(<MediaCreationScreen initialTool="image" />);
+        expect(thumbnailUrl(second, 'hero')).toBe('https://cdn.example.com/hero.png');
+      });
+    });
+
+    describe('clips', () => {
+      /** An upload that runs until it is cancelled, as a large clip on mobile data does. */
+      const uploadUntilCancelled = () => {
+        const seen: { signal?: AbortSignal } = {};
+        vi.mocked(uploadPickedMedia).mockImplementation((_uri, options) => new Promise<UploadedMedia>((_resolve, reject) => {
+          seen.signal = options?.signal;
+          options?.signal?.addEventListener('abort', () => reject(new UploadCancelledError()));
+        }));
+        return seen;
+      };
+
+      it('can be cancelled from the video rail, which adds nothing', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        vi.mocked(pickMedia).mockResolvedValue({ uri: 'file:///move.mp4', fileName: 'move.mp4', mimeType: 'video/mp4', fileSize: 80 * 1024 * 1024, duration: 4000 } as never);
+        const upload = uploadUntilCancelled();
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        await pressAndLook(labelled(tree.root, 'Add Video 0/3'));
+        expect(labelled(tree.root, 'Uploading Video 0/3, 0%')).toBeTruthy();
+        await pressAndLook(labelled(tree.root, 'Cancel upload'));
+        await settle();
+
+        expect(upload.signal?.aborted).toBe(true);
+        expect(blocker(tree)).toBe('Upload cancelled.');
+        expect(hasLabel(tree.root, 'Cancel upload')).toBe(false);
+        expect(hasLabel(tree.root, 'Open details for Reference Video')).toBe(false);
+        expect(labelled(tree.root, 'Add Video 0/3').props.disabled).toBe(false);
+      });
+
+      it('can be cancelled from the motion slot', async () => {
+        vi.mocked(pickMedia).mockResolvedValue({ uri: 'file:///dance.mp4', fileName: 'dance.mp4', mimeType: 'video/mp4', fileSize: 90 * 1024 * 1024, duration: 12_000 } as never);
+        const upload = uploadUntilCancelled();
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        await pressAndLook(labelled(tree.root, 'Add motion video'));
+        expect(labelled(tree.root, 'Uploading motion video, 0%')).toBeTruthy();
+        await pressAndLook(labelled(tree.root, 'Cancel upload'));
+        await settle();
+
+        expect(upload.signal?.aborted).toBe(true);
+        expect(blocker(tree)).toBe('Upload cancelled.');
+        expect(labelled(tree.root, 'Add motion video')).toBeTruthy();
+      });
+
+      it.each([
+        ['longer than its slot takes', { duration: 31_000, fileSize: 20 * 1024 * 1024 }, 'Reference video exceeds 30s. Please choose a shorter clip.'],
+        ['over 100 MB', { duration: 12_000, fileSize: 101 * 1024 * 1024 }, '"dance.mp4" is over 100 MB. Please upload a smaller video.'],
+      ])('for motion are refused at the pick when %s, before a byte is sent, in the web creator’s words', async (_case, asset, refusal) => {
+        vi.mocked(pickMedia).mockResolvedValue({ uri: 'file:///dance.mp4', fileName: 'dance.mp4', mimeType: 'video/mp4', ...asset } as never);
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Add motion video').props.onPress(); });
+        await settle();
+        expect(uploadPickedMedia).not.toHaveBeenCalled();
+        expect(blocker(tree)).toBe(refusal);
+      });
+
+      it('for motion are held to the length the model’s slot publishes', async () => {
+        const model = parityMotionModel();
+        model.inputModes![0].slots[1] = { ...model.inputModes![0].slots[1], maxDurationSeconds: 20 };
+        catalogState.catalog = parityCatalog([model]);
+        vi.mocked(pickMedia).mockResolvedValue({ uri: 'file:///dance.mp4', fileName: 'dance.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 25_000 } as never);
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        // The slot is named by the descriptor.
+        await renderer.act(async () => { await labelled(tree.root, 'Add reference video').props.onPress(); });
+        await settle();
+        expect(uploadPickedMedia).not.toHaveBeenCalled();
+        expect(blocker(tree)).toBe('Reference video exceeds 20s. Please choose a shorter clip.');
+      });
+
+      it('for motion are replaced in place from the details sheet, and from Inputs, keeping the clip’s name', async () => {
+        memory.set(ordinaryKey, savedDrafts({ motion: {
+          characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }),
+          referenceVideo: stagedMedia('moves', 'video', { displayName: 'Moves', durationSeconds: 6 }),
+          duration: 6,
+        } }));
+        vi.mocked(pickMedia)
+          .mockResolvedValueOnce({ uri: 'file:///twirl.mp4', fileName: 'twirl.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 9000 } as never)
+          .mockResolvedValueOnce({ uri: 'file:///spin.mp4', fileName: 'spin.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 7000 } as never);
+        vi.mocked(uploadPickedMedia)
+          .mockResolvedValueOnce(uploaded('twirl.mp4', { mimeType: 'video/mp4', kind: 'video', durationSeconds: 9 }))
+          .mockResolvedValueOnce(uploaded('spin.mp4', { mimeType: 'video/mp4', kind: 'video', durationSeconds: 7 }));
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        renderer.act(() => { labelled(tree.root, 'Open details for Moves').props.onPress(); });
+        await renderer.act(async () => { await labelled(tree.root, 'Replace Moves').props.onPress(); });
+        await settle();
+        expect(storedDrafts().motion.referenceVideo).toMatchObject({ displayName: 'Moves', url: 'https://cdn.example.com/twirl.mp4', storagePath: 'uploads/user-123/twirl.mp4', durationSeconds: 9 });
+        expect(storedDrafts().motion.duration).toBe(9);
+
+        renderer.act(() => { labelled(tree.root, 'Close reference details').props.onPress(); });
+        await renderer.act(async () => { await labelled(tree.root, 'Inputs').props.onPress(); });
+        await settle();
+        expect(text(tree)).not.toContain('This model supports up to 1 reference video.');
+        expect(storedDrafts().motion.referenceVideo).toMatchObject({ displayName: 'Moves', url: 'https://cdn.example.com/spin.mp4', durationSeconds: 7 });
+      });
+    });
+
+    describe('the result', () => {
+      it('pages through every output of a run, and Post to feed posts the run, whose first output is its primary', async () => {
+        authState.api.startGeneration.mockResolvedValue(started('pred-many'));
+        authState.api.getImageGeneration.mockResolvedValue({
+          status: 'succeeded',
+          output: 'https://cdn.example.com/one.png',
+          outputs: ['https://cdn.example.com/one.png', 'https://cdn.example.com/two.png', 'https://cdn.example.com/three.png'],
+        });
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'Three takes on a bottle');
+        await pressGenerate(tree);
+
+        const workspace = () => tree.root.findByProps({ testID: 'generation-workspace' });
+        const shown = () => workspace().find((node) => String(node.type) === 'media-preview').props.url;
+        expect(shown()).toBe('https://cdn.example.com/one.png');
+        expect(collectText(workspace())).toContain('1 of 3');
+        expect(labelled(workspace(), 'Previous output').props.disabled).toBe(true);
+
+        renderer.act(() => { labelled(workspace(), 'Next output').props.onPress(); });
+        expect(shown()).toBe('https://cdn.example.com/two.png');
+        renderer.act(() => { labelled(workspace(), 'Next output').props.onPress(); });
+        expect(shown()).toBe('https://cdn.example.com/three.png');
+        expect(collectText(workspace())).toContain('3 of 3');
+        expect(labelled(workspace(), 'Next output').props.disabled).toBe(true);
+
+        renderer.act(() => { labelled(workspace(), 'Post to feed').props.onPress(); });
+        expect(routerState.push).toHaveBeenCalledWith({ pathname: '/post/new', params: { generationId: 'gen-pred-many' } });
+      });
+
+      it('shares through the composer, which posts it and then opens the share sheet, and marks Profile’s creations stale at the start and the end', async () => {
+        const invalidate = vi.spyOn(testQueryClient, 'invalidateQueries');
+        const creationsMarked = () => invalidate.mock.calls.filter(([filters]) => (filters as { queryKey?: unknown[] } | undefined)?.queryKey?.[0] === 'profile-generations');
+        authState.api.startGeneration.mockResolvedValue(started('pred-share'));
+        let finish: (status: unknown) => void = () => undefined;
+        authState.api.getImageGeneration.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+        await pressGenerate(tree);
+
+        // The Rendering strip shows the run from its start.
+        expect(creationsMarked()).toEqual([[{ queryKey: ['profile-generations', 'user-123'], refetchType: 'none' }]]);
+        await renderer.act(async () => { finish({ status: 'succeeded', output: 'https://cdn.example.com/out.png' }); });
+        await settle();
+        expect(creationsMarked()).toHaveLength(2);
+        expect(tree.root.findAllByProps({ testID: 'result-output-pager' })).toHaveLength(0);
+
+        renderer.act(() => { labelled(tree.root, 'Share').props.onPress(); });
+        expect(routerState.push).toHaveBeenCalledWith({ pathname: '/post/new', params: { generationId: 'gen-pred-share', shareAfterPublish: '1' } });
+        expect(tree.root.findAllByProps({ testID: 'generation-workspace' })).toHaveLength(0);
+        invalidate.mockRestore();
+      });
+    });
+
+    describe('Enhance', () => {
+      it.each([
+        ['image', 'Generation prompt'],
+        ['video', 'Generation prompt'],
+        ['motion', 'Optional motion prompt'],
+      ] as const)('states its price on the %s creator, and keeps it in what is announced while it runs', async (tool, promptLabel) => {
+        authState.api.enhancePrompt.mockReturnValue(new Promise(() => undefined));
+        const tree = await open(<MediaCreationScreen initialTool={tool} />);
+        expect(collectText(labelled(tree.root, 'Enhance · 2 credits'))).toContain('Enhance · 2 credits');
+
+        await typePrompt(tree, 'A dancer turns', promptLabel);
+        await pressAndLook(labelled(tree.root, 'Enhance · 2 credits'));
+        const running = labelled(tree.root, 'Enhancing · 2 credits');
+        expect(collectText(running)).toContain('Enhancing');
+        expect(running.props.disabled).toBe(true);
+      });
+
+      it('polishes a prompt that names a reference, with the run’s settings and only what the run sends, and shows up to three notes', async () => {
+        memory.set(ordinaryKey, savedDrafts({ image: { prompt: 'A bottle beside @hero', references: [stagedMedia('hero')] } }));
+        authState.api.enhancePrompt.mockResolvedValue({
+          enhancedPrompt: 'A bottle beside @hero, soft window light.',
+          remainingCredits: 900,
+          warnings: [
+            { code: 'length', severity: 'warning', message: 'The prompt exceeds the 990-character limit.' },
+            { code: 'refused', severity: 'blocking', message: 'Not a note.' },
+            { code: 'subject', severity: 'info', message: 'Name the subject first.' },
+            { code: 'light', severity: 'info', message: 'Say where the light comes from.' },
+            { code: 'fourth', severity: 'info', message: 'A fourth note.' },
+          ],
+        });
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        // Polish has no level, as on the web: the named sentence is kept as written.
+        expect(tree.root.findAllByProps({ accessibilityLabel: 'Full enhancement' })).toHaveLength(0);
+        expect(text(tree)).toContain('Your @references stay as written. Polish only adds light visual detail around them.');
+        await renderer.act(async () => { await labelled(tree.root, 'Polish · 2 credits').props.onPress(); });
+
+        expect(authState.api.enhancePrompt).toHaveBeenCalledWith({
+          medium: 'image',
+          selectedModel: 'nano-banana-2',
+          prompt: 'A bottle beside @hero',
+          context: {
+            referenceImageCount: 1,
+            elementReferences: [{ handle: '@hero', displayName: 'Hero' }],
+            modelId: 'nano-banana-2',
+            aspectRatio: '4:5',
+            resolution: '1K',
+            googleSearch: false,
+            elementEnhancementMode: 'append-only',
+          },
+        });
+        expect(collectText(tree.root.findByProps({ testID: 'prompt-quality-notes' }))).toEqual([
+          'Prompt quality notes',
+          'The prompt exceeds the 990-character limit.',
+          'Name the subject first.',
+          'Say where the light comes from.',
+        ]);
+        expect(authState.updateCredits).toHaveBeenCalledWith(900);
+
+        // The notes speak of the prompt the enhancer wrote, so an edit takes them away.
+        await typePrompt(tree, 'A bottle on linen');
+        expect(tree.root.findAllByProps({ testID: 'prompt-quality-notes' })).toHaveLength(0);
+        expect(labelled(tree.root, 'Enhance · 2 credits')).toBeTruthy();
+        expect(tree.root.findAllByProps({ accessibilityLabel: 'Full enhancement' })).not.toHaveLength(0);
+      });
+
+      it('sends only the references a run would send', async () => {
+        catalogState.catalog = parityCatalog([parityImageModel('narrow-image', 'Narrow Image', 1)]);
+        memory.set(ordinaryKey, savedDrafts({ image: {
+          model: 'narrow-image', catalogRevision: 'parity-rev', prompt: 'A bottle on linen', references: [stagedMedia('alpha'), stagedMedia('bravo')],
+        } }));
+        authState.api.enhancePrompt.mockResolvedValue({ enhancedPrompt: 'A bottle on linen, morning light.' });
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Enhance · 2 credits').props.onPress(); });
+        const context = authState.api.enhancePrompt.mock.calls[0][0].context;
+        expect(context).toMatchObject({ referenceImageCount: 1, elementReferences: [{ handle: '@alpha', displayName: 'Alpha' }] });
+        expect(context).not.toHaveProperty('elementEnhancementMode');
+      });
+
+      it('applies the balance a failed enhancement returns with its refund', async () => {
+        authState.api.enhancePrompt.mockRejectedValue(Object.assign(new Error('Prompt enhancement failed. Your credits have been refunded.'), {
+          status: 502,
+          details: { error: 'Prompt enhancement failed. Your credits have been refunded.', remainingCredits: 950 },
+        }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+        await renderer.act(async () => { await labelled(tree.root, 'Enhance · 2 credits').props.onPress(); });
+
+        expect(authState.updateCredits).toHaveBeenCalledWith(950);
+        expect(text(tree)).toContain('Prompt enhancement failed. Your credits have been refunded.');
+      });
+    });
+
+    describe('the prompt and the parameter sheet', () => {
+      it.each([
+        ['image', 'Generation prompt'],
+        ['video', 'Generation prompt'],
+        ['motion', 'Optional motion prompt'],
+      ] as const)('count the %s prompt against its limit', async (tool, promptLabel) => {
+        const tree = await open(<MediaCreationScreen initialTool={tool} />);
+        expect(collectText(tree.root.findByProps({ testID: 'prompt-length' }))).toEqual(['0/10,000']);
+
+        await typePrompt(tree, 'x'.repeat(1234), promptLabel);
+        const counter = tree.root.findByProps({ testID: 'prompt-length' });
+        expect(collectText(counter)).toEqual(['1,234/10,000']);
+        expect(counter.props.accessibilityLabel).toBe('1,234 of 10,000 characters');
+      });
+
+      it('offers Get credits in the sheet when the balance is short, closing the sheet on the way', async () => {
+        authState.credits = 0;
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+        renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Generation parameters.').props.onPress(); });
+
+        const sheetBlocker = tree.root.findByProps({ testID: 'parameter-sheet-blocker' });
+        expect(collectText(sheetBlocker)).toEqual(['Insufficient credits. This generation costs 8 credits.', 'Get credits']);
+        renderer.act(() => { labelled(sheetBlocker, 'Get credits').props.onPress(); });
+        expect(tree.root.findAllByProps({ testID: 'creator-parameter-sheet' })).toHaveLength(0);
+        expect(routerState.push).toHaveBeenCalledWith('/(tabs)/pricing');
+      });
+
+      it.each([[1, '1 credit'], [26863, '26,863 credits']])('says a balance of %i as “%s”', async (credits, label) => {
+        authState.credits = credits;
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Generation parameters.').props.onPress(); });
+        expect(tree.root.findByProps({ accessibilityLabel: `Available balance, ${label}` })).toBeTruthy();
+      });
+    });
+
+    describe('sign-in from the creator', () => {
+      beforeEach(() => {
+        authState.user = null;
+        authState.identityUserId = null;
+      });
+
+      it('returns to this creator with its remix and its prompt', async () => {
+        const tree = await open(
+          <MediaCreationScreen
+            initialTool="video"
+            initialPrompt="A dancer & a drum"
+            guided
+            remixSource={{ generationId: 'gen-9', postId: 'post-9', title: 'Night run', creatorLabel: 'Ana', thumbnailUrl: 'https://cdn.example.com/t.jpg?x=1' }}
+          />,
+        );
+        await renderer.act(async () => { await labelled(tree.root, 'Enhance · 2 credits').props.onPress(); });
+
+        expect(routerState.push).toHaveBeenCalledWith({
+          pathname: '/auth',
+          params: {
+            returnTo: '/create/video?remix=gen-9&remixPost=post-9&prompt=A%20dancer%20%26%20a%20drum&guided=1&sourceTitle=Night%20run&sourceCreator=Ana&sourceThumbnail=https%3A%2F%2Fcdn.example.com%2Ft.jpg%3Fx%3D1',
+          },
+        });
+      });
+
+      it('returns to the Create tab on the tool it was opened on', async () => {
+        const tree = await open(<MediaCreationScreen initialTool="image" insideTab />);
+        renderer.act(() => { labelled(tree.root, 'Video').props.onPress(); });
+        await typePrompt(tree, 'A dancer turns');
+        await renderer.act(async () => { await labelled(tree.root, 'Enhance · 2 credits').props.onPress(); });
+
+        expect(routerState.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/(tabs)/creator?tool=image' } });
+      });
     });
   });
 
