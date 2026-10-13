@@ -5,7 +5,12 @@ import React from 'react';
 import renderer from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+// One stable object: the registered account the reel's auth reads, or null for a guest.
+const auth = vi.hoisted(() => ({ user: { id: 'user-1' } as { id: string } | null }));
+vi.mock('../lib/auth', () => ({ useAuth: () => auth }));
+
 import { ApiError } from '../lib/api-client';
+import { rememberAnonymousShowcaseFeedRemoval, resetAnonymousShowcaseFeedRemovalsForTests } from '../lib/showcase-feed-events';
 import { getReelEndSlideState, parseShowcaseFeedLane, serializeShowcaseFeedLane, showcaseFeedLaneQueryOptions } from '../lib/showcase-feed-lane';
 import { createShowcaseFeedQueryKey, type ShowcaseFeedFilters } from '../lib/showcase-feed-query';
 import type { ShowcaseFeedItem, ShowcaseFeedResponse } from '../lib/types';
@@ -59,11 +64,11 @@ function stubApi(overrides: Partial<Record<'getShowcaseFeed' | 'getShowcasePost'
   } as unknown as LaneProps['api'] & Record<'getShowcaseFeed' | 'getShowcasePost', ReturnType<typeof vi.fn>>;
 }
 
-/** The grid's cache as Explore leaves it: its lane's pages, an `updatedAt` ago. */
-function gridCache(pages: ShowcaseFeedResponse[], ageMs = 0, filters = FREE_LANE) {
+/** The grid's cache as Explore leaves it: its lane's pages, an `updatedAt` ago, under the viewer's identity. */
+function gridCache(pages: ShowcaseFeedResponse[], ageMs = 0, filters = FREE_LANE, identityUserId = 'user-1') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(
-    createShowcaseFeedQueryKey(filters, 'user-1'),
+    createShowcaseFeedQueryKey(filters, identityUserId),
     { pages, pageParams: pages.map((_, index) => (index === 0 ? { offset: 0 } : { cursor: `cursor-${index + 1}`, feedSessionId: 'session-1' })) },
     { updatedAt: Date.now() - ageMs }
   );
@@ -74,16 +79,18 @@ const trees: renderer.ReactTestRenderer[] = [];
 
 afterEach(() => {
   renderer.act(() => { for (const tree of trees.splice(0)) tree.unmount(); });
+  auth.user = { id: 'user-1' };
+  resetAnonymousShowcaseFeedRemovalsForTests();
 });
 
-async function renderLane(props: Omit<LaneProps, 'userId' | 'lane'> & { client?: QueryClient; laneParam?: string }) {
-  const { client = new QueryClient({ defaultOptions: { queries: { retry: false } } }), laneParam = serializeShowcaseFeedLane(FREE_LANE), ...rest } = props;
+async function renderLane(props: Omit<LaneProps, 'userId' | 'lane'> & { client?: QueryClient; laneParam?: string; userId?: string }) {
+  const { client = new QueryClient({ defaultOptions: { queries: { retry: false } } }), laneParam = serializeShowcaseFeedLane(FREE_LANE), userId = 'user-1', ...rest } = props;
   const latest: { current: LaneResult | null } = { current: null };
   // The route hands the reel the lane as a string; the reel parses it back.
   const lane = parseShowcaseFeedLane(laneParam);
 
   function Probe() {
-    latest.current = useShowcaseLaneSource({ ...rest, lane, userId: 'user-1' });
+    latest.current = useShowcaseLaneSource({ ...rest, lane, userId });
     return null;
   }
 
@@ -225,6 +232,26 @@ describe('useShowcaseLaneSource', () => {
 
     expect(api.getShowcaseFeed).toHaveBeenCalledWith({ limit: 12, sort: 'recent', offset: 0 });
     expect(ready.items.map((item) => item.id)).toEqual(['tapped']);
+  });
+
+  // Audit 04-3: the grids key a guest's lane by the guest's own uid.
+  it("reads a guest's own lane, without what the guest removed for this visit, as the grid does", async () => {
+    auth.user = null;
+    rememberAnonymousShowcaseFeedRemoval({ postId: 'hidden' });
+    const pages = [page([post('first'), post('hidden'), post('tapped')], null)];
+    const api = stubApi();
+    const guest = await renderLane({ api, client: gridCache(pages, 0, FREE_LANE, 'guest-1'), initialId: 'tapped', userId: 'guest-1' });
+    const ready = await guest.until((result) => result.selection === 'found');
+
+    expect(ready.items.map((item) => item.id)).toEqual(['first', 'tapped']);
+    expect(ready.feedSessionId).toBe('session-1');
+    expect(api.getShowcaseFeed).not.toHaveBeenCalled();
+
+    // A registered account's removals are kept by the server, not for the visit.
+    auth.user = { id: 'user-1' };
+    const registered = await renderLane({ api, client: gridCache(pages), initialId: 'tapped' });
+    expect((await registered.until((result) => result.selection === 'found')).items.map((item) => item.id))
+      .toEqual(['first', 'hidden', 'tapped']);
   });
 
   it('keeps an Explore reel to the posts with something to show, as its grid does', async () => {

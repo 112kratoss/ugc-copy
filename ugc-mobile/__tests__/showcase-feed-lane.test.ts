@@ -67,6 +67,20 @@ describe('the lane query', () => {
     expect(showcaseFeedLaneQueryOptions(api, { category: 'media' }, 'user-1').maxPages).toBe(0);
   });
 
+  // Audit 02-2: a refetch on return re-ranked every loaded page under the
+  // reader's thumb, and served up to 60 deliveries nobody saw.
+  it('reads a ranked lane again only when asked; Recent keeps the focus and mount defaults', () => {
+    const api = { getShowcaseFeed: vi.fn() };
+    for (const filters of [{}, { sort: 'for-you' }, { category: 'media' }, { sort: 'top-saves' }] as ShowcaseFeedFilters[]) {
+      expect(showcaseFeedLaneQueryOptions(api, filters, 'user-1'), JSON.stringify(filters))
+        .toMatchObject({ refetchOnWindowFocus: false, refetchOnMount: false });
+    }
+
+    const recent = showcaseFeedLaneQueryOptions(api, { sort: 'recent' }, 'user-1');
+    expect(recent).not.toHaveProperty('refetchOnWindowFocus');
+    expect(recent).not.toHaveProperty('refetchOnMount');
+  });
+
   it("asks for the lane's next page with its cursor and session", async () => {
     const api = { getShowcaseFeed: vi.fn(async () => ({ items: [] })) };
     const options = showcaseFeedLaneQueryOptions(api, parseShowcaseFeedLane('sort:for-you,category:media,unlock:free')!, 'user-1');
@@ -108,7 +122,8 @@ describe('the grids hand their lane to the reel', () => {
     ['Home', 'components/home-dashboard.tsx', 'activeChip.filters'],
   ])('%s pages its grid with the builder the reel reads, and names the lane in the push', (_grid, path, filters) => {
     const source = readFileSync(path, 'utf8');
-    expect(source).toContain(`showcaseFeedLaneQueryOptions(api, ${filters}, user?.id)`);
+    // Under the backend identity, guest or registered (audit 04-3).
+    expect(source).toContain(`showcaseFeedLaneQueryOptions(api, ${filters}, identityUserId)`);
     expect(source).toContain(`lane: serializeShowcaseFeedLane(${filters}),`);
     // One builder: the grid builds no second copy of its own query.
     expect(source).not.toContain('getShowcaseFeedPageParams(');

@@ -59,7 +59,7 @@ describe('showcase feed query helpers', () => {
     expect(createShowcaseFeedQueryKey()).toEqual([
       'showcase-feed',
       'infinite',
-      'anonymous',
+      'installation',
       { category: 'all', resource: 'all', sort: 'for-you', tool: 'all', unlock: 'all' },
     ]);
     expect(createShowcaseFeedQueryKey({}, 'user-1')).toEqual([
@@ -73,6 +73,21 @@ describe('showcase feed query helpers', () => {
       'infinite',
       'user-1',
     ]);
+  });
+
+  // Audit 04-3: the server ranks a page, and accepts its session, cursor and
+  // events, for the identity the request carried. A guest's lane is its own.
+  it('keys lanes by the backend identity, and a device with none yet as the installation', () => {
+    for (const missing of [null, undefined, '', '  ']) {
+      expect(createShowcaseFeedViewerQueryKey(missing)).toEqual(['showcase-feed', 'infinite', 'installation']);
+      expect(createShowcaseFeedQueryKey({}, missing)[2]).toBe('installation');
+    }
+
+    const guest = createShowcaseFeedQueryKey({}, 'guest-uid');
+    expect(guest[2]).toBe('guest-uid');
+    expect(guest).not.toEqual(createShowcaseFeedQueryKey({}, null));
+    expect(guest).not.toEqual(createShowcaseFeedQueryKey({}, 'next-guest-uid'));
+    expect(createShowcaseFeedViewerQueryKey(' guest-uid ')).toEqual(createShowcaseFeedViewerQueryKey('guest-uid'));
   });
 
   it('flattens multiple pages in order', () => {
@@ -138,7 +153,7 @@ describe('showcase feed query helpers', () => {
     expect(createShowcaseFeedQueryKey({ unlock: 'free', resource: 'remix' })).toEqual([
       'showcase-feed',
       'infinite',
-      'anonymous',
+      'installation',
       { category: 'all', resource: 'remix', sort: 'for-you', tool: 'all', unlock: 'free' },
     ]);
   });

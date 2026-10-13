@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { QueryClient, type InfiniteData } from '@tanstack/react-query';
+import { InfiniteQueryObserver, QueryClient, type InfiniteData } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
@@ -13,6 +13,7 @@ import { HOME_FEED_CHIPS } from '@/lib/home-feed-view-model';
 import {
   PERSISTED_HOME_FEED_CHIP_ID,
   PERSISTED_HOME_FEED_MAX_AGE_MS,
+  PERSISTED_HOME_FEED_SESSION_MAX_AGE_MS,
   PERSISTED_HOME_FEED_STORAGE_KEY,
   PERSIST_HOME_FEED_DEBOUNCE_MS,
   cancelScheduledPersistHomeFeed,
@@ -25,9 +26,12 @@ import {
   schedulePersistHomeFeed,
   type PersistedHomeFeedEnvironment,
 } from '@/lib/persisted-home-feed';
+import { canRecordShowcaseFeedEvent } from '@/lib/showcase-feed-events';
+import { showcaseFeedLaneQueryOptions } from '@/lib/showcase-feed-lane';
 import {
   SHOWCASE_FEED_STALE_TIME_MS,
   createShowcaseFeedQueryKey,
+  getShowcaseFeedSessionContext,
   type ShowcaseFeedPageParam,
 } from '@/lib/showcase-feed-query';
 import type { ShowcaseFeedItem, ShowcaseFeedResponse } from '@/lib/types';
@@ -83,7 +87,7 @@ function post(id: string, overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFe
 
 function feedPage(ids: string[]): ShowcaseFeedResponse {
   return {
-    items: ids.map((id) => post(id)),
+    items: ids.map((id, position) => post(id, { recommendation: { deliveryId: `delivery-${id}`, position } })),
     feedSessionId: 'session-1',
     nextCursor: `after-${ids.join('-')}`,
     pageInfo: { hasMore: true },
@@ -116,7 +120,7 @@ async function storageHolding(data: HomeFeedData, viewerUserId: string | null = 
 
 function storedCopy(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
-    format: 1,
+    format: 2,
     appVersion: APP_VERSION,
     viewerUserId: 'user-1',
     dataUpdatedAt: FETCHED_AT,
@@ -146,6 +150,9 @@ describe('the persisted lane', () => {
     expect(PERSISTED_HOME_FEED_CHIP_ID).toBe('for-you');
     expect(createPersistedHomeFeedQueryKey('user-1')).toEqual(createShowcaseFeedQueryKey(forYou?.filters, 'user-1'));
     expect(createPersistedHomeFeedQueryKey(null)).toEqual(createShowcaseFeedQueryKey(forYou?.filters, null));
+    // The backend identity, guest or registered; the installation when there is none yet.
+    expect(createPersistedHomeFeedQueryKey('guest-1')[2]).toBe('guest-1');
+    expect(createPersistedHomeFeedQueryKey(null)[2]).toBe('installation');
   });
 });
 
@@ -220,6 +227,86 @@ describe('restorePersistedHomeFeed', () => {
     expect(client.getQueryCache().find({ queryKey })?.isStaleByTime(SHOWCASE_FEED_STALE_TIME_MS)).toBe(false);
   });
 
+  // Audit 04-3: a guest's page belongs to the guest's session, and the server
+  // refuses that session's events to any other identity.
+  it('puts a page saved under a guest back under that guest, and under no other lane', async () => {
+    const storage = await storageHolding(lane(['a']), 'guest-1');
+    const client = new QueryClient();
+
+    await expect(restorePersistedHomeFeed(client, environment(storage))).resolves.toBe(true);
+
+    const restored = client.getQueryData<HomeFeedData>(createPersistedHomeFeedQueryKey('guest-1'));
+    expect(restored?.pages[0]?.items.map((item) => item.id)).toEqual(['a']);
+    expect(client.getQueryCache().getAll().map((query) => query.queryKey[2])).toEqual(['guest-1']);
+    expect(client.getQueryData(createPersistedHomeFeedQueryKey(null))).toBeUndefined();
+  });
+
+  it('puts a page saved with no identity yet back under the installation', async () => {
+    const storage = await storageHolding(lane(['a']), null);
+    const client = new QueryClient();
+
+    await expect(restorePersistedHomeFeed(client, environment(storage))).resolves.toBe(true);
+
+    expect(client.getQueryCache().getAll().map((query) => query.queryKey[2])).toEqual(['installation']);
+  });
+
+  it('is read again as Home moves onto its identity, although a ranked lane never refetches on mount', async () => {
+    const storage = await storageHolding(lane(['saved']), 'guest-1');
+    const client = new QueryClient();
+    const tenMinutesOn = FETCHED_AT + 10 * 60_000;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(tenMinutesOn);
+    await restorePersistedHomeFeed(client, environment(storage, tenMinutesOn));
+    const api = { getShowcaseFeed: vi.fn(async () => feedPage(['fresh'])) };
+    const forYou = HOME_FEED_CHIPS.find((chip) => chip.id === PERSISTED_HOME_FEED_CHIP_ID)?.filters ?? {};
+    expect(showcaseFeedLaneQueryOptions(api, forYou, 'guest-1')).toMatchObject({ refetchOnMount: false });
+
+    // Home first renders before auth has hydrated, under no identity.
+    const observer = new InfiniteQueryObserver(client, showcaseFeedLaneQueryOptions(api, forYou, null));
+    const unsubscribe = observer.subscribe(() => undefined);
+    observer.setOptions(showcaseFeedLaneQueryOptions(api, forYou, 'guest-1'));
+
+    await vi.waitFor(() => {
+      const data = client.getQueryData<HomeFeedData>(createPersistedHomeFeedQueryKey('guest-1'));
+      expect(data?.pages[0]?.items.map((item) => item.id)).toEqual(['fresh']);
+    });
+    unsubscribe();
+  });
+
+  // Audit 01-8 / 04-9: the server closes a feed session after two hours, and
+  // refuses every event on its deliveries from then on.
+  it("keeps the deliveries and session of a page younger than its session's two hours", async () => {
+    const storage = await storageHolding(lane(['a', 'b']));
+    const client = new QueryClient();
+
+    await restorePersistedHomeFeed(client, environment(storage, FETCHED_AT + 60 * 60_000));
+
+    const page = client.getQueryData<HomeFeedData>(createPersistedHomeFeedQueryKey('user-1'))?.pages[0];
+    expect(page?.feedSessionId).toBe('session-1');
+    expect(page?.items.map((item) => item.recommendation?.deliveryId)).toEqual(['delivery-a', 'delivery-b']);
+  });
+
+  it('restores an older page without them: it draws the same, and its events wait for the refetch', async () => {
+    expect(PERSISTED_HOME_FEED_SESSION_MAX_AGE_MS).toBe(2 * 60 * 60_000);
+    const storage = await storageHolding(lane(['a', 'b']));
+    const client = new QueryClient();
+
+    await expect(restorePersistedHomeFeed(client, environment(storage, FETCHED_AT + 3 * 60 * 60_000))).resolves.toBe(true);
+
+    const state = client.getQueryState<HomeFeedData>(createPersistedHomeFeedQueryKey('user-1'));
+    const page = state?.data?.pages[0];
+    expect(page?.items.map((item) => item.id)).toEqual(['a', 'b']);
+    expect(page?.items.map((item) => item.title)).toEqual(['Post a', 'Post b']);
+    expect(page).not.toHaveProperty('feedSessionId');
+    for (const item of page?.items ?? []) {
+      expect(item).not.toHaveProperty('recommendation');
+      expect(canRecordShowcaseFeedEvent({ postId: item.id, recommendation: item.recommendation }, 'impression')).toBe(false);
+    }
+    expect(getShowcaseFeedSessionContext(state?.data?.pages).feedSessionId).toBeNull();
+    // Still as old as it was, so the lane reads it again.
+    expect(state?.dataUpdatedAt).toBe(FETCHED_AT);
+  });
+
   it('takes the saved copy off the device before the page is drawn', async () => {
     const storage = await storageHolding(lane(['a']));
 
@@ -258,7 +345,10 @@ describe('restorePersistedHomeFeed', () => {
 
   it.each([
     ['a copy saved by another app version', storedCopy({ appVersion: '0.1.3' }), FETCHED_AT],
-    ['a copy in a format this build does not know', storedCopy({ format: 2 }), FETCHED_AT],
+    ['a copy in a format this build does not know', storedCopy({ format: 3 }), FETCHED_AT],
+    // Format 1 saved a guest's page under null, which now names a device with no identity.
+    ['a copy saved before pages were kept by identity', storedCopy({ format: 1, viewerUserId: null }), FETCHED_AT],
+    ['a registered copy saved before pages were kept by identity', storedCopy({ format: 1 }), FETCHED_AT],
     ['posts older than the age limit', storedCopy(), FETCHED_AT + PERSISTED_HOME_FEED_MAX_AGE_MS + 1],
     ['posts dated after the device clock', storedCopy(), FETCHED_AT - 10 * 60_000],
     ['a copy cut off mid-write', storedCopy().slice(0, 80), FETCHED_AT],
@@ -366,7 +456,8 @@ describe('wiring', () => {
     expect(dashboard).toContain(
       'if (isAuthLoading || activeChipId !== PERSISTED_HOME_FEED_CHIP_ID || !feedQuery.isSuccess) return;',
     );
-    expect(dashboard).toContain('schedulePersistHomeFeed(queryClient, user?.id);');
+    // Under the backend identity, guest or registered (audit 04-3).
+    expect(dashboard).toContain('schedulePersistHomeFeed(queryClient, identityUserId);');
     expect(dashboard).toContain('useEffect(() => cancelScheduledPersistHomeFeed, []);');
   });
 

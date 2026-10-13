@@ -12,8 +12,11 @@ import type { ShowcaseFeedResponse } from './types';
 // saves the lane's first page whenever it settles, and the root layout puts that
 // page back into the query cache at launch, so a returning person sees the posts
 // they last saw while the refetch runs behind them. The page keeps the age it
-// was fetched at: the lane's own staleTime decides whether a refetch follows,
-// just as it does when the app comes back from the background.
+// was fetched at, so the lane's own staleTime decides whether a refetch follows.
+// It follows as auth settles: Home's lane starts under no identity and moves
+// onto the one the page was saved under, and a query whose key changes to stale
+// data is refetched, although a ranked lane never refetches on mount
+// (`showcaseFeedLaneQueryOptions`).
 //
 // Showcase media are public showcase_media URLs, so a saved page holds no links
 // that expire. A signed URL that turns up anyway is rerouted through /api/media
@@ -26,8 +29,18 @@ export const PERSISTED_HOME_FEED_STORAGE_KEY = 'magicbooklet.homeFeed.forYou.v2'
 export const PERSISTED_HOME_FEED_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 /** Folds a fetch and the edits right after it (a save, a hidden post) into one write. */
 export const PERSIST_HOME_FEED_DEBOUNCE_MS = 1_000;
+/**
+ * How long the server keeps a feed session open (`showcase-feed-personalization.ts`).
+ * Past it every event on the page's deliveries is refused, so an older page
+ * comes back without them and without its session: it draws the same, and its
+ * events wait for the refetched page (audit 01-8, 04-9).
+ */
+export const PERSISTED_HOME_FEED_SESSION_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
-const PERSISTED_HOME_FEED_FORMAT = 1;
+// 2: `viewerUserId` holds the backend identity, guest or registered. Format 1
+// held the registered id only, and null for a guest's page as well, which would
+// come back under the lane of a device with no identity.
+const PERSISTED_HOME_FEED_FORMAT = 2;
 const CLOCK_SKEW_ALLOWANCE_MS = 60_000;
 // Lane data older than this module was fetched by an earlier launch, and the
 // only way it reaches this one is the restore below.
@@ -45,7 +58,10 @@ interface PersistedHomeFeed {
   format: typeof PERSISTED_HOME_FEED_FORMAT;
   /** A new native build starts clean rather than reading an older build's copy. */
   appVersion: string;
-  /** The registered viewer the page was ranked for; null for a guest or a signed-out device. */
+  /**
+   * The backend identity the page was ranked for (`identityUserId`: a guest's
+   * uid or a registered one); null for a device that had none yet.
+   */
   viewerUserId: string | null;
   /** When the page was fetched, or last edited in memory. Restored as the query's own age. */
   dataUpdatedAt: number;
@@ -61,9 +77,9 @@ function defaultEnvironment(): PersistedHomeFeedEnvironment {
   };
 }
 
-export function createPersistedHomeFeedQueryKey(viewerUserId: string | null | undefined) {
+export function createPersistedHomeFeedQueryKey(identityUserId: string | null | undefined) {
   const lane = HOME_FEED_CHIPS.find((chip) => chip.id === PERSISTED_HOME_FEED_CHIP_ID);
-  return createShowcaseFeedQueryKey(lane?.filters, viewerUserId);
+  return createShowcaseFeedQueryKey(lane?.filters, identityUserId);
 }
 
 /** Whether lane data predates this launch, which only a restored page can. */
@@ -85,12 +101,13 @@ function enqueue<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 /**
- * Puts the saved page back under the For You key of the viewer it was saved
- * for. Resolves whether it did, and never rejects: a launch must not depend on
- * a cache.
+ * Puts the saved page back under the For You key of the identity it was saved
+ * for, and of no other. Resolves whether it did, and never rejects: a launch
+ * must not depend on a cache.
  *
- * This runs before auth has said who the launch belongs to. A different viewer
- * never reads that key, and an unobserved page ages out of memory on its own.
+ * This runs before auth has said who the launch belongs to. A different
+ * identity never reads that key, and an unobserved page ages out of memory on
+ * its own.
  */
 export async function restorePersistedHomeFeed(
   queryClient: QueryClient,
@@ -112,10 +129,13 @@ export async function restorePersistedHomeFeed(
     const current = queryClient.getQueryState<HomeFeedData>(queryKey);
     // Whatever this launch has fetched already is newer than the saved page.
     if (current?.data !== undefined && current.dataUpdatedAt >= persisted.dataUpdatedAt) return false;
+    const page = environment.now() - persisted.dataUpdatedAt > PERSISTED_HOME_FEED_SESSION_MAX_AGE_MS
+      ? withoutFeedSession(persisted.page)
+      : persisted.page;
     // A request still out keeps running, and replaces the page when it lands.
     queryClient.setQueryData<HomeFeedData>(
       queryKey,
-      { pages: [persisted.page], pageParams: [persisted.pageParam] },
+      { pages: [page], pageParams: [persisted.pageParam] },
       { updatedAt: persisted.dataUpdatedAt },
     );
     return true;
@@ -126,25 +146,25 @@ export async function restorePersistedHomeFeed(
 }
 
 /**
- * Saves the viewer's For You first page as it sits in the cache now. A lane
- * that has not loaded, or holds no posts, is not saved: an empty page would
- * greet the next launch with "Nothing here yet" in place of a skeleton, for a
- * feed that may well have posts by then.
+ * Saves the For You first page of the backend identity (`identityUserId`) as
+ * it sits in the cache now. A lane that has not loaded, or holds no posts, is
+ * not saved: an empty page would greet the next launch with "Nothing here yet"
+ * in place of a skeleton, for a feed that may well have posts by then.
  */
 export function persistHomeFeed(
   queryClient: QueryClient,
-  viewerUserId: string | null | undefined,
+  identityUserId: string | null | undefined,
   environment: PersistedHomeFeedEnvironment = defaultEnvironment(),
 ): Promise<void> {
   return enqueue(async () => {
-    const state = queryClient.getQueryState<HomeFeedData>(createPersistedHomeFeedQueryKey(viewerUserId));
+    const state = queryClient.getQueryState<HomeFeedData>(createPersistedHomeFeedQueryKey(identityUserId));
     const page = state?.data?.pages[0];
     if (!state || state.status !== 'success' || !page?.items.length) return;
 
     const persisted: PersistedHomeFeed = {
       format: PERSISTED_HOME_FEED_FORMAT,
       appVersion: environment.appVersion,
-      viewerUserId: viewerUserId?.trim() || null,
+      viewerUserId: identityUserId?.trim() || null,
       dataUpdatedAt: state.dataUpdatedAt,
       // The first page only. A restored infinite query refetches every page it
       // holds, one request after another, before the lane settles.
@@ -162,13 +182,13 @@ export function persistHomeFeed(
 
 export function schedulePersistHomeFeed(
   queryClient: QueryClient,
-  viewerUserId: string | null | undefined,
+  identityUserId: string | null | undefined,
   environment?: PersistedHomeFeedEnvironment,
 ) {
   cancelScheduledPersistHomeFeed();
   scheduledPersist = setTimeout(() => {
     scheduledPersist = null;
-    void persistHomeFeed(queryClient, viewerUserId, environment);
+    void persistHomeFeed(queryClient, identityUserId, environment);
   }, PERSIST_HOME_FEED_DEBOUNCE_MS);
 }
 
@@ -229,6 +249,14 @@ function parsePersistedHomeFeed(
 function parseViewerUserId(value: unknown): string | null | undefined {
   if (value === null) return null;
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+/** The page as it draws, with nothing that binds it to its ended feed session. */
+function withoutFeedSession({ feedSessionId: _ended, ...page }: ShowcaseFeedResponse): ShowcaseFeedResponse {
+  return {
+    ...page,
+    items: page.items.map(({ recommendation: _delivery, ...item }) => item),
+  };
 }
 
 function isDrawableFeedPage(value: unknown): value is ShowcaseFeedResponse {

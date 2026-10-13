@@ -59,14 +59,17 @@ export function normalizeShowcaseFeedLane(filters: ShowcaseFeedFilters): Showcas
  * pages the grid's own pages (audit 03-2, 03-4). One builder rather than three
  * copies, because a page is fetched with the options of whichever reader asked
  * for it: two copies that drifted would page one lane two ways.
+ *
+ * `identityUserId` is the backend identity, guest or registered, as
+ * `createShowcaseFeedViewerQueryKey` explains.
  */
 export function showcaseFeedLaneQueryOptions(
   api: Pick<MagicbookletApiClient, 'getShowcaseFeed'>,
   filters: ShowcaseFeedFilters,
-  viewerUserId: string | null | undefined,
+  identityUserId: string | null | undefined,
 ) {
   return {
-    queryKey: createShowcaseFeedQueryKey(filters, viewerUserId),
+    queryKey: createShowcaseFeedQueryKey(filters, identityUserId),
     initialPageParam: { offset: 0 } as ShowcaseFeedPageParam,
     queryFn: ({ pageParam }: { pageParam: ShowcaseFeedPageParam }) => api.getShowcaseFeed(getShowcaseFeedPageParams({
       ...filters,
@@ -79,6 +82,13 @@ export function showcaseFeedLaneQueryOptions(
     getPreviousPageParam: getPreviousFeedPageParam,
     maxPages: filters.sort === 'recent' ? FEED_WINDOW_PAGE_LIMIT : 0,
     staleTime: SHOWCASE_FEED_STALE_TIME_MS,
+    // A ranked lane is not read again because the app came back to the
+    // foreground or a reader mounted. Such a refetch re-reads every loaded
+    // page as a new ranked session: other posts under the reader's thumb, and
+    // up to 60 deliveries served that nobody sees (audit 02-2). Pull-to-refresh
+    // and the end-of-feed Refresh still renew it. Recent is a timeline and
+    // keeps the defaults.
+    ...(filters.sort === 'recent' ? {} : { refetchOnWindowFocus: false, refetchOnMount: false }),
   };
 }
 

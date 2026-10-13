@@ -76,7 +76,7 @@ function createHarness({
   const sendBatch = vi.fn(async (
     _events: ShowcaseFeedEventRequest[],
     _options: { accessToken: string | null },
-  ) => ({ success: true, recorded: 1, rejected: 0 }));
+  ): Promise<unknown> => ({ success: true, recorded: 1, rejected: 0 }));
   const timers: Array<{ callback: () => void; delayMs: number }> = [];
   const queue = createFeedEventQueue({
     storage,
@@ -453,6 +453,79 @@ describe('feed event queue', () => {
     await harness.queue.flush();
     expect(harness.sendBatch.mock.calls[1]?.[1]).toEqual({ accessToken: 'token:user:guest-1' });
     expect(harness.queue.getEntriesForTests()).toHaveLength(0);
+  });
+
+  // Audit 04-11: a 200 can refuse some of its entries, and nobody saw which.
+  it('warns once per flush with the entries the server rejected, by error, and retries none of them', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const currentTime = 1_700_000_000_000;
+      const initial = persistedEntries(Array.from({ length: 30 }, (_, index) => (
+        persistedEntry(index, 'user:user-1', currentTime)
+      )));
+      const harness = createHarness({ initial, now: currentTime });
+      const accepted = (index: number) => ({ index, status: 200 });
+      const notThisViewer = (index: number) => ({ index, status: 400, error: 'Feed session does not belong to this viewer.' });
+      harness.sendBatch
+        .mockResolvedValueOnce({
+          success: true,
+          recorded: 23,
+          rejected: 2,
+          results: Array.from({ length: 25 }, (_, index) => (index === 3 || index === 7 ? notThisViewer(index) : accepted(index))),
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          recorded: 4,
+          rejected: 1,
+          results: [
+            accepted(0),
+            { index: 1, status: 400, error: 'Feed session was not found or was inactive when this event occurred.' },
+            accepted(2),
+            accepted(3),
+            accepted(4),
+          ],
+        });
+      await harness.queue.restore();
+      await harness.queue.flush();
+
+      expect(harness.sendBatch).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith('Feed events rejected by the server', {
+        'Feed session does not belong to this viewer.': 2,
+        'Feed session was not found or was inactive when this event occurred.': 1,
+      });
+      expect(harness.queue.getEntriesForTests()).toHaveLength(0);
+
+      await harness.queue.flush();
+      expect(harness.sendBatch).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('says nothing for a reply without per-entry results, or with none rejected', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const harness = createHarness();
+      // An older server answers with the counts alone, as the harness does.
+      await harness.queue.enqueue(event(1));
+      await harness.queue.flush();
+      harness.sendBatch.mockResolvedValueOnce({
+        success: true,
+        recorded: 1,
+        rejected: 0,
+        results: [{ index: 0, status: 200 }],
+      });
+      await harness.queue.enqueue(event(2));
+      await harness.queue.flush();
+
+      expect(harness.sendBatch).toHaveBeenCalledTimes(2);
+      expect(harness.queue.getEntriesForTests()).toHaveLength(0);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('drops terminal 400 failures instead of poisoning later flushes', async () => {
