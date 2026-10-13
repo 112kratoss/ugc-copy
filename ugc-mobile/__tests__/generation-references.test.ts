@@ -16,6 +16,19 @@ describe('owner generation reference presentation', () => {
     ]);
   });
 
+  it('labels a named subject’s picture as one, not as a plain reference', () => {
+    // The server stores each picture of a Kling O3 subject under its own role
+    // (src/lib/generation-input-media.ts), and a post's details called them
+    // "Reference image".
+    expect(generationReferences([
+      { id: 'subject-1', mediaType: 'image', role: 'subject_image', metadata: { handle: '@hero' }, sortOrder: 0 },
+      { id: 'subject-2', mediaType: 'image', role: 'subject_image', sortOrder: 1 },
+    ])).toEqual([
+      { id: 'subject-1', mediaKind: 'image', label: '@hero', caption: 'Subject image', url: null },
+      { id: 'subject-2', mediaKind: 'image', label: 'Subject image', caption: 'Subject image', url: null },
+    ]);
+  });
+
   it('keeps unavailable references visible and supports legacy kind values', () => {
     expect(generationReferences([{ storagePath: 'uploads/owner/file', kind: 'video', label: 'My reference', url: null }]))
       .toEqual([{ id: 'uploads/owner/file', mediaKind: 'video', label: 'My reference', caption: 'Reference video', url: null }]);

@@ -7,7 +7,6 @@ import {
 } from '../lib/generation-model-draft';
 import {
   createDefaultCreationDraft,
-  REMIX_RESTORE_WARNING_MESSAGE,
   type VideoCreationDraft,
 } from '../lib/media-creation-view-model';
 import type { RemixResolvedImageElement, RemixSourceBundle } from '../lib/types';
@@ -75,9 +74,17 @@ describe('catalog remix restore of reusable video references', () => {
       .not.toContainEqual(expect.stringContaining('Unknown element mention'));
   });
 
-  it('still caps restored references at the catalog model limit and says so', () => {
+  // A restore used to cut references to the catalog model's limit and warn that some could
+  // not be restored, which was the cut itself. They are all kept now, as a model change
+  // keeps them: the run sends what the model takes and waits until the rest are removed.
+  it('restores every reference, sending what the catalog model takes and blocking the run until the rest are removed', () => {
+    const base = remoteVideoModel();
     const narrow = remoteVideoModel('remote-video-v2', {
-      inputs: { ...remoteVideoModel().inputs, imageReferences: { max: 1, supportsNaming: true } },
+      inputs: { ...base.inputs, imageReferences: { max: 1, supportsNaming: true } },
+      inputModes: base.inputModes?.map((mode) => ({
+        ...mode,
+        slots: mode.slots.map((slot) => (slot.key === 'imageReferences' ? { ...slot, max: 1 } : slot)),
+      })),
     });
     const catalog = catalogV2([remoteVideoModel('fallback-video-v2'), narrow]);
 
@@ -87,8 +94,11 @@ describe('catalog remix restore of reusable video references', () => {
       catalog,
     );
 
-    expect((restored.draft as VideoCreationDraft).references.map((reference) => reference.handle)).toEqual(['@ref1']);
-    expect(restored.warning).toBe(REMIX_RESTORE_WARNING_MESSAGE);
+    expect(restored.warning).toBeNull();
+    expect((restored.draft as VideoCreationDraft).references.map((reference) => reference.handle)).toEqual(['@ref1', '@ref2']);
+    expect(validateCatalogCreationDraft(restored.draft, narrow).errors).toEqual(['Reference images supports up to 1 input.']);
+    expect(buildUnifiedCatalogGenerationRequest(restored.draft, narrow, catalog.revision).inputs.map((input) => input.handle))
+      .toEqual(['@ref1']);
   });
 
   // Reported from a live Seedance 2 post: its remix showed the three reference images

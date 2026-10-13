@@ -599,6 +599,24 @@ describe('media creation view model', () => {
     expect(draft.referenceVideo).toMatchObject({ displayName: 'Reference Motion', kind: 'video' });
   });
 
+  // The catalog path restores into a placeholder model, then holds the result to the
+  // published descriptor. The bundled ladder for the placeholder knows nothing of a
+  // catalog-only motion model, and must not decide what such a remix keeps.
+  it('restores a motion remix for the catalog without the bundled model ladder', () => {
+    const source = remixSourceBundle({
+      generation: { category: 'video', model: 'kling-3.0-motion-pro' },
+      workflowSettings: { model: 'kling-3.0-motion-pro', duration: 45 },
+      inputs: { motion: { characterImage: null, referenceVideo: null } },
+    });
+    // A resolution the catalog model publishes and the bundled ladder does not.
+    const base = { ...createDefaultCreationDraft('motion'), model: 'kling-3.0-motion-pro', mode: '480p' as never };
+
+    // Held to the bundled Kling 3.0, the source's 45 s was dropped and 480p became 720p.
+    expect(hydrateCreationDraftFromRemixSource(base, source).draft).toMatchObject({ mode: '720p', duration: 10 });
+    expect(hydrateCreationDraftFromRemixSource(base, source, { capToBundledModel: false }).draft)
+      .toMatchObject({ model: 'kling-3.0-motion-pro', mode: '480p', duration: 45 });
+  });
+
   it('skips missing remix media URLs and surfaces a restore warning', () => {
     const source = remixSourceBundle({
       inputs: {
@@ -939,6 +957,10 @@ describe('media creation view model', () => {
 
     // Gemini Omni declares no frame slots, so it is always reference-shaped.
     expect(videoDraftReferenceMode({ ...base, model: 'gemini-omni-video' as const })).toBe('elements');
+
+    // A multi-shot run sends its shots and no reference picture: pictures kept from a
+    // single shot used to ride along, hidden, and turn off the story's start frame.
+    expect(videoDraftReferenceMode({ ...withReference, isMultiShot: true })).toBe('frames');
   });
 });
 

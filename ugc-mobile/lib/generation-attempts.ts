@@ -104,18 +104,82 @@ export async function clearPendingGenerationAttempt(
 }
 
 /**
- * Whether a start that threw may still have reached the server and started a
- * run. A refusal the server made before reserving credits is definitive. A lost
- * connection (status 0), a server fault, or a start already in flight under this
- * key is not.
+ * The codes a start route answers a refusal with, whatever its status: the server
+ * started nothing, or settled what it started and returned the credits, so replaying
+ * the key cannot find a run. `submission_pending` is a public code too, and is not
+ * among them: the provider may have the task.
+ */
+const DEFINITIVE_START_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  'insufficient_credits',
+  'invalid_input_media',
+  'service_misconfigured',
+  'provider_busy',
+  'provider_unavailable',
+  'provider_rejected',
+  'prompt_blocked',
+  'INVALID_GENERATION_REQUEST',
+  'INVALID_MODEL_SETTINGS',
+  'MODEL_UNAVAILABLE',
+  'CATALOG_CHANGED',
+  'REFERENCE_DURATION_CHANGED',
+  'RATE_LIMITED',
+  'cost_changed',
+  // The per-kind routes' answer when the provider key is missing: nothing is held.
+  'GENERATION_SERVICE_UNAVAILABLE',
+]);
+
+/** The codes that say the run may exist: the start is held, still running, or was never confirmed. */
+const UNCONFIRMED_START_CODES: ReadonlySet<string> = new Set([
+  'submission_pending',
+  'GENERATION_START_IN_PROGRESS',
+  'GENERATION_ADAPTER_UNAVAILABLE',
+]);
+
+function isDefinitiveStartRefusalCode(code: string) {
+  return DEFINITIVE_START_REFUSAL_CODES.has(code) || code.startsWith('IDEMPOTENCY_KEY_');
+}
+
+function startFailure(error: unknown): { status: number; code: string | null } | null {
+  if (!error || typeof error !== 'object') return null;
+  const { status, code, details } = error as { status?: unknown; code?: unknown; details?: { code?: unknown } | null };
+  if (typeof status !== 'number') return null;
+  const failureCode = typeof code === 'string' && code
+    ? code
+    : typeof details?.code === 'string' && details.code ? details.code : null;
+  return { status, code: failureCode };
+}
+
+/**
+ * Whether a start that threw may still have reached the server and started a run.
+ * A lost connection (status 0), a start held, still running or never confirmed under
+ * this key, and a server fault that names no refusal are not settled; checking them
+ * replays the key. A refusal is definitive at any status: a 5xx that carries one of the
+ * refusal codes (`service_misconfigured`, `provider_unavailable`) started nothing, and
+ * read as unconfirmed it kept a "Check again" that re-ran the same refusal for ever.
  */
 export function isAmbiguousGenerationStartFailure(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const { status, code, details } = error as { status?: unknown; code?: unknown; details?: { code?: unknown } | null };
-  if (typeof status !== 'number') return false;
-  if (status === 0 || status >= 500) return true;
-  const failureCode = code ?? details?.code;
-  return status === 409 && (failureCode === 'GENERATION_START_IN_PROGRESS' || failureCode === 'submission_pending');
+  const failure = startFailure(error);
+  if (!failure) return false;
+  if (failure.status === 0) return true;
+  if (failure.code && UNCONFIRMED_START_CODES.has(failure.code)) return true;
+  if (failure.status >= 500) return !(failure.code && isDefinitiveStartRefusalCode(failure.code));
+  return false;
+}
+
+/**
+ * The code a definitive start refusal carries, for the failure view to choose its main
+ * action by (`prompt_blocked`, `insufficient_credits`, `invalid_input_media`,
+ * `cost_changed`, `CATALOG_CHANGED`, …), or null for a start that may have begun, an
+ * error that never reached the server, or a refusal without a code. A 402 or a 429 from
+ * a server that predates codes on every refusal is read as the refusal it always meant.
+ */
+export function generationStartRefusalCode(error: unknown): string | null {
+  const failure = startFailure(error);
+  if (!failure || isAmbiguousGenerationStartFailure(error)) return null;
+  if (failure.code) return failure.code;
+  if (failure.status === 402) return 'insufficient_credits';
+  if (failure.status === 429) return 'provider_busy';
+  return null;
 }
 
 /** The key a press must reuse: the unconfirmed attempt's own, when this is that exact request. */

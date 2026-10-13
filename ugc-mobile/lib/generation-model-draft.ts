@@ -29,7 +29,9 @@ import {
   type ImageCreationDraft,
   type MediaDraft,
   type MotionCreationDraft,
+  type ReferenceMode,
   type VideoCreationDraft,
+  type VideoShotDraft,
 } from './media-creation-view-model';
 import {
   modeGatedSettingValues,
@@ -116,6 +118,19 @@ function writeControlValues(draft: CreationDraft, model: GenerationModelDescript
   return values;
 }
 
+/** A shot's length as a run sends it: whole seconds, and at least one. */
+function shotSeconds(shot: Pick<VideoShotDraft, 'duration'>) {
+  return Math.max(1, Math.round(shot.duration || 0));
+}
+
+/**
+ * How long a multi-shot run is: its shots' lengths added up, each as the request sends
+ * it. The quote, the request and the server's own check all read this one total.
+ */
+export function multiShotTotalDuration(shots: readonly Pick<VideoShotDraft, 'duration'>[]): number {
+  return shots.reduce((total, shot) => total + shotSeconds(shot), 0);
+}
+
 export function getCatalogDraftSettings(
   draft: CreationDraft,
   model: GenerationModelDescriptor,
@@ -125,7 +140,15 @@ export function getCatalogDraftSettings(
     const value = currentControlValue(draft, control);
     if (value !== undefined) current[control.key] = value;
   }
-  return normalizeCatalogSettings(model, current);
+  const settings = normalizeCatalogSettings(model, current);
+  // A multi-shot run renders its shots, not the single-shot duration kept behind the shot
+  // editor: priced by that, the default two 5 s Kling shots cost what one did. Set after
+  // normalizing, so a total the model cannot take reaches the quote as it is and is refused
+  // there, rather than becoming the control's default and the price of a run never sent.
+  if (draft.tool === 'video' && draft.isMultiShot) {
+    settings.duration = multiShotTotalDuration(draft.multiPrompts);
+  }
+  return settings;
 }
 
 function mediaDraftAsset(media: MediaDraft): CatalogDraftInputAsset {
@@ -139,6 +162,7 @@ function mediaDraftAsset(media: MediaDraft): CatalogDraftInputAsset {
     handle: media.handle ?? null,
     durationSeconds: media.durationSeconds ?? null,
     sourceGenerationId: media.sourceGenerationId ?? null,
+    ...(media.seedanceAsset ? { seedanceAsset: media.seedanceAsset } : {}),
   };
 }
 
@@ -154,7 +178,9 @@ function legacyAssetsForSlot(
     return draft.tool === 'video' && draft.startFrame ? [mediaDraftAsset(draft.startFrame)] : [];
   }
   if (slot.role === 'endFrame') {
-    return draft.tool === 'video' && draft.endFrame ? [mediaDraftAsset(draft.endFrame)] : [];
+    // A multi-shot run ends where its last shot does. The quote and the web creator leave
+    // the end frame out of one, so the run does too.
+    return draft.tool === 'video' && draft.endFrame && !draft.isMultiShot ? [mediaDraftAsset(draft.endFrame)] : [];
   }
   if (slot.key === SUBJECT_IMAGES_SLOT_KEY) {
     // One asset per picture, each under its subject's handle and name: the server
@@ -189,23 +215,42 @@ function legacyAssetsForSlot(
     : [];
 }
 
+function heldSlotAssets(draft: CreationDraft, slot: CatalogInputSlot): CatalogDraftInputAsset[] {
+  return draft.catalogInputSlots?.[slot.key] ?? legacyAssetsForSlot(draft, slot);
+}
+
+function heldInputCounts(draft: CreationDraft, model: GenerationModelDescriptor): Record<string, number> {
+  return Object.fromEntries((model.inputModes ?? [])
+    .flatMap((mode) => mode.slots)
+    .map((slot) => [slot.key, heldSlotAssets(draft, slot).length]));
+}
+
+/**
+ * Each slot a run with these settings opens, with everything the draft holds for it. The
+ * validator reads this, so it can say when a slot holds more than it takes.
+ */
+function heldCatalogDraftInputSlots(
+  draft: CreationDraft,
+  model: GenerationModelDescriptor,
+  settings: Record<string, CatalogPrimitive>,
+): Array<{ slot: CatalogInputSlot; assets: CatalogDraftInputAsset[] }> {
+  return getActiveCatalogInputSlots(model, settings, heldInputCounts(draft, model))
+    .map((slot) => ({ slot, assets: heldSlotAssets(draft, slot) }));
+}
+
+/**
+ * What a run sends in each slot its settings open: at most the slot's max, and nothing for
+ * a slot the model does not have. A draft keeps its references when the model changes, as
+ * the web creator does, so it can hold more than this model takes; the rest wait in the
+ * draft, and `validateCatalogCreationDraft` blocks the run until they are removed.
+ */
 export function buildCatalogDraftInputSlots(
   draft: CreationDraft,
   model: GenerationModelDescriptor,
   settings: Record<string, CatalogPrimitive> = getCatalogDraftSettings(draft, model),
 ): CatalogDraftInputSlots {
-  const knownCounts = Object.fromEntries((model.inputModes ?? [])
-    .flatMap((mode) => mode.slots)
-    .map((slot) => {
-      const assets = draft.catalogInputSlots?.[slot.key] ?? legacyAssetsForSlot(draft, slot);
-      return [slot.key, assets.length];
-    }));
-  const slots = getActiveCatalogInputSlots(model, settings, knownCounts);
-  return Object.fromEntries(slots.map((slot) => {
-    const existing = draft.catalogInputSlots?.[slot.key];
-    const assets = existing ?? legacyAssetsForSlot(draft, slot);
-    return [slot.key, assets];
-  }));
+  return Object.fromEntries(heldCatalogDraftInputSlots(draft, model, settings)
+    .map(({ slot, assets }) => [slot.key, assets.slice(0, Math.max(0, slot.max))]));
 }
 
 function hasReusableVideoInputs(model: GenerationModelDescriptor) {
@@ -232,21 +277,72 @@ export function catalogSubjectSlot(model: GenerationModelDescriptor | null | und
   return null;
 }
 
-function normalizedVideoReferenceMode(
+function isFrameSlot(slot: CatalogInputSlot) {
+  return slot.role === 'startFrame' || slot.role === 'endFrame';
+}
+
+/** The shape a model's default input mode opens, for a draft whose attachments decide nothing. */
+function defaultRunReferenceMode(
+  model: GenerationModelDescriptor,
+  framesShape: CatalogInputSlot[],
+  referencesShape: CatalogInputSlot[],
+): ReferenceMode {
+  const gate = model.inputModes?.find((mode) => mode.default)?.conditions?.find((condition) => (
+    condition.source === 'setting' && condition.key === 'referenceMode' && condition.operator === 'equals'
+  ))?.value;
+  if (gate === 'frames' || gate === 'elements') return gate;
+  if (framesShape.some(isFrameSlot)) return 'frames';
+  return referencesShape.some((slot) => slot.role === 'reference') ? 'elements' : 'frames';
+}
+
+/**
+ * The shape a video run takes on this model, read off what the draft holds that the model
+ * carries. Named subjects while one is attached and the model takes them, across multi-shot
+ * too. Frames in any other multi-shot run, which sends its shots and no reference picture,
+ * as the web creator's does. Otherwise references only when the draft holds something the
+ * model takes in its references shape alone: a reference kept from another model, which
+ * this one has no slot for, must not turn a frames run into a references run and leave its
+ * frames out, and video elements that ride with either shape (Kling 3.0's) keep the frames.
+ */
+export function catalogVideoRunReferenceMode(
   draft: VideoCreationDraft,
   model: GenerationModelDescriptor,
-  isMultiShot: boolean
-): VideoCreationDraft['referenceMode'] {
-  // Subjects are the run's shape while one is attached, across multi-shot too: the
-  // subjects mode is gated on nothing but its own reference mode.
+): ReferenceMode {
   if (videoSubjects(draft).length > 0 && catalogSubjectSlot(model)) return 'subjects';
-  if (isMultiShot) return 'frames';
+  if (draft.isMultiShot) return 'frames';
+  if (!model.inputModes) {
+    // A descriptor without input modes has no slots to read, so the draft's mode stands
+    // where the model supports it.
+    const supportsFrames = model.inputs.startFrame || model.inputs.endFrame;
+    const supportsReusableReferences = hasReusableVideoInputs(model);
+    if (draft.referenceMode === 'elements' && supportsReusableReferences) return 'elements';
+    if (draft.referenceMode === 'frames' && supportsFrames) return 'frames';
+    return supportsReusableReferences ? 'elements' : 'frames';
+  }
+  const settings = getCatalogDraftSettings(draft, model);
+  const counts = heldInputCounts(draft, model);
+  const framesShape = getActiveCatalogInputSlots(model, { ...settings, referenceMode: 'frames' }, counts);
+  const referencesShape = getActiveCatalogInputSlots(model, { ...settings, referenceMode: 'elements' }, counts);
+  const inFramesShape = new Set(framesShape.map((slot) => slot.key));
+  const holds = (slot: CatalogInputSlot) => heldSlotAssets(draft, slot).length > 0;
+  if (referencesShape.some((slot) => slot.role === 'reference' && !inFramesShape.has(slot.key) && holds(slot))) {
+    return 'elements';
+  }
+  if (framesShape.some((slot) => isFrameSlot(slot) && holds(slot))) return 'frames';
+  return defaultRunReferenceMode(model, framesShape, referencesShape);
+}
 
-  const supportsFrames = model.inputs.startFrame || model.inputs.endFrame;
-  const supportsReusableReferences = hasReusableVideoInputs(model);
-  if (draft.referenceMode === 'elements' && supportsReusableReferences) return 'elements';
-  if (draft.referenceMode === 'frames' && supportsFrames) return 'frames';
-  return supportsReusableReferences ? 'elements' : 'frames';
+/** The draft as a run on this model reads it: in the run's own reference shape. */
+function catalogRunDraft<T extends CreationDraft>(draft: T, model: GenerationModelDescriptor): T {
+  return draft.tool === 'video'
+    ? { ...draft, referenceMode: catalogVideoRunReferenceMode(draft, model) } as T
+    : draft;
+}
+
+function catalogRunSettings(runDraft: CreationDraft, model: GenerationModelDescriptor) {
+  const settings = getCatalogDraftSettings(runDraft, model);
+  if (runDraft.tool === 'video') settings.referenceMode = runDraft.referenceMode;
+  return settings;
 }
 
 export function applyCatalogModelDefaults(
@@ -255,52 +351,25 @@ export function applyCatalogModelDefaults(
   catalogRevision: string | null = draft.catalogRevision ?? null,
 ): CreationDraft {
   const values = writeControlValues(draft, model);
-  const catalogSettings = getCatalogDraftSettings(draft, model);
-  const allInputSlots = new Map((model.inputModes ?? [])
-    .flatMap((mode) => mode.slots)
-    .map((slot) => [slot.key, slot]));
-  const catalogInputSlots = draft.catalogInputSlots === undefined
-    ? undefined
-    : Object.fromEntries(Object.entries(draft.catalogInputSlots)
-      .flatMap(([slotKey, assets]) => {
-        const slot = allInputSlots.get(slotKey);
-        return slot ? [[slotKey, assets.slice(0, slot.max)] as const] : [];
-      }));
+  // References, clips, tracks and generic slot inputs stay in the draft whatever this model
+  // takes: cut to its slots, they were gone for good, and picking the first model again did
+  // not bring them back. A run sends what the model takes (buildCatalogDraftInputSlots), and
+  // an excess blocks Generate with the slot's message until it is removed.
   if (draft.tool === 'image') {
-    return {
-      ...draft,
-      ...values,
-      model: model.id,
-      catalogRevision,
-      catalogSettings,
-      ...(catalogInputSlots ? { catalogInputSlots } : {}),
-      references: model.inputs.imageReferences
-        ? draft.references.slice(0, model.inputs.imageReferences.max)
-        : [],
-    } as ImageCreationDraft;
+    const normalized = { ...draft, ...values, model: model.id, catalogRevision } as ImageCreationDraft;
+    return { ...normalized, catalogSettings: getCatalogDraftSettings(normalized, model) };
   }
   if (draft.tool === 'video') {
     const isMultiShot = model.capabilities.multiShot ? Boolean(values.isMultiShot ?? draft.isMultiShot) : false;
     const subjectSlot = catalogSubjectSlot(model);
-    return {
+    const normalized = {
       ...draft,
       ...values,
       model: model.id,
       catalogRevision,
-      catalogSettings,
-      ...(catalogInputSlots ? { catalogInputSlots } : {}),
       isMultiShot,
       sound: model.capabilities.sound ? Boolean(values.sound ?? draft.sound) : false,
       fixedLens: model.capabilities.fixedLens ? Boolean(values.fixedLens ?? draft.fixedLens) : false,
-      references: model.inputs.imageReferences
-        ? draft.references.slice(0, model.inputs.imageReferences.max)
-        : [],
-      referenceVideos: model.inputs.videoReferences
-        ? draft.referenceVideos.slice(0, model.inputs.videoReferences.max)
-        : [],
-      referenceAudios: model.inputs.audioReferences
-        ? draft.referenceAudios.slice(0, model.inputs.audioReferences.max)
-        : [],
       subjects: subjectSlot
         ? videoSubjects(draft).slice(0, subjectsPerRun(subjectSlot))
         : [],
@@ -312,17 +381,12 @@ export function applyCatalogModelDefaults(
         : [],
       startFrame: model.inputs.startFrame ? draft.startFrame : null,
       endFrame: model.inputs.endFrame && !isMultiShot ? draft.endFrame : null,
-      referenceMode: normalizedVideoReferenceMode(draft, model, isMultiShot),
     } as VideoCreationDraft;
+    const shaped = { ...normalized, referenceMode: catalogVideoRunReferenceMode(normalized, model) };
+    return { ...shaped, catalogSettings: getCatalogDraftSettings(shaped, model) };
   }
-  return {
-    ...draft,
-    ...values,
-    model: model.id,
-    catalogRevision,
-    catalogSettings,
-    ...(catalogInputSlots ? { catalogInputSlots } : {}),
-  } as MotionCreationDraft;
+  const normalized = { ...draft, ...values, model: model.id, catalogRevision } as MotionCreationDraft;
+  return { ...normalized, catalogSettings: getCatalogDraftSettings(normalized, model) };
 }
 
 export function applyCatalogModelInitialDefaults(
@@ -362,9 +426,7 @@ export function getCatalogCreationSectionSummary(draft: CreationDraft, model: Ge
     };
   }
   if (draft.tool === 'video') {
-    const duration = draft.isMultiShot
-      ? draft.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0)
-      : draft.duration;
+    const duration = draft.isMultiShot ? multiShotTotalDuration(draft.multiPrompts) : draft.duration;
     return {
       essentials: `${model.displayName} · ${draft.aspectRatio} · ${duration}s`,
       references: referenceSummary(draft),
@@ -379,25 +441,90 @@ export function getCatalogCreationSectionSummary(draft: CreationDraft, model: Ge
 }
 
 /**
- * The mentions in a draft's prompt that name no reference it holds, read the way
- * the server reads them. Only an image prompt and a single-shot video prompt are
- * read: a motion run has no reference a prompt could name and a multi-shot run is
- * described by its shots, so the server reads no mention in either prompt, and
- * one refused here would be a prompt it accepts.
+ * The @handles a run's prompt and shots may name: those of the references in the slots
+ * the run fills, as the server lets a prompt name only what it is sent. A reference kept
+ * from another model, which this one has no slot for, is not one the provider would be
+ * given. One past its slot's max still counts here: that excess already blocks the run
+ * with its own message, and removing either reference settles which one the prompt meant.
+ */
+export function catalogDraftRunHandles(draft: CreationDraft, model: GenerationModelDescriptor): string[] {
+  if (draft.tool === 'motion') return [];
+  if (!model.inputModes) {
+    // No slots to read: every named reference the draft holds.
+    const references = draft.tool === 'image'
+      ? draft.references
+      : [
+          ...draft.references,
+          ...(model.id === 'kling-3.0-video' && draft.referenceMode === 'elements' ? draft.referenceVideos : []),
+        ];
+    return Array.from(new Set([
+      ...references.map((reference) => reference.handle).filter((handle): handle is string => Boolean(handle)),
+      ...(draft.tool === 'video' ? subjectHandles(draft) : []),
+    ]));
+  }
+  const runDraft = catalogRunDraft(draft, model);
+  return Array.from(new Set(heldCatalogDraftInputSlots(runDraft, model, catalogRunSettings(runDraft, model))
+    .filter(({ slot }) => slot.role === 'reference')
+    .flatMap(({ assets }) => assets)
+    .map((asset) => asset.handle)
+    .filter((handle): handle is string => Boolean(handle))));
+}
+
+/**
+ * The models whose shot prompts the server reads for mentions, refusing a handle no input
+ * answers to (startVideoGeneration in src/lib/generation-services.ts). Any other model's
+ * shots are sent as written, so a mention refused here would be one the server accepts.
+ */
+const SHOT_MENTION_CHECKED_MODEL_IDS: ReadonlySet<string> = new Set(['kling-3.0-video', 'kling-o3']);
+
+/**
+ * The mentions a run's text names that no input it sends answers to, read the way the
+ * server reads them: an image prompt, a single-shot video prompt, and the shots of a Kling
+ * 3.0 or Kling O3 multi-shot run. A motion run has no reference a prompt could name, and
+ * a multi-shot run is described by its shots, so the prompt it keeps is not read.
  */
 function unknownPromptMentions(draft: CreationDraft, model: GenerationModelDescriptor) {
-  if (draft.tool === 'motion' || (draft.tool === 'video' && draft.isMultiShot)) return [];
-  const references = draft.tool === 'image'
-    ? draft.references
-    : [
-        ...draft.references,
-        ...(model.id === 'kling-3.0-video' && draft.referenceMode === 'elements' ? draft.referenceVideos : []),
-      ];
-  const knownHandles = [
-    ...references.map((reference) => reference.handle).filter((handle): handle is string => Boolean(handle)),
-    ...(draft.tool === 'video' ? subjectHandles(draft) : []),
-  ];
-  return extractPromptHandles(draft.prompt).filter((handle) => !knownHandles.includes(handle));
+  if (draft.tool === 'motion') return [];
+  const knownHandles = catalogDraftRunHandles(draft, model);
+  const unknownIn = (text: string) => extractPromptHandles(text).filter((handle) => !knownHandles.includes(handle));
+  if (draft.tool === 'video' && draft.isMultiShot) {
+    return SHOT_MENTION_CHECKED_MODEL_IDS.has(model.id)
+      ? Array.from(new Set(draft.multiPrompts.flatMap((shot) => unknownIn(shot.prompt))))
+      : [];
+  }
+  return unknownIn(draft.prompt);
+}
+
+/**
+ * Shots per multi-shot run, by model: Kie's `multi_prompt` takes at most 5 for Kling 3.0
+ * and 6 for Kling O3. The web creator holds runs to the same numbers
+ * (src/lib/prompt-quality.ts); no descriptor publishes them yet.
+ */
+const MULTI_SHOT_MAX_SHOTS: Readonly<Record<string, number>> = {
+  'kling-3.0-video': 5,
+  'kling-o3': 6,
+};
+
+/**
+ * What a multi-shot run on this model may hold: a shot count (null where none is known)
+ * and a total length, which is the most its duration control offers, since the run's
+ * duration is the shots' total. Both are null for a model without multi-shot.
+ */
+export function catalogMultiShotLimits(model: GenerationModelDescriptor): {
+  maxShots: number | null;
+  maxTotalSeconds: number | null;
+} {
+  if (!model.capabilities.multiShot) return { maxShots: null, maxTotalSeconds: null };
+  const duration = model.controls.find((control) => control.key === 'duration');
+  const choices = duration?.type === 'choice'
+    ? duration.options.map((option) => Number(option.value)).filter((value) => Number.isFinite(value))
+    : [];
+  return {
+    maxShots: MULTI_SHOT_MAX_SHOTS[model.id] ?? null,
+    maxTotalSeconds: duration?.type === 'integer'
+      ? duration.max
+      : choices.length > 0 ? Math.max(...choices) : null,
+  };
 }
 
 function validateControls(draft: CreationDraft, model: GenerationModelDescriptor, errors: string[]) {
@@ -466,22 +593,27 @@ function catalogInputConstraintValue(
 }
 
 function validateCatalogV2Inputs(
-  draft: CreationDraft,
+  runDraft: CreationDraft,
   model: GenerationModelDescriptor,
   errors: string[],
 ) {
-  const settings = getCatalogDraftSettings(draft, model);
-  if (draft.tool === 'video') settings.referenceMode = draft.referenceMode;
-  const slots = buildCatalogDraftInputSlots(draft, model, settings);
+  const settings = catalogRunSettings(runDraft, model);
+  const held = heldCatalogDraftInputSlots(runDraft, model, settings);
+  // What the run would send, which every rule but the slot's own max is about.
+  const slots: CatalogDraftInputSlots = Object.fromEntries(
+    held.map(({ slot, assets }) => [slot.key, assets.slice(0, Math.max(0, slot.max))]),
+  );
   const inputCounts = Object.fromEntries(
     Object.entries(slots).map(([key, assets]) => [key, assets.length]),
   );
-  for (const slot of getActiveCatalogInputSlots(model, settings, inputCounts)) {
+  for (const { slot, assets: heldAssets } of held) {
     const assets = slots[slot.key] ?? [];
     if (assets.length < slot.min) {
       errors.push(`${slot.label} requires at least ${slot.min} input${slot.min === 1 ? '' : 's'}.`);
     }
-    if (assets.length > slot.max) {
+    // More than the slot takes: the run would leave the rest out without a word, so it
+    // waits until the creator removes them, or switches to a model that takes them.
+    if (heldAssets.length > slot.max) {
       errors.push(`${slot.label} supports up to ${slot.max} input${slot.max === 1 ? '' : 's'}.`);
     }
     for (const asset of assets) {
@@ -503,8 +635,13 @@ function validateCatalogV2Inputs(
       errors.push(constraint.message);
     }
   }
-  if (draft.tool === 'video' && settings.referenceMode === 'subjects') {
-    validateSubjects(draft, model, errors);
+  // A prompt-only model has no slot to report against. The references stay in the draft
+  // for another model; this one cannot use them, as its quote says.
+  if (runDraft.tool === 'image' && runDraft.references.length > 0 && !held.some(({ slot }) => slot.kind === 'image')) {
+    errors.push(`${model.displayName} does not support image references.`);
+  }
+  if (runDraft.tool === 'video' && settings.referenceMode === 'subjects') {
+    validateSubjects(runDraft, model, errors);
   }
 }
 
@@ -537,6 +674,8 @@ export function validateCatalogCreationDraft(
   options: { credits?: number | null; quotedCost?: number | null } = {}
 ): CreationValidationResult {
   const errors: string[] = [];
+  // Checked as the run it would start: in that run's reference shape.
+  const runDraft = catalogRunDraft(draft, model);
   if (draft.tool === 'image' && !draft.prompt.trim()) errors.push('Prompt is required.');
   if (draft.tool === 'video' && !draft.isMultiShot && !draft.prompt.trim()) errors.push('Prompt is required.');
   if (draft.tool === 'video' && draft.isMultiShot && !draft.multiPrompts.every((shot) => shot.prompt.trim())) errors.push('All multi-shot entries need a text prompt.');
@@ -545,9 +684,9 @@ export function validateCatalogCreationDraft(
     if (!draft.referenceVideo) errors.push('Reference video is required.');
   }
 
-  validateControls(draft, model, errors);
+  validateControls(runDraft, model, errors);
   if (model.inputModes) {
-    validateCatalogV2Inputs(draft, model, errors);
+    validateCatalogV2Inputs(runDraft, model, errors);
   } else if (draft.tool === 'image') {
     validateCatalogInputLimit(
       draft.references.length,
@@ -598,6 +737,18 @@ export function validateCatalogCreationDraft(
     );
   }
 
+  if (draft.tool === 'video' && draft.isMultiShot) {
+    // The provider refuses more shots than it takes, and the run's duration is the shots'
+    // total, which the model's duration control bounds.
+    const { maxShots, maxTotalSeconds } = catalogMultiShotLimits(model);
+    if (maxShots !== null && draft.multiPrompts.length > maxShots) {
+      errors.push(`${model.displayName} multi-shot supports at most ${maxShots} shots.`);
+    }
+    if (maxTotalSeconds !== null && multiShotTotalDuration(draft.multiPrompts) > maxTotalSeconds) {
+      errors.push(`${model.displayName} multi-shot runs can be at most ${maxTotalSeconds} seconds in total.`);
+    }
+  }
+
   const unknownHandles = unknownPromptMentions(draft, model);
   if (unknownHandles.length > 0) errors.push(`Unknown element mention${unknownHandles.length === 1 ? '' : 's'}: ${unknownHandles.join(', ')}`);
 
@@ -609,14 +760,47 @@ export function validateCatalogCreationDraft(
   return { errors, warnings: [], cost, canGenerate: errors.length === 0 && hasServerQuote };
 }
 
+function referenceSlotOf(kind: CatalogInputSlot['kind']) {
+  return (slot: CatalogInputSlot) => (
+    slot.role === 'reference' && slot.kind === kind && slot.key !== SUBJECT_IMAGES_SLOT_KEY
+  );
+}
+
+/**
+ * The draft with each kind cut to the limit the descriptor states, which
+ * applyCatalogModelDefaults used to cut the draft itself to: what the per-kind payload
+ * sends, and what a quote counts for a descriptor without input modes.
+ */
+function legacyRunDraft<T extends CreationDraft>(runDraft: T, model: GenerationModelDescriptor): T {
+  if (runDraft.tool === 'image') {
+    return { ...runDraft, references: runDraft.references.slice(0, model.inputs.imageReferences?.max ?? 0) } as T;
+  }
+  if (runDraft.tool === 'video') {
+    return {
+      ...runDraft,
+      references: runDraft.references.slice(0, model.inputs.imageReferences?.max ?? 0),
+      referenceVideos: runDraft.referenceVideos.slice(0, model.inputs.videoReferences?.max ?? 0),
+      referenceAudios: runDraft.referenceAudios.slice(0, model.inputs.audioReferences?.max ?? 0),
+    } as T;
+  }
+  return runDraft;
+}
+
 export function buildCatalogQuoteRequest(
   draft: CreationDraft,
   model: GenerationModelDescriptor,
   catalogRevision: string
 ): GenerationModelQuoteRequest {
-  const settings = getCatalogDraftSettings(draft, model);
-  if (draft.tool === 'video') settings.referenceMode = draft.referenceMode;
-  const inputSlots = buildCatalogDraftInputSlots(draft, model, settings);
+  // Priced as the run it would start: in that run's shape, counting what it sends. A
+  // reference the model has no room for is no part of the price, as it is no part of the run.
+  const runDraft = catalogRunDraft(draft, model);
+  const settings = catalogRunSettings(runDraft, model);
+  const inputSlots = buildCatalogDraftInputSlots(runDraft, model, settings);
+  const activeSlots = getActiveCatalogInputSlots(model, settings, heldInputCounts(runDraft, model));
+  const counted = (matches: (slot: CatalogInputSlot) => boolean) => activeSlots
+    .filter(matches)
+    .reduce((total, slot) => total + (inputSlots[slot.key]?.length ?? 0), 0);
+  const legacy = legacyRunDraft(runDraft, model);
   const inputMetadataSlots = Object.fromEntries(Object.entries(inputSlots).map(([slotKey, assets]) => {
     const durationsSeconds = assets
       .map((asset) => asset.durationSeconds)
@@ -626,17 +810,17 @@ export function buildCatalogQuoteRequest(
       ...(durationsSeconds.length > 0 ? { durationsSeconds } : {}),
     }];
   }));
-  const v2ReferenceVideoDurations = getActiveCatalogInputSlots(model, settings)
+  const v2ReferenceVideoDurations = activeSlots
     .filter((slot) => slot.kind === 'video' && slot.role === 'reference')
     .flatMap((slot) => inputSlots[slot.key] ?? [])
     .map((asset) => asset.durationSeconds)
     .filter((duration): duration is number => typeof duration === 'number' && Number.isFinite(duration));
-  const legacyReferenceVideoDurations = draft.tool === 'video'
-    ? draft.referenceVideos
+  const legacyReferenceVideoDurations = legacy.tool === 'video'
+    ? legacy.referenceVideos
       .map((asset) => asset.durationSeconds)
       .filter((duration): duration is number => typeof duration === 'number' && Number.isFinite(duration))
-    : draft.tool === 'motion' && typeof draft.referenceVideo?.durationSeconds === 'number'
-      ? [draft.referenceVideo.durationSeconds]
+    : legacy.tool === 'motion' && typeof legacy.referenceVideo?.durationSeconds === 'number'
+      ? [legacy.referenceVideo.durationSeconds]
       : [];
   const referenceVideoDurationsSeconds = v2ReferenceVideoDurations.length > 0
     ? v2ReferenceVideoDurations
@@ -646,36 +830,51 @@ export function buildCatalogQuoteRequest(
     ...(referenceVideoDurationsSeconds.length > 0 ? { referenceVideoDurationsSeconds } : {}),
   };
   const schemaVersion = model.inputModes ? 2 as const : 1 as const;
-  if (draft.tool === 'image') {
+  if (legacy.tool === 'image') {
     return {
       schemaVersion,
       kind: 'image',
       modelId: model.id,
       settings,
-      inputCounts: { images: draft.references.length, videos: 0, audios: 0 },
+      inputCounts: {
+        images: model.inputModes ? counted((slot) => slot.kind === 'image') : legacy.references.length,
+        videos: 0,
+        audios: 0,
+      },
       inputMetadata,
       catalogRevision,
     };
   }
-  if (draft.tool === 'video') {
-    const usesReusableReferences = draft.referenceMode === 'elements';
-    const usesSubjects = draft.referenceMode === 'subjects';
+  if (legacy.tool === 'video') {
+    const usesReusableReferences = legacy.referenceMode === 'elements';
+    const usesSubjects = legacy.referenceMode === 'subjects';
+    const inputCounts = model.inputModes
+      ? {
+          images: usesSubjects
+            ? counted((slot) => slot.key === SUBJECT_IMAGES_SLOT_KEY)
+            : usesReusableReferences ? counted(referenceSlotOf('image')) : counted(isFrameSlot),
+          videos: usesReusableReferences ? counted(referenceSlotOf('video')) : 0,
+          audios: usesReusableReferences ? counted(referenceSlotOf('audio')) : 0,
+          preparedAudios: usesReusableReferences ? counted(referenceSlotOf('preparedVoice')) : 0,
+          characters: usesReusableReferences ? counted(referenceSlotOf('character')) : 0,
+        }
+      : {
+          images: usesSubjects
+            ? videoSubjects(legacy).reduce((count, subject) => count + subject.images.length, 0)
+            : usesReusableReferences
+              ? legacy.references.length
+              : (legacy.startFrame ? 1 : 0) + (!legacy.isMultiShot && legacy.endFrame ? 1 : 0),
+          videos: usesReusableReferences ? legacy.referenceVideos.length : 0,
+          audios: usesReusableReferences ? legacy.referenceAudios.length : 0,
+          preparedAudios: usesReusableReferences ? preparedAudioIds(legacy).length : 0,
+          characters: usesReusableReferences ? characterIds(legacy).length : 0,
+        };
     return {
       schemaVersion,
       kind: 'video',
       modelId: model.id,
       settings,
-      inputCounts: {
-        images: usesSubjects
-          ? videoSubjects(draft).reduce((count, subject) => count + subject.images.length, 0)
-          : usesReusableReferences
-            ? draft.references.length
-            : (draft.startFrame ? 1 : 0) + (!draft.isMultiShot && draft.endFrame ? 1 : 0),
-        videos: usesReusableReferences ? draft.referenceVideos.length : 0,
-        audios: usesReusableReferences ? draft.referenceAudios.length : 0,
-        preparedAudios: usesReusableReferences ? preparedAudioIds(draft).length : 0,
-        characters: usesReusableReferences ? characterIds(draft).length : 0,
-      },
+      inputCounts,
       inputMetadata,
       catalogRevision,
     };
@@ -685,7 +884,7 @@ export function buildCatalogQuoteRequest(
     kind: 'motion',
     modelId: model.id,
     settings,
-    inputCounts: { images: draft.characterImage ? 1 : 0, videos: draft.referenceVideo ? 1 : 0, audios: 0 },
+    inputCounts: { images: legacy.characterImage ? 1 : 0, videos: legacy.referenceVideo ? 1 : 0, audios: 0 },
     inputMetadata,
     catalogRevision,
   };
@@ -703,49 +902,67 @@ export function buildUnifiedCatalogGenerationRequest(
   catalogRevision: string,
   normalizedSettings?: Record<string, CatalogPrimitive>,
 ): CatalogGenerationRequest {
+  const runDraft = catalogRunDraft(draft, model);
   const settings = normalizedSettings
     ? normalizeCatalogSettings(model, normalizedSettings)
-    : getCatalogDraftSettings(draft, model);
-  if (draft.tool === 'video' && !('referenceMode' in settings)) {
-    settings.referenceMode = draft.referenceMode;
+    : getCatalogDraftSettings(runDraft, model);
+  if (runDraft.tool === 'video' && !('referenceMode' in settings)) {
+    settings.referenceMode = runDraft.referenceMode;
   }
-  const inputSlots = buildCatalogDraftInputSlots(draft, model, settings);
+  if (runDraft.tool === 'video' && runDraft.isMultiShot) {
+    // The server refuses a multi-shot run whose duration is not its shots' total.
+    settings.duration = multiShotTotalDuration(runDraft.multiPrompts);
+  }
+  const inputSlots = buildCatalogDraftInputSlots(runDraft, model, settings);
   const slotDescriptors = new Map(
     getActiveCatalogInputSlots(model, settings).map((slot) => [slot.key, slot]),
   );
+  // The Seedance 2 family takes a reference's prepared asset in place of the file, once the
+  // provider reports it active: the server hands any id it gets to Seedance, and one still
+  // processing, or failed, would be refused there after the credit hold. The link goes
+  // beside the id, so the server can still measure the file and price it.
+  const preparesSeedanceAssets = isSeedance2VideoModelId(model.id);
   const inputs = Object.entries(inputSlots).flatMap(([slotKey, assets]) => {
     const slot = slotDescriptors.get(slotKey);
     if (!slot) return [];
-    return assets.map((asset): CatalogGenerationInputAsset => ({
-      slot: slotKey,
-      kind: generationInputKind(slot),
-      url: asset.url ?? null,
-      ...(slot.kind === 'character' || slot.kind === 'preparedVoice'
-        ? { assetId: asset.id }
-        : {}),
-      storagePath: asset.storagePath ?? null,
-      label: asset.displayName ?? asset.fileName ?? null,
-      handle: asset.handle ?? null,
-      durationSeconds: asset.durationSeconds ?? null,
-      sourceGenerationId: asset.sourceGenerationId ?? null,
-    }));
+    const takesPreparedAsset = preparesSeedanceAssets
+      && slot.role === 'reference'
+      && (slot.kind === 'image' || slot.kind === 'video' || slot.kind === 'audio');
+    return assets.map((asset): CatalogGenerationInputAsset => {
+      const preparedAssetId = takesPreparedAsset
+        ? getPreferredSeedanceReferenceValue(null, asset.seedanceAsset)
+        : null;
+      return {
+        slot: slotKey,
+        kind: generationInputKind(slot),
+        url: asset.url ?? null,
+        ...(slot.kind === 'character' || slot.kind === 'preparedVoice'
+          ? { assetId: asset.id }
+          : preparedAssetId ? { assetId: preparedAssetId } : {}),
+        storagePath: asset.storagePath ?? null,
+        label: asset.displayName ?? asset.fileName ?? null,
+        handle: asset.handle ?? null,
+        durationSeconds: asset.durationSeconds ?? null,
+        sourceGenerationId: asset.sourceGenerationId ?? null,
+      };
+    });
   });
   return {
-    kind: draft.tool,
+    kind: runDraft.tool,
     modelId: model.id,
     catalogRevision,
     settings,
-    prompt: draft.prompt.trim(),
-    ...(draft.tool === 'video' && draft.isMultiShot
+    prompt: runDraft.prompt.trim(),
+    ...(runDraft.tool === 'video' && runDraft.isMultiShot
       ? {
-          shots: draft.multiPrompts.map((shot) => ({
+          shots: runDraft.multiPrompts.map((shot) => ({
             prompt: shot.prompt.trim(),
-            duration: Math.max(1, Math.round(shot.duration || 0)),
+            duration: shotSeconds(shot),
           })),
         }
       : {}),
     inputs,
-    sourceGenerationId: draft.sourceGenerationId ?? null,
+    sourceGenerationId: runDraft.sourceGenerationId ?? null,
   };
 }
 
@@ -1100,11 +1317,13 @@ export function buildCatalogGenerationPayload(draft: ImageCreationDraft, model: 
 export function buildCatalogGenerationPayload(draft: VideoCreationDraft, model: GenerationModelDescriptor, catalogRevision: string, normalizedSettings?: Record<string, CatalogPrimitive>): VideoGenerationRequest;
 export function buildCatalogGenerationPayload(draft: MotionCreationDraft, model: GenerationModelDescriptor, catalogRevision: string, normalizedSettings?: Record<string, CatalogPrimitive>): MotionGenerationRequest;
 export function buildCatalogGenerationPayload(
-  draft: CreationDraft,
+  creatorDraft: CreationDraft,
   model: GenerationModelDescriptor,
   catalogRevision: string,
   normalizedSettings: Record<string, CatalogPrimitive> = {},
 ): ImageGenerationRequest | VideoGenerationRequest | MotionGenerationRequest {
+  // The run's shape, and of each kind no more than the model takes.
+  const draft = legacyRunDraft(catalogRunDraft(creatorDraft, model), model);
   if (draft.tool === 'image') {
     const hasQualityControl = model.controls.some((control) => control.key === 'qualityMode');
     return {
@@ -1124,7 +1343,9 @@ export function buildCatalogGenerationPayload(
   }
   if (draft.tool === 'video') {
     const usesReusableReferences = draft.referenceMode === 'elements';
-    const usesKlingVideoElements = usesReusableReferences && model.id === 'kling-3.0-video';
+    // Where the descriptor has input modes, Kling 3.0's video elements have one of their
+    // own that rides with either shape, beside the frames.
+    const usesKlingVideoElements = model.id === 'kling-3.0-video' && (usesReusableReferences || Boolean(model.inputModes));
     const activeReferences = usesReusableReferences ? draft.references : [];
     // The Seedance 2 family takes a prepared asset's id in place of a reference's
     // link, and is told what each reference had prepared, by index, as the web
@@ -1148,7 +1369,7 @@ export function buildCatalogGenerationPayload(
       multiPrompts: draft.isMultiShot ? draft.multiPrompts.map((shot, index) => ({
         id: shot.id || `shot-${index + 1}`,
         prompt: shot.prompt.trim(),
-        duration: Math.max(1, Math.round(shot.duration || 5)),
+        duration: shotSeconds(shot),
       })) : undefined,
       elements: usesReusableReferences ? elementDescriptors(draft) : [],
       elementImageUrls: imageUrls,
@@ -1172,7 +1393,7 @@ export function buildCatalogGenerationPayload(
       mode: draft.mode,
       aspectRatio: draft.aspectRatio,
       sound: model.capabilities.sound ? draft.sound : false,
-      duration: draft.duration,
+      duration: draft.isMultiShot ? multiShotTotalDuration(draft.multiPrompts) : draft.duration,
       resolution: draft.resolution,
       fixedLens: model.capabilities.fixedLens ? draft.fixedLens : false,
       referenceMode: draft.referenceMode,

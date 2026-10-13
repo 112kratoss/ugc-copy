@@ -23,7 +23,9 @@ export function useActiveGenerationCount(): number {
     queryKey: activeGenerationsQueryKey(identityUserId),
     enabled: Boolean(identityUserId),
     queryFn: async () => {
-      const response = await api.listGenerations(false, { limit: 20 });
+      // The status projection: a count needs no signed media or linked posts, and this
+      // runs every 10 s beside the creator's own poll.
+      const response = await api.listGenerations(false, { limit: 20, detail: 'status' });
       return (response?.generations ?? []).filter((generation) => isGenerationInFlight(generation?.status)).length;
     },
     staleTime: 1000 * 15,
