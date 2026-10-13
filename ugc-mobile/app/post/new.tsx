@@ -71,6 +71,7 @@ import {
   sanitizePostComposerResourceCardIds,
   isTemplateGeneration,
   isPostComposerResourceCardReady,
+  postComposerReturnPath,
   POST_COMPOSER_RESOURCE_CARD_OPTIONS,
   POST_COMPOSER_SOURCE_OPTIONS,
   validatePostComposerDraft,
@@ -858,7 +859,12 @@ function PostPublishSummary({
     || draft.mediaItems[0]?.uri
     || selectedGeneration?.previewUrl
     || selectedGeneration?.preview_url
-    || selectedGeneration?.output_url
+    // A picture stands in for its own missing preview; a clip does not: an
+    // image view handed one fetches the whole file to draw a frame at best.
+    // A creation whose poster failed opens here now, so it gets the glyph.
+    || (selectedGeneration && getPublishGenerationMediaKind(selectedGeneration) !== 'video'
+      ? selectedGeneration.output_url
+      : null)
     || null;
   const visibilityLabel = draft.visibility === 'public' ? 'Public' : draft.visibility === 'unlisted' ? 'Unlisted' : 'Private';
   const resourceLabel = draft.resource.accessMode === 'paid'
@@ -2011,8 +2017,8 @@ function NewPostComposer() {
   }, []);
 
   // Prefill when generationId is provided and the creations list resolves.
-  // A canonical template result may be selected before its grid derivative
-  // is ready, while ordinary creations retain the normal publishable filter.
+  // A named creation opens before its grid derivative is ready, or after that
+  // job failed: the server publishes any succeeded run with output.
   useEffect(() => {
     if (generationId && explicitGeneration) {
       const found = explicitGeneration;
@@ -2427,7 +2433,16 @@ function NewPostComposer() {
   }
 
   if (!user) {
-    return <Redirect href="/auth" />;
+    // Sign-in comes back here, on the same creation. A guest can generate and
+    // press Post to feed, and finishing sign-in on Home lost what they were
+    // posting.
+    const returnTo = postComposerReturnPath({
+      generationId,
+      postId,
+      focus: focusTarget,
+      shareAfterPublish: shareAfterPublish ? '1' : null,
+    });
+    return <Redirect href={{ pathname: '/auth', params: { returnTo } } as never} />;
   }
 
   if (isEditMode && (postQuery.isLoading || (postQuery.isSuccess && Boolean(postQuery.data?.post) && !hasPrefilledEdit))) {

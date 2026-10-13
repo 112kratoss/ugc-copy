@@ -106,8 +106,10 @@ export default function ReferralLandingScreen() {
             <Gift size={34} color={theme.colors.commerce} />
           </View>
           <AppText variant="sectionTitle" style={{ textAlign: 'center' }}>5% first top-up bonus</AppText>
+          {/* What the app itself creates: audio and workflows exist only in
+              the web's workflow builder. */}
           <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>
-            Create images, videos, motion, audio, prompts, and workflows with your bonus credits.
+            Create images, videos and motion with your bonus credits.
           </AppText>
         </View>
       </Card>

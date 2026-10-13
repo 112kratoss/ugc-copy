@@ -1,12 +1,18 @@
-import type { OwnerPostsResponse, ShowcaseFeedResponse } from '../lib/types';
-import { describe, expect, it } from 'vitest';
+import { QueryClient, QueryObserver } from '@tanstack/react-query';
+import type { GenerationListItem, OwnerPostsResponse, ShowcaseFeedResponse } from '../lib/types';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
+  PROFILE_RENDERING_REFRESH_INTERVAL_MS,
   flattenProfileGenerationPages,
   flattenProfileOwnerPostPages,
+  formatRenderingStartedLabel,
   getNextProfileGenerationsCursor,
   getNextProfileOwnerPostsOffset,
   getNextProfileSavedMediaOffset,
+  invalidateProfileCreations,
+  renderingCreationTool,
+  selectRenderingCreations,
   truncateInfiniteDataToFirstPage,
 } from '../lib/profile-media-query';
 
@@ -131,4 +137,105 @@ it('uses server cursor boundaries, including empty filtered pages, and stops at 
   expect(getNextProfileOwnerPostsOffset(owner)).toBe('owner-boundary');
   expect(getNextProfileSavedMediaOffset(saved)).toBe('save-boundary');
   expect(getNextProfileOwnerPostsOffset({ ...owner, pageInfo: { ...owner.pageInfo!, nextCursor: null } })).toBeUndefined();
+});
+
+function run(id: string, overrides: Partial<GenerationListItem>): GenerationListItem {
+  return {
+    id,
+    output_url: null,
+    status: 'processing',
+    created_at: '2026-10-13T10:00:00Z',
+    model: 'kling-3.0-video',
+    category: 'video',
+    ...overrides,
+  };
+}
+
+describe('the Rendering strip', () => {
+  it('takes every run still in flight, in the library order, and nothing settled or archived', () => {
+    const items = [
+      run('queued', { status: 'pending' }),
+      run('done', { status: 'succeeded', output_url: 'done.mp4' }),
+      run('waiting', { status: 'waiting' }),
+      run('failed', { status: 'failed' }),
+      run('working', { status: 'processing' }),
+      run('archived', { status: 'processing', archived_at: '2026-10-13T10:05:00Z' }),
+    ];
+
+    expect(selectRenderingCreations(items).map((item) => item.id)).toEqual(['queued', 'waiting', 'working']);
+  });
+
+  it('reopens the creator for the run kind, motion before its video category', () => {
+    expect(renderingCreationTool({ category: 'video' })).toBe('video');
+    expect(renderingCreationTool({ category: 'ugc-ad' })).toBe('video');
+    expect(renderingCreationTool({ category: 'image' })).toBe('image');
+    expect(renderingCreationTool({ category: 'video', creationMode: 'motion' })).toBe('motion');
+    expect(renderingCreationTool({ category: 'motion' })).toBe('motion');
+    // The app creates no sound or text, so those runs open nothing.
+    expect(renderingCreationTool({ category: 'audio' })).toBeNull();
+    expect(renderingCreationTool({ category: 'text' })).toBeNull();
+  });
+
+  it('says how long ago a run started', () => {
+    const startedAt = '2026-10-13T10:00:00Z';
+    const at = (minutes: number) => Date.parse(startedAt) + minutes * 60_000;
+
+    expect(formatRenderingStartedLabel(startedAt, at(0.5))).toBe('Started just now');
+    expect(formatRenderingStartedLabel(startedAt, at(1))).toBe('Started 1 min ago');
+    expect(formatRenderingStartedLabel(startedAt, at(59.9))).toBe('Started 59 min ago');
+    expect(formatRenderingStartedLabel(startedAt, at(125))).toBe('Started 2 h ago');
+    // A phone clock behind the server's is not a negative age.
+    expect(formatRenderingStartedLabel(startedAt, at(-3))).toBe('Started just now');
+    expect(formatRenderingStartedLabel(null, at(3))).toBe('Started recently');
+    expect(formatRenderingStartedLabel('not a date', at(3))).toBe('Started recently');
+  });
+
+  it('refreshes every 15 seconds', () => {
+    expect(PROFILE_RENDERING_REFRESH_INTERVAL_MS).toBe(15_000);
+  });
+});
+
+describe('invalidateProfileCreations', () => {
+  const key = (userId: string) => ['profile-generations', userId];
+  const library = { pages: [{ generations: [] }], pageParams: [null] };
+
+  function watchedLibrary(userId: string) {
+    const queryClient = new QueryClient();
+    const queryFn = vi.fn(async () => library);
+    queryClient.setQueryData(key(userId), library);
+    // An observer that is mounted and fresh, as Profile's grid is in a tab.
+    const observer = new QueryObserver(queryClient, { queryKey: key(userId), queryFn, staleTime: 60_000 });
+    const unsubscribe = observer.subscribe(() => undefined);
+    return { queryClient, queryFn, unsubscribe };
+  }
+
+  it('marks the reader’s creations stale without fetching anything now', async () => {
+    const { queryClient, queryFn, unsubscribe } = watchedLibrary('user-1');
+    queryClient.setQueryData(key('user-2'), library);
+
+    await invalidateProfileCreations(queryClient, 'user-1');
+
+    expect(queryClient.getQueryState(key('user-1'))?.isInvalidated).toBe(true);
+    expect(queryFn).not.toHaveBeenCalled();
+    expect(queryClient.getQueryState(key('user-2'))?.isInvalidated).toBe(false);
+    unsubscribe();
+  });
+
+  it('is told apart from an invalidation that refetches, which this observer would see', async () => {
+    const { queryClient, queryFn, unsubscribe } = watchedLibrary('user-1');
+
+    await queryClient.invalidateQueries({ queryKey: key('user-1') });
+
+    expect(queryFn).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it('does nothing without a signed-in user', async () => {
+    const queryClient = { invalidateQueries: vi.fn() };
+
+    await invalidateProfileCreations(queryClient, null);
+    await invalidateProfileCreations(queryClient, undefined);
+
+    expect(queryClient.invalidateQueries).not.toHaveBeenCalled();
+  });
 });

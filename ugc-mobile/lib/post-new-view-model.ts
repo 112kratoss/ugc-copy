@@ -785,9 +785,15 @@ export function isTemplateGeneration(item: GenerationListItem | null | undefined
     && Boolean(item.template?.runId && item.template?.templateId);
 }
 
-/** Explicit template handoffs can arrive before their derived grid preview.
- * The owner API only marks the canonical, successful, non-test result as a
- * template result, so this narrow bypass does not affect the normal picker. */
+/**
+ * The creation a hand-off names (the result's Post to feed, the viewer, the
+ * profile card feed) opens whenever the server could publish it: a succeeded,
+ * unposted run with output (showcase-publish-service.ts:486), as on web. Its
+ * preview is a separate job that can fail or still be running, and requiring it
+ * here ended a playable creation on "Could not load this creation" with a Retry
+ * that could not help. `getPublishableGenerations`, for a list to pick from,
+ * keeps the preview rule.
+ */
 export function getExplicitPublishGeneration(
   items: GenerationListItem[] | null | undefined,
   generationId: string | null | undefined,
@@ -796,8 +802,28 @@ export function getExplicitPublishGeneration(
   const item = (items ?? []).find((candidate) => candidate.id === generationId);
   if (!item || item.status !== 'succeeded' || item.linked_post_id) return null;
   if (!item.output_url && !item.output_urls?.length) return null;
-  if (isTemplateGeneration(item)) return item;
-  return getPublishableGenerations([item])[0] ?? null;
+  return item;
+}
+
+/**
+ * The composer's own route with the params it was opened with, for sign-in to
+ * return to. A guest can generate and press Post to feed; sent to sign-in with
+ * no way back, they finished on Home without the creation they were posting.
+ * Built like the viewer's return path (`immersiveViewerReturnPath`).
+ */
+export function postComposerReturnPath(params: {
+  generationId?: string | null;
+  postId?: string | null;
+  focus?: string | null;
+  shareAfterPublish?: string | null;
+}) {
+  const query = (['generationId', 'postId', 'focus', 'shareAfterPublish'] as const)
+    .flatMap((key) => {
+      const value = params[key]?.trim();
+      return value ? [`${encodeURIComponent(key)}=${encodeURIComponent(value)}`] : [];
+    })
+    .join('&');
+  return query ? `/post/new?${query}` : '/post/new';
 }
 
 export function buildPublishGenerationPostPayload(item: GenerationListItem, draft: PostComposerDraft) {

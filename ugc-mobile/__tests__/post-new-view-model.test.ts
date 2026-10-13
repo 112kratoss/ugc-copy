@@ -26,11 +26,13 @@ import {
   isPostComposerResourceCardReady,
   isTemplateGeneration,
   getPublishGenerationMediaKind,
+  postComposerReturnPath,
   getPublishGenerationTitlePrefill,
   POST_COMPOSER_RESOURCE_CARD_OPTIONS,
   POST_COMPOSER_SOURCE_OPTIONS,
   validatePostComposerDraft,
 } from '../lib/post-new-view-model';
+import { normalizeAuthReturnTo } from '../lib/auth-navigation';
 import type { GenerationListItem } from '../lib/types';
 
 function generation(overrides: Partial<GenerationListItem>): GenerationListItem {
@@ -130,7 +132,10 @@ describe('post new view model', () => {
     expect(getPublishableGenerations(items).map((item) => item.id)).toEqual(['ready']);
   });
 
-  it('allows only an explicit canonical template result before its grid preview is ready', () => {
+  // The server publishes any succeeded run with output; the preview is a
+  // separate job. A named creation whose poster is still running, or failed,
+  // used to end the composer on "Could not load this creation".
+  it('opens any named finished creation with output, whatever its preview, while a picker keeps the preview rule', () => {
     const templateResult = generation({
       id: 'template-result',
       preview_url: null,
@@ -143,14 +148,55 @@ describe('post new view model', () => {
       id: 'ordinary-pending',
       preview_url: null,
       previewUrl: null,
-      media: { gridReady: false } as GenerationListItem['media'],
+      media: { gridReady: false, status: 'pending' } as GenerationListItem['media'],
+    });
+    const posterFailed = generation({
+      id: 'poster-failed',
+      category: 'video',
+      output_url: 'https://cdn.example.com/output.mp4',
+      preview_url: null,
+      previewUrl: null,
+      media: { gridReady: false, status: 'failed' } as GenerationListItem['media'],
+    });
+    const outputsOnly = generation({ id: 'outputs-only', output_url: null, output_urls: ['https://cdn.example.com/a.png'], preview_url: null });
+
+    expect(getPublishableGenerations([templateResult, ordinaryPending, posterFailed])).toEqual([]);
+    expect(getExplicitPublishGeneration([templateResult], templateResult.id)).toBe(templateResult);
+    expect(getExplicitPublishGeneration([ordinaryPending], ordinaryPending.id)).toBe(ordinaryPending);
+    expect(getExplicitPublishGeneration([posterFailed], posterFailed.id)).toBe(posterFailed);
+    expect(getExplicitPublishGeneration([outputsOnly], outputsOnly.id)).toBe(outputsOnly);
+    expect(isTemplateGeneration(templateResult)).toBe(true);
+  });
+
+  it('still refuses a named creation the server could not publish', () => {
+    const ready = generation({ id: 'ready' });
+
+    expect(getExplicitPublishGeneration([{ ...ready, linked_post_id: 'post-1' }], 'ready')).toBeNull();
+    expect(getExplicitPublishGeneration([{ ...ready, status: 'processing' }], 'ready')).toBeNull();
+    expect(getExplicitPublishGeneration([{ ...ready, status: 'failed' }], 'ready')).toBeNull();
+    expect(getExplicitPublishGeneration([{ ...ready, output_url: null, output_urls: [] }], 'ready')).toBeNull();
+    expect(getExplicitPublishGeneration([ready], 'another-id')).toBeNull();
+    expect(getExplicitPublishGeneration([ready], null)).toBeNull();
+  });
+
+  describe('the return path sign-in comes back to', () => {
+    it('reopens the composer with every param it was opened with', () => {
+      expect(postComposerReturnPath({ generationId: 'gen-1', shareAfterPublish: '1' }))
+        .toBe('/post/new?generationId=gen-1&shareAfterPublish=1');
+      expect(postComposerReturnPath({ postId: 'post-1', focus: 'resources' }))
+        .toBe('/post/new?postId=post-1&focus=resources');
     });
 
-    expect(getPublishableGenerations([templateResult, ordinaryPending])).toEqual([]);
-    expect(getExplicitPublishGeneration([templateResult], templateResult.id)).toBe(templateResult);
-    expect(getExplicitPublishGeneration([ordinaryPending], ordinaryPending.id)).toBeNull();
-    expect(getExplicitPublishGeneration([{ ...templateResult, linked_post_id: 'post-1' }], templateResult.id)).toBeNull();
-    expect(isTemplateGeneration(templateResult)).toBe(true);
+    it('encodes values and leaves out empty ones', () => {
+      expect(postComposerReturnPath({ generationId: 'gen 1&x=2', postId: '  ', focus: null }))
+        .toBe('/post/new?generationId=gen%201%26x%3D2');
+      expect(postComposerReturnPath({})).toBe('/post/new');
+    });
+
+    it('is a path the sign-in screen accepts as it is', () => {
+      const path = postComposerReturnPath({ generationId: 'gen-1', focus: 'resources', shareAfterPublish: '1' });
+      expect(normalizeAuthReturnTo(path)).toBe(path);
+    });
   });
 
   it('forces template-origin publishing to final media only', () => {

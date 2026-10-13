@@ -1,7 +1,10 @@
-import type { InfiniteData } from '@tanstack/react-query';
+import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 
 import type { MagicbookletApiClient } from './api-client';
+import { getCreationAvailability } from './creation-library';
+import { getGenerationKind } from './generation-media';
 import type {
+  CreatorToolId,
   GenerationListItem,
   GenerationListResponse,
   OwnerPostListItem,
@@ -160,4 +163,47 @@ export function truncateInfiniteDataToFirstPage<T>(
     pages: current.pages.slice(0, 1),
     pageParams: current.pageParams.slice(0, 1),
   };
+}
+
+/**
+ * Marks the Creations library stale, for the creator to call when a run it
+ * started finishes: in-flight runs are not library members, and a library read
+ * in the last minute stayed as it was. Stale only, nothing fetched now: Profile
+ * reads its first page again the next time it is focused and merges it into
+ * the pages the reader loaded, where a refetch would request every one of them.
+ */
+export function invalidateProfileCreations(
+  queryClient: Pick<QueryClient, 'invalidateQueries'>,
+  userId: string | null | undefined,
+): Promise<void> {
+  if (!userId) return Promise.resolve();
+  return queryClient.invalidateQueries({ queryKey: ['profile-generations', userId], refetchType: 'none' });
+}
+
+/** How often Profile reads its first page again while a run on it is rendering. */
+export const PROFILE_RENDERING_REFRESH_INTERVAL_MS = 15_000;
+
+/**
+ * The runs on the Creations strip: still rendering and not archived, in the
+ * library's order. They are not library members (`isCreationLibraryMember`, the
+ * rule the grid, the card feed and the reel share), so without the strip a run
+ * left the creator's screen and appeared nowhere until it had finished.
+ */
+export function selectRenderingCreations<T extends GenerationListItem>(items: T[]): T[] {
+  return items.filter((item) => !item.archived_at && getCreationAvailability(item) === 'rendering');
+}
+
+/** The creator a rendering run reopens, or null for a kind the app cannot create (sound, text). */
+export function renderingCreationTool(item: Pick<GenerationListItem, 'category' | 'creationMode'>): CreatorToolId | null {
+  const kind = getGenerationKind(item);
+  return kind === 'image' || kind === 'video' || kind === 'motion' ? kind : null;
+}
+
+export function formatRenderingStartedLabel(createdAt: string | null | undefined, now: number) {
+  const startedAt = createdAt ? Date.parse(createdAt) : Number.NaN;
+  if (!Number.isFinite(startedAt)) return 'Started recently';
+  const minutes = Math.floor(Math.max(0, now - startedAt) / 60_000);
+  if (minutes < 1) return 'Started just now';
+  if (minutes < 60) return `Started ${minutes} min ago`;
+  return `Started ${Math.floor(minutes / 60)} h ago`;
 }
