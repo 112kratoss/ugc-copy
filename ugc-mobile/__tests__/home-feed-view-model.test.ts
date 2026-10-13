@@ -587,7 +587,8 @@ describe("a Home card's recipe chip", () => {
   });
 
   it('leaves a free recipe to Remix when that tap takes the unlock on its way', () => {
-    // The web has no Remix on this post, so there the chip is drawn.
+    // The web card takes the free unlock on the Remix tap too, so neither
+    // client draws the chip beside Remix.
     const card = showcaseToHomeFeedCard(item({
       canRemix: false,
       remixCapability: 'unlock_required',
