@@ -19,10 +19,11 @@ import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { CreatorAvatar, SecondaryButton, StatusBlock } from '@/components/ui';
 import { MotionView, useOverlayPresence } from '@/lib/motion';
 import { BackGlyph } from '@/lib/platform-glyphs';
-import type { MagicbookletApiClient } from '@/lib/api-client';
+import { ApiError, type MagicbookletApiClient } from '@/lib/api-client';
 import {
   clearSearchHistory,
   forgetSearchQuery,
+  normalizeCreatorSearchQuery,
   normalizeSearchHistoryQuery,
   readSearchHistory,
   rememberSearchQuery,
@@ -47,15 +48,61 @@ const SEARCH_TYPES: Array<{ id: PublicSearchType; label: string }> = [
   { id: 'recipes', label: 'Recipes' },
 ];
 
-function emptySearchResponse(query = '', type: PublicSearchType = 'top'): PublicSearchResponse {
-  return {
-    query,
-    normalizedQuery: normalizeSearchHistoryQuery(query),
-    type,
-    creators: { items: [], nextCursor: null },
-    posts: { items: [], nextCursor: null },
-    recipes: { items: [], nextCursor: null },
-  };
+// The server's minimums, counted on the query without its leading @
+// (normalizeCreatorSearchQuery): creators from two characters, posts and
+// recipes from three.
+const MIN_CREATOR_QUERY_LENGTH = 2;
+const MIN_CONTENT_QUERY_LENGTH = 3;
+const SEARCH_DEBOUNCE_MS = 300;
+const SEARCH_LENGTH_HINT = 'Search creators from two characters, or use three characters to discover posts and recipes.';
+
+type SearchAnswer = { key: string; response: PublicSearchResponse };
+type SearchFailure = { key: string; message: string; retryAfterSeconds: number | null };
+
+function isContentType(type: PublicSearchType) {
+  return type === 'posts' || type === 'recipes';
+}
+
+// An answer or a failure is drawn only under the query and tab it was asked
+// for, so a new query or tab shows the spinner until its own answer lands.
+function searchKey(query: string, type: PublicSearchType) {
+  return `${type}:${query}`;
+}
+
+// Top draws all three kinds; a kind's tab draws only its own.
+function shownResultCount(response: PublicSearchResponse, type: PublicSearchType) {
+  return (type === 'top' || type === 'creators' ? response.creators.items.length : 0)
+    + (type === 'top' || type === 'posts' ? response.posts.items.length : 0)
+    + (type === 'top' || type === 'recipes' ? response.recipes.items.length : 0);
+}
+
+function retryAfterSecondsOf(details: unknown) {
+  const value = typeof details === 'object' && details !== null
+    ? (details as { retryAfterSeconds?: unknown }).retryAfterSeconds
+    : undefined;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.ceil(value) : null;
+}
+
+// Only a request that got no answer, or a server fault, is a reason to send
+// someone to check their connection.
+function describeSearchFailure(error: unknown): Omit<SearchFailure, 'key'> {
+  if (error instanceof ApiError) {
+    // Every request inside the server's window is refused the same way, so
+    // Retry waits it out.
+    if (error.status === 429) {
+      const retryAfterSeconds = retryAfterSecondsOf(error.details);
+      return {
+        message: retryAfterSeconds ? `Search is busy. Try again in ${retryAfterSeconds} s.` : 'Search is busy. Try again shortly.',
+        retryAfterSeconds,
+      };
+    }
+    if (error.status === 400) return { message: SEARCH_LENGTH_HINT, retryAfterSeconds: null };
+    // Status 0 is the client's own: no answer at all, its timeout included.
+    if (error.status === 0 || error.status >= 500) {
+      return { message: 'Search could not be loaded. Check your connection and try again.', retryAfterSeconds: null };
+    }
+  }
+  return { message: 'Search could not be loaded.', retryAfterSeconds: null };
 }
 
 function postPreview(item: ShowcaseFeedItem) {
@@ -99,13 +146,16 @@ function SearchTab({
   );
 }
 
-function CreatorRow({ creator }: { creator: CreatorSearchResult }) {
+function CreatorRow({ creator, onOpen }: { creator: CreatorSearchResult; onOpen: () => void }) {
   const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`Open ${creator.displayName}'s profile`}
-      onPress={() => router.push(`/creators/${encodeURIComponent(creator.username)}` as never)}
+      onPress={() => {
+        onOpen();
+        router.push(`/creators/${encodeURIComponent(creator.username)}` as never);
+      }}
       style={({ pressed }) => ({
         minHeight: 76,
         flexDirection: 'row',
@@ -124,19 +174,24 @@ function CreatorRow({ creator }: { creator: CreatorSearchResult }) {
         <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>{creator.displayName}</Text>
         <Text numberOfLines={1} style={{ marginTop: 2, color: theme.colors.muted, fontSize: 13 }}>@{creator.username}</Text>
       </View>
-      <Text style={{ color: theme.colors.faint, fontSize: 12 }}>{creator.publicPostCount} posts</Text>
+      <Text style={{ color: theme.colors.faint, fontSize: 12 }}>
+        {`${creator.publicPostCount} ${creator.publicPostCount === 1 ? 'post' : 'posts'}`}
+      </Text>
     </Pressable>
   );
 }
 
-function PostRow({ item }: { item: ShowcaseFeedItem }) {
+function PostRow({ item, onOpen }: { item: ShowcaseFeedItem; onOpen: () => void }) {
   const theme = useAppTheme();
   const preview = postPreview(item);
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`Open post ${item.title}`}
-      onPress={() => router.push(`/post/${encodeURIComponent(item.id)}` as never)}
+      onPress={() => {
+        onOpen();
+        router.push(`/post/${encodeURIComponent(item.id)}` as never);
+      }}
       style={({ pressed }) => ({
         flex: 1,
         overflow: 'hidden',
@@ -162,7 +217,7 @@ function PostRow({ item }: { item: ShowcaseFeedItem }) {
   );
 }
 
-function RecipeRow({ recipe }: { recipe: RecipeSearchResult }) {
+function RecipeRow({ recipe, onOpen }: { recipe: RecipeSearchResult; onOpen: () => void }) {
   const theme = useAppTheme();
   // Only an image post may fall back to its media URL: a video's is not an image.
   const preview = recipe.post?.mediaPreviewUrl
@@ -171,7 +226,10 @@ function RecipeRow({ recipe }: { recipe: RecipeSearchResult }) {
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`Open recipe ${recipe.title}`}
-      onPress={() => router.push({ pathname: '/marketplace/[assetId]', params: { assetId: recipe.id, postId: recipe.postId } })}
+      onPress={() => {
+        onOpen();
+        router.push({ pathname: '/marketplace/[assetId]', params: { assetId: recipe.id, postId: recipe.postId } });
+      }}
       style={({ pressed }) => ({
         minHeight: 104,
         flexDirection: 'row',
@@ -222,29 +280,53 @@ export function ExploreSearchOverlay({
   const inputRef = useRef<TextInput>(null);
   const requestSequence = useRef(0);
   const requestController = useRef<AbortController | null>(null);
+  // The query of the request last scheduled. A change of tab alone means the
+  // person has stopped typing, so its request skips the debounce.
+  const scheduledQuery = useRef<string | null>(null);
+  // The key of a query committed with the Search key before its answer landed.
+  const rememberOnAnswer = useRef<string | null>(null);
   const [query, setQuery] = useState('');
-  const [type, setType] = useState<PublicSearchType>('top');
-  const [result, setResult] = useState<PublicSearchResponse>(() => emptySearchResponse());
+  // The tab the person picked. A query long enough for creators but not for
+  // posts and recipes runs, and shows, as Creators; the pick comes back after.
+  const [pickedType, setPickedType] = useState<PublicSearchType>('top');
+  const [answer, setAnswer] = useState<SearchAnswer | null>(null);
+  const [failure, setFailure] = useState<SearchFailure | null>(null);
   const [history, setHistory] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const normalizedQuery = useMemo(() => normalizeSearchHistoryQuery(query), [query]);
-  const hasResults = result.creators.items.length + result.posts.items.length + result.recipes.items.length > 0;
-  const nextCursor = type === 'creators'
-    ? result.creators.nextCursor
-    : type === 'posts'
-      ? result.posts.nextCursor
-      : type === 'recipes'
-        ? result.recipes.nextCursor
-        : null;
+  const countedLength = normalizeCreatorSearchQuery(normalizedQuery).length;
+  const creatorsOnly = countedLength >= MIN_CREATOR_QUERY_LENGTH && countedLength < MIN_CONTENT_QUERY_LENGTH;
+  const type: PublicSearchType = creatorsOnly && isContentType(pickedType) ? 'creators' : pickedType;
+  // From the creator minimum on, the tab in effect always meets its own.
+  const requestKey = countedLength >= MIN_CREATOR_QUERY_LENGTH ? searchKey(normalizedQuery, type) : null;
+  const response = answer && answer.key === requestKey ? answer.response : null;
+  const shownFailure = failure && failure.key === requestKey ? failure : null;
+  const resultCount = response ? shownResultCount(response, type) : 0;
+  const retryBlocked = Boolean(shownFailure?.retryAfterSeconds);
+  const nextCursor = !response
+    ? null
+    : type === 'creators'
+      ? response.creators.nextCursor
+      : type === 'posts'
+        ? response.posts.nextCursor
+        : type === 'recipes'
+          ? response.recipes.nextCursor
+          : null;
+
+  // Recent searches keep what the person acted on, never each pause in typing.
+  const rememberQuery = useCallback((value: string) => {
+    void rememberSearchQuery(value).then(setHistory);
+  }, []);
 
   const requestClose = useCallback(() => {
+    // Leaving with results on screen keeps the query; one that found nothing,
+    // or is still unanswered, is not kept.
+    if (response && resultCount > 0) rememberQuery(normalizedQuery);
     // Dismissing the keyboard alongside the fade keeps close reading as one
     // gesture instead of two staggered ones.
     Keyboard.dismiss();
     onClose();
-  }, [onClose]);
+  }, [normalizedQuery, onClose, rememberQuery, response, resultCount]);
 
   // Android's back key closes the search only while this screen is the one
   // showing. A result tap pushes the post over the tabs with the search still
@@ -264,54 +346,84 @@ export function ExploreSearchOverlay({
   }, [visible]);
 
   const runSearch = useCallback(async (cursor: string | null = null) => {
-    if (normalizedQuery.length < 2) return;
-    if ((type === 'posts' || type === 'recipes') && normalizedQuery.length < 3) return;
+    if (!requestKey) return;
+    const key = requestKey;
     const sequence = ++requestSequence.current;
     requestController.current?.abort();
     const controller = new AbortController();
     requestController.current = controller;
     if (cursor) setLoadingMore(true);
-    else setLoading(true);
-    setError(null);
+    setFailure(null);
     try {
       const next = await api.searchPublicContent({ query: normalizedQuery, type, cursor }, controller.signal);
       if (sequence !== requestSequence.current) return;
-      setResult((current) => cursor ? {
-        ...next,
-        creators: type === 'creators' ? { ...next.creators, items: [...current.creators.items, ...next.creators.items] } : next.creators,
-        posts: type === 'posts' ? { ...next.posts, items: [...current.posts.items, ...next.posts.items] } : next.posts,
-        recipes: type === 'recipes' ? { ...next.recipes, items: [...current.recipes.items, ...next.recipes.items] } : next.recipes,
-      } : next);
-      if (!cursor) void rememberSearchQuery(normalizedQuery).then(setHistory);
+      if (cursor) {
+        setAnswer((current) => current?.key === key ? {
+          key,
+          response: {
+            ...next,
+            creators: type === 'creators' ? { ...next.creators, items: [...current.response.creators.items, ...next.creators.items] } : next.creators,
+            posts: type === 'posts' ? { ...next.posts, items: [...current.response.posts.items, ...next.posts.items] } : next.posts,
+            recipes: type === 'recipes' ? { ...next.recipes, items: [...current.response.recipes.items, ...next.recipes.items] } : next.recipes,
+          },
+        } : current);
+        return;
+      }
+      setAnswer({ key, response: next });
+      if (rememberOnAnswer.current === key) {
+        rememberOnAnswer.current = null;
+        if (shownResultCount(next, type) > 0) rememberQuery(normalizedQuery);
+      }
     } catch (requestError) {
       if (controller.signal.aborted || (requestError instanceof Error && requestError.name === 'AbortError')) return;
-      if (sequence === requestSequence.current) setError('Search could not be loaded. Check your connection and try again.');
+      if (sequence === requestSequence.current) setFailure({ key, ...describeSearchFailure(requestError) });
     } finally {
-      if (sequence === requestSequence.current) {
-        setLoading(false);
-        setLoadingMore(false);
-      }
+      if (sequence === requestSequence.current) setLoadingMore(false);
     }
-  }, [api, normalizedQuery, type]);
+  }, [api, normalizedQuery, rememberQuery, requestKey, type]);
 
   useEffect(() => () => requestController.current?.abort(), []);
 
   useEffect(() => {
+    // A commit belongs to the query it was made on.
+    if (rememberOnAnswer.current !== requestKey) rememberOnAnswer.current = null;
     if (!visible) return;
-    if (normalizedQuery.length < 2) {
+    if (!requestKey) {
       requestSequence.current += 1;
-      setResult(emptySearchResponse(normalizedQuery, type));
-      setLoading(false);
-      setError(null);
+      scheduledQuery.current = null;
+      // A page still loading is dropped with its query; the answer kept for
+      // that query must not come back with a stuck Show more.
+      setLoadingMore(false);
       return;
     }
-    if (normalizedQuery.length === 2 && (type === 'posts' || type === 'recipes')) {
-      setType('creators');
-      return;
-    }
-    const timer = setTimeout(() => void runSearch(), 300);
+    const delay = scheduledQuery.current === normalizedQuery ? 0 : SEARCH_DEBOUNCE_MS;
+    scheduledQuery.current = normalizedQuery;
+    const timer = setTimeout(() => void runSearch(), delay);
     return () => clearTimeout(timer);
-  }, [normalizedQuery, runSearch, type, visible]);
+  }, [normalizedQuery, requestKey, runSearch, visible]);
+
+  // A 429 names how long its window lasts; Retry comes back when it has passed.
+  useEffect(() => {
+    const seconds = failure?.retryAfterSeconds;
+    if (!failure || !seconds) return;
+    const timer = setTimeout(() => {
+      setFailure((current) => (current === failure ? { ...failure, retryAfterSeconds: null } : current));
+    }, seconds * 1000);
+    return () => clearTimeout(timer);
+  }, [failure]);
+
+  // The Search key commits the query: it is kept now if its answer found
+  // something, or when an answer still on its way does.
+  const submitSearch = () => {
+    if (!requestKey) return;
+    if (!response) {
+      rememberOnAnswer.current = requestKey;
+      return;
+    }
+    if (resultCount > 0) rememberQuery(normalizedQuery);
+  };
+
+  const openResult = () => rememberQuery(normalizedQuery);
 
   if (!mounted) return null;
 
@@ -338,6 +450,7 @@ export function ExploreSearchOverlay({
               enterKeyHint="search"
               maxLength={100}
               onChangeText={setQuery}
+              onSubmitEditing={submitSearch}
               placeholder="Search Magicbooklet"
               placeholderTextColor={theme.colors.faint}
               returnKeyType="search"
@@ -361,9 +474,9 @@ export function ExploreSearchOverlay({
             <SearchTab
               key={item.id}
               active={type === item.id}
-              disabled={normalizedQuery.length === 2 && (item.id === 'posts' || item.id === 'recipes')}
+              disabled={creatorsOnly && isContentType(item.id)}
               label={item.label}
-              onPress={() => setType(item.id)}
+              onPress={() => setPickedType(item.id)}
             />
           ))}
         </ScrollView>
@@ -379,7 +492,7 @@ export function ExploreSearchOverlay({
           paddingBottom: tabBarMetrics.contentBottomOverlapPadding + appTheme.spacing.section,
         }}
       >
-        {normalizedQuery.length < 2 ? (
+        {!requestKey ? (
           history.length ? (
             <View style={{ gap: 12 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -416,44 +529,44 @@ export function ExploreSearchOverlay({
               ))}
             </View>
           ) : (
-            <StatusBlock title="Find your next idea" body="Search creators from two characters, or use three characters to discover posts and recipes." />
+            <StatusBlock title="Find your next idea" body={SEARCH_LENGTH_HINT} />
           )
-        ) : loading && !hasResults ? (
-          <View style={{ minHeight: 260, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-            <ActivityIndicator color={theme.colors.primary} />
-            <Text style={{ color: theme.colors.muted, fontSize: 13 }}>Searching…</Text>
-          </View>
-        ) : error && !hasResults ? (
-          <View style={{ gap: 12 }}>
-            <StatusBlock tone="danger" title="Search did not load" body={error} />
-            <SecondaryButton label="Retry search" onPress={() => void runSearch()} />
-          </View>
-        ) : !hasResults ? (
-          <StatusBlock title={`No results for “${normalizedQuery}”`} body="Try a shorter phrase, check the spelling, or search for a creator handle." />
-        ) : (
+        ) : response && resultCount > 0 ? (
           <View style={{ gap: 25 }}>
-            {(type === 'top' || type === 'creators') && result.creators.items.length ? (
+            {(type === 'top' || type === 'creators') && response.creators.items.length ? (
               <View style={{ gap: 10 }}>
                 <Text accessibilityRole="header" style={{ color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>Creators</Text>
-                {result.creators.items.map((creator) => <CreatorRow key={creator.id} creator={creator} />)}
+                {response.creators.items.map((creator) => <CreatorRow key={creator.id} creator={creator} onOpen={openResult} />)}
               </View>
             ) : null}
-            {(type === 'top' || type === 'posts') && result.posts.items.length ? (
+            {(type === 'top' || type === 'posts') && response.posts.items.length ? (
               <View style={{ gap: 10 }}>
                 <Text accessibilityRole="header" style={{ color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>Posts</Text>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-                  {result.posts.items.map((post) => <View key={post.id} style={{ width: '48%' }}><PostRow item={post} /></View>)}
+                  {response.posts.items.map((post) => <View key={post.id} style={{ width: '48%' }}><PostRow item={post} onOpen={openResult} /></View>)}
                 </View>
               </View>
             ) : null}
-            {(type === 'top' || type === 'recipes') && result.recipes.items.length ? (
+            {(type === 'top' || type === 'recipes') && response.recipes.items.length ? (
               <View style={{ gap: 10 }}>
                 <Text accessibilityRole="header" style={{ color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>Recipes</Text>
-                {result.recipes.items.map((recipe) => <RecipeRow key={recipe.id} recipe={recipe} />)}
+                {response.recipes.items.map((recipe) => <RecipeRow key={recipe.id} recipe={recipe} onOpen={openResult} />)}
               </View>
             ) : null}
-            {nextCursor ? <SecondaryButton disabled={loadingMore} label={loadingMore ? 'Loading…' : 'Show more'} onPress={() => void runSearch(nextCursor)} /> : null}
-            {error ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center', fontSize: 13 }}>{error}</Text> : null}
+            {nextCursor ? <SecondaryButton disabled={loadingMore || retryBlocked} label={loadingMore ? 'Loading…' : 'Show more'} onPress={() => void runSearch(nextCursor)} /> : null}
+            {shownFailure ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center', fontSize: 13 }}>{shownFailure.message}</Text> : null}
+          </View>
+        ) : shownFailure ? (
+          <View style={{ gap: 12 }}>
+            <StatusBlock tone="danger" title="Search did not load" body={shownFailure.message} />
+            <SecondaryButton disabled={retryBlocked} label="Retry search" onPress={() => void runSearch()} />
+          </View>
+        ) : response ? (
+          <StatusBlock title={`No results for “${normalizedQuery}”`} body="Try a shorter phrase, check the spelling, or search for a creator handle." />
+        ) : (
+          <View style={{ minHeight: 260, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+            <ActivityIndicator color={theme.colors.primary} />
+            <Text style={{ color: theme.colors.muted, fontSize: 13 }}>Searching…</Text>
           </View>
         )}
       </ScrollView>

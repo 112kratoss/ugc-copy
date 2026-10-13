@@ -9,6 +9,15 @@ export function normalizeSearchHistoryQuery(value: string) {
   return value.normalize('NFKC').trim().replace(/\s+/g, ' ').slice(0, 100);
 }
 
+/**
+ * The server's rule of the same name (src/lib/public-search.ts): it strips
+ * leading @ before its two- and three-character checks, so "@j" counts as one
+ * character. The length gates count what the server counts.
+ */
+export function normalizeCreatorSearchQuery(value: string | null | undefined): string {
+  return normalizeSearchHistoryQuery(value ?? '').replace(/^@+/, '');
+}
+
 export async function readSearchHistory(storage: SearchHistoryStorage = AsyncStorage) {
   try {
     const raw = await storage.getItem(SEARCH_HISTORY_KEY);
@@ -28,7 +37,10 @@ export async function rememberSearchQuery(query: string, storage: SearchHistoryS
   const normalized = normalizeSearchHistoryQuery(query);
   if (normalized.length < 2) return readSearchHistory(storage);
   const current = await readSearchHistory(storage);
-  const next = [normalized, ...current.filter((item) => item.toLocaleLowerCase() !== normalized.toLocaleLowerCase())]
+  const lowered = normalized.toLocaleLowerCase();
+  // An entry the new query extends was a step on the way to it ("po" and "por"
+  // before "port"); an exact repeat is its own prefix.
+  const next = [normalized, ...current.filter((item) => !lowered.startsWith(item.toLocaleLowerCase()))]
     .slice(0, SEARCH_HISTORY_LIMIT);
   await storage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next));
   return next;
@@ -42,6 +54,11 @@ export async function forgetSearchQuery(query: string, storage: SearchHistorySto
   return next;
 }
 
+/** Never rejects: a sign-out must not fail over a list of searches. */
 export async function clearSearchHistory(storage: SearchHistoryStorage = AsyncStorage) {
-  await storage.removeItem(SEARCH_HISTORY_KEY);
+  try {
+    await storage.removeItem(SEARCH_HISTORY_KEY);
+  } catch (error) {
+    console.warn('Could not clear recent searches', error);
+  }
 }
