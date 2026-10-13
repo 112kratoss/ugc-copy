@@ -68,8 +68,6 @@ export function SectionHeading({
 
 interface CreatorToolCardProps {
   tool: CreatorToolDefinition;
-  // The launchpad is the card's only layout; the hub page still names it.
-  variant?: 'launchpad';
   preview?: ReactNode;
 }
 

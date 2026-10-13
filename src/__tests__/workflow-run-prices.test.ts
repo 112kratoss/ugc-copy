@@ -89,6 +89,46 @@ describe('planWorkflowStepPrice', () => {
     });
   });
 
+  // The runner sends a clip to every model whose limits take one and charges
+  // its measured length (workflow-runner.ts), so the canvas prices the step
+  // from the length it knows, as an estimate, and not at all without one.
+  it('prices a video step’s reference clips by their recorded lengths, as an estimate', () => {
+    const graph = createStarterGraph();
+    const video = nodeOfType(graph, 'video-generate');
+    const clip = createWorkflowNode('video-input', { x: 0, y: 0 });
+    clip.data = { ...clip.data, videoUrl: 'https://cdn.example/clip.mp4', durationSeconds: 7.3 };
+    const withClip: WorkflowCanvasGraph = {
+      ...graph,
+      nodes: [...graph.nodes.map((node) => (node.id === video.id
+        ? { ...node, data: { ...node.data, model: 'minimax-h3' } } as WorkflowCanvasNode
+        : node)), clip],
+      edges: [...graph.edges, createCanvasEdge(clip.id, 'video', video.id, 'reference-video')],
+    };
+    const step = withClip.nodes.find((node) => node.id === video.id)!;
+
+    expect(planWorkflowStepPrice(withClip, step)).toMatchObject({
+      kind: 'quote',
+      approximate: true,
+      input: {
+        modelId: 'minimax-h3',
+        inputCounts: { videos: 1, audios: 0 },
+        inputMetadata: { referenceVideoDurationsSeconds: [7.3] },
+      },
+    });
+
+    // Kling takes its clips as named elements, which the runner does not measure.
+    const kling = { ...step, data: { ...step.data, model: 'kling-3.0-video' } } as WorkflowCanvasNode;
+    const plan = planWorkflowStepPrice(withClip, kling);
+    expect(plan).toMatchObject({ kind: 'quote', approximate: false, input: { inputCounts: { videos: 1 } } });
+    expect((plan as { input: { inputMetadata?: unknown } }).input.inputMetadata).toBeUndefined();
+
+    clip.data = { ...clip.data, durationSeconds: null };
+    expect(planWorkflowStepPrice(withClip, step)).toEqual({
+      kind: 'unavailable',
+      reason: 'A step with a reference clip is priced by the clip’s length, which is not known yet.',
+    });
+  });
+
   it('says why audio and music steps carry no price', () => {
     const graph = createStarterGraph();
     expect(planWorkflowStepPrice(graph, createWorkflowNode('voiceover-generate', { x: 0, y: 0 }))).toEqual({
@@ -110,7 +150,7 @@ describe('formatWorkflowRunPrice', () => {
     expect(formatWorkflowRunPrice({ status: 'ready', costCredits: 1, approximate: false })).toEqual({ label: '1 credit', note: null });
     expect(formatWorkflowRunPrice({ status: 'ready', costCredits: 64, approximate: true })).toEqual({
       label: 'about 64 credits',
-      note: 'A motion step is charged for its clip’s measured length.',
+      note: 'A step with a reference clip is charged for the clip’s measured length.',
     });
     expect(formatWorkflowRunPrice({ status: 'unavailable', reason: 'Audio steps are priced when they start.' })).toEqual({
       label: 'Cost unavailable',

@@ -92,7 +92,7 @@ export function formatWorkflowRunPrice(price: WorkflowRunPrice | null): { label:
   if (price.status === 'unavailable') return { label: 'Cost unavailable', note: price.reason };
   const credits = `${price.costCredits} ${price.costCredits === 1 ? 'credit' : 'credits'}`;
   return price.approximate
-    ? { label: `about ${credits}`, note: 'A motion step is charged for its clip’s measured length.' }
+    ? { label: `about ${credits}`, note: 'A step with a reference clip is charged for the clip’s measured length.' }
     : { label: credits, note: null };
 }
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { getVideoReferenceSupport } from '@/lib/client-generation-models';
 import { requestWebGenerationQuote } from '@/lib/generation-model-client';
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import {
@@ -10,12 +11,12 @@ import {
   getResolvedWorkflowImageReferences,
   getResolvedWorkflowVideoReferences,
   isRunnableNode,
-  isSeedance2VideoModel,
   normalizeNodeData,
   type ImageGenerateNodeData,
   type MotionGenerateNodeData,
   type VideoGenerateNodeData,
   type VideoInputNodeData,
+  type WorkflowCanvasEdge,
   type WorkflowCanvasGraph,
   type WorkflowCanvasNode,
   type WorkflowNodeData,
@@ -35,21 +36,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function countIncomingByHandle(graph: WorkflowCanvasGraph, nodeId: string, targetHandle: string) {
-  return getIncomingEdges(graph, nodeId).filter((edge) => edge.targetHandle === targetHandle).length;
-}
-
 function shotsTotalSeconds(data: VideoGenerateNodeData) {
   return data.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0);
 }
 
 /**
- * The length a motion step will be charged for: its clip's, which the runner
- * measures when the step starts. Known beforehand only as the length the upload
- * recorded, or the length the video step before it is set to make.
+ * The length of the clip an edge carries, as the canvas knows it before the run:
+ * the length the upload recorded, or the length the video step before it is set
+ * to make. The runner measures the file itself when the step starts.
  */
-function expectedMotionClipSeconds(graph: WorkflowCanvasGraph, node: WorkflowCanvasNode): number | null {
-  const clipEdge = getIncomingEdges(graph, node.id).find((edge) => edge.sourceHandle === 'video');
+function expectedClipSeconds(graph: WorkflowCanvasGraph, clipEdge: WorkflowCanvasEdge | undefined): number | null {
   const source = clipEdge ? graph.nodes.find((candidate) => candidate.id === clipEdge.source) : undefined;
   if (source?.type === 'video-input') {
     const seconds = (normalizeNodeData('video-input', source.data as Partial<WorkflowNodeData>) as VideoInputNodeData).durationSeconds;
@@ -61,6 +57,25 @@ function expectedMotionClipSeconds(graph: WorkflowCanvasGraph, node: WorkflowCan
     return seconds > 0 ? seconds : null;
   }
   return null;
+}
+
+/** The length a motion step will be charged for: its clip's. */
+function expectedMotionClipSeconds(graph: WorkflowCanvasGraph, node: WorkflowCanvasNode): number | null {
+  return expectedClipSeconds(graph, getIncomingEdges(graph, node.id).find((edge) => edge.sourceHandle === 'video'));
+}
+
+/**
+ * The reference clips and tracks a video step sends: every one the canvas
+ * connects, for a model whose limits take them (the runner reads the same
+ * table). Kling's clips are its named elements, counted with the references.
+ */
+function videoStepReferenceMedia(graph: WorkflowCanvasGraph, node: WorkflowCanvasNode, data: VideoGenerateNodeData) {
+  const support = data.model === 'kling-3.0-video' ? { videos: 0, audios: 0 } : getVideoReferenceSupport(data.model);
+  const incoming = getIncomingEdges(graph, node.id);
+  return {
+    clipEdges: support.videos > 0 ? incoming.filter((edge) => edge.targetHandle === 'reference-video') : [],
+    tracks: support.audios > 0 ? incoming.filter((edge) => edge.targetHandle === 'reference-audio').length : 0,
+  };
 }
 
 /**
@@ -94,10 +109,16 @@ export function planWorkflowStepPrice(graph: WorkflowCanvasGraph, node: Workflow
 
   if (node.type === 'video-generate') {
     const data = normalizeNodeData('video-generate', node.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
-    const isSeedance = isSeedance2VideoModel(data.model);
+    const { clipEdges, tracks } = videoStepReferenceMedia(graph, node, data);
+    // A clip is charged for its measured length, so the price is an estimate
+    // from the length the canvas knows, and none at all without one.
+    const clipSeconds = clipEdges.map((edge) => expectedClipSeconds(graph, edge));
+    if (clipSeconds.some((seconds) => seconds === null)) {
+      return { kind: 'unavailable', reason: 'A step with a reference clip is priced by the clip’s length, which is not known yet.' };
+    }
     return {
       kind: 'quote',
-      approximate: false,
+      approximate: clipEdges.length > 0,
       input: {
         kind: 'video',
         modelId: data.model,
@@ -113,10 +134,13 @@ export function planWorkflowStepPrice(graph: WorkflowCanvasGraph, node: Workflow
         },
         inputCounts: {
           images: getResolvedWorkflowImageReferences(graph, node.id).length,
-          videos: (isSeedance ? countIncomingByHandle(graph, node.id, 'reference-video') : 0)
+          videos: clipEdges.length
             + (data.model === 'kling-3.0-video' ? getResolvedWorkflowVideoReferences(graph, node.id).length : 0),
-          audios: isSeedance ? countIncomingByHandle(graph, node.id, 'reference-audio') : 0,
+          audios: tracks,
         },
+        ...(clipEdges.length > 0
+          ? { inputMetadata: { referenceVideoDurationsSeconds: clipSeconds as number[] } }
+          : {}),
       },
     };
   }

@@ -1291,7 +1291,7 @@ describe('CreateWorkflowPage', () => {
     expect(await within(contextMenu).findByRole('button', {
       name: `Run from here · about ${4 + 30 + 3 * videoSeconds} credits`,
     }, { timeout: 5_000 })).toBeInTheDocument();
-    expect(within(contextMenu).getByText('A motion step is charged for its clip’s measured length.')).toBeInTheDocument();
+    expect(within(contextMenu).getByText('A step with a reference clip is charged for the clip’s measured length.')).toBeInTheDocument();
     expect(quoteRequests.map((request) => request.kind).sort()).toEqual(['image', 'motion', 'video']);
     expect(quoteRequests.find((request) => request.kind === 'motion')?.settings?.duration).toBe(videoSeconds);
     fireEvent.keyDown(window, { key: 'Escape' });

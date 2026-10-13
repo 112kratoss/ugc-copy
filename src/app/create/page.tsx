@@ -34,7 +34,6 @@ export default async function CreateHubPage() {
             <CreatorToolCard
               key={tool.id}
               tool={tool}
-              variant="launchpad"
               preview={
                 previewByTool[tool.id] ? (
                   <CreatorToolPreview
