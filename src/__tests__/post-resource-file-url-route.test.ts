@@ -258,6 +258,64 @@ describe('/api/posts/[postId]/resource-bundle/file-url route', () => {
     );
   });
 
+  it('signs a batch with one bundle load and one rate-limit hit', async () => {
+    const storagePaths = [
+      'user-1/generation-references/gen-1/00-reference-image-input-1.png',
+      'generation_inputs/user-1/gen-1/01-reference-video.mp4',
+    ];
+    getPostResourceBundleDetailByPostIdMock.mockResolvedValue({
+      viewerCanAccess: true,
+      seller: { id: 'user-1' },
+      resources: {
+        attachments: [],
+        items: [
+          { title: 'Hero reference', storagePath: storagePaths[0], contentType: 'image/png' },
+          { title: 'Motion reference', storagePath: storagePaths[1], contentType: 'video/mp4' },
+        ],
+      },
+    });
+    createSignedUrlMock.mockImplementation(async (path: string) => ({
+      data: { signedUrl: `https://signed.example.com/${path}` },
+      error: null,
+    }));
+
+    const { POST } = await import('@/app/api/posts/[postId]/resource-bundle/file-url/route');
+    const response = await POST(
+      new Request('http://localhost/api/posts/post-1/resource-bundle/file-url', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+          'x-request-id': 'resource-file-batch-1',
+        },
+        body: JSON.stringify({ storagePaths, disposition: 'inline' }),
+      }) as NextRequest,
+      { params: Promise.resolve({ postId: 'post-1' }) }
+    );
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'resource-file-batch-1');
+    expect(data).toEqual({
+      files: [
+        {
+          storagePath: storagePaths[0],
+          url: `https://signed.example.com/${storagePaths[0]}`,
+          expiresAt: expect.any(String),
+        },
+        {
+          storagePath: storagePaths[1],
+          url: 'https://signed.example.com/user-1/gen-1/01-reference-video.mp4',
+          expiresAt: expect.any(String),
+        },
+      ],
+    });
+    expect(getPostResourceBundleDetailByPostIdMock).toHaveBeenCalledTimes(1);
+    expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(createSignedUrlMock).toHaveBeenCalledTimes(2);
+    expect(createSignedUrlMock).toHaveBeenCalledWith(storagePaths[0], 600, {});
+  });
+
   it('rate limits resource file URL signing before minting a storage URL', async () => {
     rpcMock.mockResolvedValue({
       data: {

@@ -1,7 +1,7 @@
 import { parseNsfwFlag } from '@/lib/nsfw-content';
 import path from 'node:path';
 
-import { TITLE_MAX_LENGTH } from '@/lib/posts-server';
+import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH } from '@/lib/posts-server';
 import {
   isPostResourceBundleAccessMode,
   validatePostResourceBundleInput,
@@ -28,7 +28,6 @@ import {
 import { parseCanonicalStorageLocation } from '@/lib/storage-ownership';
 
 const UPLOADS_BUCKET = 'uploads';
-const BODY_MAX_LENGTH = 2000;
 
 export type SubmittedPostMediaItem =
   | {

@@ -8,6 +8,19 @@ vi.mock('@/lib/showcase-feed-cache', () => ({
   invalidateShowcaseFeedCache: showcaseCacheMocks.invalidate,
 }));
 
+// Stands in for Next's after(): it runs the task on the spot, so a test sees
+// what the route handed it.
+const afterMock = vi.hoisted(() => vi.fn((task: () => Promise<unknown>): unknown => task()));
+
+vi.mock('next/server', async () => {
+  const actual = await vi.importActual<typeof import('next/server')>('next/server');
+
+  return {
+    ...actual,
+    after: afterMock,
+  };
+});
+
 const createUserClientMock = vi.fn();
 const rpcMock = vi.fn(async () => ({
   data: {
@@ -116,6 +129,7 @@ describe('/api/posts/[postId]/report route', () => {
     createServiceClientFactory.mockClear();
     createServiceClientFactory.mockImplementation(() => createServiceClientMock());
     showcaseCacheMocks.invalidate.mockClear();
+    afterMock.mockClear();
     rpcMock.mockReset();
     rpcMock.mockResolvedValue({
       data: {
@@ -227,6 +241,8 @@ describe('/api/posts/[postId]/report route', () => {
       p_reason: 'reported',
     });
     expect(showcaseCacheMocks.invalidate).toHaveBeenCalledOnce();
+    // The report's feed event is written behind the answer.
+    expect(afterMock).toHaveBeenCalledOnce();
   });
 
   it('rate limits repeated post reports before inserting', async () => {
@@ -267,6 +283,7 @@ describe('/api/posts/[postId]/report route', () => {
     expect(rpcMock).not.toHaveBeenCalledWith('set_feed_post_feedback', expect.anything());
     expect(insertedReports).toEqual([]);
     expect(showcaseCacheMocks.invalidate).not.toHaveBeenCalled();
+    expect(afterMock).not.toHaveBeenCalled();
   });
 
   it('rejects unlock reports for bundles attached to another post', async () => {

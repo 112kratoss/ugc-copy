@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AppState, Linking, Platform, ScrollView, View, useWindowDimensions } from 'react-native';
+import { AppState, Linking, Platform, View } from 'react-native';
 import { AppText, Pill, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { useAuth } from '@/lib/auth';
@@ -8,15 +8,35 @@ import { canRevealNsfwInApp } from '@/lib/nsfw-reveal-policy';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ShowcaseFeedItem } from '@/lib/types';
 
-/** Originals live only in this disclosure, never in a persisted feed query. */
-export function NsfwPostNotice({ postId }: { postId: string }) {
+/**
+ * The body of a post its creator marked NSFW, drawn where the post's own text
+ * would be. The page around it — the byline, the ⋮ with Report and Block, save
+ * and share — stays: the posts most likely to be reported keep the way to
+ * report them. Originals live only in this disclosure, never in a persisted
+ * feed query.
+ */
+export function NsfwPostNotice({
+  postId,
+  width,
+  onRevealedChange,
+}: {
+  postId: string;
+  /** The column the notice is drawn in; revealed media fills it. */
+  width: number;
+  /**
+   * Told each time the original appears or goes again (a reveal, Hide, the
+   * ten-minute expiry, the app leaving the foreground), so the page can keep
+   * the post's thread covered while the post is.
+   */
+  onRevealedChange?: (revealed: boolean) => void;
+}) {
   const { api, user } = useAuth();
   const theme = useAppTheme();
-  const { width } = useWindowDimensions();
   const [item, setItem] = useState<ShowcaseFeedItem | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const revealAllowed = canRevealNsfwInApp(Platform.OS);
+  const revealed = item !== null;
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => { if (state !== 'active') setItem(null); });
     return () => subscription.remove();
@@ -27,6 +47,7 @@ export function NsfwPostNotice({ postId }: { postId: string }) {
     return () => clearTimeout(timeout);
   }, [item]);
   useEffect(() => { setItem(null); }, [postId, user?.id]);
+  useEffect(() => { onRevealedChange?.(revealed); }, [onRevealedChange, revealed]);
   async function reveal() {
     if (!revealAllowed) return;
     setLoading(true); setError(null);
@@ -37,8 +58,8 @@ export function NsfwPostNotice({ postId }: { postId: string }) {
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not reveal this post. Please retry.'); }
     finally { setLoading(false); }
   }
-  const mediaWidth = Math.max(1, width - 48);
-  return <ScrollView contentContainerStyle={{ padding: 24, gap: 16 }}>
+  const mediaWidth = Math.max(1, width);
+  return <View style={{ gap: 16 }}>
     <Pill label="NSFW · 18+" />
     <AppText variant="pageTitle">{item?.title ?? 'Mature content'}</AppText>
     {item ? <>
@@ -59,5 +80,5 @@ export function NsfwPostNotice({ postId }: { postId: string }) {
       <SecondaryButton label="Manage on website" onPress={() => void Linking.openURL(`${env.siteUrl}/showcase/${encodeURIComponent(postId)}`)} />
     </>}
     {error ? <AppText variant="body" accessibilityRole="alert">{error}</AppText> : null}
-  </ScrollView>;
+  </View>;
 }

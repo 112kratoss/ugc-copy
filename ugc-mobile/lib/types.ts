@@ -892,6 +892,8 @@ export interface ShowcaseFeedItem {
   title: string;
   prompt: string;
   body: string;
+  /** The creator's caption. Set by the by-id read; feed pages leave it out. */
+  description?: string;
   category: 'image' | 'video' | 'text';
   creationMode?: 'motion' | null;
   postFormat: 'text' | 'media' | 'mixed';
@@ -1334,6 +1336,10 @@ export interface MarketplaceResource {
     mediaItems?: ShowcaseMediaItem[];
     saveCount?: number;
     remixCount?: number;
+    /** The post's own lifecycle, which decides whether a buyer can still be sent to it. */
+    visibility?: string;
+    archivedAt?: string | null;
+    tombstoned?: boolean;
   } | null;
   mediaUrl?: string | null;
 }
@@ -1346,6 +1352,24 @@ export interface MarketplaceResourceList {
   };
 }
 
+/**
+ * The bundle as it stood when this viewer unlocked it. The server sends it only
+ * once the creator has edited the bundle since (`toPurchasedRevision` in
+ * src/lib/post-resource-bundles-server.ts), so a buyer whose recipe was later
+ * cut down can still read what they paid for.
+ */
+export interface PostResourceBundlePurchasedRevision {
+  revisionNumber: number;
+  purchasedAt: string;
+  title: string;
+  summary: string;
+  previewText: string;
+  accessMode: 'free' | 'paid';
+  priceUsdCents: number;
+  resources: PostResourceBundleResources;
+  mediaItems: ShowcaseMediaItem[];
+}
+
 export interface MarketplaceResourceDetail extends MarketplaceResource {
   status: 'draft' | 'published';
   resources: PostResourceBundleResources | null;
@@ -1353,6 +1377,27 @@ export interface MarketplaceResourceDetail extends MarketplaceResource {
   viewerIsOwner: boolean;
   viewerHasPurchased: boolean;
   viewerCanAccess: boolean;
+  purchasedRevision?: PostResourceBundlePurchasedRevision | null;
+}
+
+/**
+ * The free unlock's reply (src/lib/post-resource-bundle-free-unlock-service.ts):
+ * `{ alreadyPurchased: true }` when the viewer already had it, otherwise
+ * `{ free: true, alreadyProcessed: false }`.
+ */
+export interface PostResourceBundleFreeUnlockResponse {
+  success: boolean;
+  alreadyPurchased?: boolean;
+  free?: boolean;
+  alreadyProcessed?: boolean;
+}
+
+/** `inline` lets a browser show the file; `attachment` makes it a download. */
+export type PostResourceFileDisposition = 'inline' | 'attachment';
+
+/** The file-url route's answer to `{ storagePaths }`: one signed URL per path it signed. */
+export interface PostResourceFileUrlBatchResponse {
+  files: Array<{ storagePath: string; url: string; expiresAt?: string }>;
 }
 
 export interface MarketplaceResourceDetailResponse {

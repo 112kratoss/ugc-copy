@@ -457,7 +457,27 @@
       "path": "/api/me/unlocks/:unlockId/file-url",
       "auth": "required"
     },
+    "getViewerUnlockFileUrls": {
+      "method": "POST",
+      "path": "/api/me/unlocks/:unlockId/file-url",
+      "auth": "required"
+    },
+    "resolveViewerUnlockFileUrl": {
+      "method": "POST",
+      "path": "/api/me/unlocks/:unlockId/file-url",
+      "auth": "required"
+    },
     "getPostResourceFileUrl": {
+      "method": "POST",
+      "path": "/api/posts/:postId/resource-bundle/file-url",
+      "auth": "required"
+    },
+    "getPostResourceFileUrls": {
+      "method": "POST",
+      "path": "/api/posts/:postId/resource-bundle/file-url",
+      "auth": "required"
+    },
+    "resolvePostResourceFileUrl": {
       "method": "POST",
       "path": "/api/posts/:postId/resource-bundle/file-url",
       "auth": "required"

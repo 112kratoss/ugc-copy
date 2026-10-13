@@ -16,6 +16,7 @@ import {
   type PostCommentsHandle,
 } from '../components/comments-sheet';
 import { registerActionSheetPresenter, type ActionSheetRequest } from '../lib/action-sheet';
+import { ApiError } from '../lib/api-client';
 import type { PostComment, PostCommentsResponse } from '../lib/types';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
@@ -44,6 +45,8 @@ const mocks = vi.hoisted(() => ({
   queryOptions: vi.fn(),
   routerPush: vi.fn(),
   routerSetParams: vi.fn(),
+  blockUser: vi.fn(),
+  announce: vi.fn(),
 }));
 const {
   listPostComments,
@@ -63,6 +66,8 @@ const {
   queryOptions,
   routerPush,
   routerSetParams,
+  blockUser,
+  announce,
 } = mocks;
 
 let authUser: { id: string } | null = { id: 'viewer-1' };
@@ -72,6 +77,7 @@ let queryState: Record<string, unknown> = {};
 let replyQueryState: Record<string, unknown> = {};
 
 vi.mock('react-native', () => ({
+  AccessibilityInfo: { announceForAccessibility: mocks.announce },
   ActivityIndicator: (props: MockProps) => React.createElement('spinner', props),
   Alert: { alert: mocks.alert },
   Animated: {
@@ -149,6 +155,7 @@ vi.mock('@/components/ui', () => ({
 vi.mock('@/lib/auth', () => ({
   useAuth: () => ({
     api: {
+      blockUser: mocks.blockUser,
       createPostComment: mocks.createPostComment,
       deletePostComment: mocks.deletePostComment,
       listPostComments: mocks.listPostComments,
@@ -215,20 +222,24 @@ function page(
   };
 }
 
+function sheetElement(overrides: Partial<React.ComponentProps<typeof CommentsSheet>> = {}) {
+  return (
+    <CommentsSheet
+      authReturnTo="/viewer?source=showcase-feed&initialId=post-1"
+      postId="post-1"
+      postCreatorId="owner-1"
+      commentCount={0}
+      visible
+      onClose={vi.fn()}
+      {...overrides}
+    />
+  );
+}
+
 function renderSheet(overrides: Partial<React.ComponentProps<typeof CommentsSheet>> = {}) {
   let tree: renderer.ReactTestRenderer | undefined;
   renderer.act(() => {
-    tree = renderer.create(
-      <CommentsSheet
-        authReturnTo="/viewer?source=showcase-feed&initialId=post-1"
-        postId="post-1"
-        postCreatorId="owner-1"
-        commentCount={0}
-        visible
-        onClose={vi.fn()}
-        {...overrides}
-      />
-    );
+    tree = renderer.create(sheetElement(overrides));
   });
   if (!tree) throw new Error('CommentsSheet failed to render');
   return tree;
@@ -272,6 +283,53 @@ function pressable(root: renderer.ReactTestInstance, label: string) {
   );
 }
 
+function pressables(root: renderer.ReactTestInstance, label: string) {
+  return root.findAll(
+    (node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === label
+  );
+}
+
+function composerInput(root: renderer.ReactTestInstance) {
+  return root.find((node) => String(node.type) === 'textinput');
+}
+
+/** The rows a comment's ••• offers, as the action sheet a build without native menus shows. */
+function commentOptions(root: renderer.ReactTestInstance, authorLabel: string) {
+  const presented: ActionSheetRequest[] = [];
+  const unregister = registerActionSheetPresenter((request) => presented.push(request));
+  try {
+    renderer.act(() => {
+      pressable(root, `Options for ${authorLabel}'s comment`).props.onPress();
+    });
+  } finally {
+    unregister();
+  }
+  return presented[0];
+}
+
+/** Presses a button on the dialog `showConfirmDialog` drew (the system alert on iOS). */
+function pressDialogButton(title: string, buttonText: string) {
+  const call = alert.mock.calls.find(([shownTitle]) => shownTitle === title);
+  if (!call) throw new Error(`No dialog titled ${title}`);
+  const button = (call[2] as Array<{ text: string; onPress?: () => void }>)
+    .find((candidate) => candidate.text === buttonText);
+  if (!button) throw new Error(`No ${buttonText} button on ${title}`);
+  button.onPress?.();
+}
+
+function flushPromises() {
+  return new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+async function postFromComposer(root: renderer.ReactTestInstance, body: string) {
+  renderer.act(() => {
+    composerInput(root).props.onChangeText(body);
+  });
+  await renderer.act(async () => {
+    await pressable(root, 'Post comment').props.onPress();
+  });
+}
+
 beforeEach(() => {
   authUser = { id: 'viewer-1' };
   pages = [];
@@ -296,6 +354,8 @@ beforeEach(() => {
     queryOptions,
     routerPush,
     routerSetParams,
+    blockUser,
+    announce,
   ]) {
     mock.mockReset();
   }
@@ -343,6 +403,19 @@ describe('inline post comments', () => {
     expect(tree.root.findAll((node) => String(node.type) === 'textinput')).toHaveLength(0);
     expect(queryOptions).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
   });
+
+  it("opens a comment author's profile without closing anything first", () => {
+    pages = [page([comment()])];
+    const onClose = vi.fn();
+    const { tree } = renderInline({ onClose });
+
+    renderer.act(() => {
+      pressable(tree.root, 'Open @batman profile').props.onPress();
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(routerPush).toHaveBeenCalledWith('/creators/batman');
+  });
 });
 
 describe('comments sheet', () => {
@@ -379,6 +452,11 @@ describe('comments sheet', () => {
     const root = renderSheet().root;
     expect(texts(root)).toContain('[deleted]');
     expect(root.findAll((node) => String(node.type) === 'icon-more')).toHaveLength(0);
+    // No author to open either.
+    expect(root.findAll(
+      (node) => String(node.type) === 'pressable' && typeof node.props.onPress === 'function'
+        && (String(node.props.accessibilityLabel).startsWith('Open ') || node.props.accessibilityElementsHidden)
+    )).toHaveLength(0);
   });
 
   it('paginates replies and never offers a nested reply action', () => {
@@ -594,14 +672,15 @@ describe('comments sheet', () => {
       });
 
       expect(presented[1].title).toBe('Why are you reporting this?');
+      // The web thread's labels, so a report reads the same from either client.
       expect(presented[1].actions.map((action) => action.label)).toEqual([
-        'Spam or misleading',
-        'Harassment or bullying',
+        'Spam',
+        'Harassment',
         'Unsafe content',
-        'Something else',
+        'Other',
       ]);
       await renderer.act(async () => {
-        presented[1].actions.find((action) => action.label === 'Spam or misleading')?.onPress?.();
+        presented[1].actions.find((action) => action.label === 'Spam')?.onPress?.();
       });
     } finally {
       unregister();
@@ -625,5 +704,276 @@ describe('comments sheet', () => {
     }
 
     expect(presented[0].actions.every((action) => action.destructive)).toBe(true);
+  });
+
+  it("opens a comment author's profile from the handle or the avatar, closing the sheet first", () => {
+    pages = [page([comment()])];
+    const onClose = vi.fn();
+    const tree = renderSheet({ onClose });
+
+    renderer.act(() => {
+      pressable(tree.root, 'Open @batman profile').props.onPress();
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(routerPush).toHaveBeenCalledWith('/creators/batman');
+    expect(onClose.mock.invocationCallOrder[0]).toBeLessThan(routerPush.mock.invocationCallOrder[0]);
+
+    // The avatar takes the same tap; the handle is the one a screen reader lists.
+    const avatarTarget = tree.root.find(
+      (node) => String(node.type) === 'pressable' && node.props.accessibilityElementsHidden === true
+    );
+    expect(avatarTarget.props.importantForAccessibility).toBe('no-hide-descendants');
+    expect(avatarTarget.findAll((node) => String(node.type) === 'avatar')).toHaveLength(1);
+    renderer.act(() => {
+      avatarTarget.props.onPress();
+    });
+    expect(routerPush).toHaveBeenCalledTimes(2);
+    expect(routerPush).toHaveBeenLastCalledWith('/creators/batman');
+  });
+
+  it('opens the author of a reply too', () => {
+    pages = [page([comment({ replyCount: 1 })], 2)];
+    replyPages = [page([
+      comment({
+        id: 'reply-1',
+        parentId: 'comment-1',
+        author: { id: 'creator-3', username: 'robin', displayName: 'Robin', avatarUrl: null },
+      }),
+    ], 2)];
+    const tree = renderSheet();
+
+    renderer.act(() => {
+      pressable(tree.root, 'View 1 reply').props.onPress();
+    });
+    renderer.act(() => {
+      pressable(tree.root, 'Open @robin profile').props.onPress();
+    });
+
+    expect(routerPush).toHaveBeenCalledWith('/creators/robin');
+  });
+
+  it('blocks another author from the comment menu after a confirmation, then refreshes every cached thread', async () => {
+    pages = [page([comment()])];
+    blockUser.mockResolvedValue({ success: true, blocked: true });
+    const tree = renderSheet();
+
+    const options = commentOptions(tree.root, '@batman');
+    expect(options.actions.map((action) => action.label)).toEqual(['Report', 'Block @batman']);
+    renderer.act(() => {
+      options.actions.find((action) => action.label === 'Block @batman')?.onPress?.();
+    });
+
+    expect(alert).toHaveBeenCalledWith(
+      'Block @batman?',
+      'Their posts and comments will be hidden, and neither of you will be able to follow the other.',
+      expect.any(Array),
+      expect.anything()
+    );
+    expect(blockUser).not.toHaveBeenCalled();
+
+    await renderer.act(async () => {
+      pressDialogButton('Block @batman?', 'Block user');
+      await flushPromises();
+    });
+
+    expect(blockUser).toHaveBeenCalledWith('creator-2');
+    expect(queryInvalidate).toHaveBeenCalledWith({ queryKey: ['post-comments'] });
+    expect(queryInvalidate).toHaveBeenCalledWith({ queryKey: ['post-comment-replies'] });
+    expect(announce).toHaveBeenCalledWith('@batman blocked.');
+  });
+
+  it('leaves every thread alone when the block fails', async () => {
+    pages = [page([comment()])];
+    blockUser.mockRejectedValue(new ApiError('Failed to block user.', 500));
+    const tree = renderSheet();
+
+    const options = commentOptions(tree.root, '@batman');
+    renderer.act(() => {
+      options.actions.find((action) => action.label === 'Block @batman')?.onPress?.();
+    });
+    await renderer.act(async () => {
+      pressDialogButton('Block @batman?', 'Block user');
+      await flushPromises();
+    });
+
+    expect(alert).toHaveBeenCalledWith('Could not block user', 'Failed to block user.');
+    expect(queryInvalidate).not.toHaveBeenCalled();
+    expect(announce).not.toHaveBeenCalled();
+  });
+
+  it("offers no Block on the viewer's own comment or on the post creator's", () => {
+    pages = [page([
+      comment({
+        id: 'mine',
+        author: { id: 'viewer-1', username: 'viewer', displayName: 'Viewer', avatarUrl: null },
+      }),
+      comment({
+        id: 'by-creator',
+        author: { id: 'owner-1', username: 'owner', displayName: 'Owner', avatarUrl: null },
+      }),
+    ])];
+    const tree = renderSheet();
+
+    expect(commentOptions(tree.root, '@viewer').actions.map((action) => action.label)).toEqual(['Delete']);
+    expect(commentOptions(tree.root, '@owner').actions.map((action) => action.label)).toEqual(['Report']);
+  });
+
+  it('keeps a just-posted comment on top when the refetched first page ranks it out', async () => {
+    // Under Top a busy post's first page is all comments with replies; a new
+    // one, with none yet, is not on it when the refetch after posting answers.
+    const busyFirstPage = Array.from({ length: 20 }, (_, index) => comment({
+      id: `popular-${index}`,
+      body: `Popular ${index}`,
+      replyCount: 20 - index,
+    }));
+    const mine = comment({
+      id: 'mine',
+      body: 'First time here',
+      author: { id: 'viewer-1', username: 'viewer', displayName: 'Viewer', avatarUrl: null },
+    });
+    pages = [page(busyFirstPage, 40, { hasMore: true, nextOffset: 20, limit: 20, offset: 0 })];
+    createPostComment.mockResolvedValue({ comment: mine, commentCount: 41 });
+    const tree = renderSheet();
+
+    await postFromComposer(tree.root, 'First time here');
+
+    expect(topRefetch).toHaveBeenCalledTimes(1);
+    const shown = texts(tree.root);
+    expect(shown).toContain('First time here');
+    expect(shown.indexOf('First time here')).toBeLessThan(shown.indexOf('Popular 0'));
+
+    // Once a loaded page holds it, it is listed once, still on top.
+    pages = [page([...busyFirstPage, mine], 41, { hasMore: true, nextOffset: 21, limit: 20, offset: 0 })];
+    renderer.act(() => {
+      tree.update(sheetElement());
+    });
+    const refreshed = texts(tree.root);
+    expect(refreshed.filter((text) => text === 'First time here')).toHaveLength(1);
+    expect(refreshed.indexOf('First time here')).toBeLessThan(refreshed.indexOf('Popular 0'));
+  });
+
+  it('says a comment with no replies will be removed, and drops it from the pinned list', async () => {
+    const mine = comment({
+      id: 'mine',
+      body: 'Typo, sorry',
+      author: { id: 'viewer-1', username: 'viewer', displayName: 'Viewer', avatarUrl: null },
+    });
+    pages = [page([comment({ replyCount: 3 })], 4)];
+    createPostComment.mockResolvedValue({ comment: mine, commentCount: 5 });
+    deletePostComment.mockResolvedValue({ status: 'removed_by_author', commentCount: 4 });
+    const tree = renderSheet();
+
+    await postFromComposer(tree.root, 'Typo, sorry');
+    expect(texts(tree.root)).toContain('Typo, sorry');
+
+    const options = commentOptions(tree.root, '@viewer');
+    renderer.act(() => {
+      options.actions.find((action) => action.label === 'Delete')?.onPress?.();
+    });
+    expect(alert).toHaveBeenCalledWith(
+      'Delete your comment?',
+      'It will be removed.',
+      expect.any(Array),
+      expect.anything()
+    );
+
+    await renderer.act(async () => {
+      pressDialogButton('Delete your comment?', 'Delete');
+      await flushPromises();
+    });
+
+    expect(deletePostComment).toHaveBeenCalledWith('post-1', 'mine');
+    expect(texts(tree.root)).not.toContain('Typo, sorry');
+    expect(texts(tree.root)).toContain('This prompt is unreal.');
+  });
+
+  it('says comments are closed on a 404, with nothing to retry and no composer', () => {
+    pages = undefined;
+    queryState = { isError: true, error: new ApiError('Post not found.', 404) };
+    const tree = renderSheet();
+
+    const status = tree.root.find((node) => String(node.type) === 'status-block');
+    expect(status.props).toMatchObject({ tone: 'neutral', title: 'Comments are closed on this post' });
+    expect(pressables(tree.root, 'Try loading comments again')).toHaveLength(0);
+    expect(tree.root.findAll((node) => String(node.type) === 'textinput')).toHaveLength(0);
+  });
+
+  it('asks a rate-limited reader to wait as long as the server said, and keeps Try again', () => {
+    pages = undefined;
+    queryState = {
+      isError: true,
+      error: new ApiError('Too many requests. Please wait before trying again.', 429, {
+        code: 'RATE_LIMITED',
+        retryAfterSeconds: 30,
+      }),
+    };
+    const tree = renderSheet();
+
+    const status = tree.root.find((node) => String(node.type) === 'status-block');
+    expect(status.props).toMatchObject({
+      tone: 'danger',
+      title: 'Comments are unavailable',
+      body: 'Too many requests in a short time. Try again in 30 seconds.',
+    });
+    expect(pressables(tree.root, 'Try loading comments again')).toHaveLength(1);
+  });
+
+  it('offers sign-in, back to the same reply, when posting finds the session ended', async () => {
+    pages = [page([comment()])];
+    createPostComment.mockRejectedValue(new ApiError('Unauthorized', 401));
+    const onClose = vi.fn();
+    const tree = renderSheet({ onClose });
+
+    renderer.act(() => {
+      pressable(tree.root, 'Reply to @batman').props.onPress();
+    });
+    await postFromComposer(tree.root, 'Late reply');
+
+    expect(alert).toHaveBeenCalledWith(
+      'Your session ended',
+      'Sign in to post.',
+      expect.any(Array),
+      expect.anything()
+    );
+    expect(alert.mock.calls.some(([, message]) => message === 'Unauthorized')).toBe(false);
+    expect(composerInput(tree.root).props.value).toBe('Late reply');
+
+    await renderer.act(async () => {
+      pressDialogButton('Your session ended', 'Sign in');
+      await flushPromises();
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(routerPush).toHaveBeenCalledWith({
+      pathname: '/auth',
+      params: {
+        returnTo: '/viewer?source=showcase-feed&initialId=post-1&comments=post-1&replyTo=comment-1',
+      },
+    });
+  });
+
+  it('names one reply in the singular and reports whether the replies are open', () => {
+    pages = [page([comment({ replyCount: 1 })], 2)];
+    replyPages = [page([comment({ id: 'reply-1', parentId: 'comment-1' })], 2)];
+    const tree = renderSheet();
+
+    expect(pressable(tree.root, 'View 1 reply').props.accessibilityState).toEqual({ expanded: false });
+    expect(texts(tree.root)).toContain('View 1 reply');
+    renderer.act(() => {
+      pressable(tree.root, 'View 1 reply').props.onPress();
+    });
+    expect(pressable(tree.root, 'Hide replies').props.accessibilityState).toEqual({ expanded: true });
+  });
+
+  it('labels the composer for the reply being written', () => {
+    pages = [page([comment()])];
+    const tree = renderSheet();
+
+    expect(composerInput(tree.root).props.accessibilityLabel).toBe('Write a comment');
+    renderer.act(() => {
+      pressable(tree.root, 'Reply to @batman').props.onPress();
+    });
+    expect(composerInput(tree.root).props.accessibilityLabel).toBe('Write a reply to @batman');
   });
 });

@@ -336,7 +336,7 @@ export async function createPostResourceBundleOrderForRoute({
       ok: false,
       status: 400,
       body: {
-        error: `Recipes below ${POST_RESOURCE_WEB_CASH_MIN_TOKENS} tokens can only be unlocked with credits.`,
+        error: `Recipes below ${POST_RESOURCE_WEB_CASH_MIN_TOKENS} credits can only be unlocked with credits.`,
         code: 'CREDITS_ONLY_PRICE',
         creditCost: bundle.price_usd_cents,
         cashMinimumTokens: POST_RESOURCE_WEB_CASH_MIN_TOKENS,
@@ -376,7 +376,7 @@ export async function createPostResourceBundleOrderForRoute({
       ok: false,
       status: 400,
       body: {
-        error: `Recipes below ${POST_RESOURCE_WEB_CASH_MIN_TOKENS} tokens can only be unlocked with credits.`,
+        error: `Recipes below ${POST_RESOURCE_WEB_CASH_MIN_TOKENS} credits can only be unlocked with credits.`,
         code: 'CREDITS_ONLY_PRICE',
         creditCost,
         cashMinimumTokens: POST_RESOURCE_WEB_CASH_MIN_TOKENS,

@@ -379,6 +379,34 @@ describe('FeedClient lanes and card actions', () => {
         expect(screen.getByText('First')).toBeInTheDocument();
     });
 
+    // The server files the report as that delivery's `report` feed event; a
+    // card the ranker never served has none to name.
+    it('names the delivery a ranked card was reported from, and none for an unranked one', async () => {
+        auth.state = { session: { access_token: 'token' }, user: { id: 'viewer-1' } };
+        const fetchMock = mockJsonFetch({ success: true });
+        const ranked = {
+            ...item('post-1', 'First'),
+            recommendation: { deliveryId: '812', position: 0, reason: 'Based on your saves', algorithmVersion: 'for-you-rules-v4' },
+        };
+        render(<FeedClient initialFeed={page([ranked, item('post-2', 'Second', 'creator-2')])} initialChipId="for-you" />);
+
+        fireEvent.click(screen.getByText('report-content:post-1'));
+        await waitFor(() => expect(screen.queryByText('First')).not.toBeInTheDocument());
+        fireEvent.click(screen.getByText('report-content:post-2'));
+        await waitFor(() => expect(screen.queryByText('Second')).not.toBeInTheDocument());
+
+        const bodyTo = (url: string) => JSON.parse(String(fetchMock.mock.calls.find(([called]) => called === url)?.[1]?.body));
+        expect(bodyTo('/api/posts/post-1/report')).toEqual({
+            reason: 'unsafe_content',
+            details: 'Reported from the web home feed.',
+            deliveryId: '812',
+        });
+        expect(bodyTo('/api/posts/post-2/report')).toEqual({
+            reason: 'unsafe_content',
+            details: 'Reported from the web home feed.',
+        });
+    });
+
     it('sends nothing when the confirmation is declined', async () => {
         auth.state = { session: { access_token: 'token' }, user: { id: 'viewer-1' } };
         confirmMock.mockResolvedValue(false);

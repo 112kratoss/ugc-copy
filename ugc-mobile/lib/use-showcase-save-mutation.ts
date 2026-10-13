@@ -31,7 +31,15 @@ interface SaveVariables {
  */
 export function useShowcaseSaveMutation({
   sourceSurface = 'mobile-home-feed',
-}: { sourceSurface?: string } = {}) {
+  authReturnTo,
+}: {
+  sourceSurface?: string;
+  /**
+   * Where sign-in comes back to after a signed-out tap: the screen the post
+   * is on. Without it, sign-in ends on Home and the post is lost.
+   */
+  authReturnTo?: string;
+} = {}) {
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
 
@@ -117,7 +125,7 @@ export function useShowcaseSaveMutation({
     onSaved?: (isSaved: boolean) => void;
   }) => {
     if (!user) {
-      router.push('/auth' as never);
+      router.push((authReturnTo ? { pathname: '/auth', params: { returnTo: authReturnTo } } : '/auth') as never);
       return;
     }
 
@@ -139,7 +147,7 @@ export function useShowcaseSaveMutation({
       intentSeq,
       onSaved: options.onSaved,
     });
-  }, [mutate, user]);
+  }, [authReturnTo, mutate, user]);
 
   return { toggleSave, isSaving: mutation.isPending };
 }

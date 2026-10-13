@@ -1,6 +1,7 @@
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from '../lib/api-client';
 import {
   buildViewerItems,
   loadImmersiveSourceData,
@@ -107,6 +108,28 @@ describe('immersive preview source data', () => {
     api.getShowcaseFeed.mockResolvedValueOnce({ items: [opened] });
     const again = await loadImmersiveSourceData({ api: api as never, source: 'showcase-feed', initialId: 'post-9' });
     expect(again.showcaseItems?.map((item) => item.id)).toEqual(['post-9']);
+  });
+
+  it('calls a post gone only when the server says so, and lets any other failure be retried', async () => {
+    const api = {
+      getShowcaseFeed: vi.fn(async () => ({ items: [showcaseItem('post-1')] })),
+      getSavedMedia: vi.fn(async () => ({ items: [] })),
+      getCreatorProfile: vi.fn(async () => creatorProfile([])),
+      getShowcasePost: vi.fn(async (): Promise<never> => { throw new ApiError('Post not found.', 404); }),
+    };
+
+    // A 404 loads the window without the post: the reel says it is not available.
+    for (const source of ['showcase-feed', 'profile-saved', 'creator-profile'] as const) {
+      const data = await loadImmersiveSourceData({ api: api as never, source, initialId: 'post-9', creatorUsername: 'luna' });
+      expect(data.showcaseItems?.some((item) => item.id === 'post-9')).toBe(false);
+    }
+
+    // A dropped connection used to read the same way, with no way to try again.
+    api.getShowcasePost.mockImplementation(async () => { throw new ApiError('Network request failed', 0); });
+    for (const source of ['showcase-feed', 'profile-saved', 'creator-profile'] as const) {
+      await expect(loadImmersiveSourceData({ api: api as never, source, initialId: 'post-9', creatorUsername: 'luna' }))
+        .rejects.toMatchObject({ status: 0 });
+    }
   });
   const owner = { creatorLabel: '@creator', creatorAvatar: null, creatorId: 'user-1' };
 
@@ -265,11 +288,24 @@ describe('immersive preview source data', () => {
   it('reads cached creator profile items for creator profile viewer launches', () => {
     const queryClient = new QueryClient();
     const item = showcaseItem('post-1');
-    queryClient.setQueryData(['creator-profile', 'luna'], creatorProfile([item]));
+    queryClient.setQueryData(['creator-profile', 'infinite', 'luna'], { pages: [creatorProfile([item])], pageParams: [0] });
 
-    expect(readCachedImmersiveSourceData(queryClient, 'creator-profile', 'user-1', 'post-1')).toEqual({
+    expect(readCachedImmersiveSourceData(queryClient, 'creator-profile', 'user-1', 'post-1', null, 'luna')).toEqual({
       showcaseItems: [item],
     });
+  });
+
+  it("opens a creator's reel on that creator's grid alone", () => {
+    // Visiting A then B used to open B's reel with A's posts first.
+    const queryClient = new QueryClient();
+    const novaPost = { ...showcaseItem('nova-post'), creator: { id: 'creator-2', username: 'nova', name: 'Nova', avatar: null } };
+    queryClient.setQueryData(['creator-profile', 'infinite', 'nova'], { pages: [creatorProfile([novaPost])], pageParams: [0] });
+    queryClient.setQueryData(['creator-profile', 'infinite', 'luna'], { pages: [creatorProfile([showcaseItem('luna-post')])], pageParams: [0] });
+
+    expect(readCachedImmersiveSourceData(queryClient, 'creator-profile', 'user-1', 'luna-post', null, 'luna')?.showcaseItems?.map((item) => item.id))
+      .toEqual(['luna-post']);
+    // A reel that names no creator reads no creator's cache.
+    expect(readCachedImmersiveSourceData(queryClient, 'creator-profile', 'user-1', 'luna-post')).toBeUndefined();
   });
 
   it('reads and deduplicates pages from the infinite creator profile cache', () => {
@@ -281,7 +317,7 @@ describe('immersive preview source data', () => {
       pageParams: [0, 48],
     });
 
-    expect(readCachedImmersiveSourceData(queryClient, 'creator-profile', 'user-1', 'post-3')).toEqual({
+    expect(readCachedImmersiveSourceData(queryClient, 'creator-profile', 'user-1', 'post-3', null, 'luna')).toEqual({
       showcaseItems: [first.items[0], first.items[1], second.items[1]],
     });
   });

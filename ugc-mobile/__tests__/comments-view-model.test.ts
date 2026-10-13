@@ -1,13 +1,16 @@
 import type { InfiniteData } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 
+import { ApiError } from '@/lib/api-client';
 import {
+  ALL_POST_COMMENT_QUERY_KEYS,
+  COMMENTS_CLOSED_TITLE,
   DELETED_COMMENT_LABEL,
   applyCommentCountToInfiniteFeed,
   applyCommentCountToPostResponse,
   applyCommentCountToSourceData,
   appendReplyToPages,
-  buildCommentThreads,
+  canBlockCommentAuthor,
   canDeleteComment,
   canRemoveComment,
   canReportComment,
@@ -16,12 +19,19 @@ import {
   flattenCommentPages,
   getCommentAuthReturnTo,
   getCommentDisplay,
+  getCommentPostErrorCopy,
+  getCommentsLoadErrorCopy,
   getCommentsPageParams,
   getNextCommentsPageOffset,
+  getRemoveCommentConfirmation,
+  getRepliesToggleLabel,
   incrementParentReplyCountInPages,
+  incrementReplyCountInList,
   keepFirstCommentPage,
+  markCommentRemovedInList,
   markCommentRemovedInPages,
   mergeRepliesWithPending,
+  mergeTopLevelWithPending,
   prependCommentToPages,
   suspendCommentPagination,
 } from '@/lib/comments-view-model';
@@ -63,6 +73,14 @@ describe('comments view model', () => {
         .toEqual(['post-comments', 'post-1', 'newest', 'anonymous']);
       expect(createPostCommentRepliesQueryKey('post-1', 'comment-1', VIEWER_ID))
         .toEqual(['post-comment-replies', 'post-1', 'comment-1', VIEWER_ID]);
+    });
+
+    it('has a prefix for every thread and every reply list, of any post or viewer', () => {
+      const [threads, replies] = ALL_POST_COMMENT_QUERY_KEYS;
+
+      expect(createPostCommentsQueryKey('post-9', 'top', null).slice(0, threads.length)).toEqual(threads);
+      expect(createPostCommentRepliesQueryKey('post-9', 'comment-9', VIEWER_ID).slice(0, replies.length))
+        .toEqual(replies);
     });
 
     it('builds request params and only sends parentId for reply pages', () => {
@@ -111,6 +129,30 @@ describe('comments view model', () => {
 
       expect(replies.map((item) => item.id)).toEqual(['reply-server', 'reply-pending']);
     });
+
+    it("pins the viewer's new comments above the server's pages, newest first", () => {
+      const popular = comment({ id: 'popular', replyCount: 9 });
+      const thread = mergeTopLevelWithPending(
+        [page({ comments: [popular] })],
+        [comment({ id: 'mine-2' }), comment({ id: 'mine-1' })]
+      );
+
+      expect(thread.map((item) => item.id)).toEqual(['mine-2', 'mine-1', 'popular']);
+      expect(mergeTopLevelWithPending([page({ comments: [popular] })]).map((item) => item.id))
+        .toEqual(['popular']);
+    });
+
+    it("lists a pinned comment once, as the server's copy, when a loaded page holds it", () => {
+      const pinned = comment({ id: 'mine', replyCount: 0 });
+      const serverCopy = comment({ id: 'mine', replyCount: 2 });
+      const thread = mergeTopLevelWithPending(
+        [page({ comments: [comment({ id: 'popular', replyCount: 9 }), serverCopy] })],
+        [pinned]
+      );
+
+      expect(thread.map((item) => item.id)).toEqual(['mine', 'popular']);
+      expect(thread[0].replyCount).toBe(2);
+    });
   });
 
   describe('display', () => {
@@ -128,37 +170,87 @@ describe('comments view model', () => {
       });
     });
 
-    it('prefers the author handle and pluralizes the reply label', () => {
-      expect(getCommentDisplay(comment({ replyCount: 1 })).authorLabel).toBe('@viewer');
-      expect(getCommentDisplay(comment({ replyCount: 1 })).replyLabel).toBe('1 reply');
-      expect(getCommentDisplay(comment({ replyCount: 4 })).replyLabel).toBe('4 replies');
-      expect(getCommentDisplay(comment()).replyLabel).toBeNull();
+    it('prefers the author handle', () => {
+      expect(getCommentDisplay(comment()).authorLabel).toBe('@viewer');
+      expect(getCommentDisplay(comment({
+        author: { id: 'other', username: null, displayName: 'Other', avatarUrl: null },
+      })).authorLabel).toBe('Other');
+    });
+
+    it('counts replies in the singular and plural, and says Hide once open', () => {
+      expect(getRepliesToggleLabel(1, false)).toBe('View 1 reply');
+      expect(getRepliesToggleLabel(4, false)).toBe('View 4 replies');
+      expect(getRepliesToggleLabel(4, true)).toBe('Hide replies');
+    });
+
+    it('promises "[deleted]" only for a comment that still holds replies', () => {
+      expect(getRemoveCommentConfirmation(comment(), false)).toEqual({
+        title: 'Delete your comment?',
+        message: 'It will be removed.',
+        confirmLabel: 'Delete',
+      });
+      expect(getRemoveCommentConfirmation(comment({ replyCount: 2 }), false).message)
+        .toBe('Your comment will be replaced with “[deleted]”. Replies to it stay visible.');
+      expect(getRemoveCommentConfirmation(comment(), true)).toEqual({
+        title: 'Remove this comment?',
+        message: 'It will be hidden from everyone viewing your post.',
+        confirmLabel: 'Remove',
+      });
     });
   });
 
-  describe('thread assembly', () => {
-    it('renders a replies toggle for comments that have replies', () => {
-      const rows = buildCommentThreads({ topLevel: [comment({ replyCount: 2 })] });
-
-      expect(rows.map((row) => row.kind)).toEqual(['comment', 'replies-toggle']);
-      expect(rows[1]).toMatchObject({ parentId: 'comment-1', replyCount: 2, expanded: false });
+  describe('error copy', () => {
+    it('calls a 404 closed, with nothing to retry', () => {
+      expect(getCommentsLoadErrorCopy(new ApiError('Post not found.', 404)))
+        .toEqual({ title: COMMENTS_CLOSED_TITLE, canRetry: false });
     });
 
-    it('inlines replies once a thread is expanded', () => {
-      const rows = buildCommentThreads({
-        topLevel: [comment({ replyCount: 1 })],
-        repliesByParent: { 'comment-1': [comment({ id: 'reply-1', parentId: 'comment-1' })] },
-        expandedIds: new Set(['comment-1']),
+    it("asks a rate-limited reader to wait as long as the server said", () => {
+      const limited = (retryAfterSeconds?: number) => new ApiError(
+        'Too many requests. Please wait before trying again.',
+        429,
+        { code: 'RATE_LIMITED', ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }) },
+      );
+
+      expect(getCommentsLoadErrorCopy(limited(90))).toEqual({
+        title: 'Comments are unavailable',
+        body: 'Too many requests in a short time. Try again in 2 minutes.',
+        canRetry: true,
       });
-
-      expect(rows.map((row) => row.kind)).toEqual(['comment', 'reply', 'replies-toggle']);
-      expect(rows[1]).toMatchObject({ key: 'reply-1', parentId: 'comment-1' });
-      expect(rows[2]).toMatchObject({ expanded: true });
+      expect(getCommentsLoadErrorCopy(limited(1)).body).toContain('Try again in 1 second.');
+      expect(getCommentsLoadErrorCopy(limited()).body).toContain('Wait a moment, then try again.');
     });
 
-    it('omits the toggle for comments with no replies', () => {
-      expect(buildCommentThreads({ topLevel: [comment()] }).map((row) => row.kind))
-        .toEqual(['comment']);
+    it('blames the connection only when the request never reached the server', () => {
+      expect(getCommentsLoadErrorCopy(new ApiError('Network request failed', 0)).body)
+        .toBe('We could not load this conversation. Check your connection, then try again.');
+      expect(getCommentsLoadErrorCopy(new Error('offline')).canRetry).toBe(true);
+      expect(getCommentsLoadErrorCopy(new ApiError('Failed to load comments.', 500)).body)
+        .toBe('We could not load this conversation. Try again in a moment.');
+    });
+
+    it('turns an ended session into a way to sign in, never "Unauthorized"', () => {
+      expect(getCommentPostErrorCopy(new ApiError('Unauthorized', 401), false)).toEqual({
+        title: 'Your session ended',
+        message: 'Sign in to post.',
+        signIn: true,
+      });
+    });
+
+    it('names a closed post on a new comment, and keeps the server text for a reply', () => {
+      expect(getCommentPostErrorCopy(new ApiError('Post not found.', 404), false))
+        .toEqual({ title: COMMENTS_CLOSED_TITLE, signIn: false });
+      expect(getCommentPostErrorCopy(new ApiError('That comment is no longer available.', 404), true))
+        .toEqual({ title: 'Could not post comment', message: 'That comment is no longer available.', signIn: false });
+    });
+
+    it('asks a fast commenter to wait', () => {
+      const limited = new ApiError('Too many requests.', 429, { retryAfterSeconds: 240 });
+      expect(getCommentPostErrorCopy(limited, false)).toEqual({
+        title: 'Could not post comment',
+        message: "You're commenting too quickly. Try again in 4 minutes.",
+        signIn: false,
+      });
     });
   });
 
@@ -184,6 +276,20 @@ describe('comments view model', () => {
     it('does not let a viewer report their own comment', () => {
       expect(canReportComment(comment(), VIEWER_ID)).toBe(false);
       expect(canReportComment(comment(), OWNER_ID)).toBe(true);
+    });
+
+    it("offers Block on someone else's comment, signed in, unless they made the post", () => {
+      const theirs = comment({ author: { id: 'other', username: 'other', displayName: 'Other', avatarUrl: null } });
+      const byPostCreator = comment({ author: { id: OWNER_ID, username: 'owner', displayName: 'Owner', avatarUrl: null } });
+
+      expect(canBlockCommentAuthor(theirs, OWNER_ID, VIEWER_ID)).toBe(true);
+      // The post's creator blocking a commenter on their own post.
+      expect(canBlockCommentAuthor(theirs, OWNER_ID, OWNER_ID)).toBe(true);
+      expect(canBlockCommentAuthor(comment(), OWNER_ID, VIEWER_ID)).toBe(false);
+      expect(canBlockCommentAuthor(byPostCreator, OWNER_ID, VIEWER_ID)).toBe(false);
+      expect(canBlockCommentAuthor(theirs, OWNER_ID, null)).toBe(false);
+      expect(canBlockCommentAuthor(comment({ status: 'removed_by_author', author: null }), OWNER_ID, VIEWER_ID))
+        .toBe(false);
     });
   });
 
@@ -227,6 +333,15 @@ describe('comments view model', () => {
       const up = incrementParentReplyCountInPages(data, 'comment-1', 1, 2);
       expect(up?.pages[0].comments[0].replyCount).toBe(1);
       expect(up?.pages[0].commentCount).toBe(2);
+    });
+
+    it('hands back the same pinned list when the change is about another comment', () => {
+      const pinned = [comment({ id: 'mine' })];
+
+      expect(incrementReplyCountInList(pinned, 'elsewhere', 1)).toBe(pinned);
+      expect(markCommentRemovedInList(pinned, 'elsewhere', 'removed_by_author')).toBe(pinned);
+      expect(incrementReplyCountInList(pinned, 'mine', 1)[0].replyCount).toBe(1);
+      expect(markCommentRemovedInList(pinned, 'mine', 'removed_by_author')).toEqual([]);
     });
 
     it('inserts a successful reply once and refreshes cached counts', () => {

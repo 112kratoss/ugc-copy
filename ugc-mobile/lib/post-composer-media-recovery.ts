@@ -1,4 +1,4 @@
-import type { PostComposerMediaItem } from './post-new-view-model';
+import type { PostComposerDraft, PostComposerMediaItem } from './post-new-view-model';
 
 /**
  * Recovers a restored draft's staged media.
@@ -115,6 +115,28 @@ export function applyPostComposerMediaRecovery(
       ...(replacement.uri ? { uri: replacement.uri } : {}),
     }];
   });
+}
+
+/**
+ * Apply a completed recovery to the whole draft. Dropping a lost item can hand
+ * the cover to another item, so the fields that follow the cover follow it here:
+ * a stale `category` was refused by the create route when the new cover was of
+ * another kind, and a stale `upload` sent a file that is gone through the
+ * single-file fallback once every item was lost. A text-format draft that kept
+ * its media stays filed as text.
+ */
+export function applyPostComposerMediaRecoveryToDraft(
+  draft: PostComposerDraft,
+  outcome: Parameters<typeof applyPostComposerMediaRecovery>[1],
+): PostComposerDraft {
+  const mediaItems = applyPostComposerMediaRecovery(draft.mediaItems, outcome);
+  const cover = mediaItems[0];
+  return {
+    ...draft,
+    mediaItems,
+    upload: cover ? { uri: cover.uri, name: cover.name, type: cover.type } : null,
+    category: draft.mode === 'upload' && cover ? cover.mediaKind : draft.category,
+  };
 }
 
 /** The message shown when recovery could not save everything. */

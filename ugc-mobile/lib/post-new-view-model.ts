@@ -211,27 +211,6 @@ export interface PostComposerReadinessItem {
   state: PostComposerReadinessState;
 }
 
-export interface PostComposerPublishAction {
-  id: PostComposerVisibility;
-  label: string;
-  visibility: PostComposerVisibility;
-  variant: 'primary' | 'secondary';
-  disabled: boolean;
-  loading: boolean;
-}
-
-export const POST_COMPOSER_MODES: Array<{ id: PostComposerMode; label: string; body: string }> = [
-  { id: 'text', label: 'Text', body: 'Write a post, prompt, idea, or breakdown.' },
-  { id: 'upload', label: 'Upload', body: 'Post media made in any tool.' },
-  { id: 'creation', label: 'Creation', body: 'Publish a Magicbooklet result.' },
-];
-
-export const POST_COMPOSER_CATEGORY_OPTIONS: Array<{ id: PostComposerCategory; label: string }> = [
-  { id: 'text', label: 'Text' },
-  { id: 'image', label: 'Image' },
-  { id: 'video', label: 'Video' },
-];
-
 type FallbackSourceToolInput = Omit<SourceToolOption, 'models' | 'supportedMediaKinds'> & {
   media: Array<'image' | 'video'>;
   models?: SourceToolModel[];
@@ -486,26 +465,6 @@ export const POST_COMPOSER_SOURCE_OPTIONS: SourceToolOption[] = [
   }),
 ];
 
-export const POST_COMPOSER_VISIBILITY_OPTIONS: Array<{ id: PostComposerVisibility; label: string; body: string }> = [
-  { id: 'public', label: 'Public', body: 'Visible in Showcase.' },
-  { id: 'unlisted', label: 'Unlisted', body: 'Shareable by link only.' },
-  { id: 'private', label: 'Private', body: 'Saved privately in Studio.' },
-];
-
-export const POST_COMPOSER_UNLOCK_OPTIONS: Array<{ id: PostResourceBundleAccessMode; label: string }> = [
-  { id: 'none', label: 'None' },
-  { id: 'free', label: 'Free' },
-  { id: 'paid', label: 'Paid' },
-];
-
-export const POST_COMPOSER_RESOURCE_KIND_OPTIONS: Array<{ id: PostResourceKind; label: string }> = [
-  { id: 'prompt', label: 'Prompt' },
-  { id: 'workflow', label: 'Workflow / setup' },
-  { id: 'files', label: 'Files / links' },
-  { id: 'notes', label: 'Notes' },
-  { id: 'remix', label: 'Remix access' },
-];
-
 export const POST_COMPOSER_RESOURCE_CARD_OPTIONS: Array<{
   id: PostComposerResourceCardType;
   label: string;
@@ -537,6 +496,10 @@ export const TITLE_MAX_LENGTH = 100;
 // Matches the server's limit in post-creation-submission-service.ts. A lower
 // value here silently truncated half of what a creator was allowed to write.
 export const BODY_MAX_LENGTH = 2000;
+// Matches MAX_SOURCE_TOOL_LABEL_LENGTH and MAX_SOURCE_MODEL_LABEL_LENGTH in the
+// web app's source-tools.ts: a longer made-with name could be typed here and
+// was then refused by the server at publish.
+export const MADE_WITH_LABEL_MAX_LENGTH = 80;
 const MIN_RESOURCE_PRICE_TOKENS = 10;
 const MAX_MEDIA_ITEMS = 5;
 const MAX_MADE_WITH_ROWS = 5;
@@ -837,20 +800,6 @@ export function getExplicitPublishGeneration(
   return getPublishableGenerations([item])[0] ?? null;
 }
 
-export function buildPublishGenerationPayload(item: GenerationListItem) {
-  const includeGenerationReferences = hasGenerationReferences(item) || undefined;
-
-  return {
-    generationId: item.id,
-    visibility: 'public',
-    title: item.title || item.prompt || 'Untitled creation',
-    description: item.description || undefined,
-    prompt: item.prompt || undefined,
-    category: normalizeGenerationCategory(item.category),
-    ...(includeGenerationReferences ? { includeGenerationReferences } : {}),
-  };
-}
-
 export function buildPublishGenerationPostPayload(item: GenerationListItem, draft: PostComposerDraft) {
   const templateResult = isTemplateGeneration(item);
   const resourceBundle = templateResult ? null : buildPostResourceBundleInput(draft.resource);
@@ -862,7 +811,7 @@ export function buildPublishGenerationPostPayload(item: GenerationListItem, draf
     generationId: item.id,
     visibility: draft.visibility,
     isNsfw: draft.isNsfw === true,
-    title: trimOrUndefined(draft.title) ?? getPublishGenerationTitle(item),
+    title: trimOrUndefined(draft.title) ?? trimOrUndefined(getPublishGenerationTitlePrefill(item)),
     description: trimOrUndefined(draft.description),
     body: trimOrUndefined(draft.caption),
     category: draft.category === 'text' ? getPublishGenerationMediaKind(item) ?? 'image' : draft.category,
@@ -874,6 +823,18 @@ export function buildPublishGenerationPostPayload(item: GenerationListItem, draf
   };
 }
 
+/**
+ * The Explore description is a web composer field this app has no input for,
+ * so it travels only when the draft already carries one (an edit of a post that
+ * has it), and an absent key leaves the stored value alone. Sending the Story in
+ * its place stored every story twice, and the web post page shows the
+ * description above the media and the body below it.
+ */
+function buildDescriptionPatch(draft: PostComposerDraft): { description?: string } {
+  const description = draft.description.trim();
+  return description ? { description } : {};
+}
+
 export function buildUpdatePostPayload(
   isGenerationBacked: boolean,
   draft: PostComposerDraft,
@@ -882,6 +843,7 @@ export function buildUpdatePostPayload(
   const resourceBundlePatch = options.preserveSoldResourceBundle
     ? {}
     : { resourceBundle: buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' as const } };
+  const descriptionPatch = buildDescriptionPatch(draft);
 
   if (isGenerationBacked) {
     // A post made from a creation keeps the creation's media, category, and
@@ -889,7 +851,7 @@ export function buildUpdatePostPayload(
     // these for generation-backed posts and keeps the creation in step.
     return {
       title: draft.title.trim(),
-      description: (draft.description || draft.caption).trim(),
+      ...descriptionPatch,
       body: getCreatePostBody(draft),
       visibility: draft.visibility,
     isNsfw: draft.isNsfw === true,
@@ -903,7 +865,7 @@ export function buildUpdatePostPayload(
 
     return {
       title: draft.title.trim(),
-      description: (draft.description || draft.caption).trim(),
+      ...descriptionPatch,
       body,
       visibility: draft.visibility,
     isNsfw: draft.isNsfw === true,
@@ -998,7 +960,7 @@ export function getPostComposerDetailErrors(
     errors.media = 'Choose a finished creation to continue.';
   }
 
-  if (isTextProof(draft) && !draft.contentText.trim() && !draft.caption.trim()) {
+  if (isTextProof(draft) && !draft.contentText.trim()) {
     errors.content = 'Write the text post before continuing.';
   } else if (body.length > BODY_MAX_LENGTH) {
     errors.content = `Posts are limited to ${BODY_MAX_LENGTH} characters.`;
@@ -1029,7 +991,8 @@ export function getPostComposerDetailErrors(
 export function buildCreatePostFormData(draft: PostComposerDraft) {
   const formData = new FormData();
   formData.append('title', draft.title.trim());
-  formData.append('description', (draft.description || draft.caption).trim());
+  const { description } = buildDescriptionPatch(draft);
+  if (description) formData.append('description', description);
   formData.append('body', getCreatePostBody(draft));
   const sourceTools = !isTextProof(draft) || draft.mode === 'upload' || draft.mode === 'creation'
     ? buildSourceToolsPayload(draft)
@@ -1049,7 +1012,7 @@ export function buildCreatePostFormData(draft: PostComposerDraft) {
   formData.append('resourceBundle', JSON.stringify(buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' }));
 
   if (draft.mode === 'upload') {
-    formData.append('category', draft.category);
+    formData.append('category', getSubmittedPostCategory(draft));
     const mediaItems = buildPostComposerMediaItemsPayload(draft);
     if (mediaItems.length > 0) {
       formData.append('mediaItems', JSON.stringify(mediaItems));
@@ -1119,10 +1082,10 @@ export function buildOptimisticOwnerPostListItem(
     mediaKind: isTextPost ? null : coverMedia?.mediaKind ?? inferMediaKindFromDraft(draft),
     commentCount: 0,
     ...(mediaItems.length > 0 ? { mediaItems } : {}),
-    description: trimOrUndefined(draft.description) ?? trimOrUndefined(draft.caption),
+    description: trimOrUndefined(draft.description),
     prompt: isTextPost ? trimOrUndefined(draft.contentText) : undefined,
     body: getCreatePostBody(draft),
-    category: draft.category,
+    category: getSubmittedPostCategory(draft),
     postFormat: getCreatePostFormat(draft),
     sourceLabel: primarySourceTool?.modelLabel
       ? `${primarySourceTool.toolLabel} · ${primarySourceTool.modelLabel}`
@@ -1138,23 +1101,9 @@ export function buildOptimisticOwnerPostListItem(
   };
 }
 
-export function upsertOptimisticOwnerPostResponse(
-  current: OwnerPostsResponse | undefined,
-  post: OwnerPostListItem
-): OwnerPostsResponse {
-  return {
-    success: current?.success ?? true,
-    ...current,
-    posts: [
-      post,
-      ...(current?.posts ?? []).filter((item) => item.id !== post.id),
-    ],
-  };
-}
-
 /**
- * Paginated sibling of the above. The post is prepended to the first page, and filtered out of
- * every page so an edit to an already-loaded post cannot leave a duplicate grid key behind.
+ * The post is prepended to the first page of the owner's posts, and filtered out of every page
+ * so an edit to an already-loaded post cannot leave a duplicate grid key behind.
  */
 export function upsertOptimisticOwnerPostInfiniteData(
   current: InfiniteData<OwnerPostsResponse> | undefined,
@@ -1414,55 +1363,6 @@ export function getPostComposerPreviewStatusLabel(
   return 'No resource package configured.';
 }
 
-export function getPostComposerReadiness(
-  draft: PostComposerDraft,
-  selectedGeneration?: GenerationListItem | null,
-  skipGenerationSelection = false
-): PostComposerReadinessItem[] {
-  const publicReady = isPublicPostReady(draft, selectedGeneration, skipGenerationSelection);
-  const unlockBundle = buildPostResourceBundleInput(draft.resource);
-  const unlockActive = draft.resource.accessMode !== 'none';
-  const buyerPreviewReady = Boolean(draft.resource.previewText.trim())
-    && (draft.visibility !== 'public' || hasUsefulBuyerPreview(draft.resource));
-  const unlockReady = !unlockActive || Boolean(unlockBundle && buyerPreviewReady);
-  const validation = validatePostComposerDraft(draft);
-
-  return [
-    {
-      id: 'public-post',
-      label: publicReady ? 'Public post ready' : 'Public post needs content',
-      body: publicReady
-        ? 'Title, content, attribution, and visibility are set.'
-        : publicPostMissingMessage(draft, selectedGeneration, skipGenerationSelection),
-      state: publicReady ? 'ready' : 'warning',
-    },
-    {
-      id: 'unlock',
-      label: unlockActive ? unlockReady ? 'Resource package ready' : 'Resource package needs resources' : 'Resource package optional',
-      body: unlockActive
-        ? unlockReady
-          ? getPostComposerPreviewStatusLabel(draft, selectedGeneration)
-          : 'Add a buyer preview and at least one prompt, workflow, file, note, or remix resource.'
-        : getPostComposerPreviewStatusLabel(draft, selectedGeneration),
-      state: unlockActive ? unlockReady ? 'ready' : 'warning' : 'neutral',
-    },
-    {
-      id: 'preview',
-      label: 'Preview updates live',
-      body: draft.title.trim() ? 'The preview reflects the public post and unlock cue.' : 'Add a title to make the preview meaningful.',
-      // A missing title now blocks publishing, so this reads as a warning
-      // rather than an idle suggestion.
-      state: draft.title.trim() ? 'ready' : 'warning',
-    },
-    {
-      id: 'publish',
-      label: validation.valid ? 'Ready to publish' : 'Publish blocked',
-      body: validation.valid ? 'The publish button will open the post in the viewer after success.' : validation.message ?? 'Complete the required fields.',
-      state: validation.valid ? 'ready' : 'warning',
-    },
-  ];
-}
-
 export function applyCreationPromptResource(
   draft: PostComposerDraft,
   selectedGeneration: GenerationListItem | null | undefined,
@@ -1507,17 +1407,6 @@ export function applyCreationPromptResource(
         }),
       ],
     },
-  };
-}
-
-export function getPostComposerSectionSummary(
-  draft: PostComposerDraft,
-  selectedGeneration?: GenerationListItem | null
-) {
-  return {
-    publicPost: `${visibilityLabel(draft.visibility)} · ${contentModeSummary(draft, selectedGeneration)}`,
-    postSettings: `${draft.sourceTool.trim() || 'Source'} · ${getGenerationCategoryLabel(draft.category)}`,
-    resourcePackage: getResourcePackageSummary(draft, selectedGeneration),
   };
 }
 
@@ -1612,77 +1501,22 @@ export function getPostComposerSubmitLabel(params: {
   return 'Publish public';
 }
 
-export function getPostComposerPublishActions(params: {
-  selectedVisibility: PostComposerVisibility;
-  isEditMode: boolean;
-  isPending: boolean;
-  pendingVisibility?: PostComposerVisibility | null;
-}): PostComposerPublishAction[] {
-  const createAction = (
-    visibility: PostComposerVisibility,
-    label: string,
-    variant: 'primary' | 'secondary'
-  ): PostComposerPublishAction => {
-    const loading = params.isPending
-      && (params.pendingVisibility ? params.pendingVisibility === visibility : params.selectedVisibility === visibility);
-    const pendingLabel = params.isEditMode ? 'Saving' : visibility === 'public' ? 'Publishing' : 'Saving';
-
-    return {
-      id: visibility,
-      label: loading ? pendingLabel : label,
-      visibility,
-      variant,
-      disabled: params.isPending,
-      loading,
-    };
-  };
-
-  const actions: PostComposerPublishAction[] = [
-    createAction('private', 'Save private', 'secondary'),
-  ];
-
-  if (params.selectedVisibility === 'unlisted') {
-    actions.push(createAction('unlisted', 'Save unlisted', 'secondary'));
-  }
-
-  actions.push(createAction('public', 'Publish public', 'primary'));
-
-  return actions;
-}
-
-function isPublicPostReady(
-  draft: PostComposerDraft,
-  selectedGeneration?: GenerationListItem | null,
-  skipGenerationSelection = false
-) {
-  if (isTextProof(draft)) return Boolean(draft.contentText.trim() || draft.caption.trim());
-  if (draft.mode === 'upload') return draft.mediaItems.length > 0 || Boolean(draft.upload);
-  if (draft.mode === 'creation') return skipGenerationSelection || Boolean(selectedGeneration ?? draft.selectedGenerationId);
-  return false;
-}
-
-function publicPostMissingMessage(
-  draft: PostComposerDraft,
-  selectedGeneration?: GenerationListItem | null,
-  skipGenerationSelection = false
-) {
-  if (isTextProof(draft) && !draft.contentText.trim() && !draft.caption.trim()) {
-    return 'Write the text post or add a story.';
-  }
-  if (draft.mode === 'upload' && draft.mediaItems.length === 0 && !draft.upload) {
-    return 'Upload an image or video before publishing.';
-  }
-  if (draft.mode === 'creation' && !skipGenerationSelection && !selectedGeneration && !draft.selectedGenerationId) {
-    return 'Choose a finished Magicbooklet creation.';
-  }
-  return 'Complete the required public post fields.';
-}
-
 export function getCreatePostBody(draft: PostComposerDraft) {
-  const parts = isTextProof(draft)
-    ? [draft.contentText.trim(), draft.caption.trim()]
-    : [draft.caption.trim()];
-  return parts.filter(Boolean).join('\n\n');
+  // A text post is its post text alone, as on edit and on the web. The Story
+  // field is not shown in text mode, so a story kept from the media format was
+  // published as text the author could no longer see.
+  return isTextProof(draft) ? draft.contentText.trim() : draft.caption.trim();
+}
+
+/**
+ * A media post is filed under its cover's kind. The draft's `category` is set
+ * when media is added and goes stale when a reorder or a removal puts another
+ * kind first, and the create route refuses a category that does not match the
+ * cover.
+ */
+function getSubmittedPostCategory(draft: PostComposerDraft): PostComposerCategory {
+  if (draft.mode !== 'upload') return draft.category;
+  return draft.mediaItems[0]?.mediaKind ?? draft.category;
 }
 
 export function getCreatePostFormat(draft: PostComposerDraft): 'text' | 'media' | 'mixed' {
@@ -1694,9 +1528,14 @@ export function getPublishGenerationTitle(item: GenerationListItem) {
   return item.title || item.template?.templateTitle || item.prompt || 'Untitled creation';
 }
 
-export function getPublishGenerationSubtitle(item: GenerationListItem) {
-  const category = item.creationMode === 'motion' ? 'Motion' : getGenerationCategoryLabel(item.category);
-  return `${category} · ${item.model || 'Magicbooklet'}`;
+/**
+ * The title a new post from a creation starts with: the creation's own title,
+ * else its template's, else nothing, as the web composer does. Never the
+ * prompt: a creator selling that prompt published its opening as the post's
+ * public title unless they noticed and rewrote it.
+ */
+export function getPublishGenerationTitlePrefill(item: GenerationListItem) {
+  return (item.title || item.template?.templateTitle || '').slice(0, TITLE_MAX_LENGTH);
 }
 
 export function getPublishGenerationMediaKind(item: GenerationListItem): 'image' | 'video' | null {
@@ -1730,8 +1569,6 @@ export function willAttachGenerationReferences(
   return shouldIncludeGenerationReferences(item, draft);
 }
 
-export const willAttachFreeGenerationReferenceBundle = willAttachGenerationReferences;
-
 function normalizeGenerationCategory(category: string | null | undefined) {
   if (category === 'motion' || category === 'ugc-ad') return 'video';
   if (category === 'video' || category === 'text') {
@@ -1746,31 +1583,6 @@ function isTextProof(draft: PostComposerDraft) {
 
 function getCreationPackageDraft(draft: PostComposerDraft): PostComposerCreationPackageDraft {
   return draft.creationPackage ?? getDefaultCreationPackageDraft();
-}
-
-function visibilityLabel(visibility: PostComposerVisibility) {
-  if (visibility === 'unlisted') return 'Unlisted';
-  if (visibility === 'private') return 'Private';
-  return 'Public';
-}
-
-function contentModeSummary(
-  draft: PostComposerDraft,
-  selectedGeneration?: GenerationListItem | null
-) {
-  if (draft.mode === 'creation') return selectedGeneration || draft.selectedGenerationId ? 'Creation selected' : 'Choose creation';
-  if (draft.mode === 'upload') return draft.upload ? 'Upload selected' : 'Add media';
-  return draft.contentText.trim() || draft.caption.trim() ? 'Text ready' : 'Write text';
-}
-
-function getResourcePackageSummary(
-  draft: PostComposerDraft,
-  selectedGeneration?: GenerationListItem | null
-) {
-  if (draft.resource.accessMode === 'paid') return 'Paid package';
-  if (draft.resource.accessMode === 'free') return 'Free package';
-  if (willAttachGenerationReferences(selectedGeneration, draft)) return 'References attached';
-  return 'No package';
 }
 
 function trimOrUndefined(value: string | null | undefined) {
@@ -2727,11 +2539,4 @@ function getDefaultResourcePreview(kinds: PostResourceKind[]) {
     return 'Includes the exact reusable prompt.';
   }
   return `Includes ${getDefaultResourceSummary(kinds)}.`;
-}
-
-function getGenerationCategoryLabel(category: string | null | undefined) {
-  const normalized = normalizeGenerationCategory(category);
-  if (normalized === 'video') return 'Video';
-  if (normalized === 'text') return 'Text';
-  return 'Image';
 }

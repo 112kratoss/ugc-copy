@@ -35,11 +35,10 @@ import {
     type ShowcaseResourceFilter,
     type ShowcaseSort,
     type ShowcaseUnlockFilter,
-    isGenerationRecipeAssetId,
     getShowcaseItemMediaItems,
 } from '@/lib/showcase';
 import {
-    getBundleAccessLabel,
+    formatPostResourcePriceLabel,
     getPostResourceKindLabel,
     isPostResourceKind,
     type PostResourceKind,
@@ -184,15 +183,11 @@ function getItemResourceKinds(item: ShowcaseFeedItem): PostResourceKind[] {
 }
 
 function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
-    if (isGenerationRecipeAssetId(asset.id)) {
-        return 'View recipe';
-    }
-
     if (asset.accessMode === 'free' || asset.priceUsdCents === 0) {
         return 'View free recipe';
     }
 
-    return `Unlock for ${asset.priceQuote?.formatted ?? getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+(?:unlock|recipe)$/i, '')}`;
+    return `Unlock for ${formatPostResourcePriceLabel(asset.priceUsdCents, asset.priceQuote?.formatted)}`;
 }
 
 /**
@@ -336,6 +331,10 @@ export default function ShowcaseClient({
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
     const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+    // A `?post=` link to a post outside the loaded pages: read on its own, and
+    // the reel opens on the read (loading, gone, failed) rather than on nothing.
+    const [directPostStatus, setDirectPostStatus] = useState<'loading' | 'unavailable' | 'failed' | null>(null);
+    const [directPostAttempt, setDirectPostAttempt] = useState(0);
     const [renderedItemCount, setRenderedItemCount] = useState(() => (
         Math.min(
             restoredClientState.snapshot?.renderedItemCount ?? SHOWCASE_INITIAL_RENDER_COUNT,
@@ -569,6 +568,7 @@ export default function ShowcaseClient({
             directPostRequestRef.current = null;
             reelHistoryModeRef.current = null;
             setSelectedItemId(null);
+            setDirectPostStatus(null);
             return;
         }
 
@@ -579,6 +579,7 @@ export default function ShowcaseClient({
         if (items.some((item) => item.id === postParam)) {
             directPostRequestRef.current = postParam;
             setSelectedItemId(postParam);
+            setDirectPostStatus(null);
             return;
         }
 
@@ -587,7 +588,10 @@ export default function ShowcaseClient({
         }
 
         directPostRequestRef.current = postParam;
+        setSelectedItemId(postParam);
+        setDirectPostStatus('loading');
         const controller = new AbortController();
+        let settled = false;
 
         void fetch(`/api/showcase/posts/${encodeURIComponent(postParam)}`, {
             headers: session?.access_token
@@ -598,9 +602,13 @@ export default function ShowcaseClient({
             signal: controller.signal,
         })
             .then(async (response) => {
-                const payload = await response.json();
+                const payload = await response.json().catch(() => null);
+                settled = true;
                 if (!response.ok || !payload?.item) {
-                    throw new Error(payload?.error || 'Post not found.');
+                    // 404 is the server's answer for a post that is gone or
+                    // hidden from this viewer; any other failure may be brief.
+                    setDirectPostStatus(response.status === 404 ? 'unavailable' : 'failed');
+                    return;
                 }
 
                 const sharedItem = payload.item as ShowcaseFeedItem;
@@ -608,19 +616,31 @@ export default function ShowcaseClient({
                     ? currentItems
                     : [...currentItems, sharedItem]);
                 setSelectedItemId(sharedItem.id);
+                setDirectPostStatus(null);
             })
             .catch((error) => {
                 if (error instanceof DOMException && error.name === 'AbortError') {
                     return;
                 }
 
+                settled = true;
                 console.error('Failed to load shared showcase post:', error);
+                setDirectPostStatus('failed');
             });
 
         return () => {
             controller.abort();
+            // A read cut short by a re-run is asked again, not left loading.
+            if (!settled && directPostRequestRef.current === postParam) {
+                directPostRequestRef.current = null;
+            }
         };
-    }, [items, searchParams, session?.access_token, setItems]);
+    }, [directPostAttempt, items, searchParams, session?.access_token, setItems]);
+
+    const retryDirectPost = useCallback(() => {
+        directPostRequestRef.current = null;
+        setDirectPostAttempt((attempt) => attempt + 1);
+    }, []);
 
     const updateReelUrl = useCallback((
         postId: string | null,
@@ -663,6 +683,7 @@ export default function ShowcaseClient({
 
     const closePreview = () => {
         setSelectedItemId(null);
+        setDirectPostStatus(null);
 
         if (reelHistoryModeRef.current === 'pushed') {
             reelHistoryModeRef.current = null;
@@ -683,6 +704,7 @@ export default function ShowcaseClient({
 
             if (!postParam) {
                 setSelectedItemId(null);
+                setDirectPostStatus(null);
             }
         };
 
@@ -1016,6 +1038,18 @@ export default function ShowcaseClient({
         });
     };
 
+    // A thread read in the reel reports the post's comment count; the grid's
+    // copy follows it, so the reel opened on that post again says the same.
+    const updateCommentCount = useCallback((postId: string, commentCount: number) => {
+        setItems((currentItems) => {
+            const index = currentItems.findIndex((candidate) => candidate.id === postId);
+            if (index < 0 || currentItems[index].commentCount === commentCount) return currentItems;
+            const nextItems = currentItems.slice();
+            nextItems[index] = { ...currentItems[index], commentCount };
+            return nextItems;
+        });
+    }, [setItems]);
+
     const loadMore = useCallback(async () => {
         const nextCursor = sort === DEFAULT_SHOWCASE_SORT ? pageInfo.nextCursor ?? null : null;
         const nextOffset = pageInfo.nextOffset;
@@ -1309,6 +1343,8 @@ export default function ShowcaseClient({
             accessToken: token,
             surface,
             onSend: clearFeedbackNotice,
+            // The tile's or the reel's delivery, so the ranker hears the report.
+            deliveryId: reportedItem.recommendation?.deliveryId,
         });
         if (outcome.status === 'done') {
             sessionHiddenPostIdsRef.current.add(reportedItem.id);
@@ -1863,9 +1899,13 @@ export default function ShowcaseClient({
                     accessToken={session?.access_token ?? null}
                     hasMoreItems={pageInfo.hasMore}
                     isLoadingMoreItems={isLoadingMore}
+                    loadMoreError={loadMoreError}
                     onLoadMoreItems={loadMore}
                     onClose={closePreview}
                     onSelectItemId={selectPreviewItem}
+                    selectedItemStatus={directPostStatus}
+                    onRetrySelectedItem={retryDirectPost}
+                    onCommentCountChange={updateCommentCount}
                     onMediaIndexChange={(mediaIndex) => {
                         setSelectedMediaIndex(mediaIndex);
                         updateReelUrl(selectedItemId, 'replace', mediaIndex);

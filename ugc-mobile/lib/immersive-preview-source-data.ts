@@ -111,6 +111,25 @@ export function isGenerationSource(source: PreviewViewerSource) {
   return source === 'profile-creations' || source === 'studio-creations' || source === 'home-creations';
 }
 
+/**
+ * A post read by its id, or null when there is no such post to show: deleted,
+ * made private, or hidden from this reader. Any other failure is thrown, so a
+ * dropped connection reads as "Couldn't load" with a way to try again, not as
+ * a post that is gone.
+ */
+export async function readShowcasePostOrMissing(
+  api: Pick<ImmersivePreviewApi, 'getShowcasePost'>,
+  postId: string
+): Promise<ShowcaseFeedItem | null> {
+  try {
+    const response = await api.getShowcasePost(postId);
+    return response.item ?? null;
+  } catch (error) {
+    if ((error as { status?: unknown }).status === 404) return null;
+    throw error;
+  }
+}
+
 export async function loadImmersiveSourceData({
   api,
   source,
@@ -162,9 +181,9 @@ export async function loadImmersiveSourceData({
     let showcaseItems = response.items;
 
     if (initialId && !showcaseItems.some((item) => item.id === initialId)) {
-      const detail = await api.getShowcasePost(initialId).catch(() => null);
-      if (detail?.item) {
-        showcaseItems = [detail.item, ...showcaseItems];
+      const selected = await readShowcasePostOrMissing(api, initialId);
+      if (selected) {
+        showcaseItems = [selected, ...showcaseItems];
       }
     }
 
@@ -177,30 +196,31 @@ export async function loadImmersiveSourceData({
       let showcaseItems = response.items;
 
       if (initialId && !showcaseItems.some((item) => item.id === initialId)) {
-        const detail = await api.getShowcasePost(initialId).catch(() => null);
-        if (detail?.item) {
-          showcaseItems = [detail.item, ...showcaseItems];
+        const selected = await readShowcasePostOrMissing(api, initialId);
+        if (selected) {
+          showcaseItems = [selected, ...showcaseItems];
         }
       }
 
       return { showcaseItems };
     }
 
-    const detail = initialId ? await api.getShowcasePost(initialId).catch(() => null) : null;
-    return { showcaseItems: detail?.item ? [detail.item] : [] };
+    const selected = initialId ? await readShowcasePostOrMissing(api, initialId) : null;
+    return { showcaseItems: selected ? [selected] : [] };
   }
 
   // A cold link or notification opens a post that is rarely in the first
   // page of For You, so the post is read beside the feed rather than after
-  // it: one round trip instead of two before anything shows.
-  const [response, detail] = await Promise.all([
+  // it: one round trip instead of two before anything shows. A reel opened
+  // from a grid reads the grid's own lane instead (`use-showcase-lane-source`).
+  const [response, selected] = await Promise.all([
     api.getShowcaseFeed({ limit: 48, sort: 'for-you', ...(mediaOnly ? { category: 'media' } : {}) }),
-    initialId ? api.getShowcasePost(initialId).catch(() => null) : Promise.resolve(null),
+    initialId ? readShowcasePostOrMissing(api, initialId) : Promise.resolve(null),
   ]);
   let showcaseItems = response.items;
 
-  if (initialId && detail?.item && !showcaseItems.some((item) => item.id === initialId)) {
-    showcaseItems = [detail.item, ...showcaseItems];
+  if (initialId && selected && !showcaseItems.some((item) => item.id === initialId)) {
+    showcaseItems = [selected, ...showcaseItems];
   }
 
   return {
@@ -230,14 +250,15 @@ export function readCachedImmersiveSourceSnapshot(
   source: PreviewViewerSource,
   userId: string | undefined,
   initialId: string,
-  feedSessionId?: string | null
+  feedSessionId?: string | null,
+  creatorUsername?: string | null
 ): ImmersiveSourceSnapshot | undefined {
   const snapshot = isGenerationSource(source)
     ? cachedGenerations(queryClient, userId)
     : source === 'profile-posts'
       ? cachedOwnerPosts(queryClient, userId)
       : source === 'creator-profile'
-        ? cachedCreatorProfileItems(queryClient)
+        ? cachedCreatorProfileItems(queryClient, creatorUsername)
         : cachedShowcaseItems(queryClient, source, userId, initialId, feedSessionId);
   return snapshot && sourceDataContains(snapshot.data, initialId) ? snapshot : undefined;
 }
@@ -247,9 +268,10 @@ export function readCachedImmersiveSourceData(
   source: PreviewViewerSource,
   userId: string | undefined,
   initialId: string,
-  feedSessionId?: string | null
+  feedSessionId?: string | null,
+  creatorUsername?: string | null
 ): ImmersiveSourceData | undefined {
-  return readCachedImmersiveSourceSnapshot(queryClient, source, userId, initialId, feedSessionId)?.data;
+  return readCachedImmersiveSourceSnapshot(queryClient, source, userId, initialId, feedSessionId, creatorUsername)?.data;
 }
 
 export function readCachedProfile(queryClient: QueryClient, userId: string | undefined): ProfileResponse | undefined {
@@ -305,24 +327,22 @@ function cachedShowcaseItems(
     : undefined;
 }
 
-function cachedCreatorProfileItems(queryClient: QueryClient): ImmersiveSourceSnapshot | undefined {
-  const items: ShowcaseFeedItem[] = [];
-  const contributing: QueryKey[] = [];
-  const creatorQueries = queryClient.getQueriesData<CreatorProfileResponse | InfiniteData<CreatorProfileResponse>>({ queryKey: ['creator-profile'] });
-
-  for (const [key, data] of creatorQueries) {
-    const before = items.length;
-    if (data && 'pages' in data) {
-      items.push(...flattenCreatorProfilePages(data.pages));
-    } else if (data?.items.length) {
-      items.push(...data.items);
-    }
-    if (items.length > before) contributing.push(key);
-  }
-
-  const showcaseItems = dedupeById(items);
+/**
+ * The creator's own grid, the one `creator-profile-screen` pages, and no other
+ * creator's: every cached creator used to be merged in, so B's reel opened
+ * with A's posts for as long as A's grid was fresh (audit 03-11).
+ */
+function cachedCreatorProfileItems(
+  queryClient: QueryClient,
+  creatorUsername: string | null | undefined
+): ImmersiveSourceSnapshot | undefined {
+  if (!creatorUsername) return undefined;
+  const key: QueryKey = ['creator-profile', 'infinite', creatorUsername];
+  const showcaseItems = flattenCreatorProfilePages(
+    queryClient.getQueryData<InfiniteData<CreatorProfileResponse>>(key)?.pages
+  );
   return showcaseItems.length
-    ? { data: { showcaseItems }, updatedAt: oldestUpdatedAt(queryClient, contributing) }
+    ? { data: { showcaseItems }, updatedAt: oldestUpdatedAt(queryClient, [key]) }
     : undefined;
 }
 

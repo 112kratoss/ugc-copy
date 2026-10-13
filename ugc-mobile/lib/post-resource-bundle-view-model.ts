@@ -1,4 +1,10 @@
-import type { PostResourceItem, PostResourceItemType } from './types';
+import type {
+  PostResourceBundleLockedPreview,
+  PostResourceItem,
+  PostResourceItemType,
+  PostResourceKind,
+} from './types';
+import { formatUnlockDate } from './unlock-library-view-model';
 
 /**
  * Reading decisions for an unlocked resource bundle — what a group is called,
@@ -46,6 +52,104 @@ export function resourceTypeLabel(type: PostResourceItemType) {
 export function formatItemCount(count: number) {
   const normalized = Math.max(0, Math.round(count));
   return `${normalized} ${normalized === 1 ? 'item' : 'items'}`;
+}
+
+/**
+ * What a recipe holds, in the words the web uses (`getPostResourceKindLabel`).
+ * The one table for every chip and summary in the app: four copies of it had
+ * drifted apart before.
+ */
+const RESOURCE_KIND_LABELS: Record<PostResourceKind, string> = {
+  prompt: 'Prompt',
+  workflow: 'Workflow',
+  files: 'Files',
+  notes: 'Notes',
+  remix: 'Remix',
+};
+
+/** '' for a kind this build does not know, so callers can drop it. */
+export function resourceKindLabel(kind: string) {
+  return RESOURCE_KIND_LABELS[kind as PostResourceKind] ?? '';
+}
+
+// Ported from src/lib/post-resource-bundles.ts (`RESOURCE_ITEM_COUNT_ORDER`,
+// `RESOURCE_ITEM_LABELS`), so a locked recipe counts its contents in the same
+// order and the same words on both platforms.
+const RESOURCE_ITEM_COUNT_ORDER: PostResourceItemType[] = [
+  'prompt',
+  'workflow',
+  'reference_image',
+  'reference_video',
+  'reference_audio',
+  'source_file',
+  'preset',
+  'settings',
+  'note',
+  'external_link',
+  'remix_link',
+  'remix_access',
+];
+
+const RESOURCE_ITEM_COUNT_LABELS: Record<PostResourceItemType, { singular: string; plural: string }> = {
+  prompt: { singular: 'prompt', plural: 'prompts' },
+  workflow: { singular: 'workflow', plural: 'workflows' },
+  reference_image: { singular: 'reference image', plural: 'reference images' },
+  reference_video: { singular: 'reference video', plural: 'reference videos' },
+  reference_audio: { singular: 'reference audio', plural: 'reference audio files' },
+  source_file: { singular: 'source file', plural: 'source files' },
+  preset: { singular: 'preset', plural: 'presets' },
+  settings: { singular: 'settings note', plural: 'settings notes' },
+  note: { singular: 'note', plural: 'notes' },
+  external_link: { singular: 'link', plural: 'links' },
+  remix_link: { singular: 'remix link', plural: 'remix links' },
+  remix_access: { singular: 'remix access', plural: 'remix access' },
+};
+
+/** "1 section, 3 reference images": the web's `formatPostResourceBundleCountSummary`. */
+export function formatPostResourceBundleCountSummary(
+  preview: Pick<PostResourceBundleLockedPreview, 'itemCounts' | 'sectionCount'> | null | undefined
+) {
+  const parts: string[] = [];
+  const sectionCount = Math.max(0, Math.round(preview?.sectionCount ?? 0));
+  if (sectionCount > 0) parts.push(`${sectionCount} ${sectionCount === 1 ? 'section' : 'sections'}`);
+
+  for (const type of RESOURCE_ITEM_COUNT_ORDER) {
+    const count = Math.max(0, Math.round(preview?.itemCounts?.[type] ?? 0));
+    if (count === 0) continue;
+    const labels = RESOURCE_ITEM_COUNT_LABELS[type];
+    parts.push(`${count} ${count === 1 ? labels.singular : labels.plural}`);
+  }
+
+  return parts.join(', ');
+}
+
+/** "12 sold" for a paid recipe, "12 opened" for a free one (web: `formatUnlockCountLabel`). */
+export function formatUnlockCountLabel(accessMode: 'free' | 'paid', count: number) {
+  const normalized = Math.max(0, Math.round(count));
+  return accessMode === 'free' ? `${normalized} opened` : `${normalized} sold`;
+}
+
+/**
+ * The locked card's line of social proof and freshness, "12 sold · Updated
+ * Oct 3, 2026", the facts the web panel's header carries. The server keeps
+ * `salesCount` public for exactly this.
+ */
+export function formatLockedBundleFacts({
+  accessMode,
+  salesCount,
+  updatedAt,
+}: {
+  accessMode: 'free' | 'paid';
+  salesCount?: number | null;
+  updatedAt?: string | null;
+}) {
+  const parts: string[] = [];
+  if (typeof salesCount === 'number' && Number.isFinite(salesCount)) {
+    parts.push(formatUnlockCountLabel(accessMode, salesCount));
+  }
+  const updated = updatedAt ? formatUnlockDate(updatedAt) : '';
+  if (updated) parts.push(`Updated ${updated}`);
+  return parts.join(' · ');
 }
 
 function normalizeTitle(value: string) {

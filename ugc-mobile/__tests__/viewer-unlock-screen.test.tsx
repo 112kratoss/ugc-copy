@@ -4,19 +4,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode; label?: string; title?: string; body?: string } & Record<string, unknown>;
 
-const { contentProps, unlockDetail } = vi.hoisted(() => ({
+const { authUser, contentProps, openURL, routerPush, unlockApi, unlockDetail } = vi.hoisted(() => ({
+  authUser: { current: { id: 'buyer-1' } as { id: string } | null },
   contentProps: vi.fn(),
+  openURL: vi.fn(),
+  routerPush: vi.fn(),
+  // One object for every render, as the real context provides.
+  unlockApi: { resolveViewerUnlockFileUrl: vi.fn() },
   unlockDetail: { current: null as Record<string, unknown> | null },
 }));
 
 vi.mock('react-native', () => ({
-  Linking: { openURL: vi.fn() },
+  Linking: { openURL },
   Pressable: ({ children, style: _style, ...props }: MockProps) => React.createElement('pressable', props, children),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
 }));
 
 vi.mock('expo-router', () => ({
-  router: { push: vi.fn() },
+  router: { push: routerPush },
   useLocalSearchParams: () => ({ unlockId: 'unlock-1' }),
 }));
 
@@ -27,7 +32,7 @@ vi.mock('@tanstack/react-query', () => ({
 }));
 
 vi.mock('@/lib/auth', () => ({
-  useAuth: () => ({ user: { id: 'buyer-1' }, api: {} }),
+  useAuth: () => ({ user: authUser.current, api: unlockApi }),
 }));
 
 vi.mock('@/components/media-preview', () => ({
@@ -39,6 +44,16 @@ vi.mock('@/components/post-resource-bundle-content', () => ({
     contentProps(props);
     return null;
   },
+  ResourceRevisionSwitch: ({ selected, onSelect }: { selected: string; onSelect: (revision: string) => void }) => React.createElement(
+    'view',
+    {},
+    ['latest', 'purchased'].map((revision) => React.createElement('pressable', {
+      key: revision,
+      accessibilityLabel: `Show ${revision} unlock version`,
+      accessibilityState: { selected: selected === revision },
+      onPress: () => onSelect(revision),
+    })),
+  ),
 }));
 
 vi.mock('@/components/ui', () => ({
@@ -73,8 +88,22 @@ function textValues(tree: renderer.ReactTestRenderer) {
     .flatMap((node) => typeof node.props.children === 'string' ? [node.props.children] : []);
 }
 
+function buttonLabels(tree: renderer.ReactTestRenderer) {
+  return tree.root.findAll((node) => String(node.type) === 'button').map((node) => node.props.children);
+}
+
+function renderScreen() {
+  let tree: renderer.ReactTestRenderer;
+  renderer.act(() => {
+    tree = renderer.create(<ViewerUnlockScreen />);
+  });
+  return tree!;
+}
+
 describe('viewer unlock revision switching', () => {
   beforeEach(() => {
+    authUser.current = { id: 'buyer-1' };
+    routerPush.mockClear();
     contentProps.mockClear();
     unlockDetail.current = {
       unlockId: 'unlock-1',
@@ -131,5 +160,62 @@ describe('viewer unlock revision switching', () => {
       resources: purchasedResources,
       mediaItems: purchasedMedia,
     }));
+  });
+
+  it('leads to the original post only while it is public or unlisted', () => {
+    unlockDetail.current = { ...unlockDetail.current!, post: { id: 'post-1', visibility: 'public', archivedAt: null, tombstoned: false } };
+    let tree = renderScreen();
+    expect(buttonLabels(tree)).toContain('View original post');
+    renderer.act(() => {
+      tree.root.find((node) => String(node.type) === 'button' && node.props.children === 'View original post').props.onPress();
+    });
+    expect(routerPush).toHaveBeenCalledWith('/showcase/post-1');
+
+    unlockDetail.current = { ...unlockDetail.current!, post: { id: 'post-1', visibility: 'unlisted', archivedAt: null } };
+    tree = renderScreen();
+    expect(buttonLabels(tree)).toContain('View original post');
+  });
+
+  it('says why, instead of a dead link, when the post went private or was archived', () => {
+    for (const post of [
+      { id: 'post-1', visibility: 'private', archivedAt: null },
+      { id: 'post-1', visibility: 'public', archivedAt: '2026-10-01T00:00:00.000Z' },
+      null,
+    ]) {
+      unlockDetail.current = { ...unlockDetail.current!, post, postVisibility: post?.visibility ?? null };
+      const tree = renderScreen();
+      expect(buttonLabels(tree)).not.toContain('View original post');
+      expect(textValues(tree)).toContain('This post is no longer public. Your unlock stays available here.');
+    }
+  });
+
+  it("signs the purchase's files through the batched signing, to open in place", async () => {
+    unlockApi.resolveViewerUnlockFileUrl.mockReset();
+    unlockApi.resolveViewerUnlockFileUrl.mockResolvedValue('https://storage.test/signed');
+    openURL.mockClear();
+    renderScreen();
+
+    const props = contentProps.mock.calls.at(-1)?.[0] as {
+      resolveFileUrl: (storagePath: string) => Promise<string>;
+      onOpenFile: (file: { storagePath: string; title: string; contentType: string | null }) => Promise<void>;
+    };
+    await expect(props.resolveFileUrl('retained/look.jpg')).resolves.toBe('https://storage.test/signed');
+    expect(unlockApi.resolveViewerUnlockFileUrl).toHaveBeenCalledWith('unlock-1', 'retained/look.jpg', { disposition: 'inline' });
+
+    await renderer.act(async () => {
+      await props.onOpenFile({ storagePath: 'retained/guide.pdf', title: 'Guide', contentType: 'application/pdf' });
+    });
+    expect(unlockApi.resolveViewerUnlockFileUrl).toHaveBeenLastCalledWith('unlock-1', 'retained/guide.pdf', { disposition: 'inline' });
+    expect(openURL).toHaveBeenCalledWith('https://storage.test/signed');
+  });
+
+  it('brings a signed-out buyer back to this unlock after sign-in', () => {
+    authUser.current = null;
+    const tree = renderScreen();
+
+    renderer.act(() => {
+      tree.root.find((node) => String(node.type) === 'button' && node.props.children === 'Sign in').props.onPress();
+    });
+    expect(routerPush).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/unlock/unlock-1' } });
   });
 });

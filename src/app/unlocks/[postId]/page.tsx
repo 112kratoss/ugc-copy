@@ -1,5 +1,7 @@
 import { redirect } from 'next/navigation';
 
+import { logBackendError } from '@/lib/backend-logger';
+import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { createServiceClient } from '@/lib/server-helpers';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { getServerAuthState } from '@/lib/supabase-server';
@@ -11,6 +13,30 @@ export const dynamic = 'force-dynamic';
 
 interface UnlockDetailPageProps {
   params: Promise<{ postId: string }>;
+}
+
+/**
+ * /showcase/:id answers not-found across a block in either direction, as the
+ * app's post read does. A buyer who blocked the seller, or was blocked by them,
+ * still owns what they paid for, so this page keeps the door open itself
+ * instead of bouncing them into that not-found. A relationship that could not
+ * be checked is treated as a block: the page below is the buyer's own.
+ */
+async function isBlockedBetween(viewerUserId: string, creatorUserId: string | null): Promise<boolean> {
+  if (!creatorUserId || creatorUserId === viewerUserId) {
+    return false;
+  }
+
+  try {
+    return await isUserRelationshipBlocked({
+      adminSupabase: createServiceClient(),
+      firstUserId: viewerUserId,
+      secondUserId: creatorUserId,
+    });
+  } catch (error) {
+    logBackendError('failed_to_verify_block_state_for_unlock_page', { error });
+    return true;
+  }
 }
 
 /**
@@ -32,10 +58,11 @@ export default async function UnlockDetailPage({ params }: UnlockDetailPageProps
     redirect(`/login?returnUrl=/unlocks/${unlockId}`);
   }
 
+  const viewerUserId = auth.session.user.id;
   const detail = await getViewerUnlockDetail({
     adminSupabase: createServiceClient(),
     unlockId,
-    viewerUserId: auth.session.user.id,
+    viewerUserId,
   });
 
   if (!detail) {
@@ -50,7 +77,7 @@ export default async function UnlockDetailPage({ params }: UnlockDetailPageProps
     && !post.tombstoned,
   );
 
-  if (isPubliclyReadable && post) {
+  if (isPubliclyReadable && post && !(await isBlockedBetween(viewerUserId, detail.creatorUserId))) {
     redirect(buildShowcaseDetailPath(post.id, {
       from: 'unlocks',
       returnTo: '/creations?view=unlocks',

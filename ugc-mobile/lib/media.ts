@@ -66,6 +66,60 @@ export function isPostVideoOverDurationLimit(asset: {
   return seconds > POST_VIDEO_MAX_DURATION_SECONDS;
 }
 
+/**
+ * Mirror MAX_UPLOAD_BYTES_BY_KIND in src/lib/temporary-media-upload-sign.ts,
+ * where the sign step refuses anything larger; the video limit and its message
+ * are the web composer's (src/lib/post-video-limits.ts). A file refused at
+ * sign could only be retried, which never succeeds, while Publish stayed off.
+ */
+export const POST_IMAGE_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+export const POST_VIDEO_MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
+
+const POST_IMAGE_UPLOAD_BYTES_MESSAGE = 'Images must be 25 MB or smaller.';
+const POST_VIDEO_UPLOAD_BYTES_MESSAGE = 'Videos must be 250 MB or smaller.';
+
+/**
+ * Why a picked asset cannot go on a post, as the message to show, or null when
+ * it can. Size is checked before duration, as the web composer does. A size the
+ * picker could not read passes: the sign step measures the file itself.
+ */
+export function getPostMediaPickRefusal(asset: {
+  type?: string | null;
+  mimeType?: string | null;
+  duration?: number | null;
+  fileSize?: number | null;
+}): string | null {
+  const isVideo = asset.type === 'video' || Boolean(asset.mimeType?.startsWith('video/'));
+  const sizeBytes = typeof asset.fileSize === 'number' && Number.isFinite(asset.fileSize) ? asset.fileSize : null;
+  if (sizeBytes !== null) {
+    if (isVideo && sizeBytes > POST_VIDEO_MAX_UPLOAD_BYTES) return POST_VIDEO_UPLOAD_BYTES_MESSAGE;
+    if (!isVideo && sizeBytes > POST_IMAGE_MAX_UPLOAD_BYTES) return POST_IMAGE_UPLOAD_BYTES_MESSAGE;
+  }
+  return isPostVideoOverDurationLimit(asset) ? POST_VIDEO_DURATION_LIMIT_MESSAGE : null;
+}
+
+const POST_MEDIA_PICK_REFUSAL_TITLES = new Map<string, readonly [one: string, many: string]>([
+  [POST_VIDEO_DURATION_LIMIT_MESSAGE, ['Video too long', 'videos too long']],
+  [POST_VIDEO_UPLOAD_BYTES_MESSAGE, ['Video too large', 'videos too large']],
+  [POST_IMAGE_UPLOAD_BYTES_MESSAGE, ['Image too large', 'images too large']],
+]);
+
+/**
+ * One notice for the files a pick could not add, from each file's
+ * `getPostMediaPickRefusal`: titled by the shared reason when there is one,
+ * with every distinct reason stated once in the body.
+ */
+export function describePostMediaPickRefusals(refusals: ReadonlyArray<string | null>) {
+  const refused = refusals.filter((reason): reason is string => reason !== null);
+  if (refused.length === 0) return null;
+  const reasons = [...new Set(refused)];
+  const titles = reasons.length === 1 ? POST_MEDIA_PICK_REFUSAL_TITLES.get(reasons[0]) : undefined;
+  const title = titles
+    ? refused.length === 1 ? titles[0] : `${refused.length} ${titles[1]}`
+    : `${refused.length} file${refused.length === 1 ? '' : 's'} not added`;
+  return { title, body: reasons.join(' ') };
+}
+
 const REFERENCE_MEDIA_FAMILY_BY_EXTENSION = new Map<string, 'image' | 'video' | 'audio'>([
   ['jpg', 'image'],
   ['jpeg', 'image'],

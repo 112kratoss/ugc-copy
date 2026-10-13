@@ -625,6 +625,27 @@ describe('ShowcaseClient save actions', () => {
 
     const unlockLink = screen.getByRole('link', { name: /unlock for \$9\.00/i });
     expect(unlockLink).toHaveAttribute('href', expect.stringContaining('#recipe'));
+    // Both ways to pay, as the post page names them.
+    expect(unlockLink).toHaveAccessibleName(/^Unlock for \$9\.00 · 900 credits for /);
+  });
+
+  it('prices a credits-only recipe in credits alone, with no cash figure the checkout refuses', () => {
+    renderShowcase(createShowcaseItem({
+      asset: {
+        id: 'bundle-1',
+        postId: 'post-1',
+        title: 'Prompt pack',
+        accessMode: 'paid',
+        priceUsdCents: 50,
+        priceQuote: { currency: 'USD', amountSubunits: 50, formatted: '$0.50', note: null },
+        previewText: 'Unlock the exact reusable prompt.',
+        allowRemix: false,
+        resourceKinds: ['prompt'],
+      },
+    }));
+
+    expect(screen.getByRole('link', { name: /^unlock for 50 credits for /i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /\$0\.50/ })).not.toBeInTheDocument();
   });
 
   it('disables prefetching for community card detail and creator links', async () => {
@@ -782,6 +803,193 @@ describe('ShowcaseClient save actions', () => {
       expect(new URLSearchParams(window.location.search).has('post')).toBe(false);
     });
     expect(replaceState).toHaveBeenLastCalledWith(null, '', '/showcase');
+  });
+
+  // A `?post=` link to a post the first page does not hold is read on its own.
+  // The reel opened only once that read came back, and never when it failed:
+  // a link to a deleted post showed the grid and nothing else.
+  describe('a shared post outside the first page', () => {
+    const sharedItem = createShowcaseItem({
+      id: 'post-shared',
+      title: 'Shared Campaign',
+      generationId: 'gen-shared',
+      mediaUrl: 'https://example.com/shared.jpg',
+    });
+    const answerSharedPost = (answer: () => { ok: boolean; status: number; json: () => Promise<unknown> }) => {
+      const reads: string[] = [];
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/showcase/posts/post-shared') {
+          reads.push(url);
+          return answer();
+        }
+        if (url.startsWith('/api/showcase/saved-state')) {
+          return { ok: true, json: async () => [] };
+        }
+        return { ok: true, json: async () => ({ success: true }) };
+      }));
+      return reads;
+    };
+
+    it("says inside the reel that a deleted or hidden post isn't available", async () => {
+      window.history.replaceState(null, '', '/showcase?post=post-shared');
+      const replaceState = vi.spyOn(window.history, 'replaceState');
+      answerSharedPost(() => ({ ok: false, status: 404, json: async () => ({ error: 'Post not found.' }) }));
+
+      renderShowcase(createShowcaseItem());
+
+      const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+      expect(await within(reel).findByRole('heading', { name: /this post isn.t available/i })).toBeInTheDocument();
+      expect(within(reel).queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+
+      fireEvent.click(within(reel).getByRole('button', { name: 'Back to Explore' }));
+
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
+      });
+      expect(new URLSearchParams(window.location.search).has('post')).toBe(false);
+      expect(replaceState).toHaveBeenLastCalledWith(null, '', '/showcase');
+    });
+
+    it('offers Try again when the read fails, asks nothing more on its own, and opens the post when it comes', async () => {
+      window.history.replaceState(null, '', '/showcase?post=post-shared');
+      let failing = true;
+      const reads = answerSharedPost(() => failing
+        ? { ok: false, status: 500, json: async () => ({ error: 'Failed to fetch showcase post.' }) }
+        : { ok: true, status: 200, json: async () => ({ success: true, item: sharedItem }) });
+
+      renderShowcase(createShowcaseItem());
+
+      const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+      const tryAgain = await within(reel).findByRole('button', { name: 'Try again' });
+      expect(within(reel).getByRole('heading', { name: /couldn.t load this post/i })).toBeInTheDocument();
+      const readsBeforeRetry = reads.length;
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(reads).toHaveLength(readsBeforeRetry);
+
+      failing = false;
+      fireEvent.click(tryAgain);
+
+      expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
+      expect(reads.length).toBeGreaterThan(readsBeforeRetry);
+    });
+  });
+
+  // A failed page left `hasMore` true and loading ended, and the reel asked for
+  // the page again at once, for as long as it kept failing; the grid's error
+  // was drawn behind the reel, where no one could see it.
+  it('tells the reel a page failed, so it stops asking and offers Retry', async () => {
+    const firstItem = createShowcaseItem({ id: 'post-1', title: 'Campaign Frame', generationId: 'gen-1' });
+    const secondItem = createShowcaseItem({
+      id: 'post-2',
+      title: 'Second Campaign Frame',
+      generationId: 'gen-2',
+      mediaUrl: 'https://example.com/second.jpg',
+    });
+    const thirdItem = createShowcaseItem({
+      id: 'post-3',
+      title: 'Third Campaign Frame',
+      generationId: 'gen-3',
+      mediaUrl: 'https://example.com/third.jpg',
+    });
+    let failing = true;
+    const feedFetch = vi.fn(async () => failing
+      ? { ok: false, status: 500, json: async () => ({ error: 'Failed' }) }
+      : {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: [thirdItem],
+          pageInfo: { hasMore: false, nextOffset: null, limit: 12, offset: 2 },
+        }),
+      });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/feed?')) {
+        return feedFetch();
+      }
+      if (url.startsWith('/api/showcase/saved-state')) {
+        return { ok: true, json: async () => [] };
+      }
+      return { ok: true, json: async () => ({ success: true }) };
+    }));
+    vi.spyOn(window.history, 'pushState');
+
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed([firstItem, secondItem], { hasMore: true, nextOffset: 2, limit: 2 })}
+        initialCategory="all"
+        initialSort="recent"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+    const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+    // One post after the open one: the reel asks for the next page, which fails.
+    const notice = await within(reel).findByRole('alert');
+    expect(notice).toHaveTextContent('Could not load more posts.');
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(feedFetch).toHaveBeenCalledTimes(1);
+
+    failing = false;
+    fireEvent.click(within(notice).getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => expect(feedFetch).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(within(screen.getByRole('dialog', { name: 'Explore reel viewer' })).queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps the comment count a thread read in the reel when the reel opens on that post again', async () => {
+    vi.spyOn(window.history, 'pushState');
+    // Back from the reel as the browser does it: the URL loses `post`, then popstate.
+    vi.spyOn(window.history, 'back').mockImplementation(() => {
+      window.history.replaceState(null, '', '/showcase');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/posts/post-1/comments')) {
+        return {
+          ok: true,
+          json: async () => ({
+            postId: 'post-1',
+            postCreatorId: 'creator-1',
+            commentCount: 3,
+            comments: [],
+            pageInfo: { hasMore: false, nextOffset: null, limit: 20, offset: 0 },
+          }),
+        };
+      }
+      if (url.startsWith('/api/showcase/saved-state')) {
+        return { ok: true, json: async () => [] };
+      }
+      return { ok: true, json: async () => ({ success: true }) };
+    }));
+
+    renderShowcase(createShowcaseItem());
+
+    fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+    const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+    fireEvent.click(await within(reel).findByRole('button', { name: 'Show comments on Campaign Frame (0)' }));
+    expect(await within(reel).findByRole('button', { name: 'Hide comments on Campaign Frame (3)' })).toBeInTheDocument();
+
+    fireEvent.click(within(reel).getByRole('button', { name: 'Explore' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+    const reopened = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+    expect(await within(reopened).findByRole('button', { name: 'Show comments on Campaign Frame (3)' })).toBeInTheDocument();
   });
 
   it('automatically loads the next showcase page when the feed sentinel enters view', async () => {
@@ -1415,6 +1623,24 @@ describe('ShowcaseClient save actions', () => {
     expect(screen.getByText('Second Frame')).toBeInTheDocument();
   });
 
+  // The server files the report as that delivery's `report` feed event, the
+  // one way the ranker hears it.
+  it('names the delivery a ranked tile was reported from', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderShowcase(createShowcaseItem({
+      recommendation: { deliveryId: '812', position: 0, reason: 'Based on your saves', algorithmVersion: 'for-you-rules-v4' },
+    }));
+
+    chooseFromTileMenu('Campaign Frame', /report content/i);
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Content reported and removed from your feed.');
+    expect(JSON.parse(String(requestTo('/api/posts/post-1/report')?.[1]?.body))).toEqual({
+      reason: 'unsafe_content',
+      details: 'Reported from the web Explore grid.',
+      deliveryId: '812',
+    });
+  });
+
   it('sends nothing and keeps the post when the confirmation is declined', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderShowcase(createShowcaseItem());
@@ -1664,6 +1890,26 @@ describe('ShowcaseClient save actions', () => {
     });
     expect(within(screen.getByRole('dialog')).getByRole('button', { name: /more actions for second frame/i }))
       .toBeInTheDocument();
+  });
+
+  it('names the delivery the reel showed when a ranked post is reported from it', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.spyOn(window.history, 'pushState');
+    renderShowcase(createShowcaseItem({
+      recommendation: { deliveryId: '812', position: 0, reason: 'Based on your saves', algorithmVersion: 'for-you-rules-v4' },
+    }));
+
+    fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+    const reel = await screen.findByRole('dialog');
+    fireEvent.click(await within(reel).findByRole('button', { name: /more actions for campaign frame/i }));
+    fireEvent.click(within(reel).getByRole('menuitem', { name: /report content/i }));
+
+    expect(await screen.findByText('Content reported and removed from your feed.')).toBeInTheDocument();
+    expect(JSON.parse(String(requestTo('/api/posts/post-1/report')?.[1]?.body))).toEqual({
+      reason: 'unsafe_content',
+      details: 'Reported from the web reel.',
+      deliveryId: '812',
+    });
   });
 
   it("offers the reel Not interested and nothing else on the viewer's own post", async () => {

@@ -101,6 +101,44 @@ describe('mobile api client caching', () => {
     }
   });
 
+  it('names the recipe a post report is about, and sends no bundle otherwise', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ success: true }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.reportPost('post-1', { reason: 'misleading_unlock', details: 'Not what it says', bundleId: 'bundle-1' });
+    await api.reportPost('post-1', { reason: 'spam' });
+
+    const bodies = (fetcher.mock.calls as unknown as Array<[string, RequestInit]>)
+      .map(([, init]) => JSON.parse(String(init.body)));
+    expect(bodies[0]).toEqual({ reason: 'misleading_unlock', details: 'Not what it says', bundleId: 'bundle-1' });
+    expect(bodies[1]).toEqual({ reason: 'spam' });
+  });
+
+  it('names the feed delivery a post was reported from, and sends no delivery otherwise', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ success: true }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.reportPost('post-1', { reason: 'unsafe_content', details: 'From the reel', deliveryId: '812' });
+    await api.reportPost('post-1', { reason: 'unsafe_content', deliveryId: '' });
+    await api.reportPost('post-1', { reason: 'spam' });
+
+    const bodies = (fetcher.mock.calls as unknown as Array<[string, RequestInit]>)
+      .map(([, init]) => JSON.parse(String(init.body)));
+    expect(bodies).toEqual([
+      { reason: 'unsafe_content', details: 'From the reel', deliveryId: '812' },
+      { reason: 'unsafe_content' },
+      { reason: 'spam' },
+    ]);
+  });
+
   it('sends an explicit confirmation and transient Apple authorization when deleting an account', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ success: true, deleted: true }));
     const api = createApiClient({
@@ -827,6 +865,66 @@ describe('mobile api client caching', () => {
     expect(url).toBe('https://magicbooklet.test/api/me/unlocks/unlock-1/file-url');
     expect(init.method).toBe('POST');
     expect(JSON.parse(String(init.body))).toEqual({ storagePath: 'creator/resource.zip' });
+  });
+
+  it("signs a purchase's files in one call per tick, inline when asked, on the buyer-library route", async () => {
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { storagePath?: string; storagePaths?: string[] };
+      if (body.storagePaths) {
+        return jsonResponse({ files: body.storagePaths.map((path) => ({ storagePath: path, url: `https://signed.test/${path}` })) });
+      }
+      return jsonResponse({ success: true, signedUrl: `https://signed.test/one/${body.storagePath}` });
+    });
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const urls = await Promise.all([
+      api.resolveViewerUnlockFileUrl('unlock-1', 'retained/a.png', { disposition: 'inline' }),
+      api.resolveViewerUnlockFileUrl('unlock-1', 'retained/b.mp4', { disposition: 'inline' }),
+    ]);
+    // An explicit Open asks for its one file on its own.
+    const opened = await api.resolveViewerUnlockFileUrl('unlock-1', 'retained/guide.pdf', { disposition: 'inline' });
+    await api.getViewerUnlockFileUrls('unlock-1', ['retained/c.png']);
+
+    const requests = (fetcher.mock.calls as unknown as Array<[string, RequestInit]>)
+      .map(([url, init]) => [url, init.method, JSON.parse(String(init.body))]);
+    expect(requests).toEqual([
+      ['https://magicbooklet.test/api/me/unlocks/unlock-1/file-url', 'POST', { storagePaths: ['retained/a.png', 'retained/b.mp4'], disposition: 'inline' }],
+      ['https://magicbooklet.test/api/me/unlocks/unlock-1/file-url', 'POST', { storagePath: 'retained/guide.pdf', disposition: 'inline' }],
+      ['https://magicbooklet.test/api/me/unlocks/unlock-1/file-url', 'POST', { storagePaths: ['retained/c.png'] }],
+    ]);
+    expect(urls).toEqual(['https://signed.test/retained/a.png', 'https://signed.test/retained/b.mp4']);
+    expect(opened).toBe('https://signed.test/one/retained/guide.pdf');
+  });
+
+  it('signs one purchase file per call on a server without the batch form', async () => {
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { storagePath?: string };
+      // What the buyer-library route answered before it learned `storagePaths`.
+      if (!body.storagePath) {
+        return new Response(JSON.stringify({ error: 'Missing resource file path.' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return jsonResponse({ success: true, signedUrl: `https://signed.test/one/${body.storagePath}` });
+    });
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const urls = await Promise.all([
+      api.resolveViewerUnlockFileUrl('unlock-1', 'retained/a.png'),
+      api.resolveViewerUnlockFileUrl('unlock-1', 'retained/b.png'),
+    ]);
+
+    expect(urls).toEqual(['https://signed.test/one/retained/a.png', 'https://signed.test/one/retained/b.png']);
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
   it('requests server-issued temporary media upload intents with JSON metadata', async () => {
@@ -1640,5 +1738,166 @@ describe('mobile api client refused-token handling', () => {
     vi.setSystemTime(new Date('2026-09-11T10:00:11.000Z'));
     await expect(api.getProfile()).rejects.toBeInstanceOf(SessionRejectedError);
     expect(handler).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('signing bundle files', () => {
+  type Fetcher = ReturnType<typeof vi.fn>;
+
+  function errorResponse(status: number, error: string) {
+    return new Response(JSON.stringify({ error }), { status, headers: { 'Content-Type': 'application/json' } });
+  }
+
+  function clientWith(fetcher: Fetcher) {
+    return createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+  }
+
+  function bodies(fetcher: Fetcher) {
+    return fetcher.mock.calls.map((call) => JSON.parse(String((call[1] as RequestInit).body)));
+  }
+
+  /** A server with the batch form: signs every path it is sent. */
+  function batchServer() {
+    return vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { storagePath?: string; storagePaths?: string[] };
+      if (body.storagePaths) {
+        return jsonResponse({ files: body.storagePaths.map((path) => ({ storagePath: path, url: `https://signed.test/${path}` })) });
+      }
+      return jsonResponse({ success: true, signedUrl: `https://signed.test/one/${body.storagePath}` });
+    });
+  }
+
+  it('asks for an inline file only when told to, and keeps the plain body otherwise', async () => {
+    const fetcher = batchServer();
+    const api = clientWith(fetcher);
+
+    await api.getPostResourceFileUrl('post-1', 'refs/a.jpg', { disposition: 'inline' });
+    await api.getPostResourceFileUrl('post-1', 'refs/a.jpg');
+
+    expect(bodies(fetcher)).toEqual([
+      { storagePath: 'refs/a.jpg', disposition: 'inline' },
+      { storagePath: 'refs/a.jpg' },
+    ]);
+  });
+
+  it('signs every path asked for in the same tick with one call', async () => {
+    const fetcher = batchServer();
+    const api = clientWith(fetcher);
+
+    const urls = await Promise.all([
+      api.resolvePostResourceFileUrl('post-1', 'refs/a.jpg', { disposition: 'inline' }),
+      api.resolvePostResourceFileUrl('post-1', 'refs/b.mp4', { disposition: 'inline' }),
+      api.resolvePostResourceFileUrl('post-1', 'refs/a.jpg', { disposition: 'inline' }),
+    ]);
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe('https://magicbooklet.test/api/posts/post-1/resource-bundle/file-url');
+    expect(bodies(fetcher)).toEqual([{ storagePaths: ['refs/a.jpg', 'refs/b.mp4'], disposition: 'inline' }]);
+    expect(urls).toEqual(['https://signed.test/refs/a.jpg', 'https://signed.test/refs/b.mp4', 'https://signed.test/refs/a.jpg']);
+  });
+
+  it('signs a path asked for on its own with the single form every server knows', async () => {
+    const fetcher = batchServer();
+    const api = clientWith(fetcher);
+
+    await expect(api.resolvePostResourceFileUrl('post-1', 'files/guide.pdf', { disposition: 'inline' }))
+      .resolves.toBe('https://signed.test/one/files/guide.pdf');
+    expect(bodies(fetcher)).toEqual([{ storagePath: 'files/guide.pdf', disposition: 'inline' }]);
+  });
+
+  it('keeps separate posts in separate requests', async () => {
+    const fetcher = batchServer();
+    const api = clientWith(fetcher);
+
+    await Promise.all([
+      api.resolvePostResourceFileUrl('post-1', 'refs/a.jpg'),
+      api.resolvePostResourceFileUrl('post-2', 'refs/b.jpg'),
+    ]);
+
+    expect(fetcher.mock.calls.map((call) => String(call[0]))).toEqual([
+      'https://magicbooklet.test/api/posts/post-1/resource-bundle/file-url',
+      'https://magicbooklet.test/api/posts/post-2/resource-bundle/file-url',
+    ]);
+  });
+
+  it('signs one path per call on a server without the batch form', async () => {
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { storagePath?: string };
+      // What the route answered before it learned `storagePaths`.
+      if (!body.storagePath) return errorResponse(400, 'Missing resource file path.');
+      return jsonResponse({ success: true, signedUrl: `https://signed.test/one/${body.storagePath}` });
+    });
+    const api = clientWith(fetcher);
+
+    const urls = await Promise.all([
+      api.resolvePostResourceFileUrl('post-1', 'refs/a.jpg'),
+      api.resolvePostResourceFileUrl('post-1', 'refs/b.jpg'),
+    ]);
+
+    expect(urls).toEqual(['https://signed.test/one/refs/a.jpg', 'https://signed.test/one/refs/b.jpg']);
+    expect(bodies(fetcher)).toEqual([
+      { storagePaths: ['refs/a.jpg', 'refs/b.jpg'] },
+      { storagePath: 'refs/a.jpg' },
+      { storagePath: 'refs/b.jpg' },
+    ]);
+  });
+
+  it('takes a whole-batch 404 as the answer for every path, without asking for each again', async () => {
+    // The route answers 404 only when nothing asked for is on the unlock.
+    const fetcher = vi.fn(async () => errorResponse(404, 'Resource file not found on this unlock.'));
+    const api = clientWith(fetcher);
+
+    const results = await Promise.allSettled([
+      api.resolvePostResourceFileUrl('post-1', 'refs/gone-a.jpg'),
+      api.resolvePostResourceFileUrl('post-1', 'refs/gone-b.jpg'),
+    ]);
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(results.map((result) => result.status)).toEqual(['rejected', 'rejected']);
+    expect(((results[1] as PromiseRejectedResult).reason as ApiError).status).toBe(404);
+  });
+
+  it('gives every path the answer when access or the signing limit stops the batch', async () => {
+    const fetcher = vi.fn(async () => errorResponse(403, 'Unlock this resource before downloading files.'));
+    const api = clientWith(fetcher);
+
+    const results = await Promise.allSettled([
+      api.resolvePostResourceFileUrl('post-1', 'refs/a.jpg'),
+      api.resolvePostResourceFileUrl('post-1', 'refs/b.jpg'),
+    ]);
+
+    // No retry per path: it would be refused the same way, and spend the limit.
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(results.map((result) => result.status)).toEqual(['rejected', 'rejected']);
+    expect(((results[0] as PromiseRejectedResult).reason as Error).message).toBe('Unlock this resource before downloading files.');
+  });
+
+  it('refuses a path the batch answer left out, without a second request', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ files: [{ storagePath: 'refs/a.jpg', url: 'https://signed.test/refs/a.jpg' }] }));
+    const api = clientWith(fetcher);
+
+    const [kept, missing] = await Promise.allSettled([
+      api.resolvePostResourceFileUrl('post-1', 'refs/a.jpg'),
+      api.resolvePostResourceFileUrl('post-1', 'refs/b.jpg'),
+    ]);
+
+    expect(kept).toEqual({ status: 'fulfilled', value: 'https://signed.test/refs/a.jpg' });
+    expect(missing.status).toBe('rejected');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('signs more than the batch limit in calls of 25', async () => {
+    const fetcher = batchServer();
+    const api = clientWith(fetcher);
+    const paths = Array.from({ length: 30 }, (_, index) => `refs/${index}.jpg`);
+
+    const urls = await Promise.all(paths.map((path) => api.resolvePostResourceFileUrl('post-1', path)));
+
+    expect(bodies(fetcher).map((body: { storagePaths: string[] }) => body.storagePaths.length)).toEqual([25, 5]);
+    expect(urls[29]).toBe('https://signed.test/refs/29.jpg');
   });
 });

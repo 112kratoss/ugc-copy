@@ -5,11 +5,14 @@ import { useMemo, useState } from 'react';
 import { Eye, Heart, Loader2, MessageCircle, Repeat2 } from 'lucide-react';
 
 import { useAuth } from '@/components/AuthProvider';
+import { useNsfwPostRevealed } from '@/components/NsfwPostReveal';
 import PublicShareButton from '@/components/PublicShareButton';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import { formatCompactCount } from '@/lib/post-feed-presentation';
 import { getCurrentInternalPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
+
+import { useShowcaseDetailCommentCount } from './ShowcaseDetailCommentCount';
 
 /**
  * The verbs under the post — Remix, Save, Comment, Share — plus passive reach,
@@ -47,6 +50,11 @@ export default function ShowcaseDetailEngagementRow({
   const { session, user } = useAuth();
   const [isRemixing, setIsRemixing] = useState(false);
   const [remixError, setRemixError] = useState<string | null>(null);
+  const liveCommentCount = useShowcaseDetailCommentCount(commentCount);
+  const nsfwRevealed = useNsfwPostRevealed();
+  // Under an NSFW gate the thread stays hidden until the post is revealed, and
+  // the link to it goes with it.
+  const isCommentsShown = showComments && nsfwRevealed !== false;
 
   const loginHref = () =>
     `/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}`))}`;
@@ -130,13 +138,13 @@ export default function ShowcaseDetailEngagementRow({
           <Heart className={`h-4 w-4 ${isSaved ? 'fill-current' : ''}`} aria-hidden="true" />
           {liveSaveCount > 0 ? formatCompactCount(liveSaveCount) : 'Save'}
         </button>
-        {showComments ? (
+        {isCommentsShown ? (
           <a
             href="#comments"
             className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full px-2 transition hover:text-white"
           >
             <MessageCircle className="h-4 w-4" aria-hidden="true" />
-            {commentCount > 0 ? formatCompactCount(commentCount) : 'Comment'}
+            {liveCommentCount > 0 ? formatCompactCount(liveCommentCount) : 'Comment'}
           </a>
         ) : null}
         <PublicShareButton

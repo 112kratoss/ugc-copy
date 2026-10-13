@@ -52,7 +52,6 @@ export default function UnlockDetail({ detail }: { detail: ViewerUnlockDetailMod
             priceUsdCents={detail.priceUsdCents}
             priceNote={null}
             isFree={detail.accessMode === 'free'}
-            isPublic={false}
             viewerCanAccess
             viewerIsOwner={false}
             resourceKinds={detail.resourceKinds}

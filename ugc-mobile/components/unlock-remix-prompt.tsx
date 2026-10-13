@@ -1,9 +1,7 @@
-import { useQueryClient } from '@tanstack/react-query';
-import { router } from 'expo-router';
-import { FileText, Lock } from 'lucide-react-native';
-import { useState } from 'react';
+import { Lock } from 'lucide-react-native';
 import { ActivityIndicator, Modal, Pressable, Text, View } from 'react-native';
 
+import { ResourceKindRow } from '@/components/resource-kind-row';
 import { SheetBackdrop, SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { useAuth } from '@/lib/auth';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
@@ -12,9 +10,7 @@ import { CloseGlyph } from '@/lib/platform-glyphs';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
-import type { PostResourceKind } from '@/lib/types';
-import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
-import { haptic } from '@/lib/haptics';
+import { useBundleUnlock } from '@/lib/use-bundle-unlock';
 
 export function UnlockRemixPrompt({
   bottomInset,
@@ -32,51 +28,43 @@ export function UnlockRemixPrompt({
   visible: boolean;
 }) {
   const theme = useAppTheme();
-  const { api, user } = useAuth();
-  const queryClient = useQueryClient();
-  const [unlocking, setUnlocking] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { user } = useAuth();
   const reducedMotion = useReducedMotion();
   const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
   const unlock = item?.details?.unlock ?? null;
+  // The feed's price for this bundle, when the item carries the bundle it names.
+  const resource = item?.resource && unlock && item.resource.resourceId === unlock.resourceId ? item.resource : null;
+  const bundleUnlock = useBundleUnlock({
+    authReturnTo,
+    // This sheet is an RN Modal, which would hide the action sheet the other
+    // hosts ask with; the dialog draws above it.
+    confirmWith: 'dialog',
+    onLeave: onClose,
+    onUnlocked: async () => {
+      if (!item) return;
+      onClose();
+      await onUnlocked(item);
+    },
+    target: unlock
+      ? {
+        postId: unlock.postId,
+        resourceId: unlock.resourceId,
+        accessMode: unlock.accessMode,
+        priceUsdCents: typeof resource?.priceUsdCents === 'number' ? resource.priceUsdCents : null,
+        priceLabel: unlock.priceLabel,
+      }
+      : null,
+  });
   const accent: ToolAccent = unlock?.accessMode === 'free' ? 'workflow' : 'commerce';
   const accentValue = accentColor(accent, theme.colors);
   const resourceKinds = unlock?.resourceKinds ?? [];
-  // A paid unlock spends credits the moment this is pressed, so the button says how many.
+  // A paid unlock spends credits once confirmed, so the button says how many.
   const ctaLabel = !user
     ? 'Sign in to unlock'
     : unlock?.accessMode === 'paid' && unlock.priceLabel
       ? `Unlock for ${unlock.priceLabel}`
       : 'Unlock to remix';
-
-  const handleUnlock = async () => {
-    if (!item || !unlock) return;
-
-    if (!user) {
-      onClose();
-      router.push({ pathname: '/auth', params: { returnTo: authReturnTo } } as never);
-      return;
-    }
-
-    try {
-      setError(null);
-      setUnlocking(true);
-      if (unlock.accessMode === 'free') {
-        await api.unlockFreeBundle(unlock.postId);
-      } else {
-        await api.unlockBundleWithCredits(unlock.postId);
-      }
-
-      await refreshUnlockedBundleCaches(queryClient, unlock);
-      haptic.select();
-      setUnlocking(false);
-      onClose();
-      await onUnlocked(item);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not unlock this resource.');
-      setUnlocking(false);
-    }
-  };
+  const ctaDisabled = bundleUnlock.isPending || bundleUnlock.shortfall > 0;
 
   if (!item || !unlock) {
     return null;
@@ -158,18 +146,22 @@ export function UnlockRemixPrompt({
                 </View>
               ) : null}
             </View>
-            <ResourceKindRow kinds={resourceKinds} />
+            <ResourceKindRow kinds={resourceKinds} on="surfaceStrong" />
           </View>
 
-          {error ? <Text selectable style={{ color: theme.colors.danger, ...appTheme.type.caption, fontWeight: '800' }}>{error}</Text> : null}
+          {bundleUnlock.shortfallMessage ? (
+            <Text style={{ color: theme.semantic.warning.foreground, ...appTheme.type.caption, fontWeight: '800' }}>
+              {bundleUnlock.shortfallMessage}
+            </Text>
+          ) : null}
+          {bundleUnlock.error ? <Text selectable style={{ color: theme.colors.danger, ...appTheme.type.caption, fontWeight: '800' }}>{bundleUnlock.error}</Text> : null}
 
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={ctaLabel}
-            disabled={unlocking}
-            onPress={() => {
-              void handleUnlock();
-            }}
+            accessibilityState={{ disabled: ctaDisabled }}
+            disabled={ctaDisabled}
+            onPress={bundleUnlock.request}
             style={({ pressed }) => ({
               minHeight: 50,
               flexDirection: 'row',
@@ -178,45 +170,39 @@ export function UnlockRemixPrompt({
               gap: 9,
               borderRadius: appTheme.radii.pill,
               backgroundColor: theme.colors.primaryFill,
-              opacity: unlocking ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+              opacity: ctaDisabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
               paddingHorizontal: 18,
             })}
           >
-            {unlocking ? (
+            {bundleUnlock.isPending ? (
               <ActivityIndicator color={theme.colors.onPrimary} />
             ) : (
               <Lock size={appTheme.icon.default} color={theme.colors.onPrimary} />
             )}
             <Text style={{ color: theme.colors.onPrimary, ...appTheme.type.bodySm, fontWeight: '800' }}>
-              {unlocking ? 'Unlocking…' : ctaLabel}
+              {bundleUnlock.isPending ? 'Unlocking…' : ctaLabel}
             </Text>
           </Pressable>
+          {bundleUnlock.offersCredits ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Get credits"
+              onPress={bundleUnlock.goToCredits}
+              style={({ pressed }) => ({
+                minHeight: 50,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: appTheme.radii.pill,
+                backgroundColor: theme.colors.surfaceStrong,
+                opacity: pressed ? appTheme.opacity.pressed : 1,
+                paddingHorizontal: 18,
+              })}
+            >
+              <Text style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>Get credits</Text>
+            </Pressable>
+          ) : null}
         </SheetPanel>
       </View>
     </Modal>
   );
-}
-
-function ResourceKindRow({ kinds }: { kinds: PostResourceKind[] }) {
-  const theme = useAppTheme();
-  if (!kinds.length) return null;
-
-  return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-      {kinds.map((kind) => (
-        <View key={kind} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surface, paddingHorizontal: 10, paddingVertical: 6 }}>
-          <FileText size={appTheme.icon.xs} color={theme.colors.textSecondary} />
-          <Text style={{ color: theme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>{resourceKindLabel(kind)}</Text>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function resourceKindLabel(kind: PostResourceKind) {
-  if (kind === 'prompt') return 'Prompt';
-  if (kind === 'workflow') return 'Workflow';
-  if (kind === 'files') return 'Files';
-  if (kind === 'notes') return 'Notes';
-  return 'Remix';
 }

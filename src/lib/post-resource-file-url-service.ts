@@ -3,6 +3,13 @@ import {
   POST_RESOURCE_FILE_READ_URL_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { logBackendError } from '@/lib/backend-logger';
+import {
+  POST_RESOURCE_FILE_URL_BATCH_LIMIT,
+  formatPostResourceDownloadName,
+  type PostResourceFileDisposition,
+  type PostResourceSignedFileUrl,
+} from '@/lib/post-resource-bundles';
 import {
   getPostResourceBundleDetailByPostId,
   type PostResourceBundleDetail,
@@ -18,7 +25,7 @@ export type PostResourceFileReadUrlClient = Parameters<typeof enforceBackendRate
       createSignedUrl: (
         path: string,
         expiresInSeconds: number,
-        options: { download: string },
+        options: { download?: string },
       ) => PromiseLike<{
         data: { signedUrl?: string | null } | null;
         error: { message?: string } | Error | null;
@@ -33,6 +40,12 @@ export type PostResourceFileReadUrlResult =
     body: {
       success: true;
       signedUrl: string;
+    };
+  }
+  | {
+    ok: true;
+    body: {
+      files: PostResourceSignedFileUrl[];
     };
   }
   | {
@@ -57,6 +70,16 @@ type CreatePostResourceFileReadUrlParams = {
   viewerUserId: string | null;
 };
 
+type FileUrlRequest =
+  | {
+    ok: true;
+    /** `{ storagePaths }` answers `{ files }`; `{ storagePath }` keeps its `{ success, signedUrl }`. */
+    batch: boolean;
+    storagePaths: string[];
+    disposition: PostResourceFileDisposition;
+  }
+  | { ok: false; error: string };
+
 const RESOURCE_FILES_BUCKET = 'post_resource_files';
 const RESOURCE_SOURCE_BUCKETS = [
   RESOURCE_FILES_BUCKET,
@@ -67,17 +90,41 @@ const RESOURCE_SOURCE_BUCKETS = [
   'generated_audio',
 ] as const;
 const SIGNED_READ_EXPIRES_IN_SECONDS = 600;
+const NOT_ON_THIS_UNLOCK = 'Resource file not found on this unlock.';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-function parseRequestedPath(body: unknown) {
-  if (!isRecord(body) || typeof body.storagePath !== 'string') {
-    return '';
+function isExactPath(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value === value.trim();
+}
+
+function parseFileUrlRequest(body: unknown): FileUrlRequest {
+  const fields = isRecord(body) ? body : {};
+  const disposition = fields.disposition ?? 'attachment';
+  if (disposition !== 'inline' && disposition !== 'attachment') {
+    return { ok: false, error: 'Unknown file disposition.' };
   }
 
-  return body.storagePath === body.storagePath.trim() ? body.storagePath : '';
+  if (fields.storagePaths === undefined) {
+    return isExactPath(fields.storagePath)
+      ? { ok: true, batch: false, storagePaths: [fields.storagePath], disposition }
+      : { ok: false, error: 'Missing resource file path.' };
+  }
+
+  const storagePaths = fields.storagePaths;
+  if (!Array.isArray(storagePaths) || storagePaths.length === 0 || !storagePaths.every(isExactPath)) {
+    return { ok: false, error: 'Missing resource file path.' };
+  }
+  if (storagePaths.length > POST_RESOURCE_FILE_URL_BATCH_LIMIT) {
+    return {
+      ok: false,
+      error: `Ask for at most ${POST_RESOURCE_FILE_URL_BATCH_LIMIT} resource files at a time.`,
+    };
+  }
+
+  return { ok: true, batch: true, storagePaths: Array.from(new Set(storagePaths)), disposition };
 }
 
 function resolveClient(client: CreatePostResourceFileReadUrlParams['client']) {
@@ -120,6 +167,25 @@ function resolveStorageLocation(requestedPath: string, ownerUserId: string) {
   return filePath ? { bucket: RESOURCE_FILES_BUCKET, filePath } : null;
 }
 
+function findSignableFile(detail: PostResourceBundleDetail, storagePath: string, ownerUserId: string) {
+  const { attachment, resourceItem } = findRequestedResource(detail, storagePath);
+  if (!attachment && !resourceItem) {
+    return null;
+  }
+
+  const location = resolveStorageLocation(storagePath, ownerUserId);
+  return location
+    ? {
+      storagePath,
+      location,
+      downloadName: formatPostResourceDownloadName(
+        attachment?.label ?? resourceItem?.title,
+        attachment?.contentType ?? resourceItem?.contentType,
+      ),
+    }
+    : null;
+}
+
 export async function createPostResourceFileReadUrlForRoute({
   body,
   client,
@@ -129,15 +195,17 @@ export async function createPostResourceFileReadUrlForRoute({
   rateLimitKey,
   viewerUserId,
 }: CreatePostResourceFileReadUrlParams): Promise<PostResourceFileReadUrlResult> {
-  const requestedPath = parseRequestedPath(body);
-  if (!requestedPath) {
+  const request = parseFileUrlRequest(body);
+  if (!request.ok) {
     return {
       ok: false,
       status: 400,
-      body: { error: 'Missing resource file path.' },
+      body: { error: request.error },
     };
   }
 
+  // One entitlement load answers the whole request: a panel used to sign one
+  // file per call, and every call loaded the bundle, purchase and post again.
   const detail = await getDetailByPostId(postId, {
     viewerUserId,
     countryCode,
@@ -151,34 +219,26 @@ export async function createPostResourceFileReadUrlForRoute({
     };
   }
 
-  const { attachment, resourceItem } = findRequestedResource(detail, requestedPath);
-  if (!attachment && !resourceItem) {
-    return {
-      ok: false,
-      status: 404,
-      body: { error: 'Resource file not found on this unlock.' },
-    };
-  }
-
   const resourceOwnerUserId = detail.seller?.id;
-  if (!resourceOwnerUserId) {
+  // A path that is not on this unlock is left out of a batch's answer rather
+  // than failing the paths beside it; the caller reads its absence.
+  const signableFiles = resourceOwnerUserId
+    ? request.storagePaths.flatMap((storagePath) => {
+      const file = findSignableFile(detail, storagePath, resourceOwnerUserId);
+      return file ? [file] : [];
+    })
+    : [];
+  if (signableFiles.length === 0) {
     return {
       ok: false,
       status: 404,
-      body: { error: 'Resource file not found on this unlock.' },
-    };
-  }
-  const storageLocation = resolveStorageLocation(requestedPath, resourceOwnerUserId);
-  if (!storageLocation) {
-    return {
-      ok: false,
-      status: 404,
-      body: { error: 'Resource file not found on this unlock.' },
+      body: { error: NOT_ON_THIS_UNLOCK },
     };
   }
 
   const resolvedClient = resolveClient(client);
   try {
+    // Once per request, so a batch counts as one signing against the limit.
     await enforceBackendRateLimit(resolvedClient, {
       ...POST_RESOURCE_FILE_READ_URL_RATE_LIMIT,
       key: rateLimitKey,
@@ -198,13 +258,28 @@ export async function createPostResourceFileReadUrlForRoute({
     };
   }
 
-  const { data, error } = await resolvedClient.storage
-    .from(storageLocation.bucket)
-    .createSignedUrl(storageLocation.filePath, SIGNED_READ_EXPIRES_IN_SECONDS, {
-      download: attachment?.label ?? resourceItem?.title ?? 'Resource file',
-    });
+  // Taken before signing, so the stated expiry is never later than the URL's own.
+  const expiresAt = new Date(Date.now() + SIGNED_READ_EXPIRES_IN_SECONDS * 1000).toISOString();
+  const signedFiles = await Promise.all(signableFiles.map(async (file): Promise<PostResourceSignedFileUrl | null> => {
+    try {
+      const { data, error } = await resolvedClient.storage
+        .from(file.location.bucket)
+        // Without `download` storage serves the file inline, so "Open file"
+        // opens it instead of saving it.
+        .createSignedUrl(
+          file.location.filePath,
+          SIGNED_READ_EXPIRES_IN_SECONDS,
+          request.disposition === 'attachment' ? { download: file.downloadName } : {},
+        );
+      return error || !data?.signedUrl ? null : { storagePath: file.storagePath, url: data.signedUrl, expiresAt };
+    } catch (error) {
+      logBackendError('post_resource_file_sign_failed', { error });
+      return null;
+    }
+  }));
+  const files = signedFiles.filter((file): file is PostResourceSignedFileUrl => Boolean(file));
 
-  if (error || !data?.signedUrl) {
+  if (files.length === 0) {
     return {
       ok: false,
       status: 500,
@@ -212,11 +287,18 @@ export async function createPostResourceFileReadUrlForRoute({
     };
   }
 
+  if (!request.batch) {
+    return {
+      ok: true,
+      body: {
+        success: true,
+        signedUrl: files[0].url,
+      },
+    };
+  }
+
   return {
     ok: true,
-    body: {
-      success: true,
-      signedUrl: data.signedUrl,
-    },
+    body: { files },
   };
 }

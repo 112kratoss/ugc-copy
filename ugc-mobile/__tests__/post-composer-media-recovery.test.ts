@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyPostComposerMediaRecovery,
+  applyPostComposerMediaRecoveryToDraft,
   describeLostRecoveryMedia,
   planPostComposerMediaRecovery,
   type MediaVerification,
 } from '@/lib/post-composer-media-recovery';
-import type { PostComposerMediaItem } from '@/lib/post-new-view-model';
+import { buildCreatePostFormData, getDefaultPostComposerDraft, type PostComposerMediaItem } from '@/lib/post-new-view-model';
 
 function mediaItem(overrides: Partial<PostComposerMediaItem> = {}): PostComposerMediaItem {
   return {
@@ -115,6 +116,54 @@ describe('applyPostComposerMediaRecovery', () => {
       reuploaded: new Map(),
       lost: new Set(),
     })).toEqual(items);
+  });
+});
+
+describe('applyPostComposerMediaRecoveryToDraft', () => {
+  const video = mediaItem({ id: 'video', uri: 'file:///local/clip.mp4', name: 'clip.mp4', type: 'video/mp4', mediaKind: 'video', storagePath: 'uploads/user-1/clip.mp4' });
+  const image = mediaItem({ id: 'image', uri: 'file:///local/still.jpg', name: 'still.jpg', storagePath: 'uploads/user-1/still.jpg' });
+  const draft = {
+    ...getDefaultPostComposerDraft(),
+    mode: 'upload' as const,
+    proofMode: 'media' as const,
+    title: 'Restored gallery',
+    category: 'video' as const,
+    upload: { uri: video.uri, name: video.name, type: video.type },
+    mediaItems: [video, image],
+  };
+
+  it('hands the cover fields to the item that becomes first', () => {
+    const restored = applyPostComposerMediaRecoveryToDraft(draft, {
+      reuploaded: new Map(),
+      lost: new Set(['video']),
+    });
+
+    expect(restored.mediaItems.map((item) => item.id)).toEqual(['image']);
+    expect(restored.upload).toEqual({ uri: image.uri, name: image.name, type: image.type });
+    expect(restored.category).toBe('image');
+    // What the create route checks against the cover's type.
+    expect(buildCreatePostFormData(restored).get('category')).toBe('image');
+  });
+
+  it('leaves no file behind for the single-file fallback once every item is lost', () => {
+    const restored = applyPostComposerMediaRecoveryToDraft(draft, {
+      reuploaded: new Map(),
+      lost: new Set(['video', 'image']),
+    });
+
+    expect(restored.mediaItems).toEqual([]);
+    expect(restored.upload).toBeNull();
+    expect(buildCreatePostFormData(restored).get('media')).toBeNull();
+  });
+
+  it('keeps a text-format draft filed as text', () => {
+    const restored = applyPostComposerMediaRecoveryToDraft(
+      { ...draft, mode: 'text', proofMode: 'text', category: 'text' },
+      { reuploaded: new Map([['video', { storagePath: 'uploads/user-1/clip-new.mp4' }]]), lost: new Set() },
+    );
+
+    expect(restored.category).toBe('text');
+    expect(restored.mediaItems[0].storagePath).toBe('uploads/user-1/clip-new.mp4');
   });
 });
 

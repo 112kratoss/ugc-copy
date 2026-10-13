@@ -35,11 +35,25 @@ export interface ViewerActionCallbacks {
   onHideCreator?: () => void;
   onNotInterested?: () => void;
   onRecreate: () => void;
+  /**
+   * The screen's own Save, where it has one: the reel's is optimistic and
+   * tells the ranker. Without it the row saves through the API and refreshes
+   * every cache that shows the item.
+   */
+  onSave?: (item: ImmersivePreviewItem) => void;
   onShare: () => void;
   onDeleted?: (postId: string) => void;
   onBlocked?: (userId: string) => void;
+  /** A report about the post went through: the reel takes the post out and moves on, as the web's does. */
+  onReported?: (item: ImmersivePreviewItem) => void;
   onUnlockRemix?: () => void;
   onSourceRefresh: () => void;
+  /**
+   * Where sign-in comes back to when a signed-out reader picks an action that
+   * needs an account (Report, Block): the screen showing this item. Without
+   * it, sign-in ends on Home and the reader has lost the post.
+   */
+  authReturnTo?: string;
 }
 
 /**
@@ -50,12 +64,12 @@ export interface ViewerActionCallbacks {
  */
 type PostReportReason = Parameters<ReturnType<typeof createApiClient>['reportPost']>[1]['reason'];
 
-const POST_REPORT_REASONS: Array<{ label: string; value: PostReportReason }> = [
+const POST_REPORT_REASONS: Array<{ label: string; value: PostReportReason; aboutRecipe?: boolean }> = [
   { label: 'Spam', value: 'spam' },
   { label: 'Stolen content', value: 'stolen_content' },
-  { label: 'Misleading recipe', value: 'misleading_unlock' },
+  { label: 'Misleading recipe', value: 'misleading_unlock', aboutRecipe: true },
   { label: 'Unsafe content', value: 'unsafe_content' },
-  { label: 'Payment issue', value: 'payment_issue' },
+  { label: 'Payment issue', value: 'payment_issue', aboutRecipe: true },
   { label: 'Something else', value: 'other' },
 ];
 
@@ -67,11 +81,14 @@ export function useViewerActionHandlers({
   onHideCreator,
   onNotInterested,
   onRecreate,
+  onSave,
   onShare,
   onDeleted,
   onBlocked,
+  onReported,
   onUnlockRemix,
   onSourceRefresh,
+  authReturnTo,
 }: ViewerActionCallbacks & { item: ImmersivePreviewItem; onClose?: () => void }) {
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
@@ -154,11 +171,15 @@ export function useViewerActionHandlers({
 
     const requireSignedIn = () => {
       if (user) return true;
-      router.push('/auth');
+      router.push((authReturnTo ? { pathname: '/auth', params: { returnTo: authReturnTo } } : '/auth') as never);
       return false;
     };
 
     if (action === 'save' || action === 'unsave') {
+      if (onSave) {
+        onSave(item);
+        return;
+      }
       // A bookmark is reversible in place: no dialog, like the web.
       const shouldSave = action === 'save';
       void (async () => {
@@ -234,10 +255,6 @@ export function useViewerActionHandlers({
       router.push(immersiveViewerHref({ source: 'profile-posts', initialId: item.linkedPostId }) as never);
       return;
     }
-    if (action === 'edit-linked' && item.linkedPostId) {
-      router.push({ pathname: '/post/new', params: { postId: item.linkedPostId } } as never);
-      return;
-    }
     if (action === 'edit-linked-resources' && item.linkedPostId) {
       router.push({ pathname: '/post/new', params: { postId: item.linkedPostId, focus: 'resources' } } as never);
       return;
@@ -260,10 +277,6 @@ export function useViewerActionHandlers({
     }
     if (action === 'unlock-remix') {
       onUnlockRemix?.();
-      return;
-    }
-    if (action === 'open-original' && item.showcasePostId) {
-      router.push(immersiveViewerHref({ source: 'showcase-feed', initialId: item.showcasePostId }) as never);
       return;
     }
     if (action === 'comment') {
@@ -297,12 +310,19 @@ export function useViewerActionHandlers({
     if (action === 'report-content' && item.showcasePostId) {
       if (!requireSignedIn()) return;
       const postId = item.showcasePostId;
-      // The same six reasons the web post page offers, so a stolen-work or
-      // misleading-recipe report reaches moderation filed as one.
+      // The recipe's own id (`post_resource_bundles.id`), so a report about
+      // it reaches moderation with the recipe it concerns, as the web's does.
+      const bundleId = item.details?.unlock?.resourceId;
+      // The delivery the reel's impression went to, so the ranker hears the
+      // report against the same delivery. A post read on its own has none.
+      const deliveryId = item.recommendation?.deliveryId;
+      // The web post page's reasons, so a stolen-work or misleading-recipe
+      // report reaches moderation filed as one. The two about a recipe are
+      // offered only on a post that has one.
       showActionSheet({
         title: 'Why are you reporting this?',
         message: 'Choose the closest reason so the moderation team can review it correctly.',
-        actions: POST_REPORT_REASONS.map((reason) => ({
+        actions: POST_REPORT_REASONS.filter((reason) => bundleId || !reason.aboutRecipe).map((reason) => ({
           label: reason.label,
           onPress: () => {
             void (async () => {
@@ -310,8 +330,11 @@ export function useViewerActionHandlers({
                 await api.reportPost(postId, {
                   reason: reason.value,
                   details: 'Reported from the mobile Showcase viewer.',
+                  ...(reason.aboutRecipe && bundleId ? { bundleId } : {}),
+                  ...(deliveryId ? { deliveryId } : {}),
                 });
                 haptic.success();
+                onReported?.(item);
                 showMessageDialog({
                   title: 'Report received',
                   message: 'Thank you. Our moderation team will review this content.',
@@ -337,7 +360,9 @@ export function useViewerActionHandlers({
         if (!confirmed) return;
         try {
           await api.reportUser(item.creatorId!, {
-            reason: 'unsafe_content',
+            // The reason the web files a creator under from its feed, Explore
+            // and reel (`src/lib/moderation-client.ts`), so moderators see one.
+            reason: 'harassment',
             sourceSurface: 'showcase-reel',
             details: item.showcasePostId ? `Reported from post ${item.showcasePostId}.` : undefined,
           });

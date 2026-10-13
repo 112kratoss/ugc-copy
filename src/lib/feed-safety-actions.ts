@@ -10,8 +10,9 @@ import { forgetBlockedCreatorForVisit, takeBlockedCreatorOffClientFeeds } from '
 
 /**
  * The three safety rows of a post's menu, each asked for, sent and answered one
- * way wherever the menu is drawn: the feed card, Explore's tile, the reel, and
- * a creator's page. Worded as the app's Home words them.
+ * way wherever the menu is drawn: the feed card, Explore's tile, the reel, a
+ * creator's page, and a post's own page (its creator rows). Worded as the app's
+ * Home words them.
  *
  * `cancelled`: the viewer said no and nothing was sent. `done` and `failed`
  * carry the line to show. The caller owns everything else: who may ask (the
@@ -31,10 +32,11 @@ interface FeedSafetyRequest {
 
 /**
  * A feed takes a reported post away. A creator's page and the viewer's saved
- * posts are lists of their own, not a feed: the post stays where it is listed,
- * and the answer says only that it was reported.
+ * posts are lists of their own, not a feed, and a post's page is the post
+ * itself: the post stays where it is, and the answer says only that it was
+ * reported.
  */
-const KEEPS_REPORTED_POST: ReadonlySet<SafetySurface> = new Set(['creator-page', 'saved']);
+const KEEPS_REPORTED_POST: ReadonlySet<SafetySurface> = new Set(['creator-page', 'saved', 'post-page']);
 
 /**
  * Shows a finished action's line as a toast, for a page with no notice bar of
@@ -57,7 +59,12 @@ export async function reportPostAfterConfirmation({
   accessToken,
   surface,
   onSend,
-}: FeedSafetyRequest & { postId: string }): Promise<FeedSafetyOutcome> {
+  deliveryId,
+}: FeedSafetyRequest & {
+  postId: string;
+  /** The feed delivery it was reported from, when a ranked feed showed it. */
+  deliveryId?: string | null;
+}): Promise<FeedSafetyOutcome> {
   const confirmed = await requestConfirmation({
     title: 'Report content?',
     message: 'Magicbooklet will send this post to the moderation team for a safety review.',
@@ -67,7 +74,7 @@ export async function reportPostAfterConfirmation({
   if (!confirmed) return { status: 'cancelled' };
   onSend?.();
   try {
-    await reportPostContent({ postId, accessToken, surface });
+    await reportPostContent({ postId, accessToken, surface, deliveryId });
     return {
       status: 'done',
       message: KEEPS_REPORTED_POST.has(surface)

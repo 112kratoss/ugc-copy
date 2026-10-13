@@ -1,7 +1,8 @@
 'use client';
 
+import PostComments from '@/components/PostComments';
 import ResourceFileLink from '@/components/ResourceFileLink';
-import ResourceMediaPreview from '@/components/ResourceMediaPreview';
+import ResourceMediaPreview, { createBatchedUrlResolver } from '@/components/ResourceMediaPreview';
 
 import Link from 'next/link';
 import Script from 'next/script';
@@ -16,7 +17,9 @@ import {
   Heart,
   LockKeyhole,
   Loader2,
+  MessageCircle,
   MessageSquareText,
+  RefreshCw,
   ShoppingBag,
   Sparkles,
   Wand2,
@@ -27,11 +30,13 @@ import CreatorIdentity from '@/components/CreatorIdentity';
 import PublicShareButton from '@/components/PublicShareButton';
 import TextPostPreviewCard from '@/components/TextPostPreviewCard';
 import { useAuth } from '@/components/AuthProvider';
-import { readFeedbackSnapshot } from '@/components/feedback-state';
+import { readFeedbackSnapshot, requestConfirmation } from '@/components/feedback-state';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import {
   ShowcaseFeedbackMenu,
+  getShowcaseRecommendation,
   sendShowcaseFeedEvent,
+  sendShowcaseResourceOpenEvent,
   type ShowcaseFeedbackAction,
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import {
@@ -39,23 +44,28 @@ import {
   type ShowcaseMediaProgressTracker,
 } from '@/lib/showcase-media-progress';
 import {
+  POST_RESOURCE_FILE_URL_BATCH_LIMIT,
   formatPostResourceBundleCountSummary,
-  getBundleAccessLabel,
+  formatPostResourcePriceLabel,
   getPostResourceKindLabel,
   isPostResourceKind,
   type PostResourceAttachment,
   type PostResourceItem,
   type PostResourceKind,
   type PostResourceSection,
+  type PostResourceSignedFileUrl,
 } from '@/lib/post-resource-bundles';
-import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
+import { FREE_RECIPE_LABEL, isFreeRecipeAsset } from '@/lib/showcase-asset-labels';
+import { formatCompactCount } from '@/lib/post-feed-presentation';
+import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
+import { trackProductEvent } from '@/lib/product-analytics';
 import {
   clearRazorpayCheckoutIntentKey,
   getOrCreateRazorpayCheckoutIntentKey,
   verifyRazorpayCheckoutUntilSettled,
 } from '@/lib/razorpay-checkout-client';
 import { getCurrentInternalPath } from '@/lib/share';
-import { isGenerationRecipeAssetId, type ShowcaseFeedItem, type ShowcaseMediaItem, getShowcaseItemMediaItems } from '@/lib/showcase';
+import { type ShowcaseFeedItem, type ShowcaseMediaItem, getShowcaseItemMediaItems } from '@/lib/showcase';
 
 declare global {
   interface Window {
@@ -75,6 +85,12 @@ interface ShowcaseReelViewerProps {
   accessToken?: string | null;
   hasMoreItems: boolean;
   isLoadingMoreItems: boolean;
+  /**
+   * The host's last page request failed. The reel stops asking for pages on
+   * its own (a failed page left `hasMoreItems` true, and it asked again at
+   * once, without end) and shows the message with a Retry.
+   */
+  loadMoreError?: string | null;
   initialMediaIndex?: number;
   onLoadMoreItems: () => void | Promise<void>;
   onClose: () => void;
@@ -82,6 +98,16 @@ interface ShowcaseReelViewerProps {
   onMediaIndexChange?: (index: number) => void;
   onToggleSave: (id: string) => void | Promise<void>;
   onRemix: (id: string) => void | Promise<void>;
+  /** A post's comment count as its thread in the reel reads it, for the host's own copy of the post. */
+  onCommentCountChange?: (postId: string, commentCount: number) => void;
+  /**
+   * What the host knows of a selected post that is not in `items`: a `?post=`
+   * link still being read, one the server does not show this viewer (deleted,
+   * hidden or blocked), or one whose read failed. The reel opens on that state
+   * instead of not opening at all.
+   */
+  selectedItemStatus?: 'loading' | 'unavailable' | 'failed' | null;
+  onRetrySelectedItem?: () => void;
   feedSessionId?: string | null;
   /** The ⋯ menu's two feed rows (Not interested, Hide): given where the reel plays a feed. */
   onFeedback?: (item: ShowcaseFeedItem, action: ShowcaseFeedbackAction) => void | Promise<void>;
@@ -139,6 +165,11 @@ function getFocusableElements(container: HTMLElement | null) {
   )).filter((element) => element.getAttribute('aria-hidden') !== 'true');
 }
 
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement
+    && (target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT');
+}
+
 function getItemResourceKinds(item: ShowcaseFeedItem): PostResourceKind[] {
   return (item.asset?.resourceKinds ?? []).filter(isPostResourceKind);
 }
@@ -151,49 +182,23 @@ function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
+function getAssetPriceLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
+  return formatPostResourcePriceLabel(asset.priceUsdCents, asset.priceQuote?.formatted);
+}
+
 function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
-  if (isGenerationRecipeAssetId(asset.id)) {
-    return 'Free recipe';
-  }
-
-  if (asset.priceQuote) {
-    return formatBundleAccessLabel({
-      accessMode: asset.accessMode,
-      priceQuote: asset.priceQuote,
-    }).replace(/\s+unlock$/i, ' recipe');
-  }
-
-  return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+unlock$/i, ' recipe');
+  return isFreeRecipeAsset(asset) ? FREE_RECIPE_LABEL : getAssetPriceLabel(asset);
 }
 
 function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
-  if (isGenerationRecipeAssetId(asset.id)) {
-    return 'View recipe';
-  }
-
   if (asset.accessMode === 'free' || asset.priceUsdCents === 0) {
     return 'Get free recipe';
   }
 
-  return `Unlock for ${asset.priceQuote?.formatted ?? getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+(?:unlock|recipe)$/i, '')}`;
+  return `Unlock for ${getAssetPriceLabel(asset)}`;
 }
 
 function getItemSummary(item: ShowcaseFeedItem): string {
-  if (item.asset && isGenerationRecipeAssetId(item.asset.id)) {
-    const kinds = getItemResourceKinds(item);
-    const bundleCountSummary = formatPostResourceBundleCountSummary(item.asset.lockedPreview ?? null);
-
-    if (bundleCountSummary) {
-      return `Creation recipe includes ${bundleCountSummary}.`;
-    }
-
-    if (kinds.length > 0) {
-      return `Creation recipe includes ${kinds.map((kind) => getPostResourceKindLabel(kind).toLowerCase()).join(', ')}.`;
-    }
-
-    return item.asset.previewText || 'Creation recipe is available below.';
-  }
-
   if (item.body.trim()) {
     return item.body;
   }
@@ -246,6 +251,7 @@ export default function ShowcaseReelViewer({
   accessToken,
   hasMoreItems,
   isLoadingMoreItems,
+  loadMoreError = null,
   initialMediaIndex = 0,
   onLoadMoreItems,
   onClose,
@@ -253,6 +259,9 @@ export default function ShowcaseReelViewer({
   onMediaIndexChange,
   onToggleSave,
   onRemix,
+  onCommentCountChange,
+  selectedItemStatus = null,
+  onRetrySelectedItem,
   feedSessionId,
   onFeedback,
   onReportContent,
@@ -286,11 +295,18 @@ export default function ShowcaseReelViewer({
   const [unlockSuccessItemId, setUnlockSuccessItemId] = useState<string | null>(null);
   const [unlockedResources, setUnlockedResources] = useState<ReelBundleResources | null>(null);
   const [showUnlockedDetails, setShowUnlockedDetails] = useState(false);
-  const [publicRecipeItemId, setPublicRecipeItemId] = useState<string | null>(null);
-  const [publicRecipeResources, setPublicRecipeResources] = useState<ReelBundleResources | null>(null);
-  const [publicRecipeLoadingItemId, setPublicRecipeLoadingItemId] = useState<string | null>(null);
-  const [publicRecipeError, setPublicRecipeError] = useState<string | null>(null);
   const [activeReferencePreview, setActiveReferencePreview] = useState<ActiveReferencePreview | null>(null);
+  // The thread is open for one post; moving to another closes it.
+  const [commentsItemId, setCommentsItemId] = useState<string | null>(null);
+  // Counts the open threads have read, ahead of the host's copy of the post.
+  const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
+  // Whom the signed-in viewer follows, by `viewer:creator`, as the server last said.
+  const [followStates, setFollowStates] = useState<Record<string, boolean>>({});
+  const [followPendingKey, setFollowPendingKey] = useState<string | null>(null);
+  const [followError, setFollowError] = useState<{ key: string; message: string } | null>(null);
+  const [copiedPromptItemId, setCopiedPromptItemId] = useState<string | null>(null);
+  const followRequestsRef = useRef(new Set<string>());
+  const commentsSectionRef = useRef<HTMLDivElement | null>(null);
   const selectedIndex = useMemo(
     () => selectedItemId ? items.findIndex((item) => item.id === selectedItemId) : -1,
     [items, selectedItemId]
@@ -300,13 +316,31 @@ export default function ShowcaseReelViewer({
   const nextItem = selectedIndex >= 0 && selectedIndex < items.length - 1 ? items[selectedIndex + 1] : null;
   const selectedFeedItemId = item?.id ?? null;
   const feedEventItemRef = useRef<ShowcaseFeedItem | null>(item);
+  // Read when an event is sent, so a token refresh, a new page's session id or
+  // an earlier post leaving the list does not end the post on screen and
+  // start it again (a dwell or skip filed for it, and a second open).
+  const accessTokenRef = useRef(accessToken);
+  const feedSessionIdRef = useRef(feedSessionId);
+  const selectedIndexRef = useRef(selectedIndex);
+  const sessionTokenRef = useRef(session?.access_token ?? null);
   useEffect(() => {
     feedEventItemRef.current = item;
-  }, [item]);
+    accessTokenRef.current = accessToken;
+    feedSessionIdRef.current = feedSessionId;
+    selectedIndexRef.current = selectedIndex;
+    sessionTokenRef.current = session?.access_token ?? null;
+  }, [accessToken, feedSessionId, item, selectedIndex, session?.access_token]);
+  // One reel session: `open` goes to the post it opened on, and each delivery
+  // reports one impression however often the reader comes back to it.
+  const openSentRef = useRef(false);
+  const impressionDeliveryIdsRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (isOpen) return;
+    openSentRef.current = false;
+    impressionDeliveryIdsRef.current = new Set();
+  }, [isOpen]);
   const mediaProgressTrackerRef = useRef<ShowcaseMediaProgressTracker | null>(null);
   const flushMediaProgressRef = useRef<() => void>(() => {});
-  const selectedAssetId = item?.asset?.id ?? null;
-  const isPublicRecipeAsset = Boolean(selectedAssetId && isGenerationRecipeAssetId(selectedAssetId));
   const mediaItems = useMemo(() => item ? getShowcaseItemMediaItems(item) : [], [item]);
   const activeMediaItem = mediaItems[Math.min(activeMediaIndex, Math.max(0, mediaItems.length - 1))] ?? mediaItems[0] ?? null;
 
@@ -317,6 +351,7 @@ export default function ShowcaseReelViewer({
     setUnlockNotice(null);
     setRemixError(null);
     setShowUnlockedDetails(false);
+    setCommentsItemId(null);
     setActiveMediaIndex(0);
     setTransitionDirection(direction);
     onSelectItemId(targetItem.id);
@@ -353,10 +388,11 @@ export default function ShowcaseReelViewer({
       return;
     }
 
-    if (hasMoreItems) {
+    // Opened on a linked post that is not in the list: there is no "after" yet.
+    if (hasMoreItems && selectedIndex >= 0) {
       requestMoreItems(true);
     }
-  }, [hasMoreItems, moveToItem, nextItem, requestMoreItems]);
+  }, [hasMoreItems, moveToItem, nextItem, requestMoreItems, selectedIndex]);
 
   const handleClose = useCallback(() => {
     setActiveUnlockCheckoutItemId(null);
@@ -387,14 +423,6 @@ export default function ShowcaseReelViewer({
 
   const openUnlockCheckout = () => {
     if (!item?.asset) {
-      return;
-    }
-
-    if (isGenerationRecipeAssetId(item.asset.id)) {
-      detailsScrollerRef.current?.scrollTo({
-        top: 220,
-        behavior: prefersReducedMotion ? 'auto' : 'smooth',
-      });
       return;
     }
 
@@ -492,6 +520,16 @@ export default function ShowcaseReelViewer({
     };
   }, [isOpen]);
 
+  const hasItem = Boolean(item);
+  useEffect(() => {
+    // A linked post's body replaces the reel's loading state, and the close
+    // button focused there goes with it: focus would fall out of the dialog.
+    if (!isOpen || !hasItem) return;
+    if (!reelDialogRef.current?.contains(document.activeElement)) {
+      reelCloseButtonRef.current?.focus();
+    }
+  }, [hasItem, isOpen]);
+
   useEffect(() => {
     if (!activeReferencePreview) return;
 
@@ -525,65 +563,56 @@ export default function ShowcaseReelViewer({
     // go through the ref so listeners outside this effect stay current.
     const mediaProgressTracker = createShowcaseMediaProgressTracker();
     mediaProgressTrackerRef.current = mediaProgressTracker;
+    const eventContext = () => ({
+      item: trackedItem,
+      sourceSurface: 'showcase-reel' as const,
+      accessToken: accessTokenRef.current,
+      feedSessionId: feedSessionIdRef.current,
+      fallbackPosition: selectedIndexRef.current,
+    });
     flushMediaProgressRef.current = () => {
       const flush = mediaProgressTracker.takeFlush();
       if (!flush) return;
       void sendShowcaseFeedEvent({
-        item: trackedItem,
+        ...eventContext(),
         eventType: 'media_progress',
-        sourceSurface: 'showcase-reel',
-        accessToken,
-        feedSessionId,
-        fallbackPosition: selectedIndex,
         progress: flush.progress,
         ...(flush.durationMs !== null ? { durationMs: flush.durationMs } : {}),
       }).catch(() => undefined);
     };
 
     const startedAt = Date.now();
-    let openWasSent = false;
+    // `open` is the post the reader chose (the tile, or the link the reel
+    // opened on), as the app counts it: swiping on is not opening.
     const sendOpenTimer = window.setTimeout(() => {
-      openWasSent = true;
-      void sendShowcaseFeedEvent({
-        item: trackedItem,
-        eventType: 'open',
-        sourceSurface: 'showcase-reel',
-        accessToken,
-        feedSessionId,
-        fallbackPosition: selectedIndex,
-      }).catch(() => undefined);
+      if (openSentRef.current) return;
+      openSentRef.current = true;
+      void sendShowcaseFeedEvent({ ...eventContext(), eventType: 'open' }).catch(() => undefined);
     }, 0);
+    const deliveryId = getShowcaseRecommendation(trackedItem)?.deliveryId ?? null;
     const sendImpressionTimer = window.setTimeout(() => {
-      void sendShowcaseFeedEvent({
-        item: trackedItem,
-        eventType: 'impression',
-        sourceSurface: 'showcase-reel',
-        accessToken,
-        feedSessionId,
-        fallbackPosition: selectedIndex,
-      }).catch(() => undefined);
+      if (!deliveryId || impressionDeliveryIdsRef.current.has(deliveryId)) return;
+      impressionDeliveryIdsRef.current.add(deliveryId);
+      void sendShowcaseFeedEvent({ ...eventContext(), eventType: 'impression' }).catch(() => undefined);
     }, QUALIFIED_REEL_VIEW_DURATION_MS);
 
     return () => {
       window.clearTimeout(sendOpenTimer);
       window.clearTimeout(sendImpressionTimer);
       flushMediaProgressRef.current();
+      // Under 250 ms the post was flicked past, not seen: neither a skip nor a dwell.
       const durationMs = Date.now() - startedAt;
-      if (!openWasSent || durationMs < 250) {
+      if (durationMs < 250) {
         return;
       }
 
       void sendShowcaseFeedEvent({
-        item: trackedItem,
+        ...eventContext(),
         eventType: durationMs < QUALIFIED_REEL_VIEW_DURATION_MS ? 'quick_skip' : 'dwell',
-        sourceSurface: 'showcase-reel',
-        accessToken,
-        feedSessionId,
-        fallbackPosition: selectedIndex,
         durationMs,
       }).catch(() => undefined);
     };
-  }, [accessToken, feedSessionId, isOpen, selectedFeedItemId, selectedIndex]);
+  }, [isOpen, selectedFeedItemId]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -607,14 +636,15 @@ export default function ShowcaseReelViewer({
   }, [isOpen]);
 
   useEffect(() => {
-    if (!isOpen || selectedIndex < 0 || !nextItem || !hasMoreItems || isLoadingMoreItems) {
+    // After a failed page only the reader asks again (Retry, or Next at the end).
+    if (!isOpen || selectedIndex < 0 || !nextItem || !hasMoreItems || isLoadingMoreItems || loadMoreError) {
       return;
     }
 
     if (items.length - selectedIndex <= 3) {
       void onLoadMoreItems();
     }
-  }, [hasMoreItems, isLoadingMoreItems, isOpen, items.length, nextItem, onLoadMoreItems, selectedIndex]);
+  }, [hasMoreItems, isLoadingMoreItems, isOpen, items.length, loadMoreError, nextItem, onLoadMoreItems, selectedIndex]);
 
   useEffect(() => {
     if (!pendingAdvanceAfterLoadRef.current || !nextItem) {
@@ -625,58 +655,44 @@ export default function ShowcaseReelViewer({
     onSelectItemId(nextItem.id);
   }, [nextItem, onSelectItemId]);
 
+  const viewerId = user?.id ?? null;
+  const creatorId = item?.creator.id ?? null;
+  const followKey = viewerId && creatorId && creatorId !== viewerId ? `${viewerId}:${creatorId}` : null;
+  const isFollowStateKnown = followKey !== null && followKey in followStates;
+  const hasSessionToken = Boolean(session?.access_token);
   useEffect(() => {
-    if (!isOpen || !item?.id || !isPublicRecipeAsset) {
-      return;
-    }
-
-    let cancelled = false;
-
-    // Loading state belongs to the currently visible public recipe request.
-    setPublicRecipeLoadingItemId(item.id);
-    setPublicRecipeError(null);
-
-    void fetchBundleForItem(item.id)
-      .then((bundle) => {
-        if (cancelled) {
-          return;
-        }
-
-        if (bundle.viewerCanAccess && bundle.resources) {
-          setPublicRecipeItemId(item.id);
-          setPublicRecipeResources(bundle.resources);
-          return;
-        }
-
-        setPublicRecipeItemId(null);
-        setPublicRecipeResources(null);
+    // Asked once per creator while the reel is open, and never on the viewer's
+    // own post. The Follow is drawn once the answer is in, as the app draws it;
+    // a failed read leaves it out until the reader lands on that creator again.
+    const token = sessionTokenRef.current;
+    if (!isOpen || !followKey || !creatorId || isFollowStateKnown || !token) return;
+    if (followRequestsRef.current.has(followKey)) return;
+    followRequestsRef.current.add(followKey);
+    const key = followKey;
+    void fetch(`/api/profile/follow?${new URLSearchParams({ followingId: creatorId }).toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Failed to load follow state');
+        const data = await response.json() as { following?: unknown };
+        setFollowStates((current) => key in current ? current : { ...current, [key]: data.following === true });
       })
-      .catch((error) => {
-        if (cancelled) {
-          return;
-        }
-
-        setPublicRecipeError(error instanceof Error ? error.message : 'Failed to load recipe.');
-      })
+      .catch(() => undefined)
       .finally(() => {
-        if (!cancelled) {
-          setPublicRecipeLoadingItemId(null);
-        }
+        followRequestsRef.current.delete(key);
       });
+  }, [creatorId, followKey, hasSessionToken, isFollowStateKnown, isOpen]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [fetchBundleForItem, isOpen, isPublicRecipeAsset, item?.id]);
+  useEffect(() => {
+    if (!copiedPromptItemId) return;
+    const timer = window.setTimeout(() => setCopiedPromptItemId(null), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copiedPromptItemId]);
 
-  const activeAccessibleResources =
-    item && unlockSuccessItemId === item.id
-      ? unlockedResources
-      : item && publicRecipeItemId === item.id
-        ? publicRecipeResources
-        : null;
-
-  const fetchResourceFileUrl = useCallback(async (storagePath: string, signal?: AbortSignal): Promise<string> => {
+  const fetchResourceFileUrls = useCallback(async (
+    storagePaths: string[],
+    signal: AbortSignal,
+  ): Promise<ReadonlyMap<string, string>> => {
     if (!item?.id) throw new Error('Resource unavailable');
     const response = await fetch(`/api/posts/${item.id}/resource-bundle/file-url`, {
       method: 'POST', signal,
@@ -684,12 +700,21 @@ export default function ShowcaseReelViewer({
         'Content-Type': 'application/json',
         ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
       },
-      body: JSON.stringify({ storagePath }),
+      body: JSON.stringify({ storagePaths, disposition: 'inline' }),
     });
     const data = await response.json();
-    if (!response.ok || typeof data?.signedUrl !== 'string') throw new Error('Resource unavailable');
-    return data.signedUrl;
+    if (!response.ok || !Array.isArray(data?.files)) throw new Error('Resource unavailable');
+    return new Map((data.files as PostResourceSignedFileUrl[]).map((file) => [file.storagePath, file.url]));
   }, [item?.id, session?.access_token]);
+  // The recipe card's files are signed together, as the post page's panel
+  // signs its previews: the ones asked for in the same tick leave as one
+  // request (one entitlement load on the server, one count against the
+  // signing limit), where each preview used to sign its own. Inline, so Open
+  // shows a file the browser can show rather than saving it.
+  const fetchResourceFileUrl = useMemo(
+    () => createBatchedUrlResolver(fetchResourceFileUrls, POST_RESOURCE_FILE_URL_BATCH_LIMIT),
+    [fetchResourceFileUrls],
+  );
 
   useEffect(() => {
     // Reference previews cannot carry across reel items.
@@ -732,15 +757,15 @@ export default function ShowcaseReelViewer({
         return;
       }
 
+      // Writing a comment: the arrows move the caret, not the reel, and
+      // Escape must not throw the draft away by closing it.
+      if (isTextEntryTarget(event.target)) {
+        return;
+      }
+
       if (event.key === 'Escape') {
         if (activeReferencePreview) {
           setActiveReferencePreview(null);
-          return;
-        }
-
-        // The post-detail overlay (opened from "Post details") sits above this
-        // viewer and listens on the window too. Let the top layer close first.
-        if (document.body.dataset.showcaseOverlayOpen === 'true') {
           return;
         }
 
@@ -776,10 +801,7 @@ export default function ShowcaseReelViewer({
       return;
     }
 
-    const isPublicRecipe = Boolean(item.asset.id && isGenerationRecipeAssetId(item.asset.id));
-    const alreadyUnlocked = unlockSuccessItemId === item.id;
-
-    if (isPublicRecipe || alreadyUnlocked) {
+    if (unlockSuccessItemId === item.id) {
       return;
     }
 
@@ -812,8 +834,76 @@ export default function ShowcaseReelViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, item?.id, item?.asset?.id, item?.asset?.accessMode, item?.asset?.priceUsdCents, unlockSuccessItemId, fetchBundleForItem]);
 
-  if (!isOpen || !item) {
+  if (!isOpen) {
     return null;
+  }
+
+  if (!item) {
+    if (!selectedItemStatus) {
+      return null;
+    }
+
+    return (
+      <div
+        ref={reelDialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${originLabel} reel viewer`}
+        className="fixed inset-0 z-[90] overflow-hidden bg-[#050506] text-white"
+      >
+        <header className="relative z-20 flex h-14 items-center justify-between gap-3 border-b border-white/8 bg-black/40 px-3 backdrop-blur-xl sm:px-5">
+          <button
+            ref={reelCloseButtonRef}
+            type="button"
+            onClick={handleClose}
+            className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
+          >
+            <X className="h-4 w-4" />
+            {originLabel}
+          </button>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">{originLabel} reel</div>
+          <div aria-hidden="true" className="w-24" />
+        </header>
+        <div className="flex h-[calc(100dvh-3.5rem)] items-center justify-center px-6 text-center">
+          {selectedItemStatus === 'loading' ? (
+            <div role="status" aria-live="polite" className="inline-flex items-center gap-2 text-sm font-semibold text-zinc-300">
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              Loading post
+            </div>
+          ) : (
+            <div role="alert" className="max-w-sm">
+              <h2 className="text-xl font-semibold text-white">
+                {selectedItemStatus === 'unavailable' ? 'This post isn’t available' : 'Couldn’t load this post'}
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-zinc-400">
+                {selectedItemStatus === 'unavailable'
+                  ? 'It may have been deleted or made private.'
+                  : 'Check your connection and try again.'}
+              </p>
+              <div className="mt-5 flex flex-wrap justify-center gap-2">
+                {selectedItemStatus === 'failed' && onRetrySelectedItem ? (
+                  <button
+                    type="button"
+                    onClick={onRetrySelectedItem}
+                    className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full bg-white px-5 text-sm font-bold text-black transition hover:bg-zinc-200"
+                  >
+                    <RefreshCw className="h-4 w-4" aria-hidden />
+                    Try again
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={handleClose}
+                  className="ui-focus-ring inline-flex min-h-11 items-center rounded-full border border-white/12 bg-white/[0.05] px-5 text-sm font-bold text-zinc-100 transition hover:bg-white/[0.09]"
+                >
+                  Back to {originLabel}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
   }
 
   const resourceKinds = getItemResourceKinds(item);
@@ -827,16 +917,39 @@ export default function ShowcaseReelViewer({
   const hasReelUnlockAccess = unlockSuccessItemId === item.id;
   const isFreeUnlock = Boolean(item.asset && (item.asset.accessMode === 'free' || item.asset.priceUsdCents === 0));
   const reelRecipeActionLabel = hasReelUnlockAccess ? 'View recipe' : unlockCtaLabel;
-  const priceLabel = item.asset
-    ? item.asset.priceQuote?.formatted ?? getAssetAccessLabel(item.asset).replace(/\s+(?:unlock|recipe)$/i, '')
-    : '';
+  const priceLabel = item.asset ? getAssetPriceLabel(item.asset) : '';
   const tokenCost = item.asset ? Math.max(0, item.asset.priceUsdCents) : 0;
+  const formattedCreditCost = tokenCost.toLocaleString();
+  // Below the cash minimum a recipe is credits-only, and the server refuses a
+  // cash order for it, as the post page's panel already knows.
+  const offersCashCheckout = !isFreeUnlock && isPostResourceWebCashEligible(tokenCost);
   const hasKnownInsufficientTokens = Boolean(session?.access_token && typeof credits === 'number' && credits < tokenCost);
   const includedKindLabels = resourceKinds.map(getPostResourceKindLabel);
   const bundleCountSummary = item.asset
     ? formatPostResourceBundleCountSummary(item.asset.lockedPreview ?? null)
     : '';
-  const publicRecipeIsLoading = publicRecipeLoadingItemId === item.id;
+  // A remix the creator sells with the recipe: offered here as in the app,
+  // behind the unlock until the reader has it. Workflow and text-template
+  // remixes are left out, as the server's own `canRemix` leaves them out.
+  const remixNeedsUnlock = !item.canRemix
+    && item.remixCapability === 'unlock_required'
+    && item.remixTarget !== 'workflow'
+    && item.remixTarget !== 'text_template'
+    && Boolean(item.asset?.allowRemix);
+  const remixIsLocked = remixNeedsUnlock && !hasReelUnlockAccess;
+  // Unlisted posts take no comments (the server reads public posts only).
+  const canComment = item.visibility !== 'unlisted';
+  const commentsAreOpen = canComment && commentsItemId === item.id;
+  const commentCount = commentCounts[item.id] ?? item.commentCount;
+  const isOwnPost = Boolean(user && item.creator.id === user.id);
+  const isFollowingCreator = followKey !== null && followStates[followKey] === true;
+  // Signed out, Follow leads to sign-in; signed in, it waits for the answer.
+  const showFollow = Boolean(item.creator.id) && !isOwnPost && (!user || isFollowStateKnown);
+  const followIsPending = followKey !== null && followPendingKey === followKey;
+  const followErrorMessage = followError && followError.key === followKey ? followError.message : null;
+  // The body and the prompt have boxes of their own below; the lede is for a
+  // post with neither, so nothing is printed twice.
+  const detailsLede = item.body.trim() || item.prompt.trim() ? null : summary;
   const shouldWaitForMedia = item.postFormat !== 'text' && Boolean(activeMediaItem);
   const currentMediaKey = activeMediaItem ? getReelMediaLifecycleKey(item.id, activeMediaItem) : null;
   const currentMediaLoadState = currentMediaKey ? mediaLoadStates[currentMediaKey] ?? null : 'ready';
@@ -866,12 +979,23 @@ export default function ShowcaseReelViewer({
     setUnlockNotice(null);
   };
 
+  // The recipe opened, from any of its buttons: one `resource_open` per delivery.
+  const reportResourceOpen = () => sendShowcaseResourceOpenEvent({
+    item,
+    sourceSurface: 'showcase-reel',
+    accessToken,
+    feedSessionId,
+    fallbackPosition: selectedIndex,
+  });
+
   const openFreeUnlock = async () => {
     if (!ensureAuthenticated()) {
       return;
     }
 
     try {
+      // The post page's funnel events: a recipe got in the reel counts as one got there.
+      trackProductEvent('recipe_unlock_started', { method: 'free', post_id: item.id });
       setUnlockWorkingAction('free');
       setUnlockError(null);
       setUnlockNotice(null);
@@ -889,10 +1013,21 @@ export default function ShowcaseReelViewer({
 
       await finishReelUnlock();
       setActiveUnlockCheckoutItemId(item.id);
+      trackProductEvent('recipe_unlock_succeeded', { method: 'free', post_id: item.id });
     } catch (unlockError) {
+      trackProductEvent('recipe_unlock_failed', { method: 'free', post_id: item.id });
       setUnlockError(unlockError instanceof Error ? unlockError.message : 'Failed to get the free recipe.');
     } finally {
       setUnlockWorkingAction(null);
+    }
+  };
+
+  const openRecipe = () => {
+    reportResourceOpen();
+    if (isFreeUnlock) {
+      void openFreeUnlock();
+    } else {
+      openUnlockCheckout();
     }
   };
 
@@ -902,6 +1037,7 @@ export default function ShowcaseReelViewer({
     }
 
     try {
+      trackProductEvent('recipe_checkout_started', { method: 'razorpay', post_id: item.id });
       setUnlockWorkingAction('cash');
       setUnlockError(null);
       setUnlockNotice(null);
@@ -966,7 +1102,9 @@ export default function ShowcaseReelViewer({
 
             clearRazorpayCheckoutIntentKey(checkoutIntentScope);
             await finishReelUnlock();
+            trackProductEvent('recipe_checkout_succeeded', { method: 'razorpay', post_id: item.id });
           } catch (verifyError) {
+            trackProductEvent('recipe_checkout_failed', { method: 'razorpay', post_id: item.id });
             setUnlockError(verifyError instanceof Error ? verifyError.message : 'Payment verification failed.');
           } finally {
             setUnlockWorkingAction(null);
@@ -978,12 +1116,14 @@ export default function ShowcaseReelViewer({
       });
 
       razorpay.on('payment.failed', (payload: unknown) => {
+        trackProductEvent('recipe_checkout_failed', { method: 'razorpay', post_id: item.id });
         const errorPayload = payload as { error?: { description?: string } } | null;
         setUnlockError(errorPayload?.error?.description || 'Payment failed. Please try again.');
       });
 
       razorpay.open();
     } catch (checkoutError) {
+      trackProductEvent('recipe_checkout_failed', { method: 'razorpay', post_id: item.id });
       setUnlockError(checkoutError instanceof Error ? checkoutError.message : 'Failed to start checkout.');
     } finally {
       setUnlockWorkingAction(null);
@@ -996,11 +1136,22 @@ export default function ShowcaseReelViewer({
     }
 
     if (hasKnownInsufficientTokens) {
-      setUnlockError(`This recipe needs ${tokenCost.toLocaleString()} credits.`);
+      setUnlockError(`This recipe needs ${formattedCreditCost} credits.`);
+      return;
+    }
+
+    // The spend cannot be undone: asked first, with the post page's words.
+    const confirmed = await requestConfirmation({
+      title: 'Unlock this recipe?',
+      message: `${formattedCreditCost} credits will come off your balance right away.`,
+      confirmLabel: `Use ${formattedCreditCost} credits`,
+    });
+    if (!confirmed) {
       return;
     }
 
     try {
+      trackProductEvent('recipe_unlock_started', { method: 'credits', post_id: item.id });
       setUnlockWorkingAction('tokens');
       setUnlockError(null);
       setUnlockNotice(null);
@@ -1021,14 +1172,105 @@ export default function ShowcaseReelViewer({
       }
 
       await finishReelUnlock();
+      trackProductEvent('recipe_unlock_succeeded', { method: 'credits', post_id: item.id });
     } catch (unlockError) {
+      trackProductEvent('recipe_unlock_failed', { method: 'credits', post_id: item.id });
       setUnlockError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock with credits.');
     } finally {
       setUnlockWorkingAction(null);
     }
   };
 
+  // Follow from the reel, credited to the post and the delivery that showed
+  // it, as the app's reel sends it. The request is the creator page's.
+  const toggleFollow = async () => {
+    const targetCreatorId = item.creator.id;
+    if (!targetCreatorId || !ensureAuthenticated() || !user || !session?.access_token) {
+      return;
+    }
+    if (targetCreatorId === user.id) {
+      return;
+    }
+
+    const key = `${user.id}:${targetCreatorId}`;
+    const wasFollowing = followStates[key] === true;
+    const nextFollowing = !wasFollowing;
+    setFollowStates((current) => ({ ...current, [key]: nextFollowing }));
+    setFollowPendingKey(key);
+    setFollowError(null);
+
+    try {
+      const response = await fetch('/api/profile/follow', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          followingId: targetCreatorId,
+          following: nextFollowing,
+          postId: item.id,
+          deliveryId: item.recommendation?.deliveryId ?? null,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to update follow state');
+      }
+
+      const data = await response.json() as { following?: unknown };
+      const confirmedFollowing = typeof data.following === 'boolean' ? data.following : nextFollowing;
+      setFollowStates((current) => ({ ...current, [key]: confirmedFollowing }));
+    } catch {
+      setFollowStates((current) => ({ ...current, [key]: wasFollowing }));
+      setFollowError({ key, message: 'Could not update follow. Please try again.' });
+    } finally {
+      setFollowPendingKey((current) => current === key ? null : current);
+    }
+  };
+
+  const toggleComments = () => {
+    if (commentsAreOpen) {
+      setCommentsItemId(null);
+      return;
+    }
+
+    setCommentsItemId(item.id);
+    // The thread is the last thing in the details: bring it into view.
+    window.requestAnimationFrame(() => {
+      const scroller = detailsScrollerRef.current;
+      const section = commentsSectionRef.current;
+      if (!scroller || !section) return;
+      scroller.scrollTo({
+        top: scroller.scrollTop + section.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 16,
+        behavior: prefersReducedMotion ? 'auto' : 'smooth',
+      });
+    });
+  };
+
+  const recordCommentCount = (postId: string, nextCount: number) => {
+    setCommentCounts((current) => current[postId] === nextCount ? current : { ...current, [postId]: nextCount });
+    onCommentCountChange?.(postId, nextCount);
+  };
+
+  const copyPrompt = async () => {
+    if (!navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(item.prompt);
+      setCopiedPromptItemId(item.id);
+    } catch {
+      // Refused by the browser: the prompt is still on screen to select.
+    }
+  };
+
   const handleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    const target = event.target instanceof Element ? event.target : null;
+    // A finger scrolling the details (a thread, a long prompt) is not a swipe
+    // to another post, as the wheel there is not.
+    if (target?.closest('[data-reel-scroll-region="details"]')) {
+      touchStartRef.current = null;
+      return;
+    }
+
     const touch = event.touches[0];
     touchStartRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
   };
@@ -1297,7 +1539,10 @@ export default function ShowcaseReelViewer({
             </p>
             <button
               type="button"
-              onClick={() => setShowUnlockedDetails((currentValue) => !currentValue)}
+              onClick={() => {
+                if (!showUnlockedDetails) reportResourceOpen();
+                setShowUnlockedDetails((currentValue) => !currentValue);
+              }}
               className="mt-3 inline-flex w-full items-center justify-center rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
               aria-expanded={showUnlockedDetails}
             >
@@ -1322,15 +1567,17 @@ export default function ShowcaseReelViewer({
           </button>
         ) : (
           <div className="mt-4 grid gap-2">
-            <button
-              type="button"
-              onClick={() => void startCashCheckout()}
-              disabled={unlockWorkingAction !== null}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              {unlockWorkingAction === 'cash' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingBag className="h-4 w-4" />}
-              Pay with cash
-            </button>
+            {offersCashCheckout ? (
+              <button
+                type="button"
+                onClick={() => void startCashCheckout()}
+                disabled={unlockWorkingAction !== null}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {unlockWorkingAction === 'cash' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingBag className="h-4 w-4" />}
+                Pay with cash
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => void unlockWithTokens()}
@@ -1338,7 +1585,7 @@ export default function ShowcaseReelViewer({
               className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-55"
             >
               {unlockWorkingAction === 'tokens' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              {`Use ${tokenCost.toLocaleString()} credits`}
+              {`Use ${formattedCreditCost} credits`}
             </button>
           </div>
         )}
@@ -1431,7 +1678,7 @@ export default function ShowcaseReelViewer({
       onTouchEnd={handleTouchEnd}
       onWheel={handleWheel}
     >
-      {item.asset && isUnlockCheckoutOpen && !isFreeUnlock ? (
+      {item.asset && isUnlockCheckoutOpen && offersCashCheckout ? (
         <Script id="showcase-reel-razorpay-checkout" src="https://checkout.razorpay.com/v1/checkout.js" />
       ) : null}
 
@@ -1652,6 +1899,24 @@ export default function ShowcaseReelViewer({
             </AnimatePresence>
           </button>
 
+          {canComment ? (
+            <button
+              type="button"
+              onClick={toggleComments}
+              aria-expanded={commentsAreOpen}
+              aria-controls={commentsAreOpen ? 'showcase-reel-comments' : undefined}
+              aria-label={`${commentsAreOpen ? 'Hide' : 'Show'} comments on ${item.title} (${commentCount})`}
+              className={`inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition lg:h-[70px] lg:w-[70px] lg:max-w-[70px] ${
+                commentsAreOpen
+                  ? 'border-white/25 bg-white/[0.12] text-white'
+                  : 'border-white/10 bg-white/[0.05] text-zinc-100 hover:bg-white/[0.08]'
+              }`}
+            >
+              <MessageCircle size={20} className="h-5 w-5 shrink-0" />
+              <span>{formatCompactCount(commentCount)}</span>
+            </button>
+          ) : null}
+
           <PublicShareButton
             generationId={item.id}
             title={item.title}
@@ -1673,19 +1938,18 @@ export default function ShowcaseReelViewer({
             className="inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-white/10 bg-white/[0.05] text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08] lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
           />
 
-          {item.asset && !isPublicRecipeAsset ? (
+          {item.asset ? (
             <button
               type="button"
               onClick={() => {
                 if (hasReelUnlockAccess) {
+                  reportResourceOpen();
                   detailsScrollerRef.current?.scrollTo({
                     top: 220,
                     behavior: prefersReducedMotion ? 'auto' : 'smooth',
                   });
-                } else if (isFreeUnlock) {
-                  void openFreeUnlock();
                 } else {
-                  openUnlockCheckout();
+                  openRecipe();
                 }
               }}
               disabled={unlockWorkingAction !== null}
@@ -1699,10 +1963,17 @@ export default function ShowcaseReelViewer({
             </button>
           ) : null}
 
-          {item.canRemix ? (
+          {item.canRemix || remixNeedsUnlock ? (
             <button
               type="button"
+              // Until the reader has the recipe, the tap gets it (free) or
+              // opens its checkout; with it, the tap remixes.
+              aria-label={remixIsLocked ? `Remix: unlock the recipe for ${item.title} first` : undefined}
               onClick={() => {
+                if (remixIsLocked) {
+                  openRecipe();
+                  return;
+                }
                 if (remixWorkingItemId) return;
                 setRemixError(null);
                 setRemixWorkingItemId(item.id);
@@ -1716,12 +1987,14 @@ export default function ShowcaseReelViewer({
                   })
                   .finally(() => setRemixWorkingItemId(null));
               }}
-              disabled={remixWorkingItemId !== null}
+              disabled={remixWorkingItemId !== null || (remixIsLocked && unlockWorkingAction !== null)}
               className="ui-focus-ring inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary)] text-xs font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-60 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
             >
               {remixWorkingItemId === item.id
                 ? <Loader2 size={20} className="h-5 w-5 shrink-0 animate-spin" />
-                : <Wand2 size={20} className="h-5 w-5 shrink-0" />}
+                : remixIsLocked
+                  ? <LockKeyhole size={20} className="h-5 w-5 shrink-0" />
+                  : <Wand2 size={20} className="h-5 w-5 shrink-0" />}
               <span>{remixWorkingItemId === item.id ? 'Starting…' : 'Remix'}</span>
             </button>
           ) : null}
@@ -1745,6 +2018,19 @@ export default function ShowcaseReelViewer({
             ref={detailsScrollerRef}
             className="app-scrollbar min-h-0 flex-1 overflow-y-auto p-5 pb-6"
           >
+            {loadMoreError ? (
+              <div role="alert" className="mb-4 flex items-center justify-between gap-3 rounded-2xl border border-rose-300/25 bg-rose-400/10 px-4 py-3">
+                <p className="text-sm text-rose-100">{loadMoreError}</p>
+                <button
+                  type="button"
+                  onClick={() => void onLoadMoreItems()}
+                  className="ui-focus-ring inline-flex min-h-10 shrink-0 items-center gap-2 rounded-full border border-rose-300/25 bg-rose-400/10 px-3 text-sm font-bold text-rose-100 transition hover:bg-rose-400/15"
+                >
+                  <RefreshCw className="h-4 w-4" aria-hidden />
+                  Retry
+                </button>
+              </div>
+            ) : null}
             {remixError ? (
               <div role="alert" className="mb-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
                 {remixError}
@@ -1760,7 +2046,32 @@ export default function ShowcaseReelViewer({
                 exit="exit"
                 transition={detailsTransition}
               >
-                <CreatorIdentity creator={item.creator} prefetch={false} />
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <CreatorIdentity creator={item.creator} prefetch={false} />
+                  </div>
+                  {showFollow ? (
+                    <button
+                      type="button"
+                      onClick={() => void toggleFollow()}
+                      disabled={followIsPending}
+                      aria-label={`${isFollowingCreator ? 'Following' : 'Follow'} ${item.creator.name}`}
+                      aria-pressed={isFollowingCreator}
+                      aria-busy={followIsPending}
+                      className={`ui-focus-ring inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full px-4 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-70 ${
+                        isFollowingCreator
+                          ? 'border border-white/15 bg-white/10 text-white hover:bg-white/15'
+                          : 'bg-white text-black hover:bg-zinc-200'
+                      }`}
+                    >
+                      {followIsPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+                      {isFollowingCreator ? 'Following' : 'Follow'}
+                    </button>
+                  ) : null}
+                </div>
+                {followErrorMessage ? (
+                  <p role="alert" className="mt-2 text-xs text-rose-300">{followErrorMessage}</p>
+                ) : null}
 
                 <h2 className="mt-5 text-2xl font-semibold tracking-tight text-white">
                   {item.title}
@@ -1775,28 +2086,13 @@ export default function ShowcaseReelViewer({
                   {item.sourceTool ? <span>{item.sourceTool}</span> : null}
                 </div>
 
-                <p className="mt-5 text-sm leading-7 text-zinc-300">
-                  {summary}
-                </p>
-
-                {isPublicRecipeAsset ? (
-                  publicRecipeIsLoading ? (
-                    <div className="mt-5 rounded-[22px] border border-emerald-300/20 bg-emerald-500/10 p-4">
-                      <div className="flex items-center gap-2 text-sm font-semibold text-emerald-100">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Loading recipe
-                      </div>
-                    </div>
-                  ) : publicRecipeError ? (
-                    <div className="mt-5 rounded-[22px] border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-100">
-                      {publicRecipeError}
-                    </div>
-                  ) : activeAccessibleResources ? (
-                    renderRecipeResourcesCard(activeAccessibleResources)
-                  ) : null
+                {detailsLede ? (
+                  <p className="mt-5 text-sm leading-7 text-zinc-300">
+                    {detailsLede}
+                  </p>
                 ) : null}
 
-                {item.asset && !isUnlockCheckoutOpen && !isPublicRecipeAsset && !hasReelUnlockAccess ? (
+                {item.asset && !isUnlockCheckoutOpen && !hasReelUnlockAccess ? (
                   <div className="mt-5 rounded-[22px] border border-emerald-300/20 bg-emerald-500/10 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -1824,13 +2120,7 @@ export default function ShowcaseReelViewer({
                     ) : null}
                     <button
                       type="button"
-                      onClick={() => {
-                        if (isFreeUnlock) {
-                          void openFreeUnlock();
-                        } else {
-                          openUnlockCheckout();
-                        }
-                      }}
+                      onClick={openRecipe}
                       disabled={unlockWorkingAction !== null}
                       className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
                     >
@@ -1842,11 +2132,11 @@ export default function ShowcaseReelViewer({
                   </div>
                 ) : null}
 
-                {item.asset && isUnlockCheckoutOpen && !isPublicRecipeAsset ? (
+                {item.asset && isUnlockCheckoutOpen ? (
                   renderCompactUnlockCard()
                 ) : null}
 
-                {item.asset && hasReelUnlockAccess && !isUnlockCheckoutOpen && !isPublicRecipeAsset && unlockedResources ? (
+                {item.asset && hasReelUnlockAccess && !isUnlockCheckoutOpen && unlockedResources ? (
                   renderRecipeResourcesCard(unlockedResources, {
                     title: 'Recipe details',
                   })
@@ -1861,10 +2151,20 @@ export default function ShowcaseReelViewer({
                   </div>
                 ) : null}
 
-                {item.prompt.trim() && !isPublicRecipeAsset ? (
+                {item.prompt.trim() ? (
                   <div className="mt-5 rounded-[20px] border border-white/8 bg-black/30 p-4">
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                      {item.postFormat === 'text' ? 'Workflow notes' : 'Prompt'}
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                        {item.postFormat === 'text' ? 'Workflow notes' : 'Prompt'}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void copyPrompt()}
+                        aria-label={copiedPromptItemId === item.id ? 'Copied' : `Copy the ${item.postFormat === 'text' ? 'workflow notes' : 'prompt'}`}
+                        className="ui-focus-ring rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08]"
+                      >
+                        {copiedPromptItemId === item.id ? 'Copied' : 'Copy'}
+                      </button>
                     </div>
                     <p className="mt-3 max-h-44 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-7 text-zinc-300 [overflow-wrap:anywhere] app-scrollbar">
                       {item.prompt}
@@ -1889,6 +2189,23 @@ export default function ShowcaseReelViewer({
                     Create your own
                   </Link>
                 </div>
+
+                {commentsAreOpen ? (
+                  <div
+                    id="showcase-reel-comments"
+                    ref={commentsSectionRef}
+                    className="mt-6 border-t border-white/8 pt-5"
+                  >
+                    <PostComments
+                      postId={item.id}
+                      postCreatorId={item.creator.id}
+                      commentCount={commentCount}
+                      // Credited to the ranked delivery that showed the post, as a feed card's thread is.
+                      deliveryId={item.recommendation?.deliveryId ?? null}
+                      onCommentCountChange={(nextCount) => recordCommentCount(item.id, nextCount)}
+                    />
+                  </div>
+                ) : null}
               </motion.div>
             </AnimatePresence>
           </div>

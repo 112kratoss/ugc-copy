@@ -8,6 +8,7 @@ import type {
   ShowcaseFeedResponse,
   ShowcasePostResponse,
 } from '@/lib/types';
+import { ApiError } from './api-client';
 import { formatCompactCount, formatRelativeTime } from './home-view-model';
 
 export const POST_COMMENTS_PAGE_SIZE = 20;
@@ -16,29 +17,31 @@ export const DELETED_COMMENT_LABEL = '[deleted]';
 
 export type PostCommentSort = 'top' | 'newest';
 
-export interface CommentThreadRow {
-  kind: 'comment' | 'reply' | 'replies-toggle';
-  key: string;
-  comment?: PostComment;
-  parentId?: string;
-  replyCount?: number;
-  expanded?: boolean;
-}
-
 export interface CommentDisplay {
   isDeleted: boolean;
   bodyText: string;
   authorLabel: string;
   timeLabel: string;
-  replyLabel: string | null;
 }
+
+const POST_COMMENTS_QUERY_ROOT = 'post-comments';
+const POST_COMMENT_REPLIES_QUERY_ROOT = 'post-comment-replies';
+
+/**
+ * Prefixes matching every cached thread and reply list, whatever the post,
+ * sort or viewer: a block hides its author from all of them at once.
+ */
+export const ALL_POST_COMMENT_QUERY_KEYS = [
+  [POST_COMMENTS_QUERY_ROOT],
+  [POST_COMMENT_REPLIES_QUERY_ROOT],
+] as const;
 
 export function createPostCommentsQueryKey(
   postId: string,
   sort: PostCommentSort,
   viewerUserId?: string | null
 ) {
-  return ['post-comments', postId, sort, viewerUserId?.trim() || 'anonymous'] as const;
+  return [POST_COMMENTS_QUERY_ROOT, postId, sort, viewerUserId?.trim() || 'anonymous'] as const;
 }
 
 export function createPostCommentRepliesQueryKey(
@@ -46,7 +49,7 @@ export function createPostCommentRepliesQueryKey(
   parentId: string,
   viewerUserId?: string | null
 ) {
-  return ['post-comment-replies', postId, parentId, viewerUserId?.trim() || 'anonymous'] as const;
+  return [POST_COMMENT_REPLIES_QUERY_ROOT, postId, parentId, viewerUserId?.trim() || 'anonymous'] as const;
 }
 
 export function flattenCommentPages(pages: PostCommentsResponse[] | undefined) {
@@ -62,6 +65,28 @@ export function flattenCommentPages(pages: PostCommentsResponse[] | undefined) {
   }
 
   return comments;
+}
+
+/**
+ * The top-level thread with the viewer's own new comments pinned above it,
+ * newest first. Under Top the server ranks by reply count, so on a busy post a
+ * comment with no replies yet falls past page 1 and would vanish on the
+ * refetch that follows posting it. The server's copy of a pinned comment wins
+ * once a loaded page holds it (a newer reply count, a removal), and it is
+ * listed once, in the pinned place.
+ */
+export function mergeTopLevelWithPending(
+  pages: PostCommentsResponse[] | undefined,
+  pendingTopLevel: PostComment[] = []
+) {
+  const server = flattenCommentPages(pages);
+  if (!pendingTopLevel.length) return server;
+  const serverById = new Map(server.map((comment) => [comment.id, comment]));
+  const pinnedIds = new Set(pendingTopLevel.map((comment) => comment.id));
+  return [
+    ...pendingTopLevel.map((comment) => serverById.get(comment.id) ?? comment),
+    ...server.filter((comment) => !pinnedIds.has(comment.id)),
+  ];
 }
 
 export function mergeRepliesWithPending(
@@ -139,50 +164,34 @@ export function getCommentDisplay(comment: PostComment, now = new Date()): Comme
         ? `@${comment.author.username}`
         : comment.author?.displayName ?? 'Creator',
     timeLabel: formatRelativeTime(comment.createdAt, now),
-    replyLabel: comment.replyCount > 0
-      ? `${comment.replyCount} ${comment.replyCount === 1 ? 'reply' : 'replies'}`
-      : null,
   };
 }
 
+export function getRepliesToggleLabel(replyCount: number, expanded: boolean) {
+  if (expanded) return 'Hide replies';
+  return `View ${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}`;
+}
+
 /**
- * Flattens top-level comments plus any expanded reply sets into a single render
- * list. The API and UI share a one-level thread contract: replies always point
- * at a top-level parent.
+ * The question before a delete or an owner's removal. The server keeps a
+ * removed comment as "[deleted]" only while it holds replies; one without
+ * replies is removed outright, and the author's copy says so.
  */
-export function buildCommentThreads({
-  topLevel,
-  repliesByParent = {},
-  expandedIds = new Set<string>(),
-}: {
-  topLevel: PostComment[];
-  repliesByParent?: Record<string, PostComment[]>;
-  expandedIds?: Set<string>;
-}): CommentThreadRow[] {
-  const rows: CommentThreadRow[] = [];
-
-  for (const comment of topLevel) {
-    rows.push({ kind: 'comment', key: comment.id, comment });
-
-    const expanded = expandedIds.has(comment.id);
-    if (expanded) {
-      for (const reply of repliesByParent[comment.id] ?? []) {
-        rows.push({ kind: 'reply', key: reply.id, comment: reply, parentId: comment.id });
-      }
-    }
-
-    if (comment.replyCount > 0) {
-      rows.push({
-        kind: 'replies-toggle',
-        key: `${comment.id}:toggle`,
-        parentId: comment.id,
-        replyCount: comment.replyCount,
-        expanded,
-      });
-    }
+export function getRemoveCommentConfirmation(comment: PostComment, asOwner: boolean) {
+  if (asOwner) {
+    return {
+      title: 'Remove this comment?',
+      message: 'It will be hidden from everyone viewing your post.',
+      confirmLabel: 'Remove',
+    };
   }
-
-  return rows;
+  return {
+    title: 'Delete your comment?',
+    message: comment.replyCount > 0
+      ? `Your comment will be replaced with “${DELETED_COMMENT_LABEL}”. Replies to it stay visible.`
+      : 'It will be removed.',
+    confirmLabel: 'Delete',
+  };
 }
 
 export function canDeleteComment(comment: PostComment, viewerUserId: string | null | undefined) {
@@ -207,6 +216,25 @@ export function canReportComment(comment: PostComment, viewerUserId: string | nu
   return comment.status === 'active'
     && Boolean(viewerUserId)
     && comment.author?.id !== viewerUserId;
+}
+
+/**
+ * Block from a comment: someone else's comment, with the viewer signed in. Not
+ * the post's creator: blocking them hides the post itself, which the post's
+ * own menu does while taking it off the screen, and their profile (a tap on
+ * the comment's author) offers Block as well.
+ */
+export function canBlockCommentAuthor(
+  comment: PostComment,
+  postCreatorId: string | null | undefined,
+  viewerUserId: string | null | undefined
+) {
+  const authorId = comment.author?.id;
+  return comment.status === 'active'
+    && Boolean(viewerUserId)
+    && Boolean(authorId)
+    && authorId !== viewerUserId
+    && authorId !== postCreatorId;
 }
 
 export function prependCommentToPages(
@@ -298,6 +326,33 @@ export function suspendCommentPagination(
   };
 }
 
+/** Returns the same list when it does not hold the comment. */
+export function markCommentRemovedInList(
+  comments: PostComment[],
+  commentId: string,
+  status: PostComment['status']
+): PostComment[] {
+  if (!comments.some((comment) => comment.id === commentId)) return comments;
+  return comments.flatMap((comment) => {
+    if (comment.id !== commentId) return [comment];
+    // A removed comment stays only while it still anchors replies.
+    if (comment.replyCount <= 0) return [];
+    return [{ ...comment, status, body: '', author: null }];
+  });
+}
+
+/** Returns the same list when it does not hold the parent. */
+export function incrementReplyCountInList(
+  comments: PostComment[],
+  parentId: string,
+  delta: number
+): PostComment[] {
+  if (!comments.some((comment) => comment.id === parentId)) return comments;
+  return comments.map((comment) => (comment.id === parentId
+    ? { ...comment, replyCount: Math.max(0, comment.replyCount + delta) }
+    : comment));
+}
+
 export function markCommentRemovedInPages(
   data: InfiniteData<PostCommentsResponse> | undefined,
   commentId: string,
@@ -311,12 +366,7 @@ export function markCommentRemovedInPages(
     pages: data.pages.map((page) => ({
       ...page,
       commentCount,
-      comments: page.comments.flatMap((comment) => {
-        if (comment.id !== commentId) return [comment];
-        // A removed comment stays only while it still anchors replies.
-        if (comment.replyCount <= 0) return [];
-        return [{ ...comment, status, body: '', author: null }];
-      }),
+      comments: markCommentRemovedInList(page.comments, commentId, status),
     })),
   };
 }
@@ -334,10 +384,97 @@ export function incrementParentReplyCountInPages(
     pages: data.pages.map((page) => ({
       ...page,
       ...(typeof commentCount === 'number' ? { commentCount } : {}),
-      comments: page.comments.map((comment) => (comment.id === parentId
-        ? { ...comment, replyCount: Math.max(0, comment.replyCount + delta) }
-        : comment)),
+      comments: incrementReplyCountInList(page.comments, parentId, delta),
     })),
+  };
+}
+
+export const COMMENTS_CLOSED_TITLE = 'Comments are closed on this post';
+
+function errorStatus(error: unknown) {
+  return error instanceof ApiError ? error.status : null;
+}
+
+/** How long a 429 asked the client to wait, when its body said. */
+function retryAfterSeconds(error: unknown) {
+  if (!(error instanceof ApiError) || error.status !== 429) return null;
+  const details = error.details;
+  const seconds = details && typeof details === 'object'
+    ? Number((details as { retryAfterSeconds?: unknown }).retryAfterSeconds)
+    : Number.NaN;
+  return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : null;
+}
+
+function waitSentence(error: unknown) {
+  const seconds = retryAfterSeconds(error);
+  if (seconds === null) return 'Wait a moment, then try again.';
+  if (seconds < 60) return `Try again in ${seconds} ${seconds === 1 ? 'second' : 'seconds'}.`;
+  const minutes = Math.ceil(seconds / 60);
+  return `Try again in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}.`;
+}
+
+export interface CommentsLoadErrorCopy {
+  title: string;
+  body?: string;
+  /** False when asking again cannot change the answer. */
+  canRetry: boolean;
+}
+
+/**
+ * A failed thread load, named by its cause rather than by the request. A 404
+ * is a post no longer public or visible to this viewer (a block either way
+ * with its creator reads the same), which trying again cannot open. A 429
+ * clears with time. Only a request that never reached the server is a
+ * connection problem.
+ */
+export function getCommentsLoadErrorCopy(error: unknown): CommentsLoadErrorCopy {
+  const status = errorStatus(error);
+  if (status === 404) return { title: COMMENTS_CLOSED_TITLE, canRetry: false };
+  if (status === 429) {
+    return {
+      title: 'Comments are unavailable',
+      body: `Too many requests in a short time. ${waitSentence(error)}`,
+      canRetry: true,
+    };
+  }
+  return {
+    title: 'Comments are unavailable',
+    body: status === null || status === 0
+      ? 'We could not load this conversation. Check your connection, then try again.'
+      : 'We could not load this conversation. Try again in a moment.',
+    canRetry: true,
+  };
+}
+
+export interface CommentPostErrorCopy {
+  title: string;
+  message?: string;
+  /** The session behind the post ended: the dialog's way forward is to sign in. */
+  signIn: boolean;
+}
+
+/**
+ * A failed comment or reply. A 401 is a session that ended after the thread
+ * opened (the app drops back to a guest when the server refuses it), so it
+ * says that rather than the server's "Unauthorized". A 404 on a new comment is
+ * a post that closed meanwhile; on a reply it can also be a parent removed
+ * meanwhile, which the server's own text names.
+ */
+export function getCommentPostErrorCopy(error: unknown, isReply: boolean): CommentPostErrorCopy {
+  const status = errorStatus(error);
+  if (status === 401) return { title: 'Your session ended', message: 'Sign in to post.', signIn: true };
+  if (status === 404 && !isReply) return { title: COMMENTS_CLOSED_TITLE, signIn: false };
+  if (status === 429) {
+    return {
+      title: 'Could not post comment',
+      message: `You're commenting too quickly. ${waitSentence(error)}`,
+      signIn: false,
+    };
+  }
+  return {
+    title: 'Could not post comment',
+    message: error instanceof Error && error.message.trim() ? error.message : 'Please try again.',
+    signIn: false,
   };
 }
 

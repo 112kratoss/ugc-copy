@@ -85,7 +85,38 @@ describe('postReportRouteResponse', () => {
       reporterUserId: 'reporter-1',
       readBody: expect.any(Function),
       createAdminSupabase: expect.any(Function),
+      runAfterResponse: expect.any(Function),
     });
+  });
+
+  it("hands the service the whole body and a scheduler, so the report's feed event goes out behind the answer", async () => {
+    const runAfterResponse = vi.fn();
+    const submitPostReportForRoute = vi.fn(
+      async ({ readBody }: { readBody: () => Promise<unknown> }): Promise<PostReportRouteResult> => {
+        // The delivery the post was reported from reaches the service with the report.
+        await expect(readBody()).resolves.toEqual({ reason: 'unsafe_content', deliveryId: '812' });
+        return { ok: true, body: { success: true } };
+      },
+    );
+
+    const response = await postReportRouteResponse({
+      postId: 'post-1',
+      request: new Request('http://localhost/api/posts/post-1/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'unsafe_content', deliveryId: '812' }),
+      }),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient),
+        createUserClient: () => createUserClient('reporter-1'),
+        runAfterResponse,
+        submitPostReportForRoute,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(submitPostReportForRoute).toHaveBeenCalledTimes(1);
+    expect(submitPostReportForRoute.mock.calls[0][0]).toMatchObject({ runAfterResponse });
   });
 
   it('maps post report rate limits to standard private backend rate-limit responses', async () => {

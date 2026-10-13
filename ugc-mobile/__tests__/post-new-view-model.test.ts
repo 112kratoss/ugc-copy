@@ -5,12 +5,10 @@ import {
   upsertOptimisticOwnerPostInfiniteData,
   buildPostComposerMediaItemsPayload,
   buildPostResourceBundleInput,
-  buildPublishGenerationPayload,
   buildPublishGenerationPostPayload,
   buildUpdatePostPayload,
   createPostComposerResourceCard,
   deriveCreationPackageFromResourceCards,
-  getPostComposerPublishActions,
   applyCreationPromptResource,
   getDefaultPostComposerDraft,
   getExplicitPublishGeneration,
@@ -19,9 +17,7 @@ import {
   getPostComposerPackageStatus,
   getPostComposerPriceTokens,
   getPostComposerPreviewStatusLabel,
-  getPostComposerReadiness,
   getPostComposerResourceCardErrors,
-  getPostComposerSectionSummary,
   getPostComposerSubmitLabel,
   getPublishableGenerations,
   hydratePostComposerResourceCards,
@@ -30,7 +26,7 @@ import {
   isPostComposerResourceCardReady,
   isTemplateGeneration,
   getPublishGenerationMediaKind,
-  getPublishGenerationSubtitle,
+  getPublishGenerationTitlePrefill,
   POST_COMPOSER_RESOURCE_CARD_OPTIONS,
   POST_COMPOSER_SOURCE_OPTIONS,
   validatePostComposerDraft,
@@ -190,31 +186,30 @@ describe('post new view model', () => {
     expect(payload).not.toHaveProperty('includeGenerationReferences');
   });
 
-  it('builds a publish payload from generation metadata', () => {
-    expect(buildPublishGenerationPayload(generation({ id: 'gen-42', category: 'motion' }))).toEqual({
-      generationId: 'gen-42',
-      visibility: 'public',
-      title: 'Image result',
-      description: 'A polished image',
-      prompt: 'Make a glossy product photo',
-      category: 'video',
-    });
+  it('normalizes legacy ugc-ad and motion generation categories to video media', () => {
+    expect(getPublishGenerationMediaKind(generation({ id: 'gen-ugc', category: 'ugc-ad', output_url: 'https://cdn.example.com/ad.mp4' }))).toBe('video');
+    expect(getPublishGenerationMediaKind(generation({ id: 'gen-42', category: 'motion' }))).toBe('video');
+    expect(getPublishGenerationMediaKind(generation({ category: null }))).toBe('image');
   });
 
-  it('uses readable subtitles for the publish list', () => {
-    expect(getPublishGenerationSubtitle(generation({ category: 'video', model: 'seedance' }))).toContain('Video');
-    expect(getPublishGenerationSubtitle(generation({ category: 'ugc-ad', model: 'seedance' }))).toContain('Video');
-    expect(getPublishGenerationSubtitle(generation({ category: null, model: 'seedream' }))).toContain('Image');
-  });
+  // The raw prompt used to be the fallback, so a creator selling that prompt
+  // published its opening as the post's public title.
+  it('prefills a creation post title from its own title or its template, never its prompt', () => {
+    expect(getPublishGenerationTitlePrefill(generation({ title: 'Image result' }))).toBe('Image result');
+    expect(getPublishGenerationTitlePrefill(generation({
+      title: null,
+      origin: 'template',
+      template: { runId: 'run-1', templateId: 'template-1', templateTitle: 'Ghost rider' },
+    }))).toBe('Ghost rider');
+    expect(getPublishGenerationTitlePrefill(generation({ title: null, prompt: 'Make a glossy product photo' }))).toBe('');
+    expect(getPublishGenerationTitlePrefill(generation({ title: 't'.repeat(TITLE_MAX_LENGTH + 20) }))).toHaveLength(TITLE_MAX_LENGTH);
 
-  it('normalizes legacy ugc-ad generation category to video media', () => {
-    const item = generation({ id: 'gen-ugc', category: 'ugc-ad', output_url: 'https://cdn.example.com/ad.mp4' });
-
-    expect(buildPublishGenerationPayload(item)).toMatchObject({
-      generationId: 'gen-ugc',
-      category: 'video',
-    });
-    expect(getPublishGenerationMediaKind(item)).toBe('video');
+    const untitled = generation({ title: null, prompt: 'Exact prompt for sale' });
+    expect(buildPublishGenerationPostPayload(untitled, {
+      ...getDefaultPostComposerDraft(),
+      mode: 'creation',
+      selectedGenerationId: untitled.id,
+    }).title).toBeUndefined();
   });
 
   it('validates the ordered text composer fields', () => {
@@ -236,6 +231,12 @@ describe('post new view model', () => {
       message: 'Add a title for your post.',
     });
     expect(validatePostComposerDraft({ ...draft, contentText: '', caption: '' })).toMatchObject({
+      valid: false,
+      message: 'Write the text post before continuing.',
+    });
+    // A Story kept from the media format is not shown in text mode and is not
+    // published, so it cannot stand in for the post text.
+    expect(validatePostComposerDraft({ ...draft, contentText: '', caption: 'A hidden story' })).toMatchObject({
       valid: false,
       message: 'Write the text post before continuing.',
     });
@@ -421,6 +422,8 @@ describe('post new view model', () => {
     expect(isPostComposerResourceCardReady({ ...card, title: 'Reusable prompt', textContent: 'Exact prompt' })).toBe(true);
   });
 
+  // The caption is a Story kept from the media format, which text mode does not
+  // show: it is neither the body nor the description of a text post.
   it('builds FormData for text posts in the public post order', () => {
     const formData = buildCreatePostFormData({
       ...getDefaultPostComposerDraft(),
@@ -438,8 +441,7 @@ describe('post new view model', () => {
 
     expect(entries).toEqual([
       ['title', 'Text post title'],
-      ['description', 'Extra caption'],
-      ['body', 'Main text content\n\nExtra caption'],
+      ['body', 'Main text content'],
       ['sourceTool', 'Manual'],
       ['sourceToolSlug', 'manual'],
       ['visibility', 'public'],
@@ -522,6 +524,81 @@ describe('post new view model', () => {
       modelLabel: 'Gen-4',
       modelSlug: 'gen-4',
     }]));
+  });
+
+  // The draft's category is set when media is added and is not touched by a
+  // reorder or a removal; the create route refuses one that does not match
+  // the cover ("choose a matching category", a control this app does not have).
+  it('files a media post under its cover after a video is moved first', () => {
+    const image = {
+      id: 'media-image',
+      uri: 'file:///cover.jpg',
+      name: 'cover.jpg',
+      type: 'image/jpeg',
+      mediaKind: 'image' as const,
+      storagePath: 'uploads/user-1/cover.jpg',
+    };
+    const video = {
+      id: 'media-video',
+      uri: 'file:///clip.mp4',
+      name: 'clip.mp4',
+      type: 'video/mp4',
+      mediaKind: 'video' as const,
+      storagePath: 'uploads/user-1/clip.mp4',
+    };
+    const reordered = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'upload' as const,
+      proofMode: 'media' as const,
+      title: 'Mixed gallery',
+      category: 'image' as const,
+      mediaItems: [video, image],
+    };
+
+    const formData = buildCreatePostFormData(reordered);
+    expect(formData.get('category')).toBe('video');
+    expect(JSON.parse(String(formData.get('mediaItems')))[0]).toMatchObject({ contentType: 'video/mp4' });
+    expect(buildOptimisticOwnerPostListItem('post-1', reordered)?.category).toBe('video');
+
+    expect(buildCreatePostFormData({ ...reordered, category: 'video', mediaItems: [image] }).get('category')).toBe('image');
+    // A text post keeps its own category whatever media the draft still holds.
+    expect(buildOptimisticOwnerPostListItem('post-2', {
+      ...reordered,
+      mode: 'text',
+      proofMode: 'text',
+      category: 'text',
+      contentText: 'A useful note',
+    })?.category).toBe('text');
+  });
+
+  // The app has no description field, and the web post page shows the
+  // description above the media and the body below it: sending the Story as
+  // both stored and showed it twice.
+  it('sends the Story as the body only, and a description only when the draft has one', () => {
+    const draft = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'upload' as const,
+      proofMode: 'media' as const,
+      title: 'Story post',
+      caption: 'How this was made.',
+      category: 'image' as const,
+      mediaItems: [{
+        id: 'media-1',
+        uri: 'file:///cover.jpg',
+        name: 'cover.jpg',
+        type: 'image/jpeg',
+        mediaKind: 'image' as const,
+        storagePath: 'uploads/user-1/cover.jpg',
+      }],
+    };
+
+    const formData = buildCreatePostFormData(draft);
+    expect(formData.get('description')).toBeNull();
+    expect(formData.get('body')).toBe('How this was made.');
+    expect(formData.get('postFormat')).toBe('mixed');
+
+    expect(buildCreatePostFormData({ ...draft, description: '  Explore copy  ' }).get('description')).toBe('Explore copy');
+    expect(buildCreatePostFormData({ ...draft, description: '   ' }).get('description')).toBeNull();
   });
 
   it('builds paid unlock bundle payloads only when unlock content exists', () => {
@@ -1260,7 +1337,7 @@ describe('post new view model', () => {
     });
   });
 
-  it('summarizes post sections and creation package state for the Phase 4 composer', () => {
+  it('reports attached creation references as the package status', () => {
     const item = generation({
       id: 'gen-summary',
       input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
@@ -1281,11 +1358,6 @@ describe('post new view model', () => {
       },
     };
 
-    expect(getPostComposerSectionSummary(draft, item)).toEqual({
-      publicPost: 'Public · Creation selected',
-      postSettings: 'Magicbooklet · Image',
-      resourcePackage: 'References attached',
-    });
     expect(getPostComposerPackageStatus(draft, item)).toEqual(expect.objectContaining({
       label: 'References attached',
       body: 'Creation input media will be available from the post details.',
@@ -1326,47 +1398,6 @@ describe('post new view model', () => {
     }, item)).toBe('Paid resource package will appear in post details.');
   });
 
-  it('summarizes guided composer readiness for public post, unlock, preview, and publish', () => {
-    const draft = {
-      ...getDefaultPostComposerDraft(),
-      mode: 'text' as const,
-      title: 'Prompt teardown',
-      contentText: 'A reusable breakdown.',
-      resource: {
-        ...getDefaultPostComposerDraft().resource,
-        accessMode: 'paid' as const,
-        cardAuthoringMode: 'legacy' as const,
-        promptText: 'Exact prompt',
-        previewText: 'Prompt, notes, and usage included.',
-        priceUsd: '9',
-      },
-    };
-
-    expect(getPostComposerReadiness(draft)).toEqual([
-      expect.objectContaining({
-        id: 'public-post',
-        label: 'Public post ready',
-        state: 'ready',
-      }),
-      expect.objectContaining({
-        id: 'unlock',
-        label: 'Resource package ready',
-        body: 'Paid resource package will appear in post details.',
-        state: 'ready',
-      }),
-      expect.objectContaining({
-        id: 'preview',
-        label: 'Preview updates live',
-        state: 'ready',
-      }),
-      expect.objectContaining({
-        id: 'publish',
-        label: 'Ready to publish',
-        state: 'ready',
-      }),
-    ]);
-  });
-
   it('adds structured source tool metadata for uploaded media posts', () => {
     const formData = buildCreatePostFormData({
       ...getDefaultPostComposerDraft(),
@@ -1402,22 +1433,6 @@ describe('post new view model', () => {
     }]));
   });
 
-  it('returns web-style publish actions with explicit target visibility', () => {
-    expect(getPostComposerPublishActions({ selectedVisibility: 'public', isEditMode: false, isPending: false })).toEqual([
-      { id: 'private', label: 'Save private', visibility: 'private', variant: 'secondary', disabled: false, loading: false },
-      { id: 'public', label: 'Publish public', visibility: 'public', variant: 'primary', disabled: false, loading: false },
-    ]);
-    expect(getPostComposerPublishActions({ selectedVisibility: 'unlisted', isEditMode: false, isPending: false })).toEqual([
-      { id: 'private', label: 'Save private', visibility: 'private', variant: 'secondary', disabled: false, loading: false },
-      { id: 'unlisted', label: 'Save unlisted', visibility: 'unlisted', variant: 'secondary', disabled: false, loading: false },
-      { id: 'public', label: 'Publish public', visibility: 'public', variant: 'primary', disabled: false, loading: false },
-    ]);
-    expect(getPostComposerPublishActions({ selectedVisibility: 'public', isEditMode: true, isPending: true, pendingVisibility: 'public' })).toEqual([
-      { id: 'private', label: 'Save private', visibility: 'private', variant: 'secondary', disabled: true, loading: false },
-      { id: 'public', label: 'Saving', visibility: 'public', variant: 'primary', disabled: true, loading: true },
-    ]);
-  });
-
   it('builds an optimistic owner post with the selected upload preview', () => {
     const post = buildOptimisticOwnerPostListItem('post-123', {
       ...getDefaultPostComposerDraft(),
@@ -1444,7 +1459,7 @@ describe('post new view model', () => {
       visibility: 'public',
       mediaUrl: 'file:///tmp/cover.png',
       mediaKind: 'image',
-      description: 'Uploaded from phone',
+      body: 'Uploaded from phone',
       category: 'image',
       postFormat: 'mixed',
       sourceTool: 'Manual',
@@ -1459,6 +1474,8 @@ describe('post new view model', () => {
         sortOrder: 0,
       }],
     });
+    // Nothing was written as a description, so the tile carries none.
+    expect(post?.description).toBeUndefined();
   });
 
   it('returns submit labels for publish visibility and edit states', () => {
@@ -1475,8 +1492,11 @@ describe('post new view model', () => {
     // owner's own words travel. Sending only the visibility is what locked
     // title, story and caption behind "Creation details are fixed".
     it('sends the owner-written fields for a generation-backed post and leaves the creation-derived ones out', () => {
+      // As the editor loads a post made from a creation.
       const draft = {
         ...getDefaultPostComposerDraft(),
+        mode: 'creation' as const,
+        proofMode: 'media' as const,
         title: 'New Title',
         caption: 'New Caption',
         visibility: 'private' as const,
@@ -1494,9 +1514,10 @@ describe('post new view model', () => {
       expect(payload).not.toHaveProperty('sourceTool');
       expect(payload).not.toHaveProperty('sourceTools');
       expect(payload).not.toHaveProperty('mediaItems');
+      // The Story is the body. An absent description leaves the stored one alone.
+      expect(payload).not.toHaveProperty('description');
       expect(payload).toMatchObject({
         title: 'New Title',
-        description: 'New Caption',
         body: 'New Caption',
         visibility: 'private',
         resourceBundle: {
@@ -1528,7 +1549,6 @@ describe('post new view model', () => {
       expect(buildUpdatePostPayload(true, draft, { preserveSoldResourceBundle: true })).toEqual({
         isNsfw: false,
         title: '',
-        description: '',
         body: '',
         visibility: 'private',
       });
@@ -1555,9 +1575,9 @@ describe('post new view model', () => {
       };
 
       const payload = buildUpdatePostPayload(false, draft);
+      expect(payload).not.toHaveProperty('description');
       expect(payload).toMatchObject({
         title: 'New Title',
-        description: 'New Caption',
         body: 'New Content',
         visibility: 'private',
         category: 'video',
@@ -1596,9 +1616,9 @@ describe('post new view model', () => {
       };
 
       const payload = buildUpdatePostPayload(false, draft);
+      expect(payload).not.toHaveProperty('description');
       expect(payload).toMatchObject({
         title: 'Media Title',
-        description: 'Media Caption',
         body: 'Media Caption',
         visibility: 'unlisted',
         category: 'image',
@@ -1606,6 +1626,28 @@ describe('post new view model', () => {
           toolLabel: 'Manual',
           toolSlug: 'manual',
         }],
+      });
+    });
+
+    // A post written on the web can carry an Explore description the app has
+    // no field for; the edit loads it and sends it back unchanged.
+    it('keeps a description the loaded post already had, on both edit routes', () => {
+      const draft = {
+        ...getDefaultPostComposerDraft(),
+        mode: 'upload' as const,
+        title: 'Web post',
+        description: 'Written in the web composer',
+        caption: 'The story',
+        category: 'image' as const,
+      };
+
+      expect(buildUpdatePostPayload(false, draft)).toMatchObject({
+        description: 'Written in the web composer',
+        body: 'The story',
+      });
+      expect(buildUpdatePostPayload(true, draft)).toMatchObject({
+        description: 'Written in the web composer',
+        body: 'The story',
       });
     });
   });

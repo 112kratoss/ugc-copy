@@ -248,12 +248,18 @@ vi.mock('@/lib/durable-generation-media', () => ({
   ensureDurableGenerationMedia: (...args: unknown[]) => ensureDurableGenerationMediaMock(...args),
 }));
 
-vi.mock('@/lib/posts-server', () => ({
-  deriveTitleFromBody: vi.fn((value: string | null | undefined) => value?.split('\n')[0] ?? null),
-  isMissingPostsSchemaError: vi.fn(() => false),
-  isMissingMarketplaceSchemaError: vi.fn(() => false),
-  isMissingPostResourceBundlesSchemaError: vi.fn(() => false),
-}));
+vi.mock('@/lib/posts-server', async () => {
+  // The real limits, so a publish is held to the numbers the service uses.
+  const { BODY_MAX_LENGTH, TITLE_MAX_LENGTH } = await vi.importActual<typeof import('@/lib/posts-server')>('@/lib/posts-server');
+  return {
+    BODY_MAX_LENGTH,
+    TITLE_MAX_LENGTH,
+    deriveTitleFromBody: vi.fn((value: string | null | undefined) => value?.split('\n')[0] ?? null),
+    isMissingPostsSchemaError: vi.fn(() => false),
+    isMissingMarketplaceSchemaError: vi.fn(() => false),
+    isMissingPostResourceBundlesSchemaError: vi.fn(() => false),
+  };
+});
 
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: NextRequest) => createUserClientMock(request),

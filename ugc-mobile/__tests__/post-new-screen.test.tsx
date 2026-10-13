@@ -15,7 +15,7 @@ function resolvePressableStyle(style: unknown) {
     : style;
 }
 
-const routerState = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn() }));
+const routerState = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn(), canGoBack: vi.fn(() => false) }));
 const navigationState = vi.hoisted(() => ({ dispatch: vi.fn(), setOptions: vi.fn() }));
 const alertState = vi.hoisted(() => ({ alert: vi.fn() }));
 const storageState = vi.hoisted(() => ({ values: new Map<string, string>() }));
@@ -49,10 +49,13 @@ const sourceToolsState = vi.hoisted(() => ({
   }] as SourceToolOption[],
 }));
 const postEditState = vi.hoisted(() => ({ post: null as Record<string, unknown> | null }));
+// The creation the composer is opened on, when a case needs one other than `generationItem`.
+const generationState = vi.hoisted(() => ({ item: null as Record<string, unknown> | null }));
 const mutationState = vi.hoisted(() => ({
   mutate: vi.fn(),
   isPending: false,
   options: null as null | {
+    mutationFn?: (visibility?: 'public' | 'unlisted' | 'private') => Promise<unknown>;
     onMutate?: (visibility?: 'public' | 'unlisted' | 'private') => { submittedDraft?: unknown } | void;
     onSuccess?: (
       response: { postId?: string | null },
@@ -62,7 +65,7 @@ const mutationState = vi.hoisted(() => ({
   },
 }));
 const queryClientState = vi.hoisted(() => ({ invalidateQueries: vi.fn(), setQueryData: vi.fn() }));
-const queryOptionsState = vi.hoisted(() => ({ options: [] as Array<{ queryKey: string[]; enabled?: boolean }> }));
+const queryOptionsState = vi.hoisted(() => ({ options: [] as Array<{ queryKey: string[]; enabled?: boolean; gcTime?: number }> }));
 const keyboardState = vi.hoisted(() => ({ dismiss: vi.fn() }));
 // Android's back key, as the screen's own surfaces claim it.
 const backHandlerState = vi.hoisted(() => ({ listeners: new Set<() => boolean>() }));
@@ -136,10 +139,10 @@ vi.mock('@tanstack/react-query', () => ({
     mutationState.options = options;
     return mutationState;
   },
-  useQuery: (options: { queryKey: string[]; enabled?: boolean }) => {
+  useQuery: (options: { queryKey: string[]; enabled?: boolean; gcTime?: number }) => {
     queryOptionsState.options.push(options);
     if (options.queryKey[0] === 'post-new-generations') {
-      return { data: { generations: [generationItem] }, error: null, isLoading: false, isSuccess: true };
+      return { data: { generations: [generationState.item ?? generationItem] }, error: null, isLoading: false, isSuccess: true };
     }
     if (options.queryKey[0] === 'post-edit') {
       return postEditState.post
@@ -389,6 +392,10 @@ describe('mobile external post composer', () => {
     routerState.push.mockClear();
     routerState.replace.mockClear();
     routerState.back.mockClear();
+    routerState.canGoBack.mockReset();
+    routerState.canGoBack.mockReturnValue(false);
+    generationState.item = null;
+    authState.api.createPost.mockReset();
     queryClientState.invalidateQueries.mockClear();
     queryClientState.setQueryData.mockClear();
     mutationState.mutate.mockClear();
@@ -1194,6 +1201,227 @@ describe('mobile external post composer', () => {
     expect(routerState.replace).toHaveBeenCalledWith({ pathname: '/(tabs)/profile', params: { tab: 'posts', postId: 'post-123', published: '1' } });
   });
 
+  describe('after saving an edit', () => {
+    const editedPost = {
+      id: 'post-edit-1',
+      title: 'Existing post',
+      description: null,
+      body: 'Existing story',
+      postFormat: 'mixed',
+      generationId: null,
+      category: 'image',
+      visibility: 'public',
+      sourceTool: 'Manual',
+      sourceToolSlug: 'manual',
+      mediaUrl: 'https://cdn.example.com/existing.png',
+      mediaKind: 'image',
+      mediaItems: [],
+      resourceBundleInput: null,
+      hasPaidOrders: false,
+    };
+
+    async function saveEdit(canGoBack: boolean) {
+      paramsState.params = { postId: 'post-edit-1' };
+      postEditState.post = editedPost;
+      routerState.canGoBack.mockReturnValue(canGoBack);
+      await renderScreen();
+      renderer.act(() => mutationState.options?.onSuccess?.({ postId: 'post-edit-1' }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    // Opened from the viewer, the post page or the seller dashboard, an edit
+    // used to land on the profile like a new post, offer included.
+    it('returns to the screen that opened the editor, refreshed', async () => {
+      await saveEdit(true);
+
+      expect(routerState.back).toHaveBeenCalledTimes(1);
+      expect(routerState.replace).not.toHaveBeenCalled();
+      expect(queryClientState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['immersive-preview-source'] });
+      expect(queryClientState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['showcase-post', 'post-edit-1'] });
+      expect(queryClientState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['owner-text-post', 'post-edit-1'] });
+      expect(queryClientState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['seller-dashboard-posts', 'user-123'] });
+      // Reopening the editor from there must not prefill from the copy loaded
+      // before the save.
+      expect(queryOptionsState.options.find((options) => options.queryKey[0] === 'post-edit')?.gcTime).toBe(0);
+    });
+
+    it('lands on the profile without the publish offer when nothing is behind it', async () => {
+      await saveEdit(false);
+
+      expect(routerState.back).not.toHaveBeenCalled();
+      expect(routerState.replace).toHaveBeenCalledWith({ pathname: '/(tabs)/profile', params: { tab: 'posts', postId: 'post-edit-1' } });
+    });
+  });
+
+  // The web editor shows a post's Explore description apart from its body;
+  // reading it into the Story turned a media post mixed on its first save here.
+  it('loads the Story from the body alone and carries a web description through unchanged', async () => {
+    paramsState.params = { postId: 'post-web' };
+    postEditState.post = {
+      id: 'post-web',
+      title: 'Web post',
+      description: 'Explore copy from the web',
+      body: '',
+      postFormat: 'media',
+      generationId: null,
+      category: 'image',
+      visibility: 'public',
+      sourceTool: 'Manual',
+      sourceToolSlug: 'manual',
+      mediaUrl: 'https://cdn.example.com/web.png',
+      mediaKind: 'image',
+      mediaItems: [],
+      resourceBundleInput: null,
+      hasPaidOrders: false,
+    };
+
+    const tree = await renderScreen();
+    expect(findTextInputByAccessibilityLabel(tree.root, 'Story, optional').props.value).toBe('');
+
+    let context: { submittedDraft?: PostComposerDraft } | void = undefined;
+    renderer.act(() => {
+      context = mutationState.options?.onMutate?.('public') as typeof context;
+    });
+    expect((context as { submittedDraft?: PostComposerDraft } | undefined)?.submittedDraft).toMatchObject({
+      caption: '',
+      description: 'Explore copy from the web',
+    });
+  });
+
+  describe('title prefill from a creation', () => {
+    it('starts untitled when the creation has no title, rather than from its prompt', async () => {
+      generationState.item = { ...generationItem, title: null };
+      const tree = await renderScreen();
+      expect(findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.value).toBe('');
+    });
+
+    it('takes the template title when the creation has none', async () => {
+      generationState.item = {
+        ...generationItem,
+        title: null,
+        origin: 'template',
+        template: { runId: 'run-1', templateId: 'template-1', templateTitle: 'Ghost rider' },
+      };
+      const tree = await renderScreen();
+      expect(findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.value).toBe('Ghost rider');
+    });
+
+    it('takes the creation’s own title first', async () => {
+      const tree = await renderScreen();
+      expect(findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.value).toBe('Hero product image');
+    });
+  });
+
+  // The category used to follow only the first media added; a reorder kept it,
+  // and the create route refused the mismatch with a message about a control
+  // this app does not have.
+  it('files a new post under its cover after a video is moved first', async () => {
+    paramsState.params = {};
+    await uploadManualMedia([
+      { uri: 'file:///still.png', fileName: 'still.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
+      { uri: 'file:///clip.mp4', fileName: 'clip.mp4', mimeType: 'video/mp4', type: 'video', fileSize: 4096, duration: 8000, width: 1080, height: 1920 },
+    ] as never);
+    const tree = await renderScreen();
+    await choosePreparedMedia(tree);
+
+    const videoCard = tree.root.findAll((node) => node.props.accessibilityLabel === 'Media 2, 2 of 2')[0];
+    renderer.act(() => videoCard.props.onAccessibilityAction({ nativeEvent: { actionName: 'decrement' } }));
+    expect(tree.root.findAll((node) => String(node.type) === 'text' && node.props.children === 'clip.mp4')).toHaveLength(1);
+    expect(tree.root.findAll((node) => node.props.accessibilityLabel === 'Cover, 1 of 2').length).toBeGreaterThan(0);
+    renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Mixed gallery'));
+
+    authState.api.createPost.mockResolvedValueOnce({ postId: 'post-mixed' });
+    await renderer.act(async () => {
+      await mutationState.options?.mutationFn?.('public');
+    });
+
+    const formData = authState.api.createPost.mock.calls.at(-1)?.[0] as unknown as FormData;
+    expect(formData.get('category')).toBe('video');
+    expect(JSON.parse(String(formData.get('mediaItems'))).map((item: { originalName: string }) => item.originalName))
+      .toEqual(['clip.mp4', 'still.png']);
+  });
+
+  describe('media the post cannot take', () => {
+    const MB = 1024 * 1024;
+
+    it('refuses an oversized video before uploading any of it', async () => {
+      paramsState.params = {};
+      await uploadManualMedia([
+        { uri: 'file:///long.mp4', fileName: 'long.mp4', mimeType: 'video/mp4', type: 'video', fileSize: 300 * MB, duration: 60_000, width: 1080, height: 1920 },
+        { uri: 'file:///still.png', fileName: 'still.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
+      ] as never);
+      const tree = await renderScreen();
+      await choosePreparedMedia(tree);
+
+      expect(vi.mocked(uploadPickedMedia).mock.calls.map(([uri]) => uri)).toEqual(['file:///still.png']);
+      const text = collectText(tree.root);
+      expect(text).toContain('Video too large');
+      expect(text).toContain('Videos must be 250 MB or smaller.');
+      expect(text).toContain('still.png');
+    });
+
+    function pickWithOneFailure() {
+      vi.mocked(pickMediaList).mockResolvedValueOnce([
+        { uri: 'file:///still.png', fileName: 'still.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
+        { uri: 'file:///broken.png', fileName: 'broken.png', mimeType: 'image/png', fileSize: 2048, width: 1024, height: 1024 },
+      ] as never);
+      vi.mocked(uploadPickedMedia).mockImplementation(async (uri, options) => {
+        if (uri === 'file:///broken.png') throw new Error('The connection was lost.');
+        return {
+          signedUrl: uri,
+          storagePath: `uploads/${options?.fileName ?? 'media.png'}`,
+          mimeType: 'image/png',
+          fileName: options?.fileName ?? 'media.png',
+          kind: 'image',
+          durationSeconds: null,
+          sizeBytes: options?.sizeBytes ?? null,
+        };
+      });
+    }
+
+    // Publish stayed off while a failed upload waited for a retry, and some
+    // failures never pass on a retry: the only escape was the picker.
+    it('offers Remove failed beside Retry, which lets Publish go', async () => {
+      paramsState.params = {};
+      pickWithOneFailure();
+      const tree = await renderScreen();
+      await choosePreparedMedia(tree);
+      renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Kept still'));
+      renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+
+      expect(findPressableByAccessibilityLabel(tree.root, 'Retry 1 media upload')).toBeTruthy();
+      expect(findPressableByAccessibilityLabel(tree.root, 'Publish public').props.disabled).toBe(true);
+
+      renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Remove failed').props.onPress());
+
+      expect(tree.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Retry 1 media upload')).toHaveLength(0);
+      expect(tree.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Remove failed')).toHaveLength(0);
+      expect(findPressableByAccessibilityLabel(tree.root, 'Publish public').props.disabled).toBe(false);
+      // What did upload is still the post's.
+      const context = mutationState.options?.onMutate?.('public') as { submittedDraft?: PostComposerDraft } | void;
+      expect(context?.submittedDraft?.mediaItems.map((item) => item.name)).toEqual(['still.png']);
+    });
+
+    it('clears the failure notice along with the failed media', async () => {
+      paramsState.params = {};
+      pickWithOneFailure();
+      const tree = await renderScreen();
+      await choosePreparedMedia(tree);
+      expect(collectText(tree.root)).toContain('1 media upload failed');
+
+      renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Remove failed').props.onPress());
+      expect(collectText(tree.root)).not.toContain('1 media upload failed');
+    });
+  });
+
+  it('caps a made-with tool or model name at the server’s 80 characters', async () => {
+    paramsState.params = {};
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Made with').props.onPress());
+    expect(findTextInputByPlaceholder(tree.root, 'Choose or search tool').props.maxLength).toBe(80);
+    expect(findTextInputByPlaceholder(tree.root, 'Any model').props.maxLength).toBe(80);
+  });
+
   describe('publish then share', () => {
     // Reached by tapping Share on something not yet public. Publishing is the
     // real action and the share sheet follows it, so a shared link always points
@@ -1244,6 +1472,40 @@ describe('mobile external post composer', () => {
         pathname: '/(tabs)/profile',
         params: { tab: 'posts', postId: 'post-126', published: '1' },
       });
+    });
+
+    // Share on a post that is not public yet opens it in the editor; once it is
+    // public and shared, the person is put back where they tapped Share.
+    it('returns to the screen it was opened from after making a post public and sharing it', async () => {
+      paramsState.params = { postId: 'post-private', shareAfterPublish: '1' };
+      postEditState.post = {
+        id: 'post-private',
+        title: 'Private post',
+        description: null,
+        body: '',
+        postFormat: 'media',
+        generationId: null,
+        category: 'image',
+        visibility: 'private',
+        sourceTool: 'Manual',
+        sourceToolSlug: 'manual',
+        mediaUrl: 'https://cdn.example.com/private.png',
+        mediaKind: 'image',
+        mediaItems: [],
+        resourceBundleInput: null,
+        hasPaidOrders: false,
+      };
+      routerState.canGoBack.mockReturnValue(true);
+      await renderScreen();
+      renderer.act(() => mutationState.options?.onSuccess?.({ postId: 'post-private', visibility: 'public' } as { postId?: string | null }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(shareState.share).toHaveBeenCalledWith(expect.objectContaining({
+        url: 'https://magicbooklet.com/showcase/post-private?s=my-creations',
+      }));
+      expect(routerState.back).toHaveBeenCalledTimes(1);
+      expect(routerState.replace).not.toHaveBeenCalled();
     });
 
     it('does not share when the composer was not opened with a share intent', async () => {

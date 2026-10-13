@@ -733,6 +733,7 @@
           "title": "Launch frame",
           "prompt": "Create a bright launch visual.",
           "body": "Reusable launch notes.",
+          "description": "A clean launch visual.",
           "category": "image",
           "creationMode": null,
           "postFormat": "media",
@@ -1644,6 +1645,32 @@
       "response": {
         "success": true,
         "signedUrl": "https://storage.example.test/signed/bundles/post-1/prompt.txt"
+      },
+      "batchLimit": 25,
+      "requestVariants": {
+        "batch": {
+          "storagePaths": [
+            "generation_inputs/user-1/gen-1/00-reference-image.png",
+            "generation_inputs/user-1/gen-1/01-reference-video.mp4"
+          ],
+          "disposition": "inline"
+        }
+      },
+      "responseVariants": {
+        "batch": {
+          "files": [
+            {
+              "storagePath": "generation_inputs/user-1/gen-1/00-reference-image.png",
+              "url": "https://storage.example.test/signed/generation_inputs/user-1/gen-1/00-reference-image.png",
+              "expiresAt": "2026-06-22T06:10:00.000Z"
+            },
+            {
+              "storagePath": "generation_inputs/user-1/gen-1/01-reference-video.mp4",
+              "url": "https://storage.example.test/signed/generation_inputs/user-1/gen-1/01-reference-video.mp4",
+              "expiresAt": "2026-06-22T06:10:00.000Z"
+            }
+          ]
+        }
       }
     },
     "mobileCommerceSync": {

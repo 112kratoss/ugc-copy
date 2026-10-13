@@ -1,5 +1,5 @@
 import { formatUnlockCreditPrice } from '@/lib/pricing';
-import type { ViewerUnlockItem } from '@/lib/types';
+import type { ViewerUnlockDetail, ViewerUnlockItem } from '@/lib/types';
 
 export type UnlockStateBadge = {
   tone: 'kept' | 'updated' | 'none';
@@ -64,6 +64,22 @@ export function formatUnlockDate(value: string): string {
  */
 export function getUnlockDestination(item: ViewerUnlockItem): string {
   return `/unlock/${encodeURIComponent(item.unlockId)}`;
+}
+
+/**
+ * Whether "View original post" leads anywhere. The web's unlock page asks the
+ * same question before it sends a buyer on to the post (`isPubliclyReadable`
+ * in src/app/unlocks/[postId]/page.tsx): public or unlisted, not archived, not
+ * removed. A private or archived post answered that button with "This post
+ * isn't available".
+ */
+export function canOpenUnlockedPost(
+  detail: Pick<ViewerUnlockDetail, 'postId' | 'post' | 'postVisibility' | 'tombstoned' | 'detached'>
+): boolean {
+  const post = detail.post;
+  if (!detail.postId || !post || detail.detached || detail.tombstoned || post.tombstoned) return false;
+  const visibility = post.visibility ?? detail.postVisibility;
+  return (visibility === 'public' || visibility === 'unlisted') && !post.archivedAt;
 }
 
 export function summarizeUnlockCount(total: number): string {

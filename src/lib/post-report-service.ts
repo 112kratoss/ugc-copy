@@ -8,7 +8,12 @@ import {
   POST_REPORT_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import {
+  parseFeedDeliveryIdField,
+  scheduleAuthoritativeFeedEvent,
+} from '@/lib/showcase-feed-events-service';
 
 const REPORT_REASONS = new Set([
   'spam',
@@ -23,6 +28,8 @@ type PostReportBody = {
   reason?: unknown;
   details?: unknown;
   bundleId?: unknown;
+  /** The feed delivery the post was reported from, when a ranked feed showed it. */
+  deliveryId?: unknown;
 };
 
 export type PostReportRouteResult =
@@ -82,12 +89,20 @@ export async function submitPostReportForRoute({
   readBody,
   createAdminSupabase,
   invalidateFeedCache = invalidateShowcaseFeedCache,
+  runAfterResponse,
+  scheduleFeedEvent = scheduleAuthoritativeFeedEvent,
 }: {
   postId: string;
   reporterUserId: string;
   readBody: () => Promise<unknown>;
   createAdminSupabase: () => SupabaseClient;
   invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
+  /**
+   * The route passes one so the report's feed event is written behind the
+   * answer; without it the event is written, bounded by its timeout, first.
+   */
+  runAfterResponse?: RunAfterResponse;
+  scheduleFeedEvent?: typeof scheduleAuthoritativeFeedEvent;
 }): Promise<PostReportRouteResult> {
   const body = normalizeBody(await readBody().catch(() => null));
   const reason = normalizeReason(body.reason);
@@ -162,6 +177,8 @@ export async function submitPostReportForRoute({
     logBackendError('failed_to_create_post_report', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to submit report.' } };
   }
+  // Its feed event is dated by the report, not by when the event is written.
+  const reportedAt = new Date().toISOString();
 
   // A report also takes the post out of the reporter's own feed, through the
   // same hard exclusion a "not interested" writes (`feed_user_post_feedback`,
@@ -184,6 +201,21 @@ export async function submitPostReportForRoute({
   }
 
   invalidateFeedCache();
+
+  // The report is stored and out of the reporter's feed. Its feed event is
+  // v4's `report` signal. Attributed to the feed delivery the client reported
+  // from, when it sent one, it stamps that delivery's `reported_at`, and the
+  // ranker's refreshes count it against the post and in the reporter's
+  // interests (they read a report only through its delivery). It is
+  // telemetry: it never fails or holds this answer, and is written once per
+  // reporter, post and delivery.
+  await scheduleFeedEvent(runAfterResponse, adminSupabase, {
+    eventType: 'report',
+    viewerUserId: reporterUserId,
+    postId,
+    deliveryId: parseFeedDeliveryIdField(body.deliveryId),
+    occurredAt: reportedAt,
+  });
 
   return { ok: true, body: { success: true } };
 }

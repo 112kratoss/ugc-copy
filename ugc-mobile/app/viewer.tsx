@@ -1,16 +1,15 @@
 import { useDecodedImageAspectRatio } from '@/lib/use-decoded-image-aspect-ratio';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
-import * as Clipboard from 'expo-clipboard';
 import { Image } from 'expo-image';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { useViewerVideoPlayer } from '@/lib/use-viewer-video-player';
 import { useReelBackdrop } from '@/lib/reel-backdrop';
-import { AudioLines, Copy, ImageOff, Lock, Play, Volume2, VolumeX } from 'lucide-react-native';
+import { AudioLines, ImageOff, Play, Volume2, VolumeX } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { createContext, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
@@ -32,12 +31,12 @@ import {
   forgetPlayback,
 } from '@/lib/playback-metrics';
 import { createViewerPlaybackHandoff } from '@/lib/viewer-playback-handoff';
-import { reconcileViewerSessionItems } from '@/lib/viewer-session-items';
+import { isRemovedFromViewer, reconcileViewerSessionItems, removeViewerSessionItems } from '@/lib/viewer-session-items';
 import { isVideoPlayerHandedBack } from '@/lib/video-player-loans';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { LetterboxBands } from '@/components/letterbox-bands';
 import { PostDetailsPage } from '@/components/post-details-page';
-import { Pill, SecondaryButton, StatusBlock } from '@/components/ui';
+import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
 import { AppSchemeScope } from '@/components/app-scheme-scope';
 import { CommentsSheet } from '@/components/comments-sheet';
@@ -91,7 +90,6 @@ import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dia
 import { haptic } from '@/lib/haptics';
 import { useReducedMotion } from '@/lib/motion';
 import {
-  applyShowcaseSaveStateToFeedResponse,
   applyShowcaseSaveStateToInfiniteFeed,
   applyShowcaseSaveStateToPostResponse,
   applyShowcaseSaveStateToSourceData,
@@ -111,7 +109,11 @@ import {
   removeShowcaseFeedItems,
   removeShowcaseFeedItemsFromInfiniteData,
   type ShowcaseFeedEventDetails,
+  type ShowcaseFeedRemovalTarget,
 } from '@/lib/showcase-feed-events';
+import { getReelEndSlideState, readViewerLane, type ReelEndSlideState } from '@/lib/showcase-feed-lane';
+import { useShowcaseLaneSource } from '@/lib/use-showcase-lane-source';
+import { reelLeaveEventType, resourceOpenGate } from '@/lib/reel-feed-events';
 import {
   enqueueShowcaseFeedEvent,
   flushShowcaseFeedEvents,
@@ -129,7 +131,7 @@ import {
 import { appTheme, mediaColors } from '@/lib/theme';
 import { useNavigationBarSurface } from '@/lib/system-bars';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
-import type { PostResourceKind, ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
+import type { ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
 import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE, canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getViewerShareIntent, getViewerShareSourceSurface } from '@/lib/viewer-actions';
 import {
@@ -147,7 +149,7 @@ import { useScreenLeaving } from '@/lib/use-screen-leaving';
 import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
 import { useStableSignedUrl } from '@/lib/use-stable-signed-url';
 import { verticalHitSlop } from '@/lib/hit-target';
-import { changeViewerPage, isDetailsPageCovering, resolveViewerPosition, settleViewerItem, slidePageKey, type ViewerPosition } from '@/lib/viewer-position';
+import { changeViewerPage, initialViewerPosition, isDetailsPageCovering, pickViewerItemAfterRemoval, resolveViewerPosition, settleViewerItem, slidePageKey, type ViewerPosition } from '@/lib/viewer-position';
 
 type ViewerParams = {
   algorithmVersion?: string | string[];
@@ -160,6 +162,8 @@ type ViewerParams = {
   initialSection?: string | string[];
   replyTo?: string | string[];
   mediaOnly?: string | string[];
+  /** The grid lane the reel was opened from (`serializeShowcaseFeedLane`). */
+  lane?: string | string[];
 };
 
 type SaveMutationVariables = {
@@ -224,6 +228,8 @@ function ImmersivePreviewViewer() {
   // Black behind the navigator while this reel shows or a pop reveals it (lib/reel-backdrop.ts).
   useReelBackdrop();
   const creatorUsername = normalizeParam(params.creatorUsername) || null;
+  const laneParam = normalizeParam(params.lane) || null;
+  const lane = useMemo(() => readViewerLane(source, laneParam), [laneParam, source]);
   const routeFeedSessionId = normalizeParam(params.feedSessionId) || null;
   const routeAlgorithmVersion = normalizeParam(params.algorithmVersion) || null;
   const requestedCommentsPostId = normalizeParam(params.comments) || null;
@@ -278,8 +284,8 @@ function ImmersivePreviewViewer() {
   });
 
   const sourceQueryKey = useMemo(
-    () => ['immersive-preview-source', source, user?.id ?? 'guest', initialId, creatorUsername ?? '', routeFeedSessionId ?? '', mediaOnly] as const,
-    [creatorUsername, initialId, mediaOnly, routeFeedSessionId, source, user?.id]
+    () => ['immersive-preview-source', source, user?.id ?? 'guest', initialId, creatorUsername ?? '', routeFeedSessionId ?? '', mediaOnly, laneParam ?? ''] as const,
+    [creatorUsername, initialId, laneParam, mediaOnly, routeFeedSessionId, source, user?.id]
   );
   const viewerFeedQueryKey = useMemo(
     () => createShowcaseFeedViewerQueryKey(user?.id),
@@ -294,7 +300,9 @@ function ImmersivePreviewViewer() {
 
   // Owned libraries read the Profile grid's own pages, so a reel opened from a
   // card holds the grid's items in the grid's order and pages on through its
-  // cursor (audit C3, C8). Every other source loads its own window below.
+  // cursor (audit C3, C8). A reel opened from an Explore or Home tile does the
+  // same with the lane it was tapped in (audit 03-2, 03-4). Every other source,
+  // a link or a notification among them, loads its own window below.
   const libraryBacked = isProfileLibrarySource(source);
   const library = useProfileLibrarySource({
     api,
@@ -304,19 +312,30 @@ function ImmersivePreviewViewer() {
     owner: ownerInfo,
     enabled: libraryBacked,
   });
+  const laneBacked = !libraryBacked && Boolean(lane);
+  const laneSource = useShowcaseLaneSource({
+    api,
+    userId: user?.id,
+    lane,
+    initialId,
+    mediaOnly,
+    enabled: laneBacked,
+  });
+  const grid = libraryBacked ? library : laneBacked ? laneSource : null;
+  const gridBacked = Boolean(grid);
 
   const loaderQuery = useQuery({
     queryKey: sourceQueryKey,
-    enabled: Boolean(source) && !libraryBacked,
+    enabled: Boolean(source) && !gridBacked,
     // Cached data opens the viewer at once and keeps the age of the caches it
     // came from, so an hour-old snapshot refetches straight away instead of
     // passing for fresh (audit C4).
-    initialData: () => (libraryBacked
+    initialData: () => (gridBacked
       ? undefined
-      : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId)?.data),
-    initialDataUpdatedAt: () => (libraryBacked
+      : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId, creatorUsername)?.data),
+    initialDataUpdatedAt: () => (gridBacked
       ? undefined
-      : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId)?.updatedAt),
+      : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId, creatorUsername)?.updatedAt),
     queryFn: () => loadImmersiveSourceData({ api, source, initialId, creatorUsername, mediaOnly }),
     staleTime: 1000 * 45,
   });
@@ -332,19 +351,19 @@ function ImmersivePreviewViewer() {
     [postEnrichmentQuery.data]
   );
 
-  const sourceQuery = libraryBacked
+  const sourceQuery = grid
     ? {
       data: undefined as ImmersiveSourceData | undefined,
-      isLoading: library.isLoading || library.selection === 'loading',
-      isError: library.isError || library.selection === 'error',
-      isFetching: library.isFetching,
-      refetch: library.selection === 'error' && !library.isError ? library.retrySelection : library.refetch,
+      isLoading: grid.isLoading || grid.selection === 'loading',
+      isError: grid.isError || grid.selection === 'error',
+      isFetching: grid.isFetching,
+      refetch: grid.selection === 'error' && !grid.isError ? grid.retrySelection : grid.refetch,
     }
     : loaderQuery;
 
   const refetchLoader = loaderQuery.refetch;
   useEffect(() => {
-    if (!isFocused || libraryBacked) return;
+    if (!isFocused || gridBacked) return;
     if (source === 'showcase-feed' && skipInitialRankedFeedRefreshRef.current) {
       skipInitialRankedFeedRefreshRef.current = false;
       return;
@@ -355,15 +374,18 @@ function ImmersivePreviewViewer() {
     if (!state || state.status === 'pending' || state.fetchStatus === 'fetching') return;
     if (!state.isInvalidated && Date.now() - state.dataUpdatedAt < 1000 * 45) return;
     void refetchLoader?.();
-  }, [isFocused, libraryBacked, queryClient, refetchLoader, source, sourceQueryKey]);
+  }, [gridBacked, isFocused, queryClient, refetchLoader, source, sourceQueryKey]);
 
-  // A warm library is not proof that the requested item exists. Keep unrelated
-  // pages out of the renderer and position/playback effects until selection
-  // resolves. After landing, the reader's own position continues to own the reel.
-  const awaitingLibrarySelection = libraryBacked && !initialPositionReady
-    && library.selection !== 'none' && library.selection !== 'found';
+  // A warm library or lane is not proof that the requested item exists. Keep
+  // unrelated pages out of the renderer and position/playback effects until
+  // selection resolves. After landing, the reader's own position owns the reel.
+  const awaitingGridSelection = Boolean(grid) && !initialPositionReady
+    && grid?.selection !== 'none' && grid?.selection !== 'found';
+  // The hooks keep their item arrays stable; the objects around them are new
+  // on every render, and a memo keyed on those would rebuild every render.
+  const gridItems = grid?.items ?? null;
   const sourceItems = useMemo(() => {
-    if (libraryBacked) return awaitingLibrarySelection ? [] : library.items;
+    if (gridItems) return awaitingGridSelection ? [] : gridItems;
     const data = isGenerationSource(source) && loaderQuery.data
       ? { ...loaderQuery.data, ownerPosts: enrichmentPosts }
       : loaderQuery.data;
@@ -378,26 +400,28 @@ function ImmersivePreviewViewer() {
     return builtItems.filter((item) => (
       !item.showcasePostId || visiblePostIds.has(item.showcasePostId)
     ));
-  }, [awaitingLibrarySelection, enrichmentPosts, initialId, library.items, libraryBacked, loaderQuery.data, mediaOnly, ownerInfo, source, user]);
+  }, [awaitingGridSelection, enrichmentPosts, gridItems, initialId, loaderQuery.data, mediaOnly, ownerInfo, source, user]);
   // A stale grid snapshot can refresh as UIKit is still opening the viewer.
   // Keep its row order for this opening: moving the playing cell to the new
   // ranking briefly exposes another post at the old native scroll offset.
   // Reconcile before commit, rather than letting an effect paint stale data.
+  // A lane's refresh is a new session that leaves out the posts already seen,
+  // so those stay; the reel takes out what the reader removes (`removeFromReel`).
   const [sessionItems, setSessionItems] = useState({ key: sourceQueryKey, input: sourceItems, ordered: sourceItems });
   if (sessionItems.input !== sourceItems || sessionItems.key !== sourceQueryKey) {
     setSessionItems({
       key: sourceQueryKey,
       input: sourceItems,
       ordered: sessionItems.key === sourceQueryKey
-        ? reconcileViewerSessionItems(sessionItems.ordered, sourceItems)
+        ? reconcileViewerSessionItems(sessionItems.ordered, sourceItems, { keepMissing: laneBacked })
         : sourceItems,
     });
   }
   const items = sessionItems.ordered;
   // The item the route named did not load: deleted, archived elsewhere, or no
   // longer the reader's. Shown as that, never replaced by the first item (C1).
-  const selectionMissing = libraryBacked
-    ? library.selection === 'missing'
+  const selectionMissing = grid
+    ? grid.selection === 'missing'
     : loaderQuery.data !== undefined && isImmersiveSelectionMissing(items, initialId);
   const openCreatorProfile = useCallback((item: ImmersivePreviewItem) => {
     if (!item.creatorUsername) return;
@@ -461,16 +485,40 @@ function ImmersivePreviewViewer() {
     return () => cancelAnimationFrame(frame);
   }, [activeIndex, height, initialPositionReady]);
 
+  // What stands after a lane's last post, and whether the reader is on it: the
+  // native page past the last post. No post is on screen there, so nothing
+  // plays and no post's time is counted.
+  const endSlide = laneBacked ? getReelEndSlideState({
+    hasData: laneSource.hasData,
+    itemCount: items.length,
+    hasNextPage: laneSource.hasNextPage,
+    isFetchNextPageError: laneSource.isFetchNextPageError,
+    isFetchingNextPage: laneSource.isFetchingNextPage,
+  }) : null;
+  const [endSlidePage, setEndSlidePage] = useState<number | null>(null);
+  const onEndSlide = endSlide !== null && endSlidePage !== null && endSlidePage >= items.length;
+  // Posts that arrive while the reader is on that slide (a page retried from
+  // it) take its place on screen: the first of them is the post they are on.
+  useEffect(() => {
+    if (endSlidePage === null || endSlidePage >= items.length) return;
+    const landed = items[endSlidePage];
+    setEndSlidePage(null);
+    nativeRowRef.current = { index: endSlidePage, height };
+    handoffPageRef.current = endSlidePage;
+    playbackHandoff.handoff({ from: null, to: landed?.id });
+    setActiveIndex(endSlidePage);
+  }, [endSlidePage, height, items, playbackHandoff, setActiveIndex]);
+
   const overlayOpenItemId = getImmersiveVideoBlockerId({
     actionsOpenItemId,
     commentsOpenItemId,
     detailsPageOpenItemId,
     unlockRemixOpenItemId,
   });
-  const activeVideoId = isFocused
+  const activeVideoId = isFocused && !onEndSlide
     ? selectActiveImmersiveVideoId(items, activeIndex, overlayOpenItemId)
     : null;
-  const handoffAutoplayAllowed = isFocused && !reducedMotion && !overlayOpenItemId;
+  const handoffAutoplayAllowed = isFocused && !reducedMotion && !overlayOpenItemId && !onEndSlide;
   useLayoutEffect(() => {
     playbackHandoff.setAutoplayAllowed(handoffAutoplayAllowed);
     return () => playbackHandoff.setAutoplayAllowed(false);
@@ -541,8 +589,25 @@ function ImmersivePreviewViewer() {
     isFocused && !detailsOpenForActive && !overlayOpenItemId,
     zoom.dismiss
   );
-  const feedSessionId = sourceQuery.data?.feedSessionId ?? routeFeedSessionId ?? null;
-  const algorithmVersion = sourceQuery.data?.algorithmVersion ?? routeAlgorithmVersion ?? null;
+  const feedSessionId = (laneBacked ? laneSource.feedSessionId : sourceQuery.data?.feedSessionId) ?? routeFeedSessionId ?? null;
+  const algorithmVersion = (laneBacked ? laneSource.algorithmVersion : sourceQuery.data?.algorithmVersion) ?? routeAlgorithmVersion ?? null;
+  // Where sign-in brings a signed-out reader back to: this reel, on this post.
+  const returnPathFor = (item: ImmersivePreviewItem) => immersiveViewerReturnPath({
+    mediaOnly,
+    source,
+    initialId: item.id,
+    feedSessionId,
+    algorithmVersion,
+    creatorUsername,
+    lane: laneParam,
+  });
+  // Read as each event is sent rather than captured: a new session gave
+  // `submitViewerFeedEvent` a new identity, which restarted the attention
+  // effect and filed a skip or a dwell for the post on screen (audit 03-2).
+  const feedEventContextRef = useRef({ feedSessionId, algorithmVersion });
+  useEffect(() => {
+    feedEventContextRef.current = { feedSessionId, algorithmVersion };
+  }, [algorithmVersion, feedSessionId]);
   const submitViewerFeedEvent = useCallback((
     item: ImmersivePreviewItem,
     eventType: ShowcaseFeedEventType,
@@ -553,18 +618,19 @@ function ImmersivePreviewViewer() {
       postId: item.showcasePostId,
       recommendation: item.recommendation,
     }, eventType)) return Promise.resolve();
+    const context = feedEventContextRef.current;
     const request = buildShowcaseFeedEventRequest({
       postId: item.showcasePostId,
       recommendation: item.recommendation,
     }, eventType, {
-      feedSessionId,
-      algorithmVersion: item.recommendation?.algorithmVersion ?? algorithmVersion,
+      feedSessionId: context.feedSessionId,
+      algorithmVersion: item.recommendation?.algorithmVersion ?? context.algorithmVersion,
       sourceSurface: 'showcase-reel',
     }, details);
     return isBatchedShowcaseFeedEventType(eventType)
       ? enqueueShowcaseFeedEvent(request).then(() => undefined)
       : api.recordShowcaseFeedEvent(request).then(() => undefined);
-  }, [algorithmVersion, api, feedSessionId]);
+  }, [api]);
   useEffect(() => {
     if (!isFocused) void flushShowcaseFeedEvents();
   }, [isFocused]);
@@ -594,6 +660,21 @@ function ImmersivePreviewViewer() {
   const unlockRemixSheetItem = unlockRemixOpenItemId
     ? unlockRemixItem ?? lastUnlockRemixItem
     : null;
+
+  // A post's resources opened in the reel, on its Details page (the card is
+  // there whenever the post has a recipe) or in the unlock sheet: once per
+  // delivery, through the gate Home's recipe chip shares.
+  const recordResourceOpen = useCallback((item: ImmersivePreviewItem) => {
+    if (source !== 'showcase-feed' || !resourceOpenGate.pass(item.recommendation?.deliveryId)) return;
+    recordViewerFeedEvent(item, 'resource_open');
+  }, [recordViewerFeedEvent, source]);
+  const resourcesCardItem = detailsOpenForActive && activeItem?.details?.unlock ? activeItem : null;
+  useEffect(() => {
+    if (resourcesCardItem) recordResourceOpen(resourcesCardItem);
+  }, [recordResourceOpen, resourcesCardItem]);
+  useEffect(() => {
+    if (unlockRemixSheetItem) recordResourceOpen(unlockRemixSheetItem);
+  }, [recordResourceOpen, unlockRemixSheetItem]);
 
   useEffect(() => {
     // A missing selection has no position to settle on; settling on item 0
@@ -628,13 +709,13 @@ function ImmersivePreviewViewer() {
   }, [items, requestedCommentsPostId, requestedReplyToId]);
 
   useEffect(() => {
-    if (!initialPositionReady || !isFocused || source !== 'showcase-feed' || !activeItem?.showcasePostId) return;
+    if (!initialPositionReady || !isFocused || onEndSlide || source !== 'showcase-feed' || !activeItem?.showcasePostId) return;
     const item = activeItem;
     const postId = activeItem.showcasePostId;
     const impressionKey = getQualifiedImpressionKey({
       postId,
       recommendation: item.recommendation,
-    }, feedSessionId);
+    }, feedEventContextRef.current.feedSessionId);
     const startedAt = Date.now();
     const recordQualifiedImpression = () => {
       if (qualifiedImpressionsRef.current.has(impressionKey)) return;
@@ -684,13 +765,11 @@ function ImmersivePreviewViewer() {
       if (durationMs >= SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.minimumViewTime) {
         recordQualifiedImpression();
       }
-      recordViewerFeedEvent(
-        item,
-        durationMs < SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.minimumViewTime ? 'quick_skip' : 'dwell',
-        { durationMs }
-      );
+      // A landing under 250 ms is a flick passing through, not a skip.
+      const leaveEvent = reelLeaveEventType(durationMs);
+      if (leaveEvent) recordViewerFeedEvent(item, leaveEvent, { durationMs });
     };
-  }, [activeItem?.id, feedSessionId, initialPositionReady, isFocused, recordViewerFeedEvent, source]);
+  }, [activeItem?.id, initialPositionReady, isFocused, onEndSlide, recordViewerFeedEvent, source]);
 
   const reconcileShowcaseSave = useCallback((
     result: ShowcaseSaveStateResult,
@@ -779,7 +858,9 @@ function ImmersivePreviewViewer() {
   const saveItem: SaveItemHandler = (item, trigger = 'rail') => {
     if (!item.canSave || !item.showcasePostId) return;
     if (!user) {
-      router.push('/auth');
+      // The heart and a double-tap are a guest's likeliest first action:
+      // signing in comes back to this post rather than to Home.
+      router.push({ pathname: '/auth', params: { returnTo: returnPathFor(item) } } as never);
       return;
     }
     // The rail button owns its tick the way the double-tap gesture already
@@ -825,19 +906,7 @@ function ImmersivePreviewViewer() {
     if (!user) {
       // Send them back to this exact item, so signing in does not cost them
       // their place in the reel and a second hunt for the post.
-      router.push({
-        pathname: '/auth',
-        params: {
-          returnTo: immersiveViewerReturnPath({
-            mediaOnly,
-            source,
-            initialId: item.id,
-            feedSessionId,
-            algorithmVersion,
-            creatorUsername,
-          }),
-        },
-      } as never);
+      router.push({ pathname: '/auth', params: { returnTo: returnPathFor(item) } } as never);
       return;
     }
 
@@ -949,7 +1018,7 @@ function ImmersivePreviewViewer() {
    */
   const runOwnerAction = (action: string, item: ImmersivePreviewItem) => {
     if (!user) {
-      router.push('/auth');
+      router.push({ pathname: '/auth', params: { returnTo: returnPathFor(item) } } as never);
       return;
     }
 
@@ -986,6 +1055,44 @@ function ImmersivePreviewViewer() {
     }
   };
 
+  /**
+   * Takes posts out of the reel under the reader, and out of the reel's source
+   * and every feed lane, and moves the reader on to the next post that stays.
+   * The target is chosen from the reel's own list before anything is removed
+   * (`pickViewerItemAfterRemoval`). Returns whether any post is left, and how
+   * to put everything back for a removal the server then refuses.
+   */
+  const removeFromReel = (target: ShowcaseFeedRemovalTarget) => {
+    const next = pickViewerItemAfterRemoval(items, activeIndex, (candidate) => isRemovedFromViewer(candidate, target));
+    const previous = {
+      position: savedPosition,
+      ordered: sessionItems.ordered,
+      sourceData: queryClient.getQueryData<ImmersiveSourceData>(sourceQueryKey),
+      feeds: queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({ queryKey: viewerFeedQueryKey }),
+    };
+    if (next) setSavedPosition(initialViewerPosition(next));
+    setSessionItems((current) => ({ ...current, ordered: removeViewerSessionItems(current.ordered, target) }));
+    queryClient.setQueryData<ImmersiveSourceData>(sourceQueryKey, (data) => data ? {
+      ...data,
+      showcaseItems: removeShowcaseFeedItems(data.showcaseItems ?? [], target),
+    } : data);
+    queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+      { queryKey: viewerFeedQueryKey },
+      (data) => removeShowcaseFeedItemsFromInfiniteData(data, target)
+    );
+    return {
+      remaining: Boolean(next),
+      restore: () => {
+        queryClient.setQueryData(sourceQueryKey, previous.sourceData);
+        previous.feeds.forEach(([cachedQueryKey, cachedData]) => {
+          queryClient.setQueryData(cachedQueryKey, cachedData);
+        });
+        setSessionItems((current) => ({ ...current, ordered: previous.ordered }));
+        setSavedPosition(previous.position);
+      },
+    };
+  };
+
   const dismissRecommendation = (
     item: ImmersivePreviewItem,
     eventType: 'not_interested' | 'hide_creator'
@@ -995,27 +1102,11 @@ function ImmersivePreviewViewer() {
     const target = eventType === 'hide_creator' && item.creatorId
       ? { creatorId: item.creatorId }
       : { postId: item.showcasePostId };
-    const remainingItems = removeShowcaseFeedItems(sourceQuery.data?.showcaseItems ?? [], target);
-    const previousSourceData = queryClient.getQueryData<ImmersiveSourceData>(sourceQueryKey);
-    const cachedFeeds = queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({
-      queryKey: viewerFeedQueryKey,
-    });
-    const previousActiveIndex = activeIndex;
 
     if (!user) rememberAnonymousShowcaseFeedRemoval(target);
 
     setActionsOpenItemId(null);
-    queryClient.setQueryData<ImmersiveSourceData>(sourceQueryKey, (data) => data ? {
-      ...data,
-      showcaseItems: removeShowcaseFeedItems(data.showcaseItems ?? [], target),
-    } : data);
-    queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
-      { queryKey: viewerFeedQueryKey },
-      (data) => removeShowcaseFeedItemsFromInfiniteData(data, target)
-    );
-    if (remainingItems.length) {
-      setActiveIndex((current) => Math.min(current, remainingItems.length - 1));
-    }
+    const removal = removeFromReel(target);
     void submitViewerFeedEvent(item, eventType)
       .then(() => {
         void AccessibilityInfo.announceForAccessibility(eventType === 'hide_creator'
@@ -1025,17 +1116,13 @@ function ImmersivePreviewViewer() {
           : user
             ? 'Post removed. Your feed will adapt.'
             : 'Post removed for this visit.');
-        if (!remainingItems.length) {
+        if (!removal.remaining) {
           requestAnimationFrame(leaveViewer);
         }
       })
       .catch(() => {
         if (!user) forgetAnonymousShowcaseFeedRemoval(target);
-        queryClient.setQueryData(sourceQueryKey, previousSourceData);
-        cachedFeeds.forEach(([cachedQueryKey, cachedData]) => {
-          queryClient.setQueryData(cachedQueryKey, cachedData);
-        });
-        setActiveIndex(previousActiveIndex);
+        removal.restore();
         showMessageDialog({
           title: 'Couldn’t update your feed',
           message: 'The post was restored. Check your connection and try again.',
@@ -1044,6 +1131,14 @@ function ImmersivePreviewViewer() {
           'Couldn’t update your feed. The post was restored.'
         );
       });
+  };
+
+  // A report went through: the post leaves the reel and the reader moves on,
+  // as on the web, rather than staying on what they just reported.
+  const takeOutReportedPost = (reported: ImmersivePreviewItem) => {
+    if (!reported.showcasePostId) return;
+    const removal = removeFromReel({ postId: reported.showcasePostId });
+    if (!removal.remaining) requestAnimationFrame(leaveViewer);
   };
 
   if (selectionMissing && !savedPosition) {
@@ -1087,10 +1182,17 @@ function ImmersivePreviewViewer() {
   }
 
   if (!items.length) {
+    // Loaded, and nothing left to show: the posts here were removed, or none
+    // of them can be drawn in this reel. A final state, so it offers a way on.
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset}>
-        <Text selectable style={{ color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>Preview unavailable</Text>
-        <Text selectable style={{ color: theme.colors.muted, marginTop: 8 }}>This item may have been removed or is still loading.</Text>
+        <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
+          <StatusBlock
+            title="Nothing to show here"
+            body="These posts may have been removed. Try again, or go back."
+          />
+          <SecondaryButton label="Try again" onPress={() => void sourceQuery.refetch()} />
+        </View>
       </ViewerShell>
     );
   }
@@ -1099,6 +1201,7 @@ function ImmersivePreviewViewer() {
   // per slide (`components/viewer-actions-menu.tsx`), and the sheet below — the
   // fallback where native menus are missing — takes it for the open item.
   const actionCallbacksFor = (item: ImmersivePreviewItem): ViewerActionCallbacks => ({
+    authReturnTo: returnPathFor(item),
     onComments: item.canComment ? () => {
       setActionsOpenItemId(null);
       setCommentsReplyToId(null);
@@ -1109,6 +1212,10 @@ function ImmersivePreviewViewer() {
       activeSlideRef.current?.openDetails();
     },
     onRecreate: () => void recreateItem(item),
+    // The rail's own optimistic Save, which tells the ranker, rather than a
+    // round trip and a refresh of every feed.
+    onSave: (saved) => saveItem(saved),
+    onReported: takeOutReportedPost,
     onNotInterested: source === 'showcase-feed' && item.sourceType === 'showcase'
       ? () => dismissRecommendation(item, 'not_interested')
       : undefined,
@@ -1133,7 +1240,9 @@ function ImmersivePreviewViewer() {
     onBlocked: () => zoom.dismiss(),
     onSourceRefresh: () => {
       setManualRefreshes((count) => count + 1);
-      void sourceQuery.refetch();
+      // A lane is the grid's: the invalidation that comes before this has
+      // already refreshed it, and a second refresh is a second new session.
+      if (!laneBacked) void sourceQuery.refetch();
     },
   });
 
@@ -1171,6 +1280,19 @@ function ImmersivePreviewViewer() {
         maxToRenderPerBatch={IMMERSIVE_VERTICAL_LIST_TUNING.maxToRenderPerBatch}
         onMomentumScrollEnd={(event) => {
           const nextIndex = Math.round(event.nativeEvent.contentOffset.y / height);
+          if (endSlide && nextIndex >= items.length) {
+            // The closing slide. The last post stays the active one underneath,
+            // paused, and the alignment effect has nothing to correct.
+            if (endSlidePage === null) haptic.soft();
+            nativeRowRef.current = { index: activeIndex, height };
+            playbackHandoff.handoff({ from: items[handoffPageRef.current ?? activeIndex]?.id, to: null });
+            handoffPageRef.current = items.length;
+            setEndSlidePage(items.length);
+            setActionsOpenItemId(null);
+            setUnlockRemixOpenItemId(null);
+            return;
+          }
+          if (endSlidePage !== null) setEndSlidePage(null);
           const clampedIndex = Math.max(0, Math.min(items.length - 1, nextIndex));
           // A quiet tick as each page settles: the reel feels like it has
           // detents rather than sliding freely. Soft so it can repeat at
@@ -1197,12 +1319,26 @@ function ImmersivePreviewViewer() {
             listRef.current?.scrollToOffset({ offset: height * index, animated: false });
           });
         }}
-        // An owned library continues through the grid's cursor instead of
-        // stopping at whatever was loaded when the reel opened.
-        onEndReached={libraryBacked && library.hasNextPage ? () => {
+        // An owned library, or the lane a tile was tapped in, continues through
+        // the grid's cursor instead of stopping at whatever was loaded when the
+        // reel opened.
+        onEndReached={grid?.hasNextPage ? () => {
+          if (laneBacked) {
+            laneSource.fetchNextPage();
+            return;
+          }
           if (!library.isFetchingNextPage) void library.fetchNextPage();
         } : undefined}
         onEndReachedThreshold={2}
+        ListFooterComponent={endSlide ? (
+          <ReelEndSlide
+            state={endSlide}
+            width={width}
+            height={height}
+            onRetry={laneSource.retryNextPage}
+            onBack={zoom.dismiss}
+          />
+        ) : null}
         // Hand playback over as soon as the landing page owns most of the
         // screen, the moment Instagram and TikTok switch, rather than at
         // momentum end. On Android that event trails the visible stop by
@@ -1212,7 +1348,10 @@ function ImmersivePreviewViewer() {
         // Paging on iOS and momentum-free interval snapping on Android both
         // stop at a neighbour, so the rounded page always has a prepared player.
         onScroll={(event) => {
-          const page = Math.max(0, Math.min(items.length - 1, Math.round(event.nativeEvent.contentOffset.y / height)));
+          // One page past the last post is the closing slide, when there is
+          // one: handing over to it stops the last post's video.
+          const lastPage = endSlide ? items.length : items.length - 1;
+          const page = Math.max(0, Math.min(lastPage, Math.round(event.nativeEvent.contentOffset.y / height)));
           const previous = handoffPageRef.current ?? activeIndex;
           if (page === previous) return;
           handoffPageRef.current = page;
@@ -1246,14 +1385,7 @@ function ImmersivePreviewViewer() {
             onLayoutAsNeighbour={index === activeIndex ? undefined : zoom.reportNeighbourDrawn}
             onChromeLayout={index === activeIndex ? zoom.reportChromeDrawn : undefined}
             activeVideoId={activeVideoId}
-            authReturnTo={immersiveViewerReturnPath({
-              mediaOnly,
-              source,
-              initialId: item.id,
-              feedSessionId,
-              algorithmVersion,
-              creatorUsername,
-            })}
+            authReturnTo={returnPathFor(item)}
             bottomInset={bottomInset}
             chromeHidden={actionsOpenItemId === item.id}
             height={height}
@@ -1347,14 +1479,7 @@ function ImmersivePreviewViewer() {
       {activeItem?.canComment && activeItem.showcasePostId ? (
         <CommentsSheet
           key={activeItem.showcasePostId}
-          authReturnTo={immersiveViewerReturnPath({
-            mediaOnly,
-            source,
-            initialId: activeItem.id,
-            feedSessionId,
-            algorithmVersion,
-            creatorUsername,
-          })}
+          authReturnTo={returnPathFor(activeItem)}
           postId={activeItem.showcasePostId}
           postCreatorId={activeItem.creatorId ?? null}
           commentCount={activeItem.commentCount}
@@ -1378,14 +1503,7 @@ function ImmersivePreviewViewer() {
         />
       ) : null}
       <UnlockRemixPrompt
-        authReturnTo={unlockRemixSheetItem ? immersiveViewerReturnPath({
-          mediaOnly,
-          source,
-          initialId: unlockRemixSheetItem.id,
-          feedSessionId,
-          algorithmVersion,
-          creatorUsername,
-        }) : undefined}
+        authReturnTo={unlockRemixSheetItem ? returnPathFor(unlockRemixSheetItem) : undefined}
         bottomInset={bottomInset}
         item={unlockRemixSheetItem}
         onClose={() => setUnlockRemixOpenItemId(null)}
@@ -1500,6 +1618,48 @@ function leaveViewer() {
     return;
   }
   router.replace('/(tabs)/showcase' as never);
+}
+
+/**
+ * The page after a lane's last post: the end of the lane, or the page that
+ * would have come next and failed, with its retry. The reel used to stop at
+ * its last post with nothing to say why (audit 03-4).
+ */
+function ReelEndSlide({
+  state,
+  width,
+  height,
+  onRetry,
+  onBack,
+}: {
+  state: ReelEndSlideState;
+  width: number;
+  height: number;
+  onRetry: () => void;
+  onBack: () => void;
+}) {
+  const theme = useAppTheme();
+  return (
+    <View style={{ width, height, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, backgroundColor: '#000' }}>
+      {state === 'loading' ? (
+        <ActivityIndicator accessibilityLabel="Loading more posts" color={theme.colors.primary} />
+      ) : (
+        <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
+          {state === 'error' ? (
+            <>
+              <StatusBlock tone="danger" title="Couldn't load more posts" body="Check your connection and try again." />
+              <SecondaryButton label="Try again" onPress={onRetry} />
+            </>
+          ) : (
+            <>
+              <StatusBlock title="You're all caught up" body="That's every post here for now." />
+              <SecondaryButton label="Go back" onPress={onBack} />
+            </>
+          )}
+        </View>
+      )}
+    </View>
+  );
 }
 
 /** What the reel can ask of the slide the reader is on. */
@@ -1749,6 +1909,7 @@ function ImmersiveSlide({
           active={videoPlaybackActive}
           slideActive={active}
           prepareVideo={prepareVideo}
+          authReturnTo={authReturnTo}
           bottomInset={bottomInset}
           height={height}
           item={item}
@@ -1808,6 +1969,7 @@ function ImmersiveSlide({
             // The page on screen is where the zoom's close shrinks the reel out of.
             zoomTarget={active && currentHorizontalIndex === pageIndex}
             prepareVideo={prepareVideo && preparedMediaIndex === pageIndex}
+            authReturnTo={authReturnTo}
             bottomInset={bottomInset}
             height={height}
             item={item}
@@ -1997,6 +2159,7 @@ function MediaSlidePage({
   slideActive,
   zoomTarget = false,
   prepareVideo,
+  authReturnTo,
   bottomInset,
   height,
   item,
@@ -2021,6 +2184,8 @@ function MediaSlidePage({
   /** This page is the one on screen: it marks where the zoom's close shrinks out of (iOS 18). */
   zoomTarget?: boolean;
   prepareVideo: boolean;
+  /** Where the Details page's "Sign in to unlock" comes back to. */
+  authReturnTo: string;
   bottomInset: number;
   height: number;
   item: ImmersivePreviewItem;
@@ -2044,6 +2209,7 @@ function MediaSlidePage({
       {page.type === 'details' ? (
         <PostDetailsPage
           active={active}
+          authReturnTo={authReturnTo}
           bottomInset={bottomInset}
           height={height}
           item={item}

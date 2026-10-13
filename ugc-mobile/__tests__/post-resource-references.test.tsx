@@ -37,6 +37,7 @@ vi.mock('@/components/media-lightbox', () => ({
 }));
 
 import { PostResourceReferences } from '../components/post-resource-references';
+import { createPostResourceFileUrlResolver } from '../lib/api-client';
 
 const referenceImage: PostResourceItem = {
   type: 'reference_image',
@@ -337,6 +338,36 @@ describe('PostResourceReferences', () => {
     expect(tree!.root.findByProps({ children: 'Timing track' })).toBeTruthy();
     expect(tree!.root.findByProps({ children: 'Open video' })).toBeTruthy();
     expect(tree!.root.findByProps({ children: 'Open audio' })).toBeTruthy();
+  });
+
+  it("signs the previews of every group a bundle renders in one call", async () => {
+    // One list per resource group, as PostResourceBundleContent draws them.
+    const signMany = vi.fn(async (_postId: string, paths: string[]) => ({
+      files: paths.map((path) => ({ storagePath: path, url: `https://signed.test/${path}` })),
+    }));
+    const signOne = vi.fn(async (_postId: string, path: string) => `https://signed.test/one/${path}`);
+    const resolve = createPostResourceFileUrlResolver({ signMany, signOne });
+    const resolveFileUrl = (path: string) => resolve('post-1', path, { disposition: 'inline' });
+    const secondGroupImage: PostResourceItem = { ...referenceImage, id: 'second', title: '@second', storagePath: 'references/second.jpg' };
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    await renderer.act(async () => {
+      tree = renderer.create(
+        <>
+          <PostResourceReferences items={[referenceImage]} onOpenUrl={vi.fn()} resolveFileUrl={resolveFileUrl} />
+          <PostResourceReferences items={[secondGroupImage]} onOpenUrl={vi.fn()} resolveFileUrl={resolveFileUrl} />
+        </>
+      );
+    });
+
+    expect(signMany).toHaveBeenCalledTimes(1);
+    expect(signMany).toHaveBeenCalledWith('post-1', ['references/alisa.jpg', 'references/second.jpg'], { disposition: 'inline' });
+    expect(signOne).not.toHaveBeenCalled();
+    expect(tree!.root.findAll((node) => String(node.type) === 'feed-media-frame').map((node) => node.props.url)).toEqual([
+      'https://signed.test/references/alisa.jpg',
+      'https://signed.test/references/second.jpg',
+    ]);
+    renderer.act(() => tree?.unmount());
   });
 
   it('renders nothing when structured reference items are unavailable', () => {

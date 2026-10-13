@@ -4,11 +4,11 @@ import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 import type { ImagePickerAsset } from 'expo-image-picker';
 import { Check, ChevronDown, ChevronRight, FileText, Globe2, ImageIcon, Link2, Lock, Package, Pencil, Play, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Keyboard, KeyboardAvoidingView, Modal, PanResponder, Platform, Pressable, ScrollView, Share, Text, TextInput, useWindowDimensions, View, type GestureResponderEvent, type TextInputProps } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Keyboard, Modal, PanResponder, Platform, Pressable, ScrollView, Share, Text, TextInput, useWindowDimensions, View, type GestureResponderEvent, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ContentPolicyGate } from '@/components/content-policy-gate';
-import { AppText, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
+import { AppText, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { ComposerMediaLightbox, getComposerMediaLabel } from '@/components/composer-media-lightbox';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { Overlay } from '@/components/overlay-host';
@@ -21,9 +21,9 @@ import { useAuth } from '@/lib/auth';
 import { truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
 import { adjustProfileStats, invalidateProfileStats } from '@/lib/profile-stats';
 import {
-  POST_VIDEO_DURATION_LIMIT_MESSAGE,
   assetDurationSeconds,
-  isPostVideoOverDurationLimit,
+  describePostMediaPickRefusals,
+  getPostMediaPickRefusal,
   pickMediaList,
   pickResourceDocument,
   uploadPickedMedia,
@@ -38,13 +38,12 @@ import {
   persistPostComposerDraft,
 } from '@/lib/post-composer-draft-resume';
 import {
-  applyPostComposerMediaRecovery,
+  applyPostComposerMediaRecoveryToDraft,
   describeLostRecoveryMedia,
   planPostComposerMediaRecovery,
   type MediaVerification,
 } from '@/lib/post-composer-media-recovery';
 import {
-  buildPostComposerMediaItemsPayload,
   buildCreatePostFormData,
   buildOptimisticOwnerPostListItem,
   buildPublishGenerationPostPayload,
@@ -62,7 +61,9 @@ import {
   getExplicitPublishGeneration,
   getPublishGenerationMediaKind,
   getPublishGenerationTitle,
+  getPublishGenerationTitlePrefill,
   BODY_MAX_LENGTH,
+  MADE_WITH_LABEL_MAX_LENGTH,
   TITLE_MAX_LENGTH,
   hydratePostComposerAllowRemix,
   hydratePostComposerResourceCards,
@@ -70,7 +71,6 @@ import {
   sanitizePostComposerResourceCardIds,
   isTemplateGeneration,
   isPostComposerResourceCardReady,
-  POST_COMPOSER_CATEGORY_OPTIONS,
   POST_COMPOSER_RESOURCE_CARD_OPTIONS,
   POST_COMPOSER_SOURCE_OPTIONS,
   validatePostComposerDraft,
@@ -1954,6 +1954,10 @@ function NewPostComposer() {
     queryKey: ['post-edit', postId],
     enabled: Boolean(user && postId),
     queryFn: () => api.getOwnerPost(postId!),
+    // The prefill runs once, from whatever copy is in hand. A saved edit goes
+    // back to the screen that opened the editor, where Edit is one tap away, so
+    // a copy kept past this screen would reopen it on the values before the save.
+    gcTime: 0,
   });
 
   const generationLookupId = generationId ?? postQuery.data?.post?.generationId ?? null;
@@ -2020,9 +2024,7 @@ function NewPostComposer() {
             mode: 'creation',
             proofMode: 'media',
             selectedGenerationId: found.id,
-            // getPublishGenerationTitle falls back to the raw prompt, which is
-            // routinely longer than a title is allowed to be.
-            title: current.title || getPublishGenerationTitle(found).slice(0, TITLE_MAX_LENGTH),
+            title: current.title || getPublishGenerationTitlePrefill(found),
             contentText: '',
             sourceTool: 'Magicbooklet',
             sourceToolSlug: 'magicbooklet',
@@ -2068,7 +2070,10 @@ function NewPostComposer() {
         title: loadedTitle,
         description: post.description || '',
         contentText: mode === 'text' ? post.body || '' : '',
-        caption: mode === 'text' ? '' : post.body || post.description || '',
+        // The Story is the body. A description is the web's separate Explore
+        // field: copying it into the Story turned a media post into a mixed one
+        // on its first save here and showed the same text twice on the web.
+        caption: mode === 'text' ? '' : post.body || '',
         sourceTool: post.sourceTool || 'Manual',
         sourceToolSlug: post.sourceToolSlug || 'manual',
         madeWithRows: post.sourceTools?.length
@@ -2300,13 +2305,27 @@ function NewPostComposer() {
         }
       }
       void invalidatePostCaches(queryClient, user?.id);
+      if (isEditMode && targetPostId) {
+        void invalidateEditedPostCaches(queryClient, user?.id, targetPostId);
+      }
       if (targetPostId) {
         setIsNavigationAllowed(true);
         setHasHydratedPersistedDraft(false);
         if (draftStorageId) {
           void clearPersistedPostComposerDraft(draftStorageId);
         }
-        const goToPost = () => {
+        const leaveComposer = () => {
+          if (isEditMode) {
+            // An edit returns to where it was opened from (the viewer, the post
+            // page, the seller dashboard), as the web editor keeps its page.
+            // Landing every edit on the profile lost that place.
+            if (router.canGoBack()) {
+              router.back();
+              return;
+            }
+            router.replace({ pathname: '/(tabs)/profile', params: { tab: 'posts', postId: targetPostId } } as never);
+            return;
+          }
           router.replace({
             pathname: '/(tabs)/profile',
             params: {
@@ -2325,7 +2344,7 @@ function NewPostComposer() {
         // share must never be reported as a failed publish.
         setTimeout(() => {
           if (!shareAfterPublish || response.visibility !== 'public') {
-            goToPost();
+            leaveComposer();
             return;
           }
 
@@ -2342,7 +2361,7 @@ function NewPostComposer() {
             } catch {
               // A share sheet that could not open is not a publish failure.
             } finally {
-              goToPost();
+              leaveComposer();
             }
           })();
         }, 0);
@@ -2650,10 +2669,7 @@ function NewPostComposer() {
         }
       }
 
-      setDraft((current) => ({
-        ...current,
-        mediaItems: applyPostComposerMediaRecovery(current.mediaItems, { reuploaded, lost }),
-      }));
+      setDraft((current) => applyPostComposerMediaRecoveryToDraft(current, { reuploaded, lost }));
 
       if (cancelled) {
         setMessage({
@@ -2803,27 +2819,24 @@ function NewPostComposer() {
     setIsPickingMedia(true);
     try {
       const picked = await pickMediaList(kind, { allowsMultipleSelection: true });
-      const overlongCount = picked.filter(isPostVideoOverDurationLimit).length;
-      const allowed = picked.filter((asset) => !isPostVideoOverDurationLimit(asset));
+      // Refused before any bytes move: a file the sign step refuses for its
+      // size lands in Retry, which can never succeed.
+      const refusals = picked.map(getPostMediaPickRefusal);
+      const allowed = picked.filter((_asset, index) => refusals[index] === null);
       const availableSlots = Math.max(0, MEDIA_MAX_ITEMS - draft.mediaItems.length);
       const selected = allowed.slice(0, availableSlots);
-      const overlongMessage = overlongCount > 0
-        ? {
-          tone: 'danger' as const,
-          title: overlongCount === 1 ? 'Video too long' : `${overlongCount} videos too long`,
-          body: POST_VIDEO_DURATION_LIMIT_MESSAGE,
-        }
-        : null;
+      const refusal = describePostMediaPickRefusals(refusals);
+      const refusalMessage = refusal ? { tone: 'danger' as const, ...refusal } : null;
       if (selected.length === 0) {
-        if (overlongMessage) setMessage(overlongMessage);
+        if (refusalMessage) setMessage(refusalMessage);
         return;
       }
       setIsPickingMedia(false);
       await uploadSelectedMedia(selected);
-      if (overlongMessage) {
+      if (refusalMessage) {
         // Restore the notice after the upload runs (it clears messages on
         // start) — but never on top of an upload failure it just reported.
-        setMessage((current) => current ?? overlongMessage);
+        setMessage((current) => current ?? refusalMessage);
       }
     } catch (error) {
       setMessage({ tone: 'danger', title: 'Could not pick media', body: error instanceof Error ? error.message : 'Try again.' });
@@ -2836,6 +2849,14 @@ function NewPostComposer() {
     const retryAssets = pendingRetryMedia;
     setPendingRetryMedia([]);
     await uploadSelectedMedia(retryAssets);
+  };
+
+  // Publish stays off while uploads wait for a retry, and some failures never
+  // pass on a retry; this lets the post go without them. They never reached
+  // the draft, so there is nothing for undo to put back.
+  const removeFailedMediaUploads = () => {
+    setPendingRetryMedia([]);
+    setMessage(null);
   };
 
   const cancelMediaUploads = () => {
@@ -3278,10 +3299,17 @@ function NewPostComposer() {
             <SecondaryButton label="Cancel upload" onPress={cancelMediaUploads} />
           </View>
         ) : pendingRetryMedia.length > 0 ? (
-          <SecondaryButton
-            label={`Retry ${pendingRetryMedia.length} media upload${pendingRetryMedia.length === 1 ? '' : 's'}`}
-            onPress={() => void retryPendingMediaUploads()}
-          />
+          <View style={{ gap: 8 }}>
+            <SecondaryButton
+              label={`Retry ${pendingRetryMedia.length} media upload${pendingRetryMedia.length === 1 ? '' : 's'}`}
+              onPress={() => void retryPendingMediaUploads()}
+            />
+            <SecondaryButton
+              label="Remove failed"
+              accessibilityHint="Drops the media that did not upload, so the post can be published without it."
+              onPress={removeFailedMediaUploads}
+            />
+          </View>
         ) : null}
 
         <ToggleRow
@@ -3789,6 +3817,8 @@ function MobileCreatablePicker({
           placeholder={placeholder}
           placeholderTextColor={theme.colors.faint}
           editable={!disabled}
+          // Every picker here names a made-with tool or model.
+          maxLength={MADE_WITH_LABEL_MAX_LENGTH}
           style={{
             minHeight: appTheme.touch.compact,
             borderRadius: 14,
@@ -4774,5 +4804,15 @@ async function invalidatePostCaches(queryClient: QueryClient, userId: string | u
     invalidateProfileStats(queryClient, userId),
     queryClient.invalidateQueries({ queryKey: ['generations', userId] }),
     queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
+  ]);
+}
+
+/** The screens a saved edit can return to, which still hold the post as it was. */
+async function invalidateEditedPostCaches(queryClient: QueryClient, userId: string | undefined, postId: string) {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
+    queryClient.invalidateQueries({ queryKey: ['showcase-post', postId] }),
+    queryClient.invalidateQueries({ queryKey: ['owner-text-post', postId] }),
+    queryClient.invalidateQueries({ queryKey: ['seller-dashboard-posts', userId] }),
   ]);
 }

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ViewerUnlockItem } from '@/lib/types';
+import type { ViewerUnlockDetail, ViewerUnlockItem } from '@/lib/types';
 import {
+  canOpenUnlockedPost,
   formatUnlockDate,
   formatUnlockPrice,
   getUnlockDestination,
@@ -104,5 +105,36 @@ describe('unlock library view model', () => {
 
   it('degrades to an empty string on an unparseable date', () => {
     expect(formatUnlockDate('not-a-date')).toBe('');
+  });
+});
+
+describe('canOpenUnlockedPost', () => {
+  const detail = (overrides: Partial<ViewerUnlockDetail> = {}) => ({
+    postId: 'post-1',
+    postVisibility: 'public',
+    tombstoned: false,
+    detached: false,
+    post: { id: 'post-1', title: 'Launch', body: '', mediaUrl: null, mediaKind: null, visibility: 'public', archivedAt: null, tombstoned: false },
+    ...overrides,
+  }) as Pick<ViewerUnlockDetail, 'postId' | 'post' | 'postVisibility' | 'tombstoned' | 'detached'>;
+
+  it('leads to a public or unlisted post', () => {
+    expect(canOpenUnlockedPost(detail())).toBe(true);
+    expect(canOpenUnlockedPost(detail({ post: { ...detail().post!, visibility: 'unlisted' } }))).toBe(true);
+  });
+
+  it('leads nowhere for a private, archived, removed or missing post', () => {
+    expect(canOpenUnlockedPost(detail({ post: { ...detail().post!, visibility: 'private' } }))).toBe(false);
+    expect(canOpenUnlockedPost(detail({ post: { ...detail().post!, archivedAt: '2026-10-01T00:00:00.000Z' } }))).toBe(false);
+    expect(canOpenUnlockedPost(detail({ tombstoned: true }))).toBe(false);
+    expect(canOpenUnlockedPost(detail({ detached: true }))).toBe(false);
+    expect(canOpenUnlockedPost(detail({ post: null }))).toBe(false);
+    expect(canOpenUnlockedPost(detail({ postId: null }))).toBe(false);
+  });
+
+  it("reads the unlock's own visibility when the post carries none", () => {
+    const { visibility: _visibility, ...post } = detail().post!;
+    expect(canOpenUnlockedPost(detail({ post, postVisibility: 'public' }))).toBe(true);
+    expect(canOpenUnlockedPost(detail({ post, postVisibility: 'private' }))).toBe(false);
   });
 });

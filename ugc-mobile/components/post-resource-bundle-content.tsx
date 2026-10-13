@@ -25,6 +25,7 @@ import {
   type GenerationSetup,
 } from '@/lib/post-resource-bundle-view-model';
 import { hexWithAlpha } from '@/lib/eased-fade';
+import { verticalHitSlop } from '@/lib/hit-target';
 import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type {
@@ -208,6 +209,62 @@ export function PostResourceBundleContent({
           No resources apply to this output.
         </Text>
       )}
+    </View>
+  );
+}
+
+export type ResourceRevision = 'latest' | 'purchased';
+
+/** A compact pill, given the reach of a full control. */
+const REVISION_PILL_HEIGHT = 36;
+
+/**
+ * Latest or the version this buyer unlocked, for a bundle the creator edited
+ * after the purchase. Shared by the unlock screen and the post's resources
+ * card, where the purchased version used to be out of reach.
+ */
+export function ResourceRevisionSwitch({
+  onSelect,
+  selected,
+}: {
+  onSelect: (revision: ResourceRevision) => void;
+  selected: ResourceRevision;
+}) {
+  const theme = useAppTheme();
+  const options: Array<{ label: string; revision: ResourceRevision }> = [
+    { label: 'Latest', revision: 'latest' },
+    { label: 'Purchased', revision: 'purchased' },
+  ];
+  return (
+    <View style={{ flexDirection: 'row', gap: 8 }}>
+      {options.map((option) => {
+        const isSelected = option.revision === selected;
+        return (
+          <Pressable
+            accessibilityLabel={`Show ${option.label.toLowerCase()} unlock version`}
+            accessibilityRole="button"
+            accessibilityState={{ selected: isSelected }}
+            hitSlop={verticalHitSlop(REVISION_PILL_HEIGHT)}
+            key={option.revision}
+            onPress={() => onSelect(option.revision)}
+            style={({ pressed }) => ({
+              minHeight: REVISION_PILL_HEIGHT,
+              justifyContent: 'center',
+              borderRadius: appTheme.radii.pill,
+              borderWidth: 1,
+              borderColor: isSelected ? theme.colors.success : theme.colors.border,
+              backgroundColor: isSelected ? `${theme.colors.success}20` : theme.colors.surface,
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+              paddingHorizontal: 14,
+              paddingVertical: 9,
+            })}
+          >
+            <Text style={{ color: isSelected ? theme.colors.success : theme.colors.muted, ...appTheme.type.caption }}>
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }

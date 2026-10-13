@@ -107,6 +107,10 @@ export function CreatorContentTabs({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [observerSupported, setObserverSupported] = useState(true);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  // A `?post=` link to a post outside the loaded pages: read on its own, and
+  // the reel opens on the read (loading, gone, failed) rather than on nothing.
+  const [directPostStatus, setDirectPostStatus] = useState<'loading' | 'unavailable' | 'failed' | null>(null);
+  const [directPostAttempt, setDirectPostAttempt] = useState(0);
   const [selectedMediaIndex, setSelectedMediaIndex] = useState(() => {
     const value = Number(searchParams.get('media'));
     return Number.isInteger(value) && value >= 0 ? value : 0;
@@ -174,6 +178,7 @@ export function CreatorContentTabs({
 
   const closeViewer = useCallback(() => {
     setSelectedItemId(null);
+    setDirectPostStatus(null);
     if (reelHistoryModeRef.current === 'pushed') {
       reelHistoryModeRef.current = null;
       window.history.back();
@@ -190,6 +195,7 @@ export function CreatorContentTabs({
       const postId = params.get('post');
       const mediaIndex = Number(params.get('media'));
       setSelectedItemId(postId);
+      if (!postId) setDirectPostStatus(null);
       setSelectedMediaIndex(Number.isInteger(mediaIndex) && mediaIndex >= 0 ? mediaIndex : 0);
       reelHistoryModeRef.current = postId ? 'direct' : null;
       setActiveTab(getTabFromHash(window.location.hash));
@@ -206,36 +212,75 @@ export function CreatorContentTabs({
     const postId = searchParams.get('post');
     if (!postId) {
       directPostRequestRef.current = null;
+      setDirectPostStatus(null);
       return;
     }
     if (items.some((item) => item.id === postId)) {
       // The URL can directly select an item already present in the client page.
       setSelectedItemId(postId);
+      setDirectPostStatus(null);
       return;
     }
     if (directPostRequestRef.current === postId) return;
     directPostRequestRef.current = postId;
+    setSelectedItemId(postId);
+    setDirectPostStatus('loading');
 
     const controller = new AbortController();
+    let settled = false;
     void fetch(`/api/showcase/posts/${encodeURIComponent(postId)}`, {
       headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
       signal: controller.signal,
     }).then(async (response) => {
-      const payload = await response.json();
+      const payload = await response.json().catch(() => null);
       const item = payload?.item as ShowcaseFeedItem | undefined;
-      if (!response.ok || !item || item.creator.username !== initialData.profile.username) {
-        throw new Error(payload?.error || 'Creator post not found.');
+      settled = true;
+      if (!response.ok || !item) {
+        // 404 is the server's answer for a post that is gone or hidden from
+        // this viewer; any other failure may be brief.
+        setDirectPostStatus(response.status === 404 ? 'unavailable' : 'failed');
+        return;
+      }
+      // Someone else's post is not on this creator's page.
+      if (item.creator.username !== initialData.profile.username) {
+        setDirectPostStatus('unavailable');
+        return;
       }
       setItems((current) => current.some((candidate) => candidate.id === item.id) ? current : [...current, item]);
       setSelectedItemId(item.id);
+      setDirectPostStatus(null);
     }).catch((error) => {
-      if (!(error instanceof DOMException && error.name === 'AbortError')) {
-        console.error('Failed to load creator post:', error);
-      }
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      settled = true;
+      console.error('Failed to load creator post:', error);
+      setDirectPostStatus('failed');
     });
 
-    return () => controller.abort();
-  }, [initialData.profile.username, items, searchParams, session?.access_token, setItems]);
+    return () => {
+      controller.abort();
+      // A read cut short by a re-run is asked again, not left loading.
+      if (!settled && directPostRequestRef.current === postId) {
+        directPostRequestRef.current = null;
+      }
+    };
+  }, [directPostAttempt, initialData.profile.username, items, searchParams, session?.access_token, setItems]);
+
+  const retryDirectPost = useCallback(() => {
+    directPostRequestRef.current = null;
+    setDirectPostAttempt((attempt) => attempt + 1);
+  }, []);
+
+  // A thread read in the reel reports the post's comment count; the page's
+  // copy follows it, so the reel opened on that post again says the same.
+  const updateCommentCount = useCallback((postId: string, commentCount: number) => {
+    setItems((current) => {
+      const index = current.findIndex((candidate) => candidate.id === postId);
+      if (index < 0 || current[index].commentCount === commentCount) return current;
+      const next = current.slice();
+      next[index] = { ...current[index], commentCount };
+      return next;
+    });
+  }, [setItems]);
 
   const loadMore = useCallback(async () => {
     if (loadingMoreRef.current || !pageInfo.hasMore || pageInfo.nextOffset === null) return;
@@ -480,9 +525,13 @@ export function CreatorContentTabs({
           accessToken={session?.access_token ?? null}
           hasMoreItems={pageInfo.hasMore}
           isLoadingMoreItems={isLoadingMore}
+          loadMoreError={loadError}
           onLoadMoreItems={loadMore}
           onClose={closeViewer}
           onSelectItemId={selectViewerItem}
+          selectedItemStatus={directPostStatus}
+          onRetrySelectedItem={retryDirectPost}
+          onCommentCountChange={updateCommentCount}
           onMediaIndexChange={(index) => {
             setSelectedMediaIndex(index);
             updateLocation(selectedItemId, 'replace', index);

@@ -36,7 +36,6 @@ import {
 } from '@/lib/generation-preview-info';
 import {
   MAGICBOOKLET_SOURCE_KIND,
-  isGenerationRecipeAssetId,
   normalizeShowcaseSourceKind,
   sanitizeShowcaseFeedPage,
   type RawShowcaseSourceKind,
@@ -73,6 +72,8 @@ export interface PostRow {
   prompt: string | null;
   title: string | null;
   body: string | null;
+  /** Selected by the by-id read only; feed pages leave it out. */
+  description?: string | null;
   category: ShowcaseItemCategory;
   creation_mode?: 'motion' | null;
   post_format: ShowcasePostFormat;
@@ -630,15 +631,17 @@ export async function resolvePostRowsToFeedItems(
     mediaItemsMap,
     sourceToolsMap,
     generationInfoMap,
+    nsfwIds,
   ] = await Promise.all([
     timed('hydrate_profiles', loadProfiles),
     assetMapPromise,
     mediaItemsPromise,
     timed('hydrate_tools', loadSourceTools),
     timed('hydrate_generations', () => loadGenerationInfo(mediaItemsPromise)),
+    // Needs only the ids, so it runs beside the reads above, not after them.
+    loadNsfwPostIds(adminSupabase, postIds),
   ]);
 
-  const nsfwIds = await loadNsfwPostIds(adminSupabase, postIds);
   const resolvedItems = await Promise.all(
     rowsToHydrate.map(async (post): Promise<ShowcaseFeedItem | null> => {
       let mediaItems = mediaItemsMap.get(post.id) ?? await buildLegacyPostMediaItems({
@@ -660,7 +663,7 @@ export async function resolvePostRowsToFeedItems(
       const publicContent = sanitizePublicPostContent({
         prompt: post.prompt?.trim() || '',
         body: post.body?.trim() || '',
-        description: '',
+        description: post.description?.trim() || '',
         hasRecipe: Boolean(asset),
         isPaidRecipe: asset?.accessMode === 'paid',
       });
@@ -678,7 +681,9 @@ export async function resolvePostRowsToFeedItems(
         sourceKind: normalizeShowcaseSourceKind(post.source_kind),
         resourceBundle: asset
           ? {
-              viewerCanAccess: isGenerationRecipeAssetId(asset.id),
+              // Built without a viewer, so nothing is unlocked here; a caller
+              // that knows the viewer adds their access (attachViewerStateToFeed).
+              viewerCanAccess: false,
               allowRemix: asset.allowRemix,
               items: asset.lockedPreview?.itemPreviews ?? [],
             }
@@ -696,6 +701,9 @@ export async function resolvePostRowsToFeedItems(
         title: post.title?.trim() || deriveTitleFromBody(body) || (post.post_format === 'text' ? 'Untitled Note' : 'Untitled Creation'),
         prompt: publicContent.prompt,
         body,
+        // The creator's caption, which the web post page prints as its lede;
+        // only a row read with the column (the by-id read) carries it.
+        ...(post.description === undefined ? {} : { description: publicContent.description }),
         category: resolveItemCategory(post.category),
         creationMode: post.creation_mode ?? ((post.category as string) === 'motion' ? 'motion' : null),
         postFormat: post.post_format,
@@ -1311,7 +1319,7 @@ async function attachViewerStateToFeed(
       feed.items
         .filter((item) => item.asset?.allowRemix)
         .map((item) => item.asset?.id)
-        .filter((bundleId): bundleId is string => Boolean(bundleId) && !isGenerationRecipeAssetId(bundleId))
+        .filter((bundleId): bundleId is string => Boolean(bundleId))
     )
   );
   const loadSavedIds = async () => {
@@ -1408,8 +1416,7 @@ async function attachViewerStateToFeed(
       if (item.isNsfw && !item.nsfwRevealed) return { ...item, isSaved: savedIdSet.has(item.id) };
       const viewerCanAccessBundle = Boolean(
         item.asset && (
-          isGenerationRecipeAssetId(item.asset.id)
-          || item.creator.id === viewerUserId
+          item.creator.id === viewerUserId
           || purchasedBundleIdSet.has(item.asset.id)
         )
       );
@@ -1448,7 +1455,7 @@ export async function getShowcaseFeedItemById(options: {
   const adminSupabase = createServiceClient();
   let result = await adminSupabase
     .from('posts')
-    .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility')
+    .select('id, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility')
     .eq('id', postId)
     // Unlisted means "anyone with the link": the web post page reads it, and
     // the app receives the same share links, so the by-id read does too.
@@ -1456,10 +1463,10 @@ export async function getShowcaseFeedItemById(options: {
     .is('archived_at', null)
     .maybeSingle();
 
-  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status/))) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode/))) {
     result = await adminSupabase
       .from('posts')
-      .select('id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id, visibility')
+      .select('id, output_url, showcase_asset_path, prompt, title, description, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id, visibility')
       .eq('id', postId)
       .in('visibility', ['public', 'unlisted'])
       .is('archived_at', null)
@@ -1470,8 +1477,10 @@ export async function getShowcaseFeedItemById(options: {
         ...result,
         data: {
           ...(result.data as LegacyPostRow),
+          description: (result.data as { description?: string | null }).description ?? null,
           body: null,
           comment_count: null,
+          creation_mode: null,
           post_format: normalizeLegacyPostFormat((result.data as LegacyPostRow).category),
           source_tool_slug: slugifySourceTool((result.data as LegacyPostRow).source_tool),
           review_status: 'visible',

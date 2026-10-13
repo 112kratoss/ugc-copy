@@ -1,10 +1,9 @@
 'use client';
 
-import ResourceMediaPreview from '@/components/ResourceMediaPreview';
+import ResourceMediaPreview, { createBatchedUrlResolver } from '@/components/ResourceMediaPreview';
 import { requestConfirmation } from '@/components/feedback-state';
 
-import Script from 'next/script';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Copy,
@@ -18,22 +17,27 @@ import {
 
 import { useAuth } from '@/components/AuthProvider';
 import {
+  POST_RESOURCE_FILE_URL_BATCH_LIMIT,
   buildPostResourceBundleLockedPreview,
   describePostResourceKinds,
   formatPostResourceBundleCountSummary,
+  formatPostResourceDownloadName,
+  formatPostResourcePriceLabel,
   formatUnlockCountLabel,
-  formatUsdCents,
   getPostResourceKinds,
   getPostResourceItemTypeLabel,
   getPostResourceKindLabel,
   type PostResourceAttachment,
   type PostResourceBundleLockedPreview,
+  type PostResourceFileDisposition,
   type PostResourceItem,
   type PostResourceItemScope,
   type PostResourceItemType,
   type PostResourceKind,
   type PostResourceSection,
+  type PostResourceSignedFileUrl,
 } from '@/lib/post-resource-bundles';
+import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
 import { getCurrentInternalPath } from '@/lib/share';
 import { trackProductEvent } from '@/lib/product-analytics';
@@ -52,6 +56,37 @@ declare global {
   }
 }
 
+const RAZORPAY_CHECKOUT_SCRIPT_ID = 'post-resource-bundle-razorpay-checkout';
+
+/**
+ * checkout.js is fetched when a buyer presses Pay, not on every view of a
+ * locked recipe. A press while it is still loading waits on the same script;
+ * one that failed is removed, so the next press fetches it again.
+ */
+function loadRazorpayCheckout(): Promise<void> {
+  if (window.Razorpay) {
+    return Promise.resolve();
+  }
+
+  let script = document.getElementById(RAZORPAY_CHECKOUT_SCRIPT_ID) as HTMLScriptElement | null;
+  if (!script) {
+    script = document.createElement('script');
+    script.id = RAZORPAY_CHECKOUT_SCRIPT_ID;
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    document.head.appendChild(script);
+  }
+
+  const pending = script;
+  return new Promise<void>((resolve, reject) => {
+    pending.addEventListener('load', () => resolve(), { once: true });
+    pending.addEventListener('error', () => {
+      pending.remove();
+      reject(new Error('Razorpay checkout could not load. Check your connection and try again.'));
+    }, { once: true });
+  });
+}
+
 interface PostResourceBundlePanelProps {
   postId: string;
   /**
@@ -61,8 +96,6 @@ interface PostResourceBundlePanelProps {
   mediaItems?: ShowcaseMediaItem[];
   /** Buyer-library screens resolve files by purchase UUID, including after detachment. */
   fileUrlEndpoint?: string;
-  /** Detached unlocks have no live version, so their pinned revision is the default. */
-  defaultToPurchasedRevision?: boolean;
   title: string;
   /** The post page passes true when the bundle title just repeats the post title. */
   suppressTitle?: boolean;
@@ -72,7 +105,6 @@ interface PostResourceBundlePanelProps {
   priceUsdCents: number;
   priceNote: string | null;
   isFree: boolean;
-  isPublic?: boolean;
   viewerCanAccess: boolean;
   viewerIsOwner: boolean;
   resourceKinds: PostResourceKind[];
@@ -236,7 +268,6 @@ export default function PostResourceBundlePanel({
   postId,
   mediaItems = [],
   fileUrlEndpoint,
-  defaultToPurchasedRevision = false,
   title,
   suppressTitle = false,
   summary,
@@ -245,7 +276,6 @@ export default function PostResourceBundlePanel({
   priceUsdCents,
   priceNote,
   isFree,
-  isPublic = false,
   viewerCanAccess,
   viewerIsOwner,
   resourceKinds,
@@ -258,7 +288,7 @@ export default function PostResourceBundlePanel({
   const { session, credits, updateCredits } = useAuth();
   const [hasAccess, setHasAccess] = useState(viewerCanAccess || viewerIsOwner);
   const [resources, setResources] = useState(initialResources);
-  const [showPurchasedRevision, setShowPurchasedRevision] = useState(defaultToPurchasedRevision);
+  const [showPurchasedRevision, setShowPurchasedRevision] = useState(false);
   const [selectedScopeMediaKey, setSelectedScopeMediaKey] = useState<string | null>(null);
   // The buyer sees the creator's latest by default -- honest improvements reach
   // them for free -- but never loses the version they paid for.
@@ -275,7 +305,10 @@ export default function PostResourceBundlePanel({
   const activePriceUsdCents = showingPurchasedRevision && purchasedRevision
     ? purchasedRevision.priceUsdCents
     : priceUsdCents;
-  const activePriceLabel = showingPurchasedRevision ? formatUsdCents(activePriceUsdCents) : priceLabel;
+  // The purchased version has no quote in the viewer's currency, so both
+  // versions are priced in dollars: a rupee latest beside a dollar purchase
+  // read as two different prices.
+  const activePriceLabel = formatPostResourcePriceLabel(activePriceUsdCents);
   const activeResourceKinds = useMemo(
     () => showingPurchasedRevision && activeResources
       ? getPostResourceKinds(activeResources)
@@ -354,11 +387,11 @@ export default function PostResourceBundlePanel({
   );
   const hasSectionedResourceItems = (activeResources?.sections?.length ?? 0) > 0 && groupedSectionResources.length > 0;
   const hasStructuredResourceItems = groupedResourceItems.length > 0;
-  const isRecipeVisible = isPublic || hasAccess || viewerIsOwner;
+  const isRecipeVisible = hasAccess || viewerIsOwner;
   const creditCost = Math.max(0, Math.round(priceUsdCents));
-  const formattedCreditCost = creditCost.toLocaleString();
-  const offersCashCheckout = !isFree && creditCost >= 100;
-  const accessPriceLabel = offersCashCheckout ? priceLabel : `${formattedCreditCost} credits`;
+  const formattedCreditCost = creditCost.toLocaleString('en-US');
+  const offersCashCheckout = !isFree && isPostResourceWebCashEligible(creditCost);
+  const accessPriceLabel = formatPostResourcePriceLabel(creditCost, priceLabel);
   const allPublicCardPreviews = (preview.cardPreviews ?? []).filter((card) => card.publicTitle.trim().length > 0);
   const selectableMedia = useMemo(
     () => activeMediaItems.filter((item) => Boolean(item.mediaKey)),
@@ -420,23 +453,10 @@ export default function PostResourceBundlePanel({
     </div>
   ) : null;
 
-  const accessLabel = useMemo(() => {
-    if (isPublic) {
-      return 'This public recipe is available immediately.';
-    }
-
-    if (viewerIsOwner) {
-      return 'You own this recipe.';
-    }
-
-    if (hasAccess) {
-      return isFree
-        ? 'Your free recipe is ready and saved to your library.'
-        : 'Recipe unlocked on this post.';
-    }
-
-    return isFree ? 'Get the full recipe free with one click.' : `Unlock the full recipe for ${accessPriceLabel}.`;
-  }, [accessPriceLabel, hasAccess, isFree, isPublic, viewerIsOwner]);
+  // Drawn only while the recipe is locked to this viewer.
+  const accessLabel = isFree
+    ? 'Get the full recipe free with one click.'
+    : `Unlock the full recipe for ${accessPriceLabel}.`;
   const formattedCreditBalance = typeof credits === 'number' ? credits.toLocaleString() : null;
   const hasKnownInsufficientCredits = Boolean(session?.access_token && typeof credits === 'number' && credits < creditCost);
   const isAnyActionWorking = workingAction !== null;
@@ -447,6 +467,31 @@ export default function PostResourceBundlePanel({
     // merely because the previous version's selected key no longer exists.
     setSelectedScopeMediaKey(null);
   }, [showPurchasedRevision]);
+
+  const disarmPaymentRecheck = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    const recheck = disarmPaymentRecheck;
+    return () => recheck.current?.();
+  }, []);
+
+  // The verify poll gives up while a payment can still be capturing, and
+  // nothing looked again before a reload. The buyer coming back to the tab
+  // (from their bank app, say) is the moment to look once more.
+  const recheckPendingPaymentOnFocus = (check: () => Promise<void>) => {
+    disarmPaymentRecheck.current?.();
+    const disarm = () => {
+      window.removeEventListener('focus', onFocus);
+      disarmPaymentRecheck.current = null;
+    };
+    const onFocus = () => {
+      disarm();
+      void check().catch((recheckError: unknown) => {
+        setError(recheckError instanceof Error ? recheckError.message : 'Payment verification failed.');
+      });
+    };
+    window.addEventListener('focus', onFocus);
+    disarmPaymentRecheck.current = disarm;
+  };
 
   const copyText = async (value: string, successMessage: string) => {
     try {
@@ -537,6 +582,11 @@ export default function PostResourceBundlePanel({
       setFeedback(null);
       setError(null);
 
+      // Fetched while the order is created; a failed load surfaces where it
+      // is awaited, below, and not as an unhandled rejection before that.
+      const checkoutScript = loadRazorpayCheckout();
+      checkoutScript.catch(() => undefined);
+
       const checkoutIntentScope = `post-resource:${postId}`;
       const clientIntentKey = getOrCreateRazorpayCheckoutIntentKey(checkoutIntentScope);
       const orderResponse = await fetch(`/api/posts/${postId}/resource-bundle/order`, {
@@ -568,8 +618,9 @@ export default function PostResourceBundlePanel({
         return;
       }
 
+      await checkoutScript;
       if (!window.Razorpay) {
-        throw new Error('Razorpay checkout is still loading. Please try again.');
+        throw new Error('Razorpay checkout could not load. Check your connection and try again.');
       }
 
       const razorpay = new window.Razorpay({
@@ -584,20 +635,33 @@ export default function PostResourceBundlePanel({
           razorpay_order_id: string;
           razorpay_signature: string;
         }) => {
-          try {
-            const verification = await verifyRazorpayCheckoutUntilSettled({
-              url: `/api/posts/${postId}/resource-bundle/verify`,
-              token: session?.access_token ?? '',
-              body: response,
-            });
-            if (verification.state === 'pending') {
-              setFeedback('Payment received and waiting for capture. This recipe will unlock automatically once confirmed.');
-              return;
-            }
-
+          const verify = (maxAttempts?: number) => verifyRazorpayCheckoutUntilSettled({
+            url: `/api/posts/${postId}/resource-bundle/verify`,
+            token: session?.access_token ?? '',
+            body: response,
+            ...(maxAttempts ? { maxAttempts } : {}),
+          });
+          const completeCheckout = async () => {
             clearRazorpayCheckoutIntentKey(checkoutIntentScope);
             await fetchLatestBundle();
             trackProductEvent('recipe_checkout_succeeded', { method: 'razorpay', post_id: postId });
+          };
+
+          try {
+            const verification = await verify();
+            if (verification.state === 'pending') {
+              setFeedback('Payment received and waiting for capture. This recipe will unlock automatically once confirmed.');
+              recheckPendingPaymentOnFocus(async () => {
+                if ((await verify(1)).state === 'pending') {
+                  return;
+                }
+                setFeedback(null);
+                await completeCheckout();
+              });
+              return;
+            }
+
+            await completeCheckout();
           } catch (verifyError) {
             trackProductEvent('recipe_checkout_failed', { method: 'razorpay', post_id: postId });
             setError(verifyError instanceof Error ? verifyError.message : 'Payment verification failed.');
@@ -628,13 +692,8 @@ export default function PostResourceBundlePanel({
       return;
     }
 
-    if (hasKnownInsufficientCredits) {
-      setError(`This recipe costs ${formattedCreditCost} credits. Add credits to continue.`);
-      setFeedback(null);
-      return;
-    }
-
-    // The spend cannot be undone; the app asks first and the web spent on one click.
+    // The spend cannot be undone, so it is confirmed first. (A known shortfall
+    // never gets here: the button is disabled and "Buy credits" shows instead.)
     const confirmed = await requestConfirmation({
       title: 'Unlock this recipe?',
       message: `${formattedCreditCost} credits will come off your balance right away.`,
@@ -677,7 +736,11 @@ export default function PostResourceBundlePanel({
     }
   };
 
-  const fetchResourceFileUrl = useCallback(async (storagePath: string, signal?: AbortSignal): Promise<string> => {
+  const fetchResourceFileUrl = useCallback(async (
+    storagePath: string,
+    signal?: AbortSignal,
+    disposition: PostResourceFileDisposition = 'attachment',
+  ): Promise<string> => {
     const response = await fetch(fileUrlEndpoint ?? `/api/posts/${postId}/resource-bundle/file-url`, {
       signal,
       method: 'POST',
@@ -689,7 +752,7 @@ export default function PostResourceBundlePanel({
             }
           : {}),
       },
-      body: JSON.stringify({ storagePath }),
+      body: JSON.stringify({ storagePath, disposition }),
     });
     const data = await response.json();
 
@@ -700,12 +763,45 @@ export default function PostResourceBundlePanel({
     return data.signedUrl as string;
   }, [fileUrlEndpoint, postId, session]);
 
-  const resolveResourceFileUrl = async (storagePath: string): Promise<string | null> => {
+  const fetchResourceFileUrls = useCallback(async (
+    storagePaths: string[],
+    signal: AbortSignal,
+  ): Promise<ReadonlyMap<string, string>> => {
+    const response = await fetch(fileUrlEndpoint ?? `/api/posts/${postId}/resource-bundle/file-url`, {
+      signal,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
+      body: JSON.stringify({ storagePaths, disposition: 'inline' }),
+    });
+    const data = await response.json();
+
+    if (!response.ok || !Array.isArray(data.files)) {
+      throw new Error(data.error || 'Failed to open resource file.');
+    }
+
+    return new Map((data.files as PostResourceSignedFileUrl[]).map((file) => [file.storagePath, file.url]));
+  }, [fileUrlEndpoint, postId, session]);
+
+  // Every preview the panel draws is signed in one request (one entitlement
+  // load on the server, one count against the signing limit) where each used
+  // to sign itself. The buyer-library route takes the same batch form.
+  const signPreviewUrl = useMemo(
+    () => createBatchedUrlResolver(fetchResourceFileUrls, POST_RESOURCE_FILE_URL_BATCH_LIMIT),
+    [fetchResourceFileUrls]
+  );
+
+  const resolveResourceFileUrl = async (
+    storagePath: string,
+    disposition: PostResourceFileDisposition,
+  ): Promise<string | null> => {
     if (!isFree && !ensureAuthenticated()) {
       return null;
     }
 
-    return fetchResourceFileUrl(storagePath);
+    return fetchResourceFileUrl(storagePath, undefined, disposition);
   };
 
   const openResourceFile = async (storagePath: string) => {
@@ -714,7 +810,8 @@ export default function PostResourceBundlePanel({
       setFeedback(null);
       setError(null);
 
-      const signedUrl = await resolveResourceFileUrl(storagePath);
+      // Signed as an attachment, the file Open was pressed to view was saved instead.
+      const signedUrl = await resolveResourceFileUrl(storagePath, 'inline');
       if (signedUrl) {
         window.open(signedUrl, '_blank', 'noopener,noreferrer');
       }
@@ -731,7 +828,7 @@ export default function PostResourceBundlePanel({
       setFeedback(null);
       setError(null);
 
-      const signedUrl = await resolveResourceFileUrl(storagePath);
+      const signedUrl = await resolveResourceFileUrl(storagePath, 'attachment');
       if (signedUrl) {
         const anchor = document.createElement('a');
         anchor.href = signedUrl;
@@ -775,7 +872,7 @@ export default function PostResourceBundlePanel({
     if (!item.contentType) return null;
     if (item.storagePath && item.contentType.startsWith('image/')) {
       return <ResourceMediaPreview key={`${postId}:${item.storagePath}`} mediaType="image" label={item.title}
-        resolveUrl={signal => fetchResourceFileUrl(item.storagePath!, signal)} className="mb-3 max-w-full" />;
+        resolveUrl={signal => signPreviewUrl(item.storagePath!, signal)} className="mb-3 max-w-full" />;
     }
 
     if (item.storagePath && (item.contentType.startsWith('video/') || item.contentType.startsWith('audio/'))) {
@@ -783,7 +880,7 @@ export default function PostResourceBundlePanel({
         key={`${postId}:${item.storagePath}`}
         mediaType={item.contentType.startsWith('audio/') ? 'audio' : 'video'}
         label={item.title}
-        resolveUrl={signal => fetchResourceFileUrl(item.storagePath!, signal)}
+        resolveUrl={signal => signPreviewUrl(item.storagePath!, signal)}
         className="mb-3 max-w-full"
       />;
     }
@@ -857,7 +954,7 @@ export default function PostResourceBundlePanel({
                 </button>
                 <button
                   type="button"
-                  onClick={() => void downloadResourceFile(item.storagePath ?? '', item.title)}
+                  onClick={() => void downloadResourceFile(item.storagePath ?? '', formatPostResourceDownloadName(item.title, item.contentType))}
                   className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                 >
                   <Download className="h-4 w-4" />
@@ -879,9 +976,6 @@ export default function PostResourceBundlePanel({
   return (
     <section id="recipe" className="min-w-0 scroll-mt-24">
       <span id="resources" aria-hidden className="sr-only" />
-      {offersCashCheckout && !hasAccess && !viewerIsOwner ? (
-        <Script id="post-resource-bundle-razorpay-checkout" src="https://checkout.razorpay.com/v1/checkout.js" />
-      ) : null}
 
       {/*
         * One quiet header line carries everything the old three boxes said:
@@ -890,7 +984,7 @@ export default function PostResourceBundlePanel({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-zinc-500">
         <span className="font-semibold uppercase tracking-[0.2em] text-emerald-300/80">Recipe</span>
         <span className="rounded-full border border-emerald-300/25 bg-emerald-300 px-2.5 py-0.5 font-bold text-slate-950">
-          {isPublic ? 'Public recipe' : isRecipeVisible ? (viewerIsOwner ? 'Owner access' : activeIsFree ? 'Free recipe' : 'Unlocked') : isFree ? 'Free recipe' : accessPriceLabel}
+          {isRecipeVisible ? (viewerIsOwner ? 'Owner access' : activeIsFree ? 'Free recipe' : 'Unlocked') : isFree ? 'Free recipe' : accessPriceLabel}
         </span>
         {typeof salesCount === 'number' ? (
           <span>{formatUnlockCountLabel(activeIsFree ? 'free' : 'paid', salesCount)}</span>
@@ -1248,7 +1342,7 @@ export default function PostResourceBundlePanel({
             </p>
           ) : null}
 
-          {viewerIsOwner && !isPublic ? (
+          {viewerIsOwner ? (
             <p className="border-t border-white/8 pt-4 text-sm leading-6 text-emerald-100/80">
               Owner preview. {isFree ? 'People add this recipe before seeing it.' : 'Buyers must unlock the recipe before seeing it.'}
             </p>

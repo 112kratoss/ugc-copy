@@ -3,7 +3,7 @@ import { router } from 'expo-router';
 import { MoreHorizontal, SendHorizontal } from 'lucide-react-native';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type React from 'react';
-import { ActivityIndicator, Animated, Easing, FlatList, type LayoutChangeEvent, Platform, Pressable, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Animated, Easing, FlatList, type LayoutChangeEvent, Platform, Pressable, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { NativeMenu } from '@/components/native-menu';
@@ -12,26 +12,34 @@ import { CreatorAvatar, StatusBlock } from '@/components/ui';
 import { showActionSheet } from '@/lib/action-sheet';
 import { useAuth } from '@/lib/auth';
 import {
+  ALL_POST_COMMENT_QUERY_KEYS,
   POST_COMMENTS_PAGE_SIZE,
   POST_COMMENT_MAX_LENGTH,
   applyCommentCountToInfiniteFeed,
   applyCommentCountToPostResponse,
   applyCommentCountToSourceData,
   appendReplyToPages,
+  canBlockCommentAuthor,
   canDeleteComment,
   canRemoveComment,
   canReportComment,
   createPostCommentRepliesQueryKey,
   createPostCommentsQueryKey,
-  flattenCommentPages,
   getCommentAuthReturnTo,
   getCommentDisplay,
+  getCommentPostErrorCopy,
+  getCommentsLoadErrorCopy,
   getCommentsPageParams,
   getNextCommentsPageOffset,
+  getRemoveCommentConfirmation,
+  getRepliesToggleLabel,
   incrementParentReplyCountInPages,
+  incrementReplyCountInList,
   keepFirstCommentPage,
+  markCommentRemovedInList,
   markCommentRemovedInPages,
   mergeRepliesWithPending,
+  mergeTopLevelWithPending,
   prependCommentToPages,
   suspendCommentPagination,
   type PostCommentSort,
@@ -58,15 +66,18 @@ import type {
 } from '@/lib/types';
 import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
 
+// The web thread's labels (src/components/PostComments.tsx), so a report reads
+// the same whichever client filed it.
 const REPORT_REASONS: Array<{ label: string; value: CommentReportReason }> = [
-  { label: 'Spam or misleading', value: 'spam' },
-  { label: 'Harassment or bullying', value: 'harassment' },
+  { label: 'Spam', value: 'spam' },
+  { label: 'Harassment', value: 'harassment' },
   { label: 'Unsafe content', value: 'unsafe_content' },
-  { label: 'Something else', value: 'other' },
+  { label: 'Other', value: 'other' },
 ];
 
 type CommentActionHandler = (comment: PostComment) => void;
 type CommentMenuBuilder = (comment: PostComment) => NativeMenuModel;
+type AuthorOpenHandler = (username: string) => void;
 
 export type PostCommentsHandle = {
   focusComposer: () => void;
@@ -123,6 +134,9 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   const [replyTo, setReplyTo] = useState<PostComment | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   const [pendingRepliesByParent, setPendingRepliesByParent] = useState<Record<string, PostComment[]>>({});
+  // The viewer's own top-level comments from this thread, pinned above the
+  // server's pages (`mergeTopLevelWithPending`).
+  const [pendingTopLevel, setPendingTopLevel] = useState<PostComment[]>([]);
   const [reporting, setReporting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   // Decoupled from query fetch state: on iOS a programmatic `refreshing` drags
@@ -198,8 +212,8 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   });
 
   const topLevel = useMemo(
-    () => flattenCommentPages(commentsQuery.data?.pages),
-    [commentsQuery.data?.pages]
+    () => mergeTopLevelWithPending(commentsQuery.data?.pages, pendingTopLevel),
+    [commentsQuery.data?.pages, pendingTopLevel]
   );
 
   useEffect(() => {
@@ -207,6 +221,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     setReplyTo(null);
     setExpandedIds(new Set());
     setPendingRepliesByParent({});
+    setPendingTopLevel([]);
     setReporting(false);
     restoredReplyIdRef.current = null;
   }, [postId]);
@@ -242,6 +257,9 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   const serverCommentCount = commentsQuery.data?.pages?.[0]?.commentCount ?? commentCount;
   const resolvedPostCreatorId = commentsQuery.data?.pages?.[0]?.postCreatorId ?? postCreatorId;
   const commentsUnavailable = commentsQuery.isError && !commentsQuery.data?.pages?.length;
+  const loadError = commentsUnavailable ? getCommentsLoadErrorCopy(commentsQuery.error) : null;
+  // Closed is an answer, not a failure: no retry, and no composer inviting a comment.
+  const commentsClosed = loadError ? !loadError.canRetry : false;
 
   const publishCommentCount = useCallback((nextCount: number) => {
     const result = { postId, commentCount: nextCount };
@@ -284,8 +302,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     onCommentCountChange?.(nextCount);
   }, [onCommentCountChange, postId, queryClient]);
 
-  const requireSignIn = useCallback((replyComment?: PostComment | null) => {
-    if (user) return true;
+  const openSignIn = useCallback((replyComment?: PostComment | null) => {
     const rootReplyId = replyComment
       ? replyComment.parentId ?? replyComment.id
       : null;
@@ -296,8 +313,20 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
         returnTo: getCommentAuthReturnTo(authReturnTo, postId, rootReplyId),
       },
     } as never);
+  }, [authReturnTo, onClose, postId]);
+
+  const requireSignIn = useCallback((replyComment?: PostComment | null) => {
+    if (user) return true;
+    openSignIn(replyComment);
     return false;
-  }, [authReturnTo, onClose, postId, user]);
+  }, [openSignIn, user]);
+
+  const openAuthorProfile = useCallback((username: string) => {
+    // Left open, the sheet would still cover the post when the reader comes
+    // back from the profile, so it closes first, as it does for sign-in.
+    if (presentation === 'sheet') onClose();
+    router.push(`/creators/${encodeURIComponent(username)}` as never);
+  }, [onClose, presentation]);
 
   const toggleReplies = useCallback((parentId: string) => {
     setExpandedIds((current) => {
@@ -313,13 +342,14 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     if (!body || submitting) return;
     if (!requireSignIn(replyTo)) return;
 
+    // The product exposes one reply level. Normalizing here also protects
+    // restored/stale reply targets while the server enforces the same rule.
+    const replyTarget = replyTo;
+    const parentId = replyTarget
+      ? replyTarget.parentId ?? replyTarget.id
+      : null;
     setSubmitting(true);
     try {
-      // The product exposes one reply level. Normalizing here also protects
-      // restored/stale reply targets while the server enforces the same rule.
-      const parentId = replyTo
-        ? replyTo.parentId ?? replyTo.id
-        : null;
       const response = await api.createPostComment(postId, { body, parentId, deliveryId });
       setDraft('');
       setReplyTo(null);
@@ -343,6 +373,8 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
             response.comment,
           ],
         }));
+        // A pinned parent may sit on no loaded page; its own copy counts the reply.
+        setPendingTopLevel((current) => incrementReplyCountInList(current, parentId, 1));
         setExpandedIds((current) => new Set(current).add(parentId));
         void commentsQuery.refetch();
       } else {
@@ -352,25 +384,33 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
             prependCommentToPages(current, response.comment, response.commentCount)
           )
         );
+        setPendingTopLevel((current) => [
+          response.comment,
+          ...current.filter((comment) => comment.id !== response.comment.id),
+        ]);
         void commentsQuery.refetch();
       }
 
       publishCommentCount(response.commentCount);
     } catch (error) {
       haptic.error();
-      showErrorDialog('Could not post comment', error);
+      const copy = getCommentPostErrorCopy(error, Boolean(parentId));
+      if (copy.signIn) {
+        void showConfirmDialog({ title: copy.title, message: copy.message, confirmLabel: 'Sign in' })
+          .then((confirmed) => {
+            if (confirmed) openSignIn(replyTarget);
+          });
+      } else {
+        showMessageDialog({ title: copy.title, message: copy.message });
+      }
     } finally {
       setSubmitting(false);
     }
-  }, [api, commentsQuery, commentsQueryKey, deliveryId, draft, postId, publishCommentCount, queryClient, replyTo, requireSignIn, submitting, user?.id]);
+  }, [api, commentsQuery, commentsQueryKey, deliveryId, draft, openSignIn, postId, publishCommentCount, queryClient, replyTo, requireSignIn, submitting, user?.id]);
 
   const removeComment = useCallback((comment: PostComment, asOwner: boolean) => {
     void showConfirmDialog({
-      title: asOwner ? 'Remove this comment?' : 'Delete your comment?',
-      message: asOwner
-        ? 'It will be hidden from everyone viewing your post.'
-        : 'Your comment will be replaced with “[deleted]”. Replies to it stay visible.',
-      confirmLabel: asOwner ? 'Remove' : 'Delete',
+      ...getRemoveCommentConfirmation(comment, asOwner),
       destructive: true,
     }).then(async (confirmed) => {
       if (!confirmed) return;
@@ -400,6 +440,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
               )
             )
           );
+          setPendingTopLevel((current) => incrementReplyCountInList(current, comment.parentId!, -1));
           void queryClient.invalidateQueries({ queryKey: repliesKey, refetchType: 'active' });
         } else {
           queryClient.setQueryData<InfiniteData<PostCommentsResponse>>(
@@ -408,6 +449,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
               markCommentRemovedInPages(current, comment.id, response.status, response.commentCount)
             )
           );
+          setPendingTopLevel((current) => markCommentRemovedInList(current, comment.id, response.status));
         }
         void commentsQuery.refetch();
         publishCommentCount(response.commentCount);
@@ -451,6 +493,34 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     });
   }, [reporting, requireSignIn, submitReport]);
 
+  const blockAuthor = useCallback((comment: PostComment) => {
+    const authorId = comment.author?.id;
+    if (!authorId || !requireSignIn()) return;
+    const { authorLabel } = getCommentDisplay(comment);
+    void showConfirmDialog({
+      title: `Block ${authorLabel}?`,
+      message: 'Their posts and comments will be hidden, and neither of you will be able to follow the other.',
+      confirmLabel: 'Block user',
+      destructive: true,
+    }).then(async (confirmed) => {
+      if (!confirmed) return;
+      try {
+        await api.blockUser(authorId);
+      } catch (error) {
+        haptic.error();
+        showErrorDialog('Could not block user', error);
+        return;
+      }
+      setReplyTo((current) => (current?.author?.id === authorId ? null : current));
+      // The server leaves a blocked author's comments out of every thread it
+      // lists, so every cached thread is out of date, not only this one.
+      for (const queryKey of ALL_POST_COMMENT_QUERY_KEYS) {
+        void queryClient.invalidateQueries({ queryKey });
+      }
+      AccessibilityInfo.announceForAccessibility(`${authorLabel} blocked.`);
+    });
+  }, [api, queryClient, requireSignIn]);
+
   // What a comment's ••• offers: a native menu on the ••• itself
   // (`lib/native-menu.ts`), and the same rows as an action sheet in a build
   // without native menus.
@@ -458,10 +528,13 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     canDelete: canDeleteComment(comment, user?.id),
     canRemove: canRemoveComment(comment, resolvedPostCreatorId, user?.id),
     canReport: canReportComment(comment, user?.id),
+    block: canBlockCommentAuthor(comment, resolvedPostCreatorId, user?.id)
+      ? { authorLabel: getCommentDisplay(comment).authorLabel, onBlock: () => blockAuthor(comment) }
+      : null,
     onDelete: () => removeComment(comment, false),
     onRemove: () => removeComment(comment, true),
     onReport: () => reportComment(comment),
-  }), [removeComment, reportComment, resolvedPostCreatorId, user?.id]);
+  }), [blockAuthor, removeComment, reportComment, resolvedPostCreatorId, user?.id]);
 
   const openCommentActions = useCallback((comment: PostComment) => {
     const menu = commentMenu(comment);
@@ -480,12 +553,14 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
 
   const renderTopLevelComment = useCallback(({ item: comment }: { item: PostComment }) => {
     const expanded = expandedIds.has(comment.id);
+    const repliesToggleLabel = getRepliesToggleLabel(comment.replyCount, expanded);
     return (
       <View>
         <CommentRowView
           comment={comment}
           actionsMenu={commentMenu}
           onActions={hasCommentActions(comment) ? openCommentActions : undefined}
+          onAuthorOpen={openAuthorProfile}
           onReply={(nextComment) => {
             if (requireSignIn(nextComment)) setReplyTo(nextComment);
           }}
@@ -498,12 +573,14 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
             hasActions={hasCommentActions}
             actionsMenu={commentMenu}
             onActions={openCommentActions}
+            onAuthorOpen={openAuthorProfile}
           />
         ) : null}
         {comment.replyCount > 0 ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={expanded ? 'Hide replies' : `View ${comment.replyCount} replies`}
+            accessibilityLabel={repliesToggleLabel}
+            accessibilityState={{ expanded }}
             onPress={() => toggleReplies(comment.id)}
             style={({ pressed }) => ({
               minHeight: 48,
@@ -514,15 +591,13 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
             })}
           >
             <Text style={{ color: theme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>
-              {expanded
-                ? 'Hide replies'
-                : `View ${comment.replyCount} ${comment.replyCount === 1 ? 'reply' : 'replies'}`}
+              {repliesToggleLabel}
             </Text>
           </Pressable>
         ) : null}
       </View>
     );
-  }, [expandedIds, commentMenu, hasCommentActions, openCommentActions, pendingRepliesByParent, postId, requireSignIn, toggleReplies]);
+  }, [expandedIds, commentMenu, hasCommentActions, openAuthorProfile, openCommentActions, pendingRepliesByParent, postId, requireSignIn, toggleReplies]);
 
   const canSubmit = draft.trim().length > 0 && !submitting && !commentsUnavailable;
 
@@ -571,38 +646,40 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     </View>
   );
 
-  const retryState = (
+  const loadErrorState = loadError ? (
     <View style={{ padding: appTheme.spacing.panel, gap: appTheme.spacing.gap }}>
       <StatusBlock
-        tone="danger"
-        title="Comments are unavailable"
-        body="We could not load this conversation. Check your connection, then try again."
+        tone={loadError.canRetry ? 'danger' : 'neutral'}
+        title={loadError.title}
+        body={loadError.body}
       />
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Try loading comments again"
-        accessibilityState={{ busy: commentsQuery.isRefetching }}
-        disabled={commentsQuery.isRefetching}
-        onPress={() => void commentsQuery.refetch()}
-        style={({ pressed }) => ({
-          minHeight: 48,
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderRadius: appTheme.radii.md,
-          backgroundColor: theme.colors.primaryFill,
-          opacity: pressed ? appTheme.opacity.pressed : 1,
-        })}
-      >
-        {commentsQuery.isRefetching ? (
-          <ActivityIndicator color={theme.colors.onPrimary} />
-        ) : (
-          <Text style={{ color: theme.colors.onPrimary, ...appTheme.type.bodySm, fontWeight: '800' }}>
-            Try again
-          </Text>
-        )}
-      </Pressable>
+      {loadError.canRetry ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Try loading comments again"
+          accessibilityState={{ busy: commentsQuery.isRefetching }}
+          disabled={commentsQuery.isRefetching}
+          onPress={() => void commentsQuery.refetch()}
+          style={({ pressed }) => ({
+            minHeight: 48,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: appTheme.radii.md,
+            backgroundColor: theme.colors.primaryFill,
+            opacity: pressed ? appTheme.opacity.pressed : 1,
+          })}
+        >
+          {commentsQuery.isRefetching ? (
+            <ActivityIndicator color={theme.colors.onPrimary} />
+          ) : (
+            <Text style={{ color: theme.colors.onPrimary, ...appTheme.type.bodySm, fontWeight: '800' }}>
+              Try again
+            </Text>
+          )}
+        </Pressable>
+      ) : null}
     </View>
-  );
+  ) : null;
 
   const emptyState = !enabled && unavailableMessage ? (
     <View style={{ paddingVertical: appTheme.spacing.section, paddingHorizontal: appTheme.spacing.panel }}>
@@ -610,7 +687,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
         {unavailableMessage}
       </Text>
     </View>
-  ) : commentsUnavailable ? retryState : commentsQuery.isLoading ? (
+  ) : commentsUnavailable ? loadErrorState : commentsQuery.isLoading ? (
     <View style={{ paddingHorizontal: appTheme.spacing.panel, paddingVertical: appTheme.spacing.card }}>
       <CommentListSkeleton />
     </View>
@@ -659,7 +736,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     />
   );
 
-  const composer = enabled ? (
+  const composer = enabled && !commentsClosed ? (
     <View
       style={{
         borderTopWidth: 1,
@@ -689,7 +766,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: appTheme.spacing.compact }}>
         <TextInput
           ref={composerRef}
-          accessibilityLabel="Write a comment"
+          accessibilityLabel={replyTo ? `Write a reply to ${getCommentDisplay(replyTo).authorLabel}` : 'Write a comment'}
           accessibilityHint={commentsUnavailable ? 'Retry loading comments before posting.' : undefined}
           value={draft}
           onChangeText={setDraft}
@@ -834,6 +911,7 @@ function RepliesList({
   hasActions,
   actionsMenu,
   onActions,
+  onAuthorOpen,
 }: {
   parentId: string;
   pendingReplies: PostComment[];
@@ -841,6 +919,7 @@ function RepliesList({
   hasActions: (comment: PostComment) => boolean;
   actionsMenu: CommentMenuBuilder;
   onActions: CommentActionHandler;
+  onAuthorOpen: AuthorOpenHandler;
 }) {
   const theme = useAppTheme();
   const { api, user } = useAuth();
@@ -882,6 +961,7 @@ function RepliesList({
           isReply
           actionsMenu={actionsMenu}
           onActions={hasActions(reply) ? onActions : undefined}
+          onAuthorOpen={onAuthorOpen}
         />
       ))}
       {repliesQuery.isError ? (
@@ -946,6 +1026,7 @@ function CommentRowView({
   isReply = false,
   actionsMenu,
   onActions,
+  onAuthorOpen,
   onReply,
 }: {
   comment: PostComment;
@@ -953,10 +1034,20 @@ function CommentRowView({
   /** The ••• menu; `onActions` opens the action sheet where native menus are missing. */
   actionsMenu?: CommentMenuBuilder;
   onActions?: CommentActionHandler;
+  onAuthorOpen?: AuthorOpenHandler;
   onReply?: CommentActionHandler;
 }) {
   const theme = useAppTheme();
   const display = getCommentDisplay(comment);
+  // A removed comment has no author, and the profile route needs a handle.
+  const authorUsername = display.isDeleted ? null : comment.author?.username ?? null;
+  const openAuthor = authorUsername && onAuthorOpen ? () => onAuthorOpen(authorUsername) : undefined;
+  const avatar = <CreatorAvatar uri={comment.author?.avatarUrl ?? null} name={display.authorLabel} size={25} />;
+  const authorName = (
+    <Text numberOfLines={1} style={{ color: theme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800', flexShrink: 1 }}>
+      {display.authorLabel}
+    </Text>
+  );
 
   return (
     <View
@@ -968,12 +1059,35 @@ function CommentRowView({
         paddingVertical: appTheme.spacing.gap,
       }}
     >
-      <CreatorAvatar uri={comment.author?.avatarUrl ?? null} name={display.authorLabel} size={25} />
+      {openAuthor ? (
+        // The avatar takes the handle's tap, with room around it for a 44pt
+        // target. The handle is the one control a screen reader lists, so this
+        // one stays out of its way.
+        <Pressable
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          hitSlop={10}
+          onPress={openAuthor}
+          style={({ pressed }) => ({ alignSelf: 'flex-start', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+        >
+          {avatar}
+        </Pressable>
+      ) : avatar}
       <View style={{ flex: 1, gap: 3 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
-          <Text numberOfLines={1} style={{ color: theme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800', flexShrink: 1 }}>
-            {display.authorLabel}
-          </Text>
+          {openAuthor ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${display.authorLabel} profile`}
+              // Up into the row's padding, and down no further than the gap
+              // above the comment, so a tap on its text never opens the profile.
+              hitSlop={{ top: appTheme.spacing.gap, bottom: 3 }}
+              onPress={openAuthor}
+              style={({ pressed }) => ({ flexShrink: 1, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+            >
+              {authorName}
+            </Pressable>
+          ) : authorName}
           <Text style={{ color: theme.colors.faint, ...appTheme.type.caption }}>{display.timeLabel}</Text>
         </View>
         <Text

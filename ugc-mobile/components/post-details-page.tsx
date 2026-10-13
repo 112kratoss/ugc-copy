@@ -1,13 +1,13 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { router } from 'expo-router';
-import { Copy, FileText, Lock, MessageCircle, MoreVertical, Repeat2 } from 'lucide-react-native';
+import { useQuery } from '@tanstack/react-query';
+import { Copy, Crown, FileText, Lock, MessageCircle, MoreVertical, Repeat2 } from 'lucide-react-native';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { ResourcePrompt } from '@/components/resource-prompt';
 import { GenerationReferences } from '@/components/generation-references';
-import { PostResourceBundleContent } from '@/components/post-resource-bundle-content';
+import { PostResourceBundleContent, ResourceRevisionSwitch } from '@/components/post-resource-bundle-content';
 import { ResourceAction } from '@/components/resource-action';
+import { ResourceKindRow } from '@/components/resource-kind-row';
 import { CreatorAvatar, Pill } from '@/components/ui';
 import { SaveHeart } from '@/components/save-heart';
 import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
@@ -26,12 +26,11 @@ import {
   prepareUnlockedResourcesForDetails,
 } from '@/lib/post-details-view-model';
 import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
-import type { PostResourceKind } from '@/lib/types';
+import { formatLockedBundleFacts, formatPostResourceBundleCountSummary } from '@/lib/post-resource-bundle-view-model';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
-import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
+import { useBundleUnlock } from '@/lib/use-bundle-unlock';
 import { verticalHitSlop } from '@/lib/hit-target';
-import { haptic } from '@/lib/haptics';
 
 /** The creator byline reads as a single line of text; its reach is widened rather than its height. */
 const CREATOR_ROW_HEIGHT = 36;
@@ -55,6 +54,7 @@ const DETAILS_TITLE_MAX_LINES = 6;
  */
 export function PostDetailsPage({
   active,
+  authReturnTo,
   bottomInset,
   height,
   hostRendersPostText = false,
@@ -73,6 +73,11 @@ export function PostDetailsPage({
   width,
 }: {
   active: boolean;
+  /**
+   * Where "Sign in to unlock" comes back to: the screen this page is on.
+   * Without it, sign-in ends on Home and the reader has lost the post.
+   */
+  authReturnTo?: string;
   bottomInset: number;
   height: number;
   /**
@@ -100,12 +105,18 @@ export function PostDetailsPage({
   const details = item.details;
   const unlock = details?.unlock ?? null;
   const { api, user } = useAuth();
-  const queryClient = useQueryClient();
   const [fileLoadingPath, setFileLoadingPath] = useState<string | null>(null);
   const [resourceError, setResourceError] = useState<string | null>(null);
+  // Which bundle the reader switched to the version they unlocked; any other
+  // bundle shows its latest.
+  const [purchasedRevisionFor, setPurchasedRevisionFor] = useState<string | null>(null);
 
   const resourceQuery = useQuery({
-    queryKey: ['post-resource-bundle', unlock?.postId, unlock?.resourceId],
+    // The viewer is part of the answer: `resources` and access come back only
+    // for someone entitled, and sign-out keeps the query cache. Without the id,
+    // an account switch showed the last account's unlocked bundle, and a buyer
+    // who had just signed in saw a stale lock for up to a minute.
+    queryKey: ['post-resource-bundle', unlock?.postId, unlock?.resourceId, user?.id ?? null],
     enabled: active && Boolean(unlock),
     queryFn: async () => {
       if (!unlock) throw new Error('Missing unlock details');
@@ -113,25 +124,25 @@ export function PostDetailsPage({
     },
     staleTime: 1000 * 60,
   });
+  const bundle = resourceQuery.data?.bundle;
 
-  const unlockMutation = useMutation({
-    mutationFn: async () => {
-      if (!unlock) return null;
-      if (unlock.accessMode === 'free') {
-        return api.unlockFreeBundle(unlock.postId);
+  const bundleUnlock = useBundleUnlock({
+    authReturnTo,
+    target: unlock
+      ? {
+        postId: unlock.postId,
+        resourceId: unlock.resourceId,
+        accessMode: unlock.accessMode,
+        priceUsdCents: typeof bundle?.priceUsdCents === 'number' ? bundle.priceUsdCents : null,
+        priceLabel: unlock.priceLabel,
       }
-      return api.unlockBundleWithCredits(unlock.postId);
-    },
-    onSuccess: async () => {
-      if (unlock) await refreshUnlockedBundleCaches(queryClient, unlock);
-      haptic.select();
-    },
+      : null,
   });
 
-  const resolveResourceFileUrl = useCallback(async (storagePath: string) => {
+  const resolveResourceFileUrl = useCallback((storagePath: string) => {
     const postId = item.showcasePostId ?? item.ownerPostId ?? item.id;
-    const response = await api.getPostResourceFileUrl(postId, storagePath);
-    return response.signedUrl;
+    // Inline, so a file the browser can show opens rather than downloads.
+    return api.resolvePostResourceFileUrl(postId, storagePath, { disposition: 'inline' });
   }, [api, item.id, item.ownerPostId, item.showcasePostId]);
 
   const openResourceUrl = useCallback(async (url: string) => {
@@ -143,7 +154,6 @@ export function PostDetailsPage({
     return <View style={{ width, height, backgroundColor: theme.colors.app }} />;
   }
 
-  const bundle = resourceQuery.data?.bundle;
   const sectionState = getResourceSectionState({
     hasUnlock: Boolean(unlock),
     bundle,
@@ -151,9 +161,29 @@ export function PostDetailsPage({
   });
   const canAccess = sectionState === 'unlocked';
   const resourceKinds = bundle?.resourceKinds ?? unlock?.resourceKinds ?? [];
-  const prepared = canAccess && bundle?.resources
-    ? prepareUnlockedResourcesForDetails(bundle.resources, { detailsPrompt: details.prompt })
+  // Sent only when the creator has edited the bundle since this viewer
+  // unlocked it; the latest stays the default, as on the web.
+  const purchasedRevision = canAccess ? bundle?.purchasedRevision ?? null : null;
+  const shownRevision = purchasedRevision && unlock && purchasedRevisionFor === unlock.resourceId
+    ? purchasedRevision
     : null;
+  const activeResources = shownRevision?.resources ?? bundle?.resources ?? null;
+  const prepared = canAccess && activeResources
+    ? prepareUnlockedResourcesForDetails(activeResources, { detailsPrompt: details.prompt })
+    : null;
+  // What the web sells a locked recipe with: its track record and freshness,
+  // what it includes, and the creator's own summary of it.
+  const lockedFacts = bundle && unlock
+    ? formatLockedBundleFacts({
+      accessMode: bundle.accessMode ?? unlock.accessMode,
+      salesCount: bundle.salesCount,
+      updatedAt: bundle.lockedPreview?.updatedAt,
+    })
+    : '';
+  const includesSummary = formatPostResourceBundleCountSummary(bundle?.lockedPreview);
+  const lockedSummary = [bundle?.summary, bundle?.previewText, unlock?.previewText]
+    .map((text) => text?.trim())
+    .find(Boolean) ?? 'The prompt, files and notes behind this result.';
 
   const copyText = (text: string) => copyToClipboard(text);
 
@@ -171,7 +201,6 @@ export function PostDetailsPage({
     }
   };
 
-  const unlockError = unlockMutation.error instanceof Error ? unlockMutation.error.message : null;
   const unlockAccent: ToolAccent = unlock?.accessMode === 'free' ? 'workflow' : 'commerce';
   const unlockPriceLabel = getUnlockPriceLabel(unlock, bundle);
   const primaryAction = getDetailsPrimaryAction(item, { canAccess });
@@ -332,14 +361,27 @@ export function PostDetailsPage({
             <View style={{ gap: 12 }}>
               <ResourcesHeading
                 pills={[
-                  { label: 'Unlocked', accent: 'workflow' },
+                  // The creator reads their own recipe by owning it, not by
+                  // having unlocked it; the web panel says so too.
+                  { label: bundle?.viewerIsOwner ? 'Owner access' : 'Unlocked', accent: 'workflow' },
                   ...(prepared?.hasRemixAccess ? [{ label: 'Remix included', accent: 'primary' as ToolAccent }] : []),
                 ]}
               />
+              {purchasedRevision ? (
+                <View style={{ gap: 8 }}>
+                  <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
+                    The creator has updated this unlock since you bought it. You can read either version.
+                  </Text>
+                  <ResourceRevisionSwitch
+                    selected={shownRevision ? 'purchased' : 'latest'}
+                    onSelect={(revision) => setPurchasedRevisionFor(revision === 'purchased' ? unlock.resourceId : null)}
+                  />
+                </View>
+              ) : null}
               {prepared && !prepared.isEmpty ? (
                 <PostResourceBundleContent
                   fileLoadingPath={fileLoadingPath}
-                  mediaItems={item.mediaItems}
+                  mediaItems={shownRevision?.mediaItems ?? item.mediaItems}
                   onCopy={copyText}
                   onError={setResourceError}
                   onOpenFile={openResourceFile}
@@ -355,13 +397,17 @@ export function PostDetailsPage({
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
                 <View style={{ flex: 1, gap: 5 }}>
                   <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>Creator's resources</Text>
-                  <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
-                    {bundle?.previewText ?? unlock.previewText ?? 'The prompt, files and notes behind this result.'}
-                  </Text>
+                  {lockedFacts ? (
+                    <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{lockedFacts}</Text>
+                  ) : null}
+                  <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>{lockedSummary}</Text>
                 </View>
                 {unlockPriceLabel ? <Pill label={unlockPriceLabel} accent={unlockAccent} /> : null}
               </View>
-              <ResourceKindRow kinds={resourceKinds} />
+              <ResourceKindRow kinds={resourceKinds} on="surface" />
+              {includesSummary ? (
+                <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{`Includes ${includesSummary}`}</Text>
+              ) : null}
               {sectionState === 'loading' ? (
                 <ActivityIndicator color={theme.colors.primary} />
               ) : sectionState === 'error' ? (
@@ -377,20 +423,30 @@ export function PostDetailsPage({
                     resources={null}
                   />
                   <View style={{ gap: 10 }}>
+                    {/* Free is one tap; a paid unlock asks first, and is not
+                        offered while the known balance is short of it
+                        (`useBundleUnlock`). */}
                     <DetailActionButton
+                      disabled={bundleUnlock.shortfall > 0}
                       label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Get resources — Free' : unlockPriceLabel ? `Unlock for ${unlockPriceLabel}` : 'Unlock with credits'}
                       icon={<Lock size={appTheme.icon.compact} color={theme.colors.onPrimary} />}
-                      loading={unlockMutation.isPending}
+                      loading={bundleUnlock.isPending}
                       primary
-                      onPress={() => {
-                        if (!user) {
-                          router.push('/auth');
-                          return;
-                        }
-                        unlockMutation.mutate();
-                      }}
+                      onPress={bundleUnlock.request}
                     />
-                    {unlockError ? <ErrorText message={unlockError} /> : null}
+                    {bundleUnlock.shortfallMessage ? (
+                      <Text style={{ color: theme.semantic.warning.foreground, ...appTheme.type.label }}>
+                        {bundleUnlock.shortfallMessage}
+                      </Text>
+                    ) : null}
+                    {bundleUnlock.offersCredits ? (
+                      <DetailActionButton
+                        label="Get credits"
+                        icon={<Crown size={appTheme.icon.compact} color={theme.colors.text} />}
+                        onPress={bundleUnlock.goToCredits}
+                      />
+                    ) : null}
+                    {bundleUnlock.error ? <ErrorText message={bundleUnlock.error} /> : null}
                   </View>
                 </>
               )}
@@ -616,27 +672,4 @@ function DetailActionButton({
       <Text numberOfLines={1} style={{ color: primary ? theme.colors.onPrimary : theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{label}</Text>
     </Pressable>
   );
-}
-
-function ResourceKindRow({ kinds }: { kinds: PostResourceKind[] }) {
-  const theme = useAppTheme();
-  if (!kinds.length) return null;
-  return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-      {kinds.map((kind) => (
-        <View key={kind} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, paddingHorizontal: 10, paddingVertical: 6 }}>
-          <FileText size={appTheme.icon.xs} color={theme.colors.textSecondary} />
-          <Text style={{ color: theme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>{resourceKindLabel(kind)}</Text>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function resourceKindLabel(kind: PostResourceKind) {
-  if (kind === 'prompt') return 'Prompt';
-  if (kind === 'workflow') return 'Workflow';
-  if (kind === 'files') return 'Files';
-  if (kind === 'notes') return 'Notes';
-  return 'Remix';
 }

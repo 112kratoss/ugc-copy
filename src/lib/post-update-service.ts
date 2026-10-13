@@ -26,7 +26,7 @@ import {
 } from '@/lib/post-resource-bundles-server';
 import { isOwnerPostTitleFallback } from '@/lib/owner-post-title-fallback';
 import { PostSourceToolsWriteError, replacePostSourceTools } from '@/lib/post-source-tools-server';
-import { TITLE_MAX_LENGTH, isMissingPostResourceBundlesSchemaError } from '@/lib/posts-server';
+import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH, isMissingPostResourceBundlesSchemaError } from '@/lib/posts-server';
 import {
   getMediaKindFromContentType,
   MAX_POST_MEDIA_ITEMS,
@@ -1249,6 +1249,16 @@ export async function updateOwnerPostForRoute({
     const nextBody = Object.prototype.hasOwnProperty.call(body, 'body') ? normalizeBody(body.body) : post.body;
     if (post.post_format === 'text' && !nextBody) {
       return { ok: false, status: 400, body: { error: 'Text posts need a note or tip to save.' } };
+    }
+    // Checked only when this request changes the text, as the title is below:
+    // composers PATCH the whole draft, and edits went unchecked until now, so a
+    // longer text already stored must not block a change to another field.
+    if (nextBody && nextBody !== post.body && nextBody.length > BODY_MAX_LENGTH) {
+      return {
+        ok: false,
+        status: 400,
+        body: { error: `Post text is limited to ${BODY_MAX_LENGTH} characters.`, field: 'body' },
+      };
     }
 
     const nextVisibility = normalizeVisibility(body.visibility) ?? post.visibility;

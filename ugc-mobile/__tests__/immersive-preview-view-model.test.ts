@@ -5,11 +5,9 @@ import {
   getImmersiveStatusSlide,
   buildImmersiveOwnerPostItems,
   buildImmersiveShowcaseItems,
-  getImmersiveHorizontalPageIndex,
   getImmersiveInitialIndex,
   hasImmersiveDetailsPage,
   immersivePreviewOpenHref,
-  isImmersiveDetailsHorizontalPage,
   immersiveViewerHref,
   immersiveViewerReturnPath,
   selectActiveImmersiveVideoId,
@@ -60,6 +58,14 @@ function generation(overrides: Partial<GenerationListItem>): GenerationListItem 
     ...overrides,
   };
 }
+
+/** An owned post with a picture, where the default one is a post of words. */
+const ownerPostMedia: Partial<OwnerPostListItem> = {
+  mediaUrl: 'https://cdn.example.com/owner-post.jpg',
+  mediaKind: 'image',
+  category: 'image',
+  postFormat: 'media',
+};
 
 function ownerPost(overrides: Partial<OwnerPostListItem>): OwnerPostListItem {
   const id = overrides.id ?? 'owner-post-1';
@@ -114,6 +120,29 @@ describe('immersive preview view model', () => {
     });
     expect(getShowcasePlaybackUrl(other)).toBe('https://cdn.example.com/other.mp4');
     expect(other.previewUrl).toBeNull();
+  });
+
+  it('reads a post\'s description as its story when it has no body, as the owner view does', () => {
+    const [captionOnly, both, neither] = buildImmersiveShowcaseItems('showcase-feed', [
+      showcaseItem({ id: 'caption-only', body: '', description: '  Written in the web composer.  ' }),
+      showcaseItem({ id: 'both', body: 'The body wins.', description: 'A separate caption.' }),
+      showcaseItem({ id: 'neither', body: '' }),
+    ]);
+
+    expect(captionOnly.details?.body).toBe('Written in the web composer.');
+    expect(both.details?.body).toBe('The body wins.');
+    expect(neither.details?.body).toBe('');
+  });
+
+  it('labels a motion post Motion, which its video category alone would not', () => {
+    const [motion] = buildImmersiveShowcaseItems('showcase-feed', [showcaseItem({
+      category: 'video',
+      mediaKind: 'video',
+      mediaUrl: 'https://cdn.example.com/dance.mp4',
+      creationMode: 'motion',
+    })]);
+
+    expect(motion).toMatchObject({ badge: 'Motion', recreateTool: 'motion' });
   });
 
   it('builds the shared text-post viewer route for public and owner posts', () => {
@@ -559,13 +588,6 @@ describe('immersive preview view model', () => {
     expect(selectActiveImmersiveVideoId(items, 0)).toBeNull();
   });
 
-  it('keeps horizontal details paging on the left-swipe side of the media page', () => {
-    expect(getImmersiveHorizontalPageIndex(false)).toBe(0);
-    expect(getImmersiveHorizontalPageIndex(true)).toBe(1);
-    expect(isImmersiveDetailsHorizontalPage(0)).toBe(false);
-    expect(isImmersiveDetailsHorizontalPage(1)).toBe(true);
-  });
-
   it('builds stable viewer hrefs with source context', () => {
     expect(immersiveViewerHref({ source: 'creator-profile', initialId: 'post-1' })).toEqual({
       pathname: '/viewer',
@@ -602,11 +624,35 @@ describe('immersive preview view model', () => {
     })).toBe('/viewer?source=showcase-feed&initialId=post%202&feedSessionId=session%2F1');
   });
 
+  it('carries the lane a tile was tapped in to the reel, and back to it after sign-in', () => {
+    const lane = 'sort:for-you,category:media,unlock:free';
+    expect(showcaseFeedItemOpenHref({ item: showcaseItem({}), source: 'showcase-feed', mediaOnly: true, lane }))
+      .toMatchObject({ params: { source: 'showcase-feed', initialId: 'post-1', mediaOnly: '1', lane } });
+    expect(immersiveViewerHref({ source: 'showcase-feed', initialId: 'post-1', lane, initialPage: 'details' }))
+      .toMatchObject({ params: { lane, initialPage: 'details' } });
+    expect(immersiveViewerReturnPath({ source: 'showcase-feed', initialId: 'post-1', lane }))
+      .toBe('/viewer?source=showcase-feed&initialId=post-1&lane=sort%3Afor-you%2Ccategory%3Amedia%2Cunlock%3Afree');
+    // No lane, no parameter: a link opens the reel's own window, as before.
+    expect(immersiveViewerHref({ source: 'showcase-feed', initialId: 'post-1' })).not.toHaveProperty('params.lane');
+  });
+
   describe('action builder available and disabled actions', () => {
     it('returns correct actions for saved media', () => {
       const [item] = buildImmersiveShowcaseItems('profile-saved', [showcaseItem({ id: 'saved-item', generationId: 'gen-saved', canRemix: true })]);
-      expect(item.availableActions).toEqual(['unsave', 'comment', 'share', 'recreate', 'view-details', 'open-original']);
+      expect(item.availableActions).toEqual(['unsave', 'comment', 'share', 'recreate', 'view-details']);
       expect(item.disabledActions).toEqual({});
+    });
+
+    it('lists Comments only on a post that takes comments, and never opens a second reel of itself', () => {
+      // The rail hid Comments on an unlisted post while the ••• row stayed and
+      // did nothing; "Open original post" pushed another reel of the same post.
+      const [unlisted, listed] = buildImmersiveShowcaseItems('showcase-feed', [
+        showcaseItem({ id: 'post-unlisted', visibility: 'unlisted' }),
+        showcaseItem({ id: 'post-public', visibility: 'public' }),
+      ]);
+      expect(unlisted.availableActions).toEqual(['save', 'share', 'view-details']);
+      expect(listed.availableActions).toEqual(['save', 'comment', 'share', 'view-details']);
+      expect([...unlisted.availableActions, ...listed.availableActions]).not.toContain('open-original');
     });
 
     it('keeps recreate locked for paid remix unlocks until the viewer has access', () => {
@@ -645,7 +691,7 @@ describe('immersive preview view model', () => {
         }),
       ]);
 
-      expect(lockedItem.availableActions).toEqual(['save', 'comment', 'share', 'unlock-remix', 'view-details', 'open-original']);
+      expect(lockedItem.availableActions).toEqual(['save', 'comment', 'share', 'unlock-remix', 'view-details']);
       expect(lockedItem.remixAccess).toBe('paid-unlock');
       expect(unlockedItem.availableActions).toContain('recreate');
       expect(unlockedItem.remixAccess).toBe('open');
@@ -675,7 +721,7 @@ describe('immersive preview view model', () => {
         }),
       ]);
 
-      expect(item.availableActions).toEqual(['save', 'comment', 'share', 'recreate', 'view-details', 'open-original']);
+      expect(item.availableActions).toEqual(['save', 'comment', 'share', 'recreate', 'view-details']);
       // The tap claims the unlock on the way: this is what tells it to.
       expect(item.remixAccess).toBe('free-unlock');
       expect(getViewerActionSlots(item).find((slot) => slot.id === 'create')).toMatchObject({
@@ -690,7 +736,7 @@ describe('immersive preview view model', () => {
         showcaseItem({ id: 'manual-showcase-post', generationId: null, canRemix: true }),
       ]);
 
-      expect(item.availableActions).toEqual(['save', 'comment', 'share', 'view-details', 'open-original']);
+      expect(item.availableActions).toEqual(['save', 'comment', 'share', 'view-details']);
       expect(item.generationId).toBeNull();
     });
 
@@ -792,7 +838,7 @@ describe('immersive preview view model', () => {
 
     it('returns correct actions for active owner post', () => {
       const [item] = buildImmersiveOwnerPostItems('profile-posts', [
-        ownerPost({ id: 'active-post', archivedAt: null }),
+        ownerPost({ id: 'active-post', archivedAt: null, ...ownerPostMedia }),
       ], { creatorLabel: '@batman' });
       expect(item.isManualOwnerPost).toBe(true);
       expect(item.availableActions).toEqual(['edit-post', 'change-visibility', 'archive', 'delete-post', 'share', 'download', 'view-details']);
@@ -804,7 +850,7 @@ describe('immersive preview view model', () => {
     // offered it on every post.
     it('offers delete for a generation-backed owner post too', () => {
       const [item] = buildImmersiveOwnerPostItems('profile-posts', [
-        ownerPost({ id: 'generated-post', archivedAt: null, generationId: 'gen-1' }),
+        ownerPost({ id: 'generated-post', archivedAt: null, generationId: 'gen-1', ...ownerPostMedia }),
       ], { creatorLabel: '@batman' });
       expect(item.isManualOwnerPost).toBe(false);
       expect(item.generationId).toBe('gen-1');
@@ -813,7 +859,7 @@ describe('immersive preview view model', () => {
 
     it('returns correct actions for archived owner post', () => {
       const [item] = buildImmersiveOwnerPostItems('profile-posts', [
-        ownerPost({ id: 'archived-post', archivedAt: '2026-06-10T00:00:00Z' }),
+        ownerPost({ id: 'archived-post', archivedAt: '2026-06-10T00:00:00Z', ...ownerPostMedia }),
       ], { creatorLabel: '@batman' });
       expect(item.isManualOwnerPost).toBe(true);
       expect(item.availableActions).toEqual(['restore', 'delete-post', 'share', 'download', 'view-details']);
@@ -821,6 +867,17 @@ describe('immersive preview view model', () => {
         'edit-post': 'This post is archived',
         'change-visibility': 'This post is archived',
       });
+    });
+
+    it('offers no Download on a post of words, which has no file to save', () => {
+      // The row only ever answered "No media file" there.
+      const [active, archived] = buildImmersiveOwnerPostItems('profile-posts', [
+        ownerPost({ id: 'note', archivedAt: null }),
+        ownerPost({ id: 'old-note', archivedAt: '2026-06-10T00:00:00Z' }),
+      ], { creatorLabel: '@batman' });
+      expect(active.previewKind).toBe('text');
+      expect(active.availableActions).toEqual(['edit-post', 'change-visibility', 'archive', 'delete-post', 'share', 'view-details']);
+      expect(archived.availableActions).toEqual(['restore', 'delete-post', 'share', 'view-details']);
     });
 
     it('returns correct actions for archived creation', () => {

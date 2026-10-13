@@ -2064,12 +2064,15 @@ export async function getPostResourceBundleDetailByPostId(
     viewerUserId?: string | null;
     countryCode?: string | null;
     adminSupabase?: SupabaseClient;
+    /** The post's `is_nsfw`, when the caller has just read its row; read here otherwise. */
+    isNsfw?: boolean;
   }
 ): Promise<PostResourceBundleDetail | null> {
   const {
     viewerUserId = null,
     countryCode = null,
     adminSupabase = createServiceClient(),
+    isNsfw,
   } = options ?? {};
   const selectBundle = (selectColumns: string) =>
     adminSupabase
@@ -2099,7 +2102,7 @@ export async function getPostResourceBundleDetailByPostId(
     return null;
   }
 
-  if (row.owner_user_id !== viewerUserId && (await loadNsfwPostIds(adminSupabase, [postId])).has(postId) && !await hasNsfwReveal(adminSupabase, postId, viewerUserId)) return null;
+  if (row.owner_user_id !== viewerUserId && (isNsfw ?? (await loadNsfwPostIds(adminSupabase, [postId])).has(postId)) && !await hasNsfwReveal(adminSupabase, postId, viewerUserId)) return null;
 
   // Entitlement is resolved before the publish gate, because a delisted or
   // retired bundle must still open for the people who bought it -- that is the

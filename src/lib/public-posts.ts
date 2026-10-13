@@ -55,6 +55,7 @@ type PublicPostRow = {
   description: string | null;
   body: string | null;
   category: ShowcaseItemCategory;
+  creation_mode?: 'motion' | null;
   save_count: number | null;
   remix_count: number | null;
   share_count: number | null;
@@ -90,6 +91,8 @@ export interface PublicPostDetail {
   prompt: string;
   body: string;
   category: ShowcaseItemCategory;
+  /** A motion post is stored as category `video`; this is what tells it apart. */
+  creationMode: 'motion' | null;
   postFormat: ShowcasePostFormat;
   saveCount: number;
   remixCount: number;
@@ -113,7 +116,7 @@ async function fetchPublicPostRow(
 
   const result = await adminSupabase
     .from('posts')
-    .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, body, category, save_count, remix_count, share_count, share_visit_count, comment_count, source_kind, source_tool, review_status, is_nsfw, created_at, post_format')
+    .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, save_count, remix_count, share_count, share_visit_count, comment_count, source_kind, source_tool, review_status, is_nsfw, created_at, post_format')
     .eq('id', id)
     .is('archived_at', null)
     .in('visibility', ['public', 'unlisted'])
@@ -376,6 +379,7 @@ export async function getPublicPostDetail(
       prompt: generation.prompt,
       body: '',
       category: generation.category,
+      creationMode: null,
       postFormat: 'media',
       saveCount: generation.saveCount,
       remixCount: generation.remixCount,
@@ -403,7 +407,12 @@ export async function getPublicPostDetail(
   const [mediaItems, creator, resourceBundle, generationModel] = await Promise.all([
     loadPublicPostMediaItems(adminSupabase, row),
     loadPublicPostCreator(adminSupabase, row.user_id),
-    getPostResourceBundleDetailByPostId(row.id, { viewerUserId, countryCode }),
+    getPostResourceBundleDetailByPostId(row.id, {
+      viewerUserId,
+      countryCode,
+      // The row already says, so the bundle read need not ask posts again.
+      ...(row.is_nsfw === undefined ? {} : { isNsfw: row.is_nsfw === true }),
+    }),
     loadPublicPostGenerationModel(adminSupabase, row.generation_id),
   ]);
   const coverMedia = mediaItems[0] ?? null;
@@ -462,6 +471,7 @@ export async function getPublicPostDetail(
     prompt,
     body,
     category: row.category,
+    creationMode: row.creation_mode === 'motion' ? 'motion' : null,
     postFormat: row.post_format,
     saveCount: row.save_count ?? 0,
     remixCount: row.remix_count ?? 0,

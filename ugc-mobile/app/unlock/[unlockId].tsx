@@ -1,20 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
-import { Linking, Pressable, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { Linking, View } from 'react-native';
 
 import { MediaPreview } from '@/components/media-preview';
-import { PostResourceBundleContent } from '@/components/post-resource-bundle-content';
+import { PostResourceBundleContent, ResourceRevisionSwitch } from '@/components/post-resource-bundle-content';
 import { DetailSkeleton } from '@/components/skeleton';
 import { AppText, Card, Pill, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { appTheme } from '@/lib/theme';
-import { useAppTheme } from '@/lib/theme-context';
-import { formatUnlockPrice } from '@/lib/unlock-library-view-model';
+import { canOpenUnlockedPost, formatUnlockPrice } from '@/lib/unlock-library-view-model';
 
 export default function ViewerUnlockScreen() {
-  const theme = useAppTheme();
   const { unlockId: routeUnlockId } = useLocalSearchParams<{ unlockId: string }>();
   const unlockId = Array.isArray(routeUnlockId) ? routeUnlockId[0] : routeUnlockId;
   const { api, user } = useAuth();
@@ -44,10 +42,13 @@ export default function ViewerUnlockScreen() {
   const activeVersionPrice = activeAccessMode === 'free' ? 'Free' : formatUnlockPrice(activePriceUsdCents);
   const activeMediaItems = selectedRevision?.mediaItems ?? detail?.mediaItems ?? [];
 
-  const resolveResourceFileUrl = async (storagePath: string) => {
+  // Memoized: every reference preview signs through this, and the previews
+  // one render mounts are signed together in one request. Inline, so a file
+  // the browser can show opens rather than downloads.
+  const resolveResourceFileUrl = useCallback(async (storagePath: string) => {
     if (!unlockId) throw new Error('Missing unlock identity.');
-    return (await api.getViewerUnlockFileUrl(unlockId, storagePath)).signedUrl;
-  };
+    return api.resolveViewerUnlockFileUrl(unlockId, storagePath, { disposition: 'inline' });
+  }, [api, unlockId]);
 
   const openResourceFile = async ({ storagePath }: { storagePath: string }) => {
     try {
@@ -65,7 +66,14 @@ export default function ViewerUnlockScreen() {
     return (
       <Screen>
         <SectionTitle eyebrow="Your unlock" title="Sign in to open this unlock." body="Only the buyer account can access retained resources." />
-        <PrimaryButton label="Sign in" onPress={() => router.push('/auth')} accent="primary" />
+        <PrimaryButton
+          label="Sign in"
+          onPress={() => router.push({
+            pathname: '/auth',
+            params: { returnTo: `/unlock/${encodeURIComponent(String(unlockId ?? ''))}` },
+          } as never)}
+          accent="primary"
+        />
       </Screen>
     );
   }
@@ -103,6 +111,8 @@ export default function ViewerUnlockScreen() {
                 <AppText variant="bodySm" color="muted">The creator deleted their account. Your purchased version and files are retained.</AppText>
               ) : detail.tombstoned || detail.retired ? (
                 <AppText variant="bodySm" color="muted">This listing is no longer available, but your access remains.</AppText>
+              ) : !canOpenUnlockedPost(detail) ? (
+                <AppText variant="bodySm" color="muted">This post is no longer public. Your unlock stays available here.</AppText>
               ) : null}
             </View>
           </Card>
@@ -116,31 +126,10 @@ export default function ViewerUnlockScreen() {
             </View>
 
             {detail.hasNewerRevision && detail.currentResources ? (
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                {[
-                  { label: 'Latest', selected: !showPurchased, onPress: () => setShowPurchased(false) },
-                  { label: 'Purchased', selected: showPurchased, onPress: () => setShowPurchased(true) },
-                ].map((option) => (
-                  <Pressable
-                    accessibilityLabel={`Show ${option.label.toLowerCase()} unlock version`}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: option.selected }}
-                    key={option.label}
-                    onPress={option.onPress}
-                    style={({ pressed }) => ({
-                      borderRadius: appTheme.radii.pill,
-                      borderWidth: 1,
-                      borderColor: option.selected ? theme.colors.success : theme.colors.border,
-                      backgroundColor: option.selected ? `${theme.colors.success}20` : theme.colors.surface,
-                      opacity: pressed ? appTheme.opacity.pressed : 1,
-                      paddingHorizontal: 14,
-                      paddingVertical: 9,
-                    })}
-                  >
-                    <AppText variant="caption" color={option.selected ? 'success' : 'muted'}>{option.label}</AppText>
-                  </Pressable>
-                ))}
-              </View>
+              <ResourceRevisionSwitch
+                selected={showPurchased ? 'purchased' : 'latest'}
+                onSelect={(revision) => setShowPurchased(revision === 'purchased')}
+              />
             ) : null}
 
             <PostResourceBundleContent
@@ -156,7 +145,7 @@ export default function ViewerUnlockScreen() {
             {resourceError ? <StatusBlock tone="danger" title="Resource unavailable" body={resourceError} /> : null}
           </Card>
 
-          {detail.postId && !detail.tombstoned ? (
+          {canOpenUnlockedPost(detail) ? (
             <SecondaryButton label="View original post" onPress={() => router.push(`/showcase/${detail.postId}` as never)} />
           ) : null}
         </>

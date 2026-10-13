@@ -1,7 +1,9 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseDetailPage, { generateMetadata } from '@/app/showcase/[id]/page';
+import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
+import { coverNsfwContent } from '@/lib/nsfw-content';
 import { getServerAuthState } from '@/lib/supabase-server';
 
 const mockHeaders = vi.fn(async () => new Headers());
@@ -17,19 +19,50 @@ const recordPostShareEventMock = vi.fn(async (_payload: unknown) => {
   void _payload;
 });
 const postResourceBundlePanelPropsMock = vi.hoisted(() => vi.fn());
+// One router for every render, so a test can read what a click asked of it.
+const routerMock = vi.hoisted(() => ({
+  back: vi.fn(),
+  push: vi.fn(),
+  replace: vi.fn(),
+  refresh: vi.fn(),
+}));
+// The browser's session, which the page's client rows read (`useAuth`), apart
+// from the one the server rendered with.
+const clientAuth = vi.hoisted(() => ({
+  current: { session: null, user: null } as {
+    session: { access_token: string } | null;
+    user: { id: string } | null;
+  },
+}));
+const isUserRelationshipBlockedMock = vi.hoisted(() => vi.fn<(input: unknown) => Promise<boolean>>());
+const logBackendErrorMock = vi.hoisted(() => vi.fn());
 
 vi.mock('next/headers', () => ({
   headers: () => mockHeaders(),
 }));
-
-const routerBackMock = vi.fn();
 
 vi.mock('next/navigation', () => ({
   notFound: () => mockNotFound(),
   redirect: (target: string) => mockRedirect(target),
   // The back affordance is a client component that pops history when the viewer
   // arrived from inside the app.
-  useRouter: () => ({ back: routerBackMock, push: vi.fn(), replace: vi.fn() }),
+  useRouter: () => routerMock,
+}));
+
+vi.mock('@/components/AuthProvider', () => ({
+  useAuth: () => clientAuth.current,
+}));
+
+vi.mock('@/lib/moderation-service', () => ({
+  isUserRelationshipBlocked: (input: unknown) => isUserRelationshipBlockedMock(input),
+}));
+
+vi.mock('@/lib/server-helpers', () => ({
+  createServiceClient: () => ({ service: true }),
+}));
+
+vi.mock('@/lib/backend-logger', () => ({
+  logBackendError: (...args: unknown[]) => logBackendErrorMock(...args),
 }));
 
 // The page defers its share-visit write with `after`, which throws outside a
@@ -60,8 +93,8 @@ vi.mock('@/lib/supabase-server', () => ({
 }));
 
 vi.mock('@/app/showcase/[id]/ShowcaseDetailActions', () => ({
-  default: ({ postId }: { postId: string }) => (
-    <div data-testid="showcase-detail-actions">{postId}</div>
+  default: ({ postId, viewerIsOwner }: { postId: string; viewerIsOwner: boolean }) => (
+    <div data-testid="showcase-detail-actions" data-owner-tools={String(viewerIsOwner)}>{postId}</div>
   ),
 }));
 
@@ -82,9 +115,40 @@ vi.mock('@/app/showcase/[id]/ShowcaseDetailEngagementRow', () => ({
   ),
 }));
 
+/**
+ * The network as the page's client parts meet it: the mature-content
+ * preference (off), a reveal that answers with `revealedDetail`, and a plain
+ * success for a report or a block.
+ */
+function stubPageFetch(revealedDetail: Record<string, unknown> = {}) {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const reply = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as Response;
+    if (url === '/api/content-preferences') {
+      return reply({ showMature: init?.method === 'POST' });
+    }
+    if (url === '/api/posts/post-1/reveal') {
+      return reply({ success: true, detail: revealedDetail, expiresInSeconds: 600 });
+    }
+    return reply({ success: true });
+  }));
+}
+
+function requestTo(path: string) {
+  return vi.mocked(fetch).mock.calls.find(([input]) => String(input) === path);
+}
+
 describe('Showcase detail page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetFeedbackState();
+    clientAuth.current = { session: null, user: null };
+    isUserRelationshipBlockedMock.mockReset().mockResolvedValue(false);
+    stubPageFetch();
+    // The reference lookup runs only after a missed post read now, so a test's
+    // Once answer can go unread; a reset keeps it from reaching the next test.
+    getPostReferenceForShowcaseIdMock.mockReset();
+    getPublicPostDetailMock.mockReset();
     getPostReferenceForShowcaseIdMock.mockResolvedValue({
       id: 'post-1',
       generation_id: 'gen-1',
@@ -126,6 +190,7 @@ describe('Showcase detail page', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('renders a public post and records a share visit attributed to its origin surface', async () => {
@@ -192,9 +257,11 @@ describe('Showcase detail page', () => {
   // the app's leave the row out, and the server refuses the report.
   function signInAs(userId: string) {
     vi.mocked(getServerAuthState).mockResolvedValueOnce({
-      session: { user: { id: userId }, access_token: 'token' },
+      session: { user: { id: userId }, access_token: 'server-token' },
       credits: null,
     } as unknown as Awaited<ReturnType<typeof getServerAuthState>>);
+    // The browser has refreshed its session since the server rendered.
+    clientAuth.current = { session: { access_token: 'live-token' }, user: { id: userId } };
   }
 
   it('offers the report row to a signed-out visitor', async () => {
@@ -227,6 +294,330 @@ describe('Showcase detail page', () => {
 
     expect(screen.getByRole('heading', { name: /shared creation/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /report post or recipe/i })).not.toBeInTheDocument();
+  });
+
+  // A block either way hides the post, as the app's by-id read does: a shared
+  // link used to show it, with a thread that then failed to load.
+  describe('across a block', () => {
+    it('answers not-found to a viewer on either side of a block', async () => {
+      signInAs('user-2');
+      isUserRelationshipBlockedMock.mockResolvedValueOnce(true);
+
+      await expect(ShowcaseDetailPage({
+        params: Promise.resolve({ id: 'post-1' }),
+        searchParams: Promise.resolve({ s: 'showcase-reel' }),
+      })).rejects.toThrow('NEXT_NOT_FOUND');
+
+      // One question covers both directions: whom the viewer blocked, and who blocked them.
+      expect(isUserRelationshipBlockedMock).toHaveBeenCalledWith({
+        adminSupabase: { service: true },
+        firstUserId: 'user-2',
+        secondUserId: 'user-1',
+      });
+      // A post the viewer may not see is not a share visit either.
+      expect(recordPostShareEventMock).not.toHaveBeenCalled();
+    });
+
+    it('treats a block it could not check as a block', async () => {
+      signInAs('user-2');
+      isUserRelationshipBlockedMock.mockRejectedValueOnce(new Error('connection reset'));
+
+      await expect(ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }))
+        .rejects.toThrow('NEXT_NOT_FOUND');
+      expect(logBackendErrorMock).toHaveBeenCalledWith(
+        'failed_to_verify_block_state_for_post_page',
+        { error: expect.any(Error) },
+      );
+    });
+
+    it('shows the post when there is no block between them', async () => {
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      expect(screen.getByRole('heading', { name: /shared creation/i })).toBeInTheDocument();
+      expect(isUserRelationshipBlockedMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks nothing for a signed-out visitor or for the creator on their own post', async () => {
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+      signInAs('user-1');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      expect(isUserRelationshipBlockedMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the report form', () => {
+    function openReportForm() {
+      fireEvent.click(screen.getByRole('button', { name: /report post or recipe/i }));
+      return screen.getByRole('combobox', { name: 'Report reason' });
+    }
+
+    function reasonLabels() {
+      return within(screen.getByRole('combobox', { name: 'Report reason' }))
+        .getAllByRole('option')
+        .map((option) => option.textContent);
+    }
+
+    // A preselected "Misleading recipe" filed every report left on the default
+    // under it, on posts with no recipe at all.
+    it('starts with no reason chosen and keeps Submit off until one is', async () => {
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      const reason = openReportForm();
+      expect(reason).toHaveValue('');
+      expect(screen.getByRole('button', { name: /submit report/i })).toBeDisabled();
+
+      fireEvent.change(reason, { target: { value: 'spam' } });
+      expect(screen.getByRole('button', { name: /submit report/i })).toBeEnabled();
+    });
+
+    it('leaves the recipe reasons out on a post without a recipe', async () => {
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      openReportForm();
+      expect(reasonLabels()).toEqual(['Choose a reason', 'Spam', 'Stolen content', 'Unsafe content', 'Other']);
+    });
+
+    it('offers them on a post with a recipe, and names the recipe in the report', async () => {
+      signInAs('user-2');
+      const detail = await getPublicPostDetailMock('post-1');
+      getPublicPostDetailMock.mockResolvedValueOnce({
+        ...detail,
+        resourceBundle: {
+          id: 'bundle-1',
+          accessMode: 'paid',
+          priceQuote: { formatted: '$9.00', note: null },
+          resourceKinds: ['prompt'],
+          lockedPreview: null,
+          viewerCanAccess: false,
+          viewerIsOwner: false,
+          salesCount: 0,
+          resources: null,
+          title: 'Recipe',
+          summary: '',
+          previewText: '',
+          priceUsdCents: 900,
+          status: 'published',
+        },
+      });
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      const reason = openReportForm();
+      expect(reasonLabels()).toEqual([
+        'Choose a reason',
+        'Spam',
+        'Stolen content',
+        'Misleading recipe',
+        'Unsafe content',
+        'Payment issue',
+        'Other',
+      ]);
+      fireEvent.change(reason, { target: { value: 'misleading_unlock' } });
+      fireEvent.click(screen.getByRole('button', { name: /submit report/i }));
+
+      expect(await screen.findByText('Report submitted for review.')).toBeInTheDocument();
+      expect(JSON.parse(String(requestTo('/api/posts/post-1/report')?.[1]?.body))).toEqual({
+        reason: 'misleading_unlock',
+        details: '',
+        bundleId: 'bundle-1',
+      });
+    });
+
+    // The token the page was rendered with expires; a report sent with it
+    // after that failed as "Unauthorized".
+    it("sends the report with the browser's live session, not the one the page was rendered with", async () => {
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      fireEvent.change(openReportForm(), { target: { value: 'spam' } });
+      fireEvent.click(screen.getByRole('button', { name: /submit report/i }));
+
+      expect(await screen.findByText('Report submitted for review.')).toBeInTheDocument();
+      const [, init] = requestTo('/api/posts/post-1/report') ?? [];
+      expect(init?.headers).toMatchObject({ Authorization: 'Bearer live-token' });
+      expect(JSON.parse(String(init?.body))).toEqual({ reason: 'spam', details: '', bundleId: null });
+      // The form closes and starts over for the next report.
+      expect(screen.queryByRole('combobox', { name: 'Report reason' })).not.toBeInTheDocument();
+      expect(openReportForm()).toHaveValue('');
+    });
+
+    it('sends a signed-out visitor to sign in and back to the post', async () => {
+      window.history.pushState({}, '', '/showcase/post-1');
+      try {
+        render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+        fireEvent.change(openReportForm(), { target: { value: 'spam' } });
+        fireEvent.click(screen.getByRole('button', { name: /submit report/i }));
+
+        expect(routerMock.push).toHaveBeenCalledWith(`/login?returnUrl=${encodeURIComponent('/showcase/post-1')}`);
+        expect(requestTo('/api/posts/post-1/report')).toBeUndefined();
+      } finally {
+        window.history.pushState({}, '', '/');
+      }
+    });
+  });
+
+  // The page shared links land on was the one web surface where the person
+  // behind a post could not be reported or blocked.
+  describe('Report user and Block user', () => {
+    it('offers both to a signed-in viewer who is not the creator', async () => {
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      const rail = screen.getByTestId('canonical-post-actions');
+      expect(within(rail).getByRole('button', { name: 'Report user' })).toBeInTheDocument();
+      expect(within(rail).getByRole('button', { name: 'Block user' })).toBeInTheDocument();
+    });
+
+    it("leaves them out for a signed-out visitor and on the creator's own post", async () => {
+      const { unmount } = render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+      expect(screen.queryByRole('button', { name: 'Report user' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Block user' })).not.toBeInTheDocument();
+      unmount();
+
+      signInAs('user-1');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+      expect(screen.queryByRole('button', { name: 'Report user' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Block user' })).not.toBeInTheDocument();
+    });
+
+    it('reports the creator after a confirmation, as a feed card files a creator, and stays on the post', async () => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Report user' }));
+
+      await waitFor(() => {
+        expect(readFeedbackSnapshot().toasts.map((toast) => toast.message))
+          .toContain('Creator reported. Our moderation team will take a look.');
+      });
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Report this creator?'));
+      const [, init] = requestTo('/api/moderation/reports') ?? [];
+      expect(init?.headers).toMatchObject({ Authorization: 'Bearer live-token' });
+      expect(JSON.parse(String(init?.body))).toEqual({
+        targetType: 'user',
+        targetId: 'user-1',
+        reason: 'harassment',
+        sourceSurface: 'showcase',
+        details: 'Reported from a post page on the web.',
+      });
+      expect(routerMock.refresh).not.toHaveBeenCalled();
+    });
+
+    it('blocks the creator after a confirmation, then draws the page again for the server to hide', async () => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Block user' }));
+
+      await waitFor(() => expect(routerMock.refresh).toHaveBeenCalledTimes(1));
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Block this creator?'));
+      expect(requestTo('/api/moderation/blocks/user-1')?.[1]).toMatchObject({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer live-token' }),
+      });
+      expect(readFeedbackSnapshot().toasts.map((toast) => toast.message))
+        .toContain('Creator Name is blocked. Their posts are gone from your feed.');
+    });
+
+    it('sends nothing and stays on the post when the block is declined', async () => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Block user' }));
+
+      await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Block user' })).toBeEnabled());
+      expect(requestTo('/api/moderation/blocks/user-1')).toBeUndefined();
+      expect(routerMock.refresh).not.toHaveBeenCalled();
+    });
+  });
+
+  // The gate takes the place of the content, not of the page: the posts most
+  // likely to be reported had no Report, Block or byline on screen.
+  describe('an NSFW post the server has not revealed', () => {
+    async function serveCoveredPost() {
+      const detail = await getPublicPostDetailMock('post-1') as Record<string, unknown>;
+      getPublicPostDetailMock.mockResolvedValueOnce(coverNsfwContent(detail));
+      return detail;
+    }
+
+    it('keeps the byline, the rail and the engagement row, and hides the content and the thread', async () => {
+      signInAs('user-2');
+      await serveCoveredPost();
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      const head = screen.getByTestId('canonical-post-head');
+      expect(head).toHaveTextContent('@creator-name');
+      // The cover's type and title are placeholders; the gate holds the one heading.
+      expect(head).not.toHaveTextContent('Tip / note');
+      expect(screen.getAllByRole('heading', { level: 1 }).map((heading) => heading.textContent))
+        .toEqual(['Mature content']);
+      const media = screen.getByTestId('canonical-post-media');
+      expect(within(media).getByRole('button', { name: 'Reveal post' })).toBeInTheDocument();
+      expect(within(media).getByTestId('showcase-detail-engagement-row')).toBeInTheDocument();
+
+      const rail = screen.getByTestId('canonical-post-actions');
+      expect(within(rail).getByRole('button', { name: /report post or recipe/i })).toBeInTheDocument();
+      expect(within(rail).getByRole('button', { name: 'Report user' })).toBeInTheDocument();
+      expect(within(rail).getByRole('button', { name: 'Block user' })).toBeInTheDocument();
+      expect(within(rail).getByTestId('showcase-detail-actions')).toBeInTheDocument();
+
+      expect(screen.queryByTestId('canonical-post-comments')).not.toBeInTheDocument();
+    });
+
+    it('keeps Owner tools for the creator on their own post', async () => {
+      signInAs('user-1');
+      await serveCoveredPost();
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      expect(screen.getByRole('button', { name: 'Reveal post' })).toBeInTheDocument();
+      expect(screen.getByTestId('showcase-detail-actions')).toHaveAttribute('data-owner-tools', 'true');
+    });
+
+    it('shows the media and the writing in place once revealed, with the thread under them', async () => {
+      signInAs('user-2');
+      const detail = await serveCoveredPost();
+      stubPageFetch({
+        ...detail,
+        isNsfw: true,
+        nsfwRevealed: true,
+        body: 'Behind the curtain.',
+        mediaItems: [{
+          id: 'media-1',
+          url: 'https://cdn.example.com/showcase/gen-1.jpg',
+          mediaKind: 'image',
+          contentType: 'image/jpeg',
+          originalName: null,
+          width: 800,
+          height: 1000,
+          durationSeconds: null,
+          sortOrder: 0,
+        }],
+      });
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+      fireEvent.click(screen.getByRole('checkbox', { name: /18 or older/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Reveal post' }));
+
+      const media = screen.getByTestId('canonical-post-media');
+      expect(await within(media).findByRole('heading', { level: 1, name: 'Shared creation' })).toBeInTheDocument();
+      expect(within(media).getByText('Behind the curtain.')).toBeInTheDocument();
+      expect(within(media).getByRole('img', { name: 'Shared creation' })).toBeInTheDocument();
+      expect(within(media).getByTestId('post-comments-component')).toBeInTheDocument();
+      // The page around the post is the one it had before.
+      expect(screen.getByTestId('canonical-post-head')).toHaveTextContent('@creator-name');
+      expect(screen.getByRole('button', { name: /report post or recipe/i })).toBeInTheDocument();
+
+      fireEvent.click(within(media).getByRole('button', { name: 'Hide this post' }));
+      expect(within(media).queryByTestId('post-comments-component')).not.toBeInTheDocument();
+    });
   });
 
   it('does not mount public-only comments on an unlisted detail page', async () => {
@@ -421,7 +812,20 @@ describe('Showcase detail page', () => {
     });
   });
 
+  it('opens a post with one read of its row and no legacy reference lookup', async () => {
+    render(await ShowcaseDetailPage({
+      params: Promise.resolve({ id: 'post-1' }),
+    }));
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Shared creation' })).toBeInTheDocument();
+    expect(getPublicPostDetailMock).toHaveBeenCalledTimes(1);
+    expect(getPublicPostDetailMock).toHaveBeenCalledWith('post-1');
+    expect(getPostReferenceForShowcaseIdMock).not.toHaveBeenCalled();
+  });
+
   it('redirects legacy generation ids to their post ids', async () => {
+    // No post has the generation's id, so the post read misses first.
+    getPublicPostDetailMock.mockResolvedValueOnce(null);
     getPostReferenceForShowcaseIdMock.mockResolvedValueOnce({
       id: 'post-1',
       generation_id: 'gen-1',
@@ -434,9 +838,12 @@ describe('Showcase detail page', () => {
     await expect(ShowcaseDetailPage({
       params: Promise.resolve({ id: 'gen-1' }),
     })).rejects.toThrow('NEXT_REDIRECT:/showcase/post-1');
+    expect(getPublicPostDetailMock).toHaveBeenCalledWith('gen-1');
+    expect(getPostReferenceForShowcaseIdMock).toHaveBeenCalledWith('gen-1');
   });
 
   it('returns notFound for private or missing posts', async () => {
+    getPublicPostDetailMock.mockResolvedValueOnce(null);
     getPostReferenceForShowcaseIdMock.mockResolvedValueOnce(null);
 
     await expect(ShowcaseDetailPage({
@@ -444,15 +851,69 @@ describe('Showcase detail page', () => {
     })).rejects.toThrow('NEXT_NOT_FOUND');
   });
 
-  it('renders text-only posts without a media url', async () => {
+  it('answers not-found, not a redirect to itself, for a post whose row exists but cannot be shown', async () => {
+    // A media post with no readable media is one: the reference still finds
+    // its row under the same id.
+    getPublicPostDetailMock.mockResolvedValueOnce(null);
     getPostReferenceForShowcaseIdMock.mockResolvedValueOnce({
-      id: 'post-text',
-      generation_id: null,
+      id: 'post-1',
+      generation_id: 'gen-1',
       visibility: 'public',
-      category: 'text',
-      prompt: 'Keep it tight.',
-      source_kind: 'manual',
+      category: 'image',
+      prompt: 'Prompt',
+      source_kind: 'magicbooklet',
     });
+
+    await expect(ShowcaseDetailPage({
+      params: Promise.resolve({ id: 'post-1' }),
+    })).rejects.toThrow('NEXT_NOT_FOUND');
+    expect(mockRedirect).not.toHaveBeenCalled();
+  });
+
+  it('builds metadata from the post read alone, and names a legacy id a redirect', async () => {
+    await generateMetadata({ params: Promise.resolve({ id: 'post-1' }) });
+    expect(getPostReferenceForShowcaseIdMock).not.toHaveBeenCalled();
+
+    getPublicPostDetailMock.mockResolvedValueOnce(null);
+    getPostReferenceForShowcaseIdMock.mockResolvedValueOnce({
+      id: 'post-1',
+      generation_id: 'gen-1',
+      visibility: 'public',
+      category: 'image',
+      prompt: 'Prompt',
+      source_kind: 'magicbooklet',
+    });
+    await expect(generateMetadata({ params: Promise.resolve({ id: 'gen-1' }) })).resolves.toMatchObject({
+      title: 'Creation Redirect',
+      robots: { index: false, follow: true },
+    });
+
+    getPublicPostDetailMock.mockResolvedValueOnce(null);
+    getPostReferenceForShowcaseIdMock.mockResolvedValueOnce(null);
+    await expect(generateMetadata({ params: Promise.resolve({ id: 'missing' }) })).resolves.toEqual({
+      title: 'Creation Not Found',
+    });
+  });
+
+  it('labels a motion post a motion creation, as its feed card does', async () => {
+    const detail = await getPublicPostDetailMock('post-1');
+    getPublicPostDetailMock.mockReset().mockResolvedValue({
+      ...detail,
+      mediaKind: 'video',
+      category: 'video',
+      creationMode: 'motion',
+    });
+
+    render(await ShowcaseDetailPage({
+      params: Promise.resolve({ id: 'post-1' }),
+    }));
+
+    const head = screen.getByTestId('canonical-post-head');
+    expect(head).toHaveTextContent('Motion creation');
+    expect(head).not.toHaveTextContent('Video creation');
+  });
+
+  it('renders text-only posts without a media url', async () => {
     getPublicPostDetailMock.mockResolvedValueOnce({
       id: 'post-text',
       generationId: null,
@@ -513,14 +974,6 @@ describe('Showcase detail page', () => {
   });
 
   it('pitches a text post recipe once, in the document column', async () => {
-    getPostReferenceForShowcaseIdMock.mockResolvedValueOnce({
-      id: 'post-text',
-      generation_id: null,
-      visibility: 'public',
-      category: 'text',
-      prompt: null,
-      source_kind: 'manual',
-    });
     getPublicPostDetailMock.mockResolvedValueOnce({
       id: 'post-text',
       generationId: null,
@@ -602,6 +1055,44 @@ describe('Showcase detail page', () => {
         screen.getByTestId('canonical-post-recipe')
       ) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+
+  // One price wherever a locked recipe is pitched: both ways to pay when it can
+  // be bought with cash, credits alone when it is credits-only (a cash figure
+  // there named a price no checkout takes).
+  it.each([
+    { priceUsdCents: 900, formatted: '₹750.00', label: '₹750.00 · 900 credits' },
+    { priceUsdCents: 50, formatted: '$0.50', label: '50 credits' },
+  ])('prices a locked $priceUsdCents-credit recipe as "$label" in the rail and the bottom bar', async ({
+    priceUsdCents,
+    formatted,
+    label,
+  }) => {
+    const detail = await getPublicPostDetailMock('post-1');
+    getPublicPostDetailMock.mockResolvedValueOnce({
+      ...detail,
+      resourceBundle: {
+        id: 'bundle-1',
+        accessMode: 'paid',
+        priceQuote: { formatted, note: null },
+        resourceKinds: ['prompt'],
+        lockedPreview: null,
+        viewerCanAccess: false,
+        viewerIsOwner: false,
+        salesCount: 0,
+        resources: null,
+        title: 'Recipe',
+        summary: '',
+        previewText: '',
+        priceUsdCents,
+        status: 'published',
+      },
+    });
+
+    render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+    expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent(`${label}Unlock`);
+    expect(screen.getByText(`Unlock recipe for ${label}`)).toBeInTheDocument();
   });
 
   it('forwards purchase-time proof media when the buyer opens an older revision', async () => {

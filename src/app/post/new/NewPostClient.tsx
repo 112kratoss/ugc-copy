@@ -41,7 +41,6 @@ import {
 import { getCurrentInternalPath, getSafeInternalReturnPath } from '@/lib/share';
 import { trackProductEvent } from '@/lib/product-analytics';
 import {
-  getPostResourceKindLabel,
   getPostResourceKinds,
   normalizePostResourceItems,
   normalizePostResourceBundleAccessMode,
@@ -107,6 +106,47 @@ interface CreatedPostState {
   resourceBundleStatus: 'draft' | 'published' | null;
 }
 
+/**
+ * What leaving the composer would lose, in comparable form: media by identity
+ * and order, Made With rows by what they name (an empty row holds nothing).
+ */
+interface ComposerSnapshot {
+  title: string;
+  body: string;
+  description: string;
+  visibility: PostVisibility;
+  isNsfw: boolean;
+  mediaIds: string[];
+  madeWith: Array<Omit<MadeWithRow, 'id'>>;
+  resourceAccessMode: PostResourceBundleAccessMode;
+  resourceCards: PostComposerResourceCardDraft[];
+  resourceAllowRemix: boolean;
+  resourceSummary: string;
+  resourcePreviewText: string;
+  resourcePriceTokens: string;
+  includeGenerationReferences: boolean;
+}
+
+// Field by field, cheapest first, so a keystroke in the title never serializes
+// the recipe cards (a hydrated card can carry a whole workflow graph).
+function isSameComposerSnapshot(a: ComposerSnapshot, b: ComposerSnapshot): boolean {
+  return a.title === b.title
+    && a.body === b.body
+    && a.description === b.description
+    && a.visibility === b.visibility
+    && a.isNsfw === b.isNsfw
+    && a.resourceAccessMode === b.resourceAccessMode
+    && a.resourceAllowRemix === b.resourceAllowRemix
+    && a.resourceSummary === b.resourceSummary
+    && a.resourcePreviewText === b.resourcePreviewText
+    && a.resourcePriceTokens === b.resourcePriceTokens
+    && a.includeGenerationReferences === b.includeGenerationReferences
+    && a.mediaIds.join('\n') === b.mediaIds.join('\n')
+    && JSON.stringify(a.madeWith) === JSON.stringify(b.madeWith)
+    // By content, not identity: saving a card unchanged still copies it.
+    && (a.resourceCards === b.resourceCards || JSON.stringify(a.resourceCards) === JSON.stringify(b.resourceCards));
+}
+
 interface ComposerError {
   section: 'post' | 'story' | 'resources' | 'publish';
   message: string;
@@ -144,12 +184,9 @@ interface ComposerMediaItem {
 }
 
 /**
- * Aggregate upload state for the publish step.
- *
- * Uploading still happens at submit rather than at pick time, so this is the
- * only window where the user is waiting on bytes -- and before this they waited
- * on a spinner that could not say how long, could not be cancelled, and threw
- * away completed uploads if any single file failed.
+ * Aggregate byte progress for the one upload bar. Files upload as soon as they
+ * are added, and publish uploads only what did not make it, so this bar is the
+ * only place the wait shows -- and Cancel on it is the only way to stop it.
  */
 interface MediaUploadProgress {
   bytesSent: number;
@@ -205,6 +242,31 @@ function getSubmissionError(
   );
 }
 
+type SaveResponseBody = Record<string, unknown> & {
+  error?: string;
+  field?: string;
+  actionHref?: string;
+  actionLabel?: string;
+};
+
+/**
+ * Reads a create or edit response, and says whether that save may have consumed
+ * the staged uploads it named. The server moves each staged file into the post
+ * before it checks the Made With catalog, so that refusal comes after the move,
+ * and a 5xx can too (a gateway error page is not even JSON). Every other refusal
+ * is decided before a staged file is touched.
+ */
+async function readSaveResponse(
+  response: Response
+): Promise<{ data: SaveResponseBody; stagedMediaConsumed: boolean }> {
+  if (response.status >= 500) {
+    const data = await response.json().catch(() => ({})) as SaveResponseBody;
+    return { data, stagedMediaConsumed: true };
+  }
+  const data = await response.json() as SaveResponseBody;
+  return { data, stagedMediaConsumed: !response.ok && data.field === 'sourceTools' };
+}
+
 interface GenerationDraft {
   id: string;
   title: string;
@@ -216,6 +278,8 @@ interface GenerationDraft {
   paywallPrefill: GenerationPaywallPrefill | null;
   /** A template result shares its media only; its private recipe stays protected. */
   origin: 'template' | 'direct' | null;
+  /** Saved inputs with a stored file, which publish can copy into the recipe. */
+  referenceCount: number;
   /**
    * Edit mode seeds a draft from the server-rendered post before the
    * generations fetch resolves. The paywall prefill must only conclude
@@ -302,20 +366,35 @@ function createComposerMediaItem(file: File, index: number, durationSeconds: num
   };
 }
 
+/**
+ * The card a creation's prompt becomes. The "sell recipe" prefill and the
+ * "Include exact prompt" toggle both build it here, so they make the same card.
+ */
+function createCreationPromptCard(prompt: string): PostComposerResourceCardDraft {
+  return createPostComposerResourceCard('prompt', { textContent: prompt });
+}
+
+// The toggle reads its state from the package itself, so it shows what a
+// prefill or an earlier save already included.
+function isCreationPromptCard(card: PostComposerResourceCardDraft, prompt: string): boolean {
+  return card.type === 'prompt' && card.textContent.trim() === prompt;
+}
+
+/** A promise publish can wait on, settled by whoever ends the upload first. */
+function createUploadWait(): { settled: Promise<void>; settle: () => void } {
+  let settle = () => {};
+  const settled = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  return { settled, settle };
+}
+
 function formatGeneratedCategory(value: string | null | undefined): PostMediaCategory {
   if (value === 'video' || value === 'motion' || value === 'ugc-ad') {
     return 'video';
   }
 
   return 'image';
-}
-
-function getLockedSummary(selectedKinds: PostResourceKind[]): string {
-  if (selectedKinds.length === 0) {
-    return 'Nothing locked';
-  }
-
-  return selectedKinds.map((kind) => getPostResourceKindLabel(kind)).join(', ');
 }
 
 function getVisibilityStatusLabel(v: PostVisibility): string {
@@ -599,9 +678,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [didFocusPriceInput, setDidFocusPriceInput] = useState(false);
   const [error, setError] = useState<ComposerError | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [didPublish, setDidPublish] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<MediaUploadProgress | null>(null);
-  const uploadAbortRef = useRef<AbortController | null>(null);
+  // Opt-in, as in the app: the publish route copies the creation's saved
+  // inputs into the recipe as reference files.
+  const [includeGenerationReferences, setIncludeGenerationReferences] = useState(false);
   const [createdPost, setCreatedPost] = useState<CreatedPostState | null>(null);
   const [prefilledGeneration, setPrefilledGeneration] = useState<GenerationDraft | null>(() =>
     initialPost?.generationId
@@ -615,6 +695,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           model: 'magicbooklet',
           paywallPrefill: null,
           origin: null,
+          referenceCount: 0,
           source: 'seed',
         }
       : null
@@ -622,7 +703,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [isLoadingGeneration, setIsLoadingGeneration] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const submitVisibilityRef = useRef<PostVisibility>(initialPost?.visibility ?? 'public');
-  const formRef = useRef<HTMLFormElement | null>(null);
   const priceInputRef = useRef<HTMLInputElement | null>(null);
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const postSectionRef = useRef<HTMLDivElement | null>(null);
@@ -718,11 +798,56 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const hasGeneratedProof = Boolean(prefilledGeneration);
   const [generationLoadAttempt, setGenerationLoadAttempt] = useState(0);
   const [linkedPostRedirectId, setLinkedPostRedirectId] = useState<string | null>(null);
-  // Typed title or caption, or picked files, not yet published: a reload or a
-  // closed tab dropped them silently. (The app autosaves a draft instead.)
-  const hasUnsavedWork = !didPublish && !isSubmitting && (
-    (!isEditMode && (title.trim().length > 0 || description.trim().length > 0))
-    || mediaItems.some((item) => Boolean(item.file))
+  // Unsaved work is any field that differs from the post as loaded, or as last
+  // saved. The old check read only the title, the hidden Explore description and
+  // new files, so a typed body, a recipe, or any edit to an existing post was
+  // lost without a prompt. (The app autosaves a draft instead.)
+  const composerSnapshot = useMemo<ComposerSnapshot>(() => ({
+    title,
+    body,
+    description,
+    visibility,
+    isNsfw,
+    mediaIds: mediaItems.map((item) => item.id),
+    madeWith: madeWithRows
+      .filter((row) => row.toolLabel.trim() || row.modelLabel.trim())
+      .map(({ toolLabel, toolSlug, modelLabel, modelSlug, createTool, createModel }) => ({
+        toolLabel,
+        toolSlug,
+        modelLabel,
+        modelSlug,
+        createTool,
+        createModel,
+      })),
+    resourceAccessMode,
+    resourceCards,
+    resourceAllowRemix,
+    resourceSummary,
+    resourcePreviewText,
+    resourcePriceTokens,
+    includeGenerationReferences,
+  }), [
+    body,
+    description,
+    includeGenerationReferences,
+    isNsfw,
+    madeWithRows,
+    mediaItems,
+    resourceAccessMode,
+    resourceAllowRemix,
+    resourceCards,
+    resourcePreviewText,
+    resourcePriceTokens,
+    resourceSummary,
+    title,
+    visibility,
+  ]);
+  // Moves forward on a save, and absorbs what a linked creation prefills: that
+  // is where the post starts, not an edit the user would lose.
+  const [savedSnapshot, setSavedSnapshot] = useState(composerSnapshot);
+  const hasUnsavedWork = useMemo(
+    () => !isSameComposerSnapshot(composerSnapshot, savedSnapshot),
+    [composerSnapshot, savedSnapshot]
   );
   useEffect(() => {
     if (!hasUnsavedWork) return;
@@ -741,6 +866,15 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const displayVisibility = visibility;
   const generationPaywallPrefill = prefilledGeneration?.paywallPrefill ?? null;
   const hasGenerationPaywallPrefill = hasUsableGenerationPaywallPrefill(generationPaywallPrefill);
+  // "From this creation", as the app offers it: only once the creation itself
+  // has loaded, and never for a template result, whose recipe stays protected.
+  const canOfferCreationResources = prefilledGeneration?.source === 'fetched'
+    && prefilledGeneration.origin !== 'template';
+  const creationPrompt = canOfferCreationResources ? (prefilledGeneration?.prompt.trim() ?? '') : '';
+  // Only the publish route copies a creation's inputs; an edit has no such step.
+  const canIncludeGenerationReferences = canOfferCreationResources
+    && !isEditMode
+    && (prefilledGeneration?.referenceCount ?? 0) > 0;
   const shouldFocusPriceInput =
     requestedFocusTarget === 'price' && (isGeneratedPaywallIntent || isCreationPaywallManagementIntent);
   // A bundle a buyer has already paid for is frozen: its access mode, price and
@@ -751,6 +885,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     [resourceCards]
   );
   const hasResourceContent = readyResourceCards.length > 0;
+  const isCreationPromptIncluded = Boolean(creationPrompt)
+    && resourceCards.some((card) => isCreationPromptCard(card, creationPrompt));
   const parsedResourcePriceTokens = Number.parseInt(resourcePriceTokens.trim() || '0', 10);
   const resourcePriceUsdCents = resourceAccessMode === 'paid' && Number.isFinite(parsedResourcePriceTokens)
     ? Math.round(parsedResourcePriceTokens)
@@ -824,28 +960,18 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     {
       label: 'Title added',
       complete: hasTitle,
-      detail: hasTitle ? 'Your post is named' : 'Every post needs a title',
     },
     {
       label: 'Proof added',
       complete: hasMediaProof || trimmedBody.length >= 24,
-      detail: hasMediaProof ? 'Media is attached' : trimmedBody.length >= 24 ? 'Text proof is ready' : 'Add media or switch to text',
     },
     {
       label: proofMode === 'text' ? 'Story ready' : 'Caption optional',
       complete: proofMode !== 'text' || trimmedBody.length > 0,
-      detail: trimmedBody
-        ? (proofMode === 'text' ? 'Post body is included' : 'Caption gives viewers context')
-        : (proofMode === 'text' ? 'Add a useful visible post' : 'Add context to help this media perform'),
     },
     {
       label: 'Recipe optional',
       complete: resourceAccessMode === 'none' || isResourceEditingLocked || hasResourceContent || resourceAllowRemix,
-      detail: resourceAccessMode === 'none'
-        ? 'No recipe selected'
-        : isResourceEditingLocked
-          ? 'Sold package stays as sold'
-          : hasResourceContent || resourceAllowRemix ? getLockedSummary(selectedResourceKinds) : 'Add one asset',
     },
   ];
   const stepBadgeLabel = hasGeneratedProof ? 'Generated media attached' : proofMode === 'text' ? 'Text post' : 'Media post';
@@ -891,29 +1017,27 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
     // The saved generation seeds the package as cards rather than loose fields,
     // so a prefilled recipe is editable in exactly the same way as a hand-built
-    // one.
-    setResourceCards((current) => {
-      if (current.length > 0) {
-        return current;
-      }
-
-      const prefilledCards: PostComposerResourceCardDraft[] = [];
-      if (paywallPrefill.promptText) {
-        prefilledCards.push(createPostComposerResourceCard('prompt', {
-          textContent: paywallPrefill.promptText,
-        }));
-      }
-      if (paywallPrefill.notesMarkdown) {
-        prefilledCards.push(createPostComposerResourceCard('guide', {
-          textContent: paywallPrefill.notesMarkdown,
-        }));
-      }
-      return prefilledCards;
-    });
-
-    if (paywallPrefill.resourceKinds.includes('remix')) {
+    // one. Built once, outside the updaters, so the package and the leave
+    // guard's baseline hold the same cards.
+    const prefilledCards: PostComposerResourceCardDraft[] = [];
+    if (paywallPrefill.promptText) {
+      prefilledCards.push(createCreationPromptCard(paywallPrefill.promptText));
+    }
+    if (paywallPrefill.notesMarkdown) {
+      prefilledCards.push(createPostComposerResourceCard('guide', {
+        textContent: paywallPrefill.notesMarkdown,
+      }));
+    }
+    const allowRemix = paywallPrefill.resourceKinds.includes('remix');
+    setResourceCards((current) => (current.length > 0 ? current : prefilledCards));
+    if (allowRemix) {
       setResourceAllowRemix(true);
     }
+    setSavedSnapshot((saved) => ({
+      ...saved,
+      resourceCards: saved.resourceCards.length > 0 ? saved.resourceCards : prefilledCards,
+      resourceAllowRemix: saved.resourceAllowRemix || allowRemix,
+    }));
 
     setDidApplyGenerationPaywallPrefill(true);
   }, [
@@ -1013,6 +1137,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             ? generation.paywallPrefill
             : null,
           origin: generation.origin === 'template' ? 'template' : generation.origin === 'direct' ? 'direct' : null,
+          // Counted the way the paywall prefill counts saved references.
+          referenceCount: Array.isArray(generation.input_media)
+            ? generation.input_media.filter((media: { storagePath?: unknown } | null) => (
+              typeof media?.storagePath === 'string' && media.storagePath.length > 0
+            )).length
+            : 0,
           source: 'fetched',
         };
 
@@ -1022,8 +1152,14 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         // maxLength caps typing, not a programmatic prefill, so trim here too —
         // otherwise a long generation title submits over-limit and the server
         // rejects a post the composer never flagged.
-        setTitle((current) => current || nextGeneration.title.slice(0, TITLE_MAX_LENGTH));
+        const prefillTitle = nextGeneration.title.slice(0, TITLE_MAX_LENGTH);
+        setTitle((current) => current || prefillTitle);
         setDescription((current) => current || nextGeneration.description);
+        setSavedSnapshot((saved) => ({
+          ...saved,
+          title: saved.title || prefillTitle,
+          description: saved.description || nextGeneration.description,
+        }));
       } catch (loadError) {
         if (!cancelled) {
           setGenerationError(loadError instanceof Error ? loadError.message : 'Failed to load generation.');
@@ -1189,37 +1325,37 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     setIsDragging(false);
   };
 
-  // Every in-flight add-time batch, so publish can wait for all of them — a
-  // single "latest batch" ref let a second add overwrite the first, and publish
-  // then re-uploaded the still-running batch's files.
-  const activeEagerUploadsRef = useRef(new Set<Promise<void>>());
-  // Controllers for those batches. Cancel aborts every one of them, not just
-  // whichever batch happened to start last.
-  const eagerUploadControllersRef = useRef(new Set<AbortController>());
-  // Per-batch progress, merged into the one bar — with two batches in flight the
-  // numbers must sum rather than fight, and the bar only clears when the last
-  // batch is done.
-  const eagerProgressRef = useRef(new Map<AbortController, {
-    bytesSent: number; totalBytes: number; completed: number; total: number;
-  }>());
+  // One controller per media item, keyed by item id, for both the add-time and
+  // the publish-time upload: with one per batch, removing a file (or switching
+  // to text) could not stop its bytes. Cancel still stops every file.
+  const mediaUploadControllersRef = useRef(new Map<string, AbortController>());
+  // Each added file's upload until it settles, so publish can wait for them. A
+  // file leaves this map, and its wait settles, the moment it leaves the
+  // composer: publish waited minutes on a removed 250 MB video.
+  const activeEagerUploadsRef = useRef(new Map<string, { settled: Promise<void>; settle: () => void }>());
+  // Per-file progress, summed into the one bar. A removed or failed file drops
+  // out, so the bar stops counting bytes nobody is waiting for; a finished one
+  // stays counted until the last lands, so the bar does not jump backwards.
+  const eagerProgressRef = useRef(new Map<string, { bytesSent: number; totalBytes: number; done: boolean }>());
   // Staged paths keyed by item id. Publish reads this rather than waiting for the
-  // setMediaItems above to round-trip through React — resuming from an awaited
+  // setMediaItems below to round-trip through React — resuming from an awaited
   // upload does not guarantee the new state has committed, and reading it too
   // early made publish upload the same file a second time.
   const stagedPathsRef = useRef(new Map<string, string>());
 
   const publishCombinedEagerProgress = () => {
-    const batches = [...eagerProgressRef.current.values()];
-    if (batches.length === 0) {
+    const files = [...eagerProgressRef.current.values()];
+    if (files.every((file) => file.done)) {
+      eagerProgressRef.current.clear();
       setUploadProgress(null);
       return;
     }
-    const totals = batches.reduce(
-      (sum, batch) => ({
-        bytesSent: sum.bytesSent + batch.bytesSent,
-        totalBytes: sum.totalBytes + batch.totalBytes,
-        completed: sum.completed + batch.completed,
-        total: sum.total + batch.total,
+    const totals = files.reduce(
+      (sum, file) => ({
+        bytesSent: sum.bytesSent + file.bytesSent,
+        totalBytes: sum.totalBytes + file.totalBytes,
+        completed: sum.completed + (file.done ? 1 : 0),
+        total: sum.total + 1,
       }),
       { bytesSent: 0, totalBytes: 0, completed: 0, total: 0 },
     );
@@ -1229,103 +1365,124 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     });
   };
 
+  const startMediaUpload = (itemId: string) => {
+    const controller = new AbortController();
+    mediaUploadControllersRef.current.set(itemId, controller);
+    return controller;
+  };
+
+  const finishMediaUpload = (itemId: string, controller: AbortController) => {
+    if (mediaUploadControllersRef.current.get(itemId) === controller) {
+      mediaUploadControllersRef.current.delete(itemId);
+    }
+  };
+
+  // Ids of media taken out of the composer. A publish already under way holds
+  // the list as it was when clicked, and must not upload or submit these.
+  const removedMediaIdsRef = useRef(new Set<string>());
+
+  // For media leaving the composer: its upload stops, and publish stops waiting.
+  const abortMediaUploads = (itemIds: string[]) => {
+    let droppedProgress = false;
+    for (const itemId of itemIds) {
+      removedMediaIdsRef.current.add(itemId);
+      mediaUploadControllersRef.current.get(itemId)?.abort();
+      mediaUploadControllersRef.current.delete(itemId);
+      activeEagerUploadsRef.current.get(itemId)?.settle();
+      activeEagerUploadsRef.current.delete(itemId);
+      droppedProgress = eagerProgressRef.current.delete(itemId) || droppedProgress;
+    }
+    // Only when an add-time entry went: a publish-time upload owns the bar then.
+    if (droppedProgress) {
+      publishCombinedEagerProgress();
+    }
+  };
+
   const uploadAddedMedia = async (added: ComposerMediaItem[]) => {
     const uploadable = added.filter((item) => item.file);
     if (uploadable.length === 0) {
       return;
     }
 
-    const controller = new AbortController();
-    eagerUploadControllersRef.current.add(controller);
+    const controllers = new Map<string, AbortController>();
+    const waits = new Map<string, { settled: Promise<void>; settle: () => void }>();
+    for (const item of uploadable) {
+      controllers.set(item.id, startMediaUpload(item.id));
+      const wait = createUploadWait();
+      waits.set(item.id, wait);
+      activeEagerUploadsRef.current.set(item.id, wait);
+      eagerProgressRef.current.set(item.id, { bytesSent: 0, totalBytes: item.file?.size ?? 0, done: false });
+    }
+    publishCombinedEagerProgress();
 
-    const bytesByIndex = new Map<number, { bytesSent: number; totalBytes: number }>();
-    let completed = 0;
-    const publishAddProgress = () => {
-      const totals = [...bytesByIndex.values()].reduce(
-        (sum, entry) => ({
-          bytesSent: sum.bytesSent + entry.bytesSent,
-          totalBytes: sum.totalBytes + entry.totalBytes,
-        }),
-        { bytesSent: 0, totalBytes: 0 },
-      );
-      eagerProgressRef.current.set(controller, {
-        ...totals,
-        completed,
-        total: uploadable.length,
-      });
-      publishCombinedEagerProgress();
-    };
-
-    uploadable.forEach((item, index) => {
-      bytesByIndex.set(index, { bytesSent: 0, totalBytes: item.file?.size ?? 0 });
-    });
-    publishAddProgress();
-
-    const run = (async () => {
-      try {
-        const result = await runWeightedUploadQueue(
-          uploadable.map((item) => ({ item, kind: item.mediaKind })),
-          async (item, index) => {
-            // uploadMediaToTemporaryStorage resolves the session itself and
-            // ignores this argument, so there is nothing to look up here.
-            const media = await uploadMediaToTemporaryStorage(item.file!, '', {
-              signal: controller.signal,
-              onProgress: ({ bytesSent, totalBytes }) => {
-                bytesByIndex.set(index, { bytesSent, totalBytes });
-                publishAddProgress();
-              },
-            });
-            completed += 1;
-            publishAddProgress();
-            return media.storagePath;
-          },
-          { signal: controller.signal },
-        );
-
-        // Stamping storagePath is what makes publish skip these — the pending
-        // filter there already excludes anything that carries one.
-        const pathById = new Map<string, string>();
-        result.successes.forEach((entry) => {
-          pathById.set(entry.item.id, entry.result);
-          stagedPathsRef.current.set(entry.item.id, entry.result);
-        });
-        if (pathById.size > 0) {
-          setMediaItems((current) => current.map((item) => (
-            pathById.has(item.id) ? { ...item, storagePath: pathById.get(item.id)! } : item
-          )));
-        }
-
-        // Say so now rather than at publish. Nothing is lost — a failed item
-        // keeps its File and publish re-uploads it — but silently pretending the
-        // add worked would strand the user until the final click.
-        const failures = result.failures.filter((failure) => !isUploadCancelledError(failure.error));
-        if (failures.length > 0) {
-          const failedNames = failures
-            .map((failure) => failure.item.originalName ?? failure.item.file?.name)
-            .filter(Boolean)
-            .join(', ');
-          setError({
-            section: 'post',
-            message: `${failures.length} of ${uploadable.length} uploads failed${failedNames ? ` (${failedNames})` : ''}. They will be retried when you publish.`,
+    const result = await runWeightedUploadQueue(
+      uploadable.map((item) => ({ item, kind: item.mediaKind })),
+      async (item) => {
+        const controller = controllers.get(item.id)!;
+        try {
+          if (controller.signal.aborted) {
+            throw new UploadCancelledError();
+          }
+          // uploadMediaToTemporaryStorage resolves the session itself and
+          // ignores this argument, so there is nothing to look up here.
+          const media = await uploadMediaToTemporaryStorage(item.file!, '', {
+            signal: controller.signal,
+            onProgress: ({ bytesSent, totalBytes }) => {
+              const progress = eagerProgressRef.current.get(item.id);
+              if (!progress) return;
+              eagerProgressRef.current.set(item.id, { ...progress, bytesSent, totalBytes });
+              publishCombinedEagerProgress();
+            },
           });
+          if (controller.signal.aborted) {
+            throw new UploadCancelledError();
+          }
+          // Stamped as each file lands, before its wait settles, so a publish
+          // waiting on it reads the path; carrying one is what makes publish
+          // skip the file.
+          stagedPathsRef.current.set(item.id, media.storagePath);
+          setMediaItems((current) => current.map((candidate) => (
+            candidate.id === item.id ? { ...candidate, storagePath: media.storagePath } : candidate
+          )));
+          const progress = eagerProgressRef.current.get(item.id);
+          if (progress) {
+            eagerProgressRef.current.set(item.id, { ...progress, bytesSent: progress.totalBytes, done: true });
+          }
+          return media.storagePath;
+        } catch (uploadError) {
+          eagerProgressRef.current.delete(item.id);
+          // An aborted fetch rejects with its own AbortError; it is still a cancel.
+          throw controller.signal.aborted ? new UploadCancelledError() : uploadError;
+        } finally {
+          finishMediaUpload(item.id, controller);
+          const wait = waits.get(item.id)!;
+          wait.settle();
+          if (activeEagerUploadsRef.current.get(item.id) === wait) {
+            activeEagerUploadsRef.current.delete(item.id);
+          }
+          publishCombinedEagerProgress();
         }
-      } catch {
-        // Unexpected throw rather than a per-file failure. Anything not staged
-        // keeps its File, so publish re-uploads it and the composer recovers.
-      } finally {
-        eagerUploadControllersRef.current.delete(controller);
-        eagerProgressRef.current.delete(controller);
-        // Re-renders the sum of whatever batches remain, or clears the bar when
-        // this was the last one.
-        publishCombinedEagerProgress();
-      }
-    })();
+      },
+    );
 
-    activeEagerUploadsRef.current.add(run);
-    try {
-      await run;
-    } finally {
-      activeEagerUploadsRef.current.delete(run);
+    // Say so now rather than at publish. A failed file keeps its File and
+    // publish tries it again, but the server refuses some files outright (too
+    // large, wrong type), so the message gives the reason rather than promise
+    // a retry that cannot succeed.
+    const failures = result.failures.filter((failure) => !isUploadCancelledError(failure.error));
+    if (failures.length > 0) {
+      const failedNames = failures
+        .map((failure) => failure.item.originalName ?? failure.item.file?.name)
+        .filter(Boolean)
+        .join(', ');
+      const firstError = failures[0].error;
+      const reason = firstError instanceof Error && firstError.message
+        ? firstError.message
+        : 'Remove it, or publish to try again.';
+      setError({
+        section: 'post',
+        message: `${failures.length} of ${uploadable.length} uploads failed${failedNames ? ` (${failedNames})` : ''}. ${reason}`,
+      });
     }
   };
 
@@ -1405,6 +1562,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     // left pointing at removed media fails validation on publish, and with one
     // output left the scope picker is hidden, so it could not be cleared by hand.
     const removed = mediaItems.find((item) => item.id === id);
+    abortMediaUploads([id]);
     setMediaItems((current) => current.filter((item) => item.id !== id));
     if (removed) {
       setResourceCards((current) => current.map((card) => {
@@ -1419,6 +1577,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   };
 
   const switchToTextProof = () => {
+    abortMediaUploads(mediaItems.map((item) => item.id));
     setProofMode('text');
     setMediaItems([]);
     // With no proof media left, every resource necessarily applies to the post
@@ -1662,8 +1821,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       });
     }
 
-    const controller = new AbortController();
-    uploadAbortRef.current = controller;
+    const controllers = new Map(pending.map((item) => [item.id, startMediaUpload(item.id)]));
 
     const bytesByIndex = new Map<number, { bytesSent: number; totalBytes: number }>();
     let completed = 0;
@@ -1696,13 +1854,23 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             throw new Error('A selected media item is no longer available.');
           }
 
-          const media = await uploadMediaToTemporaryStorage(item.file, ownerUserId, {
-            signal: controller.signal,
-            onProgress: ({ bytesSent, totalBytes }) => {
-              bytesByIndex.set(index, { bytesSent, totalBytes });
-              publishProgress();
-            },
-          });
+          const controller = controllers.get(item.id)!;
+          if (controller.signal.aborted) {
+            throw new UploadCancelledError();
+          }
+          let media: Awaited<ReturnType<typeof uploadMediaToTemporaryStorage>>;
+          try {
+            media = await uploadMediaToTemporaryStorage(item.file, ownerUserId, {
+              signal: controller.signal,
+              onProgress: ({ bytesSent, totalBytes }) => {
+                bytesByIndex.set(index, { bytesSent, totalBytes });
+                publishProgress();
+              },
+            });
+          } catch (uploadError) {
+            // An aborted fetch rejects with its own AbortError; it is still a cancel.
+            throw controller.signal.aborted ? new UploadCancelledError() : uploadError;
+          }
 
           completed += 1;
           publishProgress();
@@ -1712,7 +1880,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             originalName: item.file.name,
           };
         },
-        { signal: controller.signal },
       );
 
       const byItemId = new Map(uploaded.successes.map((entry) => [entry.item.id, entry.result]));
@@ -1759,32 +1926,29 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         return { mediaKey: item.mediaKey, ...result };
       });
     } finally {
-      if (uploadAbortRef.current === controller) {
-        uploadAbortRef.current = null;
-      }
+      controllers.forEach((controller, itemId) => finishMediaUpload(itemId, controller));
       setUploadProgress(null);
     }
   };
 
   const cancelMediaUpload = () => {
-    // Publish-time uploads and every in-flight add-time batch — cancelling only
-    // the most recent batch left older ones running with no way to stop them.
-    uploadAbortRef.current?.abort();
-    eagerUploadControllersRef.current.forEach((controller) => controller.abort());
+    // Every file still uploading, add-time or publish-time. The files stay in
+    // the composer, and publish uploads them again.
+    mediaUploadControllersRef.current.forEach((controller) => controller.abort());
   };
 
   /**
-   * Forget staged paths after the server has been asked to publish and failed.
+   * Forget staged paths once a save may have consumed them.
    *
-   * Every server-side publish failure runs `cleanupUploadedMedia`, which deletes
-   * the staged objects the composer is still holding paths to. Keeping them
-   * would make the retry skip re-uploading and fail forever on
-   * "Failed to load uploaded media" -- so paths survive a client-side upload
-   * failure (the point of retrying only what failed) but never a dispatched one.
+   * The server moves a staged file into the post and then deletes it, so after
+   * a network error, a 5xx, or a refusal raised after that move, the retry has
+   * to upload again: reusing a consumed path fails on every attempt. Any other
+   * refusal (title, quality, safety, profile) is decided before a staged file is
+   * touched, and keeping the paths is what lets a fix-and-retry skip the upload.
    */
   const forgetStagedMediaPaths = () => {
     // The add-time cache has to go too, or publish would re-apply the very paths
-    // the server just deleted and the retry could never recover.
+    // the server just consumed and the retry could never recover.
     stagedPathsRef.current.clear();
     setMediaItems((current) => current.map((item) => (
       item.storagePath ? { ...item, storagePath: null } : item
@@ -1867,6 +2031,18 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     resetFeedback();
   };
 
+  const toggleCreationPrompt = (include: boolean) => {
+    if (include) {
+      const promptCard = createCreationPromptCard(creationPrompt);
+      setResourceCards((current) => (
+        current.some((card) => isCreationPromptCard(card, creationPrompt)) ? current : [...current, promptCard]
+      ));
+    } else {
+      setResourceCards((current) => current.filter((card) => !isCreationPromptCard(card, creationPrompt)));
+    }
+    resetFeedback();
+  };
+
   const removeResourceCard = (id: string) => {
     const nextCards = resourceCards.filter((card) => card.id !== id);
     setResourceCards(nextCards);
@@ -1895,7 +2071,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
   const completePublish = (nextPost: CreatedPostState, options: { redirect?: boolean } = {}) => {
     setCreatedPost(nextPost);
-    setDidPublish(true);
+    // The form as it was submitted is now what the server holds; anything typed
+    // while the save was in flight still counts as unsaved.
+    setSavedSnapshot(composerSnapshot);
     trackProductEvent(isEditMode ? 'post_update_success' : 'post_publish_success', {
       visibility: nextPost.visibility,
       recipe_access: nextPost.resourceAccessMode,
@@ -2047,16 +2225,19 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       // An add-time upload may still be running. Letting it finish means its
       // storagePath is already stamped, so publish skips that file instead of
       // uploading it a second time.
-      // Loop, not a single await: a new batch can start while an earlier one is
-      // being awaited, and publish must not proceed until every one has settled.
+      // Loop, not a single await: a new file can start uploading while earlier
+      // ones are being awaited, and publish must not proceed until every one
+      // has settled. A file removed meanwhile settles at once and is left out.
       while (activeEagerUploadsRef.current.size > 0) {
-        await Promise.all([...activeEagerUploadsRef.current]);
+        await Promise.all([...activeEagerUploadsRef.current.values()].map((wait) => wait.settled));
       }
-      const itemsWithStagedPaths = mediaItems.map((item) => (
-        !item.storagePath && stagedPathsRef.current.has(item.id)
-          ? { ...item, storagePath: stagedPathsRef.current.get(item.id)! }
-          : item
-      ));
+      const itemsWithStagedPaths = mediaItems
+        .filter((item) => !removedMediaIdsRef.current.has(item.id))
+        .map((item) => (
+          !item.storagePath && stagedPathsRef.current.has(item.id)
+            ? { ...item, storagePath: stagedPathsRef.current.get(item.id)! }
+            : item
+        ));
       const mediaItemsForSubmit = generationId
         ? undefined
         : await uploadComposerMedia(itemsWithStagedPaths, session.user.id);
@@ -2088,6 +2269,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             ...(isResourceEditingLocked
               ? {}
               : { resourceBundle: resourceBundle ?? { accessMode: 'none' } }),
+            // The server copies the inputs only into a recipe that is sent.
+            ...(includeGenerationReferences && canIncludeGenerationReferences && resourceBundle
+              ? { includeGenerationReferences: true }
+              : {}),
           }),
         });
 
@@ -2113,31 +2298,42 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       }
 
       if (isEditMode && initialPost) {
-        const response = await fetch(`/api/posts/${initialPost.id}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({
-            title: title.trim() || null,
-            description: description.trim() || null,
-            body: trimmedBody || null,
-            sourceTools: sourceToolsForSubmit.length > 0 ? sourceToolsForSubmit : undefined,
-            visibility: effectiveVisibility,
-            isNsfw,
-            category: inferredCategory ?? undefined,
-            mediaItems: mediaItemsForSubmit,
-            // A sold package is frozen, and the update path treats an absent
-            // key as "keep what is stored" — sending `{accessMode:'none'}` here
-            // would delete a bundle people have already paid for.
-            ...(isResourceEditingLocked
-              ? {}
-              : { resourceBundle: resourceBundle ?? { accessMode: 'none' } }),
-          }),
-        });
+        let response: Response;
+        try {
+          response = await fetch(`/api/posts/${initialPost.id}`, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({
+              title: title.trim() || null,
+              description: description.trim() || null,
+              body: trimmedBody || null,
+              sourceTools: sourceToolsForSubmit.length > 0 ? sourceToolsForSubmit : undefined,
+              visibility: effectiveVisibility,
+              isNsfw,
+              category: inferredCategory ?? undefined,
+              mediaItems: mediaItemsForSubmit,
+              // A sold package is frozen, and the update path treats an absent
+              // key as "keep what is stored" — sending `{accessMode:'none'}` here
+              // would delete a bundle people have already paid for.
+              ...(isResourceEditingLocked
+                ? {}
+                : { resourceBundle: resourceBundle ?? { accessMode: 'none' } }),
+            }),
+          });
+        } catch (networkError) {
+          // The request may have reached the server and consumed its staged
+          // media, so the safe assumption is that the paths are gone.
+          forgetStagedMediaPaths();
+          throw networkError;
+        }
 
-        const data = await response.json();
+        const { data, stagedMediaConsumed } = await readSaveResponse(response);
+        if (stagedMediaConsumed) {
+          forgetStagedMediaPaths();
+        }
         if (!response.ok || !data.success) {
           throw getSubmissionError(data, 'Failed to save post.');
         }
@@ -2192,15 +2388,18 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           body: formData,
         });
       } catch (networkError) {
-        // The request may have reached the server and rolled back its staged
+        // The request may have reached the server and consumed its staged
         // media, so the safe assumption is that the paths are gone.
         forgetStagedMediaPaths();
         throw networkError;
       }
-      const data = await response.json();
-
-      if (!response.ok) {
+      // A refusal such as a placeholder title keeps the staged paths, so the
+      // fixed retry sends them again instead of uploading every file anew.
+      const { data, stagedMediaConsumed } = await readSaveResponse(response);
+      if (stagedMediaConsumed) {
         forgetStagedMediaPaths();
+      }
+      if (!response.ok) {
         throw getSubmissionError(data, 'Failed to publish post.');
       }
 
@@ -2324,6 +2523,14 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       <div className="studio-shell relative z-10 py-12 sm:py-16">
         <Link
           href={backHref}
+          // beforeunload covers a reload or a closed tab, not this in-app link,
+          // which left with the work unasked. onNavigate, not onClick: a
+          // Cmd-click opens a tab and loses nothing.
+          onNavigate={(event) => {
+            if (hasUnsavedWork && !window.confirm('Leave this post? Your unsaved changes will be discarded.')) {
+              event.preventDefault();
+            }
+          }}
           className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -2351,7 +2558,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
               </p>
             </div>
 
-            <form id="post-composer-form" ref={formRef} className="space-y-6 pb-28 lg:pb-0" onSubmit={handleSubmit}>
+            {/* noValidate: the browser's own bubble (a price of 95 against step=10)
+                blocked submit before the composer could name the rule. */}
+            <form id="post-composer-form" noValidate className="space-y-6 pb-28 lg:pb-0" onSubmit={handleSubmit}>
               {initialPost?.archivedAt ? (
                 <div className="rounded-[24px] border border-amber-400/20 bg-amber-500/10 px-5 py-4 text-sm leading-6 text-amber-50">
                   This post is archived. It stays out of public surfaces until you restore it from My Studio.
@@ -3218,6 +3427,48 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         )}
                       </div>
                     </div>
+
+                    {canOfferCreationResources ? (
+                      <div role="group" aria-labelledby="from-this-creation-label" className="rounded-[24px] border border-white/8 bg-black/25 p-4 space-y-3">
+                        <div id="from-this-creation-label" className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                          From this creation
+                        </div>
+                        <label className={`flex items-start gap-3 select-none ${creationPrompt ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+                          <input
+                            type="checkbox"
+                            checked={isCreationPromptIncluded}
+                            disabled={!creationPrompt}
+                            onChange={(event) => toggleCreationPrompt(event.target.checked)}
+                            className="mt-0.5 h-4 w-4 rounded border-white/10 bg-white/[0.03] text-emerald-400 focus:ring-0 focus:ring-offset-0 disabled:cursor-not-allowed"
+                          />
+                          <span>
+                            <span className="block text-sm font-semibold text-white">Include exact prompt</span>
+                            <span className="mt-0.5 block text-xs leading-5 text-zinc-400">
+                              Add the original generation prompt as a resource card.
+                            </span>
+                          </span>
+                        </label>
+                        {canIncludeGenerationReferences ? (
+                          <label className="flex cursor-pointer items-start gap-3 select-none">
+                            <input
+                              type="checkbox"
+                              checked={includeGenerationReferences}
+                              onChange={(event) => {
+                                setIncludeGenerationReferences(event.target.checked);
+                                resetFeedback();
+                              }}
+                              className="mt-0.5 h-4 w-4 rounded border-white/10 bg-white/[0.03] text-emerald-400 focus:ring-0 focus:ring-offset-0"
+                            />
+                            <span>
+                              <span className="block text-sm font-semibold text-white">Include creation references</span>
+                              <span className="mt-0.5 block text-xs leading-5 text-zinc-400">
+                                Attach the saved input media as reusable references.
+                              </span>
+                            </span>
+                          </label>
+                        ) : null}
+                      </div>
+                    ) : null}
 
                     <ResourceCardsSection
                       cards={resourceCards}

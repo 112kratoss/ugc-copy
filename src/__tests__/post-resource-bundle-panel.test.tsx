@@ -10,21 +10,29 @@ import {
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 
-const { mockPush, mockRefresh, mockUpdateCredits, authState } = vi.hoisted(() => ({
-  mockPush: vi.fn(),
-  mockRefresh: vi.fn(),
-  mockUpdateCredits: vi.fn(),
-  authState: {
-    session: null as { access_token: string } | null,
-    credits: null as number | null,
-  },
-}));
+const { mockPush, mockRefresh, mockRouter, mockUpdateCredits, mockVerifyCheckout, authState } = vi.hoisted(() => {
+  const push = vi.fn();
+  const refresh = vi.fn();
+  return {
+    mockPush: push,
+    mockRefresh: refresh,
+    mockRouter: { push, refresh },
+    mockUpdateCredits: vi.fn(),
+    mockVerifyCheckout: vi.fn(),
+    authState: {
+      session: null as { access_token: string } | null,
+      credits: null as number | null,
+    },
+  };
+});
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: mockPush,
-    refresh: mockRefresh,
-  }),
+  useRouter: () => mockRouter,
+}));
+
+vi.mock('@/lib/razorpay-checkout-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/razorpay-checkout-client')>()),
+  verifyRazorpayCheckoutUntilSettled: mockVerifyCheckout,
 }));
 
 // Spending credits asks first; these tests answer yes.
@@ -319,9 +327,11 @@ describe('PostResourceBundlePanel', () => {
     mockPush.mockClear();
     mockRefresh.mockClear();
     mockUpdateCredits.mockClear();
+    mockVerifyCheckout.mockReset();
     authState.session = null;
     authState.credits = null;
     vi.unstubAllGlobals();
+    document.getElementById('post-resource-bundle-razorpay-checkout')?.remove();
   });
 
   it('keeps locked prompt-only unlocks compact with one open action', () => {
@@ -337,9 +347,8 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.queryByText(/secret prompt/i)).not.toBeInTheDocument();
   });
 
-  it('presents free public resources as a visible creation recipe', () => {
+  it('shows the parts of a free recipe the viewer already has, with its status chip', () => {
     renderPanel({
-      isPublic: true,
       title: 'Creation recipe',
       summary: 'Prompt, notes, and references used for this result.',
       resourceKinds: ['prompt', 'files', 'notes'],
@@ -355,9 +364,9 @@ describe('PostResourceBundlePanel', () => {
       },
     });
 
-    // The content is the message: a public recipe shows its parts directly,
+    // The content is the message: an open recipe shows its parts directly,
     // with just the status chip saying what it is.
-    expect(screen.getAllByText(/public recipe/i).length).toBeGreaterThan(0);
+    expect(screen.getByText('Free recipe')).toBeInTheDocument();
     expect(screen.getByText('Public recipe prompt')).toBeInTheDocument();
     expect(screen.getByText('Public recipe notes')).toBeInTheDocument();
     expect(screen.getByText('Image input')).toBeInTheDocument();
@@ -401,6 +410,8 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.getByRole('button', { name: /pay ₹189 with razorpay/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeInTheDocument();
     expect(screen.getByText(/credit cost: 900 credits/i)).toBeInTheDocument();
+    // Both ways to pay, named in the price chip.
+    expect(screen.getByText('₹189 · 900 credits')).toBeInTheDocument();
     expect(screen.queryByText(/digital recipes are final sale/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/do not resell, redistribute, or claim the raw bundle as your own/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/secret prompt/i)).not.toBeInTheDocument();
@@ -950,6 +961,238 @@ describe('PostResourceBundlePanel', () => {
       expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/order', expect.objectContaining({
         method: 'POST',
       }));
+    });
+  });
+
+  it('prices the latest and the purchased version in one currency', () => {
+    renderPanel({
+      isFree: false,
+      priceLabel: '₹750',
+      priceUsdCents: 900,
+      viewerCanAccess: true,
+      initialResources: {
+        promptText: 'Latest prompt',
+        notesMarkdown: null,
+        workflowShareUrl: null,
+        attachments: [],
+        allowRemix: false,
+      },
+      purchasedRevision: {
+        revisionNumber: 1,
+        purchasedAt: '2026-07-01T00:00:00.000Z',
+        title: 'Prompt unlock',
+        summary: '',
+        previewText: '',
+        accessMode: 'paid',
+        priceUsdCents: 500,
+        resources: {
+          promptText: 'Original prompt',
+          notesMarkdown: null,
+          workflowShareUrl: null,
+          attachments: [],
+          allowRemix: false,
+        },
+      },
+    });
+
+    expect(screen.getByText(/latest version ·/i)).toHaveTextContent('Latest version · $9.00 · 900 credits');
+    fireEvent.click(screen.getByRole('button', { name: /the version you unlocked/i }));
+    expect(screen.getByText(/purchased version ·/i)).toHaveTextContent('Purchased version · $5.00 · 500 credits');
+  });
+
+  describe('resource files', () => {
+    const mediaItems = normalizePostResourceItems([
+      { type: 'reference_image', title: 'Reference 1', storagePath: 'user-1/references/frame.png', contentType: 'image/png' },
+      { type: 'reference_video', title: 'Motion', storagePath: 'user-1/references/motion.mp4', contentType: 'video/mp4' },
+      { type: 'reference_audio', title: 'Voice', storagePath: 'user-1/references/voice.mp3', contentType: 'audio/mpeg' },
+    ]);
+
+    function unlockedWith(items: PostResourceItem[]) {
+      return {
+        viewerCanAccess: true,
+        resourceKinds: ['files'] as PostResourceKind[],
+        initialResources: {
+          promptText: null,
+          notesMarkdown: null,
+          workflowShareUrl: null,
+          attachments: [],
+          allowRemix: false,
+          items,
+        },
+      };
+    }
+
+    // Answers both forms: a batch with every path it was asked for, a single
+    // path with a URL that names the disposition it was signed for.
+    function stubFileUrlFetch() {
+      const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body ?? '{}'));
+        if (Array.isArray(body.storagePaths)) {
+          return new Response(JSON.stringify({
+            files: body.storagePaths.map((storagePath: string) => ({
+              storagePath,
+              url: `https://signed.example.com/${storagePath}`,
+            })),
+          }));
+        }
+        return new Response(JSON.stringify({
+          success: true,
+          signedUrl: `https://signed.example.com/${body.disposition}/${body.storagePath}`,
+        }));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    }
+
+    it('signs every preview it draws in one request, to be shown inline', async () => {
+      const fetchMock = stubFileUrlFetch();
+      const { container } = renderPanel(unlockedWith(mediaItems));
+
+      await waitFor(() => {
+        expect(container.querySelector('img')).toHaveAttribute('src', 'https://signed.example.com/user-1/references/frame.png');
+      });
+      expect(container.querySelector('video')).toHaveAttribute('src', 'https://signed.example.com/user-1/references/motion.mp4');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/posts/post-1/resource-bundle/file-url');
+      expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+        storagePaths: mediaItems.map((item) => item.storagePath),
+        disposition: 'inline',
+      });
+    });
+
+    it('signs previews in one request on the buyer library route too, which takes the same batch form', async () => {
+      const fetchMock = stubFileUrlFetch();
+      renderPanel({
+        ...unlockedWith(mediaItems.slice(0, 2)),
+        fileUrlEndpoint: '/api/me/unlocks/unlock-1/file-url',
+      });
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      expect(fetchMock.mock.calls.map(([url, init]) => [url, JSON.parse(String(init?.body))])).toEqual([
+        ['/api/me/unlocks/unlock-1/file-url', {
+          storagePaths: ['user-1/references/frame.png', 'user-1/references/motion.mp4'],
+          disposition: 'inline',
+        }],
+      ]);
+    });
+
+    it('opens a file in the browser and saves a download under a name with its extension', async () => {
+      stubFileUrlFetch();
+      const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+      const saved: Array<{ href: string; download: string }> = [];
+      const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+        saved.push({ href: this.href, download: this.download });
+      });
+      try {
+        renderPanel(unlockedWith(mediaItems.slice(0, 1)));
+
+        fireEvent.click(screen.getByRole('button', { name: 'Open file' }));
+        await waitFor(() => {
+          expect(open).toHaveBeenCalledWith(
+            'https://signed.example.com/inline/user-1/references/frame.png',
+            '_blank',
+            'noopener,noreferrer',
+          );
+        });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+        await waitFor(() => {
+          expect(saved).toEqual([{
+            href: 'https://signed.example.com/attachment/user-1/references/frame.png',
+            download: 'Reference 1.png',
+          }]);
+        });
+      } finally {
+        open.mockRestore();
+        click.mockRestore();
+      }
+    });
+  });
+
+  describe('cash checkout', () => {
+    const payment = {
+      razorpay_payment_id: 'pay-1',
+      razorpay_order_id: 'order-1',
+      razorpay_signature: 'signature-1',
+    };
+
+    function stubCheckoutFetch() {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.endsWith('/order')) {
+          return new Response(JSON.stringify({ orderId: 'order-1', amount: 90000, currency: 'USD' }));
+        }
+        if (url.endsWith('/resource-bundle')) {
+          return new Response(JSON.stringify({
+            bundle: {
+              viewerCanAccess: true,
+              viewerIsOwner: false,
+              resources: {
+                promptText: 'captured prompt',
+                notesMarkdown: null,
+                workflowShareUrl: null,
+                attachments: [],
+                allowRemix: false,
+              },
+            },
+          }));
+        }
+        return new Response(JSON.stringify({ error: 'Unexpected request' }), { status: 500 });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    }
+
+    it('fetches checkout.js only once Pay is pressed', async () => {
+      authState.session = { access_token: 'token-1' };
+      const fetchMock = stubCheckoutFetch();
+      const opened = vi.fn();
+      renderPanel({ isFree: false, priceLabel: '$9.00', priceUsdCents: 900 });
+
+      expect(document.getElementById('post-resource-bundle-razorpay-checkout')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i }));
+      const script = document.getElementById('post-resource-bundle-razorpay-checkout') as HTMLScriptElement | null;
+      expect(script?.src).toBe('https://checkout.razorpay.com/v1/checkout.js');
+
+      // The order is created while the script loads; checkout opens once both are in.
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/order', expect.anything());
+      });
+      expect(opened).not.toHaveBeenCalled();
+      vi.stubGlobal('Razorpay', class {
+        open() { opened(); }
+        on() {}
+      });
+      fireEvent.load(script!);
+      await waitFor(() => expect(opened).toHaveBeenCalledTimes(1));
+    });
+
+    it('looks once more at a payment still capturing when the buyer comes back to the tab', async () => {
+      authState.session = { access_token: 'token-1' };
+      stubCheckoutFetch();
+      mockVerifyCheckout
+        .mockResolvedValueOnce({ state: 'pending', body: { code: 'PAYMENT_PENDING' } })
+        .mockResolvedValueOnce({ state: 'settled', body: { success: true } });
+      vi.stubGlobal('Razorpay', class {
+        constructor(private readonly options: { handler: (response: typeof payment) => Promise<void> }) {}
+        open() { void this.options.handler(payment); }
+        on() {}
+      });
+      renderPanel({ isFree: false, priceLabel: '$9.00', priceUsdCents: 900 });
+
+      fireEvent.click(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i }));
+      expect(await screen.findByText(/payment received and waiting for capture/i)).toBeInTheDocument();
+      expect(mockVerifyCheckout).toHaveBeenCalledTimes(1);
+
+      fireEvent.focus(window);
+      expect(await screen.findByText('captured prompt')).toBeInTheDocument();
+      expect(mockVerifyCheckout).toHaveBeenCalledTimes(2);
+      expect(mockVerifyCheckout).toHaveBeenLastCalledWith(expect.objectContaining({ body: payment, maxAttempts: 1 }));
+      expect(screen.queryByText(/payment received and waiting for capture/i)).toBeNull();
+
+      // Once: a later return to the tab asks nothing more.
+      fireEvent.focus(window);
+      expect(mockVerifyCheckout).toHaveBeenCalledTimes(2);
     });
   });
 });

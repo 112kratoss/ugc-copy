@@ -1,13 +1,19 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  ShowcaseDetailCommentCountProvider,
+  ShowcaseDetailComments,
+} from '@/app/showcase/[id]/ShowcaseDetailCommentCount';
 import ShowcaseDetailEngagementRow from '@/app/showcase/[id]/ShowcaseDetailEngagementRow';
+import NsfwPostReveal from '@/components/NsfwPostReveal';
 
-const pushMock = vi.fn();
+const routerMock = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
+const pushMock = routerMock.push;
 const useAuthMock = vi.fn();
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: pushMock, refresh: vi.fn() }),
+  useRouter: () => routerMock,
 }));
 
 vi.mock('@/components/AuthProvider', () => ({
@@ -20,6 +26,17 @@ vi.mock('@/components/PublicShareButton', () => ({
 
 vi.mock('@/lib/showcase-remix-client', () => ({
   requestShowcaseRemix: vi.fn(async () => ({ redirectTo: '/create-image?remix=1' })),
+}));
+
+// The thread reports its count the way `PostComments` does: through the
+// `onCommentCountChange` it is handed, after a post or a delete lands.
+vi.mock('@/components/PostComments', () => ({
+  default: ({ onCommentCountChange }: { onCommentCountChange?: (count: number) => void }) => (
+    <div>
+      <button type="button" onClick={() => onCommentCountChange?.(1)}>Post a comment</button>
+      <button type="button" onClick={() => onCommentCountChange?.(0)}>Delete the comment</button>
+    </div>
+  ),
 }));
 
 function rowProps(overrides: Partial<Parameters<typeof ShowcaseDetailEngagementRow>[0]> = {}) {
@@ -97,5 +114,59 @@ describe('ShowcaseDetailEngagementRow', () => {
 
     expect(pushMock).toHaveBeenCalledWith(expect.stringContaining('/login?returnUrl='));
     expect(vi.mocked(fetch)).not.toHaveBeenCalledWith('/api/showcase/save', expect.anything());
+  });
+
+  // The page is rendered on the server: the row kept the count the post had
+  // then, while the thread's own heading moved with every comment.
+  it("follows the thread's count after a comment is posted or deleted", () => {
+    render(
+      <ShowcaseDetailCommentCountProvider initialCount={0}>
+        <ShowcaseDetailEngagementRow {...rowProps({ commentCount: 0 })} />
+        <ShowcaseDetailComments postId="post-1" postCreatorId="creator-1" commentCount={0} />
+      </ShowcaseDetailCommentCountProvider>,
+    );
+
+    expect(screen.getByRole('link')).toHaveTextContent('Comment');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Post a comment' }));
+    expect(screen.getByRole('link')).toHaveTextContent('1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete the comment' }));
+    expect(screen.getByRole('link')).toHaveTextContent('Comment');
+  });
+
+  it('prints the count it was given outside the provider', () => {
+    render(<ShowcaseDetailEngagementRow {...rowProps({ commentCount: 3 })} />);
+
+    expect(screen.getByRole('link')).toHaveTextContent('3');
+  });
+
+  // An NSFW post's thread stays hidden until the post is revealed; a link to
+  // it before then would point at nothing.
+  it('leaves out the Comment link while an NSFW gate is closed, and brings it back on reveal', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const reply = (body: unknown) => ({ ok: true, json: async () => body }) as Response;
+      if (url === '/api/content-preferences') return reply({ showMature: true });
+      if (url === '/api/posts/post-1/reveal') {
+        return reply({ success: true, detail: { title: 'Shared creation', body: '', mediaItems: [] } });
+      }
+      return reply([]);
+    }));
+    render(
+      <NsfwPostReveal postId="post-1">
+        <ShowcaseDetailEngagementRow {...rowProps()} />
+      </NsfwPostReveal>,
+    );
+
+    expect(screen.queryByRole('link', { name: /comment/i })).not.toBeInTheDocument();
+    // Save and Share stay reachable under the gate.
+    expect(screen.getByRole('button', { name: /save shared creation/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Share' })).toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reveal post' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal post' }));
+
+    expect(await screen.findByRole('link', { name: /comment/i })).toHaveAttribute('href', '#comments');
   });
 });

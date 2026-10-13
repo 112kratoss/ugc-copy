@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  formatLockedBundleFacts,
+  formatPostResourceBundleCountSummary,
+  formatUnlockCountLabel,
   getResourceGroupSubtitle,
   parseGenerationSetupNotes,
+  resourceKindLabel,
   shouldShowResourceItemTitle,
 } from '@/lib/post-resource-bundle-view-model';
+import { formatUnlockDate } from '@/lib/unlock-library-view-model';
 
 describe('parseGenerationSetupNotes', () => {
   it('reads the publish flow\'s saved setup as settings', () => {
@@ -81,5 +86,42 @@ describe('shouldShowResourceItemTitle', () => {
 
   it('keeps every title once a group lists more than one item', () => {
     expect(shouldShowResourceItemTitle({ ...promptGroup, itemCount: 2 }, { title: 'Prompt', type: 'prompt' })).toBe(true);
+  });
+});
+
+describe('resourceKindLabel', () => {
+  it("names each kind in the web's words, and drops one this build does not know", () => {
+    expect(['prompt', 'workflow', 'files', 'notes', 'remix'].map(resourceKindLabel))
+      .toEqual(['Prompt', 'Workflow', 'Files', 'Notes', 'Remix']);
+    expect(resourceKindLabel('hologram')).toBe('');
+  });
+});
+
+describe('formatPostResourceBundleCountSummary', () => {
+  it("counts sections first, then items in the web's order and words", () => {
+    expect(formatPostResourceBundleCountSummary({
+      sectionCount: 1,
+      itemCounts: { reference_image: 3, prompt: 1, settings: 2, reference_audio: 2 },
+    })).toBe('1 section, 1 prompt, 3 reference images, 2 reference audio files, 2 settings notes');
+  });
+
+  it('says nothing when the preview counts nothing', () => {
+    expect(formatPostResourceBundleCountSummary({ sectionCount: 0, itemCounts: {} })).toBe('');
+    expect(formatPostResourceBundleCountSummary(null)).toBe('');
+  });
+});
+
+describe('formatLockedBundleFacts', () => {
+  it('reads sold for a paid recipe and opened for a free one', () => {
+    expect(formatUnlockCountLabel('paid', 12)).toBe('12 sold');
+    expect(formatUnlockCountLabel('free', 1)).toBe('1 opened');
+  });
+
+  it('joins the record and the last update into one line', () => {
+    const updatedAt = '2026-10-03T10:00:00.000Z';
+    expect(formatLockedBundleFacts({ accessMode: 'paid', salesCount: 12, updatedAt }))
+      .toBe(`12 sold · Updated ${formatUnlockDate(updatedAt)}`);
+    expect(formatLockedBundleFacts({ accessMode: 'free', salesCount: 0, updatedAt: null })).toBe('0 opened');
+    expect(formatLockedBundleFacts({ accessMode: 'paid', salesCount: undefined, updatedAt: 'not-a-date' })).toBe('');
   });
 });

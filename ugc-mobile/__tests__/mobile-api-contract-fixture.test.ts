@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
-import { ApiError, createApiClient, type MagicbookletApiClient } from '../lib/api-client';
+import { ApiError, POST_RESOURCE_FILE_URL_BATCH_LIMIT, createApiClient, type MagicbookletApiClient } from '../lib/api-client';
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
-import { buildImmersiveGenerationItems } from '../lib/immersive-preview-view-model';
+import { buildImmersiveGenerationItems, buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
 import { buildShowcaseFeedEventRequest } from '../lib/showcase-feed-events';
 import type { ShowcaseFeedEventRequest, ShowcaseFeedEventType } from '../lib/types';
 import { getShowcaseViewerImageUrl } from '../lib/showcase-media';
@@ -109,6 +109,18 @@ it('opens an owner image on its display rendition and keeps the original for dow
   const [item] = buildImmersiveGenerationItems('profile-creations', image ? [image] : [], { creatorLabel: '@owner' });
   expect(getShowcaseViewerImageUrl(item.mediaItems[0])).toBe('https://cdn.example.test/generation-1-display.webp');
   expect(item.mediaItems[0].url).toBe('https://cdn.example.test/generation-1.png');
+});
+
+it('shows the caption a post read by id carries as its story when it has no body', async () => {
+  // Contract payload to details page: the by-id read is where the web
+  // composer's description reaches the app at all.
+  const { item } = await clientForEndpoint('getShowcasePost').getShowcasePost('post-1');
+  expect(item.description).toBe('A clean launch visual.');
+
+  const [withBody] = buildImmersiveShowcaseItems('showcase-feed', [item]);
+  expect(withBody.details?.body).toBe('Reusable launch notes.');
+  const [withoutBody] = buildImmersiveShowcaseItems('showcase-feed', [{ ...item, body: '' }]);
+  expect(withoutBody.details?.body).toBe('A clean launch visual.');
 });
 
 it('plays an audio creation from the owner library as sound, never as a picture', async () => {
@@ -318,6 +330,11 @@ const extendedOperationCases: Array<{
   { key: 'listViewerUnlocks', call: (api) => api.listViewerUnlocks({ limit: 24, offset: 0 }) },
   { key: 'getViewerUnlock', call: (api) => api.getViewerUnlock('unlock-1') },
   { key: 'getViewerUnlockFileUrl', call: (api) => api.getViewerUnlockFileUrl('unlock-1', 'retained/file.zip') },
+  {
+    key: 'getViewerUnlockFileUrls',
+    call: (api) => api.getViewerUnlockFileUrls('unlock-1', ['retained/a.png', 'retained/b.png'], { disposition: 'inline' }),
+  },
+  { key: 'resolveViewerUnlockFileUrl', call: (api) => api.resolveViewerUnlockFileUrl('unlock-1', 'retained/file.zip') },
   { key: 'getOnboardingState', call: (api) => api.getOnboardingState() },
   { key: 'updateOnboardingState', call: (api) => api.updateOnboardingState({ status: 'in_progress' }) },
   { key: 'getWelcomeCredits', call: (api) => api.getWelcomeCredits() },
@@ -413,6 +430,11 @@ const extendedOperationCases: Array<{
   { key: 'retryTemplateRunStep', call: (api) => api.retryTemplateRunStep('run-1', 'step-1') },
   { key: 'approveTemplateRunStep', call: (api) => api.approveTemplateRunStep('run-1', 'step-1') },
   { key: 'cancelTemplateRun', call: (api) => api.cancelTemplateRun('run-1') },
+  {
+    key: 'getPostResourceFileUrls',
+    call: (api) => api.getPostResourceFileUrls('post-1', ['bundles/post-1/a.png', 'bundles/post-1/b.png'], { disposition: 'inline' }),
+  },
+  { key: 'resolvePostResourceFileUrl', call: (api) => api.resolvePostResourceFileUrl('post-1', 'bundles/post-1/prompt.txt') },
 ];
 
 const legacyOperationAliases: Partial<Record<ContractEndpointKey, RegisteredOperationKey>> = {
@@ -520,6 +542,64 @@ describe('mobile shared API v1 contract fixture', () => {
       code: 'MOBILE_UPDATE_REQUIRED',
       details: endpoint.response,
     });
+  });
+
+  it("signs a bundle's files in the shared batch shapes, within the shared limit", async () => {
+    const endpoint = contract.endpoints.getPostResourceFileUrl as unknown as ContractEndpoint & {
+      batchLimit: number;
+      requestVariants: { batch: { storagePaths: string[]; disposition: 'inline' | 'attachment' } };
+      responseVariants: { batch: { files: Array<{ storagePath: string; url: string }> } };
+    };
+    const batch = endpoint.requestVariants.batch;
+    expect(POST_RESOURCE_FILE_URL_BATCH_LIMIT).toBe(endpoint.batchLimit);
+
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(matchesPathTemplate(endpoint.path, new URL(String(input)).pathname)).toBe(true);
+      expect((init?.method ?? 'GET').toUpperCase()).toBe(endpoint.method);
+      return jsonResponse(endpoint.responseVariants.batch);
+    });
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const urls = await Promise.all(batch.storagePaths.map((storagePath) => (
+      api.resolvePostResourceFileUrl('post-1', storagePath, { disposition: batch.disposition })
+    )));
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String((fetcher.mock.calls[0]?.[1] as RequestInit).body))).toEqual(batch);
+    expect(urls).toEqual(endpoint.responseVariants.batch.files.map((file) => file.url));
+  });
+
+  it('treats a path the batch answer leaves out as not found, without asking again', async () => {
+    const endpoint = contract.endpoints.getPostResourceFileUrl as unknown as ContractEndpoint & {
+      requestVariants: { batch: { storagePaths: string[]; disposition: 'inline' | 'attachment' } };
+      responseVariants: { batch: { files: Array<{ storagePath: string; url: string }> } };
+    };
+    const [kept, ...rest] = endpoint.responseVariants.batch.files;
+    expect(rest.length).toBeGreaterThan(0);
+    // The route leaves out a path that is not on the unlock rather than
+    // failing the paths beside it.
+    const fetcher = vi.fn(async () => jsonResponse({ files: [kept] }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const results = await Promise.allSettled(endpoint.requestVariants.batch.storagePaths.map((storagePath) => (
+      api.resolvePostResourceFileUrl('post-1', storagePath, { disposition: endpoint.requestVariants.batch.disposition })
+    )));
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(results[0]).toEqual({ status: 'fulfilled', value: kept!.url });
+    for (const missing of results.slice(1)) {
+      expect(missing.status).toBe('rejected');
+      expect((missing as PromiseRejectedResult).reason).toBeInstanceOf(ApiError);
+      expect(((missing as PromiseRejectedResult).reason as ApiError).status).toBe(404);
+    }
   });
 
   it('consumes the marketplace bundle fallback response through the mobile API client', async () => {

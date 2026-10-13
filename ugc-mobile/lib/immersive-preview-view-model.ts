@@ -169,6 +169,7 @@ export function immersiveViewerHref({
   algorithmVersion,
   creatorUsername,
   feedSessionId,
+  lane,
   mediaOnly,
   source,
   initialId,
@@ -179,6 +180,8 @@ export function immersiveViewerHref({
   algorithmVersion?: string | null;
   creatorUsername?: string | null;
   feedSessionId?: string | null;
+  /** The grid lane the tile was in (`serializeShowcaseFeedLane`): the reel reads and pages it. */
+  lane?: string | null;
   mediaOnly?: boolean;
   source: PreviewViewerSource;
   initialId: string;
@@ -199,6 +202,7 @@ export function immersiveViewerHref({
       ...(feedSessionId ? { feedSessionId } : {}),
       ...(algorithmVersion ? { algorithmVersion } : {}),
       ...(creatorUsername ? { creatorUsername } : {}),
+      ...(lane ? { lane } : {}),
     },
   }, zoom);
 }
@@ -262,6 +266,7 @@ export function showcaseFeedItemOpenHref({
   comments,
   creatorUsername,
   feedSessionId,
+  lane,
   mediaOnly,
   item,
   source,
@@ -271,6 +276,7 @@ export function showcaseFeedItemOpenHref({
   comments?: boolean;
   creatorUsername?: string | null;
   feedSessionId?: string | null;
+  lane?: string | null;
   mediaOnly?: boolean;
   item: ShowcaseFeedItem;
   source: PreviewViewerSource;
@@ -285,6 +291,7 @@ export function showcaseFeedItemOpenHref({
     algorithmVersion,
     creatorUsername,
     feedSessionId,
+    lane,
     source,
     initialId: item.id,
     mediaOnly,
@@ -296,6 +303,7 @@ export function immersiveViewerReturnPath({
   algorithmVersion,
   creatorUsername,
   feedSessionId,
+  lane,
   mediaOnly,
   source,
   initialId,
@@ -303,6 +311,7 @@ export function immersiveViewerReturnPath({
   algorithmVersion?: string | null;
   creatorUsername?: string | null;
   feedSessionId?: string | null;
+  lane?: string | null;
   mediaOnly?: boolean;
   source: PreviewViewerSource;
   initialId: string;
@@ -314,6 +323,7 @@ export function immersiveViewerReturnPath({
     ...(feedSessionId ? [['feedSessionId', feedSessionId]] : []),
     ...(algorithmVersion ? [['algorithmVersion', algorithmVersion]] : []),
     ...(creatorUsername ? [['creatorUsername', creatorUsername]] : []),
+    ...(lane ? [['lane', lane]] : []),
   ];
   return `/viewer?${params
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
@@ -469,14 +479,6 @@ export function hasImmersiveDetailsPage(item: ImmersivePreviewItem) {
   return Boolean(item.details);
 }
 
-export function getImmersiveHorizontalPageIndex(detailsOpen: boolean) {
-  return detailsOpen ? 1 : 0;
-}
-
-export function isImmersiveDetailsHorizontalPage(pageIndex: number) {
-  return pageIndex === 1;
-}
-
 function getMediaItemsList(
   id: string,
   mediaUrl: string | null,
@@ -554,6 +556,8 @@ function showcaseToImmersiveItem(
   // before anything is spent. A free one is claimed by the Remix tap itself.
   const canUnlockRemix = remixAccess === 'paid-unlock';
   const canRecreate = remixAccess === 'open' || remixAccess === 'free-unlock';
+  // The server takes comments on public posts only.
+  const canComment = item.visibility !== 'unlisted';
 
   return {
     id: item.id,
@@ -578,8 +582,7 @@ function showcaseToImmersiveItem(
     saveCount: item.saveCount,
     commentLabel: formatCompactCount(item.commentCount),
     commentCount: item.commentCount ?? 0,
-    // The server takes comments on public posts only.
-    canComment: item.visibility !== 'unlisted',
+    canComment,
     isSaved,
     canSave: true,
     canShare: true,
@@ -594,7 +597,10 @@ function showcaseToImmersiveItem(
     details: {
       title,
       prompt: item.prompt.trim(),
-      body: item.body.trim(),
+      // A caption written in the web composer's description field, on a post
+      // with no body, is still the post's story; the owner view reads it the
+      // same way.
+      body: item.body.trim() || item.description?.trim() || '',
       categoryLabel: categoryLabel(item.category, item.postFormat),
       sourceLabel: 'Showcase',
       toolLabel: item.sourceTool?.trim() || null,
@@ -626,12 +632,12 @@ function showcaseToImmersiveItem(
       // often as from Profile; the web post page offers Edit there too.
       ...(viewerUserId && item.creator.id === viewerUserId ? ['edit-post'] : []),
       isSaved ? 'unsave' : 'save',
-      'comment',
+      // The rail's own rule: a row on a post that takes no comments did nothing.
+      ...(canComment ? ['comment'] : []),
       'share',
       ...(canRecreate ? ['recreate'] : []),
       ...(canUnlockRemix ? ['unlock-remix'] : []),
       'view-details',
-      'open-original',
     ],
     disabledActions: {},
     recommendation: item.recommendation,
@@ -812,6 +818,9 @@ function ownerPostToImmersiveItem(
   // same way as an upload (including the second step when buyers exist).
   const deleteActions = ['delete-post'];
   const activeGeneratedPostActions = isManualOwnerPost ? [] : ['recreate'];
+  const mediaItems = getMediaItemsList(item.id, item.mediaUrl, item.mediaKind, item.mediaItems);
+  // A post of words has no file to save: the row only ever answered "No media file".
+  const downloadActions = mediaItems.length ? ['download'] : [];
 
   return {
     id: item.id,
@@ -821,7 +830,7 @@ function ownerPostToImmersiveItem(
     displayText,
     mediaUrl: item.mediaUrl,
     mediaKind: item.mediaKind,
-    mediaItems: getMediaItemsList(item.id, item.mediaUrl, item.mediaKind, item.mediaItems),
+    mediaItems,
     previewKind: textOnly ? 'text' : undefined,
     creatorLabel: owner.creatorLabel,
     creatorAvatar: owner.creatorAvatar ?? null,
@@ -873,8 +882,8 @@ function ownerPostToImmersiveItem(
     archivedAt: item.archivedAt ?? null,
     visibility: item.visibility,
     availableActions: item.archivedAt
-      ? ['restore', ...deleteActions, 'share', 'download', 'view-details']
-      : ['edit-post', 'change-visibility', 'archive', ...deleteActions, 'share', 'download', ...activeGeneratedPostActions, 'view-details'],
+      ? ['restore', ...deleteActions, 'share', ...downloadActions, 'view-details']
+      : ['edit-post', 'change-visibility', 'archive', ...deleteActions, 'share', ...downloadActions, ...activeGeneratedPostActions, 'view-details'],
     disabledActions: item.archivedAt
       ? {
           'edit-post': 'This post is archived',

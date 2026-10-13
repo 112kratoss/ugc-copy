@@ -146,6 +146,30 @@ describe('recordAuthoritativeFeedEvent', () => {
     }]);
   });
 
+  // The post-report route writes it: the delivery it carries is what stamps
+  // that delivery fact's `reported_at` (`apply_feed_delivery_outcome`).
+  it('writes a report against the delivery it was filed from', async () => {
+    const db = feedTables();
+
+    const result = await recordAuthoritativeFeedEvent(db.client, {
+      eventType: 'report',
+      viewerUserId: VIEWER,
+      postId: POST,
+      deliveryId: '501',
+      occurredAt: '2026-10-01T09:00:00.000Z',
+    });
+
+    expect(result).toEqual({ status: 'recorded', deliveryId: '501' });
+    expect(db.tables.feed_events).toEqual([expect.objectContaining({
+      client_event_id: `srv:report:${VIEWER}:${POST}:501`,
+      session_id: SESSION,
+      session_item_id: '501',
+      event_type: 'report',
+      source_surface: AUTHORITATIVE_FEED_EVENT_SOURCE_SURFACE,
+      position: 4,
+    })]);
+  });
+
   it.each([
     ['another viewer\'s delivery', '502'],
     ['a delivery of another post', '503'],
@@ -428,8 +452,8 @@ describe('recordAuthoritativeFeedEvent', () => {
     }).ok).toBe(true);
   });
 
-  it('keeps the four types server-only: the client parser refuses every one', () => {
-    expect(AUTHORITATIVE_FEED_EVENT_TYPES).toEqual(['comment', 'follow', 'remix_complete', 'purchase']);
+  it('keeps the five types server-only: the client parser refuses every one', () => {
+    expect(AUTHORITATIVE_FEED_EVENT_TYPES).toEqual(['comment', 'follow', 'remix_complete', 'purchase', 'report']);
     for (const eventType of AUTHORITATIVE_FEED_EVENT_TYPES) {
       const parsed = parseShowcaseFeedEventPayload({
         clientEventId: 'event-1',
@@ -437,7 +461,7 @@ describe('recordAuthoritativeFeedEvent', () => {
         eventType,
         sourceSurface: 'feed',
       });
-      // `comment` is not a client type at all; the other three are refused when
+      // `comment` is not a client type at all; the other four are refused when
       // recorded (recordShowcaseFeedEvent and the batch RPC answer 400).
       if (eventType === 'comment') expect(parsed.ok).toBe(false);
     }

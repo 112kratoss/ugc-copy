@@ -91,6 +91,10 @@ export function getPostMediaKind(
 // NewPostClient.tsx, mobile in post-new-view-model.ts — but this is the gate
 // that actually rejects, on create and on edit alike.
 export const TITLE_MAX_LENGTH = 100;
+// The same for a post's text (its body). Edit and publish check this one;
+// create checks the same number in post-creation-submission-service.ts, and
+// both composers mirror it for their counters.
+export const BODY_MAX_LENGTH = 2000;
 
 // Titles derived from a body are cut well short of TITLE_MAX_LENGTH, so an
 // auto-generated title can never violate the limit a creator is held to.

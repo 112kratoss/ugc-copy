@@ -44,11 +44,14 @@ export function ViewerActionSheet({
   onHideCreator,
   onNotInterested,
   onRecreate,
+  onSave,
   onShare,
   onDeleted,
   onBlocked,
+  onReported,
   onUnlockRemix,
   onSourceRefresh,
+  authReturnTo,
   visible,
 }: {
   item: ImmersivePreviewItem;
@@ -58,11 +61,15 @@ export function ViewerActionSheet({
   onHideCreator?: () => void;
   onNotInterested?: () => void;
   onRecreate: () => void;
+  onSave?: (item: ImmersivePreviewItem) => void;
   onShare: () => void;
   onDeleted?: (postId: string) => void;
   onBlocked?: (userId: string) => void;
+  onReported?: (item: ImmersivePreviewItem) => void;
   onUnlockRemix?: () => void;
   onSourceRefresh: () => void;
+  /** Where sign-in comes back to from Report and Block: the screen showing this item. */
+  authReturnTo?: string;
   visible: boolean;
 }) {
   const theme = useAppTheme();
@@ -78,11 +85,14 @@ export function ViewerActionSheet({
     onHideCreator,
     onNotInterested,
     onRecreate,
+    onSave,
     onShare,
     onDeleted,
     onBlocked,
+    onReported,
     onUnlockRemix,
     onSourceRefresh,
+    authReturnTo,
   });
 
   return (
@@ -168,10 +178,8 @@ const VIEWER_ACTION_ICONS: Record<string, LucideIcon> = {
   'edit-post': Pencil,
   'change-visibility': Eye,
   'view-linked': ExternalLink,
-  'edit-linked': Pencil,
   'edit-linked-resources': SlidersHorizontal,
   'change-linked-visibility': Eye,
-  'open-original': ExternalLink,
   'view-details': Info,
   download: Download,
   'not-interested': EyeOff,
@@ -217,12 +225,8 @@ function getViewerActionDescription(action: string, item: ImmersivePreviewItem) 
       return 'Choose who can see this post.';
     case 'view-linked':
       return 'Open the post created from this media.';
-    case 'edit-linked':
-      return 'Edit the post created from this media.';
     case 'edit-linked-resources':
       return 'Choose what people receive when they unlock this post.';
-    case 'open-original':
-      return 'Open this media in its original post.';
     case 'view-details':
       return 'See the prompt, model, and creation information.';
     case 'download':

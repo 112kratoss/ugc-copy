@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   hapticLight: vi.fn(),
   hapticError: vi.fn(),
   announce: vi.fn(),
+  user: { id: 'user-1' } as { id: string } | null,
 }));
 
 vi.mock('expo-router', () => ({ router: { push: mocks.routerPush } }));
@@ -22,7 +23,7 @@ vi.mock('react-native', () => ({
   AccessibilityInfo: { announceForAccessibility: mocks.announce },
 }));
 vi.mock('@/lib/auth', () => ({
-  useAuth: () => ({ api: { saveShowcasePost: mocks.saveShowcasePost }, user: { id: 'user-1' } }),
+  useAuth: () => ({ api: { saveShowcasePost: mocks.saveShowcasePost }, user: mocks.user }),
 }));
 
 import { useShowcaseSaveMutation } from '../lib/use-showcase-save-mutation';
@@ -111,7 +112,10 @@ async function mountSaveSurfaces(surfaceCount = 1) {
   };
 }
 
-afterEach(() => { vi.clearAllMocks(); });
+afterEach(() => {
+  vi.clearAllMocks();
+  mocks.user = { id: 'user-1' };
+});
 
 describe('two quick taps on one save button', () => {
   it('holds the second request until the first settles, so the server sees tap order', async () => {
@@ -265,6 +269,49 @@ describe('a save reported to the feed', () => {
 
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledWith(false);
+
+    surface.cleanup();
+  });
+});
+
+// A guest's tap goes to sign-in first; the screen says where sign-in returns
+// to, or the guest signs up and lands on Home without the post.
+describe('a signed-out tap', () => {
+  async function mountSignedOut(options?: { authReturnTo?: string }) {
+    mocks.user = null;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    let toggle!: Toggle;
+    function Probe() {
+      toggle = useShowcaseSaveMutation(options).toggleSave;
+      return null;
+    }
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(React.createElement(QueryClientProvider, { client }, React.createElement(Probe)));
+    });
+    return {
+      tap: async () => { await act(async () => { toggle({ postId: 'post-signed-out', isSaved: false, saveCount: 0 }); }); },
+      cleanup: () => { tree.unmount(); client.clear(); },
+    };
+  }
+
+  it('sends the reader to sign in and back to the screen the post is on', async () => {
+    const surface = await mountSignedOut({ authReturnTo: '/post/post-signed-out' });
+
+    await surface.tap();
+
+    expect(mocks.routerPush).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/post/post-signed-out' } });
+    expect(mocks.saveShowcasePost).not.toHaveBeenCalled();
+
+    surface.cleanup();
+  });
+
+  it('keeps the plain sign-in for a surface that names no way back', async () => {
+    const surface = await mountSignedOut();
+
+    await surface.tap();
+
+    expect(mocks.routerPush).toHaveBeenCalledWith('/auth');
 
     surface.cleanup();
   });

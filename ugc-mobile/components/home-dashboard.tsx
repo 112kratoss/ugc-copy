@@ -32,7 +32,7 @@ import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE } from '@/lib/viewer-actions';
-import { FEED_WINDOW_PAGE_LIMIT, feedWindowPaginationPosition, getPreviousFeedPageParam } from '@/lib/feed-page-window';
+import { feedWindowPaginationPosition } from '@/lib/feed-page-window';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import {
   HOME_FEED_CHIPS,
@@ -75,10 +75,10 @@ import { getShowcaseRemixAccess } from '@/lib/showcase-remix-access';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
 import {
   createFeedAttentionTracker,
-  createFeedDeliveryOnceGate,
   feedAttentionEventDetails,
   type FeedAttentionEvent,
 } from '@/lib/feed-attention-view-model';
+import { resourceOpenGate } from '@/lib/reel-feed-events';
 import {
   SHOWCASE_DWELL_VIEWABILITY,
   SHOWCASE_PLAYBACK_VIEWABILITY,
@@ -98,16 +98,12 @@ import {
   isBatchedShowcaseFeedEventType,
 } from '@/lib/feed-event-queue';
 import {
-  SHOWCASE_FEED_STALE_TIME_MS,
-  createShowcaseFeedQueryKey,
   createShowcaseFeedViewerQueryKey,
   createShowcasePostQueryKey,
   flattenShowcaseFeedPages,
-  getNextShowcaseFeedPageParam,
-  getShowcaseFeedPageParams,
   getShowcaseFeedSessionContext,
-  type ShowcaseFeedPageParam,
 } from '@/lib/showcase-feed-query';
+import { serializeShowcaseFeedLane, showcaseFeedLaneQueryOptions } from '@/lib/showcase-feed-lane';
 import {
   PERSISTED_HOME_FEED_CHIP_ID,
   cancelScheduledPersistHomeFeed,
@@ -236,10 +232,12 @@ export function HomeDashboard() {
   const [unlockRemixOpen, setUnlockRemixOpen] = useState(false);
 
   const activeChip = HOME_FEED_CHIPS.find((chip) => chip.id === activeChipId) ?? HOME_FEED_CHIPS[0];
-  const queryKey = useMemo(
-    () => createShowcaseFeedQueryKey(activeChip.filters, user?.id),
-    [activeChip, user?.id]
+  // The reel a card opens reads and pages these very pages (`lane` below).
+  const laneQueryOptions = useMemo(
+    () => showcaseFeedLaneQueryOptions(api, activeChip.filters, user?.id),
+    [activeChip, api, user?.id]
   );
+  const queryKey = laneQueryOptions.queryKey;
   const viewerFeedQueryKey = useMemo(() => createShowcaseFeedViewerQueryKey(user?.id), [user?.id]);
 
   const profileQuery = useQuery({
@@ -302,11 +300,11 @@ export function HomeDashboard() {
     }
   }, [recordFeedEvent]);
   // A card's resources (its recipe chip, the unlock sheet its Remix opens) are
-  // reported opened once per delivery.
-  const [resourceOpenGate] = useState(() => createFeedDeliveryOnceGate());
+  // reported opened once per delivery, through the gate the reel's Details and
+  // unlock sheet share: the chip opens the reel on that very card.
   const recordResourceOpen = useCallback((item: ShowcaseFeedItem) => {
     if (resourceOpenGate.pass(item.recommendation?.deliveryId)) recordFeedEvent(item, 'resource_open');
-  }, [recordFeedEvent, resourceOpenGate]);
+  }, [recordFeedEvent]);
   // Where the cards at qualified visibility sit in the list, as last reported.
   // FlashList reports indexes, and only when they change: a refresh or a
   // removal that puts other posts at the same places says nothing, so the
@@ -380,19 +378,7 @@ export function HomeDashboard() {
     },
   ]);
 
-  const feedQuery = useInfiniteQuery({
-    queryKey,
-    initialPageParam: { offset: 0 } as ShowcaseFeedPageParam,
-    queryFn: ({ pageParam }) => api.getShowcaseFeed(getShowcaseFeedPageParams({
-      ...activeChip.filters,
-      ...pageParam,
-    })),
-    getNextPageParam: getNextShowcaseFeedPageParam,
-    getPreviousPageParam: getPreviousFeedPageParam,
-    // Ranked sessions are already limited to 60 items on the server.
-    maxPages: activeChip.filters.sort === 'recent' ? FEED_WINDOW_PAGE_LIMIT : 0,
-    staleTime: SHOWCASE_FEED_STALE_TIME_MS,
-  });
+  const feedQuery = useInfiniteQuery(laneQueryOptions);
 
   const feedSession = useMemo(
     () => getShowcaseFeedSessionContext(feedQuery.data?.pages),
@@ -587,6 +573,9 @@ export function HomeDashboard() {
       initialSection,
       feedSessionId: feedSession.feedSessionId,
       algorithmVersion: item.recommendation?.algorithmVersion ?? feedSession.algorithmVersion,
+      // The reel reads this chip's lane and pages on through it, rather than a
+      // For You session of its own.
+      lane: serializeShowcaseFeedLane(activeChip.filters),
       zoom,
     }) as never);
   };
@@ -784,11 +773,16 @@ export function HomeDashboard() {
       destructive: true,
     }).then(async (confirmed) => {
       if (!confirmed) return;
+      // The card's delivery, so the ranker hears the report. Built outside the try: React Compiler skips a
+      // component with a conditional inside a try/catch.
+      const deliveryId = item.recommendation?.deliveryId;
+      const report = {
+        reason: 'unsafe_content' as const,
+        details: 'Reported from the mobile home feed.',
+        ...(deliveryId ? { deliveryId } : {}),
+      };
       try {
-        await api.reportPost(item.id, {
-          reason: 'unsafe_content',
-          details: 'Reported from the mobile home feed.',
-        });
+        await api.reportPost(item.id, report);
         queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
           { queryKey: viewerFeedQueryKey },
           (current) => removeShowcaseFeedItemsFromInfiniteData(current, { postId: item.id })

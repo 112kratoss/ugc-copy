@@ -17,6 +17,8 @@ import {
   publishGenerationPostWithResourceBundleAtomically,
 } from '@/lib/post-resource-bundles-server';
 import {
+  BODY_MAX_LENGTH,
+  TITLE_MAX_LENGTH,
   deriveTitleFromBody,
   isMissingPostsSchemaError,
   isMissingPostResourceBundlesSchemaError,
@@ -622,9 +624,13 @@ export async function publishGenerationToShowcaseForRoute({
   const hasRecipe = Boolean(bundleForPublicValidation && bundleForPublicValidation.accessMode !== 'none');
   const isPaidRecipe = bundleForPublicValidation?.accessMode === 'paid';
   const requestedDescription = normalizeTextValue(description);
+  // A stored post keeps its own description, an empty one included: one its
+  // creator cleared, or that a cleanup cleared, must not be refilled from the
+  // generation by a visibility flip. The generation's seeds a new post only.
   const descriptionCandidate = requestedDescription
-    ?? normalizeTextValue(existingPost?.description)
-    ?? (isPaidRecipe ? null : generation.description?.trim() ?? null);
+    ?? (existingPost
+      ? normalizeTextValue(existingPost.description)
+      : isPaidRecipe ? null : generation.description?.trim() ?? null);
   const sanitizedPublicContent = sanitizePublicPostContent({
     body: normalizedBody ?? '',
     description: descriptionCandidate ?? '',
@@ -641,6 +647,25 @@ export async function publishGenerationToShowcaseForRoute({
 
   if (isComposeSubmission && !resolvedTitle) {
     return { ok: false, status: 400, body: { error: 'Add a title for your post.', field: 'title' } };
+  }
+
+  // Only what the request writes is held to the limits: a visibility flip
+  // carries the stored post forward, which may predate them.
+  const submittedTitle = normalizeTextValue(title);
+  if (submittedTitle && submittedTitle.length > TITLE_MAX_LENGTH) {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: `Titles are limited to ${TITLE_MAX_LENGTH} characters.`, field: 'title' },
+    };
+  }
+  const submittedBody = normalizeTextValue(body);
+  if (submittedBody && submittedBody.length > BODY_MAX_LENGTH) {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: `Post text is limited to ${BODY_MAX_LENGTH} characters.`, field: 'body' },
+    };
   }
 
   const safetyViolation = shouldExposePost

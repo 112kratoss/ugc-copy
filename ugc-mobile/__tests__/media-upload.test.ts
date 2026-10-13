@@ -60,6 +60,56 @@ describe('post video duration limit', () => {
   });
 });
 
+describe('post media size limit', () => {
+  const MB = 1024 * 1024;
+
+  // The sign step's caps (MAX_UPLOAD_BYTES_BY_KIND) and the web composer's
+  // video message. A file over them was refused only after it was picked and
+  // queued, and Retry could never send it.
+  it('refuses a picked file over the sign step’s size for its kind', async () => {
+    const { getPostMediaPickRefusal, POST_IMAGE_MAX_UPLOAD_BYTES, POST_VIDEO_MAX_UPLOAD_BYTES } = await import('../lib/media');
+
+    expect(POST_VIDEO_MAX_UPLOAD_BYTES).toBe(250 * MB);
+    expect(POST_IMAGE_MAX_UPLOAD_BYTES).toBe(25 * MB);
+    expect(getPostMediaPickRefusal({ type: 'video', mimeType: 'video/mp4', fileSize: 250 * MB + 1 })).toBe('Videos must be 250 MB or smaller.');
+    expect(getPostMediaPickRefusal({ mimeType: 'video/quicktime', fileSize: 300 * MB })).toBe('Videos must be 250 MB or smaller.');
+    expect(getPostMediaPickRefusal({ type: 'image', mimeType: 'image/jpeg', fileSize: 25 * MB + 1 })).toBe('Images must be 25 MB or smaller.');
+    // At the limit exactly is allowed, and a 30 MB video is not judged as an image.
+    expect(getPostMediaPickRefusal({ type: 'video', fileSize: 250 * MB })).toBeNull();
+    expect(getPostMediaPickRefusal({ type: 'image', fileSize: 25 * MB })).toBeNull();
+    expect(getPostMediaPickRefusal({ type: 'video', fileSize: 30 * MB })).toBeNull();
+    // A size the picker could not read is left to the sign step.
+    expect(getPostMediaPickRefusal({ type: 'video' })).toBeNull();
+    expect(getPostMediaPickRefusal({ type: 'image', fileSize: null })).toBeNull();
+  });
+
+  it('checks the size before the duration, as the web composer does', async () => {
+    const { getPostMediaPickRefusal, POST_VIDEO_MAX_DURATION_SECONDS } = await import('../lib/media');
+    const overlongMs = (POST_VIDEO_MAX_DURATION_SECONDS + 1) * 1000;
+
+    expect(getPostMediaPickRefusal({ type: 'video', fileSize: 300 * MB, duration: overlongMs })).toBe('Videos must be 250 MB or smaller.');
+    expect(getPostMediaPickRefusal({ type: 'video', fileSize: 30 * MB, duration: overlongMs })).toBe('Videos must be 10 minutes or shorter.');
+  });
+
+  it('describes a pick’s refusals in one notice', async () => {
+    const { describePostMediaPickRefusals } = await import('../lib/media');
+
+    expect(describePostMediaPickRefusals([null, null])).toBeNull();
+    expect(describePostMediaPickRefusals(['Videos must be 250 MB or smaller.', null])).toEqual({
+      title: 'Video too large',
+      body: 'Videos must be 250 MB or smaller.',
+    });
+    expect(describePostMediaPickRefusals(['Videos must be 10 minutes or shorter.', 'Videos must be 10 minutes or shorter.'])).toEqual({
+      title: '2 videos too long',
+      body: 'Videos must be 10 minutes or shorter.',
+    });
+    expect(describePostMediaPickRefusals(['Images must be 25 MB or smaller.', 'Videos must be 250 MB or smaller.'])).toEqual({
+      title: '2 files not added',
+      body: 'Images must be 25 MB or smaller. Videos must be 250 MB or smaller.',
+    });
+  });
+});
+
 describe('mobile media uploads', () => {
   beforeEach(() => {
     uploadState.inspectUriUpload.mockReset();

@@ -1,25 +1,25 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { router, useLocalSearchParams } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { useLocalSearchParams } from 'expo-router';
+import { useCallback, useMemo, useState } from 'react';
 import { Linking, View } from 'react-native';
 
 import { MediaPreview } from '@/components/media-preview';
 import { PostResourceBundleContent } from '@/components/post-resource-bundle-content';
 import { DetailSkeleton } from '@/components/skeleton';
 import { AppText, Card, Pill, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
-import { showActionSheet } from '@/lib/action-sheet';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
+import { resourceKindLabel } from '@/lib/post-resource-bundle-view-model';
 import { CREDIT_BALANCE_LOADING_LABEL, FREE_RECIPE_LABEL, formatCreditAmount } from '@/lib/pricing';
 import { appTheme, type ToolAccent } from '@/lib/theme';
 import type { MarketplaceResource, PostResourceKind } from '@/lib/types';
-import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
+import { useBundleUnlock } from '@/lib/use-bundle-unlock';
 import { formatUnlockPrice } from '@/lib/unlock-library-view-model';
 
 function resourceLabel(kinds?: PostResourceKind[]) {
-  if (!kinds || kinds.length === 0) return 'Creator unlock';
-  return kinds.map((kind) => kind[0]?.toUpperCase() + kind.slice(1)).join(' · ');
+  const labels = (kinds ?? []).map(resourceKindLabel).filter(Boolean);
+  return labels.length ? labels.join(' · ') : 'Creator unlock';
 }
 
 function marketplaceAccent(accessMode?: MarketplaceResource['accessMode']): ToolAccent {
@@ -34,8 +34,7 @@ export default function MarketplaceAssetScreen() {
   const { assetId, postId } = useLocalSearchParams<{ assetId: string; postId?: string }>();
   const resourceId = Array.isArray(assetId) ? assetId[0] : assetId;
   const fallbackPostId = Array.isArray(postId) ? postId[0] : postId;
-  const { user, api, credits, updateCredits } = useAuth();
-  const queryClient = useQueryClient();
+  const { user, api, credits } = useAuth();
   const [fileLoadingPath, setFileLoadingPath] = useState<string | null>(null);
   const [resourceError, setResourceError] = useState<string | null>(null);
 
@@ -45,29 +44,6 @@ export default function MarketplaceAssetScreen() {
     queryFn: async () => (await api.getMarketplaceResourceDetail(resourceId, { postId: fallbackPostId })).bundle,
   });
 
-  const unlockMutation = useMutation({
-    mutationFn: async () => {
-      const detail = detailQuery.data;
-      if (!detail?.postId) throw new Error('Missing post for unlock.');
-      if (detail.accessMode === 'free') {
-        return api.unlockFreeBundle(detail.postId);
-      }
-      return api.unlockBundleWithCredits(detail.postId);
-    },
-    onSuccess: async (result) => {
-      if ('credits' in result && typeof result.credits === 'number') {
-        updateCredits(result.credits);
-      }
-      const postId = detailQuery.data?.postId;
-      if (postId && resourceId) {
-        await refreshUnlockedBundleCaches(queryClient, { postId, resourceId });
-        return;
-      }
-      await queryClient.invalidateQueries({ queryKey: ['marketplace-resource', resourceId] });
-      await queryClient.invalidateQueries({ queryKey: ['marketplace-resources'] });
-    },
-  });
-
   const detail = detailQuery.data;
   const resources = detail?.resources;
   const unlockPrice = detail?.priceUsdCents ?? 0;
@@ -75,21 +51,21 @@ export default function MarketplaceAssetScreen() {
   // there is no shortfall to report, and the unlock itself is checked against
   // the real balance on the server.
   const balanceKnown = credits !== null;
-  const creditShortfall = balanceKnown ? Math.max(0, unlockPrice - credits) : 0;
-
-  // A paid unlock spends the balance immediately and cannot be undone, so it
-  // gets the confirmation step the system purchase sheet gives real-money
-  // buys. Free unlocks stay one tap.
-  const confirmPaidUnlock = () => {
-    showActionSheet({
-      title: 'Unlock this resource?',
-      message: `${formatUnlockPrice(unlockPrice)} will come off your credit balance right away.`,
-      actions: [{
-        label: `Unlock for ${formatUnlockPrice(unlockPrice)}`,
-        onPress: () => unlockMutation.mutate(),
-      }],
-    });
-  };
+  // Where sign-in comes back to; a bare /auth landed the buyer on Home.
+  const unlockPath = `/marketplace/${encodeURIComponent(String(assetId))}${postId ? `?postId=${encodeURIComponent(String(postId))}` : ''}`;
+  // A paid unlock asks first, in the words every unlock now uses; free stays
+  // one tap (`useBundleUnlock`).
+  const bundleUnlock = useBundleUnlock({
+    authReturnTo: unlockPath,
+    target: detail?.postId && resourceId
+      ? {
+        postId: detail.postId,
+        resourceId,
+        accessMode: detail.accessMode === 'free' ? 'free' : 'paid',
+        priceUsdCents: unlockPrice,
+      }
+      : null,
+  });
   const resourceMediaItems = useMemo(() => {
     if (!detail?.post) return [];
     if (detail.post.mediaItems?.length) return detail.post.mediaItems;
@@ -108,11 +84,13 @@ export default function MarketplaceAssetScreen() {
     }];
   }, [detail?.post]);
 
-  const resolveResourceFileUrl = async (storagePath: string) => {
-    if (!detail?.postId) throw new Error('Missing post for this resource.');
-    const response = await api.getPostResourceFileUrl(detail.postId, storagePath);
-    return response.signedUrl;
-  };
+  // Memoized: every reference preview signs through this, and the previews
+  // one render mounts are signed together in one request.
+  const bundlePostId = detail?.postId;
+  const resolveResourceFileUrl = useCallback(async (storagePath: string) => {
+    if (!bundlePostId) throw new Error('Missing post for this resource.');
+    return api.resolvePostResourceFileUrl(bundlePostId, storagePath, { disposition: 'inline' });
+  }, [api, bundlePostId]);
 
   const openResourceFile = async ({ storagePath }: { storagePath: string; title: string; contentType: string | null }) => {
     try {
@@ -136,8 +114,6 @@ export default function MarketplaceAssetScreen() {
   };
 
   const isUnlockGone = detailQuery.error instanceof ApiError && detailQuery.error.status === 404;
-  // Where sign-in comes back to; a bare /auth landed the buyer on Home.
-  const unlockPath = `/marketplace/${encodeURIComponent(String(assetId))}${postId ? `?postId=${encodeURIComponent(String(postId))}` : ''}`;
 
   return (
     <Screen>
@@ -170,12 +146,8 @@ export default function MarketplaceAssetScreen() {
         )
       ) : null}
       {detailQuery.isLoading ? <DetailSkeleton label="Loading unlock details" /> : null}
-      {unlockMutation.error ? (
-        <StatusBlock
-          tone="danger"
-          title="Unlock failed"
-          body={unlockMutation.error instanceof Error ? unlockMutation.error.message : 'Try again.'}
-        />
+      {bundleUnlock.error ? (
+        <StatusBlock tone="danger" title="Unlock failed" body={bundleUnlock.error} />
       ) : null}
 
       {detail ? (
@@ -217,7 +189,7 @@ export default function MarketplaceAssetScreen() {
               <View style={{ gap: appTheme.spacing.gap }}>
                 <AppText variant="label">Sign in required</AppText>
                 <AppText variant="bodySm" color="muted">Sign in before unlocking free or paid resources.</AppText>
-                <PrimaryButton label="Sign in to unlock" onPress={() => router.push({ pathname: '/auth', params: { returnTo: unlockPath } } as never)} accent="primary" />
+                <PrimaryButton label="Sign in to unlock" onPress={bundleUnlock.request} accent="primary" />
               </View>
             ) : detail.viewerCanAccess ? (
               <View style={{ gap: 4 }}>
@@ -226,9 +198,9 @@ export default function MarketplaceAssetScreen() {
               </View>
             ) : detail.accessMode === 'free' ? (
               <PrimaryButton
-                label={unlockMutation.isPending ? 'Getting resources…' : 'Get resources — Free'}
-                loading={unlockMutation.isPending}
-                onPress={() => unlockMutation.mutate()}
+                label={bundleUnlock.isPending ? 'Getting resources…' : 'Get resources — Free'}
+                loading={bundleUnlock.isPending}
+                onPress={bundleUnlock.request}
                 accent="primary"
               />
             ) : (
@@ -238,24 +210,22 @@ export default function MarketplaceAssetScreen() {
                   <AppText variant="bodySm" color="muted">
                     Paid mobile unlocks use your Magicbooklet credit balance instead of a separate store checkout.
                   </AppText>
-                  <AppText variant="label" color={!balanceKnown ? 'muted' : creditShortfall > 0 ? 'warning' : 'success'}>
+                  <AppText variant="label" color={!balanceKnown ? 'muted' : bundleUnlock.shortfall > 0 ? 'warning' : 'success'}>
                     Costs {formatUnlockPrice(unlockPrice)} · {balanceKnown ? `Balance ${formatCreditAmount(credits)}` : CREDIT_BALANCE_LOADING_LABEL}
                   </AppText>
-                  {creditShortfall > 0 ? (
-                    <AppText variant="bodySm" color="muted">
-                      You need {formatCreditAmount(creditShortfall)} more credits for this unlock.
-                    </AppText>
+                  {bundleUnlock.shortfallMessage ? (
+                    <AppText variant="bodySm" color="muted">{bundleUnlock.shortfallMessage}</AppText>
                   ) : null}
                 </View>
                 <PrimaryButton
-                  label={unlockMutation.isPending ? 'Unlocking…' : `Unlock for ${formatUnlockPrice(unlockPrice)}`}
-                  loading={unlockMutation.isPending}
-                  disabled={creditShortfall > 0 || unlockMutation.isPending}
-                  onPress={confirmPaidUnlock}
+                  label={bundleUnlock.isPending ? 'Unlocking…' : `Unlock for ${formatUnlockPrice(unlockPrice)}`}
+                  loading={bundleUnlock.isPending}
+                  disabled={bundleUnlock.shortfall > 0 || bundleUnlock.isPending}
+                  onPress={bundleUnlock.request}
                   accent="primary"
                 />
-                {creditShortfall > 0 ? (
-                  <SecondaryButton label="Get credits" onPress={() => router.push('/pricing' as never)} />
+                {bundleUnlock.offersCredits ? (
+                  <SecondaryButton label="Get credits" onPress={bundleUnlock.goToCredits} />
                 ) : null}
               </View>
             )}

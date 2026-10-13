@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
+
 const nextCacheState = vi.hoisted(() => ({
   invocations: [] as unknown[][],
   definitions: [] as Array<{
@@ -49,6 +51,9 @@ type PostRow = {
   review_status?: string | null;
   generation_id: string | null;
   archived_at?: string | null;
+  description?: string | null;
+  creation_mode?: 'motion' | null;
+  is_nsfw?: boolean;
 };
 
 type GenerationModelRow = {
@@ -144,6 +149,8 @@ let postResourceBundlePurchasesState: PostResourceBundlePurchaseRow[] = [];
 let userBlocksState: UserBlockRow[] = [];
 let postsSchemaMissingState = false;
 let lastPurchaseBundleIds: unknown[] | null = null;
+// Holds the creator profile read open while set, to see what else has started.
+let profilesGate: Promise<void> | null = null;
 let tableAccesses: string[] = [];
 let rpcAccesses: string[] = [];
 // Forces the fake to answer the top-sales RPC as missing, so the legacy
@@ -271,14 +278,32 @@ function createServiceClientMock() {
         const filters: Record<string, unknown> = {};
         const sorts: Array<{ column: keyof PostRow; ascending: boolean }> = [];
         let textFilter = false;
+        let selectedColumns: string[] | null = null;
         const missingPostsError = {
           code: 'PGRST205',
           message: "Could not find the table 'public.posts'",
         };
 
         const query = {
-          select() {
+          select(columns?: string) {
+            selectedColumns = typeof columns === 'string'
+              ? columns.split(',').map((column) => column.trim())
+              : null;
             return query;
+          },
+          // A single-row read answers with the columns it asked for, as
+          // PostgREST does, so a column the read leaves out is missing here too.
+          async maybeSingle() {
+            const { data, error } = await query.range(0, 0);
+            const row = data?.[0] ?? null;
+            if (error || !row || !selectedColumns) return { data: row, error };
+            return {
+              data: Object.fromEntries(selectedColumns.map((column) => [
+                column,
+                (row as Record<string, unknown>)[column] ?? null,
+              ])),
+              error: null,
+            };
           },
           eq(column: string, value: unknown) {
             filters[column] = value;
@@ -318,7 +343,10 @@ function createServiceClientMock() {
               .filter((row) => !textFilter || row.category === 'text' || row.post_format === 'mixed')
               .sort((left, right) => {
                 for (const sort of sorts) {
-                  const comparison = compareValues(left[sort.column], right[sort.column]);
+                  const comparison = compareValues(
+                    left[sort.column] as string | number | null | undefined,
+                    right[sort.column] as string | number | null | undefined,
+                  );
                   if (comparison !== 0) {
                     return sort.ascending ? comparison : -comparison;
                   }
@@ -346,6 +374,7 @@ function createServiceClientMock() {
           select() {
             return {
               async in(_column: string, values: unknown[]) {
+                if (profilesGate) await profilesGate;
                 return {
                   data: profilesState.filter((profile) => values.includes(profile.id)),
                   error: null,
@@ -663,6 +692,7 @@ describe('showcase feed', () => {
     userBlocksState = [];
     postsSchemaMissingState = false;
     lastPurchaseBundleIds = null;
+    profilesGate = null;
     tableAccesses = [];
     rpcAccesses = [];
     topSalesRpcMissingState = false;
@@ -1726,5 +1756,83 @@ describe('showcase feed', () => {
     });
 
     expect(page.items[0].creator.id).toBe('user-2');
+  });
+
+  describe('the post read by id', () => {
+    it('carries the caption and the creation mode, which the app reads from it', async () => {
+      postsState = [createPostRow({
+        id: 'post-motion',
+        created_at: '2026-03-20T10:00:00.000Z',
+        category: 'video',
+        creation_mode: 'motion',
+        description: '  A caption written in the web composer.  ',
+        body: '',
+      })];
+      resourceBundlesState = [];
+
+      const { getShowcaseFeedItemById } = await import('@/lib/showcase-feed');
+      const item = await getShowcaseFeedItemById({ postId: 'post-motion' });
+
+      expect(item).toMatchObject({
+        id: 'post-motion',
+        description: 'A caption written in the web composer.',
+        creationMode: 'motion',
+      });
+    });
+
+    it('answers every field the shared contract pins for it', async () => {
+      const { getShowcaseFeedItemById } = await import('@/lib/showcase-feed');
+      const item = await getShowcaseFeedItemById({ postId: 'post-1', viewerUserId: 'viewer-1' });
+
+      const pinned = Object.keys(mobileApiContract.endpoints.getShowcasePost.response.item);
+      expect(pinned).toEqual(expect.arrayContaining(['description', 'creationMode']));
+      expect(Object.keys(item ?? {})).toEqual(expect.arrayContaining(pinned));
+    });
+
+    it('holds the caption to the paid-recipe rule the body and prompt follow', async () => {
+      postsState = [createPostRow({
+        id: 'post-1',
+        created_at: '2026-03-20T10:00:00.000Z',
+        generation_id: 'gen-1',
+        description: 'Saved generation setup\nModel: GPT Image 2',
+      })];
+
+      const { getShowcaseFeedItemById } = await import('@/lib/showcase-feed');
+      const item = await getShowcaseFeedItemById({ postId: 'post-1' });
+
+      expect(item?.asset?.accessMode).toBe('paid');
+      expect(item?.description).toBe('');
+    });
+
+    it('keeps an NSFW post\'s caption behind its cover', async () => {
+      postsState = [createPostRow({
+        id: 'post-nsfw',
+        created_at: '2026-03-20T10:00:00.000Z',
+        description: 'A caption only a reveal may show.',
+        is_nsfw: true,
+      })];
+      resourceBundlesState = [];
+
+      const { getShowcaseFeedItemById } = await import('@/lib/showcase-feed');
+      const { NSFW_DESCRIPTION } = await import('@/lib/nsfw-content');
+      const item = await getShowcaseFeedItemById({ postId: 'post-nsfw' });
+
+      expect(item).toMatchObject({ isNsfw: true, nsfwRevealed: false, description: NSFW_DESCRIPTION });
+      expect(JSON.stringify(item)).not.toContain('A caption only a reveal may show.');
+    });
+
+    it('asks for the NSFW flags alongside the other hydration reads, not after them', async () => {
+      let openProfiles = () => {};
+      profilesGate = new Promise<void>((resolve) => { openProfiles = resolve; });
+
+      const { getShowcaseFeedItemById } = await import('@/lib/showcase-feed');
+      const pending = getShowcaseFeedItemById({ postId: 'post-1' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The row read, then the NSFW read, while the creator read is still open.
+      expect(tableAccesses.filter((table) => table === 'posts')).toHaveLength(2);
+      openProfiles();
+      await expect(pending).resolves.toMatchObject({ id: 'post-1', isNsfw: false });
+    });
   });
 });

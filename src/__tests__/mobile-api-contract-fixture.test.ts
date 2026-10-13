@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { POST_RESOURCE_FILE_URL_BATCH_LIMIT } from '@/lib/post-resource-bundles';
+import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
+import { createPostResourceFileReadUrlForRoute } from '@/lib/post-resource-file-url-service';
 import { normalizeShowcaseCategory } from '@/lib/showcase';
 import { parseShowcaseFeedEventBatchPayload } from '@/lib/showcase-feed-events-service';
 
@@ -299,6 +302,53 @@ describe('shared mobile API v1 contract fixture', () => {
     }
     const batch: ShowcaseFeedEventBatchResponse = contract.endpoints.recordShowcaseFeedEvents.response;
     expect(batch).toEqual({ success: true, recorded: events.length, rejected: 0 });
+  });
+
+  // A bundle's files signed in one call: the request and the answer the app
+  // codes against, held to what the server's own service returns for them.
+  it('answers the file-url batch request with the files the fixture pins', async () => {
+    const endpoint = mobileApiContract.endpoints.getPostResourceFileUrl;
+    const request = endpoint.requestVariants.batch;
+    expect(endpoint.batchLimit).toBe(POST_RESOURCE_FILE_URL_BATCH_LIMIT);
+    // The single-path answer is unchanged.
+    expect(endpoint.response).toEqual({ success: true, signedUrl: expect.any(String) });
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-06-22T06:00:00.000Z'));
+    try {
+      const result = await createPostResourceFileReadUrlForRoute({
+        body: request,
+        client: {
+          rpc: vi.fn(async () => ({
+            data: { allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0, resetAt: '2026-06-22T06:10:00.000Z' },
+            error: null,
+          })),
+          storage: {
+            from: (bucket: string) => ({
+              createSignedUrl: async (path: string) => ({
+                data: { signedUrl: `https://storage.example.test/signed/${bucket}/${path}` },
+                error: null,
+              }),
+            }),
+          },
+        },
+        countryCode: null,
+        getDetailByPostId: vi.fn(async () => ({
+          viewerCanAccess: true,
+          seller: { id: 'user-1' },
+          resources: {
+            attachments: [],
+            items: request.storagePaths.map((storagePath) => ({ title: 'Reference', storagePath })),
+          },
+        }) as unknown as PostResourceBundleDetail),
+        postId: 'post-1',
+        rateLimitKey: 'buyer-1',
+        viewerUserId: 'buyer-1',
+      });
+      expect(result).toEqual({ ok: true, body: endpoint.responseVariants.batch });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

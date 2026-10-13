@@ -343,6 +343,23 @@ describe('comment menu', () => {
       canDelete: false, canRemove: false, canReport: false, onDelete: noop, onRemove: noop, onReport: noop,
     }))).toBe(false);
   });
+
+  it('ends with Block, naming the author, only when the sheet offers it', () => {
+    const onBlock = vi.fn();
+    const theirs = buildCommentMenu({
+      canDelete: false, canRemove: false, canReport: true, block: { authorLabel: '@batman', onBlock },
+      onDelete: noop, onRemove: noop, onReport: noop,
+    });
+    const blockRow = theirs.sections[0].items[1];
+
+    expect(theirs.sections[0].items.map((item) => item.label)).toEqual(['Report', 'Block @batman']);
+    expect(blockRow).toMatchObject({ kind: 'action', id: 'block', systemImage: 'nosign', destructive: true });
+    if (blockRow.kind === 'action') blockRow.onSelect();
+    expect(onBlock).toHaveBeenCalledTimes(1);
+    expect(buildCommentMenu({
+      canDelete: false, canRemove: false, canReport: true, block: null, onDelete: noop, onRemove: noop, onReport: noop,
+    }).sections[0].items.map((item) => item.label)).toEqual(['Report']);
+  });
 });
 
 describe('post visibility choices', () => {
@@ -373,7 +390,7 @@ describe('viewer menu', () => {
   it("opens with the rail's actions as a row of icons and keeps the sheet's groups below", () => {
     const menu = buildViewerActionsMenu({
       item: viewerItem(),
-      actions: ['save', 'comment', 'share', 'recreate', 'view-details', 'open-original', 'not-interested', 'report-content', 'report-user', 'block-user'],
+      actions: ['save', 'comment', 'share', 'recreate', 'view-details', 'download', 'not-interested', 'report-content', 'report-user', 'block-user'],
       onAction: noop,
     });
 
@@ -381,7 +398,7 @@ describe('viewer menu', () => {
     expect(menu.quickActions.map((row) => row.label)).toEqual(['Save', 'Comments', 'Share']);
     expect(menu.quickActions.every((row) => Boolean(row.systemImage))).toBe(true);
     expect(menu.sections.map((section) => section.title)).toEqual([undefined, 'Explore preferences', 'Safety']);
-    expect(menu.sections[0].items.map((item) => item.label)).toEqual(['Remix', 'View details', 'Open original post']);
+    expect(menu.sections[0].items.map((item) => item.label)).toEqual(['Remix', 'View details', 'Download media']);
     expect(menu.sections[2].items.every((item) => item.kind === 'action' && item.destructive)).toBe(true);
   });
 
