@@ -19,8 +19,19 @@ export function isGenerationInFlight(status: string | null | undefined) {
   return !isGenerationFinished(value) && value !== 'cancelled' && value !== 'canceled';
 }
 
+/** The primary output: the one Post to feed publishes. */
 export function getGenerationOutput(status: GenerationStatusResponse) {
   return status.outputs?.[0] ?? status.output ?? null;
+}
+
+/**
+ * Every output a finished run returned, the primary first, so a run that made several
+ * (Grok Imagine's options) shows them all; `[output]` when the status carries no list.
+ */
+export function getGenerationOutputs(status: GenerationStatusResponse): string[] {
+  const outputs = (status.outputs ?? []).filter((output): output is string => typeof output === 'string' && output.length > 0);
+  if (outputs.length > 0) return outputs;
+  return status.output ? [status.output] : [];
 }
 
 export async function pollGenerationStatus(

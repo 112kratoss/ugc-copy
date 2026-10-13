@@ -7,6 +7,7 @@ import { BadgeDollarSign, BookOpen, Check, CircleAlert, Globe, Loader2, LockKeyh
 import { sharePublicGeneration } from '@/lib/share-client';
 import type { GenerationShareSourceSurface } from '@/lib/share';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
+import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
 import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profile';
 import {
   formatUsdCents,
@@ -64,6 +65,15 @@ function normalizeOptionalText(value: string): string | undefined {
  */
 function getDefaultPublishDescription(defaultDescription: string): string {
   return defaultDescription.trim();
+}
+
+/**
+ * A creation's own title can be longer than a post's, and the field's
+ * maxLength does not trim a value it is handed; the server would refuse the
+ * publish. The composers trim a prefilled title the same way.
+ */
+function getDefaultPublishTitle(defaultTitle: string): string {
+  return defaultTitle.slice(0, TITLE_MAX_LENGTH);
 }
 
 const DEFAULT_PRICE_TOKENS = 900;
@@ -192,7 +202,7 @@ export default function PublishToShowcaseModal({
   onPublished,
 }: PublishToShowcaseModalProps) {
   const [isNsfw, setIsNsfw] = useState(false);
-  const [publishTitle, setPublishTitle] = useState(defaultTitle);
+  const [publishTitle, setPublishTitle] = useState(() => getDefaultPublishTitle(defaultTitle));
   const [publishDescription, setPublishDescription] = useState(() =>
     getDefaultPublishDescription(defaultDescription)
   );
@@ -249,7 +259,7 @@ export default function PublishToShowcaseModal({
 
     // Opening a generation starts a fresh publish draft from its supplied defaults.
     setIsNsfw(false);
-    setPublishTitle(defaultTitle);
+    setPublishTitle(getDefaultPublishTitle(defaultTitle));
     setPublishDescription(getDefaultPublishDescription(defaultDescription));
     // A fresh publish starts with no recipe attached; the creator opts in.
     setRecipeAccess('none');
@@ -583,7 +593,7 @@ export default function PublishToShowcaseModal({
               onChange={(event) => setPublishTitle(event.target.value)}
               placeholder="Give your creation a name"
               className="w-full rounded-2xl border border-white/10 bg-black px-4 py-3 text-white transition-colors placeholder:text-zinc-600 focus:border-emerald-400/50 focus:outline-none"
-              maxLength={60}
+              maxLength={TITLE_MAX_LENGTH}
             />
           </div>
 

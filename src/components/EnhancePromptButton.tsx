@@ -2,12 +2,16 @@
 
 import { useEffect, useState } from 'react';
 import { Sparkles, Loader2, AlertCircle, Undo2 } from 'lucide-react';
+import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { EnhancerContext, Medium, PromptEnhancementLevel } from '@/lib/prompt-enhancer';
 import {
     PromptEnhancementError,
     type PromptEnhancementResult,
     requestPromptEnhancement,
 } from '@/components/enhancePromptClient';
+
+// The service debits this same constant, so the price on the button is the charge.
+const ENHANCEMENT_PRICE_LABEL = `${PROMPT_ENHANCEMENT_COST_CREDITS} ${PROMPT_ENHANCEMENT_COST_CREDITS === 1 ? 'credit' : 'credits'}`;
 
 interface EnhancePromptButtonProps {
     prompt: string;
@@ -123,6 +127,8 @@ export default function EnhancePromptButton({
                 <button
                     onClick={handleEnhance}
                     disabled={!canEnhance}
+                    // The price as a phrase of its own: the two spans can run together ("Enhance2 credits").
+                    aria-label={`${isEnhancing ? loadingLabel : label}, ${ENHANCEMENT_PRICE_LABEL}`}
                     className={`group flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all duration-300 ${
                         canEnhance
                             ? 'border border-[#ff7a59]/30 bg-[#ff7a59]/10 text-[#ffb09c] hover:border-[#ff7a59]/50 hover:bg-[#ff7a59]/15 active:scale-[0.97]'
@@ -140,7 +146,7 @@ export default function EnhancePromptButton({
                             ? 'bg-black/25 text-[#ffc1b2]'
                             : 'bg-zinc-800 text-zinc-600'
                     }`}>
-                        2 credits
+                        {ENHANCEMENT_PRICE_LABEL}
                     </span>
                 </button>
 

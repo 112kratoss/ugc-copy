@@ -1,3 +1,5 @@
+import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../ugc-mobile/lib/model-catalog/protocol';
+
 import { logBackendError } from '@/lib/backend-logger';
 import { extractPromptHandles } from '@/lib/image-elements';
 
@@ -163,7 +165,7 @@ export const PROMPT_ENHANCER_PROVIDER_MODEL = 'gemini-3.6-flash';
 const PROMPT_ENHANCER_ENDPOINT = 'https://api.kie.ai/gemini-3-6-flash-openai/v1/chat/completions';
 
 export function getPromptEnhancementCost(): number {
-  return 2;
+  return PROMPT_ENHANCEMENT_COST_CREDITS;
 }
 
 const OUTPUT_ONLY_THE_PROMPT_RULE =

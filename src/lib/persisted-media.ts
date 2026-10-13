@@ -4,13 +4,11 @@ const persistedMediaStore = localforage.createInstance({
   name: 'magicbooklet-persisted-media',
 });
 
-const legacyPersistedMediaStore = localforage.createInstance({
-  name: 'emptybooklet-persisted-media',
-});
-
-const legacyUgcCopyPersistedMediaStore = localforage.createInstance({
-  name: 'ugc-copy-persisted-media',
-});
+/**
+ * Databases the creators wrote under the product's earlier names. Nothing reads
+ * them any more: what they hold was saved for no particular account.
+ */
+const LEGACY_PERSISTED_MEDIA_DATABASES = ['emptybooklet-persisted-media', 'ugc-copy-persisted-media'] as const;
 
 interface StoredMediaFile {
   file: Blob;
@@ -29,7 +27,12 @@ export interface PersistedImageElementRecord {
    */
   handle?: string | null;
   file: File;
+  /** The copy a run staged in `uploads`, so a reload sends it again instead of uploading the file. */
+  staged?: PersistedStagedUpload | null;
 }
+
+/** `uploadedAt` is epoch ms: the sweep reclaims a staged copy a fixed time after it was staged. */
+export type PersistedStagedUpload = { storagePath: string; uploadedAt: number };
 
 export interface PersistedMediaRecord {
   id: string;
@@ -58,6 +61,14 @@ interface StoredImageElementRecord {
   displayName: string;
   handle?: string | null;
   file: StoredMediaFile | File | Blob;
+  staged?: unknown;
+}
+
+function readStagedUpload(value: unknown): PersistedStagedUpload | null {
+  const { storagePath, uploadedAt } = (value ?? {}) as Record<string, unknown>;
+  return typeof storagePath === 'string' && storagePath && typeof uploadedAt === 'number' && Number.isFinite(uploadedAt)
+    ? { storagePath, uploadedAt }
+    : null;
 }
 
 interface StoredMediaRecord {
@@ -90,6 +101,62 @@ export const PERSISTED_MEDIA_KEYS = {
   createVideoKlingSubjects: 'create-video:kling-subjects',
   createVideoSeedanceAssets: 'create-video:seedance-assets',
 } as const;
+
+/**
+ * The key a creator saves its media under for one account. The unscoped keys
+ * were shared by everyone who used the browser, so the next account to sign in
+ * opened the last one's photos and clips and could send them with its own run.
+ */
+export function scopedPersistedMediaKey(key: string, userId: string): string {
+  if (!userId) {
+    throw new Error('Creator media is saved per account; a user id is required.');
+  }
+  return `${key}:${userId}`;
+}
+
+export const CREATOR_DRAFT_TOOLS = ['image', 'video', 'motion'] as const;
+export type CreatorDraftTool = (typeof CREATOR_DRAFT_TOOLS)[number];
+
+/** Where persisted-creator-draft.ts keeps a tool's text draft, defined here so clearing an account's data reaches it. */
+export function creatorDraftStorageKey(tool: CreatorDraftTool, userId: string): string {
+  if (!userId) {
+    throw new Error('Creator drafts are saved per account; a user id is required.');
+  }
+  return `creator-draft:${tool}:${userId}`;
+}
+
+// Once per page: each creator calls the purge on mount, and dropping a database
+// opens it first, so a second run would only open and delete an empty one again.
+let legacyPurge: Promise<void> | null = null;
+
+/**
+ * Deletes what the creators saved before media was kept per account: every
+ * unscoped key, and the two databases from the product's earlier names. A
+ * browser that still holds them loses those staged files once.
+ */
+export function purgeLegacyPersistedMedia(): Promise<void> {
+  legacyPurge ??= (async () => {
+    for (const name of LEGACY_PERSISTED_MEDIA_DATABASES) {
+      // Not awaited: deleting a database waits until every tab still holding it
+      // open (one on an older build) lets go, and nothing here needs it gone first.
+      void persistedMediaStore.dropInstance({ name }).catch(() => undefined);
+    }
+    await Promise.allSettled(
+      Object.values(PERSISTED_MEDIA_KEYS).map((key) => persistedMediaStore.removeItem(key)),
+    );
+  })();
+  return legacyPurge;
+}
+
+/** Everything the creators saved for one account: staged media and text drafts. */
+export async function clearPersistedCreatorData(userId: string): Promise<void> {
+  await Promise.all([
+    ...Object.values(PERSISTED_MEDIA_KEYS).map((key) => (
+      persistedMediaStore.removeItem(scopedPersistedMediaKey(key, userId))
+    )),
+    ...CREATOR_DRAFT_TOOLS.map((tool) => persistedMediaStore.removeItem(creatorDraftStorageKey(tool, userId))),
+  ]);
+}
 
 function getFallbackExtension(type: string | undefined): string {
   const rawExtension = type?.split('/')[1]?.split(';')[0];
@@ -175,24 +242,13 @@ function restoreFile(value: unknown, fallbackBaseName: string): File | null {
 
 async function getPersistedItem<T>(key: string): Promise<T | null> {
   const value = await persistedMediaStore.getItem<T | null>(key);
-  if (value !== null && value !== undefined) {
-    return value;
-  }
-
-  const legacyValue = await legacyPersistedMediaStore.getItem<T | null>(key);
-  if (legacyValue !== null && legacyValue !== undefined) {
-    return legacyValue;
-  }
-
-  return legacyUgcCopyPersistedMediaStore.getItem<T | null>(key);
+  return value ?? null;
 }
 
+// The one store is every namespace there is: a cleared file has nowhere left
+// to come back from.
 async function removePersistedItem(key: string): Promise<void> {
-  await Promise.all([
-    persistedMediaStore.removeItem(key),
-    legacyPersistedMediaStore.removeItem(key),
-    legacyUgcCopyPersistedMediaStore.removeItem(key),
-  ]);
+  await persistedMediaStore.removeItem(key);
 }
 
 export async function getPersistedFile(key: string): Promise<File | null> {
@@ -224,6 +280,7 @@ export async function getPersistedImageElementRecords(key: string): Promise<Pers
         displayName: item.displayName,
         handle: typeof item.handle === 'string' ? item.handle : null,
         file: restoredFile,
+        staged: readStagedUpload(item.staged),
       } satisfies PersistedImageElementRecord;
     })
     .filter((item): item is PersistedImageElementRecord => item !== null);
@@ -245,6 +302,8 @@ export async function setPersistedImageElementRecords(
       displayName: element.displayName,
       handle: element.handle ?? null,
       file: toStoredMediaFile(element.file),
+      // A signed link expires; a later run renews one from the path.
+      staged: element.staged ? { storagePath: element.staged.storagePath, uploadedAt: element.staged.uploadedAt } : null,
     }))
   );
 }
@@ -359,7 +418,7 @@ export async function setPersistedMediaRecords(
 }
 
 export async function getPersistedFiles(key: string): Promise<File[]> {
-  const value = await persistedMediaStore.getItem<Array<StoredMediaFile | File | Blob> | null>(key);
+  const value = await getPersistedItem<Array<StoredMediaFile | File | Blob>>(key);
   if (!Array.isArray(value)) return [];
   return value
     .map((item, index) => restoreFile(item, `${key}-${index + 1}`))
@@ -367,12 +426,11 @@ export async function getPersistedFiles(key: string): Promise<File[]> {
 }
 
 export async function removePersistedMedia(key: string): Promise<void> {
-  await persistedMediaStore.removeItem(key);
+  await removePersistedItem(key);
 }
 
 export async function getPersistedValue<T>(key: string): Promise<T | null> {
-  const value = await persistedMediaStore.getItem<T | null>(key);
-  return value ?? null;
+  return getPersistedItem<T>(key);
 }
 
 export async function setPersistedValue<T>(key: string, value: T | null): Promise<void> {
@@ -381,7 +439,7 @@ export async function setPersistedValue<T>(key: string, value: T | null): Promis
     value === undefined ||
     (Array.isArray(value) && value.length === 0)
   ) {
-    await persistedMediaStore.removeItem(key);
+    await removePersistedItem(key);
     return;
   }
 

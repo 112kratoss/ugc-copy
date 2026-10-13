@@ -33,6 +33,14 @@ describe('public generation failure classification', () => {
       .toBe('provider_unavailable');
   });
 
+  it('reads a provider refusal with no other signal as provider_rejected, and a 402 as insufficient credits', () => {
+    // The start routes answer a refunded provider rejection from this code.
+    expect(getPublicGenerationStartFailure(new Error('Your prompt was flagged by the safety filter.')).code)
+      .toBe('provider_rejected');
+    expect(getPublicGenerationStartFailure({ status: 402, message: 'Insufficient credits. This action costs 12 credits.' }))
+      .toEqual({ code: 'insufficient_credits', message: 'Insufficient credits for this generation step.' });
+  });
+
   it('explains a refused prompt instead of blaming the provider', () => {
     // Template and workflow runs map errors through here; a 422 would otherwise
     // read as "the provider could not accept this request".

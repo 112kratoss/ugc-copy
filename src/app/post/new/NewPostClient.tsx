@@ -31,6 +31,7 @@ import {
   getPublicPostQualityError,
   isCreatorProfileReadinessError,
 } from '@/lib/marketplace-trust';
+import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
 import { createClientPostMediaKey, defaultPostMediaKey } from '@/lib/post-media-key';
 import {
   POST_VIDEO_DURATION_LIMIT_MESSAGE,
@@ -289,10 +290,6 @@ interface GenerationDraft {
 }
 
 const BODY_MAX_LENGTH = 2000;
-// Mirrors TITLE_MAX_LENGTH in posts-server.ts, which is the gate that actually
-// rejects. This copy exists only because posts-server.ts is `server-only` and
-// cannot be imported into a client component — keep the two in step.
-const TITLE_MAX_LENGTH = 100;
 
 // Media reorder gesture, matched to the mobile composer so the interaction reads
 // the same on both. w-28 (112px) + gap-3 (12px) is how far one slot is.
@@ -1423,9 +1420,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           if (controller.signal.aborted) {
             throw new UploadCancelledError();
           }
-          // uploadMediaToTemporaryStorage resolves the session itself and
-          // ignores this argument, so there is nothing to look up here.
-          const media = await uploadMediaToTemporaryStorage(item.file!, '', {
+          const media = await uploadMediaToTemporaryStorage(item.file!, {
             signal: controller.signal,
             onProgress: ({ bytesSent, totalBytes }) => {
               const progress = eagerProgressRef.current.get(item.id);
@@ -1787,7 +1782,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
    * cannot discard files that already uploaded. Items keep their composer order
    * because the first one is the Showcase cover.
    */
-  const uploadComposerMedia = async (items: ComposerMediaItem[], ownerUserId: string) => {
+  const uploadComposerMedia = async (items: ComposerMediaItem[]) => {
     // Items that already carry a storagePath were staged by an earlier publish
     // attempt that failed on a sibling -- re-uploading them would duplicate the
     // staged object and burn the sign rate limit for nothing.
@@ -1860,7 +1855,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           }
           let media: Awaited<ReturnType<typeof uploadMediaToTemporaryStorage>>;
           try {
-            media = await uploadMediaToTemporaryStorage(item.file, ownerUserId, {
+            media = await uploadMediaToTemporaryStorage(item.file, {
               signal: controller.signal,
               onProgress: ({ bytesSent, totalBytes }) => {
                 bytesByIndex.set(index, { bytesSent, totalBytes });
@@ -2240,7 +2235,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         ));
       const mediaItemsForSubmit = generationId
         ? undefined
-        : await uploadComposerMedia(itemsWithStagedPaths, session.user.id);
+        : await uploadComposerMedia(itemsWithStagedPaths);
 
       // The publish route creates a post from a creation. Once the post
       // exists, every edit — including one made from a creation — goes

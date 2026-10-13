@@ -43,29 +43,39 @@ import {
   clearPendingGenerationAttempt,
   GENERATION_ATTEMPT_CHOICE_MESSAGE,
   GENERATION_ATTEMPT_UNCONFIRMED_MESSAGE,
+  generationStartRefusalCode,
   isAmbiguousGenerationStartFailure,
   loadPendingGenerationAttempt,
   reusableAttemptKey,
   savePendingGenerationAttempt,
-  type GenerationAttemptRoute,
   type PendingGenerationAttempt,
 } from '@/lib/generation-attempts';
+import {
+  clearActiveGenerationRecord,
+  loadActiveGenerationRecord,
+  saveActiveGenerationRecord,
+  type ActiveGenerationRecord,
+} from '@/lib/active-generation-record';
 import { createDraftSaveQueue } from '@/lib/draft-save-queue';
 import { SheetBackdrop, SheetGrabber, SheetPanel, sheetMotion, useSheetDismissDrag, useSheetPresentation } from '@/components/sheet-chrome';
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { trackOnboardingEvent } from '@/lib/onboarding';
-import { getGenerationOutput, pollGenerationStatus } from '@/lib/generation';
+import { getGenerationOutput, getGenerationOutputs, pollGenerationStatus } from '@/lib/generation';
 import {
   applyCatalogModelDefaults,
   applyVerifiedInputDurations,
-  buildCatalogGenerationPayload,
+  buildCatalogDraftInputSlots,
   buildCatalogQuoteRequest,
   buildUnifiedCatalogGenerationRequest,
+  catalogDraftRunHandles,
+  catalogMultiShotLimits,
   catalogSubjectSlot,
+  catalogVideoRunReferenceMode,
   getCatalogDraftSettings,
   hasCreatorEditedPromptDuringRemix,
   hydrateCatalogCreationDraftFromRemixSource,
+  multiShotTotalDuration,
   normalizeCreationDraftForCatalog,
   readVerifiedInputDurations,
   REFERENCE_DURATION_CHANGED_CODE,
@@ -83,7 +93,6 @@ import {
   type GenerationModelCatalog,
 } from '@/lib/generation-model-catalog';
 import {
-  applyModelDefaults,
   buildPromptEnhancementRequest,
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
@@ -96,19 +105,19 @@ import {
   subjectAsReference,
   type CreationDraft,
   type ImageCreationDraft,
-  type ImageModelId,
   type MediaDraft,
   type MotionCreationDraft,
-  type MotionModelId,
   type ReferenceMode,
   type SubjectDraft,
   type VideoCreationDraft,
-  type VideoModelId,
   videoDraftHandles,
   videoDraftReferenceMode,
   videoSubjects,
 } from '@/lib/media-creation-view-model';
-import { assetDurationSeconds, pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia } from '@/lib/media';
+import { assetDurationSeconds, pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia, type UploadedMedia } from '@/lib/media';
+import { isUploadCancelledError, runWeightedUploadQueue, type WeightedUploadQueueResult } from '@/lib/upload-file';
+import { invalidateProfileCreations } from '@/lib/profile-media-query';
+import { signedStorageUrlExpiresAt } from '@/lib/media-url-expiry';
 import {
   findActiveReferenceMention,
   insertHandleAtSelection,
@@ -122,8 +131,8 @@ import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentColor, appTheme, mediaColors, type ToolAccent } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
-import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel, SeedanceAssetResponse } from '@/lib/types';
-import { SUBJECT_IMAGES_PER_NAME, subjectsPerRun, type ModelCatalogSummary, GENERATION_PROMPT_MAX_LENGTH } from '@/lib/model-catalog/protocol';
+import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel, PromptEnhancementRequest, PromptEnhancementWarning, SeedanceAssetResponse } from '@/lib/types';
+import { SUBJECT_IMAGES_PER_NAME, subjectsPerRun, type ModelCatalogSummary, GENERATION_PROMPT_MAX_LENGTH, PROMPT_ENHANCEMENT_COST_CREDITS } from '@/lib/model-catalog/protocol';
 import { createSeedanceAssetMetadata, isSeedance2VideoModelId, type SeedanceAssetKind, type SeedanceAssetMetadata } from '@/lib/model-catalog/seedance-assets';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
@@ -398,14 +407,92 @@ function supportsReusableVideoInputs(
   );
 }
 
-function creatorParameterSummary(draft: CreationDraft, model: CreatorCatalogModel | null) {
-  if (draft.tool === 'image') {
-    return [draft.resolution, draft.aspectRatio, draft.outputFormat.toUpperCase()].filter(Boolean).join(' · ');
+/**
+ * The shape a video run takes on this model, as the quote, the validator and the request
+ * read it. A reference kept from another model, which this one has no slot for, no longer
+ * makes a frames run a references run. Seeded with the shape the attachments imply, which
+ * is all a descriptor without input modes can go by.
+ */
+function videoRunReferenceMode(draft: VideoCreationDraft, model: CreatorCatalogModel | null): ReferenceMode {
+  const derived = videoDraftReferenceMode(draft);
+  return model ? catalogVideoRunReferenceMode({ ...draft, referenceMode: derived }, model) : derived;
+}
+
+/**
+ * The slot a model takes reference clips in, found by kind rather than key: Kling 3.0, the
+ * default video model, takes its clips as named `videoElements` beside its frames, and a
+ * lookup by `videoReferences` left it with no way to add one.
+ */
+function referenceVideoSlot(model: CreatorCatalogModel | null, draft: VideoCreationDraft): CatalogInputSlot | null {
+  return activeCatalogInputSlots(model, draft, 'elements')?.find((slot) => slot.role === 'reference' && slot.kind === 'video') ?? null;
+}
+
+/**
+ * What a video draft holds that a run on this model would not send: past a slot's max, or
+ * of a kind the run's shape has no slot for. A draft keeps them across a model change, as
+ * the web creator does, so they wait apart from the run's own references until they are
+ * removed or a model that takes them is picked.
+ */
+function standbyVideoReferences(draft: VideoCreationDraft, model: CreatorCatalogModel | null): MediaDraft[] {
+  if (!model) return [];
+  if (!model.inputModes) {
+    return [
+      ...draft.references.slice(model.inputs.imageReferences?.max ?? 0),
+      ...draft.referenceVideos.slice(model.inputs.videoReferences?.max ?? 0),
+      ...draft.referenceAudios.slice(model.inputs.audioReferences?.max ?? 0),
+    ];
   }
+  const runDraft = { ...draft, referenceMode: videoRunReferenceMode(draft, model) };
+  const settings = { ...getCatalogDraftSettings(runDraft, model), referenceMode: runDraft.referenceMode };
+  const sent = new Set(Object.values(buildCatalogDraftInputSlots(runDraft, model, settings)).flat().map((asset) => asset.id));
+  return [...draft.references, ...draft.referenceVideos, ...draft.referenceAudios].filter((media) => !sent.has(media.id));
+}
+
+/** The validator's word on a slot holding more than it takes, said beside the extras. */
+function isReferenceLimitError(error: string) {
+  return / supports up to \d+ /.test(error) || / does not support (?:image references|reference videos|reference audio)\.$/.test(error);
+}
+
+/** Every piece of media a draft holds behind a stored link, as the link renewal reaches it. */
+function draftMediaList(draft: CreationDraft): MediaDraft[] {
+  const media = draft.tool === 'image'
+    ? draft.references
+    : draft.tool === 'video'
+      ? [...draft.references, ...draft.referenceVideos, ...draft.referenceAudios, draft.startFrame, draft.endFrame]
+      : [draft.characterImage, draft.referenceVideo];
+  return media.filter((item): item is MediaDraft => Boolean(item));
+}
+
+/** Only a positive 404 says a staged upload was swept; offline, a rate limit or a 5xx says nothing. */
+function isMissingUploadError(error: unknown) {
+  return Boolean(error && typeof error === 'object' && (error as { status?: unknown }).status === 404);
+}
+
+function unavailableReferenceMessage(media: MediaDraft) {
+  return `${mediaAccessibleName(media)} is no longer available. Add this reference again.`;
+}
+
+/** Shown in place of a motion quote the server would refuse: it needs both inputs to price. */
+const MOTION_INPUTS_HINT = 'Add a character image and a motion clip.';
+
+/**
+ * What the failure view offers first for a refusal the server named, where pressing Try
+ * again would only send the same refusal back: the prompt, the balance, the reference or
+ * the price is what has to change.
+ */
+function startRefusalActionLabel(code: string | null): string | null {
+  if (code === 'prompt_blocked') return 'Edit prompt';
+  if (code === 'insufficient_credits') return 'Get credits';
+  if (code === 'invalid_input_media') return 'Replace reference';
+  if (code === 'cost_changed' || code === 'REFERENCE_DURATION_CHANGED') return 'Check the new price';
+  if (code === 'CATALOG_CHANGED' || code === 'MODEL_UNAVAILABLE') return 'Review options';
+  return null;
+}
+
+/** The video and motion bars' summary; the image bar builds its own from the image draft's fields. */
+function creatorParameterSummary(draft: VideoCreationDraft | MotionCreationDraft, model: CreatorCatalogModel | null) {
   if (draft.tool === 'video') {
-    const totalDuration = draft.isMultiShot
-      ? draft.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0)
-      : draft.duration;
+    const totalDuration = draft.isMultiShot ? multiShotTotalDuration(draft.multiPrompts) : draft.duration;
     const modeControl = model?.controls.find((control) => control.key === 'mode' && control.type === 'choice');
     const modeLabel = modeControl?.type === 'choice'
       ? modeControl.options.find((option) => option.value === draft.mode)?.label ?? draft.mode
@@ -415,6 +502,120 @@ function creatorParameterSummary(draft: CreationDraft, model: CreatorCatalogMode
   }
   const duration = draft.referenceVideo ? getMotionDuration(draft) : null;
   return [draft.mode.toUpperCase(), duration ? `${duration}s` : 'Add motion'].join(' · ');
+}
+
+type EnhanceVerb = 'Enhance' | 'Polish';
+
+/**
+ * An Enhance button's words. Every press debits the enhancer's price, so the button states it, and
+ * so does what is announced while the press runs, as on the web button.
+ */
+function enhanceButtonLabels(verb: EnhanceVerb, busy: boolean) {
+  const word = busy ? (verb === 'Polish' ? 'Polishing' : 'Enhancing') : verb;
+  return {
+    label: busy ? word : withCreditCost(word, PROMPT_ENHANCEMENT_COST_CREDITS),
+    accessibilityLabel: withCreditCost(word, PROMPT_ENHANCEMENT_COST_CREDITS),
+  };
+}
+
+/** The references an image run sends: the first ones, up to the model's max; all of them before its descriptor is in. */
+function imageRunReferences(draft: ImageCreationDraft, model: CreatorCatalogModel | null) {
+  if (!model) return draft.references;
+  return draft.references.slice(0, catalogInputLimit(model, draft, 'imageReferences', model.inputs.imageReferences?.max ?? 0));
+}
+
+/**
+ * A prompt that names a reference the run sends is polished rather than rewritten, as on the web:
+ * the enhancer keeps the sentence that names it as written and only adds around it.
+ */
+function imagePromptNamesReference(draft: ImageCreationDraft, model: CreatorCatalogModel | null) {
+  return imageRunReferences(draft, model).some((media) => promptContainsHandle(draft.prompt, media.handle));
+}
+
+/** "10,000": the prompt counter's numbers. */
+function groupDigits(value: number) {
+  return String(Math.max(0, Math.trunc(value))).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/** Which add control an upload came from: that tile shows the upload's progress. */
+type UploadTarget = 'image-references' | 'subject' | 'start-frame' | 'end-frame' | 'character' | 'reference-video' | 'reference-audio' | 'motion-clip';
+
+/** An upload in flight: where it came from, how far its bytes have got (null while their size is unknown), and whether it can be stopped. */
+type UploadProgress = { target: UploadTarget; percent: number | null; cancellable: boolean };
+
+/** A file the picker handed over, as the upload takes it. */
+type PickedUpload = {
+  uri: string;
+  fileName?: string | null;
+  mimeType?: string | null;
+  kind: 'image' | 'video' | 'audio';
+  durationSeconds?: number | null;
+  sizeBytes?: number | null;
+};
+
+function uploadPercentLabel(progress: UploadProgress) {
+  return progress.percent === null ? '…' : `${progress.percent}%`;
+}
+
+/**
+ * Names the picks that did not arrive. The ones that did are kept, so only these need adding again;
+ * the loop this replaced dropped every finished upload when one failed.
+ */
+function uploadFailureMessage(failures: ReadonlyArray<{ item: PickedUpload; error: unknown }>, added: number): string | null {
+  if (failures.length === 0) return null;
+  const names = failures.map(({ item }) => item.fileName?.trim() || (item.kind === 'video' ? 'a clip' : item.kind === 'audio' ? 'a track' : 'a picture'));
+  const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  const lead = added > 0 ? `Added ${added} of ${added + failures.length}. ` : '';
+  if (failures.every(({ error }) => isUploadCancelledError(error))) return `${lead}Upload cancelled.`;
+  const reason = failures.map(({ error }) => error).find((error) => !isUploadCancelledError(error));
+  const detail = reason instanceof Error && reason.message.trim() ? ` ${reason.message.trim()}` : '';
+  return `${lead}Could not add ${listed}.${detail}`;
+}
+
+/** Kie's motion-control limit for the clip, stricter than the sign step's 250 MB, as the web creator holds it. */
+const MOTION_CLIP_MAX_BYTES = 100 * 1024 * 1024;
+/** The clip length the web creator holds a model to when its descriptor names none. */
+const MOTION_CLIP_DEFAULT_MAX_SECONDS = 30;
+
+/**
+ * A motion clip the run would refuse, said at the pick in the web creator's words: checked after the
+ * upload, a long clip cost a full upload (minutes on mobile data) before the refusal.
+ */
+function motionClipRefusal(picked: { fileName?: string | null; fileSize?: number | null; duration?: number | null }, maxSeconds: number) {
+  const seconds = assetDurationSeconds(picked.duration);
+  if (seconds !== null && seconds > maxSeconds) return `Reference video exceeds ${maxSeconds}s. Please choose a shorter clip.`;
+  if ((picked.fileSize ?? 0) > MOTION_CLIP_MAX_BYTES) return `"${picked.fileName?.trim() || 'This video'}" is over 100 MB. Please upload a smaller video.`;
+  return null;
+}
+
+/**
+ * Where sign-in returns to: this creator with the params it was opened with, so the screen still
+ * under the sign-in is the one shown again. A return without them was a different route, which
+ * opened a creator without the remix or the prompt. Inside the Create tab, the tab itself.
+ */
+function creatorReturnPath({ insideTab, tool, guided, initialPrompt, remixSource }: {
+  insideTab: boolean;
+  tool: CreatorToolId;
+  guided: boolean;
+  initialPrompt?: string | null;
+  remixSource?: MediaCreationScreenProps['remixSource'];
+}) {
+  const params: Array<[string, string | null | undefined]> = insideTab
+    ? [['tool', tool], ['guided', guided ? '1' : null]]
+    : [
+        ['remix', remixSource?.generationId],
+        ['remixPost', remixSource?.postId],
+        ['prompt', initialPrompt],
+        ['guided', guided ? '1' : null],
+        ['sourceTitle', remixSource?.title],
+        ['sourceCreator', remixSource?.creatorLabel],
+        ['sourceThumbnail', remixSource?.thumbnailUrl],
+      ];
+  const query = params
+    .flatMap(([key, value]) => (value && value.trim() ? [`${encodeURIComponent(key)}=${encodeURIComponent(value)}`] : []))
+    .join('&');
+  const path = insideTab ? '/(tabs)/creator' : `/create/${tool}`;
+  return query ? `${path}?${query}` : path;
 }
 
 function mediaAccessibleName(media: MediaDraft) {
@@ -469,10 +670,6 @@ function seedanceAssetTileLabel(asset: SeedanceAssetMetadata | null, busy: boole
   if (asset.status === 'processing') return 'Processing';
   if (asset.status === 'active') return 'Ready';
   return 'Retry';
-}
-
-function renameMediaInList(items: MediaDraft[], id: string, displayName: string) {
-  return items.map((media) => (media.id === id ? renameMediaDraft(media, displayName) : media));
 }
 
 function replaceMediaInList(items: MediaDraft[], id: string, upload: Parameters<typeof replaceMediaDraftMedia>[1]) {
@@ -551,7 +748,7 @@ function IdentityCreationScreen({
   // `user` still gates remix restore, which pulls another creator's source
   // media out of the community feed. Generating and enhancing key off
   // `identityUserId` so a guest can spend the credits they just bought.
-  const { user, identityUserId, session, api, credits, updateCredits } = useAuth();
+  const { user, identityUserId, session, api, credits, updateCredits, refreshProfile } = useAuth();
   const queryClient = useQueryClient();
   const [activeTool, setActiveTool] = useState<CreatorToolId>(isTool(initialTool) ? initialTool : 'image');
   const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => ({
@@ -567,6 +764,12 @@ function IdentityCreationScreen({
     prompt: initialTool === 'motion' ? initialPrompt ?? '' : '',
   }));
   const [isUploading, setIsUploading] = useState(false);
+  // The running upload's tile, progress and Cancel (uploadPicks).
+  const [upload, setUpload] = useState<UploadProgress | null>(null);
+  const uploadControllerRef = useRef<AbortController | null>(null);
+  // The picker's own copy of each upload this session made, by storage path, for its tile: the signed
+  // link downloaded the whole upload again. Never saved, so after a restart a tile draws the link.
+  const [localPreviews, setLocalPreviews] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [replacingReferenceId, setReplacingReferenceId] = useState<string | null>(null);
   const [preparingAssetId, setPreparingAssetId] = useState<string | null>(null);
   const seedanceAssetTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
@@ -578,11 +781,26 @@ function IdentityCreationScreen({
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhanceLevel, setEnhanceLevel] = useState<'cinematic' | 'faithful'>('cinematic');
   const [enhanceUndo, setEnhanceUndo] = useState<{ previous: string; enhanced: string } | null>(null);
+  // What the enhancer said about the prompt it wrote, shown while that prompt stands.
+  const [enhanceNotes, setEnhanceNotes] = useState<{ tool: CreatorToolId; prompt: string; warnings: PromptEnhancementWarning[] } | null>(null);
   const [status, setStatus] = useState<GenerationStatusResponse | null>(null);
   const [lastGenerationId, setLastGenerationId] = useState<string | null>(null);
   const [lastPredictionId, setLastPredictionId] = useState<string | null>(null);
   const [generationTool, setGenerationTool] = useState<CreatorToolId | null>(null);
   const [pollingInterrupted, setPollingInterrupted] = useState(false);
+  // The code of a start the server refused outright, which picks the failure view's first action.
+  const [startRefusal, setStartRefusal] = useState<string | null>(null);
+  // What a failed run's settlement gave back, said under its failure.
+  const [refundNotice, setRefundNotice] = useState<string | null>(null);
+  // What the start of the run being watched charged, as its answer said.
+  const runCostRef = useRef<number | null>(null);
+  // A run of another tool this identity started and has not seen end (see loadActiveGenerationRecord).
+  const [otherToolRun, setOtherToolRun] = useState<ActiveGenerationRecord | null>(null);
+  const activeRunCheckedRef = useRef(false);
+  // Staged uploads the server no longer holds: swept 48 h after a run used them.
+  const [unavailableReferencePaths, setUnavailableReferencePaths] = useState<ReadonlySet<string>>(() => new Set());
+  const stagedReferencesCheckedRef = useRef(false);
+  const [promptFocusRequest, setPromptFocusRequest] = useState(0);
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
   const [guidedReferencesExpanded, setGuidedReferencesExpanded] = useState(false);
   const [draftsHydrated, setDraftsHydrated] = useState(false);
@@ -657,6 +875,9 @@ function IdentityCreationScreen({
     motion: motionDraft.prompt,
   });
   const [modelPickerVisible, setModelPickerVisible] = useState(false);
+  // A pick whose model's details are still loading, or failed to: the draft changes once they are in.
+  const [modelPick, setModelPick] = useState<{ modelId: string; error: string | null } | null>(null);
+  const modelPickRef = useRef<string | null>(null);
   const catalogQuery = useGenerationModelCatalog(api, { kind: activeTool, selectedIds: [imageDraft.model, videoDraft.model, motionDraft.model], pickerOpen: modelPickerVisible });
   const catalog = catalogQuery.catalog;
   const refetchCatalog = catalogQuery.refetch;
@@ -703,8 +924,14 @@ function IdentityCreationScreen({
     // replaced on every token refresh, and reloading then would pull the drafts
     // out from under someone typing.
     const signedInAt = session?.user?.last_sign_in_at ?? null;
-    // A prompt-only entry has its own seed; a remix can resume its own session.
-    const load = !identityUserId || (initialPrompt && !remixScope)
+    // A remix can resume its own session. A prompt-only entry resumes the saved drafts too and
+    // replaces only its own tool's prompt: it used to skip the load, and its first save then
+    // wrote the defaults over every tool's saved draft.
+    const seedsPrompt = Boolean(initialPrompt) && !remixScope;
+    const seed = <T extends CreationDraft>(draft: T): T => (
+      seedsPrompt && draft.tool === initialTool ? { ...draft, prompt: initialPrompt ?? '' } : draft
+    );
+    const load = !identityUserId
       ? Promise.resolve(null)
       : remixScope
         ? loadPersistedCreationDrafts(remixScope)
@@ -712,9 +939,10 @@ function IdentityCreationScreen({
     void load.then((persisted) => {
       if (!active) return;
       if (persisted) {
-        setImageDraft(persisted.image);
-        setVideoDraft(persisted.video);
-        setMotionDraft(persisted.motion);
+        // The fingerprint below stays the saved record's, so the autosave writes the seeded prompt.
+        setImageDraft(seed(persisted.image));
+        setVideoDraft(seed(persisted.video));
+        setMotionDraft(seed(persisted.motion));
         // A previous failed restore may have been saved as complete, or the links
         // it saved may have run out since. Re-read its source without resetting
         // the creator's other saved fields.
@@ -851,23 +1079,25 @@ function IdentityCreationScreen({
   }, [catalog, catalogQuery.missingIds]);
 
   const rawDraft: CreationDraft = activeTool === 'image' ? imageDraft : activeTool === 'video' ? videoDraft : motionDraft;
-  // Nothing selects a reference mode any more — every slot a model declares is on screen
-  // at once — so the field is derived from what is attached before anything reads it.
-  // validateCatalogCreationDraft, the quote and buildCatalogGenerationPayload all key off
-  // it, and normalizedVideoReferenceMode answers 'frames' for a stale value, which drops
-  // every attached reference from the payload without saying so.
-  const currentDraft: CreationDraft = rawDraft.tool === 'video'
-    ? { ...rawDraft, referenceMode: videoDraftReferenceMode(rawDraft) }
-    : rawDraft;
   const currentCatalogModel = useMemo(
-    () => catalog ? getCatalogModel(catalog, currentDraft.model) : null,
-    [catalog, currentDraft.model]
+    () => catalog ? getCatalogModel(catalog, rawDraft.model) : null,
+    [catalog, rawDraft.model]
   );
+  // Nothing selects a reference mode any more — every slot a model declares is on screen
+  // at once — so the field is derived before anything reads it, from what the model can
+  // carry of what is attached: a reference kept from another model must not turn a frames
+  // run into a references run, which would leave its frames out without saying so.
+  const currentDraft: CreationDraft = rawDraft.tool === 'video'
+    ? { ...rawDraft, referenceMode: videoRunReferenceMode(rawDraft, currentCatalogModel) }
+    : rawDraft;
+  // A motion quote needs both inputs: asked without them, the server refuses it, and that
+  // refusal read as an error on every first visit.
+  const motionInputsMissing = currentDraft.tool === 'motion' && (!currentDraft.characterImage || !currentDraft.referenceVideo);
   const quoteRequest = useMemo(
-    () => currentCatalogModel && catalog
+    () => currentCatalogModel && catalog && !motionInputsMissing
       ? buildCatalogQuoteRequest(currentDraft, currentCatalogModel, catalog.revision)
       : null,
-    [catalog, currentCatalogModel, currentDraft]
+    [catalog, currentCatalogModel, currentDraft, motionInputsMissing]
   );
   const quoteKey = quoteRequest ? JSON.stringify(quoteRequest) : null;
   const [quoteState, setQuoteState] = useState<{
@@ -946,8 +1176,11 @@ function IdentityCreationScreen({
     }
     setQuoteRetryNonce((value) => value + 1);
   };
-  const validation = useMemo(
-    () => currentCatalogModel
+  // A swept upload cannot be sent, so the run waits until it is removed or replaced.
+  const unavailableReference = draftMediaList(currentDraft)
+    .find((media) => Boolean(media.storagePath && unavailableReferencePaths.has(media.storagePath))) ?? null;
+  const validation = useMemo(() => {
+    const result = currentCatalogModel
       ? validateCatalogCreationDraft(currentDraft, currentCatalogModel, { credits, quotedCost: activeQuote.cost })
       : catalog
         ? {
@@ -961,10 +1194,14 @@ function IdentityCreationScreen({
             warnings: [],
             cost: 0,
             canGenerate: false,
-          },
-    [activeQuote.cost, catalog, catalogUnavailable, currentCatalogModel, currentDraft, credits]
-  );
+          };
+    return unavailableReference
+      ? { ...result, errors: [unavailableReferenceMessage(unavailableReference), ...result.errors], canGenerate: false }
+      : result;
+  }, [activeQuote.cost, catalog, catalogUnavailable, currentCatalogModel, currentDraft, credits, unavailableReference]);
   const outputUrl = useMemo(() => (status ? getGenerationOutput(status) : null), [status]);
+  // Every output, the primary first: a run can return several (Grok Imagine's options).
+  const outputUrls = useMemo(() => (status ? getGenerationOutputs(status) : []), [status]);
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const isCompact = width < 380;
@@ -980,7 +1217,9 @@ function IdentityCreationScreen({
     router.push({
       pathname: '/auth',
       params: {
-        returnTo: `/create/${currentDraft.tool}${guided ? '?guided=1' : ''}`,
+        // The route's own tool, not the one switched to: the tool, remix and prompt are what the
+        // route was opened with, and only those find this screen again.
+        returnTo: creatorReturnPath({ insideTab, tool: initialTool, guided, initialPrompt, remixSource }),
       },
     } as never);
   };
@@ -1000,11 +1239,17 @@ function IdentityCreationScreen({
     scrollRef.current?.scrollTo({ y: 0, animated: false });
   };
 
-  const replaceDraft = (draft: CreationDraft) => {
-    const catalogModel = catalog ? getCatalogModel(catalog, draft.model) : null;
+  /**
+   * Puts a changed draft on screen, normalized for its model. Without that model's descriptor
+   * the draft goes on as it is and the catalog reconcile normalizes it once the details are in,
+   * rather than through the bundled ladder, which reads a model it does not know as Kling 3.0
+   * and cuts its references to fit. A model pick loads the descriptor first (pickModel).
+   */
+  const replaceDraft = (draft: CreationDraft, source: GenerationModelCatalog | null = catalog) => {
+    const catalogModel = source ? getCatalogModel(source, draft.model) : null;
     const normalized = catalogModel
-      ? applyCatalogModelDefaults(draft, catalogModel, catalog?.revision ?? null)
-      : applyModelDefaults(draft);
+      ? applyCatalogModelDefaults(draft, catalogModel, source?.revision ?? null)
+      : draft;
     if (normalized.tool === 'image') {
       setImageDraft((current) => {
         if (current.model !== normalized.model) modelSelectionTouched.current.image = true;
@@ -1027,9 +1272,42 @@ function IdentityCreationScreen({
 
   const normalizeCatalogDraft = <T extends CreationDraft>(draft: T): T => {
     const model = catalog ? getCatalogModel(catalog, draft.model) : null;
-    return (model
-      ? applyCatalogModelDefaults(draft, model, catalog?.revision ?? null)
-      : applyModelDefaults(draft)) as T;
+    return (model ? applyCatalogModelDefaults(draft, model, catalog?.revision ?? null) : draft) as T;
+  };
+
+  /**
+   * A model chosen in a picker. The picker lists every model, but the catalog holds details
+   * only for the drafts' models and the defaults, so a first pick waits for its model's
+   * descriptor, with the picker's row turning, and the draft changes only once it is in.
+   */
+  const pickModel = async (tool: CreatorToolId, modelId: string) => {
+    const withModel = () => ({ ...latestDrafts.current[tool], model: modelId }) as CreationDraft;
+    if (catalog && getCatalogModel(catalog, modelId)) {
+      replaceDraft(withModel());
+      setModelPickerVisible(false);
+      return;
+    }
+    modelPickRef.current = modelId;
+    setModelPick({ modelId, error: null });
+    try {
+      const loaded = await loadCatalogDetails([modelId]);
+      if (modelPickRef.current !== modelId) return;
+      if (!getCatalogModel(loaded, modelId)) throw new Error('This model is no longer available. Choose another model.');
+      replaceDraft(withModel(), loaded);
+      setModelPick(null);
+      setModelPickerVisible(false);
+    } catch (error) {
+      if (modelPickRef.current !== modelId) return;
+      setModelPick({ modelId, error: error instanceof Error ? error.message : 'Could not load model settings.' });
+    } finally {
+      if (modelPickRef.current === modelId) modelPickRef.current = null;
+    }
+  };
+  // Closing the picker drops a pick still loading: the choice is the picker's, made while it is open.
+  const closeModelPicker = () => {
+    modelPickRef.current = null;
+    setModelPick(null);
+    setModelPickerVisible(false);
   };
 
   useEffect(() => {
@@ -1152,6 +1430,66 @@ function IdentityCreationScreen({
     };
   }, [imageDraft.prompt, videoDraft.prompt, motionDraft.prompt]);
 
+  const rememberLocalPreviews = (uploads: ReadonlyArray<{ item: PickedUpload; result: UploadedMedia }>) => {
+    const previews = uploads.filter(({ item }) => item.kind !== 'audio');
+    if (previews.length === 0) return;
+    setLocalPreviews((current) => new Map([...current, ...previews.map(({ item, result }) => [result.storagePath, item.uri] as const)]));
+  };
+
+  /**
+   * Uploads picked files two pictures (or one clip) at a time, keeping every one that arrives: the
+   * loop this replaced sent one file at a time and dropped them all when one failed. The tile that
+   * started it shows how far the bytes have got, and a clip can be stopped.
+   */
+  const uploadPicks = async (target: UploadTarget, picks: PickedUpload[]): Promise<WeightedUploadQueueResult<PickedUpload, UploadedMedia>> => {
+    const controller = new AbortController();
+    uploadControllerRef.current = controller;
+    const sentBytes = picks.map(() => 0);
+    const totalBytes = picks.map((pick) => (pick.sizeBytes && pick.sizeBytes > 0 ? pick.sizeBytes : 0));
+    const cancellable = picks.some((pick) => pick.kind === 'video');
+    const report = () => {
+      const total = totalBytes.reduce((sum, bytes) => sum + bytes, 0);
+      const sent = sentBytes.reduce((sum, bytes) => sum + bytes, 0);
+      const percent = total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : null;
+      // A render per whole percent, not per progress event.
+      setUpload((current) => (current && current.target === target && current.percent === percent ? current : { target, percent, cancellable }));
+    };
+    report();
+    try {
+      const result = await runWeightedUploadQueue(
+        picks.map((pick) => ({ item: pick, kind: pick.kind === 'video' ? 'video' as const : 'image' as const })),
+        async (pick, index) => {
+          const media = await uploadPickedMedia(pick.uri, {
+            api,
+            fileName: pick.fileName,
+            mimeType: pick.mimeType,
+            kind: pick.kind,
+            durationSeconds: pick.durationSeconds ?? null,
+            sizeBytes: pick.sizeBytes ?? null,
+            signal: controller.signal,
+            onProgress: (progress) => {
+              sentBytes[index] = progress.bytesSent;
+              totalBytes[index] = progress.totalBytes;
+              report();
+            },
+          });
+          sentBytes[index] = totalBytes[index];
+          report();
+          return media;
+        },
+        { signal: controller.signal },
+      );
+      rememberLocalPreviews(result.successes);
+      return result;
+    } finally {
+      if (uploadControllerRef.current === controller) {
+        uploadControllerRef.current = null;
+        setUpload(null);
+      }
+    }
+  };
+  const cancelUpload = () => uploadControllerRef.current?.abort();
+
   const uploadImageReferences = async (tool: 'image' | 'video') => {
     setMessage(null);
     setPromptMessage(null);
@@ -1173,24 +1511,32 @@ function IdentityCreationScreen({
     try {
       const picked = await pickMediaList('image', { allowsMultipleSelection: true });
       if (picked.length === 0) return;
-      const uploaded: MediaDraft[] = [];
-      for (const asset of picked.slice(0, remainingSlots)) {
-        const media = await uploadPickedMedia(asset.uri, {
-          api,
-          fileName: asset.fileName,
-          mimeType: asset.mimeType,
-          kind: 'image',
-          sizeBytes: asset.fileSize ?? null,
-        });
-        uploaded.push(createMediaDraftFromUpload(media));
-      }
-      if (picked.length > remainingSlots) {
-        setMessage(`Added ${remainingSlots} reference${remainingSlots === 1 ? '' : 's'} to stay within this model's ${maxImages}-image limit.`);
-      }
+      const result = await uploadPicks('image-references', picked.slice(0, remainingSlots).map((asset) => ({
+        uri: asset.uri,
+        fileName: asset.fileName,
+        mimeType: asset.mimeType,
+        kind: 'image' as const,
+        sizeBytes: asset.fileSize ?? null,
+      })));
+      const uploaded = result.successes.map(({ result: media }) => createMediaDraftFromUpload(media));
+      setMessage(uploadFailureMessage(result.failures, uploaded.length) ?? (picked.length > remainingSlots
+        ? `Added ${remainingSlots} reference${remainingSlots === 1 ? '' : 's'} to stay within this model's ${maxImages}-image limit.`
+        : null));
+      if (uploaded.length === 0) return;
+      // Named after their files, so the same photo picked twice, or two files named alike, would
+      // otherwise answer to one @mention.
+      const withHandles = (existing: MediaDraft[]) => uploaded.reduce<MediaDraft[]>(
+        (added, media) => [...added, withUniqueReferenceHandle(media, [...existing, ...added])],
+        [],
+      );
       if (tool === 'image') {
-        setImageDraft((draft) => normalizeCatalogDraft({ ...draft, references: [...draft.references, ...uploaded] }));
+        setImageDraft((draft) => normalizeCatalogDraft({ ...draft, references: [...draft.references, ...withHandles(draft.references)] }));
       } else {
-        setVideoDraft((draft) => normalizeCatalogDraft({ ...draft, references: [...draft.references, ...uploaded], referenceMode: 'elements' }));
+        setVideoDraft((draft) => normalizeCatalogDraft({
+          ...draft,
+          references: [...draft.references, ...withHandles([...draft.references, ...draft.referenceVideos, ...videoSubjects(draft).map(subjectAsReference)])],
+          referenceMode: 'elements',
+        }));
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Upload failed.');
@@ -1277,6 +1623,7 @@ function IdentityCreationScreen({
         kind: 'image',
         sizeBytes: picked.fileSize ?? null,
       });
+      rememberLocalPreviews([{ item: { uri: picked.uri, kind: 'image' }, result: uploaded }]);
       if (tool === 'image') {
         setImageDraft((draft) => ({ ...draft, references: replaceMediaInList(draft.references, id, uploaded) }));
       } else {
@@ -1296,13 +1643,18 @@ function IdentityCreationScreen({
     try {
       const picked = await pickMedia('image');
       if (!picked) return;
-      const uploaded = await uploadPickedMedia(picked.uri, {
-        api,
+      const result = await uploadPicks(role === 'start' ? 'start-frame' : role === 'end' ? 'end-frame' : 'character', [{
+        uri: picked.uri,
         fileName: picked.fileName,
         mimeType: picked.mimeType,
         kind: 'image',
         sizeBytes: picked.fileSize ?? null,
-      });
+      }]);
+      const uploaded = result.successes[0]?.result;
+      if (!uploaded) {
+        setMessage(uploadFailureMessage(result.failures, 0));
+        return;
+      }
       const draft = createMediaDraftFromUpload(uploaded, {
         displayName: role === 'start' ? 'Start Frame' : role === 'end' ? 'End Frame' : 'Character Image',
       });
@@ -1327,11 +1679,16 @@ function IdentityCreationScreen({
     setPromptMessage(null);
     const selectedDraft = target === 'video' ? videoDraft : motionDraft;
     const selectedModel = catalog ? getCatalogModel(catalog, selectedDraft.model) : null;
-    const slotKey = target === 'video' ? 'videoReferences' : 'referenceVideo';
     const currentCount = target === 'video' ? videoDraft.referenceVideos.length : motionDraft.referenceVideo ? 1 : 0;
-    const legacyLimit = target === 'video' ? selectedModel?.inputs.videoReferences?.max ?? 0 : 1;
-    const maxVideos = catalogInputLimit(selectedModel, selectedDraft, slotKey, legacyLimit, 'elements');
-    if (currentCount >= maxVideos) {
+    const clipSlot = target === 'video' && selectedModel?.inputModes ? referenceVideoSlot(selectedModel, videoDraft) : null;
+    const maxVideos = target === 'video'
+      ? selectedModel?.inputModes ? clipSlot?.max ?? 0 : selectedModel?.inputs.videoReferences?.max ?? 0
+      : catalogInputLimit(selectedModel, selectedDraft, 'referenceVideo', 1, 'elements');
+    // Named clips are mentioned in the prompt, so each needs a handle of its own.
+    const namesClips = clipSlot ? Boolean(clipSlot.supportsNaming) : videoDraft.model === 'kling-3.0-video';
+    // A motion run takes one clip, so a new pick takes the place of the one attached, as Replace does.
+    const replacesClip = target === 'motion' && maxVideos > 0;
+    if (currentCount >= maxVideos && !replacesClip) {
       setMessage(maxVideos > 0
         ? `This model supports up to ${maxVideos} reference video${maxVideos === 1 ? '' : 's'}.`
         : 'This model does not support reference videos.');
@@ -1341,24 +1698,40 @@ function IdentityCreationScreen({
     try {
       const picked = await pickMedia('video');
       if (!picked) return;
-      const uploaded = await uploadPickedMedia(picked.uri, {
-        api,
+      if (target === 'motion') {
+        const motionSlot = catalogInputSlot(selectedModel, motionDraft, 'referenceVideo');
+        const refusal = motionClipRefusal(picked, motionSlot?.maxDurationSeconds ?? MOTION_CLIP_DEFAULT_MAX_SECONDS);
+        if (refusal) {
+          setMessage(refusal);
+          return;
+        }
+      }
+      const result = await uploadPicks(target === 'motion' ? 'motion-clip' : 'reference-video', [{
+        uri: picked.uri,
         fileName: picked.fileName,
         mimeType: picked.mimeType,
         kind: 'video',
         durationSeconds: assetDurationSeconds(picked.duration),
         sizeBytes: picked.fileSize ?? null,
-      });
+      }]);
+      const uploaded = result.successes[0]?.result;
+      if (!uploaded) {
+        setMessage(uploadFailureMessage(result.failures, 0));
+        return;
+      }
       const media = createMediaDraftFromUpload(uploaded, {
         displayName: target === 'motion' ? 'Reference Motion' : 'Reference Video',
       });
       if (target === 'motion') {
-        setMotionDraft((draft) => ({ ...draft, referenceVideo: media, duration: Math.ceil(media.durationSeconds ?? draft.duration) }));
+        setMotionDraft((draft) => ({
+          ...draft,
+          // Replaced in place, the clip keeps the name it was given.
+          referenceVideo: draft.referenceVideo ? replaceMediaDraftMedia(draft.referenceVideo, uploaded) : media,
+          duration: Math.ceil(media.durationSeconds ?? draft.duration),
+        }));
       } else {
         setVideoDraft((draft) => {
-          const nextMedia = draft.model === 'kling-3.0-video'
-            ? withUniqueReferenceHandle(media, draft.referenceVideos)
-            : media;
+          const nextMedia = namesClips ? withUniqueReferenceHandle(media, draft.referenceVideos) : media;
           return normalizeCatalogDraft({ ...draft, referenceVideos: [...draft.referenceVideos, nextMedia] });
         });
       }
@@ -1390,13 +1763,18 @@ function IdentityCreationScreen({
     try {
       const picked = await pickAudioDocument();
       if (!picked) return;
-      const uploaded = await uploadPickedMedia(picked.uri, {
-        api,
+      const result = await uploadPicks('reference-audio', [{
+        uri: picked.uri,
         fileName: picked.name,
         mimeType: picked.mimeType,
         kind: 'audio',
         sizeBytes: picked.size ?? null,
-      });
+      }]);
+      const uploaded = result.successes[0]?.result;
+      if (!uploaded) {
+        setMessage(uploadFailureMessage(result.failures, 0));
+        return;
+      }
       const media = createMediaDraftFromUpload(uploaded, { displayName: 'Reference Audio' });
       setVideoDraft((draft) => normalizeCatalogDraft({ ...draft, referenceAudios: [...draft.referenceAudios, media] }));
     } catch (error) {
@@ -1432,20 +1810,23 @@ function IdentityCreationScreen({
         setMessage(`Pick ${SUBJECT_IMAGES_PER_NAME.min} to ${SUBJECT_IMAGES_PER_NAME.max} pictures of the same person or thing.`);
         return;
       }
-      const uploaded: MediaDraft[] = [];
-      for (const asset of picked.slice(0, SUBJECT_IMAGES_PER_NAME.max)) {
-        const media = await uploadPickedMedia(asset.uri, {
-          api,
-          fileName: asset.fileName,
-          mimeType: asset.mimeType,
-          kind: 'image',
-          sizeBytes: asset.fileSize ?? null,
-        });
-        uploaded.push(createMediaDraftFromUpload(media));
+      const result = await uploadPicks('subject', picked.slice(0, SUBJECT_IMAGES_PER_NAME.max).map((asset) => ({
+        uri: asset.uri,
+        fileName: asset.fileName,
+        mimeType: asset.mimeType,
+        kind: 'image' as const,
+        sizeBytes: asset.fileSize ?? null,
+      })));
+      const uploaded = result.successes.map(({ result: media }) => createMediaDraftFromUpload(media));
+      const failure = uploadFailureMessage(result.failures, uploaded.length);
+      // The pictures that arrived still make the subject when there are enough of them.
+      if (uploaded.length < SUBJECT_IMAGES_PER_NAME.min) {
+        setMessage(`${failure ?? ''} A subject is made of ${SUBJECT_IMAGES_PER_NAME.min} to ${SUBJECT_IMAGES_PER_NAME.max} pictures of the same person or thing.`.trim());
+        return;
       }
-      if (picked.length > SUBJECT_IMAGES_PER_NAME.max) {
-        setMessage(`Kept the first ${SUBJECT_IMAGES_PER_NAME.max} pictures: a subject is made of ${SUBJECT_IMAGES_PER_NAME.min} to ${SUBJECT_IMAGES_PER_NAME.max}.`);
-      }
+      setMessage(failure ?? (picked.length > SUBJECT_IMAGES_PER_NAME.max
+        ? `Kept the first ${SUBJECT_IMAGES_PER_NAME.max} pictures: a subject is made of ${SUBJECT_IMAGES_PER_NAME.min} to ${SUBJECT_IMAGES_PER_NAME.max}.`
+        : null));
       setVideoDraft((draft) => {
         const subjects = videoSubjects(draft);
         const subject = createSubjectDraft(uploaded, `Subject ${subjects.length + 1}`, videoDraftHandles(draft));
@@ -1475,21 +1856,49 @@ function IdentityCreationScreen({
     if (!(await ensureAiDataConsent())) return;
     setMessage(null);
     setPromptMessage(null);
+    setEnhanceNotes(null);
     setIsEnhancing(true);
     try {
       const previousPrompt = currentDraft.prompt;
-      const result = await api.enhancePrompt(buildPromptEnhancementRequest(currentDraft, { level: enhanceLevel }));
+      const result = await api.enhancePrompt(promptEnhancementRequest(currentDraft));
       updatePrompt(result.enhancedPrompt);
       setEnhanceUndo({ previous: previousPrompt, enhanced: result.enhancedPrompt });
+      // Notes such as a prompt longer than the model reads; a blocking one is a refusal, not a note.
+      const warnings = (result.warnings ?? []).filter((warning) => warning.severity !== 'blocking').slice(0, 3);
+      if (warnings.length > 0) setEnhanceNotes({ tool: currentDraft.tool, prompt: result.enhancedPrompt, warnings });
       if (typeof result.remainingCredits === 'number') updateCredits(result.remainingCredits);
       haptic.success();
     } catch (error) {
       setPromptMessage(error instanceof Error ? error.message : 'Prompt enhancement failed.');
       setMessage(null);
+      // A failed enhancement is refunded, and the answer carries the balance after the refund.
+      const details = error && typeof error === 'object' && 'details' in error ? (error as { details?: unknown }).details : null;
+      const remainingCredits = details && typeof details === 'object' ? (details as { remainingCredits?: unknown }).remainingCredits : undefined;
+      if (typeof remainingCredits === 'number' && Number.isFinite(remainingCredits)) updateCredits(remainingCredits);
       haptic.error();
     } finally {
       setIsEnhancing(false);
     }
+  };
+
+  /**
+   * What the enhancer is asked. An image's request says what the web creator's does: the run's
+   * settings, only the references the run sends, and append-only ("Polish") when the prompt names
+   * one of them, so a sentence naming a reference is kept as written instead of rewritten.
+   */
+  const promptEnhancementRequest = (draft: CreationDraft): PromptEnhancementRequest => {
+    if (draft.tool !== 'image') return buildPromptEnhancementRequest(draft, { level: enhanceLevel });
+    const model = catalog ? getCatalogModel(catalog, draft.model) : null;
+    const request = buildPromptEnhancementRequest({ ...draft, references: imageRunReferences(draft, model) }, { level: enhanceLevel });
+    const context = {
+      ...request.context,
+      modelId: draft.model,
+      aspectRatio: draft.aspectRatio,
+      resolution: draft.resolution,
+      googleSearch: draft.googleSearch,
+      ...(imagePromptNamesReference(draft, model) ? { elementEnhancementMode: 'append-only' as const } : {}),
+    };
+    return { ...request, context };
   };
 
   const handleUndoEnhance = () => {
@@ -1512,25 +1921,45 @@ function IdentityCreationScreen({
     { onTick: setStatus, signal: controller.signal, waitUntilReady: waitUntilAppActive },
   );
 
-  const finishGenerationPolling = async (finalStatus: GenerationStatusResponse, tool: CreatorToolId) => {
+  // Cleared only for the run it names: a start from another creator screen keeps its own.
+  const forgetActiveRun = async (identity: string, predictionId: string) => {
+    const record = await loadActiveGenerationRecord(identity).catch(() => null);
+    if (record?.predictionId === predictionId) await clearActiveGenerationRecord(identity).catch(() => undefined);
+  };
+
+  const finishGenerationPolling = async (finalStatus: GenerationStatusResponse, tool: CreatorToolId, predictionId: string) => {
     setStatus(finalStatus);
     setPollingInterrupted(false);
     setLastPredictionId(null);
+    // Over either way, so there is nothing left for a creator opened again to resume.
+    if (identityUserId) void forgetActiveRun(identityUserId, predictionId);
     if (finalStatus.status === 'failed') {
       setMessage(finalStatus.error?.trim() || 'Generation failed. Your inputs are still here, so you can adjust them and retry.');
+      // A failed run's settlement returns what its start held; the balance on screen predates it.
+      void refreshProfile().catch(() => undefined);
+      const cost = runCostRef.current;
+      setRefundNotice(typeof cost === 'number' && cost > 0
+        ? cost === 1 ? 'Your 1 credit was returned.' : `Your ${formatCreditCost(cost)} were returned.`
+        : null);
       haptic.error();
       return;
     }
 
     setMessage(null);
     haptic.success();
-    if (draftScope) void clearPersistedCreationDrafts(draftScope).catch(() => undefined);
+    // Profile → Creations read in the last minute would otherwise go on without the new creation.
+    void invalidateProfileCreations(queryClient, user?.id).catch(() => undefined);
+    // A remix link reopens its session until a run in it succeeds. The ordinary drafts stay
+    // saved, as on the web, so what is on screen is still what is stored.
+    if (remixScope) void clearPersistedCreationDrafts(remixScope).catch(() => undefined);
     if (guided) void trackOnboardingEvent(api, 'first_generation_succeeded', { goal: tool, step: 'creator' });
   };
 
-  const resumeGenerationPolling = async () => {
-    if (!lastPredictionId || !generationTool || isGenerating || activeGenerationRequestKeyRef.current) return;
-    const requestKey = `poll:${generationTool}:${lastPredictionId}`;
+  const resumeGenerationPolling = async (run: { tool: CreatorToolId; predictionId: string } | null = (
+    lastPredictionId && generationTool ? { tool: generationTool, predictionId: lastPredictionId } : null
+  )) => {
+    if (!run || isGenerating || activeGenerationRequestKeyRef.current) return;
+    const requestKey = `poll:${run.tool}:${run.predictionId}`;
     activeGenerationRequestKeyRef.current = requestKey;
     generationPollControllerRef.current?.abort();
     const pollController = new AbortController();
@@ -1540,8 +1969,8 @@ function IdentityCreationScreen({
     setMessage(null);
     setIsGenerating(true);
     try {
-      const finalStatus = await pollGenerationForTool(generationTool, lastPredictionId, pollController);
-      await finishGenerationPolling(finalStatus, generationTool);
+      const finalStatus = await pollGenerationForTool(run.tool, run.predictionId, pollController);
+      await finishGenerationPolling(finalStatus, run.tool, run.predictionId);
     } catch (error) {
       if (pollController.signal.aborted) return;
       setPollingInterrupted(true);
@@ -1593,15 +2022,32 @@ function IdentityCreationScreen({
       const started = await sendGenerationAttempt(attempt);
       startedPredictionId = started.predictionId;
       void forgetPendingAttempt(attempt.identityUserId);
+      runCostRef.current = typeof started.cost === 'number' ? started.cost : null;
+      // Kept until the run ends, so a creator opened again watches this run rather than
+      // offering Generate on the same draft, which would start and charge a second one.
+      const attemptedAt = Date.parse(attempt.createdAt);
+      void saveActiveGenerationRecord({
+        version: 1,
+        identityUserId: attempt.identityUserId,
+        tool: attempt.tool,
+        predictionId: started.predictionId,
+        generationId: started.generationId ?? null,
+        startedAt: Number.isFinite(attemptedAt) ? attemptedAt : Date.now(),
+        estimatedTotalMs: null,
+      }).catch(() => undefined);
+      // One record per identity: this run's has taken the place of any other's.
+      setOtherToolRun(null);
       // The tab bar's create ring counts the viewer's in-flight runs, and its
       // poll is off while that count is zero. Tell it a run exists now, or it
       // stays dark until the app next comes back to the foreground.
       invalidateActiveGenerations(queryClient, identityUserId);
+      // And Profile's Rendering strip, which a read from the last minute would leave without this run.
+      void invalidateProfileCreations(queryClient, user?.id).catch(() => undefined);
       setLastPredictionId(started.predictionId);
       setLastGenerationId(started.generationId ?? null);
       if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
       const finalStatus = await pollGenerationForTool(attempt.tool, started.predictionId, pollController);
-      await finishGenerationPolling(finalStatus, attempt.tool);
+      await finishGenerationPolling(finalStatus, attempt.tool, started.predictionId);
     } catch (error) {
       if (pollController.signal.aborted) return;
       const details = error && typeof error === 'object' && 'details' in error
@@ -1620,6 +2066,14 @@ function IdentityCreationScreen({
         setMessage(GENERATION_ATTEMPT_UNCONFIRMED_MESSAGE);
       } else {
         void forgetPendingAttempt(attempt.identityUserId);
+        const refusal = generationStartRefusalCode(error) ?? details?.code ?? null;
+        setStartRefusal(refusal);
+        // The balance the form reads can be stale; the server has just said it is short.
+        if (refusal === 'insufficient_credits') void refreshProfile().catch(() => undefined);
+        // Priced again at once, so Try again states what the run now costs.
+        if (refusal === 'cost_changed') setQuoteRetryNonce((value) => value + 1);
+        // The server does not say which reference it could not use; storage says which are gone.
+        if (refusal === 'invalid_input_media') void verifyStagedReferences([attempt.tool], { onlyExpired: false });
         if (details?.code === 'CATALOG_CHANGED' || details?.code === 'MODEL_UNAVAILABLE') {
           void refetchCatalog();
           setMessage('The model catalog changed before generation started. Review the refreshed options and generate again.');
@@ -1661,35 +2115,31 @@ function IdentityCreationScreen({
       return;
     }
     const nextValidation = validateCatalogCreationDraft(currentDraft, currentCatalogModel, { credits, quotedCost: activeQuote.cost });
-    if (nextValidation.errors.length > 0) {
-      const promptError = promptValidationMessage(nextValidation.errors[0]);
+    const nextErrors = unavailableReference
+      ? [unavailableReferenceMessage(unavailableReference), ...nextValidation.errors]
+      : nextValidation.errors;
+    if (nextErrors.length > 0) {
+      const promptError = promptValidationMessage(nextErrors[0]);
       if (promptError) {
         setPromptMessage(promptError);
         setMessage(null);
       } else {
-        setMessage(nextValidation.errors[0]);
+        setMessage(nextErrors[0]);
         setPromptMessage(null);
       }
       return;
     }
-    const route: GenerationAttemptRoute = api.startGeneration ? 'unified' : currentDraft.tool;
+    // Every new run starts on POST /api/generations, which the app's catalog schema always
+    // has; the per-kind routes are left for replaying an attempt an older build saved.
+    const route = 'unified' as const;
     // Kept so a refusal that measured the references can be matched back to the draft's media.
-    const unifiedRequest = route === 'unified'
-      ? buildUnifiedCatalogGenerationRequest(
-        currentDraft,
-        currentCatalogModel,
-        catalog?.revision ?? '',
-        activeQuote.normalizedSettings ?? undefined,
-      )
-      : null;
-    const catalogRevision = catalog?.revision ?? '';
-    const normalizedSettings = activeQuote.normalizedSettings ?? undefined;
-    const requestJson = JSON.stringify(unifiedRequest
-      ?? (currentDraft.tool === 'image'
-        ? buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalogRevision, normalizedSettings)
-        : currentDraft.tool === 'video'
-          ? buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalogRevision, normalizedSettings)
-          : buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalogRevision, normalizedSettings)));
+    const unifiedRequest = buildUnifiedCatalogGenerationRequest(
+      currentDraft,
+      currentCatalogModel,
+      catalog?.revision ?? '',
+      activeQuote.normalizedSettings ?? undefined,
+    );
+    const requestJson = JSON.stringify(unifiedRequest);
     // An unchanged press after a lost response is the same attempt, under the same key.
     const reusedKey = newRun ? null : reusableAttemptKey(pendingAttempt, identityUserId, route, requestJson);
     if (pendingAttempt && !newRun && !reusedKey) {
@@ -1706,6 +2156,8 @@ function IdentityCreationScreen({
     setLastGenerationId(null);
     setLastPredictionId(null);
     setPollingInterrupted(false);
+    setStartRefusal(null);
+    setRefundNotice(null);
     setGenerationTool(currentDraft.tool);
     // Stamped here rather than when the workspace becomes visible: minimizing
     // and coming back must not restart the clock the wait is reporting.
@@ -1735,6 +2187,8 @@ function IdentityCreationScreen({
     setLastGenerationId(null);
     setLastPredictionId(null);
     setPollingInterrupted(false);
+    setStartRefusal(null);
+    setRefundNotice(null);
     setGenerationTool(attempt.tool);
     const attemptedAt = Date.parse(attempt.createdAt);
     setGenerationStartedAt(Number.isFinite(attemptedAt) ? attemptedAt : Date.now());
@@ -1756,6 +2210,46 @@ function IdentityCreationScreen({
     await forgetPendingAttempt(identityUserId);
     await generate({ newRun: true });
   };
+
+  /** Watches a run this identity started from a creator screen that has since closed. */
+  const openActiveRun = (record: ActiveGenerationRecord) => {
+    setOtherToolRun(null);
+    setActiveTool(record.tool);
+    setGenerationTool(record.tool);
+    setStatus(null);
+    setMessage(null);
+    setStartRefusal(null);
+    setRefundNotice(null);
+    setLastPredictionId(record.predictionId);
+    setLastGenerationId(record.generationId);
+    setGenerationStartedAt(record.startedAt);
+    runCostRef.current = null;
+    void resumeGenerationPolling({ tool: record.tool, predictionId: record.predictionId });
+  };
+  // Once the drafts are back: a run still in flight for this tool is watched again, with its
+  // progress on screen, and one for another tool is offered, before Generate can start a second.
+  useEffect(() => {
+    if (!draftsHydrated || !identityUserId || activeRunCheckedRef.current) return;
+    let active = true;
+    void loadActiveGenerationRecord(identityUserId).then((record) => {
+      if (!active) return;
+      activeRunCheckedRef.current = true;
+      if (!record || activeGenerationRequestKeyRef.current) return;
+      if (record.tool === activeTool) openActiveRun(record);
+      else setOtherToolRun(record);
+    }, () => {
+      if (active) activeRunCheckedRef.current = true;
+    });
+    return () => {
+      active = false;
+    };
+  }, [draftsHydrated, identityUserId]);
+  const otherToolRunNotice = otherToolRun && !isGenerating ? (
+    <View style={{ gap: 8 }}>
+      <SlimCreatorBanner label="Run in progress" body={`A ${otherToolRun.tool} run is in progress.`} />
+      <SecondaryButton label="Open" onPress={() => openActiveRun(otherToolRun)} />
+    </View>
+  ) : null;
 
   const pendingAttemptMedium = pendingAttempt?.tool === 'image'
     ? 'image'
@@ -1794,7 +2288,13 @@ function IdentityCreationScreen({
       }
     }
     if (!url && media.storagePath) {
-      url = (await api.createMediaReadUrl({ storagePath: media.storagePath })).signedUrl;
+      try {
+        url = (await api.createMediaReadUrl({ storagePath: media.storagePath })).signedUrl;
+      } catch (error) {
+        // Gone from storage: the tile asks for the reference again rather than offering a retry.
+        if (isMissingUploadError(error)) markReferenceUnavailable(media.storagePath);
+        throw error;
+      }
     }
     if (!url) throw new Error('This reference can’t be refreshed. Remove it and add it again.');
     const renewed = url;
@@ -1803,9 +2303,98 @@ function IdentityCreationScreen({
     setMotionDraft((draft) => replaceDraftMediaUrl(draft, media.id, renewed));
     return renewed;
   };
+  const markReferenceUnavailable = (storagePath: string) => {
+    setUnavailableReferencePaths((current) => (current.has(storagePath) ? current : new Set([...current, storagePath])));
+  };
+  /**
+   * Signs the creator's own staged uploads again, marking any the server has swept: a staged
+   * upload a run used is deleted 48 h after it was signed, and a draft keeps its path for ever.
+   * On resume only uploads whose saved link has run out are asked about (a link lasts an hour,
+   * so one still good has not been swept); after a refusal of the run's media, all of them.
+   */
+  const verifyStagedReferences = async (tools: readonly CreatorToolId[], { onlyExpired }: { onlyExpired: boolean }) => {
+    const now = Date.now();
+    const staged = tools
+      .flatMap((tool) => draftMediaList(latestDrafts.current[tool]))
+      .filter((media): media is MediaDraft & { storagePath: string } => Boolean(media.storagePath) && !media.sourceGenerationId)
+      .filter((media) => {
+        if (!onlyExpired) return true;
+        const expiresAt = signedStorageUrlExpiresAt(media.url, env.supabaseUrl);
+        return expiresAt !== null && expiresAt - 60_000 <= now;
+      });
+    for (const storagePath of new Set(staged.map((media) => media.storagePath))) {
+      try {
+        const { signedUrl } = await api.createMediaReadUrl({ storagePath });
+        if (!signedUrl) continue;
+        for (const media of staged.filter((item) => item.storagePath === storagePath)) {
+          setImageDraft((draft) => replaceDraftMediaUrl(draft, media.id, signedUrl));
+          setVideoDraft((draft) => replaceDraftMediaUrl(draft, media.id, signedUrl));
+          setMotionDraft((draft) => replaceDraftMediaUrl(draft, media.id, signedUrl));
+        }
+      } catch (error) {
+        if (isMissingUploadError(error)) markReferenceUnavailable(storagePath);
+      }
+    }
+  };
+  useEffect(() => {
+    if (!draftsHydrated || stagedReferencesCheckedRef.current) return;
+    stagedReferencesCheckedRef.current = true;
+    void verifyStagedReferences(['image', 'video', 'motion'], { onlyExpired: true });
+  }, [draftsHydrated]);
   const withReferenceLinkRenewal = (tree: ReactElement) => (
-    <ReferenceLinkRenewal.Provider value={renewReferenceLink}>{tree}</ReferenceLinkRenewal.Provider>
+    <ReferenceLinkRenewal.Provider value={renewReferenceLink}>
+      <UnavailableReferences.Provider value={unavailableReferencePaths}>
+        <LocalReferencePreviews.Provider value={localPreviews}>{tree}</LocalReferencePreviews.Provider>
+      </UnavailableReferences.Provider>
+    </ReferenceLinkRenewal.Provider>
   );
+
+  /** The failure view's first action for a refusal the server named (startRefusalActionLabel). */
+  const runRefusalAction = () => {
+    const refusal = startRefusal;
+    const refusalMessage = message;
+    setWorkspaceVisible(false);
+    setStatus(null);
+    setLastPredictionId(null);
+    setPollingInterrupted(false);
+    setGenerationTool(null);
+    setStartRefusal(null);
+    setRefundNotice(null);
+    if (refusal === 'insufficient_credits') {
+      setMessage(null);
+      router.push('/(tabs)/pricing' as never);
+      return;
+    }
+    if (refusal === 'prompt_blocked') {
+      setMessage(null);
+      setPromptMessage(refusalMessage);
+      setPromptFocusRequest((value) => value + 1);
+      return;
+    }
+    // The reference, the price or the options to change are on the creator itself, where the
+    // refusal stays said until the next press.
+    setMessage(refusalMessage);
+  };
+  const refusalActionLabel = startRefusalActionLabel(startRefusal);
+  const refusalAction = refusalActionLabel ? { label: refusalActionLabel, onPress: runRefusalAction } : null;
+  const promptNotes = enhanceNotes && enhanceNotes.tool === activeTool && enhanceNotes.prompt === currentDraft.prompt
+    ? enhanceNotes.warnings
+    : [];
+  // The parameter sheet is a Modal, which would stay over the pricing page.
+  const openCreditsFromParameters = () => {
+    setParametersVisible(false);
+    router.push('/(tabs)/pricing' as never);
+  };
+  // Share goes through the composer, as the viewer's Share does for a creation never posted: there
+  // is no public link until it is posted, and the composer opens the share sheet once it is.
+  const openComposerForResult = (shareAfterPublish: boolean) => {
+    if (!lastGenerationId) return;
+    setWorkspaceVisible(false);
+    router.push({
+      pathname: '/post/new',
+      params: shareAfterPublish ? { generationId: lastGenerationId, shareAfterPublish: '1' } : { generationId: lastGenerationId },
+    } as never);
+  };
 
   if (activeTool !== 'image') {
     const creatorModels = catalog ? getCatalogModels(catalog, activeTool) : [];
@@ -1814,7 +2403,7 @@ function IdentityCreationScreen({
       : null;
     const activeGenerationStatus = generationTool === activeTool ? status : null;
     const activeOutputUrl = generationTool === activeTool ? outputUrl : null;
-    const parameterSummary = creatorParameterSummary(currentDraft, selectedCreatorModel);
+    const parameterSummary = creatorParameterSummary(activeTool === 'video' ? videoDraft : motionDraft, selectedCreatorModel);
     const visibleValidationError = isRestoringRemix ? undefined : validation.errors.find((error) => (
       !isReferenceMentionActive || !error.startsWith('Unknown element mention:')
     ));
@@ -1822,6 +2411,7 @@ function IdentityCreationScreen({
       ?? message
       ?? (catalogUnavailable ? catalogQuery.error?.message : null)
       ?? (activeQuote.status === 'error' ? activeQuote.error : null)
+      ?? (motionInputsMissing && !unavailableReference ? MOTION_INPUTS_HINT : null)
       // Through the same mapper the Generate press uses: before this, the
       // blocker stated the condition ("Prompt is required.") and pressing
       // Generate restated it as an instruction ("Add a prompt before
@@ -1903,11 +2493,13 @@ function IdentityCreationScreen({
             <SlimCreatorBanner label="Reference updated" body={referenceNotice} onDismiss={() => setReferenceNotice(null)} />
           ) : null}
           {pendingAttemptNotice}
+          {otherToolRunNotice}
 
           {activeTool === 'video' ? (
             <VideoCreatorComposer
               draft={videoDraft}
               model={selectedCreatorModel}
+              promptFocusRequest={promptFocusRequest}
               isEnhancing={isEnhancing}
               isUploading={isUploading}
               promptMessage={promptMessage}
@@ -1925,6 +2517,9 @@ function IdentityCreationScreen({
               onUploadVideo={() => uploadReferenceVideo('video')}
               onUploadAudio={uploadReferenceAudio}
               onAddSubject={() => void uploadSubject()}
+              upload={upload}
+              onCancelUpload={cancelUpload}
+              promptNotes={promptNotes}
               onReplaceReference={(id) => {
                 void replaceImageReference('video', id);
               }}
@@ -1941,6 +2536,7 @@ function IdentityCreationScreen({
             <MotionCreatorComposer
               draft={motionDraft}
               model={selectedCreatorModel}
+              promptFocusRequest={promptFocusRequest}
               isEnhancing={isEnhancing}
               isUploading={isUploading}
               promptMessage={promptMessage}
@@ -1954,6 +2550,9 @@ function IdentityCreationScreen({
               onChange={(draft) => replaceDraft(draft)}
               onUploadCharacter={() => uploadSingleImage('character')}
               onUploadMotion={() => uploadReferenceVideo('motion')}
+              upload={upload}
+              onCancelUpload={cancelUpload}
+              promptNotes={promptNotes}
               onFocus={() => setIsPromptFocused(true)}
               onBlur={() => setIsPromptFocused(false)}
             />
@@ -1966,6 +2565,7 @@ function IdentityCreationScreen({
           summary={parameterSummary}
           blocker={persistentAction === 'generate' ? blocker : null}
           quoteStatus={creatorQuoteStatus}
+          awaitingInputs={motionInputsMissing}
           cost={activeQuote.cost}
           retryLabel={creatorRetryLabel}
           action={persistentAction}
@@ -1981,16 +2581,13 @@ function IdentityCreationScreen({
         <SearchableModelPickerSheet
           visible={modelPickerVisible}
           loading={catalogQuery.isLoadingModels}
-          error={catalogQuery.error?.message}
-          onRetry={refetchCatalog}
+          pendingId={modelPick && !modelPick.error ? modelPick.modelId : null}
+          error={modelPick?.error ?? catalogQuery.error?.message}
+          onRetry={modelPick?.error ? () => void pickModel(activeTool, modelPick.modelId) : refetchCatalog}
           items={catalogQuery.summaries.filter(model => model.kind === activeTool)}
           value={currentDraft.model}
-          onClose={() => setModelPickerVisible(false)}
-          onChange={(modelId) => {
-            if (activeTool === 'video') replaceDraft({ ...videoDraft, model: modelId as VideoModelId });
-            else replaceDraft({ ...motionDraft, model: modelId as MotionModelId });
-            setModelPickerVisible(false);
-          }}
+          onClose={closeModelPicker}
+          onChange={(modelId) => void pickModel(activeTool, modelId)}
         />
 
         <CreatorParameterSheet
@@ -2006,12 +2603,14 @@ function IdentityCreationScreen({
             : ['duration']}
           sourceDurationSeconds={activeTool === 'motion' && motionDraft.referenceVideo ? getMotionDuration(motionDraft) : null}
           quoteStatus={creatorQuoteStatus}
+          awaitingInputs={motionInputsMissing}
           cost={activeQuote.cost}
           availableCredits={credits}
           blocker={blocker}
           retryLabel={creatorRetryLabel}
           onClose={() => setParametersVisible(false)}
           onRetryQuote={retryCreatorQuote}
+          onGetCredits={openCreditsFromParameters}
           onChange={replaceDraft}
           onGenerate={() => {
             setParametersVisible(false);
@@ -2026,10 +2625,13 @@ function IdentityCreationScreen({
           status={activeGenerationStatus}
           isGenerating={isGenerating && generationTool === activeTool}
           outputUrl={activeOutputUrl}
+          outputUrls={generationTool === activeTool ? outputUrls : []}
           generationId={generationTool === activeTool ? lastGenerationId : null}
           settingsSummary={`${selectedCreatorModel?.displayName ?? meta.title} · ${parameterSummary}`}
           startedAt={generationStartedAt}
           retryCost={activeQuote.status === 'ready' ? activeQuote.cost : null}
+          refusalAction={refusalAction}
+          notice={refundNotice}
           error={activeGenerationStatus?.status === 'failed' ? activeGenerationStatus.error?.trim() || message : message}
           pollingInterrupted={pollingInterrupted && generationTool === activeTool}
           onResumePolling={() => void resumeGenerationPolling()}
@@ -2049,12 +2651,11 @@ function IdentityCreationScreen({
             setPollingInterrupted(false);
             setGenerationTool(null);
             setMessage(null);
+            setStartRefusal(null);
+            setRefundNotice(null);
           }}
-          onPost={() => {
-            if (!lastGenerationId) return;
-            setWorkspaceVisible(false);
-            router.push({ pathname: '/post/new', params: { generationId: lastGenerationId } } as never);
-          }}
+          onPost={() => openComposerForResult(false)}
+          onShare={() => openComposerForResult(true)}
           onCreateAnother={() => {
             setWorkspaceVisible(false);
             setStatus(null);
@@ -2064,6 +2665,8 @@ function IdentityCreationScreen({
             setGenerationTool(null);
             setMessage(null);
             setPromptMessage(null);
+            setStartRefusal(null);
+            setRefundNotice(null);
           }}
         />
       </View>
@@ -2098,6 +2701,12 @@ function IdentityCreationScreen({
         ? 'progress'
         : 'generate';
     const imageContentBottom = bottomInset + 108;
+    const maxImageReferences = catalogInputLimit(
+      selectedImageModel,
+      imageDraft,
+      'imageReferences',
+      selectedImageModel?.inputs.imageReferences?.max ?? 0,
+    );
 
     return withReferenceLinkRenewal(
       <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -2168,17 +2777,22 @@ function IdentityCreationScreen({
             <SlimCreatorBanner label="Reference updated" body={referenceNotice} onDismiss={() => setReferenceNotice(null)} />
           ) : null}
           {pendingAttemptNotice}
+          {otherToolRunNotice}
 
           <ImagePromptComposer
             draft={imageDraft}
-            maxReferences={catalogInputLimit(
-              selectedImageModel,
-              imageDraft,
-              'imageReferences',
-              selectedImageModel?.inputs.imageReferences?.max ?? 0,
-            )}
+            maxReferences={maxImageReferences}
+            // Until the model's descriptor is in, nothing is known to be left out.
+            referencesSent={selectedImageModel ? maxImageReferences : imageDraft.references.length}
+            promptOnlyModelName={selectedImageModel && maxImageReferences === 0 ? selectedImageModel.displayName : null}
+            mentionHandles={selectedImageModel ? catalogDraftRunHandles(imageDraft, selectedImageModel) : null}
+            referenceLimitMessage={validation.errors.find(isReferenceLimitError) ?? null}
+            promptFocusRequest={promptFocusRequest}
             isEnhancing={isEnhancing}
+            enhanceVerb={imagePromptNamesReference(imageDraft, selectedImageModel) ? 'Polish' : 'Enhance'}
+            promptNotes={promptNotes}
             isUploading={isUploading}
+            uploadProgress={upload?.target === 'image-references' ? upload : null}
             promptMessage={promptMessage}
             onPromptChange={updatePrompt}
             onEnhance={enhancePrompt}
@@ -2189,14 +2803,19 @@ function IdentityCreationScreen({
             onUploadReferences={() => uploadImageReferences('image')}
             onRenameReference={(id, displayName) => setImageDraft((draft) => {
               const currentReference = draft.references.find((media) => media.id === id);
-              const renamedReference = currentReference ? renameMediaDraft(currentReference, displayName) : null;
-              const nextPrompt = currentReference?.handle && promptContainsHandle(draft.prompt, currentReference.handle)
-                ? replacePromptHandle(draft.prompt, currentReference.handle, renamedReference?.handle ?? '')
+              if (!currentReference) return draft;
+              const renamed = renameMediaDraft(currentReference, displayName);
+              // Two references renamed alike would otherwise answer to one @mention.
+              const renamedReference = renamed.handle
+                ? withUniqueReferenceHandle(renamed, draft.references.filter((media) => media.id !== id))
+                : renamed;
+              const nextPrompt = currentReference.handle && promptContainsHandle(draft.prompt, currentReference.handle)
+                ? replacePromptHandle(draft.prompt, currentReference.handle, renamedReference.handle ?? '')
                 : draft.prompt;
               return {
                 ...draft,
                 prompt: nextPrompt,
-                references: renameMediaInList(draft.references, id, displayName),
+                references: draft.references.map((media) => (media.id === id ? renamedReference : media)),
               };
             })}
             onReplaceReference={(id) => {
@@ -2246,15 +2865,13 @@ function IdentityCreationScreen({
         <SearchableModelPickerSheet
           visible={modelPickerVisible}
           loading={catalogQuery.isLoadingModels}
-          error={catalogQuery.error?.message}
-          onRetry={refetchCatalog}
+          pendingId={modelPick && !modelPick.error ? modelPick.modelId : null}
+          error={modelPick?.error ?? catalogQuery.error?.message}
+          onRetry={modelPick?.error ? () => void pickModel('image', modelPick.modelId) : refetchCatalog}
           items={catalogQuery.summaries.filter(model => model.kind === 'image')}
           value={imageDraft.model}
-          onClose={() => setModelPickerVisible(false)}
-          onChange={(modelId) => {
-            replaceDraft({ ...imageDraft, model: modelId as ImageModelId });
-            setModelPickerVisible(false);
-          }}
+          onClose={closeModelPicker}
+          onChange={(modelId) => void pickModel('image', modelId)}
         />
 
         <CreatorParameterSheet
@@ -2270,6 +2887,7 @@ function IdentityCreationScreen({
           retryLabel={creatorRetryLabel}
           onClose={() => setParametersVisible(false)}
           onRetryQuote={retryCreatorQuote}
+          onGetCredits={openCreditsFromParameters}
           onChange={replaceDraft}
           onGenerate={() => {
             setParametersVisible(false);
@@ -2284,10 +2902,13 @@ function IdentityCreationScreen({
           status={activeGenerationStatus}
           isGenerating={isGenerating && generationTool === 'image'}
           outputUrl={activeOutputUrl}
+          outputUrls={generationTool === 'image' ? outputUrls : []}
           generationId={generationTool === 'image' ? lastGenerationId : null}
           settingsSummary={`${selectedImageModel?.displayName ?? 'Image'} · ${parameterSummary || 'Default settings'}`}
           startedAt={generationStartedAt}
           retryCost={activeQuote.status === 'ready' ? activeQuote.cost : null}
+          refusalAction={refusalAction}
+          notice={refundNotice}
           error={status?.status === 'failed' ? status.error?.trim() || message : message}
           pollingInterrupted={pollingInterrupted && generationTool === 'image'}
           onResumePolling={() => void resumeGenerationPolling()}
@@ -2307,12 +2928,11 @@ function IdentityCreationScreen({
             setPollingInterrupted(false);
             setGenerationTool(null);
             setMessage(null);
+            setStartRefusal(null);
+            setRefundNotice(null);
           }}
-          onPost={() => {
-            if (!lastGenerationId) return;
-            setWorkspaceVisible(false);
-            router.push({ pathname: '/post/new', params: { generationId: lastGenerationId } } as never);
-          }}
+          onPost={() => openComposerForResult(false)}
+          onShare={() => openComposerForResult(true)}
           onCreateAnother={() => {
             setWorkspaceVisible(false);
             setStatus(null);
@@ -2322,6 +2942,8 @@ function IdentityCreationScreen({
             setGenerationTool(null);
             setMessage(null);
             setPromptMessage(null);
+            setStartRefusal(null);
+            setRefundNotice(null);
           }}
         />
       </View>
@@ -2523,8 +3145,16 @@ function SlimCreatorBanner({ label, body, loading, onDismiss }: { label: string;
 function ImagePromptComposer({
   draft,
   maxReferences,
+  referencesSent,
+  promptOnlyModelName,
+  mentionHandles,
+  referenceLimitMessage,
+  promptFocusRequest,
   isEnhancing,
+  enhanceVerb,
+  promptNotes,
   isUploading,
+  uploadProgress,
   promptMessage,
   onPromptChange,
   onEnhance,
@@ -2543,8 +3173,23 @@ function ImagePromptComposer({
 }: {
   draft: ImageCreationDraft;
   maxReferences: number;
+  /** How many of the draft's references a run sends: the first ones, up to the model's max. */
+  referencesSent: number;
+  /** The model's name when it takes no reference images, for the note drawn in place of the rail. */
+  promptOnlyModelName: string | null;
+  /** The handles a run on this model may name, or null before its descriptor is in. */
+  mentionHandles: string[] | null;
+  /** The validator's word on references past the model's max, said beside them. */
+  referenceLimitMessage: string | null;
+  /** Bumped to put the cursor in the prompt, after a refusal of what it says. */
+  promptFocusRequest: number;
   isEnhancing: boolean;
+  /** Polish when the prompt names a reference the run sends: the enhancer then only adds around it. */
+  enhanceVerb: EnhanceVerb;
+  promptNotes: PromptEnhancementWarning[];
   isUploading: boolean;
+  /** References being uploaded from the rail's add tile. */
+  uploadProgress: UploadProgress | null;
   promptMessage: string | null;
   onPromptChange: (prompt: string) => void;
   onEnhance: () => void;
@@ -2575,6 +3220,9 @@ function ImagePromptComposer({
   const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectedReference = draft.references.find((media) => media.id === referenceId) ?? null;
   const referenceLimitReached = maxReferences === 0 || draft.references.length >= maxReferences;
+  // The rest wait in the draft for a model that takes them.
+  const sentReferences = draft.references.slice(0, referencesSent);
+  const standbyReferences = draft.references.slice(referencesSent);
   const detectedMention = useMemo(
     () => promptFocused ? findActiveReferenceMention(draft.prompt, promptSelection) : null,
     [draft.prompt, promptFocused, promptSelection],
@@ -2586,10 +3234,16 @@ function ImagePromptComposer({
     const query = activeMention.query.toLowerCase();
     return draft.references.filter((media) => {
       if (!media.handle) return false;
+      // Only what the run sends can be named: the server refuses a mention of anything else.
+      if (mentionHandles && !mentionHandles.includes(media.handle)) return false;
       const normalizedHandle = media.handle.slice(1).toLowerCase();
       return normalizedHandle.includes(query) || media.displayName.toLowerCase().includes(query);
     });
-  }, [activeMention, draft.references]);
+  }, [activeMention, draft.references, mentionHandles]);
+
+  useEffect(() => {
+    if (promptFocusRequest > 0) promptInputRef.current?.focus();
+  }, [promptFocusRequest]);
 
   useEffect(() => {
     promptTextRef.current = draft.prompt;
@@ -2718,11 +3372,13 @@ function ImagePromptComposer({
             style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 16, backgroundColor: theme.colors.panel }}
           />
         </View>
+        <PromptLengthCounter length={draft.prompt.length} />
         {promptMessage ? (
           <Text accessibilityRole="alert" selectable style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 10 }}>
             {promptMessage}
           </Text>
         ) : null}
+        <PromptQualityNotes warnings={promptNotes} />
       </View>
 
         {activeMention ? (
@@ -2737,7 +3393,7 @@ function ImagePromptComposer({
         <View testID="composer-action-grid" style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
           <ComposerToolbarButton icon={<ImageIcon size={16} color={theme.colors.text} />} label="Reference" onPress={onUploadReferences} disabled={isUploading || referenceLimitReached} />
           <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
-          <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} label={isEnhancing ? 'Enhancing' : 'Enhance'} onPress={onEnhance} disabled={isEnhancing} accent />
+          <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} {...enhanceButtonLabels(enhanceVerb, isEnhancing)} onPress={onEnhance} disabled={isEnhancing} accent />
         </View>
 
         <EnhanceControlsRow
@@ -2746,6 +3402,7 @@ function ImagePromptComposer({
           canUndo={canUndoEnhance}
           onUndo={onUndoEnhance}
           disabled={isEnhancing}
+          polishes={enhanceVerb === 'Polish'}
         />
 
         <View
@@ -2762,44 +3419,62 @@ function ImagePromptComposer({
             gap: 10,
           }}
         >
-          <View style={{ paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-            <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>Reference images</Text>
-            <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '700' }}>{draft.references.length} / {maxReferences}</Text>
-          </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingHorizontal: 16, paddingRight: 16 }}>
-            {draft.references.map((media) => (
-              <Pressable
-                key={media.id}
-                accessibilityRole="button"
-                accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`}
-                onPress={() => setReferenceId(media.id)}
-                style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1, width: 72 })}
-              >
-                <ReferenceMediaPreview media={media} size={72} />
-              </Pressable>
-            ))}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Add reference images"
-              accessibilityState={{ disabled: isUploading || referenceLimitReached }}
-              disabled={isUploading || referenceLimitReached}
-              onPress={onUploadReferences}
-              style={({ pressed }) => ({
-                width: 72,
-                height: 72,
-                borderRadius: 16,
-                borderWidth: 1,
-                borderStyle: 'dashed',
-                borderColor: hexWithAlpha(theme.colors.image, 0.42),
-                backgroundColor: hexWithAlpha(theme.colors.image, 0.08),
-                alignItems: 'center',
-                justifyContent: 'center',
-                opacity: isUploading || referenceLimitReached ? 0.38 : pressed ? appTheme.opacity.pressed : 1,
-              })}
-            >
-              {isUploading ? <ActivityIndicator color={theme.colors.image} size="small" /> : <Plus size={22} color={theme.colors.image} />}
-            </Pressable>
-          </ScrollView>
+          {promptOnlyModelName ? (
+            <View style={{ paddingHorizontal: 16 }}>
+              <PromptOnlyNote modelName={promptOnlyModelName} />
+            </View>
+          ) : (
+            <>
+              <View style={{ paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>Reference images</Text>
+                <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '700' }}>{draft.references.length} / {maxReferences}</Text>
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingHorizontal: 16, paddingRight: 16 }}>
+                {sentReferences.map((media) => (
+                  <Pressable
+                    key={media.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`}
+                    onPress={() => setReferenceId(media.id)}
+                    style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1, width: 72 })}
+                  >
+                    <ReferenceMediaPreview media={media} size={72} />
+                  </Pressable>
+                ))}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={uploadProgress ? `Uploading reference images, ${uploadPercentLabel(uploadProgress)}` : 'Add reference images'}
+                  accessibilityState={{ disabled: isUploading || referenceLimitReached, busy: Boolean(uploadProgress) }}
+                  disabled={isUploading || referenceLimitReached}
+                  onPress={onUploadReferences}
+                  style={({ pressed }) => ({
+                    width: 72,
+                    height: 72,
+                    borderRadius: 16,
+                    borderWidth: 1,
+                    borderStyle: 'dashed',
+                    borderColor: hexWithAlpha(theme.colors.image, 0.42),
+                    backgroundColor: hexWithAlpha(theme.colors.image, 0.08),
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 4,
+                    // The tile the upload came from stays legible: it is where its progress shows.
+                    opacity: uploadProgress ? 1 : isUploading || referenceLimitReached ? 0.38 : pressed ? appTheme.opacity.pressed : 1,
+                  })}
+                >
+                  {isUploading ? <ActivityIndicator color={theme.colors.image} size="small" /> : <Plus size={22} color={theme.colors.image} />}
+                  {uploadProgress ? (
+                    <Text testID="reference-upload-progress" style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{uploadPercentLabel(uploadProgress)}</Text>
+                  ) : null}
+                </Pressable>
+              </ScrollView>
+            </>
+          )}
+          {standbyReferences.length > 0 ? (
+            <View style={{ paddingHorizontal: 16 }}>
+              <StandbyReferences references={standbyReferences} message={referenceLimitMessage} onRemove={(media) => onRemoveReference(media.id)} />
+            </View>
+          ) : null}
         </View>
       </View>
 
@@ -2835,6 +3510,7 @@ function CompactReferenceSlot({
   required,
   disabled = false,
   isUploading,
+  progress = null,
   onAdd,
   onOpen,
 }: {
@@ -2845,12 +3521,16 @@ function CompactReferenceSlot({
   required?: boolean;
   disabled?: boolean;
   isUploading: boolean;
+  /** The upload this slot started, whose progress it shows until the media arrives. */
+  progress?: UploadProgress | null;
   onAdd: () => void;
   onOpen: () => void;
 }) {
   const theme = useAppTheme();
   const action = media ? onOpen : onAdd;
-  const label = media ? `Open details for ${mediaAccessibleName(media)}` : `Add ${title.toLowerCase()}`;
+  const label = progress && !media
+    ? `Uploading ${title.toLowerCase()}, ${uploadPercentLabel(progress)}`
+    : media ? `Open details for ${mediaAccessibleName(media)}` : `Add ${title.toLowerCase()}`;
   return (
     <Pressable
       testID={testID}
@@ -2871,7 +3551,7 @@ function CompactReferenceSlot({
         backgroundColor: media ? theme.colors.surfaceStrong : hexWithAlpha(theme.colors.image, 0.055),
         padding: 11,
         gap: 9,
-        opacity: isUploading || disabled ? 0.45 : pressed ? appTheme.opacity.pressed : 1,
+        opacity: progress ? 1 : isUploading || disabled ? 0.45 : pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       <View style={{ minHeight: required ? 29 : 16, alignItems: 'flex-start', justifyContent: 'flex-start', gap: 1 }}>
@@ -2885,8 +3565,11 @@ function CompactReferenceSlot({
         </>
       ) : (
         <View style={{ flex: 1, minHeight: 82, alignItems: 'center', justifyContent: 'center', gap: 7 }}>
-          {isUploading ? <ActivityIndicator color={theme.colors.image} size="small" /> : <Plus size={23} color={theme.colors.image} />}
-          <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 14, textAlign: 'center' }}>{helper ?? 'Tap to add media'}</Text>
+          {/* Only the slot being filled turns; the others wait, dimmed, for the upload to end. */}
+          {progress ? <ActivityIndicator color={theme.colors.image} size="small" /> : <Plus size={23} color={theme.colors.image} />}
+          <Text numberOfLines={2} style={{ color: progress ? theme.colors.textSecondary : theme.colors.muted, fontSize: 11, lineHeight: 14, textAlign: 'center', fontVariant: ['tabular-nums'] }}>
+            {progress ? `Uploading ${uploadPercentLabel(progress)}` : helper ?? 'Tap to add media'}
+          </Text>
         </View>
       )}
     </Pressable>
@@ -2895,11 +3578,13 @@ function CompactReferenceSlot({
 
 function CompactShotEditor({
   draft,
+  model,
   onChange,
   onFocus,
   onBlur,
 }: {
   draft: VideoCreationDraft;
+  model: CreatorCatalogModel | null;
   onChange: (draft: VideoCreationDraft) => void;
   onFocus: () => void;
   onBlur: () => void;
@@ -2907,7 +3592,14 @@ function CompactShotEditor({
   const theme = useAppTheme();
   const [selectedId, setSelectedId] = useState(draft.multiPrompts[0]?.id ?? '');
   const selectedShot = draft.multiPrompts.find((shot) => shot.id === selectedId) ?? draft.multiPrompts[0] ?? null;
-  const totalDuration = draft.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0);
+  // The run's duration, as the quote and the request carry it, and what the provider takes.
+  const totalDuration = multiShotTotalDuration(draft.multiPrompts);
+  const { maxShots, maxTotalSeconds } = model ? catalogMultiShotLimits(model) : { maxShots: null, maxTotalSeconds: null };
+  const shotsLabel = maxShots !== null ? `${draft.multiPrompts.length} of ${maxShots} shots` : `${draft.multiPrompts.length} shots`;
+  const totalLabel = maxTotalSeconds !== null ? `${totalDuration}s of ${maxTotalSeconds}s` : `${totalDuration}s total`;
+  // At either cap another shot could only be refused; the shots already there can still be shortened.
+  const atShotCap = (maxShots !== null && draft.multiPrompts.length >= maxShots)
+    || (maxTotalSeconds !== null && totalDuration >= maxTotalSeconds);
 
   useEffect(() => {
     if (selectedShot || draft.multiPrompts.length === 0) return;
@@ -2927,17 +3619,19 @@ function CompactShotEditor({
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <View style={{ gap: 2 }}>
           <Text style={{ color: theme.colors.video, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Multi-shot story</Text>
-          <Text style={{ color: theme.colors.muted, fontSize: 11 }}>{draft.multiPrompts.length} shots · {totalDuration}s total</Text>
+          <Text testID="video-shot-totals" style={{ color: theme.colors.muted, fontSize: 11 }}>{`${shotsLabel} · ${totalLabel}`}</Text>
         </View>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Add shot"
+          accessibilityState={{ disabled: atShotCap }}
+          disabled={atShotCap}
           onPress={() => {
             const id = `shot-${Date.now().toString(36)}`;
             onChange({ ...draft, multiPrompts: [...draft.multiPrompts, { id, prompt: '', duration: 5 }] });
             setSelectedId(id);
           }}
-          style={({ pressed }) => ({ minHeight: 48, borderRadius: 16, paddingHorizontal: 13, backgroundColor: pressed ? theme.colors.pressed : theme.colors.surfaceStrong, flexDirection: 'row', alignItems: 'center', gap: 6, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+          style={({ pressed }) => ({ minHeight: 48, borderRadius: 16, paddingHorizontal: 13, backgroundColor: pressed ? theme.colors.pressed : theme.colors.surfaceStrong, flexDirection: 'row', alignItems: 'center', gap: 6, opacity: atShotCap ? 0.38 : pressed ? appTheme.opacity.pressed : 1 })}
         >
           <Plus size={16} color={theme.colors.video} />
           <Text style={{ color: theme.colors.text, fontSize: 11, fontWeight: '800' }}>Add shot</Text>
@@ -3009,6 +3703,7 @@ function CompactShotEditor({
 function VideoCreatorComposer({
   draft,
   model,
+  promptFocusRequest,
   isEnhancing,
   isUploading,
   promptMessage,
@@ -3026,6 +3721,9 @@ function VideoCreatorComposer({
   onUploadVideo,
   onUploadAudio,
   onAddSubject,
+  upload,
+  onCancelUpload,
+  promptNotes,
   onReplaceReference,
   replacingReferenceId,
   preparingAssetId,
@@ -3038,6 +3736,8 @@ function VideoCreatorComposer({
 }: {
   draft: VideoCreationDraft;
   model: CreatorCatalogModel | null;
+  /** Bumped to put the cursor in the prompt, after a refusal of what it says. */
+  promptFocusRequest: number;
   isEnhancing: boolean;
   isUploading: boolean;
   promptMessage: string | null;
@@ -3055,6 +3755,10 @@ function VideoCreatorComposer({
   onUploadVideo: () => void;
   onUploadAudio: () => void;
   onAddSubject: () => void;
+  /** An upload in flight, shown on the control it came from. */
+  upload: UploadProgress | null;
+  onCancelUpload: () => void;
+  promptNotes: PromptEnhancementWarning[];
   onReplaceReference: (id: string) => void;
   replacingReferenceId: string | null;
   /** The reference whose Seedance asset is being prepared or checked. */
@@ -3094,7 +3798,7 @@ function VideoCreatorComposer({
   const endFrameSlot = catalogInputSlot(model, draft, 'endFrame');
   const supportsFrames = supportsStartFrame || supportsEndFrame;
   const supportsReusable = !draft.isMultiShot && supportsReusableVideoInputs(model, draft);
-  const referenceMode = videoDraftReferenceMode(draft);
+  const referenceMode = videoRunReferenceMode(draft, model);
   // Kie only lets wan-2.7 send a first frame alongside references; Seedance documents the
   // two as mutually exclusive scenarios, and minimax-h3 and kling-o3 route references to
   // an endpoint with no frame field. Both groups stay on screen either way — the one the
@@ -3104,12 +3808,9 @@ function VideoCreatorComposer({
     && modeGatedReferenceSlots(model)
     && model?.inputs.combineFramesWithReferences !== true;
   const hasFrameAttachment = Boolean(draft.startFrame || draft.endFrame);
-  const hasPlainReferences = draft.references.length > 0
-    || draft.referenceVideos.length > 0
-    || draft.referenceAudios.length > 0
-    || draft.preparedAudioIds.length > 0
-    || draft.characterIds.length > 0;
-  const hasReferenceAttachment = referenceMode === 'elements' || hasPlainReferences;
+  // A references run, as the model reads the draft: a reference kept from another model,
+  // which this one takes nowhere, is not one and must not lock this model's frames.
+  const hasReferenceAttachment = referenceMode === 'elements';
   // Only ever lock the empty side. A restored draft can hold both — the previous surface
   // kept the frames while you worked in references — and locking each against the other
   // leaves a panel where nothing can be removed, so nothing can be unlocked either.
@@ -3137,13 +3838,18 @@ function VideoCreatorComposer({
     model?.inputs.imageReferences?.max ?? 0,
     'elements',
   );
-  const videoLimit = catalogInputLimit(
-    model,
-    draft,
-    'videoReferences',
-    model?.inputs.videoReferences?.max ?? 0,
-    'elements',
-  );
+  const videoLimit = model?.inputModes
+    ? referenceVideoSlot(model, draft)?.max ?? 0
+    : model?.inputs.videoReferences?.max ?? 0;
+  // Held for another model, or past a slot's max: drawn apart, each with its own Remove.
+  const standbyReferences = standbyVideoReferences(draft, model);
+  const standbyIds = new Set(standbyReferences.map((media) => media.id));
+  const isSent = (media: MediaDraft) => !standbyIds.has(media.id);
+  const referenceLimitMessage = validationErrors.find(isReferenceLimitError) ?? null;
+  // The handles a run on this model may name: those it sends, as the server refuses the rest.
+  const runHandles = new Set(model
+    ? catalogDraftRunHandles({ ...draft, referenceMode }, model)
+    : videoDraftHandles(draft));
   const audioLimit = catalogInputLimit(
     model,
     draft,
@@ -3199,16 +3905,11 @@ function VideoCreatorComposer({
   const mentionReferences = useMemo(() => {
     if (!activeMention) return [];
     const query = activeMention.query.toLowerCase();
-    const namedReferences = [
-      ...(model?.id === 'kling-3.0-video'
-        ? [...draft.references, ...draft.referenceVideos]
-        : draft.references),
-      ...subjects.map(subjectAsReference),
-    ];
-    return namedReferences.filter((media) => media.handle && (
+    const namedReferences = [...draft.references, ...draft.referenceVideos, ...subjects.map(subjectAsReference)];
+    return namedReferences.filter((media) => media.handle && runHandles.has(media.handle) && (
       media.handle.slice(1).toLowerCase().includes(query) || media.displayName.toLowerCase().includes(query)
     ));
-  }, [activeMention, draft.referenceVideos, draft.references, model?.id, subjects]);
+  }, [activeMention, draft.referenceVideos, draft.references, runHandles, subjects]);
 
   useEffect(() => {
     promptTextRef.current = draft.prompt;
@@ -3226,6 +3927,10 @@ function VideoCreatorComposer({
     onMentionStateChange(Boolean(activeMention));
     return () => onMentionStateChange(false);
   }, [activeMention, onMentionStateChange]);
+
+  useEffect(() => {
+    if (promptFocusRequest > 0) promptInputRef.current?.focus();
+  }, [promptFocusRequest]);
 
   const restorePromptFocus = (delay = 0) => {
     if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
@@ -3264,23 +3969,45 @@ function VideoCreatorComposer({
       onChange({ ...draft, prompt, subjects: subjects.map((subject) => (subject.id === selectedSubject.id ? renamedSubject : subject)) });
       return;
     }
-    const renamed = renameMediaDraft(selectedReference, displayName);
+    const nextName = renameMediaDraft(selectedReference, displayName);
+    // Two references renamed alike would otherwise answer to one @mention.
+    const renamed = nextName.handle
+      ? withUniqueReferenceHandle(nextName, [...draft.references, ...draft.referenceVideos, ...subjects.map(subjectAsReference)]
+        .filter((media) => media.id !== selectedReference.id))
+      : nextName;
+    const withRenamed = (items: MediaDraft[]) => items.map((media) => (media.id === selectedReference.id ? renamed : media));
     if (draft.references.some((media) => media.id === selectedReference.id)) {
       const prompt = selectedReference.handle && promptContainsHandle(draft.prompt, selectedReference.handle)
         ? replacePromptHandle(draft.prompt, selectedReference.handle, renamed.handle ?? '')
         : draft.prompt;
-      onChange({ ...draft, prompt, references: renameMediaInList(draft.references, selectedReference.id, displayName) });
+      onChange({ ...draft, prompt, references: withRenamed(draft.references) });
       return;
     }
     if (draft.referenceVideos.some((media) => media.id === selectedReference.id)) {
       const prompt = selectedReference.handle && promptContainsHandle(draft.prompt, selectedReference.handle)
         ? replacePromptHandle(draft.prompt, selectedReference.handle, renamed.handle ?? '')
         : draft.prompt;
-      onChange({ ...draft, prompt, referenceVideos: renameMediaInList(draft.referenceVideos, selectedReference.id, displayName) });
+      onChange({ ...draft, prompt, referenceVideos: withRenamed(draft.referenceVideos) });
       return;
     }
     if (draft.startFrame?.id === selectedReference.id) onChange({ ...draft, startFrame: renameMediaDraft(selectedReference, displayName) });
     if (draft.endFrame?.id === selectedReference.id) onChange({ ...draft, endFrame: renameMediaDraft(selectedReference, displayName) });
+  };
+
+  // A reference, clip or track, with its @handle taken out of the prompt.
+  const removeReference = (media: MediaDraft) => {
+    const handleUsed = promptContainsHandle(draft.prompt, media.handle);
+    onReferenceNotice(handleUsed && media.handle
+      ? `${media.displayName} and ${media.handle} were removed from this draft.`
+      : `${media.displayName} was removed from this draft.`);
+    const without = (items: MediaDraft[]) => items.filter((item) => item.id !== media.id);
+    onChange({
+      ...draft,
+      prompt: handleUsed && media.handle ? replacePromptHandle(draft.prompt, media.handle) : draft.prompt,
+      references: without(draft.references),
+      referenceVideos: without(draft.referenceVideos),
+      referenceAudios: without(draft.referenceAudios),
+    });
   };
 
   const removeSelectedReference = () => {
@@ -3295,26 +4022,8 @@ function VideoCreatorComposer({
         prompt: handleUsed ? replacePromptHandle(draft.prompt, selectedSubject.handle) : draft.prompt,
         subjects: subjects.filter((subject) => subject.id !== selectedSubject.id),
       });
-    } else if (draft.references.some((media) => media.id === selectedReference.id)) {
-      const handleUsed = promptContainsHandle(draft.prompt, selectedReference.handle);
-      onReferenceNotice(handleUsed && selectedReference.handle
-        ? `${selectedReference.displayName} and ${selectedReference.handle} were removed from this draft.`
-        : `${selectedReference.displayName} was removed from this draft.`);
-      onChange({
-        ...draft,
-        prompt: handleUsed && selectedReference.handle ? replacePromptHandle(draft.prompt, selectedReference.handle) : draft.prompt,
-        references: draft.references.filter((media) => media.id !== selectedReference.id),
-      });
-    } else if (draft.referenceVideos.some((media) => media.id === selectedReference.id)) {
-      const handleUsed = promptContainsHandle(draft.prompt, selectedReference.handle);
-      onReferenceNotice(handleUsed && selectedReference.handle
-        ? `${selectedReference.displayName} and ${selectedReference.handle} were removed from this draft.`
-        : `${selectedReference.displayName} was removed from this draft.`);
-      onChange({
-        ...draft,
-        prompt: handleUsed && selectedReference.handle ? replacePromptHandle(draft.prompt, selectedReference.handle) : draft.prompt,
-        referenceVideos: draft.referenceVideos.filter((media) => media.id !== selectedReference.id),
-      });
+    } else if ([...draft.references, ...draft.referenceVideos].some((media) => media.id === selectedReference.id)) {
+      removeReference(selectedReference);
     } else if (draft.startFrame?.id === selectedReference.id) {
       onChange({ ...draft, startFrame: null });
     } else if (draft.endFrame?.id === selectedReference.id) {
@@ -3357,7 +4066,7 @@ function VideoCreatorComposer({
       ) : null}
 
       {draft.isMultiShot ? (
-        <CompactShotEditor draft={draft} onChange={onChange} onFocus={onFocus} onBlur={onBlur} />
+        <CompactShotEditor draft={draft} model={model} onChange={onChange} onFocus={onFocus} onBlur={onBlur} />
       ) : (
         <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.image, 0.2), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
           <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 }}>
@@ -3401,7 +4110,9 @@ function VideoCreatorComposer({
             }}
             style={{ height: 188, color: theme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 28 }}
           />
+          <PromptLengthCounter length={draft.prompt.length} />
           {promptMessage ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 11 }}>{promptMessage}</Text> : null}
+          <PromptQualityNotes warnings={promptNotes} />
         </View>
       )}
 
@@ -3412,7 +4123,7 @@ function VideoCreatorComposer({
       <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
         <ComposerToolbarButton icon={<ImageIcon size={16} color={theme.colors.text} />} label="Reference" onPress={primaryReferenceAction} disabled={referenceActionDisabled} />
         <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
-        <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} label={isEnhancing ? 'Enhancing' : 'Enhance'} onPress={onEnhance} disabled={isEnhancing || draft.isMultiShot} accent />
+        <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} {...enhanceButtonLabels('Enhance', isEnhancing)} onPress={onEnhance} disabled={isEnhancing || draft.isMultiShot} accent />
       </View>
 
         <EnhanceControlsRow
@@ -3452,7 +4163,7 @@ function VideoCreatorComposer({
           >
             <View testID="video-frame-slots" style={{ flexDirection: 'row', gap: 9 }}>
               {supportsStartFrame ? (
-                <CompactReferenceSlot testID="video-start-frame-slot" title={startFrameSlot?.label ?? 'Start frame'} helper="First visual" media={draft.startFrame} required={(startFrameSlot?.min ?? (model?.id === 'hailuo-2.3' ? 1 : 0)) > 0} isUploading={isUploading} onAdd={onUploadStart} onOpen={() => setReferenceId(draft.startFrame?.id ?? null)} />
+                <CompactReferenceSlot testID="video-start-frame-slot" title={startFrameSlot?.label ?? 'Start frame'} helper="First visual" media={draft.startFrame} required={(startFrameSlot?.min ?? (model?.id === 'hailuo-2.3' ? 1 : 0)) > 0} isUploading={isUploading} progress={upload?.target === 'start-frame' ? upload : null} onAdd={onUploadStart} onOpen={() => setReferenceId(draft.startFrame?.id ?? null)} />
               ) : null}
               {supportsEndFrame ? (
                 <CompactReferenceSlot
@@ -3463,6 +4174,7 @@ function VideoCreatorComposer({
                   required={(endFrameSlot?.min ?? 0) > 0}
                   disabled={draft.isMultiShot && !draft.endFrame}
                   isUploading={isUploading}
+                  progress={upload?.target === 'end-frame' ? upload : null}
                   onAdd={onUploadEnd}
                   onOpen={() => setReferenceId(draft.endFrame?.id ?? null)}
                 />
@@ -3479,19 +4191,19 @@ function VideoCreatorComposer({
             style={{ gap: 10, opacity: referencesLockedByFrames || referencesLockedBySubjects ? 0.4 : 1 }}
           >
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
-              {draft.references.map((media) => (
+              {draft.references.filter(isSent).map((media) => (
                 <Pressable key={media.id} accessibilityRole="button" accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`} onPress={() => setReferenceId(media.id)} style={({ pressed }) => ({ width: 72, gap: 5, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                   <ReferenceMediaPreview media={media} size={72} />
                   <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>{media.displayName}</Text>
                 </Pressable>
               ))}
-              {draft.referenceVideos.map((media) => (
+              {draft.referenceVideos.filter(isSent).map((media) => (
                 <Pressable key={media.id} accessibilityRole="button" accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`} onPress={() => setReferenceId(media.id)} style={({ pressed }) => ({ width: 72, gap: 5, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                   <ReferenceMediaPreview media={media} size={72} />
                   <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>{media.displayName}</Text>
                 </Pressable>
               ))}
-              {draft.referenceAudios.map((media) => (
+              {draft.referenceAudios.filter(isSent).map((media) => (
                 <View key={media.id} style={{ width: 72, gap: 4 }}>
                   <ReferenceMediaPreview media={media} size={72} />
                   <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${mediaAccessibleName(media)}`} onPress={() => onChange({ ...draft, referenceAudios: draft.referenceAudios.filter((item) => item.id !== media.id) })} style={({ pressed }) => ({ minHeight: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
@@ -3514,10 +4226,11 @@ function VideoCreatorComposer({
                   ) : null}
                 </View>
               ))}
-              {imageLimit > 0 ? <CompactRailAddButton label={`Images ${draft.references.length}/${imageLimit}`} onPress={onUploadImages} disabled={isUploading || draft.references.length >= imageLimit} /> : null}
-              {videoLimit > 0 ? <CompactRailAddButton label={`Video ${draft.referenceVideos.length}/${videoLimit}`} onPress={onUploadVideo} disabled={isUploading || draft.referenceVideos.length >= videoLimit} icon="video" /> : null}
-              {audioLimit > 0 ? <CompactRailAddButton label={`Audio ${draft.referenceAudios.length}/${audioLimit}`} onPress={onUploadAudio} disabled={isUploading || draft.referenceAudios.length >= audioLimit} icon="audio" /> : null}
+              {imageLimit > 0 ? <CompactRailAddButton label={`Images ${draft.references.length}/${imageLimit}`} onPress={onUploadImages} disabled={isUploading || draft.references.length >= imageLimit} progress={upload?.target === 'image-references' ? upload : null} /> : null}
+              {videoLimit > 0 ? <CompactRailAddButton label={`Video ${draft.referenceVideos.length}/${videoLimit}`} onPress={onUploadVideo} disabled={isUploading || draft.referenceVideos.length >= videoLimit} icon="video" progress={upload?.target === 'reference-video' ? upload : null} /> : null}
+              {audioLimit > 0 ? <CompactRailAddButton label={`Audio ${draft.referenceAudios.length}/${audioLimit}`} onPress={onUploadAudio} disabled={isUploading || draft.referenceAudios.length >= audioLimit} icon="audio" progress={upload?.target === 'reference-audio' ? upload : null} /> : null}
             </ScrollView>
+            {upload?.target === 'reference-video' && upload.cancellable ? <UploadCancelButton onPress={onCancelUpload} /> : null}
             {preparesSeedanceAssets ? (
               <Text style={{ color: theme.colors.muted, fontSize: 11 }}>
                 Open a reference to prepare it with Seedance once. Every run then reuses the prepared asset instead of sending the file again.
@@ -3525,7 +4238,7 @@ function VideoCreatorComposer({
             ) : null}
             {model?.inputs.combineFramesWithReferences && supportsStartFrame ? (
               <View style={{ maxWidth: 170 }}>
-                <CompactReferenceSlot testID="video-optional-first-frame-slot" title="First frame" helper="Optional with reusable refs" media={draft.startFrame} isUploading={isUploading} onAdd={onUploadStart} onOpen={() => setReferenceId(draft.startFrame?.id ?? null)} />
+                <CompactReferenceSlot testID="video-optional-first-frame-slot" title="First frame" helper="Optional with reusable refs" media={draft.startFrame} isUploading={isUploading} progress={upload?.target === 'start-frame' ? upload : null} onAdd={onUploadStart} onOpen={() => setReferenceId(draft.startFrame?.id ?? null)} />
               </View>
             ) : null}
             {preparedVoiceLimit > 0 ? (
@@ -3555,7 +4268,7 @@ function VideoCreatorComposer({
                 </Pressable>
               ))}
               {subjects.length < maxSubjects ? (
-                <CompactRailAddButton label={`Subject ${subjects.length}/${maxSubjects}`} onPress={onAddSubject} disabled={isUploading} />
+                <CompactRailAddButton label={`Subject ${subjects.length}/${maxSubjects}`} onPress={onAddSubject} disabled={isUploading} progress={upload?.target === 'subject' ? upload : null} />
               ) : null}
             </ScrollView>
             <Text style={{ color: theme.colors.muted, fontSize: 11 }}>
@@ -3567,6 +4280,8 @@ function VideoCreatorComposer({
         {supportsFrames || supportsReusable || subjectSlot ? null : (
           <Text style={{ color: theme.colors.muted, fontSize: 11 }}>This model creates from text without reference media.</Text>
         )}
+
+        <StandbyReferences references={standbyReferences} message={referenceLimitMessage} onRemove={removeReference} />
       </View>
 
       <ReferenceDetailsOverlay
@@ -3576,11 +4291,7 @@ function VideoCreatorComposer({
         handleUsedInPrompt={promptContainsHandle(draft.prompt, selectedReference?.handle)}
         onClose={() => setReferenceId(null)}
         onRename={renameSelectedReference}
-        onUseHandle={selectedReference && (
-          selectedSubject !== null
-          || draft.references.some((media) => media.id === selectedReference.id)
-          || (model?.id === 'kling-3.0-video' && draft.referenceVideos.some((media) => media.id === selectedReference.id))
-        )
+        onUseHandle={selectedReference && (selectedSubject !== null || Boolean(selectedReference.handle && runHandles.has(selectedReference.handle)))
           ? (handle) => {
               insertReferenceHandle(handle, lastPromptSelectionRef.current, 280);
               setReferenceId(null);
@@ -3600,26 +4311,107 @@ function VideoCreatorComposer({
   );
 }
 
-function CompactRailAddButton({ label, icon = 'image', onPress, disabled }: { label: string; icon?: 'image' | 'video' | 'audio'; onPress: () => void; disabled: boolean }) {
+function CompactRailAddButton({ label, icon = 'image', onPress, disabled, progress = null }: {
+  label: string;
+  icon?: 'image' | 'video' | 'audio';
+  onPress: () => void;
+  disabled: boolean;
+  /** The upload this button started, whose progress it shows in place of its label. */
+  progress?: UploadProgress | null;
+}) {
   const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Add ${label}`}
-      accessibilityState={{ disabled }}
+      accessibilityLabel={progress ? `Uploading ${label}, ${uploadPercentLabel(progress)}` : `Add ${label}`}
+      accessibilityState={{ disabled, busy: Boolean(progress) }}
       disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => ({ width: 80, minHeight: 96, borderRadius: 16, borderWidth: 1, borderStyle: 'dashed', borderColor: hexWithAlpha(theme.colors.image, 0.38), backgroundColor: hexWithAlpha(theme.colors.image, 0.055), alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 6, opacity: disabled ? 0.38 : pressed ? appTheme.opacity.pressed : 1 })}
+      style={({ pressed }) => ({ width: 80, minHeight: 96, borderRadius: 16, borderWidth: 1, borderStyle: 'dashed', borderColor: hexWithAlpha(theme.colors.image, 0.38), backgroundColor: hexWithAlpha(theme.colors.image, 0.055), alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 6, opacity: progress ? 1 : disabled ? 0.38 : pressed ? appTheme.opacity.pressed : 1 })}
     >
-      {icon === 'video' ? <Video size={20} color={theme.colors.video} /> : icon === 'audio' ? <AudioLines size={20} color={theme.colors.motion} /> : <Plus size={21} color={theme.colors.image} />}
-      <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', lineHeight: 14, textAlign: 'center' }}>{label}</Text>
+      {progress
+        ? <ActivityIndicator color={theme.colors.image} size="small" />
+        : icon === 'video' ? <Video size={20} color={theme.colors.video} /> : icon === 'audio' ? <AudioLines size={20} color={theme.colors.motion} /> : <Plus size={21} color={theme.colors.image} />}
+      <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', lineHeight: 14, textAlign: 'center', fontVariant: ['tabular-nums'] }}>{progress ? uploadPercentLabel(progress) : label}</Text>
     </Pressable>
+  );
+}
+
+/** Stops a clip's upload: a clip can run to 250 MB, minutes on mobile data. */
+function UploadCancelButton({ onPress }: { onPress: () => void }) {
+  const theme = useAppTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Cancel upload"
+      onPress={onPress}
+      style={({ pressed }) => ({ minHeight: 44, alignSelf: 'flex-start', paddingHorizontal: 14, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.danger, 0.34), alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+    >
+      <Text style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '800' }}>Cancel upload</Text>
+    </Pressable>
+  );
+}
+
+/**
+ * References a draft keeps that this run does not send: past a slot's max, or of a kind this
+ * model or mode takes none of. A model change keeps them, as the web creator does, so they
+ * wait here, each with its own Remove, and an excess that blocks Generate says why beside them.
+ */
+function StandbyReferences({
+  references,
+  message,
+  onRemove,
+}: {
+  references: MediaDraft[];
+  message: string | null;
+  onRemove: (media: MediaDraft) => void;
+}) {
+  const theme = useAppTheme();
+  if (references.length === 0) return null;
+  return (
+    <View testID="standby-references" style={{ gap: 8 }}>
+      <View style={{ gap: 2 }}>
+        <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>Not sent with this run</Text>
+        {message ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700', lineHeight: 15 }}>{message}</Text> : null}
+      </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
+        {references.map((media) => (
+          <View key={media.id} style={{ width: 72, gap: 4 }}>
+            <View style={{ opacity: 0.45 }}>
+              <ReferenceMediaPreview media={media} size={72} />
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Remove ${mediaAccessibleName(media)}`}
+              onPress={() => onRemove(media)}
+              style={({ pressed }) => ({ minHeight: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+            >
+              <Text style={{ color: theme.colors.danger, fontSize: 11, fontWeight: '800' }}>Remove</Text>
+            </Pressable>
+          </View>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+/** Web's note for a model that takes no reference images, drawn where the rail would be. */
+function PromptOnlyNote({ modelName }: { modelName: string }) {
+  const theme = useAppTheme();
+  return (
+    <View testID="prompt-only-note" style={{ gap: 3 }}>
+      <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>Prompt-only model</Text>
+      <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>
+        {`${modelName} does not accept reference images. Switch models whenever you need identity, product, or style anchors.`}
+      </Text>
+    </View>
   );
 }
 
 function MotionCreatorComposer({
   draft,
   model,
+  promptFocusRequest,
   isEnhancing,
   isUploading,
   promptMessage,
@@ -3633,11 +4425,16 @@ function MotionCreatorComposer({
   onChange,
   onUploadCharacter,
   onUploadMotion,
+  upload,
+  onCancelUpload,
+  promptNotes,
   onFocus,
   onBlur,
 }: {
   draft: MotionCreationDraft;
   model: CreatorCatalogModel | null;
+  /** Bumped to put the cursor in the prompt, after a refusal of what it says. */
+  promptFocusRequest: number;
   isEnhancing: boolean;
   isUploading: boolean;
   promptMessage: string | null;
@@ -3650,11 +4447,20 @@ function MotionCreatorComposer({
   onUndoEnhance: () => void;
   onChange: (draft: MotionCreationDraft) => void;
   onUploadCharacter: () => void;
+  /** Picks a clip; with one attached, the new one takes its place. */
   onUploadMotion: () => void;
+  /** An upload in flight, shown on the slot it came from. */
+  upload: UploadProgress | null;
+  onCancelUpload: () => void;
+  promptNotes: PromptEnhancementWarning[];
   onFocus: () => void;
   onBlur: () => void;
 }) {
   const theme = useAppTheme();
+  const promptInputRef = useRef<TextInput>(null);
+  useEffect(() => {
+    if (promptFocusRequest > 0) promptInputRef.current?.focus();
+  }, [promptFocusRequest]);
   const [selectedRole, setSelectedRole] = useState<'character' | 'motion' | null>(null);
   const selectedMedia = selectedRole === 'character' ? draft.characterImage : selectedRole === 'motion' ? draft.referenceVideo : null;
   const duration = draft.referenceVideo ? getMotionDuration(draft) : null;
@@ -3673,13 +4479,20 @@ function MotionCreatorComposer({
           <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>Choose the character to preserve and the movement to transfer.</Text>
         </View>
         <View style={{ flexDirection: 'row', gap: 9 }}>
-          {supportsCharacter ? <CompactReferenceSlot testID="motion-character-slot" title={characterSlot?.label ?? 'Character image'} helper="Who should move?" media={draft.characterImage} required={(characterSlot?.min ?? 1) > 0} isUploading={isUploading} onAdd={onUploadCharacter} onOpen={() => setSelectedRole('character')} /> : null}
-          {supportsMotion ? <CompactReferenceSlot testID="motion-video-slot" title={motionSlot?.label ?? 'Motion video'} helper="How should they move?" media={draft.referenceVideo} required={(motionSlot?.min ?? 1) > 0} isUploading={isUploading} onAdd={onUploadMotion} onOpen={() => setSelectedRole('motion')} /> : null}
+          {supportsCharacter ? <CompactReferenceSlot testID="motion-character-slot" title={characterSlot?.label ?? 'Character image'} helper="Who should move?" media={draft.characterImage} required={(characterSlot?.min ?? 1) > 0} isUploading={isUploading} progress={upload?.target === 'character' ? upload : null} onAdd={onUploadCharacter} onOpen={() => setSelectedRole('character')} /> : null}
+          {supportsMotion ? <CompactReferenceSlot testID="motion-video-slot" title={motionSlot?.label ?? 'Motion video'} helper="How should they move?" media={draft.referenceVideo} required={(motionSlot?.min ?? 1) > 0} isUploading={isUploading} progress={upload?.target === 'motion-clip' ? upload : null} onAdd={onUploadMotion} onOpen={() => setSelectedRole('motion')} /> : null}
         </View>
         <View style={{ gap: 4 }}>
           {characterError ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{characterError}</Text> : null}
           {motionError ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{motionError}</Text> : null}
           {duration ? <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '700' }}>Detected motion length · {duration}s</Text> : null}
+          {upload?.target === 'motion-clip' && upload.cancellable ? (
+            <>
+              {/* A replacement uploads behind the attached clip, so its progress is said here too. */}
+              {draft.referenceVideo ? <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] }}>{`Uploading the new clip · ${uploadPercentLabel(upload)}`}</Text> : null}
+              <UploadCancelButton onPress={onCancelUpload} />
+            </>
+          ) : null}
         </View>
       </View> : null}
 
@@ -3689,6 +4502,7 @@ function MotionCreatorComposer({
           <Text style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '800' }}>Optional</Text>
         </View>
         <TextInput
+          ref={promptInputRef}
           maxLength={GENERATION_PROMPT_MAX_LENGTH}
           testID="motion-prompt-input"
           accessibilityLabel="Optional motion prompt"
@@ -3703,13 +4517,15 @@ function MotionCreatorComposer({
           onBlur={onBlur}
           style={{ height: 128, color: theme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 22 }}
         />
+        <PromptLengthCounter length={draft.prompt.length} />
         {promptMessage ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 11 }}>{promptMessage}</Text> : null}
+        <PromptQualityNotes warnings={promptNotes} />
       </View>
 
       <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
         <ComposerToolbarButton icon={<Layers size={16} color={theme.colors.text} />} label="Inputs" onPress={!draft.characterImage ? onUploadCharacter : onUploadMotion} disabled={isUploading} />
         <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
-        <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} label={isEnhancing ? 'Enhancing' : 'Enhance'} onPress={onEnhance} disabled={isEnhancing || !draft.prompt.trim()} accent />
+        <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} {...enhanceButtonLabels('Enhance', isEnhancing)} onPress={onEnhance} disabled={isEnhancing || !draft.prompt.trim()} accent />
       </View>
 
         <EnhanceControlsRow
@@ -3729,6 +4545,9 @@ function MotionCreatorComposer({
           if (selectedRole === 'character') onChange({ ...draft, characterImage: renameMediaDraft(selectedMedia, displayName) });
           if (selectedRole === 'motion') onChange({ ...draft, referenceVideo: renameMediaDraft(selectedMedia, displayName) });
         }}
+        // The clip is swapped in place: Remove then Add read like a limit ("supports up to 1").
+        onReplace={selectedRole === 'motion' ? onUploadMotion : undefined}
+        isReplacing={selectedRole === 'motion' && upload?.target === 'motion-clip'}
         onRemove={() => {
           if (selectedRole === 'character') onChange({ ...draft, characterImage: null });
           if (selectedRole === 'motion') onChange({ ...draft, referenceVideo: null });
@@ -3832,16 +4651,24 @@ function EnhanceControlsRow({
   canUndo,
   onUndo,
   disabled,
+  polishes = false,
 }: {
   level: PromptEnhancementLevel;
   onLevelChange: (level: PromptEnhancementLevel) => void;
   canUndo: boolean;
   onUndo: () => void;
   disabled?: boolean;
+  /** The prompt names a reference, so a press polishes around it and no level applies, as on the web. */
+  polishes?: boolean;
 }) {
   const theme = useAppTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      {polishes ? (
+        <Text testID="polish-note" style={{ flex: 1, color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>
+          Your @references stay as written. Polish only adds light visual detail around them.
+        </Text>
+      ) : (
       <View style={{ flexDirection: 'row', borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.text, 0.12), padding: 2 }}>
         {([['cinematic', 'Full'], ['faithful', 'Light']] as const).map(([value, label]) => (
           <Pressable
@@ -3870,6 +4697,7 @@ function EnhanceControlsRow({
           </Pressable>
         ))}
       </View>
+      )}
       {canUndo ? (
         <Pressable
           accessibilityRole="button"
@@ -3892,12 +4720,12 @@ function EnhanceControlsRow({
   );
 }
 
-function ComposerToolbarButton({ icon, label, onPress, disabled, accent, quiet }: { icon: React.ReactNode; label: string; onPress: () => void; disabled?: boolean; accent?: boolean; quiet?: boolean }) {
+function ComposerToolbarButton({ icon, label, accessibilityLabel, onPress, disabled, accent, quiet }: { icon: React.ReactNode; label: string; accessibilityLabel?: string; onPress: () => void; disabled?: boolean; accent?: boolean; quiet?: boolean }) {
   const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}
@@ -3917,7 +4745,8 @@ function ComposerToolbarButton({ icon, label, onPress, disabled, accent, quiet }
       })}
     >
       {icon}
-      <Text style={{ color: accent ? theme.colors.primary : quiet ? theme.colors.muted : theme.colors.textSecondary, fontSize: quiet ? 10 : 11, fontWeight: '800' }}>{label}</Text>
+      {/* Centred, because a priced label ("Enhance · 2 credits") can take two lines in a third of the row. */}
+      <Text style={{ color: accent ? theme.colors.primary : quiet ? theme.colors.muted : theme.colors.textSecondary, fontSize: quiet ? 10 : 11, fontWeight: '800', textAlign: 'center', paddingHorizontal: 4 }}>{label}</Text>
     </Pressable>
   );
 }
@@ -4066,8 +4895,15 @@ function ReferenceDetailsOverlay({
     };
   }, [shownId]);
 
+  // The overlay is drawn at the app's root, outside the creator's providers, so the sheet hands on
+  // what its pictures read: the link renewal, the swept uploads and the picker's own copies.
+  const renewLink = useContext(ReferenceLinkRenewal);
+  const unavailableReferences = useContext(UnavailableReferences);
+  const localPreviews = useContext(LocalReferencePreviews);
+
   if (!content) return null;
   const shown = content.media;
+  const shownUrl = (shown.storagePath ? localPreviews.get(shown.storagePath) : undefined) ?? shown.url;
   const accessibleName = mediaAccessibleName(shown);
   const motion = sheetMotion(drag, presentation);
 
@@ -4100,6 +4936,9 @@ function ReferenceDetailsOverlay({
 
   return (
     <Overlay visible={presentation.rendered}>
+      <ReferenceLinkRenewal.Provider value={renewLink}>
+      <UnavailableReferences.Provider value={unavailableReferences}>
+      <LocalReferencePreviews.Provider value={localPreviews}>
       {/* Answered once: while the exit plays the sheet is still drawn, and a press on it must not land. */}
       <View pointerEvents={visible ? 'auto' : 'none'} style={{ flex: 1 }}>
         <KeyboardAvoidingArea iosScrollViewAdjustsInsets followsKeyboard={presentation.settled} testID="reference-details-keyboard-area" style={{ justifyContent: 'flex-end' }}>
@@ -4123,7 +4962,7 @@ function ReferenceDetailsOverlay({
                 </ScrollView>
               ) : (
                 /* The whole reference, centred across the sheet: it is what the model is given, so none of it is cropped away. */
-                <MediaPreview url={shown.url} kind={shown.kind === 'video' ? 'video' : 'image'} height={300} radius={22} letterbox playerHeld={!arrived} />
+                <MediaPreview url={shownUrl} kind={shown.kind === 'video' ? 'video' : 'image'} height={300} radius={22} letterbox playerHeld={!arrived} />
               )}
               <View style={{ gap: 7 }}>
                 <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>{`${nounLabel} name`}</Text>
@@ -4185,6 +5024,9 @@ function ReferenceDetailsOverlay({
           </SheetPanel>
         </KeyboardAvoidingArea>
       </View>
+      </LocalReferencePreviews.Provider>
+      </UnavailableReferences.Provider>
+      </ReferenceLinkRenewal.Provider>
     </Overlay>
   );
 }
@@ -4194,6 +5036,7 @@ function CreatorPersistentBar({
   summary,
   blocker,
   quoteStatus,
+  awaitingInputs = false,
   cost,
   retryLabel = 'Retry quote',
   action,
@@ -4206,6 +5049,8 @@ function CreatorPersistentBar({
   summary: string;
   blocker: string | null;
   quoteStatus: 'idle' | 'pending' | 'ready' | 'error';
+  /** No quote is asked for until the inputs it prices are there, so nothing is being calculated. */
+  awaitingInputs?: boolean;
   cost: number | null;
   retryLabel?: string;
   action: 'generate' | 'progress' | 'result';
@@ -4220,7 +5065,7 @@ function CreatorPersistentBar({
     : action === 'progress'
       ? 'View progress'
       : quoteStatus === 'pending' || quoteStatus === 'idle'
-        ? 'Calculating…'
+        ? awaitingInputs ? 'Generate' : 'Calculating…'
         : quoteStatus === 'ready'
           // Shared with the workspace's Try again / Generate again, so the same
           // spend is never announced two different ways — and so "1 credits"
@@ -4234,19 +5079,9 @@ function CreatorPersistentBar({
         <View testID="creator-contextual-blocker" accessibilityRole="alert" style={{ minHeight: 40, borderRadius: 14, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.amber, 0.28), backgroundColor: theme.colors.panelSoft, paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.amber }} />
           <Text numberOfLines={2} style={{ flex: 1, color: theme.colors.textSecondary, fontSize: 11, fontWeight: '700', lineHeight: 15 }}>{blocker}</Text>
-          {blocker.startsWith('Insufficient credits') ? (
-            // The creator stack has no tab bar and no balance in its header, so
-            // this was a dead end; the web shows "Top Up Credits" here.
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Get credits"
-              hitSlop={8}
-              onPress={() => router.push('/(tabs)/pricing' as never)}
-              style={({ pressed }) => ({ minHeight: 32, paddingHorizontal: 10, borderRadius: 10, backgroundColor: theme.colors.primaryFill, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
-            >
-              <Text style={{ color: theme.colors.onPrimary, fontSize: 11, fontWeight: '900' }}>Get credits</Text>
-            </Pressable>
-          ) : null}
+          {/* The creator stack has no tab bar and no balance in its header, so this was a dead end;
+              the web shows "Top Up Credits" here. */}
+          {blocker.startsWith('Insufficient credits') ? <GetCreditsButton onPress={() => router.push('/(tabs)/pricing' as never)} /> : null}
         </View>
       ) : null}
       <View style={{ minHeight: 72, borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.panel, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8, boxShadow: theme.shadow.floating.boxShadow }}>
@@ -4274,6 +5109,22 @@ function CreatorPersistentBar({
   );
 }
 
+/** The way from a credits blocker to the pricing page, on the bar and in the parameter sheet alike. */
+function GetCreditsButton({ onPress }: { onPress: () => void }) {
+  const theme = useAppTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Get credits"
+      hitSlop={8}
+      onPress={onPress}
+      style={({ pressed }) => ({ minHeight: 32, paddingHorizontal: 10, borderRadius: 10, backgroundColor: theme.colors.primaryFill, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+    >
+      <Text style={{ color: theme.colors.onPrimary, fontSize: 11, fontWeight: '900' }}>Get credits</Text>
+    </Pressable>
+  );
+}
+
 /**
  * The sheet a creation screen's model chip opens: a search field over the
  * list of models.
@@ -4298,11 +5149,14 @@ function SearchableModelPickerSheet({
   onClose,
   onChange,
   loading,
+  pendingId = null,
   error,
   onRetry,
 }: {
   visible: boolean;
   loading?: boolean;
+  /** A model whose details are loading before the pick lands: its row turns, and no other takes a press. */
+  pendingId?: string | null;
   error?: string;
   onRetry?: () => void;
   items: ModelCatalogSummary[];
@@ -4374,12 +5228,14 @@ function SearchableModelPickerSheet({
             <ScrollView {...drag.scrollProps} automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 8, paddingBottom: 28 }}>
               {filteredItems.map((item) => {
                 const selected = item.id === value;
+                const pending = item.id === pendingId;
                 return (
                   <Pressable
                     key={item.id}
                     accessibilityRole="button"
-                    accessibilityState={{ selected }}
+                    accessibilityState={{ selected, busy: pending, disabled: pendingId !== null }}
                     accessibilityLabel={`${item.displayName}. ${item.description}`}
+                    disabled={pendingId !== null}
                     onPress={() => onChange(item.id)}
                     style={({ pressed }) => ({ minHeight: 76, borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: selected ? hexWithAlpha(theme.colors.image, 0.55) : theme.colors.border, backgroundColor: selected ? hexWithAlpha(theme.colors.image, 0.1) : theme.colors.surfaceStrong, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
                   >
@@ -4393,7 +5249,9 @@ function SearchableModelPickerSheet({
                       </View>
                       <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>{item.description}</Text>
                     </View>
-                    {selected ? <Check size={19} color={theme.colors.image} /> : null}
+                    {pending
+                      ? <ActivityIndicator testID="model-picker-row-loading" color={theme.colors.image} size="small" />
+                      : selected ? <Check size={19} color={theme.colors.image} /> : null}
                   </Pressable>
                 );
               })}
@@ -4415,6 +5273,7 @@ function CreatorParameterSheet({
   model,
   draft,
   quoteStatus,
+  awaitingInputs = false,
   cost,
   availableCredits,
   blocker,
@@ -4423,6 +5282,7 @@ function CreatorParameterSheet({
   sourceDurationSeconds,
   onClose,
   onRetryQuote,
+  onGetCredits,
   onChange,
   onGenerate,
   generateDisabled,
@@ -4433,6 +5293,8 @@ function CreatorParameterSheet({
   model: ReturnType<typeof getCatalogModels>[number] | null;
   draft: CreationDraft;
   quoteStatus: 'idle' | 'pending' | 'ready' | 'error';
+  /** No quote is asked for until the inputs it prices are there. */
+  awaitingInputs?: boolean;
   cost: number | null;
   availableCredits: number | null;
   blocker: string | null;
@@ -4441,6 +5303,8 @@ function CreatorParameterSheet({
   sourceDurationSeconds?: number | null;
   onClose: () => void;
   onRetryQuote: () => void;
+  /** Leaves the sheet for the pricing page; the bar offers the same from its credits blocker. */
+  onGetCredits: () => void;
   onChange: (draft: CreationDraft) => void;
   onGenerate: () => void;
   generateDisabled: boolean;
@@ -4451,9 +5315,12 @@ function CreatorParameterSheet({
   // `takesTouchDown`, and what that costs a list on Android: a slow drag that begins on a label or in
   // a gap of this one scrolls nothing. Pixel 9a emulator, 2026-10-07; not what this change is for).
   const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
-  const quoteLabel = quoteStatus === 'ready' ? formatCreditCost(cost ?? 0) : quoteStatus === 'error' ? 'Unavailable' : 'Calculating…';
+  const quoteLabel = quoteStatus === 'ready'
+    ? formatCreditCost(cost ?? 0)
+    : quoteStatus === 'error' ? 'Unavailable' : awaitingInputs ? 'Needs both inputs' : 'Calculating…';
+  // Grouped as every balance is, and counted as formatCreditCost counts: a balance of 1 read "1 credits".
   const balanceLabel = typeof availableCredits === 'number'
-    ? `${formatCreditAmount(availableCredits)} credits`
+    ? formatCreditCost(availableCredits).replace(/^\S+/, formatCreditAmount(availableCredits))
     : 'Unavailable';
   return (
     <Modal visible={visible} transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose}>
@@ -4495,7 +5362,13 @@ function CreatorParameterSheet({
                 <CatalogAdvancedControls model={model} draft={draft} onChange={onChange} hiddenControlKeys={hiddenControlKeys} />
               </>
             )}
-            {blocker ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', lineHeight: 17 }}>{blocker}</Text> : null}
+            {blocker ? (
+              <View testID="parameter-sheet-blocker" style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Text accessibilityRole="alert" style={{ flex: 1, color: theme.colors.danger, fontSize: 12, fontWeight: '700', lineHeight: 17 }}>{blocker}</Text>
+                {/* The bar's way out of a short balance, here too: this sheet's Generate is disabled by it. */}
+                {blocker.startsWith('Insufficient credits') ? <GetCreditsButton onPress={onGetCredits} /> : null}
+              </View>
+            ) : null}
           </ScrollView>
           <View style={{ paddingHorizontal: 20, paddingTop: 12, borderTopWidth: 1, borderTopColor: theme.colors.border, gap: 10 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -4511,7 +5384,7 @@ function CreatorParameterSheet({
               <Text style={{ color: theme.colors.textSecondary, fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{balanceLabel}</Text>
             </View>
             <PrimaryButton
-              label={quoteStatus === 'ready' ? withCreditCost('Generate', cost ?? 0) : quoteStatus === 'error' ? retryLabel : quoteLabel}
+              label={quoteStatus === 'ready' ? withCreditCost('Generate', cost ?? 0) : quoteStatus === 'error' ? retryLabel : awaitingInputs ? 'Generate' : quoteLabel}
               onPress={quoteStatus === 'error' ? onRetryQuote : onGenerate}
               disabled={quoteStatus === 'error' ? false : generateDisabled}
             />
@@ -4550,10 +5423,13 @@ function GenerationWorkspace({
   status,
   isGenerating,
   outputUrl,
+  outputUrls,
   generationId,
   settingsSummary,
   startedAt,
   retryCost,
+  refusalAction = null,
+  notice = null,
   error,
   pollingInterrupted,
   onResumePolling,
@@ -4565,19 +5441,30 @@ function GenerationWorkspace({
   onRetry,
   onBack,
   onPost,
+  onShare,
   onCreateAnother,
 }: {
   visible: boolean;
   tool: CreatorToolId;
   status: GenerationStatusResponse | null;
   isGenerating: boolean;
+  /** The primary output: the one Post to feed publishes. */
   outputUrl: string | null;
+  /** Every output, the primary first; a run that made several is paged through here. */
+  outputUrls: string[];
   generationId: string | null;
   settingsSummary: string;
   /** When the run started, so minimizing and returning does not restart the clock. */
   startedAt: number | null;
   /** What another run of the same draft costs, or null while the quote is unsettled. */
   retryCost: number | null;
+  /**
+   * What to do first about a start the server refused outright, where sending it again would
+   * only be refused again (Edit prompt, Get credits, …); Try again stays, second.
+   */
+  refusalAction?: { label: string; onPress: () => void } | null;
+  /** A line under the failure, such as the credits a failed run's settlement returned. */
+  notice?: string | null;
   error: string | null | undefined;
   pollingInterrupted: boolean;
   onResumePolling: () => void;
@@ -4590,12 +5477,21 @@ function GenerationWorkspace({
   onRetry: () => void;
   onBack: () => void;
   onPost: () => void;
+  /** Posts the creation, then opens the share sheet on its public link. */
+  onShare: () => void;
   onCreateAnother: () => void;
 }) {
   const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
   const safeAreaInsets = useSafeAreaInsets();
   const succeeded = Boolean(outputUrl);
+  const outputs = outputUrls.length > 0 ? outputUrls : outputUrl ? [outputUrl] : [];
+  // Which output is on screen, kept for this run's outputs only: the next run opens on its primary.
+  const outputsKey = outputs.join('\n');
+  const [shownOutput, setShownOutput] = useState({ outputsKey, index: 0 });
+  const shownIndex = shownOutput.outputsKey === outputsKey ? Math.min(shownOutput.index, Math.max(0, outputs.length - 1)) : 0;
+  const shownUrl = outputs[shownIndex] ?? outputUrl;
+  const showOutput = (index: number) => setShownOutput({ outputsKey, index });
   const failed = status?.status === 'failed' || (!isGenerating && !succeeded && Boolean(error) && !pollingInterrupted);
   const medium = tool === 'image' ? 'image' : tool === 'video' ? 'video' : 'motion video';
   const previewKind = tool === 'image' ? 'image' : 'video';
@@ -4626,9 +5522,40 @@ function GenerationWorkspace({
             <>
               {/* The whole result, whatever its shape: cropping it to fill
                   would hide part of what was just made. */}
-              <MediaPreview url={outputUrl} kind={previewKind} height={480} radius={26} nativeControls={previewKind === 'video'} letterbox />
+              <MediaPreview url={shownUrl ?? outputUrl} kind={previewKind} height={480} radius={26} nativeControls={previewKind === 'video'} letterbox />
+              {outputs.length > 1 ? (
+                // A run can return several options (Grok Imagine); each is kept, and Post to feed
+                // publishes the first, as the web creator says.
+                <View testID="result-output-pager" style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+                  {/* Words rather than chevrons: a left chevron is the app's Back glyph. */}
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Previous output"
+                    accessibilityState={{ disabled: shownIndex === 0 }}
+                    disabled={shownIndex === 0}
+                    onPress={() => showOutput(shownIndex - 1)}
+                    style={({ pressed }) => ({ minHeight: 44, paddingHorizontal: 16, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: shownIndex === 0 ? 0.4 : pressed ? appTheme.opacity.pressed : 1 })}
+                  >
+                    <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>Previous</Text>
+                  </Pressable>
+                  <Text accessibilityLiveRegion="polite" style={{ minWidth: 64, textAlign: 'center', color: theme.colors.textSecondary, fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
+                    {`${shownIndex + 1} of ${outputs.length}`}
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Next output"
+                    accessibilityState={{ disabled: shownIndex >= outputs.length - 1 }}
+                    disabled={shownIndex >= outputs.length - 1}
+                    onPress={() => showOutput(shownIndex + 1)}
+                    style={({ pressed }) => ({ minHeight: 44, paddingHorizontal: 16, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: shownIndex >= outputs.length - 1 ? 0.4 : pressed ? appTheme.opacity.pressed : 1 })}
+                  >
+                    <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>Next</Text>
+                  </Pressable>
+                </View>
+              ) : null}
               <View style={{ gap: 10 }}>
                 {generationId ? <PrimaryButton label="Post to feed" onPress={onPost} /> : null}
+                {generationId ? <SecondaryButton label="Share" onPress={onShare} /> : null}
                 {/* Generative AI asks for controls like Edit, Undo, Retry or
                     Adjust *near* generated content — the result had none, so
                     running the same draft again meant leaving this view first.
@@ -4678,10 +5605,14 @@ function GenerationWorkspace({
                 </View>
                 <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>We couldn’t create this {medium}</Text>
                 <Text accessibilityRole="alert" selectable style={{ color: theme.colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'center' }}>{error || 'Your inputs are preserved. Try again when you’re ready.'}</Text>
+                {notice ? <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.textSecondary, fontSize: 13, fontWeight: '700', textAlign: 'center' }}>{notice}</Text> : null}
               </View>
+              {refusalAction ? <PrimaryButton label={refusalAction.label} onPress={refusalAction.onPress} /> : null}
               {/* "Retry" ran a full new paid generation behind a bare verb,
                   where every other route to that spend states the price. */}
-              <PrimaryButton label={withCreditCost('Try again', retryCost)} onPress={onRetry} />
+              {refusalAction
+                ? <SecondaryButton label={withCreditCost('Try again', retryCost)} onPress={onRetry} />
+                : <PrimaryButton label={withCreditCost('Try again', retryCost)} onPress={onRetry} />}
               <SecondaryButton label="Back to creator" onPress={onBack} />
             </View>
           ) : (
@@ -5317,6 +6248,54 @@ function ToggleRow({ title, value, onValueChange }: { title: string; value: bool
 /** Renews a reference's link from where it came from. The creator screen supplies it. */
 const ReferenceLinkRenewal = createContext<((media: MediaDraft) => Promise<string>) | null>(null);
 
+/** Storage paths of staged uploads the server has swept. The creator screen supplies them. */
+const UnavailableReferences = createContext<ReadonlySet<string>>(new Set());
+
+/** The picker's own copy of each upload made this session, by storage path. The creator screen supplies them. */
+const LocalReferencePreviews = createContext<ReadonlyMap<string, string>>(new Map());
+
+/**
+ * What a reference is drawn from: the picker's copy on the phone while this session lasts, the
+ * signed link otherwise. The link is the whole upload, fetched again for a 72pt tile; the run
+ * still sends the link, which is all the draft keeps.
+ */
+function useReferencePreviewUrl(media: MediaDraft) {
+  const localPreviews = useContext(LocalReferencePreviews);
+  return (media.storagePath ? localPreviews.get(media.storagePath) : undefined) ?? media.url;
+}
+
+/** The prompt's length against the one limit the routes and every composer read, as web's counter shows it. */
+function PromptLengthCounter({ length }: { length: number }) {
+  const theme = useAppTheme();
+  const atLimit = length >= GENERATION_PROMPT_MAX_LENGTH;
+  return (
+    <Text
+      testID="prompt-length"
+      accessibilityLabel={`${groupDigits(length)} of ${groupDigits(GENERATION_PROMPT_MAX_LENGTH)} characters`}
+      style={{ alignSelf: 'flex-end', color: atLimit ? theme.colors.amber : theme.colors.muted, fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'], paddingHorizontal: 16, paddingBottom: 10 }}
+    >
+      {`${groupDigits(length)}/${groupDigits(GENERATION_PROMPT_MAX_LENGTH)}`}
+    </Text>
+  );
+}
+
+/**
+ * What the enhancer noticed about the prompt it wrote, such as a length past what the model reads:
+ * the web shows these as "Prompt quality notes", and the app dropped them.
+ */
+function PromptQualityNotes({ warnings }: { warnings: PromptEnhancementWarning[] }) {
+  const theme = useAppTheme();
+  if (warnings.length === 0) return null;
+  return (
+    <View testID="prompt-quality-notes" style={{ marginHorizontal: 16, marginBottom: 12, borderRadius: 14, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.amber, 0.28), backgroundColor: hexWithAlpha(theme.colors.amber, 0.08), paddingHorizontal: 12, paddingVertical: 10, gap: 4 }}>
+      <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>Prompt quality notes</Text>
+      {warnings.map((warning, index) => (
+        <Text key={`${warning.code}:${index}`} style={{ color: theme.colors.textSecondary, fontSize: 12, lineHeight: 17 }}>{warning.message}</Text>
+      ))}
+    </View>
+  );
+}
+
 /**
  * A subject's tile: its pictures in a two-by-two collage. One picture would read as
  * one reference, and a subject is its several pictures together.
@@ -5332,17 +6311,23 @@ function SubjectPreview({ subject, size = 72 }: { subject: SubjectDraft; size?: 
       style={{ width: size, height: size, borderRadius: 16, borderCurve: 'continuous', overflow: 'hidden', backgroundColor: theme.colors.surfaceStrong, flexDirection: 'row', flexWrap: 'wrap', gap }}
     >
       {subject.images.slice(0, 4).map((image) => (
-        <StableMediaImage
-          key={image.id}
-          url={image.url}
-          cacheKey={`reference-thumbnail:${image.id}:${image.url}`}
-          contentFit="cover"
-          transition={80}
-          style={{ width: cell, height: cell }}
-          resolveRetryUrl={renewLink ? () => renewLink(image) : undefined}
-        />
+        <SubjectPicture key={image.id} image={image} size={cell} renewLink={renewLink} />
       ))}
     </View>
+  );
+}
+
+function SubjectPicture({ image, size, renewLink }: { image: MediaDraft; size: number; renewLink: ((media: MediaDraft) => Promise<string>) | null }) {
+  const url = useReferencePreviewUrl(image);
+  return (
+    <StableMediaImage
+      url={url}
+      cacheKey={`reference-thumbnail:${image.id}:${url}`}
+      contentFit="cover"
+      transition={80}
+      style={{ width: size, height: size }}
+      resolveRetryUrl={renewLink ? () => renewLink(image) : undefined}
+    />
   );
 }
 
@@ -5351,9 +6336,36 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
   // A saved link can have run out. Retrying the thumbnail then fetches a fresh
   // one instead of asking for the dead link again.
   const renewLink = useContext(ReferenceLinkRenewal);
+  const unavailable = useContext(UnavailableReferences);
+  const previewUrl = useReferencePreviewUrl(media);
   const resolveRetryUrl = renewLink ? () => renewLink(media) : undefined;
   const width = size ?? 58;
   const height = size ?? 72;
+  if (media.storagePath && unavailable.has(media.storagePath)) {
+    // Nothing is left to draw or retry: the upload has to be added again.
+    return (
+      <View
+        testID={`reference-unavailable-${media.id}`}
+        style={{
+          width,
+          height,
+          borderRadius: 16,
+          borderCurve: 'continuous',
+          borderWidth: 1,
+          borderStyle: 'dashed',
+          borderColor: hexWithAlpha(theme.colors.amber, 0.5),
+          backgroundColor: hexWithAlpha(theme.colors.amber, 0.08),
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 6,
+        }}
+      >
+        {width >= 56 ? (
+          <Text numberOfLines={3} style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '800', lineHeight: 14, textAlign: 'center' }}>Add this reference again</Text>
+        ) : null}
+      </View>
+    );
+  }
   if (media.kind === 'audio') {
     return (
       <View
@@ -5391,8 +6403,8 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
     >
       {kind === 'image' ? (
         <StableMediaImage
-          url={media.url}
-          cacheKey={`reference-thumbnail:${media.id}:${media.url}`}
+          url={previewUrl}
+          cacheKey={`reference-thumbnail:${media.id}:${previewUrl}`}
           contentFit="cover"
           transition={80}
           style={{ width: '100%', height: '100%' }}
@@ -5400,7 +6412,7 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
         />
       ) : (
         <MediaPreview
-          url={media.url}
+          url={previewUrl}
           kind={kind}
           height={height}
           radius={16}

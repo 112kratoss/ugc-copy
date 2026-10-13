@@ -1,14 +1,20 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import contractFixture from '../../contracts/generation-model-catalog-v1.json';
 import {
   applyGenerationModelCatalogToRegistries,
+  clearPendingWebStart,
+  isAmbiguousWebStartFailure,
+  loadPendingWebStart,
   parseClientGenerationModelCatalog,
   reconcileWebCatalogGenerationDraft,
   requestWebGenerationStart,
   requestWebGenerationQuote,
   resolveCatalogModelId,
   resolveWebGenerationQuoteUi,
+  savePendingWebStart,
+  WebCatalogRequestError,
+  type PendingWebStart,
 } from '@/lib/generation-model-client';
 
 describe('web generation model catalog client', () => {
@@ -261,5 +267,201 @@ describe('web generation model catalog client', () => {
       blocksGenerate: false,
       message: null,
     });
+  });
+});
+
+const START_INPUT = {
+  kind: 'video' as const,
+  modelId: 'remote-video',
+  catalogRevision: '0123456789abcdef',
+  settings: { duration: 5 },
+  prompt: 'A remote model',
+  inputs: [],
+};
+
+function jsonResponse(body: unknown, status: number) {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+async function startFailure(response: Response): Promise<unknown> {
+  const fetcher = vi.fn(async () => response);
+  return requestWebGenerationStart(START_INPUT, {
+    accessToken: 'token-1',
+    idempotencyKey: 'request-1',
+    fetcher: fetcher as unknown as typeof fetch,
+  }).then(
+    () => { throw new Error('expected the start to fail'); },
+    (error: unknown) => error,
+  );
+}
+
+describe('web generation start answers', () => {
+  it('turns a gateway page into a status error that may have started the run', async () => {
+    const error = await startFailure(new Response('<html>Gateway Timeout</html>', { status: 504 }));
+
+    expect(error).toBeInstanceOf(WebCatalogRequestError);
+    expect(error).toMatchObject({ status: 504, code: undefined, message: 'Could not start generation.' });
+    expect(isAmbiguousWebStartFailure(error)).toBe(true);
+  });
+
+  it('reads a 200 it cannot parse as a run that started, not as a refusal', async () => {
+    const error = await startFailure(new Response('not json', { status: 200 }));
+
+    expect(error).toMatchObject({ status: 502, message: 'The generation service returned an invalid response.' });
+    expect(isAmbiguousWebStartFailure(error)).toBe(true);
+  });
+
+  it('keeps the measured lengths of a REFERENCE_DURATION_CHANGED refusal', async () => {
+    const error = await startFailure(jsonResponse({
+      code: 'REFERENCE_DURATION_CHANGED',
+      error: 'Check the updated cost, then generate again.',
+      costCredits: 96,
+      quotedCostCredits: 80,
+      inputs: [{ index: 0, durationSeconds: 7.3 }],
+    }, 409));
+
+    expect(error).toMatchObject({
+      status: 409,
+      code: 'REFERENCE_DURATION_CHANGED',
+      details: { costCredits: 96, quotedCostCredits: 80, inputs: [{ index: 0, durationSeconds: 7.3 }] },
+    });
+    expect(isAmbiguousWebStartFailure(error)).toBe(false);
+  });
+
+  it('keeps the held generation of a submission that is still pending', async () => {
+    const error = await startFailure(jsonResponse({
+      code: 'submission_pending',
+      error: 'Your credits stay reserved while we confirm it.',
+      generationId: 'generation-held',
+    }, 409));
+
+    expect(error).toMatchObject({ code: 'submission_pending', details: { generationId: 'generation-held' } });
+    expect(isAmbiguousWebStartFailure(error)).toBe(true);
+  });
+});
+
+describe('isAmbiguousWebStartFailure', () => {
+  const refusal = (status: number, code?: string) => new WebCatalogRequestError('refused', status, code);
+
+  it('counts no answer at all as a start that may be running', () => {
+    expect(isAmbiguousWebStartFailure(new TypeError('Failed to fetch'))).toBe(true);
+    expect(isAmbiguousWebStartFailure(new SyntaxError('Unexpected token <'))).toBe(true);
+    expect(isAmbiguousWebStartFailure(new DOMException('The operation was aborted.', 'AbortError'))).toBe(true);
+    expect(isAmbiguousWebStartFailure(refusal(0))).toBe(true);
+  });
+
+  it('counts an answer saying the start is under way as ambiguous', () => {
+    expect(isAmbiguousWebStartFailure(refusal(409, 'GENERATION_START_IN_PROGRESS'))).toBe(true);
+    expect(isAmbiguousWebStartFailure(refusal(409, 'submission_pending'))).toBe(true);
+    expect(isAmbiguousWebStartFailure(refusal(503, 'GENERATION_ADAPTER_UNAVAILABLE'))).toBe(true);
+    // The start RPC's own in-progress answer carries no code.
+    expect(isAmbiguousWebStartFailure(refusal(409))).toBe(true);
+  });
+
+  it('counts a server fault without a refusal code as ambiguous', () => {
+    expect(isAmbiguousWebStartFailure(refusal(500))).toBe(true);
+    expect(isAmbiguousWebStartFailure(refusal(500, 'GENERATION_START_FAILED'))).toBe(true);
+    expect(isAmbiguousWebStartFailure(refusal(502))).toBe(true);
+  });
+
+  it('counts a refusal made before any credits were held as definitive, whatever its status', () => {
+    for (const [status, code] of [
+      [402, 'insufficient_credits'],
+      [422, 'prompt_blocked'],
+      [422, 'provider_rejected'],
+      [400, 'invalid_input_media'],
+      [429, 'provider_busy'],
+      [429, 'RATE_LIMITED'],
+      [503, 'service_misconfigured'],
+      [503, 'provider_unavailable'],
+      [503, 'GENERATION_SERVICE_UNAVAILABLE'],
+      [422, 'INVALID_GENERATION_REQUEST'],
+      [422, 'INVALID_MODEL_SETTINGS'],
+      [409, 'MODEL_UNAVAILABLE'],
+      [409, 'CATALOG_CHANGED'],
+      [409, 'REFERENCE_DURATION_CHANGED'],
+      [409, 'cost_changed'],
+      [409, 'IDEMPOTENCY_KEY_REUSED'],
+      [400, 'IDEMPOTENCY_KEY_REQUIRED'],
+    ] as const) {
+      expect(isAmbiguousWebStartFailure(refusal(status, code)), `${status} ${code}`).toBe(false);
+    }
+    expect(isAmbiguousWebStartFailure(refusal(401))).toBe(false);
+    expect(isAmbiguousWebStartFailure(refusal(400))).toBe(false);
+  });
+
+  it('does not guess about errors that never came from a start', () => {
+    expect(isAmbiguousWebStartFailure(new Error('Please log in to upload files.'))).toBe(false);
+    expect(isAmbiguousWebStartFailure(null)).toBe(false);
+    expect(isAmbiguousWebStartFailure('failed')).toBe(false);
+  });
+});
+
+describe('pending web starts', () => {
+  afterEach(() => {
+    window.sessionStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  function pendingStart(overrides: Partial<PendingWebStart> = {}): PendingWebStart {
+    return {
+      version: 1,
+      tool: 'image',
+      idempotencyKey: 'key-1',
+      body: { kind: 'image', modelId: 'fixture-image', catalogRevision: 'rev-1', settings: {}, prompt: 'A fox' },
+      catalogRevision: 'rev-1',
+      createdAt: new Date().toISOString(),
+      userId: 'user-1',
+      ...overrides,
+    };
+  }
+
+  it('hands back the saved key and body for that tool until it is cleared', () => {
+    const start = pendingStart();
+    expect(savePendingWebStart(start)).toBe(true);
+
+    expect(loadPendingWebStart('image', 'user-1')).toEqual(start);
+    expect(loadPendingWebStart('video', 'user-1')).toBeNull();
+
+    clearPendingWebStart('image');
+    expect(loadPendingWebStart('image', 'user-1')).toBeNull();
+  });
+
+  it('replays the same body the server hashed', () => {
+    const start = pendingStart({ body: { kind: 'image', settings: { aspectRatio: '1:1' }, inputs: [{ slot: 'imageReferences', url: 'https://cdn.test/a.png' }] } });
+    savePendingWebStart(start);
+
+    expect(JSON.stringify(loadPendingWebStart('image')?.body)).toBe(JSON.stringify(start.body));
+  });
+
+  it('drops a start older than a day', () => {
+    savePendingWebStart(pendingStart({ createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() }));
+
+    expect(loadPendingWebStart('image', 'user-1')).toBeNull();
+    expect(window.sessionStorage.length).toBe(0);
+  });
+
+  it('never hands one account the start another account saved in this tab', () => {
+    savePendingWebStart(pendingStart({ userId: 'user-1' }));
+
+    expect(loadPendingWebStart('image', 'user-2')).toBeNull();
+    expect(loadPendingWebStart('image', 'user-1')).toBeNull();
+  });
+
+  it('drops a record it cannot read', () => {
+    window.sessionStorage.setItem('magicbooklet:pending-generation-start:v1:image', '{"version":1,"tool":"image"}');
+    expect(loadPendingWebStart('image')).toBeNull();
+    expect(window.sessionStorage.length).toBe(0);
+
+    window.sessionStorage.setItem('magicbooklet:pending-generation-start:v1:motion', 'not json');
+    expect(loadPendingWebStart('motion')).toBeNull();
+  });
+
+  it('reports a refused write instead of throwing before the start is sent', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError');
+    });
+
+    expect(savePendingWebStart(pendingStart())).toBe(false);
   });
 });

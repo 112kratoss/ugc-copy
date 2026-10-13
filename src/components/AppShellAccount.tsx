@@ -23,6 +23,32 @@ type ProfileSummary = {
   credits: number | null;
 };
 
+/** Sign-out waits this long at most for the creators' storage to clear. */
+const SIGN_OUT_CLEAR_WAIT_MS = 3000;
+
+/**
+ * The creators keep this account's staged files and text drafts in the
+ * browser; the next person to sign in here must not open them. Loaded on
+ * demand so the storage library stays out of the account menu's chunk, and
+ * bounded so storage that never answers cannot hold the sign-out.
+ */
+async function clearCreatorDataForSignOut(userId: string) {
+  const clearing = import('@/lib/persisted-media')
+    .then(({ clearPersistedCreatorData }) => clearPersistedCreatorData(userId))
+    .catch(() => {
+      // The keys are per account, so whatever is left stays out of the next
+      // account's reach; signing out goes ahead.
+    });
+  let timer: number | undefined;
+  await Promise.race([
+    clearing,
+    new Promise<void>((resolve) => {
+      timer = window.setTimeout(resolve, SIGN_OUT_CLEAR_WAIT_MS);
+    }),
+  ]);
+  window.clearTimeout(timer);
+}
+
 type AccountAvatarProps = {
   session: Session | null;
   profile: ProfileSummary | null;
@@ -261,6 +287,10 @@ export default function AppShellAccount() {
   }, [session?.user?.id]);
 
   const handleSignOut = async () => {
+    const userId = session?.user?.id;
+    if (userId) {
+      await clearCreatorDataForSignOut(userId);
+    }
     // This browser only. The default (global) also ends the account's session
     // on the person's phone, which then has every request refused.
     await supabase.auth.signOut({ scope: 'local' });

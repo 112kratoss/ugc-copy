@@ -499,11 +499,185 @@ export class WebCatalogRequestError extends Error {
     message: string,
     public readonly status: number,
     public readonly code?: string,
-    public readonly fieldErrors: Record<string, string> = {}
+    public readonly fieldErrors: Record<string, string> = {},
+    /**
+     * The whole error body, for what the fields above leave out: the measured
+     * `inputs` and `costCredits` of a REFERENCE_DURATION_CHANGED refusal, the
+     * held `generationId` of a submission_pending one.
+     */
+    public readonly details: Readonly<Record<string, unknown>> = {},
   ) {
     super(message);
     this.name = 'WebCatalogRequestError';
   }
+}
+
+export type WebStartTool = 'image' | 'video' | 'motion';
+
+/**
+ * A start the page sent but has no answer to: kept, with its key and the exact
+ * body, until an answer says whether it started. Each press used to mint a new
+ * key and forget it, so after a lost response the next press reached the
+ * server as a request it had never seen, and it started and charged a second
+ * run. Replaying the same key and body instead answers with the run that
+ * started, or starts it once. Mobile keeps the same record
+ * (ugc-mobile/lib/generation-attempts.ts).
+ */
+export type PendingWebStart = {
+  version: 1;
+  tool: WebStartTool;
+  idempotencyKey: string;
+  body: Record<string, unknown>;
+  catalogRevision: string;
+  createdAt: string;
+  /**
+   * The account that sent it. A tab that changes account must not replay
+   * another account's start under its own credits.
+   */
+  userId?: string | null;
+};
+
+const PENDING_WEB_START_STORAGE_PREFIX = 'magicbooklet:pending-generation-start:v1';
+/** Past this a start is no longer worth a second look. */
+export const PENDING_WEB_START_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+function pendingWebStartStorageKey(tool: WebStartTool) {
+  return `${PENDING_WEB_START_STORAGE_PREFIX}:${tool}`;
+}
+
+// sessionStorage: one tab's attempt, so another tab never replays it, and it
+// lasts through the reload a deploy or a lost session can bring.
+function getPendingWebStartStorage(): Storage | null {
+  try {
+    return typeof window === 'undefined' ? null : window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function parsePendingWebStart(raw: string, tool: WebStartTool): PendingWebStart | null {
+  try {
+    const value = JSON.parse(raw) as Partial<PendingWebStart>;
+    if (
+      value.version !== 1
+      || value.tool !== tool
+      || typeof value.idempotencyKey !== 'string' || !value.idempotencyKey
+      || !isRecord(value.body)
+      || typeof value.catalogRevision !== 'string'
+      || typeof value.createdAt !== 'string'
+      || (value.userId !== undefined && value.userId !== null && typeof value.userId !== 'string')
+    ) {
+      return null;
+    }
+    return value as PendingWebStart;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The tool's unanswered start, or null. Pass the signed-in user's id: a start
+ * saved under another account is dropped rather than handed back.
+ */
+export function loadPendingWebStart(tool: WebStartTool, userId?: string | null): PendingWebStart | null {
+  const storage = getPendingWebStartStorage();
+  if (!storage) return null;
+  const key = pendingWebStartStorageKey(tool);
+  let raw: string | null = null;
+  try {
+    raw = storage.getItem(key);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  const start = parsePendingWebStart(raw, tool);
+  const createdAt = start ? Date.parse(start.createdAt) : Number.NaN;
+  if (
+    !start
+    || !Number.isFinite(createdAt)
+    || Date.now() - createdAt > PENDING_WEB_START_MAX_AGE_MS
+    || (userId && start.userId && start.userId !== userId)
+  ) {
+    try {
+      storage.removeItem(key);
+    } catch {
+      // Storage refused: the record stays unreadable to this tab either way.
+    }
+    return null;
+  }
+  return start;
+}
+
+/**
+ * Saves the start before it is sent. False when the browser refused the
+ * write; the page then holds the key in memory, which still covers a retry
+ * from the same page.
+ */
+export function savePendingWebStart(start: PendingWebStart): boolean {
+  const storage = getPendingWebStartStorage();
+  if (!storage) return false;
+  try {
+    storage.setItem(pendingWebStartStorageKey(start.tool), JSON.stringify(start));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function clearPendingWebStart(tool: WebStartTool): void {
+  try {
+    getPendingWebStartStorage()?.removeItem(pendingWebStartStorageKey(tool));
+  } catch {
+    // Nothing to clear in a tab whose storage is unavailable.
+  }
+}
+
+/** Refusals the server makes before it reserves credits or calls the provider. */
+const DEFINITIVE_WEB_START_FAILURE_CODES = new Set([
+  'insufficient_credits',
+  'invalid_input_media',
+  'service_misconfigured',
+  'provider_busy',
+  'provider_unavailable',
+  'provider_rejected',
+  'prompt_blocked',
+  'INVALID_GENERATION_REQUEST',
+  'INVALID_MODEL_SETTINGS',
+  'MODEL_UNAVAILABLE',
+  'CATALOG_CHANGED',
+  'REFERENCE_DURATION_CHANGED',
+  'RATE_LIMITED',
+  'cost_changed',
+  // The per-kind routes' answer when the provider key is missing: nothing is held.
+  'GENERATION_SERVICE_UNAVAILABLE',
+]);
+/** Answers that say the start under this key is, or may be, under way. */
+const AMBIGUOUS_WEB_START_FAILURE_CODES = new Set([
+  'submission_pending',
+  'GENERATION_START_IN_PROGRESS',
+  'GENERATION_ADAPTER_UNAVAILABLE',
+]);
+
+/**
+ * Whether a start that threw may still have started a run, so the page must
+ * keep its key and replay it rather than mint a new one. Yes for no answer at
+ * all (a network failure, an abort, a body that is not JSON), for an answer
+ * saying the start is under way, and for a server fault without a refusal
+ * code. A refusal the server made before reserving credits is definitive.
+ */
+export function isAmbiguousWebStartFailure(error: unknown): boolean {
+  if (error instanceof TypeError || error instanceof SyntaxError) return true;
+  if (!error || typeof error !== 'object') return false;
+  const { name, status, code } = error as { name?: unknown; status?: unknown; code?: unknown };
+  if (name === 'AbortError') return true;
+  if (typeof status !== 'number') return false;
+  if (typeof code === 'string') {
+    if (AMBIGUOUS_WEB_START_FAILURE_CODES.has(code)) return true;
+    if (DEFINITIVE_WEB_START_FAILURE_CODES.has(code) || code.startsWith('IDEMPOTENCY_KEY_')) return false;
+  }
+  // A 409 is ambiguous unless its code says refusal: the start RPC's own
+  // "already starting under this key" answer carries none.
+  return status === 0 || status >= 500 || status === 409;
 }
 
 export type WebGenerationStartResponse = {
@@ -560,20 +734,28 @@ export async function requestWebGenerationStart(
     }),
     signal,
   });
-  const body = await response.json() as Partial<WebGenerationStartResponse> & {
+  let parsedBody: unknown = null;
+  try {
+    parsedBody = await response.json();
+  } catch {
+    // A platform timeout or gateway page instead of JSON. Its status still
+    // decides: a 5xx may have started the run, a 200 surely did.
+  }
+  const body = (isRecord(parsedBody) ? parsedBody : {}) as Partial<WebGenerationStartResponse> & {
     error?: string;
     code?: string;
     fieldErrors?: Record<string, string>;
   };
   if (!response.ok) {
-    const fieldErrors = body.fieldErrors ?? {};
+    const fieldErrors = isRecord(body.fieldErrors) ? body.fieldErrors as Record<string, string> : {};
     const fieldMessage = Object.values(fieldErrors)
       .find((message) => typeof message === 'string' && message.trim());
     throw new WebCatalogRequestError(
-      fieldMessage ?? body.error ?? 'Could not start generation.',
+      fieldMessage ?? (typeof body.error === 'string' && body.error ? body.error : 'Could not start generation.'),
       response.status,
-      body.code,
+      typeof body.code === 'string' ? body.code : undefined,
       fieldErrors,
+      body,
     );
   }
   if (

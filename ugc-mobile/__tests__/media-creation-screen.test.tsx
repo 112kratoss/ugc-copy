@@ -34,9 +34,12 @@ const authState = vi.hoisted(() => ({
   isGuest: false,
   credits: 999,
   updateCredits: vi.fn(),
+  refreshProfile: vi.fn(async () => undefined),
   api: {
     enhancePrompt: vi.fn(),
-    startGeneration: undefined as ReturnType<typeof vi.fn> | undefined,
+    // Every new run starts here, as in the app (catalog schema 3); the per-kind starts
+    // below only replay an attempt an older build saved.
+    startGeneration: vi.fn(),
     startImageGeneration: vi.fn(),
     startVideoGeneration: vi.fn(),
     startMotionGeneration: vi.fn(),
@@ -54,6 +57,11 @@ const authState = vi.hoisted(() => ({
 const EMPTY_MISSING_IDS = vi.hoisted(() => [] as string[]);
 const catalogState = vi.hoisted(() => ({
   catalog: null as unknown,
+  // When set, what the hook's loadDetails answers, so a case can hold a model's details
+  // back from `catalog` the way the screen meets a model first picked.
+  loadDetails: null as null | ((ids: string[]) => Promise<unknown>),
+  // When set, the picker's list, which can name models `catalog` has no details for.
+  summaries: null as unknown[] | null,
   isLoading: false,
   isUnavailable: false,
   error: null as Error | null,
@@ -242,10 +250,10 @@ vi.mock('@/lib/env', async (importOriginal) => {
   return { ...actual, env: { ...actual.env, supabaseUrl: 'https://project.supabase.co' } };
 });
 
-const loadCatalogDetails = async () => catalogState.catalog;
+const loadCatalogDetails = async (ids: string[]) => (catalogState.loadDetails ? catalogState.loadDetails(ids) : catalogState.catalog);
 
 vi.mock('@/lib/use-generation-model-catalog', () => ({
-  useGenerationModelCatalog: () => ({ ...catalogState, loadDetails: loadCatalogDetails, summaries: (catalogState.catalog as {models?: unknown[]} | null)?.models ?? [], missingIds: EMPTY_MISSING_IDS, isLoadingModels: false }),
+  useGenerationModelCatalog: () => ({ ...catalogState, loadDetails: loadCatalogDetails, summaries: catalogState.summaries ?? (catalogState.catalog as {models?: unknown[]} | null)?.models ?? [], missingIds: EMPTY_MISSING_IDS, isLoadingModels: false }),
 }));
 
 import { AppState, PanResponder } from 'react-native';
@@ -253,9 +261,179 @@ import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
 import { MediaCreationScreen } from '../components/media-creation-screen';
 import { PUSH_OFFER_STORAGE_KEY, resetPushOffersForTests } from '../lib/push-prompt';
 import { readCreatorSession, resetCreatorSessionForTests } from '../lib/creator-session-diagnostics';
-import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia } from '../lib/media';
+import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia, type UploadedMedia } from '../lib/media';
+import { UploadCancelledError } from '../lib/upload-file';
 import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
 import { catalogV2 } from './generation-model-catalog-v2-fixtures';
+import type { CatalogInputMode, CatalogInputSlot, GenerationModelCatalog, GenerationModelDescriptor } from '../lib/generation-model-catalog';
+import { creationDraftStorageKey, ordinaryDraftScope, remixDraftScope } from '../lib/creation-draft-resume';
+import { activeGenerationRecordStorageKey } from '../lib/active-generation-record';
+import { PrimaryButton, SecondaryButton } from '../components/ui';
+
+const referenceModeIs = (value: 'frames' | 'elements') => [{ source: 'setting' as const, key: 'referenceMode', operator: 'equals' as const, value }];
+const frameSlots: CatalogInputSlot[] = [
+  { key: 'startFrame', kind: 'image', role: 'startFrame', label: 'Start frame', min: 0, max: 1 },
+  { key: 'endFrame', kind: 'image', role: 'endFrame', label: 'End frame', min: 0, max: 1 },
+];
+
+/** Seedance 2's published input modes: frames, or reusable references, one per run. */
+function seedanceInputModes(): CatalogInputMode[] {
+  return [
+    { key: 'frames', label: 'Frames', default: true, conditions: referenceModeIs('frames'), slots: frameSlots },
+    {
+      key: 'references',
+      label: 'Reusable references',
+      default: false,
+      conditions: referenceModeIs('elements'),
+      slots: [
+        { key: 'imageReferences', kind: 'image', role: 'reference', label: 'Reference images', min: 0, max: 5, supportsNaming: true },
+        { key: 'videoReferences', kind: 'video', role: 'reference', label: 'Reference videos', min: 0, max: 3, durationMetadata: 'required', maxDurationSeconds: 15 },
+        { key: 'audioReferences', kind: 'audio', role: 'reference', label: 'Reference audio', min: 0, max: 3, durationMetadata: 'optional', maxDurationSeconds: 15 },
+      ],
+    },
+  ];
+}
+
+/**
+ * Descriptors shaped as the production catalog publishes them (src/lib/generation-model-catalog.ts),
+ * with input modes, for the cases about what a run sends.
+ */
+function parityImageModel(id: string, displayName: string, maxImages: number): GenerationModelDescriptor {
+  return {
+    id,
+    kind: 'image',
+    displayName,
+    description: `${displayName} test descriptor`,
+    badge: null,
+    recommended: false,
+    sortOrder: 0,
+    minClientSchemaVersion: 1,
+    controls: [
+      { key: 'aspectRatio', label: 'Aspect ratio', type: 'choice', presentation: 'chips', defaultValue: '4:5', options: [{ value: '4:5', label: '4:5' }, { value: '1:1', label: '1:1' }] },
+      { key: 'resolution', label: 'Resolution', type: 'choice', presentation: 'chips', defaultValue: '1K', options: [{ value: '1K', label: '1K' }] },
+    ],
+    capabilities: { multiShot: false, sound: false, fixedLens: false, googleSearch: false, outputFormat: false },
+    inputs: { imageReferences: maxImages > 0 ? { max: maxImages, supportsNaming: true } : null, videoReferences: null, audioReferences: null, startFrame: false, endFrame: false },
+    availability: { web: true, mobile: true },
+    inputModes: maxImages > 0
+      ? [{ key: 'references', label: 'Reference images', default: true, slots: [{ key: 'imageReferences', kind: 'image', role: 'reference', label: 'Reference images', min: 0, max: maxImages, supportsNaming: true }] }]
+      : [{ key: 'prompt-only', label: 'Prompt only', default: true, slots: [] }],
+    inputConstraints: [],
+  };
+}
+
+/** Kling 3.0 as published: frames, and named video elements in a mode of their own beside them. */
+function parityKlingVideo(): GenerationModelDescriptor {
+  return {
+    id: 'kling-3.0-video',
+    kind: 'video',
+    displayName: 'Kling 3.0 Cinematic',
+    description: 'Kling 3.0 test descriptor',
+    badge: null,
+    recommended: true,
+    sortOrder: 0,
+    minClientSchemaVersion: 1,
+    controls: [
+      { key: 'aspectRatio', label: 'Aspect ratio', type: 'choice', presentation: 'chips', defaultValue: '16:9', options: [{ value: '16:9', label: '16:9' }, { value: '9:16', label: '9:16' }] },
+      { key: 'mode', label: 'Quality mode', type: 'choice', presentation: 'chips', defaultValue: 'std', options: [{ value: 'std', label: 'Standard' }, { value: 'pro', label: 'Pro' }] },
+      { key: 'duration', label: 'Duration', type: 'integer', presentation: 'stepper', defaultValue: 5, min: 3, max: 15, step: 1, unit: 'seconds' },
+      { key: 'sound', label: 'Sound', type: 'boolean', presentation: 'toggle', defaultValue: false },
+      { key: 'isMultiShot', label: 'Multi-shot', type: 'boolean', presentation: 'toggle', defaultValue: false },
+    ],
+    capabilities: { multiShot: true, sound: true, fixedLens: false, googleSearch: false, outputFormat: false },
+    inputs: { imageReferences: null, videoReferences: { max: 3 }, audioReferences: null, startFrame: true, endFrame: true, combineFramesWithReferences: false },
+    availability: { web: true, mobile: true },
+    inputModes: [
+      { key: 'frames', label: 'Frames', default: true, conditions: referenceModeIs('frames'), slots: frameSlots },
+      {
+        key: 'video-elements',
+        label: 'Video elements',
+        default: false,
+        slots: [{ key: 'videoElements', kind: 'video', role: 'reference', label: 'Video elements', min: 0, max: 3, supportsNaming: true, durationMetadata: 'optional' }],
+      },
+    ],
+    inputConstraints: [],
+  };
+}
+
+function paritySeedanceVideo(): GenerationModelDescriptor {
+  return {
+    ...parityKlingVideo(),
+    id: 'seedance-2',
+    displayName: 'Seedance 2',
+    recommended: false,
+    controls: [
+      { key: 'aspectRatio', label: 'Aspect ratio', type: 'choice', presentation: 'chips', defaultValue: '16:9', options: [{ value: '16:9', label: '16:9' }, { value: '9:16', label: '9:16' }] },
+      { key: 'duration', label: 'Duration', type: 'integer', presentation: 'stepper', defaultValue: 5, min: 4, max: 15, step: 1, unit: 'seconds' },
+      { key: 'referenceMode', label: 'Input mode', type: 'choice', presentation: 'chips', defaultValue: 'frames', options: [{ value: 'frames', label: 'Frames' }, { value: 'elements', label: 'References' }] },
+    ],
+    capabilities: { multiShot: false, sound: false, fixedLens: false, googleSearch: false, outputFormat: false },
+    inputs: { imageReferences: { max: 5, supportsNaming: true }, videoReferences: { max: 3 }, audioReferences: { max: 3 }, startFrame: true, endFrame: true, combineFramesWithReferences: false },
+    inputModes: seedanceInputModes(),
+  };
+}
+
+function parityMotionModel(): GenerationModelDescriptor {
+  return {
+    id: 'kling-3.0',
+    kind: 'motion',
+    displayName: 'Kling 3.0',
+    description: 'Kling 3.0 motion test descriptor',
+    badge: null,
+    recommended: true,
+    sortOrder: 0,
+    minClientSchemaVersion: 1,
+    controls: [
+      { key: 'resolution', label: 'Resolution', type: 'choice', presentation: 'chips', defaultValue: '720p', options: [{ value: '720p', label: '720p' }, { value: '1080p', label: '1080p' }] },
+      { key: 'duration', label: 'Duration', type: 'integer', presentation: 'stepper', defaultValue: 10, min: 1, max: 30, step: 1, unit: 'seconds' },
+    ],
+    capabilities: { multiShot: false, sound: false, fixedLens: false, googleSearch: false, outputFormat: false },
+    inputs: { imageReferences: null, videoReferences: { max: 1 }, audioReferences: null, startFrame: false, endFrame: false },
+    availability: { web: true, mobile: true },
+    inputModes: [{
+      key: 'motion-inputs',
+      label: 'Motion inputs',
+      default: true,
+      slots: [
+        { key: 'characterImage', kind: 'image', role: 'reference', label: 'Character image', min: 1, max: 1 },
+        { key: 'referenceVideo', kind: 'video', role: 'reference', label: 'Reference video', min: 1, max: 1, durationMetadata: 'optional', maxDurationSeconds: 30 },
+      ],
+    }],
+    inputConstraints: [],
+  };
+}
+
+function parityCatalog(models: GenerationModelDescriptor[]): GenerationModelCatalog {
+  const first = (kind: GenerationModelDescriptor['kind']) => models.find((model) => model.kind === kind)?.id ?? null;
+  return { schemaVersion: 3, revision: 'parity-rev', defaults: { image: first('image'), video: first('video'), motion: first('motion') }, models };
+}
+
+/** A quote that prices the request it is given and hands its settings back, as the server's does. */
+function quoteEchoingSettings(costCredits = 8) {
+  authState.api.quoteGenerationModel.mockImplementation(async (request: { modelId: string; catalogRevision: string; settings: Record<string, unknown> }) => ({
+    modelId: request.modelId,
+    catalogRevision: request.catalogRevision,
+    normalizedSettings: request.settings,
+    costCredits,
+  }));
+}
+
+/** A reference the creator uploaded: staged under their own path, named after its file. */
+function stagedMedia(id: string, kind: 'image' | 'video' | 'audio' = 'image', extra: Record<string, unknown> = {}) {
+  const extension = kind === 'image' ? 'png' : kind === 'video' ? 'mp4' : 'mp3';
+  return {
+    id,
+    kind,
+    url: `https://cdn.example.com/${id}.${extension}`,
+    storagePath: `uploads/user-123/${id}.${extension}`,
+    fileName: `${id}.${extension}`,
+    displayName: id.charAt(0).toUpperCase() + id.slice(1),
+    handle: `@${id}`,
+    durationSeconds: kind === 'image' ? null : 4,
+    sourceGenerationId: null,
+    ...extra,
+  };
+}
 
 const mountedTrees: renderer.ReactTestRenderer[] = [];
 const createRenderer = renderer.create.bind(renderer);
@@ -354,12 +532,13 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     routerState.push.mockClear();
     resetCreatorSessionForTests();
     authState.updateCredits.mockClear();
+    authState.refreshProfile.mockClear();
     authState.credits = 999;
     authState.user = { id: 'user-123', email: 'creator@example.com' };
     authState.identityUserId = 'user-123';
     authState.session = null;
     authState.isGuest = false;
-    authState.api.startGeneration = undefined;
+    authState.api.startGeneration = vi.fn();
     authState.api.startImageGeneration.mockReset();
     authState.api.getImageGeneration.mockReset();
     authState.api.startVideoGeneration.mockReset();
@@ -378,6 +557,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       costCredits: 8,
     });
     catalogState.catalog = createTestGenerationModelCatalog();
+    catalogState.loadDetails = null;
+    catalogState.summaries = null;
     catalogState.isLoading = false;
     catalogState.isUnavailable = false;
     catalogState.error = null;
@@ -783,7 +964,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     const actionColumns = actionGrid.findAll(
       (node) =>
         node.props.accessibilityRole === 'button' &&
-        ['Reference', 'Templates', 'Enhance'].includes(node.props.accessibilityLabel) &&
+        ['Reference', 'Templates', 'Enhance · 2 credits'].includes(node.props.accessibilityLabel) &&
         node.props.style?.minHeight === 60,
     );
     expect(actionColumns).toHaveLength(3);
@@ -1110,10 +1291,14 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     const settle = () => renderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
     const openEditor = async (model: string) => {
       // The production descriptors, plus a copy of Seedance 2 under another id: a model
-      // with the same slots that is not in the family.
+      // with the same slots that is not in the family. Seedance 2 carries its published
+      // input modes, which is what the unified request reads its inputs from.
       const catalog = createRemixRestoreCatalog();
-      const seedance = catalog.models.find((entry) => entry.id === 'seedance-2')!;
-      catalogState.catalog = { ...catalog, models: [...catalog.models, { ...seedance, id: 'wan-2.7', displayName: 'Wan 2.7' }] };
+      const seedance = { ...catalog.models.find((entry) => entry.id === 'seedance-2')!, inputModes: seedanceInputModes() };
+      catalogState.catalog = {
+        ...catalog,
+        models: [...catalog.models.filter((entry) => entry.id !== 'seedance-2'), seedance, { ...seedance, id: 'wan-2.7', displayName: 'Wan 2.7' }],
+      };
       authState.api.getRemixSourceBundle.mockResolvedValue(remixOf(model));
       let tree!: renderer.ReactTestRenderer;
       await renderer.act(async () => { tree = renderer.create(<MediaCreationScreen initialTool="video" remixSource={{ generationId: 'gen-girl', postId: 'post-girl' }} />); });
@@ -1127,6 +1312,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     it('prepares a Seedance 2 reference from its details sheet, checks on it, and sends the asset id on the run', async () => {
+      // The quote hands back the settings it priced, the run's shape among them, as the server's does.
+      quoteEchoingSettings();
       authState.api.createSeedanceAsset.mockResolvedValue(assetAnswer('processing', 'Image'));
       authState.api.getSeedanceAsset.mockResolvedValue(assetAnswer('active', 'Image'));
       const tree = await openEditor('seedance-2');
@@ -1145,19 +1332,20 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(authState.api.getSeedanceAsset).toHaveBeenCalledWith('asset-girl');
       expect(text(tree)).toContain('Ready. Runs send the prepared asset in place of the file.');
 
-      // The run sends the asset id where the link was, and says what was prepared.
-      authState.api.startVideoGeneration.mockResolvedValue({ predictionId: 'pred-1', status: 'starting' } as never);
+      // The run sends the prepared id beside the link the server measures (C3).
+      authState.api.startGeneration.mockResolvedValue({ predictionId: 'pred-1', status: 'starting' } as never);
       await press(tree, 'Close reference details');
       await settle();
       await renderer.act(async () => { findPressableByLabelPrefix(tree.root, 'Generate ·').props.onPress(); });
       await settle();
-      expect(authState.api.startVideoGeneration).toHaveBeenCalledTimes(1);
-      expect(authState.api.startVideoGeneration.mock.calls[0][0]).toMatchObject({
-        model: 'seedance-2',
-        imageUrls: ['asset-girl'],
-        elementImageUrls: ['asset-girl'],
-        seedanceAssets: { images: [expect.objectContaining({ assetId: 'asset-girl', status: 'active' })] },
+      expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
+      expect(authState.api.startGeneration.mock.calls[0][0]).toMatchObject({
+        modelId: 'seedance-2',
+        inputs: expect.arrayContaining([
+          expect.objectContaining({ slot: 'imageReferences', url: 'https://cdn.example.com/girl.png', assetId: 'asset-girl' }),
+        ]),
       });
+      expect(authState.api.startVideoGeneration).not.toHaveBeenCalled();
       tree.unmount();
     });
 
@@ -1802,7 +1990,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     renderer.act(() => {
-      findPressableByText(tree!.root, 'Enhance').props.onPress();
+      findPressableByText(tree!.root, 'Enhance · 2 credits').props.onPress();
     });
 
     const text = collectText(tree!.root);
@@ -1833,7 +2021,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       await findPressableByText(tree!.root, 'Reference').props.onPress();
     });
 
-    const thumbnail = tree!.root.find((node) => String(node.type) === 'stable-media-image' && node.props.url === 'https://cdn.example.com/hero.png');
+    // Drawn from the picker's own copy this session, not the signed link to the whole upload.
+    const thumbnail = tree!.root.find((node) => String(node.type) === 'stable-media-image' && node.props.url === 'file:///hero.png');
     expect(thumbnail.props).toEqual(expect.objectContaining({
       contentFit: 'cover',
       style: { width: '100%', height: '100%' },
@@ -1879,7 +2068,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(previews).toContainEqual(expect.objectContaining({
       props: expect.objectContaining({
         kind: 'video',
-        url: 'https://cdn.example.com/motion.mp4',
+        // The picker's own copy, while this session lasts.
+        url: 'file:///motion.mp4',
         letterbox: true,
         nativeControls: false,
       }),
@@ -1940,7 +2130,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     await renderer.act(async () => {
       await findPressableByText(tree!.root, 'Reference').props.onPress();
     });
-    const thumbnail = tree!.root.find((node) => String(node.type) === 'stable-media-image' && node.props.url === 'https://cdn.example.com/hero.png');
+    const thumbnail = tree!.root.find((node) => String(node.type) === 'stable-media-image' && node.props.url === 'file:///hero.png');
     expect(thumbnail.props).toEqual(expect.objectContaining({
       contentFit: 'cover',
       style: { width: '100%', height: '100%' },
@@ -1955,7 +2145,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     // preview was a 240pt card against the left edge (see media-preview.test).
     expect(tree!.root.findAll((node) => String(node.type) === 'media-preview')).toContainEqual(expect.objectContaining({
       props: expect.objectContaining({
-        url: 'https://cdn.example.com/hero.png',
+        url: 'file:///hero.png',
         height: 300,
         letterbox: true,
       }),
@@ -2959,7 +3149,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     authState.user = null;
     authState.isGuest = true;
     authState.identityUserId = 'guest-1';
-    authState.api.startImageGeneration.mockResolvedValue({
+    authState.api.startGeneration.mockResolvedValue({
       success: true,
       predictionId: 'prediction-guest-1',
       generationId: 'gen-guest-1',
@@ -2990,7 +3180,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     // Generated, not bounced to /auth.
-    expect(authState.api.startImageGeneration).toHaveBeenCalledTimes(1);
+    expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
     expect(routerState.push).not.toHaveBeenCalled();
   });
 
@@ -3016,7 +3206,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     expect(aiDataConsentState.ensure).toHaveBeenCalledTimes(1);
-    expect(authState.api.startImageGeneration).not.toHaveBeenCalled();
+    expect(authState.api.startGeneration).not.toHaveBeenCalled();
     // Not even saved as an attempt: there is no request to check later.
     expect(draftStorage.setItem.mock.calls.map(([key]) => key))
       .not.toContainEqual(expect.stringContaining('generation.pendingAttempt'));
@@ -3025,7 +3215,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
     // Allowed on the next press, the same draft goes out.
     aiDataConsentState.ensure.mockResolvedValue(true);
-    authState.api.startImageGeneration.mockResolvedValue({
+    authState.api.startGeneration.mockResolvedValue({
       success: true,
       predictionId: 'prediction-after-consent',
       generationId: 'gen-after-consent',
@@ -3036,8 +3226,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     await renderer.act(async () => {
       await findPressableByText(tree!.root, 'Generate \u00b7 8 credits').props.onPress();
     });
-    expect(authState.api.startImageGeneration).toHaveBeenCalledTimes(1);
-    expect(authState.api.startImageGeneration.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+    expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
+    expect(authState.api.startGeneration.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
       prompt: 'A product shot on linen.',
     }));
   });
@@ -3054,7 +3244,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       tree!.root.findAll((node) => String(node.type) === 'textinput')[0].props.onChangeText('serum on a stone');
     });
     await renderer.act(async () => {
-      await findPressableByText(tree!.root, 'Enhance').props.onPress();
+      await findPressableByText(tree!.root, 'Enhance · 2 credits').props.onPress();
     });
 
     expect(aiDataConsentState.ensure).toHaveBeenCalledTimes(1);
@@ -3064,7 +3254,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
   it('offers a post handoff after a generation succeeds with a generation id', async () => {
     vi.useFakeTimers();
-    authState.api.startImageGeneration.mockResolvedValue({
+    authState.api.startGeneration.mockResolvedValue({
       success: true,
       predictionId: 'prediction-1',
       generationId: 'gen-1',
@@ -3094,7 +3284,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       await findPressableByText(tree!.root, 'Generate · 8 credits').props.onPress();
     });
 
-    expect(authState.api.startImageGeneration).toHaveBeenCalledTimes(1);
+    expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
     expect(authState.api.getImageGeneration).toHaveBeenCalledTimes(1);
     const text = collectText(tree!.root);
     expect(text).toContain('Post to feed');
@@ -3114,7 +3304,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
     /** Starts an image run that never settles, then lets the push check and offer history land. */
     async function openWaitingWorkspace() {
-      authState.api.startImageGeneration.mockReturnValue(new Promise(() => undefined));
+      authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
       let tree: renderer.ReactTestRenderer | undefined;
       renderer.act(() => {
         tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab />);
@@ -3256,7 +3446,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       vi.useFakeTimers();
       askFirstThen(() => Promise.resolve({ status: 'registered', expoPushToken: 'ExponentPushToken[late]' }));
       (authState.api as Record<string, unknown>).recordOnboardingEvent = vi.fn().mockResolvedValue({ success: true });
-      authState.api.startImageGeneration.mockResolvedValue({
+      authState.api.startGeneration.mockResolvedValue({
         success: true,
         predictionId: 'prediction-1',
         generationId: 'gen-1',
@@ -3570,7 +3760,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
   it('opens the shared video result workspace and posts with the generation id', async () => {
     vi.useFakeTimers();
-    authState.api.startVideoGeneration.mockResolvedValue({
+    authState.api.startGeneration.mockResolvedValue({
       success: true,
       predictionId: 'video-prediction-1',
       generationId: 'video-gen-1',
@@ -3596,7 +3786,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       await findPressableByText(tree!.root, 'Generate · 8 credits').props.onPress();
     });
 
-    expect(authState.api.startVideoGeneration).toHaveBeenCalledTimes(1);
+    expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
     expect(collectText(tree!.root)).toContain('Your video');
     // Letterboxed: the whole result, across its column. As a 4:5 card of its
     // height it was 384pt wide in a 366pt column (see media-preview.test).
@@ -3614,7 +3804,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
   it('minimizes and reopens an in-progress image workspace without cancelling generation', async () => {
     vi.useFakeTimers();
-    authState.api.startImageGeneration.mockReturnValue(new Promise(() => undefined));
+    authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
 
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
@@ -3646,13 +3836,13 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       findPressableByText(tree!.root, 'View progress').props.onPress();
     });
     expect(collectText(tree!.root)).toContain('Creating image');
-    expect(authState.api.startImageGeneration).toHaveBeenCalledTimes(1);
+    expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
 
   it('retries an interrupted status check without starting or charging for a second generation', async () => {
     vi.useFakeTimers();
-    authState.api.startImageGeneration.mockResolvedValue({
+    authState.api.startGeneration.mockResolvedValue({
       success: true,
       predictionId: 'prediction-interrupted',
       generationId: 'gen-interrupted',
@@ -3682,13 +3872,13 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
     expect(collectText(tree!.root)).toContain('Progress check interrupted');
     expect(collectText(tree!.root)).toContain('Retry status check');
-    expect(authState.api.startImageGeneration).toHaveBeenCalledTimes(1);
+    expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
 
     await renderer.act(async () => {
       await findPressableByText(tree!.root, 'Retry status check').props.onPress();
     });
 
-    expect(authState.api.startImageGeneration).toHaveBeenCalledTimes(1);
+    expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
     expect(authState.api.getImageGeneration).toHaveBeenCalledTimes(2);
     expect(collectText(tree!.root)).toContain('Post to feed');
     vi.useRealTimers();
@@ -3696,7 +3886,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
   it('shows failed generation actions and retries with the preserved draft', async () => {
     vi.useFakeTimers();
-    authState.api.startImageGeneration.mockResolvedValue({
+    authState.api.startGeneration.mockResolvedValue({
       success: true,
       predictionId: 'prediction-failed',
       generationId: 'gen-failed',
@@ -3730,19 +3920,19 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(collectText(tree!.root)).toContain('Try again · 8 credits');
     expect(collectText(tree!.root)).toContain('Back to creator');
 
-    authState.api.startImageGeneration.mockReturnValueOnce(new Promise(() => undefined));
+    authState.api.startGeneration.mockReturnValueOnce(new Promise(() => undefined));
     await renderer.act(async () => {
       void findPressableByText(tree!.root, 'Try again · 8 credits').props.onPress();
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(authState.api.startImageGeneration).toHaveBeenCalledTimes(2);
+    expect(authState.api.startGeneration).toHaveBeenCalledTimes(2);
     expect(promptInput.props.value).toBe('Create a dramatic studio portrait.');
     vi.useRealTimers();
   });
 
   it('creates another image while preserving prompt and parameters', async () => {
     vi.useFakeTimers();
-    authState.api.startImageGeneration.mockResolvedValue({
+    authState.api.startGeneration.mockResolvedValue({
       success: true,
       predictionId: 'prediction-another',
       generationId: 'gen-another',
@@ -3804,7 +3994,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(tree!.root.findAllByProps({ accessibilityLabel: 'Undo enhancement' })).toHaveLength(0);
 
     await renderer.act(async () => {
-      await findPressableByText(tree!.root, 'Enhance').props.onPress();
+      await findPressableByText(tree!.root, 'Enhance · 2 credits').props.onPress();
     });
 
     expect(authState.api.enhancePrompt).toHaveBeenCalledWith(expect.objectContaining({
@@ -3969,6 +4159,1046 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(authState.api.createMediaReadUrl).toHaveBeenCalledWith({ storagePath: ownPath });
       expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
       expect(thumbnail(tree, 'Product').props.url).toBe(renewedLink);
+    });
+  });
+
+  // The creators parity pass (archive/web-mobile-creators-compare-2026-10-13, package P7a): what a
+  // run sends, what the failure view offers first, and what a draft keeps across a model change,
+  // a finished run, a closed creator and a swept upload.
+  describe('what a run sends and what a draft keeps', () => {
+    const memory = new Map<string, string>();
+    const ordinaryKey = creationDraftStorageKey(ordinaryDraftScope('user-123'));
+    const activeRunKey = activeGenerationRecordStorageKey('user-123');
+    // Past the quote's delay and the autosave's, and past every storage read a load makes.
+    const settle = () => renderer.act(async () => { await vi.advanceTimersByTimeAsync(450); });
+    const savedDrafts = (overrides: { image?: Record<string, unknown>; video?: Record<string, unknown>; motion?: Record<string, unknown> }) => JSON.stringify({
+      image: { ...createDefaultCreationDraft('image'), ...overrides.image },
+      video: { ...createDefaultCreationDraft('video'), ...overrides.video },
+      motion: { ...createDefaultCreationDraft('motion'), ...overrides.motion },
+      updatedAt: new Date().toISOString(),
+    });
+    const storedDrafts = () => JSON.parse(memory.get(ordinaryKey) ?? 'null');
+    const text = (tree: renderer.ReactTestRenderer) => collectText(tree.root).join('\n');
+    const pressables = (root: renderer.ReactTestInstance) => root.findAll((node) => String(node.type) === 'pressable');
+    const labelled = (root: renderer.ReactTestInstance, label: string) => root.find((node) => (
+      String(node.type) === 'pressable' && node.props.accessibilityLabel === label
+    ));
+    const generateButton = (tree: renderer.ReactTestRenderer) => findPressableByLabelPrefix(tree.root, 'Generate');
+    const blocker = (tree: renderer.ReactTestRenderer) => collectText(tree.root.findByProps({ testID: 'creator-contextual-blocker' })).join(' ');
+    const modelChip = (tree: renderer.ReactTestRenderer) => findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel as string;
+    const pickModel = async (tree: renderer.ReactTestRenderer, displayName: string) => {
+      renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Selected model').props.onPress(); });
+      await renderer.act(async () => { findPressableByLabelPrefix(tree.root, `${displayName}.`).props.onPress(); });
+    };
+    const open = async (element: React.ReactElement, options?: Parameters<typeof renderer.create>[1]) => {
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(element, options); });
+      await settle();
+      return tree;
+    };
+    const typePrompt = async (tree: renderer.ReactTestRenderer, prompt: string) => {
+      renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText(prompt); });
+      await settle();
+    };
+    const pressGenerate = async (tree: renderer.ReactTestRenderer) => {
+      await renderer.act(async () => { void findPressableByLabelPrefix(tree.root, 'Generate ·').props.onPress(); });
+      await settle();
+    };
+    const started = (predictionId: string, extra: Record<string, unknown> = {}) => ({
+      success: true, predictionId, generationId: `gen-${predictionId}`, status: 'processing', remainingCredits: 990, cost: 8, ...extra,
+    });
+    const refusal = (status: number, code: string, message: string) => Object.assign(new Error(message), { status, code, details: { code, error: message } });
+    const missingUpload = () => Object.assign(new Error('That upload is no longer available.'), { status: 404, code: 'MEDIA_OBJECT_NOT_FOUND' });
+    const expiredLink = (path: string) => `https://project.supabase.co/storage/v1/object/sign/${path}?token=head.${Buffer.from(JSON.stringify({ exp: Math.floor((Date.now() - 3_600_000) / 1000) })).toString('base64url')}.signature`;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      memory.clear();
+      draftStorage.getItem.mockImplementation(async (key: string) => memory.get(key) ?? null);
+      draftStorage.setItem.mockImplementation(async (key: string, value: string) => { memory.set(key, value); });
+      draftStorage.removeItem.mockImplementation(async (key: string) => { memory.delete(key); });
+      quoteEchoingSettings();
+    });
+
+    describe('a model picked with fewer reference slots', () => {
+      const wide = () => parityImageModel('wide-image', 'Wide Image', 5);
+      const narrow = () => parityImageModel('narrow-image', 'Narrow Image', 2);
+      const fourReferences = () => ['alpha', 'bravo', 'charlie', 'delta'].map((id) => stagedMedia(id));
+
+      it('waits for its descriptor, keeps every reference, and blocks Generate until the extras go; the first model takes them all again', async () => {
+        const full = parityCatalog([wide(), narrow()]);
+        // The screen holds details for the draft's model only; the picker lists the other by its summary.
+        catalogState.catalog = parityCatalog([wide()]);
+        catalogState.summaries = full.models;
+        let release: () => void = () => undefined;
+        catalogState.loadDetails = async () => {
+          await new Promise<void>((resolve) => { release = resolve; });
+          catalogState.catalog = full;
+          return full;
+        };
+        memory.set(ordinaryKey, savedDrafts({ image: { model: 'wide-image', catalogRevision: 'parity-rev', prompt: 'A bottle on linen', references: fourReferences() } }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        expect(text(tree)).toContain('4 / 5');
+        expect(generateButton(tree).props.disabled).toBe(false);
+
+        await pickModel(tree, 'Narrow Image');
+        // The row turns while the details load, and the draft stays where it was.
+        expect(tree.root.findAllByProps({ testID: 'model-picker-row-loading' })).not.toHaveLength(0);
+        expect(modelChip(tree)).toContain('Wide Image');
+        await renderer.act(async () => { release(); });
+        await settle();
+
+        expect(modelChip(tree)).toContain('Narrow Image');
+        expect(text(tree)).not.toContain('Choose model');
+        // Two go with the run; two wait, each with its own Remove, under the slot's own message.
+        expect(pressables(tree.root).filter((node) => String(node.props.accessibilityLabel).startsWith('Open details for'))).toHaveLength(2);
+        const standby = tree.root.findByProps({ testID: 'standby-references' });
+        expect(collectText(standby)).toEqual(expect.arrayContaining(['Not sent with this run', 'Reference images supports up to 2 inputs.']));
+        expect(pressables(standby).map((node) => node.props.accessibilityLabel)).toEqual(['Remove Charlie', 'Remove Delta']);
+        expect(blocker(tree)).toContain('Reference images supports up to 2 inputs.');
+        expect(generateButton(tree).props.disabled).toBe(true);
+        expect(storedDrafts().image.references.map((media: { id: string }) => media.id)).toEqual(['alpha', 'bravo', 'charlie', 'delta']);
+
+        await pickModel(tree, 'Wide Image');
+        await settle();
+        expect(modelChip(tree)).toContain('Wide Image');
+        expect(tree.root.findAllByProps({ testID: 'standby-references' })).toHaveLength(0);
+        expect(text(tree)).toContain('4 / 5');
+        expect(generateButton(tree).props.disabled).toBe(false);
+      });
+
+      it('lets a waiting extra be removed from the rail, which clears the block', async () => {
+        catalogState.catalog = parityCatalog([wide(), narrow()]);
+        memory.set(ordinaryKey, savedDrafts({ image: { model: 'narrow-image', catalogRevision: 'parity-rev', prompt: 'A bottle on linen', references: fourReferences().slice(0, 3) } }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        expect(generateButton(tree).props.disabled).toBe(true);
+
+        renderer.act(() => { labelled(tree.root, 'Remove Charlie').props.onPress(); });
+        await settle();
+        expect(tree.root.findAllByProps({ testID: 'standby-references' })).toHaveLength(0);
+        expect(text(tree)).toContain('Charlie was removed from this draft.');
+        expect(generateButton(tree).props.disabled).toBe(false);
+      });
+
+      it('shows a prompt-only model’s note where the rail was, with the references it keeps waiting beside it', async () => {
+        catalogState.catalog = parityCatalog([wide(), parityImageModel('text-image', 'Text Image', 0)]);
+        memory.set(ordinaryKey, savedDrafts({ image: { model: 'wide-image', catalogRevision: 'parity-rev', prompt: 'A bottle on linen', references: fourReferences().slice(0, 2) } }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        await pickModel(tree, 'Text Image');
+        await settle();
+        expect(text(tree)).toContain('Prompt-only model');
+        expect(text(tree)).toContain('Text Image does not accept reference images. Switch models whenever you need identity, product, or style anchors.');
+        expect(text(tree)).not.toContain('0 / 0');
+        expect(collectText(tree.root.findByProps({ testID: 'standby-references' }))).toContain('Text Image does not support image references.');
+        expect(generateButton(tree).props.disabled).toBe(true);
+
+        renderer.act(() => { labelled(tree.root, 'Remove Alpha').props.onPress(); });
+        renderer.act(() => { labelled(tree.root, 'Remove Bravo').props.onPress(); });
+        await settle();
+        expect(tree.root.findAllByProps({ testID: 'standby-references' })).toHaveLength(0);
+        expect(text(tree)).toContain('Prompt-only model');
+        expect(generateButton(tree).props.disabled).toBe(false);
+      });
+
+      it('draws no reference as left out while its model’s details are still loading', async () => {
+        catalogState.catalog = parityCatalog([wide()]);
+        memory.set(ordinaryKey, savedDrafts({ image: { model: 'narrow-image', catalogRevision: 'parity-rev', prompt: 'A bottle on linen', references: fourReferences() } }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        expect(modelChip(tree)).toContain('Loading model settings…');
+        expect(tree.root.findAllByProps({ testID: 'standby-references' })).toHaveLength(0);
+        expect(pressables(tree.root).filter((node) => String(node.props.accessibilityLabel).startsWith('Open details for'))).toHaveLength(4);
+      });
+
+      it('keeps the draft on its model when the picked model’s details cannot be loaded', async () => {
+        catalogState.catalog = parityCatalog([wide()]);
+        catalogState.summaries = parityCatalog([wide(), narrow()]).models;
+        catalogState.loadDetails = async () => { throw new Error('Could not load model settings.'); };
+        memory.set(ordinaryKey, savedDrafts({ image: { model: 'wide-image', catalogRevision: 'parity-rev', prompt: 'A bottle on linen', references: fourReferences() } }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        await pickModel(tree, 'Narrow Image');
+        expect(text(tree)).toContain('Could not load model settings. Tap to retry.');
+        expect(modelChip(tree)).toContain('Wide Image');
+        renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Close model picker' }).props.onPress(); });
+        await settle();
+        expect(text(tree)).toContain('4 / 5');
+        expect(storedDrafts().image.model).toBe('wide-image');
+      });
+    });
+
+    describe('Kling 3.0, the default video model', () => {
+      it('adds named video elements, sends them beside its start frame, and offers them to mention', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'kling-3.0-video',
+          catalogRevision: 'parity-rev',
+          prompt: 'The dancer spins',
+          startFrame: stagedMedia('door', 'image', { displayName: 'Start Frame' }),
+        } }));
+        vi.mocked(pickMedia).mockResolvedValue({ uri: 'file:///move.mp4', fileName: 'move.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 4000 } as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue({
+          signedUrl: 'https://cdn.example.com/move.mp4', storagePath: 'uploads/user-123/move.mp4', mimeType: 'video/mp4', fileName: 'move.mp4', kind: 'video', durationSeconds: 4, sizeBytes: 4096,
+        });
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+        expect(text(tree)).toContain('Frames and references');
+
+        await renderer.act(async () => { await labelled(tree.root, 'Add Video 0/3').props.onPress(); });
+        await settle();
+        expect(text(tree)).not.toContain('This model does not support reference videos.');
+        expect(labelled(tree.root, 'Open details for Reference Video')).toBeTruthy();
+
+        let prompt = tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+        renderer.act(() => prompt.props.onFocus());
+        renderer.act(() => prompt.props.onChangeText('The dancer from @ref spins'));
+        prompt = tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+        renderer.act(() => prompt.props.onSelectionChange({ nativeEvent: { selection: { start: 20, end: 20 } } }));
+        renderer.act(() => labelled(tree.root, 'Insert @reference_video, Reference Video').props.onPress());
+        await settle();
+
+        await pressGenerate(tree);
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
+        const request = authState.api.startGeneration.mock.calls[0][0] as { prompt: string; inputs: Array<Record<string, unknown>> };
+        expect(request.prompt).toBe('The dancer from @reference_video spins');
+        expect(request.inputs).toEqual(expect.arrayContaining([
+          expect.objectContaining({ slot: 'startFrame', url: 'https://cdn.example.com/door.png' }),
+          expect.objectContaining({ slot: 'videoElements', handle: '@reference_video', url: 'https://cdn.example.com/move.mp4', durationSeconds: 4 }),
+        ]));
+      });
+
+      it('keeps clips from Seedance 2 waiting on Seedance 1.5 Pro, without locking its frames or offering them to mention', async () => {
+        const seedanceOneFive: GenerationModelDescriptor = {
+          ...paritySeedanceVideo(),
+          id: 'seedance-1.5-pro',
+          displayName: 'Seedance 1.5 Pro',
+          inputs: { imageReferences: { max: 2, supportsNaming: true }, videoReferences: null, audioReferences: null, startFrame: true, endFrame: true, combineFramesWithReferences: false },
+          inputModes: [
+            { key: 'frames', label: 'Frames', default: true, conditions: referenceModeIs('frames'), slots: frameSlots },
+            {
+              key: 'references',
+              label: 'Reusable references',
+              default: false,
+              conditions: referenceModeIs('elements'),
+              slots: [{ key: 'imageReferences', kind: 'image', role: 'reference', label: 'Reference images', min: 0, max: 2, supportsNaming: true }],
+            },
+          ],
+        };
+        catalogState.catalog = parityCatalog([paritySeedanceVideo(), seedanceOneFive]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'seedance-2',
+          catalogRevision: 'parity-rev',
+          prompt: 'A walk at dusk',
+          referenceVideos: [stagedMedia('stroll', 'video'), stagedMedia('turn', 'video')],
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+        // On Seedance 2 both go with the run.
+        expect(tree.root.findAllByProps({ testID: 'standby-references' })).toHaveLength(0);
+
+        await pickModel(tree, 'Seedance 1.5 Pro');
+        await settle();
+        const standby = tree.root.findByProps({ testID: 'standby-references' });
+        expect(pressables(standby).map((node) => node.props.accessibilityLabel)).toEqual(['Remove Stroll', 'Remove Turn']);
+        // Nothing the run sends is a reference, so the frames stay open to a start frame.
+        let framesGroup: renderer.ReactTestInstance | null = tree.root.findByProps({ testID: 'video-frame-slots' });
+        while (framesGroup && framesGroup.props.pointerEvents === undefined) framesGroup = framesGroup.parent;
+        expect(framesGroup?.props.pointerEvents).toBe('auto');
+        expect(text(tree)).not.toContain('unavailable with references attached');
+        expect(generateButton(tree).props.disabled).toBe(false);
+
+        let prompt = tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+        renderer.act(() => prompt.props.onFocus());
+        renderer.act(() => prompt.props.onChangeText('A walk with @st'));
+        prompt = tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+        renderer.act(() => prompt.props.onSelectionChange({ nativeEvent: { selection: { start: 15, end: 15 } } }));
+        expect(text(tree)).toContain('No named references match “@st”.');
+      });
+    });
+
+    describe('a multi-shot run', () => {
+      const shot = (id: string, prompt: string, duration: number) => ({ id, prompt, duration });
+
+      it('is quoted and sent at its shots’ total, which the shot editor shows against the cap', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'kling-3.0-video',
+          catalogRevision: 'parity-rev',
+          isMultiShot: true,
+          duration: 5,
+          multiPrompts: [shot('s1', 'A door opens', 5), shot('s2', 'She walks in', 6)],
+        } }));
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        expect(collectText(tree.root.findByProps({ testID: 'video-shot-totals' }))).toEqual(['2 of 5 shots · 11s of 15s']);
+        expect(authState.api.quoteGenerationModel.mock.lastCall?.[0]).toMatchObject({ settings: expect.objectContaining({ duration: 11 }) });
+
+        await pressGenerate(tree);
+        expect(authState.api.startGeneration.mock.calls[0][0]).toMatchObject({
+          settings: expect.objectContaining({ duration: 11 }),
+          shots: [{ prompt: 'A door opens', duration: 5 }, { prompt: 'She walks in', duration: 6 }],
+        });
+      });
+
+      it('stops adding shots at the cap, and says when the total runs over', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'kling-3.0-video',
+          catalogRevision: 'parity-rev',
+          isMultiShot: true,
+          multiPrompts: ['s1', 's2', 's3', 's4'].map((id) => shot(id, `Beat ${id}`, 3)),
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+        const addShot = () => labelled(tree.root, 'Add shot');
+        expect(collectText(tree.root.findByProps({ testID: 'video-shot-totals' }))).toEqual(['4 of 5 shots · 12s of 15s']);
+        expect(addShot().props.disabled).toBe(false);
+
+        renderer.act(() => { addShot().props.onPress(); });
+        renderer.act(() => { tree.root.findByProps({ testID: 'selected-shot-prompt' }).props.onChangeText('Beat s5'); });
+        await settle();
+        expect(collectText(tree.root.findByProps({ testID: 'video-shot-totals' }))).toEqual(['5 of 5 shots · 17s of 15s']);
+        expect(addShot().props.disabled).toBe(true);
+        expect(addShot().props.accessibilityState).toEqual({ disabled: true });
+        expect(blocker(tree)).toContain('Kling 3.0 Cinematic multi-shot runs can be at most 15 seconds in total.');
+        expect(generateButton(tree).props.disabled).toBe(true);
+      });
+    });
+
+    describe('a start the server refuses outright', () => {
+      const openTyped = async (options?: Parameters<typeof renderer.create>[1]) => {
+        const tree = await open(<MediaCreationScreen initialTool="image" />, options);
+        await typePrompt(tree, 'A bottle on linen');
+        return tree;
+      };
+      const workspaceButtons = (tree: renderer.ReactTestRenderer) => {
+        const workspace = tree.root.findByProps({ testID: 'generation-workspace' });
+        return {
+          primary: workspace.findAll((node) => node.type === PrimaryButton).map((node) => node.props.label as string),
+          secondary: workspace.findAll((node) => node.type === SecondaryButton).map((node) => node.props.label as string),
+        };
+      };
+
+      it.each([
+        ['prompt_blocked', 422, 'Edit prompt'],
+        ['insufficient_credits', 402, 'Get credits'],
+        ['invalid_input_media', 400, 'Replace reference'],
+        ['cost_changed', 409, 'Check the new price'],
+        ['CATALOG_CHANGED', 409, 'Review options'],
+      ] as const)('leads with what to change for %s, with Try again second', async (code, status, action) => {
+        authState.api.startGeneration.mockRejectedValue(refusal(status, code, 'Refused for a reason.'));
+        const tree = await openTyped();
+        await pressGenerate(tree);
+
+        expect(text(tree)).not.toContain('Generation not confirmed');
+        expect(memory.has('magicbooklet.generation.pendingAttempt.v1:user-123')).toBe(false);
+        expect(workspaceButtons(tree)).toEqual({ primary: [action], secondary: ['Try again · 8 credits', 'Back to creator'] });
+      });
+
+      it('keeps Try again first for a refusal with nothing else to change, and never calls it unconfirmed', async () => {
+        authState.api.startGeneration.mockRejectedValue(refusal(503, 'provider_unavailable', 'The video service is unavailable right now. No credits were used.'));
+        const tree = await openTyped();
+        await pressGenerate(tree);
+
+        expect(text(tree)).not.toContain('Generation not confirmed');
+        expect(text(tree)).toContain('The video service is unavailable right now. No credits were used.');
+        expect(workspaceButtons(tree)).toEqual({ primary: ['Try again · 8 credits'], secondary: ['Back to creator'] });
+      });
+
+      it('takes a blocked prompt back to the prompt, with the reason under it', async () => {
+        const focus = vi.fn();
+        authState.api.startGeneration.mockRejectedValue(refusal(422, 'prompt_blocked', 'This prompt was blocked by our safety checks.'));
+        const tree = await openTyped({
+          createNodeMock: (element) => (String(element.type) === 'textinput' ? { focus, setNativeProps: vi.fn() } : null),
+        });
+        await pressGenerate(tree);
+        focus.mockClear();
+
+        renderer.act(() => { labelled(tree.root.findByProps({ testID: 'generation-workspace' }), 'Edit prompt').props.onPress(); });
+        expect(tree.root.findAllByProps({ testID: 'generation-workspace' })).toHaveLength(0);
+        expect(text(tree)).toContain('This prompt was blocked by our safety checks.');
+        expect(focus).toHaveBeenCalled();
+      });
+
+      it('reads the balance again on a refusal for credits, and opens credits from the failure', async () => {
+        authState.api.startGeneration.mockRejectedValue(refusal(402, 'insufficient_credits', 'Insufficient credits.'));
+        const tree = await openTyped();
+        await pressGenerate(tree);
+        expect(authState.refreshProfile).toHaveBeenCalledTimes(1);
+
+        renderer.act(() => { labelled(tree.root.findByProps({ testID: 'generation-workspace' }), 'Get credits').props.onPress(); });
+        expect(routerState.push).toHaveBeenCalledWith('/(tabs)/pricing');
+        expect(tree.root.findAllByProps({ testID: 'generation-workspace' })).toHaveLength(0);
+      });
+
+      it('prices the run again when the price changed', async () => {
+        authState.api.startGeneration.mockRejectedValue(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'));
+        const tree = await openTyped();
+        const quotesBefore = authState.api.quoteGenerationModel.mock.calls.length;
+        await pressGenerate(tree);
+        expect(authState.api.quoteGenerationModel.mock.calls.length).toBeGreaterThan(quotesBefore);
+
+        renderer.act(() => { labelled(tree.root.findByProps({ testID: 'generation-workspace' }), 'Check the new price').props.onPress(); });
+        expect(blocker(tree)).toContain('The price of this run changed.');
+      });
+
+      it('asks storage which reference is gone when the server cannot use the run’s media, and marks it', async () => {
+        memory.set(ordinaryKey, savedDrafts({ image: { prompt: 'A bottle with @alpha', references: [stagedMedia('alpha')] } }));
+        authState.api.startGeneration.mockRejectedValue(refusal(400, 'invalid_input_media', 'This reference upload has expired. Add it again.'));
+        authState.api.createMediaReadUrl.mockRejectedValue(missingUpload());
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        // Its link cannot be dated, so opening the draft asked nothing.
+        expect(authState.api.createMediaReadUrl).not.toHaveBeenCalled();
+
+        await pressGenerate(tree);
+        expect(authState.api.createMediaReadUrl).toHaveBeenCalledWith({ storagePath: 'uploads/user-123/alpha.png' });
+        renderer.act(() => { labelled(tree.root.findByProps({ testID: 'generation-workspace' }), 'Replace reference').props.onPress(); });
+        expect(tree.root.findAllByProps({ testID: 'reference-unavailable-alpha' })).not.toHaveLength(0);
+        expect(blocker(tree)).toContain('This reference upload has expired. Add it again.');
+      });
+    });
+
+    describe('a run the creator closed on', () => {
+      const activeRun = (tool: 'image' | 'video', predictionId: string) => JSON.stringify({
+        version: 1, identityUserId: 'user-123', tool, predictionId, generationId: `gen-${predictionId}`, startedAt: Date.now() - 60_000, estimatedTotalMs: null,
+      });
+
+      it('is kept from the start’s answer until it ends', async () => {
+        authState.api.startGeneration.mockResolvedValue(started('pred-live'));
+        let finish: (status: unknown) => void = () => undefined;
+        authState.api.getImageGeneration.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+        await pressGenerate(tree);
+
+        expect(JSON.parse(memory.get(activeRunKey)!)).toMatchObject({
+          version: 1, identityUserId: 'user-123', tool: 'image', predictionId: 'pred-live', generationId: 'gen-pred-live',
+        });
+        await renderer.act(async () => { finish({ status: 'succeeded', output: 'https://cdn.example.com/out.png' }); });
+        await settle();
+        expect(text(tree)).toContain('Your image');
+        expect(memory.has(activeRunKey)).toBe(false);
+      });
+
+      it('is watched again when the creator opens on its tool, rather than offering Generate', async () => {
+        memory.set(activeRunKey, activeRun('image', 'pred-earlier'));
+        authState.api.getImageGeneration.mockResolvedValue({ status: 'succeeded', output: 'https://cdn.example.com/earlier.png' });
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        expect(authState.api.getImageGeneration).toHaveBeenCalledWith('pred-earlier');
+        expect(text(tree)).toContain('Your image');
+        renderer.act(() => { labelled(tree.root, 'Post to feed').props.onPress(); });
+        expect(routerState.push).toHaveBeenCalledWith({ pathname: '/post/new', params: { generationId: 'gen-pred-earlier' } });
+        expect(authState.api.startGeneration).not.toHaveBeenCalled();
+        expect(memory.has(activeRunKey)).toBe(false);
+      });
+
+      it('is offered from another tool, and opens with its progress', async () => {
+        memory.set(activeRunKey, activeRun('video', 'pred-video'));
+        authState.api.getVideoGeneration.mockReturnValue(new Promise(() => undefined));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        expect(text(tree)).toContain('A video run is in progress.');
+        expect(authState.api.getVideoGeneration).not.toHaveBeenCalled();
+        await renderer.act(async () => { labelled(tree.root, 'Open').props.onPress(); });
+        expect(authState.api.getVideoGeneration).toHaveBeenCalledWith('pred-video');
+        expect(text(tree)).toContain('Creating video');
+        expect(text(tree)).not.toContain('A video run is in progress.');
+      });
+    });
+
+    it('says a failed run’s credits came back, and reads the balance again', async () => {
+      authState.api.startGeneration.mockResolvedValue(started('pred-failed'));
+      authState.api.getImageGeneration.mockResolvedValue({ status: 'failed', error: 'The image provider timed out.' });
+      const tree = await open(<MediaCreationScreen initialTool="image" />);
+      await typePrompt(tree, 'A bottle on linen');
+      await pressGenerate(tree);
+
+      expect(text(tree)).toContain('The image provider timed out.');
+      expect(text(tree)).toContain('Your 8 credits were returned.');
+      expect(authState.refreshProfile).toHaveBeenCalledTimes(1);
+    });
+
+    describe('saved drafts', () => {
+      it('keeps every tool’s draft after a run succeeds, as saved', async () => {
+        memory.set(ordinaryKey, savedDrafts({ video: { prompt: 'My video idea' } }));
+        authState.api.startGeneration.mockResolvedValue(started('pred-done'));
+        authState.api.getImageGeneration.mockResolvedValue({ status: 'succeeded', output: 'https://cdn.example.com/done.png' });
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'An image prompt');
+        await pressGenerate(tree);
+
+        expect(text(tree)).toContain('Your image');
+        expect(draftStorage.removeItem).not.toHaveBeenCalledWith(ordinaryKey);
+        expect(storedDrafts()).toMatchObject({ image: { prompt: 'An image prompt' }, video: { prompt: 'My video idea' } });
+      });
+
+      it('ends a remix’s saved session when a run in it succeeds', async () => {
+        const source = { generationId: 'gen-1', postId: 'post-1' };
+        authState.api.getRemixSourceBundle.mockResolvedValue({
+          generation: { id: 'gen-1', title: 'Source', prompt: 'Restore this prompt.', category: 'image', model: 'nano-banana-2' },
+          result: null,
+          inputs: { image: { elements: [] } },
+          workflowSettings: { model: 'nano-banana-2', aspectRatio: '4:5', resolution: '1K' },
+          restoreIssues: [],
+        });
+        authState.api.startGeneration.mockResolvedValue(started('pred-remix'));
+        authState.api.getImageGeneration.mockResolvedValue({ status: 'succeeded', output: 'https://cdn.example.com/remix.png' });
+        const tree = await open(<MediaCreationScreen initialTool="image" remixSource={source} />);
+        await settle();
+        expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('Restore this prompt.');
+        await pressGenerate(tree);
+
+        expect(text(tree)).toContain('Your image');
+        expect(draftStorage.removeItem).toHaveBeenCalledWith(creationDraftStorageKey(remixDraftScope('user-123', source)!));
+      });
+
+      it('opens a prompt-only link on the saved drafts, replacing only its own tool’s prompt', async () => {
+        memory.set(ordinaryKey, savedDrafts({ image: { prompt: 'My old image prompt' }, video: { prompt: 'My video draft' } }));
+        const tree = await open(<MediaCreationScreen initialTool="image" initialPrompt="From a deep link" />);
+
+        expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('From a deep link');
+        expect(storedDrafts()).toMatchObject({ image: { prompt: 'From a deep link' }, video: { prompt: 'My video draft' } });
+        renderer.act(() => { labelled(tree.root, 'Video').props.onPress(); });
+        expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('My video draft');
+      });
+    });
+
+    describe('a staged upload the server has swept', () => {
+      it('is marked to add again when the resumed draft’s link renews to a 404, and holds Generate until it is removed', async () => {
+        memory.set(ordinaryKey, savedDrafts({ image: {
+          prompt: 'A bottle on linen',
+          references: [stagedMedia('alpha', 'image', { url: expiredLink('uploads/user-123/alpha.png') }), stagedMedia('bravo')],
+        } }));
+        authState.api.createMediaReadUrl.mockRejectedValue(missingUpload());
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        // Only the upload whose link had run out was asked about.
+        expect(authState.api.createMediaReadUrl).toHaveBeenCalledTimes(1);
+        expect(authState.api.createMediaReadUrl).toHaveBeenCalledWith({ storagePath: 'uploads/user-123/alpha.png' });
+        expect(collectText(tree.root.findByProps({ testID: 'reference-unavailable-alpha' }))).toEqual(['Add this reference again']);
+        expect(tree.root.findAllByProps({ testID: 'reference-unavailable-bravo' })).toHaveLength(0);
+        expect(blocker(tree)).toContain('Alpha is no longer available. Add this reference again.');
+        expect(generateButton(tree).props.disabled).toBe(true);
+
+        renderer.act(() => { labelled(tree.root, 'Open details for Alpha').props.onPress(); });
+        renderer.act(() => { labelled(tree.root, 'Remove Alpha').props.onPress(); });
+        const buttons = nativeAlertState.alert.mock.calls[0][2] as Array<{ text: string; onPress?: () => void }>;
+        await renderer.act(async () => {
+          buttons.find((button) => button.text === 'Remove')?.onPress?.();
+          await Promise.resolve();
+        });
+        await settle();
+        expect(generateButton(tree).props.disabled).toBe(false);
+      });
+
+      it('is marked when a tile’s retry renews its link to a 404', async () => {
+        memory.set(ordinaryKey, savedDrafts({ image: { prompt: 'A bottle on linen', references: [stagedMedia('alpha')] } }));
+        authState.api.createMediaReadUrl.mockRejectedValue(missingUpload());
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        const thumbnail = labelled(tree.root, 'Open details for Alpha').find((node) => String(node.type) === 'stable-media-image');
+
+        await renderer.act(async () => { await expect(thumbnail.props.resolveRetryUrl()).rejects.toThrow('That upload is no longer available.'); });
+        expect(tree.root.findAllByProps({ testID: 'reference-unavailable-alpha' })).not.toHaveLength(0);
+        expect(generateButton(tree).props.disabled).toBe(true);
+      });
+    });
+
+    it('asks for no motion quote until both inputs are attached, and says what to add', async () => {
+      vi.mocked(pickMedia)
+        .mockResolvedValueOnce({ uri: 'file:///dancer.png', fileName: 'dancer.png', mimeType: 'image/png', fileSize: 2048 } as never)
+        .mockResolvedValueOnce({ uri: 'file:///moves.mp4', fileName: 'moves.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 6000 } as never);
+      vi.mocked(uploadPickedMedia)
+        .mockResolvedValueOnce({ signedUrl: 'https://cdn.example.com/dancer.png', storagePath: 'uploads/user-123/dancer.png', mimeType: 'image/png', fileName: 'dancer.png', kind: 'image', durationSeconds: null, sizeBytes: 2048 })
+        .mockResolvedValueOnce({ signedUrl: 'https://cdn.example.com/moves.mp4', storagePath: 'uploads/user-123/moves.mp4', mimeType: 'video/mp4', fileName: 'moves.mp4', kind: 'video', durationSeconds: 6, sizeBytes: 4096 });
+      const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+      expect(authState.api.quoteGenerationModel).not.toHaveBeenCalled();
+      expect(blocker(tree)).toBe('Add a character image and a motion clip.');
+      expect(generateButton(tree).props.accessibilityLabel).toBe('Generate');
+      expect(generateButton(tree).props.disabled).toBe(true);
+
+      await renderer.act(async () => { await labelled(tree.root, 'Add character image').props.onPress(); });
+      await settle();
+      expect(authState.api.quoteGenerationModel).not.toHaveBeenCalled();
+
+      await renderer.act(async () => { await labelled(tree.root, 'Add motion video').props.onPress(); });
+      await settle();
+      expect(authState.api.quoteGenerationModel).toHaveBeenCalledTimes(1);
+      expect(authState.api.quoteGenerationModel.mock.calls[0][0]).toMatchObject({ kind: 'motion', inputCounts: { images: 1, videos: 1 } });
+      expect(generateButton(tree).props.accessibilityLabel).toBe('Generate · 8 credits');
+    });
+  });
+
+  describe('uploads, the result, the enhancer and the way back from sign-in', () => {
+    const memory = new Map<string, string>();
+    const ordinaryKey = creationDraftStorageKey(ordinaryDraftScope('user-123'));
+    // Past the quote's delay and the autosave's, and past every storage read a load makes.
+    const settle = () => renderer.act(async () => { await vi.advanceTimersByTimeAsync(450); });
+    const savedDrafts = (overrides: { image?: Record<string, unknown>; video?: Record<string, unknown>; motion?: Record<string, unknown> }) => JSON.stringify({
+      image: { ...createDefaultCreationDraft('image'), ...overrides.image },
+      video: { ...createDefaultCreationDraft('video'), ...overrides.video },
+      motion: { ...createDefaultCreationDraft('motion'), ...overrides.motion },
+      updatedAt: new Date().toISOString(),
+    });
+    const storedDrafts = () => JSON.parse(memory.get(ordinaryKey) ?? 'null');
+    const text = (tree: renderer.ReactTestRenderer) => collectText(tree.root).join('\n');
+    const labelled = (root: renderer.ReactTestInstance, label: string) => root.find((node) => (
+      String(node.type) === 'pressable' && node.props.accessibilityLabel === label
+    ));
+    const hasLabel = (root: renderer.ReactTestInstance, label: string) => root.findAll((node) => (
+      String(node.type) === 'pressable' && node.props.accessibilityLabel === label
+    )).length > 0;
+    const blocker = (tree: renderer.ReactTestRenderer) => collectText(tree.root.findByProps({ testID: 'creator-contextual-blocker' })).join(' ');
+    const open = async (element: React.ReactElement) => {
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(element); });
+      await settle();
+      return tree;
+    };
+    const typePrompt = async (tree: renderer.ReactTestRenderer, prompt: string, label = 'Generation prompt') => {
+      renderer.act(() => { tree.root.findByProps({ accessibilityLabel: label }).props.onChangeText(prompt); });
+      await settle();
+    };
+    // A press whose work is still running when the case looks: its first steps land, and nothing waits on the rest.
+    const pressAndLook = (pressable: renderer.ReactTestInstance) => renderer.act(async () => {
+      void pressable.props.onPress();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const pressGenerate = async (tree: renderer.ReactTestRenderer) => {
+      await renderer.act(async () => { void findPressableByLabelPrefix(tree.root, 'Generate ·').props.onPress(); });
+      await settle();
+    };
+    const started = (predictionId: string) => ({
+      success: true, predictionId, generationId: `gen-${predictionId}`, status: 'processing', remainingCredits: 990, cost: 8,
+    });
+    const pickedImage = (fileName: string, fileSize = 2048) => ({ uri: `file:///${fileName}`, fileName, mimeType: 'image/png', fileSize });
+    const uploaded = (fileName: string, extra: Partial<UploadedMedia> = {}): UploadedMedia => ({
+      signedUrl: `https://cdn.example.com/${fileName}`,
+      storagePath: `uploads/user-123/${fileName}`,
+      mimeType: 'image/png',
+      fileName,
+      kind: 'image',
+      durationSeconds: null,
+      sizeBytes: 2048,
+      ...extra,
+    });
+    const thumbnailUrl = (tree: renderer.ReactTestRenderer, name: string) => labelled(tree.root, `Open details for ${name}`)
+      .find((node) => String(node.type) === 'stable-media-image').props.url as string;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      memory.clear();
+      draftStorage.getItem.mockImplementation(async (key: string) => memory.get(key) ?? null);
+      draftStorage.setItem.mockImplementation(async (key: string, value: string) => { memory.set(key, value); });
+      draftStorage.removeItem.mockImplementation(async (key: string) => { memory.delete(key); });
+      quoteEchoingSettings();
+      authState.api.enhancePrompt.mockReset();
+    });
+
+    describe('picked references', () => {
+      it('upload two at a time, keep every one that arrives, and name the one that did not', async () => {
+        vi.mocked(pickMediaList).mockResolvedValue([pickedImage('alpha.png'), pickedImage('bravo.png'), pickedImage('charlie.png')] as never);
+        const finishes: Array<() => void> = [];
+        vi.mocked(uploadPickedMedia).mockImplementation((uri) => new Promise<UploadedMedia>((resolve, reject) => {
+          finishes.push(() => (uri === 'file:///bravo.png'
+            ? reject(new Error('Upload failed with status 500.'))
+            : resolve(uploaded(uri.replace('file:///', '')))));
+        }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        await pressAndLook(labelled(tree.root, 'Add reference images'));
+        // Two at once, each able to report its bytes and to be stopped, where the loop sent one at a time.
+        expect(uploadPickedMedia).toHaveBeenCalledTimes(2);
+        expect(vi.mocked(uploadPickedMedia).mock.calls[0][1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal), onProgress: expect.any(Function) }));
+        await renderer.act(async () => { finishes[0](); finishes[1](); });
+        expect(uploadPickedMedia).toHaveBeenCalledTimes(3);
+        await renderer.act(async () => { finishes[2](); });
+        await settle();
+
+        expect(labelled(tree.root, 'Open details for alpha')).toBeTruthy();
+        expect(labelled(tree.root, 'Open details for charlie')).toBeTruthy();
+        expect(hasLabel(tree.root, 'Open details for bravo')).toBe(false);
+        expect(blocker(tree)).toBe('Added 2 of 3. Could not add bravo.png. Upload failed with status 500.');
+        expect(storedDrafts().image.references.map((media: { fileName: string }) => media.fileName)).toEqual(['alpha.png', 'charlie.png']);
+      });
+
+      it('show on the add tile how far their bytes have got', async () => {
+        vi.mocked(pickMediaList).mockResolvedValue([pickedImage('alpha.png', 4096)] as never);
+        let finish: () => void = () => undefined;
+        vi.mocked(uploadPickedMedia).mockImplementation((_uri, options) => new Promise<UploadedMedia>((resolve) => {
+          options?.onProgress?.({ bytesSent: 1024, totalBytes: 4096, fraction: 0.25 });
+          finish = () => resolve(uploaded('alpha.png', { sizeBytes: 4096 }));
+        }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        await pressAndLook(labelled(tree.root, 'Add reference images'));
+        expect(collectText(tree.root.findByProps({ testID: 'reference-upload-progress' }))).toEqual(['25%']);
+        expect(labelled(tree.root, 'Uploading reference images, 25%').props.disabled).toBe(true);
+
+        await renderer.act(async () => { finish(); });
+        await settle();
+        expect(tree.root.findAllByProps({ testID: 'reference-upload-progress' })).toHaveLength(0);
+        expect(labelled(tree.root, 'Open details for alpha')).toBeTruthy();
+      });
+
+      it('get handles of their own when the same photo is picked again or two are named alike', async () => {
+        memory.set(ordinaryKey, savedDrafts({ image: { prompt: 'Put @bravo on the table', references: [stagedMedia('alpha'), stagedMedia('bravo')] } }));
+        vi.mocked(pickMediaList).mockResolvedValue([pickedImage('alpha.png')] as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('alpha.png'));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Add reference images').props.onPress(); });
+        await settle();
+        expect(storedDrafts().image.references.map((media: { handle: string }) => media.handle)).toEqual(['@alpha', '@bravo', '@alpha_2']);
+
+        renderer.act(() => { labelled(tree.root, 'Open details for Bravo').props.onPress(); });
+        renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Reference name for Bravo' }).props.onChangeText('Alpha'); });
+        await settle();
+        expect(storedDrafts().image.references.map((media: { handle: string }) => media.handle)).toEqual(['@alpha', '@alpha_3', '@alpha_2']);
+        expect(storedDrafts().image.prompt).toBe('Put @alpha_3 on the table');
+      });
+
+      it('are drawn from the picker’s copy this session, saved and sent as their link, and drawn from the link after a restart', async () => {
+        // A descriptor with input modes, as production publishes, so the run carries its references.
+        catalogState.catalog = parityCatalog([parityImageModel('wide-image', 'Wide Image', 5)]);
+        memory.set(ordinaryKey, savedDrafts({ image: { model: 'wide-image', catalogRevision: 'parity-rev' } }));
+        vi.mocked(pickMediaList).mockResolvedValue([pickedImage('hero.png')] as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('hero.png'));
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        const first = await open(<MediaCreationScreen initialTool="image" />);
+        await renderer.act(async () => { await labelled(first.root, 'Add reference images').props.onPress(); });
+        await typePrompt(first, 'A bottle beside @hero');
+
+        expect(thumbnailUrl(first, 'hero')).toBe('file:///hero.png');
+        expect(memory.get(ordinaryKey)).toContain('https://cdn.example.com/hero.png');
+        expect(memory.get(ordinaryKey)).not.toContain('file://');
+        await pressGenerate(first);
+        const request = JSON.stringify(authState.api.startGeneration.mock.calls[0][0]);
+        expect(request).toContain('https://cdn.example.com/hero.png');
+        expect(request).not.toContain('file://');
+        renderer.act(() => { first.unmount(); });
+
+        const second = await open(<MediaCreationScreen initialTool="image" />);
+        expect(thumbnailUrl(second, 'hero')).toBe('https://cdn.example.com/hero.png');
+      });
+    });
+
+    describe('clips', () => {
+      /** An upload that runs until it is cancelled, as a large clip on mobile data does. */
+      const uploadUntilCancelled = () => {
+        const seen: { signal?: AbortSignal } = {};
+        vi.mocked(uploadPickedMedia).mockImplementation((_uri, options) => new Promise<UploadedMedia>((_resolve, reject) => {
+          seen.signal = options?.signal;
+          options?.signal?.addEventListener('abort', () => reject(new UploadCancelledError()));
+        }));
+        return seen;
+      };
+
+      it('can be cancelled from the video rail, which adds nothing', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        vi.mocked(pickMedia).mockResolvedValue({ uri: 'file:///move.mp4', fileName: 'move.mp4', mimeType: 'video/mp4', fileSize: 80 * 1024 * 1024, duration: 4000 } as never);
+        const upload = uploadUntilCancelled();
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        await pressAndLook(labelled(tree.root, 'Add Video 0/3'));
+        expect(labelled(tree.root, 'Uploading Video 0/3, 0%')).toBeTruthy();
+        await pressAndLook(labelled(tree.root, 'Cancel upload'));
+        await settle();
+
+        expect(upload.signal?.aborted).toBe(true);
+        expect(blocker(tree)).toBe('Upload cancelled.');
+        expect(hasLabel(tree.root, 'Cancel upload')).toBe(false);
+        expect(hasLabel(tree.root, 'Open details for Reference Video')).toBe(false);
+        expect(labelled(tree.root, 'Add Video 0/3').props.disabled).toBe(false);
+      });
+
+      it('can be cancelled from the motion slot', async () => {
+        vi.mocked(pickMedia).mockResolvedValue({ uri: 'file:///dance.mp4', fileName: 'dance.mp4', mimeType: 'video/mp4', fileSize: 90 * 1024 * 1024, duration: 12_000 } as never);
+        const upload = uploadUntilCancelled();
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        await pressAndLook(labelled(tree.root, 'Add motion video'));
+        expect(labelled(tree.root, 'Uploading motion video, 0%')).toBeTruthy();
+        await pressAndLook(labelled(tree.root, 'Cancel upload'));
+        await settle();
+
+        expect(upload.signal?.aborted).toBe(true);
+        expect(blocker(tree)).toBe('Upload cancelled.');
+        expect(labelled(tree.root, 'Add motion video')).toBeTruthy();
+      });
+
+      it.each([
+        ['longer than its slot takes', { duration: 31_000, fileSize: 20 * 1024 * 1024 }, 'Reference video exceeds 30s. Please choose a shorter clip.'],
+        ['over 100 MB', { duration: 12_000, fileSize: 101 * 1024 * 1024 }, '"dance.mp4" is over 100 MB. Please upload a smaller video.'],
+      ])('for motion are refused at the pick when %s, before a byte is sent, in the web creator’s words', async (_case, asset, refusal) => {
+        vi.mocked(pickMedia).mockResolvedValue({ uri: 'file:///dance.mp4', fileName: 'dance.mp4', mimeType: 'video/mp4', ...asset } as never);
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Add motion video').props.onPress(); });
+        await settle();
+        expect(uploadPickedMedia).not.toHaveBeenCalled();
+        expect(blocker(tree)).toBe(refusal);
+      });
+
+      it('for motion are held to the length the model’s slot publishes', async () => {
+        const model = parityMotionModel();
+        model.inputModes![0].slots[1] = { ...model.inputModes![0].slots[1], maxDurationSeconds: 20 };
+        catalogState.catalog = parityCatalog([model]);
+        vi.mocked(pickMedia).mockResolvedValue({ uri: 'file:///dance.mp4', fileName: 'dance.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 25_000 } as never);
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        // The slot is named by the descriptor.
+        await renderer.act(async () => { await labelled(tree.root, 'Add reference video').props.onPress(); });
+        await settle();
+        expect(uploadPickedMedia).not.toHaveBeenCalled();
+        expect(blocker(tree)).toBe('Reference video exceeds 20s. Please choose a shorter clip.');
+      });
+
+      it('for motion are replaced in place from the details sheet, and from Inputs, keeping the clip’s name', async () => {
+        memory.set(ordinaryKey, savedDrafts({ motion: {
+          characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }),
+          referenceVideo: stagedMedia('moves', 'video', { displayName: 'Moves', durationSeconds: 6 }),
+          duration: 6,
+        } }));
+        vi.mocked(pickMedia)
+          .mockResolvedValueOnce({ uri: 'file:///twirl.mp4', fileName: 'twirl.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 9000 } as never)
+          .mockResolvedValueOnce({ uri: 'file:///spin.mp4', fileName: 'spin.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 7000 } as never);
+        vi.mocked(uploadPickedMedia)
+          .mockResolvedValueOnce(uploaded('twirl.mp4', { mimeType: 'video/mp4', kind: 'video', durationSeconds: 9 }))
+          .mockResolvedValueOnce(uploaded('spin.mp4', { mimeType: 'video/mp4', kind: 'video', durationSeconds: 7 }));
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        renderer.act(() => { labelled(tree.root, 'Open details for Moves').props.onPress(); });
+        await renderer.act(async () => { await labelled(tree.root, 'Replace Moves').props.onPress(); });
+        await settle();
+        expect(storedDrafts().motion.referenceVideo).toMatchObject({ displayName: 'Moves', url: 'https://cdn.example.com/twirl.mp4', storagePath: 'uploads/user-123/twirl.mp4', durationSeconds: 9 });
+        expect(storedDrafts().motion.duration).toBe(9);
+
+        renderer.act(() => { labelled(tree.root, 'Close reference details').props.onPress(); });
+        await renderer.act(async () => { await labelled(tree.root, 'Inputs').props.onPress(); });
+        await settle();
+        expect(text(tree)).not.toContain('This model supports up to 1 reference video.');
+        expect(storedDrafts().motion.referenceVideo).toMatchObject({ displayName: 'Moves', url: 'https://cdn.example.com/spin.mp4', durationSeconds: 7 });
+      });
+    });
+
+    describe('the result', () => {
+      it('pages through every output of a run, and Post to feed posts the run, whose first output is its primary', async () => {
+        authState.api.startGeneration.mockResolvedValue(started('pred-many'));
+        authState.api.getImageGeneration.mockResolvedValue({
+          status: 'succeeded',
+          output: 'https://cdn.example.com/one.png',
+          outputs: ['https://cdn.example.com/one.png', 'https://cdn.example.com/two.png', 'https://cdn.example.com/three.png'],
+        });
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'Three takes on a bottle');
+        await pressGenerate(tree);
+
+        const workspace = () => tree.root.findByProps({ testID: 'generation-workspace' });
+        const shown = () => workspace().find((node) => String(node.type) === 'media-preview').props.url;
+        expect(shown()).toBe('https://cdn.example.com/one.png');
+        expect(collectText(workspace())).toContain('1 of 3');
+        expect(labelled(workspace(), 'Previous output').props.disabled).toBe(true);
+
+        renderer.act(() => { labelled(workspace(), 'Next output').props.onPress(); });
+        expect(shown()).toBe('https://cdn.example.com/two.png');
+        renderer.act(() => { labelled(workspace(), 'Next output').props.onPress(); });
+        expect(shown()).toBe('https://cdn.example.com/three.png');
+        expect(collectText(workspace())).toContain('3 of 3');
+        expect(labelled(workspace(), 'Next output').props.disabled).toBe(true);
+
+        renderer.act(() => { labelled(workspace(), 'Post to feed').props.onPress(); });
+        expect(routerState.push).toHaveBeenCalledWith({ pathname: '/post/new', params: { generationId: 'gen-pred-many' } });
+      });
+
+      it('shares through the composer, which posts it and then opens the share sheet, and marks Profile’s creations stale at the start and the end', async () => {
+        const invalidate = vi.spyOn(testQueryClient, 'invalidateQueries');
+        const creationsMarked = () => invalidate.mock.calls.filter(([filters]) => (filters as { queryKey?: unknown[] } | undefined)?.queryKey?.[0] === 'profile-generations');
+        authState.api.startGeneration.mockResolvedValue(started('pred-share'));
+        let finish: (status: unknown) => void = () => undefined;
+        authState.api.getImageGeneration.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+        await pressGenerate(tree);
+
+        // The Rendering strip shows the run from its start.
+        expect(creationsMarked()).toEqual([[{ queryKey: ['profile-generations', 'user-123'], refetchType: 'none' }]]);
+        await renderer.act(async () => { finish({ status: 'succeeded', output: 'https://cdn.example.com/out.png' }); });
+        await settle();
+        expect(creationsMarked()).toHaveLength(2);
+        expect(tree.root.findAllByProps({ testID: 'result-output-pager' })).toHaveLength(0);
+
+        renderer.act(() => { labelled(tree.root, 'Share').props.onPress(); });
+        expect(routerState.push).toHaveBeenCalledWith({ pathname: '/post/new', params: { generationId: 'gen-pred-share', shareAfterPublish: '1' } });
+        expect(tree.root.findAllByProps({ testID: 'generation-workspace' })).toHaveLength(0);
+        invalidate.mockRestore();
+      });
+    });
+
+    describe('Enhance', () => {
+      it.each([
+        ['image', 'Generation prompt'],
+        ['video', 'Generation prompt'],
+        ['motion', 'Optional motion prompt'],
+      ] as const)('states its price on the %s creator, and keeps it in what is announced while it runs', async (tool, promptLabel) => {
+        authState.api.enhancePrompt.mockReturnValue(new Promise(() => undefined));
+        const tree = await open(<MediaCreationScreen initialTool={tool} />);
+        expect(collectText(labelled(tree.root, 'Enhance · 2 credits'))).toContain('Enhance · 2 credits');
+
+        await typePrompt(tree, 'A dancer turns', promptLabel);
+        await pressAndLook(labelled(tree.root, 'Enhance · 2 credits'));
+        const running = labelled(tree.root, 'Enhancing · 2 credits');
+        expect(collectText(running)).toContain('Enhancing');
+        expect(running.props.disabled).toBe(true);
+      });
+
+      it('polishes a prompt that names a reference, with the run’s settings and only what the run sends, and shows up to three notes', async () => {
+        memory.set(ordinaryKey, savedDrafts({ image: { prompt: 'A bottle beside @hero', references: [stagedMedia('hero')] } }));
+        authState.api.enhancePrompt.mockResolvedValue({
+          enhancedPrompt: 'A bottle beside @hero, soft window light.',
+          remainingCredits: 900,
+          warnings: [
+            { code: 'length', severity: 'warning', message: 'The prompt exceeds the 990-character limit.' },
+            { code: 'refused', severity: 'blocking', message: 'Not a note.' },
+            { code: 'subject', severity: 'info', message: 'Name the subject first.' },
+            { code: 'light', severity: 'info', message: 'Say where the light comes from.' },
+            { code: 'fourth', severity: 'info', message: 'A fourth note.' },
+          ],
+        });
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        // Polish has no level, as on the web: the named sentence is kept as written.
+        expect(tree.root.findAllByProps({ accessibilityLabel: 'Full enhancement' })).toHaveLength(0);
+        expect(text(tree)).toContain('Your @references stay as written. Polish only adds light visual detail around them.');
+        await renderer.act(async () => { await labelled(tree.root, 'Polish · 2 credits').props.onPress(); });
+
+        expect(authState.api.enhancePrompt).toHaveBeenCalledWith({
+          medium: 'image',
+          selectedModel: 'nano-banana-2',
+          prompt: 'A bottle beside @hero',
+          context: {
+            referenceImageCount: 1,
+            elementReferences: [{ handle: '@hero', displayName: 'Hero' }],
+            modelId: 'nano-banana-2',
+            aspectRatio: '4:5',
+            resolution: '1K',
+            googleSearch: false,
+            elementEnhancementMode: 'append-only',
+          },
+        });
+        expect(collectText(tree.root.findByProps({ testID: 'prompt-quality-notes' }))).toEqual([
+          'Prompt quality notes',
+          'The prompt exceeds the 990-character limit.',
+          'Name the subject first.',
+          'Say where the light comes from.',
+        ]);
+        expect(authState.updateCredits).toHaveBeenCalledWith(900);
+
+        // The notes speak of the prompt the enhancer wrote, so an edit takes them away.
+        await typePrompt(tree, 'A bottle on linen');
+        expect(tree.root.findAllByProps({ testID: 'prompt-quality-notes' })).toHaveLength(0);
+        expect(labelled(tree.root, 'Enhance · 2 credits')).toBeTruthy();
+        expect(tree.root.findAllByProps({ accessibilityLabel: 'Full enhancement' })).not.toHaveLength(0);
+      });
+
+      it('sends only the references a run would send', async () => {
+        catalogState.catalog = parityCatalog([parityImageModel('narrow-image', 'Narrow Image', 1)]);
+        memory.set(ordinaryKey, savedDrafts({ image: {
+          model: 'narrow-image', catalogRevision: 'parity-rev', prompt: 'A bottle on linen', references: [stagedMedia('alpha'), stagedMedia('bravo')],
+        } }));
+        authState.api.enhancePrompt.mockResolvedValue({ enhancedPrompt: 'A bottle on linen, morning light.' });
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Enhance · 2 credits').props.onPress(); });
+        const context = authState.api.enhancePrompt.mock.calls[0][0].context;
+        expect(context).toMatchObject({ referenceImageCount: 1, elementReferences: [{ handle: '@alpha', displayName: 'Alpha' }] });
+        expect(context).not.toHaveProperty('elementEnhancementMode');
+      });
+
+      it('applies the balance a failed enhancement returns with its refund', async () => {
+        authState.api.enhancePrompt.mockRejectedValue(Object.assign(new Error('Prompt enhancement failed. Your credits have been refunded.'), {
+          status: 502,
+          details: { error: 'Prompt enhancement failed. Your credits have been refunded.', remainingCredits: 950 },
+        }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+        await renderer.act(async () => { await labelled(tree.root, 'Enhance · 2 credits').props.onPress(); });
+
+        expect(authState.updateCredits).toHaveBeenCalledWith(950);
+        expect(text(tree)).toContain('Prompt enhancement failed. Your credits have been refunded.');
+      });
+    });
+
+    describe('the prompt and the parameter sheet', () => {
+      it.each([
+        ['image', 'Generation prompt'],
+        ['video', 'Generation prompt'],
+        ['motion', 'Optional motion prompt'],
+      ] as const)('count the %s prompt against its limit', async (tool, promptLabel) => {
+        const tree = await open(<MediaCreationScreen initialTool={tool} />);
+        expect(collectText(tree.root.findByProps({ testID: 'prompt-length' }))).toEqual(['0/10,000']);
+
+        await typePrompt(tree, 'x'.repeat(1234), promptLabel);
+        const counter = tree.root.findByProps({ testID: 'prompt-length' });
+        expect(collectText(counter)).toEqual(['1,234/10,000']);
+        expect(counter.props.accessibilityLabel).toBe('1,234 of 10,000 characters');
+      });
+
+      it('offers Get credits in the sheet when the balance is short, closing the sheet on the way', async () => {
+        authState.credits = 0;
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+        renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Generation parameters.').props.onPress(); });
+
+        const sheetBlocker = tree.root.findByProps({ testID: 'parameter-sheet-blocker' });
+        expect(collectText(sheetBlocker)).toEqual(['Insufficient credits. This generation costs 8 credits.', 'Get credits']);
+        renderer.act(() => { labelled(sheetBlocker, 'Get credits').props.onPress(); });
+        expect(tree.root.findAllByProps({ testID: 'creator-parameter-sheet' })).toHaveLength(0);
+        expect(routerState.push).toHaveBeenCalledWith('/(tabs)/pricing');
+      });
+
+      it.each([[1, '1 credit'], [26863, '26,863 credits']])('says a balance of %i as “%s”', async (credits, label) => {
+        authState.credits = credits;
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Generation parameters.').props.onPress(); });
+        expect(tree.root.findByProps({ accessibilityLabel: `Available balance, ${label}` })).toBeTruthy();
+      });
+    });
+
+    describe('sign-in from the creator', () => {
+      beforeEach(() => {
+        authState.user = null;
+        authState.identityUserId = null;
+      });
+
+      it('returns to this creator with its remix and its prompt', async () => {
+        const tree = await open(
+          <MediaCreationScreen
+            initialTool="video"
+            initialPrompt="A dancer & a drum"
+            guided
+            remixSource={{ generationId: 'gen-9', postId: 'post-9', title: 'Night run', creatorLabel: 'Ana', thumbnailUrl: 'https://cdn.example.com/t.jpg?x=1' }}
+          />,
+        );
+        await renderer.act(async () => { await labelled(tree.root, 'Enhance · 2 credits').props.onPress(); });
+
+        expect(routerState.push).toHaveBeenCalledWith({
+          pathname: '/auth',
+          params: {
+            returnTo: '/create/video?remix=gen-9&remixPost=post-9&prompt=A%20dancer%20%26%20a%20drum&guided=1&sourceTitle=Night%20run&sourceCreator=Ana&sourceThumbnail=https%3A%2F%2Fcdn.example.com%2Ft.jpg%3Fx%3D1',
+          },
+        });
+      });
+
+      it('returns to the Create tab on the tool it was opened on', async () => {
+        const tree = await open(<MediaCreationScreen initialTool="image" insideTab />);
+        renderer.act(() => { labelled(tree.root, 'Video').props.onPress(); });
+        await typePrompt(tree, 'A dancer turns');
+        await renderer.act(async () => { await labelled(tree.root, 'Enhance · 2 credits').props.onPress(); });
+
+        expect(routerState.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/(tabs)/creator?tool=image' } });
+      });
     });
   });
 

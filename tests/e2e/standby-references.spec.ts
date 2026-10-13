@@ -136,13 +136,13 @@ test.describe('references saved on another video model', () => {
         await openModel(page, 'seedance-2');
         const heading = page.getByRole('heading', { name: 'Reusable image references' });
         await expect(heading).toBeVisible();
-        if (await savedCount(page, 'create-video:elements') !== 2) {
+        if (await savedCount(page, 'create-video:elements:workflow-user') !== 2) {
           await heading.locator('xpath=ancestor::div[.//input[@type="file"]][1]').locator('input[type="file"]').first().setInputFiles([
             { name: 'hero.png', mimeType: 'image/png', buffer: ONE_PIXEL_PNG },
             { name: 'scarf.png', mimeType: 'image/png', buffer: ONE_PIXEL_PNG },
           ]);
         }
-        await expect.poll(() => savedCount(page, 'create-video:elements')).toBe(2);
+        await expect.poll(() => savedCount(page, 'create-video:elements:workflow-user')).toBe(2);
       }).toPass({ timeout: 50_000 });
 
       await openModel(page, modelId);
@@ -175,16 +175,16 @@ test.describe('references saved on another video model', () => {
       await openModel(page, 'seedance-2');
       const heading = page.getByRole('heading', { name: 'Reusable image references' });
       await expect(heading).toBeVisible();
-      if (await savedCount(page, 'create-video:elements') !== 1) {
+      if (await savedCount(page, 'create-video:elements:workflow-user') !== 1) {
         await heading.locator('xpath=ancestor::div[.//input[@type="file"]][1]').locator('input[type="file"]').first().setInputFiles(
           { name: 'hero.png', mimeType: 'image/png', buffer: ONE_PIXEL_PNG },
         );
       }
-      if (await savedCount(page, 'create-video:reference-videos') !== 1) {
+      if (await savedCount(page, 'create-video:reference-videos:workflow-user') !== 1) {
         await page.locator('input[type="file"][accept="video/*"]').setInputFiles({ name: 'camera-move.mp4', mimeType: 'video/mp4', buffer: Buffer.from('a clip') });
       }
-      await expect.poll(() => savedCount(page, 'create-video:elements')).toBe(1);
-      await expect.poll(() => savedCount(page, 'create-video:reference-videos')).toBe(1);
+      await expect.poll(() => savedCount(page, 'create-video:elements:workflow-user')).toBe(1);
+      await expect.poll(() => savedCount(page, 'create-video:reference-videos:workflow-user')).toBe(1);
     }).toPass({ timeout: 50_000 });
 
     // Seedance 1.5 Pro takes two images and has no place for a clip, and says so.
@@ -214,7 +214,7 @@ test.describe('references saved on another video model', () => {
       await openModel(page, 'seedance-2');
       const heading = page.getByRole('heading', { name: 'Reusable image references' });
       await expect(heading).toBeVisible();
-      if (await savedCount(page, 'create-video:elements') !== 1) {
+      if (await savedCount(page, 'create-video:elements:workflow-user') !== 1) {
         await heading.locator('xpath=ancestor::div[.//input[@type="file"]][1]').locator('input[type="file"]').first().setInputFiles(
           { name: 'hero.png', mimeType: 'image/png', buffer: ONE_PIXEL_PNG },
         );
@@ -224,7 +224,7 @@ test.describe('references saved on another video model', () => {
       await name.fill(NAME);
       await name.press('Enter');
       await expect(page.getByText(HANDLE, { exact: true }).first()).toBeVisible();
-      await expect.poll(() => savedCount(page, 'create-video:elements')).toBe(1);
+      await expect.poll(() => savedCount(page, 'create-video:elements:workflow-user')).toBe(1);
     }).toPass({ timeout: 50_000 });
 
     const prompt = page.getByPlaceholder(/^Describe the .* scene/);

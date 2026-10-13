@@ -167,6 +167,7 @@ const queryState = vi.hoisted(() => ({
   generationsIsFetched: false,
   generationsIsFetching: false,
   generationsIsStale: false,
+  generationsDataUpdatedAt: 0,
   ownerPostsIsFetched: false,
   ownerPostsIsFetching: false,
   ownerPostsIsStale: false,
@@ -232,6 +233,7 @@ vi.mock('@tanstack/react-query', () => ({
         isFetching: queryState.generationsIsFetching,
         isLoading: false,
         isStale: queryState.generationsIsStale,
+        dataUpdatedAt: queryState.generationsDataUpdatedAt,
         refetch: queryState.refetchGenerations,
       };
     }
@@ -1449,6 +1451,134 @@ describe('ProfileDashboard media tiles routing', () => {
       });
 
       expect(offers(tree!)).toHaveLength(0);
+    });
+  });
+
+  // A run still rendering is not a library member (the viewers' rule), so it
+  // appeared nowhere on Profile until it finished, and Home's "render in
+  // progress" opened a list without it.
+  describe('the Rendering strip', () => {
+    const readAt = Date.parse('2026-10-13T10:00:00Z');
+    const minutesBefore = (minutes: number) => new Date(readAt - minutes * 60_000).toISOString();
+    const renderingRuns = () => [
+      {
+        id: 'ready-image',
+        status: 'succeeded',
+        output_url: 'ready-image.jpg',
+        preview_url: 'ready-image.preview.webp',
+        category: 'image',
+        title: 'Ready image',
+        created_at: minutesBefore(30),
+      },
+      { id: 'video-run', status: 'processing', output_url: null, category: 'video', title: 'Video run', created_at: minutesBefore(3) },
+      { id: 'motion-run', status: 'pending', output_url: null, category: 'video', creationMode: 'motion', title: 'Motion run', created_at: minutesBefore(0.5) },
+      { id: 'sound-run', status: 'waiting', output_url: null, category: 'audio', audioKind: 'voiceover', title: 'Sound run', created_at: minutesBefore(125) },
+      { id: 'failed-run', status: 'failed', output_url: null, category: 'image', title: 'Failed run', created_at: minutesBefore(5) },
+      { id: 'archived-run', status: 'processing', output_url: null, category: 'image', title: 'Archived run', created_at: minutesBefore(5), archived_at: minutesBefore(1) },
+    ];
+    const renderDashboard = (initialTab: 'Creations' | 'Posts' = 'Creations') => {
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<ProfileDashboard initialTab={initialTab} />);
+      });
+      return tree!;
+    };
+    const stripTitles = (tree: renderer.ReactTestRenderer) => tree.root.findAllByProps({ children: 'Rendering (3)' });
+    const listCalls = () => authState.api.listGenerations.mock.calls.length;
+
+    beforeEach(() => {
+      queryState.generations = renderingRuns();
+      queryState.generationsDataUpdatedAt = readAt;
+    });
+
+    afterEach(() => {
+      queryState.generationsDataUpdatedAt = 0;
+      vi.useRealTimers();
+    });
+
+    it('shows each run still rendering above the grid, with its kind and how long ago it started', () => {
+      const tree = renderDashboard();
+
+      expect(stripTitles(tree).length).toBeGreaterThan(0);
+      expect(tree.root.findByProps({ accessibilityLabel: 'Video, rendering, started 3 min ago' })).toBeTruthy();
+      expect(tree.root.findByProps({ accessibilityLabel: 'Motion, rendering, started just now' })).toBeTruthy();
+      expect(tree.root.findByProps({ accessibilityLabel: 'Voiceover, rendering, started 2 h ago' })).toBeTruthy();
+      // The finished image, the failed run and the archived one are all images:
+      // none of them is on the strip.
+      expect(tree.root.findAll((node) => typeof node.props.accessibilityLabel === 'string'
+        && node.props.accessibilityLabel.startsWith('Image, rendering'))).toHaveLength(0);
+    });
+
+    it('keeps the library rule: the grid still holds only finished creations', () => {
+      const tree = renderDashboard();
+
+      expect(tree.root.findByProps({ accessibilityLabel: 'Creation, Ready image, Not posted' })).toBeTruthy();
+      expect(tree.root.findAllByProps({ accessibilityLabel: 'Creation, Video run, Not posted' })).toHaveLength(0);
+      expect(tree.root.findAllByProps({ accessibilityLabel: 'Creation, Motion run, Not posted' })).toHaveLength(0);
+    });
+
+    it('opens the creator that resumes the run, and leaves a kind the app cannot create as a report', () => {
+      const tree = renderDashboard();
+      const tile = (label: string) => tree.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === label);
+
+      renderer.act(() => { tile('Video, rendering, started 3 min ago')[0].props.onPress(); });
+      renderer.act(() => { tile('Motion, rendering, started just now')[0].props.onPress(); });
+
+      expect(routerState.push).toHaveBeenCalledWith('/create/video');
+      expect(routerState.push).toHaveBeenCalledWith('/create/motion');
+      expect(tile('Voiceover, rendering, started 2 h ago')).toHaveLength(0);
+      expect(tree.root.findAll((node) => String(node.type) === 'view'
+        && node.props.accessibilityLabel === 'Voiceover, rendering, started 2 h ago')).toHaveLength(1);
+    });
+
+    it('is absent from the Archived scope, from the other tabs, and when nothing is rendering', () => {
+      const tree = renderDashboard();
+      renderer.act(() => { findPressableByText(tree.root, 'Archived (0)').props.onPress(); });
+      expect(stripTitles(tree)).toHaveLength(0);
+
+      expect(stripTitles(renderDashboard('Posts'))).toHaveLength(0);
+
+      queryState.generations = renderingRuns().filter((run) => run.status === 'succeeded');
+      const idle = renderDashboard();
+      expect(idle.root.findAll((node) => typeof node.props.children === 'string'
+        && node.props.children.startsWith('Rendering ('))).toHaveLength(0);
+    });
+
+    it('reads the first page again every 15 seconds while a run is rendering', () => {
+      vi.useFakeTimers();
+      const tree = renderDashboard();
+      const before = listCalls();
+
+      renderer.act(() => { vi.advanceTimersByTime(14_999); });
+      expect(listCalls()).toBe(before);
+      renderer.act(() => { vi.advanceTimersByTime(1); });
+      expect(listCalls()).toBe(before + 1);
+      // The head of the library, merged, never a refetch of every page.
+      expect(authState.api.listGenerations).toHaveBeenLastCalledWith(true, { limit: 24 });
+      expect(queryState.refetchGenerations).not.toHaveBeenCalled();
+      renderer.act(() => { vi.advanceTimersByTime(15_000); });
+      expect(listCalls()).toBe(before + 2);
+
+      renderer.act(() => { tree.unmount(); });
+      renderer.act(() => { vi.advanceTimersByTime(30_000); });
+      expect(listCalls()).toBe(before + 2);
+    });
+
+    it('does not poll when nothing is rendering, or on another tab', () => {
+      vi.useFakeTimers();
+      queryState.generations = renderingRuns().filter((run) => run.status === 'succeeded');
+      const idle = renderDashboard();
+      queryState.generations = renderingRuns();
+      const posts = renderDashboard('Posts');
+      const before = listCalls();
+
+      renderer.act(() => { vi.advanceTimersByTime(60_000); });
+
+      expect(listCalls()).toBe(before);
+      renderer.act(() => {
+        idle.unmount();
+        posts.unmount();
+      });
     });
   });
 });

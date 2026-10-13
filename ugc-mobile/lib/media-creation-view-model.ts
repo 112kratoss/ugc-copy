@@ -317,6 +317,8 @@ export interface CatalogDraftInputAsset {
   handle?: string | null;
   durationSeconds?: number | null;
   sourceGenerationId?: string | null;
+  /** The reference's prepared Seedance asset, when it has one; a run sends the id beside the link. */
+  seedanceAsset?: SeedanceAssetMetadata | null;
 }
 
 export type CatalogDraftInputSlots = Record<string, CatalogDraftInputAsset[]>;
@@ -1095,11 +1097,10 @@ type RemixHydrationResult<T extends CreationDraft> = {
 
 export type RemixHydrationOptions = {
   /**
-   * Cap restored media at the bundled registry's limits for the draft's model (default
-   * true). The catalog path passes false: it restores into a placeholder model and then
-   * applies the published descriptor's own limits. The default video placeholder,
+   * Hold restored media and settings to the bundled registry's entry for the draft's model
+   * (default true). The catalog path passes false: it restores into a placeholder model and
+   * then applies the published descriptor's own limits. The default video placeholder,
    * kling-3.0-video, accepts no reusable references, so capping first emptied every one.
-   * Motion drafts have no reference caps and ignore this.
    */
   capToBundledModel?: boolean;
 };
@@ -1278,7 +1279,8 @@ function hydrateVideoDraftFromRemixSource(
 
 function hydrateMotionDraftFromRemixSource(
   baseDraft: MotionCreationDraft,
-  bundle: RemixSourceBundle
+  bundle: RemixSourceBundle,
+  { capToBundledModel = true }: RemixHydrationOptions = {},
 ): RemixHydrationResult<MotionCreationDraft> {
   const settings = bundle.workflowSettings ?? {};
   const modelSetting = stringSetting(settings, 'model');
@@ -1306,12 +1308,18 @@ function hydrateMotionDraftFromRemixSource(
     nextDraft = { ...nextDraft, characterOrientation };
   }
 
+  // The catalog path holds the duration and the settings to the published descriptor
+  // afterwards, which the bundled ladder for the placeholder model knows nothing about.
   const duration = numberSetting(settings, 'duration');
-  if (typeof duration === 'number' && duration > 0 && duration <= bundledMotionModel(model).maxDuration) {
+  if (
+    typeof duration === 'number'
+    && duration > 0
+    && (!capToBundledModel || duration <= bundledMotionModel(model).maxDuration)
+  ) {
     nextDraft = { ...nextDraft, duration: Math.ceil(duration) };
   }
 
-  const normalizedDraft = applyModelDefaults(nextDraft) as MotionCreationDraft;
+  const normalizedDraft = capToBundledModel ? applyModelDefaults(nextDraft) as MotionCreationDraft : nextDraft;
   const skipped = restoredCharacterImage.skipped + restoredReferenceVideo.skipped;
 
   return {
@@ -1342,7 +1350,7 @@ export function hydrateCreationDraftFromRemixSource(
 ): RemixHydrationResult<CreationDraft> {
   if (baseDraft.tool === 'image') return hydrateImageDraftFromRemixSource(baseDraft, bundle, options);
   if (baseDraft.tool === 'video') return hydrateVideoDraftFromRemixSource(baseDraft, bundle, options);
-  return hydrateMotionDraftFromRemixSource(baseDraft, bundle);
+  return hydrateMotionDraftFromRemixSource(baseDraft, bundle, options);
 }
 
 /**
@@ -1357,6 +1365,10 @@ export function videoDraftReferenceMode(draft: VideoCreationDraft): ReferenceMod
   // Subjects replace frames and references for the run, as the server's quote reads
   // them: only the subjects mode's slot is active while one is attached.
   if (videoSubjects(draft).length > 0) return 'subjects';
+  // A multi-shot run sends its shots and no reference picture, as the web creator's does:
+  // pictures attached for a single shot stayed in the run while their rail was hidden,
+  // and turned off the frames a story starts from.
+  if (draft.isMultiShot) return 'frames';
   if (draft.model === 'gemini-omni-video') return 'elements';
   const hasReferences = draft.references.length > 0
     || draft.referenceVideos.length > 0
@@ -2023,15 +2035,3 @@ export function applyModelDefaults(draft: CreationDraft): CreationDraft {
     characterOrientation: asStringList(config.characterOrientations).includes(draft.characterOrientation) ? draft.characterOrientation : 'video',
   };
 }
-
-/**
- * Video models whose provider generates an audio track unconditionally. There
- * is no sound toggle for these; the prompt (or the enhancer) must script the
- * soundscape or explicitly ask for "no music".
- */
-export const ALWAYS_ON_AUDIO_VIDEO_MODELS: ReadonlySet<string> = new Set([
-  'wan-2.7',
-  'grok-imagine-video',
-  'minimax-h3',
-  'happyhorse-1.1',
-]);

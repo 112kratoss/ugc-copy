@@ -972,14 +972,14 @@ export default function CreationsPage() {
             return;
         }
 
-        if (!session?.access_token || !session.user?.id) {
+        if (!session?.access_token) {
             router.push('/login?returnUrl=/creations');
             return;
         }
 
         setRestoringGenerationId(generation.id);
         try {
-            const uploadedMedia = await uploadMediaToTemporaryStorage(file, session.user.id);
+            const uploadedMedia = await uploadMediaToTemporaryStorage(file);
             const response = await fetch(`/api/generations/${generation.id}/restore-media`, {
                 method: 'POST',
                 headers: {

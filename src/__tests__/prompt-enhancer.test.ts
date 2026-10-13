@@ -7,16 +7,25 @@ import {
   buildPromptStrategyGuidance,
   buildWorkflowPromptFieldGuidance,
   callPromptEnhancer,
+  getPromptEnhancementCost,
   resolvePromptEnhancementAgent,
   resolvePromptScenario,
 } from '@/lib/prompt-enhancer';
 import { inspectPromptQuality } from '@/lib/prompt-quality';
 import { PROMPT_ENHANCER_FIXTURES } from '@/__tests__/fixtures/prompt-enhancer-fixtures';
+import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe('prompt enhancement price', () => {
+  it('debits the one price both apps print on their Enhance buttons', () => {
+    expect(getPromptEnhancementCost()).toBe(PROMPT_ENHANCEMENT_COST_CREDITS);
+    expect(PROMPT_ENHANCEMENT_COST_CREDITS).toBe(2);
+  });
 });
 
 describe('prompt enhancer strategy', () => {

@@ -19,6 +19,7 @@ import {
   isValidElementHandle,
 } from '@/lib/image-elements';
 import { WorkflowModelCatalogContext } from '@/lib/generation-model-client';
+import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import CatalogAdditionalControls from '@/components/CatalogAdditionalControls';
 import RecoverableMediaVideo from '@/components/RecoverableMediaVideo';
 import { getDisplayMediaUrl } from '@/lib/media-urls';
@@ -114,7 +115,6 @@ interface WorkflowCanvasInspectorProps {
   onDeleteEdge: (edgeId?: string) => void;
   onDeleteNode: () => void;
   onDeleteSelection: () => void;
-  onDuplicateSelection: () => void;
   onOpenPreview: (preview: PreviewMediaState) => void;
   onRunBranch: () => void;
   onRunNode: () => void;
@@ -1477,7 +1477,7 @@ function PromptNodeEnhancer({
           <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${
             canEnhance ? 'bg-black/20 text-[var(--ui-primary-on)]' : 'bg-zinc-800 text-zinc-600'
           }`}>
-            2 credits
+            {PROMPT_ENHANCEMENT_COST_CREDITS} {PROMPT_ENHANCEMENT_COST_CREDITS === 1 ? 'credit' : 'credits'}
           </span>
         </button>
       </div>

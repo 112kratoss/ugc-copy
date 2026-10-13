@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { getGenerationOutput, getPollDelayMs, isGenerationFinished, pollGenerationStatus } from '../lib/generation';
+import { getGenerationOutput, getGenerationOutputs, getPollDelayMs, isGenerationFinished, pollGenerationStatus } from '../lib/generation';
 
 describe('generation polling helpers', () => {
   afterEach(() => {
@@ -18,6 +18,16 @@ describe('generation polling helpers', () => {
   it('prefers the first output URL from a multi-output response', () => {
     expect(getGenerationOutput({ status: 'succeeded', output: 'fallback.png', outputs: ['first.png', 'second.png'] })).toBe('first.png');
     expect(getGenerationOutput({ status: 'succeeded', output: 'single.mp4' })).toBe('single.mp4');
+  });
+
+  it('reads every output of a run that returned several, the primary first', () => {
+    // Grok Imagine answers with several options; the result showed only the first.
+    expect(getGenerationOutputs({ status: 'succeeded', output: 'first.png', outputs: ['first.png', 'second.png', 'third.png'] }))
+      .toEqual(['first.png', 'second.png', 'third.png']);
+    expect(getGenerationOutputs({ status: 'succeeded', output: 'single.mp4' })).toEqual(['single.mp4']);
+    expect(getGenerationOutputs({ status: 'succeeded', output: 'single.mp4', outputs: [] })).toEqual(['single.mp4']);
+    expect(getGenerationOutputs({ status: 'succeeded', outputs: ['', 'kept.png'] })).toEqual(['kept.png']);
+    expect(getGenerationOutputs({ status: 'processing', output: null })).toEqual([]);
   });
 
   it('polls until a generation succeeds and emits tick updates', async () => {

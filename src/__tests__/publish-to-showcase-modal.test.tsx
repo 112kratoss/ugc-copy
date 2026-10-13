@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useState } from 'react';
 
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
+import { TITLE_MAX_LENGTH } from '@/lib/posts-server';
 
 const getSessionMock = vi.hoisted(() => vi.fn());
 const sharePublicGenerationMock = vi.hoisted(() => vi.fn());
@@ -58,6 +59,42 @@ describe('PublishToShowcaseModal', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it('takes a title as long as the server allows, 100 characters', () => {
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="gen-1"
+        defaultTitle="Broadcast"
+      />
+    );
+
+    expect(TITLE_MAX_LENGTH).toBe(100);
+    expect(screen.getByRole('textbox', { name: /^title$/i })).toHaveAttribute('maxlength', String(TITLE_MAX_LENGTH));
+  });
+
+  it('keeps a long creation title within the post limit so the publish is not refused', async () => {
+    const creationTitle = `${'Golden hour rooftop portrait '.repeat(5)}with city lights`;
+    expect(creationTitle.length).toBeGreaterThan(TITLE_MAX_LENGTH);
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="gen-1"
+        defaultTitle={creationTitle}
+      />
+    );
+
+    // The field's maxlength does not trim a value it is handed.
+    expect(screen.getByRole('textbox', { name: /^title$/i })).toHaveValue(creationTitle.slice(0, TITLE_MAX_LENGTH));
+    fireEvent.click(screen.getByRole('button', { name: /^private post$/i }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith('/api/showcase/publish', expect.anything());
+    });
+    expect(JSON.parse(String(getPublishRequest().body)).title).toBe(creationTitle.slice(0, TITLE_MAX_LENGTH));
   });
 
   it('keeps the publish dialog scrollable within the viewport', () => {

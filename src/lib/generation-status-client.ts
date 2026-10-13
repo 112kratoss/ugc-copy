@@ -23,6 +23,25 @@ type FetchGenerationStatusOptions = {
   fetchImpl?: typeof fetch;
 };
 
+type FetchGenerationStatusWithRetryOptions = {
+  url: string;
+  /** Read again before every attempt: a run can outlive the token it started with. */
+  getAccessToken: () => Promise<string | null | undefined> | string | null | undefined;
+  signal?: AbortSignal;
+  maxAttempts?: number;
+  /** The wait before the second, third, … attempt; the last value repeats. */
+  delaysMs?: readonly number[];
+  fetchImpl?: typeof fetch;
+};
+
+/** A status read the server answered with an error status. */
+export class GenerationStatusRequestError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = 'GenerationStatusRequestError';
+  }
+}
+
 type PollWaitOptions = {
   signal?: AbortSignal;
   random?: () => number;
@@ -70,8 +89,9 @@ export async function fetchGenerationStatus<
   }
 
   if (!response.ok) {
-    throw new Error(
-      getErrorMessage(payload) ?? `Generation status request failed (${response.status}).`
+    throw new GenerationStatusRequestError(
+      getErrorMessage(payload) ?? `Generation status request failed (${response.status}).`,
+      response.status,
     );
   }
 
@@ -84,6 +104,62 @@ export async function fetchGenerationStatus<
   }
 
   return payload as T;
+}
+
+/**
+ * Worth another try: no answer (a network failure), a server fault, or a token
+ * that expired during the run. Anything else, such as an unknown run, would
+ * answer the same again.
+ */
+function isRetryableGenerationStatusFailure(error: unknown) {
+  if (error instanceof TypeError) return true;
+  return error instanceof GenerationStatusRequestError
+    && (error.status === 401 || error.status >= 500);
+}
+
+/**
+ * One status read that rides out a blip. The first failed read used to end
+ * the run view while the run went on with the credits it had taken, and a
+ * second press then paid for a second run. The token is read again for every
+ * attempt; after the last one the last error is thrown.
+ */
+export async function fetchGenerationStatusWithRetry<
+  T extends GenerationStatusResponse = GenerationStatusResponse,
+>({
+  url,
+  getAccessToken,
+  signal,
+  maxAttempts = 4,
+  delaysMs = [2000, 5000, 10000],
+  fetchImpl,
+}: FetchGenerationStatusWithRetryOptions): Promise<T> {
+  const attempts = Math.max(1, Math.floor(maxAttempts));
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) {
+      await waitForAbortableDelay(delaysMs[Math.min(attempt - 1, delaysMs.length - 1)] ?? 0, signal);
+    }
+    throwIfAborted(signal);
+    try {
+      const accessToken = await getAccessToken();
+      if (!accessToken) {
+        // A refresh that has not landed yet reads as signed out for a moment.
+        throw new GenerationStatusRequestError('Please log in to check generation status.', 401);
+      }
+      return await fetchGenerationStatus<T>({
+        url,
+        accessToken,
+        signal,
+        ...(fetchImpl ? { fetchImpl } : {}),
+      });
+    } catch (error) {
+      if (signal?.aborted || isGenerationStatusAbortError(error) || !isRetryableGenerationStatusFailure(error)) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 export function getGenerationStatusRetryDelayMs(

@@ -707,8 +707,10 @@ function videoDescriptors(): GenerationModelDescriptor[] {
         combineFramesWithReferences: model.id === 'wan-2.7',
       },
       // A model whose maker the installed apps do not yet name in the AI-data question
-      // (ugc-mobile/lib/ai-data-consent.ts) stays off mobile here until an app update that
-      // names it has shipped on both platforms, as PixVerse V6 did on 2026-10-08.
+      // (ugc-mobile/lib/ai-data-consent.ts) stays off mobile in the published release until
+      // an app update that names it is in users' hands on both platforms. PixVerse V6's
+      // update shipped in code on 2026-10-08; release pixverse-mobile-20261008, which turns
+      // it on for mobile, is held until then (docs/model-api-references/pixverse-v6.md).
       availability: { web: true, mobile: true },
       inputModes: videoInputModes(model.id, limits),
       inputConstraints: videoInputConstraints(model.id),

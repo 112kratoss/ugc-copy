@@ -63,6 +63,13 @@ vi.mock('@/lib/generation-input-media', async (importOriginal) => ({
   persistGenerationInputMedia: async () => undefined,
 }));
 
+// A motion step is priced at its reference clip's length, which ffmpeg reads
+// from the clip; `workflow-runner.test.ts` covers that reading.
+vi.mock('@/lib/video-rendition', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/video-rendition')>()),
+  probeMediaDurationSeconds: async () => 10,
+}));
+
 type Row = Record<string, unknown>;
 type Filter = { op: 'eq' | 'in'; column: string; value: unknown };
 

@@ -38,6 +38,12 @@ export interface CanvasAnchoredPopupPosition extends CanvasFloatingPosition {
 export type WorkflowInspectorTab = 'parameters' | 'data' | 'runs' | 'notes';
 export type WorkflowInspectorPanel = WorkflowInspectorTab | 'connection' | 'selection';
 
+/** What a Run control costs: one step for Run node, every step from it for Run branch. */
+export type WorkflowRunPrice =
+  | { status: 'pending' }
+  | { status: 'ready'; costCredits: number; approximate: boolean }
+  | { status: 'unavailable'; reason: string };
+
 export interface WorkflowRunAffordance {
   tone: 'ready' | 'queued' | 'blocked' | 'static';
   message: string;

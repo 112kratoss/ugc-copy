@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { STORAGE_MEDIA_MIME_TYPES, isAllowedStorageMediaMimeType } from '@/lib/storage-upload-mime-policy';
+import { MEDIA_OBJECT_NOT_FOUND_CODE } from '@/lib/temporary-media-read-url';
+import { MAX_UPLOAD_BYTES_BY_KIND } from '@/lib/temporary-media-upload-sign';
+
 const supabaseMocks = vi.hoisted(() => ({
   getSession: vi.fn(),
   from: vi.fn(),
@@ -145,7 +149,7 @@ describe('uploadMediaToTemporaryStorage', () => {
   it('does not reserve storage for a cancelled upload', async () => {
     const { uploadMediaToTemporaryStorage } = await import('@/lib/temporary-media-upload');
     const signal = AbortSignal.abort();
-    await expect(uploadMediaToTemporaryStorage(new File(['image'], 'image.png'), 'user-1', { signal }))
+    await expect(uploadMediaToTemporaryStorage(new File(['image'], 'image.png'), { signal }))
       .rejects.toMatchObject({ name: 'UploadCancelledError' });
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -154,7 +158,7 @@ describe('uploadMediaToTemporaryStorage', () => {
     stubXhr();
     const { uploadMediaToTemporaryStorage } = await import('@/lib/temporary-media-upload');
     const signal = new AbortController().signal;
-    await uploadMediaToTemporaryStorage(new File(['image'], 'image.png', { type: 'image/png' }), 'user-1', { signal });
+    await uploadMediaToTemporaryStorage(new File(['image'], 'image.png', { type: 'image/png' }), { signal });
     for (const endpoint of ['/api/uploads/media/sign', '/api/uploads/finalize', '/api/uploads/media/read-url']) {
       expect(fetch).toHaveBeenCalledWith(endpoint, expect.objectContaining({ signal }));
     }
@@ -166,7 +170,7 @@ describe('uploadMediaToTemporaryStorage', () => {
     const file = new File(['image-bytes'], 'Reference Image.PNG', { type: 'image/png' });
     const progress: number[] = [];
 
-    await expect(uploadMediaToTemporaryStorage(file, 'user-1', {
+    await expect(uploadMediaToTemporaryStorage(file, {
       onProgress: ({ fraction }) => progress.push(fraction),
     })).resolves.toEqual({
       signedUrl: 'https://storage.example.test/signed/reference.png',
@@ -215,5 +219,123 @@ describe('uploadMediaToTemporaryStorage', () => {
     });
     expect(supabaseMocks.createSignedUrl).not.toHaveBeenCalled();
     expect(supabaseMocks.upload).not.toHaveBeenCalled();
+  });
+
+  it('takes its options second, with no owner id it never read', async () => {
+    const sent = stubXhr();
+    const { uploadMediaToTemporaryStorage } = await import('@/lib/temporary-media-upload');
+    const progress: number[] = [];
+
+    await expect(uploadMediaToTemporaryStorage(
+      new File(['image-bytes'], 'reference.png', { type: 'image/png' }),
+      { onProgress: ({ fraction }) => progress.push(fraction) },
+    )).resolves.toMatchObject({ storagePath: 'uploads/user-1/reference.png' });
+    expect(sent).toHaveLength(1);
+    expect(progress).toEqual([0.5, 1]);
+
+    await expect(uploadMediaToTemporaryStorage(new File(['image'], 'image.png'), { signal: AbortSignal.abort() }))
+      .rejects.toMatchObject({ name: 'UploadCancelledError' });
+  });
+});
+
+describe('refreshTemporaryMediaUrl', () => {
+  beforeEach(() => {
+    supabaseMocks.getSession.mockReset();
+    supabaseMocks.getSession.mockResolvedValue({
+      data: { session: { access_token: 'access-token', user: { id: 'user-1' } } },
+      error: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('renews the link of media already staged instead of uploading it again', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      signedUrl: 'https://storage.example.test/signed/again.png',
+      expiresInSeconds: 3600,
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { refreshTemporaryMediaUrl } = await import('@/lib/temporary-media-upload');
+
+    await expect(refreshTemporaryMediaUrl('uploads/user-1/reference.png'))
+      .resolves.toBe('https://storage.example.test/signed/again.png');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith('/api/uploads/media/read-url', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer access-token',
+      },
+      body: JSON.stringify({ storagePath: 'uploads/user-1/reference.png' }),
+    });
+  });
+
+  it('says when the staged object is gone, so the creator uploads the file again', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      code: MEDIA_OBJECT_NOT_FOUND_CODE,
+      error: 'That upload is no longer available.',
+    }), { status: 404 })));
+    const { refreshTemporaryMediaUrl, TemporaryMediaReadUrlError } = await import('@/lib/temporary-media-upload');
+
+    const error = await refreshTemporaryMediaUrl('uploads/user-1/old.png').catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(TemporaryMediaReadUrlError);
+    expect(error).toMatchObject({
+      message: 'That upload is no longer available.',
+      status: 404,
+      code: 'MEDIA_OBJECT_NOT_FOUND',
+    });
+  });
+
+  it('keeps the status of a failure whose body is not JSON', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>Bad Gateway</html>', { status: 502 })));
+    const { refreshTemporaryMediaUrl } = await import('@/lib/temporary-media-upload');
+
+    await expect(refreshTemporaryMediaUrl('uploads/user-1/reference.png'))
+      .rejects.toMatchObject({ status: 502, code: null, message: 'Failed to prepare media preview.' });
+  });
+
+  it('needs a signed-in session', async () => {
+    supabaseMocks.getSession.mockResolvedValue({ data: { session: null }, error: null });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const { refreshTemporaryMediaUrl } = await import('@/lib/temporary-media-upload');
+
+    await expect(refreshTemporaryMediaUrl('uploads/user-1/reference.png')).rejects.toThrow('Please log in to upload files.');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('TEMPORARY_MEDIA_UPLOAD_LIMITS', () => {
+  it('holds the same byte caps as the sign step', async () => {
+    const { TEMPORARY_MEDIA_UPLOAD_LIMITS } = await import('@/lib/temporary-media-upload');
+
+    expect(TEMPORARY_MEDIA_UPLOAD_LIMITS.maxBytesByKind).toEqual(MAX_UPLOAD_BYTES_BY_KIND);
+  });
+
+  it('allows exactly the types the sign step allows', async () => {
+    const { TEMPORARY_MEDIA_UPLOAD_LIMITS } = await import('@/lib/temporary-media-upload');
+    const candidates = [
+      ...Object.values(STORAGE_MEDIA_MIME_TYPES).flat(),
+      'audio/x-m4a',
+      'audio/flac',
+      'video/x-matroska',
+      'image/bmp',
+      'image/svg+xml',
+      'IMAGE/PNG',
+      '',
+    ];
+
+    for (const kind of ['image', 'video', 'audio'] as const) {
+      for (const type of candidates) {
+        expect(TEMPORARY_MEDIA_UPLOAD_LIMITS.isAllowedMimeType(kind, type), `${kind} ${type}`)
+          .toBe(isAllowedStorageMediaMimeType(kind, type));
+      }
+    }
+    expect(TEMPORARY_MEDIA_UPLOAD_LIMITS.isAllowedMimeType('audio', 'audio/x-m4a')).toBe(false);
+    expect(TEMPORARY_MEDIA_UPLOAD_LIMITS.isAllowedMimeType('video', 'video/quicktime')).toBe(true);
   });
 });

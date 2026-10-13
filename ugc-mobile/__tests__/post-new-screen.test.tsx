@@ -1517,4 +1517,91 @@ describe('mobile external post composer', () => {
       expect(shareState.share).not.toHaveBeenCalled();
     });
   });
+
+  // A guest can generate and press Post to feed. Sent to sign-in with no way
+  // back, they finished on Home, without the creation they were posting.
+  describe('signed out', () => {
+    const signedInUser = authState.user;
+    const auth = authState as { user: typeof signedInUser | null };
+
+    afterEach(() => {
+      auth.user = signedInUser;
+    });
+
+    const redirects = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => String(node.type) === 'redirect');
+
+    it('sends sign-in back to the composer, on the same creation and intent', async () => {
+      auth.user = null;
+      paramsState.params = { generationId: 'gen-1', shareAfterPublish: '1' };
+      const tree = await renderScreen();
+
+      expect(redirects(tree)).toHaveLength(1);
+      expect(redirects(tree)[0].props.href).toEqual({
+        pathname: '/auth',
+        params: { returnTo: '/post/new?generationId=gen-1&shareAfterPublish=1' },
+      });
+    });
+
+    it('keeps an edit and the step it was opened on', async () => {
+      auth.user = null;
+      paramsState.params = { postId: 'post-9', focus: 'resources' };
+      const tree = await renderScreen();
+
+      expect(redirects(tree)[0].props.href).toEqual({
+        pathname: '/auth',
+        params: { returnTo: '/post/new?postId=post-9&focus=resources' },
+      });
+    });
+
+    it('does not redirect a signed-in creator', async () => {
+      const tree = await renderScreen();
+      expect(redirects(tree)).toHaveLength(0);
+    });
+  });
+
+  // The server publishes any succeeded run with output. A creation whose poster
+  // job failed plays fine, and used to end here on "Could not load this creation".
+  describe('a creation whose preview failed', () => {
+    const posterFailedVideo = {
+      ...generationItem,
+      category: 'video',
+      output_url: 'https://cdn.example.com/output.mp4',
+      preview_url: null,
+      previewUrl: null,
+      media: { gridReady: false, status: 'failed' },
+    };
+
+    it('opens on its details, drawing a plate rather than the clip', async () => {
+      generationState.item = posterFailedVideo;
+      const tree = await renderScreen();
+      const text = collectText(tree.root);
+
+      expect(text).not.toContain('Could not load this creation');
+      expect(text).toContain('Hero product image');
+      expect(text).toContain('Creation ready');
+    });
+
+    it('never hands the clip to a picture on the review step', async () => {
+      generationState.item = posterFailedVideo;
+      paramsState.params = { generationId: 'gen-1', focus: 'resources' };
+      const tree = await renderScreen();
+
+      expect(collectText(tree.root)).toContain('Step 2 of 2 · resources optional');
+      const pictureUrls = tree.root
+        .findAll((node) => String(node.type) === 'stable-media-image')
+        .map((node) => node.props.url);
+      expect(pictureUrls).not.toContain('https://cdn.example.com/output.mp4');
+    });
+
+    it('still draws a picture creation from its output when it has no preview', async () => {
+      generationState.item = { ...generationItem, preview_url: null, previewUrl: null, media: { gridReady: false, status: 'failed' } };
+      paramsState.params = { generationId: 'gen-1', focus: 'resources' };
+      const tree = await renderScreen();
+
+      const pictureUrls = tree.root
+        .findAll((node) => String(node.type) === 'stable-media-image')
+        .map((node) => node.props.url);
+      expect(pictureUrls).toContain('https://cdn.example.com/output.png');
+    });
+  });
 });

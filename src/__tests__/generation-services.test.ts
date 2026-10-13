@@ -5,6 +5,7 @@ import {
   createMobileNotificationHistory,
   withMobileNotificationHistory,
 } from '@/__tests__/fixtures/mobile-notification-history';
+import { GENERATION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { BackendLogRecord } from '@/lib/backend-logger';
 
 // Foreign references stay rejected by default; individual tests opt into an
@@ -5368,5 +5369,299 @@ describe('generation services', () => {
     })).rejects.toThrow('Media references must belong to the authenticated user.');
     expect(rpcCalls.map((call) => call.fn)).not.toContain('start_generation');
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  // 05-4: the reclaim sweep deletes a staged upload two days after a run consumed it,
+  // while the app's draft keeps its path. The start then said the file was not the
+  // creator's, which named the wrong cause and the wrong fix.
+  describe('a reference upload storage no longer holds', () => {
+    function storageWith(exists: boolean | 'unreachable') {
+      const existsCheck = vi.fn(async (filePath: string) => {
+        void filePath;
+        if (exists === 'unreachable') throw new TypeError('fetch failed');
+        return exists
+          ? { data: true, error: null }
+          : { data: false, error: { message: 'Object not found', status: 400, statusCode: '404' } };
+      });
+      const supabase = {
+        storage: {
+          from: vi.fn(() => ({
+            createSignedUrl: vi.fn(async () => ({ data: null, error: { message: 'Object not found', statusCode: '404' } })),
+            exists: existsCheck,
+          })),
+        },
+      } as unknown as SupabaseClient;
+      return { supabase, existsCheck };
+    }
+
+    it('is refused as expired, with the code that asks for the file again', async () => {
+      const { resolveGenerationMediaSource } = await import('@/lib/generation-services');
+      const { supabase, existsCheck } = storageWith(false);
+
+      await expect(resolveGenerationMediaSource(supabase, 'uploads/user-1/draft/hero.png', 'user-1')).rejects.toMatchObject({
+        status: 400,
+        failureCode: 'invalid_input_media',
+        message: 'This reference upload has expired. Add it again.',
+      });
+      // The same object named by the signed link the app's draft holds.
+      await expect(resolveGenerationMediaSource(
+        supabase,
+        'https://project.supabase.co/storage/v1/object/sign/uploads/user-1/draft/hero.png?token=old',
+        'user-1',
+      )).rejects.toMatchObject({ failureCode: 'invalid_input_media' });
+      expect(existsCheck).toHaveBeenCalledWith('user-1/draft/hero.png');
+    });
+
+    it('keeps the ownership refusal for another account’s upload and when storage cannot answer', async () => {
+      const { resolveGenerationMediaSource } = await import('@/lib/generation-services');
+      const missing = storageWith(false);
+      await expect(resolveGenerationMediaSource(missing.supabase, 'uploads/user-2/hero.png', 'user-1'))
+        .rejects.toThrow('Media references must belong to the authenticated user.');
+      expect(missing.existsCheck).not.toHaveBeenCalled();
+
+      const unreachable = storageWith('unreachable');
+      await expect(resolveGenerationMediaSource(unreachable.supabase, 'uploads/user-1/hero.png', 'user-1'))
+        .rejects.toThrow('Media references must belong to the authenticated user.');
+    });
+
+    it('refuses the run before anything is held', async () => {
+      const { startImageGeneration } = await import('@/lib/generation-services');
+      const { supabase } = storageWith(false);
+      const credits = createSupabaseMock();
+
+      await expect(startImageGeneration({
+        supabase,
+        creditSupabase: credits.supabase,
+        userId: 'user-1',
+        prompt: 'Use @hero on a clean tabletop scene.',
+        model: 'nano-banana-2',
+        imageUrls: ['uploads/user-1/draft/hero.png'],
+        elements: [{ id: 'element-1', displayName: 'Hero bottle', handle: '@hero', storagePath: 'uploads/user-1/draft/hero.png' }],
+      })).rejects.toMatchObject({ failureCode: 'invalid_input_media' });
+      expect(credits.rpcCalls).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+  });
+
+  // 02-1 / C2: the start sends Kie every shot, so the shots' total is what a multi-shot
+  // run costs. A quote for a shorter run, the app's hidden single-shot length, was
+  // charged as it stood.
+  it('refuses a multi-shot run quoted for less than its shots, before anything is held', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    vi.mocked(fetch).mockImplementation(async () => ({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-kling-shots-1' } }),
+    }) as Response);
+    const run = (supabase: SupabaseClient, quotedCostCredits: number) => startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: '',
+      model: 'kling-3.0-video',
+      isMultiShot: true,
+      mode: 'std',
+      aspectRatio: '16:9',
+      multiPrompts: [
+        { id: 'shot-1', prompt: 'Open on the harbour at dusk.', duration: 5 },
+        { id: 'shot-2', prompt: 'Cut to the lighthouse.', duration: 5 },
+      ],
+      quotedCostCredits,
+    });
+
+    // 70 is Kling 3.0 Standard's price for 5 s; the two shots run 10 s, which is 140.
+    const underQuoted = createSupabaseMock();
+    await expect(run(underQuoted.supabase, 70)).rejects.toMatchObject({
+      status: 409,
+      failureCode: 'cost_changed',
+      message: 'The price of this run changed. Check the updated cost and generate again.',
+    });
+    expect(underQuoted.rpcCalls).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+
+    const quoted = createSupabaseMock();
+    await run(quoted.supabase, 140);
+    expect(quoted.generations[0].cost).toBe(140);
+
+    // Otherwise the quote is the price.
+    const overQuoted = createSupabaseMock();
+    await run(overQuoted.supabase, 150);
+    expect(overQuoted.generations[0].cost).toBe(150);
+  });
+
+  // 05-9: the shared limit held image and single-shot video prompts only.
+  it('holds every shot prompt, a multi-shot run’s own prompt and a motion prompt to the shared limit', async () => {
+    const { startMotionGeneration, startVideoGeneration } = await import('@/lib/generation-services');
+    const tooLong = 'a'.repeat(GENERATION_PROMPT_MAX_LENGTH + 1);
+    const { supabase, rpcCalls } = createSupabaseMock();
+    const multiShot = (prompt: string, shotPrompts: string[]) => startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt,
+      model: 'kling-3.0-video',
+      isMultiShot: true,
+      mode: 'std',
+      aspectRatio: '16:9',
+      multiPrompts: shotPrompts.map((shotPrompt, index) => ({ id: `shot-${index + 1}`, prompt: shotPrompt, duration: 5 })),
+    });
+
+    await expect(multiShot('', ['Open on the harbour at dusk.', tooLong])).rejects.toMatchObject({
+      status: 400,
+      message: `Shot 2: prompts support up to ${GENERATION_PROMPT_MAX_LENGTH} characters.`,
+    });
+    await expect(multiShot(tooLong, ['Open on the harbour at dusk.'])).rejects.toMatchObject({
+      status: 400,
+      message: `Prompts support up to ${GENERATION_PROMPT_MAX_LENGTH} characters.`,
+    });
+    await expect(startMotionGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: tooLong,
+      model: 'kling-2.6',
+      referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+      characterImageUrl: 'https://cdn.example.com/character.png',
+      duration: 5,
+    })).rejects.toMatchObject({
+      status: 400,
+      message: `Prompts support up to ${GENERATION_PROMPT_MAX_LENGTH} characters.`,
+    });
+    expect(rpcCalls).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('still starts a motion run with no prompt', async () => {
+    const { startMotionGeneration } = await import('@/lib/generation-services');
+    let providerBody: { input?: { prompt?: string } } | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-motion-blank-1' } }),
+      } as Response;
+    });
+    const { supabase } = createSupabaseMock();
+
+    const result = await startMotionGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: '',
+      model: 'kling-2.6',
+      referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+      characterImageUrl: 'https://cdn.example.com/character.png',
+      duration: 5,
+    });
+
+    expect(result.predictionId).toBe('task-motion-blank-1');
+    const sent = providerBody as { input?: { prompt?: string } } | null;
+    expect(sent?.input?.prompt).toBe('The character follows the reference performance naturally.');
+  });
+
+  // C3: the unified start sends a prepared Seedance asset's file by its link, which it
+  // measured, and names the asset in the collections. The id goes to Kie in the file's
+  // place; the file is kept as the reference it is, with the length a remix quotes by.
+  it('sends a prepared Seedance asset in place of its file, and keeps the file under its own name', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: { input?: Record<string, unknown> } | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-seedance-prepared-1' } }),
+      } as Response;
+    });
+    const ALI = 'https://signed.example.com/ali.png';
+    const DANCE = 'https://signed.example.com/dance.mp4';
+    const BEAT = 'https://signed.example.com/beat.mp3';
+    const asset = (assetId: string | null, assetType: 'Image' | 'Video' | 'Audio', sourceUrl: string) => ({
+      assetId,
+      assetType,
+      status: assetId ? 'active' as const : 'idle' as const,
+      sourceUrl,
+      error: null,
+      lastCheckedAt: null,
+    });
+
+    const { supabase, generations, inputMediaRows } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Change the first person in the reference video to @ali.',
+      model: 'seedance-2',
+      duration: 12,
+      aspectRatio: '9:16',
+      resolution: '480p',
+      referenceMode: 'elements',
+      elements: [{
+        id: 'imageReferences-1',
+        displayName: 'Ali',
+        handle: '@ali',
+        storagePath: 'uploads/user-1/ali.png',
+        sourceGenerationId: null,
+      }],
+      elementImageUrls: [ALI],
+      referenceVideoUrls: [DANCE],
+      referenceVideos: [{ kind: 'video', label: 'Dance clip', storagePath: 'uploads/user-1/dance.mp4', sourceGenerationId: null, durationSeconds: 9.4 }],
+      referenceAudioUrls: [BEAT],
+      referenceAudios: [{ kind: 'audio', label: 'Beat', storagePath: 'uploads/user-1/beat.mp3', sourceGenerationId: null }],
+      seedanceAssets: {
+        images: [asset('asset-ali-1', 'Image', ALI)],
+        videos: [asset('asset-dance-1', 'Video', DANCE)],
+        // Not prepared: the track goes as its link.
+        audios: [asset(null, 'Audio', BEAT)],
+      },
+    });
+
+    const sent = providerBody as { input?: Record<string, unknown> } | null;
+    expect(sent?.input).toMatchObject({
+      reference_image_urls: ['asset-ali-1'],
+      reference_video_urls: ['asset-dance-1'],
+      reference_audio_urls: [BEAT],
+    });
+    expect(generations[0].workflow_settings).toMatchObject({
+      referenceVideoUrls: [DANCE],
+      seedanceAssets: { videos: [expect.objectContaining({ assetId: 'asset-dance-1' })] },
+    });
+    expect(inputMediaRows.map((row) => [row.role, row.label])).toEqual([
+      ['reference_image', 'Ali'],
+      ['reference_video', 'Dance clip'],
+      ['reference_audio', 'Beat'],
+    ]);
+    expect(inputMediaRows[1]).toMatchObject({
+      metadata: expect.objectContaining({ sourceStoragePath: 'uploads/user-1/dance.mp4', durationSeconds: 9.4 }),
+    });
+  });
+
+  // The catalog adapter kept the compiled prompt as the run's prompt, so a remix of a
+  // workflow image run opened on the legend and compiled it a second time.
+  it('keeps a catalog image run’s prompt as written and sends the provider the legend', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    let providerBody: { input?: { prompt?: string } } | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-image-legend-1' } }),
+      } as Response;
+    });
+    const { supabase, generations } = createSupabaseMock();
+
+    await startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Use @hero on a clean tabletop scene.',
+      model: 'nano-banana-2',
+      imageUrls: ['https://cdn.example.com/hero.jpg'],
+      elements: [{ id: 'element-1', displayName: 'Hero bottle', handle: '@hero', storagePath: null, sourceGenerationId: null }],
+      persistInputMedia: false,
+    });
+
+    const sent = providerBody as { input?: { prompt?: string } } | null;
+    expect(sent?.input?.prompt).toContain('@hero = attached reference image 1 (Hero bottle)');
+    expect(generations[0].prompt).toBe('Use @hero on a clean tabletop scene.');
+    expect(generations[0].workflow_settings?.compiledPrompt).toBe(sent?.input?.prompt);
   });
 });

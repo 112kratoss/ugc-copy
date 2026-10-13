@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ApiError,
+  GENERATION_START_TIMEOUT_MS,
   SessionMergedError,
   SessionRejectedError,
   UpgradeRequiredError,
@@ -332,6 +333,51 @@ describe('mobile api client caching', () => {
     });
     const [, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
     expect(init.signal?.aborted).toBe(true);
+  });
+
+  it('gives a start two minutes before calling it unconfirmed, and every other request the client timeout', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const fetcher = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      if (init?.signal) signals.push(init.signal);
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason ?? new Error('aborted')), { once: true });
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+      clientInfo: { appVersion: '0.1.8', apiVersion: 1, catalogSchemaVersion: 3 },
+      requestTimeoutMs: 100,
+    });
+    try {
+      const profile = api.getProfile().catch((error) => error);
+      const unified = api.startGeneration!({
+        kind: 'video',
+        modelId: 'seedance-2',
+        catalogRevision: 'catalog-1',
+        settings: {},
+        prompt: 'A reveal',
+        inputs: [],
+      }, 'video:attempt-1').catch((error) => error);
+      const perKind = api.startVideoGeneration({ model: 'seedance-2', prompt: 'A reveal' } as never, 'video:attempt-2').catch((error) => error);
+      const templateRun = api.startTemplateRun('run-1', 'template-run-start:attempt-3').catch((error) => error);
+
+      await vi.advanceTimersByTimeAsync(150);
+      expect(await profile).toMatchObject({ name: 'ApiError', status: 0 });
+      expect(signals.filter((signal) => signal.aborted)).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(GENERATION_START_TIMEOUT_MS - 200);
+      expect(signals.filter((signal) => signal.aborted)).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(GENERATION_START_TIMEOUT_MS).toBe(120_000);
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+      for (const start of [unified, perKind, templateRun]) {
+        expect(await start).toMatchObject({ name: 'ApiError', status: 0 });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('times out a media-link response that sends headers but stalls while sending its body', async () => {
@@ -714,6 +760,23 @@ describe('mobile api client caching', () => {
     expect(response.generations[0].output_urls).toEqual([
       'https://storage.magicbooklet.test/generated_images/user-1/gen-1.jpg?token=signed',
     ]);
+  });
+
+  it('asks for the status projection when a caller only counts runs', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      generations: [{ id: 'gen-1', status: 'processing', created_at: '2026-10-13T10:00:00.000Z', model: 'kling-3.0-video', category: 'video' }],
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const response = await api.listGenerations(false, { limit: 20, detail: 'status' });
+
+    const [url] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/generations?detail=status&includeArchived=false&limit=20');
+    expect(response.generations.map((generation) => generation.status)).toEqual(['processing']);
   });
 
   it('forwards a page cursor when asking for more generations', async () => {

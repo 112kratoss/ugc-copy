@@ -4,9 +4,11 @@ type LocalforageInstance = {
   getItem: <T>(key: string) => Promise<T | null>;
   setItem: <T>(key: string, value: T) => Promise<T>;
   removeItem: (key: string) => Promise<void>;
+  dropInstance: (options: { name: string }) => Promise<void>;
 };
 
 const stores = new Map<string, Map<string, unknown>>();
+const droppedDatabases: string[] = [];
 
 function getStore(name: string) {
   let store = stores.get(name);
@@ -34,6 +36,10 @@ vi.mock('localforage', () => ({
         async removeItem(key: string) {
           store.delete(key);
         },
+        async dropInstance({ name: databaseName }: { name: string }) {
+          droppedDatabases.push(databaseName);
+          stores.delete(databaseName);
+        },
       };
     },
   },
@@ -42,39 +48,90 @@ vi.mock('localforage', () => ({
 describe('persisted media storage namespaces', () => {
   beforeEach(() => {
     stores.clear();
+    droppedDatabases.length = 0;
     vi.resetModules();
   });
 
-  it('reads persisted files from the legacy emptybooklet namespace', async () => {
-    getStore('emptybooklet-persisted-media').set('demo-file', {
-      file: new Blob(['legacy-emptybooklet'], { type: 'image/png' }),
-      name: 'legacy-emptybooklet.png',
-      type: 'image/png',
-      lastModified: 42,
-    });
-
-    const { getPersistedFile } = await import('@/lib/persisted-media');
-    const file = await getPersistedFile('demo-file');
-
-    expect(file).not.toBeNull();
-    expect(file?.name).toBe('legacy-emptybooklet.png');
-    expect(await file?.text()).toBe('legacy-emptybooklet');
+  const storedFile = (text: string) => ({
+    file: new Blob([text], { type: 'image/png' }),
+    name: `${text}.png`,
+    type: 'image/png',
+    lastModified: 42,
   });
 
-  it('reads persisted files from the legacy ugc-copy namespace', async () => {
-    getStore('ugc-copy-persisted-media').set('demo-file', {
-      file: new Blob(['legacy-ugc-copy'], { type: 'image/png' }),
-      name: 'legacy-ugc-copy.png',
-      type: 'image/png',
-      lastModified: 84,
-    });
+  it('no longer reads the databases of the earlier product names', async () => {
+    // They hold files saved for no particular account.
+    getStore('emptybooklet-persisted-media').set('demo-file', storedFile('legacy-emptybooklet'));
+    getStore('ugc-copy-persisted-media').set('demo-file', storedFile('legacy-ugc-copy'));
 
     const { getPersistedFile } = await import('@/lib/persisted-media');
-    const file = await getPersistedFile('demo-file');
 
-    expect(file).not.toBeNull();
-    expect(file?.name).toBe('legacy-ugc-copy.png');
-    expect(await file?.text()).toBe('legacy-ugc-copy');
+    expect(await getPersistedFile('demo-file')).toBeNull();
+  });
+
+  it('does not bring a cleared file back from an earlier database', async () => {
+    getStore('magicbooklet-persisted-media').set('create-video:start-image:user-1', storedFile('current'));
+    getStore('emptybooklet-persisted-media').set('create-video:start-image:user-1', storedFile('legacy'));
+
+    const { getPersistedFile, removePersistedMedia } = await import('@/lib/persisted-media');
+    await removePersistedMedia('create-video:start-image:user-1');
+
+    expect(await getPersistedFile('create-video:start-image:user-1')).toBeNull();
+  });
+
+  it('keys each creator file to the account that saved it', async () => {
+    const { PERSISTED_MEDIA_KEYS, getPersistedFile, scopedPersistedMediaKey, setPersistedFile } = await import('@/lib/persisted-media');
+    const key = PERSISTED_MEDIA_KEYS.createMotionCharacterImage;
+
+    expect(scopedPersistedMediaKey(key, 'user-1')).toBe('create-motion:character-image:user-1');
+    expect(() => scopedPersistedMediaKey(key, '')).toThrow();
+
+    await setPersistedFile(scopedPersistedMediaKey(key, 'user-1'), new File(['mine'], 'mine.png', { type: 'image/png' }));
+    expect(await getPersistedFile(scopedPersistedMediaKey(key, 'user-2'))).toBeNull();
+    expect(await (await getPersistedFile(scopedPersistedMediaKey(key, 'user-1')))?.text()).toBe('mine');
+  });
+
+  it('purges what was saved before media was kept per account, once per page', async () => {
+    const current = getStore('magicbooklet-persisted-media');
+    current.set('create-image:elements', [{ id: 'old', displayName: 'Old', file: storedFile('old') }]);
+    current.set('create-image:reference-images', [storedFile('older')]);
+    current.set('create-video:seedance-assets', { image: [] });
+    current.set('create-image:elements:user-1', [{ id: 'kept', displayName: 'Kept', file: storedFile('kept') }]);
+    current.set('creator-draft:image:user-1', { version: 1, savedAt: '2026-10-13T00:00:00.000Z', draft: { prompt: 'kept' } });
+    getStore('emptybooklet-persisted-media').set('demo-file', storedFile('legacy'));
+
+    const { PERSISTED_MEDIA_KEYS, purgeLegacyPersistedMedia } = await import('@/lib/persisted-media');
+    await purgeLegacyPersistedMedia();
+
+    for (const key of Object.values(PERSISTED_MEDIA_KEYS)) {
+      expect(current.has(key), key).toBe(false);
+    }
+    expect(current.has('create-image:elements:user-1')).toBe(true);
+    expect(current.has('creator-draft:image:user-1')).toBe(true);
+    expect(droppedDatabases.sort()).toEqual(['emptybooklet-persisted-media', 'ugc-copy-persisted-media']);
+
+    await purgeLegacyPersistedMedia();
+    expect(droppedDatabases).toHaveLength(2);
+  });
+
+  it('clears one account\'s media and drafts and leaves every other account\'s', async () => {
+    const current = getStore('magicbooklet-persisted-media');
+    const { PERSISTED_MEDIA_KEYS, clearPersistedCreatorData, scopedPersistedMediaKey } = await import('@/lib/persisted-media');
+    for (const key of Object.values(PERSISTED_MEDIA_KEYS)) {
+      current.set(scopedPersistedMediaKey(key, 'user-1'), [storedFile('mine')]);
+      current.set(scopedPersistedMediaKey(key, 'user-2'), [storedFile('theirs')]);
+    }
+    for (const tool of ['image', 'video', 'motion']) {
+      current.set(`creator-draft:${tool}:user-1`, { version: 1, savedAt: '2026-10-13T00:00:00.000Z', draft: {} });
+      current.set(`creator-draft:${tool}:user-2`, { version: 1, savedAt: '2026-10-13T00:00:00.000Z', draft: {} });
+    }
+
+    await clearPersistedCreatorData('user-1');
+
+    expect([...current.keys()].filter((key) => key.endsWith(':user-1'))).toEqual([]);
+    expect([...current.keys()].filter((key) => key.endsWith(':user-2'))).toHaveLength(
+      Object.values(PERSISTED_MEDIA_KEYS).length + 3,
+    );
   });
 
   it('writes new persisted files only to the magicbooklet namespace', async () => {
@@ -108,6 +165,21 @@ describe('persisted media storage namespaces', () => {
     expect(restored[0]).toMatchObject({ id: 'element-1', displayName: 'Dancer', handle: '@dancer_2' });
     expect(restored[0].file.name).toBe('dancer.png');
     expect(await restored[0].file.text()).toBe('dancer');
+  });
+
+  it('keeps an element’s staged copy by its path and time, never its expiring link', async () => {
+    const { getPersistedImageElementRecords, setPersistedImageElementRecords } = await import('@/lib/persisted-media');
+    const staged = { storagePath: 'uploads/user-1/dancer.png', uploadedAt: 1_700_000_000_000 };
+    const file = new File(['dancer'], 'dancer.png', { type: 'image/png' });
+
+    await setPersistedImageElementRecords('create-image:elements', [
+      { id: 'staged', displayName: 'Dancer', file, staged: { ...staged, signedUrl: 'https://signed.example/x' } as typeof staged },
+      { id: 'never-staged', displayName: 'Dancer', file },
+    ]);
+    expect((getStore('magicbooklet-persisted-media').get('create-image:elements') as Array<{ staged: unknown }>)
+      .map((record) => record.staged)).toEqual([staged, null]);
+    expect((await getPersistedImageElementRecords('create-image:elements')).map((record) => record.staged))
+      .toEqual([staged, null]);
   });
 
   it('round-trips a Kling video element with its handle and length', async () => {

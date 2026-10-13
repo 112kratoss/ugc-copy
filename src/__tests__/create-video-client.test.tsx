@@ -12,12 +12,52 @@ import * as serverCatalog from '@/lib/generation-model-catalog';
 import * as catalogClient from '@/lib/generation-model-client';
 import type { EnhancerContext } from '@/lib/prompt-enhancer';
 import type { RemixResolvedSubject, RemixSourceBundle } from '@/lib/remix-source';
+import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
+import { inspectPromptQuality } from '@/lib/prompt-quality';
+import { supabase } from '@/lib/supabase';
+import { TemporaryMediaReadUrlError } from '@/lib/temporary-media-upload';
 
-const mockPush = vi.fn();
+// One router for every render: a new object per render restarts effects that read it.
+const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
+const mockPush = routerMock.push;
 const mockUpdateCredits = vi.fn();
+const loadCreatorDraftMock = vi.hoisted(() => vi.fn(async (_tool: string, _userId: string): Promise<unknown> => {
+  void _tool;
+  void _userId;
+  return null;
+}));
+const saveCreatorDraftMock = vi.hoisted(() => vi.fn(async (_tool: string, _userId: string, _draft: unknown): Promise<void> => {
+  void _tool;
+  void _userId;
+  void _draft;
+}));
+const purgeLegacyPersistedMediaMock = vi.hoisted(() => vi.fn(async () => undefined));
+const setPersistedFileMock = vi.hoisted(() => vi.fn(async (_key: string, _file: File): Promise<void> => {
+  void _key;
+  void _file;
+}));
+const getPersistedValueMock = vi.hoisted(() => vi.fn(async (_key: string): Promise<unknown> => {
+  void _key;
+  return null;
+}));
+const refreshTemporaryMediaUrlMock = vi.hoisted(() => vi.fn(async (storagePath: string) => `https://signed.example.com/refreshed/${storagePath}`));
+// The page's duration reader, as the browser would answer it: a clip is 4.2 seconds long and a track 6.5.
+const readDurationMock = vi.hoisted(() => vi.fn(async (source: File | string) => (
+  typeof source !== 'string' && source.type.startsWith('audio/') ? 6.5 : 4.2
+)));
+// Whether a deploy newer than the page is known, and what the page asked the watcher.
+const deployState = vi.hoisted(() => ({ newBuildAvailable: false, enabled: [] as boolean[] }));
+const publishModalPropsMock = vi.hoisted(() => vi.fn((_props: {
+  isOpen: boolean;
+  defaultTitle?: string;
+  paywallPrefill?: unknown;
+}) => {
+  void _props;
+}));
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
-const quoteRequestMock = vi.hoisted(() => vi.fn((_request: GenerationModelQuoteInput | null) => {
+const quoteRequestMock = vi.hoisted(() => vi.fn((_request: GenerationModelQuoteInput | null, _attempt?: number) => {
   void _request;
+  void _attempt;
 }));
 const modelCatalogState = vi.hoisted(() => ({
   missingIds: [] as string[],
@@ -87,9 +127,23 @@ const queryBuilder = {
 };
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: mockPush,
-  }),
+  useRouter: () => routerMock,
+}));
+
+vi.mock('@/lib/persisted-creator-draft', () => ({
+  loadCreatorDraft: loadCreatorDraftMock,
+  saveCreatorDraft: saveCreatorDraftMock,
+}));
+
+vi.mock('@/lib/video-metadata-probe', () => ({
+  readVideoDurationSeconds: readDurationMock,
+}));
+
+vi.mock('@/lib/use-deployment-refresh', () => ({
+  useDeploymentRefresh: (enabled: boolean) => {
+    deployState.enabled.push(enabled);
+    return { newBuildAvailable: deployState.newBuildAvailable };
+  },
 }));
 
 vi.mock('@/components/AuthProvider', () => ({
@@ -116,7 +170,10 @@ vi.mock('@/components/PublicShareButton', () => ({
 }));
 
 vi.mock('@/components/PublishToShowcaseModal', () => ({
-  default: () => null,
+  default: (props: { isOpen: boolean; defaultTitle?: string; paywallPrefill?: unknown }) => {
+    publishModalPropsMock(props);
+    return null;
+  },
 }));
 
 vi.mock('@/lib/persisted-media', () => ({
@@ -136,9 +193,12 @@ vi.mock('@/lib/persisted-media', () => ({
   // Hydration loads every persisted slot in one Promise.all, so a missing mock
   // here rejects the whole load and silently disables ALL draft restoration.
   getPersistedSubjectRecords: getPersistedSubjectRecordsMock,
-  getPersistedValue: vi.fn(async () => null),
+  getPersistedValue: getPersistedValueMock,
+  // The keys of persisted-media.ts: every key is saved under its account.
+  scopedPersistedMediaKey: (key: string, userId: string) => `${key}:${userId}`,
+  purgeLegacyPersistedMedia: purgeLegacyPersistedMediaMock,
   removePersistedMedia: vi.fn(async () => undefined),
-  setPersistedFile: vi.fn(async () => undefined),
+  setPersistedFile: setPersistedFileMock,
   setPersistedImageElementRecords: setPersistedImageElementRecordsMock,
   setPersistedMediaRecords: setPersistedMediaRecordsMock,
   setPersistedSubjectRecords: setPersistedSubjectRecordsMock,
@@ -172,9 +232,14 @@ vi.mock('@/lib/supabase', () => ({
   },
 }));
 
-vi.mock('@/lib/temporary-media-upload', () => ({
-  uploadMediaToTemporaryStorage: temporaryUploadMock,
-}));
+vi.mock('@/lib/temporary-media-upload', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/temporary-media-upload')>('@/lib/temporary-media-upload');
+  return {
+    ...actual,
+    uploadMediaToTemporaryStorage: temporaryUploadMock,
+    refreshTemporaryMediaUrl: refreshTemporaryMediaUrlMock,
+  };
+});
 
 vi.mock('@/lib/generation-model-client', async () => {
   const actual = await vi.importActual<typeof import('@/lib/generation-model-client')>('@/lib/generation-model-client');
@@ -239,8 +304,9 @@ vi.mock('@/lib/generation-model-client', async () => {
       revision: 'test-catalog-rev',
       refetch: generationCatalogRefetchMock,
     }),
-    useWebGenerationModelQuote: (request: GenerationModelQuoteInput | null) => {
-      quoteRequestMock(request);
+    useWebGenerationModelQuote: (request: GenerationModelQuoteInput | null, _accessToken?: string | null, attempt = 0) => {
+      void _accessToken;
+      quoteRequestMock(request, attempt);
       return {
         status: 'ready',
         quote: {
@@ -301,13 +367,61 @@ async function unknownMentionLine() {
   return (await screen.findByText(/^Unknown element mention/)).textContent;
 }
 
+/** What the server answers a start it accepted. */
+function startedRunBody(overrides: Record<string, unknown> = {}) {
+  return {
+    success: true,
+    predictionId: 'pred-1',
+    generationId: 'gen-run-1',
+    status: 'processing',
+    remainingCredits: 900,
+    cost: 12,
+    catalogRevision: 'test-catalog-rev',
+    modelId: 'kling-3.0-video',
+    ...overrides,
+  };
+}
+
+/**
+ * The page's own answers when a test says nothing else: a start is accepted and its
+ * run has finished by the first status check.
+ */
+async function defaultResponse(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  if (String(input).includes('/api/generations') && init?.method === 'POST') {
+    return { ok: true, status: 200, json: async () => startedRunBody() } as Response;
+  }
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      status: 'succeeded',
+      output: 'https://example.com/result.mp4',
+      timing: null,
+    }),
+  } as Response;
+}
+
 describe('CreateVideoClient Kling video elements', () => {
   const originalCreateObjectURL = URL.createObjectURL;
   const originalRevokeObjectURL = URL.revokeObjectURL;
-  const originalCreateElement = document.createElement.bind(document);
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    // A start kept from another test would be replayed when the page opens.
+    window.sessionStorage.clear();
+    deployState.newBuildAvailable = false;
+    deployState.enabled = [];
+    loadCreatorDraftMock.mockReset();
+    loadCreatorDraftMock.mockResolvedValue(null);
+    saveCreatorDraftMock.mockClear();
+    purgeLegacyPersistedMediaMock.mockClear();
+    setPersistedFileMock.mockClear();
+    getPersistedValueMock.mockReset();
+    getPersistedValueMock.mockResolvedValue(null);
+    refreshTemporaryMediaUrlMock.mockReset();
+    refreshTemporaryMediaUrlMock.mockImplementation(async (storagePath: string) => `https://signed.example.com/refreshed/${storagePath}`);
+    readDurationMock.mockClear();
+    publishModalPropsMock.mockClear();
     mockPush.mockClear();
     mockUpdateCredits.mockClear();
     generationCatalogRefetchMock.mockClear();
@@ -344,54 +458,8 @@ describe('CreateVideoClient Kling video elements', () => {
       return `blob:${label}:${objectUrlSequence}`;
     }) as typeof URL.createObjectURL;
     URL.revokeObjectURL = vi.fn() as typeof URL.revokeObjectURL;
-    vi.spyOn(document, 'createElement').mockImplementation(((tagName: string) => {
-      // jsdom loads no media, so the page would wait for a length that never comes.
-      // Here a clip is 4.2 seconds long and a track 6.5.
-      if (tagName === 'video' || tagName === 'audio') {
-        const previewMedia = originalCreateElement(tagName) as HTMLMediaElement;
-        Object.defineProperty(previewMedia, 'duration', {
-          configurable: true,
-          get: () => (tagName === 'video' ? 4.2 : 6.5),
-        });
-        Object.defineProperty(previewMedia, 'src', {
-          configurable: true,
-          get: () => 'blob:kling-video',
-          set: () => {
-            setTimeout(() => {
-              previewMedia.onloadedmetadata?.(new Event('loadedmetadata'));
-            }, 0);
-          },
-        });
-        previewMedia.load = vi.fn();
-        return previewMedia;
-      }
 
-      return originalCreateElement(tagName);
-    }) as typeof document.createElement);
-
-    fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes('/api/generate-video') && init?.method === 'POST') {
-        return {
-          ok: true,
-          json: async () => ({
-            success: true,
-            predictionId: 'pred-kling',
-            generationId: 'gen-kling',
-            remainingCredits: 900,
-          }),
-        } as Response;
-      }
-
-      return {
-        ok: true,
-        json: async () => ({
-          status: 'succeeded',
-          output: 'https://example.com/result.mp4',
-          timing: null,
-        }),
-      } as Response;
-    });
+    fetchMock = vi.fn(defaultResponse);
     vi.stubGlobal('fetch', fetchMock);
   });
 
@@ -410,14 +478,13 @@ describe('CreateVideoClient Kling video elements', () => {
     return call ? JSON.parse(String(call[1]?.body)) : undefined;
   }
 
-  /** Answers the page's remix request with this bundle, and every other request as a finished run. */
+  /** Answers the page's remix request with this bundle, and every other request as the page's own answers do. */
   function stubRemix(bundle: RemixSourceBundle) {
-    fetchMock.mockImplementation(async (input: RequestInfo | URL) => ({
-      ok: true,
-      json: async () => (String(input).includes('/api/remix-source')
-        ? bundle
-        : { status: 'succeeded', output: 'https://example.com/result.mp4', timing: null }),
-    } as Response));
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+      String(input).includes('/api/remix-source')
+        ? { ok: true, status: 200, json: async () => bundle } as Response
+        : defaultResponse(input, init)
+    ));
   }
 
   /** What the Enhance button of one shot was last given. */
@@ -765,7 +832,7 @@ describe('CreateVideoClient Kling video elements', () => {
     // panel where nothing can be removed and so nothing can be un-locked.
     const startFrame = new File(['frame-bytes'], 'start.png', { type: 'image/png' });
     getPersistedFileMock.mockImplementation(async (key: string) => (
-      key === 'create-video:start-image' ? startFrame : null
+      key === 'create-video:start-image:user-1' ? startFrame : null
     ));
     getPersistedImageElementRecordsMock.mockResolvedValue([
       { id: 'element-1', displayName: 'Hero', handle: '@Hero', file: new File(['ref'], 'hero.png', { type: 'image/png' }), source: 'upload' },
@@ -889,7 +956,7 @@ describe('CreateVideoClient Kling video elements', () => {
       // on MiniMax H3 while the page had no card to show it or take it off.
       const savedClip = new File(['video-bytes'], 'camera-move.mp4', { type: 'video/mp4' });
       getPersistedMediaRecordsMock.mockImplementation(async (key: string) => (
-        key === 'create-video:reference-videos'
+        key === 'create-video:reference-videos:user-1'
           ? [{ id: 'saved-clip', displayName: 'Camera move', durationSeconds: 5, file: savedClip }]
           : []
       ));
@@ -989,7 +1056,8 @@ describe('CreateVideoClient Kling video elements', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
 
-    expect(temporaryUploadMock).toHaveBeenCalledWith(file);
+    // The session is read before anything is uploaded, so a lapsed one uploads nothing.
+    await waitFor(() => expect(temporaryUploadMock).toHaveBeenCalledWith(file));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -1216,7 +1284,7 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']);
       expect(promptBox()).toHaveValue('A dancer follows @video_element_1 across the stage');
       const savedNames = setPersistedMediaRecordsMock.mock.calls
-        .filter(([key]) => key === 'create-video:kling-video-elements')
+        .filter(([key]) => key === 'create-video:kling-video-elements:user-1')
         .flatMap(([, records]) => records.map((record) => record.displayName));
       expect(savedNames).not.toContain('Red jacket');
     });
@@ -1239,12 +1307,12 @@ describe('CreateVideoClient Kling video elements', () => {
 
       // The reload: the page goes away, and the next one starts from what was saved.
       const saved = setPersistedMediaRecordsMock.mock.calls
-        .filter(([key]) => key === 'create-video:kling-video-elements')
+        .filter(([key]) => key === 'create-video:kling-video-elements:user-1')
         .at(-1)?.[1] ?? [];
       expect(saved).toHaveLength(2);
       first.unmount();
       getPersistedMediaRecordsMock.mockImplementation(async (key: string) => (
-        key === 'create-video:kling-video-elements' ? saved : []
+        key === 'create-video:kling-video-elements:user-1' ? saved : []
       ));
 
       const second = render(<CreateVideoClient prefill={{}} />);
@@ -2383,7 +2451,7 @@ describe('CreateVideoClient Kling video elements', () => {
       // The handle is one the page knows, so it is not an unknown mention.
       const row = promptBox().nextElementSibling;
       expect(Array.from(row?.children ?? []).map((part) => part.textContent)).toEqual([
-        `${prompt.length}/2500`,
+        `${prompt.length}/10000`,
         'On standby here: @hero',
       ]);
     });
@@ -2396,7 +2464,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       const row = promptBox().nextElementSibling;
       expect(Array.from(row?.children ?? []).map((part) => part.textContent)).toEqual([
-        `${withUnknown.length}/2500`,
+        `${withUnknown.length}/10000`,
         'Unknown element mention: @ghost',
       ]);
     });
@@ -2406,7 +2474,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(promptBox(), { target: { value: 'A harbour at dusk' } });
 
       const row = promptBox().nextElementSibling;
-      expect(row?.textContent).toBe('17/2500');
+      expect(row?.textContent).toBe('17/10000');
       expect(row?.children).toHaveLength(1);
     });
 
@@ -2466,7 +2534,7 @@ describe('CreateVideoClient Kling video elements', () => {
         file: picture(`saved-image-${index + 1}`),
       })));
       getPersistedMediaRecordsMock.mockImplementation(async (key: string) => {
-        if (key === 'create-video:reference-videos' && (saved.clip || saved.clips)) {
+        if (key === 'create-video:reference-videos:user-1' && (saved.clip || saved.clips)) {
           return Array.from({ length: saved.clips ?? 1 }, (_, index) => ({
             id: `saved-clip-${index + 1}`,
             displayName: index === 0 ? 'Saved clip' : `Saved clip ${index + 1}`,
@@ -2474,17 +2542,17 @@ describe('CreateVideoClient Kling video elements', () => {
             durationSeconds: 4,
           }));
         }
-        if (key === 'create-video:reference-audios' && saved.track) {
+        if (key === 'create-video:reference-audios:user-1' && saved.track) {
           return [{ id: 'saved-track', displayName: 'Saved track', file: new File(['track'], 'saved-track.mp3', { type: 'audio/mpeg' }), durationSeconds: 6 }];
         }
-        if (key === 'create-video:kling-video-elements' && saved.klingClip) {
+        if (key === 'create-video:kling-video-elements:user-1' && saved.klingClip) {
           return [{ id: 'saved-kling-clip', displayName: 'Saved Kling clip', handle: '@saved_kling_clip', file: new File(['clip'], 'saved-kling-clip.mp4', { type: 'video/mp4' }), durationSeconds: 4 }];
         }
         return [];
       });
       if (saved.startFrame) {
         getPersistedFileMock.mockImplementation(async (key: string) => (
-          key === 'create-video:start-image' ? picture('start') : null
+          key === 'create-video:start-image:user-1' ? picture('start') : null
         ));
       }
     }
@@ -2539,6 +2607,12 @@ describe('CreateVideoClient Kling video elements', () => {
 
     function runInputs(slot: string) {
       return (postedRun()?.inputs ?? []).filter((input: { slot: string }) => input.slot === slot);
+    }
+
+    /** The references the standby card offers to take off, by name. */
+    function standbyChips() {
+      return Array.from(screen.queryByRole('list', { name: 'References on standby' })?.querySelectorAll('li') ?? [])
+        .map((chip) => chip.textContent);
     }
 
     /** What the standby card says under its title, or null where the page shows no such card. */
@@ -2693,7 +2767,9 @@ describe('CreateVideoClient Kling video elements', () => {
       await restored();
 
       expect(screen.getByText('Saved clip')).toBeInTheDocument();
-      expect(screen.queryByText('Saved track')).toBeNull();
+      // The track is offered only on the standby card, where it can be taken off.
+      expect(standbyChips()).toEqual(['Saved track']);
+      expect(screen.queryByRole('heading', { name: 'Video and audio references' })).toBeNull();
       expect(runSummary('Inputs')).toBe('2 references');
       expect(refusedByTheServer(lastQuoteRequest())).toBeNull();
 
@@ -2782,7 +2858,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(promptBox, { target: { value: prompt } });
 
       expect(Array.from(promptBox.nextElementSibling?.children ?? []).map((part) => part.textContent)).toEqual([
-        `${prompt.length}/2500`,
+        `${prompt.length}/10000`,
         'On standby here: @saved_image_1, @saved_image_2',
       ]);
 
@@ -2871,6 +2947,848 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(frameGroupLocked(view.container)).toBe(false);
       expect(screen.getByText(/takes either frames or references in a single run/)).toBeInTheDocument();
       expect(lastQuoteRequest().settings.referenceMode).toBe('frames');
+    });
+  });
+
+  /**
+   * What the page does around a start. A start keeps one key until an answer says
+   * whether it started (each press used to mint a new one, so a lost answer was paid
+   * for twice); a status check rides out a blip; a newer deploy is watched for while
+   * the page is idle; the prompt and settings outlive a reload; a file is uploaded once
+   * for many presses; and each refusal leads to what the creator can do about it.
+   */
+  describe('the start, the run and the draft', () => {
+    const PROMPT = 'A harbour at dusk, a slow push in over the water as the lamps come on along the quay.';
+    const clipInput = 'input[type="file"][accept="video/*"]';
+
+    function promptBox() {
+      return screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/);
+    }
+
+    function generateButton() {
+      return screen.getByRole('button', { name: /generate video/i });
+    }
+
+    /** Every start the page sent, as its key and its body. */
+    function postedStarts(): Array<{ key: string | null; body: { inputs: Array<Record<string, unknown>>; settings: Record<string, unknown>; shots: unknown[] } }> {
+      return fetchMock.mock.calls
+        .filter(([input, init]) => String(input).includes('/api/generations') && init?.method === 'POST')
+        .map(([, init]) => ({
+          key: new Headers(init?.headers).get('Idempotency-Key'),
+          body: JSON.parse(String(init?.body)),
+        }));
+    }
+
+    function statusChecks() {
+      return fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/generate-video?id='));
+    }
+
+    /** Each start the page sends takes the next answer; anything else gets the page's own. */
+    function answerStarts(...answers: Array<() => Promise<Response>>) {
+      const queue = [...answers];
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+        String(input).includes('/api/generations') && init?.method === 'POST' && queue.length > 0
+          ? queue.shift()!()
+          : defaultResponse(input, init)
+      ));
+    }
+
+    const refusal = (status: number, body: Record<string, unknown>) => async () => (
+      { ok: false, status, json: async () => body } as Response
+    );
+
+    /** The `credits_updated` events that ask for the balance to be read again (they carry no balance). */
+    function watchBalanceRereads() {
+      const rereads: Event[] = [];
+      const listener = (event: Event) => {
+        if (!(event instanceof CustomEvent && event.detail)) rereads.push(event);
+      };
+      window.addEventListener('credits_updated', listener);
+      return { rereads, stop: () => window.removeEventListener('credits_updated', listener) };
+    }
+
+    async function attachClip(container: HTMLElement, file: File) {
+      fireEvent.change(container.querySelector<HTMLInputElement>(clipInput)!, { target: { files: [file] } });
+      expect(await screen.findByText('Video reference 1')).toBeInTheDocument();
+    }
+
+    it('keeps the key of a start that got no answer, and Check again sends that key and body once more', async () => {
+      answerStarts(async () => {
+        throw new TypeError('Failed to fetch');
+      });
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+
+      expect(await screen.findByText('We couldn’t confirm your generation started. Check again — that can’t start a second run.')).toBeInTheDocument();
+      const [first] = postedStarts();
+      expect(catalogClient.loadPendingWebStart('video', 'user-1')).toMatchObject({ idempotencyKey: first.key, body: { prompt: PROMPT } });
+      // Nothing on the page can start a second run while this one is unanswered.
+      expect(screen.queryByRole('button', { name: /generate video/i })).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+
+      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      const starts = postedStarts();
+      expect(starts).toHaveLength(2);
+      expect(starts[1].key).toBe(first.key);
+      expect(starts[1].body).toEqual(first.body);
+      expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
+      expect(screen.queryByText(/couldn’t confirm/)).toBeNull();
+    });
+
+    it('stops watching for a newer build while a start is out, so no reload can cut it off', async () => {
+      let answer: (response: Response) => void = () => undefined;
+      answerStarts(() => new Promise<Response>((resolve) => {
+        answer = resolve;
+      }));
+      render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(deployState.enabled.at(-1)).toBe(true));
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+
+      await waitFor(() => expect(postedStarts()).toHaveLength(1));
+      await waitFor(() => expect(deployState.enabled.at(-1)).toBe(false));
+
+      answer({ ok: true, status: 200, json: async () => startedRunBody() } as Response);
+      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      await waitFor(() => expect(deployState.enabled.at(-1)).toBe(true));
+    });
+
+    it('lets the creator give up on an unanswered start and start a new run under a new key', async () => {
+      answerStarts(refusal(504, {}));
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+      await screen.findByRole('button', { name: 'Check again' });
+
+      // Priced on its button: the unanswered start may yet have started.
+      fireEvent.click(screen.getByRole('button', { name: 'Start a new run · 12 credits' }));
+
+      await waitFor(() => expect(postedStarts()).toHaveLength(2));
+      expect(postedStarts()[1].key).not.toBe(postedStarts()[0].key);
+      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
+    });
+
+    it('drops the key of a refused start, and puts the cursor back in the prompt the server refused', async () => {
+      answerStarts(refusal(422, { code: 'INVALID_GENERATION_REQUEST', error: 'Shot 1 is too long.' }));
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+
+      expect(await screen.findByText('Shot 1 is too long.')).toBeInTheDocument();
+      expect(promptBox()).toHaveFocus();
+      expect(screen.queryByText(/couldn’t confirm/)).toBeNull();
+      expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
+
+      fireEvent.click(generateButton());
+      await waitFor(() => expect(postedStarts()).toHaveLength(2));
+      expect(postedStarts()[1].key).not.toBe(postedStarts()[0].key);
+    });
+
+    it('puts the cursor back in the prompt when the server blocks it', async () => {
+      answerStarts(refusal(422, { code: 'prompt_blocked', error: 'This prompt can’t be used. Edit it and try again.' }));
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+
+      expect(await screen.findByText('This prompt can’t be used. Edit it and try again.')).toBeInTheDocument();
+      expect(promptBox()).toHaveFocus();
+    });
+
+    it('replays a start this tab never heard back from when the page opens, before looking for a running one', async () => {
+      const body = {
+        kind: 'video',
+        modelId: 'kling-3.0-video',
+        catalogRevision: 'test-catalog-rev',
+        prompt: PROMPT,
+        shots: [],
+        settings: { duration: 5 },
+        inputs: [],
+      };
+      catalogClient.savePendingWebStart({
+        version: 1,
+        tool: 'video',
+        idempotencyKey: 'video:kept-key',
+        body,
+        catalogRevision: 'test-catalog-rev',
+        createdAt: new Date().toISOString(),
+        userId: 'user-1',
+      });
+
+      render(<CreateVideoClient prefill={{}} />);
+
+      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      expect(postedStarts()).toEqual([{ key: 'video:kept-key', body: { schemaVersion: 3, ...body } }]);
+      expect(maybeSingleMock).not.toHaveBeenCalled();
+      expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
+    });
+
+    it('does not replay a start another account left in this tab', async () => {
+      catalogClient.savePendingWebStart({
+        version: 1,
+        tool: 'video',
+        idempotencyKey: 'video:their-key',
+        body: { kind: 'video', modelId: 'kling-3.0-video', catalogRevision: 'test-catalog-rev', prompt: PROMPT, settings: {} },
+        catalogRevision: 'test-catalog-rev',
+        createdAt: new Date().toISOString(),
+        userId: 'user-2',
+      });
+
+      render(<CreateVideoClient prefill={{}} />);
+
+      await waitFor(() => expect(maybeSingleMock).toHaveBeenCalled());
+      expect(postedStarts()).toEqual([]);
+    });
+
+    it('hands a run whose status checks keep failing to the background view, after trying again', async () => {
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+        String(input).includes('/api/generate-video?id=')
+          ? { ok: false, status: 500, json: async () => ({ error: 'Failed to fetch generation status' }) } as Response
+          : defaultResponse(input, init)
+      ));
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      const getSession = vi.mocked(supabase.auth.getSession);
+      await waitFor(() => expect(maybeSingleMock).toHaveBeenCalled());
+
+      vi.useFakeTimers();
+      try {
+        fireEvent.click(generateButton());
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        const sessionReadsAtStart = getSession.mock.calls.length;
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(20_000);
+        });
+
+        expect(statusChecks()).toHaveLength(4);
+        // The token is read again for every check: a run can outlive the one it started with.
+        expect(getSession.mock.calls.length - sessionReadsAtStart).toBeGreaterThanOrEqual(3);
+        expect(screen.queryByText('Failed to fetch generation status')).toBeNull();
+        expect(screen.getAllByText('Video still processing').length).toBeGreaterThan(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('rides out one failed status check and shows the result', async () => {
+      let checks = 0;
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes('/api/generate-video?id=')) {
+          checks += 1;
+          if (checks === 1) return { ok: false, status: 503, json: async () => ({}) } as Response;
+        }
+        return defaultResponse(input, init);
+      });
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      await waitFor(() => expect(maybeSingleMock).toHaveBeenCalled());
+
+      vi.useFakeTimers();
+      try {
+        fireEvent.click(generateButton());
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_500);
+        });
+        expect(checks).toBe(2);
+        expect(screen.getByText('Latest video result')).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('says a failed run returned its credits, and reads the balance again', async () => {
+      const balance = watchBalanceRereads();
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+        String(input).includes('/api/generate-video?id=')
+          ? { ok: true, status: 200, json: async () => ({ status: 'failed', error: 'The provider could not render this prompt.' }) } as Response
+          : defaultResponse(input, init)
+      ));
+      try {
+        render(<CreateVideoClient prefill={{}} />);
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        fireEvent.click(generateButton());
+
+        expect(await screen.findByText('The provider could not render this prompt. Your 12 credits were returned.')).toBeInTheDocument();
+        expect(balance.rereads.length).toBeGreaterThan(0);
+      } finally {
+        balance.stop();
+      }
+    });
+
+    it('offers a top-up when the server says the credits are short, and reads the balance again', async () => {
+      const balance = watchBalanceRereads();
+      answerStarts(refusal(402, { code: 'insufficient_credits', error: 'Insufficient credits. This action costs 12 credits.' }));
+      try {
+        render(<CreateVideoClient prefill={{}} />);
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        fireEvent.click(generateButton());
+
+        expect(await screen.findByText('Insufficient credits. This action costs 12 credits.')).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: /Top Up Credits/ })).toHaveAttribute('href', '/pricing');
+        expect(screen.queryByRole('button', { name: /generate video/i })).toBeNull();
+        expect(balance.rereads.length).toBeGreaterThan(0);
+        expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
+      } finally {
+        balance.stop();
+      }
+    });
+
+    it('watches for a newer build while idle, and at the press saves the draft and reloads instead of sending', async () => {
+      render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(deployState.enabled.at(-1)).toBe(true));
+      await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalled());
+
+      deployState.newBuildAvailable = true;
+      // The change draws the page again, which reads the new answer.
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      // jsdom does not navigate: it reports each navigation it was asked for, a reload
+      // included, as not implemented.
+      const { virtualConsole } = (globalThis as unknown as {
+        jsdom: { virtualConsole: { on: (event: string, listener: (error: Error) => void) => void; off: (event: string, listener: (error: Error) => void) => void } };
+      }).jsdom;
+      const navigations: string[] = [];
+      const onJsdomError = (jsdomError: Error) => {
+        if (/navigation/i.test(jsdomError.message)) navigations.push(jsdomError.message);
+      };
+      virtualConsole.on('jsdomError', onJsdomError);
+      try {
+        fireEvent.click(generateButton());
+
+        // Saved at the press, ahead of the half-second wait of an ordinary save.
+        await waitFor(
+          () => expect(saveCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1', expect.objectContaining({ prompt: PROMPT })),
+          { timeout: 300 },
+        );
+        await waitFor(() => expect(navigations).toHaveLength(1));
+        expect(postedStarts()).toEqual([]);
+        expect(temporaryUploadMock).not.toHaveBeenCalled();
+      } finally {
+        virtualConsole.off('jsdomError', onJsdomError);
+      }
+    });
+
+    it('sends a lapsed session to sign in on this page’s own link, with the draft saved', async () => {
+      window.history.replaceState({}, '', '/create-video?model=seedance-1.5-pro&prompt=harbour');
+      try {
+        render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+        await waitFor(() => expect(maybeSingleMock).toHaveBeenCalled());
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalled());
+        vi.mocked(supabase.auth.getSession).mockResolvedValueOnce({ data: { session: null }, error: null } as never);
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        fireEvent.click(generateButton());
+
+        await waitFor(() => expect(mockPush).toHaveBeenCalledWith(
+          `/login?returnUrl=${encodeURIComponent('/create-video?model=seedance-1.5-pro&prompt=harbour')}`,
+        ));
+        expect(saveCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1', expect.objectContaining({ prompt: PROMPT }));
+        expect(postedStarts()).toEqual([]);
+      } finally {
+        window.history.replaceState({}, '', '/');
+      }
+    });
+
+    it('saves the prompt and settings for the account, and brings them back before the catalog picks a model', async () => {
+      const first = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(screen.getByRole('button', { name: '9:16' }));
+      await waitFor(() => expect(saveCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1', expect.objectContaining({
+        prompt: PROMPT,
+        modelId: 'seedance-1.5-pro',
+        aspectRatio: '9:16',
+      })));
+      const saved = saveCreatorDraftMock.mock.calls.at(-1)?.[2];
+      first.unmount();
+
+      // The next visit, on a link that names no model: the catalog's default is Kling 3.0.
+      loadCreatorDraftMock.mockResolvedValue(saved);
+      render(<CreateVideoClient prefill={{}} />);
+
+      await waitFor(() => expect(promptBox()).toHaveValue(PROMPT));
+      expect(screen.getByPlaceholderText('Describe the Seedance 1.5 Pro scene in rich cinematic detail...')).toBeInTheDocument();
+      await waitFor(() => expect(quoteRequestMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        modelId: 'seedance-1.5-pro',
+        settings: { aspectRatio: '9:16' },
+      }));
+    });
+
+    it('lets a link’s own prompt win over the saved one, and keeps the rest of the draft', async () => {
+      loadCreatorDraftMock.mockResolvedValue({
+        prompt: 'The saved prompt',
+        modelId: 'seedance-1.5-pro',
+        aspectRatio: '9:16',
+        isMultiShot: false,
+        shots: [{ id: '1', prompt: '', duration: 5 }],
+        duration: 5,
+      });
+      render(<CreateVideoClient prefill={{ prompt: 'The prompt of the link' }} />);
+
+      await waitFor(() => expect(screen.getByPlaceholderText('Describe the Seedance 1.5 Pro scene in rich cinematic detail...')).toHaveValue('The prompt of the link'));
+      await waitFor(() => expect(quoteRequestMock.mock.calls.at(-1)?.[0]?.settings).toMatchObject({ aspectRatio: '9:16' }));
+    });
+
+    it('keeps no draft of a remix, which restores its source', async () => {
+      stubRemix({
+        generation: { id: 'gen-1', title: 'Harbour', prompt: PROMPT, category: 'video', model: 'kling-3.0-video' },
+        result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+        inputs: {},
+        workflowSettings: { model: 'kling-3.0-video' },
+        restoreIssues: [],
+      } as RemixSourceBundle);
+      const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      await waitFor(() => expect(promptBox()).toHaveValue(PROMPT));
+      fireEvent.change(promptBox(), { target: { value: `${PROMPT} Again.` } });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+      });
+      view.unmount();
+
+      expect(loadCreatorDraftMock).not.toHaveBeenCalled();
+      expect(saveCreatorDraftMock).not.toHaveBeenCalled();
+    });
+
+    it('reads and writes staged files under the account, and drops the unscoped ones once', async () => {
+      const view = render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(getPersistedFileMock).toHaveBeenCalledWith('create-video:start-image:user-1'));
+      expect(getPersistedImageElementRecordsMock).toHaveBeenCalledWith('create-video:elements:user-1');
+      expect(getPersistedValueMock).toHaveBeenCalledWith('create-video:seedance-assets:user-1');
+      expect(getPersistedFileMock).not.toHaveBeenCalledWith('create-video:start-image');
+      expect(purgeLegacyPersistedMediaMock).toHaveBeenCalledTimes(1);
+
+      const frame = new File(['image'], 'start.png', { type: 'image/png' });
+      fireEvent.change(view.container.querySelector<HTMLInputElement>('#video-start-frame-input')!, { target: { files: [frame] } });
+      await waitFor(() => expect(setPersistedFileMock).toHaveBeenCalledWith('create-video:start-image:user-1', frame));
+    });
+
+    it('uploads a clip once for two presses, and sends its staged copy the second time', async () => {
+      const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
+      await screen.findByRole('heading', { name: 'Video and audio references' });
+      await attachClip(view.container, new File(['video-bytes'], 'walk.mp4', { type: 'video/mp4' }));
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+
+      fireEvent.click(generateButton());
+      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      fireEvent.click(generateButton());
+      await waitFor(() => expect(postedStarts()).toHaveLength(2));
+
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
+      expect(refreshTemporaryMediaUrlMock).toHaveBeenCalledWith('uploads/user-1/walk.mp4');
+      const clipOf = (index: number) => postedStarts()[index].body.inputs.find((input) => input.slot === 'videoReferences');
+      expect(clipOf(0)).toMatchObject({ url: 'https://signed.example.com/uploads/user-1/walk.mp4', storagePath: 'uploads/user-1/walk.mp4' });
+      expect(clipOf(1)).toMatchObject({ url: 'https://signed.example.com/refreshed/uploads/user-1/walk.mp4', storagePath: 'uploads/user-1/walk.mp4' });
+    });
+
+    it('uploads a frame once for two presses', async () => {
+      const view = render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(view.container.querySelector<HTMLInputElement>('#video-start-frame-input')!, {
+        target: { files: [new File(['image'], 'start.png', { type: 'image/png' })] },
+      });
+      await waitFor(() => expect(setPersistedFileMock).toHaveBeenCalled());
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+
+      fireEvent.click(generateButton());
+      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      fireEvent.click(generateButton());
+      await waitFor(() => expect(postedStarts()).toHaveLength(2));
+
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
+      const frameOf = (index: number) => postedStarts()[index].body.inputs.find((input) => input.slot === 'startFrame');
+      expect(frameOf(1)).toMatchObject({ url: 'https://signed.example.com/refreshed/uploads/user-1/start.png', storagePath: 'uploads/user-1/start.png' });
+    });
+
+    it('sends the copy a Seedance preparation uploaded, instead of uploading the image again', async () => {
+      getPersistedImageElementRecordsMock.mockResolvedValue([
+        { id: 'hero-1', displayName: 'Hero', file: new File(['image'], 'hero.png', { type: 'image/png' }) },
+      ]);
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+        String(input).includes('/api/seedance-assets')
+          ? { ok: true, status: 200, json: async () => ({ success: true, assetId: 'asset-hero', status: 'processing' }) } as Response
+          : defaultResponse(input, init)
+      ));
+      render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      fireEvent.click(await screen.findByRole('button', { name: /Prepare asset/ }));
+      await waitFor(() => expect(screen.getByText('Asset ID: asset-hero')).toBeInTheDocument());
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
+
+      fireEvent.change(promptBox(), { target: { value: '@hero walks along the harbour at dusk, slow push in.' } });
+      fireEvent.click(generateButton());
+      await waitFor(() => expect(postedStarts()).toHaveLength(1));
+
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
+      expect(refreshTemporaryMediaUrlMock).toHaveBeenCalledWith('uploads/user-1/hero.png');
+      expect(postedStarts()[0].body.inputs.find((input) => input.slot === 'imageReferences')).toMatchObject({
+        url: 'https://signed.example.com/refreshed/uploads/user-1/hero.png',
+        storagePath: 'uploads/user-1/hero.png',
+        assetId: null,
+      });
+    });
+
+    it('uploads a clip again when its staged copy is gone', async () => {
+      refreshTemporaryMediaUrlMock.mockRejectedValue(new TemporaryMediaReadUrlError('That upload is no longer available.', 404, 'MEDIA_OBJECT_NOT_FOUND'));
+      const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
+      await screen.findByRole('heading', { name: 'Video and audio references' });
+      await attachClip(view.container, new File(['video-bytes'], 'walk.mp4', { type: 'video/mp4' }));
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+
+      fireEvent.click(generateButton());
+      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      fireEvent.click(generateButton());
+      await waitFor(() => expect(postedStarts()).toHaveLength(2));
+
+      expect(refreshTemporaryMediaUrlMock).toHaveBeenCalledTimes(1);
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('names a picked file the upload step would refuse, and leaves it out', async () => {
+      const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
+      await screen.findByRole('heading', { name: 'Video and audio references' });
+      const huge = new File(['video-bytes'], 'huge.mp4', { type: 'video/mp4' });
+      Object.defineProperty(huge, 'size', { value: 300 * 1024 * 1024 });
+
+      fireEvent.change(view.container.querySelector<HTMLInputElement>(clipInput)!, {
+        target: { files: [new File(['x'], 'scene.mkv', { type: 'video/x-matroska' }), huge] },
+      });
+
+      expect(await screen.findByText(
+        'scene.mkv can’t be used: add an MP4, MOV, WebM or M4V video. huge.mp4 is over the 250 MB limit for a video.',
+      )).toBeInTheDocument();
+      expect(screen.queryByText('Video reference 1')).toBeNull();
+      expect(setPersistedMediaRecordsMock).not.toHaveBeenCalled();
+    });
+
+    it('says how many picks it added when the model takes fewer', async () => {
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
+      const input = await waitFor(() => {
+        const found = view.container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"][multiple]');
+        expect(found).not.toBeNull();
+        return found!;
+      });
+
+      fireEvent.change(input, {
+        target: { files: ['one', 'two', 'three'].map((name) => new File(['image'], `${name}.png`, { type: 'image/png' })) },
+      });
+
+      expect(await screen.findByText('Added 2 of 3: this model takes up to 2 image references.')).toBeInTheDocument();
+      expect(screen.getAllByPlaceholderText('Rename element')).toHaveLength(2);
+    });
+
+    it('sends a prepared Seedance asset by its id beside the file’s own link, and only once it is active', async () => {
+      getPersistedImageElementRecordsMock.mockResolvedValue([
+        { id: 'hero-1', displayName: 'Hero', file: new File(['image'], 'hero.png', { type: 'image/png' }) },
+      ]);
+      getPersistedMediaRecordsMock.mockImplementation(async (key: string) => (
+        key === 'create-video:reference-videos:user-1'
+          ? [{ id: 'clip-1', displayName: 'Dance clip', durationSeconds: 4, file: new File(['clip'], 'dance.mp4', { type: 'video/mp4' }) }]
+          : []
+      ));
+      const asset = (assetId: string, status: 'active' | 'processing') => ({
+        assetId,
+        assetType: null,
+        status,
+        sourceUrl: null,
+        error: null,
+        lastCheckedAt: null,
+      });
+      getPersistedValueMock.mockImplementation(async (key: string) => (
+        key === 'create-video:seedance-assets:user-1'
+          ? { images: [asset('asset-hero', 'processing')], videos: [asset('asset-clip', 'active')] }
+          : null
+      ));
+      render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      expect((await screen.findAllByText('Dance clip')).length).toBeGreaterThan(0);
+      fireEvent.change(promptBox(), { target: { value: '@hero dances like the reference clip in a bright studio, slow push in.' } });
+
+      fireEvent.click(generateButton());
+      await waitFor(() => expect(postedStarts()).toHaveLength(1));
+
+      const inputs = postedStarts()[0].body.inputs;
+      // The link is what the server measures; the id is what the provider is given.
+      expect(inputs.find((input) => input.slot === 'videoReferences')).toMatchObject({
+        url: 'https://signed.example.com/uploads/user-1/dance.mp4',
+        assetId: 'asset-clip',
+      });
+      // A preparation still processing would fail at the provider after the hold.
+      expect(inputs.find((input) => input.slot === 'imageReferences')).toMatchObject({
+        url: 'https://signed.example.com/uploads/user-1/hero.png',
+        assetId: null,
+      });
+    });
+
+    it('keeps a remixed Seedance clip’s link and its prepared id, and sends both', async () => {
+      const link = 'https://signed.example.com/generation_inputs/owner-1/gen-1/00-reference_video.mp4';
+      stubRemix({
+        generation: { id: 'gen-1', title: 'Dance', prompt: 'Swap the dancer for the reference', category: 'video', model: 'seedance-2-5' },
+        result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+        inputs: {
+          video: {
+            referenceMode: 'elements',
+            startFrame: null,
+            endFrame: null,
+            elements: [],
+            referenceVideos: [{
+              kind: 'video',
+              label: 'Video reference 1',
+              storagePath: 'generation_inputs/owner-1/gen-1/00-reference_video.mp4',
+              sourceGenerationId: 'gen-1',
+              url: link,
+              durationSeconds: 6,
+            }],
+            referenceAudios: [],
+          },
+        },
+        workflowSettings: {
+          model: 'seedance-2-5',
+          seedanceAssets: { videos: [{ assetId: 'asset-clip-9', assetType: 'Video', status: 'active', sourceUrl: null, error: null, lastCheckedAt: null }] },
+        },
+        restoreIssues: [],
+      });
+      render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      await waitFor(() => expect(promptBox()).toHaveValue('Swap the dancer for the reference'));
+      expect((await screen.findAllByText('Video reference 1')).length).toBeGreaterThan(0);
+
+      fireEvent.click(generateButton());
+      await waitFor(() => expect(postedStarts()).toHaveLength(1));
+
+      expect(postedStarts()[0].body.inputs.find((input) => input.slot === 'videoReferences')).toMatchObject({
+        url: link,
+        assetId: 'asset-clip-9',
+        durationSeconds: 6,
+      });
+      expect(temporaryUploadMock).not.toHaveBeenCalled();
+    });
+
+    it('restores an older run’s prepared clip by the link it was prepared from, not by its id', async () => {
+      const link = 'https://signed.example.com/uploads/owner-1/dance.mp4';
+      stubRemix({
+        generation: { id: 'gen-1', title: 'Dance', prompt: 'Swap the dancer for the reference', category: 'video', model: 'seedance-2-5' },
+        result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+        inputs: { video: { referenceMode: 'elements', startFrame: null, endFrame: null, elements: [], referenceVideos: [], referenceAudios: [] } },
+        workflowSettings: {
+          model: 'seedance-2-5',
+          referenceVideoUrls: ['asset-clip-9', 'asset-without-link'],
+          seedanceAssets: {
+            videos: [
+              { assetId: 'asset-clip-9', assetType: 'Video', status: 'active', sourceUrl: link, error: null, lastCheckedAt: null },
+              { assetId: 'asset-without-link', assetType: 'Video', status: 'active', sourceUrl: null, error: null, lastCheckedAt: null },
+            ],
+          },
+        },
+        restoreIssues: [],
+      });
+      render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      expect(await screen.findByText(/Some source media could not be restored automatically/)).toBeInTheDocument();
+
+      fireEvent.click(generateButton());
+      await waitFor(() => expect(postedStarts()).toHaveLength(1));
+
+      const clips = postedStarts()[0].body.inputs.filter((input) => input.slot === 'videoReferences');
+      expect(clips).toEqual([expect.objectContaining({ url: link, assetId: 'asset-clip-9' })]);
+    });
+
+    it('asks for the price again when the server says it changed', async () => {
+      answerStarts(refusal(409, {
+        code: 'cost_changed',
+        error: 'The price of this run changed. Check the updated cost and generate again.',
+      }));
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      expect(quoteRequestMock.mock.calls.at(-1)?.[1]).toBe(0);
+      fireEvent.click(generateButton());
+
+      expect(await screen.findByText('The price of this run changed. Check the updated cost and generate again.')).toBeInTheDocument();
+      expect(quoteRequestMock.mock.calls.at(-1)?.[1]).toBe(1);
+      expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
+    });
+
+    it('promises a saved draft only where one is kept', async () => {
+      modelCatalogState.missingIds = ['kling-3.0-video'];
+      const page = render(<CreateVideoClient prefill={{}} />);
+      expect(await screen.findByText('This model is no longer available. Your draft is saved; choose another model.')).toBeInTheDocument();
+      page.unmount();
+
+      stubRemix({
+        generation: { id: 'gen-1', title: 'Harbour', prompt: PROMPT, category: 'video', model: 'kling-3.0-video' },
+        result: { mediaType: 'video', url: 'https://example.com/result.mp4' },
+        inputs: {},
+        workflowSettings: { model: 'kling-3.0-video' },
+        restoreIssues: [],
+      } as RemixSourceBundle);
+      render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      expect(await screen.findByText('This model is no longer available. Choose another model; your settings stay on this page.')).toBeInTheDocument();
+    });
+
+    it('takes the lengths the server measured, so the price is asked again, and says to check it', async () => {
+      answerStarts(refusal(409, {
+        code: 'REFERENCE_DURATION_CHANGED',
+        error: 'Your reference media runs longer than the length this price was based on. Check the updated cost, then generate again.',
+        costCredits: 30,
+        quotedCostCredits: 12,
+        inputs: [{ index: 0, slot: 'videoReferences', durationSeconds: 7.9 }],
+      }));
+      const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
+      await screen.findByRole('heading', { name: 'Video and audio references' });
+      await attachClip(view.container, new File(['video-bytes'], 'walk.mp4', { type: 'video/mp4' }));
+      expect(screen.getByText('4.2s clip')).toBeInTheDocument();
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+
+      fireEvent.click(generateButton());
+
+      expect(await screen.findByText(/Check the updated cost, then generate again\./)).toBeInTheDocument();
+      expect(screen.getByText('7.9s clip')).toBeInTheDocument();
+      await waitFor(() => expect(quoteRequestMock.mock.calls.at(-1)?.[0]?.inputMetadata?.slots?.videoReferences)
+        .toEqual({ count: 1, durationsSeconds: [7.9] }));
+      expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
+      // The measured length is kept with the clip for the next visit.
+      expect(setPersistedMediaRecordsMock.mock.calls.filter(([key]) => key === 'create-video:reference-videos:user-1').at(-1)?.[1])
+        .toEqual([expect.objectContaining({ durationSeconds: 7.9 })]);
+    });
+
+    it('takes prompts and shot prompts up to the shared limit of 10,000 characters', async () => {
+      render(<CreateVideoClient prefill={{}} />);
+      expect(promptBox()).toHaveAttribute('maxlength', '10000');
+      fireEvent.change(promptBox(), { target: { value: 'x'.repeat(3000) } });
+      expect(promptBox().nextElementSibling?.firstElementChild?.textContent).toBe('3000/10000');
+
+      fireEvent.click(screen.getByText('Multi-Shot'));
+      expect(await screen.findByPlaceholderText('Describe shot 1...')).toHaveAttribute('maxlength', '10000');
+    });
+
+    it('prices a multi-shot run by its shots, and stops adding shots at the model’s length and shot limits', async () => {
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.click(screen.getByText('Multi-Shot'));
+      const addShot = await screen.findByRole('button', { name: /Add New Shot/ });
+      const setShotLength = (shot: number, seconds: number) => fireEvent.change(screen.getAllByRole('slider')[shot], { target: { value: String(seconds) } });
+
+      fireEvent.click(addShot);
+      expect(await screen.findByText('2 of 5 shots · 10s in total, up to 15s')).toBeInTheDocument();
+      await waitFor(() => expect(quoteRequestMock.mock.calls.at(-1)?.[0]?.settings).toMatchObject({ isMultiShot: true, duration: 10 }));
+
+      // Kling 3.0 runs at most 15 seconds.
+      fireEvent.click(addShot);
+      expect(await screen.findByText('3 of 5 shots · 15s in total, up to 15s')).toBeInTheDocument();
+      expect(addShot).toBeDisabled();
+
+      // Shorter shots leave room for more, up to five.
+      [0, 1, 2].forEach((shot) => setShotLength(shot, 1));
+      expect(addShot).toBeEnabled();
+      fireEvent.click(addShot);
+      setShotLength(3, 1);
+      fireEvent.click(addShot);
+      expect(await screen.findByText('5 of 5 shots · 9s in total, up to 15s')).toBeInTheDocument();
+      expect(addShot).toBeDisabled();
+
+      for (let shot = 1; shot <= 5; shot += 1) {
+        fireEvent.change(screen.getByPlaceholderText(`Describe shot ${shot}...`), { target: { value: `Shot ${shot}: the camera holds on the water as the light fades.` } });
+      }
+      fireEvent.click(generateButton());
+      await waitFor(() => expect(postedStarts()).toHaveLength(1));
+      const run = postedStarts()[0].body;
+      expect(run.settings).toMatchObject({ isMultiShot: true, duration: 9 });
+      expect((run.shots as Array<{ duration: number }>).map((shot) => shot.duration)).toEqual([1, 1, 1, 1, 5]);
+    });
+
+    it.each([
+      ['Kling 3.0 Cinematic', 'kling-3.0-video'],
+      ['Kling O3', 'kling-o3'],
+    ] as const)('lets %s add as many shots as the prompt check accepts, and no more', async (_name, modelId) => {
+      render(<CreateVideoClient prefill={{ model: modelId }} />);
+      fireEvent.click(screen.getByText('Multi-Shot'));
+      const addShot = await screen.findByRole('button', { name: /Add New Shot/ });
+      // One-second shots, so the length cap is never what stops the next one.
+      let shots = 1;
+      fireEvent.change(screen.getAllByRole('slider')[0], { target: { value: '1' } });
+      while (!(addShot as HTMLButtonElement).disabled && shots < 20) {
+        fireEvent.click(addShot);
+        shots += 1;
+        fireEvent.change(screen.getAllByRole('slider')[shots - 1], { target: { value: '1' } });
+      }
+
+      const blocks = (shotCount: number) => inspectPromptQuality({
+        medium: 'video',
+        selectedModel: modelId,
+        prompt: 'The camera holds on the water as the light fades.',
+        context: { isMultiShot: true, shotCount },
+      }).warnings.some((warning) => warning.severity === 'blocking');
+      expect(blocks(shots)).toBe(false);
+      expect(blocks(shots + 1)).toBe(true);
+    });
+
+    it('lets a saved image the model cannot take be removed from the standby card', async () => {
+      getPersistedImageElementRecordsMock.mockResolvedValue([
+        { id: 'saved-1', displayName: 'Hero', file: new File(['image'], 'hero.png', { type: 'image/png' }) },
+        { id: 'saved-2', displayName: 'Scarf', file: new File(['image'], 'scarf.png', { type: 'image/png' }) },
+      ]);
+      render(<CreateVideoClient prefill={{}} />);
+      await screen.findByText('Saved references are on standby');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Hero' }));
+
+      await waitFor(() => expect(setPersistedImageElementRecordsMock).toHaveBeenLastCalledWith(
+        'create-video:elements:user-1',
+        [expect.objectContaining({ id: 'saved-2' })],
+      ));
+      expect(screen.queryByRole('button', { name: 'Remove Hero' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Remove Scarf' })).toBeInTheDocument();
+    });
+
+    it('lets a saved track the model cannot take be removed from the standby card', async () => {
+      getPersistedMediaRecordsMock.mockImplementation(async (key: string) => (
+        key === 'create-video:reference-audios:user-1'
+          ? [{ id: 'track-1', displayName: 'Voice line', durationSeconds: 6, file: new File(['audio'], 'voice.mp3', { type: 'audio/mpeg' }) }]
+          : []
+      ));
+      render(<CreateVideoClient prefill={{ model: 'gemini-omni-video' }} />);
+      await screen.findByText('Saved references are on standby');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Voice line' }));
+
+      await waitFor(() => expect(setPersistedMediaRecordsMock).toHaveBeenLastCalledWith('create-video:reference-audios:user-1', []));
+      await waitFor(() => expect(screen.queryByText('Saved references are on standby')).toBeNull());
+    });
+
+    it('opens Publish & share with the creation’s own title and recipe', async () => {
+      const recipe: GenerationPaywallPrefill = {
+        resourceKinds: ['prompt'],
+        promptText: PROMPT,
+        notesMarkdown: null,
+        allowRemix: false,
+      };
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        // The library entry, read in full; the result player reads a summary of its own.
+        if (url.startsWith('/api/generations?') && !url.includes('detail=')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ generations: [{ id: 'gen-run-1', title: 'Harbour at dusk', paywallPrefill: recipe }] }),
+          } as Response;
+        }
+        return defaultResponse(input, init);
+      });
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+
+      fireEvent.click(await screen.findByRole('button', { name: /Publish & share/ }));
+
+      await waitFor(() => expect(publishModalPropsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        isOpen: true,
+        defaultTitle: 'Harbour at dusk',
+        paywallPrefill: recipe,
+      }));
+    });
+
+    it('marks the Studio links with a gallery icon, not a download one', async () => {
+      render(<CreateVideoClient prefill={{}} />);
+
+      for (const link of [screen.getByRole('link', { name: /View Studio/ }), screen.getByRole('link', { name: /^Studio/ })]) {
+        const icon = link.querySelector('svg')?.getAttribute('class') ?? '';
+        expect(icon).toContain('lucide-images');
+        expect(icon).not.toContain('lucide-download');
+      }
     });
   });
 });

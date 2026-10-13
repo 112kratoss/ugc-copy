@@ -59,6 +59,9 @@ interface WorkflowCanvasSurfaceProps {
     canRunNode: boolean;
     runBranchDisabled: boolean;
     runNodeDisabled: boolean;
+    runNodePriceLabel?: string | null;
+    runBranchPriceLabel?: string | null;
+    runPriceNote?: string | null;
   } | undefined>;
   onAddNote: (position: { x: number; y: number }) => void;
   onClearSelection: () => void;

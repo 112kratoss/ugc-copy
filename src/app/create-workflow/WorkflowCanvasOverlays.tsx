@@ -24,6 +24,9 @@ interface WorkflowCanvasOverlaysProps {
     canRunNode: boolean;
     runBranchDisabled: boolean;
     runNodeDisabled: boolean;
+    runNodePriceLabel?: string | null;
+    runBranchPriceLabel?: string | null;
+    runPriceNote?: string | null;
   } | undefined>;
   onAddNote: (position: { x: number; y: number }) => void;
   onClearSelection: () => void;
@@ -281,25 +284,36 @@ function CanvasContextMenu({
               {nodeRunState?.canRunNode && (
                 <button
                   type="button"
+                  aria-label={nodeRunState.runNodePriceLabel ? `Run this step · ${nodeRunState.runNodePriceLabel}` : undefined}
                   onClick={() => { onClose(); onRunNode(node.id); }}
                   disabled={nodeRunState.runNodeDisabled}
                   className={actionClassName}
                 >
-                  <span>Run this step</span>
+                  <span>
+                    Run this step
+                    {nodeRunState.runNodePriceLabel ? <span className="text-zinc-400">{` · ${nodeRunState.runNodePriceLabel}`}</span> : null}
+                  </span>
                   <Play className="h-4 w-4 fill-current text-emerald-300" />
                 </button>
               )}
               {nodeRunState?.canRunBranch && (
                 <button
                   type="button"
+                  aria-label={nodeRunState.runBranchPriceLabel ? `Run from here · ${nodeRunState.runBranchPriceLabel}` : undefined}
                   onClick={() => { onClose(); onRunBranch(node.id); }}
                   disabled={nodeRunState.runBranchDisabled}
                   className={actionClassName}
                 >
-                  <span>Run from here</span>
+                  <span>
+                    Run from here
+                    {nodeRunState.runBranchPriceLabel ? <span className="text-zinc-400">{` · ${nodeRunState.runBranchPriceLabel}`}</span> : null}
+                  </span>
                   <Play className="h-4 w-4 fill-current text-sky-300" />
                 </button>
               )}
+              {nodeRunState?.runPriceNote ? (
+                <p className="px-3 text-[11px] leading-relaxed text-zinc-500">{nodeRunState.runPriceNote}</p>
+              ) : null}
               <button type="button" onClick={() => { onClose(); onDeleteSelection(); }} className={actionClassName}>
                 <span>Delete</span>
                 <Trash2 className="h-4 w-4 text-rose-300" />

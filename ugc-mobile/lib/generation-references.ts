@@ -4,6 +4,7 @@ const ROLE_LABELS: Record<string, string> = {
   reference_image: 'Reference image', start_frame: 'Start frame', end_frame: 'End frame',
   reference_video: 'Reference video', reference_audio: 'Reference audio',
   character_image: 'Character image', motion_reference_video: 'Motion reference video',
+  subject_image: 'Subject image',
 };
 
 export function generationReferences(media: GenerationInputMediaItem[] = []) {

@@ -261,6 +261,33 @@ describe('PostResourceBundleContent', () => {
     expect(onOpenFile).toHaveBeenCalledWith(expect.objectContaining({ storagePath: 'user/source.zip' }));
   });
 
+  // Neither client can open a workflow snapshot (the web shows a workflow only
+  // by its share link), so a line saying one was included promised a project
+  // nobody could reach. The row keeps its title and description, as on web.
+  it('says nothing more about a workflow it holds only as a snapshot', () => {
+    const resources: PostResourceBundleResources = {
+      promptText: null,
+      notesMarkdown: null,
+      workflowShareUrl: null,
+      workflowSnapshot: null,
+      attachments: [],
+      allowRemix: false,
+      sections: [
+        { id: 'graphs', title: 'Node graphs', kind: 'asset_group', description: null, sortOrder: 0, resourceType: 'workflow', scope: { kind: 'all' } },
+      ],
+      items: [
+        item({ id: 'snapshot', type: 'workflow', title: 'Comfy graph', description: 'The full node graph', sectionId: 'graphs', workflowSnapshot: { nodes: [] }, sortOrder: 0 }),
+        item({ id: 'linked', type: 'workflow', title: 'Shared graph', sectionId: 'graphs', externalUrl: 'https://example.com/workflow', sortOrder: 1 }),
+      ],
+    };
+    const tree = renderContent(<PostResourceBundleContent onOpenUrl={vi.fn()} resources={resources} />);
+
+    const values = textValues(tree);
+    expect(values).toEqual(expect.arrayContaining(['Comfy graph', 'The full node graph', 'Shared graph']));
+    expect(values).not.toContain('Workflow project included');
+    expect(tree.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Open workflow')).toHaveLength(1);
+  });
+
   it('filters shared and media-scoped public cards by selected output', () => {
     const tree = renderContent(
       <PostResourceBundleContent

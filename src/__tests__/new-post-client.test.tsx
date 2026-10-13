@@ -2838,7 +2838,6 @@ describe('NewPostClient', () => {
 
       temporaryUploadMock.mockImplementation(async (
         file: File,
-        _ownerUserId: string,
         options?: { onProgress?: (progress: { bytesSent: number; totalBytes: number; fraction: number }) => void },
       ) => {
         reportProgress = options?.onProgress ?? null;
@@ -2887,7 +2886,6 @@ describe('NewPostClient', () => {
     it('lets the user cancel an add-time upload and keeps the file in the composer', async () => {
       temporaryUploadMock.mockImplementation(async (
         _file: File,
-        _ownerUserId: string,
         options?: { signal?: AbortSignal },
       ) => new Promise((_resolve, reject) => {
         options?.signal?.addEventListener('abort', () => {
@@ -3136,7 +3134,6 @@ describe('NewPostClient', () => {
     function mockOneHangingUpload(signals: Map<string, AbortSignal>) {
       temporaryUploadMock.mockImplementation(async (
         file: File,
-        _ownerUserId: string,
         options?: { signal?: AbortSignal },
       ) => {
         if (options?.signal) signals.set(file.name, options.signal);
@@ -3223,7 +3220,6 @@ describe('NewPostClient', () => {
       const signals: AbortSignal[] = [];
       temporaryUploadMock.mockImplementation(async (
         _file: File,
-        _ownerUserId: string,
         options?: { signal?: AbortSignal },
       ) => {
         if (options?.signal) signals.push(options.signal);
@@ -3244,7 +3240,6 @@ describe('NewPostClient', () => {
       const signals: AbortSignal[] = [];
       temporaryUploadMock.mockImplementation(async (
         _file: File,
-        _ownerUserId: string,
         options?: { signal?: AbortSignal },
       ) => {
         if (options?.signal) signals.push(options.signal);

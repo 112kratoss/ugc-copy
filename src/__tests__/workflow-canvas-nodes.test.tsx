@@ -138,6 +138,42 @@ describe('WorkflowCanvasNodes edge controls', () => {
     expect(onDeleteNode).toHaveBeenCalledTimes(1);
   });
 
+  it('prices both run choices in the open run menu and says why one has no price', () => {
+    const graph = createStarterGraph();
+    const node = graph.nodes.find((candidate) => candidate.type === 'video-generate');
+    expect(node).toBeTruthy();
+    const onRunNode = vi.fn();
+    const WorkflowNode = workflowCanvasNodeTypes['video-generate'] as unknown as ComponentType<Record<string, unknown>>;
+
+    render(
+      <WorkflowNode
+        id={node?.id}
+        data={{
+          ...node?.data,
+          __runtime: {
+            showPlayControl: true,
+            isRunMenuOpen: true,
+            onRunNode,
+            onRunBranch: vi.fn(),
+            runNodePriceLabel: '30 credits',
+            runBranchPriceLabel: 'Cost unavailable',
+            runPriceNote: 'Audio steps are priced when they start.',
+          },
+        }}
+        dragging={false}
+      />
+    );
+
+    const runNode = screen.getByTestId('workflow-node-run-node');
+    expect(runNode).toHaveTextContent('Run this step · 30 credits');
+    expect(runNode).toHaveAccessibleName('Run this step · 30 credits');
+    expect(screen.getByTestId('workflow-node-run-branch')).toHaveAccessibleName('Run from here · Cost unavailable');
+    expect(screen.getByText('Audio steps are priced when they start.')).toBeInTheDocument();
+
+    fireEvent.click(runNode);
+    expect(onRunNode).toHaveBeenCalledTimes(1);
+  });
+
   it('shows only delete for note-style nodes', () => {
     const graph = createStarterGraph();
     const node = graph.nodes.find((candidate) => candidate.type === 'note');

@@ -421,6 +421,7 @@ describe('/api/generate-image route', () => {
     expect(response.status).toBe(401);
     expectPrivateNoStoreTraceHeaders(response, 'image-post-auth-1');
     expect(await response.json()).toEqual({
+      code: 'UNAUTHORIZED',
       error: 'Unauthorized: Please log in to generate images',
     });
     expect(currentSupabaseMock.client.auth.getUser).toHaveBeenCalledTimes(1);

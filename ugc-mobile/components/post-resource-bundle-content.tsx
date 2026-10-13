@@ -519,11 +519,9 @@ function ResourceItemRow({
           {textContent}
         </Text>
       ) : null}
-      {item.workflowSnapshot && !externalUrl && !storagePath ? (
-        <Text style={{ color: theme.colors.success, ...appTheme.type.caption, fontWeight: '700' }}>
-          Workflow project included
-        </Text>
-      ) : null}
+      {/* A workflow snapshot on its own draws nothing, as on web: neither
+          client can open one (web shows a workflow only by its share link),
+          and "Workflow project included" promised a project nobody could reach. */}
       {hasActions ? (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           {textContent && onCopy && item.type !== 'prompt' ? (

@@ -277,6 +277,8 @@ type QueryValue = string | number | boolean | null | undefined;
 type RequestOptions = {
   auth?: boolean;
   cacheTtlMs?: number;
+  /** This request's own deadline, in place of the client's `requestTimeoutMs`. */
+  timeoutMs?: number;
 };
 
 export interface SaveShowcasePostOptions {
@@ -298,6 +300,11 @@ export interface GenerationListOptions {
   cursor?: string | null;
   id?: string;
   limit?: number;
+  /**
+   * `summary` (the default) signs each run's media; `status` answers only what a count
+   * needs (id, status, times, model), which the in-flight ring polls every 10 s.
+   */
+  detail?: 'summary' | 'status';
 }
 
 export interface SaveShowcasePostResponse {
@@ -329,6 +336,14 @@ export type ModerationReportSourceSurface =
 
 const CONTENT_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_API_REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * A start answers only after it has measured each priced reference (up to 20 s each),
+ * created the provider task (up to 30 s) and copied every input across, so a video with
+ * large references ran past the 30 s every other request gets and read as unconfirmed
+ * although it had started.
+ */
+export const GENERATION_START_TIMEOUT_MS = 120_000;
+const GENERATION_START_REQUEST_OPTIONS: RequestOptions = { timeoutMs: GENERATION_START_TIMEOUT_MS };
 const REQUEST_ID_HEADER = 'x-request-id';
 const FEED_INSTALLATION_ID_HEADER = 'x-magicbooklet-installation-id';
 
@@ -752,9 +767,10 @@ export function createApiClient({
       } else {
         upstreamSignal?.addEventListener('abort', abortFromUpstream, { once: true });
       }
+      const timeoutMs = options.timeoutMs ?? requestTimeoutMs;
       const timeoutId = setTimeout(() => {
-        requestController.abort(new Error(`Request timed out after ${requestTimeoutMs}ms`));
-      }, requestTimeoutMs);
+        requestController.abort(new Error(`Request timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
       try {
         response = await fetcher(url, {
           ...init,
@@ -938,7 +954,7 @@ export function createApiClient({
       }),
     listGenerations: async (includeArchived = true, options: GenerationListOptions = {}) => {
       const response = await request<GenerationListResponse>(`/api/generations${buildQuery({
-        detail: 'summary',
+        detail: options.detail ?? 'summary',
         includeArchived,
         id: options.id,
         limit: options.limit,
@@ -962,11 +978,11 @@ export function createApiClient({
     restoreGeneration: (generationId: string) =>
       request(`/api/generations/${generationId}/restore`, { method: 'POST' }),
     startImageGeneration: (body: ImageGenerationRequest, idempotencyKey?: string) =>
-      request<GenerationStartResponse>('/api/generate-image', generationStartInit(body, 'image', idempotencyKey)),
+      request<GenerationStartResponse>('/api/generate-image', generationStartInit(body, 'image', idempotencyKey), GENERATION_START_REQUEST_OPTIONS),
     getImageGeneration: (predictionId: string) =>
       request<GenerationStatusResponse>(`/api/generate-image${buildQuery({ id: predictionId })}`),
     startVideoGeneration: (body: VideoGenerationRequest, idempotencyKey?: string) =>
-      request<GenerationStartResponse>('/api/generate-video', generationStartInit(body, 'video', idempotencyKey)),
+      request<GenerationStartResponse>('/api/generate-video', generationStartInit(body, 'video', idempotencyKey), GENERATION_START_REQUEST_OPTIONS),
     getVideoGeneration: (predictionId: string) =>
       request<GenerationStatusResponse>(`/api/generate-video${buildQuery({ id: predictionId })}`),
     // A reference registered with Seedance once (its storage path or signed link)
@@ -976,7 +992,7 @@ export function createApiClient({
     getSeedanceAsset: (assetId: string) =>
       request<SeedanceAssetResponse>(`/api/seedance-assets${buildQuery({ assetId })}`),
     startMotionGeneration: (body: MotionGenerationRequest, idempotencyKey?: string) =>
-      request<GenerationStartResponse>('/api/generate', generationStartInit(body, 'motion', idempotencyKey)),
+      request<GenerationStartResponse>('/api/generate', generationStartInit(body, 'motion', idempotencyKey), GENERATION_START_REQUEST_OPTIONS),
     getMotionGeneration: (predictionId: string) =>
       request<GenerationStatusResponse>(`/api/generate${buildQuery({ id: predictionId })}`),
     enhancePrompt: (body: PromptEnhancementRequest) =>
@@ -1238,6 +1254,7 @@ export function createApiClient({
             request<GenerationStartResponse>(
               '/api/generations',
               generationStartInit(body, body.kind, idempotencyKey),
+              GENERATION_START_REQUEST_OPTIONS,
             ),
         }
       : {}),
@@ -1297,7 +1314,8 @@ export function createApiClient({
     createMediaTemplateRun: async (templateId: string, idempotencyKey?: string) => {
       const response = await request<unknown>(
         `/api/templates/${encodeURIComponent(templateId)}/runs`,
-        generationStartInit({}, 'template-run', idempotencyKey)
+        generationStartInit({}, 'template-run', idempotencyKey),
+        GENERATION_START_REQUEST_OPTIONS,
       );
       return normalizeTemplateRunMediaUrls(root, normalizeTemplateRunResponse(response));
     },
@@ -1320,28 +1338,32 @@ export function createApiClient({
     startTemplateRun: async (runId: string, idempotencyKey?: string) => {
       const response = await request<unknown>(
         `/api/template-runs/${encodeURIComponent(runId)}/start`,
-        generationStartInit({}, 'template-run-start', idempotencyKey)
+        generationStartInit({}, 'template-run-start', idempotencyKey),
+        GENERATION_START_REQUEST_OPTIONS,
       );
       return normalizeTemplateRunMediaUrls(root, normalizeTemplateRunResponse(response));
     },
     retryTemplateRunStep: async (runId: string, stepId: string, idempotencyKey?: string) => {
       const response = await request<unknown>(
         `/api/template-runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepId)}/retry`,
-        generationStartInit({}, 'template-step-retry', idempotencyKey)
+        generationStartInit({}, 'template-step-retry', idempotencyKey),
+        GENERATION_START_REQUEST_OPTIONS,
       );
       return normalizeTemplateRunMediaUrls(root, normalizeTemplateRunResponse(response));
     },
     approveTemplateRunStep: async (runId: string, stepId: string, idempotencyKey?: string) => {
       const response = await request<unknown>(
         `/api/template-runs/${encodeURIComponent(runId)}/approval-steps/${encodeURIComponent(stepId)}/approve`,
-        generationStartInit({}, 'template-step-approve', idempotencyKey)
+        generationStartInit({}, 'template-step-approve', idempotencyKey),
+        GENERATION_START_REQUEST_OPTIONS,
       );
       return normalizeTemplateRunMediaUrls(root, normalizeTemplateRunResponse(response));
     },
     cancelTemplateRun: async (runId: string, idempotencyKey?: string) => {
       const response = await request<unknown>(
         `/api/template-runs/${encodeURIComponent(runId)}/cancel`,
-        generationStartInit({}, 'template-cancel', idempotencyKey)
+        generationStartInit({}, 'template-cancel', idempotencyKey),
+        GENERATION_START_REQUEST_OPTIONS,
       );
       return normalizeTemplateRunMediaUrls(root, normalizeTemplateRunResponse(response));
     },

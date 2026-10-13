@@ -1375,10 +1375,7 @@ describe('CreationsPage', () => {
     });
 
     await waitFor(() => {
-      expect(temporaryUploadMock).toHaveBeenCalledWith(
-        replacement,
-        'user-1'
-      );
+      expect(temporaryUploadMock).toHaveBeenCalledWith(replacement);
     });
 
     await waitFor(() => {

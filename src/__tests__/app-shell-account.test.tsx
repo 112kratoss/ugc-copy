@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   select: vi.fn(),
   eq: vi.fn(),
   maybeSingle: vi.fn(),
+  signOut: vi.fn(),
+  clearPersistedCreatorData: vi.fn(),
+  router: { push: vi.fn() },
 }));
 
 const authenticatedSession = {
@@ -30,7 +33,11 @@ const authenticatedSession = {
 let appShellAuthCallback: ((event: string, session: typeof authenticatedSession | null) => void) | null = null;
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => mocks.router,
+}));
+
+vi.mock('@/lib/persisted-media', () => ({
+  clearPersistedCreatorData: mocks.clearPersistedCreatorData,
 }));
 
 vi.mock('@/lib/supabase', () => ({
@@ -39,7 +46,7 @@ vi.mock('@/lib/supabase', () => ({
       getSession: mocks.getSession,
       getUser: mocks.getUser,
       onAuthStateChange: mocks.onAuthStateChange,
-      signOut: vi.fn(),
+      signOut: mocks.signOut,
     },
     from: () => ({ select: mocks.select }),
   },
@@ -53,7 +60,12 @@ describe('AppShellAccount', () => {
     mocks.select.mockReset();
     mocks.eq.mockReset();
     mocks.maybeSingle.mockReset();
+    mocks.signOut.mockReset();
+    mocks.clearPersistedCreatorData.mockReset();
+    mocks.router.push.mockReset();
     appShellAuthCallback = null;
+    mocks.signOut.mockResolvedValue({ error: null });
+    mocks.clearPersistedCreatorData.mockResolvedValue(undefined);
 
     mocks.getSession.mockResolvedValue({ data: { session: authenticatedSession } });
     mocks.getUser.mockResolvedValue({
@@ -207,4 +219,60 @@ describe('AppShellAccount', () => {
     expect(screen.queryByText('9999 credits')).toBeNull();
   });
 
+  describe('sign-out', () => {
+    async function openAccountMenu() {
+      render(<AppShellAccount />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Open account menu for Test Creator' }));
+    }
+
+    it('clears the account\'s creator media and drafts before the session ends', async () => {
+      const order: string[] = [];
+      mocks.clearPersistedCreatorData.mockImplementation(async () => {
+        order.push('clear');
+      });
+      mocks.signOut.mockImplementation(async () => {
+        order.push('signOut');
+        return { error: null };
+      });
+      await openAccountMenu();
+
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
+
+      await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
+      expect(mocks.clearPersistedCreatorData).toHaveBeenCalledWith('user-1');
+      expect(order).toEqual(['clear', 'signOut']);
+      expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'local' });
+    });
+
+    it('still signs out when the browser storage refuses', async () => {
+      mocks.clearPersistedCreatorData.mockRejectedValue(new Error('IndexedDB unavailable'));
+      await openAccountMenu();
+
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
+
+      await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
+      expect(mocks.signOut).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not wait more than three seconds on storage that never answers', async () => {
+      mocks.clearPersistedCreatorData.mockImplementation(() => new Promise(() => {}));
+      await openAccountMenu();
+      vi.useFakeTimers();
+      try {
+        fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2_900);
+        });
+        expect(mocks.signOut).not.toHaveBeenCalled();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(100);
+        });
+        expect(mocks.signOut).toHaveBeenCalledTimes(1);
+        expect(mocks.router.push).toHaveBeenCalledWith('/login');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

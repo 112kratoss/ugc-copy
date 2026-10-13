@@ -378,6 +378,7 @@ describe('/api/generate-video route', () => {
     expect(response.status).toBe(401);
     expectPrivateNoStoreTraceHeaders(response, 'video-post-auth-1');
     expect(await response.json()).toEqual({
+      code: 'UNAUTHORIZED',
       error: 'Unauthorized: Please log in to generate videos',
     });
     expect(currentSupabaseMock.client.auth.getUser).toHaveBeenCalledTimes(1);
@@ -725,7 +726,8 @@ describe('/api/generate-video route', () => {
       model: 'bytedance/seedance-2',
       input: {
         prompt: 'Keep the energy of the reference clips.',
-        reference_image_urls: ['https://signed.example.com/hero.png'],
+        // A picture prepared as a Seedance asset goes by its id too, like the clips and tracks.
+        reference_image_urls: ['asset-image-1'],
         reference_video_urls: ['asset-video-1'],
         reference_audio_urls: ['asset-audio-1'],
         generate_audio: true,

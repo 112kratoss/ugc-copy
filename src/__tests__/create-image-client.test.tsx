@@ -2,8 +2,10 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateImageClient from '@/app/create-image/CreateImageClient';
+import { GenerationStatusRequestError } from '@/lib/generation-status-client';
 import type { PersistedImageElementRecord } from '@/lib/persisted-media';
 import type { RemixSourceBundle } from '@/lib/remix-source';
+import { TemporaryMediaReadUrlError } from '@/lib/temporary-media-upload';
 
 const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string, _elements: PersistedImageElementRecord[]): Promise<void> => {
@@ -18,12 +20,66 @@ const getPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   }
 ));
 const removePersistedMediaMock = vi.hoisted(() => vi.fn(async () => undefined));
+const purgeLegacyPersistedMediaMock = vi.hoisted(() => vi.fn(async () => undefined));
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
+const testDescriptors = vi.hoisted(() => ({
+  nanoBanana: {
+    id: 'nano-banana-2',
+    kind: 'image',
+    displayName: 'Nano Banana 2.0',
+    description: 'Test image model',
+    controls: [] as unknown[],
+    capabilities: {},
+    inputs: {},
+  },
+  imagen: {
+    id: 'imagen-4',
+    kind: 'image',
+    displayName: 'Imagen 4',
+    description: 'Test prompt-only image model',
+    controls: [] as unknown[],
+    capabilities: {},
+    inputs: {},
+  },
+}));
 const modelCatalogState = vi.hoisted(() => ({
   missingIds: [] as string[],
   error: null as Error | null,
   summaries: [] as Array<{ id: string; kind: string; displayName: string; description: string }>,
+  /** The models whose details have loaded; null is Nano Banana 2 alone. */
+  models: null as Array<Record<string, unknown>> | null,
+  /** False while the catalog has not arrived. */
+  catalogReady: true,
 }));
+// Text drafts as the page saves and reads them, per tool and account.
+const creatorDraftStore = vi.hoisted(() => new Map<string, unknown>());
+const loadCreatorDraftMock = vi.hoisted(() => vi.fn(
+  async (tool: string, userId: string): Promise<unknown> => creatorDraftStore.get(`${tool}:${userId}`) ?? null
+));
+const saveCreatorDraftMock = vi.hoisted(() => vi.fn(async (tool: string, userId: string, draft: unknown) => {
+  creatorDraftStore.set(`${tool}:${userId}`, draft);
+}));
+const uploadMediaToTemporaryStorageMock = vi.hoisted(() => vi.fn(async (file: File) => ({
+  signedUrl: `https://signed.example.com/uploads/${file.name}`,
+  storagePath: `uploads/user-1/${file.name}`,
+})));
+const refreshTemporaryMediaUrlMock = vi.hoisted(() => vi.fn(
+  async (storagePath: string) => `https://signed.example.com/refreshed/${storagePath}`
+));
+const fetchGenerationStatusWithRetryMock = vi.hoisted(() => vi.fn());
+const deploymentRefreshState = vi.hoisted(() => ({ newBuildAvailable: false }));
+const useDeploymentRefreshMock = vi.hoisted(() => vi.fn((enabled: boolean) => {
+  void enabled;
+  return { newBuildAvailable: deploymentRefreshState.newBuildAvailable };
+}));
+const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
+const authState = vi.hoisted(() => ({
+  credits: 10_000 as number | null,
+  session: { access_token: 'test-token', user: { id: 'user-1' } },
+  updateCredits: vi.fn(),
+}));
+const getSessionMock = vi.hoisted(() => vi.fn());
+const publishModalProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
 const restoredFile = new File(['image-bytes'], 'restored-element.png', { type: 'image/png' });
 
 const maybeSingleMock = vi.fn(async () => ({ data: null, error: null }));
@@ -37,18 +93,15 @@ const queryBuilder = {
 };
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => routerMock,
 }));
 
 vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
-    credits: 10_000,
+    credits: authState.credits,
     isLoading: false,
-    session: {
-      access_token: 'test-token',
-      user: { id: 'user-1' },
-    },
-    updateCredits: vi.fn(),
+    session: authState.session,
+    updateCredits: authState.updateCredits,
   }),
 }));
 
@@ -61,7 +114,10 @@ vi.mock('@/components/PublicShareButton', () => ({
 }));
 
 vi.mock('@/components/PublishToShowcaseModal', () => ({
-  default: () => null,
+  default: (props: Record<string, unknown>) => {
+    publishModalProps.current = props;
+    return null;
+  },
 }));
 
 vi.mock('@/lib/persisted-media', () => ({
@@ -70,24 +126,40 @@ vi.mock('@/lib/persisted-media', () => ({
     createImageElementDrafts: 'create-image:element-drafts',
     createImageElements: 'create-image:elements',
   },
-  getPersistedFiles: vi.fn(async () => []),
   getPersistedImageElementRecords: getPersistedImageElementRecordsMock,
-  getPersistedValue: vi.fn(async () => null),
+  purgeLegacyPersistedMedia: purgeLegacyPersistedMediaMock,
   removePersistedMedia: removePersistedMediaMock,
+  scopedPersistedMediaKey: (key: string, userId: string) => `${key}:${userId}`,
   setPersistedImageElementRecords: setPersistedImageElementRecordsMock,
+}));
+
+vi.mock('@/lib/persisted-creator-draft', () => ({
+  loadCreatorDraft: loadCreatorDraftMock,
+  saveCreatorDraft: saveCreatorDraftMock,
+}));
+
+vi.mock('@/lib/temporary-media-upload', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/temporary-media-upload')>('@/lib/temporary-media-upload');
+  return {
+    ...actual,
+    refreshTemporaryMediaUrl: refreshTemporaryMediaUrlMock,
+    uploadMediaToTemporaryStorage: uploadMediaToTemporaryStorageMock,
+  };
+});
+
+vi.mock('@/lib/generation-status-client', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/generation-status-client')>('@/lib/generation-status-client');
+  return { ...actual, fetchGenerationStatusWithRetry: fetchGenerationStatusWithRetryMock };
+});
+
+vi.mock('@/lib/use-deployment-refresh', () => ({
+  useDeploymentRefresh: useDeploymentRefreshMock,
 }));
 
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
-      getSession: vi.fn(async () => ({
-        data: {
-          session: {
-            access_token: 'test-token',
-            user: { id: 'user-1' },
-          },
-        },
-      })),
+      getSession: getSessionMock,
     },
     from: vi.fn(() => queryBuilder),
   },
@@ -98,25 +170,18 @@ vi.mock('@/lib/generation-model-client', async () => {
   return {
     ...actual,
     useWebGenerationModelCatalog: () => ({
-      summaries: modelCatalogState.summaries, missingIds: modelCatalogState.missingIds, detailsReady: true, isLoadingModels: false,
-      catalog: {
+      summaries: modelCatalogState.summaries,
+      missingIds: modelCatalogState.missingIds,
+      detailsReady: modelCatalogState.catalogReady,
+      isLoadingModels: false,
+      catalog: modelCatalogState.catalogReady ? {
         revision: 'test-catalog-rev',
         schemaVersion: 1,
         defaults: { image: 'nano-banana-2', video: 'kling-3.0-video', motion: 'kling-3.0' },
-        models: [
-          {
-            id: 'nano-banana-2',
-            kind: 'image',
-            displayName: 'Nano Banana 2.0',
-            description: 'Test image model',
-            controls: [],
-            capabilities: {},
-            inputs: {},
-          },
-        ],
-      },
+        models: modelCatalogState.models ?? [testDescriptors.nanoBanana],
+      } : null,
       error: modelCatalogState.error,
-      isLoading: false,
+      isLoading: !modelCatalogState.catalogReady,
       revision: 'test-catalog-rev',
       refetch: generationCatalogRefetchMock,
     }),
@@ -131,6 +196,30 @@ vi.mock('@/lib/generation-model-client', async () => {
       error: null,
     }),
   };
+});
+
+const SIGNED_IN_SESSION = { data: { session: { access_token: 'test-token', user: { id: 'user-1' } } } };
+
+beforeEach(() => {
+  creatorDraftStore.clear();
+  loadCreatorDraftMock.mockClear();
+  saveCreatorDraftMock.mockClear();
+  purgeLegacyPersistedMediaMock.mockClear();
+  uploadMediaToTemporaryStorageMock.mockClear();
+  refreshTemporaryMediaUrlMock.mockReset();
+  refreshTemporaryMediaUrlMock.mockImplementation(async (storagePath: string) => `https://signed.example.com/refreshed/${storagePath}`);
+  fetchGenerationStatusWithRetryMock.mockReset();
+  deploymentRefreshState.newBuildAvailable = false;
+  useDeploymentRefreshMock.mockClear();
+  routerMock.push.mockClear();
+  authState.credits = 10_000;
+  authState.updateCredits.mockClear();
+  getSessionMock.mockReset();
+  getSessionMock.mockResolvedValue(SIGNED_IN_SESSION);
+  modelCatalogState.models = null;
+  modelCatalogState.catalogReady = true;
+  publishModalProps.current = null;
+  window.sessionStorage.clear();
 });
 
 describe('CreateImageClient persisted elements', () => {
@@ -182,8 +271,9 @@ describe('CreateImageClient persisted elements', () => {
     view.unmount();
     await waitFor(() => {
       expect(setPersistedImageElementRecordsMock).toHaveBeenCalledTimes(1);
-      expect(removePersistedMediaMock).toHaveBeenCalledTimes(2);
     });
+    // The stores from before media was kept per account are purged once on load, not at each write.
+    expect(removePersistedMediaMock).not.toHaveBeenCalled();
   });
 
   it('persists element uploads and removals', async () => {
@@ -580,5 +670,654 @@ describe('CreateImageClient model notices', () => {
     await waitFor(() => {
       expect(screen.queryByText(/Unsupported choices were reset/)).not.toBeInTheDocument();
     });
+  });
+});
+
+const PENDING_START_KEY = 'magicbooklet:pending-generation-start:v1:image';
+const OUTPUT_URL = 'https://project.supabase.co/storage/v1/object/sign/generated_images/user-1/run-1.png?token=signed';
+const PROMPT_PLACEHOLDER = 'Describe the image you want to create...';
+
+type StartReply = { status: number; body: unknown } | Error | 'hang';
+
+function startedReply(overrides: Record<string, unknown> = {}): StartReply {
+  return {
+    status: 200,
+    body: {
+      success: true,
+      predictionId: 'pred-1',
+      generationId: 'gen-new',
+      status: 'processing',
+      remainingCredits: 9_992,
+      cost: 8,
+      catalogRevision: 'test-catalog-rev',
+      modelId: 'nano-banana-2',
+      ...overrides,
+    },
+  };
+}
+
+function jsonResponse(status: number, body: unknown) {
+  return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
+}
+
+/** Answers the start POSTs in order, and the creation read the publish modal makes. */
+function installFetch({ starts = [], publishDetails = null, remixBundle = null }: {
+  starts?: StartReply[];
+  publishDetails?: unknown;
+  remixBundle?: RemixSourceBundle | null;
+} = {}) {
+  const replies = [...starts];
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === '/api/generations' && init?.method === 'POST') {
+      const reply = replies.shift();
+      if (!reply) throw new Error('No start reply left');
+      if (reply === 'hang') return new Promise<Response>(() => undefined);
+      if (reply instanceof Error) throw reply;
+      return jsonResponse(reply.status, reply.body);
+    }
+    if (url.startsWith('/api/generations?')) return jsonResponse(200, publishDetails ?? { generations: [] });
+    if (url.startsWith('/api/remix-source?') && remixBundle) return jsonResponse(200, remixBundle);
+    throw new Error(`Unexpected fetch: ${url}`);
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+function startCalls(fetchMock: ReturnType<typeof installFetch>) {
+  return fetchMock.mock.calls.filter(([url, init]) => String(url) === '/api/generations' && init?.method === 'POST');
+}
+
+function startKey(call: unknown[]) {
+  return ((call[1] as RequestInit).headers as Record<string, string>)['Idempotency-Key'];
+}
+
+function startBody(call: unknown[]) {
+  return JSON.parse(String((call[1] as RequestInit).body)) as {
+    prompt: string;
+    settings: Record<string, unknown>;
+    inputs: Array<Record<string, unknown>>;
+  };
+}
+
+function typePrompt(value: string) {
+  fireEvent.change(screen.getByPlaceholderText(PROMPT_PLACEHOLDER), { target: { value } });
+}
+
+function pressGenerate() {
+  fireEvent.click(screen.getByRole('button', { name: /Generate Image/ }));
+}
+
+function frameShown() {
+  return screen.getByText('Frame').nextElementSibling?.textContent;
+}
+
+async function findResult() {
+  return screen.findByRole('button', { name: 'Preview generated image 1' });
+}
+
+/** Lets the mount read of the saved draft finish: until it has, a press does not save over it. */
+async function settleDraftRead() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+describe('CreateImageClient generation pipeline', () => {
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+
+  beforeEach(() => {
+    getPersistedImageElementRecordsMock.mockReset();
+    getPersistedImageElementRecordsMock.mockResolvedValue([]);
+    setPersistedImageElementRecordsMock.mockClear();
+    removePersistedMediaMock.mockClear();
+    maybeSingleMock.mockClear();
+    modelCatalogState.missingIds = [];
+    modelCatalogState.error = null;
+    modelCatalogState.summaries = [];
+    fetchGenerationStatusWithRetryMock.mockResolvedValue({ status: 'succeeded', output: OUTPUT_URL, outputs: [OUTPUT_URL] });
+    URL.createObjectURL = vi.fn(() => 'blob:element') as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn() as typeof URL.revokeObjectURL;
+    window.scrollTo = vi.fn();
+  });
+
+  afterEach(() => {
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  describe('a start the server never answered', () => {
+    it('keeps its key and replays the same request when Check again is pressed', async () => {
+      const fetchMock = installFetch({ starts: [new TypeError('Failed to fetch'), startedReply()] });
+      render(<CreateImageClient prefill={{}} />);
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+
+      expect(await screen.findByText('We couldn’t confirm your generation started. Check again — that can’t start a second run.')).toBeInTheDocument();
+      const [first] = startCalls(fetchMock);
+      expect(JSON.parse(window.sessionStorage.getItem(PENDING_START_KEY) ?? 'null')).toMatchObject({
+        idempotencyKey: startKey(first),
+        userId: 'user-1',
+        body: { prompt: 'A lighthouse at dawn' },
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(2));
+      const [, second] = startCalls(fetchMock);
+      expect(startKey(second)).toBe(startKey(first));
+      expect((second[1] as RequestInit).body).toBe((first[1] as RequestInit).body);
+      expect(await findResult()).toBeInTheDocument();
+      expect(window.sessionStorage.getItem(PENDING_START_KEY)).toBeNull();
+    });
+
+    it('drops the key after a refusal, so the next press is a new request', async () => {
+      const fetchMock = installFetch({
+        starts: [
+          { status: 422, body: { code: 'INVALID_GENERATION_REQUEST', error: 'Prompts support up to 10000 characters.' } },
+          startedReply(),
+        ],
+      });
+      render(<CreateImageClient prefill={{}} />);
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+
+      expect(await screen.findByText('Prompts support up to 10000 characters.')).toBeInTheDocument();
+      expect(window.sessionStorage.getItem(PENDING_START_KEY)).toBeNull();
+      // The refusal is about the prompt, so the prompt is where the creator lands.
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveFocus();
+
+      pressGenerate();
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(2));
+      const [first, second] = startCalls(fetchMock);
+      expect(startKey(second)).not.toBe(startKey(first));
+    });
+
+    it('offers a new run instead, priced, under a key of its own', async () => {
+      const fetchMock = installFetch({ starts: [new TypeError('Failed to fetch'), startedReply()] });
+      render(<CreateImageClient prefill={{}} />);
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Start a new run · 8 credits' }));
+
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(2));
+      const [first, second] = startCalls(fetchMock);
+      expect(startKey(second)).not.toBe(startKey(first));
+      expect(await findResult()).toBeInTheDocument();
+    });
+
+    it('is replayed on load, before the lookup for a running one', async () => {
+      window.sessionStorage.setItem(PENDING_START_KEY, JSON.stringify({
+        version: 1,
+        tool: 'image',
+        idempotencyKey: 'image:kept-key',
+        body: { kind: 'image', modelId: 'nano-banana-2', prompt: 'A kept prompt', settings: {}, inputs: [], catalogRevision: 'test-catalog-rev' },
+        catalogRevision: 'test-catalog-rev',
+        createdAt: new Date().toISOString(),
+        userId: 'user-1',
+      }));
+      const fetchMock = installFetch({ starts: [startedReply()] });
+
+      render(<CreateImageClient prefill={{}} />);
+
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(1));
+      expect(startKey(startCalls(fetchMock)[0])).toBe('image:kept-key');
+      expect(startBody(startCalls(fetchMock)[0]).prompt).toBe('A kept prompt');
+      expect(await findResult()).toBeInTheDocument();
+      expect(maybeSingleMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it('hands a run whose status checks keep failing to Studio instead of ending it', async () => {
+    fetchGenerationStatusWithRetryMock.mockRejectedValue(new GenerationStatusRequestError('Failed to fetch generation status', 500));
+    installFetch({ starts: [startedReply()] });
+    render(<CreateImageClient prefill={{}} />);
+    typePrompt('A lighthouse at dawn');
+    pressGenerate();
+
+    expect((await screen.findAllByText('Image still processing')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Failed to fetch generation status')).not.toBeInTheDocument();
+
+    const [{ url, getAccessToken }] = fetchGenerationStatusWithRetryMock.mock.calls[0] as [{
+      url: string;
+      getAccessToken: () => Promise<string | null>;
+    }];
+    expect(url).toBe('/api/generate-image?id=pred-1');
+    // Each check reads the session again rather than reusing the token of the press.
+    getSessionMock.mockResolvedValueOnce({ data: { session: { access_token: 'refreshed-token', user: { id: 'user-1' } } } });
+    await expect(getAccessToken()).resolves.toBe('refreshed-token');
+  });
+
+  describe('a newer deploy', () => {
+    it('is watched for only while the page is idle', async () => {
+      installFetch({ starts: ['hang'] });
+      render(<CreateImageClient prefill={{}} />);
+      expect(useDeploymentRefreshMock).toHaveBeenLastCalledWith(true);
+
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+
+      await waitFor(() => expect(useDeploymentRefreshMock).toHaveBeenLastCalledWith(false));
+    });
+
+    it('is reloaded onto at the press, after the draft is saved, instead of sending', async () => {
+      const reload = vi.fn();
+      vi.stubGlobal('location', { ...window.location, reload });
+      const fetchMock = installFetch();
+      render(<CreateImageClient prefill={{}} />);
+      await settleDraftRead();
+
+      deploymentRefreshState.newBuildAvailable = true;
+      typePrompt('An idea worth keeping');
+      pressGenerate();
+
+      await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+      expect(saveCreatorDraftMock).toHaveBeenCalledWith('image', 'user-1', expect.objectContaining({ prompt: 'An idea worth keeping' }));
+      expect(startCalls(fetchMock)).toHaveLength(0);
+    });
+  });
+
+  describe('the text draft', () => {
+    it('is saved per account and comes back after a remount', async () => {
+      installFetch();
+      const first = render(<CreateImageClient prefill={{}} />);
+      typePrompt('A red bicycle in fog');
+      fireEvent.click(screen.getByRole('button', { name: '1:1' }));
+
+      await waitFor(() => expect(saveCreatorDraftMock).toHaveBeenLastCalledWith('image', 'user-1', expect.objectContaining({
+        prompt: 'A red bicycle in fog',
+        modelId: 'nano-banana-2',
+        aspectRatio: '1:1',
+      })), { timeout: 2_000 });
+      first.unmount();
+
+      render(<CreateImageClient prefill={{}} />);
+
+      await waitFor(() => expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('A red bicycle in fog'));
+      expect(frameShown()).toBe('1:1');
+    });
+
+    it('brings its model back before the catalog would put its default in', async () => {
+      creatorDraftStore.set('image:user-1', {
+        prompt: 'A poster with bold type',
+        modelId: 'imagen-4',
+        aspectRatio: '16:9',
+        resolution: '1K',
+        qualityMode: 'standard',
+        googleSearch: false,
+        additionalSettings: {},
+      });
+      modelCatalogState.models = [testDescriptors.nanoBanana, testDescriptors.imagen];
+      modelCatalogState.catalogReady = false;
+      installFetch();
+      const view = render(<CreateImageClient prefill={{}} />);
+      await waitFor(() => expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('A poster with bold type'));
+
+      // The catalog arrives after the draft, as it does over a network.
+      modelCatalogState.catalogReady = true;
+      view.rerender(<CreateImageClient prefill={{}} />);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      const picker = view.container.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]');
+      expect(picker).toHaveTextContent('Imagen 4');
+      expect(frameShown()).toBe('16:9');
+      expect(screen.queryByText(/Your previous image model is no longer available/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps staged media under the signed-in account and purges the unscoped stores once', async () => {
+    getPersistedImageElementRecordsMock.mockResolvedValue([{ id: 'restored-1', displayName: 'Restored product', file: restoredFile }]);
+    const view = render(<CreateImageClient prefill={{}} />);
+
+    expect((await screen.findAllByText('@restored_product')).length).toBeGreaterThan(0);
+    expect(getPersistedImageElementRecordsMock).toHaveBeenCalledWith('create-image:elements:user-1');
+    expect(purgeLegacyPersistedMediaMock).toHaveBeenCalledTimes(1);
+
+    const input = view.container.querySelector<HTMLInputElement>('input[type="file"][multiple]');
+    fireEvent.change(input!, { target: { files: [new File(['next'], 'next.png', { type: 'image/png' })] } });
+
+    await waitFor(() => expect(setPersistedImageElementRecordsMock).toHaveBeenLastCalledWith(
+      'create-image:elements:user-1',
+      expect.arrayContaining([expect.objectContaining({ displayName: 'Restored product' })]),
+    ));
+    expect(removePersistedMediaMock).not.toHaveBeenCalled();
+  });
+
+  describe('a reference staged by an earlier press', () => {
+    beforeEach(() => {
+      getPersistedImageElementRecordsMock.mockResolvedValue([{ id: 'restored-1', displayName: 'Restored product', file: restoredFile }]);
+    });
+
+    async function generateTwice() {
+      const fetchMock = installFetch({ starts: [startedReply(), startedReply({ predictionId: 'pred-2', generationId: 'gen-2' })] });
+      render(<CreateImageClient prefill={{}} />);
+      expect((await screen.findAllByText('@restored_product')).length).toBeGreaterThan(0);
+      typePrompt('A portrait of @restored_product');
+      pressGenerate();
+      await findResult();
+      return fetchMock;
+    }
+
+    it('is sent again as its staged copy, so two presses upload it once', async () => {
+      const fetchMock = await generateTwice();
+      pressGenerate();
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(2));
+
+      expect(uploadMediaToTemporaryStorageMock).toHaveBeenCalledTimes(1);
+      expect(refreshTemporaryMediaUrlMock).toHaveBeenCalledWith('uploads/user-1/restored-element.png');
+      const [first, second] = startCalls(fetchMock).map(startBody);
+      expect(first.inputs[0]).toMatchObject({
+        url: 'https://signed.example.com/uploads/restored-element.png',
+        storagePath: 'uploads/user-1/restored-element.png',
+        handle: '@restored_product',
+      });
+      expect(second.inputs[0]).toMatchObject({
+        url: 'https://signed.example.com/refreshed/uploads/user-1/restored-element.png',
+        storagePath: 'uploads/user-1/restored-element.png',
+        handle: '@restored_product',
+      });
+    });
+
+    it('is saved with its element, since a reload runs no cleanup', async () => {
+      await generateTwice();
+      await waitFor(() => expect(setPersistedImageElementRecordsMock).toHaveBeenCalledWith(expect.any(String), [
+        expect.objectContaining({ staged: expect.objectContaining({ storagePath: 'uploads/user-1/restored-element.png' }) }),
+      ]));
+    });
+
+    it('is sent again when a reload restores it with its element', async () => {
+      const staged = { storagePath: 'uploads/user-1/restored-element.png', uploadedAt: Date.now() - 60 * 60 * 1000 };
+      getPersistedImageElementRecordsMock.mockResolvedValue([{ id: 'restored-1', displayName: 'Restored product', file: restoredFile, staged }]);
+      const fetchMock = installFetch({ starts: [startedReply()] });
+      render(<CreateImageClient prefill={{}} />);
+      expect((await screen.findAllByText('@restored_product')).length).toBeGreaterThan(0);
+      typePrompt('A portrait of @restored_product');
+      pressGenerate();
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(1));
+
+      expect(uploadMediaToTemporaryStorageMock).not.toHaveBeenCalled();
+      expect(startBody(startCalls(fetchMock)[0]).inputs[0]).toMatchObject({
+        url: 'https://signed.example.com/refreshed/uploads/user-1/restored-element.png',
+        storagePath: staged.storagePath,
+      });
+    });
+
+    it('is uploaded again once storage no longer has it', async () => {
+      const fetchMock = await generateTwice();
+      refreshTemporaryMediaUrlMock.mockRejectedValueOnce(
+        new TemporaryMediaReadUrlError('That upload is no longer available.', 404, 'MEDIA_OBJECT_NOT_FOUND'),
+      );
+      pressGenerate();
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(2));
+
+      expect(uploadMediaToTemporaryStorageMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('is uploaded again after the server refuses it as expired', async () => {
+      const fetchMock = installFetch({
+        starts: [
+          startedReply(),
+          { status: 400, body: { code: 'invalid_input_media', error: 'This reference upload has expired. Add it again.' } },
+          startedReply({ predictionId: 'pred-3', generationId: 'gen-3' }),
+        ],
+      });
+      render(<CreateImageClient prefill={{}} />);
+      expect((await screen.findAllByText('@restored_product')).length).toBeGreaterThan(0);
+      typePrompt('A portrait of @restored_product');
+      pressGenerate();
+      await findResult();
+
+      pressGenerate();
+      expect(await screen.findByText('This reference upload has expired. Add it again.')).toBeInTheDocument();
+      expect(uploadMediaToTemporaryStorageMock).toHaveBeenCalledTimes(1);
+
+      pressGenerate();
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(3));
+      expect(uploadMediaToTemporaryStorageMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('is uploaded again once the sweep may have taken it', async () => {
+      const fetchMock = await generateTwice();
+      // The sweep deletes a used staged object 48 h after it was signed.
+      const later = Date.now() + 41 * 60 * 60 * 1000;
+      vi.spyOn(Date, 'now').mockReturnValue(later);
+      pressGenerate();
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(2));
+
+      expect(refreshTemporaryMediaUrlMock).not.toHaveBeenCalled();
+      expect(uploadMediaToTemporaryStorageMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('keeps elements on the grid, with their remove buttons, when a prompt-only model is chosen', async () => {
+    modelCatalogState.summaries = imageModelSummaries;
+    getPersistedImageElementRecordsMock.mockResolvedValue([{ id: 'restored-1', displayName: 'Restored product', file: restoredFile }]);
+    const view = render(<CreateImageClient prefill={{}} />);
+    await screen.findByAltText('Restored product');
+    typePrompt('A portrait of @restored_product');
+
+    chooseModel(view.container, 'Imagen 4');
+
+    expect(await screen.findByText(/does not take reference images\. Your references are preserved/)).toBeInTheDocument();
+    expect(screen.getByAltText('Restored product')).toBeInTheDocument();
+    expect(screen.queryByText('Prompt-only model')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Generate Image/ })).toBeDisabled();
+    // Nothing is sent to a prompt-only model, so the server would not know the mention either.
+    expect(screen.getByText(/^Unknown element mention/)).toBeInTheDocument();
+
+    const removeButton = screen.getByAltText('Restored product').closest('div.relative')?.querySelectorAll('button')[1];
+    fireEvent.click(removeButton!);
+
+    await waitFor(() => expect(screen.queryByAltText('Restored product')).not.toBeInTheDocument());
+    expect(screen.getByText('Prompt-only model')).toBeInTheDocument();
+    expect(screen.queryByText(/Your references are preserved/)).not.toBeInTheDocument();
+  });
+
+  it('starts with the settings it quoted, the chosen output format among them, and names the download after the output', async () => {
+    modelCatalogState.models = [{
+      ...testDescriptors.nanoBanana,
+      controls: [{
+        key: 'outputFormat',
+        label: 'Output format',
+        type: 'choice',
+        presentation: 'select',
+        defaultValue: 'jpg',
+        options: [{ value: 'jpg', label: 'JPG' }, { value: 'png', label: 'PNG' }],
+      }],
+    }];
+    const fetchMock = installFetch({ starts: [startedReply()] });
+    render(<CreateImageClient prefill={{}} />);
+
+    fireEvent.change(screen.getByLabelText('Output format'), { target: { value: 'png' } });
+    typePrompt('A lighthouse at dawn');
+    pressGenerate();
+    await findResult();
+
+    expect(startBody(startCalls(fetchMock)[0]).settings).toEqual({
+      aspectRatio: 'auto',
+      resolution: '1K',
+      qualityMode: 'standard',
+      googleSearch: false,
+      outputFormat: 'png',
+    });
+    const download = screen.getByRole('link', { name: /Download image/ });
+    expect(download).toHaveAttribute('download', 'generated-image.png');
+    expect(download.getAttribute('href')).toContain('filename=generated-image.png');
+  });
+
+  describe('a refusal or a failed run', () => {
+    it('re-reads the balance and offers a top-up when the server says credits are short', async () => {
+      const creditsUpdated = vi.fn();
+      window.addEventListener('credits_updated', creditsUpdated);
+      installFetch({ starts: [{ status: 402, body: { code: 'insufficient_credits', error: 'Insufficient credits. This action costs 8 credits.' } }] });
+      render(<CreateImageClient prefill={{}} />);
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+
+      expect(await screen.findByText('Insufficient credits. This action costs 8 credits.')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Top Up Credits/ })).toHaveAttribute('href', '/pricing');
+      expect(screen.queryByRole('button', { name: /Generate Image/ })).not.toBeInTheDocument();
+      expect(creditsUpdated).toHaveBeenCalled();
+      window.removeEventListener('credits_updated', creditsUpdated);
+    });
+
+    it('puts the creator back in the prompt when the prompt is refused', async () => {
+      installFetch({ starts: [{ status: 422, body: { code: 'prompt_blocked', error: 'Magicbooklet can’t create this. No credits were used.' } }] });
+      render(<CreateImageClient prefill={{}} />);
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+
+      expect(await screen.findByText('Magicbooklet can’t create this. No credits were used.')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveFocus();
+      expect(window.sessionStorage.getItem(PENDING_START_KEY)).toBeNull();
+    });
+
+    it('says the credits came back when the run fails, and re-reads the balance', async () => {
+      const creditsUpdated = vi.fn();
+      window.addEventListener('credits_updated', creditsUpdated);
+      fetchGenerationStatusWithRetryMock.mockResolvedValue({ status: 'failed', error: 'The provider could not render this' });
+      installFetch({ starts: [startedReply()] });
+      render(<CreateImageClient prefill={{}} />);
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+
+      expect(await screen.findByText('The provider could not render this. Your 8 credits were returned.')).toBeInTheDocument();
+      expect(creditsUpdated).toHaveBeenCalled();
+      window.removeEventListener('credits_updated', creditsUpdated);
+    });
+  });
+
+  it('refuses a file the upload would refuse, by name, and says when picks pass the model’s limit', async () => {
+    // Ideogram V3 takes one reference image.
+    const view = render(<CreateImageClient prefill={{ model: 'ideogram-v3' }} />);
+    const huge = new File(['h'], 'huge.png', { type: 'image/png' });
+    Object.defineProperty(huge, 'size', { value: 26 * 1024 * 1024 });
+    const input = view.container.querySelector<HTMLInputElement>('input[type="file"][multiple]');
+
+    fireEvent.change(input!, {
+      target: {
+        files: [
+          new File(['b'], 'scan.bmp', { type: 'image/bmp' }),
+          huge,
+          new File(['1'], 'first.png', { type: 'image/png' }),
+          new File(['2'], 'second.png', { type: 'image/png' }),
+        ],
+      },
+    });
+
+    const notice = await screen.findByText(/“scan\.bmp” isn’t a JPEG, PNG, WebP, GIF, AVIF or HEIC image\./);
+    expect(notice).toHaveTextContent('“huge.png” is larger than 25 MB.');
+    expect(notice).toHaveTextContent('Added 1 of 2 images to stay within this model’s 1-image limit.');
+    expect(await screen.findByAltText('Element 1')).toBeInTheDocument();
+    expect(setPersistedImageElementRecordsMock.mock.calls.at(-1)?.[1]).toHaveLength(1);
+  });
+
+  it('shows the source prompt as the original, and the submitted prompt with the result', async () => {
+    const bundle: RemixSourceBundle = {
+      generation: { id: 'gen-1', title: 'Harbour', prompt: '@lead walks past @prop at dusk', category: 'image', model: 'nano-banana-2' },
+      result: { mediaType: 'image', url: 'https://example.com/result.png' },
+      inputs: {
+        image: {
+          elements: [
+            { id: 'remix-1', displayName: 'Hero shot', handle: '@lead', url: 'https://signed.example.com/lead.png', storagePath: 'generation_inputs/owner-1/gen-1/00.png', sourceGenerationId: 'gen-1' },
+            { id: 'remix-2', displayName: 'Umbrella', handle: '@prop', url: 'https://signed.example.com/prop.png', storagePath: 'generation_inputs/owner-1/gen-1/01.png', sourceGenerationId: 'gen-1' },
+          ],
+        },
+      },
+      workflowSettings: { model: 'nano-banana-2' },
+      restoreIssues: [],
+    };
+    installFetch({ starts: [startedReply()], remixBundle: bundle });
+    render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    await waitFor(() => expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead walks past @prop at dusk'));
+
+    typePrompt('@lead runs past @prop at noon');
+    fireEvent.click(screen.getByRole('button', { name: /View original/ }));
+    const original = screen.getByRole('heading', { name: 'Original Creation' }).parentElement!;
+    expect(original).toHaveTextContent('@lead walks past @prop at dusk');
+    fireEvent.click(screen.getByRole('button', { name: 'Close preview' }));
+
+    pressGenerate();
+    await findResult();
+    typePrompt('@lead sleeps under @prop');
+    fireEvent.click(screen.getByRole('button', { name: /Preview primary/ }));
+    const preview = screen.getByRole('heading', { name: 'Generated Image Preview' }).parentElement!;
+    expect(preview).toHaveTextContent('@lead runs past @prop at noon');
+    expect(preview).not.toHaveTextContent('@lead sleeps under @prop');
+  });
+
+  it('sends a lost session to sign-in with this page’s params, keeping the draft', async () => {
+    window.history.replaceState({}, '', '/create-image?model=nano-banana-2&prompt=hi');
+    const fetchMock = installFetch();
+    render(<CreateImageClient prefill={{}} />);
+    await settleDraftRead();
+    typePrompt('A draft worth keeping');
+
+    getSessionMock.mockResolvedValue({ data: { session: null } });
+    pressGenerate();
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith(
+      '/login?returnUrl=%2Fcreate-image%3Fmodel%3Dnano-banana-2%26prompt%3Dhi',
+    ));
+    expect(saveCreatorDraftMock).toHaveBeenCalledWith('image', 'user-1', expect.objectContaining({ prompt: 'A draft worth keeping' }));
+    expect(uploadMediaToTemporaryStorageMock).not.toHaveBeenCalled();
+    expect(startCalls(fetchMock)).toHaveLength(0);
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('sends a session the start refuses to sign-in, keeping the draft', async () => {
+    window.history.replaceState({}, '', '/create-image?remix=gen-9');
+    installFetch({ starts: [{ status: 401, body: { code: 'UNAUTHORIZED', error: 'Unauthorized: Please log in to generate media.' } }] });
+    render(<CreateImageClient prefill={{}} />);
+    await settleDraftRead();
+    typePrompt('A draft worth keeping');
+    pressGenerate();
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith('/login?returnUrl=%2Fcreate-image%3Fremix%3Dgen-9'));
+    expect(saveCreatorDraftMock).toHaveBeenCalledWith('image', 'user-1', expect.objectContaining({ prompt: 'A draft worth keeping' }));
+    expect(screen.queryByText(/Unauthorized/)).not.toBeInTheDocument();
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('opens quick publish with the creation’s title and recipe prefill', async () => {
+    const paywallPrefill = { resourceKinds: ['prompt'], promptText: 'A lighthouse at dawn', notesMarkdown: null, allowRemix: false };
+    const fetchMock = installFetch({
+      starts: [startedReply()],
+      publishDetails: { generations: [{ id: 'gen-new', title: 'Lighthouse study', paywallPrefill }] },
+    });
+    render(<CreateImageClient prefill={{}} />);
+    typePrompt('A lighthouse at dawn');
+    pressGenerate();
+    await findResult();
+
+    fireEvent.click(screen.getByRole('button', { name: /Publish & share/ }));
+
+    await waitFor(() => expect(publishModalProps.current).toMatchObject({
+      isOpen: true,
+      generationId: 'gen-new',
+      defaultTitle: 'Lighthouse study',
+      paywallPrefill,
+    }));
+    const creationRead = fetchMock.mock.calls.find(([url]) => String(url).startsWith('/api/generations?'));
+    expect(String(creationRead?.[0])).toContain('id=gen-new');
+    expect((creationRead?.[1] as RequestInit).headers).toEqual({ Authorization: 'Bearer test-token' });
+  });
+
+  it('marks the Studio links with a gallery icon rather than a download one', () => {
+    installFetch();
+    render(<CreateImageClient prefill={{}} />);
+
+    const studioLinks = screen.getAllByRole('link', { name: /Studio/ });
+    expect(studioLinks).toHaveLength(2);
+    for (const link of studioLinks) {
+      expect(link.querySelector('svg.lucide-images')).not.toBeNull();
+      expect(link.querySelector('svg.lucide-download')).toBeNull();
+    }
   });
 });

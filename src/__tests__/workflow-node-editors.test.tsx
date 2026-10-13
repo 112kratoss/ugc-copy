@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkflowModelCatalogContext, type useWebGenerationModelCatalog } from '@/lib/generation-model-client';
 import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
 import { WorkflowCanvasInspector } from '@/app/create-workflow/WorkflowNodeEditors';
+import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../ugc-mobile/lib/model-catalog/protocol';
 import {
   createStarterGraph,
   createWorkflowNode,
@@ -51,6 +52,12 @@ vi.mock('@/lib/supabase', () => ({
       })),
     },
   },
+}));
+
+vi.mock('../../ugc-mobile/lib/model-catalog/protocol', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../ugc-mobile/lib/model-catalog/protocol')>()),
+  // Not the shipped price, so the enhancer's label can only come from the constant.
+  PROMPT_ENHANCEMENT_COST_CREDITS: 3,
 }));
 
 function renderInteractiveInspector(
@@ -115,7 +122,6 @@ function renderInteractiveInspector(
           }}
           onDeleteNode={vi.fn()}
           onDeleteSelection={vi.fn()}
-          onDuplicateSelection={vi.fn()}
           onOpenPreview={vi.fn()}
           onRunBranch={vi.fn()}
           onRunNode={vi.fn()}
@@ -176,7 +182,6 @@ describe('WorkflowNodeEditors', () => {
           onDeleteEdge={vi.fn()}
           onDeleteNode={vi.fn()}
           onDeleteSelection={vi.fn()}
-          onDuplicateSelection={vi.fn()}
           onOpenPreview={vi.fn()}
           onRunBranch={vi.fn()}
           onRunNode={vi.fn()}
@@ -227,7 +232,6 @@ describe('WorkflowNodeEditors', () => {
           onDeleteEdge={vi.fn()}
           onDeleteNode={vi.fn()}
           onDeleteSelection={vi.fn()}
-          onDuplicateSelection={vi.fn()}
           onOpenPreview={vi.fn()}
           onRunBranch={vi.fn()}
           onRunNode={vi.fn()}
@@ -267,7 +271,6 @@ describe('WorkflowNodeEditors', () => {
           onDeleteEdge={vi.fn()}
           onDeleteNode={vi.fn()}
           onDeleteSelection={vi.fn()}
-          onDuplicateSelection={vi.fn()}
           onOpenPreview={vi.fn()}
           onRunBranch={vi.fn()}
           onRunNode={vi.fn()}
@@ -933,6 +936,22 @@ describe('WorkflowNodeEditors', () => {
     expect(
       screen.getByText(/prompt enhancement works when this prompt feeds an image, video, motion, voiceover, or sound-effect generator/i)
     ).toBeInTheDocument();
+  });
+
+  it('prices the prompt enhancer from the one shared constant', () => {
+    const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
+    const imageNode = createWorkflowNode('image-generate', { x: 240, y: 0 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [promptNode, imageNode],
+      edges: [
+        { id: 'prompt-image', source: promptNode.id, target: imageNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
+      ],
+    });
+
+    renderInteractiveInspector(graph, { selectedNodeId: promptNode.id });
+
+    expect(PROMPT_ENHANCEMENT_COST_CREDITS).toBe(3);
+    expect(screen.getByRole('button', { name: /enhance prompt/i })).toHaveTextContent('Enhance3 credits');
   });
 
   it('enhances a voiceover branch as an audio script', async () => {

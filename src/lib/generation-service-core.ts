@@ -16,11 +16,18 @@ import type { GenerationStartFailureCode } from '@/lib/generation-public-failure
 
 export const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
+/**
+ * What a start refusal is answered with. `cost_changed` is not one of the codes
+ * a run can fail with: it is said before anything is held, and the caller
+ * quotes again.
+ */
+export type GenerationServiceFailureCode = GenerationStartFailureCode | 'cost_changed';
+
 export class GenerationServiceError extends Error {
   status: number;
-  failureCode: GenerationStartFailureCode | null;
+  failureCode: GenerationServiceFailureCode | null;
 
-  constructor(message: string, status = 400, failureCode: GenerationStartFailureCode | null = null) {
+  constructor(message: string, status = 400, failureCode: GenerationServiceFailureCode | null = null) {
     super(message);
     this.name = 'GenerationServiceError';
     this.status = status;

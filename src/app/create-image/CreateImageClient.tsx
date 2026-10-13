@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Sparkles, Loader2, Download, X, Image as ImageIcon, Zap, ChevronDown, Check, Share2, Expand } from 'lucide-react';
+import { Sparkles, Loader2, Download, X, Image as ImageIcon, Images, Zap, ChevronDown, Check, Share2, Expand } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import { GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
@@ -38,13 +38,14 @@ import {
 } from '@/lib/remix-source-client';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import {
-    getPersistedFiles,
     getPersistedImageElementRecords,
-    getPersistedValue,
     PERSISTED_MEDIA_KEYS,
-    removePersistedMedia,
+    purgeLegacyPersistedMedia,
+    scopedPersistedMediaKey,
     setPersistedImageElementRecords,
+    type PersistedStagedUpload,
 } from '@/lib/persisted-media';
+import { loadCreatorDraft, saveCreatorDraft } from '@/lib/persisted-creator-draft';
 import {
     assignElementHandles,
     createElementHandleReplacementMap,
@@ -55,14 +56,15 @@ import {
     insertHandleIntoPrompt,
     replacePromptHandles,
     type ImageElementDescriptor,
-    type PersistedImageElementDraft,
 } from '@/lib/image-elements';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
 import {
     announceGenerationStarted,
-    fetchGenerationStatus,
+    fetchGenerationStatusWithRetry,
+    isGenerationStatusAbortError,
     waitForNextGenerationStatusPoll,
+    type GenerationStatusResponse,
 } from '@/lib/generation-status-client';
 import {
     createLocalGenerationTiming,
@@ -83,17 +85,32 @@ import {
     type ImageResolution,
 } from '@/lib/client-generation-models';
 import { getImageInputAffordances } from '@/lib/generation-model-affordances';
-import type { GenerationModelDescriptor } from '@/lib/generation-model-catalog';
+import type { CatalogPrimitive, GenerationModelDescriptor } from '@/lib/generation-model-catalog';
+import type { CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
 import {
+    clearPendingWebStart,
+    isAmbiguousWebStartFailure,
+    loadPendingWebStart,
+    requestWebGenerationStart,
     resolveCatalogModelId,
     resolveWebGenerationQuoteUi,
+    savePendingWebStart,
     useWebGenerationModelCatalog,
     useWebGenerationModelQuote,
+    WebCatalogRequestError,
+    type PendingWebStart,
+    type WebGenerationStartResponse,
 } from '@/lib/generation-model-client';
+import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
+import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
-import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
+import {
+    refreshTemporaryMediaUrl,
+    TEMPORARY_MEDIA_UPLOAD_LIMITS,
+    uploadMediaToTemporaryStorage,
+} from '@/lib/temporary-media-upload';
 
 type ModelId = ImageModelId;
 
@@ -115,12 +132,16 @@ interface UploadPreviewState {
     title: string;
 }
 
+/** An element's file as this page last staged it in `uploads`, kept with the element across reloads. */
+type StagedElementUpload = PersistedStagedUpload;
+
 type ImageElementDraft = ImageElementDescriptor & {
     file: File | null;
     previewUrl: string;
     providerUrl: string | null;
     source: 'upload' | 'remix';
     sourceGenerationId?: string | null;
+    staged: StagedElementUpload | null;
 };
 
 type ImageElementSeed = {
@@ -133,19 +154,49 @@ type ImageElementSeed = {
     storagePath?: string | null;
     source?: 'upload' | 'remix';
     sourceGenerationId?: string | null;
+    staged?: StagedElementUpload | null;
 };
+
+/**
+ * How long a staged copy is sent again instead of its file. The sweep deletes a
+ * staged object a run has used RECLAIM_AFTER_HOURS after it was signed; eight
+ * hours short of that leaves room for a long session.
+ */
+const STAGED_UPLOAD_REUSE_MS = (RECLAIM_AFTER_HOURS - 8) * 60 * 60 * 1000;
+
+/** What a reload, a top-up round trip or a lost session must not take away. */
+type ImageCreatorDraft = {
+    prompt: string;
+    modelId: string;
+    aspectRatio: string;
+    resolution: string;
+    qualityMode: string;
+    googleSearch: boolean;
+    additionalSettings: Record<string, CatalogPrimitive>;
+};
+
+const CREATOR_DRAFT_SAVE_DELAY_MS = 500;
+
+const START_UNCONFIRMED_MESSAGE = 'We couldn’t confirm your generation started. Check again — that can’t start a second run.';
+
+type CreationPublishDetails = {
+    title: string;
+    paywallPrefill: GenerationPaywallPrefill | null;
+};
+
+const EMPTY_PUBLISH_DETAILS: CreationPublishDetails = { title: '', paywallPrefill: null };
+/** How long the publish button waits for the creation's details before opening without them. */
+const PUBLISH_DETAILS_WAIT_MS = 3_000;
+
+const IMAGE_FILE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'heic', 'heif']);
+
+/** The run ended failed: its message is the provider's reason. */
+class ImageRunFailedError extends Error {}
 
 function revokePreviewUrl(url: string | null | undefined) {
     if (url?.startsWith('blob:')) {
         URL.revokeObjectURL(url);
     }
-}
-
-async function clearLegacyPersistedImageElements() {
-    await Promise.all([
-        removePersistedMedia(PERSISTED_MEDIA_KEYS.createImageReferences),
-        removePersistedMedia(PERSISTED_MEDIA_KEYS.createImageElementDrafts),
-    ]);
 }
 
 function hydrateImageElements(seeds: ImageElementSeed[]): ImageElementDraft[] {
@@ -159,7 +210,91 @@ function hydrateImageElements(seeds: ImageElementSeed[]): ImageElementDraft[] {
         storagePath: seed.storagePath ?? null,
         source: seed.source ?? 'upload',
         sourceGenerationId: seed.sourceGenerationId ?? null,
+        staged: seed.staged ?? null,
     }));
+}
+
+function readAccessToken(): Promise<string | null> {
+    return supabase.auth.getSession().then(({ data }) => data.session?.access_token ?? null);
+}
+
+/** Back to this page with its params, so a remix or a prefilled prompt survives the sign-in. */
+function getLoginPathForThisPage(): string {
+    return `/login?returnUrl=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`;
+}
+
+/**
+ * The element's copy in `uploads`: the one this page staged, while the sweep
+ * still keeps it, under a fresh link; else a new upload of the file. Each run
+ * used to upload every element again.
+ */
+async function stageElementFile(file: File, staged: StagedElementUpload | null): Promise<StagedElementUpload & { signedUrl: string }> {
+    if (staged && Date.now() - staged.uploadedAt < STAGED_UPLOAD_REUSE_MS) {
+        try {
+            return { ...staged, signedUrl: await refreshTemporaryMediaUrl(staged.storagePath) };
+        } catch {
+            // Gone from storage, or the link could not be renewed: the file goes up again.
+        }
+    }
+    const upload = await uploadMediaToTemporaryStorage(file);
+    return { storagePath: upload.storagePath, signedUrl: upload.signedUrl, uploadedAt: Date.now() };
+}
+
+function readDraftSettings(value: unknown): Record<string, CatalogPrimitive> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    return Object.fromEntries(Object.entries(value).filter(([, setting]) => (
+        typeof setting === 'string'
+        || typeof setting === 'boolean'
+        || (typeof setting === 'number' && Number.isFinite(setting))
+    ))) as Record<string, CatalogPrimitive>;
+}
+
+/** A failed run is refunded in the step that marks it failed. */
+function withCreditsReturned(message: string, cost: number | null): string {
+    if (!cost || cost <= 0) return message;
+    const trimmed = message.trim();
+    const sentence = /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+    return `${sentence} Your ${cost} credit${cost === 1 ? ' was' : 's were'} returned.`;
+}
+
+/** The output's own extension, for its download name: a PNG run is not a .jpg. */
+function getImageFileExtension(imageUrl: string | null | undefined): string {
+    if (!imageUrl) return 'jpg';
+    let filePath = getStoredMediaLocation(imageUrl)?.filePath ?? '';
+    if (!filePath) {
+        try {
+            const url = new URL(imageUrl, 'https://magicbooklet.invalid');
+            filePath = url.searchParams.get('path') ?? url.pathname;
+        } catch {
+            filePath = '';
+        }
+    }
+    const extension = filePath.split('/').pop()?.split('.').pop()?.toLowerCase() ?? '';
+    if (!IMAGE_FILE_EXTENSIONS.has(extension)) return 'jpg';
+    return extension === 'jpeg' ? 'jpg' : extension;
+}
+
+/** The creation's title and recipe prefill as Studio reads them, for the quick-publish modal. */
+async function fetchCreationPublishDetails(generationId: string): Promise<CreationPublishDetails | null> {
+    const accessToken = await readAccessToken();
+    if (!accessToken) return null;
+    const params = new URLSearchParams({ id: generationId, includeArchived: 'true', limit: '1' });
+    const response = await fetch(`/api/generations?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) return null;
+    const payload = await response.json() as { generations?: Array<Record<string, unknown> | null> };
+    const generation = Array.isArray(payload.generations)
+        ? payload.generations.find((item) => item?.id === generationId)
+        : null;
+    if (!generation) return null;
+    const prefill = generation.paywallPrefill;
+    return {
+        title: typeof generation.title === 'string' ? generation.title : '',
+        paywallPrefill: prefill && typeof prefill === 'object' && Array.isArray((prefill as { resourceKinds?: unknown }).resourceKinds)
+            ? prefill as GenerationPaywallPrefill
+            : null,
+    };
 }
 
 export interface CreateImagePrefill {
@@ -175,6 +310,7 @@ const CATALOG_HANDLED_KEYS = ['aspectRatio', 'resolution', 'qualityMode', 'googl
 export default function CreateImageClient({ prefill }: { prefill: CreateImagePrefill }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
+    const userId = session?.user?.id ?? null;
     const [selectedModel, setSelectedModel] = useState<ModelId>('nano-banana-2');
     const [prompt, setPrompt] = useState('');
 
@@ -199,6 +335,19 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [publishedMeta, setPublishedMeta] = useState<{ title: string; description: string } | null>(null);
     const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
+    // Watches for a newer deploy only while nothing is in flight; a press then
+    // reloads onto it instead of sending from the old page.
+    const { newBuildAvailable } = useDeploymentRefresh(!isGenerating && !isBackgroundProcessing);
+    // The prompt the run on screen was made from: later edits must not rename it.
+    const [submittedPrompt, setSubmittedPrompt] = useState('');
+    // A start sent and never answered, kept until "Check again" settles it.
+    const [pendingStart, setPendingStart] = useState<PendingWebStart | null>(null);
+    const [pendingStartNotice, setPendingStartNotice] = useState<string | null>(null);
+    const [creditRefusal, setCreditRefusal] = useState<{ message: string; credits: number | null; cost: number | null } | null>(null);
+    const [elementPickNotice, setElementPickNotice] = useState<string | null>(null);
+    const [publishModalDefaults, setPublishModalDefaults] = useState<CreationPublishDetails>(EMPTY_PUBLISH_DETAILS);
+    const [isPreparingPublish, setIsPreparingPublish] = useState(false);
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const modelCatalog = useWebGenerationModelCatalog({ kind: 'image', selectedIds: [selectedModel], pickerOpen: isModelDropdownOpen });
@@ -207,7 +356,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [modelSearchQuery, setModelSearchQuery] = useState('');
     const dropdownRef = useRef<HTMLDivElement>(null);
     const hasResolvedInitialCatalogModel = useRef(false);
-    const hasRestoredPersistedMedia = useRef(false);
+    // The account whose saved media this page has read in.
+    const restoredPersistedMediaForUserRef = useRef<string | null>(null);
     const activeGenerationRequestKeyRef = useRef<string | null>(null);
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
     const elementRefs = useRef<ImageElementDraft[]>([]);
@@ -235,6 +385,14 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const elementNames = useNameDrafts();
     const [resultPreviewImage, setResultPreviewImage] = useState<string | null>(null);
     const nowMs = useTicker(isGenerating) ?? undefined;
+    // The text draft is read before the catalog settles the model, so a saved model
+    // is not swapped for the catalog's default. A remix keeps no draft.
+    const [isDraftRestoreSettled, setIsDraftRestoreSettled] = useState(Boolean(remixId));
+    const restoredDraftModelRef = useRef(false);
+    // Saved settings for a model whose controls have not loaded yet.
+    const pendingDraftSettingsRef = useRef<{ modelId: string; values: Record<string, CatalogPrimitive> } | null>(null);
+    const unsavedDraftRef = useRef<{ userId: string; draft: ImageCreatorDraft } | null>(null);
+    const publishDetailsRef = useRef<{ generationId: string; request: Promise<CreationPublishDetails | null> } | null>(null);
 
     useEffect(() => () => {
         generationPollAbortControllerRef.current?.abort();
@@ -254,7 +412,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     // while it still applies, so choosing another model or a successful reload clears
     // it. It takes the notice slot ahead of a one-off notice, which can be dismissed.
     const catalogProblem = modelCatalog.missingIds.includes(selectedModel)
-        ? 'This model is no longer available. Your draft is saved; choose another model.'
+        ? remixId
+            ? 'This model is no longer available. Your prompt and references stay here; choose another model.'
+            : 'This model is no longer available. Your draft is saved; choose another model.'
         : modelCatalog.error?.message || null;
     const modelNotice = catalogProblem ?? catalogNotice;
     const model = IMAGE_MODELS[selectedModel] ?? IMAGE_MODELS['nano-banana-2'];
@@ -271,8 +431,11 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         : imageModelOptions;
 
     useEffect(() => {
-        if (!modelCatalog.catalog) return;
-        const preferDefault = !hasResolvedInitialCatalogModel.current && !remixId && !prefillModel;
+        if (!modelCatalog.catalog || (userId && !isDraftRestoreSettled)) return;
+        const preferDefault = !hasResolvedInitialCatalogModel.current
+            && !remixId
+            && !prefillModel
+            && !restoredDraftModelRef.current;
         const nextModelId = resolveCatalogModelId(modelCatalog.catalog, 'image', selectedModel, { preferDefault });
         if (!nextModelId) return;
         hasResolvedInitialCatalogModel.current = true;
@@ -283,9 +446,60 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 setCatalogNotice(`Your previous image model is no longer available. Switched to ${nextModel?.displayName ?? nextModelId}.`);
             }
         }
-    }, [modelCatalog.catalog, selectedModel, prefillModel, remixId]);
+    }, [isDraftRestoreSettled, modelCatalog.catalog, selectedModel, prefillModel, remixId, userId]);
+
+    // A route's own prompt, model or frame wins over the saved one, and a model's
+    // settings come back only with that model.
+    useEffect(() => {
+        if (remixId || !userId) return;
+        let cancelled = false;
+        const promptWhenRestoreStarted = promptRef.current;
+        void loadCreatorDraft<Partial<ImageCreatorDraft>>('image', userId)
+            .then((draft) => {
+                if (cancelled || !draft) return;
+                if (
+                    !prefillPrompt
+                    && typeof draft.prompt === 'string'
+                    && !hasCreatorEditedPromptDuringRemix(promptRef.current, promptWhenRestoreStarted)
+                ) {
+                    setPrompt(draft.prompt);
+                }
+                const draftModelId = typeof draft.modelId === 'string'
+                    && (IMAGE_MODELS as unknown as Record<string, unknown>)[draft.modelId]
+                    ? draft.modelId as ModelId
+                    : null;
+                if (!draftModelId || (prefillModel && prefillModel !== draftModelId)) return;
+                if (!prefillModel) {
+                    restoredDraftModelRef.current = true;
+                    setSelectedModel(draftModelId);
+                }
+                if (!prefillAspectRatio && typeof draft.aspectRatio === 'string') setAspectRatio(draft.aspectRatio);
+                if (typeof draft.resolution === 'string') setResolution(draft.resolution as ImageResolution);
+                if (typeof draft.qualityMode === 'string') setQualityMode(draft.qualityMode as ImageQualityMode);
+                if (typeof draft.googleSearch === 'boolean') setGoogleSearch(draft.googleSearch);
+                const additionalDraftSettings = readDraftSettings(draft.additionalSettings);
+                if (additionalDraftSettings) {
+                    pendingDraftSettingsRef.current = { modelId: draftModelId, values: additionalDraftSettings };
+                }
+            })
+            .catch(() => {
+                // An unreadable draft leaves the form as it opened.
+            })
+            .finally(() => {
+                if (!cancelled) setIsDraftRestoreSettled(true);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [prefillAspectRatio, prefillModel, prefillPrompt, remixId, userId]);
+
+    useEffect(() => {
+        // What the creators saved before media was kept per account belonged to no one in particular.
+        void purgeLegacyPersistedMedia().catch(() => undefined);
+    }, []);
+
     const persistUploadedImageElements = useCallback(async (nextElements: ImageElementDraft[]) => {
-        if (remixId) {
+        if (remixId || !userId) {
             return;
         }
 
@@ -296,14 +510,14 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 displayName: element.displayName,
                 handle: element.handle,
                 file: element.file as File,
+                staged: element.staged,
             }));
 
         await setPersistedImageElementRecords(
-            PERSISTED_MEDIA_KEYS.createImageElements,
+            scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createImageElements, userId),
             persistableElements
         );
-        await clearLegacyPersistedImageElements();
-    }, [remixId]);
+    }, [remixId, userId]);
 
     const commitElements = useCallback((nextElements: ImageElementDraft[]) => {
         elementRefs.current = nextElements;
@@ -456,66 +670,38 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     }, []);
 
     const loadPersistedElements = useCallback(async () => {
-        if (remixId) {
+        if (remixId || !userId) {
             return;
         }
 
         try {
             const savedElementRecords = await getPersistedImageElementRecords(
-                PERSISTED_MEDIA_KEYS.createImageElements
+                scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createImageElements, userId)
             );
+            if (savedElementRecords.length === 0) return;
 
-            if (savedElementRecords.length > 0) {
-                const clampedRecords = savedElementRecords;
-                const restoredElements = hydrateImageElements(
-                    clampedRecords.map((element) => ({
-                        id: element.id,
-                        displayName: element.displayName,
-                        handle: element.handle,
-                        file: element.file,
-                        previewUrl: URL.createObjectURL(element.file),
-                        source: 'upload',
-                    }))
-                );
-
-                commitElements(restoredElements);
-
-                if (clampedRecords.length !== savedElementRecords.length) {
-                    await persistUploadedImageElements(restoredElements);
-                }
-                return;
-            }
-
-            const [savedFiles, savedDrafts] = await Promise.all([
-                getPersistedFiles(PERSISTED_MEDIA_KEYS.createImageReferences),
-                getPersistedValue<PersistedImageElementDraft[]>(PERSISTED_MEDIA_KEYS.createImageElementDrafts),
-            ]);
-
-            if (savedFiles.length === 0) return;
-
-            const clampedFiles = savedFiles;
-            const restoredElements = hydrateImageElements(clampedFiles.map((file, index) => ({
-                id: savedDrafts?.[index]?.id,
-                displayName: savedDrafts?.[index]?.displayName,
-                file,
-                previewUrl: URL.createObjectURL(file),
-                source: 'upload',
-            })));
-
-            commitElements(restoredElements);
-
-            await persistUploadedImageElements(restoredElements);
+            commitElements(hydrateImageElements(
+                savedElementRecords.map((element) => ({
+                    id: element.id,
+                    displayName: element.displayName,
+                    handle: element.handle,
+                    file: element.file,
+                    previewUrl: URL.createObjectURL(element.file),
+                    source: 'upload',
+                    staged: element.staged ?? null,
+                }))
+            ));
         } catch (err) {
             console.error('Error loading persisted image elements:', err);
         }
-    }, [commitElements, persistUploadedImageElements, remixId]);
+    }, [commitElements, remixId, userId]);
 
     useEffect(() => {
-        if (hasRestoredPersistedMedia.current) return;
-        hasRestoredPersistedMedia.current = true;
+        if (!userId || restoredPersistedMediaForUserRef.current === userId) return;
+        restoredPersistedMediaForUserRef.current = userId;
 
         void loadPersistedElements();
-    }, [loadPersistedElements]);
+    }, [loadPersistedElements, userId]);
 
     useEffect(() => {
         if (remixId) return;
@@ -535,21 +721,48 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         };
     }, [loadPersistedElements, remixId]);
 
+    // Leaving writes with the callback of the last render, so a sign-out that has
+    // just cleared this account's media does not get it written back.
+    const persistElementsOnLeaveRef = useRef(persistUploadedImageElements);
     useEffect(() => {
-        return () => {
-            if (!remixId && elementRefs.current.length > 0) {
-                void persistUploadedImageElements(elementRefs.current);
-            }
-        };
-    }, [persistUploadedImageElements, remixId]);
+        persistElementsOnLeaveRef.current = persistUploadedImageElements;
+    }, [persistUploadedImageElements]);
+    useEffect(() => () => {
+        if (elementRefs.current.length > 0) {
+            void persistElementsOnLeaveRef.current(elementRefs.current);
+        }
+    }, []);
 
     const processImageFiles = async (files: FileList | File[]) => {
-        const validFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
-        if (validFiles.length === 0) return;
+        const pickedFiles = Array.from(files);
+        if (pickedFiles.length === 0) return;
+
+        // The sign step's own limits, checked as a file is added: a refused file
+        // used to wait in the rail and fail every Generate without its name.
+        const refusals: string[] = [];
+        const maxImageMegabytes = Math.round(TEMPORARY_MEDIA_UPLOAD_LIMITS.maxBytesByKind.image / (1024 * 1024));
+        const validFiles = pickedFiles.filter((file) => {
+            const fileName = file.name || 'This file';
+            if (!TEMPORARY_MEDIA_UPLOAD_LIMITS.isAllowedMimeType('image', file.type)) {
+                refusals.push(`“${fileName}” isn’t a JPEG, PNG, WebP, GIF, AVIF or HEIC image.`);
+                return false;
+            }
+            if (file.size > TEMPORARY_MEDIA_UPLOAD_LIMITS.maxBytesByKind.image) {
+                refusals.push(`“${fileName}” is larger than ${maxImageMegabytes} MB.`);
+                return false;
+            }
+            return true;
+        });
 
         const currentElements = elementRefs.current;
-        const availableSlots = model.maxImages - currentElements.length;
+        const availableSlots = Math.max(0, model.maxImages - currentElements.length);
         const filesToAdd = validFiles.slice(0, availableSlots);
+        if (filesToAdd.length < validFiles.length) {
+            refusals.push(filesToAdd.length > 0
+                ? `Added ${filesToAdd.length} of ${validFiles.length} images to stay within this model’s ${model.maxImages}-image limit.`
+                : `This model takes up to ${model.maxImages} image${model.maxImages === 1 ? '' : 's'}. Remove one to add another.`);
+        }
+        setElementPickNotice(refusals.length > 0 ? refusals.join(' ') : null);
 
         if (filesToAdd.length === 0) {
             return;
@@ -592,6 +805,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             currentElements.filter((element) => element.id !== elementId)
         );
         elementNames.dropDraft(elementId);
+        setElementPickNotice(null);
         commitElements(nextElements);
         await persistUploadedImageElements(nextElements);
     };
@@ -726,7 +940,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
 
     const pollPrediction = async (
         predictionId: string,
-        accessToken: string,
         startedAtMs: number,
         estimatedTotalMs: number | null
     ): Promise<{ output: string; outputs: string[]; timing: GenerationTiming | null }> => {
@@ -737,11 +950,20 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
 
         try {
             while (Date.now() - pollingStartedAt < 5 * 60 * 1000) {
-                const data = await fetchGenerationStatus({
-                    url: `/api/generate-image?id=${predictionId}`,
-                    accessToken,
-                    signal: pollController.signal,
-                });
+                let data: GenerationStatusResponse;
+                try {
+                    // The token is read for every check: a run can outlive the one it started with.
+                    data = await fetchGenerationStatusWithRetry({
+                        url: `/api/generate-image?id=${predictionId}`,
+                        getAccessToken: readAccessToken,
+                        signal: pollController.signal,
+                    });
+                } catch (statusError) {
+                    if (isGenerationStatusAbortError(statusError)) throw statusError;
+                    // Checks that keep failing say nothing about the run, which goes on with
+                    // the credits it took: Studio follows it from here.
+                    throw new Error(BACKGROUND_PROCESSING_ERROR);
+                }
 
                 if (data.timing) {
                     setGenerationTiming(data.timing.estimatedTotalMs ? data.timing : {
@@ -770,7 +992,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 }
 
                 if (data.status === 'failed') {
-                    throw new Error(data.error || 'Image generation failed');
+                    throw new ImageRunFailedError(data.error || 'Image generation failed');
                 }
 
                 await waitForNextGenerationStatusPoll(data.retryAfterMs, {
@@ -787,13 +1009,74 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     };
 
     const additionalSettings = useAdditionalCatalogSettings(catalogDescriptor, CATALOG_HANDLED_KEYS);
+    // One settings object for the price and the run. The start used to send a fixed
+    // list with JPG written in, so an output format that was chosen and quoted was dropped.
+    const generationSettings = useMemo(() => ({
+        aspectRatio,
+        resolution,
+        qualityMode,
+        googleSearch: model.supportsGoogleSearch ? googleSearch : false,
+        ...additionalSettings.settings,
+    }), [additionalSettings.settings, aspectRatio, googleSearch, model.supportsGoogleSearch, qualityMode, resolution]);
     const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady ? {
         kind: 'image' as const,
         modelId: selectedModel,
-        settings: { aspectRatio, resolution, qualityMode, outputFormat: 'jpg', googleSearch, ...additionalSettings.settings },
+        settings: generationSettings,
         inputCounts: { images: elements.length, videos: 0, audios: 0 },
         catalogRevision: modelCatalog.catalog.revision,
-    } : null, [aspectRatio, elements.length, googleSearch, modelCatalog.catalog, qualityMode, resolution, selectedModel, modelCatalog.detailsReady, additionalSettings.settings]);
+    } : null, [elements.length, generationSettings, modelCatalog.catalog, modelCatalog.detailsReady, selectedModel]);
+
+    const applyRestoredAdditionalSetting = additionalSettings.onChange;
+    useEffect(() => {
+        const pending = pendingDraftSettingsRef.current;
+        if (!pending || catalogDescriptor?.id !== pending.modelId) return;
+        pendingDraftSettingsRef.current = null;
+        for (const [key, value] of Object.entries(pending.values)) {
+            applyRestoredAdditionalSetting(key, value);
+        }
+    }, [applyRestoredAdditionalSetting, catalogDescriptor]);
+
+    const imageCreatorDraft = useMemo<ImageCreatorDraft>(() => ({
+        prompt,
+        modelId: selectedModel,
+        aspectRatio,
+        resolution,
+        qualityMode,
+        googleSearch,
+        additionalSettings: additionalSettings.settings,
+    }), [additionalSettings.settings, aspectRatio, googleSearch, prompt, qualityMode, resolution, selectedModel]);
+    const getDraftToSave = useCallback((): ImageCreatorDraft => {
+        const pending = pendingDraftSettingsRef.current;
+        return pending && pending.modelId === imageCreatorDraft.modelId
+            ? { ...imageCreatorDraft, additionalSettings: pending.values }
+            : imageCreatorDraft;
+    }, [imageCreatorDraft]);
+    useEffect(() => {
+        if (remixId || !userId || !isDraftRestoreSettled) {
+            unsavedDraftRef.current = null;
+            return;
+        }
+        const entry = { userId, draft: getDraftToSave() };
+        unsavedDraftRef.current = entry;
+        const timer = window.setTimeout(() => {
+            if (unsavedDraftRef.current === entry) unsavedDraftRef.current = null;
+            void saveCreatorDraft('image', entry.userId, entry.draft).catch(() => undefined);
+        }, CREATOR_DRAFT_SAVE_DELAY_MS);
+        return () => window.clearTimeout(timer);
+    }, [getDraftToSave, isDraftRestoreSettled, remixId, userId]);
+    useEffect(() => () => {
+        // Leaving inside the wait, through the Top Up link say, still keeps the last edit.
+        const entry = unsavedDraftRef.current;
+        if (entry) void saveCreatorDraft('image', entry.userId, entry.draft).catch(() => undefined);
+    }, []);
+    const saveDraftNow = async () => {
+        if (remixId || !userId) return;
+        unsavedDraftRef.current = null;
+        await Promise.allSettled([
+            isDraftRestoreSettled ? saveCreatorDraft('image', userId, getDraftToSave()) : Promise.resolve(),
+            persistUploadedImageElements(elementRefs.current),
+        ]);
+    };
     const [quoteAttempt, setQuoteAttempt] = useState(0);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token, quoteAttempt);
     useEffect(() => {
@@ -822,18 +1105,32 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const isGrokImageModel = selectedModel === 'grok-imagine-image';
     const qualityModes = getImageQualityModes(selectedModel);
     const insufficientCredits = userCredits !== null && currentCost !== null && userCredits < currentCost;
+    // The server's own refusal, shown until the balance or the price on screen moves:
+    // the balance read again then speaks for itself.
+    const creditRefusalMessage = creditRefusal
+        && creditRefusal.credits === userCredits
+        && creditRefusal.cost === currentCost
+        ? creditRefusal.message
+        : null;
+    const showTopUp = insufficientCredits || Boolean(creditRefusalMessage);
     const quotePending = quoteUi.blocksGenerate;
-    const elementHandles = elements.map((element) => element.handle);
-    const referencedElementHandles = extractPromptHandles(prompt).filter((handle) => elementHandles.includes(handle));
+    // Only what the request carries can be mentioned. A model that takes fewer
+    // pictures (none, when it is prompt-only) leaves the rest on the grid unsent,
+    // and the server refuses a mention of a picture it was not sent.
+    const sentElements = elements.slice(0, Math.max(0, model.maxImages));
+    const sentElementHandles = sentElements.map((element) => element.handle);
+    const referencedElementHandles = extractPromptHandles(prompt).filter((handle) => sentElementHandles.includes(handle));
     const isElementEnhancementLocked = referencedElementHandles.length > 0;
-    const staleElementMentions = findUnknownPromptHandles(prompt, elementHandles);
+    const staleElementMentions = findUnknownPromptHandles(prompt, sentElementHandles);
     // Derived, not kept in `error`: it clears the moment the references fit the model
     // again, instead of lingering until the next generation.
     const referenceLimitMessage = modelCatalog.detailsReady && elements.length > model.maxImages
-        ? `This model now supports ${model.maxImages} reference image${model.maxImages === 1 ? '' : 's'}. Your references are preserved; remove extras or choose another model.`
+        ? model.maxImages > 0
+            ? `This model now supports ${model.maxImages} reference image${model.maxImages === 1 ? '' : 's'}. Your references are preserved; remove extras or choose another model.`
+            : `${model.displayName} does not take reference images. Your references are preserved; remove them or choose another model.`
         : null;
     const mentionSuggestions = activeMentionQuery
-        ? elements.filter((element) => {
+        ? sentElements.filter((element) => {
             const normalizedQuery = activeMentionQuery.query.toLowerCase();
             if (!normalizedQuery) return true;
 
@@ -844,14 +1141,162 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         })
         : [];
 
+    const forgetPendingStart = () => {
+        clearPendingWebStart('image');
+        setPendingStart(null);
+        setPendingStartNotice(null);
+    };
+
+    const loadPublishDetails = (generationId: string): Promise<CreationPublishDetails | null> => {
+        const cached = publishDetailsRef.current;
+        if (cached?.generationId === generationId) return cached.request;
+        const request = fetchCreationPublishDetails(generationId).catch(() => null);
+        publishDetailsRef.current = { generationId, request };
+        void request.then((details) => {
+            // A failed read is tried again at the next open.
+            if (!details && publishDetailsRef.current?.request === request) publishDetailsRef.current = null;
+        });
+        return request;
+    };
+
+    const handleStartRefusal = (refusal: unknown) => {
+        if (refusal instanceof WebCatalogRequestError && refusal.status === 401) {
+            // The session lapsed after the press: back through sign-in, with the draft kept.
+            void saveDraftNow().then(() => router.push(getLoginPathForThisPage()));
+            return;
+        }
+        const message = refusal instanceof Error && refusal.message ? refusal.message : 'Failed to start generation';
+        const code = refusal instanceof WebCatalogRequestError ? refusal.code : undefined;
+        if (code === 'CATALOG_CHANGED' || code === 'MODEL_UNAVAILABLE') {
+            setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
+            refetchModelCatalog();
+        }
+        if (code === 'insufficient_credits') {
+            // The balance on screen was out of date: read it again, and offer the top-up.
+            window.dispatchEvent(new Event('credits_updated'));
+            setCreditRefusal({ message, credits: userCredits, cost: currentCost });
+            return;
+        }
+        if (code === 'invalid_input_media') {
+            // A staged copy the server could not use goes up again from its file next time.
+            commitElements(elementRefs.current.map((element) => (element.staged ? { ...element, staged: null } : element)));
+            void persistUploadedImageElements(elementRefs.current);
+        }
+        setError(message);
+        if (code === 'prompt_blocked' || code === 'INVALID_GENERATION_REQUEST') {
+            promptTextareaRef.current?.focus();
+        }
+    };
+
+    const followRun = async (
+        predictionId: string,
+        run: { startedAtMs: number; estimatedTotalMs: number | null; cost: number | null; generationId: string | null },
+    ) => {
+        try {
+            const result = await pollPrediction(predictionId, run.startedAtMs, run.estimatedTotalMs);
+            setOutputImage(result.output);
+            setOutputImages(result.outputs);
+            if (result.timing) {
+                setGenerationTiming(result.timing);
+            }
+            if (run.generationId) void loadPublishDetails(run.generationId);
+        } catch (err) {
+            if (isGenerationStatusAbortError(err)) return;
+            if (err instanceof Error && err.message === BACKGROUND_PROCESSING_ERROR) {
+                handoffToBackgroundProcessing(run.startedAtMs);
+                return;
+            }
+            if (err instanceof ImageRunFailedError) {
+                // The failure returned the credits; the balance on screen still has them spent.
+                window.dispatchEvent(new Event('credits_updated'));
+                setError(withCreditsReturned(err.message, run.cost));
+            } else {
+                setError(err instanceof Error ? err.message : 'Something went wrong');
+            }
+            setGenerationTiming(null);
+        }
+    };
+
+    /**
+     * Sends a kept start, the first time or again under its own key. An answer
+     * that leaves it open keeps the key, so "Check again" finds the run it started
+     * or starts it once; a refusal or a started run settles it.
+     */
+    const runStart = async (start: PendingWebStart, timing: { startedAtMs: number; estimatedTotalMs: number | null }) => {
+        let started: WebGenerationStartResponse;
+        try {
+            started = await requestWebGenerationStart(start.body as CatalogGenerationRequestPayload, {
+                accessToken: await readAccessToken(),
+                idempotencyKey: start.idempotencyKey,
+            });
+        } catch (startError) {
+            setGenerationTiming(null);
+            if (isAmbiguousWebStartFailure(startError)) {
+                setPendingStart(start);
+                // A held submission's own words say what happens to its credits.
+                setPendingStartNotice(startError instanceof WebCatalogRequestError && startError.code === 'submission_pending'
+                    ? startError.message
+                    : START_UNCONFIRMED_MESSAGE);
+                return;
+            }
+            forgetPendingStart();
+            handleStartRefusal(startError);
+            return;
+        }
+        forgetPendingStart();
+        setLatestGenerationId(started.generationId ?? null);
+        setLatestIsPublic(false);
+        announceGenerationStarted();
+        updateCredits(started.remainingCredits);
+        await followRun(started.predictionId, {
+            ...timing,
+            cost: started.cost,
+            generationId: started.generationId ?? null,
+        });
+    };
+
+    const replayPendingStart = async (start: PendingWebStart) => {
+        if (activeGenerationRequestKeyRef.current) return;
+        activeGenerationRequestKeyRef.current = start.idempotencyKey;
+        const createdAtMs = Date.parse(start.createdAt);
+        const startedAtMs = Number.isNaN(createdAtMs) ? Date.now() : createdAtMs;
+        setIsGenerating(true);
+        setError(null);
+        setCreditRefusal(null);
+        setSubmittedPrompt(typeof start.body.prompt === 'string' ? start.body.prompt : '');
+        setGenerationTiming(createLocalGenerationTiming({
+            kind: 'image',
+            phaseLabel: 'Checking your last run',
+            startedAtMs,
+            estimatedTotalMs: null,
+        }));
+        try {
+            await runStart(start, { startedAtMs, estimatedTotalMs: null });
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Something went wrong');
+            setGenerationTiming(null);
+        } finally {
+            activeGenerationRequestKeyRef.current = null;
+            setIsGenerating(false);
+        }
+    };
+
     useEffect(() => {
         const resumePendingGeneration = async () => {
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) return;
 
+            // A start this tab sent and never heard back about goes first: sending it
+            // again finds the run it started, or starts it once.
+            const pendingWebStart = loadPendingWebStart('image', session.user.id);
+            if (pendingWebStart) {
+                await replayPendingStart(pendingWebStart);
+                return;
+            }
+
             const { data, error: pendingError } = await supabase
                 .from('generations')
-                .select('id, prediction_id, status, created_at')
+                .select('id, prediction_id, status, created_at, prompt, cost')
                 .eq('user_id', session.user.id)
                 .eq('category', 'image')
                 .in('status', ['processing', 'waiting'])
@@ -869,6 +1314,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             setError(null);
             setLatestGenerationId(data.id ?? null);
             setLatestIsPublic(false);
+            setSubmittedPrompt(typeof data.prompt === 'string' ? data.prompt : '');
             setGenerationTiming(createLocalGenerationTiming({
                 kind: 'image',
                 phaseLabel: 'Resuming active run',
@@ -877,20 +1323,12 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             }));
 
             try {
-                const result = await pollPrediction(data.prediction_id, session.access_token, startedAtMs, null);
-                setOutputImage(result.output);
-                setOutputImages(result.outputs);
-                if (result.timing) {
-                    setGenerationTiming(result.timing);
-                }
-            } catch (err) {
-                const errorMessage = err instanceof Error ? err.message : 'Something went wrong';
-                if (errorMessage === BACKGROUND_PROCESSING_ERROR) {
-                    handoffToBackgroundProcessing(startedAtMs);
-                } else {
-                    setError(errorMessage);
-                    setGenerationTiming(null);
-                }
+                await followRun(data.prediction_id, {
+                    startedAtMs,
+                    estimatedTotalMs: null,
+                    cost: typeof data.cost === 'number' ? data.cost : null,
+                    generationId: data.id ?? null,
+                });
             } finally {
                 setIsGenerating(false);
             }
@@ -901,20 +1339,104 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    const stageReferenceInputs = async (
+        requestElements: ImageElementDraft[],
+        startedAtMs: number,
+        estimatedTotalMs: number | null,
+    ): Promise<NonNullable<CatalogGenerationRequestPayload['inputs']>> => {
+        if (requestElements.length === 0) return [];
+        const uploadCount = requestElements.filter((element) => (
+            element.file && !(element.staged && Date.now() - element.staged.uploadedAt < STAGED_UPLOAD_REUSE_MS)
+        )).length;
+        if (uploadCount > 0) {
+            setGenerationTiming(createLocalGenerationTiming({
+                kind: 'image',
+                phaseLabel: uploadCount === 1 ? 'Uploading 1 reference' : `Uploading ${uploadCount} references`,
+                startedAtMs,
+                estimatedTotalMs,
+            }));
+        }
+
+        const results = await Promise.allSettled(requestElements.map(async (element) => {
+            if (element.file) {
+                const staged = await stageElementFile(element.file, element.staged);
+                return {
+                    element,
+                    staged,
+                    url: staged.signedUrl,
+                    storagePath: staged.storagePath as string | null,
+                    sourceGenerationId: null as string | null,
+                };
+            }
+
+            if (!element.providerUrl) {
+                throw new Error(`Missing media for ${element.displayName}`);
+            }
+
+            return {
+                element,
+                staged: null,
+                url: element.providerUrl,
+                storagePath: element.storagePath ?? null,
+                sourceGenerationId: element.sourceGenerationId ?? null,
+            };
+        }));
+
+        // Every file that went up stays on its element, so the next press sends the
+        // staged copy instead of uploading it again, even when another file failed.
+        const stagedById = new Map<string, StagedElementUpload>();
+        results.forEach((result) => {
+            if (result.status === 'fulfilled' && result.value.staged) {
+                stagedById.set(result.value.element.id, result.value.staged);
+            }
+        });
+        if (stagedById.size > 0) {
+            commitElements(elementRefs.current.map((element) => {
+                const staged = stagedById.get(element.id);
+                return staged ? { ...element, staged } : element;
+            }));
+            // Saved now: a reload runs no cleanup, so this is the copy's only way past one.
+            void persistUploadedImageElements(elementRefs.current);
+        }
+
+        const prepared = results.map((result) => {
+            if (result.status === 'rejected') throw result.reason;
+            return result.value;
+        });
+        return prepared.map(({ element, url, storagePath, sourceGenerationId }, index) => ({
+            slot: 'imageReferences',
+            kind: 'image' as const,
+            url,
+            label: element.displayName ?? `Reference ${index + 1}`,
+            handle: element.handle ?? null,
+            storagePath,
+            sourceGenerationId,
+        }));
+    };
+
     const handleGenerate = async () => {
         if (activeGenerationRequestKeyRef.current) return;
-        if (!prompt.trim()) { setError('Please enter a prompt'); return; }
-        if (quotePending) { setError(quoteUi.message ?? 'Wait for the current generation cost before continuing.'); return; }
+        const submitted = prompt.trim();
+        if (!submitted) { setError('Please enter a prompt'); return; }
         if (staleElementMentions.length > 0) {
             setError(`Unknown element mention${staleElementMentions.length > 1 ? 's' : ''}: ${staleElementMentions.join(', ')}`);
             return;
         }
-        if (userCredits !== null && currentCost !== null && userCredits < currentCost) { setError(`Insufficient credits. Image generation costs ${currentCost} credits.`); return; }
+        if (referenceLimitMessage) return;
+        if (newBuildAvailable && !remixId) {
+            // A page older than the server may send what it no longer takes. The draft
+            // is saved and comes back after the reload; a remix keeps no draft, so it
+            // sends from this page instead.
+            await saveDraftNow();
+            window.location.reload();
+            return;
+        }
 
         const idempotencyKey = createGenerationIdempotencyKey('image');
         activeGenerationRequestKeyRef.current = idempotencyKey;
         setIsGenerating(true);
         setError(null);
+        setCreditRefusal(null);
         setOutputImage(null);
         setOutputImages([]);
         setResultPreviewImage(null);
@@ -922,12 +1444,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         setLatestGenerationId(null);
         setLatestIsPublic(false);
         setPublishedMeta(null);
+        setSubmittedPrompt(submitted);
         const startedAtMs = getCurrentTimestampMs();
         const estimatedTotalMs = estimateGenerationDurationMs({
             kind: 'image',
             model: selectedModel,
             resolution,
-            referenceCount: elements.length,
+            referenceCount: sentElements.length,
         });
         setGenerationTiming(createLocalGenerationTiming({
             kind: 'image',
@@ -937,51 +1460,16 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         }));
 
         try {
-            let imageUrls: string[] = [];
-            const requestElements: ImageElementDescriptor[] = [];
-
-            if (elements.length > 0) {
-                setGenerationTiming(createLocalGenerationTiming({
-                    kind: 'image',
-                    phaseLabel: elements.length === 1 ? 'Uploading 1 reference' : `Uploading ${elements.length} references`,
-                    startedAtMs,
-                    estimatedTotalMs,
-                }));
-
-                const uploadedElements = await Promise.all(elements.map(async (element) => {
-                    if (element.file) {
-                        const upload = await uploadMediaToTemporaryStorage(element.file);
-                        return {
-                            descriptor: {
-                                id: element.id,
-                                displayName: element.displayName,
-                                handle: element.handle,
-                                storagePath: upload.storagePath,
-                                sourceGenerationId: null,
-                            } satisfies ImageElementDescriptor,
-                            imageUrl: upload.signedUrl,
-                        };
-                    }
-
-                    if (!element.providerUrl) {
-                        throw new Error(`Missing media for ${element.displayName}`);
-                    }
-
-                    return {
-                        descriptor: {
-                            id: element.id,
-                            displayName: element.displayName,
-                            handle: element.handle,
-                            storagePath: element.storagePath ?? null,
-                            sourceGenerationId: element.sourceGenerationId ?? null,
-                        } satisfies ImageElementDescriptor,
-                        imageUrl: element.providerUrl,
-                    };
-                }));
-
-                requestElements.push(...uploadedElements.map((item) => item.descriptor));
-                imageUrls = uploadedElements.map((item) => item.imageUrl);
+            // Before any upload, which would fail first and hide the way back.
+            const { data: { session: currentSession } } = await supabase.auth.getSession();
+            if (!currentSession) {
+                await saveDraftNow();
+                setGenerationTiming(null);
+                router.push(getLoginPathForThisPage());
+                return;
             }
+
+            const inputs = await stageReferenceInputs(sentElements, startedAtMs, estimatedTotalMs);
 
             setGenerationTiming(createLocalGenerationTiming({
                 kind: 'image',
@@ -990,72 +1478,54 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 estimatedTotalMs,
             }));
 
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session) { router.push('/login?returnUrl=/create-image'); return; }
-
-            const response = await fetch('/api/generations', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${session.access_token}`,
-                    'Idempotency-Key': idempotencyKey
-                },
-                body: JSON.stringify({
-                    kind: 'image',
-                    modelId: selectedModel,
-                    prompt: prompt.trim(),
-                    settings: {
-                        aspectRatio,
-                        resolution,
-                        qualityMode,
-                        googleSearch: model.supportsGoogleSearch ? googleSearch : false,
-                        outputFormat: 'jpg',
-                    },
-                    inputs: imageUrls.map((url, index) => ({
-                        slot: 'imageReferences',
-                        kind: 'image',
-                        url,
-                        label: requestElements[index]?.displayName ?? `Reference ${index + 1}`,
-                        handle: requestElements[index]?.handle ?? null,
-                        storagePath: requestElements[index]?.storagePath ?? null,
-                        sourceGenerationId: requestElements[index]?.sourceGenerationId ?? null,
-                    })),
-                    sourceGenerationId: remixId || undefined,
-                    catalogRevision: modelCatalog.catalog?.revision,
-                })
-            });
-
-            const data = await response.json();
-            if (!data.success) {
-                if (data.code === 'CATALOG_CHANGED' || data.code === 'MODEL_UNAVAILABLE') {
-                    setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
-                    modelCatalog.refetch();
-                }
-                throw new Error(data.error || 'Failed to start generation');
-            }
-            setLatestGenerationId(data.generationId ?? null);
-            setLatestIsPublic(false);
-            announceGenerationStarted();
-            if (data.remainingCredits !== undefined) updateCredits(data.remainingCredits);
-
-            const result = await pollPrediction(data.predictionId, session.access_token, startedAtMs, estimatedTotalMs);
-            setOutputImage(result.output);
-            setOutputImages(result.outputs);
-            if (result.timing) {
-                setGenerationTiming(result.timing);
-            }
+            const body: CatalogGenerationRequestPayload = {
+                kind: 'image',
+                modelId: selectedModel,
+                prompt: submitted,
+                settings: generationSettings,
+                inputs,
+                sourceGenerationId: remixId || undefined,
+                catalogRevision: modelCatalog.catalog?.revision ?? '',
+            };
+            const start: PendingWebStart = {
+                version: 1,
+                tool: 'image',
+                idempotencyKey,
+                body,
+                catalogRevision: body.catalogRevision,
+                createdAt: new Date().toISOString(),
+                userId: currentSession.user.id,
+            };
+            // Kept before it is sent: an answer that never arrives is replayed under this key.
+            savePendingWebStart(start);
+            await runStart(start, { startedAtMs, estimatedTotalMs });
         } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : 'Something went wrong';
-            if (errorMessage === BACKGROUND_PROCESSING_ERROR) {
-                handoffToBackgroundProcessing(startedAtMs);
-            } else {
-                setError(errorMessage);
-                setGenerationTiming(null);
-            }
+            setError(err instanceof Error ? err.message : 'Something went wrong');
+            setGenerationTiming(null);
         } finally {
             activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
         }
+    };
+
+    const handleStartNewRun = () => {
+        // The creator's own choice, priced on the button: the last start may still be running.
+        forgetPendingStart();
+        void handleGenerate();
+    };
+
+    const handleOpenPublish = async () => {
+        if (!latestGenerationId || isPreparingPublish) return;
+        setIsPreparingPublish(true);
+        const details = await Promise.race([
+            loadPublishDetails(latestGenerationId),
+            new Promise<null>((resolve) => {
+                window.setTimeout(() => resolve(null), PUBLISH_DETAILS_WAIT_MS);
+            }),
+        ]);
+        setPublishModalDefaults(details ?? EMPTY_PUBLISH_DETAILS);
+        setIsPreparingPublish(false);
+        setIsPublishModalOpen(true);
     };
 
     const accentStyles = {
@@ -1074,9 +1544,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             progress: 'from-amber-500 to-orange-500',
         },
     }[model.accentColor];
-    const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     const backgroundProcessingCopy = getBackgroundProcessingCopy('image');
-    useDeploymentRefresh(isGenerating || isBackgroundProcessing);
     const backgroundTiming = generationTiming ? freezeGenerationTiming(generationTiming, nowMs) : null;
     const backgroundTimingLabel = backgroundTiming ? getGenerationTimingSummaryLabel(backgroundTiming, nowMs) : null;
     const remixResultReferenceLabel = remixSourceBundle
@@ -1103,9 +1571,10 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             return imageUrl;
         }
 
+        const extension = getImageFileExtension(imageUrl);
         return buildMediaProxyUrl(location.bucket, location.filePath, {
             download: true,
-            filename: outputImages.length > 1 ? `generated-image-${index + 1}.jpg` : 'generated-image.jpg',
+            filename: outputImages.length > 1 ? `generated-image-${index + 1}.${extension}` : `generated-image.${extension}`,
         });
     };
     const outputImageDownloadUrl = getOutputImageDownloadUrl(outputImage, 0);
@@ -1135,8 +1604,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             : isBackgroundProcessing
                 ? backgroundProcessingCopy.description
                 : 'The workspace stays focused on the active run and latest result once you generate.';
-    const shareTitle = publishedMeta?.title || prompt.trim() || `${model.displayName} image`;
-    const shareDescription = publishedMeta?.description || prompt.trim() || null;
+    const shareTitle = publishedMeta?.title || submittedPrompt || `${model.displayName} image`;
+    const shareDescription = publishedMeta?.description || submittedPrompt || null;
     const publicResultPath = latestGenerationId && latestIsPublic ? buildShowcaseDetailPath(latestGenerationId) : null;
     const displayedOutputImages = outputImages.length > 0
         ? outputImages
@@ -1153,7 +1622,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                         eyebrow={`Creator studio / ${model.displayName}`}
                         description="Start with a still when you need the fastest route to a polished product visual, concept frame, or campaign hook."
                         credits={userCredits}
-                        showPathSwitcher={false}
                     />
                 }
                 controls={
@@ -1344,9 +1812,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     aspectRatio,
                                     resolution,
                                     googleSearch,
-                                    referenceImageCount: elements.length,
+                                    referenceImageCount: sentElements.length,
                                     elementEnhancementMode: isElementEnhancementLocked ? 'append-only' : undefined,
-                                    elementReferences: elements.map((element) => ({
+                                    elementReferences: sentElements.map((element) => ({
                                         handle: element.handle,
                                         displayName: element.displayName,
                                     })),
@@ -1363,9 +1831,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                             Type <span className="font-semibold text-zinc-300">@</span> to reference them in the prompt.
                                         </span>
                                     </div>
-                                    {elements.length > 0 ? (
+                                    {sentElements.length > 0 ? (
                                         <div className="flex flex-wrap gap-2">
-                                            {elements.map((element) => (
+                                            {sentElements.map((element) => (
                                                 <StudioElementChip
                                                     key={element.id}
                                                     displayName={element.displayName}
@@ -1438,7 +1906,10 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             ) : null}
                         </motion.div>
 
-                        {model.maxImages > 0 ? (
+                        {/* Elements kept from another model stay here with their remove
+                            buttons, even on a prompt-only model: the limit message asks the
+                            creator to remove the extras, and this is the only place to do it. */}
+                        {model.maxImages > 0 || elements.length > 0 ? (
                             <motion.div
                                 initial={{ opacity: 0, y: 20 }}
                                 animate={{ opacity: 1, y: 0 }}
@@ -1448,7 +1919,11 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             <div className="mb-4 flex items-start justify-between gap-3">
                                 <div>
                                     <h2 className="text-sm font-semibold text-white">Elements</h2>
-                                    <p className="mt-1 text-sm text-zinc-400">Upload visual anchors, rename them, and reference them directly in the prompt.</p>
+                                    <p className="mt-1 text-sm text-zinc-400">
+                                        {model.maxImages > 0
+                                            ? 'Upload visual anchors, rename them, and reference them directly in the prompt.'
+                                            : `${model.displayName} does not take reference images. These are kept for another model; remove them to generate here.`}
+                                    </p>
                                 </div>
                                 <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
                                     {elements.length}/{model.maxImages}
@@ -1548,6 +2023,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     <input type="file" accept="image/*" multiple onChange={handleImageUpload} className="hidden" />
                                 </label>
                             )}
+                            {elementPickNotice ? (
+                                <p role="status" className="mt-3 text-sm text-amber-200">{elementPickNotice}</p>
+                            ) : null}
                             </motion.div>
                         ) : (
                             <div className="flex items-start gap-3 rounded-[24px] border border-blue-400/15 bg-blue-400/[0.06] p-4 text-sm text-blue-100">
@@ -1715,12 +2193,32 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 </div>
                             }
                             action={
-                                insufficientCredits ? (
+                                pendingStart && !isGenerating ? (
+                                    <div className="space-y-3">
+                                        <button
+                                            type="button"
+                                            onClick={() => void replayPendingStart(pendingStart)}
+                                            className="ui-focus-ring flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 py-4 text-base font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
+                                        >
+                                            Check again
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleStartNewRun}
+                                            disabled={!prompt.trim() || quotePending || staleElementMentions.length > 0 || Boolean(referenceLimitMessage)}
+                                            className="ui-focus-ring flex min-h-12 w-full items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-6 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            {currentCost !== null ? `Start a new run · ${quoteUi.costLabel}` : 'Start a new run'}
+                                        </button>
+                                    </div>
+                                ) : showTopUp ? (
                                     <div className="space-y-4">
                                         <div className="rounded-[22px] border border-blue-500/20 bg-blue-500/10 p-4">
                                             <p className="text-sm font-semibold text-white">Not enough credits</p>
                                             <p className="mt-2 text-sm text-zinc-400">
-                                                Image generation costs <strong className="text-white">{currentCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.
+                                                {insufficientCredits ? (
+                                                    <>Image generation costs <strong className="text-white">{currentCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.</>
+                                                ) : creditRefusalMessage}
                                             </p>
                                         </div>
                                         <Link href="/pricing" className="ui-focus-ring flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]">
@@ -1731,7 +2229,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 ) : (
                                     <button
                                         onClick={handleGenerate}
-                                        disabled={!prompt.trim() || isGenerating || quotePending || staleElementMentions.length > 0}
+                                        disabled={!prompt.trim() || isGenerating || quotePending || staleElementMentions.length > 0 || Boolean(referenceLimitMessage)}
                                         className="ui-focus-ring flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 py-4 text-base font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         {isGenerating ? (
@@ -1757,6 +2255,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                             phaseLabel={backgroundTiming?.phaseLabel ?? null}
                                             timingLabel={backgroundTimingLabel}
                                         />
+                                    ) : pendingStart ? (
+                                        <p role="alert" className="text-sm text-amber-200">{pendingStartNotice ?? START_UNCONFIRMED_MESSAGE}</p>
                                     ) : referenceLimitMessage ? (
                                         <p className="text-sm text-red-400">{referenceLimitMessage}</p>
                                     ) : error ? (
@@ -1779,7 +2279,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     className="inline-flex items-center gap-2 text-sm font-medium text-zinc-300 transition hover:text-white"
                                 >
                                     View Studio
-                                    <Download className="h-4 w-4" />
+                                    <Images className="h-4 w-4" />
                                 </Link>
                             }
                         />
@@ -1793,7 +2293,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-100 transition hover:bg-white/[0.06]"
                                 >
                                     Studio
-                                    <Download className="h-4 w-4" />
+                                    <Images className="h-4 w-4" />
                                 </Link>
                             }
                         >
@@ -1822,7 +2322,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                                 {displayedOutputImages.length > 1 ? (
                                                     <a
                                                         href={getOutputImageDownloadUrl(imageUrl, index) ?? imageUrl}
-                                                        download={`generated-image-${index + 1}.jpg`}
+                                                        download={`generated-image-${index + 1}.${getImageFileExtension(imageUrl)}`}
                                                         className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-4 py-2.5 text-xs font-semibold text-emerald-100 transition hover:border-emerald-400/40 hover:bg-emerald-500/15"
                                                     >
                                                         <Download className="h-3.5 w-3.5" />
@@ -1846,7 +2346,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         </button>
                                         <a
                                             href={outputImageDownloadUrl ?? outputImage}
-                                            download="generated-image.jpg"
+                                            download={`generated-image.${getImageFileExtension(outputImage)}`}
                                             className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500"
                                         >
                                             <Download className="h-4 w-4" />
@@ -1876,10 +2376,11 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                             ) : (
                                                 <button
                                                     type="button"
-                                                    onClick={() => setIsPublishModalOpen(true)}
-                                                    className="ui-focus-ring inline-flex items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 py-3 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
+                                                    onClick={() => void handleOpenPublish()}
+                                                    disabled={isPreparingPublish}
+                                                    className="ui-focus-ring inline-flex items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 py-3 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-wait disabled:opacity-70"
                                                 >
-                                                    <Share2 className="h-4 w-4" />
+                                                    {isPreparingPublish ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
                                                     Publish & share
                                                 </button>
                                             )
@@ -1964,7 +2465,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                     <div className="flex flex-col gap-2">
                         <div className="text-xs font-bold uppercase tracking-wider text-zinc-500">Prompt</div>
                         <p className="max-h-32 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-relaxed text-zinc-300 [overflow-wrap:anywhere] custom-scrollbar">
-                            {prompt || 'No prompt available'}
+                            {submittedPrompt || 'No prompt available'}
                         </p>
                     </div>
                 }
@@ -1975,6 +2476,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 onClose={() => setIsPublishModalOpen(false)}
                 generationId={latestGenerationId}
                 accessToken={session?.access_token ?? null}
+                defaultTitle={publishModalDefaults.title}
+                paywallPrefill={publishModalDefaults.paywallPrefill}
                 shareAfterPublish={latestGenerationId ? {
                     title: shareTitle,
                     description: shareDescription,
@@ -1998,7 +2501,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                     <div className="flex flex-col gap-2">
                         <div className="text-xs font-bold uppercase tracking-wider text-zinc-500">Prompt</div>
                         <p className="max-h-32 overflow-y-auto pr-2 text-sm leading-relaxed text-zinc-300 custom-scrollbar">
-                            {prompt || "No prompt available"}
+                            {remixSourceBundle?.generation.prompt || 'No prompt available'}
                         </p>
                     </div>
                 }

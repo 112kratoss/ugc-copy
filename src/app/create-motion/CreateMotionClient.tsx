@@ -5,7 +5,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import GenerationResultVideo from '@/components/GenerationResultVideo';
-import { Upload, Sparkles, Loader2, Download, Zap, ChevronDown, Check, Play, Share2 } from 'lucide-react';
+import { Upload, Sparkles, Loader2, Download, Zap, ChevronDown, Check, Play, Share2, Images } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
@@ -35,18 +35,27 @@ import {
     getRemixRestoreWarning,
 } from '@/lib/remix-source-client';
 import { buildShowcaseDetailPath } from '@/lib/share';
+import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
+import type { CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
 import {
     getPersistedFile,
     PERSISTED_MEDIA_KEYS,
+    purgeLegacyPersistedMedia,
     removePersistedMedia,
+    scopedPersistedMediaKey,
     setPersistedFile,
 } from '@/lib/persisted-media';
+import { loadCreatorDraft, saveCreatorDraft } from '@/lib/persisted-creator-draft';
+import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
 import {
     announceGenerationStarted,
-    fetchGenerationStatus,
+    fetchGenerationStatusWithRetry,
+    GenerationStatusRequestError,
+    isGenerationStatusAbortError,
     waitForNextGenerationStatusPoll,
+    type GenerationStatusResponse,
 } from '@/lib/generation-status-client';
 import {
     createLocalGenerationTiming,
@@ -58,12 +67,24 @@ import {
 } from '@/lib/generation-timing';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useTicker } from '@/lib/use-ticker';
-import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 import {
+    refreshTemporaryMediaUrl,
+    TEMPORARY_MEDIA_UPLOAD_LIMITS,
+    uploadMediaToTemporaryStorage,
+} from '@/lib/temporary-media-upload';
+import {
+    clearPendingWebStart,
+    isAmbiguousWebStartFailure,
+    loadPendingWebStart,
+    requestWebGenerationStart,
     resolveCatalogModelId,
     resolveWebGenerationQuoteUi,
+    savePendingWebStart,
     useWebGenerationModelCatalog,
     useWebGenerationModelQuote,
+    WebCatalogRequestError,
+    type PendingWebStart,
+    type WebGenerationStartResponse,
 } from '@/lib/generation-model-client';
 // The shared mirror is the single client-side registry: it is pinned to the
 // server registry by model-registry-parity.test.ts and hydrated in place by
@@ -96,9 +117,100 @@ interface UploadPreviewState {
 
 const CATALOG_HANDLED_KEYS = ['resolution', 'characterOrientation', 'duration'] as const;
 
-export default function CreateMotionClient({ prefill }: { prefill: CreateMotionPrefill }) {
+/** Kie's motion-control limit for the clip, stricter than the sign step's 250 MB. */
+const MAX_REFERENCE_VIDEO_BYTES = 100 * 1024 * 1024;
+/**
+ * How long an uploaded input is sent again by its staged path instead of being
+ * uploaded again: the sweep deletes a staged object a run has used
+ * RECLAIM_AFTER_HOURS after it was signed, and this leaves eight hours spare.
+ */
+const STAGED_UPLOAD_REUSE_MS = (RECLAIM_AFTER_HOURS - 8) * 60 * 60 * 1000;
+const MOTION_DRAFT_SAVE_DELAY_MS = 500;
+const MOTION_INPUTS_HINT = 'Add a character image and a motion clip to see the cost.';
+const UNCONFIRMED_START_MESSAGE = 'We couldn’t confirm your generation started. Check again — that can’t start a second run.';
+
+type MotionMode = '720p' | '1080p';
+type MotionCharacterOrientation = 'video' | 'image';
+
+/** The text half of a motion draft; its two files are kept beside it in persisted media. */
+interface MotionTextDraft {
+    prompt: string;
+    /** Left out until a model is chosen: the page's placeholder must not pin itself over the catalog default. */
+    modelId?: string;
+    duration: number;
+    characterOrientation: MotionCharacterOrientation;
+    mode: MotionMode;
+    /**
+     * The ?prompt= and ?model= the draft was edited under. Reloading that same
+     * link (a deploy, a lost session) restores the draft over them; a new link
+     * still sets its own prompt and model.
+     */
+    linkPrefill?: { prompt: string | null; model: string | null };
+}
+
+interface StagedMotionUpload {
+    signedUrl: string;
+    storagePath: string;
+    uploadedAt: number;
+}
+
+interface MotionPublishPrefill {
+    generationId: string;
+    title: string;
+    paywallPrefill: GenerationPaywallPrefill | null;
+}
+
+/** A run that reached a failed status. Its hold is always returned. */
+class MotionRunFailedError extends Error {}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** What the sign step (and, for the clip, Kie) would refuse, said when the file is picked. */
+function describeRefusedMotionPick(file: File, kind: 'image' | 'video'): string | null {
+    const name = file.name || (kind === 'image' ? 'This image' : 'This video');
+    if (!TEMPORARY_MEDIA_UPLOAD_LIMITS.isAllowedMimeType(kind, file.type)) {
+        return kind === 'image'
+            ? `"${name}" isn't a supported image. Use a JPG, PNG or WEBP file.`
+            : `"${name}" isn't a supported video. Use an MP4 or MOV file.`;
+    }
+    const maxBytes = kind === 'image' ? TEMPORARY_MEDIA_UPLOAD_LIMITS.maxBytesByKind.image : MAX_REFERENCE_VIDEO_BYTES;
+    if (file.size > maxBytes) {
+        return `"${name}" is over ${Math.round(maxBytes / (1024 * 1024))} MB. Please upload a smaller ${kind}.`;
+    }
+    return null;
+}
+
+function readPublishPrefill(generationId: string, payload: unknown): MotionPublishPrefill | null {
+    const generations = isRecord(payload) && Array.isArray(payload.generations) ? payload.generations : [];
+    const generation = generations.find((item): item is Record<string, unknown> => isRecord(item) && item.id === generationId);
+    if (!generation) return null;
+    const prefill = generation.paywallPrefill;
+    return {
+        generationId,
+        title: typeof generation.title === 'string' ? generation.title : '',
+        paywallPrefill: isRecord(prefill) && Array.isArray(prefill.resourceKinds) && typeof prefill.allowRemix === 'boolean'
+            ? prefill as unknown as GenerationPaywallPrefill
+            : null,
+    };
+}
+
+function withSentenceEnd(message: string) {
+    return /[.!?]$/.test(message.trim()) ? message.trim() : `${message.trim()}.`;
+}
+
+export default function CreateMotionClient({
+    prefill,
+    returnTo = '/create-motion',
+}: {
+    prefill: CreateMotionPrefill;
+    /** This page with its params, for the sign-in round trip. */
+    returnTo?: string;
+}) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
+    const userId = session?.user?.id ?? null;
     const [selectedModel, setSelectedModel] = useState<ModelId>('kling-3.0');
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     const modelCatalog = useWebGenerationModelCatalog({ kind: 'motion', selectedIds: [selectedModel], pickerOpen: isModelDropdownOpen });
@@ -133,6 +245,28 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const [characterOrientation, setCharacterOrientation] = useState<'video' | 'image'>('video');
     const [mode, setMode] = useState<'720p' | '1080p'>('720p');
     const [prompt, setPrompt] = useState<string>("No distortion, the character's movements are consistent with the video.");
+    const [imagePickError, setImagePickError] = useState<string | null>(null);
+    const [videoPickError, setVideoPickError] = useState<string | null>(null);
+    const [unconfirmedStart, setUnconfirmedStart] = useState(false);
+    const [creditRefusal, setCreditRefusal] = useState<{ message: string; balance: number | null; cost: number | null } | null>(null);
+    const [publishPrefill, setPublishPrefill] = useState<MotionPublishPrefill | null>(null);
+    // The account whose saved draft has been read. A remix page keeps no draft,
+    // so nothing waits for one there.
+    const [draftRestoredFor, setDraftRestoredFor] = useState<string | null>(null);
+    const isDraftReady = Boolean(prefill.remixId) || !userId || draftRestoredFor === userId;
+    // The start sent without an answer. Also in sessionStorage, which a browser
+    // can refuse, so a retry from this page still reuses its key.
+    const pendingStartRef = useRef<PendingWebStart | null>(null);
+    // By File: a picked file is uploaded once and then sent again by its staged path.
+    const stagedUploadsRef = useRef(new WeakMap<File, StagedMotionUpload>());
+    const promptInputRef = useRef<HTMLTextAreaElement>(null);
+    const promptEditedRef = useRef(false);
+    const restoredDraftModelRef = useRef(false);
+    // The longest length known for the attached clip, so a reread of the same
+    // clip keeps what the server measured for it.
+    const measuredClipFloorRef = useRef<{ url: string; seconds: number } | null>(null);
+    const latestRunCostRef = useRef<number | null>(null);
+    const pendingDraftSaveRef = useRef<{ userId: string; draft: MotionTextDraft } | null>(null);
 
     // Mirrors the live prompt so the remix restore below can tell whether the
     // creator typed while /api/remix-source was still in flight.
@@ -160,8 +294,6 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         generationPollAbortControllerRef.current?.abort();
     }, []);
 
-    const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
-
     useEffect(() => {
         if (remixId) return;
         // A route prefill intentionally seeds the editable form once it is available.
@@ -174,7 +306,9 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     // while it still applies, so choosing another model or a successful reload clears
     // it. It takes the notice slot ahead of a one-off notice, which can be dismissed.
     const catalogProblem = modelCatalog.missingIds.includes(selectedModel)
-        ? 'This model is no longer available. Your draft is saved; choose another model.'
+        ? remixId
+            ? 'This model is no longer available. Your prompt and references stay on this page; choose another model.'
+            : 'This model is no longer available. Your draft is saved; choose another model.'
         : modelCatalog.error?.message || null;
     const modelNotice = catalogProblem ?? catalogNotice;
     const model = MOTION_MODELS[selectedModel] ?? MOTION_MODELS['kling-3.0'];
@@ -190,8 +324,10 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         : motionModelOptions;
     const maxVideoDuration = Number((model as unknown as { maxVideoDuration?: number; maxDuration?: number }).maxVideoDuration ?? (model as unknown as { maxDuration?: number }).maxDuration ?? 30);
     useEffect(() => {
-        if (!modelCatalog.catalog) return;
-        const preferDefault = !hasResolvedInitialCatalogModel.current && !remixId && !prefillModel;
+        // The saved draft names the model first: resolving before it lands would
+        // replace the creator's model with the catalog default.
+        if (!modelCatalog.catalog || !isDraftReady) return;
+        const preferDefault = !hasResolvedInitialCatalogModel.current && !remixId && !prefillModel && !restoredDraftModelRef.current;
         const nextModelId = resolveCatalogModelId(modelCatalog.catalog, 'motion', selectedModel, { preferDefault });
         if (!nextModelId) return;
         hasResolvedInitialCatalogModel.current = true;
@@ -202,7 +338,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                 setCatalogNotice(`Your previous motion model is no longer available. Switched to ${nextModel?.displayName ?? nextModelId}.`);
             }
         }
-    }, [modelCatalog.catalog, selectedModel, model, prefillModel, remixId]);
+    }, [isDraftReady, modelCatalog.catalog, selectedModel, model, prefillModel, remixId]);
     useEffect(() => {
         if (!modelCatalog.detailsReady) return;
         let changed = false;
@@ -235,27 +371,42 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
+    // Per account, and never on a remix page: a remix restores its own inputs,
+    // and saving them under the ordinary keys replaced the creator's own draft.
+    const getPersistedMediaKey = (key: string) => (userId && !remixId ? scopedPersistedMediaKey(key, userId) : null);
+
     const processImageFile = async (file: File) => {
-        if (!file.type.startsWith('image/')) return;
+        const refusal = describeRefusedMotionPick(file, 'image');
+        if (refusal) {
+            setImagePickError(refusal);
+            return;
+        }
+        setImagePickError(null);
         setCharacterImageFile(file);
         const url = URL.createObjectURL(file);
         setCharacterImage(url);
         setCharacterImageDescriptor(null);
-        await setPersistedFile(PERSISTED_MEDIA_KEYS.createMotionCharacterImage, file);
+        const persistedKey = getPersistedMediaKey(PERSISTED_MEDIA_KEYS.createMotionCharacterImage);
+        if (persistedKey) await setPersistedFile(persistedKey, file);
     };
 
     const processVideoFile = async (file: File) => {
-        if (!file.type.startsWith('video/')) return;
-        if (file.size > MAX_FILE_SIZE) {
-            setVideoError('File size exceeds 100MB. Please upload a smaller video.');
+        // A refused pick leaves the attached clip as it was.
+        const refusal = describeRefusedMotionPick(file, 'video');
+        if (refusal) {
+            setVideoPickError(refusal);
             return;
         }
+        setVideoPickError(null);
         setVideoError(null);
+        // No quote until the new clip's length is read.
+        setDuration(0);
         setReferenceVideoFile(file);
         const url = URL.createObjectURL(file);
         setReferenceVideo(url);
         setReferenceVideoDescriptor(null);
-        await setPersistedFile(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo, file);
+        const persistedKey = getPersistedMediaKey(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo);
+        if (persistedKey) await setPersistedFile(persistedKey, file);
     };
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -290,14 +441,18 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const handleClearImage = async () => {
         setCharacterImageFile(null); setCharacterImage(null);
         setCharacterImageDescriptor(null);
-        await removePersistedMedia(PERSISTED_MEDIA_KEYS.createMotionCharacterImage);
+        setImagePickError(null);
+        const persistedKey = getPersistedMediaKey(PERSISTED_MEDIA_KEYS.createMotionCharacterImage);
+        if (persistedKey) await removePersistedMedia(persistedKey);
     };
 
     const handleClearVideo = async () => {
         setReferenceVideoFile(null); setReferenceVideo(null);
         setReferenceVideoDescriptor(null);
-        setDuration(0); setVideoError(null);
-        await removePersistedMedia(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo);
+        setDuration(0); setVideoError(null); setVideoPickError(null);
+        measuredClipFloorRef.current = null;
+        const persistedKey = getPersistedMediaKey(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo);
+        if (persistedKey) await removePersistedMedia(persistedKey);
     };
 
     // Handle Remix Pre-fill
@@ -394,7 +549,9 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             storagePath: null,
             sourceGenerationId: remixSourceBundle.generation.id,
         });
+        setDuration(0);
         setVideoError(null);
+        setVideoPickError(null);
     };
 
     useEffect(() => {
@@ -403,14 +560,18 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         }
 
         const controller = new AbortController();
-        void readVideoDurationSeconds(referenceVideo, controller.signal).then(duration => {
+        void readVideoDurationSeconds(referenceVideo, controller.signal).then(readSeconds => {
             if (controller.signal.aborted) return;
-            if (duration === null) {
+            if (readSeconds === null) {
                 setVideoError('We could not read the reference video. Please try another clip.');
                 return;
             }
-            setDuration(duration);
-            setVideoError(duration > maxVideoDuration
+            // The browser can round a frame short of ffmpeg: a longer length the
+            // server measured for this same clip stays.
+            const floor = measuredClipFloorRef.current;
+            const seconds = floor?.url === referenceVideo ? Math.max(readSeconds, floor.seconds) : readSeconds;
+            setDuration(seconds);
+            setVideoError(seconds > maxVideoDuration
                 ? `Reference video exceeds ${maxVideoDuration}s. Please choose a shorter clip.`
                 : null);
         });
@@ -424,75 +585,112 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     useEffect(() => () => revokeObjectUrl(referenceVideo), [referenceVideo]);
 
     useEffect(() => {
-        const loadSavedFiles = async () => {
-            try {
-                const savedImageFile = await getPersistedFile(PERSISTED_MEDIA_KEYS.createMotionCharacterImage);
-                if (savedImageFile) { setCharacterImageFile(savedImageFile); setCharacterImage(URL.createObjectURL(savedImageFile)); }
-                const savedVideoFile = await getPersistedFile(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo);
-                if (savedVideoFile) { setReferenceVideoFile(savedVideoFile); setReferenceVideo(URL.createObjectURL(savedVideoFile)); }
-            } catch (err) { console.error("Error loading persisted media:", err); }
-        };
-        loadSavedFiles();
-
-        const checkPendingGenerations = async () => {
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session) return;
-            const { data } = await supabase
-                .from('generations')
-                .select('id, prediction_id, status, created_at, duration')
-                .eq('user_id', session.user.id)
-                .eq('category', 'video')
-                .eq('creation_mode', 'motion')
-                .in('status', ['processing', 'waiting'])
-                .order('created_at', { ascending: false })
-                .limit(1)
-                .maybeSingle();
-
-            if (data?.prediction_id) {
-                const startedAtMs = Number.isNaN(Date.parse(data.created_at)) ? Date.now() : Date.parse(data.created_at);
-                setIsGenerating(true);
-                setError(null);
-                setLatestGenerationId(data.id ?? null);
-                setLatestIsPublic(false);
-                setGenerationTiming(createLocalGenerationTiming({
-                    kind: 'motion',
-                    phaseLabel: 'Resuming active run',
-                    startedAtMs,
-                    appStatus: data.status === 'waiting' ? 'waiting' : 'processing',
-                }));
-                if (typeof data.duration === 'number') {
-                    setDuration(data.duration);
-                }
-
-                try {
-                    const result = await pollPrediction(data.prediction_id, session.access_token, startedAtMs, null);
-                    setOutputVideo(result.output);
-                    if (result.timing) {
-                        setGenerationTiming(result.timing);
-                    }
-                } catch (err) {
-                    const errorMessage = err instanceof Error ? err.message : 'Something went wrong';
-                    if (errorMessage === BACKGROUND_PROCESSING_ERROR) {
-                        handoffToBackgroundProcessing(startedAtMs);
-                    } else {
-                        setError(errorMessage);
-                        setGenerationTiming(null);
-                    }
-                } finally {
-                    setIsGenerating(false);
-                }
-            }
-        };
-        void checkPendingGenerations();
-        // Recovery is intentionally a mount-only lookup; changing form settings must not restart it.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        void purgeLegacyPersistedMedia();
     }, []);
 
-    function getMotionGenerationEstimate(durationSeconds = duration) {
+    // A reload of the link the draft was edited under brings the edits back; a
+    // different link keeps the prompt and model it carries.
+    const applySavedDraft = (draft: MotionTextDraft) => {
+        const savedLink = draft.linkPrefill ?? { prompt: null, model: null };
+        const continuesLink = savedLink.prompt === prefillPrompt && savedLink.model === prefillModel;
+        if (typeof draft.prompt === 'string' && (continuesLink || !prefillPrompt) && !promptEditedRef.current) {
+            setPrompt(draft.prompt);
+        }
+        if (typeof draft.modelId === 'string' && draft.modelId && (continuesLink || !prefillModel)) {
+            restoredDraftModelRef.current = true;
+            setSelectedModel(draft.modelId as ModelId);
+        }
+        if (draft.characterOrientation === 'video' || draft.characterOrientation === 'image') {
+            setCharacterOrientation(draft.characterOrientation);
+        }
+        if (draft.mode === '720p' || draft.mode === '1080p') setMode(draft.mode);
+    };
+
+    // The saved draft and its two files, read before the catalog picks a model.
+    useEffect(() => {
+        if (remixId || !userId) return;
+        let cancelled = false;
+        void (async () => {
+            const [draft, savedImageFile, savedVideoFile] = await Promise.all([
+                loadCreatorDraft<MotionTextDraft>('motion', userId).catch(() => null),
+                getPersistedFile(scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createMotionCharacterImage, userId)).catch(() => null),
+                getPersistedFile(scopedPersistedMediaKey(PERSISTED_MEDIA_KEYS.createMotionReferenceVideo, userId)).catch(() => null),
+            ]);
+            if (cancelled) return;
+            if (draft) applySavedDraft(draft);
+            if (savedImageFile) {
+                setCharacterImageFile(savedImageFile);
+                setCharacterImage(URL.createObjectURL(savedImageFile));
+            }
+            if (savedVideoFile) {
+                const url = URL.createObjectURL(savedVideoFile);
+                if (draft && typeof draft.duration === 'number' && draft.duration > 0) {
+                    measuredClipFloorRef.current = { url, seconds: draft.duration };
+                }
+                setReferenceVideoFile(savedVideoFile);
+                setReferenceVideo(url);
+            }
+            setDraftRestoredFor(userId);
+        })();
+        return () => {
+            cancelled = true;
+        };
+        // Once per account: applySavedDraft reads this page's prefill, which does not change.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [remixId, userId]);
+
+    // Prompt, model and settings per account, a moment after each edit. A remix
+    // page saves none: it restores from its source.
+    useEffect(() => {
+        if (remixId || !userId || !isDraftReady) return;
+        const modelIsChosen = hasResolvedInitialCatalogModel.current || restoredDraftModelRef.current || Boolean(prefillModel);
+        const pendingSave = {
+            userId,
+            draft: {
+                prompt,
+                ...(modelIsChosen ? { modelId: selectedModel } : {}),
+                duration,
+                characterOrientation,
+                mode,
+                linkPrefill: { prompt: prefillPrompt, model: prefillModel },
+            } satisfies MotionTextDraft,
+        };
+        pendingDraftSaveRef.current = pendingSave;
+        const timer = window.setTimeout(() => {
+            if (pendingDraftSaveRef.current === pendingSave) pendingDraftSaveRef.current = null;
+            void saveCreatorDraft('motion', pendingSave.userId, pendingSave.draft).catch(() => undefined);
+        }, MOTION_DRAFT_SAVE_DELAY_MS);
+        return () => window.clearTimeout(timer);
+    }, [characterOrientation, duration, isDraftReady, mode, prefillModel, prefillPrompt, prompt, remixId, selectedModel, userId]);
+
+    /** Writes the draft at once, for a page about to go away. */
+    const flushDraftSave = async () => {
+        const pendingSave = pendingDraftSaveRef.current;
+        if (!pendingSave) return;
+        pendingDraftSaveRef.current = null;
+        try {
+            await saveCreatorDraft('motion', pendingSave.userId, pendingSave.draft);
+        } catch {
+            // Storage refused: the files are saved already, and the page goes on.
+        }
+    };
+
+    const redirectToSignIn = async () => {
+        await flushDraftSave();
+        router.push(`/login?returnUrl=${encodeURIComponent(returnTo)}`);
+    };
+
+    // Read for every request: a run can outlive the token it started with.
+    const readAccessToken = async () => {
+        const { data: { session: currentSession } } = await supabase.auth.getSession();
+        return currentSession?.access_token ?? null;
+    };
+
+    function getMotionGenerationEstimate(durationSeconds = duration, modelId: string = selectedModel, resolution: string = mode) {
         return estimateGenerationDurationMs({
             kind: 'motion',
-            model: selectedModel,
-            resolution: mode,
+            model: modelId,
+            resolution,
             durationSeconds: Math.ceil(durationSeconds),
         });
     }
@@ -512,7 +710,6 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
     async function pollPrediction(
         predictionId: string,
-        accessToken: string,
         startedAtMs: number,
         estimatedTotalMs: number | null
     ): Promise<{ output: string; timing: GenerationTiming | null }> {
@@ -523,11 +720,20 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
         try {
             while (Date.now() - pollingStartedAt < 20 * 60 * 1000) {
-                const data = await fetchGenerationStatus({
-                    url: `/api/generate?id=${predictionId}`,
-                    accessToken,
-                    signal: pollController.signal,
-                });
+                let data: GenerationStatusResponse;
+                try {
+                    data = await fetchGenerationStatusWithRetry({
+                        url: `/api/generate?id=${predictionId}`,
+                        getAccessToken: readAccessToken,
+                        signal: pollController.signal,
+                    });
+                } catch (statusError) {
+                    if (pollController.signal.aborted || isGenerationStatusAbortError(statusError)) throw statusError;
+                    if (statusError instanceof GenerationStatusRequestError && statusError.status === 404) throw statusError;
+                    // The run goes on with its credits whether or not this page can
+                    // read it: hand it to the background rather than end it in an error.
+                    throw new Error(BACKGROUND_PROCESSING_ERROR);
+                }
 
                 if (data.timing) {
                     setGenerationTiming(data.timing.estimatedTotalMs ? data.timing : {
@@ -551,7 +757,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                 }
 
                 if (data.status === 'failed') {
-                    throw new Error(data.error || 'Generation failed');
+                    throw new MotionRunFailedError(data.error || 'Generation failed');
                 }
 
                 await waitForNextGenerationStatusPoll(data.retryAfterMs, {
@@ -567,42 +773,216 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         throw new Error(BACKGROUND_PROCESSING_ERROR);
     }
 
-    const handleGenerate = async () => {
-        if (activeGenerationRequestKeyRef.current) return;
-        // The button is disabled until both inputs and a duration exist.
-        if ((!characterImageFile && !characterImage) || (!referenceVideoFile && !referenceVideo)) return;
-        const effectiveDuration = Math.ceil(duration);
-        if (effectiveDuration <= 0) return;
-        if (quotePending) { setError(quoteUi.message ?? 'Wait for the current generation cost before continuing.'); return; }
-        if (insufficientCredits) { setError(`Insufficient credits. This costs ${estimatedCost} credits.`); return; }
+    /** How a started or resumed run that did not succeed ends on this page. */
+    function settleRunError(runError: unknown, startedAtMs: number) {
+        const message = runError instanceof Error ? runError.message : 'Something went wrong';
+        if (message === BACKGROUND_PROCESSING_ERROR) {
+            handoffToBackgroundProcessing(startedAtMs);
+            return;
+        }
+        setGenerationTiming(null);
+        if (runError instanceof MotionRunFailedError) {
+            // A failed run's hold is always returned: show the balance that is true now.
+            window.dispatchEvent(new Event('credits_updated'));
+            const cost = latestRunCostRef.current;
+            setError(cost !== null && cost > 0
+                ? `${withSentenceEnd(message)} Your ${cost} ${cost === 1 ? 'credit was' : 'credits were'} returned.`
+                : message);
+            return;
+        }
+        setError(message);
+    }
 
-        const idempotencyKey = createGenerationIdempotencyKey('motion');
-        activeGenerationRequestKeyRef.current = idempotencyKey;
-        setIsGenerating(true); setError(null); setOutputVideo(null);
-        setLatestGenerationId(null); setLatestIsPublic(false); setPublishedMeta(null);
-        const startedAtMs = getCurrentTimestampMs();
-        const estimatedTotalMs = getMotionGenerationEstimate(effectiveDuration);
+    const beginRunView = (startedAtMs: number, estimatedTotalMs: number | null, phaseLabel: string) => {
+        setIsGenerating(true);
+        setError(null);
+        setCreditRefusal(null);
+        setOutputVideo(null);
+        setLatestGenerationId(null);
+        setLatestIsPublic(false);
+        setPublishedMeta(null);
+        setPublishPrefill(null);
+        latestRunCostRef.current = null;
         setGenerationTiming(createLocalGenerationTiming({
             kind: 'motion',
-            phaseLabel: 'Preparing inputs',
+            phaseLabel,
             startedAtMs,
             estimatedTotalMs,
         }));
+    };
+
+    const forgetPendingStart = () => {
+        pendingStartRef.current = null;
+        clearPendingWebStart('motion');
+        setUnconfirmedStart(false);
+    };
+
+    // The server measured a longer clip than the browser read, and the price
+    // rose: quote with its length, which the refusal carries.
+    const applyMeasuredClipLength = (details: Readonly<Record<string, unknown>>) => {
+        const measuredInputs = Array.isArray(details.inputs) ? details.inputs.filter(isRecord) : [];
+        const clip = measuredInputs.find((input) => input.slot === 'referenceVideo')
+            ?? measuredInputs.find((input) => input.index === 1);
+        const measured = clip && typeof clip.durationSeconds === 'number' && Number.isFinite(clip.durationSeconds) && clip.durationSeconds > 0
+            ? Math.ceil(clip.durationSeconds)
+            : null;
+        if (measured === null) return;
+        if (referenceVideo) measuredClipFloorRef.current = { url: referenceVideo, seconds: measured };
+        setDuration(measured);
+        setVideoError(measured > maxVideoDuration
+            ? `Reference video exceeds ${maxVideoDuration}s. Please choose a shorter clip.`
+            : null);
+    };
+
+    /** A definitive refusal: nothing is running and nothing is held. `code` picks what to offer. */
+    const handleStartRefusal = async (refusal: unknown) => {
+        const requestError = refusal instanceof WebCatalogRequestError ? refusal : null;
+        const code = requestError?.code;
+        const message = refusal instanceof Error && refusal.message ? refusal.message : 'Failed to start generation.';
+        if (code === 'UNAUTHORIZED' || requestError?.status === 401) {
+            await redirectToSignIn();
+            return;
+        }
+        if (code === 'insufficient_credits') {
+            // The balance on screen was out of date: read it again and offer the top-up.
+            window.dispatchEvent(new Event('credits_updated'));
+            setCreditRefusal({ message, balance: userCredits, cost: estimatedCost });
+            return;
+        }
+        if (code === 'CATALOG_CHANGED' || code === 'MODEL_UNAVAILABLE') {
+            setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
+            refetchModelCatalog();
+        }
+        if (code === 'REFERENCE_DURATION_CHANGED' && requestError) {
+            applyMeasuredClipLength(requestError.details);
+        }
+        setError(message);
+        const fieldKeys = Object.keys(requestError?.fieldErrors ?? {});
+        if (
+            code === 'prompt_blocked'
+            || (code === 'INVALID_GENERATION_REQUEST' && (fieldKeys.length === 0 || fieldKeys.some((key) => key.startsWith('prompt'))))
+        ) {
+            promptInputRef.current?.focus();
+        }
+    };
+
+    /** Sends a start, new or unanswered, under its key and follows the run it answers with. */
+    const sendStart = async (start: PendingWebStart, startedAtMs: number, estimatedTotalMs: number | null) => {
+        const accessToken = await readAccessToken();
+        if (!accessToken) {
+            setGenerationTiming(null);
+            await redirectToSignIn();
+            return;
+        }
+        let started: WebGenerationStartResponse;
+        try {
+            started = await requestWebGenerationStart(start.body as CatalogGenerationRequestPayload, {
+                accessToken,
+                idempotencyKey: start.idempotencyKey,
+            });
+        } catch (startError) {
+            setGenerationTiming(null);
+            if (isAmbiguousWebStartFailure(startError)) {
+                // It may have started. The key stays, so checking again answers
+                // with that run instead of paying for a second one.
+                setUnconfirmedStart(true);
+                return;
+            }
+            forgetPendingStart();
+            await handleStartRefusal(startError);
+            return;
+        }
+        forgetPendingStart();
+        latestRunCostRef.current = started.cost;
+        setLatestGenerationId(started.generationId ?? null);
+        setLatestIsPublic(false);
+        announceGenerationStarted();
+        updateCredits(started.remainingCredits);
+
+        const result = await pollPrediction(started.predictionId, startedAtMs, estimatedTotalMs);
+        setOutputVideo(result.output);
+        if (result.timing) {
+            setGenerationTiming(result.timing);
+        }
+    };
+
+    /** Check again: the unanswered start, sent exactly as it was. */
+    const replayPendingStart = async (start: PendingWebStart) => {
+        if (activeGenerationRequestKeyRef.current) return;
+        activeGenerationRequestKeyRef.current = start.idempotencyKey;
+        const createdAtMs = Date.parse(start.createdAt);
+        const startedAtMs = Number.isFinite(createdAtMs) ? createdAtMs : getCurrentTimestampMs();
+        const sentSettings = isRecord(start.body.settings) ? start.body.settings : {};
+        const estimatedTotalMs = getMotionGenerationEstimate(
+            typeof sentSettings.duration === 'number' ? sentSettings.duration : duration,
+            typeof start.body.modelId === 'string' ? start.body.modelId : selectedModel,
+            typeof sentSettings.resolution === 'string' ? sentSettings.resolution : mode,
+        );
+        beginRunView(startedAtMs, estimatedTotalMs, 'Checking your last motion run');
+        setUnconfirmedStart(false);
+        try {
+            await sendStart(start, startedAtMs, estimatedTotalMs);
+        } catch (runError) {
+            settleRunError(runError, startedAtMs);
+        } finally {
+            activeGenerationRequestKeyRef.current = null;
+            setIsGenerating(false);
+        }
+    };
+
+    const isStagedUploadReusable = (file: File) => {
+        const staged = stagedUploadsRef.current.get(file);
+        return Boolean(staged && Date.now() - staged.uploadedAt < STAGED_UPLOAD_REUSE_MS);
+    };
+
+    /** The file's staged path and a fresh link: uploaded on the first press, reused on the next ones. */
+    const stageMotionFile = async (file: File) => {
+        const staged = stagedUploadsRef.current.get(file);
+        if (staged && isStagedUploadReusable(file)) {
+            try {
+                return { signedUrl: await refreshTemporaryMediaUrl(staged.storagePath), storagePath: staged.storagePath };
+            } catch {
+                // The staged copy is gone or could not be signed again: upload the file again.
+                stagedUploadsRef.current.delete(file);
+            }
+        }
+        const upload = await uploadMediaToTemporaryStorage(file);
+        stagedUploadsRef.current.set(file, { ...upload, uploadedAt: Date.now() });
+        return upload;
+    };
+
+    const startFreshRun = async () => {
+        if (activeGenerationRequestKeyRef.current) return;
+        const effectiveDuration = Math.ceil(duration);
+        const idempotencyKey = createGenerationIdempotencyKey('motion');
+        activeGenerationRequestKeyRef.current = idempotencyKey;
+        const startedAtMs = getCurrentTimestampMs();
+        const estimatedTotalMs = getMotionGenerationEstimate(effectiveDuration);
+        beginRunView(startedAtMs, estimatedTotalMs, 'Preparing inputs');
 
         try {
+            // Before any upload: a lapsed session goes to sign-in with this page's params.
+            if (!(await readAccessToken())) {
+                setGenerationTiming(null);
+                await redirectToSignIn();
+                return;
+            }
+
             let imageUrl = characterImage;
             let videoUrl = referenceVideo;
             let nextCharacterImageDescriptor = characterImageDescriptor;
             let nextReferenceVideoDescriptor = referenceVideoDescriptor;
 
             if (characterImageFile) {
-                setGenerationTiming(createLocalGenerationTiming({
-                    kind: 'motion',
-                    phaseLabel: 'Uploading character image',
-                    startedAtMs,
-                    estimatedTotalMs,
-                }));
-                const upload = await uploadMediaToTemporaryStorage(characterImageFile);
+                if (!isStagedUploadReusable(characterImageFile)) {
+                    setGenerationTiming(createLocalGenerationTiming({
+                        kind: 'motion',
+                        phaseLabel: 'Uploading character image',
+                        startedAtMs,
+                        estimatedTotalMs,
+                    }));
+                }
+                const upload = await stageMotionFile(characterImageFile);
                 imageUrl = upload.signedUrl;
                 nextCharacterImageDescriptor = {
                     kind: 'image',
@@ -613,13 +993,15 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             }
 
             if (referenceVideoFile) {
-                setGenerationTiming(createLocalGenerationTiming({
-                    kind: 'motion',
-                    phaseLabel: 'Uploading reference video',
-                    startedAtMs,
-                    estimatedTotalMs,
-                }));
-                const upload = await uploadMediaToTemporaryStorage(referenceVideoFile);
+                if (!isStagedUploadReusable(referenceVideoFile)) {
+                    setGenerationTiming(createLocalGenerationTiming({
+                        kind: 'motion',
+                        phaseLabel: 'Uploading reference video',
+                        startedAtMs,
+                        estimatedTotalMs,
+                    }));
+                }
+                const upload = await stageMotionFile(referenceVideoFile);
                 videoUrl = upload.signedUrl;
                 nextReferenceVideoDescriptor = {
                     kind: 'video',
@@ -635,84 +1017,182 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                 startedAtMs,
                 estimatedTotalMs,
             }));
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session) { router.push('/login?returnUrl=/create-motion'); setIsGenerating(false); return; }
-
-            const response = await fetch('/api/generations', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${session.access_token}`,
-                    'Idempotency-Key': idempotencyKey,
+            const body: CatalogGenerationRequestPayload = {
+                kind: 'motion',
+                modelId: selectedModel,
+                settings: {
+                    duration: effectiveDuration,
+                    characterOrientation,
+                    resolution: mode,
+                    ...additionalSettings.settings,
                 },
-                body: JSON.stringify({
-                    kind: 'motion',
-                    modelId: selectedModel,
-                    settings: {
-                        duration: effectiveDuration,
-                        characterOrientation,
-                        resolution: mode,
-                        ...additionalSettings.settings,
+                prompt,
+                inputs: [
+                    {
+                        slot: 'characterImage',
+                        kind: 'image',
+                        url: imageUrl,
+                        label: nextCharacterImageDescriptor?.label ?? 'Character image',
+                        storagePath: nextCharacterImageDescriptor?.storagePath ?? null,
+                        sourceGenerationId: nextCharacterImageDescriptor?.sourceGenerationId ?? null,
                     },
-                    prompt,
-                    inputs: [
-                        {
-                            slot: 'characterImage',
-                            kind: 'image',
-                            url: imageUrl,
-                            label: nextCharacterImageDescriptor?.label ?? 'Character image',
-                            storagePath: nextCharacterImageDescriptor?.storagePath ?? null,
-                            sourceGenerationId: nextCharacterImageDescriptor?.sourceGenerationId ?? null,
-                        },
-                        {
-                            slot: 'referenceVideo',
-                            kind: 'video',
-                            url: videoUrl,
-                            label: nextReferenceVideoDescriptor?.label ?? 'Reference video',
-                            storagePath: nextReferenceVideoDescriptor?.storagePath ?? null,
-                            sourceGenerationId: nextReferenceVideoDescriptor?.sourceGenerationId ?? null,
-                        },
-                    ],
-                    sourceGenerationId: remixId || undefined,
-                    catalogRevision: modelCatalog.catalog?.revision,
-                })
-            });
-
-            const data = await response.json();
-            if (!data.success) {
-                if (data.code === 'CATALOG_CHANGED' || data.code === 'MODEL_UNAVAILABLE') {
-                    setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
-                    modelCatalog.refetch();
-                }
-                throw new Error(data.error || 'Failed to start generation');
-            }
-            setLatestGenerationId(data.generationId ?? null);
-            setLatestIsPublic(false);
-            announceGenerationStarted();
-            if (data.remainingCredits !== undefined) updateCredits(data.remainingCredits);
-
-            const result = await pollPrediction(data.predictionId, session.access_token, startedAtMs, estimatedTotalMs);
-            setOutputVideo(result.output);
-            if (result.timing) {
-                setGenerationTiming(result.timing);
-            }
-
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Something went wrong';
-            if (msg === BACKGROUND_PROCESSING_ERROR) {
-                handoffToBackgroundProcessing(startedAtMs);
-            } else {
-                setError(msg);
-                setGenerationTiming(null);
-            }
+                    {
+                        slot: 'referenceVideo',
+                        kind: 'video',
+                        url: videoUrl,
+                        label: nextReferenceVideoDescriptor?.label ?? 'Reference video',
+                        storagePath: nextReferenceVideoDescriptor?.storagePath ?? null,
+                        sourceGenerationId: nextReferenceVideoDescriptor?.sourceGenerationId ?? null,
+                    },
+                ],
+                sourceGenerationId: remixId || undefined,
+                catalogRevision: modelCatalog.catalog?.revision ?? '',
+            };
+            const start: PendingWebStart = {
+                version: 1,
+                tool: 'motion',
+                idempotencyKey,
+                body,
+                catalogRevision: body.catalogRevision,
+                createdAt: new Date(startedAtMs).toISOString(),
+                userId,
+            };
+            // Kept before it is sent: an answer that never arrives is checked
+            // again under this key, on this page or after a reload.
+            pendingStartRef.current = start;
+            savePendingWebStart(start);
+            await sendStart(start, startedAtMs, estimatedTotalMs);
+        } catch (runError) {
+            settleRunError(runError, startedAtMs);
         } finally {
             activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
         }
     };
 
+    const handleGenerate = async () => {
+        if (activeGenerationRequestKeyRef.current) return;
+        // While a start is unconfirmed, a press checks it: a new key could pay for a second run.
+        const pending = pendingStartRef.current ?? (userId ? loadPendingWebStart('motion', userId) : null);
+        if (pending) {
+            pendingStartRef.current = pending;
+            await replayPendingStart(pending);
+            return;
+        }
+        // The button is disabled until both inputs and a duration exist.
+        if (!canGenerate) return;
+        // A newer build is out: send from it rather than from this page. The
+        // draft and both files are saved, so the reload loses nothing.
+        if (newBuildAvailable && !remixId) {
+            await flushDraftSave();
+            window.location.reload();
+            return;
+        }
+        await startFreshRun();
+    };
+
+    /** The explicit choice to run again while the unconfirmed start may exist. */
+    const startNewRunInstead = async () => {
+        if (activeGenerationRequestKeyRef.current) return;
+        forgetPendingStart();
+        await handleGenerate();
+    };
+
+    // An unanswered start is checked first, under its own key: it may be the
+    // very run the newest-run lookup would otherwise find.
+    const resumeNewestMotionRun = async () => {
+        const { data: { session: currentSession } } = await supabase.auth.getSession();
+        if (!currentSession) return;
+        const { data } = await supabase
+            .from('generations')
+            .select('id, prediction_id, status, created_at, duration')
+            .eq('user_id', currentSession.user.id)
+            .eq('category', 'video')
+            .eq('creation_mode', 'motion')
+            .in('status', ['processing', 'waiting'])
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+        if (!data?.prediction_id || activeGenerationRequestKeyRef.current) return;
+        activeGenerationRequestKeyRef.current = `resume:${data.prediction_id}`;
+        const startedAtMs = Number.isNaN(Date.parse(data.created_at)) ? Date.now() : Date.parse(data.created_at);
+        setIsGenerating(true);
+        setError(null);
+        setLatestGenerationId(data.id ?? null);
+        setLatestIsPublic(false);
+        latestRunCostRef.current = null;
+        setGenerationTiming(createLocalGenerationTiming({
+            kind: 'motion',
+            phaseLabel: 'Resuming active run',
+            startedAtMs,
+            appStatus: data.status === 'waiting' ? 'waiting' : 'processing',
+        }));
+        if (typeof data.duration === 'number') {
+            setDuration(data.duration);
+        }
+
+        try {
+            const result = await pollPrediction(data.prediction_id, startedAtMs, null);
+            setOutputVideo(result.output);
+            if (result.timing) {
+                setGenerationTiming(result.timing);
+            }
+        } catch (err) {
+            settleRunError(err, startedAtMs);
+        } finally {
+            activeGenerationRequestKeyRef.current = null;
+            setIsGenerating(false);
+        }
+    };
+
+    useEffect(() => {
+        const pending = userId ? loadPendingWebStart('motion', userId) : null;
+        if (pending) {
+            pendingStartRef.current = pending;
+            void replayPendingStart(pending);
+            return;
+        }
+        void resumeNewestMotionRun();
+        // Recovery is intentionally a mount-only lookup; changing form settings must not restart it.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // The quick-publish modal starts from the creation's own title and recipe.
+    useEffect(() => {
+        if (!outputVideo || !latestGenerationId) return;
+        const generationId = latestGenerationId;
+        const controller = new AbortController();
+        void (async () => {
+            try {
+                const { data: { session: currentSession } } = await supabase.auth.getSession();
+                if (!currentSession?.access_token || controller.signal.aborted) return;
+                const response = await fetch(`/api/generations?${new URLSearchParams({
+                    id: generationId,
+                    includeArchived: 'true',
+                    limit: '1',
+                })}`, {
+                    headers: { Authorization: `Bearer ${currentSession.access_token}` },
+                    signal: controller.signal,
+                });
+                if (!response.ok) return;
+                const nextPrefill = readPublishPrefill(generationId, await response.json());
+                if (nextPrefill && !controller.signal.aborted) setPublishPrefill(nextPrefill);
+            } catch {
+                // Without it the modal publishes the media alone, as it did before.
+            }
+        })();
+        return () => controller.abort();
+    }, [latestGenerationId, outputVideo]);
+
     const additionalSettings = useAdditionalCatalogSettings(catalogDescriptor, CATALOG_HANDLED_KEYS);
-    const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady ? {
+    const hasCharacterImage = Boolean(characterImage || characterImageFile);
+    const hasReferenceVideo = Boolean(referenceVideo || referenceVideoFile);
+    // The server refuses a quote without both inputs and a length, so a fresh
+    // page opened on that refusal and a Retry that could not help.
+    const motionInputsReady = hasCharacterImage && hasReferenceVideo && duration > 0;
+    const hasCatalogSettings = Boolean(modelCatalog.catalog && modelCatalog.detailsReady);
+    const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady && motionInputsReady ? {
         kind: 'motion' as const,
         modelId: selectedModel,
         // Whole seconds, as the submit sends: the duration control is an
@@ -720,7 +1200,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         settings: { resolution: mode, characterOrientation, duration: Math.ceil(duration), ...additionalSettings.settings },
         inputCounts: { images: characterImage ? 1 : 0, videos: referenceVideo ? 1 : 0, audios: 0 },
         catalogRevision: modelCatalog.catalog.revision,
-    } : null, [characterImage, characterOrientation, duration, mode, modelCatalog.catalog, referenceVideo, selectedModel, modelCatalog.detailsReady, additionalSettings.settings]);
+    } : null, [characterImage, characterOrientation, duration, mode, modelCatalog.catalog, motionInputsReady, referenceVideo, selectedModel, modelCatalog.detailsReady, additionalSettings.settings]);
     const [quoteAttempt, setQuoteAttempt] = useState(0);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token, quoteAttempt);
     useEffect(() => {
@@ -729,23 +1209,34 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
         refetchModelCatalog();
     }, [refetchModelCatalog, quoteState.error?.code]);
-    const quoteUi = resolveWebGenerationQuoteUi({
-        hasCatalog: Boolean(modelCatalog.catalog && modelCatalog.detailsReady),
-        catalogLoading: !modelCatalog.detailsReady && !modelCatalog.error && !modelCatalog.missingIds.includes(selectedModel),
-        quoteStatus: quoteState.status,
-        quotedCost: quoteState.quote?.costCredits,
-        quoteErrorMessage: quoteState.error?.message,
-    });
+    const quoteUi = hasCatalogSettings && !motionInputsReady
+        ? {
+            costCredits: null,
+            costLabel: hasCharacterImage && hasReferenceVideo ? 'Calculating...' : 'Add both inputs',
+            blocksGenerate: true,
+            message: hasCharacterImage && hasReferenceVideo ? 'Reading the motion clip’s length…' : MOTION_INPUTS_HINT,
+        }
+        : resolveWebGenerationQuoteUi({
+            hasCatalog: hasCatalogSettings,
+            catalogLoading: !modelCatalog.detailsReady && !modelCatalog.error && !modelCatalog.missingIds.includes(selectedModel),
+            quoteStatus: quoteState.status,
+            quotedCost: quoteState.quote?.costCredits,
+            quoteErrorMessage: quoteState.error?.message,
+        });
     const estimatedCost = quoteUi.costCredits;
     const quotePending = quoteUi.blocksGenerate;
     const insufficientCredits = userCredits !== null && estimatedCost !== null && estimatedCost > 0 && userCredits < estimatedCost;
-    const canGenerate = Boolean(characterImage || characterImageFile)
-        && Boolean(referenceVideo || referenceVideoFile)
-        && duration > 0
-        && !videoError;
+    // The server's refusal holds until the balance or the price on screen moves.
+    const creditRefusalMessage = creditRefusal && creditRefusal.balance === userCredits && creditRefusal.cost === estimatedCost
+        ? creditRefusal.message
+        : null;
+    const showTopUp = (insufficientCredits || Boolean(creditRefusalMessage)) && !unconfirmedStart;
+    const canGenerate = motionInputsReady && !videoError;
     const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
     const backgroundProcessingCopy = getBackgroundProcessingCopy('motion');
-    useDeploymentRefresh(isGenerating || isBackgroundProcessing);
+    // Watched only while idle, so a reload never lands mid-request. A remix page
+    // keeps no draft, so it is never reloaded under the creator.
+    const { newBuildAvailable } = useDeploymentRefresh(!isGenerating && !isBackgroundProcessing && !remixId);
 
     if (isLoadingUser) {
         return (
@@ -794,7 +1285,6 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                         eyebrow={`Creator studio / ${model.displayName}`}
                         description="Upload the character, match it to reference movement, and let the workspace track the active motion render from setup to final clip."
                         credits={userCredits}
-                        showPathSwitcher={false}
                     />
                 }
                 controls={
@@ -1006,6 +1496,11 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                 onChange={handleImageUpload}
                                 className="hidden"
                             />
+                            {imagePickError ? (
+                                <div className="mt-4 rounded-[20px] border border-rose-500/20 bg-rose-500/10 px-4 py-3">
+                                    <p className="text-sm text-rose-300">{imagePickError}</p>
+                                </div>
+                            ) : null}
                         </StudioControlCard>
 
                         <StudioControlCard
@@ -1068,6 +1563,11 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                     <span>Limit: {maxVideoDuration}s</span>
                                 </div>
 
+                                {videoPickError ? (
+                                    <div className="rounded-[20px] border border-rose-500/20 bg-rose-500/10 px-4 py-3">
+                                        <p className="text-sm text-rose-300">{videoPickError}</p>
+                                    </div>
+                                ) : null}
                                 {videoError ? (
                                     <div className="rounded-[20px] border border-rose-500/20 bg-rose-500/10 px-4 py-3">
                                         <p className="text-sm text-rose-300">{videoError}</p>
@@ -1079,7 +1579,10 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                         <StudioControlCard title="Prompt" description="Guide the performance, energy, and cleanup details for the transfer.">
                             <EnhancePromptButton
                                 prompt={prompt}
-                                onEnhanced={(text) => setPrompt(text)}
+                                onEnhanced={(text) => {
+                                    promptEditedRef.current = true;
+                                    setPrompt(text);
+                                }}
                                 onCreditsUpdate={updateCredits}
                                 medium="motion"
                                 selectedModel={selectedModel}
@@ -1092,8 +1595,12 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                 disabled={isGenerating}
                             />
                             <textarea
+                                ref={promptInputRef}
                                 value={prompt}
-                                onChange={(event) => setPrompt(event.target.value)}
+                                onChange={(event) => {
+                                    promptEditedRef.current = true;
+                                    setPrompt(event.target.value);
+                                }}
                                 placeholder="Describe the kind of movement, pacing, and constraints you want to preserve."
                                 maxLength={2500}
                                 className="mt-3 min-h-[140px] w-full resize-y rounded-2xl border border-white/10 bg-black/50 p-5 text-sm leading-relaxed text-white outline-none transition focus:border-[#ff7a59]/50 focus:ring-4 focus:ring-[#ff7a59]/10"
@@ -1179,13 +1686,17 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                 </div>
                             }
                             action={
-                                insufficientCredits ? (
+                                showTopUp ? (
                                     <div className="space-y-4">
                                         <div className="rounded-[22px] border border-rose-500/20 bg-rose-500/10 p-4">
                                             <p className="text-sm font-semibold text-white">Not enough credits</p>
-                                            <p className="mt-2 text-sm text-zinc-400">
-                                                This run costs <strong className="text-white">{estimatedCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.
-                                            </p>
+                                            {insufficientCredits ? (
+                                                <p className="mt-2 text-sm text-zinc-400">
+                                                    This run costs <strong className="text-white">{estimatedCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.
+                                                </p>
+                                            ) : (
+                                                <p className="mt-2 text-sm text-zinc-400">{creditRefusalMessage}</p>
+                                            )}
                                         </div>
                                         <Link href="/pricing" className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]">
                                             <Sparkles className="h-4 w-4" />
@@ -1194,14 +1705,19 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                     </div>
                                 ) : (
                                     <button
-                                        onClick={handleGenerate}
-                                        disabled={!canGenerate || isGenerating || quotePending}
+                                        onClick={() => void handleGenerate()}
+                                        disabled={isGenerating || (!unconfirmedStart && (!canGenerate || quotePending))}
                                         className="ui-focus-ring flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 py-4 text-base font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         {isGenerating ? (
                                             <>
                                                 <Loader2 className="h-5 w-5 animate-spin" />
                                                 Generating...
+                                            </>
+                                        ) : unconfirmedStart ? (
+                                            <>
+                                                <Sparkles className="h-5 w-5" />
+                                                Check again
                                             </>
                                         ) : (
                                             <>
@@ -1227,12 +1743,26 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                             phaseLabel={backgroundTiming?.phaseLabel ?? null}
                                             timingLabel={backgroundTimingLabel}
                                         />
+                                    ) : unconfirmedStart ? (
+                                        <div className="space-y-2">
+                                            <p className="text-sm text-amber-300">{UNCONFIRMED_START_MESSAGE}</p>
+                                            <button
+                                                type="button"
+                                                onClick={() => void startNewRunInstead()}
+                                                disabled={!canGenerate || quotePending}
+                                                className="text-sm text-zinc-300 underline underline-offset-2 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                {estimatedCost !== null ? `Start a new run · ${estimatedCost} ${estimatedCost === 1 ? 'credit' : 'credits'}` : 'Start a new run'}
+                                            </button>
+                                        </div>
                                     ) : videoError ? (
                                         <p className="text-sm text-rose-300">{videoError}</p>
                                     ) : quoteState.status === 'error' ? (
                                         <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={() => setQuoteAttempt((current) => current + 1)} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
                                     ) : error ? (
                                         <p className="text-sm text-rose-300">{error}</p>
+                                    ) : hasCatalogSettings && !motionInputsReady ? (
+                                        <p className="text-sm text-zinc-400">{quoteUi.message}</p>
                                     ) : (
                                         <p className="text-sm text-zinc-500">Upload both inputs, confirm the orientation, and the latest motion render will replace this workspace.</p>
                                     )}
@@ -1244,7 +1774,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                     className="inline-flex items-center gap-2 text-sm font-medium text-zinc-300 transition hover:text-white"
                                 >
                                     View Studio
-                                    <Download className="h-4 w-4" />
+                                    <Images className="h-4 w-4" />
                                 </Link>
                             }
                         />
@@ -1258,7 +1788,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                     className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-100 transition hover:bg-white/[0.06]"
                                 >
                                     Studio
-                                    <Download className="h-4 w-4" />
+                                    <Images className="h-4 w-4" />
                                 </Link>
                             }
                         >
@@ -1377,6 +1907,8 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                 onClose={() => setIsPublishModalOpen(false)}
                 generationId={latestGenerationId}
                 accessToken={session?.access_token ?? null}
+                defaultTitle={publishPrefill?.generationId === latestGenerationId ? publishPrefill.title : ''}
+                paywallPrefill={publishPrefill?.generationId === latestGenerationId ? publishPrefill.paywallPrefill : null}
                 shareAfterPublish={latestGenerationId ? {
                     title: shareTitle,
                     description: shareDescription,

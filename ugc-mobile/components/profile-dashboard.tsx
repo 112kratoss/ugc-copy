@@ -35,11 +35,13 @@ import { Reveal } from '@/components/reveal';
 import { ProfileGridSkeleton } from '@/components/skeleton';
 import { TopScrim } from '@/components/top-scrim';
 import { AppText, IconButton, SecondaryButton, StatusBlock } from '@/components/ui';
+import { useAppForeground } from '@/lib/app-foreground';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { buildShareUrl } from '@/lib/viewer-actions';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { formatUsdCents } from '@/lib/home-view-model';
+import { getGenerationKind, getGenerationLabel } from '@/lib/generation-media';
 import { haptic } from '@/lib/haptics';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
 import { immersiveViewerHref, profileMediaFeedHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
@@ -66,11 +68,15 @@ import { refreshProfileLibraryHead } from '@/lib/profile-library-head';
 import {
   PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
   PROFILE_MEDIA_MIN_FILL_COUNT,
+  PROFILE_RENDERING_REFRESH_INTERVAL_MS,
   flattenProfileGenerationPages,
   flattenProfileOwnerPostPages,
+  formatRenderingStartedLabel,
   profileGenerationsQueryOptions,
   profileOwnerPostsQueryOptions,
   profileSavedMediaQueryOptions,
+  renderingCreationTool,
+  selectRenderingCreations,
   truncateInfiniteDataToFirstPage,
 } from '@/lib/profile-media-query';
 import { useProfileMediaRevalidation } from '@/lib/use-profile-media-revalidation';
@@ -84,6 +90,7 @@ import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type {
+  GenerationListItem,
   GenerationListResponse,
   OwnerPostsResponse,
   ProfileResponse,
@@ -229,6 +236,22 @@ export function ProfileDashboard({
   const activeCreationCards = useMemo(() => allCreationCards.filter((card) => !card.isArchived), [allCreationCards]);
   const archivedCreationCards = useMemo(() => allCreationCards.filter((card) => card.isArchived), [allCreationCards]);
   const creationCards = creationsScope === 'archived' ? archivedCreationCards : activeCreationCards;
+  const renderingCreations = useMemo(
+    () => selectRenderingCreations(flattenProfileGenerationPages(generationsQuery.data?.pages)),
+    [generationsQuery.data]
+  );
+  const showRenderingStrip = activeTab === 'Creations' && creationsScope === 'active' && renderingCreations.length > 0;
+  const appForeground = useAppForeground(showRenderingStrip);
+  // While the strip shows a run, the first page is read again every 15 s and
+  // merged, as every refresh here is, so a finished run leaves the strip for the
+  // grid without a pull. A plain refetch would request every page loaded.
+  useEffect(() => {
+    if (!showRenderingStrip || !isFocused || !appForeground) return;
+    const timer = setInterval(() => {
+      void refreshMediaHead('Creations').catch(() => undefined);
+    }, PROFILE_RENDERING_REFRESH_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [appForeground, isFocused, refreshMediaHead, showRenderingStrip]);
   const ownerPosts = useMemo(
     () => flattenProfileOwnerPostPages(postsQuery.data?.pages),
     [postsQuery.data]
@@ -423,6 +446,10 @@ export function ProfileDashboard({
         ? { active: activeCreationCards.length, archived: archivedCreationCards.length }
         : { active: activePostCards.length, archived: archivedPostCards.length }}
       onPostsScopeChange={activeTab === 'Creations' ? setCreationsScope : setPostsScope}
+      renderingCreations={showRenderingStrip ? renderingCreations : undefined}
+      // Times on the strip are as of the page they were read from, which the
+      // 15 s refresh renews; a clock read during render would be kept by memo.
+      renderingAsOf={generationsQuery.dataUpdatedAt}
       header={(
         <>
           <ProfileTitle />
@@ -503,6 +530,8 @@ function ProfileMediaList({
   postsScope = 'active',
   postsScopeCounts,
   onPostsScopeChange,
+  renderingAsOf = 0,
+  renderingCreations,
   topInset,
 }: {
   activeTab: ProfileMediaTab;
@@ -528,6 +557,8 @@ function ProfileMediaList({
   postsScope?: ProfilePostsScope;
   postsScopeCounts?: Record<ProfilePostsScope, number>;
   onPostsScopeChange?: (scope: ProfilePostsScope) => void;
+  renderingAsOf?: number;
+  renderingCreations?: GenerationListItem[];
   topInset: number;
 }) {
   const theme = useAppTheme();
@@ -573,15 +604,16 @@ function ProfileMediaList({
     },
   ]).current;
 
-  // The notifications offer joins the header one commit after the first page
-  // does. FlashList sizes the render that delivers its first data against the
-  // previous render's header height, so a header that grows in that same render
-  // leaves its scroll offset stale (Explore's first-visit autoplay bug).
-  const [pushOfferReady, setPushOfferReady] = useState(false);
+  // The notifications offer and the Rendering strip join the header one commit
+  // after the first page does. FlashList sizes the render that delivers its
+  // first data against the previous render's header height, so a header that
+  // grows in that same render leaves its scroll offset stale (Explore's
+  // first-visit autoplay bug).
+  const [headerExtrasReady, setHeaderExtrasReady] = useState(false);
   useEffect(() => {
-    if (!isLoading) setPushOfferReady(true);
+    if (!isLoading) setHeaderExtrasReady(true);
   }, [isLoading]);
-  const pushOfferPostId = pushOfferReady && activeTab === 'Posts' ? justPublishedPostId : null;
+  const pushOfferPostId = headerExtrasReady && activeTab === 'Posts' ? justPublishedPostId : null;
 
   return (
     // Saved tiles here are what the reel grows out of and returns to.
@@ -610,6 +642,9 @@ function ProfileMediaList({
                 counts={postsScopeCounts}
                 onChange={onPostsScopeChange}
               />
+            ) : null}
+            {headerExtrasReady && renderingCreations?.length ? (
+              <ProfileRenderingStrip items={renderingCreations} asOf={renderingAsOf} tileWidth={cardWidth} />
             ) : null}
             {pushOfferPostId ? (
               <PushOfferCard key={`post:${pushOfferPostId}`} moment="post" occasion={`post:${pushOfferPostId}`} />
@@ -1057,6 +1092,76 @@ function ProfileMediaHeader({
         onPress={onRefresh}
       />
     </View>
+  );
+}
+
+/**
+ * Runs still rendering, above the grid and read from its query. The grid keeps
+ * the library rule, under which a run with nothing to play is not a member, so
+ * these get a row of their own; Home's "render in progress" opens onto it.
+ */
+function ProfileRenderingStrip({ items, asOf, tileWidth }: { items: GenerationListItem[]; asOf: number; tileWidth: number }) {
+  return (
+    <View style={{ gap: appTheme.spacing.compact }}>
+      <AppText variant="label" color="muted" accessibilityRole="header">
+        {`Rendering (${items.length})`}
+      </AppText>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: PROFILE_GALLERY_GAP }}>
+        {items.map((item) => (
+          <ProfileRenderingTile key={item.id} item={item} asOf={asOf} width={tileWidth} />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+/**
+ * One rendering run. A tap opens its creator, which picks the run up from the
+ * record it keeps; a kind the app cannot create (sound, text) only reports.
+ */
+function ProfileRenderingTile({ item, asOf, width }: { item: GenerationListItem; asOf: number; width: number }) {
+  const theme = useAppTheme();
+  const label = getGenerationLabel(getGenerationKind(item), item.audioKind);
+  const started = formatRenderingStartedLabel(item.created_at, asOf);
+  const tool = renderingCreationTool(item);
+  const spokenLabel = `${label}, rendering, ${started.toLowerCase()}`;
+  const tileStyle = {
+    width,
+    minHeight: 84,
+    borderRadius: 16,
+    borderCurve: 'continuous' as const,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.panel,
+    padding: 10,
+    gap: 6,
+  };
+  const content = (
+    <>
+      <ActivityIndicator color={theme.colors.primary} size="small" style={{ alignSelf: 'flex-start' }} />
+      <AppText variant="label" numberOfLines={1}>{label}</AppText>
+      <AppText variant="caption" color="muted" numberOfLines={2}>{started}</AppText>
+    </>
+  );
+
+  if (!tool) {
+    return (
+      <View accessible accessibilityLabel={spokenLabel} style={tileStyle}>
+        {content}
+      </View>
+    );
+  }
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={spokenLabel}
+      accessibilityHint={`Opens the ${tool} creator`}
+      onPress={() => router.push(`/create/${tool}` as never)}
+      style={({ pressed }) => ({ ...tileStyle, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+    >
+      {content}
+    </Pressable>
   );
 }
 

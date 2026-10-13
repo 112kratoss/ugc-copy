@@ -11,6 +11,13 @@ import {
   type MobileNotificationHistory,
 } from '@/__tests__/fixtures/mobile-notification-history';
 
+// The start prices a motion run at its reference clip's length, which ffmpeg
+// reads from the clip; these bodies all name a 6-second clip.
+vi.mock('@/lib/video-rendition', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/video-rendition')>()),
+  probeMediaDurationSeconds: async () => 6,
+}));
+
 const rawCreateClientMock = vi.hoisted(() => vi.fn());
 const createUserClientMock = vi.hoisted(() => vi.fn());
 // Stands in for Next's after(): a queued task starts at once unless a test holds it.
@@ -376,6 +383,7 @@ describe('/api/generate route', () => {
     expect(response.status).toBe(401);
     expectPrivateNoStoreTraceHeaders(response, 'motion-post-auth-1');
     expect(await response.json()).toEqual({
+      code: 'UNAUTHORIZED',
       error: 'Unauthorized: Please log in to generate videos',
     });
     expect(currentSupabaseMock.client.auth.getUser).toHaveBeenCalledTimes(1);
