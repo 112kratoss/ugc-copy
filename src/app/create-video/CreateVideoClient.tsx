@@ -4028,7 +4028,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         eyebrow={`Creator studio / ${videoModel.displayName}`}
                         description="Start with video when the idea needs movement, presence, or a clearer story in the very first output."
                         credits={userCredits}
-                        showPathSwitcher={false}
                     />
                 }
                 controls={

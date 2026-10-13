@@ -17,6 +17,9 @@ import {
   getPublicGenerationStartFailure,
   markHeldProviderSubmission,
 } from '@/lib/generation-public-failure';
+import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
+import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
+import { createSeedanceAssetMetadata } from '@/lib/seedance-assets';
 
 // The runner reads generations service-role (authenticated grants stop at the
 // resume projection), so the service client must serve the same state-backed
@@ -62,6 +65,17 @@ const probeMediaDurationSecondsMock = vi.fn(async (..._args: unknown[]): Promise
   void _args;
   return 10;
 });
+// A step that sends clips reads its model from the release it is quoted at, to
+// know which lengths the price and the model's limits read. Each test that
+// gets that far says which release it is.
+const loadGenerationModelOperationByRevisionMock = vi.fn(async (..._args: unknown[]): Promise<unknown> => {
+  void _args;
+  throw new Error('This test loads no catalog release.');
+});
+const startCatalogGenerationMock = vi.fn(async (..._args: unknown[]) => {
+  void _args;
+  return { predictionId: 'pred-catalog', remainingCredits: 42, cost: 64, generationId: 'gen-catalog' };
+});
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientMock(),
@@ -77,6 +91,7 @@ vi.mock('@/lib/generation-status-sync', () => ({
 vi.mock('@/lib/generation-services', () => ({
   resolveGenerationMediaSource: (...args: Parameters<typeof resolveGenerationMediaSourceMock>) =>
     resolveGenerationMediaSourceMock(...args),
+  startCatalogGeneration: (...args: unknown[]) => startCatalogGenerationMock(...args),
   startImageGeneration: vi.fn(),
   startMotionGeneration: vi.fn(),
   startSoundEffectGeneration: vi.fn(),
@@ -94,6 +109,8 @@ vi.mock('@/lib/video-rendition', async (importOriginal) => ({
 vi.mock('@/lib/generation-model-catalog-store', () => ({
   quotePublishedGenerationModel: (input: Parameters<typeof quoteGenerationModelMock>[0]) =>
     quoteGenerationModelMock(input),
+  loadGenerationModelOperationByRevision: (...args: unknown[]) =>
+    loadGenerationModelOperationByRevisionMock(...args),
 }));
 
 
@@ -699,6 +716,178 @@ describe('workflow-runner recovery', () => {
         'user-1',
         { templateAssetScope: { templateId: 'template-1', templateVersionId: 'version-1' } },
       );
+    });
+  });
+
+  // POST /api/generations measures every clip whose length a price or a limit
+  // reads; a workflow step is held to the same, with the code catalog standing
+  // in for the release the step is quoted at.
+  describe('a step’s reference clips', () => {
+    const codeCatalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3 });
+    const codeOperations = new Map(buildCodeGenerationModelOperations().map((entry) => [entry.modelId, entry]));
+    const UNVERIFIED_LENGTH = 'The length of a reference file could not be verified. Upload it again, then retry.';
+
+    beforeEach(() => {
+      loadGenerationModelOperationByRevisionMock.mockImplementation(async (...args: unknown[]) => {
+        const { modelId } = args[0] as { modelId: string };
+        return { catalog: codeCatalog, operation: codeOperations.get(modelId), releaseId: null };
+      });
+    });
+
+    /** A video step given a prompt and one uploaded clip, which the canvas recorded as 2 s long. */
+    async function runClipStep(model: VideoGenerateNodeData['model'], clip: Partial<VideoInputNodeData> = {}) {
+      const prompt = createWorkflowNode('text-input', { x: 40, y: 40 });
+      const upload = createWorkflowNode('video-input', { x: 40, y: 240 });
+      const step = createWorkflowNode('video-generate', { x: 320, y: 40 });
+      const graph = normalizeWorkflowGraph({
+        nodes: [
+          { ...prompt, data: { ...(prompt.data as TextInputNodeData), text: 'Follow this camera move.' } },
+          {
+            ...upload,
+            data: {
+              ...(upload.data as VideoInputNodeData),
+              videoUrl: 'https://cdn.example.com/clip.mp4',
+              durationSeconds: 2,
+              ...clip,
+            },
+          },
+          { ...step, data: { ...(step.data as VideoGenerateNodeData), model } },
+        ],
+        edges: [
+          createCanvasEdge(prompt.id, 'text', step.id, 'prompt'),
+          createCanvasEdge(upload.id, 'video', step.id, 'reference-video'),
+        ],
+      });
+      const { executeWorkflowRunnableNode } = await import('@/lib/workflow-runner');
+      return executeWorkflowRunnableNode({
+        supabase: { role: 'runner' } as never,
+        userId: 'user-1',
+        graph,
+        node: graph.nodes.find((candidate) => candidate.id === step.id)!,
+        catalogRevision: 'catalog-rev-1',
+        clientRequestKeyHash: 'c'.repeat(64),
+      });
+    }
+
+    it('quotes a clip priced by its seconds at its measured length and sends it', async () => {
+      probeMediaDurationSecondsMock.mockResolvedValueOnce(7.3);
+
+      const result = await runClipStep('minimax-h3');
+
+      expect(resolveGenerationMediaSourceMock).toHaveBeenCalledWith(
+        { role: 'runner' },
+        'https://cdn.example.com/clip.mp4',
+        'user-1',
+        {},
+      );
+      expect(probeMediaDurationSecondsMock).toHaveBeenCalledWith('https://cdn.example.com/clip.mp4');
+      expect(quoteGenerationModelMock).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        modelId: 'minimax-h3',
+        inputCounts: expect.objectContaining({ videos: 1 }),
+        inputMetadata: { referenceVideoDurationsSeconds: [7.3] },
+      }));
+      expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+        model: 'minimax-h3',
+        referenceVideoUrls: ['https://cdn.example.com/clip.mp4'],
+        quotedCostCredits: 77,
+      }));
+      expect(result).toMatchObject({ status: 'processing', generation_id: 'gen-video' });
+    });
+
+    it('is blocked, with nothing quoted or held, when a clip’s length cannot be verified', async () => {
+      probeMediaDurationSecondsMock.mockResolvedValueOnce(null);
+
+      const result = await runClipStep('wan-3.0');
+
+      expect(result).toEqual({
+        status: 'blocked',
+        generation_id: null,
+        input_snapshot: null,
+        output_snapshot: null,
+        error_message: UNVERIFIED_LENGTH,
+      });
+      expect(quoteGenerationModelMock).not.toHaveBeenCalled();
+      expect(startVideoGenerationMock).not.toHaveBeenCalled();
+    });
+
+    it('measures a prepared Seedance clip by its own link and still sends the asset', async () => {
+      probeMediaDurationSecondsMock.mockResolvedValueOnce(4.2);
+
+      await runClipStep('seedance-2', {
+        seedanceAsset: createSeedanceAssetMetadata({
+          assetId: 'asset-clip-1',
+          assetType: 'Video',
+          status: 'active',
+          sourceUrl: 'https://cdn.example.com/clip.mp4',
+        }),
+      });
+
+      expect(probeMediaDurationSecondsMock).toHaveBeenCalledWith('https://cdn.example.com/clip.mp4');
+      expect(quoteGenerationModelMock).toHaveBeenCalledWith(expect.objectContaining({
+        inputMetadata: { referenceVideoDurationsSeconds: [4.2] },
+      }));
+      expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+        referenceVideoUrls: ['asset-clip-1'],
+      }));
+    });
+
+    it.each(['wan-2.7', 'wan-3.0-prime', 'gemini-omni-video', 'gemini-omni-1.1-flash'] as const)(
+      'quotes and sends the clip a %s step is shown with',
+      async (model) => {
+        const result = await runClipStep(model);
+
+        expect(quoteGenerationModelMock).toHaveBeenCalledWith(expect.objectContaining({
+          modelId: model,
+          inputCounts: expect.objectContaining({ videos: 1 }),
+        }));
+        expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+          model,
+          referenceVideoUrls: ['https://cdn.example.com/clip.mp4'],
+        }));
+        expect(result).toMatchObject({ status: 'processing' });
+      },
+    );
+
+    it('starts a catalog motion step at its clip’s measured length, rounded up', async () => {
+      probeMediaDurationSecondsMock.mockResolvedValueOnce(7.3);
+      quoteGenerationModelMock.mockImplementationOnce((input) => ({
+        modelId: input.modelId,
+        catalogRevision: input.catalogRevision ?? 'current-revision',
+        normalizedSettings: (input as { settings?: Record<string, unknown> }).settings ?? {},
+        costCredits: 77,
+      }));
+      const { graph, node } = createSingleStepGraph('motion-generate');
+      // Catalog-only settings send a bundled model down the catalog branch, and
+      // the release runs it through the generic task adapter.
+      const step = { ...node, data: { ...node.data, catalogSettings: { resolution: '720p' } } };
+      const modelId = String((step.data as { model?: unknown }).model);
+      loadGenerationModelOperationByRevisionMock.mockImplementationOnce(async () => ({
+        catalog: codeCatalog,
+        operation: { ...codeOperations.get(modelId)!, adapterKey: 'kie-task-v1' },
+        releaseId: null,
+      }));
+
+      const { executeWorkflowRunnableNode } = await import('@/lib/workflow-runner');
+      const result = await executeWorkflowRunnableNode({
+        supabase: { role: 'runner' } as never,
+        userId: 'user-1',
+        graph: { ...graph, nodes: graph.nodes.map((candidate) => (candidate.id === step.id ? step : candidate)) },
+        node: step,
+        catalogRevision: 'catalog-rev-1',
+      });
+
+      expect(probeMediaDurationSecondsMock).toHaveBeenCalledWith('https://cdn.example.com/reference.mp4');
+      expect(quoteGenerationModelMock).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'motion',
+        settings: expect.objectContaining({ duration: 8 }),
+      }));
+      expect(startCatalogGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+        settings: expect.objectContaining({ duration: 8 }),
+        inputs: expect.arrayContaining([expect.objectContaining({ kind: 'video', durationSeconds: 7.3 })]),
+        quotedCostCredits: 77,
+      }));
+      expect(result).toMatchObject({ status: 'processing', generation_id: 'gen-catalog' });
     });
   });
 

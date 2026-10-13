@@ -12,7 +12,7 @@ import {
   startVoiceoverGeneration,
   type TemplateGenerationContext,
 } from '@/lib/generation-services';
-import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
+import { getVideoReferenceSupport, IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import {
   GENERATION_SUBMISSION_PENDING_MESSAGE,
   getHeldProviderSubmissionGenerationId,
@@ -66,7 +66,12 @@ import {
   quotePublishedGenerationModel,
   quotePublishedGenerationModelAtRevision,
 } from '@/lib/generation-model-catalog-store';
-import { buildUnifiedGenerationQuoteInput, type UnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
+import {
+  buildUnifiedGenerationQuoteInput,
+  resolveBillableInputDurations,
+  UnifiedGenerationRequestError,
+  type UnifiedGenerationRequest,
+} from '@/lib/unified-generation-start-service';
 import type { CatalogGenerationInputAsset } from '@/lib/generation-model-adapters';
 import { CatalogError, type CatalogPrimitive, type GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import { probeMediaDurationSeconds } from '@/lib/video-rendition';
@@ -198,6 +203,9 @@ function getSeedanceReferenceCollections(
   references: ReturnType<typeof getRunnableElementPayload>['references'];
   referenceVideoUrls: string[];
   referenceAudioUrls: string[];
+  /** Each clip's and track's own link, where the lists above may carry a prepared asset's id. */
+  referenceVideoLinks: (string | null)[];
+  referenceAudioLinks: (string | null)[];
   seedanceAssets: SeedanceAssetCollections;
 } {
   const resolvedImageReferences = getResolvedWorkflowImageReferences(graph, nodeId);
@@ -233,6 +241,8 @@ function getSeedanceReferenceCollections(
   const audioAssets: SeedanceAssetMetadata[] = [];
   const referenceVideoUrls: string[] = [];
   const referenceAudioUrls: string[] = [];
+  const referenceVideoLinks: (string | null)[] = [];
+  const referenceAudioLinks: (string | null)[] = [];
 
   for (const edge of getIncomingEdges(graph, nodeId)) {
     if (edge.targetHandle !== 'reference-video' && edge.targetHandle !== 'reference-audio') {
@@ -249,11 +259,13 @@ function getSeedanceReferenceCollections(
 
     if (edge.targetHandle === 'reference-video') {
       referenceVideoUrls.push(referenceValue);
+      referenceVideoLinks.push(outputUrl);
       videoAssets.push(asset ? { ...asset } : createSeedanceAssetMetadata({ assetType: 'Video', sourceUrl: outputUrl }));
       continue;
     }
 
     referenceAudioUrls.push(referenceValue);
+    referenceAudioLinks.push(outputUrl);
     audioAssets.push(asset ? { ...asset } : createSeedanceAssetMetadata({ assetType: 'Audio', sourceUrl: outputUrl }));
   }
 
@@ -262,6 +274,8 @@ function getSeedanceReferenceCollections(
     references,
     referenceVideoUrls,
     referenceAudioUrls,
+    referenceVideoLinks,
+    referenceAudioLinks,
     seedanceAssets: {
       images: resolvedImageReferences.map((reference) => {
         const source = reference.sourceNodeId ? getNodeById(graph, reference.sourceNodeId) : null;
@@ -318,6 +332,18 @@ function buildBlockedError(message: string): WorkflowRunnableExecutionResult {
 
 const CATALOG_EXECUTION_NODE_TYPES = new Set<string>(['image-generate', 'video-generate', 'motion-generate']);
 
+/** A template run may read its own template's assets, as the start services do. */
+function templateMediaSourceOptions(templateContext?: TemplateGenerationContext) {
+  return templateContext?.templateId
+    ? {
+        templateAssetScope: {
+          templateId: templateContext.templateId,
+          templateVersionId: templateContext.templateVersionId ?? null,
+        },
+      }
+    : {};
+}
+
 /**
  * A motion step's length in whole seconds, measured from its reference clip:
  * the output runs as long as the clip, which is what POST /api/generations
@@ -330,19 +356,51 @@ async function measureMotionReferenceSeconds(params: {
   templateContext?: TemplateGenerationContext;
 }): Promise<number | null> {
   const { supabase, referenceVideoUrl, userId, templateContext } = params;
-  const source = await resolveGenerationMediaSource(supabase, referenceVideoUrl, userId, templateContext?.templateId
-    ? {
-        templateAssetScope: {
-          templateId: templateContext.templateId,
-          templateVersionId: templateContext.templateVersionId ?? null,
-        },
-      }
-    : {});
+  const source = await resolveGenerationMediaSource(
+    supabase,
+    referenceVideoUrl,
+    userId,
+    templateMediaSourceOptions(templateContext),
+  );
   if (!/^https:\/\//i.test(source)) return null;
   const measured = await probeMediaDurationSeconds(source);
   return measured !== null && Number.isFinite(measured) && measured > 0
     ? Math.max(1, Math.ceil(measured))
     : null;
+}
+
+type BillableInputDurationsParams = Parameters<typeof resolveBillableInputDurations>[0];
+
+/**
+ * A step's request with the lengths of the clips and tracks its price or its
+ * model's limits read, measured as POST /api/generations measures them, so a
+ * length the canvas recorded, or none, never sets a price. The error is the
+ * public refusal for a file whose length could not be read.
+ */
+async function measureStepReferenceMedia(params: Pick<BillableInputDurationsParams, 'request' | 'descriptor' | 'operation'> & {
+  supabase: SupabaseClient;
+  userId: string;
+  templateContext?: TemplateGenerationContext;
+}): Promise<UnifiedGenerationRequest | UnifiedGenerationRequestError> {
+  const { supabase, userId, templateContext, request, descriptor, operation } = params;
+  try {
+    const billable = await resolveBillableInputDurations({
+      request,
+      descriptor,
+      operation,
+      resolveInputSource: (url) => resolveGenerationMediaSource(
+        supabase,
+        url,
+        userId,
+        templateMediaSourceOptions(templateContext),
+      ),
+      probeInputDuration: (url) => probeMediaDurationSeconds(url),
+    });
+    return billable.request;
+  } catch (error) {
+    if (error instanceof UnifiedGenerationRequestError) return error;
+    throw error;
+  }
 }
 
 /**
@@ -836,18 +894,22 @@ export async function executeWorkflowRunnableNode(params: {
           if (typeof source?.data.durationSeconds === 'number') asset.durationSeconds = source.data.durationSeconds;
         }
       }
-      const request: UnifiedGenerationRequest = {
-        kind: descriptor.kind, modelId: descriptor.id, catalogRevision, settings,
-        prompt: inputs.prompt ?? '', inputs: assets, sourceGenerationId: null,
-        shots: node.type === 'video-generate' && node.data.isMultiShot
-          ? (node.data as VideoGenerateNodeData).multiPrompts.map(shot => ({ prompt: shot.prompt, duration: shot.duration })) : [],
-      };
+      const request = await measureStepReferenceMedia({
+        supabase, userId, templateContext, descriptor, operation,
+        request: {
+          kind: descriptor.kind, modelId: descriptor.id, catalogRevision, settings,
+          prompt: inputs.prompt ?? '', inputs: assets, sourceGenerationId: null,
+          shots: node.type === 'video-generate' && node.data.isMultiShot
+            ? (node.data as VideoGenerateNodeData).multiPrompts.map(shot => ({ prompt: shot.prompt, duration: shot.duration })) : [],
+        },
+      });
+      if (request instanceof UnifiedGenerationRequestError) return buildBlockedError(request.message);
       // Normal runs still compare with the active revision. Only the trusted
       // template engine may use quoteAtPinnedRevision.
       const quote = await quoteRunnableNode(buildUnifiedGenerationQuoteInput(request));
       const result = await startCatalogGeneration({
         supabase, creditSupabase, userId, operation, catalogRevision: quote.catalogRevision,
-        prompt: request.prompt, settings: quote.normalizedSettings, inputs: assets, shots: request.shots,
+        prompt: request.prompt, settings: quote.normalizedSettings, inputs: request.inputs, shots: request.shots,
         quotedCostCredits: quote.costCredits, clientRequestKeyHash, persistInputMedia, privateRecipe, templateContext,
       });
       return { status: 'processing', generation_id: result.generationId ?? null,
@@ -908,17 +970,47 @@ export async function executeWorkflowRunnableNode(params: {
     }
     const isSeedance2Family = isSeedance2VideoModel(data.model);
     const isKlingVideoModel = data.model === 'kling-3.0-video';
+    // The canvas connects clips and tracks to every model whose limits take
+    // them (getVideoReferenceSupport) and the start sends them as links, so a
+    // step sends each one it is shown with. Kling's clips go as named elements.
+    const referenceSupport = getVideoReferenceSupport(data.model);
+    const sendsReferenceMedia = !isKlingVideoModel && referenceSupport.videos + referenceSupport.audios > 0;
     const elementPayload = isSeedance2Family
       ? getSeedanceReferenceCollections(graph, node.id)
       : {
           ...getRunnableElementPayload(graph, node.id),
-          referenceVideoUrls: [] as string[],
-          referenceAudioUrls: [] as string[],
+          referenceVideoUrls: sendsReferenceMedia ? inputs.videoUrls : [],
+          referenceAudioUrls: sendsReferenceMedia ? inputs.audioUrls : [],
+          referenceVideoLinks: sendsReferenceMedia ? inputs.videoUrls : [],
+          referenceAudioLinks: sendsReferenceMedia ? inputs.audioUrls : [],
           seedanceAssets: null as SeedanceAssetCollections | null,
         };
     const klingVideoElements = isKlingVideoModel
       ? getKlingVideoElementPayload(graph, node.id)
       : [];
+    const referenceMedia: CatalogGenerationInputAsset[] = [
+      ...elementPayload.referenceVideoLinks.map((url) => ({ slot: 'videoReferences', kind: 'video' as const, url })),
+      ...elementPayload.referenceAudioLinks.map((url) => ({ slot: 'audioReferences', kind: 'audio' as const, url })),
+    ];
+    let referenceVideoDurationsSeconds: number[] = [];
+    if (referenceMedia.length > 0) {
+      if (!catalogRevision) return buildBlockedError('Refresh model settings before running this workflow.');
+      const { catalog, operation } = await loadGenerationModelOperationByRevision({
+        modelId: data.model, revision: catalogRevision, schemaVersion: 3,
+      });
+      const measured = await measureStepReferenceMedia({
+        supabase, userId, templateContext, operation,
+        descriptor: catalog.models.find((model) => model.id === data.model && model.kind === 'video'),
+        request: {
+          kind: 'video', modelId: data.model, catalogRevision, settings: {},
+          prompt: '', shots: [], inputs: referenceMedia, sourceGenerationId: null,
+        },
+      });
+      if (measured instanceof UnifiedGenerationRequestError) return buildBlockedError(measured.message);
+      referenceVideoDurationsSeconds = measured.inputs.flatMap((asset) => (
+        asset.kind === 'video' && typeof asset.durationSeconds === 'number' ? [asset.durationSeconds] : []
+      ));
+    }
     const quotedDuration = data.isMultiShot
       ? data.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0)
       : data.duration;
@@ -941,6 +1033,7 @@ export async function executeWorkflowRunnableNode(params: {
         videos: elementPayload.referenceVideoUrls.length + klingVideoElements.length,
         audios: elementPayload.referenceAudioUrls.length,
       },
+      ...(referenceVideoDurationsSeconds.length > 0 ? { inputMetadata: { referenceVideoDurationsSeconds } } : {}),
     });
     const result = await startVideoGeneration({
       supabase,

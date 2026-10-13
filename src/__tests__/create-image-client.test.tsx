@@ -1024,6 +1024,30 @@ describe('CreateImageClient generation pipeline', () => {
       });
     });
 
+    it('is saved with its element, since a reload runs no cleanup', async () => {
+      await generateTwice();
+      await waitFor(() => expect(setPersistedImageElementRecordsMock).toHaveBeenCalledWith(expect.any(String), [
+        expect.objectContaining({ staged: expect.objectContaining({ storagePath: 'uploads/user-1/restored-element.png' }) }),
+      ]));
+    });
+
+    it('is sent again when a reload restores it with its element', async () => {
+      const staged = { storagePath: 'uploads/user-1/restored-element.png', uploadedAt: Date.now() - 60 * 60 * 1000 };
+      getPersistedImageElementRecordsMock.mockResolvedValue([{ id: 'restored-1', displayName: 'Restored product', file: restoredFile, staged }]);
+      const fetchMock = installFetch({ starts: [startedReply()] });
+      render(<CreateImageClient prefill={{}} />);
+      expect((await screen.findAllByText('@restored_product')).length).toBeGreaterThan(0);
+      typePrompt('A portrait of @restored_product');
+      pressGenerate();
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(1));
+
+      expect(uploadMediaToTemporaryStorageMock).not.toHaveBeenCalled();
+      expect(startBody(startCalls(fetchMock)[0]).inputs[0]).toMatchObject({
+        url: 'https://signed.example.com/refreshed/uploads/user-1/restored-element.png',
+        storagePath: staged.storagePath,
+      });
+    });
+
     it('is uploaded again once storage no longer has it', async () => {
       const fetchMock = await generateTwice();
       refreshTemporaryMediaUrlMock.mockRejectedValueOnce(

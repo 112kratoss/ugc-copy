@@ -43,6 +43,7 @@ import {
     purgeLegacyPersistedMedia,
     scopedPersistedMediaKey,
     setPersistedImageElementRecords,
+    type PersistedStagedUpload,
 } from '@/lib/persisted-media';
 import { loadCreatorDraft, saveCreatorDraft } from '@/lib/persisted-creator-draft';
 import {
@@ -131,12 +132,8 @@ interface UploadPreviewState {
     title: string;
 }
 
-/** An element's file as this page last staged it in `uploads`. */
-type StagedElementUpload = {
-    storagePath: string;
-    signedUrl: string;
-    uploadedAt: number;
-};
+/** An element's file as this page last staged it in `uploads`, kept with the element across reloads. */
+type StagedElementUpload = PersistedStagedUpload;
 
 type ImageElementDraft = ImageElementDescriptor & {
     file: File | null;
@@ -231,7 +228,7 @@ function getLoginPathForThisPage(): string {
  * still keeps it, under a fresh link; else a new upload of the file. Each run
  * used to upload every element again.
  */
-async function stageElementFile(file: File, staged: StagedElementUpload | null): Promise<StagedElementUpload> {
+async function stageElementFile(file: File, staged: StagedElementUpload | null): Promise<StagedElementUpload & { signedUrl: string }> {
     if (staged && Date.now() - staged.uploadedAt < STAGED_UPLOAD_REUSE_MS) {
         try {
             return { ...staged, signedUrl: await refreshTemporaryMediaUrl(staged.storagePath) };
@@ -513,6 +510,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 displayName: element.displayName,
                 handle: element.handle,
                 file: element.file as File,
+                staged: element.staged,
             }));
 
         await setPersistedImageElementRecords(
@@ -690,6 +688,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                     file: element.file,
                     previewUrl: URL.createObjectURL(element.file),
                     source: 'upload',
+                    staged: element.staged ?? null,
                 }))
             ));
         } catch (err) {
@@ -1181,6 +1180,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         if (code === 'invalid_input_media') {
             // A staged copy the server could not use goes up again from its file next time.
             commitElements(elementRefs.current.map((element) => (element.staged ? { ...element, staged: null } : element)));
+            void persistUploadedImageElements(elementRefs.current);
         }
         setError(message);
         if (code === 'prompt_blocked' || code === 'INVALID_GENERATION_REQUEST') {
@@ -1395,6 +1395,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 const staged = stagedById.get(element.id);
                 return staged ? { ...element, staged } : element;
             }));
+            // Saved now: a reload runs no cleanup, so this is the copy's only way past one.
+            void persistUploadedImageElements(elementRefs.current);
         }
 
         const prepared = results.map((result) => {
@@ -1620,7 +1622,6 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                         eyebrow={`Creator studio / ${model.displayName}`}
                         description="Start with a still when you need the fastest route to a polished product visual, concept frame, or campaign hook."
                         credits={userCredits}
-                        showPathSwitcher={false}
                     />
                 }
                 controls={

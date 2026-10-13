@@ -27,7 +27,12 @@ export interface PersistedImageElementRecord {
    */
   handle?: string | null;
   file: File;
+  /** The copy a run staged in `uploads`, so a reload sends it again instead of uploading the file. */
+  staged?: PersistedStagedUpload | null;
 }
+
+/** `uploadedAt` is epoch ms: the sweep reclaims a staged copy a fixed time after it was staged. */
+export type PersistedStagedUpload = { storagePath: string; uploadedAt: number };
 
 export interface PersistedMediaRecord {
   id: string;
@@ -56,6 +61,14 @@ interface StoredImageElementRecord {
   displayName: string;
   handle?: string | null;
   file: StoredMediaFile | File | Blob;
+  staged?: unknown;
+}
+
+function readStagedUpload(value: unknown): PersistedStagedUpload | null {
+  const { storagePath, uploadedAt } = (value ?? {}) as Record<string, unknown>;
+  return typeof storagePath === 'string' && storagePath && typeof uploadedAt === 'number' && Number.isFinite(uploadedAt)
+    ? { storagePath, uploadedAt }
+    : null;
 }
 
 interface StoredMediaRecord {
@@ -267,6 +280,7 @@ export async function getPersistedImageElementRecords(key: string): Promise<Pers
         displayName: item.displayName,
         handle: typeof item.handle === 'string' ? item.handle : null,
         file: restoredFile,
+        staged: readStagedUpload(item.staged),
       } satisfies PersistedImageElementRecord;
     })
     .filter((item): item is PersistedImageElementRecord => item !== null);
@@ -288,6 +302,8 @@ export async function setPersistedImageElementRecords(
       displayName: element.displayName,
       handle: element.handle ?? null,
       file: toStoredMediaFile(element.file),
+      // A signed link expires; a later run renews one from the path.
+      staged: element.staged ? { storagePath: element.staged.storagePath, uploadedAt: element.staged.uploadedAt } : null,
     }))
   );
 }

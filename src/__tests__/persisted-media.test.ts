@@ -167,6 +167,21 @@ describe('persisted media storage namespaces', () => {
     expect(await restored[0].file.text()).toBe('dancer');
   });
 
+  it('keeps an element’s staged copy by its path and time, never its expiring link', async () => {
+    const { getPersistedImageElementRecords, setPersistedImageElementRecords } = await import('@/lib/persisted-media');
+    const staged = { storagePath: 'uploads/user-1/dancer.png', uploadedAt: 1_700_000_000_000 };
+    const file = new File(['dancer'], 'dancer.png', { type: 'image/png' });
+
+    await setPersistedImageElementRecords('create-image:elements', [
+      { id: 'staged', displayName: 'Dancer', file, staged: { ...staged, signedUrl: 'https://signed.example/x' } as typeof staged },
+      { id: 'never-staged', displayName: 'Dancer', file },
+    ]);
+    expect((getStore('magicbooklet-persisted-media').get('create-image:elements') as Array<{ staged: unknown }>)
+      .map((record) => record.staged)).toEqual([staged, null]);
+    expect((await getPersistedImageElementRecords('create-image:elements')).map((record) => record.staged))
+      .toEqual([staged, null]);
+  });
+
   it('round-trips a Kling video element with its handle and length', async () => {
     const { getPersistedMediaRecords, setPersistedMediaRecords } = await import('@/lib/persisted-media');
 

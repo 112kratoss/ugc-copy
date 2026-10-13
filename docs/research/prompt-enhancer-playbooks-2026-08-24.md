@@ -71,8 +71,11 @@ LLM comparison, and published prompt-rewriting evals).
   (entries retained for a clean re-enable). The code catalog keeps them for
   code-source environments.
 - **DONE — Hidden-audio affordance**: web shows an "always generates audio"
-  note in the Audio settings section, mobile shows it in the prompt panel
-  helper; both key off `ALWAYS_ON_AUDIO_VIDEO_MODELS`.
+  note in the Audio settings section, keyed off `ALWAYS_ON_AUDIO_VIDEO_MODELS`
+  in `src/lib/client-generation-models.ts`. The app shows no such note: its
+  prompt-panel helper sat in a creator-screen branch that could never render
+  (deleted 2026-08-27), and the app's copy of the list, left without a caller,
+  was removed on 2026-10-13.
 - **DONE — Audio enhancement UI**: workflow text-prompt nodes now offer
   voiceover and sound-effect branches as enhancement targets (medium `audio`);
   dialogue-mode voiceover nodes are excluded because they ignore connected

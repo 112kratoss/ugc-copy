@@ -124,25 +124,10 @@ export async function refreshTemporaryMediaUrl(
   return requestTemporaryMediaReadUrl(session.access_token, storagePath, signal);
 }
 
-export function uploadMediaToTemporaryStorage(
-  file: File,
-  options?: TemporaryMediaUploadOptions,
-): Promise<TemporaryMediaUpload>;
-/**
- * @deprecated The upload always belongs to the signed-in session; this id was
- * never read. Pass the options second.
- */
-export function uploadMediaToTemporaryStorage(
-  file: File,
-  ownerUserId: string,
-  options?: TemporaryMediaUploadOptions,
-): Promise<TemporaryMediaUpload>;
 export async function uploadMediaToTemporaryStorage(
   file: File,
-  optionsOrOwnerUserId: TemporaryMediaUploadOptions | string = {},
-  legacyOptions: TemporaryMediaUploadOptions = {},
+  options: TemporaryMediaUploadOptions = {},
 ): Promise<TemporaryMediaUpload> {
-  const options = typeof optionsOrOwnerUserId === 'string' ? legacyOptions : optionsOrOwnerUserId;
   if (options.signal?.aborted) throw new UploadCancelledError();
   const { data: { session } } = await supabase.auth.getSession();
   if (options.signal?.aborted) throw new UploadCancelledError();

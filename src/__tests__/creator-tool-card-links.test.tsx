@@ -170,4 +170,13 @@ describe('creator tool card links', () => {
     );
     expect(screen.getByText('Go to Explore').closest('a')).toHaveAttribute('href', '/showcase');
   });
+
+  it('prefetches neither the video nor the workflow page from its card', async () => {
+    render(await CreateHubPage());
+
+    expect(screen.getByText('Create Video').closest('a')).toHaveAttribute('data-prefetch', 'false');
+    expect(screen.getByText('Workflow Canvas').closest('a')).toHaveAttribute('data-prefetch', 'false');
+    expect(screen.getByText('Create Image').closest('a')).not.toHaveAttribute('data-prefetch');
+    expect(screen.getByText('Create Motion').closest('a')).not.toHaveAttribute('data-prefetch');
+  });
 });

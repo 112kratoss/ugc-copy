@@ -771,15 +771,6 @@ export function getDefaultPostComposerDraft(): PostComposerDraft {
   };
 }
 
-export function getPublishableGenerations(items: GenerationListItem[] | null | undefined) {
-  return (items ?? []).filter((item) => {
-    const hasOutput = Boolean(item.output_url || item.output_urls?.length);
-    const previewReady = item.media?.gridReady
-      ?? Boolean(item.previewUrl ?? item.preview_url);
-    return item.status === 'succeeded' && hasOutput && previewReady && !item.linked_post_id;
-  });
-}
-
 export function isTemplateGeneration(item: GenerationListItem | null | undefined) {
   return item?.origin === 'template'
     && Boolean(item.template?.runId && item.template?.templateId);
@@ -791,8 +782,7 @@ export function isTemplateGeneration(item: GenerationListItem | null | undefined
  * unposted run with output (showcase-publish-service.ts:486), as on web. Its
  * preview is a separate job that can fail or still be running, and requiring it
  * here ended a playable creation on "Could not load this creation" with a Retry
- * that could not help. `getPublishableGenerations`, for a list to pick from,
- * keeps the preview rule.
+ * that could not help.
  */
 export function getExplicitPublishGeneration(
   items: GenerationListItem[] | null | undefined,

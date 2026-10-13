@@ -149,7 +149,7 @@ describe('uploadMediaToTemporaryStorage', () => {
   it('does not reserve storage for a cancelled upload', async () => {
     const { uploadMediaToTemporaryStorage } = await import('@/lib/temporary-media-upload');
     const signal = AbortSignal.abort();
-    await expect(uploadMediaToTemporaryStorage(new File(['image'], 'image.png'), 'user-1', { signal }))
+    await expect(uploadMediaToTemporaryStorage(new File(['image'], 'image.png'), { signal }))
       .rejects.toMatchObject({ name: 'UploadCancelledError' });
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -158,7 +158,7 @@ describe('uploadMediaToTemporaryStorage', () => {
     stubXhr();
     const { uploadMediaToTemporaryStorage } = await import('@/lib/temporary-media-upload');
     const signal = new AbortController().signal;
-    await uploadMediaToTemporaryStorage(new File(['image'], 'image.png', { type: 'image/png' }), 'user-1', { signal });
+    await uploadMediaToTemporaryStorage(new File(['image'], 'image.png', { type: 'image/png' }), { signal });
     for (const endpoint of ['/api/uploads/media/sign', '/api/uploads/finalize', '/api/uploads/media/read-url']) {
       expect(fetch).toHaveBeenCalledWith(endpoint, expect.objectContaining({ signal }));
     }
@@ -170,7 +170,7 @@ describe('uploadMediaToTemporaryStorage', () => {
     const file = new File(['image-bytes'], 'Reference Image.PNG', { type: 'image/png' });
     const progress: number[] = [];
 
-    await expect(uploadMediaToTemporaryStorage(file, 'user-1', {
+    await expect(uploadMediaToTemporaryStorage(file, {
       onProgress: ({ fraction }) => progress.push(fraction),
     })).resolves.toEqual({
       signedUrl: 'https://storage.example.test/signed/reference.png',

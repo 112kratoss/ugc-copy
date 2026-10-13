@@ -18,7 +18,6 @@ import {
   Text,
 } from '@/components/DesignSystem';
 import {
-  CREATOR_TOOLS,
   type CreatorToolAccent,
   type CreatorToolDefinition,
   type CreatorToolId,
@@ -69,49 +68,40 @@ export function SectionHeading({
 
 interface CreatorToolCardProps {
   tool: CreatorToolDefinition;
-  variant?: 'suite' | 'launchpad';
+  // The launchpad is the card's only layout; the hub page still names it.
+  variant?: 'launchpad';
   preview?: ReactNode;
-  prefetch?: boolean;
 }
 
 export function CreatorToolCard({
   tool,
-  variant = 'suite',
   preview,
-  prefetch,
 }: CreatorToolCardProps) {
   const theme = getAccentClasses(tool.accent);
   const Icon = tool.icon;
-  const isLaunchpad = variant === 'launchpad';
-  const resolvedPrefetch = prefetch
-    ?? (tool.id === 'workflow' || tool.id === 'video' ? false : undefined);
 
   return (
     <Link
       href={tool.href}
-      prefetch={resolvedPrefetch}
+      prefetch={tool.id === 'workflow' || tool.id === 'video' ? false : undefined}
       className={clsx(
-        'ui-card ui-card-interactive ui-focus-ring group relative block h-full cursor-pointer overflow-hidden bg-[var(--ui-surface-1)]',
+        'ui-card ui-card-interactive ui-focus-ring group relative block h-full min-h-[318px] cursor-pointer overflow-hidden rounded-3xl bg-[var(--ui-surface-1)] p-4 sm:p-5',
         theme.border,
-        theme.focusRing,
-        isLaunchpad
-          ? 'min-h-[318px] rounded-3xl p-4 sm:p-5'
-          : 'min-h-[286px] rounded-3xl p-3.5 sm:p-4'
+        theme.focusRing
       )}
     >
       <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
       <article className="flex h-full flex-col">
-        <MediaFrame className={clsx('relative', isLaunchpad ? 'rounded-3xl' : 'rounded-2xl')}>
+        <MediaFrame className="relative rounded-3xl">
           {preview ? (
-            <div className={clsx('w-full bg-black', isLaunchpad ? 'h-44 sm:h-48' : 'h-40 sm:h-44')}>
+            <div className="h-44 w-full bg-black sm:h-48">
               {preview}
             </div>
           ) : (
             <div
               className={clsx(
-                'relative w-full bg-gradient-to-br',
-                theme.surface,
-                isLaunchpad ? 'h-44 sm:h-48' : 'h-40 sm:h-44'
+                'relative h-44 w-full bg-gradient-to-br sm:h-48',
+                theme.surface
               )}
             >
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.12),transparent_35%)]" />
@@ -121,12 +111,11 @@ export function CreatorToolCard({
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-black/15 to-transparent" />
           <div
             className={clsx(
-              'pointer-events-none absolute left-4 top-4 flex items-center justify-center rounded-2xl border backdrop-blur-sm',
-              theme.iconWrap,
-              isLaunchpad ? 'h-12 w-12' : 'h-11 w-11'
+              'pointer-events-none absolute left-4 top-4 flex h-12 w-12 items-center justify-center rounded-2xl border backdrop-blur-sm',
+              theme.iconWrap
             )}
           >
-            <Icon className={clsx(isLaunchpad ? 'h-5 w-5' : 'h-4 w-4')} />
+            <Icon className="h-5 w-5" />
           </div>
           <Kicker className="pointer-events-none absolute bottom-4 left-4 text-white/85">
             {tool.shortLabel}
@@ -139,7 +128,7 @@ export function CreatorToolCard({
             <Text
               as="h3"
               variant="cardTitle"
-              className={clsx('mt-2', isLaunchpad ? 'text-2xl leading-8' : 'text-xl')}
+              className="mt-2 text-2xl leading-8"
             >
               {tool.label}
             </Text>
@@ -167,16 +156,14 @@ export function CreatorToolCard({
 
 interface GeneratorQuickSwitchProps {
   currentToolId: CreatorToolId;
-  toolIds?: CreatorToolId[];
+  toolIds: CreatorToolId[];
 }
 
 function GeneratorQuickSwitch({
   currentToolId,
   toolIds,
 }: GeneratorQuickSwitchProps) {
-  const visibleTools = (toolIds ?? CREATOR_TOOLS.map((tool) => tool.id)).map((toolId) =>
-    getCreatorTool(toolId)
-  );
+  const visibleTools = toolIds.map((toolId) => getCreatorTool(toolId));
 
   return (
     <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
@@ -211,8 +198,6 @@ interface GeneratorPageHeaderProps {
   eyebrow: string;
   description: string;
   credits: number | null;
-  backHref?: string;
-  showPathSwitcher?: boolean;
 }
 
 export function GeneratorPageHeader({
@@ -221,8 +206,6 @@ export function GeneratorPageHeader({
   eyebrow,
   description,
   credits,
-  backHref = '/create',
-  showPathSwitcher = true,
 }: GeneratorPageHeaderProps) {
   const tool = getCreatorTool(currentToolId);
   const theme = getAccentClasses(tool.accent);
@@ -232,7 +215,7 @@ export function GeneratorPageHeader({
       <div className="flex flex-col gap-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex items-start gap-4">
-            <IconButton href={backHref} label="Back to create hub" icon={ArrowLeft} className="shrink-0" />
+            <IconButton href="/create" label="Back to create hub" icon={ArrowLeft} className="shrink-0" />
             <div className="max-w-2xl">
               <Kicker className="text-zinc-500">{eyebrow}</Kicker>
               <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -253,13 +236,6 @@ export function GeneratorPageHeader({
             </div>
           ) : null}
         </div>
-
-        {showPathSwitcher ? (
-          <Surface variant="soft" padding="sm" className="space-y-3 bg-black/30">
-            <Kicker className="text-zinc-500">Switch creator path</Kicker>
-            <GeneratorQuickSwitch currentToolId={currentToolId} />
-          </Surface>
-        ) : null}
       </div>
     </Surface>
   );

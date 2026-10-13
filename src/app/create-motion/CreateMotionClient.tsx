@@ -1285,7 +1285,6 @@ export default function CreateMotionClient({
                         eyebrow={`Creator studio / ${model.displayName}`}
                         description="Upload the character, match it to reference movement, and let the workspace track the active motion render from setup to final clip."
                         credits={userCredits}
-                        showPathSwitcher={false}
                     />
                 }
                 controls={

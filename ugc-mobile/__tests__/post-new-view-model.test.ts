@@ -19,7 +19,6 @@ import {
   getPostComposerPreviewStatusLabel,
   getPostComposerResourceCardErrors,
   getPostComposerSubmitLabel,
-  getPublishableGenerations,
   hydratePostComposerResourceCards,
   migratePostComposerResourceDraftToCards,
   sanitizePostComposerResourceCardIds,
@@ -121,21 +120,10 @@ describe('post new view model', () => {
     });
   });
 
-  it('keeps only succeeded unposted generations with output media', () => {
-    const items = [
-      generation({ id: 'ready' }),
-      generation({ id: 'failed', status: 'failed' }),
-      generation({ id: 'empty', output_url: null, output_urls: [] }),
-      generation({ id: 'already-posted', linked_post_id: 'post-1' }),
-    ];
-
-    expect(getPublishableGenerations(items).map((item) => item.id)).toEqual(['ready']);
-  });
-
   // The server publishes any succeeded run with output; the preview is a
   // separate job. A named creation whose poster is still running, or failed,
   // used to end the composer on "Could not load this creation".
-  it('opens any named finished creation with output, whatever its preview, while a picker keeps the preview rule', () => {
+  it('opens any named finished creation with output, whatever its preview', () => {
     const templateResult = generation({
       id: 'template-result',
       preview_url: null,
@@ -160,7 +148,6 @@ describe('post new view model', () => {
     });
     const outputsOnly = generation({ id: 'outputs-only', output_url: null, output_urls: ['https://cdn.example.com/a.png'], preview_url: null });
 
-    expect(getPublishableGenerations([templateResult, ordinaryPending, posterFailed])).toEqual([]);
     expect(getExplicitPublishGeneration([templateResult], templateResult.id)).toBe(templateResult);
     expect(getExplicitPublishGeneration([ordinaryPending], ordinaryPending.id)).toBe(ordinaryPending);
     expect(getExplicitPublishGeneration([posterFailed], posterFailed.id)).toBe(posterFailed);
@@ -1695,20 +1682,6 @@ describe('post new view model', () => {
         description: 'Written in the web composer',
         body: 'The story',
       });
-    });
-  });
-
-  describe('publishable generation selection', () => {
-    it('only allows publishable generations', () => {
-      const items = [
-        generation({ id: 'succeeded-unposted', status: 'succeeded', output_url: 'https://example.com', linked_post_id: null }),
-        generation({ id: 'succeeded-posted', status: 'succeeded', output_url: 'https://example.com', linked_post_id: 'post-1' }),
-        generation({ id: 'failed-unposted', status: 'failed', output_url: 'https://example.com', linked_post_id: null }),
-        generation({ id: 'no-output', status: 'succeeded', output_url: null, output_urls: [], linked_post_id: null }),
-      ];
-
-      const publishable = getPublishableGenerations(items);
-      expect(publishable.map((p) => p.id)).toEqual(['succeeded-unposted']);
     });
   });
 });
