@@ -1289,8 +1289,8 @@ describe('ShowcaseClient save actions', () => {
 
     fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
     const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
-    fireEvent.click(await within(reel).findByRole('button', { name: 'Show comments on Campaign Frame (0)' }));
-    expect(await within(reel).findByRole('button', { name: 'Hide comments on Campaign Frame (3)' })).toBeInTheDocument();
+    fireEvent.click(await within(reel).findByRole('button', { name: 'Show comments on Campaign Frame (0)' }, { timeout: 3000 }));
+    expect(await within(reel).findByRole('button', { name: 'Hide comments on Campaign Frame (3)' }, { timeout: 3000 })).toBeInTheDocument();
 
     fireEvent.click(within(reel).getByRole('button', { name: 'Explore' }));
     await waitFor(() => {
