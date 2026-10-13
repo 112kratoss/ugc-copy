@@ -7,7 +7,7 @@
     "tree against this file and refuses to publish on a mismatch.",
     "",
     "Update this file in the same commit that ships a new binary, and never to",
-    "silence the preflight — a mismatch means the update cannot land, not that",
+    "silence the preflight \u2014 a mismatch means the update cannot land, not that",
     "the record is stale.",
     "",
     "\"setAside\" lists files that landed on main after that binary was built and",
@@ -31,12 +31,13 @@
     "ios": {
       "fingerprint": "4babc8b439ba5309615abbbe59baf79a23014d6c",
       "appVersion": "0.1.8",
-      "buildNumber": 58,
-      "shipped": "2026-09-27",
+      "buildNumber": 59,
+      "shipped": "2026-10-13",
       "tracks": [
+        "appstore",
         "testflight"
       ],
-      "$note": "Built from main 5837720a (#225; EAS build 07f8b038, workflow run 36322017759) and uploaded to TestFlight for the internal group 2026-09-27. It is the first binary with the native menus (#217, @expo/ui). EAS recorded this runtime for the build, and a clean npm ci of main 015fd701 fingerprints the same. Submitted to App Review as version 0.1.8 on 2026-09-27 (automatic release on approval), in place of 0.1.7 (57), which was withdrawn from review and never released. Hold iOS updates while it is in review, so the reviewer sees the build as submitted. Until Apple approves it, the App Store still serves 0.1.5 (54) at 835877cfddddf3644cf2e03bc8da01d7aec206d0, which no update from main can reach, so an update published against this fingerprint reaches TestFlight only."
+      "$note": "Build 59 (EAS build 2a468f8c from main 35d8cb29, uploaded 2026-10-05) was approved and released to the App Store on 2026-10-13 as version 0.1.8 (READY_FOR_SALE, released on approval; submission 967bed17, resubmitted 2026-10-05 after 58's rejection). Its runtime is the same 4babc8b4 as build 58 (built from main 5837720a, #225, the first binary with the native menus), so every update published at this fingerprint reaches the App Store and TestFlight alike, and the hold on iOS updates that this note carried while the build was in review is over. Users still on 0.1.5 (54) at 835877cfddddf3644cf2e03bc8da01d7aec206d0 are reached by no update from main; they move by the store update."
     }
   }
 }
