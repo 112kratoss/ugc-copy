@@ -74,10 +74,14 @@ describe('FeedClient navigation', () => {
         routerPush.mockClear();
         routerPrefetch.mockClear();
         publishNavigationStartMock.mockClear();
+        // Signed out on the page built for everyone, the feed asks for the
+        // guest's own page one; here it never answers.
+        vi.stubGlobal('fetch', vi.fn(() => new Promise(() => undefined)));
     });
 
     afterEach(() => {
         cleanup();
+        vi.unstubAllGlobals();
     });
 
     it('warms a post the first time intent is shown', () => {

@@ -488,6 +488,86 @@ describe("FeedPostCard's recipe chip", () => {
     });
 });
 
+// The card drew Remix only when `canRemix`, which the server sets false where
+// the creator sells the remix with the recipe; the app and the web reel draw
+// it in all three cases (01-4).
+describe("FeedPostCard's Remix behind a recipe", () => {
+    beforeEach(() => {
+        vi.stubGlobal('IntersectionObserver', IntersectionObserverMock);
+    });
+
+    afterEach(() => {
+        cleanup();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    function lockedBehind(overrides: Partial<ShowcaseAssetSummary>): Partial<ShowcaseFeedItem> {
+        return {
+            canRemix: false,
+            remixCapability: 'unlock_required',
+            remixTarget: 'image',
+            asset: {
+                id: 'bundle-1',
+                postId: 'post-1',
+                title: 'A launch frame',
+                accessMode: 'free',
+                priceUsdCents: 0,
+                previewText: '',
+                allowRemix: true,
+                ...overrides,
+            } as ShowcaseAssetSummary,
+        };
+    }
+
+    const recipeHref = buildShowcaseDetailPath('post-1', { ...DETAIL_CONTEXT, section: 'resources' });
+
+    it('starts a remix that sits behind a free unlock from Remix, with no chip beside it', () => {
+        const onOpenResources = vi.fn();
+        const { onRemix, onOpenPost } = renderCard(lockedBehind({}), { onOpenResources });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Remix · 1' }));
+
+        // The feed takes the free recipe on the way (FeedClient's handler).
+        expect(onRemix).toHaveBeenCalledWith('post-1');
+        expect(onOpenPost).not.toHaveBeenCalled();
+        expect(screen.queryByText('Free recipe')).not.toBeInTheDocument();
+        expect(document.querySelector(`a[href="${recipeHref}"]`)).toBeNull();
+    });
+
+    it('sells a remix behind a paid unlock on the recipe, with the price drawn once', () => {
+        const onOpenResources = vi.fn();
+        const { onRemix, onOpenPost, onRecordOpen } = renderCard(
+            lockedBehind({ accessMode: 'paid', priceUsdCents: 250 }),
+            { onOpenResources },
+        );
+
+        const remix = screen.getByRole('link', { name: 'Unlock A launch frame to remix it, $2.50 recipe' });
+
+        expect(remix).toHaveAttribute('href', recipeHref);
+        expect(remix.textContent).toBe('$2.50 recipe');
+        // No second pill with the same price at the end of the row.
+        expect(screen.getAllByText('$2.50 recipe')).toHaveLength(1);
+        expect(screen.queryByRole('button', { name: /Remix/ })).not.toBeInTheDocument();
+
+        fireEvent.click(remix);
+
+        expect(onOpenResources).toHaveBeenCalledWith('post-1');
+        expect(onRemix).not.toHaveBeenCalled();
+        expect(onOpenPost).not.toHaveBeenCalled();
+        expect(onRecordOpen).not.toHaveBeenCalled();
+    });
+
+    it('draws no Remix where the unlock would not include one', () => {
+        renderCard({ ...lockedBehind({ accessMode: 'paid', priceUsdCents: 250, allowRemix: false }) });
+
+        expect(screen.queryByRole('button', { name: /Remix/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /to remix it/ })).not.toBeInTheDocument();
+        // The recipe is still for sale, on its chip.
+        expect(screen.getByRole('link', { name: '$2.50 recipe: A launch frame' })).toHaveAttribute('href', recipeHref);
+    });
+});
+
 // Feed ranking v4, §4: what a Home card reports past its impression.
 describe("FeedPostCard's feed telemetry", () => {
     beforeEach(() => {
@@ -509,6 +589,36 @@ describe("FeedPostCard's feed telemetry", () => {
         renderCard(ranked, { commentsOpen: true });
 
         expect(postCommentsProps.current).toMatchObject({ postId: 'post-1', deliveryId: '9001' });
+    });
+
+    // The post page reads `?delivery=` and credits a report or a comment
+    // filed there to the card that showed the post (C2).
+    it("carries a ranked card's delivery into the post page from its links", () => {
+        const recipe = {
+            id: 'bundle-1',
+            postId: 'post-1',
+            title: 'A launch frame',
+            accessMode: 'paid',
+            priceUsdCents: 250,
+            previewText: '',
+            allowRemix: false,
+        } as ShowcaseAssetSummary;
+        vi.stubGlobal('open', vi.fn());
+        renderCard({ ...ranked, asset: recipe });
+
+        const title = screen.getByRole('link', { name: 'A launch frame' });
+        const chip = screen.getByRole('link', { name: '$2.50 recipe: A launch frame' });
+
+        expect(title).toHaveAttribute('href', buildShowcaseDetailPath('post-1', { ...DETAIL_CONTEXT, deliveryId: '9001' }));
+        expect(title.getAttribute('href')).toContain('delivery=9001');
+        expect(chip).toHaveAttribute(
+            'href',
+            buildShowcaseDetailPath('post-1', { ...DETAIL_CONTEXT, section: 'resources', deliveryId: '9001' }),
+        );
+
+        // A new tab opens the same address.
+        fireEvent.click(screen.getByText(/Image/i, { selector: 'p' }), { metaKey: true });
+        expect(window.open).toHaveBeenCalledWith(title.getAttribute('href'), '_blank', 'noopener,noreferrer');
     });
 
     it('sends no delivery with a comment under an unranked card', () => {
