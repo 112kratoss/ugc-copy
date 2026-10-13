@@ -19,6 +19,7 @@ const recordPostShareEventMock = vi.fn(async (_payload: unknown) => {
   void _payload;
 });
 const postResourceBundlePanelPropsMock = vi.hoisted(() => vi.fn());
+const postCommentsPropsMock = vi.hoisted(() => vi.fn());
 // One router for every render, so a test can read what a click asked of it.
 const routerMock = vi.hoisted(() => ({
   back: vi.fn(),
@@ -106,7 +107,10 @@ vi.mock('@/app/showcase/[id]/PostResourceBundlePanel', () => ({
 }));
 
 vi.mock('@/components/PostComments', () => ({
-  default: () => <div data-testid="post-comments-component">Comments</div>,
+  default: (props: { postId: string; deliveryId?: string | null }) => {
+    postCommentsPropsMock(props);
+    return <div data-testid="post-comments-component">Comments</div>;
+  },
 }));
 
 vi.mock('@/app/showcase/[id]/ShowcaseDetailEngagementRow', () => ({
@@ -457,6 +461,106 @@ describe('Showcase detail page', () => {
       } finally {
         window.history.pushState({}, '', '/');
       }
+    });
+  });
+
+  // A Home card opens the page with its delivery, as the app's text card opens
+  // its post route with `deliveryId`. A report without one reached neither the
+  // post's stats nor the reporter's interests, though a ranked card showed it.
+  describe('opened from a ranked card', () => {
+    const openedFromCard = { from: 'home', returnTo: '/?chip=notes', delivery: '4242' };
+
+    function fileSpamReport() {
+      fireEvent.click(screen.getByRole('button', { name: /report post or recipe/i }));
+      fireEvent.change(screen.getByRole('combobox', { name: 'Report reason' }), { target: { value: 'spam' } });
+      fireEvent.click(screen.getByRole('button', { name: /submit report/i }));
+    }
+
+    it('files a report with the delivery the card opened the page with', async () => {
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({
+        params: Promise.resolve({ id: 'post-1' }),
+        searchParams: Promise.resolve(openedFromCard),
+      }));
+
+      fileSpamReport();
+
+      expect(await screen.findByText('Report submitted for review.')).toBeInTheDocument();
+      expect(JSON.parse(String(requestTo('/api/posts/post-1/report')?.[1]?.body))).toEqual({
+        reason: 'spam',
+        details: '',
+        bundleId: null,
+        deliveryId: '4242',
+      });
+    });
+
+    it('hands the delivery to the thread, which sends it with each new comment', async () => {
+      render(await ShowcaseDetailPage({
+        params: Promise.resolve({ id: 'post-1' }),
+        searchParams: Promise.resolve(openedFromCard),
+      }));
+
+      expect(screen.getByTestId('post-comments-component')).toBeInTheDocument();
+      expect(postCommentsPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({
+        postId: 'post-1',
+        deliveryId: '4242',
+      }));
+    });
+
+    it('sends no delivery when the link carries an empty one', async () => {
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({
+        params: Promise.resolve({ id: 'post-1' }),
+        searchParams: Promise.resolve({ ...openedFromCard, delivery: ' ' }),
+      }));
+
+      expect(postCommentsPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({ deliveryId: null }));
+      fileSpamReport();
+
+      expect(await screen.findByText('Report submitted for review.')).toBeInTheDocument();
+      expect(JSON.parse(String(requestTo('/api/posts/post-1/report')?.[1]?.body))).toEqual({
+        reason: 'spam',
+        details: '',
+        bundleId: null,
+      });
+    });
+
+    it('keeps the delivery out of the canonical URL and the structured data', async () => {
+      const { container } = render(await ShowcaseDetailPage({
+        params: Promise.resolve({ id: 'post-1' }),
+        searchParams: Promise.resolve(openedFromCard),
+      }));
+
+      const structuredData = container.querySelector('script[type="application/ld+json"]')?.textContent ?? '';
+      expect(structuredData).toContain('/showcase/post-1');
+      expect(structuredData).not.toContain('4242');
+
+      const metadata = await generateMetadata({
+        params: Promise.resolve({ id: 'post-1' }),
+        searchParams: Promise.resolve(openedFromCard),
+      });
+      expect(metadata.alternates?.canonical).toBe('/showcase/post-1');
+      expect(metadata.openGraph?.url).toBe('/showcase/post-1');
+    });
+
+    it('keeps the delivery across the redirect from a legacy generation id', async () => {
+      getPublicPostDetailMock.mockResolvedValueOnce(null);
+      getPostReferenceForShowcaseIdMock.mockResolvedValueOnce({
+        id: 'post-1',
+        generation_id: 'gen-1',
+        visibility: 'public',
+        category: 'image',
+        prompt: 'Prompt',
+        source_kind: 'magicbooklet',
+      });
+
+      await expect(ShowcaseDetailPage({
+        params: Promise.resolve({ id: 'gen-1' }),
+        searchParams: Promise.resolve(openedFromCard),
+      })).rejects.toThrow('NEXT_REDIRECT');
+      expect(mockRedirect).toHaveBeenCalledWith(
+        `/showcase/post-1?from=home&returnTo=${encodeURIComponent('/?chip=notes')}&delivery=4242`,
+      );
     });
   });
 
