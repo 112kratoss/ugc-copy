@@ -89,6 +89,12 @@ interface FeedPostCardProps {
     /** Opens the post page. Fired by a click on the card outside any control. */
     onOpenPost: (postId: string) => void;
     /**
+     * The post was opened a way the card does not navigate itself (its title
+     * link, a new tab, Read more): tells the ranker as `onOpenPost` does, and
+     * does not navigate.
+     */
+    onRecordOpen: (postId: string) => void;
+    /**
      * Warms the post page on hover or focus, so the click that follows is a
      * cache hit rather than a cold round trip. Safe to call repeatedly.
      */
@@ -133,6 +139,7 @@ function FeedPostCardView({
     onCommentCountChange,
     onOpenMedia,
     onOpenPost,
+    onRecordOpen,
     onPrefetchPost,
     onFeedback,
     onRemix,
@@ -167,7 +174,10 @@ function FeedPostCardView({
     const isOwnClick = (target: EventTarget | null) =>
         !(target instanceof HTMLElement) || !target.closest(INTERACTIVE_SELECTOR);
 
-    const openInNewTab = () => window.open(detailHref, '_blank', 'noopener,noreferrer');
+    const openInNewTab = () => {
+        onRecordOpen(item.id);
+        window.open(detailHref, '_blank', 'noopener,noreferrer');
+    };
 
     return (
         <article
@@ -254,7 +264,20 @@ function FeedPostCardView({
                     Styling is unchanged; this is the outline only.
                 */}
                 <h3 className="text-lg font-extrabold leading-snug tracking-[-0.01em] text-[var(--ui-text-primary)] sm:text-xl">
-                    <Link href={detailHref} prefetch={false} className="ui-focus-ring rounded-sm hover:text-white">
+                    <Link
+                        href={detailHref}
+                        prefetch={false}
+                        className="ui-focus-ring rounded-sm hover:text-white"
+                        // The link navigates, or opens a tab or window, by
+                        // itself; the ranker hears of it here. Alt-click
+                        // downloads the page rather than opening the post.
+                        onClick={(event) => {
+                            if (!event.altKey) onRecordOpen(item.id);
+                        }}
+                        onAuxClick={(event) => {
+                            if (event.button === 1) onRecordOpen(item.id);
+                        }}
+                    >
                         {card.title}
                     </Link>
                 </h3>
@@ -271,7 +294,13 @@ function FeedPostCardView({
                         clampLines={card.clampLines}
                         canExpand={card.canExpandBody}
                         expanded={expanded}
-                        onToggle={() => onToggleExpanded(item.id)}
+                        onToggle={() => {
+                            // Read more is how the web card opens the rest of
+                            // the post (the app's opens the post page), so it
+                            // is an open; Show less is not.
+                            if (!expanded) onRecordOpen(item.id);
+                            onToggleExpanded(item.id);
+                        }}
                     />
                 ) : null}
             </div>

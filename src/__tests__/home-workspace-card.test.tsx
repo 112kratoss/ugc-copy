@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import WorkspaceCard from '@/app/home/WorkspaceCard';
 import { announceGenerationStatusSynced } from '@/lib/generation-status-client';
@@ -152,5 +152,45 @@ describe('WorkspaceCard', () => {
 
     expect(screen.getByText('2 renders in progress')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /New creation/ })).toHaveAttribute('href', '/create');
+  });
+
+  describe('the clock', () => {
+    function atRailWidth(matches: boolean) {
+      vi.stubGlobal('matchMedia', (query: string) => ({
+        matches,
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }));
+    }
+
+    const running = [buildView({ id: 'active-1', status: 'processing', isActive: true, completedAt: null })];
+    const secondTicks = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.filter(([, delay]) => delay === 1000);
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it('ticks in the rail, which shows how long each run has taken', () => {
+      atRailWidth(true);
+      const setIntervalSpy = vi.spyOn(window, 'setInterval');
+
+      render(<WorkspaceCard initialGenerations={running} initialCredits={5} variant="rail" />);
+
+      expect(secondTicks(setIntervalSpy)).toHaveLength(1);
+    });
+
+    // The strip a phone shows reads no clock, and its tick re-rendered Home
+    // every second while a run was in progress.
+    it('never ticks in the inline strip, which shows only a count', () => {
+      atRailWidth(false);
+      const setIntervalSpy = vi.spyOn(window, 'setInterval');
+
+      render(<WorkspaceCard initialGenerations={running} initialCredits={5} variant="inline" />);
+
+      expect(screen.getByText('1 render in progress')).toBeInTheDocument();
+      expect(secondTicks(setIntervalSpy)).toHaveLength(0);
+    });
   });
 });
