@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { GENERATION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import { GenerationModelCatalogSchemaUnavailableError } from '@/lib/generation-model-catalog-store';
 import {
@@ -702,6 +703,35 @@ describe('reference lengths a caller reports', () => {
     expect(probe).not.toHaveBeenCalled();
   });
 
+  // C3: the creators prepare a Seedance asset from an upload and send its id beside the
+  // upload's link. Web sent the id as the link, which the length check cannot read, so
+  // a prepared clip was refused after its upload; the app's id was dropped here.
+  it('measures a prepared clip by its link and hands the video start the asset id', async () => {
+    const body = {
+      ...seedanceBody(10),
+      inputs: [{ slot: 'videoReferences', kind: 'video', url: REFERENCE_URL, assetId: 'asset-clip-1', durationSeconds: 10 }],
+    };
+    const { outcome, startVideo, probeInputDuration } = start({ body, measuredSeconds: 10 });
+
+    await expect(outcome).resolves.toMatchObject({ success: true });
+    expect(probeInputDuration).toHaveBeenCalledWith(REFERENCE_URL);
+    expect(startVideo).toHaveBeenCalledWith(expect.objectContaining({
+      referenceVideoUrls: [REFERENCE_URL],
+      seedanceAssets: {
+        images: [],
+        videos: [expect.objectContaining({ assetId: 'asset-clip-1', assetType: 'Video', status: 'active', sourceUrl: REFERENCE_URL })],
+        audios: [],
+      },
+    }));
+  });
+
+  it('records no prepared assets for a run that prepared none', async () => {
+    const { outcome, startVideo } = start({ body: seedanceBody(10), measuredSeconds: 10 });
+
+    await expect(outcome).resolves.toMatchObject({ success: true });
+    expect(startVideo).toHaveBeenCalledWith(expect.objectContaining({ seedanceAssets: null }));
+  });
+
   it('finds every slot whose length is read, at any depth', () => {
     const slots = durationBoundInputSlots(
       {
@@ -903,5 +933,391 @@ describe('a page run with a named reference picture', () => {
       model: 'wan/2-7-r2v',
       input: { reference_image: [REFERENCE], first_frame: FIRST_FRAME },
     });
+  });
+});
+
+// 01-1: the legacy image start checks a prompt before it hands it to the catalog
+// adapter. This start handed the adapter the raw prompt, so on the default image model
+// a mention reached the provider as plain text, with no word of the picture it meant,
+// and neither the blank check nor the shared limit ran.
+describe('a catalog image run', () => {
+  const IMAGE_OPERATION = {
+    modelId: 'nano-banana-2',
+    kind: 'image' as const,
+    adapterKey: 'kie-task-v1' as const,
+    providerModelMap: { default: 'nano-banana-2' },
+    adapterConfig: {},
+    pricingStrategy: 'flat' as const,
+    pricingConfig: { credits: 8 },
+    validationStrategy: 'descriptor-rules-v1' as const,
+    validationConfig: {},
+    verificationConfig: {},
+  };
+  const HERO = 'https://signed.example.com/uploads/user-1/hero.png';
+  const BACKDROP = 'https://signed.example.com/uploads/user-1/backdrop.png';
+
+  function dispatchImage(prompt: string, inputs: Array<Record<string, unknown>> = []) {
+    const startCatalog = vi.fn(async (params: Record<string, unknown>) => {
+      void params;
+      return { predictionId: 'provider-task-image', generationId: 'generation-image', remainingCredits: 92, cost: 8 };
+    });
+    const outcome = dispatchCatalogGenerationAdapter({
+      request: parseUnifiedGenerationRequest({
+        kind: 'image',
+        modelId: 'nano-banana-2',
+        catalogRevision: 'catalog-v2',
+        prompt,
+        settings: { aspectRatio: '1:1' },
+        inputs,
+      }),
+      quote: {
+        modelId: 'nano-banana-2',
+        catalogRevision: 'catalog-v2',
+        normalizedSettings: { aspectRatio: '1:1' },
+        costCredits: 8,
+      },
+      operation: IMAGE_OPERATION,
+      supabase: {} as never,
+      adminSupabase: {} as never,
+      userId: 'user-1',
+      clientRequestKeyHash: 'request-hash',
+      sourceGenerationId: null,
+      dependencies: { startCatalog, startImage: vi.fn(), startVideo: vi.fn(), startMotion: vi.fn() },
+    });
+    return { outcome, startCatalog };
+  }
+
+  it('refuses a blank prompt and one over the shared limit before anything is held', async () => {
+    const blank = dispatchImage('   ');
+    await expect(blank.outcome).rejects.toMatchObject({
+      status: 400,
+      message: 'A prompt is required to generate an image.',
+    });
+    expect(blank.startCatalog).not.toHaveBeenCalled();
+
+    const long = dispatchImage('a'.repeat(GENERATION_PROMPT_MAX_LENGTH + 1));
+    await expect(long.outcome).rejects.toMatchObject({
+      status: 400,
+      message: `Prompts support up to ${GENERATION_PROMPT_MAX_LENGTH} characters.`,
+    });
+    expect(long.startCatalog).not.toHaveBeenCalled();
+  });
+
+  it('refuses a mention that no picture is named for', async () => {
+    const { outcome, startCatalog } = dispatchImage('@a holds the bottle.', [
+      { slot: 'imageReferences', kind: 'image', url: HERO, label: 'Hero bottle', handle: '@hero' },
+    ]);
+
+    await expect(outcome).rejects.toMatchObject({ status: 400, message: 'Unknown element mention: @a' });
+    expect(startCatalog).not.toHaveBeenCalled();
+  });
+
+  it('tells the provider which attached picture a mention means, and keeps the prompt as written', async () => {
+    const { outcome, startCatalog } = dispatchImage('  @hero on a clean tabletop.  ', [
+      { slot: 'imageReferences', kind: 'image', url: BACKDROP },
+      { slot: 'imageReferences', kind: 'image', url: HERO, label: 'Hero bottle', handle: '@hero' },
+    ]);
+
+    await expect(outcome).resolves.toMatchObject({ predictionId: 'provider-task-image' });
+    const sent = startCatalog.mock.calls[0][0];
+    expect(sent.prompt).toBe('@hero on a clean tabletop.');
+    // The pictures reach the provider in this order, so the named one is the second.
+    expect(sent.compiledPrompt).toContain('@hero = attached reference image 2 (Hero bottle)');
+    expect(sent.compiledPrompt).toMatch(/\nPrompt:\n@hero on a clean tabletop\.$/);
+    expect(sent.inputs).toHaveLength(2);
+  });
+
+  it('sends a prompt that mentions nothing as written', async () => {
+    const { outcome, startCatalog } = dispatchImage('A bottle on a clean tabletop.', [
+      { slot: 'imageReferences', kind: 'image', url: HERO, label: 'Hero bottle', handle: '@hero' },
+    ]);
+
+    await expect(outcome).resolves.toMatchObject({ predictionId: 'provider-task-image' });
+    expect(startCatalog.mock.calls[0][0]).toMatchObject({ prompt: 'A bottle on a clean tabletop.' });
+    expect(startCatalog.mock.calls[0][0]).not.toHaveProperty('compiledPrompt');
+  });
+});
+
+// 02-1 / C2: the app quoted a multi-shot run by the single-shot length its shot editor
+// hides, and the start charged that quote: two 5 s shots on Kling 3.0 Standard were 70
+// credits in the app and 140 on web.
+describe('a multi-shot run', () => {
+  const KLING_OPERATION = {
+    modelId: 'kling-3.0-video',
+    kind: 'video' as const,
+    adapterKey: 'video-v1' as const,
+    providerModelMap: {},
+    adapterConfig: {},
+    pricingStrategy: 'per-second' as const,
+    pricingConfig: { durationSettingKey: 'duration', rate: 14 },
+    validationStrategy: 'descriptor-rules-v1' as const,
+    validationConfig: {},
+    verificationConfig: {},
+  };
+
+  /** The claim, the lock, and the replay lookup of the idempotent start. */
+  function createAdminClient(existingGeneration: Record<string, unknown> | null) {
+    return {
+      rpc: vi.fn(async (fn: string) => (
+        fn === 'claim_generation_start_request'
+          ? { data: 'claimed', error: null }
+          : { data: true, error: null }
+      )),
+      from: vi.fn((table: string) => {
+        const builder = {
+          select: () => builder,
+          eq: () => builder,
+          maybeSingle: async () => ({
+            data: table === 'generations' ? existingGeneration : { credits: 60 },
+            error: null,
+          }),
+        };
+        return builder;
+      }),
+    };
+  }
+
+  function startShots(
+    settings: Record<string, unknown>,
+    existingGeneration: Record<string, unknown> | null = null,
+  ) {
+    const quoteModel = vi.fn((input: GenerationModelQuoteInput) => ({
+      modelId: input.modelId,
+      catalogRevision: 'catalog-v2',
+      normalizedSettings: input.settings ?? {},
+      costCredits: Number(input.settings?.duration ?? 0) * 14,
+    }));
+    const startVideo = vi.fn(async () => ({
+      predictionId: 'provider-task-shots',
+      generationId: 'generation-shots',
+      remainingCredits: 60,
+      cost: 140,
+    }));
+    const outcome = startUnifiedGenerationForRoute(
+      {
+        request: new Request('http://localhost/api/generations', {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'multi-shot-key' },
+        }),
+        body: {
+          kind: 'video',
+          modelId: 'kling-3.0-video',
+          catalogRevision: 'catalog-v2',
+          prompt: '',
+          settings: { mode: 'std', isMultiShot: true, ...settings },
+          shots: [
+            { prompt: 'Open on the harbour at dusk.', duration: 5 },
+            { prompt: 'Cut to the lighthouse.', duration: 4.6 },
+          ],
+        },
+        userId: 'user-1',
+        supabase: {} as never,
+        adminSupabase: createAdminClient(existingGeneration) as never,
+      },
+      {
+        loadCatalog: vi.fn(async () => ({
+          catalog: {
+            schemaVersion: 2,
+            revision: 'catalog-v2',
+            defaults: { image: null, video: 'kling-3.0-video', motion: null },
+            models: [],
+          },
+          operations: new Map([[KLING_OPERATION.modelId, KLING_OPERATION]]),
+          source: 'database' as const,
+          releaseId: 'release-v2',
+          releaseSchemaVersion: 2,
+        })) as never,
+        quoteModel: quoteModel as never,
+        resolveSource: vi.fn(async () => null) as never,
+        enforceRateLimit: vi.fn(async () => undefined) as never,
+        startVideo: startVideo as never,
+      },
+    );
+    return { outcome, quoteModel, startVideo };
+  }
+
+  it('is quoted and started at its shots’ total length', async () => {
+    const { outcome, quoteModel, startVideo } = startShots({});
+
+    await expect(outcome).resolves.toMatchObject({ success: true, predictionId: 'provider-task-shots' });
+    // 5 s and 4.6 s: 10 s together, each shot counted in whole seconds.
+    expect(quoteModel).toHaveBeenCalledWith(
+      expect.objectContaining({ settings: expect.objectContaining({ duration: 10 }) }),
+      expect.anything(),
+    );
+    expect(startVideo).toHaveBeenCalledWith(expect.objectContaining({
+      isMultiShot: true,
+      duration: 10,
+      quotedCostCredits: 140,
+    }));
+  });
+
+  it('accepts a body that names the total', async () => {
+    const { outcome, startVideo } = startShots({ duration: 10 });
+
+    await expect(outcome).resolves.toMatchObject({ success: true });
+    expect(startVideo).toHaveBeenCalledWith(expect.objectContaining({ quotedCostCredits: 140 }));
+  });
+
+  it('refuses a body that names another length, before it is priced', async () => {
+    const { outcome, quoteModel, startVideo } = startShots({ duration: 5 });
+
+    const refusal = await outcome.then(() => null, (error: unknown) => error);
+    expect(refusal).toBeInstanceOf(UnifiedGenerationRequestError);
+    expect(refusal).toMatchObject({
+      status: 422,
+      fieldErrors: { 'settings.duration': "The run's length must equal its shots' total. Update the app, then generate again." },
+    });
+    expect(quoteModel).not.toHaveBeenCalled();
+    expect(startVideo).not.toHaveBeenCalled();
+  });
+
+  it('still replays an attempt that was accepted before the rule', async () => {
+    const { outcome, startVideo } = startShots(
+      { duration: 5 },
+      { id: 'generation-shots', prediction_id: 'provider-task-original', status: 'processing', cost: 70 },
+    );
+
+    await expect(outcome).resolves.toMatchObject({ predictionId: 'provider-task-original', idempotentReplay: true });
+    expect(startVideo).not.toHaveBeenCalled();
+  });
+});
+
+// The two fixes above, from the request body to the provider request, with the
+// catalog's quote and the real start services.
+describe('a page run the provider is sent', () => {
+  const CLIP = 'https://signed.example.com/uploads/user-1/dance.mp4';
+  const HERO = 'https://signed.example.com/uploads/user-1/hero.png';
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubEnv('KIE_AI_API_KEY', 'test-key');
+    vi.stubEnv('KIE_PROVIDER_WEBHOOK_SECRET', 'test-webhook-secret');
+    vi.stubEnv('KIE_WEBHOOK_HMAC_KEY', 'hmac-key');
+    vi.stubEnv('NEXT_PUBLIC_SITE_URL', 'https://magicbooklet.com');
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.co');
+    vi.stubEnv('GENERATION_MODEL_CATALOG_SOURCE', 'code');
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  async function startFromPage(body: Record<string, unknown>) {
+    const { startUnifiedGenerationForRoute: startRoute } = await import('@/lib/unified-generation-start-service');
+    const { startCatalogGeneration, startVideoGeneration } = await import('@/lib/generation-services');
+    const { loadPublishedGenerationModelCatalog } = await import('@/lib/generation-model-catalog-store');
+    const { catalog } = await loadPublishedGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+
+    const requests: Array<Record<string, unknown>> = [];
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (typeof init?.body === 'string') requests.push(JSON.parse(init.body));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: 'provider-task-1' } }) } as Response;
+    });
+    const rpc = vi.fn(async (fn: string, args: Record<string, unknown>) => {
+      if (fn === 'claim_generation_start_request') return { data: 'claimed', error: null };
+      if (fn === 'start_generation') {
+        return {
+          data: { status: 'started', generation_id: 'generation-1', remaining_credits: 100, cost: args.p_cost },
+          error: null,
+        };
+      }
+      if (fn === 'attach_generation_provider_task') {
+        return { data: { status: 'attached', generation_id: 'generation-1' }, error: null };
+      }
+      return { data: true, error: null };
+    });
+    const probeInputDuration = vi.fn(async () => 4);
+
+    const outcome = await startRoute(
+      {
+        request: new Request('http://localhost/api/generations', {
+          method: 'POST',
+          headers: { 'Idempotency-Key': `page-run-${String(body.modelId)}` },
+        }),
+        body: { ...body, catalogRevision: catalog.revision },
+        userId: 'user-1',
+        supabase: {} as never,
+        adminSupabase: {
+          rpc,
+          from: vi.fn(() => {
+            const builder = {
+              select: () => builder,
+              eq: () => builder,
+              maybeSingle: async () => ({ data: null, error: null }),
+            };
+            return builder;
+          }),
+        } as never,
+      },
+      {
+        resolveSource: vi.fn(async () => null) as never,
+        enforceRateLimit: vi.fn(async () => undefined) as never,
+        resolveInputSource: vi.fn(async (_client: unknown, url: string) => url),
+        probeInputDuration,
+        // The real starts. Keeping a run's inputs has its own suite.
+        startCatalog: (params) => startCatalogGeneration({ ...params, persistInputMedia: false }),
+        startVideo: (params) => startVideoGeneration({ ...params, persistInputMedia: false }),
+      },
+    );
+    const reservation = rpc.mock.calls.find(([fn]) => fn === 'start_generation')?.[1];
+    return { outcome, request: requests[0], reservation, probeInputDuration };
+  }
+
+  it('sends Seedance 2 a prepared clip by its asset id, measured by its link', async () => {
+    const { outcome, request, reservation, probeInputDuration } = await startFromPage({
+      kind: 'video',
+      modelId: 'seedance-2',
+      prompt: 'Follow the dance in the clip.',
+      shots: [],
+      settings: { aspectRatio: '16:9', sound: false, duration: 5, resolution: '720p', referenceMode: 'elements' },
+      inputs: [{
+        slot: 'videoReferences',
+        kind: 'video',
+        url: CLIP,
+        assetId: 'asset-clip-1',
+        label: 'Dance clip',
+        storagePath: 'uploads/user-1/dance.mp4',
+        durationSeconds: 4,
+      }],
+    });
+
+    expect(outcome).toMatchObject({ success: true, predictionId: 'provider-task-1', modelId: 'seedance-2' });
+    expect(probeInputDuration).toHaveBeenCalledWith(CLIP);
+    expect(request).toMatchObject({
+      model: 'bytedance/seedance-2',
+      input: { reference_video_urls: ['asset-clip-1'] },
+    });
+    // What a remix restores the prepared asset from.
+    expect(reservation?.p_workflow_settings).toMatchObject({
+      referenceVideoUrls: [CLIP],
+      seedanceAssets: { videos: [expect.objectContaining({ assetId: 'asset-clip-1', sourceUrl: CLIP })] },
+    });
+  });
+
+  it('sends Nano Banana 2 the legend for a mentioned picture and keeps the prompt as written', async () => {
+    const { outcome, request, reservation } = await startFromPage({
+      kind: 'image',
+      modelId: 'nano-banana-2',
+      prompt: '@hero on a clean tabletop.',
+      settings: { aspectRatio: '1:1', resolution: '1K' },
+      inputs: [{
+        slot: 'imageReferences',
+        kind: 'image',
+        url: HERO,
+        label: 'Hero bottle',
+        handle: '@hero',
+        storagePath: 'uploads/user-1/hero.png',
+      }],
+    });
+
+    expect(outcome).toMatchObject({ success: true, predictionId: 'provider-task-1', modelId: 'nano-banana-2' });
+    const sent = request as { input?: { prompt?: string; image_input?: string[] } } | undefined;
+    expect(sent?.input?.prompt).toContain('@hero = attached reference image 1 (Hero bottle)');
+    expect(sent?.input?.image_input).toEqual([HERO]);
+    expect(reservation?.p_prompt).toBe('@hero on a clean tabletop.');
+    expect(reservation?.p_workflow_settings).toMatchObject({ compiledPrompt: sent?.input?.prompt });
   });
 });

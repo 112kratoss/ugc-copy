@@ -44,6 +44,7 @@ import {
   type RemixMediaAssetDescriptor,
 } from '@/lib/remix-source';
 import {
+  getPreferredSeedanceReferenceValue,
   hasSeedanceAssetCollections,
   isSeedance2VideoModelId,
   type SeedanceAssetCollections,
@@ -64,7 +65,7 @@ import { importSharedGenerationInputMedia } from '@/lib/generation-input-media-i
 import { GENERATION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-candidates';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
-import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
+import { getCanonicalStoredMediaLocation, getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
 import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 import {
@@ -851,22 +852,29 @@ async function settleGenerationStartFailureQuietly(params: {
   });
 }
 
-// Generous ceiling above every supported model's accepted prompt size; it only
-// exists to stop unbounded payloads from reaching the provider and database.
+/**
+ * GENERATION_PROMPT_MAX_LENGTH is a generous ceiling above every supported
+ * model's accepted prompt size; it only exists to stop unbounded payloads from
+ * reaching the provider and database. A prompt that may be blank (a motion
+ * prompt, the single-shot prompt a multi-shot run still carries) is held to it
+ * here; `shotIndex` names the shot whose prompt is over it.
+ */
+function assertPromptWithinLimit(prompt: string, shotIndex?: number): void {
+  if (prompt.trim().length <= GENERATION_PROMPT_MAX_LENGTH) return;
+  const limit = `support up to ${GENERATION_PROMPT_MAX_LENGTH} characters.`;
+  throw new GenerationServiceError(
+    shotIndex === undefined ? `Prompts ${limit}` : `Shot ${shotIndex + 1}: prompts ${limit}`,
+    400
+  );
+}
 
-function trimPrompt(prompt: string, errorMessage: string): string {
+export function trimPrompt(prompt: string, errorMessage: string): string {
   const trimmed = prompt.trim();
   if (!trimmed) {
     throw new GenerationServiceError(errorMessage, 400);
   }
 
-  if (trimmed.length > GENERATION_PROMPT_MAX_LENGTH) {
-    throw new GenerationServiceError(
-      `Prompts support up to ${GENERATION_PROMPT_MAX_LENGTH} characters.`,
-      400
-    );
-  }
-
+  assertPromptWithinLimit(trimmed);
   return trimmed;
 }
 
@@ -1071,6 +1079,24 @@ function normalizeKlingSubjectInputs(value: KlingSubjectInput[] | undefined) {
 // cannot address a network host.
 const PROVIDER_ASSET_HANDLE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/;
 
+/**
+ * The id of each prepared Seedance asset, keyed by the file it was prepared
+ * from. Keyed by file rather than by place, so an asset only ever stands in
+ * for its own file: callers that already send the id where the link was find
+ * nothing to swap, and a list that skipped an entry cannot shift an id onto
+ * the wrong reference.
+ */
+function preparedSeedanceAssetIds(assets: SeedanceAssetCollections | null | undefined): Map<string, string> {
+  const ids = new Map<string, string>();
+  for (const asset of [...(assets?.images ?? []), ...(assets?.videos ?? []), ...(assets?.audios ?? [])]) {
+    const sourceUrl = typeof asset?.sourceUrl === 'string' ? asset.sourceUrl.trim() : '';
+    // With no link given, the shared rule answers with the id of an active asset only.
+    const assetId = getPreferredSeedanceReferenceValue(null, asset);
+    if (sourceUrl && assetId) ids.set(sourceUrl, assetId);
+  }
+  return ids;
+}
+
 function getConfiguredSupabaseOrigin(): string | null {
   const configured = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
   if (!configured) return null;
@@ -1123,6 +1149,29 @@ function assertAllowedGenerationMediaSource(value: string): string {
   return value;
 }
 
+/**
+ * Whether `source` is one of the caller's own staged uploads that storage no
+ * longer holds. The reclaim sweep deletes a staged upload two days after a run
+ * consumes it (media-upload-reclaim), while a draft can keep its path for
+ * longer; told only that the file is not theirs, the creator has no way to
+ * see that adding it again is the fix. A storage error is not an answer, so
+ * it leaves the caller's usual refusal in place.
+ */
+async function isMissingOwnUpload(
+  supabase: SupabaseClient,
+  source: string,
+  userId: string,
+): Promise<boolean> {
+  const location = getUserOwnedStoredMediaLocation(source, userId, { allowedBuckets: ['uploads'] });
+  if (!location) return false;
+  try {
+    const { data: exists } = await supabase.storage.from(location.bucket).exists(location.filePath);
+    return exists === false;
+  } catch {
+    return false;
+  }
+}
+
 export async function resolveGenerationMediaSource(
   supabase: SupabaseClient,
   url: string,
@@ -1170,6 +1219,13 @@ export async function resolveGenerationMediaSource(
 
   const resolved = await resolveOwnedStoredMediaUrl(supabase, source, userId);
   if (!resolved) {
+    if (await isMissingOwnUpload(supabase, source, userId)) {
+      throw new GenerationServiceError(
+        'This reference upload has expired. Add it again.',
+        400,
+        'invalid_input_media',
+      );
+    }
     // A remix (or an unlocked recipe) hands the caller the original creator's
     // shared input media, whose path fails the ownership check above. Import a
     // caller-owned copy when that sharing is authorized — decided server-side
@@ -1894,7 +1950,10 @@ export async function startImageGeneration(params: {
       clientRequestKeyHash,
       operation: runtimeConfig,
       catalogRevision: catalogRevision ?? 'code',
-      prompt: compiledPrompt,
+      // Kept as the creator wrote it, as the ladder below keeps it; the provider is
+      // sent the compiled one.
+      prompt: trimmedPrompt,
+      compiledPrompt,
       settings: {
         aspectRatio,
         resolution,
@@ -2320,6 +2379,8 @@ export async function startVideoGeneration(params: {
       normalizedMultiPrompts.every((shot) => shot.prompt.length > 0),
       'All multi-shot entries need a text prompt.'
     );
+    normalizedMultiPrompts.forEach((shot, index) => assertPromptWithinLimit(shot.prompt, index));
+    assertPromptWithinLimit(trimmedPrompt);
   } else {
     trimPrompt(prompt, 'A prompt is required to generate a video.');
   }
@@ -2423,6 +2484,12 @@ export async function startVideoGeneration(params: {
   const providerReferenceImageUrls = resolvedReferenceImageUrls.length > 0
     ? resolvedReferenceImageUrls
     : resolvedElementImageUrls;
+  // Each of those pictures as it was submitted, in the same order.
+  const providerReferenceImageSources = normalizedReferences.length > 0
+    ? normalizedReferences.map((reference) => reference.url)
+    : resolvedReferenceImageUrls.length > 0
+      ? normalizeMediaUrlList(imageUrls)
+      : normalizeMediaUrlList(elementImageUrls);
   const totalReferenceImageCount = providerReferenceImageUrls.length;
 
   if (totalReferenceImageCount > 0 && !videoElementSupport.enabled) {
@@ -2740,6 +2807,17 @@ export async function startVideoGeneration(params: {
     hasReusableReference,
   });
   const cost = resolveQuotedGenerationCost(computedCost, quotedCostCredits);
+  // The provider is sent every shot, so a multi-shot run costs its shots' total.
+  // A quote for less priced some other length (the app used to quote the hidden
+  // single-shot duration): charging it would bill less than the run, so the
+  // caller is sent back to quote again before anything is held.
+  if (isMultiShot && quotedCostCredits !== undefined && computedCost > cost) {
+    throw new GenerationServiceError(
+      'The price of this run changed. Check the updated cost and generate again.',
+      409,
+      'cost_changed',
+    );
+  }
 
   let generationId: string | null = null;
   let predictionId: string | null = null;
@@ -2907,14 +2985,20 @@ export async function startVideoGeneration(params: {
           if (frameImageUrls[0]) input.first_frame_url = frameImageUrls[0];
           if (frameImageUrls[1]) input.last_frame_url = frameImageUrls[1];
         } else {
+          // A file prepared as a Seedance asset goes by the asset's id. The run keeps,
+          // and the unified start measured, the file's own link.
+          const preparedIds = preparedSeedanceAssetIds(seedanceAssets);
+          const preferPrepared = (sources: string[], urls: string[]) => (
+            urls.map((url, index) => preparedIds.get(sources[index] ?? '') ?? url)
+          );
           if (providerReferenceImageUrls.length > 0) {
-            input.reference_image_urls = providerReferenceImageUrls;
+            input.reference_image_urls = preferPrepared(providerReferenceImageSources, providerReferenceImageUrls);
           }
           if (resolvedReferenceVideoUrls.length > 0) {
-            input.reference_video_urls = resolvedReferenceVideoUrls;
+            input.reference_video_urls = preferPrepared(normalizeMediaUrlList(referenceVideoUrls), resolvedReferenceVideoUrls);
           }
           if (resolvedReferenceAudioUrls.length > 0) {
-            input.reference_audio_urls = resolvedReferenceAudioUrls;
+            input.reference_audio_urls = preferPrepared(normalizeMediaUrlList(referenceAudioUrls), resolvedReferenceAudioUrls);
           }
         }
 
@@ -3364,10 +3448,17 @@ export async function startVideoGeneration(params: {
         sortOrder: inputSortOrder++,
       });
     }
-    const seedanceAssetCandidates = collectSeedanceAssetCandidates({
-      assets: seedanceAssets,
-      offset: inputSortOrder,
-    });
+    // The unified start sends each clip and track by its own link and says what it
+    // is (`referenceVideos`, `referenceAudios`), so they are kept below under their
+    // names and lengths, which a remix needs to quote; the assets prepared from
+    // them are in the recipe. Collected here too, they would be kept under stand-in
+    // names with no length, and the described ones dropped as already kept.
+    const seedanceAssetCandidates = referenceVideos || referenceAudios
+      ? []
+      : collectSeedanceAssetCandidates({
+          assets: seedanceAssets,
+          offset: inputSortOrder,
+        });
     videoInputCandidates.push(...seedanceAssetCandidates);
     inputSortOrder += seedanceAssetCandidates.length;
 
@@ -3478,6 +3569,9 @@ export async function startMotionGeneration(params: {
   if (!referenceVideoUrl || !characterImageUrl) {
     throw new Error('Motion generation requires both a reference video and a character image.');
   }
+  // A motion run may leave its prompt blank (the provider is given a default), so
+  // only the length is held.
+  assertPromptWithinLimit(prompt);
   assertGenerationPromptsAllowed([prompt], { userId, model });
 
   // Motion inputs are forwarded to the provider as-is, so gate their sources
@@ -3611,6 +3705,13 @@ export async function startCatalogGeneration(params: {
   operation: GenericGenerationAdapterOperation;
   catalogRevision: string;
   prompt: string;
+  /**
+   * What the provider is sent when it is not the creator's own prompt: the
+   * prompt with the legend that tells it which attached picture each @mention
+   * means. The run keeps `prompt`, so a remix restores what the creator wrote
+   * and does not compile the legend a second time.
+   */
+  compiledPrompt?: string;
   settings: Record<string, CatalogPrimitive>;
   inputs?: CatalogGenerationInputAsset[];
   shots?: CatalogGenerationShot[];
@@ -3635,6 +3736,7 @@ export async function startCatalogGeneration(params: {
     operation,
     catalogRevision,
     prompt,
+    compiledPrompt,
     settings,
     inputs = [],
     shots = [],
@@ -3652,8 +3754,13 @@ export async function startCatalogGeneration(params: {
   if (!Number.isInteger(quotedCostCredits) || quotedCostCredits < 0) {
     throw new GenerationServiceError('Invalid quoted generation cost.', 500);
   }
+  const creatorPrompt = typeof prompt === 'string' ? prompt.trim() : '';
+  const providerPrompt = typeof compiledPrompt === 'string' && compiledPrompt.trim()
+    ? compiledPrompt.trim()
+    : creatorPrompt;
+  // The legend carries the pictures' names to the provider, so it is checked too.
   assertGenerationPromptsAllowed(
-    [prompt, ...shots.map((shot) => (typeof shot.prompt === 'string' ? shot.prompt : null))],
+    [prompt, compiledPrompt, ...shots.map((shot) => (typeof shot.prompt === 'string' ? shot.prompt : null))],
     { userId, model: operation.modelId },
   );
 
@@ -3675,7 +3782,7 @@ export async function startCatalogGeneration(params: {
       duration,
       cost: quotedCostCredits,
       client_request_key_hash: clientRequestKeyHash,
-      prompt: privateRecipe ? null : (typeof prompt === 'string' ? prompt.trim() : ''),
+      prompt: privateRecipe ? null : creatorPrompt,
       category: operation.kind === 'image' ? 'image' : 'video',
       creation_mode: operation.kind === 'motion' ? 'motion' : null,
       source_generation_id: sourceGenerationId,
@@ -3691,7 +3798,7 @@ export async function startCatalogGeneration(params: {
         // remix readers of workflow_settings recognize it by.
         ...(operation.kind === 'motion' ? { creationMode: 'motion' } : {}),
         catalogRevision,
-        compiledPrompt: typeof prompt === 'string' ? prompt.trim() : '',
+        compiledPrompt: providerPrompt,
         settings,
         ...(() => {
           const elements = inputs
@@ -3752,7 +3859,7 @@ export async function startCatalogGeneration(params: {
         })));
     const providerRequest = buildGenerationProviderRequest({
       operation,
-      prompt: typeof prompt === 'string' ? prompt.trim() : '',
+      prompt: providerPrompt,
       settings,
       inputs: resolvedInputs,
       shots,

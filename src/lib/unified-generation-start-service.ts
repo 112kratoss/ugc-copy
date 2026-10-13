@@ -29,13 +29,21 @@ import {
 import type { ReferenceMediaDescriptor } from '@/lib/generation-input-media';
 import type { GenerationModelOperationalConfig } from '@/lib/generation-model-runtime';
 import {
+  GenerationServiceError,
   resolveGenerationMediaSource,
   startCatalogGeneration,
   startImageGeneration,
   startMotionGeneration,
   startVideoGeneration,
+  trimPrompt,
   type VideoMultiPromptInput,
 } from '@/lib/generation-services';
+import {
+  compileImagePromptWithElements,
+  findUnknownPromptHandles,
+  isValidElementHandle,
+  type ImageElementDescriptor,
+} from '@/lib/image-elements';
 import {
   getGenerationStartIdempotencyKey,
   getGenerationStartLockOwner,
@@ -50,6 +58,12 @@ import type {
   MotionModelId,
   VideoModelId,
 } from '@/lib/models';
+import {
+  createSeedanceAssetMetadata,
+  isSeedance2VideoModelId,
+  type SeedanceAssetCollections,
+  type SeedanceAssetKind,
+} from '@/lib/seedance-assets';
 import { resolveSourceGenerationId } from '@/lib/source-generation';
 import { probeMediaDurationSeconds } from '@/lib/video-rendition';
 
@@ -324,6 +338,33 @@ export function parseUnifiedGenerationRequest(
   };
 }
 
+/**
+ * A multi-shot run lasts as long as its shots together, and that is the length
+ * it is quoted and started at: both creators send it as `settings.duration`. A
+ * body naming another length is refused rather than priced at it, because the
+ * app used to send the single-shot duration its shot editor hides, and a run
+ * of two 5 s shots was charged for 5 s.
+ */
+function withShotsDuration(request: UnifiedGenerationRequest): UnifiedGenerationRequest {
+  if (request.shots.length === 0) return request;
+  const total = request.shots.reduce(
+    // A shot with no length is sent as 1 s (dispatchCatalogGenerationAdapter).
+    (sum, shot) => sum + Math.max(1, Math.round(shot.duration ?? 1)),
+    0,
+  );
+  const named = request.settings.duration;
+  if (named !== undefined && Number(named) !== total) {
+    throw new UnifiedGenerationRequestError(
+      'The length of this multi-shot run does not match its shots.',
+      422,
+      // Said for the creator: the app that sent the hidden single-shot length
+      // shows this as its refusal, and only an updated app sends the total.
+      { 'settings.duration': "The run's length must equal its shots' total. Update the app, then generate again." },
+    );
+  }
+  return { ...request, settings: { ...request.settings, duration: total } };
+}
+
 export function buildUnifiedGenerationQuoteInput(
   request: UnifiedGenerationRequest,
 ): GenerationModelQuoteInput {
@@ -546,6 +587,66 @@ function referenceMediaDescriptor(asset: CatalogGenerationInputAsset): Reference
   };
 }
 
+/**
+ * The checks the legacy image start makes before it hands its prompt to the same
+ * adapter (startImageGeneration): a prompt that is there and within the shared
+ * limit, no @mention without a picture of that name, and a legend telling the
+ * provider which attached picture each mention means, since the adapter sends
+ * the pictures as a bare list. A picture without a name keeps its place, so each
+ * legend line numbers its picture as the provider receives it.
+ */
+function compileCatalogImagePrompt(
+  request: UnifiedGenerationRequest,
+): { prompt: string; compiledPrompt?: string } {
+  const prompt = trimPrompt(request.prompt, 'A prompt is required to generate an image.');
+  const elements: ImageElementDescriptor[] = request.inputs
+    .filter((asset) => asset.kind === 'image')
+    .map((asset, index) => ({
+      id: `${asset.slot}-${index + 1}`,
+      displayName: asset.label ?? `Reference ${index + 1}`,
+      handle: asset.handle && isValidElementHandle(asset.handle) ? asset.handle : '',
+    }));
+  const unknownHandles = findUnknownPromptHandles(
+    prompt,
+    elements.flatMap((element) => (element.handle ? [element.handle] : [])),
+  );
+  if (unknownHandles.length > 0) {
+    throw new GenerationServiceError(
+      `Unknown element mention${unknownHandles.length > 1 ? 's' : ''}: ${unknownHandles.join(', ')}`,
+      400,
+    );
+  }
+  const compiledPrompt = compileImagePromptWithElements(prompt, elements);
+  return compiledPrompt === prompt ? { prompt } : { prompt, compiledPrompt };
+}
+
+/**
+ * The Seedance asset collections a run records, one entry for each picture, clip
+ * and track in the order the video start is given them, as the creators' legacy
+ * payloads build them: a remix pairs each entry with its reference by place. An
+ * input carries the file's link (measured, sent and kept) and, once prepared, the
+ * asset's id, which the video start sends in the file's place. Null when nothing
+ * was prepared, so such a run records what it did before.
+ */
+function preparedSeedanceAssets(
+  lists: Record<'images' | 'videos' | 'audios', CatalogGenerationInputAsset[]>,
+): SeedanceAssetCollections | null {
+  if (![...lists.images, ...lists.videos, ...lists.audios].some((asset) => asset.assetId)) return null;
+  const entry = (assetType: SeedanceAssetKind) => (asset: CatalogGenerationInputAsset) => (
+    createSeedanceAssetMetadata({
+      assetId: asset.assetId ?? null,
+      assetType,
+      status: asset.assetId ? 'active' : 'idle',
+      sourceUrl: asset.url ?? null,
+    })
+  );
+  return {
+    images: lists.images.map(entry('Image')),
+    videos: lists.videos.map(entry('Video')),
+    audios: lists.audios.map(entry('Audio')),
+  };
+}
+
 export async function dispatchCatalogGenerationAdapter({
   request,
   quote,
@@ -572,6 +673,9 @@ export async function dispatchCatalogGenerationAdapter({
 }) {
   const normalized = quote.normalizedSettings;
   if (operation.adapterKey === 'kie-task-v1') {
+    const prompts = request.kind === 'image'
+      ? compileCatalogImagePrompt(request)
+      : { prompt: request.prompt };
     return dependencies.startCatalog({
       supabase,
       creditSupabase: adminSupabase,
@@ -579,7 +683,7 @@ export async function dispatchCatalogGenerationAdapter({
       clientRequestKeyHash,
       operation,
       catalogRevision: quote.catalogRevision,
-      prompt: request.prompt,
+      ...prompts,
       settings: normalized,
       inputs: request.inputs,
       shots: request.shots,
@@ -628,9 +732,9 @@ export async function dispatchCatalogGenerationAdapter({
     ));
     const subjectImageInputs = referenceInputs
       .filter((asset) => asset.slot === 'subjectImages' && asset.kind === 'image' && asset.url && asset.handle);
-    const referenceImageUrls = referenceInputs
-      .filter((asset) => asset.kind === 'image' && asset.url && asset.slot !== 'subjectImages')
-      .map((asset) => asset.url!);
+    const referenceImageInputs = referenceInputs
+      .filter((asset) => asset.kind === 'image' && asset.url && asset.slot !== 'subjectImages');
+    const referenceImageUrls = referenceImageInputs.map((asset) => asset.url!);
     const referenceVideoInputs = referenceInputs.filter((asset) => asset.kind === 'video' && asset.url);
     const referenceAudioInputs = referenceInputs.filter((asset) => asset.kind === 'audio' && asset.url);
     const referenceVideoUrls = referenceVideoInputs.map((asset) => asset.url!);
@@ -677,6 +781,14 @@ export async function dispatchCatalogGenerationAdapter({
       prompt: shot.prompt,
       duration: typeof shot.duration === 'number' ? shot.duration : 1,
     }));
+    const seedanceAssets = isSeedance2VideoModelId(request.modelId)
+      ? preparedSeedanceAssets({
+          // The pictures the start sends: the named ones when any is named.
+          images: namedImageInputs.length > 0 ? namedImageInputs : referenceImageInputs,
+          videos: referenceVideoInputs,
+          audios: referenceAudioInputs,
+        })
+      : null;
 
     return dependencies.startVideo({
       supabase,
@@ -713,6 +825,7 @@ export async function dispatchCatalogGenerationAdapter({
         sourceGenerationId: asset.sourceGenerationId ?? null,
       })),
       klingSubjects,
+      seedanceAssets,
       startImageUrl,
       endImageUrl,
       mode: String(normalized.mode ?? ''),
@@ -796,15 +909,16 @@ export async function startUnifiedGenerationForRoute(
     // Accepted attempts replay before mutable catalog/source validation. A
     // later model release or privacy change cannot hide an already-started run.
     start: async (clientRequestKeyHash) => {
+      const run = withShotsDuration(parsed);
       const snapshot = await loadUnifiedGenerationCatalog(loadCatalog, platformForRequest(request));
-      const quote = quoteModel(buildUnifiedGenerationQuoteInputForCatalog(parsed, snapshot), {
+      const quote = quoteModel(buildUnifiedGenerationQuoteInputForCatalog(run, snapshot), {
         catalog: snapshot.catalog,
         operations: snapshot.operations,
       });
       const operation = requireOperation(snapshot, parsed.modelId);
       const sourceGenerationId = await resolveSource(adminSupabase, userId, parsed.sourceGenerationId);
       const billable = await resolveBillableInputDurations({
-        request: parsed,
+        request: run,
         descriptor: snapshot.catalog.models.find((model) => (
           model.id === parsed.modelId && model.kind === parsed.kind
         )),
