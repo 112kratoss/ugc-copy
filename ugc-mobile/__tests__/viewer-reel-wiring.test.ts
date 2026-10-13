@@ -39,6 +39,21 @@ describe('the reel reads the lane it was opened from', () => {
     expect(slice('onSourceRefresh: () => {', '},')).toContain('if (!laneBacked) void sourceQuery.refetch();');
   });
 
+  // Home and Explore key their lanes by the backend identity, a guest's
+  // included (audit 04-3); the reel reads, edits and seeds from those same
+  // lanes. Behaviour: `viewer-reel-actions.test.tsx`, "a guest's reel".
+  it('keys the lanes it reads and edits by the identity, and keeps what is registered-only on the account', () => {
+    expect(viewer).toContain('const { api, user, identityUserId } = useAuth();');
+    expect(slice('const viewerFeedQueryKey = useMemo(', ');')).toContain('createShowcaseFeedViewerQueryKey(identityUserId)');
+    expect(slice('const laneSource = useShowcaseLaneSource({', '});')).toContain('userId: identityUserId,');
+    expect(viewer.match(
+      /readCachedImmersiveSourceSnapshot\(queryClient, source, user\?\.id, initialId, routeFeedSessionId, creatorUsername, identityUserId\)/g
+    )).toHaveLength(2);
+    expect(viewer).not.toContain('createShowcaseFeedViewerQueryKey(user?.id)');
+    expect(viewer).toContain("queryKey: ['profile', user?.id],");
+    expect(viewer).toContain("['profile-saved-media', user?.id]");
+  });
+
   it('comes back to the same lane after sign-in', () => {
     expect(slice('const returnPathFor = (item: ImmersivePreviewItem) => immersiveViewerReturnPath({', '});')).toContain('lane: laneParam,');
     // Every sign-in the reel starts goes through it.
@@ -46,7 +61,7 @@ describe('the reel reads the lane it was opened from', () => {
   });
 });
 
-describe('Not interested, Hide and Report move the reader on', () => {
+describe('Not interested, Hide, Report and Block move the reader on', () => {
   it('chooses the next post from the list as it was, then removes', () => {
     const removal = slice('const removeFromReel = (target: ShowcaseFeedRemovalTarget) => {', '\n  };');
     const pick = removal.indexOf('pickViewerItemAfterRemoval(items, activeIndex,');
@@ -66,6 +81,17 @@ describe('Not interested, Hide and Report move the reader on', () => {
       .toContain('removeFromReel({ postId: reported.showcasePostId })');
     expect(slice('const actionCallbacksFor = (item: ImmersivePreviewItem): ViewerActionCallbacks => ({', '\n  });'))
       .toContain('onReported: takeOutReportedPost,');
+  });
+
+  // A block used to close the reel (audit 02-4). Behaviour:
+  // `viewer-reel-actions.test.tsx`, "Block user from the reel".
+  it('uses it for a block, every post by the creator, and stays open on what is left', () => {
+    const takeOut = slice('const takeOutBlockedCreator = (creatorId: string) => {', '\n  };');
+    expect(takeOut).toContain('const removal = removeFromReel({ creatorId });');
+    expect(takeOut).toContain('if (!removal.remaining) requestAnimationFrame(leaveViewer);');
+    expect(slice('const actionCallbacksFor = (item: ImmersivePreviewItem): ViewerActionCallbacks => ({', '\n  });'))
+      .toContain('onBlocked: takeOutBlockedCreator,');
+    expect(viewer).not.toContain('onBlocked: () => zoom.dismiss()');
   });
 });
 

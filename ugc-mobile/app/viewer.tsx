@@ -238,7 +238,10 @@ function ImmersivePreviewViewer() {
   const initialSection = initialPage && (initialSectionParam === 'story' || initialSectionParam === 'prompt')
     ? initialSectionParam : undefined;
   const requestedReplyToId = normalizeParam(params.replyTo) || null;
-  const { api, user } = useAuth();
+  // `user` is the registered account (saves, follows, owner actions). The feed
+  // lanes are keyed by `identityUserId`, a guest's included, as Home and Explore
+  // key theirs: the reel reads and edits the grid's own pages.
+  const { api, user, identityUserId } = useAuth();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
   const [playbackHandoff] = useState(createViewerPlaybackHandoff);
@@ -288,8 +291,8 @@ function ImmersivePreviewViewer() {
     [creatorUsername, initialId, laneParam, mediaOnly, routeFeedSessionId, source, user?.id]
   );
   const viewerFeedQueryKey = useMemo(
-    () => createShowcaseFeedViewerQueryKey(user?.id),
-    [user?.id]
+    () => createShowcaseFeedViewerQueryKey(identityUserId),
+    [identityUserId]
   );
 
   const ownerInfo = useMemo(() => ({
@@ -315,7 +318,7 @@ function ImmersivePreviewViewer() {
   const laneBacked = !libraryBacked && Boolean(lane);
   const laneSource = useShowcaseLaneSource({
     api,
-    userId: user?.id,
+    userId: identityUserId,
     lane,
     initialId,
     mediaOnly,
@@ -332,10 +335,10 @@ function ImmersivePreviewViewer() {
     // passing for fresh (audit C4).
     initialData: () => (gridBacked
       ? undefined
-      : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId, creatorUsername)?.data),
+      : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId, creatorUsername, identityUserId)?.data),
     initialDataUpdatedAt: () => (gridBacked
       ? undefined
-      : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId, creatorUsername)?.updatedAt),
+      : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId, creatorUsername, identityUserId)?.updatedAt),
     queryFn: () => loadImmersiveSourceData({ api, source, initialId, creatorUsername, mediaOnly }),
     staleTime: 1000 * 45,
   });
@@ -890,8 +893,11 @@ function ImmersivePreviewViewer() {
       return;
     }
 
-    const shareResult = await Share.share({ ...intent.content });
-    if (shareResult.action !== Share.sharedAction) return;
+    // A dismissed share sheet is not an error worth surfacing. `.catch` rather
+    // than try…catch, which React Compiler cannot compile around the check below.
+    const shareResult = await Share.share({ ...intent.content }).catch(() => null);
+    // Android's share intent cannot report a dismissal (it answers "shared" either way), so only iOS counts a share.
+    if (Platform.OS !== 'ios' || shareResult?.action !== Share.sharedAction) return;
     if (item.showcasePostId) {
       await api
         .shareShowcasePost(item.showcasePostId, { sourceSurface: getViewerShareSourceSurface(source) })
@@ -1141,6 +1147,15 @@ function ImmersivePreviewViewer() {
     if (!removal.remaining) requestAnimationFrame(leaveViewer);
   };
 
+  // A block went through: every post by the creator leaves the reel and the
+  // lanes behind it, and the reader moves on to the next post by someone else,
+  // as Explore's tile and the web reel do (audit 02-4). The reel used to close
+  // and have every lane re-ranked behind it.
+  const takeOutBlockedCreator = (creatorId: string) => {
+    const removal = removeFromReel({ creatorId });
+    if (!removal.remaining) requestAnimationFrame(leaveViewer);
+  };
+
   if (selectionMissing && !savedPosition) {
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset}>
@@ -1237,7 +1252,7 @@ function ImmersivePreviewViewer() {
         params: { tab: 'posts' },
       } as never);
     },
-    onBlocked: () => zoom.dismiss(),
+    onBlocked: takeOutBlockedCreator,
     onSourceRefresh: () => {
       setManualRefreshes((count) => count + 1);
       // A lane is the grid's: the invalidation that comes before this has
