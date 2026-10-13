@@ -189,6 +189,47 @@ describe('startVideoGenerationForRoute', () => {
     });
   });
 
+  it.each(['minimax-h3', 'wan-3.0', 'seedance-2'])(
+    'never prices %s by a reference clip length the caller reports',
+    async (model) => {
+      // Kie bills these models for the reference seconds too. This route hands
+      // the quote no lengths at all, whatever the body claims, so the catalog
+      // refuses the clip before any hold instead of pricing it from a figure the
+      // caller chose. POST /api/generations measures it.
+      startVideoGenerationMock.mockClear();
+      const adminClient = createClientMock();
+
+      const refusal = await startVideoGenerationForRoute({
+        request: new Request('http://localhost/api/generate-video', {
+          headers: { 'idempotency-key': `video-reference-${model}` },
+        }),
+        body: {
+          prompt: 'Follow the reference clip.',
+          model,
+          duration: 5,
+          referenceMode: 'elements',
+          referenceVideoUrls: ['https://example.com/reference.mp4'],
+          referenceVideoDurations: [1],
+          inputMetadata: { referenceVideoDurationsSeconds: [1] },
+          catalogRevision,
+        },
+        userId: 'user-1',
+        supabase: createClientMock().client,
+        adminSupabase: adminClient.client,
+      }).catch((error: unknown) => error);
+
+      expect(refusal).toBeInstanceOf(CatalogError);
+      expect(refusal).toMatchObject({
+        code: 'INVALID_MODEL_SETTINGS',
+        fieldErrors: expect.objectContaining({
+          videoReferences: 'Reference videos requires duration metadata for every asset.',
+        }),
+      });
+      expect(adminClient.rpc).not.toHaveBeenCalled();
+      expect(startVideoGenerationMock).not.toHaveBeenCalled();
+    },
+  );
+
   it('forwards the server-only input-retention override without reading it from the body', async () => {
     startVideoGenerationMock.mockResolvedValueOnce({
       predictionId: 'task-video-private-template',

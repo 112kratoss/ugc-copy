@@ -6,24 +6,13 @@ import {
   BackendRateLimitError,
 } from '@/lib/backend-rate-limit';
 import type { RunAfterResponse } from '@/lib/deferrable-notification';
-import { CatalogError } from '@/lib/generation-model-catalog';
-import {
-  GenerationServiceError,
-} from '@/lib/generation-services';
-import {
-  getHeldProviderSubmissionGenerationId,
-  getPublicGenerationStartFailure,
-} from '@/lib/generation-public-failure';
-import {
-  GenerationStartIdempotencyError,
-} from '@/lib/generation-start-idempotency';
 import {
   getImageGenerationStatusForRoute,
 } from '@/lib/image-generation-status-service';
 import {
   startImageGenerationForRoute,
 } from '@/lib/image-generation-start-service';
-import { SourceGenerationValidationError } from '@/lib/source-generation';
+import { mapGenerationStartRouteError } from '@/lib/unified-generation-route-service';
 
 type RouteBody = Record<string, unknown>;
 
@@ -66,63 +55,10 @@ async function readRequestBody(input: ImageGenerationRouteInput) {
 }
 
 function mapImageStartError(error: unknown): ImageGenerationRouteResult {
-  if (error instanceof CatalogError) {
-    return {
-      ok: false,
-      body: {
-        error: error.message,
-        code: error.code,
-        fieldErrors: error.fieldErrors,
-      },
-      status: error.status,
-    };
-  }
-
-  if (error instanceof SourceGenerationValidationError) {
-    return { ok: false, body: { error: error.message }, status: error.status };
-  }
-
-  if (error instanceof GenerationStartIdempotencyError) {
-    return {
-      ok: false,
-      body: { code: error.code, error: error.message },
-      status: error.status,
-    };
-  }
-
-  if (error instanceof BackendRateLimitError) {
-    return {
-      ok: false,
-      body: { error: error.message },
-      status: error.status,
-      rateLimitError: error,
-    };
-  }
-
-  const publicFailure = getPublicGenerationStartFailure(error);
-  if (publicFailure.code === 'submission_pending') {
-    return {
-      ok: false,
-      body: {
-        code: publicFailure.code,
-        error: publicFailure.message,
-        generationId: getHeldProviderSubmissionGenerationId(error),
-      },
-      status: 409,
-    };
-  }
-
-  logBackendError('error_starting_image_generation', { error: error });
-  if (error instanceof GenerationServiceError) {
-    return { ok: false, body: { error: error.message }, status: error.status };
-  }
-
-  // Unexpected errors stay in the backend logs; clients get a fixed message.
-  return {
-    ok: false,
-    body: { error: 'Failed to start image generation' },
-    status: 500,
-  };
+  return mapGenerationStartRouteError(error, {
+    logEvent: 'error_starting_image_generation',
+    fallbackMessage: 'Failed to start image generation',
+  });
 }
 
 export async function postImageGenerationForRoute(
@@ -133,7 +69,7 @@ export async function postImageGenerationForRoute(
   if (!userId) {
     return {
       ok: false,
-      body: { error: 'Unauthorized: Please log in to generate images' },
+      body: { code: 'UNAUTHORIZED', error: 'Unauthorized: Please log in to generate images' },
       status: 401,
     };
   }
@@ -142,8 +78,11 @@ export async function postImageGenerationForRoute(
     logBackendError('kie_ai_api_key_not_found_in_environment_variables');
     return {
       ok: false,
-      body: { error: 'Server configuration error: API key missing' },
-      status: 500,
+      body: {
+        code: 'GENERATION_SERVICE_UNAVAILABLE',
+        error: 'Generation is temporarily unavailable.',
+      },
+      status: 503,
     };
   }
 

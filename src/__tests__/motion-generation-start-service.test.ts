@@ -1,20 +1,31 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildGenerationModelCatalog, CatalogError } from '@/lib/generation-model-catalog';
 import {
+  MotionGenerationStartValidationError,
   startMotionGenerationForRoute,
   type MotionGenerationStartRouteClient,
 } from '@/lib/motion-generation-start-service';
+import { ReferenceDurationChangedError } from '@/lib/unified-generation-start-service';
 
 const startMotionGenerationMock = vi.hoisted(() => vi.fn());
+const resolveGenerationMediaSourceMock = vi.hoisted(() => vi.fn());
+const probeMediaDurationSecondsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/generation-services', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/generation-services')>();
   return {
     ...actual,
+    resolveGenerationMediaSource: resolveGenerationMediaSourceMock,
     startMotionGeneration: startMotionGenerationMock,
   };
 });
+
+// ffmpeg reads the clip; these tests decide what it finds.
+vi.mock('@/lib/video-rendition', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/video-rendition')>()),
+  probeMediaDurationSeconds: probeMediaDurationSecondsMock,
+}));
 
 type SourceGenerationRow = {
   id: string;
@@ -22,12 +33,22 @@ type SourceGenerationRow = {
   is_public: boolean;
 };
 
+type ExistingGenerationRow = {
+  id: string;
+  prediction_id: string;
+  status: string;
+  cost: number;
+};
+
 function createClientMock({
   sourceGeneration = null,
   rateLimitAllowed = true,
+  existingGeneration = null,
 }: {
   sourceGeneration?: SourceGenerationRow | null;
   rateLimitAllowed?: boolean;
+  /** The generation that already holds the request key: a start that was accepted. */
+  existingGeneration?: ExistingGenerationRow | null;
 } = {}) {
   const rpc = vi.fn(async (fn: string) => {
     if (fn === 'check_backend_rate_limit') {
@@ -59,6 +80,13 @@ function createClientMock({
   });
 
   const from = vi.fn((table: string) => {
+    if (table === 'profiles' && existingGeneration) {
+      return {
+        select: () => ({
+          eq: () => ({ maybeSingle: async () => ({ data: { credits: 70 }, error: null }) }),
+        }),
+      };
+    }
     if (table !== 'generations') {
       throw new Error(`Unexpected table access: ${table}`);
     }
@@ -77,6 +105,9 @@ function createClientMock({
           async maybeSingle() {
             if (filters.id && sourceGeneration?.id === filters.id) {
               return { data: sourceGeneration, error: null };
+            }
+            if (filters.client_request_key_hash && existingGeneration) {
+              return { data: existingGeneration, error: null };
             }
 
             return { data: null, error: null };
@@ -97,6 +128,28 @@ function createClientMock({
 
 describe('startMotionGenerationForRoute', () => {
   const catalogRevision = buildGenerationModelCatalog({ platform: 'mobile', schemaVersion: 1 }).revision;
+  const resolvedReference = 'https://project.supabase.co/storage/v1/object/sign/uploads/user-1/reference.mp4?token=t';
+
+  beforeEach(() => {
+    startMotionGenerationMock.mockReset();
+    resolveGenerationMediaSourceMock.mockReset();
+    probeMediaDurationSecondsMock.mockReset();
+    resolveGenerationMediaSourceMock.mockResolvedValue(resolvedReference);
+    probeMediaDurationSecondsMock.mockResolvedValue(5.2);
+  });
+
+  /** A kling-2.6 or kling-3.0 run with both inputs, naming `duration` for its clip. */
+  function motionBody(overrides: Record<string, unknown> = {}) {
+    return {
+      prompt: 'Transfer the performance naturally.',
+      model: 'kling-3.0',
+      characterImageUrl: 'https://signed.example.com/character.png',
+      referenceVideoUrl: 'https://signed.example.com/reference.mp4',
+      mode: '1080p',
+      catalogRevision,
+      ...overrides,
+    };
+  }
 
   it('rejects stale catalog revisions before rate limits or provider starts', async () => {
     const userClient = createClientMock();
@@ -117,6 +170,7 @@ describe('startMotionGenerationForRoute', () => {
     })).rejects.toBeInstanceOf(CatalogError);
 
     expect(adminClient.rpc).not.toHaveBeenCalled();
+    expect(probeMediaDurationSecondsMock).not.toHaveBeenCalled();
     expect(startMotionGenerationMock).not.toHaveBeenCalled();
   });
 
@@ -201,5 +255,101 @@ describe('startMotionGenerationForRoute', () => {
       remainingCredits: 88,
       cost: 12,
     });
+    // The clip measured is the one the caller owns, resolved as the provider fetches it.
+    expect(resolveGenerationMediaSourceMock).toHaveBeenCalledWith(
+      userClient.client,
+      'https://signed.example.com/reference.mp4',
+      'user-1',
+    );
+    expect(probeMediaDurationSecondsMock).toHaveBeenCalledWith(resolvedReference);
+  });
+
+  it('charges the length the clip measures, whatever duration the caller names', async () => {
+    startMotionGenerationMock.mockResolvedValueOnce({
+      predictionId: 'task-motion-2',
+      generationId: 'gen-motion-2',
+      remainingCredits: 500,
+      cost: 216,
+    });
+    probeMediaDurationSecondsMock.mockResolvedValueOnce(7.3);
+
+    await startMotionGenerationForRoute({
+      request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-2' } }),
+      body: motionBody({ duration: 30 }),
+      userId: 'user-1',
+      supabase: createClientMock().client,
+      adminSupabase: createClientMock().client,
+    });
+
+    // Kling 3.0 at 1080p is 27 credits a second: 8 s, not the 30 s the body named.
+    expect(startMotionGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+      duration: 8,
+      quotedCostCredits: 216,
+    }));
+  });
+
+  it('refuses, before any hold, a clip longer than the length the caller was quoted for', async () => {
+    // The crafted request the old route took: pay for 1 second, send 30.
+    probeMediaDurationSecondsMock.mockResolvedValueOnce(29.6);
+
+    const refusal = await startMotionGenerationForRoute({
+      request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-3' } }),
+      body: motionBody({ model: 'kling-2.6', mode: '720p', duration: 1 }),
+      userId: 'user-1',
+      supabase: createClientMock().client,
+      adminSupabase: createClientMock().client,
+    }).catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(ReferenceDurationChangedError);
+    expect(refusal).toMatchObject({
+      status: 409,
+      quotedCostCredits: 11,
+      costCredits: 330,
+      inputs: [{ index: 0, slot: 'referenceVideo', durationSeconds: 29.6 }],
+    });
+    expect(startMotionGenerationMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['ffmpeg finds no length', 'probe', null],
+    ['the clip resolves to a link that is not HTTPS', 'source', 'uploads/user-1/reference.mp4'],
+  ])('refuses a clip whose length cannot be verified when %s', async (_name, which, value) => {
+    if (which === 'probe') probeMediaDurationSecondsMock.mockResolvedValueOnce(value);
+    else resolveGenerationMediaSourceMock.mockResolvedValueOnce(value);
+
+    const refusal = await startMotionGenerationForRoute({
+      request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-4' } }),
+      body: motionBody({ duration: 6 }),
+      userId: 'user-1',
+      supabase: createClientMock().client,
+      adminSupabase: createClientMock().client,
+    }).catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(MotionGenerationStartValidationError);
+    expect(refusal).toMatchObject({
+      status: 422,
+      message: 'The length of a reference file could not be verified. Upload it again, then retry.',
+    });
+    expect(probeMediaDurationSecondsMock).toHaveBeenCalledTimes(which === 'probe' ? 1 : 0);
+    expect(startMotionGenerationMock).not.toHaveBeenCalled();
+  });
+
+  it('replays a start already accepted without reading its clip again', async () => {
+    const adminClient = createClientMock({
+      existingGeneration: { id: 'gen-motion-5', prediction_id: 'task-motion-5', status: 'processing', cost: 162 },
+    });
+
+    const result = await startMotionGenerationForRoute({
+      request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-5' } }),
+      body: motionBody({ duration: 6 }),
+      userId: 'user-1',
+      supabase: createClientMock().client,
+      adminSupabase: adminClient.client,
+    });
+
+    expect(result).toMatchObject({ predictionId: 'task-motion-5', idempotentReplay: true });
+    expect(resolveGenerationMediaSourceMock).not.toHaveBeenCalled();
+    expect(probeMediaDurationSecondsMock).not.toHaveBeenCalled();
+    expect(startMotionGenerationMock).not.toHaveBeenCalled();
   });
 });

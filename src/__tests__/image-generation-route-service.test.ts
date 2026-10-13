@@ -4,7 +4,11 @@ import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { CatalogError } from '@/lib/generation-model-catalog';
-import { markHeldProviderSubmission } from '@/lib/generation-public-failure';
+import {
+  markHeldProviderSubmission,
+  markRefundedGenerationStart,
+} from '@/lib/generation-public-failure';
+import { GenerationServiceError } from '@/lib/generation-services';
 
 const mocks = vi.hoisted(() => ({
   getImageGenerationStatusForRoute: vi.fn(),
@@ -103,7 +107,7 @@ describe('image generation route service', () => {
 
     expect(result).toEqual({
       ok: false,
-      body: { error: 'Unauthorized: Please log in to generate images' },
+      body: { code: 'UNAUTHORIZED', error: 'Unauthorized: Please log in to generate images' },
       status: 401,
     });
     expect(readRequestBody).not.toHaveBeenCalled();
@@ -122,10 +126,14 @@ describe('image generation route service', () => {
       request: new Request('http://localhost/api/generate-image'),
     });
 
+    // The same answer as POST /api/generations: nothing was reserved.
     expect(result).toEqual({
       ok: false,
-      body: { error: 'Server configuration error: API key missing' },
-      status: 500,
+      body: {
+        code: 'GENERATION_SERVICE_UNAVAILABLE',
+        error: 'Generation is temporarily unavailable.',
+      },
+      status: 503,
     });
     expect(readRequestBody).not.toHaveBeenCalled();
     expect(createAdminSupabase).not.toHaveBeenCalled();
@@ -174,8 +182,66 @@ describe('image generation route service', () => {
     expect(rateLimited).toMatchObject({
       ok: false,
       status: 429,
+      body: { code: 'RATE_LIMITED' },
       rateLimitError: expect.any(BackendRateLimitError),
     });
+  });
+
+  it.each([
+    {
+      name: 'a provider rejection at task creation',
+      error: (() => {
+        const error = new Error('Your prompt was flagged by the safety filter.');
+        markRefundedGenerationStart(error, 'generation-refunded-image-1');
+        return error;
+      })(),
+      status: 422,
+      body: {
+        code: 'provider_rejected',
+        error: 'The generation provider could not accept this request. Check your prompt and inputs, then try again. No credits were used.',
+      },
+    },
+    {
+      name: 'a balance the hold could not take',
+      error: new GenerationServiceError('Insufficient credits. This action costs 12 credits.', 402),
+      status: 402,
+      body: { code: 'insufficient_credits', error: 'Insufficient credits. This action costs 12 credits.' },
+    },
+    {
+      name: 'a busy provider',
+      error: new GenerationServiceError('The generation provider is busy right now. Please retry shortly.', 429, 'provider_busy'),
+      status: 429,
+      body: { code: 'provider_busy', error: 'The generation provider is busy right now. Please retry shortly.' },
+    },
+    {
+      name: 'a body that is not JSON',
+      error: new SyntaxError('Unexpected token < in JSON'),
+      status: 422,
+      body: {
+        code: 'INVALID_GENERATION_REQUEST',
+        error: 'The generation request could not be processed.',
+        fieldErrors: {},
+      },
+    },
+    {
+      name: 'a failure nobody classified',
+      error: new Error('Unexpected settlement shape'),
+      status: 500,
+      body: { code: 'GENERATION_START_FAILED', error: 'Failed to start image generation' },
+    },
+  ])('answers $name as POST /api/generations does', async ({ error, status, body }) => {
+    mocks.startImageGenerationForRoute.mockRejectedValueOnce(error);
+    const { postImageGenerationForRoute } = await import('@/lib/image-generation-route-service');
+
+    const result = await postImageGenerationForRoute({
+      createAdminSupabase,
+      createUserSupabase,
+      kieApiKey: 'kie-key',
+      request: new Request('http://localhost/api/generate'),
+      readRequestBody: async () => ({ model: 'any-model' }),
+    });
+
+    expect(result).toEqual({ ok: false, status, body });
   });
 
   it('validates status ids before auth and delegates authenticated status checks', async () => {

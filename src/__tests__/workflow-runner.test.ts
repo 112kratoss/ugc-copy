@@ -52,6 +52,16 @@ const startVideoGenerationMock = vi.fn(async (..._args: unknown[]): Promise<Star
   };
 });
 const syncGenerationStatusesMock = vi.fn(async () => undefined);
+// A motion step is priced at its clip's measured length: the clip resolves the
+// way the provider fetches it, and ffmpeg's reading is decided per test.
+const resolveGenerationMediaSourceMock = vi.fn(async (_client: unknown, url: string, ..._rest: unknown[]) => {
+  void _rest;
+  return url.startsWith('https://') ? url : `https://signed.example.com/${encodeURIComponent(url)}`;
+});
+const probeMediaDurationSecondsMock = vi.fn(async (..._args: unknown[]): Promise<number | null> => {
+  void _args;
+  return 10;
+});
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientMock(),
@@ -65,12 +75,20 @@ vi.mock('@/lib/generation-status-sync', () => ({
 }));
 
 vi.mock('@/lib/generation-services', () => ({
+  resolveGenerationMediaSource: (...args: Parameters<typeof resolveGenerationMediaSourceMock>) =>
+    resolveGenerationMediaSourceMock(...args),
   startImageGeneration: vi.fn(),
   startMotionGeneration: vi.fn(),
   startSoundEffectGeneration: vi.fn(),
   startVideoGeneration: (...args: Parameters<typeof startVideoGenerationMock>) =>
     startVideoGenerationMock(...args),
   startVoiceoverGeneration: vi.fn(),
+}));
+
+vi.mock('@/lib/video-rendition', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/video-rendition')>()),
+  probeMediaDurationSeconds: (...args: Parameters<typeof probeMediaDurationSecondsMock>) =>
+    probeMediaDurationSecondsMock(...args),
 }));
 
 vi.mock('@/lib/generation-model-catalog-store', () => ({
@@ -611,6 +629,77 @@ describe('workflow-runner recovery', () => {
       templateContext: { runId: 'run-1', stepId: 'step-1' },
       clientRequestKeyHash: 'a'.repeat(64),
     }));
+  });
+
+  describe('a motion step', () => {
+    async function runMotionStep(templateContext?: { runId: string; stepId: string; templateId?: string; templateVersionId?: string | null }) {
+      const services = await import('@/lib/generation-services');
+      vi.mocked(services.startMotionGeneration).mockResolvedValue({
+        predictionId: 'pred-motion', remainingCredits: 40, cost: 88, generationId: 'gen-motion',
+      });
+      const { graph, node } = createSingleStepGraph('motion-generate');
+      const { executeWorkflowRunnableNode } = await import('@/lib/workflow-runner');
+      const result = await executeWorkflowRunnableNode({
+        supabase: { role: 'runner' } as never,
+        userId: 'user-1',
+        graph,
+        node,
+        catalogRevision: 'catalog-rev-1',
+        clientRequestKeyHash: 'b'.repeat(64),
+        ...(templateContext ? { templateContext } : {}),
+      });
+      return { result, startMotionGeneration: vi.mocked(services.startMotionGeneration) };
+    }
+
+    it('is quoted and started at its clip’s measured length, rounded up', async () => {
+      probeMediaDurationSecondsMock.mockResolvedValueOnce(7.3);
+
+      const { result, startMotionGeneration } = await runMotionStep();
+
+      expect(resolveGenerationMediaSourceMock).toHaveBeenCalledWith(
+        { role: 'runner' },
+        'https://cdn.example.com/reference.mp4',
+        'user-1',
+        {},
+      );
+      expect(probeMediaDurationSecondsMock).toHaveBeenCalledWith('https://cdn.example.com/reference.mp4');
+      expect(quoteGenerationModelMock).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'motion',
+        settings: expect.objectContaining({ duration: 8 }),
+      }));
+      expect(startMotionGeneration).toHaveBeenCalledWith(expect.objectContaining({
+        duration: 8,
+        quotedCostCredits: 77,
+      }));
+      expect(result).toMatchObject({ status: 'processing', generation_id: 'gen-motion' });
+    });
+
+    it('is blocked, with nothing quoted or held, when the clip’s length cannot be verified', async () => {
+      probeMediaDurationSecondsMock.mockResolvedValueOnce(null);
+
+      const { result, startMotionGeneration } = await runMotionStep();
+
+      expect(result).toEqual({
+        status: 'blocked',
+        generation_id: null,
+        input_snapshot: null,
+        output_snapshot: null,
+        error_message: 'The reference clip’s length could not be verified.',
+      });
+      expect(quoteGenerationModelMock).not.toHaveBeenCalled();
+      expect(startMotionGeneration).not.toHaveBeenCalled();
+    });
+
+    it('reads a template run’s clip within that template’s assets', async () => {
+      await runMotionStep({ runId: 'run-1', stepId: 'step-1', templateId: 'template-1', templateVersionId: 'version-1' });
+
+      expect(resolveGenerationMediaSourceMock).toHaveBeenCalledWith(
+        { role: 'runner' },
+        'https://cdn.example.com/reference.mp4',
+        'user-1',
+        { templateAssetScope: { templateId: 'template-1', templateVersionId: 'version-1' } },
+      );
+    });
   });
 
   describe('the request key a step is run with', () => {

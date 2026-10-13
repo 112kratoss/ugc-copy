@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { enforceBackendRateLimit, MEDIA_GENERATION_RATE_LIMIT } from '@/lib/backend-rate-limit';
 import { quotePublishedGenerationModel } from '@/lib/generation-model-catalog-store';
-import { startMotionGeneration } from '@/lib/generation-services';
+import { resolveGenerationMediaSource, startMotionGeneration } from '@/lib/generation-services';
 import {
   getGenerationStartIdempotencyKey,
   getGenerationStartLockOwner,
@@ -12,6 +12,8 @@ import {
 import { MOTION_MODELS, type MotionModelId } from '@/lib/models';
 import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
 import { resolveSourceGenerationId } from '@/lib/source-generation';
+import { ReferenceDurationChangedError } from '@/lib/unified-generation-start-service';
+import { probeMediaDurationSeconds } from '@/lib/video-rendition';
 
 export type MotionGenerationStartRouteClient = SupabaseClient;
 
@@ -66,6 +68,27 @@ function readObject(value: unknown): Record<string, unknown> {
     : {};
 }
 
+/**
+ * The reference clip's length, measured the way POST /api/generations measures
+ * it: a motion output runs as long as its clip, so the clip is what is priced,
+ * not the `duration` a caller names. Only an HTTPS object is ever read.
+ */
+async function measureReferenceVideoSeconds(
+  supabase: MotionGenerationStartRouteClient,
+  referenceVideoUrl: string,
+  userId: string,
+): Promise<number> {
+  const source = await resolveGenerationMediaSource(supabase, referenceVideoUrl, userId);
+  const measured = /^https:\/\//i.test(source) ? await probeMediaDurationSeconds(source) : null;
+  if (measured === null || !Number.isFinite(measured) || measured <= 0) {
+    throw new MotionGenerationStartValidationError(
+      'The length of a reference file could not be verified. Upload it again, then retry.',
+      422,
+    );
+  }
+  return measured;
+}
+
 export async function startMotionGenerationForRoute({
   request,
   body,
@@ -94,17 +117,20 @@ export async function startMotionGenerationForRoute({
     );
   }
 
-  const quote = await quotePublishedGenerationModel({
+  const platform = request.headers.get('x-magicbooklet-client') === 'mobile' ? 'mobile' : 'web';
+  const quoteAtDuration = (duration: number, catalogRevision: string | null) => quotePublishedGenerationModel({
     kind: 'motion',
     modelId: selectedModel,
     settings: {
       resolution: requestedSettings.resolution ?? body.mode ?? '720p',
       characterOrientation: requestedSettings.characterOrientation ?? body.characterOrientation ?? 'video',
-      duration: requestedDuration,
+      duration,
     },
     inputCounts: { images: 1, videos: 1, audios: 0 },
-    catalogRevision: readOptionalString(body.catalogRevision),
-  }, { platform: request.headers.get('x-magicbooklet-client') === 'mobile' ? 'mobile' : 'web' });
+    catalogRevision,
+  }, { platform });
+  // The price the caller was shown, for the length it reported.
+  const quote = await quoteAtDuration(requestedDuration, readOptionalString(body.catalogRevision));
 
   const sourceGenerationId = await resolveSourceGenerationId(
     adminSupabase,
@@ -117,33 +143,53 @@ export async function startMotionGenerationForRoute({
     key: userId,
   });
 
-  const normalizedSettings = quote.normalizedSettings;
-  const characterOrientation = String(normalizedSettings.characterOrientation);
-  const mode = String(normalizedSettings.resolution);
   const result = await withGenerationStartIdempotency({
     client: adminSupabase,
     userId,
     idempotencyKey: getGenerationStartIdempotencyKey(request, body),
     requestHash: hashGenerationStartRequest(body),
     owner: getGenerationStartLockOwner(request),
-    start: (clientRequestKeyHash) => startMotionGeneration({
-      supabase,
-      creditSupabase: adminSupabase,
-      userId,
-      clientRequestKeyHash,
-      model: selectedModel as MotionModelId,
-      referenceVideoUrl,
-      characterImageUrl,
-      duration: Number(normalizedSettings.duration),
-      characterOrientation: characterOrientation === 'image' ? 'image' : 'video',
-      mode: mode === '1080p' ? '1080p' : '720p',
-      prompt: readString(body.prompt, ''),
-      sourceGenerationId,
-      characterImage: normalizeRemixMediaAssetDescriptor(body.characterImage, 'image'),
-      referenceVideo: normalizeRemixMediaAssetDescriptor(body.referenceVideo, 'video'),
-      quotedCostCredits: quote.costCredits,
-      catalogRevision: quote.catalogRevision,
-    }),
+    // Measured once the key is claimed: a start already accepted replays
+    // without reading its clip again.
+    start: async (clientRequestKeyHash) => {
+      const measuredSeconds = await measureReferenceVideoSeconds(supabase, referenceVideoUrl, userId);
+      const measuredDuration = Math.max(1, Math.ceil(measuredSeconds));
+      const billableQuote = measuredDuration === Number(quote.normalizedSettings.duration)
+        ? quote
+        : await quoteAtDuration(measuredDuration, quote.catalogRevision);
+      // Never charge more than the price the caller saw: a longer clip than
+      // reported is refused with its measured length (the body names one
+      // clip, input 0), and a shorter one is charged as measured.
+      if (billableQuote.costCredits > quote.costCredits) {
+        throw new ReferenceDurationChangedError(
+          [{ index: 0, slot: 'referenceVideo', durationSeconds: measuredSeconds }],
+          quote.costCredits,
+          billableQuote.costCredits,
+        );
+      }
+
+      const normalizedSettings = billableQuote.normalizedSettings;
+      const characterOrientation = String(normalizedSettings.characterOrientation);
+      const mode = String(normalizedSettings.resolution);
+      return startMotionGeneration({
+        supabase,
+        creditSupabase: adminSupabase,
+        userId,
+        clientRequestKeyHash,
+        model: selectedModel as MotionModelId,
+        referenceVideoUrl,
+        characterImageUrl,
+        duration: Number(normalizedSettings.duration),
+        characterOrientation: characterOrientation === 'image' ? 'image' : 'video',
+        mode: mode === '1080p' ? '1080p' : '720p',
+        prompt: readString(body.prompt, ''),
+        sourceGenerationId,
+        characterImage: normalizeRemixMediaAssetDescriptor(body.characterImage, 'image'),
+        referenceVideo: normalizeRemixMediaAssetDescriptor(body.referenceVideo, 'video'),
+        quotedCostCredits: billableQuote.costCredits,
+        catalogRevision: billableQuote.catalogRevision,
+      });
+    },
   });
 
   return {

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { createServiceClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 import {
+  resolveGenerationMediaSource,
   startImageGeneration,
   startCatalogGeneration,
   startMotionGeneration,
@@ -68,6 +69,7 @@ import {
 import { buildUnifiedGenerationQuoteInput, type UnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 import type { CatalogGenerationInputAsset } from '@/lib/generation-model-adapters';
 import { CatalogError, type CatalogPrimitive, type GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
+import { probeMediaDurationSeconds } from '@/lib/video-rendition';
 
 export interface WorkflowRunExecutionResult {
   runId: string;
@@ -315,6 +317,33 @@ function buildBlockedError(message: string): WorkflowRunnableExecutionResult {
 }
 
 const CATALOG_EXECUTION_NODE_TYPES = new Set<string>(['image-generate', 'video-generate', 'motion-generate']);
+
+/**
+ * A motion step's length in whole seconds, measured from its reference clip:
+ * the output runs as long as the clip, which is what POST /api/generations
+ * prices too. Null when the clip cannot be read, or is not an HTTPS object.
+ */
+async function measureMotionReferenceSeconds(params: {
+  supabase: SupabaseClient;
+  referenceVideoUrl: string;
+  userId: string;
+  templateContext?: TemplateGenerationContext;
+}): Promise<number | null> {
+  const { supabase, referenceVideoUrl, userId, templateContext } = params;
+  const source = await resolveGenerationMediaSource(supabase, referenceVideoUrl, userId, templateContext?.templateId
+    ? {
+        templateAssetScope: {
+          templateId: templateContext.templateId,
+          templateVersionId: templateContext.templateVersionId ?? null,
+        },
+      }
+    : {});
+  if (!/^https:\/\//i.test(source)) return null;
+  const measured = await probeMediaDurationSeconds(source);
+  return measured !== null && Number.isFinite(measured) && measured > 0
+    ? Math.max(1, Math.ceil(measured))
+    : null;
+}
 
 /**
  * A model with no bundled registry entry can only run through the published
@@ -964,13 +993,18 @@ export async function executeWorkflowRunnableNode(params: {
       return buildBlockedError('Motion control requires both an image input and a video input.');
     }
 
+    const duration = await measureMotionReferenceSeconds({ supabase, referenceVideoUrl, userId, templateContext });
+    if (duration === null) {
+      return buildBlockedError('The reference clip’s length could not be verified.');
+    }
+
     const quote = await quoteRunnableNode({
       kind: 'motion',
       modelId: data.model,
       settings: {
         resolution: data.mode,
         characterOrientation: data.characterOrientation,
-        duration: 10,
+        duration,
       },
       inputCounts: { images: 1, videos: 1, audios: 0 },
     });
@@ -982,7 +1016,7 @@ export async function executeWorkflowRunnableNode(params: {
       model: data.model,
       referenceVideoUrl,
       characterImageUrl,
-      duration: 10,
+      duration,
       characterOrientation: data.characterOrientation,
       mode: data.mode,
       quotedCostCredits: quote.costCredits,
