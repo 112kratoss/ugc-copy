@@ -7,7 +7,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import GenerationResultVideo from '@/components/GenerationResultVideo';
-import { Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check, Share2 } from 'lucide-react';
+import { Sparkles, Loader2, Download, X, Image as ImageIcon, Images, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check, Share2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
@@ -34,13 +34,24 @@ import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/client-generation-models';
 import { getVideoInputAffordances, getVideoRunAffordances } from '@/lib/generation-model-affordances';
-import type { GenerationModelDescriptor } from '@/lib/generation-model-catalog';
+import type { CatalogGenerationInputAsset, CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
+import type { CatalogPrimitive, GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import {
+    clearPendingWebStart,
+    isAmbiguousWebStartFailure,
+    loadPendingWebStart,
+    requestWebGenerationStart,
     resolveCatalogModelId,
     resolveWebGenerationQuoteUi,
+    savePendingWebStart,
     useWebGenerationModelCatalog,
     useWebGenerationModelQuote,
+    WebCatalogRequestError,
+    type PendingWebStart,
+    type WebGenerationStartResponse,
 } from '@/lib/generation-model-client';
+import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
+import { GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import { useAuth } from '@/components/AuthProvider';
 import type { RemixMediaAssetDescriptor, RemixResolvedAsset, RemixSourceBundle } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
@@ -57,19 +68,24 @@ import {
     getPersistedSubjectRecords,
     getPersistedValue,
     PERSISTED_MEDIA_KEYS,
+    purgeLegacyPersistedMedia,
     removePersistedMedia,
+    scopedPersistedMediaKey,
     setPersistedFile,
     setPersistedImageElementRecords,
     setPersistedMediaRecords,
     setPersistedSubjectRecords,
     setPersistedValue,
 } from '@/lib/persisted-media';
+import { loadCreatorDraft, saveCreatorDraft } from '@/lib/persisted-creator-draft';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
 import { createGenerationIdempotencyKey } from '@/lib/generation-idempotency-client';
 import {
     announceGenerationStarted,
-    fetchGenerationStatus,
+    fetchGenerationStatusWithRetry,
+    isGenerationStatusAbortError,
     waitForNextGenerationStatusPoll,
+    type GenerationStatusResponse,
 } from '@/lib/generation-status-client';
 import {
     assignElementHandles,
@@ -85,7 +101,6 @@ import {
 } from '@/lib/image-elements';
 import {
     createSeedanceAssetMetadata,
-    getPreferredSeedanceReferenceValue,
     getSeedanceAssetSourceName,
     getSeedanceAssetStatusLabel,
     isSeedance2VideoModelId,
@@ -108,7 +123,15 @@ import {
     inspectPromptQuality,
     type PromptEnhancementWarning,
 } from '@/lib/prompt-quality';
-import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
+import type { StorageMediaKind } from '@/lib/storage-upload-mime-policy';
+import {
+    refreshTemporaryMediaUrl,
+    TEMPORARY_MEDIA_UPLOAD_LIMITS,
+    TemporaryMediaReadUrlError,
+    uploadMediaToTemporaryStorage,
+} from '@/lib/temporary-media-upload';
+import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
+import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
 
 interface MultiShot {
     id: string;
@@ -118,6 +141,227 @@ interface MultiShot {
 
 const KLING_VIDEO_ELEMENT_LIMIT = 3;
 const KLING_VIDEO_ELEMENT_MAX_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Shots per multi-shot run: Kie's multi_prompt takes at most 5 for Kling 3.0 and 6 for
+ * Kling O3. The prompt check refuses a run past them with the same numbers
+ * (src/lib/prompt-quality.ts), and the app holds its shot editor to them too
+ * (catalogMultiShotLimits); no descriptor publishes them yet.
+ */
+const MULTI_SHOT_MAX_SHOTS: Readonly<Partial<Record<string, number>>> = {
+    'kling-3.0-video': 5,
+    'kling-o3': 6,
+};
+
+/** A multi-shot run's length, as the server derives it from the shots: each one whole and at least a second. */
+function multiShotTotalDuration(shots: readonly { duration: number }[]): number {
+    return shots.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration)), 0);
+}
+
+/**
+ * How long a file uploaded for a run is sent again by its staged path rather than
+ * uploaded once more. The reclaim sweep deletes a staged object a run has used
+ * RECLAIM_AFTER_HOURS after it was signed; eight hours short of that stays clear of it.
+ */
+const STAGED_UPLOAD_REUSE_MS = (RECLAIM_AFTER_HOURS - 8) * 60 * 60 * 1000;
+
+/** Where a reference's file was uploaded for a run, and when. */
+type StagedUpload = { storagePath: string; signedUrl: string; uploadedAt: number };
+
+/**
+ * A reference file staged for a run: the object uploaded for an earlier run, under a
+ * fresh link, while it is younger than STAGED_UPLOAD_REUSE_MS, or a new upload. Every
+ * press used to upload every reference again, each one a sign request against the
+ * limit of 60 a user per 10 minutes. An object the sweep took anyway answers
+ * MEDIA_OBJECT_NOT_FOUND, and the file goes up again.
+ */
+async function stageReferenceFile(file: File, staged: StagedUpload | null | undefined): Promise<StagedUpload> {
+    if (staged && Date.now() - staged.uploadedAt < STAGED_UPLOAD_REUSE_MS) {
+        try {
+            return { ...staged, signedUrl: await refreshTemporaryMediaUrl(staged.storagePath) };
+        } catch (refreshError) {
+            if (!(refreshError instanceof TemporaryMediaReadUrlError && refreshError.code === 'MEDIA_OBJECT_NOT_FOUND')) {
+                throw refreshError;
+            }
+        }
+    }
+    const upload = await uploadMediaToTemporaryStorage(file);
+    return { storagePath: upload.storagePath, signedUrl: upload.signedUrl, uploadedAt: Date.now() };
+}
+
+const PICKED_FILE_RULES: Record<StorageMediaKind, { use: string; limitFor: string }> = {
+    image: { use: 'a JPEG, PNG, WebP, GIF, AVIF or HEIC image', limitFor: 'an image' },
+    video: { use: 'an MP4, MOV, WebM or M4V video', limitFor: 'a video' },
+    audio: { use: 'an MP3, AAC, WAV, OGG or WebM audio file', limitFor: 'an audio file' },
+};
+
+/**
+ * The picked files the upload step will take, and a sentence naming each one it would
+ * refuse. A refused file used to be kept and saved, and every Generate then failed on
+ * it without saying which file it was.
+ */
+function screenPickedFiles(files: File[], kind: StorageMediaKind): { accepted: File[]; refusal: string | null } {
+    const maxBytes = TEMPORARY_MEDIA_UPLOAD_LIMITS.maxBytesByKind[kind];
+    const rules = PICKED_FILE_RULES[kind];
+    const refusals: string[] = [];
+    const accepted = files.filter((file) => {
+        const name = file.name || 'This file';
+        if (!TEMPORARY_MEDIA_UPLOAD_LIMITS.isAllowedMimeType(kind, file.type)) {
+            refusals.push(`${name} can’t be used: add ${rules.use}.`);
+            return false;
+        }
+        if (file.size > maxBytes) {
+            refusals.push(`${name} is over the ${Math.round(maxBytes / (1024 * 1024))} MB limit for ${rules.limitFor}.`);
+            return false;
+        }
+        return true;
+    });
+    return { accepted, refusal: refusals.length > 0 ? refusals.join(' ') : null };
+}
+
+/** What the run panel says when picks were left out because the model takes no more. */
+function droppedPicksNotice(added: number, picked: number, limit: number, noun: string): string | null {
+    if (added >= picked) return null;
+    return `Added ${added} of ${picked}: this model takes up to ${limit} ${noun}${limit === 1 ? '' : 's'}.`;
+}
+
+const START_UNCONFIRMED_MESSAGE = 'We couldn’t confirm your generation started. Check again — that can’t start a second run.';
+
+/**
+ * The link a remixed clip or track is sent by: its own, or for an asset id that an
+ * older run kept in its place, the link the asset was prepared from. The server
+ * measures it, so only an https link will do.
+ */
+function measurableRemixLink(value: string, asset: SeedanceAssetMetadata | undefined): string | null {
+    const url = /^https:\/\//i.test(value) ? value : asset?.sourceUrl ?? null;
+    return url && /^https:\/\//i.test(url) ? url : null;
+}
+
+/** A run the provider ended as failed. Every failed settlement returns the run's credits. */
+class VideoRunFailedError extends Error {}
+
+function creditsReturnedSentence(cost: number | null | undefined): string {
+    return typeof cost === 'number' && cost > 0
+        ? ` Your ${cost} credit${cost === 1 ? ' was' : 's were'} returned.`
+        : '';
+}
+
+/** The measured lengths a REFERENCE_DURATION_CHANGED refusal carries, by the place of each input in the request. */
+function readMeasuredInputDurations(details: Readonly<Record<string, unknown>>): Array<{ index: number; durationSeconds: number }> {
+    const inputs = details.inputs;
+    if (!Array.isArray(inputs)) return [];
+    return inputs.flatMap((entry) => {
+        if (!entry || typeof entry !== 'object') return [];
+        const { index, durationSeconds } = entry as { index?: unknown; durationSeconds?: unknown };
+        return typeof index === 'number' && Number.isInteger(index) && index >= 0
+            && typeof durationSeconds === 'number' && Number.isFinite(durationSeconds) && durationSeconds > 0
+            ? [{ index, durationSeconds }]
+            : [];
+    });
+}
+
+/**
+ * What the form keeps through a reload, a top-up round trip or a lost session, per
+ * account (persisted-creator-draft.ts). Only the files used to come back; the prompt,
+ * the model and every setting were lost. The reference mode is not kept: the page
+ * reads it from what is attached.
+ */
+type VideoCreatorDraft = {
+    prompt: string;
+    modelId: string;
+    mode: string;
+    aspectRatio: string;
+    sound: boolean;
+    resolution: string;
+    fixedLens: boolean;
+    isMultiShot: boolean;
+    shots: MultiShot[];
+    duration: number;
+    additionalSettings: { modelId: string; values: Record<string, CatalogPrimitive> };
+};
+
+/**
+ * A saved draft, field by field: a build that saved it may have shaped it otherwise,
+ * and a field this build cannot read is left at what the page has.
+ */
+function readVideoCreatorDraft(value: unknown): Partial<VideoCreatorDraft> {
+    if (!value || typeof value !== 'object') return {};
+    const stored = value as Record<string, unknown>;
+    const text = (key: string) => (typeof stored[key] === 'string' ? stored[key] as string : undefined);
+    const flag = (key: string) => (typeof stored[key] === 'boolean' ? stored[key] as boolean : undefined);
+    const modelId = text('modelId');
+    const shots = Array.isArray(stored.shots)
+        ? stored.shots.flatMap((shot, index): MultiShot[] => {
+            if (!shot || typeof shot !== 'object') return [];
+            const { id, prompt, duration } = shot as Record<string, unknown>;
+            return typeof prompt === 'string' && typeof duration === 'number' && Number.isFinite(duration)
+                ? [{ id: typeof id === 'string' && id ? id : `${index + 1}`, prompt, duration: Math.min(12, Math.max(1, Math.round(duration))) }]
+                : [];
+        })
+        : undefined;
+    const additional = stored.additionalSettings as { modelId?: unknown; values?: unknown } | undefined;
+    const additionalValues = additional && typeof additional.values === 'object' && additional.values !== null
+        ? Object.fromEntries(Object.entries(additional.values as Record<string, unknown>).filter(([, setting]) => (
+            typeof setting === 'string' || typeof setting === 'number' || typeof setting === 'boolean'
+        ))) as Record<string, CatalogPrimitive>
+        : null;
+    const duration = typeof stored.duration === 'number' && Number.isFinite(stored.duration) ? stored.duration : undefined;
+    return {
+        prompt: text('prompt')?.slice(0, GENERATION_PROMPT_MAX_LENGTH),
+        modelId: modelId && modelId in VIDEO_MODELS ? modelId : undefined,
+        mode: text('mode'),
+        aspectRatio: text('aspectRatio'),
+        sound: flag('sound'),
+        resolution: text('resolution'),
+        fixedLens: flag('fixedLens'),
+        isMultiShot: flag('isMultiShot'),
+        shots: shots && shots.length > 0 ? shots : undefined,
+        duration,
+        additionalSettings: additionalValues && typeof additional?.modelId === 'string'
+            ? { modelId: additional.modelId, values: additionalValues }
+            : undefined,
+    };
+}
+
+function isPaywallPrefill(value: unknown): value is GenerationPaywallPrefill {
+    return Boolean(value) && typeof value === 'object' && Array.isArray((value as { resourceKinds?: unknown }).resourceKinds);
+}
+
+type CreationPublishDefaults = { generationId: string; title: string; paywallPrefill: GenerationPaywallPrefill | null };
+
+/**
+ * The creation's own title and recipe, for the quick-publish modal: opened without
+ * them it published the media alone, while the same creation from Studio offered its
+ * recipe. Read from the owner's library entry, as Studio reads it.
+ */
+async function loadCreationPublishDefaults(generationId: string, accessToken: string | null | undefined): Promise<CreationPublishDefaults> {
+    const fallback: CreationPublishDefaults = { generationId, title: '', paywallPrefill: null };
+    if (!accessToken) return fallback;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+        const response = await fetch(`/api/generations?${new URLSearchParams({ id: generationId, includeArchived: 'true', limit: '1' })}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            cache: 'no-store',
+            signal: controller.signal,
+        });
+        if (!response.ok) return fallback;
+        const payload = await response.json() as { generations?: Array<{ id?: unknown; title?: unknown; paywallPrefill?: unknown }> };
+        const generation = Array.isArray(payload.generations)
+            ? payload.generations.find((item) => item?.id === generationId)
+            : undefined;
+        return {
+            generationId,
+            title: typeof generation?.title === 'string' ? generation.title : '',
+            paywallPrefill: isPaywallPrefill(generation?.paywallPrefill) ? generation.paywallPrefill : null,
+        };
+    } catch {
+        // Without them the modal still publishes the media; nothing is lost but the prefill.
+        return fallback;
+    } finally {
+        clearTimeout(timeout);
+    }
+}
 
 function PromptQualityWarnings({ warnings }: { warnings: PromptEnhancementWarning[] }) {
     if (warnings.length === 0) {
@@ -185,6 +429,8 @@ type VideoElementDraft = ImageElementDescriptor & {
     source: 'upload' | 'remix';
     sourceGenerationId?: string | null;
     seedanceAsset: SeedanceAssetMetadata;
+    /** The upload of `file` an earlier run or preparation made, sent again while it lasts. */
+    staged: StagedUpload | null;
 };
 
 type VideoElementSeed = {
@@ -198,6 +444,7 @@ type VideoElementSeed = {
     source?: 'upload' | 'remix';
     sourceGenerationId?: string | null;
     seedanceAsset?: Partial<SeedanceAssetMetadata>;
+    staged?: StagedUpload | null;
 };
 
 type SeedanceMediaReferenceDraft = {
@@ -211,6 +458,7 @@ type SeedanceMediaReferenceDraft = {
     sourceGenerationId?: string | null;
     durationSeconds?: number | null;
     seedanceAsset: SeedanceAssetMetadata;
+    staged: StagedUpload | null;
 };
 
 type SeedanceMediaReferenceSeed = {
@@ -224,6 +472,7 @@ type SeedanceMediaReferenceSeed = {
     sourceGenerationId?: string | null;
     durationSeconds?: number | null;
     seedanceAsset?: Partial<SeedanceAssetMetadata>;
+    staged?: StagedUpload | null;
 };
 
 type KlingVideoElementDescriptor = {
@@ -246,6 +495,7 @@ type KlingVideoElementDraft = {
     source: 'upload' | 'remix';
     sourceGenerationId?: string | null;
     durationSeconds?: number | null;
+    staged: StagedUpload | null;
 };
 
 type KlingSubjectImageDraft = {
@@ -254,6 +504,7 @@ type KlingSubjectImageDraft = {
     previewUrl: string;
     remoteUrl: string | null;
     storagePath: string | null;
+    staged?: StagedUpload | null;
 };
 
 // A Kling O3 named multi-image subject: 2–4 images fused into one identity the
@@ -280,12 +531,14 @@ function KlingSubjectsEditor({
     disabled,
     onChange,
     onRename,
+    onRefusedFiles,
 }: {
     subjects: KlingSubjectDraft[];
     limits: SubjectLimits;
     disabled: boolean;
     onChange: (next: KlingSubjectSeed[]) => void;
     onRename: (subjectId: string, displayName: string) => void;
+    onRefusedFiles: (message: string | null) => void;
 }) {
     const KLING_SUBJECT_LIMIT = limits.maxNamed;
     const KLING_SUBJECT_MIN_IMAGES = limits.imagesPerSubject.min;
@@ -329,7 +582,16 @@ function KlingSubjectsEditor({
         const subject = subjects.find((candidate) => candidate.id === subjectId);
         if (!subject) return;
         const availableSlots = Math.max(0, KLING_SUBJECT_MAX_IMAGES - subject.images.length);
-        const nextImages = Array.from(files).slice(0, availableSlots).map((file) => ({
+        const { accepted, refusal } = screenPickedFiles(Array.from(files), 'image');
+        const added = accepted.slice(0, availableSlots);
+        onRefusedFiles([
+            refusal,
+            accepted.length > added.length
+                ? `Added ${added.length} of ${accepted.length}: a subject takes up to ${KLING_SUBJECT_MAX_IMAGES} images.`
+                : null,
+        ].filter(Boolean).join(' ') || null);
+        if (added.length === 0) return;
+        const nextImages = added.map((file) => ({
             id: `subject-image-${crypto.randomUUID()}`,
             file,
             previewUrl: URL.createObjectURL(file),
@@ -485,6 +747,7 @@ type KlingVideoElementSeed = {
     source?: 'upload' | 'remix';
     sourceGenerationId?: string | null;
     durationSeconds?: number | null;
+    staged?: StagedUpload | null;
 };
 
 type PromptMentionCandidate = {
@@ -510,6 +773,7 @@ function hydrateVideoElements(seeds: VideoElementSeed[]): VideoElementDraft[] {
             sourceUrl: seed.providerUrl ?? seed.previewUrl ?? null,
             ...seed.seedanceAsset,
         }),
+        staged: seed.staged ?? null,
     }));
 }
 
@@ -532,6 +796,7 @@ function hydrateSeedanceMediaReferences(
             sourceUrl: seed.providerUrl ?? seed.previewUrl ?? null,
             ...seed.seedanceAsset,
         }),
+        staged: seed.staged ?? null,
     }));
 }
 
@@ -580,6 +845,7 @@ function hydrateKlingVideoElements(seeds: KlingVideoElementSeed[]): KlingVideoEl
         source: seed.source ?? 'upload',
         sourceGenerationId: seed.sourceGenerationId ?? null,
         durationSeconds: typeof seed.durationSeconds === 'number' ? seed.durationSeconds : null,
+        staged: seed.staged ?? null,
     }));
 }
 
@@ -592,50 +858,6 @@ function isSupportedKlingVideoFile(file: File): boolean {
         normalizedName.endsWith('.mp4') ||
         normalizedName.endsWith('.mov')
     );
-}
-
-async function readMediaDurationSeconds(file: File, kind: 'video' | 'audio'): Promise<number | null> {
-    const previewUrl = URL.createObjectURL(file);
-
-    try {
-        const durationSeconds = await new Promise<number | null>((resolve) => {
-            const previewMedia = document.createElement(kind);
-
-            const cleanup = () => {
-                previewMedia.removeAttribute('src');
-                previewMedia.load();
-            };
-
-            previewMedia.preload = 'metadata';
-            previewMedia.onloadedmetadata = () => {
-                const nextDuration = Number.isFinite(previewMedia.duration) ? previewMedia.duration : null;
-                cleanup();
-                resolve(nextDuration);
-            };
-            previewMedia.onerror = () => {
-                cleanup();
-                resolve(null);
-            };
-            previewMedia.src = previewUrl;
-        });
-
-        return durationSeconds;
-    } finally {
-        URL.revokeObjectURL(previewUrl);
-    }
-}
-
-function readVideoDurationSeconds(file: File): Promise<number | null> {
-    return readMediaDurationSeconds(file, 'video');
-}
-
-/**
- * Kie caps the combined length of reference audio (15 s on Seedance 2, Fast, Mini and
- * MiniMax H3) the same way it caps clips, so the quote needs each track's duration to
- * enforce it before submit instead of the provider rejecting the run afterwards.
- */
-function readAudioDurationSeconds(file: File): Promise<number | null> {
-    return readMediaDurationSeconds(file, 'audio');
 }
 
 export interface CreateVideoPrefill {
@@ -672,6 +894,7 @@ function standbyClipAndTrackNotice(modelName: string, clips: number, tracks: num
 export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPrefill }) {
     const router = useRouter();
     const { credits: userCredits, isLoading: isLoadingUser, session, updateCredits } = useAuth();
+    const userId = session?.user?.id ?? null;
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
     const prefillPrompt = prefill.prompt ?? null;
@@ -711,6 +934,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [endImageFile, setEndImageFile] = useState<File | null>(null);
     const [endImageUrl, setEndImageUrl] = useState<string | null>(null);
     const [endFrameDescriptor, setEndFrameDescriptor] = useState<RemixMediaAssetDescriptor | null>(null);
+    // Each frame's upload for an earlier run, kept with the file it was made from: a
+    // frame replaced since does not match, and is uploaded.
+    const [startFrameStaged, setStartFrameStaged] = useState<{ file: File; staged: StagedUpload } | null>(null);
+    const [endFrameStaged, setEndFrameStaged] = useState<{ file: File; staged: StagedUpload } | null>(null);
     const [mode, setMode] = useState('std');
     const [aspectRatio, setAspectRatio] = useState('16:9');
     const [sound, setSound] = useState(false);
@@ -727,7 +954,24 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [latestIsPublic, setLatestIsPublic] = useState(false);
     const [publishedMeta, setPublishedMeta] = useState<{ title: string; description: string } | null>(null);
     const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
+    const [publishDefaults, setPublishDefaults] = useState<CreationPublishDefaults | null>(null);
+    const [isPreparingPublish, setIsPreparingPublish] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // Why files just picked were left out: their own line, so it never stands in for a
+    // run's error or its background state.
+    const [pickNotice, setPickNotice] = useState<string | null>(null);
+    // A start sent without an answer that says whether it started. Until one comes, the
+    // run panel offers to check again under the same key instead of starting another.
+    const [unconfirmedStart, setUnconfirmedStart] = useState<PendingWebStart | null>(null);
+    // The server's "not enough credits", for the balance and price it was given at. A
+    // fresh balance or another price is a new question, so it applies only while both hold.
+    const [creditRefusal, setCreditRefusal] = useState<{ message: string; credits: number | null; cost: number | null } | null>(null);
+    // The account whose saved draft has been read back. Until then nothing is saved over
+    // it, and the catalog does not pick its default model in place of the saved one.
+    const [draftRestoredFor, setDraftRestoredFor] = useState<string | null>(null);
+    const restoredDraftModelRef = useRef(false);
+    const pendingAdditionalSettingsRef = useRef<VideoCreatorDraft['additionalSettings'] | null>(null);
+    const unsavedDraftRef = useRef<{ userId: string; draft: VideoCreatorDraft } | null>(null);
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
     const [promptQualityWarnings, setPromptQualityWarnings] = useState<PromptEnhancementWarning[]>([]);
     const [multiPromptQualityWarnings, setMultiPromptQualityWarnings] = useState<Record<string, PromptEnhancementWarning[]>>({});
@@ -796,8 +1040,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     // Derived, not kept in `catalogNotice`: a retired model or a failed load shows only
     // while it still applies, so choosing another model or a successful reload clears
     // it. It takes the notice slot ahead of a one-off notice, which can be dismissed.
+    // A remix's form is not saved as a draft, so it is not promised one.
     const catalogProblem = modelCatalog.missingIds.includes(selectedModel)
-        ? 'This model is no longer available. Your draft is saved; choose another model.'
+        ? (remixId
+            ? 'This model is no longer available. Choose another model; your settings stay on this page.'
+            : 'This model is no longer available. Your draft is saved; choose another model.')
         : modelCatalog.error?.message || null;
     const modelNotice = catalogProblem ?? catalogNotice;
     const videoModel = VIDEO_MODELS[selectedModel] ?? VIDEO_MODELS['kling-3.0-video'];
@@ -816,9 +1063,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return searchableModelText.includes(normalizedModelSearchQuery);
         })
         : videoModelOptions;
+    const draftReady = Boolean(remixId) || !userId || draftRestoredFor === userId;
     useEffect(() => {
-        if (!modelCatalog.catalog) return;
-        const preferDefault = !hasResolvedInitialCatalogModel.current && !remixId && !prefillModel;
+        if (!modelCatalog.catalog || !draftReady) return;
+        const preferDefault = !hasResolvedInitialCatalogModel.current && !remixId && !prefillModel && !restoredDraftModelRef.current;
         const nextModelId = resolveCatalogModelId(modelCatalog.catalog, 'video', selectedModel, { preferDefault });
         if (!nextModelId) return;
         hasResolvedInitialCatalogModel.current = true;
@@ -829,7 +1077,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 setCatalogNotice(`Your previous video model is no longer available. Switched to ${nextModel?.displayName ?? nextModelId}.`);
             }
         }
-    }, [modelCatalog.catalog, selectedModel, videoModel, prefillModel, remixId]);
+    }, [modelCatalog.catalog, selectedModel, videoModel, prefillModel, remixId, draftReady]);
     const isSeedance2Family = isSeedance2VideoModelId(selectedModel);
     const isKlingVideoModel = selectedModel === 'kling-3.0-video';
     const isKlingO3Model = selectedModel === 'kling-o3';
@@ -851,8 +1099,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         klingVideoElementsRef.current = nextElements;
         setKlingVideoElements(nextElements);
     };
+    // Staged files are saved under the account that added them, so the next account to
+    // use this browser does not open them. A remix keeps none: it restores its source.
+    const mediaKey = useCallback((key: string) => (
+        !remixId && userId ? scopedPersistedMediaKey(key, userId) : null
+    ), [remixId, userId]);
     const persistVideoElements = useCallback(async (nextElements: VideoElementDraft[]) => {
-        if (remixId) {
+        const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoElements);
+        if (!key) {
             return;
         }
 
@@ -865,18 +1119,16 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 file: element.file as File,
             }));
 
-        await setPersistedImageElementRecords(
-            PERSISTED_MEDIA_KEYS.createVideoElements,
-            persistableElements
-        );
-    }, [remixId]);
+        await setPersistedImageElementRecords(key, persistableElements);
+    }, [mediaKey]);
     const persistReferenceVideos = async (nextReferences: SeedanceMediaReferenceDraft[]) => {
-        if (remixId) {
+        const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoReferenceVideos);
+        if (!key) {
             return;
         }
 
         await setPersistedMediaRecords(
-            PERSISTED_MEDIA_KEYS.createVideoReferenceVideos,
+            key,
             nextReferences
                 .filter((reference) => reference.file && reference.source === 'upload')
                 .map((reference) => ({
@@ -888,29 +1140,32 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         );
     };
     const persistReferenceAudios = async (nextReferences: SeedanceMediaReferenceDraft[]) => {
-        if (remixId) {
+        const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoReferenceAudios);
+        if (!key) {
             return;
         }
 
         await setPersistedMediaRecords(
-            PERSISTED_MEDIA_KEYS.createVideoReferenceAudios,
+            key,
             nextReferences
                 .filter((reference) => reference.file && reference.source === 'upload')
                 .map((reference) => ({
                     id: reference.id,
                     displayName: reference.displayName,
-                    durationSeconds: null,
+                    // A track's length prices some runs, and the server may correct it.
+                    durationSeconds: reference.durationSeconds ?? null,
                     file: reference.file as File,
                 }))
         );
     };
     const persistKlingVideoElements = async (nextElements: KlingVideoElementDraft[]) => {
-        if (remixId) {
+        const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoKlingVideoElements);
+        if (!key) {
             return;
         }
 
         await setPersistedMediaRecords(
-            PERSISTED_MEDIA_KEYS.createVideoKlingVideoElements,
+            key,
             nextElements
                 .filter((element) => element.file && element.source === 'upload')
                 .map((element) => ({
@@ -923,12 +1178,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         );
     };
     const persistKlingSubjects = async (nextSubjects: KlingSubjectDraft[]) => {
-        if (remixId) {
+        const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoKlingSubjects);
+        if (!key) {
             return;
         }
 
         await setPersistedSubjectRecords(
-            PERSISTED_MEDIA_KEYS.createVideoKlingSubjects,
+            key,
             nextSubjects
                 // Only locally-uploaded images can be restored from storage; a
                 // subject with any unrestorable image is dropped whole so it
@@ -959,12 +1215,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         nextReferenceVideos: SeedanceMediaReferenceDraft[] = referenceVideosRef.current,
         nextReferenceAudios: SeedanceMediaReferenceDraft[] = referenceAudiosRef.current
     ) => {
-        if (remixId) {
+        const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoSeedanceAssets);
+        if (!key) {
             return;
         }
 
         await setPersistedValue<SeedanceAssetCollections>(
-            PERSISTED_MEDIA_KEYS.createVideoSeedanceAssets,
+            key,
             {
                 images: nextElements.map((element) => ({ ...element.seedanceAsset })),
                 videos: nextReferenceVideos.map((reference) => ({ ...reference.seedanceAsset })),
@@ -1066,9 +1323,19 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     // a panel of their own, so its limit here is zero.
     const supportsMultimodalReferences = referenceVideoLimit > 0 || referenceAudioLimit > 0;
     const supportsReferenceAudio = referenceAudioLimit > 0;
+    // A multi-shot run is quoted and started at its shots' total, the length the server
+    // derives from the shots; a body naming another length is refused.
     const totalDuration = currentIsMultiShot
-        ? multiPrompts.reduce((acc, curr) => acc + curr.duration, 0)
+        ? multiShotTotalDuration(multiPrompts)
         : (selectedModel === 'veo-3.1' ? videoModel.durations[0] : currentDuration);
+    const multiShotMaxShots = MULTI_SHOT_MAX_SHOTS[selectedModel] ?? null;
+    // The run's duration is the shots' total, so the most it may come to is the most
+    // the duration control offers; the quote refuses anything longer.
+    const multiShotMaxTotalSeconds = singleShotDurationRange?.max
+        ?? (videoModel.durations.length > 0 ? Math.max(...videoModel.durations) : null);
+    const canAddShot = (multiShotMaxShots === null || multiPrompts.length < multiShotMaxShots)
+        && (multiShotMaxTotalSeconds === null || totalDuration < multiShotMaxTotalSeconds);
+    const multiShotOverLength = multiShotMaxTotalSeconds !== null && totalDuration > multiShotMaxTotalSeconds;
     const hasReferenceVideoForRun = (activeReferenceMode === 'elements' && runReferenceVideos.length > 0) || (isKlingVideoModel && klingVideoElements.length > 0);
     const frameReferenceCount = Number(Boolean(startImageUrl || startImageFile)) + (activeSupportsEndFrame ? Number(Boolean(endImageUrl || endImageFile)) : 0);
     const estimatedReferenceCount =
@@ -1131,14 +1398,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         ))
                         : [],
                 },
-                // The videoElements slot is declared inside the elements-conditioned
-                // "references" input mode, but this surface never puts Kling into
-                // elements mode (getVideoElementSupport disables elements for it), so
-                // reporting a count here made the quote reject every run outright with
-                // "Video elements is unavailable with the selected settings." Report the
-                // count only while the slot is actually active. The catalog change that
-                // gives videoElements its own always-active mode restores full
-                // validation; see generation-model-catalog.ts videoInputModes.
+                // Kling 3.0's named video elements have an input mode of their own,
+                // active beside either shape (generation-model-catalog.ts), so their
+                // count is quoted whenever the model has the slot.
                 videoElements: {
                     count: videoElementsSlotActive ? klingVideoElements.length : 0,
                 },
@@ -1187,12 +1449,27 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         hasReferenceVideo: hasReferenceVideoForRun,
     });
     const insufficientCredits = userCredits !== null && estimatedCost !== null && userCredits < estimatedCost;
+    // The balance and price a refusal answers, read when it comes: that can be long after
+    // the render that sent it (a replay on mount).
+    const creditContextRef = useRef({ credits: userCredits, cost: estimatedCost });
+    useEffect(() => {
+        creditContextRef.current = { credits: userCredits, cost: estimatedCost };
+    }, [userCredits, estimatedCost]);
+    const creditRefusalApplies = creditRefusal !== null
+        && creditRefusal.credits === userCredits
+        && creditRefusal.cost === estimatedCost;
+    const showTopUp = insufficientCredits || creditRefusalApplies;
+    // A single-shot prompt may mention only what its run sends: the server refuses any
+    // other handle. A saved image the run leaves out is named as on standby, the rest as
+    // unknown.
+    const sentElements = activeReferenceMode === 'elements' ? runElements : NO_RUN_ELEMENTS;
     const elementHandles = elements.map((element) => element.handle);
     const klingVideoHandles = isKlingVideoModel ? klingVideoElements.map((element) => element.handle) : [];
-    const knownPromptHandles = [...elementHandles, ...klingVideoHandles, ...klingSubjectHandles];
-    const knownElementMentions = extractPromptHandles(prompt).filter((handle) => elementHandles.includes(handle));
-    const knownKlingVideoMentions = extractPromptHandles(prompt).filter((handle) => klingVideoHandles.includes(handle));
-    const staleElementMentions = findUnknownPromptHandles(prompt, knownPromptHandles);
+    const sentPromptHandles = [...sentElements.map((element) => element.handle), ...klingVideoHandles, ...klingSubjectHandles];
+    const promptHandles = extractPromptHandles(prompt);
+    const knownElementMentions = promptHandles.filter((handle) => elementHandles.includes(handle));
+    const knownKlingVideoMentions = promptHandles.filter((handle) => klingVideoHandles.includes(handle));
+    const staleElementMentions = findUnknownPromptHandles(prompt, [...sentPromptHandles, ...elementHandles]);
     // What a shot prompt can mention: the references a multi-shot run sends with its
     // shots, which are Kling 3.0's video elements and Kling O3's named subjects. Image
     // references are not among them, because a multi-shot run does not send them. The
@@ -1226,19 +1503,17 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         : [];
     const hasKnownElementMentions = knownElementMentions.length > 0;
     const hasKnownKlingVideoMentions = knownKlingVideoMentions.length > 0;
-    // The saved references the prompt mentions on a model that takes none. The row under
+    // The saved references the prompt mentions that this run leaves out. The row under
     // the prompt and the refusal on Generate both name them.
-    const standbyElementMentions = canUseVideoElements ? [] : knownElementMentions;
+    const standbyElementMentions = knownElementMentions.filter((handle) => !sentPromptHandles.includes(handle));
     const hasInactiveElementMentions = standbyElementMentions.length > 0;
     const promptMentionCandidates: PromptMentionCandidate[] = [
-        ...(canUseVideoElements
-            ? elements.map((element) => ({
-                id: element.id,
-                displayName: element.displayName,
-                handle: element.handle,
-                kind: 'image' as const,
-            }))
-            : []),
+        ...sentElements.map((element) => ({
+            id: element.id,
+            displayName: element.displayName,
+            handle: element.handle,
+            kind: 'image' as const,
+        })),
         ...shotMentionCandidates,
     ];
     const mentionSuggestions = activeMentionQuery
@@ -1410,7 +1685,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     }, [klingVideoElements, klingSubjects]);
 
     useEffect(() => {
-        if (!modelCatalog.detailsReady) return;
+        // A saved draft is read back first, so its settings are checked against its model
+        // rather than replaced by the defaults of the model the page opened on.
+        if (!modelCatalog.detailsReady || !draftReady) return;
         if (videoModel.modeOptions?.length) {
             if (!videoModel.modeOptions.some((option) => option.value === mode)) {
                 // Switching models reconciles controls to values supported by the provider.
@@ -1449,7 +1726,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         if (!videoModel.supportsMultiShot) {
             setIsMultiShot(false);
         }
-    }, [selectedModel, videoModel, mode, aspectRatio, singleDuration, resolution, modelCatalog.detailsReady, catalogDescriptor]);
+    }, [selectedModel, videoModel, mode, aspectRatio, singleDuration, resolution, modelCatalog.detailsReady, catalogDescriptor, draftReady]);
 
     // Derived, not kept in `error`: it clears the moment the references fit the model
     // again, instead of lingering until the next generation.
@@ -1586,6 +1863,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     commitElements(hydrateVideoElements([...restoredSeeds, ...legacyFrameSeeds]));
                     const restoredReferenceVideos = restoredVideoInputs?.referenceVideos ?? [];
                     const restoredReferenceAudios = restoredVideoInputs?.referenceAudios ?? [];
+                    let unrestorableReferences = 0;
                     const referenceVideoSeeds = restoredReferenceVideos.length > 0
                         ? restoredReferenceVideos
                             .flatMap((item, index) => item.url ? [{
@@ -1601,14 +1879,22 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 durationSeconds: item.durationSeconds ?? null,
                                 seedanceAsset: restoredSeedanceAssets?.videos?.[index] ?? undefined,
                             }] : [])
-                        : (settings?.referenceVideoUrls ?? []).map((url, index) => ({
-                            displayName: `Video reference ${index + 1}`,
-                            file: null,
-                            previewUrl: url,
-                            providerUrl: url,
-                            source: 'remix' as const,
-                            seedanceAsset: restoredSeedanceAssets?.videos?.[index] ?? undefined,
-                        }));
+                        : (settings?.referenceVideoUrls ?? []).flatMap((value, index) => {
+                            // An older run kept a prepared clip's asset id in its list. The
+                            // link it was prepared from is the one that can be measured, and
+                            // a clip with neither cannot run: it is left out, and the notice says so.
+                            const asset = restoredSeedanceAssets?.videos?.[index];
+                            const url = measurableRemixLink(value, asset);
+                            if (!url) unrestorableReferences += 1;
+                            return url ? [{
+                                displayName: `Video reference ${index + 1}`,
+                                file: null,
+                                previewUrl: url,
+                                providerUrl: url,
+                                source: 'remix' as const,
+                                seedanceAsset: asset ?? undefined,
+                            }] : [];
+                        });
                     const referenceAudioSeeds = restoredReferenceAudios.length > 0
                         ? restoredReferenceAudios
                             .flatMap((item, index) => item.url ? [{
@@ -1622,17 +1908,26 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 durationSeconds: item.durationSeconds ?? null,
                                 seedanceAsset: restoredSeedanceAssets?.audios?.[index] ?? undefined,
                             }] : [])
-                        : (settings?.referenceAudioUrls ?? []).map((url, index) => ({
-                            displayName: `Audio reference ${index + 1}`,
-                            file: null,
-                            previewUrl: '',
-                            providerUrl: url,
-                            source: 'remix' as const,
-                            seedanceAsset: restoredSeedanceAssets?.audios?.[index] ?? undefined,
-                        }));
+                        : (settings?.referenceAudioUrls ?? []).flatMap((value, index) => {
+                            const asset = restoredSeedanceAssets?.audios?.[index];
+                            const url = measurableRemixLink(value, asset);
+                            if (!url) unrestorableReferences += 1;
+                            return url ? [{
+                                displayName: `Audio reference ${index + 1}`,
+                                file: null,
+                                previewUrl: '',
+                                providerUrl: url,
+                                source: 'remix' as const,
+                                seedanceAsset: asset ?? undefined,
+                            }] : [];
+                        });
 	                    commitReferenceVideos(hydrateSeedanceMediaReferences('Video', referenceVideoSeeds));
 	                    commitReferenceAudios(hydrateSeedanceMediaReferences('Audio', referenceAudioSeeds));
 	                    commitKlingVideoElements([]);
+	                    if (unrestorableReferences > 0) {
+	                        setRemixRestoreWarning((current) => current
+	                            ?? 'Some source media could not be restored automatically, so you may need to re-add a few references.');
+	                    }
 
 	                    setStartImageFile(null);
                     setStartImageUrl(null);
@@ -1731,11 +2026,18 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     }, [remixId, remixPostId, session?.access_token]);
 
     useEffect(() => {
-        if (remixId) {
+        // What the browser held before media was saved per account belongs to nobody in
+        // particular. It goes once, on the first creator a page opens.
+        void purgeLegacyPersistedMedia().catch(() => undefined);
+    }, []);
+
+    useEffect(() => {
+        if (remixId || !userId) {
             return;
         }
 
         let isMounted = true;
+        const key = (name: string) => scopedPersistedMediaKey(name, userId);
 
         const loadPersistedMedia = async () => {
             try {
@@ -1749,14 +2051,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                    savedKlingSubjects,
 	                    savedSeedanceAssets,
 	                ] = await Promise.all([
-	                    getPersistedFile(PERSISTED_MEDIA_KEYS.createVideoStartImage),
-	                    getPersistedFile(PERSISTED_MEDIA_KEYS.createVideoEndImage),
-	                    getPersistedImageElementRecords(PERSISTED_MEDIA_KEYS.createVideoElements),
-	                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoReferenceVideos),
-	                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoReferenceAudios),
-	                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoKlingVideoElements),
-	                    getPersistedSubjectRecords(PERSISTED_MEDIA_KEYS.createVideoKlingSubjects),
-	                    getPersistedValue<SeedanceAssetCollections>(PERSISTED_MEDIA_KEYS.createVideoSeedanceAssets),
+	                    getPersistedFile(key(PERSISTED_MEDIA_KEYS.createVideoStartImage)),
+	                    getPersistedFile(key(PERSISTED_MEDIA_KEYS.createVideoEndImage)),
+	                    getPersistedImageElementRecords(key(PERSISTED_MEDIA_KEYS.createVideoElements)),
+	                    getPersistedMediaRecords(key(PERSISTED_MEDIA_KEYS.createVideoReferenceVideos)),
+	                    getPersistedMediaRecords(key(PERSISTED_MEDIA_KEYS.createVideoReferenceAudios)),
+	                    getPersistedMediaRecords(key(PERSISTED_MEDIA_KEYS.createVideoKlingVideoElements)),
+	                    getPersistedSubjectRecords(key(PERSISTED_MEDIA_KEYS.createVideoKlingSubjects)),
+	                    getPersistedValue<SeedanceAssetCollections>(key(PERSISTED_MEDIA_KEYS.createVideoSeedanceAssets)),
 	                ]);
 
                 if (!isMounted) return;
@@ -1804,6 +2106,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         savedReferenceAudios.map((reference, index) => ({
                             id: reference.id,
                             displayName: reference.displayName,
+                            durationSeconds: reference.durationSeconds ?? null,
                             file: reference.file,
                             previewUrl: '',
                             source: 'upload',
@@ -1852,10 +2155,130 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         return () => {
             isMounted = false;
         };
-    }, [remixId]);
+    }, [remixId, userId]);
+
+    // The saved text draft, read back before the catalog checks the settings against a
+    // model. A link's own prompt, model, ratio or length wins over it; what the link
+    // leaves alone comes back. A remix restores its source instead.
+    useEffect(() => {
+        if (remixId || !userId) return;
+        let cancelled = false;
+        // The catalog waits for the draft, so a store that never answers must not hold
+        // it: past this the page goes on without the draft, and a late one is ignored.
+        let settled = false;
+        const giveUp = window.setTimeout(() => {
+            settled = true;
+            if (!cancelled) setDraftRestoredFor(userId);
+        }, 3000);
+        void loadCreatorDraft<unknown>('video', userId)
+            .then((stored) => {
+                if (cancelled || settled || !stored) return;
+                const draft = readVideoCreatorDraft(stored);
+                if (draft.prompt !== undefined && !prefillPrompt) setPrompt(draft.prompt);
+                if (draft.modelId && !prefillModel) {
+                    restoredDraftModelRef.current = true;
+                    setSelectedModel(draft.modelId as VideoModelId);
+                }
+                if (draft.mode !== undefined) setMode(draft.mode);
+                if (draft.aspectRatio && !prefillAspectRatio) setAspectRatio(draft.aspectRatio);
+                if (draft.sound !== undefined) setSound(draft.sound);
+                if (draft.resolution !== undefined) setResolution(draft.resolution);
+                if (draft.fixedLens !== undefined) setFixedLens(draft.fixedLens);
+                if (draft.isMultiShot !== undefined) setIsMultiShot(draft.isMultiShot);
+                if (draft.shots) setMultiPrompts(draft.shots);
+                if (draft.duration !== undefined && !prefillDuration) setSingleDuration(draft.duration);
+                if (draft.additionalSettings) pendingAdditionalSettingsRef.current = draft.additionalSettings;
+            })
+            .catch((draftError) => {
+                console.error('Error loading the saved video draft:', draftError);
+            })
+            .finally(() => {
+                window.clearTimeout(giveUp);
+                settled = true;
+                if (!cancelled) setDraftRestoredFor(userId);
+            });
+        return () => {
+            cancelled = true;
+            window.clearTimeout(giveUp);
+        };
+    }, [remixId, userId, prefillPrompt, prefillModel, prefillAspectRatio, prefillDuration]);
+
+    // A model's extra settings can be set only once its descriptor is here.
+    useEffect(() => {
+        const pending = pendingAdditionalSettingsRef.current;
+        if (!pending) return;
+        if (selectedModel !== pending.modelId) {
+            pendingAdditionalSettingsRef.current = null;
+            return;
+        }
+        if (catalogDescriptor?.id !== pending.modelId) return;
+        pendingAdditionalSettingsRef.current = null;
+        for (const [key, value] of Object.entries(pending.values)) {
+            additionalSettings.onChange(key, value);
+        }
+    }, [additionalSettings, catalogDescriptor, selectedModel]);
+
+    const textDraft = useMemo<VideoCreatorDraft>(() => ({
+        prompt,
+        modelId: selectedModel,
+        mode,
+        aspectRatio,
+        sound,
+        resolution,
+        fixedLens,
+        isMultiShot,
+        shots: multiPrompts,
+        duration: singleDuration,
+        additionalSettings: { modelId: selectedModel, values: additionalSettings.settings },
+    }), [prompt, selectedModel, mode, aspectRatio, sound, resolution, fixedLens, isMultiShot, multiPrompts, singleDuration, additionalSettings.settings]);
+
+    const flushTextDraft = useCallback(async () => {
+        const unsaved = unsavedDraftRef.current;
+        unsavedDraftRef.current = null;
+        if (!unsaved) return;
+        try {
+            await saveCreatorDraft('video', unsaved.userId, {
+                ...unsaved.draft,
+                // Settings still waiting for their model's descriptor are the ones to keep.
+                additionalSettings: pendingAdditionalSettingsRef.current ?? unsaved.draft.additionalSettings,
+            });
+        } catch (draftError) {
+            // The form is unchanged; only its copy for the next visit is behind.
+            console.error('Error saving the video draft:', draftError);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (remixId || !userId || draftRestoredFor !== userId) {
+            // Signed out, or not yet read back: nothing is written over an account's draft.
+            unsavedDraftRef.current = null;
+            return;
+        }
+        unsavedDraftRef.current = { userId, draft: textDraft };
+        const timer = window.setTimeout(() => {
+            void flushTextDraft();
+        }, 500);
+        return () => window.clearTimeout(timer);
+    }, [draftRestoredFor, flushTextDraft, remixId, textDraft, userId]);
+
+    // An edit made in the last half second is not lost when the page goes.
+    useEffect(() => () => {
+        void flushTextDraft();
+    }, [flushTextDraft]);
+
+    /** Saves the form now, for a reload or a sign-in round trip about to leave the page. */
+    const saveTextDraftNow = async () => {
+        if (!remixId && userId && draftRestoredFor === userId) {
+            unsavedDraftRef.current = { userId, draft: textDraft };
+        }
+        await flushTextDraft();
+    };
 
     const addShot = () => {
-        setMultiPrompts([...multiPrompts, { id: Math.random().toString(), prompt: '', duration: 5 }]);
+        if (!canAddShot) return;
+        // A new shot takes what is left of the run's length, up to the usual 5 s.
+        const remaining = multiShotMaxTotalSeconds === null ? 5 : multiShotMaxTotalSeconds - totalDuration;
+        setMultiPrompts([...multiPrompts, { id: Math.random().toString(), prompt: '', duration: Math.max(1, Math.min(5, remaining)) }]);
         setMultiPromptQualityWarnings({});
     };
 
@@ -1896,13 +2319,18 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     };
 
     const persistFrame = async (file: File, type: 'start' | 'end') => {
+        const { refusal } = screenPickedFiles([file], 'image');
+        setPickNotice(refusal);
+        if (refusal) return;
+
         if (type === 'start') {
             revokeObjectUrl(startImageUrl);
             setStartImageFile(file);
             setStartImageUrl(URL.createObjectURL(file));
             setStartFrameDescriptor(null);
-            if (!remixId) {
-                await setPersistedFile(PERSISTED_MEDIA_KEYS.createVideoStartImage, file);
+            const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoStartImage);
+            if (key) {
+                await setPersistedFile(key, file);
             }
             return;
         }
@@ -1911,18 +2339,21 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         setEndImageFile(file);
         setEndImageUrl(URL.createObjectURL(file));
         setEndFrameDescriptor(null);
-        if (!remixId) {
-            await setPersistedFile(PERSISTED_MEDIA_KEYS.createVideoEndImage, file);
+        const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoEndImage);
+        if (key) {
+            await setPersistedFile(key, file);
         }
     };
 
     const processElementFiles = async (files: FileList | File[]) => {
-        const validFiles = Array.from(files).filter((file) => file.type.startsWith('image/'));
-        if (validFiles.length === 0) return;
-
+        const { accepted: validFiles, refusal } = screenPickedFiles(Array.from(files), 'image');
         const currentElements = elementsRef.current;
-        const availableSlots = videoElementSupport.maxElements - currentElements.length;
+        const availableSlots = Math.max(0, videoElementSupport.maxElements - currentElements.length);
         const filesToAdd = validFiles.slice(0, availableSlots);
+        setPickNotice([
+            refusal,
+            droppedPicksNotice(filesToAdd.length, validFiles.length, videoElementSupport.maxElements, 'image reference'),
+        ].filter(Boolean).join(' ') || null);
         if (filesToAdd.length === 0) return;
 
         const newElements = hydrateVideoElements(filesToAdd.map((file, index) => ({
@@ -1947,7 +2378,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         }
 
         const file = event.dataTransfer.files?.[0];
-        if (file && file.type.startsWith('image/')) {
+        if (file) {
             await persistFrame(file, type);
         }
     };
@@ -1970,7 +2401,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
     const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>, type: 'start' | 'end') => {
         const file = event.target.files?.[0];
-        if (file && file.type.startsWith('image/')) {
+        if (file) {
             await persistFrame(file, type);
             event.target.value = '';
         }
@@ -1984,11 +2415,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     };
 
     const processReferenceVideoFiles = async (files: FileList | File[]) => {
-        const validFiles = Array.from(files).filter((file) => file.type.startsWith('video/'));
-        if (validFiles.length === 0) return;
-
+        const { accepted: validFiles, refusal } = screenPickedFiles(Array.from(files), 'video');
         const availableSlots = Math.max(0, referenceVideoLimit - referenceVideosRef.current.length);
         const filesToAdd = validFiles.slice(0, availableSlots);
+        setPickNotice([
+            refusal,
+            droppedPicksNotice(filesToAdd.length, validFiles.length, referenceVideoLimit, 'reference clip'),
+        ].filter(Boolean).join(' ') || null);
         if (filesToAdd.length === 0) return;
 
         const seeds = await Promise.all(filesToAdd.map(async (file, index) => ({
@@ -2007,29 +2440,20 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
     const processKlingVideoElementFiles = async (files: FileList | File[]) => {
         const selectedFiles = Array.from(files);
-        const validFiles = selectedFiles.filter((file) => (
-            isSupportedKlingVideoFile(file) && file.size <= KLING_VIDEO_ELEMENT_MAX_BYTES
-        ));
-
-        if (validFiles.length === 0) {
-            setError('Kling video elements support MP4 or MOV files up to 50MB.');
-            return;
-        }
-
+        // Kling's own limits are narrower than the upload step's: MP4 or MOV, up to 50 MB.
+        const isKlingClip = (file: File) => isSupportedKlingVideoFile(file) && file.size <= KLING_VIDEO_ELEMENT_MAX_BYTES;
+        const validFiles = selectedFiles.filter(isKlingClip);
+        const refusedNames = selectedFiles.filter((file) => !isKlingClip(file)).map((file) => file.name || 'This file');
         const availableSlots = Math.max(0, KLING_VIDEO_ELEMENT_LIMIT - klingVideoElementsRef.current.length);
         const filesToAdd = validFiles.slice(0, availableSlots);
-        if (filesToAdd.length === 0) {
-            setError(`Kling 3.0 Video supports up to ${KLING_VIDEO_ELEMENT_LIMIT} video elements.`);
-            return;
-        }
-
-        if (validFiles.length < selectedFiles.length) {
-            setError('Some clips were skipped. Kling video elements accept MP4 or MOV files up to 50MB.');
-        } else if (filesToAdd.length < validFiles.length) {
-            setError(`Only ${KLING_VIDEO_ELEMENT_LIMIT} Kling video elements can be attached for now.`);
-        } else {
-            setError(null);
-        }
+        // Its own line: an error set here used to clear a run's error or background state.
+        setPickNotice([
+            refusedNames.length > 0
+                ? `${refusedNames.join(', ')} can’t be used: Kling video elements are MP4 or MOV files up to 50 MB.`
+                : null,
+            droppedPicksNotice(filesToAdd.length, validFiles.length, KLING_VIDEO_ELEMENT_LIMIT, 'video element'),
+        ].filter(Boolean).join(' ') || null);
+        if (filesToAdd.length === 0) return;
 
         const seeds = await Promise.all(filesToAdd.map(async (file, index) => ({
             displayName: `Video element ${klingVideoElementsRef.current.length + index + 1}`,
@@ -2045,11 +2469,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     };
 
     const processReferenceAudioFiles = async (files: FileList | File[]) => {
-        const validFiles = Array.from(files).filter((file) => file.type.startsWith('audio/'));
-        if (validFiles.length === 0) return;
-
+        const { accepted: validFiles, refusal } = screenPickedFiles(Array.from(files), 'audio');
         const availableSlots = Math.max(0, referenceAudioLimit - referenceAudiosRef.current.length);
         const filesToAdd = validFiles.slice(0, availableSlots);
+        setPickNotice([
+            refusal,
+            droppedPicksNotice(filesToAdd.length, validFiles.length, referenceAudioLimit, 'reference track'),
+        ].filter(Boolean).join(' ') || null);
         if (filesToAdd.length === 0) return;
 
         const seeds = await Promise.all(filesToAdd.map(async (file, index) => ({
@@ -2057,7 +2483,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             file,
             previewUrl: '',
             source: 'upload' as const,
-            durationSeconds: await readAudioDurationSeconds(file),
+            // Kie caps the combined length of reference audio as it caps clips, and some
+            // models price by it, so the quote is told each track's length. A media
+            // element reads an audio file's length as it reads a clip's.
+            durationSeconds: await readVideoDurationSeconds(file),
         })));
 
         const nextReferences = [...referenceAudiosRef.current, ...hydrateSeedanceMediaReferences('Audio', seeds)];
@@ -2093,16 +2522,18 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             setStartImageFile(null);
             setStartImageUrl(null);
             setStartFrameDescriptor(null);
-            if (!remixId) {
-                await removePersistedMedia(PERSISTED_MEDIA_KEYS.createVideoStartImage);
+            const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoStartImage);
+            if (key) {
+                await removePersistedMedia(key);
             }
         } else {
             revokeObjectUrl(endImageUrl);
             setEndImageFile(null);
             setEndImageUrl(null);
             setEndFrameDescriptor(null);
-            if (!remixId) {
-                await removePersistedMedia(PERSISTED_MEDIA_KEYS.createVideoEndImage);
+            const key = mediaKey(PERSISTED_MEDIA_KEYS.createVideoEndImage);
+            if (key) {
+                await removePersistedMedia(key);
             }
         }
     };
@@ -2436,15 +2867,16 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return element;
         }
 
-        const upload = await uploadMediaToTemporaryStorage(element.file);
+        const staged = await stageReferenceFile(element.file, element.staged);
         return {
             ...element,
-            providerUrl: upload.signedUrl,
-            storagePath: upload.storagePath,
+            providerUrl: staged.signedUrl,
+            storagePath: staged.storagePath,
+            staged,
             seedanceAsset: {
                 ...element.seedanceAsset,
                 assetType: 'Image',
-                sourceUrl: upload.signedUrl,
+                sourceUrl: staged.signedUrl,
             },
         };
     };
@@ -2457,15 +2889,16 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return reference;
         }
 
-        const upload = await uploadMediaToTemporaryStorage(reference.file);
+        const staged = await stageReferenceFile(reference.file, reference.staged);
         return {
             ...reference,
-            providerUrl: upload.signedUrl,
-            storagePath: upload.storagePath,
+            providerUrl: staged.signedUrl,
+            storagePath: staged.storagePath,
+            staged,
             seedanceAsset: {
                 ...reference.seedanceAsset,
                 assetType,
-                sourceUrl: upload.signedUrl,
+                sourceUrl: staged.signedUrl,
             },
         };
     };
@@ -2477,13 +2910,29 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return element;
         }
 
-        const upload = await uploadMediaToTemporaryStorage(element.file);
+        const staged = await stageReferenceFile(element.file, element.staged);
         return {
             ...element,
-            providerUrl: upload.signedUrl,
-            storagePath: upload.storagePath,
+            providerUrl: staged.signedUrl,
+            storagePath: staged.storagePath,
+            staged,
         };
     };
+
+    /**
+     * Takes the uploads a run made back into the cards they were made for, so the next
+     * press sends them again instead of uploading. A card whose file changed meanwhile
+     * keeps its own.
+     */
+    const withStagedUploads = <T extends { id: string; file: File | null; providerUrl: string | null; storagePath?: string | null; staged: StagedUpload | null }>(
+        current: T[],
+        uploaded: readonly T[],
+    ): T[] => current.map((item) => {
+        const match = uploaded.find((candidate) => candidate.id === item.id && candidate.file === item.file);
+        return match?.staged && item.file
+            ? { ...item, providerUrl: match.providerUrl, storagePath: match.storagePath, staged: match.staged }
+            : item;
+    });
 
     const updateElementAsset = async (
         elementId: string,
@@ -2662,7 +3111,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
     const pollPrediction = async (
         predictionId: string,
-        accessToken: string,
         startedAtMs: number,
         estimatedTotalMs: number | null
     ): Promise<{ output: string; timing: GenerationTiming | null }> => {
@@ -2673,11 +3121,23 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
         try {
             while (Date.now() - pollingStartedAt < 10 * 60 * 1000) {
-                const data = await fetchGenerationStatus({
-                    url: `/api/generate-video?id=${predictionId}`,
-                    accessToken,
-                    signal: pollController.signal,
-                });
+                let data: GenerationStatusResponse;
+                try {
+                    data = await fetchGenerationStatusWithRetry({
+                        url: `/api/generate-video?id=${predictionId}`,
+                        // Read for every check: a run can outlive the token it started with.
+                        getAccessToken: async () => (await supabase.auth.getSession()).data.session?.access_token ?? null,
+                        signal: pollController.signal,
+                    });
+                } catch (statusError) {
+                    if (pollController.signal.aborted || isGenerationStatusAbortError(statusError)) {
+                        throw statusError;
+                    }
+                    // Status reads that keep failing say nothing of the run, which goes on
+                    // with its credits. Ending the view with an error invited a second,
+                    // paid press; the background view says where the run will turn up.
+                    throw new Error(BACKGROUND_PROCESSING_ERROR);
+                }
 
                 if (data.timing) {
                     setGenerationTiming(data.timing.estimatedTotalMs ? data.timing : {
@@ -2701,7 +3161,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 }
 
                 if (data.status === 'failed') {
-                    throw new Error(data.error || 'Video generation failed');
+                    throw new VideoRunFailedError(data.error || 'Video generation failed');
                 }
 
                 await waitForNextGenerationStatusPoll(data.retryAfterMs, {
@@ -2716,6 +3176,165 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
         throw new Error(BACKGROUND_PROCESSING_ERROR);
     };
+
+    const handleRunFailure = (runError: unknown, startedAtMs: number, cost: number | null) => {
+        // The page went away under the poll; the run is not this page's to report.
+        if (isGenerationStatusAbortError(runError)) return;
+        if (runError instanceof Error && runError.message === BACKGROUND_PROCESSING_ERROR) {
+            handoffToBackgroundProcessing(startedAtMs);
+            return;
+        }
+        if (runError instanceof VideoRunFailedError) {
+            // A failed run is refunded, and the balance on screen is still the debited one.
+            window.dispatchEvent(new Event('credits_updated'));
+            setError(`${runError.message}${creditsReturnedSentence(cost)}`);
+            setGenerationTiming(null);
+            return;
+        }
+        setError(runError instanceof Error ? runError.message : 'Something went wrong');
+        setGenerationTiming(null);
+    };
+
+    /**
+     * The lengths the server measured, written onto the references they belong to, so
+     * the quote is asked again with them and shows the price the run will be charged.
+     * Each one is found by the storage path, or else the link, the request sent for it.
+     */
+    const applyMeasuredReferenceLengths = async (
+        sentInputs: readonly CatalogGenerationInputAsset[],
+        measured: ReadonlyArray<{ index: number; durationSeconds: number }>,
+    ) => {
+        const byPath = new Map<string, number>();
+        const byUrl = new Map<string, number>();
+        for (const { index, durationSeconds } of measured) {
+            const input = sentInputs[index];
+            if (input?.storagePath) byPath.set(input.storagePath, durationSeconds);
+            if (input?.url) byUrl.set(input.url, durationSeconds);
+        }
+        const remeasured = <T extends { storagePath: string | null; providerUrl: string | null; durationSeconds?: number | null }>(items: T[]) => {
+            let changed = false;
+            const next = items.map((item) => {
+                const length = (item.storagePath ? byPath.get(item.storagePath) : undefined)
+                    ?? (item.providerUrl ? byUrl.get(item.providerUrl) : undefined);
+                if (length === undefined || length === item.durationSeconds) return item;
+                changed = true;
+                return { ...item, durationSeconds: length };
+            });
+            return changed ? next : null;
+        };
+
+        const nextVideos = remeasured(referenceVideosRef.current);
+        if (nextVideos) {
+            commitReferenceVideos(nextVideos);
+            await persistReferenceVideos(nextVideos);
+        }
+        const nextAudios = remeasured(referenceAudiosRef.current);
+        if (nextAudios) {
+            commitReferenceAudios(nextAudios);
+            await persistReferenceAudios(nextAudios);
+        }
+        const nextKlingElements = remeasured(klingVideoElementsRef.current);
+        if (nextKlingElements) {
+            commitKlingVideoElements(nextKlingElements);
+            await persistKlingVideoElements(nextKlingElements);
+        }
+    };
+
+    /**
+     * A start that did not answer with a run. An answer that may still mean it started
+     * keeps the attempt, and the run panel offers to check again under its key. A
+     * refusal clears it, and says what the creator can do about it.
+     */
+    const handleStartFailure = async (startError: unknown, attempt: PendingWebStart) => {
+        setGenerationTiming(null);
+        if (isAmbiguousWebStartFailure(startError)) {
+            setUnconfirmedStart(attempt);
+            setError(null);
+            return;
+        }
+
+        clearPendingWebStart('video');
+        setUnconfirmedStart(null);
+        const message = startError instanceof Error && startError.message ? startError.message : 'Could not start generation.';
+        const code = startError instanceof WebCatalogRequestError ? startError.code : undefined;
+        if (code === 'insufficient_credits') {
+            // The balance on screen was out of date. It is read again, and the run panel
+            // offers a top-up instead of a Generate the server would refuse once more.
+            window.dispatchEvent(new Event('credits_updated'));
+            setCreditRefusal({ message, ...creditContextRef.current });
+            setError(null);
+            return;
+        }
+
+        setError(message);
+        if (code === 'CATALOG_CHANGED' || code === 'MODEL_UNAVAILABLE') {
+            setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
+            refetchModelCatalog();
+        } else if (code === 'prompt_blocked' || code === 'INVALID_GENERATION_REQUEST') {
+            (promptTextareaRef.current ?? Object.values(multiShotTextareaRefs.current).find(Boolean))?.focus();
+        } else if (code === 'REFERENCE_DURATION_CHANGED' && startError instanceof WebCatalogRequestError) {
+            const sentInputs = Array.isArray(attempt.body.inputs) ? attempt.body.inputs as CatalogGenerationInputAsset[] : [];
+            await applyMeasuredReferenceLengths(sentInputs, readMeasuredInputDurations(startError.details));
+        } else if (code === 'cost_changed') {
+            setQuoteAttempt((current) => current + 1);
+        }
+    };
+
+    /** Sends a saved start under its own key, and follows the run it answers with. */
+    const sendStartAndFollow = async (attempt: PendingWebStart, startedAtMs: number, estimatedTotalMs: number | null) => {
+        let started: WebGenerationStartResponse;
+        try {
+            const { data: { session: activeSession } } = await supabase.auth.getSession();
+            started = await requestWebGenerationStart(attempt.body as CatalogGenerationRequestPayload, {
+                accessToken: activeSession?.access_token ?? null,
+                idempotencyKey: attempt.idempotencyKey,
+            });
+        } catch (startError) {
+            await handleStartFailure(startError, attempt);
+            return;
+        }
+
+        // The answer names the run: the attempt has done its work.
+        clearPendingWebStart('video');
+        setUnconfirmedStart(null);
+        try {
+            setLatestGenerationId(started.generationId ?? null);
+            setLatestIsPublic(false);
+            announceGenerationStarted();
+            updateCredits(started.remainingCredits);
+
+            const result = await pollPrediction(started.predictionId, startedAtMs, estimatedTotalMs);
+            setOutputVideo(result.output);
+            if (result.timing) {
+                setGenerationTiming(result.timing);
+            }
+        } catch (runError) {
+            handleRunFailure(runError, startedAtMs, started.cost);
+        }
+    };
+
+    /** "Check again": the unanswered start, replayed with the exact body under the same key. */
+    const replayPendingStart = async (attempt: PendingWebStart) => {
+        if (activeGenerationRequestKeyRef.current) return;
+        activeGenerationRequestKeyRef.current = attempt.idempotencyKey;
+        const startedAtMs = getCurrentTimestampMs();
+        setIsGenerating(true);
+        setError(null);
+        setCreditRefusal(null);
+        setGenerationTiming(createLocalGenerationTiming({
+            kind: 'video',
+            phaseLabel: 'Checking your generation',
+            startedAtMs,
+            estimatedTotalMs: null,
+        }));
+        try {
+            await sendStartAndFollow(attempt, startedAtMs, null);
+        } finally {
+            activeGenerationRequestKeyRef.current = null;
+            setIsGenerating(false);
+        }
+    };
+
 
     const handleSelectModel = (modelId: VideoModelId) => {
         const nextModel = VIDEO_MODELS[modelId];
@@ -2748,9 +3367,17 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) return;
 
+            // A start this tab sent and never heard back from goes first. Replayed under
+            // its own key, it answers with the run it started, or starts it once.
+            const unanswered = loadPendingWebStart('video', session.user.id);
+            if (unanswered) {
+                await replayPendingStart(unanswered);
+                return;
+            }
+
             const { data, error: pendingError } = await supabase
                 .from('generations')
-                .select('id, prediction_id, status, created_at')
+                .select('id, prediction_id, status, created_at, cost')
                 .eq('user_id', session.user.id)
                 .eq('category', 'video')
                 .is('creation_mode', null)
@@ -2777,19 +3404,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             }));
 
             try {
-                const result = await pollPrediction(data.prediction_id, session.access_token, startedAtMs, null);
+                const result = await pollPrediction(data.prediction_id, startedAtMs, null);
                 setOutputVideo(result.output);
                 if (result.timing) {
                     setGenerationTiming(result.timing);
                 }
             } catch (generationError) {
-                const errorMessage = generationError instanceof Error ? generationError.message : 'Something went wrong';
-                if (errorMessage === BACKGROUND_PROCESSING_ERROR) {
-                    handoffToBackgroundProcessing(startedAtMs);
-                } else {
-                    setError(errorMessage);
-                    setGenerationTiming(null);
-                }
+                handleRunFailure(generationError, startedAtMs, typeof data.cost === 'number' ? data.cost : null);
             } finally {
                 setIsGenerating(false);
             }
@@ -2800,8 +3421,19 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const handleGenerate = async () => {
+    const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
+    // Watched while idle only: a reload mid-upload or mid-start lost the run's page. A page
+    // left hidden reloads by itself; one in use reloads at the next press instead of sending.
+    const { newBuildAvailable } = useDeploymentRefresh(!isGenerating && !isBackgroundProcessing);
+
+    const handleGenerate = async ({ replacingUnconfirmed = false }: { replacingUnconfirmed?: boolean } = {}) => {
         if (activeGenerationRequestKeyRef.current) return;
+        // An unanswered start is checked again under its own key before anything new is sent.
+        if (unconfirmedStart && !replacingUnconfirmed) {
+            await replayPendingStart(unconfirmedStart);
+            return;
+        }
+        setPickNotice(null);
         if (isMultiShot) {
             if (multiPrompts.some((shot) => !shot.prompt.trim())) {
                 setError('All shots must have a prompt');
@@ -2940,19 +3572,31 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             }
         }
 
-        if (insufficientCredits) {
-            setError(`Insufficient credits. This costs ${estimatedCost} credits.`);
-            return;
-        }
-        if (quotePending) {
-            setError(quoteUi.message ?? 'Wait for the current generation cost before continuing.');
+        // Held from here, so a second click while the session is read sends nothing.
+        const idempotencyKey = createGenerationIdempotencyKey('video');
+        activeGenerationRequestKeyRef.current = idempotencyKey;
+
+        // A newer build was deployed since this page loaded. The run is not sent from the
+        // old one: the draft is saved and the page reloads onto the new build.
+        if (newBuildAvailable) {
+            await saveTextDraftNow();
+            window.location.reload();
+            activeGenerationRequestKeyRef.current = null;
             return;
         }
 
-        const idempotencyKey = createGenerationIdempotencyKey('video');
-        activeGenerationRequestKeyRef.current = idempotencyKey;
+        const { data: { session: activeSession } } = await supabase.auth.getSession();
+        if (!activeSession) {
+            // Back here after signing in, on this page's own link, with the draft saved.
+            activeGenerationRequestKeyRef.current = null;
+            await saveTextDraftNow();
+            router.push(`/login?returnUrl=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
+            return;
+        }
+
         setIsGenerating(true);
         setError(null);
+        setCreditRefusal(null);
         setOutputVideo(null);
         setLatestGenerationId(null);
         setLatestIsPublic(false);
@@ -2966,15 +3610,23 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             estimatedTotalMs,
         }));
 
+        // A prepared Seedance asset goes as its id beside the file's own link: the server
+        // measures the link and gives the provider the id. One still processing, or one
+        // that failed, would fail at the provider after the credits were held.
+        const preparedAssetId = (asset: SeedanceAssetMetadata) => {
+            const assetId = asset.assetId?.trim();
+            return isSeedance2Family && asset.status === 'active' && assetId ? assetId : null;
+        };
+
+        let attempt: PendingWebStart | null = null;
         try {
             let startUrl: string | null = activeReferenceMode === 'frames' || combinesFrameWithReferences ? startImageUrl : null;
             let endUrl: string | null = activeReferenceMode === 'frames' && activeSupportsEndFrame ? endImageUrl : null;
             let nextStartFrameDescriptor = startFrameDescriptor;
             let nextEndFrameDescriptor = endFrameDescriptor;
-            const requestElements: ImageElementDescriptor[] = [];
-            let elementImageUrls: string[] = [];
-            const requestReferenceVideoUrls: string[] = [];
-            const requestReferenceAudioUrls: string[] = [];
+            const requestElements: Array<{ element: VideoElementDraft; url: string; assetId: string | null }> = [];
+            const requestReferenceVideos: Array<{ reference: SeedanceMediaReferenceDraft; url: string; assetId: string | null }> = [];
+            const requestReferenceAudios: Array<{ reference: SeedanceMediaReferenceDraft; url: string; assetId: string | null }> = [];
             const requestKlingVideoElements: Array<{
                 id: string;
                 url: string;
@@ -2983,11 +3635,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 storagePath: string | null;
                 sourceGenerationId: string | null;
             }> = [];
-            const nextSeedanceAssets: SeedanceAssetCollections = {
-                images: [],
-                videos: [],
-                audios: [],
-            };
 
             if (!currentIsMultiShot && activeReferenceMode === 'elements' && runElements.length > 0) {
                 setGenerationTiming(createLocalGenerationTiming({
@@ -2997,35 +3644,15 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     estimatedTotalMs,
                 }));
 
-                const uploadedElements = await Promise.all(runElements.map(async (element) => {
-                    const preparedElement = await ensureUploadedElement(element);
+                const preparedElements = await Promise.all(runElements.map((element) => ensureUploadedElement(element)));
+                commitElements(withStagedUploads(elementsRef.current, preparedElements));
+                for (const preparedElement of preparedElements) {
                     const imageUrl = preparedElement.providerUrl || preparedElement.previewUrl;
                     if (!imageUrl) {
-                        throw new Error(`Missing media for ${element.displayName}`);
+                        throw new Error(`Missing media for ${preparedElement.displayName}`);
                     }
-
-                    const nextAsset = {
-                        ...preparedElement.seedanceAsset,
-                        assetType: 'Image' as const,
-                        sourceUrl: preparedElement.providerUrl || preparedElement.seedanceAsset.sourceUrl,
-                    };
-
-                    return {
-                        descriptor: {
-                            id: preparedElement.id,
-                            displayName: preparedElement.displayName,
-                            handle: preparedElement.handle,
-                            storagePath: preparedElement.storagePath ?? null,
-                            sourceGenerationId: preparedElement.sourceGenerationId ?? null,
-                        } satisfies ImageElementDescriptor,
-                        imageUrl: getPreferredSeedanceReferenceValue(imageUrl, nextAsset) || imageUrl,
-                        asset: nextAsset,
-                    };
-                }));
-
-                requestElements.push(...uploadedElements.map((item) => item.descriptor));
-                elementImageUrls = uploadedElements.map((item) => item.imageUrl);
-                nextSeedanceAssets.images = uploadedElements.map((item) => item.asset);
+                    requestElements.push({ element: preparedElement, url: imageUrl, assetId: preparedAssetId(preparedElement.seedanceAsset) });
+                }
             }
 
             if (supportsMultimodalReferences && activeReferenceMode === 'elements' && runReferenceVideos.length > 0) {
@@ -3035,27 +3662,15 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     startedAtMs,
                     estimatedTotalMs,
                 }));
-                const uploadedReferences = await Promise.all(runReferenceVideos.map(async (reference) => {
-                    const preparedReference = await ensureUploadedReference(reference, 'Video');
+                const preparedReferences = await Promise.all(runReferenceVideos.map((reference) => ensureUploadedReference(reference, 'Video')));
+                commitReferenceVideos(withStagedUploads(referenceVideosRef.current, preparedReferences));
+                for (const preparedReference of preparedReferences) {
                     const sourceUrl = preparedReference.providerUrl || preparedReference.previewUrl;
                     if (!sourceUrl) {
-                        throw new Error(`Missing media for ${reference.displayName}`);
+                        throw new Error(`Missing media for ${preparedReference.displayName}`);
                     }
-
-                    const nextAsset = {
-                        ...preparedReference.seedanceAsset,
-                        assetType: 'Video' as const,
-                        sourceUrl: preparedReference.providerUrl || preparedReference.seedanceAsset.sourceUrl,
-                    };
-
-                    return {
-                        url: getPreferredSeedanceReferenceValue(sourceUrl, nextAsset) || sourceUrl,
-                        asset: nextAsset,
-                    };
-                }));
-
-                requestReferenceVideoUrls.push(...uploadedReferences.map((item) => item.url));
-                nextSeedanceAssets.videos = uploadedReferences.map((item) => item.asset);
+                    requestReferenceVideos.push({ reference: preparedReference, url: sourceUrl, assetId: preparedAssetId(preparedReference.seedanceAsset) });
+                }
             }
 
             if (supportsReferenceAudio && activeReferenceMode === 'elements' && runReferenceAudios.length > 0) {
@@ -3065,27 +3680,15 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     startedAtMs,
                     estimatedTotalMs,
                 }));
-                const uploadedReferences = await Promise.all(runReferenceAudios.map(async (reference) => {
-                    const preparedReference = await ensureUploadedReference(reference, 'Audio');
+                const preparedReferences = await Promise.all(runReferenceAudios.map((reference) => ensureUploadedReference(reference, 'Audio')));
+                commitReferenceAudios(withStagedUploads(referenceAudiosRef.current, preparedReferences));
+                for (const preparedReference of preparedReferences) {
                     const sourceUrl = preparedReference.providerUrl || preparedReference.previewUrl;
                     if (!sourceUrl) {
-                        throw new Error(`Missing media for ${reference.displayName}`);
+                        throw new Error(`Missing media for ${preparedReference.displayName}`);
                     }
-
-                    const nextAsset = {
-                        ...preparedReference.seedanceAsset,
-                        assetType: 'Audio' as const,
-                        sourceUrl: preparedReference.providerUrl || preparedReference.seedanceAsset.sourceUrl,
-                    };
-
-                    return {
-                        url: getPreferredSeedanceReferenceValue(sourceUrl, nextAsset) || sourceUrl,
-                        asset: nextAsset,
-                    };
-                }));
-
-                requestReferenceAudioUrls.push(...uploadedReferences.map((item) => item.url));
-                nextSeedanceAssets.audios = uploadedReferences.map((item) => item.asset);
+                    requestReferenceAudios.push({ reference: preparedReference, url: sourceUrl, assetId: preparedAssetId(preparedReference.seedanceAsset) });
+                }
             }
 
             if (isKlingVideoModel && klingVideoElements.length > 0) {
@@ -3109,8 +3712,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     };
                 }));
 
-                commitKlingVideoElements(uploadedKlingElements);
-                await persistKlingVideoElements(uploadedKlingElements);
+                commitKlingVideoElements(withStagedUploads(klingVideoElementsRef.current, uploadedKlingElements));
                 requestKlingVideoElements.push(...uploadedKlingElements.map((element) => ({
                     id: element.id,
                     url: element.requestUrl,
@@ -3145,15 +3747,17 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     for (const image of subject.images) {
                         let remoteUrl = image.remoteUrl;
                         let storagePath = image.storagePath;
-                        if (!remoteUrl && image.file) {
-                            const upload = await uploadMediaToTemporaryStorage(image.file);
-                            remoteUrl = upload.signedUrl;
-                            storagePath = upload.storagePath;
+                        let staged = image.staged ?? null;
+                        // A picture of the creator's own is staged; a remix's is the file the run kept.
+                        if (image.file) {
+                            staged = await stageReferenceFile(image.file, image.staged);
+                            remoteUrl = staged.signedUrl;
+                            storagePath = staged.storagePath;
                         }
                         if (!remoteUrl && !storagePath) {
                             throw new Error(`Missing media for ${subject.displayName}`);
                         }
-                        uploadedImages.push({ ...image, remoteUrl, storagePath });
+                        uploadedImages.push({ ...image, remoteUrl, storagePath, staged });
                         requestKlingSubjectInputs.push({
                             slot: 'subjectImages',
                             kind: 'image',
@@ -3177,12 +3781,16 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     startedAtMs,
                     estimatedTotalMs,
                 }));
-                const upload = await uploadMediaToTemporaryStorage(startImageFile);
-                startUrl = upload.signedUrl;
+                const staged = await stageReferenceFile(
+                    startImageFile,
+                    startFrameStaged?.file === startImageFile ? startFrameStaged.staged : null,
+                );
+                setStartFrameStaged({ file: startImageFile, staged });
+                startUrl = staged.signedUrl;
                 nextStartFrameDescriptor = {
                     kind: 'image',
                     label: 'Start frame',
-                    storagePath: upload.storagePath,
+                    storagePath: staged.storagePath,
                     sourceGenerationId: null,
                 };
             }
@@ -3194,37 +3802,28 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     startedAtMs,
                     estimatedTotalMs,
                 }));
-                const upload = await uploadMediaToTemporaryStorage(endImageFile);
-                endUrl = upload.signedUrl;
+                const staged = await stageReferenceFile(
+                    endImageFile,
+                    endFrameStaged?.file === endImageFile ? endFrameStaged.staged : null,
+                );
+                setEndFrameStaged({ file: endImageFile, staged });
+                endUrl = staged.signedUrl;
                 nextEndFrameDescriptor = {
                     kind: 'image',
                     label: 'End frame',
-                    storagePath: upload.storagePath,
+                    storagePath: staged.storagePath,
                     sourceGenerationId: null,
                 };
             }
 
-            setGenerationTiming(createLocalGenerationTiming({
-                kind: 'video',
-                phaseLabel: 'Submitting video run',
-                startedAtMs,
-                estimatedTotalMs,
-            }));
-
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session) {
-                router.push('/login?returnUrl=/create-video');
-                return;
-            }
-
-            const payload = {
+            const payload: CatalogGenerationRequestPayload = {
                 kind: 'video',
                 modelId: selectedModel,
                 prompt: prompt.trim(),
                 shots: currentIsMultiShot
                     ? multiPrompts.map((shot) => ({
                         prompt: shot.prompt,
-                        duration: shot.duration,
+                        duration: Math.max(1, Math.round(shot.duration)),
                     }))
                     : [],
                 settings: {
@@ -3236,39 +3835,40 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     fixedLens: currentFixedLens,
                     isMultiShot: currentIsMultiShot,
                     referenceMode: klingSubjectsActive ? 'subjects' : activeReferenceMode,
-            ...additionalSettings.settings,
+                    ...additionalSettings.settings,
                 },
                 inputs: [
-                    ...requestElements.map((element, index) => ({
+                    ...requestElements.map(({ element, url, assetId }): CatalogGenerationInputAsset => ({
                         slot: 'imageReferences',
                         kind: 'image',
-                        url: elementImageUrls[index],
-                        assetId: nextSeedanceAssets.images?.[index]?.assetId ?? null,
+                        url,
+                        assetId,
                         label: element.displayName,
                         handle: element.handle,
                         storagePath: element.storagePath ?? null,
                         sourceGenerationId: element.sourceGenerationId ?? null,
                     })),
-                    ...requestReferenceVideoUrls.map((url, index) => ({
+                    ...requestReferenceVideos.map(({ reference, url, assetId }): CatalogGenerationInputAsset => ({
                         slot: 'videoReferences',
                         kind: 'video',
                         url,
-                        assetId: nextSeedanceAssets.videos?.[index]?.assetId ?? null,
-                        label: runReferenceVideos[index]?.displayName ?? `Video reference ${index + 1}`,
-                        durationSeconds: runReferenceVideos[index]?.durationSeconds ?? null,
-                        storagePath: runReferenceVideos[index]?.storagePath ?? null,
-                        sourceGenerationId: runReferenceVideos[index]?.sourceGenerationId ?? null,
+                        assetId,
+                        label: reference.displayName,
+                        durationSeconds: reference.durationSeconds ?? null,
+                        storagePath: reference.storagePath ?? null,
+                        sourceGenerationId: reference.sourceGenerationId ?? null,
                     })),
-                    ...requestReferenceAudioUrls.map((url, index) => ({
+                    ...requestReferenceAudios.map(({ reference, url, assetId }): CatalogGenerationInputAsset => ({
                         slot: 'audioReferences',
                         kind: 'audio',
                         url,
-                        assetId: nextSeedanceAssets.audios?.[index]?.assetId ?? null,
-                        label: runReferenceAudios[index]?.displayName ?? `Audio reference ${index + 1}`,
-                        storagePath: runReferenceAudios[index]?.storagePath ?? null,
-                        sourceGenerationId: runReferenceAudios[index]?.sourceGenerationId ?? null,
+                        assetId,
+                        label: reference.displayName,
+                        durationSeconds: reference.durationSeconds ?? null,
+                        storagePath: reference.storagePath ?? null,
+                        sourceGenerationId: reference.sourceGenerationId ?? null,
                     })),
-                    ...requestKlingVideoElements.map((element) => ({
+                    ...requestKlingVideoElements.map((element): CatalogGenerationInputAsset => ({
                         slot: 'videoElements',
                         kind: 'video',
                         url: element.url,
@@ -3280,7 +3880,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     ...requestKlingSubjectInputs,
                     ...(startUrl ? [{
                         slot: 'startFrame',
-                        kind: 'image',
+                        kind: 'image' as const,
                         url: startUrl,
                         label: nextStartFrameDescriptor?.label ?? 'Start frame',
                         storagePath: nextStartFrameDescriptor?.storagePath ?? null,
@@ -3288,71 +3888,94 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     }] : []),
                     ...(endUrl ? [{
                         slot: 'endFrame',
-                        kind: 'image',
+                        kind: 'image' as const,
                         url: endUrl,
                         label: nextEndFrameDescriptor?.label ?? 'End frame',
                         storagePath: nextEndFrameDescriptor?.storagePath ?? null,
                         sourceGenerationId: nextEndFrameDescriptor?.sourceGenerationId ?? null,
                     }] : []),
-                    ...(isGeminiOmniVideoModel ? preparedAudioIds.map((assetId) => ({
+                    ...(isGeminiOmniVideoModel ? preparedAudioIds.map((assetId): CatalogGenerationInputAsset => ({
                         slot: 'preparedVoices',
                         kind: 'preparedVoice',
                         assetId,
                     })) : []),
-                    ...(isGeminiOmniVideoModel ? characterIds.map((assetId) => ({
+                    ...(isGeminiOmniVideoModel ? characterIds.map((assetId): CatalogGenerationInputAsset => ({
                         slot: 'characters',
                         kind: 'character',
                         assetId,
                     })) : []),
                 ],
-                sourceGenerationId: remixId || undefined,
-                catalogRevision: modelCatalog.catalog?.revision,
+                ...(remixId ? { sourceGenerationId: remixId } : {}),
+                catalogRevision: modelCatalog.catalog?.revision ?? '',
             };
 
-            const response = await fetch('/api/generations', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${session.access_token}`,
-                    'Idempotency-Key': idempotencyKey,
-                },
-                body: JSON.stringify(payload),
-            });
+            attempt = {
+                version: 1,
+                tool: 'video',
+                idempotencyKey,
+                body: payload,
+                catalogRevision: payload.catalogRevision,
+                createdAt: new Date().toISOString(),
+                userId: activeSession.user.id,
+            };
+            // Kept before it is sent: with no answer, the next press and the next visit
+            // replay this key and body instead of paying for a second run.
+            savePendingWebStart(attempt);
+        } catch (prepareError) {
+            setError(prepareError instanceof Error ? prepareError.message : 'Something went wrong');
+            setGenerationTiming(null);
+            activeGenerationRequestKeyRef.current = null;
+            setIsGenerating(false);
+            return;
+        }
 
-            const data = await response.json();
-            if (!data.success) {
-                if (data.code === 'CATALOG_CHANGED' || data.code === 'MODEL_UNAVAILABLE') {
-                    setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
-                    modelCatalog.refetch();
-                }
-                throw new Error(data.error || 'Failed to start generation');
-            }
-            setLatestGenerationId(data.generationId ?? null);
-            setLatestIsPublic(false);
-            announceGenerationStarted();
-            if (data.remainingCredits !== undefined) updateCredits(data.remainingCredits);
-
-            const result = await pollPrediction(data.predictionId, session.access_token, startedAtMs, estimatedTotalMs);
-            setOutputVideo(result.output);
-            if (result.timing) {
-                setGenerationTiming(result.timing);
-            }
-        } catch (generationError) {
-            const errorMessage = generationError instanceof Error ? generationError.message : 'Something went wrong';
-            if (errorMessage === BACKGROUND_PROCESSING_ERROR) {
-                handoffToBackgroundProcessing(startedAtMs);
-            } else {
-                setError(errorMessage);
-                setGenerationTiming(null);
-            }
+        try {
+            setGenerationTiming(createLocalGenerationTiming({
+                kind: 'video',
+                phaseLabel: 'Submitting video run',
+                startedAtMs,
+                estimatedTotalMs,
+            }));
+            await sendStartAndFollow(attempt, startedAtMs, estimatedTotalMs);
         } finally {
             activeGenerationRequestKeyRef.current = null;
             setIsGenerating(false);
         }
     };
 
-    const isBackgroundProcessing = error === BACKGROUND_PROCESSING_ERROR;
-    useDeploymentRefresh(isGenerating || isBackgroundProcessing);
+    // The creator's own choice to stop waiting, priced on its button: the unanswered
+    // start may yet have started, so this can be a second run.
+    const startNewRunInstead = () => {
+        clearPendingWebStart('video');
+        setUnconfirmedStart(null);
+        void handleGenerate({ replacingUnconfirmed: true });
+    };
+
+    // What the run leaves out because the model has no slot for it, with a way to take
+    // each off: the standby card used to say they were kept and offer no means to remove them.
+    const standbyReferences: Array<{ kind: 'image' | 'video' | 'audio'; id: string; displayName: string; onRemove: () => void }> = [
+        ...(showSavedElementNotice
+            ? elements.map((element) => ({ kind: 'image' as const, id: element.id, displayName: element.displayName, onRemove: () => void handleRemoveElement(element.id) }))
+            : []),
+        ...(affordances.carries.videos
+            ? []
+            : referenceVideos.map((reference) => ({ kind: 'video' as const, id: reference.id, displayName: reference.displayName, onRemove: () => void handleRemoveReferenceVideo(reference.id) }))),
+        ...(affordances.carries.audios
+            ? []
+            : referenceAudios.map((reference) => ({ kind: 'audio' as const, id: reference.id, displayName: reference.displayName, onRemove: () => void handleRemoveReferenceAudio(reference.id) }))),
+    ];
+
+    const openPublishModal = async () => {
+        const generationId = latestGenerationId;
+        if (!generationId) return;
+        if (publishDefaults?.generationId !== generationId) {
+            // Read before the modal opens: it seeds its title from these as it opens.
+            setIsPreparingPublish(true);
+            setPublishDefaults(await loadCreationPublishDefaults(generationId, session?.access_token));
+            setIsPreparingPublish(false);
+        }
+        setIsPublishModalOpen(true);
+    };
 
     if (isLoadingUser) {
         return (
@@ -3628,11 +4251,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         onClick={syncPromptCaretState}
                                         onKeyUp={syncPromptCaretState}
                                         placeholder={`Describe the ${videoModel.displayName} scene in rich cinematic detail...`}
-                                        maxLength={2500}
+                                        maxLength={GENERATION_PROMPT_MAX_LENGTH}
                                         className="w-full bg-black/50 text-white rounded-2xl p-5 border border-white/10 focus:border-[#ff7a59]/50 focus:ring-4 focus:ring-[#ff7a59]/10 outline-none resize-y min-h-[140px] text-sm leading-relaxed"
                                     />
                                     <div className="mt-2 flex items-center justify-between gap-3 text-xs">
-                                        <span className="text-zinc-600">{prompt.length}/2500</span>
+                                        <span className="text-zinc-600">{prompt.length}/{GENERATION_PROMPT_MAX_LENGTH}</span>
                                         {staleElementMentions.length > 0 ? (
                                             <span className="min-w-0 text-right text-rose-300">
                                                 Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}:{' '}
@@ -3776,6 +4399,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                    onClick={() => syncShotPromptCaretState(shot)}
 	                                                    onKeyUp={() => syncShotPromptCaretState(shot)}
 	                                                    placeholder={`Describe shot ${index + 1}...`}
+	                                                    maxLength={GENERATION_PROMPT_MAX_LENGTH}
 	                                                    className="mb-4 min-h-[100px] w-full resize-none rounded-2xl border border-white/10 bg-black/50 p-4 text-sm text-white outline-none focus:border-[#ff7a59]/50"
 	                                                />
 	                                                {activeShotMentionQuery?.shotId === shot.id && shotPromptsTakeMentions ? (
@@ -3826,9 +4450,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         ))}
                                     </AnimatePresence>
 
+                                    <p className={`px-2 text-xs ${multiShotOverLength ? 'text-rose-300' : 'text-zinc-500'}`}>
+                                        {`${multiPrompts.length}${multiShotMaxShots === null ? '' : ` of ${multiShotMaxShots}`} shot${multiPrompts.length === 1 && multiShotMaxShots === null ? '' : 's'} · ${totalDuration}s in total${multiShotMaxTotalSeconds === null ? '' : `, up to ${multiShotMaxTotalSeconds}s`}${multiShotOverLength ? '. Shorten a shot to generate.' : ''}`}
+                                    </p>
                                     <button
                                         onClick={addShot}
-                                        className="flex w-full items-center justify-center gap-2 rounded-3xl border-2 border-dashed border-zinc-800 py-4 font-medium text-zinc-500 transition-all hover:border-[#ff7a59]/50 hover:bg-[#ff7a59]/5 hover:text-[#ff9a80]"
+                                        disabled={!canAddShot}
+                                        className="flex w-full items-center justify-center gap-2 rounded-3xl border-2 border-dashed border-zinc-800 py-4 font-medium text-zinc-500 transition-all hover:border-[#ff7a59]/50 hover:bg-[#ff7a59]/5 hover:text-[#ff9a80] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-zinc-800 disabled:hover:bg-transparent disabled:hover:text-zinc-500"
                                     >
                                         <Plus className="w-5 h-5" /> Add New Shot
                                     </button>
@@ -3874,6 +4502,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                    disabled={isGenerating}
 	                                    onChange={commitKlingSubjects}
 	                                    onRename={handleKlingSubjectRename}
+	                                    onRefusedFiles={setPickNotice}
 	                                />
 	                            </motion.div>
 	                        )}
@@ -4022,6 +4651,25 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 {savedClipAndTrackNotice ? (
                                     <p className="mt-2 text-sm leading-6 text-zinc-300">{savedClipAndTrackNotice}</p>
                                 ) : null}
+                                {/* The model has no card for these, so they can be taken off here. */}
+                                <ul aria-label="References on standby" className="mt-3 flex flex-wrap gap-2">
+                                    {standbyReferences.map((reference) => (
+                                        <li
+                                            key={`${reference.kind}-${reference.id}`}
+                                            className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-white/10 bg-black/30 py-1 pl-3 pr-1 text-xs text-zinc-200"
+                                        >
+                                            <span className="min-w-0 truncate">{reference.displayName}</span>
+                                            <button
+                                                type="button"
+                                                onClick={reference.onRemove}
+                                                aria-label={`Remove ${reference.displayName}`}
+                                                className="shrink-0 rounded-full p-1 text-zinc-400 transition hover:bg-rose-500/20 hover:text-rose-100"
+                                            >
+                                                <X className="h-3 w-3" />
+                                            </button>
+                                        </li>
+                                    ))}
+                                </ul>
                             </div>
                         )}
 
@@ -4731,12 +5379,33 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 </div>
                             }
                             action={
-                                insufficientCredits ? (
+                                unconfirmedStart ? (
+                                    <div className="space-y-3">
+                                        <button
+                                            type="button"
+                                            onClick={() => void replayPendingStart(unconfirmedStart)}
+                                            disabled={isGenerating}
+                                            className="ui-focus-ring flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 py-4 text-base font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            {isGenerating ? <><Loader2 className="w-5 h-5 animate-spin" /> Checking...</> : 'Check again'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={startNewRunInstead}
+                                            disabled={isGenerating || quotePending}
+                                            className="ui-focus-ring flex min-h-12 w-full items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-6 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            {estimatedCost !== null ? `Start a new run · ${quoteUi.costLabel}` : 'Start a new run'}
+                                        </button>
+                                    </div>
+                                ) : showTopUp ? (
                                     <div className="space-y-4">
                                         <div className="rounded-[22px] border border-rose-500/20 bg-rose-500/10 p-4">
                                             <p className="text-sm font-semibold text-white">Not enough credits</p>
                                             <p className="mt-2 text-sm text-zinc-400">
-                                                This run costs <strong className="text-white">{estimatedCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.
+                                                {insufficientCredits ? (
+                                                    <>This run costs <strong className="text-white">{estimatedCost} credits</strong> but you only have <strong className="text-white">{userCredits}</strong>.</>
+                                                ) : creditRefusal?.message}
                                             </p>
                                         </div>
                                         <Link href="/pricing" className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]">
@@ -4746,7 +5415,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     </div>
                                 ) : (
                                     <button
-                                        onClick={handleGenerate}
+                                        onClick={() => void handleGenerate()}
                                         disabled={isGenerating || quotePending}
                                         className="ui-focus-ring flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 py-4 text-base font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
                                     >
@@ -4769,6 +5438,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             phaseLabel={backgroundTiming?.phaseLabel ?? null}
                                             timingLabel={backgroundTimingLabel}
                                         />
+                                    ) : unconfirmedStart ? (
+                                        <p className="text-sm text-amber-300">{START_UNCONFIRMED_MESSAGE}</p>
+                                    ) : pickNotice ? (
+                                        <p className="text-sm text-amber-300 [overflow-wrap:anywhere]">{pickNotice}</p>
                                     ) : referenceLimitMessage ? (
                                         <p className="text-sm text-red-400">{referenceLimitMessage}</p>
                                     ) : error ? (
@@ -4791,7 +5464,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     className="inline-flex items-center gap-2 text-sm font-medium text-zinc-300 transition hover:text-white"
                                 >
                                     View Studio
-                                    <Download className="h-4 w-4" />
+                                    <Images className="h-4 w-4" aria-hidden="true" />
                                 </Link>
                             }
                         />
@@ -4805,7 +5478,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-100 transition hover:bg-white/[0.06]"
                                 >
                                     Studio
-                                    <Download className="h-4 w-4" />
+                                    <Images className="h-4 w-4" aria-hidden="true" />
                                 </Link>
                             }
                         >
@@ -4843,10 +5516,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             ) : (
                                                 <button
                                                     type="button"
-                                                    onClick={() => setIsPublishModalOpen(true)}
-                                                    className="ui-focus-ring inline-flex items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 py-3 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
+                                                    onClick={() => void openPublishModal()}
+                                                    disabled={isPreparingPublish}
+                                                    className="ui-focus-ring inline-flex items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 py-3 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:opacity-60"
                                                 >
-                                                    <Share2 className="h-4 w-4" />
+                                                    {isPreparingPublish ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
                                                     Publish & share
                                                 </button>
                                             )
@@ -4922,6 +5596,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 onClose={() => setIsPublishModalOpen(false)}
                 generationId={latestGenerationId}
                 accessToken={session?.access_token ?? null}
+                defaultTitle={publishDefaults?.generationId === latestGenerationId ? publishDefaults.title : ''}
+                paywallPrefill={publishDefaults?.generationId === latestGenerationId ? publishDefaults.paywallPrefill : null}
                 shareAfterPublish={latestGenerationId ? {
                     title: shareTitle,
                     description: primarySharePrompt,
