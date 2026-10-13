@@ -648,6 +648,8 @@ const DEFINITIVE_WEB_START_FAILURE_CODES = new Set([
   'REFERENCE_DURATION_CHANGED',
   'RATE_LIMITED',
   'cost_changed',
+  // The per-kind routes' answer when the provider key is missing: nothing is held.
+  'GENERATION_SERVICE_UNAVAILABLE',
 ]);
 /** Answers that say the start under this key is, or may be, under way. */
 const AMBIGUOUS_WEB_START_FAILURE_CODES = new Set([

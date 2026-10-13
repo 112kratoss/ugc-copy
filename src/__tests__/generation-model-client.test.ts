@@ -374,6 +374,7 @@ describe('isAmbiguousWebStartFailure', () => {
       [429, 'RATE_LIMITED'],
       [503, 'service_misconfigured'],
       [503, 'provider_unavailable'],
+      [503, 'GENERATION_SERVICE_UNAVAILABLE'],
       [422, 'INVALID_GENERATION_REQUEST'],
       [422, 'INVALID_MODEL_SETTINGS'],
       [409, 'MODEL_UNAVAILABLE'],
