@@ -354,11 +354,12 @@ function withShotsDuration(request: UnifiedGenerationRequest): UnifiedGeneration
   );
   const named = request.settings.duration;
   if (named !== undefined && Number(named) !== total) {
+    // Said for the creator: an app from before this rule sends the hidden
+    // single-shot length and shows the message, not the field error, as its
+    // refusal; only an updated app sends the total.
     throw new UnifiedGenerationRequestError(
-      'The length of this multi-shot run does not match its shots.',
+      'The length of this multi-shot run does not match its shots. Update the app, then generate again.',
       422,
-      // Said for the creator: the app that sent the hidden single-shot length
-      // shows this as its refusal, and only an updated app sends the total.
       { 'settings.duration': "The run's length must equal its shots' total. Update the app, then generate again." },
     );
   }
