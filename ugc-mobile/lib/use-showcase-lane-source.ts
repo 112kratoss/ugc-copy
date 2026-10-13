@@ -74,10 +74,18 @@ export function useShowcaseLaneSource({
       .filter((item) => !mediaOnly || Boolean(item.mediaItems.length || item.mediaUrl));
   }, [mediaOnly, pages, registeredUserId]);
   const selectedInLane = Boolean(initialId) && laneItems.some((item) => item.id === initialId);
+  // A post the lane held and then dropped (Not interested, Hide, Report take it
+  // out of the lane's pages) is not looked up again: the server would still
+  // return it, and it would come back at the end of the reel the reader just
+  // removed it from. Only a post the lane never held is fetched on its own.
+  const [selectionWasInLane, setSelectionWasInLane] = useState(false);
+  useEffect(() => {
+    if (selectedInLane) setSelectionWasInLane(true);
+  }, [selectedInLane]);
 
   const selectionQuery = useQuery({
     queryKey: ['showcase-lane-selection', userId?.trim() || 'installation', initialId],
-    enabled: active && Boolean(initialId) && laneHasData && !selectedInLane,
+    enabled: active && Boolean(initialId) && laneHasData && !selectedInLane && !selectionWasInLane,
     staleTime: 1000 * 60,
     retry: false,
     queryFn: (): Promise<ShowcaseFeedItem | null> => readShowcasePostOrMissing(api, initialId),
@@ -102,6 +110,9 @@ export function useShowcaseLaneSource({
     ? 'none'
     : selectionFound
       ? 'found'
+      // Taken out of the lane by the reader: the reel moved on, nothing to find.
+      : selectionWasInLane
+        ? 'none'
       : !laneHasData && laneQuery.isError && !laneQuery.isFetching
         ? 'error'
         : !laneHasData || selectionQuery.fetchStatus === 'fetching' || (selectionQuery.data && !selectionPinned)

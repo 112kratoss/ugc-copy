@@ -210,6 +210,27 @@ describe('useShowcaseLaneSource', () => {
     expect(paged.items.map((item) => item.id)).toEqual(['older', 'first', 'second', 'third']);
   });
 
+  it('does not look a post up again once the reader took it out of the lane', async () => {
+    // Not interested, Hide and Report remove the post from the lane's pages;
+    // the server would still return it, and it came back at the end of the reel.
+    const client = gridCache([page([post('a'), post('b'), post('c')], null)]);
+    const api = stubApi({ getShowcasePost: vi.fn(async () => ({ success: true, item: post('b') })) });
+    const lane = await renderLane({ api, client, initialId: 'b' });
+    expect((await lane.until((result) => result.selection === 'found')).items.map((item) => item.id)).toEqual(['a', 'b', 'c']);
+
+    await renderer.act(async () => {
+      client.setQueryData(createShowcaseFeedQueryKey(FREE_LANE, 'user-1'), {
+        pages: [page([post('a'), post('c')], null)],
+        pageParams: [{ offset: 0 }],
+      });
+    });
+    const removed = await lane.until((result) => result.items.length === 2);
+
+    expect(removed.items.map((item) => item.id)).toEqual(['a', 'c']);
+    expect(removed.selection).toBe('none');
+    expect(api.getShowcasePost).not.toHaveBeenCalled();
+  });
+
   it('calls the opened post gone only when the server says so', async () => {
     const missingApi = stubApi({ getShowcasePost: vi.fn(async () => { throw new ApiError('Post not found.', 404); }) });
     const missing = await renderLane({ api: missingApi, client: gridCache([page([post('first')], null)]), initialId: 'deleted' });

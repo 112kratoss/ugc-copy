@@ -402,10 +402,9 @@ describe('Block user from the reel', () => {
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     dialogs.confirm.mockResolvedValue(true);
     authState.api.blockUser.mockResolvedValue({ success: true });
-    // The post the reel was opened on has left its lane, so the lane source
-    // asks for it on its own; the server serves no post by a creator the
-    // reader blocked (`attachViewerStateToFeed`), so it stays out.
-    authState.api.getShowcasePost.mockRejectedValue(Object.assign(new Error('Post not found.'), { status: 404 }));
+    // The post the reel was opened on leaves its lane. The lane source does
+    // not ask for it again: a post the lane held and the reader took out stays
+    // out (`useShowcaseLaneSource`).
     const actions = actionsFor(activeItem());
     expect(actions.actions).toContain('block-user');
 
@@ -417,7 +416,7 @@ describe('Block user from the reel', () => {
     expect(authState.api.blockUser).toHaveBeenCalledWith('creator-luna');
     // Luna's next post is skipped too: the reader lands on Nova's.
     expect(activeId()).toBe('post-d');
-    expect(authState.api.getShowcasePost).toHaveBeenCalledWith('post-b');
+    expect(authState.api.getShowcasePost).not.toHaveBeenCalled();
     expect(reelIds(tree)).toEqual(['post-a', 'post-d']);
     // The grid behind the reel reads the same pages, without Luna's posts.
     expect(laneIds(laneKey)).toEqual(['post-a', 'post-d']);
