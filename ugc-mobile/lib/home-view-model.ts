@@ -1,16 +1,13 @@
 import type { CreatorToolId, OwnerPostListItem } from '@/lib/types';
 import type { ToolAccent } from '@/lib/theme';
 
-export type HomeToolShortcutId = CreatorToolId | 'workflow';
-
 export interface HomeToolShortcut {
-  id: HomeToolShortcutId;
+  id: CreatorToolId;
   title: string;
   body: string;
   accent: ToolAccent;
   href: string | null;
   previewVariant: 'kingdom' | 'city' | 'runner' | null;
-  badge?: string;
 }
 
 export const HOME_TOOL_SHORTCUTS: HomeToolShortcut[] = [
@@ -37,15 +34,6 @@ export const HOME_TOOL_SHORTCUTS: HomeToolShortcut[] = [
     accent: 'motion',
     href: '/create/motion',
     previewVariant: 'runner',
-  },
-  {
-    id: 'workflow',
-    title: 'Workflow',
-    body: 'Reusable systems are coming to mobile.',
-    accent: 'workflow',
-    href: null,
-    previewVariant: null,
-    badge: 'Soon',
   },
 ];
 

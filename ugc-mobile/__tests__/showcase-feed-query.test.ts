@@ -6,7 +6,6 @@ import {
   createShowcaseFeedQueryKey,
   createShowcaseFeedViewerQueryKey,
   createShowcasePostQueryKey,
-  findShowcaseFeedItemById,
   flattenShowcaseFeedPages,
   getNextShowcaseFeedOffset,
   getNextShowcaseFeedPageParam,
@@ -111,24 +110,6 @@ describe('showcase feed query helpers', () => {
     ];
 
     expect(flattenShowcaseFeedPages(pages).map((post) => post.id)).toEqual(['post-1', 'post-2', 'post-3']);
-  });
-
-  it('finds a post inside paginated feed pages', () => {
-    const pages: ShowcaseFeedResponse[] = [
-      { items: [item({ id: 'post-1' }), item({ id: 'post-2' })] },
-      { items: [item({ id: 'post-3', title: 'Cached detail' }), item({ id: 'post-4' })] },
-    ];
-
-    expect(findShowcaseFeedItemById(pages, 'post-3')).toMatchObject({
-      id: 'post-3',
-      title: 'Cached detail',
-    });
-  });
-
-  it('does not find missing or empty post IDs', () => {
-    expect(findShowcaseFeedItemById([{ items: [item({ id: 'post-1' })] }], 'post-2')).toBeUndefined();
-    expect(findShowcaseFeedItemById(undefined, 'post-1')).toBeUndefined();
-    expect(findShowcaseFeedItemById([{ items: [item({ id: 'post-1' })] }], undefined)).toBeUndefined();
   });
 
   it('builds detail query keys that match the viewer-specific detail query', () => {

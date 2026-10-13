@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   getShowcasePostDisplayText,
   isTextOnlyShowcasePost,
-  selectActiveShowcaseVideoId,
   selectActiveShowcaseVideoIds,
   selectPreparedShowcaseVideoIds,
 } from '../lib/showcase-display';
@@ -45,17 +44,6 @@ describe('showcase display helpers', () => {
     expect(getShowcasePostDisplayText(item({ body: '', prompt: '  Prompt copy  ', title: 'Title' }))).toBe('Prompt copy');
     expect(getShowcasePostDisplayText(item({ body: '', prompt: '', title: '  Title copy  ' }))).toBe('Title copy');
     expect(getShowcasePostDisplayText(item({ body: '', prompt: '', title: '' }))).toBe('Community post');
-  });
-
-  it('selects only the first visible video with a usable media URL', () => {
-    const visibleItems = [
-      item({ id: 'image-post', category: 'image', mediaKind: 'image', mediaUrl: 'https://cdn.example.com/image.png' }),
-      item({ id: 'video-without-url', category: 'video', mediaKind: 'video', mediaUrl: null }),
-      item({ id: 'first-video', category: 'video', mediaKind: 'video', mediaUrl: 'https://cdn.example.com/video-1.mp4' }),
-      item({ id: 'second-video', category: 'video', mediaKind: 'video', mediaUrl: 'https://cdn.example.com/video-2.mp4' }),
-    ];
-
-    expect(selectActiveShowcaseVideoId(visibleItems)).toBe('first-video');
   });
 
   it('selects a capped set of visible videos for feed previews', () => {
@@ -105,12 +93,6 @@ describe('showcase display helpers', () => {
   });
 
   it('does not select an active video when no visible item can preview', () => {
-    expect(
-      selectActiveShowcaseVideoId([
-        item({ id: 'image-post', category: 'image', mediaKind: 'image', mediaUrl: 'https://cdn.example.com/image.png' }),
-        item({ id: 'video-without-url', category: 'video', mediaKind: 'video', mediaUrl: null }),
-      ])
-    ).toBeNull();
     expect(
       selectActiveShowcaseVideoIds([
         item({ id: 'image-post', category: 'image', mediaKind: 'image', mediaUrl: 'https://cdn.example.com/image.png' }),

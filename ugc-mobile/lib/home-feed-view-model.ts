@@ -1,6 +1,5 @@
 import type { ToolAccent } from '@/lib/theme';
 import type { ShowcaseFeedItem } from '@/lib/types';
-import type { PreviewViewerSource } from './immersive-preview-view-model';
 import { HOME_TOOL_SHORTCUTS, formatCompactCount, formatRelativeTime, type HomeToolShortcut } from './home-view-model';
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import type { ShowcaseFeedFilters } from './showcase-feed-query';
@@ -46,15 +45,18 @@ export interface HomeFeedCard {
   creatorLabel: string;
   creatorName: string;
   creatorAvatar: string | null;
-  creatorId: string | null;
   timeLabel: string;
   categoryLabel: string;
   accent: ToolAccent;
   mediaUrl: string | null;
   mediaKind: 'image' | 'video' | null;
   previewUrl: string | null;
+  /**
+   * Not drawn by the card but read off the list's viewability tokens: on iOS
+   * the tab bar takes its tint from the card nearest it
+   * (`selectBottomVisibleAmbientSource`, lib/tab-bar-ambient.ts).
+   */
   previewThumbhash: string | null;
-  previewCacheKey: string;
   aspectRatio: number | null;
   /**
    * What a tap on Remix has to get through first; null when the post has
@@ -69,7 +71,6 @@ export interface HomeFeedCard {
   /** The recipe behind the post, where the action row has reason to name it. */
   recipeChip: HomeFeedRecipeChip | null;
   isSaved: boolean;
-  viewerSource: PreviewViewerSource;
 }
 
 /**
@@ -96,23 +97,35 @@ const BODY_FONT_SIZE = 14;
  */
 const AVERAGE_GLYPH_WIDTH_RATIO = 0.52;
 
-export function getHomeFeedChip(id: HomeFeedChipId | string | null | undefined) {
-  return HOME_FEED_CHIPS.find((chip) => chip.id === id) ?? HOME_FEED_CHIPS[0];
-}
+type HomeSlidePreviews = Readonly<Partial<Record<ToolAccent, string>>>;
+
+let lastSlidePreviews: HomeSlidePreviews = {};
 
 /**
  * The freshest preview in the feed for each tool slide, so the rail shows what
  * people are making right now instead of a bundled stock still. Cards arrive
  * newest first, so the first match per tool wins.
+ *
+ * The answer is the rail's `extraData`, where a new object re-renders every
+ * slide, and the list of cards is new after every page, save and refetch while
+ * the picks hardly ever change. So an answer with the same picks as the last
+ * one is that same object, shared: read it, never write to it.
  */
-export function pickHomeSlidePreviews(cards: HomeFeedCard[]): Partial<Record<ToolAccent, string>> {
+export function pickHomeSlidePreviews(cards: HomeFeedCard[]): HomeSlidePreviews {
   const previews: Partial<Record<ToolAccent, string>> = {};
   for (const card of cards) {
     if (previews[card.accent]) continue;
     const url = card.previewUrl ?? (card.mediaKind === 'image' ? card.mediaUrl : null);
     if (url) previews[card.accent] = url;
   }
-  return previews;
+  if (!haveSamePreviews(previews, lastSlidePreviews)) lastSlidePreviews = previews;
+  return lastSlidePreviews;
+}
+
+function haveSamePreviews(next: HomeSlidePreviews, last: HomeSlidePreviews) {
+  const accents = Object.keys(next) as ToolAccent[];
+  return accents.length === Object.keys(last).length
+    && accents.every((accent) => next[accent] === last[accent]);
 }
 
 export function getHomeFeedSlides(shortcuts: HomeToolShortcut[] = HOME_TOOL_SHORTCUTS): HomeFeedSlide[] {
@@ -295,15 +308,33 @@ export function shouldTurnHomeSlides({
 }
 
 /**
+ * Each item's card, for as long as the item object lives. FlashList re-renders
+ * a cell whose item is a new object, and every page, save and refetch rebuilds
+ * the lane's cards; a save writes a new object for the saved post alone
+ * (`applyShowcaseSaveStateToFeedResponse`), and a refetch keeps the objects of
+ * the posts it did not change. Items are never edited in place, so a card can
+ * be handed back while its item is the same object and the clock, its one
+ * other input, still gives the same `timeLabel`.
+ */
+const homeFeedCardCache = new WeakMap<ShowcaseFeedItem, HomeFeedCard>();
+
+/**
  * Sibling of `buildShowcaseMasonry`. Home renders every post format in one
  * column, so — unlike the grid — it keeps text posts and never drops an item
  * for a preview that has not finished baking.
  */
-export function buildHomeFeedCards(items: ShowcaseFeedItem[]): HomeFeedCard[] {
-  return items.map(showcaseToHomeFeedCard);
+export function buildHomeFeedCards(items: ShowcaseFeedItem[], now = new Date()): HomeFeedCard[] {
+  return items.map((item) => {
+    const cached = homeFeedCardCache.get(item);
+    if (cached && cached.timeLabel === formatRelativeTime(item.createdAt, now)) return cached;
+
+    const card = showcaseToHomeFeedCard(item, now);
+    homeFeedCardCache.set(item, card);
+    return card;
+  });
 }
 
-export function showcaseToHomeFeedCard(item: ShowcaseFeedItem): HomeFeedCard {
+export function showcaseToHomeFeedCard(item: ShowcaseFeedItem, now = new Date()): HomeFeedCard {
   const hasMedia = Boolean(item.mediaUrl);
   const bodyText = (item.body || '').trim();
   const previewKind = resolveHomePreviewKind(item, hasMedia, bodyText);
@@ -329,15 +360,13 @@ export function showcaseToHomeFeedCard(item: ShowcaseFeedItem): HomeFeedCard {
     creatorLabel: item.creator.username ? `@${item.creator.username}` : creatorName,
     creatorName,
     creatorAvatar: item.creator.avatar,
-    creatorId: item.creator.id,
-    timeLabel: formatRelativeTime(item.createdAt),
+    timeLabel: formatRelativeTime(item.createdAt, now),
     categoryLabel: homeCategoryLabel(item),
     accent: homeCardAccent(item),
     mediaUrl: item.mediaUrl,
     mediaKind: item.mediaKind,
     previewUrl: preview?.previewUrl ?? cover?.previewUrl ?? null,
     previewThumbhash: preview?.thumbhash ?? cover?.previewThumbhash ?? null,
-    previewCacheKey: preview?.cacheKey ?? cover?.previewCacheKey ?? cover?.id ?? item.id,
     aspectRatio: getHomeCardAspectRatio(item),
     remixAccess,
     saveLabel: formatFeedActionLabel(item.saveCount, 'Save'),
@@ -349,7 +378,6 @@ export function showcaseToHomeFeedCard(item: ShowcaseFeedItem): HomeFeedCard {
       : `Remix ${title}`,
     recipeChip: homeRecipeChip(item, title, remixAccess),
     isSaved: Boolean(item.isSaved),
-    viewerSource: 'showcase-feed',
   };
 }
 

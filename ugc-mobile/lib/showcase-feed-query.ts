@@ -135,17 +135,6 @@ export function flattenShowcaseFeedPages(pages: ShowcaseFeedResponse[] | undefin
   return items;
 }
 
-export function findShowcaseFeedItemById(pages: ShowcaseFeedResponse[] | undefined, postId: string | undefined) {
-  if (!postId) return undefined;
-
-  for (const page of pages ?? []) {
-    const item = page.items.find((candidate) => candidate.id === postId);
-    if (item) return item;
-  }
-
-  return undefined;
-}
-
 export function getNextShowcaseFeedOffset(lastPage: ShowcaseFeedResponse): number | null {
   if (!lastPage.pageInfo?.hasMore) return null;
   return typeof lastPage.pageInfo.nextOffset === 'number' ? lastPage.pageInfo.nextOffset : null;

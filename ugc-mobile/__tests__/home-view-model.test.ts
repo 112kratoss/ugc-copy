@@ -9,12 +9,11 @@ import {
 } from '../lib/home-view-model';
 
 describe('home view model', () => {
-  it('describes mobile workspace creator paths with routes and the workflow teaser', () => {
-    expect(HOME_TOOL_SHORTCUTS.map(({ id, accent, href, badge, previewVariant }) => ({ id, accent, href, badge, previewVariant }))).toEqual([
-      { id: 'image', accent: 'image', href: '/create/image', badge: undefined, previewVariant: 'kingdom' },
-      { id: 'video', accent: 'video', href: '/create/video', badge: undefined, previewVariant: 'city' },
-      { id: 'motion', accent: 'motion', href: '/create/motion', badge: undefined, previewVariant: 'runner' },
-      { id: 'workflow', accent: 'workflow', href: null, badge: 'Soon', previewVariant: null },
+  it('describes mobile workspace creator paths with routes', () => {
+    expect(HOME_TOOL_SHORTCUTS.map(({ id, accent, href, previewVariant }) => ({ id, accent, href, previewVariant }))).toEqual([
+      { id: 'image', accent: 'image', href: '/create/image', previewVariant: 'kingdom' },
+      { id: 'video', accent: 'video', href: '/create/video', previewVariant: 'city' },
+      { id: 'motion', accent: 'motion', href: '/create/motion', previewVariant: 'runner' },
     ]);
   });
 
