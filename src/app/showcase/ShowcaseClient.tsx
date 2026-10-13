@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
+import { startTransition, useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Loader2, Heart, Image as ImageIcon, Video, Layers, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, SlidersHorizontal, X, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/components/AuthProvider';
@@ -60,9 +60,10 @@ import {
     buildShowcaseClientCacheKey,
     claimVisitMemoryFor,
     filterFeedItemsForVisit,
+    forgetShowcaseClientSnapshot,
     getCreatorsBlockedThisVisit,
     getFeedPreferencesHiddenThisVisit,
-    readShowcaseClientSnapshot,
+    readShowcaseClientSnapshotToRestore,
     rememberViewerExclusionsForVisit,
     writeShowcaseClientSnapshot,
     type ShowcaseClientSnapshot,
@@ -224,6 +225,22 @@ function filterSessionHiddenItems(
     return feedItems.filter((item) => !isSessionHiddenItem(item, hiddenPostIds, hiddenCreatorIds));
 }
 
+/**
+ * The post a reel moves to when the one it has open is taken out: the first
+ * one left after it, else the last one left before it. Picked by post from the
+ * list as it was, not by index from what is left, so a hidden creator's
+ * earlier posts going too do not skip the post after the open one.
+ */
+function pickReelReplacement(
+    feedItems: ShowcaseFeedItem[],
+    openPosition: number,
+    isRemoved: (candidate: ShowcaseFeedItem) => boolean
+): ShowcaseFeedItem | null {
+    return feedItems.slice(openPosition + 1).find((candidate) => !isRemoved(candidate))
+        ?? feedItems.slice(0, openPosition).reverse().find((candidate) => !isRemoved(candidate))
+        ?? null;
+}
+
 export default function ShowcaseClient({
     initialFeed,
     initialCategory,
@@ -238,7 +255,11 @@ export default function ShowcaseClient({
     const pathname = usePathname();
     const searchParams = useSearchParams();
     const { session, user, isLoading: isAuthLoading } = useAuth();
-    const [isPending, startTransition] = useTransition();
+    // `isPending` turns the lane controls off while a lane change is under
+    // way. The reveal ticks use React's own `startTransition`, which has no
+    // pending state: through this one every tick committed the page once more,
+    // synchronously, only to turn the controls off and on again.
+    const [isPending, startLaneTransition] = useTransition();
     const showcaseClientCacheKey = buildShowcaseClientCacheKey({
         viewerId: user?.id ?? null,
         category: initialCategory,
@@ -256,7 +277,7 @@ export default function ShowcaseClient({
             unlock: initialUnlock,
             resource: initialResource,
         });
-        const snapshot = readShowcaseClientSnapshot(cacheKey);
+        const snapshot = readShowcaseClientSnapshotToRestore(cacheKey);
         if (!snapshot) {
             // The server builds this first page for everyone. What this tab
             // already knows the viewer's own feed leaves out is not drawn from
@@ -285,6 +306,12 @@ export default function ShowcaseClient({
         };
     });
     const restoredInitialFeed = restoredClientState.feed;
+    // The saved-state lookup asks about the lane's first page: the one this
+    // grid opened with, then the page each lane change brings. Those pages are
+    // built for everyone, so none of their posts arrives marked saved, and a
+    // lane changed to drew the viewer's saved posts with an empty heart.
+    const [openedWithFeed] = useState(initialFeed);
+    const laneFirstPageItems = initialFeed === openedWithFeed ? restoredInitialFeed.items : initialFeed.items;
     const feedItemsForEventsRef = useRef<ShowcaseFeedItem[]>(restoredInitialFeed.items);
     const feedSessionIdForEventsRef = useRef<string | null>(getShowcaseFeedSessionId(restoredInitialFeed));
     const {
@@ -295,7 +322,7 @@ export default function ShowcaseClient({
         savingItemIds,
         toggleSave,
     } = useOptimisticPostSave({
-        initialItems: restoredInitialFeed.items,
+        initialItems: laneFirstPageItems,
         accessToken: session?.access_token ?? null,
         isSignedIn: Boolean(user && session?.access_token),
         onAuthRequired: () => router.push(
@@ -330,6 +357,7 @@ export default function ShowcaseClient({
     const [feedSessionId, setFeedSessionId] = useState(() => getShowcaseFeedSessionId(restoredInitialFeed));
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+    const [isRefreshingLane, setIsRefreshingLane] = useState(false);
     const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
     // A `?post=` link to a post outside the loaded pages: read on its own, and
     // the reel opens on the read (loading, gone, failed) rather than on nothing.
@@ -345,6 +373,8 @@ export default function ShowcaseClient({
     const [hasAnonymousPersonalizationDemand, setHasAnonymousPersonalizationDemand] = useState(() => (
         Boolean(searchParams.get('post'))
     ));
+    // Load More asks the For you refresh to run again after it gave up.
+    const [personalizedRefreshRequest, setPersonalizedRefreshRequest] = useState(0);
     const [feedbackNotice, setFeedbackNotice] = useState<{
         tone: 'success' | 'error';
         message: string;
@@ -372,6 +402,12 @@ export default function ShowcaseClient({
         ...(initialSort === DEFAULT_SHOWCASE_SORT ? getFeedPreferencesHiddenThisVisit(user?.id ?? null).creatorIds : []),
     ]));
     const anonymousPersonalizationStartedRef = useRef(false);
+    // The viewer's own For you page: on its way (asked for, or waiting on idle
+    // or a retry), and come for this lane. Until it comes, For you's first page
+    // has no cursor, and the viewer's page is what Load More shows next.
+    const personalizedRefreshPendingRef = useRef(false);
+    const personalizedRefreshLandedRef = useRef(false);
+    const pageInfoRef = useRef(restoredInitialFeed.pageInfo);
     const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
     const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(
         searchParams.get('post') ? 'direct' : null
@@ -407,7 +443,8 @@ export default function ShowcaseClient({
         feedItemsForEventsRef.current = items;
         feedSessionIdForEventsRef.current = feedSessionId;
         renderedItemCountRef.current = renderedItemCount;
-    }, [feedSessionId, items, renderedItemCount, selectedItemId]);
+        pageInfoRef.current = pageInfo;
+    }, [feedSessionId, items, pageInfo, renderedItemCount, selectedItemId]);
 
     useEffect(() => (
         scheduleIdleWork(warmShowcaseReelViewer, SHOWCASE_REEL_WARM_IDLE_TIMEOUT_MS)
@@ -714,12 +751,13 @@ export default function ShowcaseClient({
 
     useEffect(() => {
         const previousSnapshot = initialSnapshotRef.current;
-        const snapshotIsUnchanged = previousSnapshot.initialFeed === initialFeed
-            && previousSnapshot.initialCategory === initialCategory
+        const laneIsUnchanged = previousSnapshot.initialCategory === initialCategory
             && previousSnapshot.initialSort === initialSort
             && previousSnapshot.initialTool === initialTool
             && previousSnapshot.initialUnlock === initialUnlock
-            && previousSnapshot.initialResource === initialResource
+            && previousSnapshot.initialResource === initialResource;
+        const snapshotIsUnchanged = previousSnapshot.initialFeed === initialFeed
+            && laneIsUnchanged
             && previousSnapshot.userId === userId;
         initialSnapshotRef.current = {
             initialFeed,
@@ -746,15 +784,24 @@ export default function ShowcaseClient({
         setFeedSessionId(getShowcaseFeedSessionId(initialFeed));
         setIsLoadingMore(false);
         setLoadMoreError(null);
+        setIsRefreshingLane(false);
         isLoadingMoreRef.current = false;
         loadMoreGenerationRef.current += 1;
         anonymousPersonalizationStartedRef.current = false;
+        personalizedRefreshLandedRef.current = false;
         setCategory(initialCategory);
         setSort(initialSort);
         setTool(initialTool ?? 'all');
         setUnlock(initialUnlock);
         setResource(initialResource);
         setSavedItemIds(new Set(visibleInitialItems.filter((item) => item.isSaved).map((item) => item.id)));
+        if (!laneIsUnchanged) {
+            // Another lane is another feed, so it opens at its first row, as
+            // the app's does. The filter bar stays on screen deep in the grid,
+            // and a lane changed from there opened at the bottom of the new,
+            // shorter page. A new viewer keeps their place.
+            window.scrollTo({ top: 0 });
+        }
     }, [initialCategory, initialFeed, initialResource, initialSort, initialTool, initialUnlock, setItems, setSavedItemIds, userId]);
 
     useEffect(() => {
@@ -787,7 +834,7 @@ export default function ShowcaseClient({
                 window.clearTimeout(tickHandle);
             }
         };
-    }, [hasDeferredItems, isLoadingInitialFeed, items.length, startTransition]);
+    }, [hasDeferredItems, isLoadingInitialFeed, items.length]);
 
     useEffect(() => {
         if (
@@ -878,6 +925,8 @@ export default function ShowcaseClient({
                         return;
                     }
 
+                    personalizedRefreshPendingRef.current = false;
+                    personalizedRefreshLandedRef.current = true;
                     const visiblePersonalizedItems = filterSessionHiddenItems(
                         personalizedFeed.items,
                         sessionHiddenPostIdsRef.current,
@@ -951,11 +1000,22 @@ export default function ShowcaseClient({
                     }
 
                     // A later navigation/filter change may establish a fresh
-                    // session after all bounded attempts have been exhausted.
+                    // session after all bounded attempts have been exhausted,
+                    // and so may Load More or Retry (`loadMore`).
+                    personalizedRefreshPendingRef.current = false;
                     anonymousPersonalizationStartedRef.current = false;
                     console.error('Failed to refresh personalized showcase feed:', error);
+                    // A first page with more posts and no cursor goes on only
+                    // through the viewer's own feed: without this its Load More
+                    // did nothing, and nothing said why.
+                    if (pageInfoRef.current.hasMore && !pageInfoRef.current.nextCursor) {
+                        setLoadMoreError('Could not load more posts. Your current feed is still available.');
+                        isLoadingMoreRef.current = false;
+                        setIsLoadingMore(false);
+                    }
                 });
         };
+        personalizedRefreshPendingRef.current = true;
         // Signed-in viewers should see their ranking immediately. Anonymous
         // viewers already have a useful server bootstrap, so establish their
         // feed session only after real demand and an idle browser window.
@@ -972,6 +1032,7 @@ export default function ShowcaseClient({
                 window.clearTimeout(retryHandle);
             }
             controller.abort();
+            personalizedRefreshPendingRef.current = false;
         };
     }, [
         category,
@@ -984,6 +1045,7 @@ export default function ShowcaseClient({
         initialTool,
         initialUnlock,
         isAuthLoading,
+        personalizedRefreshRequest,
         resource,
         setItems,
         setSavedItemIds,
@@ -1031,7 +1093,7 @@ export default function ShowcaseClient({
             params.set('resource', nextResource);
         }
 
-        startTransition(() => {
+        startLaneTransition(() => {
             router.replace(params.size > 0 ? `${pathname}?${params.toString()}` : pathname, {
                 scroll: false,
             });
@@ -1053,11 +1115,28 @@ export default function ShowcaseClient({
     const loadMore = useCallback(async () => {
         const nextCursor = sort === DEFAULT_SHOWCASE_SORT ? pageInfo.nextCursor ?? null : null;
         const nextOffset = pageInfo.nextOffset;
-        if (
-            isLoadingMoreRef.current
-            || !pageInfo.hasMore
-            || (sort === DEFAULT_SHOWCASE_SORT ? !nextCursor : nextOffset === null)
-        ) {
+        if (isLoadingMoreRef.current || !pageInfo.hasMore) {
+            return;
+        }
+
+        // For you's first page is built for everyone and has no cursor: what
+        // follows it is the viewer's own feed, merged in under the drawn rows
+        // (the refresh effect above). Asking for more asks for that: it is the
+        // demand a guest's feed waits on, and it starts the refresh again after
+        // it gave up. Loading shows until the page comes, or the Retry row.
+        // Once it has come, a page still without a cursor goes on by offset.
+        if (sort === DEFAULT_SHOWCASE_SORT && !nextCursor && !personalizedRefreshLandedRef.current) {
+            isLoadingMoreRef.current = true;
+            setIsLoadingMore(true);
+            setLoadMoreError(null);
+            setHasAnonymousPersonalizationDemand(true);
+            if (!personalizedRefreshPendingRef.current) {
+                setPersonalizedRefreshRequest((request) => request + 1);
+            }
+            return;
+        }
+
+        if (!nextCursor && nextOffset === null) {
             return;
         }
 
@@ -1164,6 +1243,78 @@ export default function ShowcaseClient({
         };
     }, [hasDeferredItems, isLoadingInitialFeed, loadMore, pageInfo.hasMore]);
 
+    // The end of a lane offers Refresh, as the app's pull and header button
+    // do: page one asked for afresh replaces the grid. What was kept of the
+    // lane for coming back to it goes first, or a back navigation would bring
+    // the old grid back.
+    const refreshLane = async () => {
+        if (isLoadingMoreRef.current || personalizedRefreshPendingRef.current) {
+            return;
+        }
+
+        forgetShowcaseClientSnapshot(showcaseClientCacheKey);
+        pendingSnapshotRef.current = null;
+        isLoadingMoreRef.current = true;
+        setIsRefreshingLane(true);
+        setLoadMoreError(null);
+        // This page one is the viewer's own: For you's refresh, which a
+        // guest's first interaction (this tap) starts, need not ask again.
+        anonymousPersonalizationStartedRef.current = true;
+        const refreshGeneration = loadMoreGenerationRef.current;
+
+        try {
+            const params = new URLSearchParams({ limit: String(SHOWCASE_PAGE_SIZE) });
+            setNonDefaultParam(params, 'category', requestCategoryFor(category), 'all');
+            setNonDefaultParam(params, 'sort', sort, DEFAULT_SHOWCASE_SORT);
+            setNonDefaultParam(params, 'tool', tool, 'all');
+            setNonDefaultParam(params, 'unlock', unlock, 'all');
+            setNonDefaultParam(params, 'resource', resource, 'all');
+
+            const response = await fetch(`/api/showcase/feed?${params.toString()}`, accessToken ? {
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                },
+            } : undefined);
+            if (!response.ok) {
+                throw new Error(`Feed request failed with ${response.status}`);
+            }
+
+            const firstPage: ShowcaseFeedPage = await response.json();
+            // A lane change while this was in flight: the page is the old lane's.
+            if (refreshGeneration !== loadMoreGenerationRef.current) {
+                return;
+            }
+            const visibleItems = filterSessionHiddenItems(
+                firstPage.items,
+                sessionHiddenPostIdsRef.current,
+                sessionHiddenCreatorIdsRef.current
+            );
+            personalizedRefreshLandedRef.current = true;
+            setItems(visibleItems);
+            setPageInfo(firstPage.pageInfo);
+            setFeedSessionId(getShowcaseFeedSessionId(firstPage));
+            setRenderedItemCount(Math.min(SHOWCASE_INITIAL_RENDER_COUNT, visibleItems.length));
+            setSavedItemIds(new Set(visibleItems.filter((item) => item.isSaved).map((item) => item.id)));
+            // The reader was at the end of the old grid; the new one starts at the top.
+            window.scrollTo({ top: 0 });
+        } catch (error) {
+            if (refreshGeneration !== loadMoreGenerationRef.current) {
+                return;
+            }
+            anonymousPersonalizationStartedRef.current = false;
+            console.error('Failed to refresh the showcase lane:', error);
+            setFeedbackNotice({
+                tone: 'error',
+                message: 'Could not refresh Explore. Your current feed is still available.',
+            });
+        } finally {
+            if (refreshGeneration === loadMoreGenerationRef.current) {
+                isLoadingMoreRef.current = false;
+                setIsRefreshingLane(false);
+            }
+        }
+    };
+
     const handleRemix = async (
         id: string,
         sourceSurface: ShowcaseEventSourceSurface = 'showcase'
@@ -1243,10 +1394,11 @@ export default function ShowcaseClient({
         setItems(remainingItems);
 
         if (selectedItemId && removedIds.has(selectedItemId)) {
-            const replacementItem = remainingItems[Math.min(
-                Math.max(itemPosition, 0),
-                Math.max(remainingItems.length - 1, 0)
-            )] ?? null;
+            const replacementItem = pickReelReplacement(
+                items,
+                items.findIndex((candidate) => candidate.id === selectedItemId),
+                (candidate) => removedIds.has(candidate.id)
+            );
 
             if (replacementItem) {
                 selectPreviewItem(replacementItem.id);
@@ -1326,9 +1478,7 @@ export default function ShowcaseClient({
         const openPosition = openId ? currentItems.findIndex((candidate) => candidate.id === openId) : -1;
         setItems((latestItems) => latestItems.filter((candidate) => !isRemoved(candidate)));
         if (openPosition < 0 || !isRemoved(currentItems[openPosition])) return;
-        const replacementItem = currentItems.slice(openPosition + 1).find((candidate) => !isRemoved(candidate))
-            ?? currentItems.slice(0, openPosition).reverse().find((candidate) => !isRemoved(candidate))
-            ?? null;
+        const replacementItem = pickReelReplacement(currentItems, openPosition, isRemoved);
         if (replacementItem) {
             selectPreviewItem(replacementItem.id);
         } else {
@@ -1408,6 +1558,15 @@ export default function ShowcaseClient({
             },
         } : null,
     ].filter((pill): pill is { key: string; label: string; clear: () => void } => Boolean(pill));
+    // Worded as the app's end of Explore: For you as it comes is all caught
+    // up, and a narrower lane is named by its narrowest choice, the tool or
+    // filter first as in the app, then the kind, then the sort.
+    const narrowestLaneLabel = activeFilterPills[0]?.label
+        ?? (category !== 'all' ? CATEGORIES.find((option) => option.id === category)?.label : undefined)
+        ?? (sort !== DEFAULT_SHOWCASE_SORT ? SORTS.find((option) => option.id === sort)?.label : undefined);
+    const endOfLaneMessage = narrowestLaneLabel
+        ? `You've reached the end of ${narrowestLaneLabel}.`
+        : "You're all caught up.";
 
     return (
         <div className="ui-page ui-page-ambient min-h-screen py-5 font-[family-name:var(--font-geist-sans)] sm:py-7">
@@ -1864,6 +2023,22 @@ export default function ShowcaseClient({
                         </button>
                     </div>
                 )}
+
+                {!pageInfo.hasMore && tileableItems.length > 0 && !hasDeferredItems ? (
+                    <div className="mt-12 flex flex-col items-center gap-3 text-center">
+                        <p className="text-sm font-semibold text-[var(--ui-text-muted)]">{endOfLaneMessage}</p>
+                        <button
+                            type="button"
+                            onClick={() => void refreshLane()}
+                            disabled={isRefreshingLane}
+                            aria-busy={isRefreshingLane}
+                            className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-6 text-sm font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-3)] disabled:opacity-50"
+                        >
+                            <RefreshCw className={`h-4 w-4 ${isRefreshingLane ? 'animate-spin' : ''}`} aria-hidden />
+                            Refresh
+                        </button>
+                    </div>
+                ) : null}
             </div>
 
             {feedbackNotice ? (

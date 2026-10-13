@@ -5,6 +5,7 @@ import { mergeShowcaseFeedKeepingVisibleItems } from '@/lib/showcase-feed-stabil
 type TestFeedItem = {
   id: string;
   label: string;
+  recommendation?: { deliveryId: string };
 };
 
 function item(id: string, label = id): TestFeedItem {
@@ -31,8 +32,43 @@ describe('showcase feed stability', () => {
       'ranked-first',
       'ranked-third',
     ]);
-    expect(merged[0]).toBe(visibleFirst);
+    // A visible card the incoming page also holds takes the incoming copy in
+    // its place; one the page lacks stays the object it was.
+    expect(merged[0]).toBe(incomingSecond);
     expect(merged[1]).toBe(visibleSecond);
+  });
+
+  // A card drawn from the page built for everyone has no delivery. The
+  // viewer's own page carries one for the same post, and the card only reports
+  // its impression, open and share with it.
+  it("gives a visible card the incoming page's delivery without moving it", () => {
+    const drawnWithoutDelivery = item('drawn');
+    const drawnTheRankedPageLacks = item('drawn-only');
+    const rankedCopy: TestFeedItem = { ...item('drawn', 'Ranked copy'), recommendation: { deliveryId: 'delivery-7' } };
+
+    const merged = mergeShowcaseFeedKeepingVisibleItems(
+      [drawnWithoutDelivery, drawnTheRankedPageLacks],
+      [item('ranked-first'), rankedCopy],
+      2,
+    );
+
+    expect(merged.map((candidate) => candidate.id)).toEqual(['drawn', 'drawn-only', 'ranked-first']);
+    expect(merged[0].recommendation).toEqual({ deliveryId: 'delivery-7' });
+    expect(merged[0]).toBe(rankedCopy);
+    expect(merged[1]).toBe(drawnTheRankedPageLacks);
+  });
+
+  it('takes the first incoming copy when the incoming page repeats a visible post', () => {
+    const firstCopy = item('drawn', 'First copy');
+
+    const merged = mergeShowcaseFeedKeepingVisibleItems(
+      [item('drawn', 'Drawn')],
+      [firstCopy, item('drawn', 'Second copy')],
+      1,
+    );
+
+    expect(merged).toEqual([firstCopy]);
+    expect(merged[0]).toBe(firstCopy);
   });
 
   it('uses the incoming order when no current cards are visible', () => {
