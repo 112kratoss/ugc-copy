@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { startTransition, useCallback, useEffect, useRef, useState, useTransition } from 'react';
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Loader2, Heart, Image as ImageIcon, Video, Layers, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, SlidersHorizontal, X, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/components/AuthProvider';
@@ -241,6 +241,264 @@ function pickReelReplacement(
         ?? null;
 }
 
+/**
+ * The path of an Explore lane: its filters, each named only when it is not
+ * the default. A lane change goes there, and a tile's links come back there.
+ */
+function buildShowcaseLanePath(
+    pathname: string,
+    lane: {
+        category: ShowcaseCategory;
+        sort: ShowcaseSort;
+        tool: string;
+        unlock: ShowcaseUnlockFilter;
+        resource: ShowcaseResourceFilter;
+    }
+): string {
+    const params = new URLSearchParams();
+
+    if (lane.category !== 'all') {
+        params.set('category', lane.category);
+    }
+
+    if (lane.sort !== DEFAULT_SHOWCASE_SORT) {
+        params.set('sort', lane.sort);
+    }
+
+    if (lane.tool && lane.tool !== 'all') {
+        params.set('tool', lane.tool);
+    }
+
+    if (lane.unlock !== 'all') {
+        params.set('unlock', lane.unlock);
+    }
+
+    if (lane.resource !== 'all') {
+        params.set('resource', lane.resource);
+    }
+
+    return params.size > 0 ? `${pathname}?${params.toString()}` : pathname;
+}
+
+interface ShowcaseGridCardProps {
+    item: ShowcaseFeedItem;
+    index: number;
+    isSaved: boolean;
+    isSaving: boolean;
+    isPriority: boolean;
+    priorityPoster: ShowcasePriorityPosterData | null;
+    feedSessionId: string | null;
+    accessToken: string | null;
+    viewerId: string | null;
+    /** The lane the tile's links come back to (`buildShowcaseLanePath`). */
+    returnTo: string;
+    onOpenPreview: (item: ShowcaseFeedItem, mediaIndex: number) => void;
+    onToggleSave: (id: string) => void;
+    onFeedback: (
+        item: ShowcaseFeedItem,
+        action: ShowcaseFeedbackAction,
+        sourceSurface: ShowcaseEventSourceSurface
+    ) => Promise<void>;
+    onReportContent: (item: ShowcaseFeedItem, surface: 'explore' | 'reel') => Promise<void>;
+    onReportUser: (item: ShowcaseFeedItem, surface: 'explore' | 'reel') => Promise<void>;
+    onBlockUser: (item: ShowcaseFeedItem) => Promise<void>;
+}
+
+/**
+ * One Explore tile. The grid is not windowed, and the page around it renders
+ * again at every reel landing, media swipe, save and reveal tick: a tile drawn
+ * inline was drawn again each time, every tile, down to its carousel and menu.
+ * Memoised, it draws again only when what it shows changes. So its props are
+ * values, and functions kept across renders; the reel's post and slide, which
+ * the page's URL carries, are not among them.
+ */
+const ShowcaseGridCard = memo(function ShowcaseGridCard({
+    item,
+    index,
+    isSaved,
+    isSaving,
+    isPriority,
+    priorityPoster,
+    feedSessionId,
+    accessToken,
+    viewerId,
+    returnTo,
+    onOpenPreview,
+    onToggleSave,
+    onFeedback,
+    onReportContent,
+    onReportUser,
+    onBlockUser,
+}: ShowcaseGridCardProps) {
+    const resourceKinds = getItemResourceKinds(item);
+    const mediaItems = useMemo(() => getShowcaseItemMediaItems(item), [item]);
+    const isMixedMedia = new Set(mediaItems.map((mediaItem) => mediaItem.mediaKind)).size > 1;
+    const isOwnPost = Boolean(viewerId && item.creator.id === viewerId);
+
+    return (
+        <QualifiedImpressionBoundary
+            item={item}
+            position={index}
+            feedSessionId={feedSessionId}
+            accessToken={accessToken}
+            className="flex min-w-0 flex-col [content-visibility:auto] [contain-intrinsic-size:auto_520px]"
+        >
+            {/* Pinterest Style Card Frame */}
+            <div className="group relative overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition duration-200 hover:border-[rgba(255,122,89,0.28)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.42)] focus-within:border-[rgba(255,122,89,0.34)]">
+                <div className="relative overflow-hidden bg-black">
+                    {mediaItems.length > 0 ? (
+                        <ShowcaseMediaCarousel
+                            mediaItems={mediaItems}
+                            title={item.title}
+                            priority={isPriority}
+                            priorityPoster={priorityPoster}
+                            onOpen={(mediaIndex) => onOpenPreview(item, mediaIndex)}
+                        />
+                    ) : (
+                        <div className="flex min-h-[240px] items-center justify-center bg-zinc-950 text-zinc-500">
+                            <BookText className="h-10 w-10" />
+                        </div>
+                    )}
+                </div>
+
+                {/* Hover State Controls Overlay (Pinterest Style) */}
+                <div className="showcase-card-actions pointer-events-none absolute inset-0 z-20 flex flex-col justify-between bg-gradient-to-t from-black/70 via-transparent to-transparent p-3 transition-opacity duration-200">
+                    <div className="flex justify-between items-start pointer-events-auto">
+                        <div className="px-2.5 py-1 bg-black/60 backdrop-blur-md rounded-full text-[11px] font-medium border border-white/10 flex items-center gap-1.5 text-white">
+                            <span>{isMixedMedia ? 'Mixed' : item.category}</span>
+                        </div>
+                        {/* The feed card's five rows. Not on the viewer's own
+                            post: nothing there to hide, report or block. */}
+                        <ShowcaseFeedbackMenu
+                            portal
+                            itemTitle={item.title}
+                            creator={item.creator}
+                            canHideCreator={Boolean(
+                                item.creator.id && item.creator.id !== viewerId
+                            )}
+                            sessionOnly={!viewerId}
+                            onSelect={(action) => onFeedback(item, action, 'showcase')}
+                            onReportContent={isOwnPost
+                                ? undefined
+                                : () => void onReportContent(item, 'explore')}
+                            onReportUser={() => void onReportUser(item, 'explore')}
+                            onBlockUser={() => void onBlockUser(item)}
+                        />
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pointer-events-auto">
+                        <PublicShareButton
+                            generationId={item.id}
+                            title={item.title}
+                            description={item.body || item.prompt}
+                            sourceSurface="showcase"
+                            accessToken={accessToken}
+                            viewerIsOwner={isOwnPost}
+                            onShared={() => {
+                                void sendShowcaseFeedEvent({
+                                    item,
+                                    eventType: 'share',
+                                    sourceSurface: 'showcase',
+                                    accessToken,
+                                    feedSessionId,
+                                    fallbackPosition: index,
+                                }).catch(() => undefined);
+                            }}
+                            iconOnly
+                            className="ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full bg-[var(--ui-text-primary)] text-[var(--ui-primary-on)] shadow-md transition hover:bg-white"
+                        />
+
+                        {item.asset ? (
+                            <Link
+                                href={buildShowcaseDetailPath(item.id, {
+                                    from: 'community',
+                                    returnTo,
+                                    section: 'resources',
+                                })}
+                                prefetch={false}
+                                // The tile's resources opened: once per delivery.
+                                onClick={() => sendShowcaseResourceOpenEvent({
+                                    item,
+                                    sourceSurface: 'showcase',
+                                    accessToken,
+                                    feedSessionId,
+                                    fallbackPosition: index,
+                                })}
+                                className="ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full bg-amber-400 text-[#1a0d08] shadow-md transition hover:bg-amber-300"
+                                aria-label={`${getAssetPurchaseCtaLabel(item.asset)} for ${item.title}`}
+                                title={getAssetPurchaseCtaLabel(item.asset)}
+                            >
+                                <ShoppingBag className="h-4.5 w-4.5" />
+                            </Link>
+                        ) : null}
+
+                        <button
+                            type="button"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onToggleSave(item.id);
+                            }}
+                            disabled={isSaving}
+                            aria-label={`${isSaved ? 'Remove save from' : 'Save'} ${item.title}. ${item.saveCount} saves`}
+                            aria-pressed={isSaved}
+                            aria-busy={isSaving}
+                            className={`ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full shadow-md transition ${
+                                isSaved
+                                    ? 'bg-rose-600 text-white hover:bg-rose-700'
+                                    : 'bg-[var(--ui-text-primary)] text-[var(--ui-primary-on)] hover:bg-white'
+                            }`}
+                            title={isSaved ? 'Remove save' : 'Save'}
+                        >
+                            <Heart className={`h-4 w-4 ${isSaved ? 'fill-current' : ''}`} />
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {/* Pinterest Style Meta Details Under the Card */}
+            <div className="mt-3 px-1.5 flex flex-col gap-1.5">
+                <div className="flex items-start justify-between gap-2">
+                    <h3 className="font-semibold text-zinc-100 text-sm leading-snug line-clamp-1 flex-1">
+                        {item.title}
+                    </h3>
+                    <span className="text-[10px] text-zinc-500 font-semibold whitespace-nowrap mt-0.5">
+                        {formatShowcaseDate(item.createdAt)}
+                    </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                        <CreatorIdentity creator={item.creator} compact prefetch={false} />
+                    </div>
+                    <div className="flex items-center gap-1 text-zinc-500 text-[11px] font-semibold">
+                        <Heart className={`w-3.5 h-3.5 ${isSaved ? 'fill-[var(--ui-primary)] text-[var(--ui-primary)]' : ''}`} />
+                        <span>{item.saveCount}</span>
+                    </div>
+                </div>
+
+                {/* Recipe and resource badges */}
+                {(item.asset || resourceKinds.length > 0) && (
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                        {item.asset ? (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/10 bg-emerald-500/[0.06] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                                {getAssetAccessLabel(item.asset)}
+                            </span>
+                        ) : null}
+                        {resourceKinds.map((kind) => (
+                            <span
+                                key={`${item.id}-${kind}`}
+                                className="rounded-full border border-white/5 bg-white/[0.02] px-2 py-0.5 text-[10px] font-bold tracking-wider text-zinc-400 uppercase"
+                            >
+                                {getPostResourceKindLabel(kind)}
+                            </span>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </QualifiedImpressionBoundary>
+    );
+});
+
 export default function ShowcaseClient({
     initialFeed,
     initialCategory,
@@ -450,16 +708,27 @@ export default function ShowcaseClient({
         scheduleIdleWork(warmShowcaseReelViewer, SHOWCASE_REEL_WARM_IDLE_TIMEOUT_MS)
     ), []);
 
-    const currentShowcasePath = searchParams.toString()
-        ? `${pathname}?${searchParams.toString()}`
-        : pathname;
-
-    const buildCommunityDetailPath = (id: string, section?: string) =>
+    // A post page goes back to the lane, named by its filters alone. The URL
+    // also carries the reel's post and slide, which change at every landing: a
+    // way back read from it made every tile's props new at each one, though
+    // `buildShowcaseDetailPath` drops both from the link. The lane is the one
+    // the grid holds, from the props: the local filters run ahead of them
+    // while a lane change is on its way, and would draw every tile of the old
+    // lane again in the tap's own render.
+    const laneReturnPath = useMemo(() => buildShowcaseLanePath(pathname, {
+        category: initialCategory,
+        sort: initialSort,
+        tool: initialTool ?? 'all',
+        unlock: initialUnlock,
+        resource: initialResource,
+    }), [initialCategory, initialResource, initialSort, initialTool, initialUnlock, pathname]);
+    const buildCommunityDetailPath = useCallback((id: string, section?: string) => (
         buildShowcaseDetailPath(id, {
             from: 'community',
-            returnTo: currentShowcasePath,
+            returnTo: laneReturnPath,
             section,
-        });
+        })
+    ), [laneReturnPath]);
     const isLoadingInitialFeed = isPending && items.length === 0 && !isAuthLoading;
     // Showcase is the media grid. A text-only post has nothing to put in a tile,
     // so it lives on /feed, which renders a written post at full width.
@@ -711,14 +980,16 @@ export default function ShowcaseClient({
         setSelectedItemId(id);
     }, [updateReelUrl]);
 
-    const openPreview = (item: ShowcaseFeedItem, mediaIndex = 0) => {
+    // What the tiles call is kept across renders (`ShowcaseGridCard`), and
+    // reads the list and the open post through refs, not from one render.
+    const openPreview = useCallback((item: ShowcaseFeedItem, mediaIndex = 0) => {
         reelHistoryModeRef.current = 'pushed';
         setSelectedMediaIndex(mediaIndex);
         updateReelUrl(item.id, 'push', mediaIndex);
         setSelectedItemId(item.id);
-    };
+    }, [updateReelUrl]);
 
-    const closePreview = () => {
+    const closePreview = useCallback(() => {
         setSelectedItemId(null);
         setDirectPostStatus(null);
 
@@ -730,7 +1001,15 @@ export default function ShowcaseClient({
 
         reelHistoryModeRef.current = null;
         updateReelUrl(null, 'replace');
-    };
+    }, [updateReelUrl]);
+
+    // The save hook returns a new toggleSave on every render; the tiles get
+    // one function that reads the latest through a ref, as Home's cards do.
+    const toggleSaveRef = useRef(toggleSave);
+    toggleSaveRef.current = toggleSave;
+    const handleToggleSave = useCallback((id: string) => {
+        void toggleSaveRef.current(id);
+    }, []);
 
     useEffect(() => {
         const handlePopState = () => {
@@ -1071,30 +1350,14 @@ export default function ShowcaseClient({
         nextUnlock = unlock,
         nextResource = resource
     ) => {
-        const params = new URLSearchParams();
-
-        if (nextCategory !== 'all') {
-            params.set('category', nextCategory);
-        }
-
-        if (nextSort !== DEFAULT_SHOWCASE_SORT) {
-            params.set('sort', nextSort);
-        }
-
-        if (nextTool && nextTool !== 'all') {
-            params.set('tool', nextTool);
-        }
-
-        if (nextUnlock !== 'all') {
-            params.set('unlock', nextUnlock);
-        }
-
-        if (nextResource !== 'all') {
-            params.set('resource', nextResource);
-        }
-
         startLaneTransition(() => {
-            router.replace(params.size > 0 ? `${pathname}?${params.toString()}` : pathname, {
+            router.replace(buildShowcaseLanePath(pathname, {
+                category: nextCategory,
+                sort: nextSort,
+                tool: nextTool,
+                unlock: nextUnlock,
+                resource: nextResource,
+            }), {
                 scroll: false,
             });
         });
@@ -1357,20 +1620,22 @@ export default function ShowcaseClient({
         }
     };
 
-    const handleFeedFeedback = async (
+    const handleFeedFeedback = useCallback(async (
         feedbackItem: ShowcaseFeedItem,
         action: ShowcaseFeedbackAction,
         sourceSurface: ShowcaseEventSourceSurface
     ) => {
         if (
             action === 'hide_creator'
-            && (!feedbackItem.creator.id || feedbackItem.creator.id === user?.id)
+            && (!feedbackItem.creator.id || feedbackItem.creator.id === userId)
         ) {
             return;
         }
 
-        const itemPosition = items.findIndex((candidate) => candidate.id === feedbackItem.id);
-        const removedItems = items
+        const currentItems = feedItemsForEventsRef.current;
+        const openItemId = selectedItemIdRef.current;
+        const itemPosition = currentItems.findIndex((candidate) => candidate.id === feedbackItem.id);
+        const removedItems = currentItems
             .map((candidate, index) => ({ item: candidate, index }))
             .filter(({ item: candidate }) => action === 'hide_creator'
                 ? candidate.creator.id === feedbackItem.creator.id
@@ -1380,7 +1645,7 @@ export default function ShowcaseClient({
             return;
         }
 
-        if (!user) {
+        if (!userId) {
             if (action === 'hide_creator' && feedbackItem.creator.id) {
                 sessionHiddenCreatorIdsRef.current.add(feedbackItem.creator.id);
             } else {
@@ -1389,14 +1654,15 @@ export default function ShowcaseClient({
         }
 
         const removedIds = new Set(removedItems.map(({ item: candidate }) => candidate.id));
-        const remainingItems = items.filter((candidate) => !removedIds.has(candidate.id));
         setFeedbackNotice(null);
-        setItems(remainingItems);
+        // Taken from the list as it is when this lands: the refs follow each
+        // commit a moment later, and a page appended in that moment stays.
+        setItems((latestItems) => latestItems.filter((candidate) => !removedIds.has(candidate.id)));
 
-        if (selectedItemId && removedIds.has(selectedItemId)) {
+        if (openItemId && removedIds.has(openItemId)) {
             const replacementItem = pickReelReplacement(
-                items,
-                items.findIndex((candidate) => candidate.id === selectedItemId),
+                currentItems,
+                currentItems.findIndex((candidate) => candidate.id === openItemId),
                 (candidate) => removedIds.has(candidate.id)
             );
 
@@ -1412,8 +1678,8 @@ export default function ShowcaseClient({
                 item: feedbackItem,
                 eventType: action,
                 sourceSurface,
-                accessToken: session?.access_token ?? null,
-                feedSessionId,
+                accessToken: accessTokenRef.current,
+                feedSessionId: feedSessionIdForEventsRef.current,
                 fallbackPosition: itemPosition >= 0 ? itemPosition : undefined,
                 metadata: {
                     creatorId: feedbackItem.creator.id,
@@ -1421,7 +1687,7 @@ export default function ShowcaseClient({
             });
             setFeedbackNotice({
                 tone: 'success',
-                message: !user
+                message: !userId
                     ? action === 'hide_creator'
                         ? `Posts from ${feedbackItem.creator.name} are hidden for this visit.`
                         : 'Post removed for this visit.'
@@ -1431,15 +1697,15 @@ export default function ShowcaseClient({
             });
         } catch (error) {
             console.error('Failed to save showcase feedback:', error);
-            if (!user) {
+            if (!userId) {
                 if (action === 'hide_creator' && feedbackItem.creator.id) {
                     sessionHiddenCreatorIdsRef.current.delete(feedbackItem.creator.id);
                 } else {
                     sessionHiddenPostIdsRef.current.delete(feedbackItem.id);
                 }
             }
-            setItems((currentItems) => {
-                const restoredItems = [...currentItems];
+            setItems((latestItems) => {
+                const restoredItems = [...latestItems];
                 removedItems.forEach(({ item: removedItem, index }) => {
                     if (!restoredItems.some((candidate) => candidate.id === removedItem.id)) {
                         restoredItems.splice(Math.min(index, restoredItems.length), 0, removedItem);
@@ -1452,27 +1718,27 @@ export default function ShowcaseClient({
                 message: 'We couldn’t save that preference, so the post was restored. Please try again.',
             });
         }
-    };
+    }, [closePreview, selectPreviewItem, setItems, userId]);
 
     // Report content, Report user and Block user, asked for and sent as the
     // feed card's are (`lib/feed-safety-actions.ts`). The server takes them
     // from registered accounts only, so a signed-out viewer is asked to sign
     // in first, and comes back here.
-    const requireAccount = (): string | null => {
-        if (user && session?.access_token) return session.access_token;
+    const requireAccount = useCallback((): string | null => {
+        if (userId && accessTokenRef.current) return accessTokenRef.current;
         router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath('/showcase'))}`);
         return null;
-    };
-    const clearFeedbackNotice = () => setFeedbackNotice(null);
-    const showSafetyOutcome = (outcome: FeedSafetyOutcome) => {
+    }, [router, userId]);
+    const clearFeedbackNotice = useCallback(() => setFeedbackNotice(null), []);
+    const showSafetyOutcome = useCallback((outcome: FeedSafetyOutcome) => {
         if (outcome.status === 'cancelled') return;
         setFeedbackNotice({ tone: outcome.status === 'done' ? 'success' : 'error', message: outcome.message });
-    };
+    }, []);
     // Takes posts out of the grid once a report or a block has gone through.
     // The answer can arrive after the grid has grown or the reel has moved on,
     // so it reads both as they are now. A reel left open on a removed post
     // moves to the post that followed it, or the one before, or closes.
-    const removeAfterSafetyAction = (isRemoved: (candidate: ShowcaseFeedItem) => boolean) => {
+    const removeAfterSafetyAction = useCallback((isRemoved: (candidate: ShowcaseFeedItem) => boolean) => {
         const currentItems = feedItemsForEventsRef.current;
         const openId = selectedItemIdRef.current;
         const openPosition = openId ? currentItems.findIndex((candidate) => candidate.id === openId) : -1;
@@ -1484,8 +1750,8 @@ export default function ShowcaseClient({
         } else {
             closePreview();
         }
-    };
-    const handleReportContent = async (reportedItem: ShowcaseFeedItem, surface: 'explore' | 'reel') => {
+    }, [closePreview, selectPreviewItem, setItems]);
+    const handleReportContent = useCallback(async (reportedItem: ShowcaseFeedItem, surface: 'explore' | 'reel') => {
         const token = requireAccount();
         if (!token) return;
         const outcome = await reportPostAfterConfirmation({
@@ -1501,10 +1767,10 @@ export default function ShowcaseClient({
             removeAfterSafetyAction((candidate) => candidate.id === reportedItem.id);
         }
         showSafetyOutcome(outcome);
-    };
-    const handleReportUser = async (reportedItem: ShowcaseFeedItem, surface: 'explore' | 'reel') => {
+    }, [clearFeedbackNotice, removeAfterSafetyAction, requireAccount, showSafetyOutcome]);
+    const handleReportUser = useCallback(async (reportedItem: ShowcaseFeedItem, surface: 'explore' | 'reel') => {
         const creatorId = reportedItem.creator.id;
-        if (!creatorId || creatorId === user?.id) return;
+        if (!creatorId || creatorId === userId) return;
         const token = requireAccount();
         if (!token) return;
         showSafetyOutcome(await reportCreatorAfterConfirmation({
@@ -1513,10 +1779,10 @@ export default function ShowcaseClient({
             surface,
             onSend: clearFeedbackNotice,
         }));
-    };
-    const handleBlockUser = async (blockedItem: ShowcaseFeedItem) => {
+    }, [clearFeedbackNotice, requireAccount, showSafetyOutcome, userId]);
+    const handleBlockUser = useCallback(async (blockedItem: ShowcaseFeedItem) => {
         const creatorId = blockedItem.creator.id;
-        if (!creatorId || creatorId === user?.id) return;
+        if (!creatorId || creatorId === userId) return;
         const token = requireAccount();
         if (!token) return;
         const outcome = await blockCreatorAfterConfirmation({
@@ -1530,7 +1796,7 @@ export default function ShowcaseClient({
             removeAfterSafetyAction((candidate) => candidate.creator.id === creatorId);
         }
         showSafetyOutcome(outcome);
-    };
+    }, [clearFeedbackNotice, removeAfterSafetyAction, requireAccount, showSafetyOutcome, userId]);
 
     const activeFilterPills = [
         tool !== 'all' ? {
@@ -1794,177 +2060,27 @@ export default function ShowcaseClient({
                         onPointerEnter={warmShowcaseReelViewer}
                         onTouchStart={warmShowcaseReelViewer}
                     >
-                            {renderedItems.map((item, itemIndex) => {
-                                const resourceKinds = getItemResourceKinds(item);
-                                const isSaved = savedItemIds.has(item.id);
-                                const mediaItems = getShowcaseItemMediaItems(item);
-                                const isMixedMedia = new Set(mediaItems.map((mediaItem) => mediaItem.mediaKind)).size > 1;
-
-                                return (
-                                    <QualifiedImpressionBoundary
-                                        key={item.id}
-                                        item={item}
-                                        position={itemIndex}
-                                        feedSessionId={feedSessionId}
-                                        accessToken={session?.access_token ?? null}
-                                        className="flex min-w-0 flex-col [content-visibility:auto] [contain-intrinsic-size:auto_520px]"
-                                    >
-                                        {/* Pinterest Style Card Frame */}
-                                        <div className="group relative overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition duration-200 hover:border-[rgba(255,122,89,0.28)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.42)] focus-within:border-[rgba(255,122,89,0.34)]">
-                                            <div className="relative overflow-hidden bg-black">
-                                                {mediaItems.length > 0 ? (
-                                                    <ShowcaseMediaCarousel
-                                                        mediaItems={mediaItems}
-                                                        title={item.title}
-                                                        priority={item.id === priorityMediaItemId}
-                                                        priorityPoster={item.id === initialPriorityPoster?.postId
-                                                            ? {
-                                                                mediaId: initialPriorityPoster.mediaId,
-                                                                dataUrl: initialPriorityPoster.dataUrl,
-                                                            }
-                                                            : null}
-                                                        onOpen={(mediaIndex) => openPreview(item, mediaIndex)}
-                                                    />
-                                                ) : (
-                                                    <div className="flex min-h-[240px] items-center justify-center bg-zinc-950 text-zinc-500">
-                                                        <BookText className="h-10 w-10" />
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            {/* Hover State Controls Overlay (Pinterest Style) */}
-                                            <div className="showcase-card-actions pointer-events-none absolute inset-0 z-20 flex flex-col justify-between bg-gradient-to-t from-black/70 via-transparent to-transparent p-3 transition-opacity duration-200">
-                                                <div className="flex justify-between items-start pointer-events-auto">
-                                                    <div className="px-2.5 py-1 bg-black/60 backdrop-blur-md rounded-full text-[11px] font-medium border border-white/10 flex items-center gap-1.5 text-white">
-                                                        <span>{isMixedMedia ? 'Mixed' : item.category}</span>
-                                                    </div>
-                                                    {/* The feed card's five rows. Not on the viewer's own
-                                                        post: nothing there to hide, report or block. */}
-                                                    <ShowcaseFeedbackMenu
-                                                        portal
-                                                        itemTitle={item.title}
-                                                        creator={item.creator}
-                                                        canHideCreator={Boolean(
-                                                            item.creator.id && item.creator.id !== user?.id
-                                                        )}
-                                                        sessionOnly={!user}
-                                                        onSelect={(action) => handleFeedFeedback(item, action, 'showcase')}
-                                                        onReportContent={user && item.creator.id === user.id
-                                                            ? undefined
-                                                            : () => void handleReportContent(item, 'explore')}
-                                                        onReportUser={() => void handleReportUser(item, 'explore')}
-                                                        onBlockUser={() => void handleBlockUser(item)}
-                                                    />
-                                                </div>
-
-                                                <div className="flex items-center justify-end gap-2 pointer-events-auto">
-                                                    <PublicShareButton
-                                                        generationId={item.id}
-                                                        title={item.title}
-                                                        description={item.body || item.prompt}
-                                                        sourceSurface="showcase"
-                                                        accessToken={session?.access_token ?? null}
-                                                        viewerIsOwner={Boolean(user && item.creator.id === user.id)}
-                                                        onShared={() => {
-                                                            void sendShowcaseFeedEvent({
-                                                                item,
-                                                                eventType: 'share',
-                                                                sourceSurface: 'showcase',
-                                                                accessToken: session?.access_token ?? null,
-                                                                feedSessionId,
-                                                                fallbackPosition: itemIndex,
-                                                            }).catch(() => undefined);
-                                                        }}
-                                                        iconOnly
-                                                        className="ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full bg-[var(--ui-text-primary)] text-[var(--ui-primary-on)] shadow-md transition hover:bg-white"
-                                                    />
-
-                                                    {item.asset ? (
-                                                        <Link
-                                                            href={buildCommunityDetailPath(item.id, 'resources')}
-                                                            prefetch={false}
-                                                            // The tile's resources opened: once per delivery.
-                                                            onClick={() => sendShowcaseResourceOpenEvent({
-                                                                item,
-                                                                sourceSurface: 'showcase',
-                                                                accessToken: session?.access_token ?? null,
-                                                                feedSessionId,
-                                                                fallbackPosition: itemIndex,
-                                                            })}
-                                                            className="ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full bg-amber-400 text-[#1a0d08] shadow-md transition hover:bg-amber-300"
-                                                            aria-label={`${getAssetPurchaseCtaLabel(item.asset)} for ${item.title}`}
-                                                            title={getAssetPurchaseCtaLabel(item.asset)}
-                                                        >
-                                                            <ShoppingBag className="h-4.5 w-4.5" />
-                                                        </Link>
-                                                    ) : null}
-
-                                                    <button
-                                                        type="button"
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            void toggleSave(item.id);
-                                                        }}
-                                                        disabled={savingItemIds.has(item.id)}
-                                                        aria-label={`${isSaved ? 'Remove save from' : 'Save'} ${item.title}. ${item.saveCount} saves`}
-                                                        aria-pressed={isSaved}
-                                                        aria-busy={savingItemIds.has(item.id)}
-                                                        className={`ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full shadow-md transition ${
-                                                            isSaved
-                                                                ? 'bg-rose-600 text-white hover:bg-rose-700'
-                                                                : 'bg-[var(--ui-text-primary)] text-[var(--ui-primary-on)] hover:bg-white'
-                                                        }`}
-                                                        title={isSaved ? 'Remove save' : 'Save'}
-                                                    >
-                                                        <Heart className={`h-4 w-4 ${isSaved ? 'fill-current' : ''}`} />
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {/* Pinterest Style Meta Details Under the Card */}
-                                        <div className="mt-3 px-1.5 flex flex-col gap-1.5">
-                                            <div className="flex items-start justify-between gap-2">
-                                                <h3 className="font-semibold text-zinc-100 text-sm leading-snug line-clamp-1 flex-1">
-                                                    {item.title}
-                                                </h3>
-                                                <span className="text-[10px] text-zinc-500 font-semibold whitespace-nowrap mt-0.5">
-                                                    {formatShowcaseDate(item.createdAt)}
-                                                </span>
-                                            </div>
-
-                                            <div className="flex items-center justify-between gap-2">
-                                                <div className="min-w-0 flex-1">
-                                                    <CreatorIdentity creator={item.creator} compact prefetch={false} />
-                                                </div>
-                                                <div className="flex items-center gap-1 text-zinc-500 text-[11px] font-semibold">
-                                                    <Heart className={`w-3.5 h-3.5 ${isSaved ? 'fill-[var(--ui-primary)] text-[var(--ui-primary)]' : ''}`} />
-                                                    <span>{item.saveCount}</span>
-                                                </div>
-                                            </div>
-
-                                            {/* Recipe and resource badges */}
-                                            {(item.asset || resourceKinds.length > 0) && (
-                                                <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                                                    {item.asset ? (
-                                                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/10 bg-emerald-500/[0.06] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-400">
-                                                            {getAssetAccessLabel(item.asset)}
-                                                        </span>
-                                                    ) : null}
-                                                    {resourceKinds.map((kind) => (
-                                                        <span
-                                                            key={`${item.id}-${kind}`}
-                                                            className="rounded-full border border-white/5 bg-white/[0.02] px-2 py-0.5 text-[10px] font-bold tracking-wider text-zinc-400 uppercase"
-                                                        >
-                                                            {getPostResourceKindLabel(kind)}
-                                                        </span>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </QualifiedImpressionBoundary>
-                                );
-                            })}
+                            {renderedItems.map((item, itemIndex) => (
+                                <ShowcaseGridCard
+                                    key={item.id}
+                                    item={item}
+                                    index={itemIndex}
+                                    isSaved={savedItemIds.has(item.id)}
+                                    isSaving={savingItemIds.has(item.id)}
+                                    isPriority={item.id === priorityMediaItemId}
+                                    priorityPoster={item.id === initialPriorityPoster?.postId ? initialPriorityPoster : null}
+                                    feedSessionId={feedSessionId}
+                                    accessToken={accessToken}
+                                    viewerId={userId}
+                                    returnTo={laneReturnPath}
+                                    onOpenPreview={openPreview}
+                                    onToggleSave={handleToggleSave}
+                                    onFeedback={handleFeedFeedback}
+                                    onReportContent={handleReportContent}
+                                    onReportUser={handleReportUser}
+                                    onBlockUser={handleBlockUser}
+                                />
+                            ))}
                     </div>
                 )}
 

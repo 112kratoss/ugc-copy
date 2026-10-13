@@ -1,4 +1,4 @@
-import type { AnchorHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
+import type { AnchorHTMLAttributes, ComponentProps, HTMLAttributes, ReactNode } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -80,6 +80,19 @@ vi.mock('framer-motion', () => ({
   },
   useReducedMotion: () => false,
 }));
+
+// Every Explore tile is drawn inside one impression boundary, which holds no
+// state of its own, and nothing else on the page draws one (the reel does
+// not): its renders are the tiles' renders. The real boundary is drawn.
+const tileRenders = vi.hoisted(() => vi.fn<(postId: string) => void>());
+vi.mock('@/app/showcase/ShowcaseFeedInteraction', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/app/showcase/ShowcaseFeedInteraction')>();
+  function CountedImpressionBoundary(props: ComponentProps<typeof actual.QualifiedImpressionBoundary>) {
+    tileRenders(props.item.id);
+    return <actual.QualifiedImpressionBoundary {...props} />;
+  }
+  return { ...actual, QualifiedImpressionBoundary: CountedImpressionBoundary };
+});
 
 const SOURCE_TOOL_OPTIONS: SourceToolOption[] = [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
@@ -433,6 +446,212 @@ describe('ShowcaseClient save actions', () => {
     expect(disabledChanges).toEqual([]);
     expect(sortSelect).toBeEnabled();
     expect(imagesChip).toBeEnabled();
+  });
+
+  // A tile draws again only when what it shows changes. Drawn inline, every
+  // tile on the page drew again at each reel landing, media swipe, save and
+  // reveal tick, and the grid is not windowed: the cost grew with each page.
+  describe('what draws a tile again', () => {
+    const drawsOf = (postId: string) => tileRenders.mock.calls.filter(([id]) => id === postId).length;
+    const threeTiles = () => [
+      createShowcaseItem(),
+      createShowcaseItem({
+        id: 'post-2',
+        generationId: 'gen-2',
+        title: 'Second Frame',
+        mediaUrl: 'https://example.com/second.jpg',
+      }),
+      createShowcaseItem({
+        id: 'post-3',
+        generationId: 'gen-3',
+        title: 'Third Frame',
+        mediaUrl: 'https://example.com/third.jpg',
+        mediaItems: [
+          {
+            id: 'third-media-1',
+            url: 'https://example.com/third.jpg',
+            mediaKind: 'image',
+            contentType: 'image/jpeg',
+            originalName: 'third.jpg',
+            width: 800,
+            height: 1000,
+            durationSeconds: null,
+            sortOrder: 0,
+          },
+          {
+            id: 'third-media-2',
+            url: 'https://example.com/third-second.jpg',
+            mediaKind: 'image',
+            contentType: 'image/jpeg',
+            originalName: 'third-second.jpg',
+            width: 1200,
+            height: 800,
+            durationSeconds: null,
+            sortOrder: 1,
+          },
+        ],
+      }),
+    ];
+
+    beforeEach(() => {
+      tileRenders.mockClear();
+    });
+
+    it('draws none as the reel opens, lands on other posts, swipes media and closes', async () => {
+      vi.spyOn(window.history, 'pushState');
+      // Back from the reel as the browser does it: the URL loses `post`, then popstate.
+      vi.spyOn(window.history, 'back').mockImplementation(() => {
+        window.history.replaceState(null, '', '/showcase');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      const feed = createFeed(threeTiles());
+      // A new element with the same props, as Next draws the page again when
+      // its URL changes.
+      const drawShowcase = () => (
+        <ShowcaseClient
+          initialFeed={feed}
+          initialCategory="all"
+          initialSort="recent"
+          initialTool={null}
+          initialUnlock="all"
+          initialResource="all"
+          sourceToolOptions={SOURCE_TOOL_OPTIONS}
+        />
+      );
+      const reel = async () => within(await screen.findByRole('dialog', { name: 'Explore reel viewer' }));
+      const { rerender } = render(drawShowcase());
+      // The count sees the tiles: each drew once.
+      expect(['post-1', 'post-2', 'post-3'].map(drawsOf)).toEqual([1, 1, 1]);
+      const tileDraws = tileRenders.mock.calls.length;
+
+      fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+      expect(await (await reel()).findByRole('button', { name: /more actions for campaign frame/i })).toBeInTheDocument();
+
+      // A landing from the reel: its Next post (`selectPreviewItem`).
+      fireEvent.click((await reel()).getByRole('button', { name: 'Next post' }));
+      expect(await (await reel()).findByRole('button', { name: /more actions for second frame/i })).toBeInTheDocument();
+      expect(new URLSearchParams(window.location.search).get('post')).toBe('post-2');
+
+      // A landing from the URL (a link, the browser's history): `?post=` changes.
+      window.history.replaceState(null, '', '/showcase?post=post-3');
+      rerender(drawShowcase());
+      expect(await (await reel()).findByRole('button', { name: /more actions for third frame/i })).toBeInTheDocument();
+
+      // A media swipe in the reel: `?media=` changes.
+      fireEvent.click((await reel()).getByRole('button', { name: 'Next media' }));
+      await waitFor(() => {
+        expect(new URLSearchParams(window.location.search).get('media')).toBe('1');
+      });
+
+      fireEvent.click((await reel()).getByRole('button', { name: 'Explore' }));
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
+      });
+
+      expect(tileRenders.mock.calls.length).toBe(tileDraws);
+    });
+
+    it('draws the saved tile alone when a post is saved', async () => {
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/showcase/save') {
+          return { ok: true, json: async () => ({ success: true, isSaved: true, saveCount: 5, changed: true }) };
+        }
+        if (url.startsWith('/api/showcase/saved-state')) {
+          return { ok: true, json: async () => [] };
+        }
+        return { ok: true, json: async () => ({ success: true }) };
+      }));
+      renderShowcase(threeTiles());
+      // The viewer's saved state answers after the first draw, and saves nothing here.
+      await waitFor(() => {
+        expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).startsWith('/api/showcase/saved-state')))
+          .toBe(true);
+      });
+      await act(async () => undefined);
+      const [firstDraws, savedDraws, thirdDraws] = ['post-1', 'post-2', 'post-3'].map(drawsOf);
+
+      fireEvent.click(screen.getByRole('button', { name: /save second frame\. 4 saves/i }));
+
+      const savedButton = await screen.findByRole('button', { name: /remove save from second frame\. 5 saves/i });
+      expect(savedButton).toHaveAttribute('aria-pressed', 'true');
+      // The save has come back: the heart takes taps again.
+      await waitFor(() => expect(savedButton).toBeEnabled());
+      expect(drawsOf('post-2')).toBeGreaterThan(savedDraws);
+      expect(drawsOf('post-1')).toBe(firstDraws);
+      expect(drawsOf('post-3')).toBe(thirdDraws);
+    });
+
+    it('draws none of the tiles already shown when a reveal tick adds the next one', () => {
+      vi.useFakeTimers();
+      const items = Array.from({ length: SHOWCASE_INITIAL_RENDER_COUNT + 2 }, (_, index) => createShowcaseItem({
+        id: `post-${index + 1}`,
+        generationId: `gen-${index + 1}`,
+        title: `Campaign ${index + 1}`,
+        mediaUrl: `https://example.com/campaign-${index + 1}.jpg`,
+      }));
+      const shownIds = items.slice(0, SHOWCASE_INITIAL_RENDER_COUNT).map((item) => item.id);
+      const revealedId = items[SHOWCASE_INITIAL_RENDER_COUNT].id;
+      renderShowcase(items);
+      const shownDraws = shownIds.map(drawsOf);
+      expect(drawsOf(revealedId)).toBe(0);
+
+      act(() => {
+        vi.advanceTimersByTime(160);
+      });
+
+      expect(screen.getByText(`Campaign ${SHOWCASE_INITIAL_RENDER_COUNT + 1}`)).toBeInTheDocument();
+      expect(drawsOf(revealedId)).toBeGreaterThan(0);
+      expect(shownIds.map(drawsOf)).toEqual(shownDraws);
+    });
+
+    it("draws none when a lane is tapped, before that lane's page comes", () => {
+      renderShowcase(threeTiles());
+      const tileDraws = tileRenders.mock.calls.length;
+
+      fireEvent.click(screen.getByRole('button', { name: 'Videos' }));
+
+      expect(screen.getByRole('button', { name: 'Videos' })).toHaveAttribute('aria-pressed', 'true');
+      expect(mockReplace).toHaveBeenCalledWith('/showcase?category=video&sort=recent', { scroll: false });
+      expect(tileRenders.mock.calls.length).toBe(tileDraws);
+    });
+
+    it("names the lane alone as a tile's way back: not the reel's post, nor anything else the URL carries", async () => {
+      window.history.replaceState(null, '', '/showcase?category=video&sort=recent&utm_source=newsletter');
+      vi.spyOn(window.history, 'pushState');
+      render(
+        <ShowcaseClient
+          initialFeed={createFeed(createShowcaseItem({
+            asset: {
+              id: 'bundle-1',
+              postId: 'post-1',
+              title: 'Campaign Frame Unlock',
+              accessMode: 'paid',
+              priceUsdCents: 900,
+              previewText: 'Prompt and workflow included.',
+              allowRemix: false,
+              resourceKinds: ['prompt'],
+            },
+          }))}
+          initialCategory="video"
+          initialSort="recent"
+          initialTool={null}
+          initialUnlock="all"
+          initialResource="all"
+          sourceToolOptions={SOURCE_TOOL_OPTIONS}
+        />
+      );
+      const recipeLink = screen.getByRole('link', { name: /unlock for \$9\.00/i });
+      const wayBack = () => new URL(recipeLink.getAttribute('href') ?? '', 'https://magicbooklet.test')
+        .searchParams.get('returnTo');
+      expect(wayBack()).toBe('/showcase?category=video&sort=recent');
+
+      fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+      await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+
+      expect(new URLSearchParams(window.location.search).get('post')).toBe('post-1');
+      expect(wayBack()).toBe('/showcase?category=video&sort=recent');
+    });
   });
 
   it('establishes an anonymous feed session only after demand and an idle window', () => {
