@@ -7,6 +7,7 @@ import {
   memo,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type PropsWithChildren,
@@ -345,6 +346,26 @@ function NodeShell({
   const pathVisibilityClassName = runtime?.templatePathState === 'dimmed'
     ? 'opacity-30 saturate-50'
     : '';
+  // The run menu opens upward from its button. With a message and a price note under its two
+  // choices it grew under the canvas's sticky header, where a press reaches the header instead
+  // (CI's run of workflow-run-catalog-revision.spec.ts, 2026-10-13). Measured once drawn, and
+  // again when its lines change: it opens below the button when the room above is short. The
+  // side is written onto the element itself, which is the measurement's only reader.
+  const runMenuRef = useRef<HTMLDivElement>(null);
+  const runMenuOpen = Boolean(runtime?.isRunMenuOpen);
+  const runMenuLines = [runtime?.runMessage, runtime?.runPriceNote, runtime?.runNodePriceLabel, runtime?.runBranchPriceLabel].join('\n');
+  useLayoutEffect(() => {
+    const menu = runMenuRef.current;
+    const anchor = menu?.parentElement;
+    if (!runMenuOpen || !menu || !anchor) return;
+    const header = document.querySelector('[data-testid="workflow-canvas-header"]');
+    const roomAbove = header ? header.getBoundingClientRect().bottom : 0;
+    const below = anchor.getBoundingClientRect().top - menu.getBoundingClientRect().height < roomAbove;
+    menu.dataset.placement = below ? 'below' : 'above';
+    for (const [className, on] of [['top-full', below], ['translate-y-2', below], ['top-0', !below], ['-translate-y-full', !below]] as const) {
+      menu.classList.toggle(className, on);
+    }
+  }, [runMenuOpen, runMenuLines]);
 
   return (
     <div
@@ -386,7 +407,9 @@ function NodeShell({
 
               {runtime.isRunMenuOpen && (
                 <div
+                  ref={runMenuRef}
                   data-testid="workflow-node-run-menu"
+                  data-placement="above"
                   className="nodrag nopan absolute left-1/2 top-0 w-60 -translate-x-1/2 -translate-y-full rounded-2xl border border-white/10 bg-[#090909]/95 p-2 shadow-[0_20px_48px_rgba(0,0,0,0.5)] backdrop-blur"
                   onMouseDown={(event) => {
                     event.preventDefault();

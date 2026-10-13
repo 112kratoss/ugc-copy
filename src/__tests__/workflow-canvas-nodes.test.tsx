@@ -138,6 +138,51 @@ describe('WorkflowCanvasNodes edge controls', () => {
     expect(onDeleteNode).toHaveBeenCalledTimes(1);
   });
 
+  // The menu opens upward from its button; with a message and a note it ran under the canvas's
+  // sticky header, where its buttons could not be pressed. jsdom lays nothing out, so the rects
+  // are given: the header's bottom edge, the button's top, the menu's height.
+  it('opens the run menu below its button when the room above ends at the canvas header', () => {
+    const header = document.createElement('div');
+    header.setAttribute('data-testid', 'workflow-canvas-header');
+    document.body.appendChild(header);
+    let buttonTop = 90;
+    const rect = (top: number, height: number): DOMRect => ({
+      x: 0, y: top, width: 240, height, top, left: 0, right: 240, bottom: top + height, toJSON: () => ({}),
+    });
+    const rects = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      if (this === header) return rect(0, 64);
+      if (this.getAttribute('data-testid') === 'workflow-node-run-menu') return rect(buttonTop - 150, 150);
+      return rect(buttonTop, 32);
+    });
+    const graph = createStarterGraph();
+    const node = graph.nodes.find((candidate) => candidate.type === 'video-generate');
+    const WorkflowNode = workflowCanvasNodeTypes['video-generate'] as unknown as ComponentType<Record<string, unknown>>;
+    const runtime = {
+      showPlayControl: true,
+      isRunMenuOpen: true,
+      onRunNode: vi.fn(),
+      onRunBranch: vi.fn(),
+      runNodePriceLabel: 'Cost unavailable',
+      runBranchPriceLabel: 'Cost unavailable',
+      runMessage: 'Ready to run with the current inputs.',
+      runPriceNote: 'Unauthorized',
+    };
+
+    try {
+      const { rerender } = render(<WorkflowNode id={node?.id} data={{ ...node?.data, __runtime: runtime }} dragging={false} />);
+      // 90 above the button, a 150 menu: it would end 60 above the page, under the 64 header.
+      expect(screen.getByTestId('workflow-node-run-menu')).toHaveAttribute('data-placement', 'below');
+
+      // Lower on the canvas there is room, and a note no longer sends it under the header.
+      buttonTop = 400;
+      rerender(<WorkflowNode id={node?.id} data={{ ...node?.data, __runtime: { ...runtime, runPriceNote: null } }} dragging={false} />);
+      expect(screen.getByTestId('workflow-node-run-menu')).toHaveAttribute('data-placement', 'above');
+    } finally {
+      rects.mockRestore();
+      header.remove();
+    }
+  });
+
   it('prices both run choices in the open run menu and says why one has no price', () => {
     const graph = createStarterGraph();
     const node = graph.nodes.find((candidate) => candidate.type === 'video-generate');

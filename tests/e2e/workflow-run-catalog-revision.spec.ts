@@ -132,6 +132,13 @@ async function openCanvasBeforeRelease(page: Page) {
     { name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' },
   ]);
 
+  // The run menu prices its two choices with a quote. Without a session the route answers 401
+  // and the menu says so under them; a fixed price keeps the menu, and this test's subject,
+  // steady.
+  await page.route('**/api/generation-models/quote', async (route) => {
+    await route.fulfill({ json: { modelId: IMAGE_MODEL, catalogRevision: catalog.published, normalizedSettings: {}, costCredits: 25 } });
+  });
+
   await page.route('**/api/model-catalog/v1/**', async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname.endsWith('/current')) {
