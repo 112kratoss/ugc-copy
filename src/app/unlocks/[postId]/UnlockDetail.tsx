@@ -77,6 +77,7 @@ export default function UnlockDetail({ detail }: { detail: ViewerUnlockDetailMod
             postId={detail.postId ?? detail.unlockId}
             fileUrlEndpoint={`/api/me/unlocks/${detail.unlockId}/file-url`}
             mediaItems={detail.mediaItems}
+            coverMedia={detail.isNsfw}
             title={detail.title}
             summary={detail.summary}
             previewText={detail.previewText}

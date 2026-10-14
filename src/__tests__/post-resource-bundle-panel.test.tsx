@@ -1107,6 +1107,82 @@ describe('PostResourceBundlePanel', () => {
         click.mockRestore();
       }
     });
+
+    const outputs = [
+      { id: 'm1', mediaKey: 'media-1', url: '/a.png', previewUrl: '/a-still.jpg', mediaKind: 'image' as const },
+      { id: 'm2', mediaKey: 'media-2', url: '/b.png', previewUrl: '/b-still.jpg', mediaKind: 'image' as const },
+    ] as unknown as NonNullable<Parameters<typeof PostResourceBundlePanel>[0]['mediaItems']>;
+
+    // A preview signs and loads its file as it mounts, so under the plate
+    // there is no preview at all, and the outputs' chips keep the Play mark.
+    it('covers a mature post\'s previews and output stills until one Show, loading nothing under them', async () => {
+      const fetchMock = stubFileUrlFetch();
+      // The scoped reference puts the "Resources for" chips on screen.
+      const items = normalizePostResourceItems([
+        { ...mediaItems[0], scope: { kind: 'media', mediaKeys: ['media-1'] } },
+        mediaItems[1],
+        mediaItems[2],
+      ]);
+      const { container } = renderPanel({ ...unlockedWith(items), mediaItems: outputs, coverMedia: true });
+
+      // One plate per preview, and the outputs' row.
+      expect(screen.getAllByRole('button', { name: 'Show mature content' })).toHaveLength(4);
+      expect(screen.getAllByText('Mature content')).toHaveLength(4);
+      expect(screen.getByRole('button', { name: /show resources for output 1/i })).toBeInTheDocument();
+      expect(container.querySelector('img, video, audio')).toBeNull();
+      expect(screen.queryAllByText(/^Loading (image|video|audio)/)).toHaveLength(0);
+      expect(screen.getByText('Reference 1')).toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Open file' })).toHaveLength(3);
+      expect(screen.getAllByRole('button', { name: 'Download' })).toHaveLength(3);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getAllByRole('button', { name: 'Show mature content' })[2]);
+
+      expect(screen.queryByRole('button', { name: 'Show mature content' })).toBeNull();
+      expect(container.querySelector('img[src="/a-still.jpg"]')).not.toBeNull();
+      expect(container.querySelector('img[src="/b-still.jpg"]')).not.toBeNull();
+      await waitFor(() => {
+        expect(container.querySelector('video')).toHaveAttribute('src', 'https://signed.example.com/user-1/references/motion.mp4');
+      });
+      expect(container.querySelector('img[alt="Reference 1"]')).toHaveAttribute('src', 'https://signed.example.com/user-1/references/frame.png');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+        storagePaths: mediaItems.map((item) => item.storagePath),
+        disposition: 'inline',
+      });
+    });
+
+    it('lets the outputs\' row reveal its stills when a mature recipe has no preview to press', () => {
+      const fetchMock = stubFileUrlFetch();
+      const { container } = renderPanel({
+        viewerCanAccess: true,
+        resourceKinds: ['prompt'],
+        mediaItems: outputs,
+        coverMedia: true,
+        initialResources: {
+          promptText: null,
+          notesMarkdown: null,
+          workflowShareUrl: null,
+          attachments: [],
+          allowRemix: false,
+          items: normalizePostResourceItems([
+            { type: 'prompt', title: 'Hero prompt', textContent: 'Hero text', scope: { kind: 'media', mediaKeys: ['media-1'] } },
+            { type: 'prompt', title: 'Detail prompt', textContent: 'Detail text', scope: { kind: 'media', mediaKeys: ['media-2'] } },
+          ]),
+        },
+      });
+
+      expect(container.querySelector('img')).toBeNull();
+      expect(screen.getByText('Hero text')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Show mature content' }));
+
+      expect(container.querySelector('img[src="/a-still.jpg"]')).not.toBeNull();
+      expect(container.querySelector('img[src="/b-still.jpg"]')).not.toBeNull();
+      expect(screen.queryByText('Mature content')).toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
   describe('cash checkout', () => {

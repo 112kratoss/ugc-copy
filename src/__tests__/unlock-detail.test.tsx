@@ -139,4 +139,14 @@ describe('UnlockDetail', () => {
     expect(screen.queryByText(/stays here|retained here|kept here|stays available here/)).toBeNull();
     expect(panelProps).toHaveBeenCalled();
   });
+
+  // The page draws no media of its own: every still and preview is the panel's.
+  it.each([
+    ['a mature post', true],
+    ['any other post', false],
+  ])('has the panel cover its media for %s', (_name, isNsfw) => {
+    renderDetail({ isNsfw, postReachable: true, postVisibility: 'public' });
+
+    expect(panelProps).toHaveBeenCalledWith(expect.objectContaining({ coverMedia: isNsfw }));
+  });
 });

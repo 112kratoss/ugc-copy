@@ -40,6 +40,7 @@ type GenerationRestoreRow = {
   output_url: string | null;
   showcase_asset_path: string | null;
   is_public: boolean;
+  source_unavailable_at: string | null;
 };
 
 type LinkedPostRow = {
@@ -155,7 +156,7 @@ export async function restoreGenerationMediaForRoute({
   try {
     const { data: generation, error: generationError } = await adminSupabase
       .from('generations')
-      .select('id, user_id, status, model, category, output_url, showcase_asset_path, is_public')
+      .select('id, user_id, status, model, category, output_url, showcase_asset_path, is_public, source_unavailable_at')
       .eq('id', generationId)
       .in('user_id', await resolveLinkedAccountIds(adminSupabase, userId))
       .is('template_run_id', null)
@@ -266,6 +267,9 @@ export async function restoreGenerationMediaForRoute({
         output_url: persistedMedia.outputUrl,
         showcase_asset_path: null,
         is_public: false,
+        // The owner list withholds every address while the lost-source flag is
+        // set, so a restored file would never show.
+        source_unavailable_at: null,
       })
       .eq('id', ownedGeneration.id)
       .eq('user_id', ownedGeneration.user_id)
@@ -323,6 +327,7 @@ export async function restoreGenerationMediaForRoute({
             output_url: ownedGeneration.output_url,
             showcase_asset_path: ownedGeneration.showcase_asset_path,
             is_public: ownedGeneration.is_public,
+            source_unavailable_at: ownedGeneration.source_unavailable_at,
           })
           .eq('id', ownedGeneration.id)
           .eq('user_id', ownedGeneration.user_id)
