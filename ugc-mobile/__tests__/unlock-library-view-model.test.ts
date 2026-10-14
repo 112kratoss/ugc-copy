@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ViewerUnlockDetail, ViewerUnlockItem } from '@/lib/types';
+import type { PostResourceBundleResources, PostResourceItem, ViewerUnlockDetail, ViewerUnlockItem } from '@/lib/types';
 import {
   canOpenUnlockedPost,
   describeUnreachableUnlockedPost,
@@ -12,6 +12,7 @@ import {
   getUnlockDestination,
   getUnlockStateBadge,
   getUnlockThumbnailUrl,
+  hasResourcePictures,
   summarizeUnlockCount,
 } from '@/lib/unlock-library-view-model';
 
@@ -132,36 +133,53 @@ describe('unlock library view model', () => {
 });
 
 describe('what a purchase cost (03-2)', () => {
-  it('names a credit unlock by the credits it took', () => {
-    expect(formatUnlockPaid(createUnlock({ paidWith: 'credits', paidAmountSubunits: 900 }))).toBe('900 credits');
-    expect(formatUnlockPaid(createUnlock({ paidWith: 'credits', paidAmountSubunits: 125000 }))).toBe('1,25,000 credits');
-    expect(formatUnlockPaidPill(createUnlock({ paidWith: 'credits', paidAmountSubunits: 900 }))).toBe('900 credits paid');
+  it('names a credit unlock by the credits it took, on both platforms', () => {
+    for (const platform of ['ios', 'android']) {
+      expect(formatUnlockPaid(createUnlock({ paidWith: 'credits', paidAmountSubunits: 900 }), platform)).toBe('900 credits');
+      expect(formatUnlockPaid(createUnlock({ paidWith: 'credits', paidAmountSubunits: 125000 }), platform)).toBe('1,25,000 credits');
+      expect(formatUnlockPaidPill(createUnlock({ paidWith: 'credits', paidAmountSubunits: 900 }), platform)).toBe('900 credits paid');
+    }
   });
 
-  it('names a cash purchase in its own currency, from minor units', () => {
+  it('names a cash purchase in its own currency on Android, from minor units', () => {
     const rupees = createUnlock({ paidWith: 'cash', paidAmountSubunits: 75000, paidCurrency: 'INR' });
-    expect(formatUnlockPaid(rupees)).toBe('₹750 paid');
-    expect(formatUnlockPaidPill(rupees)).toBe('₹750 paid');
-    expect(formatUnlockPaid(createUnlock({ paidWith: 'cash', paidAmountSubunits: 74950, paidCurrency: 'INR' }))).toBe('₹749.50 paid');
-    expect(formatUnlockPaid(createUnlock({ paidWith: 'cash', paidAmountSubunits: 12500000, paidCurrency: 'INR' }))).toBe('₹1,25,000 paid');
+    expect(formatUnlockPaid(rupees, 'android')).toBe('₹750 paid');
+    expect(formatUnlockPaidPill(rupees, 'android')).toBe('₹750 paid');
+    expect(formatUnlockPaid(createUnlock({ paidWith: 'cash', paidAmountSubunits: 74950, paidCurrency: 'INR' }), 'android')).toBe('₹749.50 paid');
+    expect(formatUnlockPaid(createUnlock({ paidWith: 'cash', paidAmountSubunits: 12500000, paidCurrency: 'INR' }), 'android')).toBe('₹1,25,000 paid');
 
     const dollars = createUnlock({ paidWith: 'cash', paidAmountSubunits: 900, paidCurrency: 'USD' });
-    expect(formatUnlockPaid(dollars)).toBe('$9.00 paid');
-    expect(formatUnlockPaidPill(dollars)).toBe('$9.00 paid');
+    expect(formatUnlockPaid(dollars, 'android')).toBe('$9.00 paid');
+    expect(formatUnlockPaidPill(dollars, 'android')).toBe('$9.00 paid');
   });
 
-  it('calls a free unlock free', () => {
+  it('says only "Paid" for a cash purchase on iOS, with no amount or currency (App Review 2.1(b), 0.1.6)', () => {
+    for (const [amount, currency] of [[75000, 'INR'], [74950, 'INR'], [900, 'USD'], [null, 'INR'], [900, null]] as const) {
+      const cash = createUnlock({ paidWith: 'cash', paidAmountSubunits: amount, paidCurrency: currency });
+      expect(formatUnlockPaid(cash, 'ios')).toBe('Paid');
+      expect(formatUnlockPaidPill(cash, 'ios')).toBe('Paid');
+    }
+  });
+
+  it('calls a free unlock free, on both platforms', () => {
     const free = createUnlock({ accessMode: 'free', purchasePriceUsdCents: 0, paidWith: 'free', paidAmountSubunits: null });
-    expect(formatUnlockPaid(free)).toBe('Free');
-    expect(formatUnlockPaidPill(free)).toBe('Free unlock');
+    for (const platform of ['ios', 'android']) {
+      expect(formatUnlockPaid(free, platform)).toBe('Free');
+      expect(formatUnlockPaidPill(free, platform)).toBe('Free unlock');
+    }
   });
 
-  it('shows a currency only for a purchase that was paid in cash', () => {
+  it('shows a currency only for a purchase paid in cash, and never on iOS', () => {
+    const currency = /[$₹€£]|USD|INR/;
     for (const amount of [1, 99, 900, 250000]) {
-      for (const paidWith of ['credits', 'free'] as const) {
-        const unlock = createUnlock({ paidWith, paidAmountSubunits: amount, purchasePriceUsdCents: amount });
-        expect(formatUnlockPaid(unlock)).not.toMatch(/[$₹€£]|USD|INR/);
-        expect(formatUnlockPaidPill(unlock)).not.toMatch(/[$₹€£]|USD|INR/);
+      for (const paidWith of ['credits', 'free', 'cash'] as const) {
+        const unlock = createUnlock({ paidWith, paidAmountSubunits: amount, purchasePriceUsdCents: amount, paidCurrency: paidWith === 'cash' ? 'INR' : null });
+        expect(formatUnlockPaid(unlock, 'ios')).not.toMatch(currency);
+        expect(formatUnlockPaidPill(unlock, 'ios')).not.toMatch(currency);
+        if (paidWith !== 'cash') {
+          expect(formatUnlockPaid(unlock, 'android')).not.toMatch(currency);
+          expect(formatUnlockPaidPill(unlock, 'android')).not.toMatch(currency);
+        }
       }
     }
   });
@@ -171,15 +189,70 @@ describe('what a purchase cost (03-2)', () => {
     delete legacy.paidWith;
     delete legacy.paidAmountSubunits;
     delete legacy.paidCurrency;
-    expect(formatUnlockPaid(legacy as ViewerUnlockItem)).toBe('900 credits');
-    expect(formatUnlockPaidPill(legacy as ViewerUnlockItem)).toBe('900 credits paid');
-    expect(formatUnlockPaid({ ...(legacy as ViewerUnlockItem), purchasePriceUsdCents: 0 })).toBe('Free');
+    for (const platform of ['ios', 'android']) {
+      expect(formatUnlockPaid(legacy as ViewerUnlockItem, platform)).toBe('900 credits');
+      expect(formatUnlockPaidPill(legacy as ViewerUnlockItem, platform)).toBe('900 credits paid');
+      expect(formatUnlockPaid({ ...(legacy as ViewerUnlockItem), purchasePriceUsdCents: 0 }, platform)).toBe('Free');
+    }
   });
 
   it('keeps an unreadable cash amount from becoming a wrong one', () => {
-    expect(formatUnlockPaid(createUnlock({ paidWith: 'cash', paidAmountSubunits: null, paidCurrency: 'INR' }))).toBe('Paid');
-    expect(formatUnlockPaid(createUnlock({ paidWith: 'cash', paidAmountSubunits: 900, paidCurrency: null }))).toBe('Paid');
-    expect(formatUnlockPaid(createUnlock({ paidWith: 'cash', paidAmountSubunits: 900, paidCurrency: 'XX1' }))).toBe('9.00 XX1 paid');
+    expect(formatUnlockPaid(createUnlock({ paidWith: 'cash', paidAmountSubunits: null, paidCurrency: 'INR' }), 'android')).toBe('Paid');
+    expect(formatUnlockPaid(createUnlock({ paidWith: 'cash', paidAmountSubunits: 900, paidCurrency: null }), 'android')).toBe('Paid');
+    expect(formatUnlockPaid(createUnlock({ paidWith: 'cash', paidAmountSubunits: 900, paidCurrency: 'XX1' }), 'android')).toBe('9.00 XX1 paid');
+  });
+});
+
+describe('pictures among a purchase\'s resources', () => {
+  const resources = (overrides: Partial<PostResourceBundleResources> = {}): PostResourceBundleResources => ({
+    promptText: 'A prompt',
+    notesMarkdown: null,
+    workflowShareUrl: null,
+    workflowSnapshot: null,
+    attachments: [],
+    allowRemix: false,
+    ...overrides,
+  });
+  const item = (overrides: Partial<PostResourceItem>): PostResourceItem => ({
+    type: 'reference_image',
+    role: 'character_reference',
+    sectionId: null,
+    title: '@alisa',
+    description: null,
+    textContent: null,
+    externalUrl: null,
+    storagePath: 'references/alisa.jpg',
+    contentType: 'image/jpeg',
+    sizeBytes: 120_000,
+    workflowSnapshot: null,
+    sortOrder: 0,
+    isPrimary: true,
+    remixUse: 'reference_only',
+    ...overrides,
+  });
+
+  it('finds a stored picture among the items', () => {
+    expect(hasResourcePictures(resources({ items: [item({ type: 'prompt', storagePath: null, contentType: null }), item({})] }))).toBe(true);
+    expect(hasResourcePictures(resources({ items: [item({ type: 'source_file', contentType: 'image/png' })] }))).toBe(true);
+  });
+
+  it('ignores clips, sounds, and pictures that are only links', () => {
+    expect(hasResourcePictures(resources({
+      items: [
+        item({ type: 'reference_video', storagePath: 'references/clip.mp4', contentType: 'video/mp4' }),
+        item({ type: 'reference_audio', storagePath: 'references/track.mp3', contentType: 'audio/mpeg' }),
+        item({ storagePath: null, externalUrl: 'https://example.com/board.jpg' }),
+      ],
+    }))).toBe(false);
+    expect(hasResourcePictures(resources())).toBe(false);
+    expect(hasResourcePictures(null)).toBe(false);
+  });
+
+  it("reads a legacy bundle's attachments when it has no items, as the bundle content does", () => {
+    const legacy = resources({ attachments: [{ label: 'Look', kind: 'file', storagePath: 'references/look.jpg', contentType: 'image/jpeg' }] });
+    expect(hasResourcePictures(legacy)).toBe(true);
+    expect(hasResourcePictures({ ...legacy, items: [] })).toBe(true);
+    expect(hasResourcePictures({ ...legacy, items: [item({ type: 'prompt', storagePath: null, contentType: null })] })).toBe(false);
   });
 });
 

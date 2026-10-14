@@ -22,6 +22,9 @@ const { authUser, mediaSource, platform, query, routerDismissTo, routerPush } = 
   routerPush: vi.fn(),
 }));
 const useMediaSource = vi.hoisted(() => vi.fn(mediaSource));
+// What the website preference allows, as the hook reports it; each test sets it.
+const reveal = vi.hoisted(() => ({ current: 'show' as 'show' | 'website' | 'pending' | 'never' }));
+const useMatureReveal = vi.hoisted(() => vi.fn((_needed: boolean) => reveal.current));
 
 vi.mock('expo-router', () => ({
   router: { push: routerPush, replace: vi.fn(), dismissTo: routerDismissTo, canGoBack: () => true },
@@ -58,6 +61,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@/lib/use-media-source', () => ({ useMediaSource }));
+vi.mock('@/lib/use-mature-reveal', () => ({ useMatureReveal }));
 
 vi.mock('@tanstack/react-query', () => ({
   useInfiniteQuery: () => query.current,
@@ -126,6 +130,8 @@ function images(tree: renderer.ReactTestRenderer) {
 beforeEach(() => {
   authUser.current = { id: 'user-1' };
   platform.OS = 'ios';
+  reveal.current = 'show';
+  useMatureReveal.mockClear();
   routerPush.mockClear();
   routerDismissTo.mockClear();
   fetchNextPage.mockClear();
@@ -204,6 +210,8 @@ describe('mature unlocks', () => {
     isNsfw: true,
     post: { mediaUrl: null, mediaKind: 'image', previewUrl: '/api/media?bucket=post_media&path=still.webp', previewThumbhash: 'thumb-1' },
   });
+  const showControls = (tree: renderer.ReactTestRenderer) =>
+    tree.root.findAll((node) => node.props.accessibilityLabel === 'Show mature content');
 
   it('covers the thumbnail with a plate, and draws it in place on Show without opening the unlock', () => {
     loaded([matureRow()]);
@@ -217,7 +225,7 @@ describe('mature unlocks', () => {
     renderer.act(() => { (show.props.onPress as () => void)(); });
 
     expect(images(tree)[0]?.props.source).toEqual(expect.objectContaining({ uri: 'https://api.test/api/media?bucket=post_media&path=still.webp' }));
-    expect(tree.root.findAll((node) => node.props.accessibilityLabel === 'Show mature content')).toHaveLength(0);
+    expect(showControls(tree)).toHaveLength(0);
     expect(routerPush).not.toHaveBeenCalled();
   });
 
@@ -235,25 +243,71 @@ describe('mature unlocks', () => {
     expect(findRow(tree).props.accessibilityActions).toBeUndefined();
   });
 
+  it('asks for the preference only for a row with a mature still to cover', () => {
+    loaded([matureRow(), unlockRow({ unlockId: 'unlock-2', isNsfw: true, post: null }), unlockRow({ unlockId: 'unlock-3' })]);
+    renderScreen();
+
+    expect(useMatureReveal.mock.calls.map(([needed]) => needed)).toEqual([true, false, false]);
+  });
+
+  it('offers no Show on iOS while the website preference is off or still being read', () => {
+    for (const state of ['website', 'pending'] as const) {
+      reveal.current = state;
+      loaded([matureRow()]);
+      const tree = renderScreen();
+
+      expect(images(tree)).toHaveLength(0);
+      expect(showControls(tree)).toHaveLength(0);
+      expect(tree.root.findAll((node) => String(node.type) === 'icon' && node.props.name === 'EyeOff')).toHaveLength(1);
+      expect(findRow(tree).props.accessibilityActions).toBeUndefined();
+      expect(texts(tree)).toContain('Mature content');
+    }
+  });
+
+  it('covers the still again when the preference is turned off on the website', () => {
+    loaded([matureRow()]);
+    const tree = renderScreen();
+    renderer.act(() => { (showControls(tree)[0]!.props.onPress as () => void)(); });
+    expect(images(tree)).toHaveLength(1);
+
+    reveal.current = 'website';
+    renderer.act(() => { tree.update(React.createElement(UnlocksScreen)); });
+
+    expect(images(tree)).toHaveLength(0);
+    expect(tree.root.findAll((node) => String(node.type) === 'icon' && node.props.name === 'EyeOff')).toHaveLength(1);
+  });
+
   it('keeps the plate up for good on Android, which shows no mature media', () => {
     platform.OS = 'android';
+    reveal.current = 'never';
     loaded([matureRow()]);
     const tree = renderScreen();
 
     expect(images(tree)).toHaveLength(0);
-    expect(tree.root.findAll((node) => node.props.accessibilityLabel === 'Show mature content')).toHaveLength(0);
+    expect(showControls(tree)).toHaveLength(0);
     expect(tree.root.findAll((node) => String(node.type) === 'icon' && node.props.name === 'EyeOff')).toHaveLength(1);
     expect(findRow(tree).props.accessibilityActions).toBeUndefined();
   });
 });
 
 describe('what each row says it cost, and who left (03-2, 03-8)', () => {
-  it('prints a cash purchase as a receipt in its own currency', () => {
+  it('prints a cash purchase as a receipt in its own currency on Android', () => {
+    platform.OS = 'android';
     loaded([unlockRow({ paidWith: 'cash', paidAmountSubunits: 75000, paidCurrency: 'INR' })]);
     const tree = renderScreen();
 
     expect(texts(tree).some((line) => line.startsWith('₹750 paid · '))).toBe(true);
     expect(String(findRow(tree).props.accessibilityLabel)).toContain('₹750 paid');
+  });
+
+  it('says only "Paid" for a cash purchase on iOS, with no amount', () => {
+    loaded([unlockRow({ paidWith: 'cash', paidAmountSubunits: 75000, paidCurrency: 'INR' })]);
+    const tree = renderScreen();
+
+    expect(texts(tree).some((line) => line.startsWith('Paid · '))).toBe(true);
+    expect(texts(tree).join(' ')).not.toMatch(/₹|INR|750/);
+    expect(String(findRow(tree).props.accessibilityLabel)).toContain(' Paid.');
+    expect(String(findRow(tree).props.accessibilityLabel)).not.toMatch(/₹|750/);
   });
 
   it('calls a free unlock free', () => {

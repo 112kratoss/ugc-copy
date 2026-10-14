@@ -9,7 +9,7 @@ import { MatureCover } from '@/components/mature-cover';
 import { CardListSkeleton } from '@/components/skeleton';
 import { AppText, Card, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
-import { canRevealNsfwInApp } from '@/lib/nsfw-reveal-policy';
+import type { MatureReveal } from '@/lib/nsfw-reveal-policy';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ViewerUnlockItem } from '@/lib/types';
@@ -21,6 +21,7 @@ import {
   getUnlockThumbnailUrl,
   summarizeUnlockCount,
 } from '@/lib/unlock-library-view-model';
+import { useMatureReveal } from '@/lib/use-mature-reveal';
 import { useMediaSource } from '@/lib/use-media-source';
 
 export default function UnlocksScreen() {
@@ -135,10 +136,14 @@ function UnlockRow({ item }: { item: ViewerUnlockItem }) {
   const [matureShown, setMatureShown] = useState(false);
   const badge = getUnlockStateBadge(item);
   const thumbnailUrl = getUnlockThumbnailUrl(item);
-  const paid = formatUnlockPaid(item);
+  const paid = formatUnlockPaid(item, Platform.OS);
   // Only a picture there is to draw needs covering; a row without one keeps its icon.
-  const matureCovered = item.isNsfw && Boolean(thumbnailUrl) && !matureShown;
-  const canShowMature = matureCovered && canRevealNsfwInApp(Platform.OS);
+  const matureStill = item.isNsfw && Boolean(thumbnailUrl);
+  const reveal = useMatureReveal(matureStill);
+  // Shown only while the website preference allows it, so turning it off
+  // there covers the still again when the app comes back.
+  const matureCovered = matureStill && !(matureShown && reveal === 'show');
+  const canShowMature = matureCovered && reveal === 'show';
 
   return (
     <Pressable
@@ -161,6 +166,7 @@ function UnlockRow({ item }: { item: ViewerUnlockItem }) {
             url={thumbnailUrl}
             thumbhash={item.post?.previewThumbhash ?? null}
             covered={matureCovered}
+            reveal={reveal}
             onShow={() => setMatureShown(true)}
           />
 
@@ -210,12 +216,14 @@ function UnlockThumbnail({
   url,
   thumbhash,
   covered,
+  reveal,
   onShow,
 }: {
   url: string | null;
   thumbhash: string | null;
   /** A mature post's still, behind its plate until the buyer asks for it. */
   covered: boolean;
+  reveal: MatureReveal;
   onShow: () => void;
 }) {
   const theme = useAppTheme();
@@ -244,7 +252,7 @@ function UnlockThumbnail({
           that is still loading — or one that quietly resolves to nothing
           without ever firing onError — would otherwise leave a blank tile. */}
       <PackageOpen size={20} color={theme.colors.muted} />
-      {covered ? <MatureCover variant="tile" onShow={onShow} /> : null}
+      {covered ? <MatureCover variant="tile" reveal={reveal} onShow={onShow} /> : null}
       {showImage ? (
         <Image
           accessibilityIgnoresInvertColors

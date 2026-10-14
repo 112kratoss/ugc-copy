@@ -2,12 +2,14 @@ import React from 'react';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { MatureReveal } from '@/lib/nsfw-reveal-policy';
+
 type MockProps = { children?: React.ReactNode; label?: string } & Record<string, unknown>;
 
-const platform = vi.hoisted(() => ({ OS: 'ios' }));
+const openURL = vi.hoisted(() => vi.fn());
 
 vi.mock('react-native', () => ({
-  Platform: platform,
+  Linking: { openURL },
   Pressable: ({ children, style: _style, ...props }: MockProps) => React.createElement('pressable', props, children),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
 }));
@@ -23,10 +25,12 @@ vi.mock('@/components/ui', () => ({
 
 import { MatureCover } from '../components/mature-cover';
 
-function render(variant: 'tile' | 'card', onShow = vi.fn()) {
+const GUIDANCE = 'Mature content is off by default. Adults can enable it on the Magicbooklet website, then return here to show it.';
+
+function render(element: React.ReactElement) {
   let tree!: renderer.ReactTestRenderer;
   renderer.act(() => {
-    tree = renderer.create(<MatureCover variant={variant} onShow={onShow} />);
+    tree = renderer.create(element);
   });
   return tree;
 }
@@ -35,45 +39,90 @@ function texts(tree: renderer.ReactTestRenderer) {
   return tree.root.findAll((node) => String(node.type) === 'text').map((node) => node.props.children);
 }
 
+function buttons(tree: renderer.ReactTestRenderer) {
+  return tree.root.findAll((node) => String(node.type) === 'button').map((node) => node.props.children);
+}
+
+function pressables(tree: renderer.ReactTestRenderer) {
+  return tree.root.findAll((node) => String(node.type) === 'pressable');
+}
+
 beforeEach(() => {
-  platform.OS = 'ios';
+  openURL.mockClear();
 });
 
-describe('MatureCover', () => {
-  it('makes the whole tile the Show control on iOS', () => {
+describe('MatureCover tile', () => {
+  it('makes the whole tile the Show control once the preference allows it', () => {
     const onShow = vi.fn();
-    const tree = render('tile', onShow);
-    const show = tree.root.find((node) => String(node.type) === 'pressable');
+    const tree = render(<MatureCover variant="tile" reveal="show" onShow={onShow} />);
+    const [show] = pressables(tree);
 
-    expect(show.props.accessibilityRole).toBe('button');
-    expect(show.props.accessibilityLabel).toBe('Show mature content');
+    expect(show?.props.accessibilityRole).toBe('button');
+    expect(show?.props.accessibilityLabel).toBe('Show mature content');
     expect(texts(tree)).toEqual(['Show']);
-    renderer.act(() => { show.props.onPress(); });
+    renderer.act(() => { show!.props.onPress(); });
     expect(onShow).toHaveBeenCalledTimes(1);
   });
 
-  it('names what the card covers and shows it on iOS', () => {
+  it('only covers while the preference is off or unread, on Android, or with no Show of its own', () => {
+    const tiles: React.ReactElement[] = [
+      ...(['website', 'pending', 'never'] as MatureReveal[]).map((reveal) => <MatureCover variant="tile" reveal={reveal} onShow={vi.fn()} />),
+      <MatureCover variant="tile" reveal="show" />,
+      <MatureCover variant="tile" />,
+    ];
+    for (const tile of tiles) {
+      const tree = render(tile);
+      expect(pressables(tree)).toHaveLength(0);
+      expect(texts(tree)).toEqual([]);
+      expect(tree.root.findAll((node) => String(node.type) === 'icon' && node.props.name === 'EyeOff')).toHaveLength(1);
+    }
+  });
+});
+
+describe('MatureCover card', () => {
+  it('offers Show once the preference is on', () => {
     const onShow = vi.fn();
-    const tree = render('card', onShow);
+    const tree = render(<MatureCover variant="card" reveal="show" onShow={onShow} websiteUrl="https://magicbooklet.test/showcase/post-1" />);
 
     expect(texts(tree)).toEqual([
       'Mature content',
       'The creator marked this post NSFW. It stays covered until you choose to see it.',
     ]);
-    const show = tree.root.find((node) => String(node.type) === 'button' && node.props.children === 'Show');
-    renderer.act(() => { show.props.onPress(); });
+    expect(buttons(tree)).toEqual(['Show']);
+    renderer.act(() => { tree.root.find((node) => String(node.type) === 'button').props.onPress(); });
     expect(onShow).toHaveBeenCalledTimes(1);
+    expect(openURL).not.toHaveBeenCalled();
   });
 
-  it('offers nothing to press on Android, which shows no mature media', () => {
-    platform.OS = 'android';
+  it('says where to turn it on while the preference is off, and shows nothing', () => {
+    const onShow = vi.fn();
+    const tree = render(<MatureCover variant="card" reveal="website" onShow={onShow} websiteUrl="https://magicbooklet.test/showcase/post-1" />);
 
-    const tile = render('tile');
-    expect(tile.root.findAll((node) => String(node.type) === 'pressable')).toHaveLength(0);
-    expect(tile.root.findAll((node) => String(node.type) === 'icon' && node.props.name === 'EyeOff')).toHaveLength(1);
+    expect(texts(tree)).toEqual(['Mature content', 'The creator marked this post NSFW.', GUIDANCE]);
+    expect(buttons(tree)).toEqual(['Manage on website']);
+    renderer.act(() => { tree.root.find((node) => String(node.type) === 'button').props.onPress(); });
+    expect(openURL).toHaveBeenCalledWith('https://magicbooklet.test/showcase/post-1');
+    expect(onShow).not.toHaveBeenCalled();
+  });
 
-    const card = render('card');
-    expect(card.root.findAll((node) => String(node.type) === 'button')).toHaveLength(0);
-    expect(texts(card)).toContain('The creator marked this post NSFW. Mature posts stay covered in this app.');
+  it('keeps the guidance without a button when there is no page to send the viewer to', () => {
+    const tree = render(<MatureCover variant="card" reveal="website" onShow={vi.fn()} />);
+
+    expect(texts(tree)).toContain(GUIDANCE);
+    expect(buttons(tree)).toEqual([]);
+  });
+
+  it('offers nothing while the preference is still being read', () => {
+    const tree = render(<MatureCover variant="card" reveal="pending" onShow={vi.fn()} websiteUrl="https://magicbooklet.test/showcase/post-1" />);
+
+    expect(texts(tree)).toEqual(['Mature content', 'The creator marked this post NSFW.']);
+    expect(buttons(tree)).toEqual([]);
+  });
+
+  it('offers nothing on Android, which shows no mature media', () => {
+    const tree = render(<MatureCover variant="card" reveal="never" onShow={vi.fn()} websiteUrl="https://magicbooklet.test/showcase/post-1" />);
+
+    expect(texts(tree)).toEqual(['Mature content', 'The creator marked this post NSFW. Mature posts stay covered in this app.']);
+    expect(buttons(tree)).toEqual([]);
   });
 });

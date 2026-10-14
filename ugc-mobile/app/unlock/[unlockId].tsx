@@ -2,9 +2,9 @@ import { useQuery } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Play } from 'lucide-react-native';
 import { useCallback, useState } from 'react';
-import { Linking, Pressable, View } from 'react-native';
+import { Linking, Platform, Pressable, View } from 'react-native';
 
-import { MatureCover } from '@/components/mature-cover';
+import { MatureCover, MatureMediaCovered } from '@/components/mature-cover';
 import { MediaPreview } from '@/components/media-preview';
 import { PostResourceBundleContent, ResourceRevisionSwitch } from '@/components/post-resource-bundle-content';
 import { RecoverableVideoPreview } from '@/components/recoverable-video-preview';
@@ -13,6 +13,8 @@ import { AppText, Card, Pill, PrimaryButton, Screen, SecondaryButton, SectionTit
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
+import { env } from '@/lib/env';
+import type { MatureReveal } from '@/lib/nsfw-reveal-policy';
 import { appTheme, mediaColors } from '@/lib/theme';
 import { ThemeScope } from '@/lib/theme-context';
 import type { ShowcaseMediaItem } from '@/lib/types';
@@ -22,8 +24,10 @@ import {
   formatUnlockPaidPill,
   formatUnlockPrice,
   getUnlockCover,
+  hasResourcePictures,
   type UnlockCover,
 } from '@/lib/unlock-library-view-model';
+import { useMatureReveal } from '@/lib/use-mature-reveal';
 
 const NO_MEDIA_ITEMS: ShowcaseMediaItem[] = [];
 
@@ -65,10 +69,19 @@ export default function ViewerUnlockScreen() {
   const activeMediaItems = selectedRevision?.mediaItems ?? detail?.mediaItems ?? [];
   const cover = getUnlockCover(detail?.post ?? null);
   // The plate stands in the cover's place whenever there is mature media to
-  // keep back, the outputs' thumbnails included, so Show is always on screen.
-  const matureCovered = Boolean(detail?.isNsfw)
-    && !matureShown
-    && (cover.kind !== 'none' || activeMediaItems.length > 0);
+  // keep back, the outputs' thumbnails and the resources' reference pictures
+  // included, so Show is always on screen.
+  const matureMedia = Boolean(detail?.isNsfw)
+    && (cover.kind !== 'none' || activeMediaItems.length > 0 || hasResourcePictures(resources));
+  const reveal = useMatureReveal(matureMedia);
+  // Shown only while the website preference allows it, so turning it off
+  // there covers it all again when the app comes back.
+  const matureCovered = matureMedia && !(matureShown && reveal === 'show');
+  // A mature post's own page is where the website turns mature content on, and
+  // where the post notice sends a viewer; offered while it opens for this buyer.
+  const matureWebsiteUrl = detail?.postId && canOpenUnlockedPost(detail)
+    ? `${env.siteUrl}/showcase/${encodeURIComponent(detail.postId)}`
+    : null;
 
   // Memoized: every reference preview signs through this, and the previews
   // one render mounts are signed together in one request. Inline, so a file
@@ -136,11 +149,13 @@ export default function ViewerUnlockScreen() {
             <UnlockCoverMedia
               cover={cover}
               covered={matureCovered}
+              reveal={reveal}
+              websiteUrl={matureWebsiteUrl}
               onShow={() => setMatureShown(true)}
             />
             <View style={{ gap: appTheme.spacing.compact }}>
               <Pill
-                label={formatUnlockPaidPill(detail)}
+                label={formatUnlockPaidPill(detail, Platform.OS)}
                 accent={activeAccessMode === 'free' ? 'workflow' : 'commerce'}
               />
               <AppText variant="caption" color="faint">
@@ -178,18 +193,21 @@ export default function ViewerUnlockScreen() {
               </View>
             ) : null}
 
-            <PostResourceBundleContent
-              fileLoadingPath={fileLoadingPath}
-              // The outputs' own thumbnails, which pick a resource's scope: a
-              // covered mature post draws none of them until it is shown.
-              mediaItems={matureCovered ? NO_MEDIA_ITEMS : activeMediaItems}
-              onCopy={(text) => copyToClipboard(text)}
-              onError={setResourceError}
-              onOpenFile={openResourceFile}
-              onOpenUrl={(url) => Linking.openURL(url)}
-              resolveFileUrl={resolveResourceFileUrl}
-              resources={resources}
-            />
+            {/* The references inside draw their pictures under the same plate. */}
+            <MatureMediaCovered.Provider value={matureCovered}>
+              <PostResourceBundleContent
+                fileLoadingPath={fileLoadingPath}
+                // The outputs' own thumbnails, which pick a resource's scope: a
+                // covered mature post draws none of them until it is shown.
+                mediaItems={matureCovered ? NO_MEDIA_ITEMS : activeMediaItems}
+                onCopy={(text) => copyToClipboard(text)}
+                onError={setResourceError}
+                onOpenFile={openResourceFile}
+                onOpenUrl={(url) => Linking.openURL(url)}
+                resolveFileUrl={resolveResourceFileUrl}
+                resources={resources}
+              />
+            </MatureMediaCovered.Provider>
             {resourceError ? <StatusBlock tone="danger" title="Resource unavailable" body={resourceError} /> : null}
           </Card>
 
@@ -219,15 +237,19 @@ const PLAY_CONTROL_SIZE = 64;
 function UnlockCoverMedia({
   cover,
   covered,
+  reveal,
+  websiteUrl,
   onShow,
 }: {
   cover: UnlockCover;
   covered: boolean;
+  reveal: MatureReveal;
+  websiteUrl: string | null;
   onShow: () => void;
 }) {
   const [playing, setPlaying] = useState(false);
 
-  if (covered) return <MatureCover variant="card" onShow={onShow} />;
+  if (covered) return <MatureCover variant="card" reveal={reveal} websiteUrl={websiteUrl} onShow={onShow} />;
   if (cover.kind === 'none') return <MediaPreview url={null} />;
   if (cover.kind === 'image') return <MediaPreview url={cover.stillUrl} kind="image" />;
 

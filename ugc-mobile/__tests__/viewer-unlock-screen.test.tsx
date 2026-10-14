@@ -16,6 +16,9 @@ const { authUser, contentProps, detailRefetch, openURL, platform, queryError, ro
   unlockApi: { resolveViewerUnlockFileUrl: vi.fn() },
   unlockDetail: { current: null as Record<string, unknown> | null },
 }));
+// What the website preference allows, as the hook reports it; each test sets it.
+const reveal = vi.hoisted(() => ({ current: 'show' as 'show' | 'website' | 'pending' | 'never' }));
+const useMatureReveal = vi.hoisted(() => vi.fn((_needed: boolean) => reveal.current));
 
 vi.mock('react-native', () => ({
   Linking: { openURL },
@@ -62,22 +65,29 @@ vi.mock('@/components/recoverable-video-preview', () => ({
   RecoverableVideoPreview: (props: MockProps) => React.createElement('video-player', props),
 }));
 
-vi.mock('@/components/post-resource-bundle-content', () => ({
-  PostResourceBundleContent: (props: unknown) => {
-    contentProps(props);
-    return null;
-  },
-  ResourceRevisionSwitch: ({ selected, onSelect }: { selected: string; onSelect: (revision: string) => void }) => React.createElement(
-    'view',
-    {},
-    ['latest', 'purchased'].map((revision) => React.createElement('pressable', {
-      key: revision,
-      accessibilityLabel: `Show ${revision} unlock version`,
-      accessibilityState: { selected: selected === revision },
-      onPress: () => onSelect(revision),
-    })),
-  ),
-}));
+vi.mock('@/components/post-resource-bundle-content', async () => {
+  // The references inside read whether they are covered from this context.
+  const { MatureMediaCovered } = await import('@/components/mature-cover');
+  return {
+    PostResourceBundleContent: (props: Record<string, unknown>) => {
+      contentProps({ ...props, mediaCovered: React.useContext(MatureMediaCovered) });
+      return null;
+    },
+    ResourceRevisionSwitch: ({ selected, onSelect }: { selected: string; onSelect: (revision: string) => void }) => React.createElement(
+      'view',
+      {},
+      ['latest', 'purchased'].map((revision) => React.createElement('pressable', {
+        key: revision,
+        accessibilityLabel: `Show ${revision} unlock version`,
+        accessibilityState: { selected: selected === revision },
+        onPress: () => onSelect(revision),
+      })),
+    ),
+  };
+});
+
+vi.mock('@/lib/use-mature-reveal', () => ({ useMatureReveal }));
+vi.mock('@/lib/env', () => ({ env: { siteUrl: 'https://magicbooklet.test' } }));
 
 vi.mock('@/components/ui', () => ({
   AppText: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
@@ -104,8 +114,9 @@ const latestMedia = [
 const purchasedMedia = [
   { id: 'purchased-1', mediaKey: 'purchased-key', url: '', mediaKind: 'image', sortOrder: 0 },
 ];
-const latestResources = { promptText: 'Latest prompt', items: [] };
-const purchasedResources = { promptText: 'Purchased prompt', items: [] };
+// As the server sends them: `attachments` is always an array (normalizeAttachments).
+const latestResources = { promptText: 'Latest prompt', items: [], attachments: [] };
+const purchasedResources = { promptText: 'Purchased prompt', items: [], attachments: [] };
 const livePost = {
   id: 'post-1',
   title: 'Launch',
@@ -143,7 +154,7 @@ function byType(tree: renderer.ReactTestRenderer, type: string) {
 }
 
 function lastContentProps() {
-  return contentProps.mock.calls.at(-1)?.[0] as { mediaItems: unknown[]; resources: unknown };
+  return contentProps.mock.calls.at(-1)?.[0] as { mediaItems: unknown[]; resources: unknown; mediaCovered: boolean };
 }
 
 function renderScreen() {
@@ -157,6 +168,9 @@ function renderScreen() {
 beforeEach(() => {
   authUser.current = { id: 'buyer-1' };
   platform.OS = 'ios';
+  reveal.current = 'show';
+  useMatureReveal.mockClear();
+  openURL.mockClear();
   queryError.current = null;
   routerPush.mockClear();
   contentProps.mockClear();
@@ -300,12 +314,21 @@ describe('what the purchase cost (03-2)', () => {
     expect(textValues(renderScreen())).toContain('900 credits paid');
   });
 
-  it('names a cash purchase in the currency it was paid in', () => {
+  it('names a cash purchase in the currency it was paid in on Android', () => {
+    platform.OS = 'android';
     unlockDetail.current = { ...unlockDetail.current!, paidWith: 'cash', paidAmountSubunits: 75000, paidCurrency: 'INR' };
     expect(textValues(renderScreen())).toContain('₹750 paid');
 
     unlockDetail.current = { ...unlockDetail.current!, paidWith: 'cash', paidAmountSubunits: 900, paidCurrency: 'USD' };
     expect(textValues(renderScreen())).toContain('$9.00 paid');
+  });
+
+  it('says only "Paid" for a cash purchase on iOS, with no amount', () => {
+    unlockDetail.current = { ...unlockDetail.current!, paidWith: 'cash', paidAmountSubunits: 75000, paidCurrency: 'INR' };
+    const texts = textValues(renderScreen());
+
+    expect(texts).toContain('Paid');
+    expect(texts.join(' ')).not.toMatch(/₹|INR|750/);
   });
 
   it('calls a free unlock free', () => {
@@ -361,21 +384,30 @@ describe('the cover', () => {
 });
 
 describe('a mature unlock', () => {
+  const GUIDANCE = 'Mature content is off by default. Adults can enable it on the Magicbooklet website, then return here to show it.';
+  const referencePicture = {
+    type: 'reference_image', role: 'character_reference', sectionId: null, title: '@alisa', description: null, textContent: null,
+    externalUrl: null, storagePath: 'references/alisa.jpg', contentType: 'image/jpeg', sizeBytes: 1200, workflowSnapshot: null,
+    sortOrder: 0, isPrimary: true, remixUse: 'reference_only',
+  };
+
   beforeEach(() => {
     unlockDetail.current = { ...unlockDetail.current!, isNsfw: true, post: livePost };
   });
 
-  it('covers the cover and the outputs, keeps the resources, and shows them in place on Show', () => {
+  it('covers the cover, the outputs and the references, keeps the resources, and shows them in place on Show', () => {
     const tree = renderScreen();
 
     expect(textValues(tree)).toContain('Mature content');
     expect(byType(tree, 'media-preview')).toHaveLength(0);
-    expect(lastContentProps()).toEqual(expect.objectContaining({ mediaItems: [], resources: latestResources }));
+    expect(lastContentProps()).toEqual(expect.objectContaining({ mediaItems: [], resources: latestResources, mediaCovered: true }));
+    expect(useMatureReveal).toHaveBeenLastCalledWith(true);
 
     pressButton(tree, 'Show');
 
     expect(byType(tree, 'media-preview').map((node) => node.props.url)).toEqual(['/api/media?bucket=post_media&path=still.webp']);
     expect(lastContentProps().mediaItems).toBe(latestMedia);
+    expect(lastContentProps().mediaCovered).toBe(false);
     expect(textValues(tree)).not.toContain('Mature content');
   });
 
@@ -390,14 +422,85 @@ describe('a mature unlock', () => {
     expect(byType(tree, 'media-preview').map((node) => node.props.url)).toEqual([null]);
   });
 
-  it('stays covered on Android, which shows no mature media, with the resources still open', () => {
-    platform.OS = 'android';
+  it('still offers Show when only reference pictures are mature', () => {
+    unlockDetail.current = {
+      ...unlockDetail.current!,
+      post: null,
+      mediaItems: [],
+      currentResources: { ...latestResources, items: [referencePicture] },
+    };
+    const tree = renderScreen();
+
+    expect(textValues(tree)).toContain('Mature content');
+    expect(lastContentProps().mediaCovered).toBe(true);
+    pressButton(tree, 'Show');
+    expect(lastContentProps().mediaCovered).toBe(false);
+  });
+
+  it('draws no plate for a mature unlock with nothing to draw', () => {
+    unlockDetail.current = { ...unlockDetail.current!, post: null, mediaItems: [] };
+    const tree = renderScreen();
+
+    expect(textValues(tree)).not.toContain('Mature content');
+    expect(lastContentProps().mediaCovered).toBe(false);
+    expect(useMatureReveal).toHaveBeenLastCalledWith(false);
+  });
+
+  it("sends a viewer whose preference is off to the post's page on the website, and shows nothing", () => {
+    reveal.current = 'website';
+    unlockDetail.current = { ...unlockDetail.current!, postReachable: true };
+    const tree = renderScreen();
+
+    expect(textValues(tree)).toContain(GUIDANCE);
+    expect(buttonLabels(tree)).not.toContain('Show');
+    pressButton(tree, 'Manage on website');
+    expect(openURL).toHaveBeenCalledWith('https://magicbooklet.test/showcase/post-1');
+    expect(byType(tree, 'media-preview')).toHaveLength(0);
+    expect(lastContentProps()).toEqual(expect.objectContaining({ mediaItems: [], resources: latestResources, mediaCovered: true }));
+  });
+
+  it("keeps the guidance without a link when the post's page would not open for this buyer", () => {
+    reveal.current = 'website';
+    const tree = renderScreen();
+
+    expect(textValues(tree)).toContain(GUIDANCE);
+    expect(buttonLabels(tree)).not.toContain('Manage on website');
+    expect(buttonLabels(tree)).not.toContain('Show');
+  });
+
+  it('offers nothing while the preference is still being read', () => {
+    reveal.current = 'pending';
     const tree = renderScreen();
 
     expect(buttonLabels(tree)).not.toContain('Show');
+    expect(textValues(tree)).not.toContain(GUIDANCE);
+    expect(byType(tree, 'media-preview')).toHaveLength(0);
+  });
+
+  it('covers it all again when the preference is turned off on the website', () => {
+    const tree = renderScreen();
+    pressButton(tree, 'Show');
+    expect(byType(tree, 'media-preview')).toHaveLength(1);
+
+    reveal.current = 'website';
+    renderer.act(() => { tree.update(<ViewerUnlockScreen />); });
+
+    expect(textValues(tree)).toContain(GUIDANCE);
+    expect(byType(tree, 'media-preview')).toHaveLength(0);
+    expect(lastContentProps()).toEqual(expect.objectContaining({ mediaItems: [], mediaCovered: true }));
+  });
+
+  it('stays covered on Android, which shows no mature media, with the resources still open', () => {
+    platform.OS = 'android';
+    reveal.current = 'never';
+    unlockDetail.current = { ...unlockDetail.current!, postReachable: true };
+    const tree = renderScreen();
+
+    expect(buttonLabels(tree)).not.toContain('Show');
+    expect(buttonLabels(tree)).not.toContain('Manage on website');
     expect(textValues(tree)).toContain('The creator marked this post NSFW. Mature posts stay covered in this app.');
     expect(byType(tree, 'media-preview')).toHaveLength(0);
-    expect(lastContentProps()).toEqual(expect.objectContaining({ mediaItems: [], resources: latestResources }));
+    expect(lastContentProps()).toEqual(expect.objectContaining({ mediaItems: [], resources: latestResources, mediaCovered: true }));
   });
 });
 

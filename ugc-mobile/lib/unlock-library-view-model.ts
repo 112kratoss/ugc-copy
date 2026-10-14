@@ -1,5 +1,5 @@
 import { formatUnlockCreditPrice } from '@/lib/pricing';
-import type { ViewerUnlockDetail, ViewerUnlockItem, ViewerUnlockPayment } from '@/lib/types';
+import type { PostResourceBundleResources, ViewerUnlockDetail, ViewerUnlockItem, ViewerUnlockPayment } from '@/lib/types';
 
 export type UnlockStateBadge = {
   tone: 'kept' | 'updated' | 'none';
@@ -52,9 +52,12 @@ type PaidAmount =
   | { kind: 'credits'; credits: string }
   | { kind: 'cash'; receipt: string };
 
-function readUnlockPayment(payment: UnlockPayment): PaidAmount {
+function readUnlockPayment(payment: UnlockPayment, platform: string): PaidAmount {
   if (payment.paidWith === 'free') return { kind: 'free' };
   if (payment.paidWith === 'cash') {
+    // The iOS app shows no amount of money anywhere, a web receipt included
+    // (App Review 2.1(b), 0.1.6); Android keeps the receipt.
+    if (platform !== 'android') return { kind: 'cash', receipt: 'Paid' };
     return { kind: 'cash', receipt: formatCashReceipt(payment.paidAmountSubunits ?? null, payment.paidCurrency ?? null) };
   }
   // A server that sends no payment yet: the purchase price, one credit per cent.
@@ -85,20 +88,20 @@ function formatCashReceipt(amountSubunits: number | null, currency: string | nul
 }
 
 /**
- * What the buyer paid, as a library row says it: "900 credits", "₹750 paid" or
- * "Free". A cash amount is only ever a receipt for a purchase paid in cash on
- * the web; every price an unlock is offered at stays in credits
- * (`formatUnlockPrice`, App Review 2.1(b)).
+ * What the buyer paid, as a library row says it: "900 credits", "Free", and
+ * for a purchase paid in cash on the web "₹750 paid" on Android, "Paid" on
+ * iOS. A cash amount is only ever that receipt; every price an unlock is
+ * offered at stays in credits (`formatUnlockPrice`, App Review 2.1(b)).
  */
-export function formatUnlockPaid(payment: UnlockPayment): string {
-  const paid = readUnlockPayment(payment);
+export function formatUnlockPaid(payment: UnlockPayment, platform: string): string {
+  const paid = readUnlockPayment(payment, platform);
   if (paid.kind === 'free') return 'Free';
   return paid.kind === 'cash' ? paid.receipt : paid.credits;
 }
 
-/** The same purchase on the detail's pill: "900 credits paid", "₹750 paid", "Free unlock". */
-export function formatUnlockPaidPill(payment: UnlockPayment): string {
-  const paid = readUnlockPayment(payment);
+/** The same purchase on the detail's pill: "900 credits paid", "₹750 paid" (iOS "Paid"), "Free unlock". */
+export function formatUnlockPaidPill(payment: UnlockPayment, platform: string): string {
+  const paid = readUnlockPayment(payment, platform);
   if (paid.kind === 'free') return 'Free unlock';
   return paid.kind === 'cash' ? paid.receipt : `${paid.credits} paid`;
 }
@@ -159,6 +162,20 @@ export function getUnlockCover(post: ViewerUnlockDetail['post']): UnlockCover {
   }
   const stillUrl = still ?? post.mediaUrl;
   return stillUrl ? { kind: 'image', stillUrl } : { kind: 'none' };
+}
+
+/**
+ * Whether a purchase's resources hold a picture its references draw as a
+ * thumbnail: a stored image among the items, or among a legacy bundle's
+ * attachments when it has no items, which is how PostResourceBundleContent
+ * reads the bundle.
+ */
+export function hasResourcePictures(resources: PostResourceBundleResources | null): boolean {
+  if (!resources) return false;
+  const files: Array<{ storagePath?: string | null; contentType?: string | null }> = resources.items?.length
+    ? resources.items
+    : resources.attachments;
+  return files.some((file) => Boolean(file.storagePath && file.contentType?.startsWith('image/')));
 }
 
 /**
