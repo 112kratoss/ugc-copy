@@ -31,6 +31,7 @@ import {
   PrimaryButton,
   SecondaryButton,
 } from '@/components/ui';
+import { WhatsNewModelsStrip } from '@/components/whats-new-models-strip';
 import { ensureAiDataConsent } from '@/lib/ai-data-consent';
 import { acquireActivityLock } from '@/lib/app-activity';
 import { showConfirmDialog } from '@/lib/dialog';
@@ -1212,7 +1213,10 @@ function IdentityCreationScreen({
   // beneath the opaque status-bar scrim below, which is what keeps that band
   // readable.
   const contentTopPadding = topInset + (insideTab ? 10 : 8);
-  const generateDisabled = !draftsHydrated || isRestoringRemix || remixRestoreFailed || isClosing || isGenerating || pollingInterrupted || isUploading || !catalog || activeQuote.status !== 'ready' || validation.errors.length > 0;
+  // A model still loading its details (a pick from the What's new strip, which leaves Generate in view)
+  // is not in the draft yet: a run started now would go to the model before it.
+  const modelPickLoading = Boolean(modelPick && !modelPick.error);
+  const generateDisabled = !draftsHydrated || isRestoringRemix || remixRestoreFailed || isClosing || isGenerating || pollingInterrupted || isUploading || modelPickLoading || !catalog || activeQuote.status !== 'ready' || validation.errors.length > 0;
   const openAuthForCurrentDraft = () => {
     router.push({
       pathname: '/auth',
@@ -1224,11 +1228,18 @@ function IdentityCreationScreen({
     } as never);
   };
 
+  /** Answers whether the screen is now on `tool`: a run still going keeps its own, and says why. */
   const changeTool = (tool: CreatorToolId) => {
     if (isGenerating || pollingInterrupted) {
       setMessage('This generation is still running. You can switch tools when it finishes or leave and follow it in Alerts.');
       setWorkspaceVisible(true);
-      return;
+      return false;
+    }
+    if (tool !== activeTool) {
+      // A pick still loading (the What's new strip's) stays with the tool it was made in: its retry in
+      // the picker would otherwise give another tool's model to this tool's draft.
+      modelPickRef.current = null;
+      setModelPick(null);
     }
     setActiveTool(tool);
     setAdvancedExpanded(false);
@@ -1237,6 +1248,7 @@ function IdentityCreationScreen({
     setPromptMessage(null);
     setIsPromptFocused(false);
     scrollRef.current?.scrollTo({ y: 0, animated: false });
+    return true;
   };
 
   /**
@@ -1308,6 +1320,16 @@ function IdentityCreationScreen({
     modelPickRef.current = null;
     setModelPick(null);
     setModelPickerVisible(false);
+  };
+  /**
+   * A model tapped in the What's new strip: its tool, as the tool switcher opens one, then the picker's
+   * own pick. A model whose details are in lands at once. One whose details still have to load turns on
+   * its chip until it lands, or says under the strip why it could not. The picker stays shut: the newest
+   * models end their kind's list, so it would open on rows above the one it waits for, then shut itself.
+   */
+  const pickWhatsNewModel = (model: ModelCatalogSummary) => {
+    if (model.kind !== activeTool && !changeTool(model.kind)) return;
+    void pickModel(model.kind, model.id);
   };
 
   useEffect(() => {
@@ -2244,6 +2266,13 @@ function IdentityCreationScreen({
       active = false;
     };
   }, [draftsHydrated, identityUserId]);
+
+  // New models in the Create tab only (D9), from the catalog pages this screen has read. A first
+  // creation, opened from onboarding, keeps to its starters: every model is new to its creator.
+  const whatsNewStrip = insideTab && !guided ? (
+    <WhatsNewModelsStrip models={catalogQuery.summaries} selectedModelId={rawDraft.model} pick={modelPick} onSelect={pickWhatsNewModel} />
+  ) : null;
+
   const otherToolRunNotice = otherToolRun && !isGenerating ? (
     <View style={{ gap: 8 }}>
       <SlimCreatorBanner label="Run in progress" body={`A ${otherToolRun.tool} run is in progress.`} />
@@ -2451,6 +2480,7 @@ function IdentityCreationScreen({
             closing={isClosing}
             remix={Boolean(remixSource)}
           />
+          {whatsNewStrip}
           {remixSource ? (
             <View accessibilityLabel="Remix source post" style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
               {remixSource.thumbnailUrl ? <StableMediaImage url={remixSource.thumbnailUrl} cacheKey={`remix-source:${remixSource.postId ?? remixSource.generationId}`} style={{ width: 40, height: 40, borderRadius: 10 }} /> : null}
@@ -2735,6 +2765,7 @@ function IdentityCreationScreen({
             closing={isClosing}
             remix={Boolean(remixSource)}
           />
+          {whatsNewStrip}
           {remixSource ? (
             <View accessibilityLabel="Remix source post" style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
               {remixSource.thumbnailUrl ? <StableMediaImage url={remixSource.thumbnailUrl} cacheKey={`remix-source:${remixSource.postId ?? remixSource.generationId}`} style={{ width: 40, height: 40, borderRadius: 10 }} /> : null}

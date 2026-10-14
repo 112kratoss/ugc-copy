@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "description": "The \"What's new\" model selection, pinned on both clients: the web's selectWhatsNewModels (src/lib/home-dashboard.ts, src/__tests__/home-dashboard.test.ts) and the app's port (ugc-mobile/lib/whats-new-models.ts, ugc-mobile/__tests__/whats-new-models.test.ts). Each case's models are in the order the web hands them over, the published catalog's: sortOrder, then display name. expectedIds is what both selections return at their default limit of 4. appStripIds is what the Create tab's strip lists: the same models, or none when no model carries New, where the web's rail falls back to the head of the catalog. In the first case Pixel Pro and Swift Kite 2 share sortOrder 10: by display name the image comes first, by id (the order the app's catalog session keeps its pages in) the video would, and with it the order the kinds take turns in.",
+  "cases": [
+    {
+      "name": "New models in two of three kinds",
+      "models": [
+        { "id": "dance-1", "kind": "motion", "badge": "Recommended", "sortOrder": 0, "displayName": "Dance 1" },
+        { "id": "kite-1", "kind": "video", "badge": null, "sortOrder": 0, "displayName": "Kite 1" },
+        { "id": "lumen-1", "kind": "image", "badge": "Recommended", "sortOrder": 0, "displayName": "Lumen 1" },
+        { "id": "dance-2", "kind": "motion", "badge": null, "sortOrder": 10, "displayName": "Dance 2" },
+        { "id": "pixel-pro", "kind": "image", "badge": "New", "sortOrder": 10, "displayName": "Pixel Pro" },
+        { "id": "kite-2", "kind": "video", "badge": "New", "sortOrder": 10, "displayName": "Swift Kite 2" },
+        { "id": "kite-3", "kind": "video", "badge": "Fast", "sortOrder": 20, "displayName": "Kite 3" },
+        { "id": "lumen-2", "kind": "image", "badge": "Pro", "sortOrder": 20, "displayName": "Lumen 2" },
+        { "id": "aurora", "kind": "image", "badge": " new ", "sortOrder": 30, "displayName": "Aurora" },
+        { "id": "orbit", "kind": "video", "badge": "New", "sortOrder": 30, "displayName": "Orbit" },
+        { "id": "lumen-3", "kind": "image", "badge": "Newest", "sortOrder": 40, "displayName": "Lumen 3" },
+        { "id": "pixel-flash", "kind": "image", "badge": "NEW", "sortOrder": 50, "displayName": "Pixel Flash" },
+        { "id": "orbit-max", "kind": "video", "badge": "new", "sortOrder": 60, "displayName": "Orbit Max" }
+      ],
+      "expectedIds": ["pixel-flash", "orbit-max", "aurora", "orbit"],
+      "appStripIds": ["pixel-flash", "orbit-max", "aurora", "orbit"]
+    },
+    {
+      "name": "no model badged New",
+      "models": [
+        { "id": "dance-1", "kind": "motion", "badge": "Recommended", "sortOrder": 0, "displayName": "Dance 1" },
+        { "id": "kite-1", "kind": "video", "badge": null, "sortOrder": 0, "displayName": "Kite 1" },
+        { "id": "lumen-1", "kind": "image", "badge": "Recommended", "sortOrder": 0, "displayName": "Lumen 1" },
+        { "id": "kite-2", "kind": "video", "badge": "Fast", "sortOrder": 10, "displayName": "Swift Kite 2" },
+        { "id": "lumen-3", "kind": "image", "badge": "Newest", "sortOrder": 40, "displayName": "Lumen 3" }
+      ],
+      "expectedIds": ["dance-1", "kite-1", "lumen-1", "kite-2"],
+      "appStripIds": []
+    }
+  ]
+}
