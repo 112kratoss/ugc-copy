@@ -16,8 +16,10 @@ import {
   buildFallbackUsername,
   getAuthAvatarUrl,
   getCreatorDisplayName,
+  getReservedProfileUsernameError,
   type ProfileApiResponse,
   type ProfileFieldErrors,
+  type ProfileFieldUpdate,
   type ProfileUpdatePayload,
 } from '@/lib/profile';
 import { parseOwnerPostSalesSummary } from '@/lib/owner-post-sales-summary';
@@ -95,6 +97,12 @@ function buildStarterProfileApiResponse(user: ProfileRouteUser): ProfileApiRespo
   };
 }
 
+function presentColumns(columns: Record<string, ProfileFieldUpdate>): Record<string, string | null> {
+  return Object.fromEntries(
+    Object.entries(columns).filter((entry): entry is [string, string | null] => entry[1] !== undefined)
+  );
+}
+
 function mapRateLimitError(error: BackendRateLimitError): ProfileRouteResult {
   return {
     ok: false,
@@ -154,9 +162,10 @@ export async function getProfileForRoute({
  * The totals `/api/profile` carries: the library counts and the seller
  * summary, each from its own service-role RPC. A count that fails is logged
  * and left out — the profile never fails over a number, and a missing field
- * makes the app draw its unknown placeholder rather than a 0.
+ * makes the app draw its unknown placeholder rather than a 0. Exported so the
+ * web's own profile page reads the same numbers as the app.
  */
-async function loadOwnerProfileTotals(
+export async function loadOwnerProfileTotals(
   client: ProfileRouteClient,
   userId: string,
 ): Promise<Pick<ProfileApiResponse, 'stats' | 'sales'>> {
@@ -222,21 +231,38 @@ export async function updateProfileForRoute({
     };
   }
 
+  const { data } = validation.payload;
+  const reservedUsernameError = getReservedProfileUsernameError(data.username, validation.existingUsername);
+  if (reservedUsernameError) {
+    return {
+      ok: false,
+      status: 400,
+      error: reservedUsernameError,
+      fieldErrors: { username: reservedUsernameError },
+    };
+  }
+
+  // Partial PATCH: only the columns the request carried are written. When the
+  // row exists, a PostgREST upsert updates exactly the columns in its body, so
+  // a field left out keeps its stored value inside the same statement — no
+  // read-then-write window in which another client's newer edit is undone.
   const profileValues = {
     id: userId,
-    username: validation.payload.data.username ?? validation.existingUsername,
-    display_name: validation.payload.data.displayName,
-    bio: validation.payload.data.bio,
-    avatar_url: validation.payload.data.avatarUrl,
-    cover_url: validation.payload.data.coverUrl,
-    website_url: validation.payload.data.websiteUrl,
-    twitter_handle: validation.payload.data.twitterHandle,
-    instagram_handle: validation.payload.data.instagramHandle,
-    tiktok_handle: validation.payload.data.tiktokHandle,
-    location: validation.payload.data.location,
+    username: data.username ?? validation.existingUsername,
+    ...presentColumns({
+      display_name: data.displayName,
+      bio: data.bio,
+      avatar_url: data.avatarUrl,
+      cover_url: data.coverUrl,
+      website_url: data.websiteUrl,
+      twitter_handle: data.twitterHandle,
+      instagram_handle: data.instagramHandle,
+      tiktok_handle: data.tiktokHandle,
+      location: data.location,
+    }),
   };
 
-  const submittedProfileMedia = [profileValues.avatar_url, profileValues.cover_url]
+  const submittedProfileMedia = [data.avatarUrl, data.coverUrl]
     .flatMap((value) => typeof value === 'string'
       ? [getUserOwnedStoredMediaLocation(value, userId)]
       : [])

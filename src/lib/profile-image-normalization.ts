@@ -37,6 +37,30 @@ export const PROFILE_IMAGE_MAX_EDGE = {
 export type ProfileImageRole = keyof typeof PROFILE_IMAGE_MAX_EDGE;
 
 /**
+ * Every screen draws a cover as a wide strip, and the web editor frames it at
+ * 1600×360 (40:9). The iOS picker can only crop square, so the app sends the
+ * whole photo, and a cover of any other shape is cut to this frame here, from
+ * its centre: the part a cover fit shows anyway.
+ */
+export const PROFILE_COVER_SIZE = { width: 1600, height: 360 } as const;
+
+/**
+ * The 40:9 frame for a cover of this upright size: 1600×360, or the largest
+ * 40:9 rectangle a smaller picture holds, so a cover is never enlarged.
+ */
+export function getProfileCoverFrame(width: number, height: number): { width: number; height: number } {
+  const frameWidth = Math.max(1, Math.min(
+    PROFILE_COVER_SIZE.width,
+    width,
+    Math.floor((height * PROFILE_COVER_SIZE.width) / PROFILE_COVER_SIZE.height),
+  ));
+  return {
+    width: frameWidth,
+    height: Math.max(1, Math.round((frameWidth * PROFILE_COVER_SIZE.height) / PROFILE_COVER_SIZE.width)),
+  };
+}
+
+/**
  * The role is read from the object name, which the signing route mints as
  * `<userId>/<role>-<uploadId>-<fileName>`. Anything else is left alone rather
  * than guessed at.
@@ -50,7 +74,7 @@ export function getProfileImageRole(filePath: string): ProfileImageRole | null {
 
 /**
  * Resizes a freshly uploaded profile image in place when it is larger than its
- * role needs.
+ * role needs, and cuts a cover to its 40:9 frame.
  *
  * In place, at the same path, on purpose: the URL the client just received
  * stays correct, no column has to be rewritten, and no superseded object is
@@ -60,6 +84,9 @@ export function getProfileImageRole(filePath: string): ProfileImageRole | null {
  * Returns whether it rewrote the object. A failure is reported as `false` and
  * logged, never thrown: the profile save that triggered this must not fail
  * because a resize did, and the original is a correct if oversized image.
+ * Storage refuses the rewrite once an upload has been finalized (finalizing
+ * tombstones its path; `profile-media-postgrest.test.ts` pins it), so for
+ * those uploads this is a logged no-op.
  */
 export async function normalizeStoredProfileImage({
   adminSupabase,
@@ -82,20 +109,29 @@ export async function normalizeStoredProfileImage({
     const input = Buffer.from(await download.data.arrayBuffer());
     const image = sharp(input).rotate();
     const metadata = await image.metadata();
-    const longestEdge = Math.max(metadata.width ?? 0, metadata.height ?? 0);
-    // Already within its role's size and not carrying needless bytes.
-    if (longestEdge > 0 && longestEdge <= maxEdge && input.byteLength <= 300_000) {
+    // Upright: a phone photo often stores its pixels a quarter turn round.
+    const { width, height } = metadata.autoOrient;
+    const longestEdge = Math.max(width, height);
+    const coverFrame = role === 'cover' && width > 0 && height > 0
+      ? getProfileCoverFrame(width, height)
+      : null;
+    const reframe = coverFrame !== null && (coverFrame.width !== width || coverFrame.height !== height);
+    // Already within its role's size and shape, and not carrying needless bytes.
+    if (!reframe && longestEdge > 0 && longestEdge <= maxEdge && input.byteLength <= 300_000) {
       return false;
     }
 
     const resized = await image
-      .resize({ width: maxEdge, height: maxEdge, fit: 'inside', withoutEnlargement: true })
+      .resize(coverFrame
+        ? { ...coverFrame, fit: 'cover', position: 'centre' }
+        : { width: maxEdge, height: maxEdge, fit: 'inside', withoutEnlargement: true })
       .webp({ quality: 82 })
       .toBuffer();
 
     // Only replace what is genuinely smaller; a tiny hand-tuned avatar should
-    // keep its own bytes rather than be re-encoded for nothing.
-    if (resized.byteLength >= input.byteLength) return false;
+    // keep its own bytes rather than be re-encoded for nothing. A cover cut to
+    // a new frame replaces its original whatever the bytes.
+    if (!reframe && resized.byteLength >= input.byteLength) return false;
 
     const upload = await storage.upload(filePath, toStorageUploadBody(resized, 'image/webp'), {
       contentType: 'image/webp',

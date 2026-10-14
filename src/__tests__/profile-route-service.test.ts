@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   getProfileForRoute,
+  loadOwnerProfileTotals,
   updateProfileForRoute,
   type ProfileRouteClient,
   type ProfileRouteUser,
@@ -98,20 +99,12 @@ function createClient({
 
                 const profileId = values.id as string;
                 const index = rows.findIndex((profile) => profile.id === profileId);
-                const nextProfile: ProfileRow = {
-                  id: profileId,
-                  username: (values.username as string | null) ?? null,
-                  display_name: (values.display_name as string | null) ?? null,
-                  bio: (values.bio as string | null) ?? null,
-                  avatar_url: (values.avatar_url as string | null) ?? null,
-                  cover_url: (values.cover_url as string | null) ?? null,
-                  website_url: (values.website_url as string | null) ?? null,
-                  twitter_handle: (values.twitter_handle as string | null) ?? null,
-                  instagram_handle: (values.instagram_handle as string | null) ?? null,
-                  tiktok_handle: (values.tiktok_handle as string | null) ?? null,
-                  location: (values.location as string | null) ?? null,
-                  credits: index === -1 ? null : rows[index].credits,
-                };
+                // PostgREST's merge upsert: an existing row changes only in the
+                // columns the body carries; a new row starts from the defaults.
+                const nextProfile = {
+                  ...(index === -1 ? emptyProfileRow(profileId) : rows[index]),
+                  ...values,
+                } as ProfileRow;
 
                 if (index === -1) {
                   rows.push(nextProfile);
@@ -136,6 +129,23 @@ function createClient({
     from,
     rows,
     upserts,
+  };
+}
+
+function emptyProfileRow(id: string): ProfileRow {
+  return {
+    id,
+    username: null,
+    display_name: null,
+    bio: null,
+    avatar_url: null,
+    cover_url: null,
+    website_url: null,
+    twitter_handle: null,
+    instagram_handle: null,
+    tiktok_handle: null,
+    location: null,
+    credits: null,
   };
 }
 
@@ -323,5 +333,158 @@ describe('profile route service', () => {
       fieldErrors: { username: 'That username is already taken.' },
     });
     expect(invalidateFeedCache).not.toHaveBeenCalled();
+  });
+
+  it('writes only the fields a save carries, so a bio edit keeps the stored links', async () => {
+    const client = createClient({
+      profiles: [{
+        ...storedProfile(),
+        website_url: 'https://luna.example',
+        instagram_handle: 'luna.dreams',
+        location: 'Bengaluru',
+      }],
+    });
+
+    const result = await updateProfileForRoute({
+      userId: user.id,
+      body: { username: 'luna', bio: 'Painting with light.' },
+      client: client.client,
+      invalidateFeedCache: vi.fn(),
+    });
+
+    // Absent keys never reach the write, so the database keeps those columns.
+    expect(client.upserts).toEqual([{ id: user.id, username: 'luna', bio: 'Painting with light.' }]);
+    expect(result).toMatchObject({
+      ok: true,
+      response: {
+        displayName: 'Luna Dreams',
+        bio: 'Painting with light.',
+        websiteUrl: 'https://luna.example',
+        instagramHandle: 'luna.dreams',
+        location: 'Bengaluru',
+      },
+    });
+  });
+
+  it('clears a field the save sends as null and keeps the rest', async () => {
+    const client = createClient({
+      profiles: [{ ...storedProfile(), website_url: 'https://luna.example', location: 'Bengaluru' }],
+    });
+
+    const result = await updateProfileForRoute({
+      userId: user.id,
+      body: { username: 'luna', websiteUrl: null },
+      client: client.client,
+      invalidateFeedCache: vi.fn(),
+    });
+
+    expect(client.upserts).toEqual([{ id: user.id, username: 'luna', website_url: null }]);
+    expect(result).toMatchObject({ ok: true, response: { websiteUrl: null, location: 'Bengaluru' } });
+    expect(client.rows[0]).toMatchObject({ website_url: null, location: 'Bengaluru', display_name: 'Luna Dreams' });
+  });
+
+  it('still saves the full ten-field body the web sends, normalising the links', async () => {
+    const client = createClient({
+      profiles: [{ ...storedProfile(), website_url: 'https://old.example', twitter_handle: 'old_handle' }],
+    });
+
+    const result = await updateProfileForRoute({
+      userId: user.id,
+      body: {
+        username: 'luna',
+        displayName: 'Luna Dreams',
+        bio: 'Painting with light.',
+        avatarUrl: '',
+        coverUrl: '',
+        websiteUrl: 'https://luna.example',
+        twitterHandle: '@luna_dreams',
+        instagramHandle: 'https://www.instagram.com/luna.dreams/',
+        tiktokHandle: '',
+        location: ' Bengaluru ',
+      },
+      client: client.client,
+      invalidateFeedCache: vi.fn(),
+    });
+
+    expect(client.upserts).toEqual([{
+      id: user.id,
+      username: 'luna',
+      display_name: 'Luna Dreams',
+      bio: 'Painting with light.',
+      avatar_url: null,
+      cover_url: null,
+      website_url: 'https://luna.example',
+      twitter_handle: 'luna_dreams',
+      instagram_handle: 'luna.dreams',
+      tiktok_handle: null,
+      location: 'Bengaluru',
+    }]);
+    expect(result).toMatchObject({
+      ok: true,
+      response: {
+        websiteUrl: 'https://luna.example',
+        twitterHandle: 'luna_dreams',
+        instagramHandle: 'luna.dreams',
+        tiktokHandle: null,
+        location: 'Bengaluru',
+        credits: 12,
+      },
+    });
+  });
+
+  it('refuses a social link to another site with a field error and writes nothing', async () => {
+    const client = createClient({ profiles: [storedProfile()] });
+
+    await expect(updateProfileForRoute({
+      userId: user.id,
+      body: { username: 'luna', instagramHandle: 'https://evil.example/luna' },
+      client: client.client,
+      invalidateFeedCache: vi.fn(),
+    })).resolves.toEqual({
+      ok: false,
+      status: 400,
+      error: 'Please fix the highlighted fields.',
+      fieldErrors: { instagramHandle: 'Enter your Instagram username or profile link.' },
+    });
+    expect(client.upserts).toHaveLength(0);
+  });
+
+  it('refuses a newly claimed reserved handle before any write', async () => {
+    const client = createClient({ profiles: [storedProfile()] });
+    const invalidateFeedCache = vi.fn();
+
+    await expect(updateProfileForRoute({
+      userId: user.id,
+      body: { username: 'Support', displayName: 'Luna Dreams' },
+      client: client.client,
+      invalidateFeedCache,
+    })).resolves.toEqual({
+      ok: false,
+      status: 400,
+      error: 'That handle is reserved.',
+      fieldErrors: { username: 'That handle is reserved.' },
+    });
+    expect(client.upserts).toHaveLength(0);
+    expect(invalidateFeedCache).not.toHaveBeenCalled();
+  });
+
+  it('lets an account that already holds a reserved handle keep it through an unrelated edit', async () => {
+    const client = createClient({ profiles: [{ ...storedProfile(), username: 'support' }] });
+
+    const result = await updateProfileForRoute({
+      userId: user.id,
+      body: { username: 'support', bio: 'Answers within a day.' },
+      client: client.client,
+      invalidateFeedCache: vi.fn(),
+    });
+
+    expect(result).toMatchObject({ ok: true, response: { username: 'support', bio: 'Answers within a day.' } });
+  });
+
+  it('exports the totals loader the web profile page reads', async () => {
+    const client = createClient();
+
+    await expect(loadOwnerProfileTotals(client.client, user.id)).resolves.toEqual({ stats: COUNTS, sales: SALES });
+    expect(client.from).not.toHaveBeenCalled();
   });
 });
