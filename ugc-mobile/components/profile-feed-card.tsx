@@ -1,4 +1,4 @@
-import { FileText, Globe, ImageOff, LockKeyhole, MessageCircle, Repeat2, Wand2 } from 'lucide-react-native';
+import { ArchiveRestore, FileText, Globe, ImageOff, LockKeyhole, MessageCircle, Repeat2, Wand2 } from 'lucide-react-native';
 import { memo } from 'react';
 import { Text, View } from 'react-native';
 
@@ -19,7 +19,7 @@ import { mediaItemAspectRatio, showcaseMediaZoomPreview } from '@/lib/media-zoom
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { accentColor, appTheme, type ThemeColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
-import { getViewerActionSlots, type ViewerStateTone } from '@/lib/viewer-actions';
+import { getProfileFeedCardSlots, type ViewerStateTone } from '@/lib/viewer-actions';
 
 export const ProfileFeedCardView = memo(function ProfileFeedCardView({
   card,
@@ -67,9 +67,7 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
     post: item,
     enabled: card.hasMedia,
   });
-  // The card drops the Details slot: tapping the card already opens its canonical
-  // viewer, and five labelled actions wrap onto a second row.
-  const slots = getViewerActionSlots(item).filter((slot) => slot.id !== 'details');
+  const slots = getProfileFeedCardSlots(item);
 
   return (
     <FeedCardShell
@@ -169,6 +167,7 @@ function profileActionIcon(
 
   if (id === 'publish') return <Globe size={appTheme.icon.default} color={colors.primary} />;
   if (id === 'unlock') return <Wand2 size={appTheme.icon.default} color={colors.success} />;
+  if (id === 'restore') return <ArchiveRestore size={appTheme.icon.default} color={colors.success} />;
   if (id === 'visibility') {
     // The icon reports where the post (or the creation's linked post) sits now.
     const isPrivate = visibility === 'private' || visibility === 'unlisted';

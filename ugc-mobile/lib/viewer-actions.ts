@@ -363,6 +363,10 @@ export function getViewerActionLabel(action: string, sourceType?: ImmersivePrevi
       return 'Restore';
     case 'delete-post':
       return 'Delete permanently';
+    case 'delete-creation':
+      return 'Delete creation';
+    case 'open-run':
+      return 'Open run';
     case 'edit-post':
       return 'Edit post';
     case 'change-visibility':
@@ -395,13 +399,42 @@ export function getViewerActionLabel(action: string, sourceType?: ImmersivePrevi
 }
 
 /**
- * A row's wording for one item. Every row but one reads the same for any item;
+ * A row's wording for one item. Every row but two reads the same for any item:
  * Hide names the creator it hides, as a feed card's Hide row does
- * (`lib/hide-creator-label.ts`).
+ * (`lib/hide-creator-label.ts`), and a failed run's Recreate is "Try again",
+ * as the web's Failed card calls it.
  */
-export function getViewerItemActionLabel(action: string, item: Pick<ImmersivePreviewItem, 'sourceType' | 'creatorLabel'>) {
+export function getViewerItemActionLabel(
+  action: string,
+  item: Pick<ImmersivePreviewItem, 'sourceType' | 'creatorLabel'> & Partial<Pick<ImmersivePreviewItem, 'runStatus'>>,
+) {
   if (action === 'hide-creator') return hideCreatorLabelFromCardLabel(item.creatorLabel);
+  if (action === 'recreate' && item.sourceType === 'generation' && item.runStatus === 'failed') return 'Try again';
   return getViewerActionLabel(action, item.sourceType);
+}
+
+/**
+ * The confirmation Delete creation asks for. The server deletes the creation
+ * outright (`generation-delete-service.ts`); a post made from it stays, and so
+ * do the files it shows, but it loses the creation its remixes are made from.
+ */
+export function getDeleteCreationConfirmation(item: Pick<ImmersivePreviewItem, 'linkedPostId'>) {
+  return {
+    title: 'Delete this creation?',
+    message: item.linkedPostId
+      ? 'This can’t be undone. Its post stays up, but remixes based on this creation may stop working.'
+      : 'This can’t be undone.',
+    confirmLabel: 'Delete',
+  };
+}
+
+/**
+ * The picture a remix's creator shows of its source, 40pt across: the media's
+ * poster, never the full-size original, and never a video file.
+ */
+export function getRemixSourceThumbnailUrl(item: Pick<ImmersivePreviewItem, 'mediaItems' | 'mediaKind' | 'mediaUrl'>) {
+  const cover = item.mediaItems?.[0];
+  return cover?.previewUrl ?? (item.mediaKind === 'image' ? item.mediaUrl : null);
 }
 
 /**
@@ -419,6 +452,7 @@ export function getViewerItemActionLabel(action: string, item: Pick<ImmersivePre
 export function isDestructiveViewerAction(action: string) {
   return action === 'archive'
     || action === 'delete-post'
+    || action === 'delete-creation'
     || action === 'report-content'
     || action === 'report-user'
     || action === 'block-user'
@@ -466,7 +500,13 @@ export function getViewerActionGroupLabel(action: string) {
     return 'Your post';
   }
 
-  if (action === 'archive' || action === 'restore' || action === 'unsave' || action === 'delete-post') {
+  if (
+    action === 'archive'
+    || action === 'restore'
+    || action === 'unsave'
+    || action === 'delete-post'
+    || action === 'delete-creation'
+  ) {
     return 'Library';
   }
 
@@ -496,7 +536,8 @@ export type ViewerActionSlotId =
   | 'create'
   | 'publish'
   | 'visibility'
-  | 'unlock';
+  | 'unlock'
+  | 'restore';
 
 export interface ViewerActionSlot {
   id: ViewerActionSlotId;
@@ -583,9 +624,24 @@ export function getViewerActionSlots(item: ImmersivePreviewItem): ViewerActionSl
   if (available.has('unlock-remix')) {
     slots.push({ id: 'create', action: 'unlock-remix', label: 'Remix', tone: 'primary' });
   } else if (available.has('recreate')) {
-    slots.push({ id: 'create', action: 'recreate', label: getViewerActionLabel('recreate', item.sourceType), tone: 'primary' });
+    slots.push({ id: 'create', action: 'recreate', label: getViewerItemActionLabel('recreate', item), tone: 'primary' });
   }
 
+  return slots;
+}
+
+/**
+ * The action row a profile card draws: the rail's slots less Details, which a
+ * tap on the card already opens (five labelled actions wrap onto a second
+ * row). An archived creation keeps none of the rail's slots (it is shared and
+ * posted only once it is back), so its row offers the way back instead. The
+ * reel leaves Restore in its •••.
+ */
+export function getProfileFeedCardSlots(item: ImmersivePreviewItem): ViewerActionSlot[] {
+  const slots = getViewerActionSlots(item).filter((slot) => slot.id !== 'details');
+  if (item.sourceType === 'generation' && item.archivedAt && item.availableActions.includes('restore')) {
+    slots.push({ id: 'restore', action: 'restore', label: 'Restore', a11yLabel: 'Restore this creation', tone: 'success' });
+  }
   return slots;
 }
 
@@ -599,13 +655,22 @@ export type ViewerStateTone = 'neutral' | 'success' | 'warning' | 'danger';
 export function getViewerStateChip(
   item: ImmersivePreviewItem
 ): { label: string; tone: ViewerStateTone } | null {
+  // Moderation archives what it removes; "Archived" would promise a Restore.
+  if (item.moderationRemoved) {
+    return { label: 'Removed by moderation', tone: 'danger' };
+  }
+
   if (item.archivedAt) {
     return { label: 'Archived', tone: 'danger' };
   }
 
   if (item.sourceType === 'generation') {
-    // Audio cannot be posted, so "Not posted" would report a state it can
-    // never leave.
+    // A finished step of a run that did not succeed can never be posted, so
+    // "Not posted" would report a state it cannot leave.
+    if (item.templateRun?.endedAs) {
+      return { label: `From template · run ${item.templateRun.endedAs}`, tone: 'warning' };
+    }
+    // Audio cannot be posted either.
     if (item.creationKind === 'audio') return null;
     if (!item.linkedPostId) return { label: 'Not posted', tone: 'neutral' };
     if (item.linkedPostVisibility === 'public') return { label: 'Public post', tone: 'success' };

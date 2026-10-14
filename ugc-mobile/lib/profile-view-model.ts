@@ -44,6 +44,13 @@ export interface ProfileMediaCard {
   previewStatusLabel?: string;
   isGridReady?: boolean;
   isArchived?: boolean;
+  /** Moderation took the creation down: the tile says so on a plate and never draws its media. */
+  moderationRemoved?: boolean;
+  /**
+   * What a template's output reports in place of its post state: a finished
+   * step of a run that ended without succeeding, which can never be posted.
+   */
+  templateNote?: string | null;
   badge?: string;
   detailLabel?: string;
   statusLabel?: string;
@@ -235,19 +242,24 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
   const outputUrl = item.media?.url ?? item.output_urls?.[0] ?? item.output_url ?? null;
   // A sound file's address is never handed on as `mediaUrl` or as a poster:
   // both are read by picture and video components, and the tile opens the card
-  // feed, which is where an audio creation plays.
+  // feed, which is where an audio creation plays. What moderation took down,
+  // of any kind, draws the plate that says so instead of itself.
   const isAudio = kind === 'audio';
-  const mediaUrl = isAudio ? null : outputUrl;
-  const posterUrl = isAudio ? null : item.media?.previewUrl ?? item.previewUrl ?? item.preview_url ?? null;
+  const moderationRemoved = Boolean(item.moderation_removed_at);
+  const withheld = isAudio || moderationRemoved;
+  const mediaUrl = withheld ? null : outputUrl;
+  const posterUrl = withheld ? null : item.media?.previewUrl ?? item.previewUrl ?? item.preview_url ?? null;
   // Whether a real derivative exists, as opposed to the source standing in for
   // one: the route answers an image with no poster yet by echoing its own
   // `output_url` back as `preview_url`, so a non-null poster proves nothing on
   // its own.
   const posterReady = item.media?.gridReady ?? Boolean(posterUrl);
   const previewUrl = posterReady ? posterUrl : null;
-  const previewText = kind === 'text' ? item.prompt || item.description || item.title || 'Saved text generation' : undefined;
+  const previewText = kind === 'text' && !moderationRemoved
+    ? item.prompt || item.description || item.title || 'Saved text generation'
+    : undefined;
   const previewState = getGenerationPreviewState({
-    kind, mediaKind, mediaUrl, posterReady, posterUrl, previewText, hasAudio: isAudio && Boolean(outputUrl),
+    kind, mediaKind, mediaUrl, posterReady, posterUrl, previewText, hasAudio: isAudio && !moderationRemoved && Boolean(outputUrl),
   });
   const isArchived = Boolean(item.archived_at);
   // A finished creation earns a tile whether or not its poster job did. The
@@ -268,10 +280,13 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
   // only ever open onto a list that contains it.
   const isGridReady = isCreationLibraryMember(item, isArchived ? 'archived' : 'active');
   const label = getGenerationLabel(kind, item.audioKind);
+  // A template's output carries no prompt: the template names it.
+  const isTemplate = item.origin === 'template';
+  const runStatus = isTemplate ? item.template?.runStatus : undefined;
 
   return {
     id: item.id,
-    title: item.title || item.prompt || 'Untitled creation',
+    title: item.title || (isTemplate ? item.template?.templateTitle?.trim() || 'Template result' : null) || item.prompt || 'Untitled creation',
     label: 'Creation',
     meta: formatRelativeTime(item.completed_at ?? item.created_at),
     mediaUrl,
@@ -287,13 +302,17 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
     // "Preview unavailable" is true of the poster and false of the creation:
     // the media is right there, one tap away. Only a card with no media to
     // reach keeps the blunt label.
-    previewStatusLabel: sourceUnavailable
-      ? 'File no longer available'
-      : previewState === 'videoFallback' || (previewState === 'artFallback' && Boolean(mediaUrl))
-        ? 'Tap to view media'
-        : undefined,
+    previewStatusLabel: moderationRemoved
+      ? 'Removed by moderation'
+      : sourceUnavailable
+        ? 'File no longer available'
+        : previewState === 'videoFallback' || (previewState === 'artFallback' && Boolean(mediaUrl))
+          ? 'Tap to view media'
+          : undefined,
     isGridReady,
     isArchived,
+    moderationRemoved,
+    templateNote: runStatus === 'cancelled' || runStatus === 'failed' ? `From template · run ${runStatus}` : null,
     badge: label,
     detailLabel: label,
     statusLabel: generationStatusLabel(item.status),

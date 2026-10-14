@@ -205,6 +205,8 @@ export function PostDetailsPage({
   const unlockPriceLabel = getUnlockPriceLabel(unlock, bundle);
   const primaryAction = getDetailsPrimaryAction(item, { canAccess });
   const generationStats = buildGenerationStats(details.generationInfo ?? null);
+  // A failed run's reason, as its settlement stored it; the web's failed card prints the same line.
+  const failureReason = details.generationInfo?.failureReason?.trim() || null;
   const meta = buildPostDetailsMeta(item);
   const canOpenCreator = Boolean(onCreatorOpen && item.creatorUsername);
   const commentCount = Math.max(0, item.commentCount ?? 0);
@@ -288,6 +290,12 @@ export function PostDetailsPage({
               <DetailStat key={stat.label} label={stat.label} value={stat.value} />
             ))}
           </View>
+        ) : null}
+
+        {failureReason ? (
+          <DetailSection title="Why it failed">
+            <Text style={{ color: theme.colors.textSecondary, ...appTheme.type.body }}>{failureReason}</Text>
+          </DetailSection>
         ) : null}
 
         {/* The one thing to do leads on its own line; the things to do with

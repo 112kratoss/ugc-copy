@@ -220,6 +220,60 @@ describe('profile view model media cards', () => {
     expect(generationToProfileMediaCard({ ...base, id: 'missing', output_url: null }).isGridReady).toBe(false);
   });
 
+  // Restore refuses it, and the web names it (audit 01-5).
+  it('draws a creation moderation removed as a labelled plate, in the Archived scope, never its media', () => {
+    const card = generationToProfileMediaCard({
+      id: 'removed',
+      output_url: 'https://cdn.example.com/removed.jpg',
+      preview_url: 'https://cdn.example.com/removed.preview.webp',
+      media: {
+        id: 'removed', kind: 'image', url: 'https://cdn.example.com/removed.jpg',
+        previewUrl: 'https://cdn.example.com/removed.preview.webp', gridReady: true, status: 'ready',
+      } as GenerationListItem['media'],
+      status: 'succeeded',
+      created_at: '2026-06-10T10:00:00.000Z',
+      model: 'nano-banana-2',
+      category: 'image',
+      title: 'Removed still',
+      archived_at: '2026-10-01T00:00:00.000Z',
+      moderation_removed_at: '2026-10-01T00:00:00.000Z',
+    });
+
+    expect(card).toMatchObject({
+      mediaUrl: null,
+      previewUrl: null,
+      previewState: 'artFallback',
+      previewStatusLabel: 'Removed by moderation',
+      moderationRemoved: true,
+      isArchived: true,
+      isGridReady: true,
+    });
+  });
+
+  // A template's output has no prompt, so its tile read "Untitled creation" (audit 01-3).
+  it("names a template's output by its template, and notes a run that ended without succeeding", () => {
+    const base: GenerationListItem = {
+      id: 'step',
+      output_url: 'https://cdn.example.com/step.jpg',
+      status: 'succeeded',
+      created_at: '2026-06-10T10:00:00.000Z',
+      model: 'template-workflow',
+      category: 'image',
+      prompt: null,
+      origin: 'template',
+      template: { runId: 'run-1', templateId: 'template-1', templateTitle: 'Product reveal', runStatus: 'cancelled' },
+    };
+
+    expect(generationToProfileMediaCard(base)).toMatchObject({
+      title: 'Product reveal',
+      templateNote: 'From template · run cancelled',
+    });
+    expect(generationToProfileMediaCard({
+      ...base,
+      template: { runId: 'run-1', templateId: 'template-1', templateTitle: null, runStatus: 'succeeded' },
+    })).toMatchObject({ title: 'Template result', templateNote: null });
+  });
+
   it('marks owner posts without usable preview content as not grid-ready', () => {
     const base: OwnerPostListItem = {
       id: 'post-base',

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { ImmersivePostUnlockDetails, ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import {
+  buildGenerationStats,
   buildPostDetailsMeta,
+  formatReturnedCredits,
   getDetailsBackLabel,
   getDetailsPrimaryAction,
   getDetailsTitle,
@@ -254,5 +256,29 @@ describe('details chrome labels', () => {
     expect(getDetailsTitle(showcaseItem({
       details: { ...showcaseItem().details!, generationInfo: { model: 'veo-3', createdAt: '', duration: 8, cost: null, inputMedia: null } },
     }))).toBe('Creation details');
+  });
+});
+
+describe('what a failed run gave back', () => {
+  it('reads "N credits returned" only when the run was refunded and had cost something', () => {
+    expect(formatReturnedCredits({ cost: 40, refunded: true })).toBe('40 credits returned');
+    expect(formatReturnedCredits({ cost: 1, refunded: true })).toBe('1 credit returned');
+    expect(formatReturnedCredits({ cost: 1200, refunded: true })).toBe('1,200 credits returned');
+    expect(formatReturnedCredits({ cost: 40, refunded: false })).toBeNull();
+    expect(formatReturnedCredits({ cost: 0, refunded: true })).toBeNull();
+    expect(formatReturnedCredits(null)).toBeNull();
+  });
+
+  // The tile it replaces said "Cost: 40 credits" for a run that cost nothing.
+  it('turns the Cost tile of a refunded run into what came back', () => {
+    expect(buildGenerationStats({ model: 'Seedance 2', duration: 5, cost: 40, refunded: true })).toEqual([
+      { label: 'Model', value: 'Seedance 2' },
+      { label: 'Duration', value: '5s' },
+      { label: 'Returned', value: '40 credits' },
+    ]);
+    expect(buildGenerationStats({ model: 'Seedance 2', duration: 5, cost: 1, refunded: true })[2])
+      .toEqual({ label: 'Returned', value: '1 credit' });
+    expect(buildGenerationStats({ model: 'Seedance 2', duration: 5, cost: 40, refunded: false })[2])
+      .toEqual({ label: 'Cost', value: '40 credits' });
   });
 });

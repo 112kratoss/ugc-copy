@@ -140,7 +140,7 @@ describe('the card and reel item of an audio creation', () => {
       },
       // Publishing, sharing and remixing an audio creation all answer 400.
       canShare: false,
-      availableActions: ['archive', 'view-details'],
+      availableActions: ['archive', 'delete-creation', 'view-details'],
     });
     expect(item.details?.categoryLabel).toBe('Voiceover');
     expect(getViewerShareIntent(item, 'https://magicbooklet.com')).toEqual({ kind: 'unavailable' });
@@ -152,9 +152,9 @@ describe('the card and reel item of an audio creation', () => {
     expect(immersive(soundEffect()).audio).toMatchObject({ kind: 'sound-effect', durationSeconds: 5 });
   });
 
-  it('offers only restore once archived', () => {
+  it('offers only restore, and delete, once archived', () => {
     const item = immersive(voiceover({ archived_at: '2026-10-02T08:00:00.000Z' }));
-    expect(item.availableActions).toEqual(['restore', 'view-details']);
+    expect(item.availableActions).toEqual(['restore', 'delete-creation', 'view-details']);
     expect(getViewerStateChip(item)).toEqual({ label: 'Archived', tone: 'danger' });
   });
 
@@ -204,7 +204,7 @@ describe('the card and reel item of an audio creation', () => {
 
     expect(item.previewKind).toBeUndefined();
     expect(item.audio).toBeNull();
-    expect(item.availableActions).toEqual(['archive', 'view-details']);
+    expect(item.availableActions).toEqual(['archive', 'delete-creation', 'view-details']);
     expect(buildImmersiveSlidePages(item).map((page) => page.type)).toEqual(['status', 'details']);
     const slide = getImmersiveStatusSlide(item);
     expect(slide.title).toBe('This render failed');

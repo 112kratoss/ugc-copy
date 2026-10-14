@@ -68,6 +68,23 @@ export interface PostDetailsStat {
   value: string;
 }
 
+function creditCount(amount: number) {
+  return `${formatCreditAmount(amount)} ${amount === 1 ? 'credit' : 'credits'}`;
+}
+
+/**
+ * What a failed run gave back, in the web Studio's words: "40 credits
+ * returned". Null unless its settlement returned a charge; a failed run that
+ * kept its cost, or cost nothing, says so through its cost instead.
+ */
+export function formatReturnedCredits(
+  info: { cost?: number | null; refunded?: boolean } | null | undefined
+): string | null {
+  const cost = info?.cost ?? 0;
+  if (!info?.refunded || cost <= 0) return null;
+  return `${creditCount(cost)} returned`;
+}
+
 /**
  * The production facts of a creation, one tile each.
  *
@@ -79,7 +96,7 @@ export interface PostDetailsStat {
  * way `buildPostDetailsMeta` leaves out "0 saves".
  */
 export function buildGenerationStats(
-  info: { model?: string | null; duration?: number | null; cost?: number | null } | null | undefined
+  info: { model?: string | null; duration?: number | null; cost?: number | null; refunded?: boolean } | null | undefined
 ): PostDetailsStat[] {
   if (!info) return [];
   const stats: PostDetailsStat[] = [];
@@ -90,16 +107,20 @@ export function buildGenerationStats(
   const duration = info.duration ?? 0;
   if (duration > 0) stats.push({ label: 'Duration', value: `${duration}s` });
 
+  // A refunded run keeps its `cost` on the row, and "Cost: 40 credits" read as
+  // a charge for a run that cost nothing. Its tile says what came back instead.
   const cost = info.cost ?? 0;
   if (cost > 0) {
-    stats.push({ label: 'Cost', value: `${formatCreditAmount(cost)} ${cost === 1 ? 'credit' : 'credits'}` });
+    stats.push(formatReturnedCredits(info)
+      ? { label: 'Returned', value: creditCount(cost) }
+      : { label: 'Cost', value: creditCount(cost) });
   }
 
   return stats;
 }
 
 export interface PostDetailsPrimaryAction {
-  label: 'Remix' | 'Recreate';
+  label: 'Remix' | 'Recreate' | 'Try again';
 }
 
 /**
@@ -113,7 +134,8 @@ export interface PostDetailsPrimaryAction {
  * button is the purchase path, and two buttons for one purchase is one too many.
  * Once the viewer can access the bundle, a stale `unlock-remix` (the feed has
  * not refetched `canRemix` yet) is treated as a remix — the remix call succeeds
- * after purchase.
+ * after purchase. A failed run's is "Try again", as the web's Failed card and
+ * the ••• call it.
  */
 export function getDetailsPrimaryAction(
   item: ImmersivePreviewItem,
@@ -121,7 +143,8 @@ export function getDetailsPrimaryAction(
 ): PostDetailsPrimaryAction | null {
   const actions = new Set(item.availableActions);
   if (actions.has('recreate')) {
-    return { label: item.sourceType === 'showcase' ? 'Remix' : 'Recreate' };
+    if (item.sourceType === 'showcase') return { label: 'Remix' };
+    return { label: item.runStatus === 'failed' ? 'Try again' : 'Recreate' };
   }
   if (actions.has('unlock-remix') && options.canAccess) {
     return { label: 'Remix' };

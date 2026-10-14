@@ -1,8 +1,8 @@
-import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
+import { useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { AccessibilityInfo, Linking } from 'react-native';
 
-import type { createApiClient } from '@/lib/api-client';
+import type { createApiClient, MagicbookletApiClient } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { showActionSheet } from '@/lib/action-sheet';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
@@ -21,8 +21,12 @@ import {
 } from '@/lib/post-lifecycle';
 import type { OwnerPostsResponse } from '@/lib/types';
 import { adjustProfileStats, invalidateProfileStats } from '@/lib/profile-stats';
-import { getViewerSafetyActions } from '@/lib/viewer-actions';
-import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
+import { getDeleteCreationConfirmation, getViewerSafetyActions } from '@/lib/viewer-actions';
+import {
+  applyGenerationArchiveToCaches,
+  refreshViewerMediaCaches,
+  removeGenerationFromCaches,
+} from '@/lib/viewer-media-cache';
 
 /**
  * What a screen hands the viewer's actions for one item: the parts of an action
@@ -42,7 +46,8 @@ export interface ViewerActionCallbacks {
    */
   onSave?: (item: ImmersivePreviewItem) => void;
   onShare: () => void;
-  onDeleted?: (postId: string) => void;
+  /** The item was deleted, with the id it had: the screen moves on from it. */
+  onDeleted?: (id: string) => void;
   /**
    * A block went through, and the screen takes the creator's posts out of what
    * it shows and of the feed lanes: the reel, which then moves on to the next
@@ -77,6 +82,55 @@ const POST_REPORT_REASONS: Array<{ label: string; value: PostReportReason; about
   { label: 'Payment issue', value: 'payment_issue', aboutRecipe: true },
   { label: 'Something else', value: 'other' },
 ];
+
+/** Whether a creation is one the profile's Creations total counts (the library rule). */
+function countsAsCreation(item: Pick<ImmersivePreviewItem, 'archivedAt' | 'availability'>) {
+  return !item.archivedAt && (item.availability === 'available' || item.availability === 'source-unavailable');
+}
+
+/**
+ * Archive or restore one creation: asked first, then the server, then the row
+ * changed in the pages already loaded (`applyGenerationArchiveToCaches`). The
+ * ••• and a profile card's own Restore both come through here. A refusal says
+ * what the server said: it refuses a template's output and a creation
+ * moderation took down, and "Please try again" told neither.
+ */
+export async function changeGenerationArchive({
+  api,
+  queryClient,
+  userId,
+  item,
+  archive,
+}: {
+  api: Pick<MagicbookletApiClient, 'archiveGeneration' | 'restoreGeneration' | 'listGenerations' | 'listOwnerPosts' | 'getSavedMedia'>;
+  queryClient: QueryClient;
+  userId: string | undefined;
+  item: Pick<ImmersivePreviewItem, 'id' | 'archivedAt' | 'availability'>;
+  archive: boolean;
+}): Promise<'done' | 'cancelled' | 'failed'> {
+  const confirmed = await showConfirmDialog(archive
+    ? { title: 'Archive creation', message: 'You can restore it later from your profile.', confirmLabel: 'Archive', destructive: true }
+    : { title: 'Restore creation', message: 'Return this item to your active media?', confirmLabel: 'Restore' });
+  if (!confirmed) return 'cancelled';
+  try {
+    await (archive ? api.archiveGeneration(item.id) : api.restoreGeneration(item.id));
+  } catch (error) {
+    haptic.error();
+    showErrorDialog(archive ? 'Could not archive creation' : 'Could not restore creation', error);
+    return 'failed';
+  }
+  // Only a library member moves the total: a failed run never counted.
+  const counted = countsAsCreation(archive ? item : { ...item, archivedAt: null });
+  if (counted) adjustProfileStats(queryClient, userId, { creations: archive ? -1 : 1 });
+  await applyGenerationArchiveToCaches({
+    api,
+    queryClient,
+    userId,
+    generationId: item.id,
+    archivedAt: archive ? new Date().toISOString() : null,
+  });
+  return 'done';
+}
 
 export function useViewerActionHandlers({
   item,
@@ -145,23 +199,23 @@ export function useViewerActionHandlers({
     onDeleted?.(item.id);
   };
 
-  const confirmMutation = (
-    title: string,
-    message: string,
-    confirmLabel: string,
-    mutation: () => Promise<unknown>,
-    destructive = false
-  ) => {
-    void showConfirmDialog({ title, message, confirmLabel, destructive }).then(async (confirmed) => {
-      if (!confirmed) return;
-      try {
-        await mutation();
-        await refreshMedia();
-      } catch {
-        haptic.error();
-        showMessageDialog({ title: 'Could not update media', message: 'Please try again.' });
-      }
-    });
+  // The screen moves on first, from the list it is showing; then the creation
+  // leaves every cache, so nothing that lists it draws it again.
+  const deleteCreation = async () => {
+    const confirmed = await showConfirmDialog({ ...getDeleteCreationConfirmation(item), destructive: true });
+    if (!confirmed) return;
+    try {
+      await api.deleteGeneration(item.id);
+    } catch (error) {
+      haptic.error();
+      showErrorDialog('Could not delete creation', error);
+      return;
+    }
+    haptic.success();
+    onDeleted?.(item.id);
+    removeGenerationFromCaches(queryClient, user?.id, item.id);
+    if (countsAsCreation(item)) adjustProfileStats(queryClient, user?.id, { creations: -1 });
+    await invalidateProfileStats(queryClient, user?.id);
   };
 
   const updateVisibility = async (post: PostLifecyclePost, visibility: 'public' | 'unlisted' | 'private') => {
@@ -212,16 +266,7 @@ export function useViewerActionHandlers({
         });
         return;
       }
-      confirmMutation(
-        'Archive creation',
-        'You can restore it later from your profile.',
-        'Archive',
-        () => api.archiveGeneration(item.id).then((result) => {
-          adjustProfileStats(queryClient, user?.id, { creations: -1 });
-          return result;
-        }),
-        true
-      );
+      void changeGenerationArchive({ api, queryClient, userId: user?.id, item, archive: true });
       return;
     }
     if (action === 'restore') {
@@ -233,19 +278,19 @@ export function useViewerActionHandlers({
         });
         return;
       }
-      confirmMutation(
-        'Restore creation',
-        'Return this item to your active media?',
-        'Restore',
-        () => api.restoreGeneration(item.id).then((result) => {
-          adjustProfileStats(queryClient, user?.id, { creations: 1 });
-          return result;
-        })
-      );
+      void changeGenerationArchive({ api, queryClient, userId: user?.id, item, archive: false });
       return;
     }
     if (action === 'delete-post') {
       void deletePost();
+      return;
+    }
+    if (action === 'delete-creation' && item.sourceType === 'generation') {
+      void deleteCreation();
+      return;
+    }
+    if (action === 'open-run' && item.templateRun?.runId) {
+      router.push(`/template-runs/${encodeURIComponent(item.templateRun.runId)}` as never);
       return;
     }
     if (action === 'publish') {

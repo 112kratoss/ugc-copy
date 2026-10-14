@@ -262,7 +262,14 @@ export interface GenerationListItem {
     runId: string;
     templateId: string;
     templateTitle: string | null;
+    /**
+     * How the run that made it ended. A finished step of a cancelled or failed
+     * run is listed too; only a succeeded run's result can be posted.
+     */
+    runStatus?: 'succeeded' | 'cancelled' | 'failed';
   } | null;
+  /** How many files the run made; the list carries the first one's addresses only. */
+  output_count?: number;
   creationMode?: 'motion' | null;
   /**
    * Set on an audio creation: which kind of sound it is. A string, not the
@@ -274,7 +281,12 @@ export interface GenerationListItem {
   created_at: string;
   completed_at?: string | null;
   duration?: number | null;
+  /** What the run was charged. A refunded run keeps it, so `refunded` says whether it came back. */
   cost?: number | null;
+  /** The run failed and its settlement returned `cost`. */
+  refunded?: boolean;
+  /** Why a failed run failed, in the server's public words; null on any other status. */
+  error_message?: string | null;
   model: string;
   category: string | null;
   title?: string | null;
@@ -285,7 +297,18 @@ export interface GenerationListItem {
   linked_post_title?: string | null;
   linked_post_visibility?: string | null;
   linked_post_archived_at?: string | null;
+  /** The recipe the linked post sells, read with the page, for posts older than the first page of owner posts. */
+  linked_post_bundle?: {
+    accessMode: 'free' | 'paid';
+    status: 'draft' | 'published';
+    priceUsdCents: number;
+  } | null;
   archived_at?: string | null;
+  /**
+   * Set when moderation removed the creation. Such a row is archived as well,
+   * and the server refuses to restore it.
+   */
+  moderation_removed_at?: string | null;
   /** Set when the output's only source is gone; the API withholds every address. */
   source_unavailable_at?: string | null;
 }

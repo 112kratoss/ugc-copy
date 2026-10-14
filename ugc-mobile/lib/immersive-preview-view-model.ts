@@ -12,6 +12,7 @@ import {
 } from './generation-media';
 import { UNKNOWN_CREATOR_LABEL } from './hide-creator-label';
 import { formatCompactCount } from './home-view-model';
+import { formatReturnedCredits } from './post-details-view-model';
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-display';
 import { getShowcaseRemixAccess, type ShowcaseRemixAccess } from './showcase-remix-access';
@@ -69,6 +70,10 @@ export interface ImmersivePostDetails {
     createdAt: string;
     duration: number | null;
     cost: number | null;
+    /** The run failed and `cost` came back to the creator. */
+    refunded?: boolean;
+    /** Why a failed run failed, in the server's public words. */
+    failureReason?: string | null;
     inputMedia: Array<{ url?: string | null; kind?: string | null }> | null;
   } | null;
 }
@@ -158,6 +163,17 @@ export interface ImmersivePreviewItem {
    * nothing to play draws this state instead of disappearing (audit C1).
    */
   availability?: CreationAvailability;
+  /**
+   * Moderation took the creation down. It is archived as well, can be deleted
+   * but not restored, and its media is not drawn anywhere: its slide says why.
+   */
+  moderationRemoved?: boolean;
+  /**
+   * Set on a template's output: the run that made it, which owns it, and how a
+   * run that did not succeed ended. Such a run's finished steps are listed but
+   * cannot be posted.
+   */
+  templateRun?: { runId: string | null; endedAs: 'cancelled' | 'failed' | null } | null;
   visibility?: string | null;
   isManualOwnerPost?: boolean;
   availableActions: string[];
@@ -440,6 +456,13 @@ export function hasImmersiveAudibleMedia(item: ImmersivePreviewItem | undefined)
 export function getImmersiveStatusSlide(item: ImmersivePreviewItem): { title: string; body: string } {
   const label = item.badge?.toLowerCase() || 'creation';
 
+  if (item.moderationRemoved) {
+    return {
+      title: 'Removed by moderation',
+      body: `Our moderation team removed this ${label}. It can’t be shown or restored, but you can delete it.`,
+    };
+  }
+
   if (item.availability === 'source-unavailable') {
     return {
       title: 'This file is no longer available',
@@ -453,13 +476,23 @@ export function getImmersiveStatusSlide(item: ImmersivePreviewItem): { title: st
     const again = item.creationKind === 'audio'
       ? 'run its workflow again on magicbooklet.com'
       : 'start it again from Create';
+    const info = item.details?.generationInfo;
+    // The row keeps its cost after a refund, so the slide says what came back,
+    // and first: a long reason can run past the slide's lines, and a refund cut
+    // off there would leave the run reading as paid for.
+    const returned = formatReturnedCredits(info);
+    const opening = returned ? `${returned}. ` : '';
+    const reason = info?.failureReason?.trim();
     return {
       title: 'This render failed',
-      body: `No ${label} came back from the model, so there is nothing to play here. The prompt is on the next page — swipe left to read it, or ${again}.`,
+      body: reason
+        ? `${opening}${reason}`
+        : `${opening}No ${label} came back from the model, so there is nothing to play here. The prompt is on the next page — swipe left to read it, or ${again}.`,
     };
   }
 
-  if (item.runStatus === 'processing' || item.runStatus === 'waiting') {
+  // `pending` is in flight too: a run the provider has not picked up yet.
+  if (item.availability === 'rendering' || item.runStatus === 'processing' || item.runStatus === 'waiting') {
     return {
       title: 'Still rendering',
       body: `This ${label} is still being made. It will play here once the model returns it.`,
@@ -651,8 +684,17 @@ function generationToImmersiveItem(
   ownerPosts: OwnerPostListItem[]
 ): ImmersivePreviewItem {
   const kind = getGenerationKind(item);
-  const displayText = item.prompt?.trim() || item.description?.trim() || item.title?.trim() || 'Saved Magicbooklet generation.';
-  const title = item.title?.trim() || displayText;
+  const templateRun = generationTemplateRun(item);
+  // A template's output carries no prompt (the recipe is the template's), so it
+  // is named by its template and described by its run.
+  const templateTitle = templateRun ? item.template?.templateTitle?.trim() || 'Template result' : null;
+  const templateSummary = templateRun
+    ? templateRun.endedAs
+      ? `A finished step of a template run that was ${templateRun.endedAs}. Open the run to see every step.`
+      : 'Made with a template. Open the run to see every step.'
+    : null;
+  const displayText = item.prompt?.trim() || item.description?.trim() || templateSummary || item.title?.trim() || 'Saved Magicbooklet generation.';
+  const title = item.title?.trim() || templateTitle || displayText;
   const mediaKind = getGenerationRenderableMediaKind(kind);
   const previewUrl = item.previewUrl ?? item.preview_url ?? null;
   const linkedPost = findLinkedOwnerPost(item, ownerPosts);
@@ -662,17 +704,27 @@ function generationToImmersiveItem(
   const linkedPostPath = linkedPost?.publicPath
     ?? (linkedPostId && linkedPostVisibility !== 'private' && !linkedPostArchivedAt ? `/showcase/${linkedPostId}` : null);
   const linkedPostOwnerPath = linkedPost?.ownerPath ?? (linkedPostId ? `/post/${linkedPostId}/edit` : null);
-  // Sharing an unposted creation means publishing it first, which a run that
-  // produced no media cannot do. The rail reads `canShare` rather than
-  // `availableActions`, so the two have to agree.
+  // A creation is shared as its post: the link to a public or unlisted one,
+  // which is what the web's "Copy post link" sends. Without such a post there
+  // is no link yet (Publish, or the visibility control, is the way to one), and
+  // an archived creation is out of the library until it is restored. The rail
+  // reads `canShare` rather than `availableActions`, so the two have to agree,
+  // and a creation with no file left offers none of its post's controls.
   const hasOutput = Boolean(item.output_url || item.output_urls?.length);
+  const sharePath = linkedPostId
+    && (linkedPostVisibility === 'public' || linkedPostVisibility === 'unlisted')
+    && !linkedPostArchivedAt
+    ? linkedPostPath
+    : null;
+  const canShare = Boolean(sharePath) && hasOutput && !item.archived_at;
   const isAudio = kind === 'audio';
   const outputUrl = item.output_urls?.[0] ?? item.output_url ?? null;
   const availability = getCreationAvailability(item);
+  const moderationRemoved = Boolean(item.moderation_removed_at);
   // Only a finished audio creation with its file has something to play. One
   // that failed, is still rendering or lost its file sits on the status page
   // like any other creation in that state.
-  const audio: ImmersivePreviewAudio | null = isAudio && availability === 'available' && outputUrl
+  const audio: ImmersivePreviewAudio | null = isAudio && availability === 'available' && outputUrl && !moderationRemoved
     ? {
         url: outputUrl,
         kind: normalizeGenerationAudioKind(item.audioKind),
@@ -687,10 +739,13 @@ function generationToImmersiveItem(
     sourceType: 'generation',
     title,
     displayText,
-    mediaUrl: isAudio ? null : outputUrl,
+    // What moderation took down is not drawn: its status page says why.
+    mediaUrl: isAudio || moderationRemoved ? null : outputUrl,
     mediaKind,
-    mediaItems: getGenerationMediaItemsList(item.id, item.output_urls, item.output_url, mediaKind, previewUrl, item.media),
-    previewKind: kind === 'text' ? 'text' : audio ? 'audio' : undefined,
+    mediaItems: moderationRemoved
+      ? []
+      : getGenerationMediaItemsList(item.id, item.output_urls, item.output_url, mediaKind, previewUrl, item.media),
+    previewKind: moderationRemoved ? undefined : kind === 'text' ? 'text' : audio ? 'audio' : undefined,
     audio,
     creationKind: kind,
     creatorLabel: owner.creatorLabel,
@@ -704,10 +759,8 @@ function generationToImmersiveItem(
     canComment: false,
     isSaved: true,
     canSave: false,
-    // Sharing an unposted creation publishes it first, and the server refuses
-    // to publish audio.
-    canShare: hasOutput && !isAudio,
-    sharePath: null,
+    canShare,
+    sharePath,
     // Unread for audio, which never offers `recreate`: no create tool takes it.
     recreateTool: kind === 'motion' ? 'motion' : kind === 'video' ? 'video' : 'image',
     recreatePrompt: item.prompt?.trim() || item.description?.trim() || item.title?.trim() || '',
@@ -730,6 +783,8 @@ function generationToImmersiveItem(
         createdAt: item.created_at,
         duration: item.duration ?? null,
         cost: item.cost ?? null,
+        refunded: item.refunded === true,
+        failureReason: item.error_message?.trim() || null,
         inputMedia: item.input_media ?? null,
       },
     },
@@ -744,8 +799,17 @@ function generationToImmersiveItem(
     archivedAt: item.archived_at ?? null,
     runStatus: item.status ?? null,
     availability,
+    moderationRemoved,
+    templateRun,
     visibility: null,
-    availableActions: getGenerationAvailableActions(item, linkedPostId, linkedPostArchivedAt, isAudio),
+    availableActions: getGenerationAvailableActions(item, {
+      availability,
+      canShare,
+      isAudio,
+      linkedPostArchivedAt,
+      linkedPostId,
+      templateRun,
+    }),
     disabledActions: item.archived_at
       ? {
           publish: 'This creation is archived',
@@ -763,35 +827,71 @@ function findLinkedOwnerPost(item: GenerationListItem, ownerPosts: OwnerPostList
     ?? null;
 }
 
+/** The run a template's output came from, or null for an ordinary creation. */
+function generationTemplateRun(item: GenerationListItem): ImmersivePreviewItem['templateRun'] {
+  if (item.origin !== 'template') return null;
+  const runStatus = item.template?.runStatus;
+  return {
+    runId: item.template?.runId?.trim() || null,
+    endedAs: runStatus === 'cancelled' || runStatus === 'failed' ? runStatus : null,
+  };
+}
+
 function getGenerationAvailableActions(
   item: GenerationListItem,
-  linkedPostId: string | null,
-  linkedPostArchivedAt: string | null,
-  isAudio: boolean
+  {
+    availability,
+    canShare,
+    isAudio,
+    linkedPostArchivedAt,
+    linkedPostId,
+    templateRun,
+  }: {
+    availability: CreationAvailability;
+    canShare: boolean;
+    isAudio: boolean;
+    linkedPostArchivedAt: string | null;
+    linkedPostId: string | null;
+    templateRun: ImmersivePreviewItem['templateRun'];
+  }
 ) {
+  // A template's output belongs to its run: the server refuses to recreate,
+  // archive, restore or delete it (`generation-lifecycle-service.ts`,
+  // `generation-delete-service.ts`), and the run is where it is managed.
+  const openRun = templateRun?.runId ? ['open-run'] : [];
+  // Delete is final and the server keeps no undo. A run still rendering holds
+  // its credits until it settles, and only the row can settle it, so it is not
+  // offered until the run has.
+  const remove = templateRun || availability === 'rendering' ? [] : ['delete-creation'];
+
   if (item.archived_at) {
-    return ['restore', 'view-details'];
+    // Moderation archives what it takes down, and Restore refuses it.
+    return [...(item.moderation_removed_at || templateRun ? [] : ['restore']), ...remove, 'view-details'];
   }
 
   // The server answers 400 to publishing, sharing and remixing audio, and the
   // app has no tool that makes it. Offering those led to a composer that could
   // not load the creation and to the image tool holding a voiceover script.
   if (isAudio) {
-    return ['archive', 'view-details'];
+    return [...(templateRun ? openRun : ['archive']), ...remove, 'view-details'];
   }
 
   // A run that produced nothing has nothing to publish or share. It reaches
   // the reel when its own "your video failed" notification is tapped, and the
   // only thing worth offering there is another go at the prompt.
   if (!item.output_url && !item.output_urls?.length) {
-    return ['recreate', 'archive', 'view-details'];
+    return templateRun
+      ? [...openRun, 'view-details']
+      : ['recreate', 'archive', ...remove, 'view-details'];
   }
 
-  // Download, as on owned posts and on the web Studio card; audio has no file to save.
-  const download = isAudio ? [] : ['download'];
+  const library = templateRun ? openRun : ['recreate', 'archive', ...remove];
+  // Download, as on owned posts and on the web Studio card.
+  const tail = [...(canShare ? ['share'] : []), 'download', 'view-details'];
 
   if (!linkedPostId) {
-    return ['publish', 'recreate', 'archive', 'share', ...download, 'view-details'];
+    // Only a succeeded run's result can be posted (`showcase-publish-service.ts`).
+    return [...(templateRun?.endedAs ? [] : ['publish']), ...library, ...tail];
   }
 
   // The linked post gets the same three-state control as a post of its own;
@@ -801,7 +901,7 @@ function getGenerationAvailableActions(
     linkedActions.push('change-linked-visibility');
   }
 
-  return [...linkedActions, 'view-linked', 'recreate', 'archive', 'share', ...download, 'view-details'];
+  return [...linkedActions, 'view-linked', ...library, ...tail];
 }
 
 function ownerPostToImmersiveItem(
