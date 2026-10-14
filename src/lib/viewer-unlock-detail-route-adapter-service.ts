@@ -8,7 +8,7 @@ import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
 import { logBackendRouteError } from '@/lib/backend-logger';
 import { getClientNetworkKey } from '@/lib/client-network-key';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
-import { getViewerUnlockDetail } from '@/lib/viewer-unlock-detail';
+import { getViewerUnlockDetail, isViewerUnlockId } from '@/lib/viewer-unlock-detail';
 import {
   createViewerUnlockFileUrl,
   type ViewerUnlockFileUrlClient,
@@ -33,10 +33,6 @@ function resolveDependencies(dependencies?: ViewerUnlockRouteDependencies) {
     getViewerUnlockDetail: dependencies?.getViewerUnlockDetail ?? getViewerUnlockDetail,
     logError: dependencies?.logError ?? logBackendRouteError,
   };
-}
-
-function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 async function authenticate(request: Request, dependencies: ReturnType<typeof resolveDependencies>) {
@@ -71,7 +67,7 @@ export async function getViewerUnlockDetailRouteResponse({
       response = NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     } else {
       const { unlockId } = await context.params;
-      const unlock = isUuid(unlockId)
+      const unlock = isViewerUnlockId(unlockId)
         ? await dependencies.getViewerUnlockDetail({
             adminSupabase: dependencies.createServiceClient(),
             unlockId,
@@ -110,7 +106,7 @@ export async function postViewerUnlockFileUrlRouteResponse({
       response = NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     } else {
       const { unlockId } = await context.params;
-      if (!isUuid(unlockId)) {
+      if (!isViewerUnlockId(unlockId)) {
         response = NextResponse.json({ error: 'Unlock not found.' }, { status: 404 });
       } else {
         const adminSupabase = dependencies.createServiceClient();

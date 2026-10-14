@@ -25,6 +25,17 @@ type PurchasedProofMediaRow = {
   sort_order: number;
 };
 
+/**
+ * The read URL of a purchase snapshot's stored path. Public posts/ and
+ * showcase/ paths go through the media proxy as well: it resolves a buyer's
+ * snapshot path even after the object moved into the post's private namespace.
+ */
+export function purchasedProofMediaUrl(adminSupabase: SupabaseClient, storagePath: string): string {
+  return storagePath.startsWith('posts/') || storagePath.startsWith('showcase/')
+    ? `/api/media?${new URLSearchParams({ bucket: 'post_media', path: storagePath })}`
+    : postMediaReadUrl(adminSupabase, storagePath);
+}
+
 function buildScopedMediaPlaceholders(resources: PostResourceBundleResources): ShowcaseMediaItem[] {
   const mediaKeys: string[] = [];
   const seen = new Set<string>();
@@ -89,7 +100,7 @@ export async function loadPurchasedProofMedia({
   if (rows.length === 0) return buildScopedMediaPlaceholders(resources);
 
   const publicUrl = (storagePath: string | null) => storagePath && includeStoredUrls
-    ? ((storagePath.startsWith('posts/') || storagePath.startsWith('showcase/')) ? `/api/media?${new URLSearchParams({ bucket: 'post_media', path: storagePath })}` : postMediaReadUrl(adminSupabase, storagePath))
+    ? purchasedProofMediaUrl(adminSupabase, storagePath)
     : null;
 
   return rows.map((row) => {
