@@ -1065,6 +1065,15 @@ export interface DeletePostCommentResponse {
   commentCount: number;
 }
 
+export interface CreatorProfileStats {
+  publicCreations: number;
+  totalSaves: number;
+  totalRemixes: number;
+  unlocks: number;
+  totalUnlockSales: number;
+  toolsUsed: Array<{ slug: string; label: string; count: number }>;
+}
+
 export interface CreatorProfileResponse {
   profile: {
     id: string;
@@ -1079,14 +1088,8 @@ export interface CreatorProfileResponse {
     tiktokHandle: string | null;
     location: string | null;
   };
-  stats: {
-    publicCreations: number;
-    totalSaves: number;
-    totalRemixes: number;
-    unlocks: number;
-    totalUnlockSales: number;
-    toolsUsed: Array<{ slug: string; label: string; count: number }>;
-  };
+  /** Sent with the first page (offset 0) only; later pages leave it out. */
+  stats?: CreatorProfileStats;
   items: ShowcaseFeedItem[];
   pageInfo: {
     hasMore: boolean;
@@ -1098,6 +1101,12 @@ export interface CreatorProfileResponse {
   viewer: {
     isOwner: boolean;
     isFollowing: boolean;
+    /**
+     * The viewer blocked this creator: the page carries the header and the
+     * counts, and no posts. A creator who blocked the viewer answers 404
+     * instead. Servers before 2026-10-14 leave it out.
+     */
+    blockedByViewer?: boolean;
   };
 }
 
