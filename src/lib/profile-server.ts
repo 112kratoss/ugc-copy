@@ -63,7 +63,7 @@ export async function findShareableProfileByUsername(
 
   const { data, error } = await adminSupabase
     .from('profiles')
-    .select('id, username')
+    .select('id, username, identity_state')
     .eq('username', normalizedUsername)
     .maybeSingle();
 
@@ -72,9 +72,13 @@ export async function findShareableProfileByUsername(
     throw error;
   }
 
-  const profile = data as ExistingProfileRow | null;
+  const profile = data as (ExistingProfileRow & { identity_state?: string | null }) | null;
 
-  return profile?.username ? { id: profile.id, username: profile.username } : null;
+  // An account being deleted has no page to share: the creator page answers
+  // not found from the first step of a deletion, and so does this.
+  if (!profile?.username || profile.identity_state === 'deleting') return null;
+
+  return { id: profile.id, username: profile.username };
 }
 
 interface ProfileValidationSuccess {

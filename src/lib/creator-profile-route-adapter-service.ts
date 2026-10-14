@@ -10,7 +10,11 @@ import {
   getApiRequestId,
   getViewerAwareApiCacheControl,
 } from '@/lib/api-cache';
-import { getCreatorProfilePageData } from '@/lib/creator-profile';
+import {
+  getCreatorProfilePageData,
+  loadCreatorBlockRelationship,
+  type CreatorProfilePage,
+} from '@/lib/creator-profile';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
 import {
   BackendRateLimitError,
@@ -19,8 +23,8 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { getCreatorFollowStateForRoute } from '@/lib/profile-follow-service';
+import { attachViewerStateToFeed } from '@/lib/showcase-feed';
 import { getFeedNetworkKeyHash } from '@/lib/showcase-feed-identity';
-import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import { parsePositiveInt } from '@/lib/showcase';
 
@@ -34,7 +38,7 @@ type CreatorProfileRouteDependencies = {
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
   getFeedNetworkKeyHash?: typeof getFeedNetworkKeyHash;
   getCreatorFollowStateForRoute?: typeof getCreatorFollowStateForRoute;
-  isUserRelationshipBlocked?: typeof isUserRelationshipBlocked;
+  loadCreatorBlockRelationship?: typeof loadCreatorBlockRelationship;
   getCreatorProfilePageData?: typeof getCreatorProfilePageData;
   logError?: typeof logBackendRouteError;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
@@ -47,7 +51,7 @@ function resolveDependencies(dependencies: CreatorProfileRouteDependencies | und
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
     getFeedNetworkKeyHash: dependencies?.getFeedNetworkKeyHash ?? getFeedNetworkKeyHash,
     getCreatorFollowStateForRoute: dependencies?.getCreatorFollowStateForRoute ?? getCreatorFollowStateForRoute,
-    isUserRelationshipBlocked: dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked,
+    loadCreatorBlockRelationship: dependencies?.loadCreatorBlockRelationship ?? loadCreatorBlockRelationship,
     getCreatorProfilePageData: dependencies?.getCreatorProfilePageData ?? getCreatorProfilePageData,
     logError: dependencies?.logError ?? logBackendRouteError,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
@@ -79,11 +83,11 @@ async function getViewerState({
   viewerUserId: string | null;
 }) {
   if (!viewerUserId) {
-    return { isOwner: false, isFollowing: false };
+    return { isOwner: false, isFollowing: false, blockedByViewer: false };
   }
 
   if (viewerUserId === creatorId) {
-    return { isOwner: true, isFollowing: false };
+    return { isOwner: true, isFollowing: false, blockedByViewer: false };
   }
 
   const result = await dependencies.getCreatorFollowStateForRoute({
@@ -94,8 +98,29 @@ async function getViewerState({
 
   return {
     isOwner: false,
-    isFollowing: result.ok && 'following' in result.body ? Boolean(result.body.following) : false,
+    isFollowing: result.ok ? result.body.following : false,
+    blockedByViewer: false,
   };
+}
+
+/**
+ * Saved state and bought-recipe remix access, read the way the feed reads
+ * them, for whichever page this is: the clients take both from each item, so
+ * a page without them showed saved posts as unsaved.
+ */
+async function attachCreatorPageViewerState(
+  data: CreatorProfilePage,
+  viewerUserId: string | null,
+  dependencies: ReturnType<typeof resolveDependencies>,
+) {
+  if (!viewerUserId) return data.items;
+
+  const feed = await attachViewerStateToFeed(
+    { items: data.items, pageInfo: data.pageInfo },
+    viewerUserId,
+    dependencies.createServiceClient(),
+  );
+  return feed.items;
 }
 
 async function handleCreatorProfileGET(
@@ -145,27 +170,45 @@ async function handleCreatorProfileGET(
       );
     }
 
-    if (viewerUserId && viewerUserId !== data.profile.id) {
-      const relationshipBlocked = await dependencies.isUserRelationshipBlocked({
-        adminSupabase: dependencies.createServiceClient(),
-        firstUserId: viewerUserId,
-        secondUserId: data.profile.id,
-      });
-      if (relationshipBlocked) {
-        return NextResponse.json(
-          { error: 'Creator not found.' },
-          { status: 404, headers: cacheHeaders },
-        );
-      }
+    const blockRelationship = viewerUserId
+      ? await dependencies.loadCreatorBlockRelationship({
+          adminSupabase: dependencies.createServiceClient(),
+          creatorId: data.profile.id,
+          viewerUserId,
+        })
+      : null;
+
+    // Someone the creator blocked gets the answer an unknown handle gets, even
+    // when they blocked the creator too.
+    if (blockRelationship?.creatorBlockedViewer) {
+      return NextResponse.json(
+        { error: 'Creator not found.' },
+        { status: 404, headers: cacheHeaders },
+      );
     }
 
-    const viewer = await getViewerState({
-      creatorId: data.profile.id,
-      dependencies,
-      viewerUserId,
-    });
+    // The viewer blocked this creator: the header comes back so the page can
+    // say so and offer Unblock, and none of the creator's posts do.
+    if (blockRelationship?.viewerBlockedCreator) {
+      return NextResponse.json({
+        profile: data.profile,
+        ...(data.stats ? { stats: data.stats } : {}),
+        items: [],
+        pageInfo: { ...data.pageInfo, hasMore: false, nextOffset: null, nextLimit: null },
+        viewer: { isOwner: false, isFollowing: false, blockedByViewer: true },
+      }, { headers: cacheHeaders });
+    }
 
-    return NextResponse.json({ ...data, viewer }, { headers: cacheHeaders });
+    const [items, viewer] = await Promise.all([
+      attachCreatorPageViewerState(data, viewerUserId, dependencies),
+      getViewerState({
+        creatorId: data.profile.id,
+        dependencies,
+        viewerUserId,
+      }),
+    ]);
+
+    return NextResponse.json({ ...data, items, viewer }, { headers: cacheHeaders });
   } catch (error) {
     dependencies.logError('Creator profile route error:', error);
     return NextResponse.json(

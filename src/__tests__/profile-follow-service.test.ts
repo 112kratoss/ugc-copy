@@ -8,7 +8,6 @@ import {
 import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 import {
   getCreatorFollowStateForRoute,
-  notifyCreatorFollowForRoute,
   updateCreatorFollowForRoute,
   type ProfileFollowServiceClient,
 } from '@/lib/profile-follow-service';
@@ -367,85 +366,6 @@ describe('profile follow service', () => {
     expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
   });
 
-  it('rate limits standalone follow notifications before lookup or notification work', async () => {
-    const client = createClient({ rateLimitAllowed: false, rateLimitLimit: 30 });
-
-    const result = await notifyCreatorFollowForRoute({
-      adminSupabase: client.client,
-      followerId: 'follower-1',
-      body: { followingId: 'creator-1' },
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      status: 429,
-      body: { code: 'RATE_LIMITED', retryAfterSeconds: 41 },
-    });
-    expect(client.rpc).toHaveBeenCalledWith('check_backend_rate_limit', {
-      p_scope: 'creator-follow:notify',
-      p_subject_key: 'follower-1',
-      p_limit: 30,
-      p_window_seconds: 600,
-    });
-    expect(client.from).not.toHaveBeenCalled();
-    expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
-  });
-
-  it('verifies an existing follow before sending a standalone notification', async () => {
-    const client = createClient({
-      rateLimitLimit: 30,
-      initialFollows: [{ follower_id: 'follower-1', following_id: 'creator-1' }],
-    });
-
-    await expect(notifyCreatorFollowForRoute({
-      adminSupabase: client.client,
-      followerId: 'follower-1',
-      body: { followingId: 'creator-1' },
-    })).resolves.toEqual({
-      ok: true,
-      body: { success: true },
-    });
-    expect(notifyCreatorFollowedMock).toHaveBeenCalledWith(client.client, {
-      followerUserId: 'follower-1',
-      followingUserId: 'creator-1',
-      followerUsername: 'athul',
-    });
-  });
-
-  it('suppresses standalone follow notifications across a block in either direction', async () => {
-    const client = createClient({
-      rateLimitLimit: 30,
-      initialFollows: [{ follower_id: 'follower-1', following_id: 'creator-1' }],
-      userBlocks: [{ blocker_user_id: 'creator-1', blocked_user_id: 'follower-1' }],
-    });
-
-    await expect(notifyCreatorFollowForRoute({
-      adminSupabase: client.client,
-      followerId: 'follower-1',
-      body: { followingId: 'creator-1' },
-    })).resolves.toEqual({
-      ok: false,
-      status: 404,
-      body: { error: 'Follow not found.' },
-    });
-    expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
-  });
-
-  it('rejects standalone notifications when the follow no longer exists', async () => {
-    const client = createClient({ rateLimitLimit: 30 });
-
-    await expect(notifyCreatorFollowForRoute({
-      adminSupabase: client.client,
-      followerId: 'follower-1',
-      body: { followingId: 'creator-1' },
-    })).resolves.toEqual({
-      ok: false,
-      status: 404,
-      body: { error: 'Follow not found.' },
-    });
-    expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
-  });
-
   it('removes follows without sending notifications', async () => {
     const client = createClient({
       initialFollows: [{ follower_id: 'follower-1', following_id: 'creator-1' }],
@@ -478,8 +398,7 @@ describe('creator follow notifications', () => {
     dedupe_key: followDedupeKey,
   });
 
-  // Both routes end by telling the creator: the follow itself, and the
-  // standalone notification for a follow that is already in the table.
+  // A new follow ends by telling the creator; it is the only request that does.
   const notifyingRequests = [
     {
       kind: 'a new follow',
@@ -487,13 +406,6 @@ describe('creator follow notifications', () => {
       body: { followingId: 'creator-1', following: true },
       initialFollows: [] as Array<typeof existingFollow>,
       answer: { ok: true, body: { following: true } },
-    },
-    {
-      kind: 'a standalone follow notification',
-      send: notifyCreatorFollowForRoute,
-      body: { followingId: 'creator-1' },
-      initialFollows: [existingFollow],
-      answer: { ok: true, body: { success: true } },
     },
   ];
 
@@ -585,12 +497,6 @@ describe('creator follow notifications', () => {
       send: updateCreatorFollowForRoute,
       body: { followingId: 'creator-1', following: true },
       options: { rateLimitAllowed: false },
-    },
-    {
-      kind: 'a standalone notification for a follow that is gone',
-      send: notifyCreatorFollowForRoute,
-      body: { followingId: 'creator-1' },
-      options: { rateLimitLimit: 30 },
     },
   ])('defers nothing for $kind', async ({ send, body, options }) => {
     const client = createClient(options);

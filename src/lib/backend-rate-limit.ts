@@ -110,12 +110,6 @@ export const USER_BLOCK_MUTATION_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
-export const CREATOR_FOLLOW_NOTIFICATION_RATE_LIMIT = {
-  scope: 'creator-follow:notify',
-  limit: 30,
-  windowSeconds: 10 * 60,
-} as const;
-
 export const CREATOR_FOLLOW_MUTATION_RATE_LIMIT = {
   scope: 'creator-follow:mutate',
   limit: 60,

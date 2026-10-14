@@ -5,7 +5,6 @@ import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import {
   createProfileFollowRouteHandlers,
   getProfileFollowRouteResponse,
-  postProfileFollowNotifyRouteResponse,
   postProfileFollowRouteResponse,
 } from '@/lib/profile-follow-route-adapter-service';
 
@@ -137,70 +136,6 @@ describe('profile follow route adapter service', () => {
     );
   });
 
-  it('rejects unauthenticated follow notifications before service-client creation or JSON parsing', async () => {
-    const createServiceClient = vi.fn();
-    const notifyCreatorFollowForRoute = vi.fn();
-    const request = new Request('http://localhost/api/profile/follow/notify', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-request-id': 'follow-notify-auth-1',
-      },
-      body: '{',
-    });
-
-    const response = await postProfileFollowNotifyRouteResponse({
-      request,
-      dependencies: {
-        createServiceClient,
-        createUserClient: () => createUserClient(null),
-        notifyCreatorFollowForRoute,
-      },
-    });
-
-    expect(response.status).toBe(401);
-    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
-    expect(response.headers.get('x-request-id')).toBe('follow-notify-auth-1');
-    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
-    expect(createServiceClient).not.toHaveBeenCalled();
-    expect(notifyCreatorFollowForRoute).not.toHaveBeenCalled();
-  });
-
-  it('delegates follow notifications with malformed JSON normalized to null', async () => {
-    const serviceClientFactory = vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient);
-    const notifyCreatorFollowForRoute = vi.fn(async () => ({
-      ok: false as const,
-      status: 400 as const,
-      body: { error: 'Missing creator profile.' },
-    }));
-
-    const response = await postProfileFollowNotifyRouteResponse({
-      request: new Request('http://localhost/api/profile/follow/notify', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-request-id': 'follow-notify-bad-json-1',
-        },
-        body: '{',
-      }),
-      dependencies: {
-        createServiceClient: serviceClientFactory,
-        createUserClient: () => createUserClient('follower-1'),
-        notifyCreatorFollowForRoute,
-      },
-    });
-
-    expect(response.status).toBe(400);
-    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
-    await expect(response.json()).resolves.toEqual({ error: 'Missing creator profile.' });
-    expect(notifyCreatorFollowForRoute).toHaveBeenCalledWith({
-      adminSupabase: serviceClientFactory,
-      followerId: 'follower-1',
-      body: null,
-      runAfterResponse: expect.any(Function),
-    });
-  });
-
   it('gives follow mutations a way to tell the creator after the response', async () => {
     const serviceClientFactory = vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient);
     const runAfterResponse = vi.fn();
@@ -233,101 +168,6 @@ describe('profile follow route adapter service', () => {
       runAfterResponse,
     });
     expect(runAfterResponse).not.toHaveBeenCalled();
-  });
-
-  it('gives standalone follow notifications a way to tell the creator after the response', async () => {
-    const serviceClientFactory = vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient);
-    const runAfterResponse = vi.fn();
-    const notifyCreatorFollowForRoute = vi.fn(async () => ({
-      ok: true as const,
-      body: { success: true as const },
-    }));
-
-    const response = await postProfileFollowNotifyRouteResponse({
-      request: new Request('http://localhost/api/profile/follow/notify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ followingId: 'creator-1' }),
-      }),
-      dependencies: {
-        createServiceClient: serviceClientFactory,
-        createUserClient: () => createUserClient('follower-1'),
-        notifyCreatorFollowForRoute,
-        runAfterResponse,
-      },
-    });
-
-    expect(response.status).toBe(200);
-    expect(notifyCreatorFollowForRoute).toHaveBeenCalledWith({
-      adminSupabase: serviceClientFactory,
-      followerId: 'follower-1',
-      body: { followingId: 'creator-1' },
-      runAfterResponse,
-    });
-    expect(runAfterResponse).not.toHaveBeenCalled();
-  });
-
-  it('maps follow notification rate-limit results to standard backend rate-limit responses', async () => {
-    const rateLimitError = new BackendRateLimitError({
-      allowed: false,
-      limit: 30,
-      remaining: 0,
-      retryAfterSeconds: 41,
-      resetAt: '2026-06-23T12:00:00.000Z',
-    });
-
-    const response = await postProfileFollowNotifyRouteResponse({
-      request: new Request('http://localhost/api/profile/follow/notify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ followingId: 'creator-1' }),
-      }),
-      dependencies: {
-        createServiceClient: vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient),
-        createUserClient: () => createUserClient('follower-1'),
-        notifyCreatorFollowForRoute: vi.fn(async () => ({
-          ok: false as const,
-          status: 429 as const,
-          rateLimitError,
-          body: { code: 'RATE_LIMITED' },
-        })),
-      },
-    });
-
-    expect(response.status).toBe(429);
-    expect(response.headers.get('Retry-After')).toBe('41');
-    await expect(response.json()).resolves.toMatchObject({
-      code: 'RATE_LIMITED',
-      retryAfterSeconds: 41,
-      limit: 30,
-    });
-  });
-
-  it('maps unexpected follow notification failures to the stable internal error response', async () => {
-    const logError = vi.fn();
-
-    const response = await postProfileFollowNotifyRouteResponse({
-      request: new Request('http://localhost/api/profile/follow/notify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ followingId: 'creator-1' }),
-      }),
-      dependencies: {
-        createServiceClient: vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient),
-        createUserClient: () => createUserClient('follower-1'),
-        notifyCreatorFollowForRoute: vi.fn(async () => {
-          throw new Error('notification queue unavailable');
-        }),
-        logError,
-      },
-    });
-
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: 'Internal server error' });
-    expect(logError).toHaveBeenCalledWith(
-      'Creator follow notification failed:',
-      expect.objectContaining({ message: 'notification queue unavailable' }),
-    );
   });
 
   it('creates route handlers that forward GET and POST follow requests through the adapter', async () => {
