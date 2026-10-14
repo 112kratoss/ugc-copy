@@ -1,6 +1,7 @@
 import {
   buildShowcaseDetailPath,
   buildShowcaseDetailUrl,
+  SHARE_SOURCE_QUERY_PARAM,
   type GenerationShareChannel,
   type GenerationShareSourceSurface,
   type ProfileShareSourceSurface,
@@ -158,7 +159,12 @@ export async function shareCreatorProfile({
     return null;
   }
 
-  const url = buildCreatorProfileUrl(username, window.location.origin);
+  // The link carries `?s=<surface>`, as a post's does, so the creator page can
+  // tell a share visit from a bookmark and credit the surface it came from:
+  // `profile` from your own profile, `creator-profile` from a creator's page.
+  const shareUrl = new URL(buildCreatorProfileUrl(username, window.location.origin));
+  shareUrl.searchParams.set(SHARE_SOURCE_QUERY_PARAM, sourceSurface);
+  const url = shareUrl.toString();
   const normalizedDisplayName = displayName.trim() || username.trim();
   const normalizedUsername = username.trim().replace(/^@+/, '').toLowerCase();
   const title = `${normalizedDisplayName} on magicbooklet`;

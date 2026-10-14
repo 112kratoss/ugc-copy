@@ -71,6 +71,7 @@ describe('refreshUnlockedBundleCaches', () => {
     };
     queryClient.setQueryData(['showcase-feed', 'infinite', 'buyer-1'], feed);
     queryClient.setQueryData(['profile-saved-media', 'buyer-1'], feed);
+    queryClient.setQueryData(['creator-profile', 'infinite', 'creator'], { pages: [{ items: [feedItem()] }], pageParams: [0] });
     queryClient.setQueryData<ImmersiveSourceData>(['immersive-preview-source', 'showcase-feed', 'buyer-1'], {
       showcaseItems: [feedItem()],
     });
@@ -83,6 +84,8 @@ describe('refreshUnlockedBundleCaches', () => {
     expect(feedPage?.pages[0]?.items.map((item) => item.canRemix)).toEqual([true, false]);
     const saved = queryClient.getQueryData<InfiniteData<ShowcaseFeedResponse>>(['profile-saved-media', 'buyer-1']);
     expect(saved?.pages[0]?.items[0]?.canRemix).toBe(true);
+    const grid = queryClient.getQueryData<InfiniteData<{ items: ShowcaseFeedItem[] }>>(['creator-profile', 'infinite', 'creator']);
+    expect(grid?.pages[0]?.items[0]?.canRemix).toBe(true);
     const source = queryClient.getQueryData<ImmersiveSourceData>(['immersive-preview-source', 'showcase-feed', 'buyer-1']);
     expect(source?.showcaseItems?.[0]?.canRemix).toBe(true);
     const post = queryClient.getQueryData<ShowcasePostResponse>(['showcase-post', 'post-123', 'buyer-1']);
@@ -92,6 +95,7 @@ describe('refreshUnlockedBundleCaches', () => {
     const invalidated = invalidate.mock.calls.map(([filters]) => filters?.queryKey);
     expect(invalidated).not.toContainEqual(['showcase-feed']);
     expect(invalidated).not.toContainEqual(['immersive-preview-source']);
+    expect(invalidated).not.toContainEqual(['creator-profile']);
     expect(invalidated).toEqual(expect.arrayContaining([
       ['post-resource-bundle', 'post-123', 'asset-123'],
       ['marketplace-resource', 'asset-123'],

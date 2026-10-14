@@ -5,6 +5,7 @@ import { AccessibilityInfo, Linking } from 'react-native';
 import type { createApiClient, MagicbookletApiClient } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { showActionSheet } from '@/lib/action-sheet';
+import { setCachedCreatorProfileBlocked } from '@/lib/creator-profile-view-model';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
@@ -21,6 +22,7 @@ import {
 } from '@/lib/post-lifecycle';
 import type { OwnerPostsResponse } from '@/lib/types';
 import { adjustProfileStats, invalidateProfileStats } from '@/lib/profile-stats';
+import { creatorFollowStateQueryKey } from '@/lib/use-creator-follow';
 import { getDeleteCreationConfirmation, getViewerSafetyActions } from '@/lib/viewer-actions';
 import {
   applyGenerationArchiveToCaches,
@@ -445,6 +447,13 @@ export function useViewerActionHandlers({
           showErrorDialog('Could not block user', error);
           return;
         }
+        // Each cached page of the creator becomes what the server now answers
+        // for them, "You blocked @x", written rather than read again:
+        // invalidating every creator's grid refetched each of their loaded
+        // pages (audit 02-8). A block ends both follows, so the reel's Follow
+        // must not remember one.
+        setCachedCreatorProfileBlocked(queryClient, creatorId);
+        queryClient.setQueryData(creatorFollowStateQueryKey(creatorId), { following: false });
         if (!onBlocked) {
           // A screen that takes no posts out itself (the text post page) still
           // refreshes every cache that may show the creator.
@@ -455,12 +464,12 @@ export function useViewerActionHandlers({
         // and moves on, as Explore's tile and the web reel do. Refreshing every
         // feed instead re-ranked the lanes behind the reel as new sessions
         // (audit 02-4), so only what a block changes is read again: the
-        // creator's page, and the reader's Saved list and its count, which
-        // leave out a blocked creator's posts.
+        // reader's Saved list and its count, which leave out a blocked
+        // creator's posts.
         onBlocked(creatorId);
+        haptic.success();
         void AccessibilityInfo.announceForAccessibility(`${item.creatorLabel} blocked.`);
         await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['creator-profile'] }),
           queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] }),
           invalidateProfileStats(queryClient, user?.id),
         ]);

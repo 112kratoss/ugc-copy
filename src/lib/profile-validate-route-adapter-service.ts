@@ -13,6 +13,7 @@ import {
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { getReservedProfileUsernameError } from '@/lib/profile';
 import { validateProfileSubmission } from '@/lib/profile-server';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import { readProfileJsonBody, PROFILE_REQUEST_TOO_LARGE } from '@/lib/profile-request-body';
@@ -89,6 +90,19 @@ async function handleProfileValidatePOST(
 
     if (!validation.ok) {
       return NextResponse.json(validation.body, { status: validation.status });
+    }
+
+    // The same refusal the save makes, so a reserved handle is caught before
+    // any photo upload.
+    const reservedUsernameError = getReservedProfileUsernameError(
+      validation.payload.data.username,
+      validation.existingUsername,
+    );
+    if (reservedUsernameError) {
+      return NextResponse.json(
+        { error: reservedUsernameError, fieldErrors: { username: reservedUsernameError } },
+        { status: 400 },
+      );
     }
 
     return NextResponse.json({ ok: true });

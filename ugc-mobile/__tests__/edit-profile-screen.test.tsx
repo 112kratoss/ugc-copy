@@ -1,0 +1,366 @@
+// Define React Native development globals for react-test-renderer.
+(global as typeof globalThis & { __DEV__: boolean }).__DEV__ = true;
+(global as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import React from 'react';
+import renderer from 'react-test-renderer';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { ProfileResponse } from '../lib/types';
+
+type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
+
+const harness = vi.hoisted(() => ({
+  user: { id: 'user-1', email: 'luna@example.com' },
+  api: {
+    getProfile: vi.fn(),
+    validateProfile: vi.fn(),
+    updateProfile: vi.fn(),
+  },
+  refreshProfile: vi.fn(async () => undefined),
+  router: { back: vi.fn(), replace: vi.fn(), canGoBack: vi.fn(() => true) },
+  navigation: { dispatch: vi.fn() },
+  picker: {
+    requestMediaLibraryPermissionsAsync: vi.fn(),
+    launchImageLibraryAsync: vi.fn(),
+  },
+  uploadProfileImage: vi.fn(),
+}));
+
+vi.mock('react-native', () => ({
+  ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
+  Linking: { openSettings: vi.fn() },
+  Platform: { OS: 'ios', select: (options: Record<string, unknown>) => options.ios ?? options.default },
+  Pressable: ({ children, style, ...props }: MockProps) => React.createElement(
+    'pressable',
+    { ...props, style: typeof style === 'function' ? (style as (state: { pressed: boolean }) => unknown)({ pressed: false }) : style },
+    children,
+  ),
+  ScrollView: ({ children, ...props }: MockProps) => React.createElement('scroll-view', props, children),
+  TextInput: () => null,
+  View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
+  useWindowDimensions: () => ({ width: 390, height: 844, scale: 3, fontScale: 1 }),
+}));
+
+vi.mock('@react-navigation/native', () => ({
+  useNavigation: () => harness.navigation,
+  usePreventRemove: vi.fn(),
+}));
+
+vi.mock('expo-router', () => ({ router: harness.router }));
+
+vi.mock('expo-image-picker', () => ({
+  requestMediaLibraryPermissionsAsync: (...args: unknown[]) => harness.picker.requestMediaLibraryPermissionsAsync(...args),
+  launchImageLibraryAsync: (...args: unknown[]) => harness.picker.launchImageLibraryAsync(...args),
+  UIImagePickerPreferredAssetRepresentationMode: { Automatic: 'automatic', Compatible: 'compatible', Current: 'current' },
+}));
+
+vi.mock('expo-linear-gradient', () => ({
+  LinearGradient: ({ children, ...props }: MockProps) => React.createElement('linear-gradient', props, children),
+}));
+
+vi.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 47, bottom: 34, left: 0, right: 0 }),
+}));
+
+vi.mock('lucide-react-native', () => {
+  const icon = (name: string) => (props: Record<string, unknown>) => React.createElement('icon', { name, ...props });
+  return { Camera: icon('Camera'), Check: icon('Check'), ImageIcon: icon('ImageIcon') };
+});
+
+vi.mock('@/components/keyboard-aware', () => ({
+  KeyboardAvoidingArea: ({ children, ...props }: MockProps) => React.createElement('keyboard-area', props, children),
+}));
+
+vi.mock('@/components/ui', () => ({
+  AppText: ({ children, ...props }: MockProps) => React.createElement('app-text', props, children),
+  AppTextInput: (props: MockProps) => React.createElement('app-text-input', props),
+  PrimaryButton: (props: MockProps) => React.createElement('primary-button', props),
+  SecondaryButton: (props: MockProps) => React.createElement('secondary-button', props),
+  StatusBlock: (props: MockProps) => React.createElement('status-block', props),
+}));
+
+vi.mock('@/lib/auth', () => ({
+  useAuth: () => harness,
+}));
+
+vi.mock('@/lib/dialog', () => ({ showConfirmDialog: vi.fn(async () => false) }));
+vi.mock('@/lib/haptics', () => ({ haptic: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('@/lib/media', () => ({
+  uploadProfileImage: (...args: unknown[]) => harness.uploadProfileImage(...args),
+}));
+vi.mock('@/lib/platform-glyphs', () => ({
+  CloseGlyph: (props: MockProps) => React.createElement('close-glyph', props),
+}));
+vi.mock('@/lib/safe-area', () => ({
+  resolvedTopInset: (value: number) => value,
+  resolvedBottomInset: (value: number) => value,
+}));
+vi.mock('@/lib/use-onboarding-destination', () => ({ invalidateWelcomeCredits: vi.fn(async () => undefined) }));
+
+import { EditProfileScreen } from '../components/edit-profile-screen';
+import { ApiError } from '../lib/api-client';
+
+const PROFILE_KEY = ['profile', 'user-1'];
+
+function storedProfile(overrides: Partial<ProfileResponse> = {}): ProfileResponse {
+  return {
+    id: 'user-1',
+    username: 'luna-dreams',
+    suggestedUsername: 'creator-1a2b3c4d',
+    displayName: 'Luna',
+    bio: 'Old bio',
+    avatarUrl: 'https://cdn.example/avatar.webp',
+    coverUrl: 'https://cdn.example/cover.webp',
+    websiteUrl: 'https://luna.example',
+    twitterHandle: 'luna',
+    instagramHandle: null,
+    tiktokHandle: null,
+    location: 'Lisbon',
+    credits: 40,
+    stats: { creations: 12, posts: 3, archivedPosts: 0, saved: 5 },
+    ...overrides,
+  };
+}
+
+function newClient(profile: ProfileResponse) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  client.setQueryData(PROFILE_KEY, profile);
+  return client;
+}
+
+/** React Query hands an update to its observers on a timer; give it a few. */
+const flush = () => renderer.act(async () => {
+  for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+async function renderScreen(client: QueryClient, element: React.ReactElement = <EditProfileScreen />) {
+  let tree!: renderer.ReactTestRenderer;
+  await renderer.act(async () => {
+    tree = renderer.create(<QueryClientProvider client={client}>{element}</QueryClientProvider>);
+  });
+  await flush();
+  return tree;
+}
+
+function input(tree: renderer.ReactTestRenderer, label: string) {
+  return tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === label);
+}
+
+async function type(tree: renderer.ReactTestRenderer, label: string, value: string) {
+  await renderer.act(async () => { input(tree, label).props.onChangeText(value); });
+}
+
+function pressable(tree: renderer.ReactTestRenderer, accessibilityLabel: string) {
+  return tree.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === accessibilityLabel);
+}
+
+async function press(tree: renderer.ReactTestRenderer, accessibilityLabel: string) {
+  await renderer.act(async () => { pressable(tree, accessibilityLabel).props.onPress(); });
+  await flush();
+}
+
+function images(tree: renderer.ReactTestRenderer) {
+  return tree.root
+    .findAll((node) => typeof node.props.source === 'object' && node.props.source !== null && 'uri' in node.props.source)
+    .map((node) => (node.props.source as { uri: string }).uri);
+}
+
+beforeEach(() => {
+  // The save's own refresh reads the profile again.
+  harness.api.getProfile.mockReset().mockImplementation(async () => storedProfile());
+  harness.api.validateProfile.mockReset().mockResolvedValue({ ok: true });
+  harness.api.updateProfile.mockReset().mockImplementation(async (body: Record<string, unknown>) => body);
+  harness.uploadProfileImage.mockReset().mockImplementation(async (_uri: string, options: { role: string }) => `https://cdn.example/${options.role}-new.jpg`);
+  harness.picker.requestMediaLibraryPermissionsAsync.mockReset().mockResolvedValue({ granted: true });
+  harness.picker.launchImageLibraryAsync.mockReset().mockResolvedValue({
+    canceled: false,
+    assets: [{ uri: 'file:///picked.jpg', fileName: 'picked.jpg', mimeType: 'image/jpeg', fileSize: 1024 }],
+  });
+  harness.router.back.mockClear();
+});
+
+describe('Edit profile: links and location', () => {
+  it('opens with the links and location the profile holds', async () => {
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    expect(input(tree, 'Website').props.value).toBe('https://luna.example');
+    expect(input(tree, 'Location').props.value).toBe('Lisbon');
+    expect(input(tree, 'X (Twitter) handle').props.value).toBe('luna');
+    expect(input(tree, 'Instagram handle').props.value).toBe('');
+    expect(input(tree, 'TikTok handle').props).toMatchObject({ value: '', hint: 'Username or profile link' });
+  });
+
+  it('saves an edited link alone, beside the handle every save carries', async () => {
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    await type(tree, 'Instagram handle', 'https://instagram.com/luna.dreams');
+    await press(tree, 'Save profile');
+
+    expect(harness.api.updateProfile).toHaveBeenCalledTimes(1);
+    expect(harness.api.updateProfile).toHaveBeenCalledWith({
+      username: 'luna-dreams',
+      instagramHandle: 'https://instagram.com/luna.dreams',
+    });
+    expect(harness.router.back).toHaveBeenCalledTimes(1);
+  });
+
+  it('draws the server’s refusal of a social link under its field', async () => {
+    harness.api.updateProfile.mockRejectedValue(new ApiError('Please fix the highlighted fields.', 400, {
+      fieldErrors: { twitterHandle: 'Enter your X username or profile link.' },
+    }));
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    await type(tree, 'X (Twitter) handle', 'https://example.com/luna');
+    await press(tree, 'Save profile');
+
+    expect(input(tree, 'X (Twitter) handle').props.error).toBe('Enter your X username or profile link.');
+    expect(tree.root.findAll((node) => String(node.type) === 'status-block' && node.props.title === 'Profile not saved'))
+      .toHaveLength(1);
+  });
+
+  it('asks the server about the fields before a photo uploads, and uploads nothing it refuses', async () => {
+    harness.api.validateProfile.mockRejectedValue(new ApiError('Please fix the highlighted fields.', 400, {
+      fieldErrors: { tiktokHandle: 'Enter your TikTok username or profile link.' },
+    }));
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    await press(tree, 'Change display photo');
+    await type(tree, 'TikTok handle', 'x');
+    await press(tree, 'Save profile');
+
+    expect(harness.api.validateProfile).toHaveBeenCalledWith({ username: 'luna-dreams', tiktokHandle: 'x' });
+    expect(harness.uploadProfileImage).not.toHaveBeenCalled();
+    expect(harness.api.updateProfile).not.toHaveBeenCalled();
+    expect(input(tree, 'TikTok handle').props.error).toBe('Enter your TikTok username or profile link.');
+  });
+
+  it('uploads and saves when the check fails without a verdict', async () => {
+    harness.api.validateProfile.mockRejectedValue(new ApiError('Too many requests', 429));
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    await press(tree, 'Change display photo');
+    await press(tree, 'Save profile');
+
+    expect(harness.uploadProfileImage).toHaveBeenCalledTimes(1);
+    expect(harness.api.updateProfile).toHaveBeenCalledWith({
+      username: 'luna-dreams',
+      avatarUrl: 'https://cdn.example/avatar-new.jpg',
+    });
+  });
+});
+
+describe('Edit profile: a profile read again while the form is open', () => {
+  it('keeps typed text and a picked photo when the profile is read again', async () => {
+    const client = newClient(storedProfile());
+    const tree = await renderScreen(client);
+
+    await type(tree, 'Bio', 'New bio');
+    await press(tree, 'Change cover');
+    expect(images(tree)).toContain('file:///picked.jpg');
+
+    // A finished run moves a count, and the web changed the website meanwhile.
+    await renderer.act(async () => {
+      client.setQueryData(PROFILE_KEY, storedProfile({
+        websiteUrl: 'https://changed-on-web.example',
+        stats: { creations: 13, posts: 3, archivedPosts: 0, saved: 5 },
+      }));
+    });
+    await flush();
+
+    expect(input(tree, 'Bio').props.value).toBe('New bio');
+    expect(input(tree, 'Website').props.value).toBe('https://luna.example');
+    expect(images(tree)).toContain('file:///picked.jpg');
+
+    // The save sends what was edited, so the web's website stays as it is.
+    await press(tree, 'Save profile');
+    expect(harness.api.updateProfile).toHaveBeenCalledWith({
+      username: 'luna-dreams',
+      bio: 'New bio',
+      coverUrl: 'https://cdn.example/cover-new.jpg',
+    });
+  });
+
+  it('shows a fresh read while nothing has been edited', async () => {
+    const client = newClient(storedProfile());
+    const tree = await renderScreen(client);
+
+    await renderer.act(async () => {
+      client.setQueryData(PROFILE_KEY, storedProfile({ location: 'Porto' }));
+    });
+    await flush();
+
+    expect(input(tree, 'Location').props.value).toBe('Porto');
+    expect(pressable(tree, 'Save profile').props.disabled).toBe(true);
+  });
+
+  it('keeps typed text after every effect runs again', async () => {
+    // Fast Refresh, or an <Activity> shown again, re-runs each effect over kept state.
+    const client = newClient(storedProfile());
+    const inActivity = (mode: 'visible' | 'hidden') => (
+      <QueryClientProvider client={client}>
+        <React.Activity mode={mode}><EditProfileScreen /></React.Activity>
+      </QueryClientProvider>
+    );
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => { tree = renderer.create(inActivity('visible')); });
+    await flush();
+
+    await type(tree, 'Bio', 'New bio');
+    await renderer.act(async () => { tree.update(inActivity('hidden')); });
+    await renderer.act(async () => { tree.update(inActivity('visible')); });
+    await flush();
+
+    expect(input(tree, 'Bio').props.value).toBe('New bio');
+    expect(pressable(tree, 'Save profile').props.disabled).toBe(false);
+  });
+});
+
+describe('Edit profile: handles', () => {
+  it('opens an unclaimed account with an empty handle and asks for one before anything uploads', async () => {
+    const tree = await renderScreen(newClient(storedProfile({ username: 'creator-1a2b3c4d' })));
+    expect(input(tree, 'Username').props.value).toBe('');
+
+    await press(tree, 'Change display photo');
+    await type(tree, 'Bio', 'New bio');
+    await press(tree, 'Save profile');
+
+    expect(input(tree, 'Username').props.error).toBe('Choose a username for your profile.');
+    expect(harness.api.validateProfile).not.toHaveBeenCalled();
+    expect(harness.uploadProfileImage).not.toHaveBeenCalled();
+    expect(harness.api.updateProfile).not.toHaveBeenCalled();
+  });
+
+  it('refuses a reserved handle as it is typed, with no request', async () => {
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    await type(tree, 'Username', 'support');
+
+    expect(input(tree, 'Username').props).toMatchObject({ hint: 'That handle is reserved.', hintTone: 'danger' });
+    expect(pressable(tree, 'Save profile').props.disabled).toBe(true);
+    expect(harness.api.validateProfile).not.toHaveBeenCalled();
+  });
+});
+
+describe('Edit profile: picking photos', () => {
+  it('takes the cover whole on iOS, as a JPEG, and crops the avatar square', async () => {
+    const tree = await renderScreen(newClient(storedProfile()));
+
+    await press(tree, 'Change cover');
+    expect(harness.picker.launchImageLibraryAsync).toHaveBeenLastCalledWith({
+      mediaTypes: ['images'],
+      allowsEditing: false,
+      preferredAssetRepresentationMode: 'compatible',
+      quality: 0.6,
+    });
+
+    await press(tree, 'Change display photo');
+    expect(harness.picker.launchImageLibraryAsync).toHaveBeenLastCalledWith({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.9,
+    });
+  });
+});

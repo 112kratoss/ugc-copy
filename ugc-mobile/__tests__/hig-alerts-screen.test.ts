@@ -117,10 +117,10 @@ describe('an alert arriving while the app is in front', () => {
 
 describe('a row with nowhere to send anyone', () => {
   /**
-   * Two of this account's live rows carry `/studio` — "New follower", whose
-   * real destination the server does not name yet — and the screen's fallback
-   * for an unresolvable link pushed the same route. Both asked the router for
-   * the screen the reader was already on.
+   * "New follower" carries `/studio` when the follower has no handle, as does
+   * every one written before the server linked the follower's page, and the
+   * screen's fallback for an unresolvable link pushed the same route. Both
+   * asked the router for the screen the reader was already on.
    */
   it('recognises a link that points back at this screen', () => {
     expect(deepLinkTargetsAlertsScreen('/studio')).toBe(true);
@@ -144,11 +144,21 @@ describe('a row with nowhere to send anyone', () => {
   });
 
   /**
-   * The root layout keeps its own `/studio` fallback, and should: a tap from
-   * outside the app has to land somewhere.
+   * A tap from outside the app has to land somewhere, so the push handler
+   * keeps the Alerts fallback (`notifications.test.ts`, "a tapped push"). The
+   * root layout hands it every tapped push, and subscribes once for the app:
+   * subscribing again per account read the launch push a second time.
    */
   it('keeps the fallback where it is still the right answer', () => {
-    expect(rootLayout).toContain("navigateToNotificationDeepLink('/studio')");
+    const start = rootLayout.indexOf('function NotificationResponseCoordinator()');
+    const coordinator = rootLayout.slice(start, rootLayout.indexOf('\n}\n', start));
+
+    expect(start).toBeGreaterThan(-1);
+    expect(coordinator).toContain([
+      '  useEffect(() => subscribeToNotificationResponses({',
+      '    handleResponse: (event) => openTappedNotification(event, { api, queryClient }),',
+      '  }), [api, queryClient]);',
+    ].join('\n'));
   });
 });
 

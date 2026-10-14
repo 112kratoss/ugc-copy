@@ -1365,6 +1365,34 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       tree.unmount();
     });
 
+    // Preparing sends the file to the AI service as a run does. It was the one way there
+    // that skipped the question: someone who declined, or withdrew in Settings, still
+    // sent their photo, video or audio with one tap.
+    it('asks before a reference is prepared, and sends nothing when the person declines', async () => {
+      aiDataConsentState.ensure.mockResolvedValue(false);
+      authState.api.createSeedanceAsset.mockResolvedValue(assetAnswer('processing', 'Image'));
+      const tree = await openEditor('seedance-2');
+
+      // From the details sheet, and from an audio tile, which has none.
+      renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Open details for Girl' }).props.onPress(); });
+      await press(tree, 'Prepare for Seedance for Girl');
+      await press(tree, 'Prepare for Seedance for Voice');
+      expect(aiDataConsentState.ensure).toHaveBeenCalledTimes(2);
+      expect(authState.api.createSeedanceAsset).not.toHaveBeenCalled();
+      // Left as it was, and free to press again.
+      expect(text(tree)).toContain('Not prepared.');
+      expect(tree.root.findByProps({ accessibilityLabel: 'Prepare for Seedance for Girl' }).props.disabled).toBe(false);
+
+      // Allowed on the next press, the file goes.
+      aiDataConsentState.ensure.mockResolvedValue(true);
+      await press(tree, 'Prepare for Seedance for Girl');
+      expect(aiDataConsentState.ensure).toHaveBeenCalledTimes(3);
+      expect(authState.api.createSeedanceAsset).toHaveBeenCalledTimes(1);
+      expect(authState.api.createSeedanceAsset).toHaveBeenCalledWith({ url: 'generation_inputs/owner/gen-girl/girl.png', assetType: 'Image' });
+      expect(text(tree)).toContain('Seedance is processing the file.');
+      tree.unmount();
+    });
+
     it('offers no Seedance asset on a model outside the family', async () => {
       const tree = await openEditor('wan-2.7');
       expect(text(tree)).not.toContain('Open a reference to prepare it with Seedance once.');

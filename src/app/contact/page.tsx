@@ -119,6 +119,17 @@ export default function Contact() {
                                         → Privacy Policy
                                     </Link>
                                 </li>
+                                {/* The shell's only help entry leads here; the app's Settings lists these two beside the policies. */}
+                                <li>
+                                    <Link href="/child-safety" className="hover:text-white transition-colors">
+                                        → Child Safety Standards
+                                    </Link>
+                                </li>
+                                <li>
+                                    <Link href="/delete-account" className="hover:text-white transition-colors">
+                                        → Delete Your Account
+                                    </Link>
+                                </li>
                             </ul>
                         </div>
                     </div>

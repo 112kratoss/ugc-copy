@@ -27,7 +27,7 @@ const state = vi.hoisted(() => ({
   query: { isPending: false, isError: false, error: null as unknown, data: undefined as unknown, refetch: vi.fn() },
   queryOptions: null as null | { queryKey: unknown; enabled: boolean; queryFn: unknown },
   setQueryData: vi.fn(),
-  invalidateQueries: vi.fn(async (_filter: { queryKey: unknown }) => undefined),
+  invalidateQueries: vi.fn(async (_filter: { queryKey: unknown; refetchType?: string }) => undefined),
   listBlockedUsers: vi.fn(),
   unblockUser: vi.fn(async (_userId: string) => ({ success: true as const, blocked: false })),
   routerPush: vi.fn(),
@@ -184,11 +184,16 @@ describe('Settings → Blocked users', () => {
     const [key, update] = state.setQueryData.mock.calls[0] as [unknown, (current: BlockedList | undefined) => BlockedList | undefined];
     expect(key).toEqual(['blocked-users', 'user-1']);
     expect(update(listOf([first, second]))?.blockedUsers).toEqual([second]);
-    // The lists a block emptied, and not the list of blocks itself: it is whole, and already right.
-    expect(state.invalidateQueries.mock.calls.map(([filter]) => filter.queryKey)).toEqual([
-      ['showcase-feed'],
-      ['immersive-preview-source'],
-      ['profile-saved-media', 'user-1'],
+    // What the unblock changed, and not the list of blocks itself: it is whole, and already right.
+    // The feeds are only marked stale: reading them behind Settings re-ranked
+    // Home as a new session, while the creator's page and the Saved count stayed
+    // wrong (audit 04-7).
+    expect(state.invalidateQueries.mock.calls.map(([filter]) => filter)).toEqual([
+      { queryKey: ['showcase-feed'], refetchType: 'none' },
+      { queryKey: ['immersive-preview-source'] },
+      { queryKey: ['creator-profile'] },
+      { queryKey: ['profile-saved-media', 'user-1'] },
+      { queryKey: ['profile', 'user-1'] },
     ]);
     expect(state.showErrorDialog).not.toHaveBeenCalled();
   });
@@ -325,7 +330,9 @@ describe('Settings → Blocked users', () => {
     expect(state.invalidateQueries.mock.calls.map(([filter]) => filter.queryKey)).toEqual([
       ['showcase-feed'],
       ['immersive-preview-source'],
+      ['creator-profile'],
       ['profile-saved-media', 'user-1'],
+      ['profile', 'user-1'],
       ['blocked-users', 'user-1'],
     ]);
   });
@@ -337,13 +344,14 @@ describe('Settings → Blocked users', () => {
     expect(layout).toContain(`<Stack.Screen name="blocked-users" options={{ title: 'Blocked Users' }} />`);
   });
 
-  it('asks a signed-out visitor to sign in, and reads nothing', () => {
+  // Sign-in used to land on the tabs, and the list had to be found again (audit 04-11).
+  it('asks a signed-out visitor to sign in, comes back to the list after, and reads nothing', () => {
     state.user = null;
     const tree = renderScreen();
 
     expect(state.queryOptions).toMatchObject({ queryKey: ['blocked-users', null], enabled: false });
     expect(byType(tree, 'status-block')[0].props.title).toBe('Sign in to see whom you blocked');
     renderer.act(() => { (byType(tree, 'primary-button')[0].props.onPress as () => void)(); });
-    expect(state.routerPush).toHaveBeenCalledWith('/auth');
+    expect(state.routerPush).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/blocked-users' } });
   });
 });

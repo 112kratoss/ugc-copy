@@ -38,8 +38,10 @@ describe('ProfileShareButton', () => {
     };
   }
 
+  // The link carries the surface it was shared from, as a post's does, so the
+  // creator page can credit the visit it brings (the app's links already do).
   it('uses the native share sheet for creator profile links when available', async () => {
-    const shareUrl = `${window.location.origin}/creators/creator-name`;
+    const shareUrl = `${window.location.origin}/creators/creator-name?s=creator-profile`;
     shareMock.mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'share', {
       configurable: true,
@@ -77,8 +79,8 @@ describe('ProfileShareButton', () => {
     });
   });
 
-  it('copies the creator profile link when native sharing is unavailable', async () => {
-    const shareUrl = `${window.location.origin}/creators/creator-name`;
+  it('copies your own profile link, marked as shared from your profile, when native sharing is unavailable', async () => {
+    const shareUrl = `${window.location.origin}/creators/creator-name?s=profile`;
     writeTextMock.mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'share', {
       configurable: true,

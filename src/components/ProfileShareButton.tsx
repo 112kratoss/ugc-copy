@@ -13,7 +13,6 @@ interface ProfileShareButtonProps {
   accessToken?: string | null;
   className?: string;
   label?: string;
-  onShared?: () => void;
 }
 
 export default function ProfileShareButton({
@@ -23,7 +22,6 @@ export default function ProfileShareButton({
   accessToken,
   className,
   label = 'Share profile',
-  onShared,
 }: ProfileShareButtonProps) {
   const {
     state,
@@ -33,7 +31,6 @@ export default function ProfileShareButton({
     runShareAction,
   } = useShareAction({
     label,
-    onShared,
     onAction: () =>
       shareCreatorProfile({
         username,

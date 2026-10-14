@@ -8,6 +8,8 @@ import {
   MARKETPLACE_ORDER_VERIFY_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
+import { notifyMarketplaceUnlockCompleted } from '@/lib/mobile-notifications';
 import {
   createPendingPaymentResultBody,
   verifyRazorpayPaymentAgainstOrder,
@@ -57,6 +59,58 @@ function normalizeBody(value: unknown): MarketplaceVerifyBody {
     : {};
 }
 
+/**
+ * Tells the buyer and the seller about a marketplace resource bought through
+ * Razorpay, as a purchase in the app is told ("Resource unlocked", "You made a
+ * resource sale"). A checkout names its order alone, so the resource and its
+ * seller are read from it. Whichever of the buyer's verify and the webhook
+ * settled the order calls this, once; the alerts' dedupe keys make a second
+ * call harmless. Never rejects: the purchase is settled whatever becomes of
+ * its alerts.
+ */
+export async function notifyRazorpayMarketplacePurchase(
+  adminSupabase: SupabaseClient,
+  razorpayOrderId: string,
+) {
+  try {
+    const { data: orderData, error: orderError } = await adminSupabase
+      .from('marketplace_orders')
+      .select('asset_id, buyer_user_id')
+      .eq('razorpay_order_id', razorpayOrderId)
+      .maybeSingle();
+    if (orderError) throw orderError;
+
+    const order = orderData as { asset_id?: unknown; buyer_user_id?: unknown } | null;
+    if (typeof order?.asset_id !== 'string' || typeof order.buyer_user_id !== 'string') {
+      logBackendError('razorpay_marketplace_notification_order_unreadable', { razorpayOrderId });
+      return null;
+    }
+
+    const { data: assetData, error: assetError } = await adminSupabase
+      .from('marketplace_assets')
+      .select('seller_user_id')
+      .eq('id', order.asset_id)
+      .maybeSingle();
+    if (assetError) throw assetError;
+
+    const sellerUserId = (assetData as { seller_user_id?: unknown } | null)?.seller_user_id;
+    if (typeof sellerUserId !== 'string') {
+      logBackendError('razorpay_marketplace_notification_order_unreadable', { razorpayOrderId });
+      return null;
+    }
+
+    return await notifyMarketplaceUnlockCompleted(adminSupabase, {
+      buyerUserId: order.buyer_user_id,
+      sellerUserId,
+      assetId: order.asset_id,
+      alreadyProcessed: false,
+    });
+  } catch (error) {
+    logBackendError('razorpay_marketplace_notification_failed', { razorpayOrderId, error });
+    return null;
+  }
+}
+
 export async function verifyMarketplacePaymentForRoute({
   adminSupabase,
   buyerUserId,
@@ -65,6 +119,8 @@ export async function verifyMarketplacePaymentForRoute({
   readBody,
   verifySignature = verifyRazorpayPaymentSignature,
   fetchPayment = defaultFetchRazorpayPayment,
+  notifyPurchase = notifyRazorpayMarketplacePurchase,
+  runAfterResponse,
 }: {
   adminSupabase: SupabaseClient;
   buyerUserId: string;
@@ -73,6 +129,13 @@ export async function verifyMarketplacePaymentForRoute({
   readBody: () => Promise<unknown>;
   verifySignature?: typeof verifyRazorpayPaymentSignature;
   fetchPayment?: typeof defaultFetchRazorpayPayment;
+  notifyPurchase?: typeof notifyRazorpayMarketplacePurchase;
+  /**
+   * Runs a task once the caller has answered. With one, the purchase's alerts
+   * go out behind the checkout's answer; without one they are sent before
+   * this returns.
+   */
+  runAfterResponse?: RunAfterResponse;
 }): Promise<MarketplaceVerifyRouteResult> {
   try {
     await enforceBackendRateLimit(adminSupabase, {
@@ -237,6 +300,10 @@ export async function verifyMarketplacePaymentForRoute({
 
     return { ok: false, status: 500, body: { error: 'Unable to finalize purchase.' } };
   }
+
+  // This call settled the order, so its alerts are sent from here; when the
+  // webhook settles one, the webhook sends them.
+  await sendDeferrableNotification(runAfterResponse, () => notifyPurchase(adminSupabase, razorpayOrderId));
 
   return { ok: true, body: { success: true } };
 }

@@ -153,6 +153,7 @@ import {
 import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
 import { flattenProfileOwnerPostPages, profileOwnerPostsQueryOptions } from '@/lib/profile-media-query';
 import { isProfileLibrarySource, useProfileLibrarySource } from '@/lib/use-profile-library-source';
+import { removeFromCachedCreatorGrid, updateCachedCreatorGridPost, useCreatorReelSource } from '@/lib/use-creator-reel-source';
 import { applyPostVisibilityToCaches } from '@/lib/viewer-media-cache';
 import { useScreenLeaving } from '@/lib/use-screen-leaving';
 import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
@@ -315,7 +316,8 @@ function ImmersivePreviewViewer() {
   // Owned libraries read the Profile grid's own pages, so a reel opened from a
   // card holds the grid's items in the grid's order and pages on through its
   // cursor (audit C3, C8). A reel opened from an Explore or Home tile does the
-  // same with the lane it was tapped in (audit 03-2, 03-4). Every other source,
+  // same with the lane it was tapped in (audit 03-2, 03-4), and one opened on
+  // a creator's page with that page's grid (audit 02-6). Every other source,
   // a link or a notification among them, loads its own window below.
   const libraryBacked = isProfileLibrarySource(source);
   const library = useProfileLibrarySource({
@@ -335,7 +337,16 @@ function ImmersivePreviewViewer() {
     mediaOnly,
     enabled: laneBacked,
   });
-  const grid = libraryBacked ? library : laneBacked ? laneSource : null;
+  const creatorBacked = source === 'creator-profile' && Boolean(creatorUsername);
+  const creatorReel = useCreatorReelSource({
+    api,
+    username: creatorUsername,
+    initialId,
+    viewerUserId: user?.id ?? null,
+    mediaOnly,
+    enabled: creatorBacked,
+  });
+  const grid = libraryBacked ? library : laneBacked ? laneSource : creatorBacked ? creatorReel : null;
   const gridBacked = Boolean(grid);
 
   const loaderQuery = useQuery({
@@ -346,11 +357,11 @@ function ImmersivePreviewViewer() {
     // passing for fresh (audit C4).
     initialData: () => (gridBacked
       ? undefined
-      : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId, creatorUsername, identityUserId)?.data),
+      : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId, identityUserId)?.data),
     initialDataUpdatedAt: () => (gridBacked
       ? undefined
-      : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId, creatorUsername, identityUserId)?.updatedAt),
-    queryFn: () => loadImmersiveSourceData({ api, source, initialId, creatorUsername, mediaOnly }),
+      : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId, identityUserId)?.updatedAt),
+    queryFn: () => loadImmersiveSourceData({ api, source, initialId, mediaOnly }),
     staleTime: 1000 * 45,
   });
 
@@ -499,15 +510,18 @@ function ImmersivePreviewViewer() {
     return () => cancelAnimationFrame(frame);
   }, [activeIndex, height, initialPositionReady]);
 
-  // What stands after a lane's last post, and whether the reader is on it: the
+  // A lane, or a creator's grid, pages on from the reel's end and closes with
+  // a slide of its own.
+  const pagedGrid = laneBacked ? laneSource : creatorBacked ? creatorReel : null;
+  // What stands after its last post, and whether the reader is on it: the
   // native page past the last post. No post is on screen there, so nothing
   // plays and no post's time is counted.
-  const endSlide = laneBacked ? getReelEndSlideState({
-    hasData: laneSource.hasData,
+  const endSlide = pagedGrid ? getReelEndSlideState({
+    hasData: pagedGrid.hasData,
     itemCount: items.length,
-    hasNextPage: laneSource.hasNextPage,
-    isFetchNextPageError: laneSource.isFetchNextPageError,
-    isFetchingNextPage: laneSource.isFetchingNextPage,
+    hasNextPage: pagedGrid.hasNextPage,
+    isFetchNextPageError: pagedGrid.isFetchNextPageError,
+    isFetchingNextPage: pagedGrid.isFetchingNextPage,
   }) : null;
   const [endSlidePage, setEndSlidePage] = useState<number | null>(null);
   const onEndSlide = endSlide !== null && endSlidePage !== null && endSlidePage >= items.length;
@@ -798,6 +812,13 @@ function ImmersivePreviewViewer() {
     queryClient.setQueriesData<ShowcasePostResponse>({ queryKey: ['showcase-post', result.postId] }, (data) =>
       applyShowcaseSaveStateToPostResponse(data, result)
     );
+    // A creator's grid shows the count on the post's tile, and a reel opened
+    // on the grid draws its heart from the grid's pages.
+    updateCachedCreatorGridPost(queryClient, result.postId, (item) => ({
+      ...item,
+      isSaved: result.isSaved,
+      saveCount: Math.max(0, result.saveCount),
+    }));
     queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(['profile-saved-media', user?.id], (data) =>
       applyShowcaseSaveStateToInfiniteFeed(data, result, {
         removeWhenUnsaved: true,
@@ -1073,8 +1094,9 @@ function ImmersivePreviewViewer() {
   };
 
   /**
-   * Takes posts out of the reel under the reader, and out of the reel's source
-   * and every feed lane, and moves the reader on to the next post that stays.
+   * Takes posts out of the reel under the reader, and out of the reel's source,
+   * every feed lane and the creator's grid a reel opened on a creator's page
+   * reads, and moves the reader on to the next post that stays.
    * The target is chosen from the reel's own list before anything is removed
    * (`pickViewerItemAfterRemoval`). Returns whether any post is left, and how
    * to put the posts back: for a removal the server then refuses, and for an
@@ -1104,6 +1126,9 @@ function ImmersivePreviewViewer() {
       { queryKey: viewerFeedQueryKey },
       (data) => removeShowcaseFeedItemsFromInfiniteData(data, target)
     );
+    const restoreCreatorGrid = creatorBacked && creatorUsername
+      ? removeFromCachedCreatorGrid(queryClient, creatorUsername, target)
+      : null;
     return {
       remaining: Boolean(next),
       // Puts the posts back and the reader on the one they were on. Running it
@@ -1123,6 +1148,7 @@ function ImmersivePreviewViewer() {
             (data) => restoreShowcaseFeedItemsToInfiniteData(data, positions)
           );
         });
+        restoreCreatorGrid?.();
         setSessionItems((current) => ({ ...current, ordered: putBackAtIndices(current.ordered, removedFromReel) }));
         setSavedPosition(positionBefore);
       },
@@ -1206,10 +1232,14 @@ function ImmersivePreviewViewer() {
   // A block went through: every post by the creator leaves the reel and the
   // lanes behind it, and the reader moves on to the next post by someone else,
   // as Explore's tile and the web reel do (audit 02-4). The reel used to close
-  // and have every lane re-ranked behind it.
+  // and have every lane re-ranked behind it. A reel opened on the blocked
+  // creator's own page, which the block empties, goes on to Explore, as the
+  // page's Block and the web's reel do: going back landed on the page of the
+  // person just blocked (audit 02-5).
   const takeOutBlockedCreator = (creatorId: string) => {
     const removal = removeFromReel({ creatorId });
-    if (!removal.remaining) requestAnimationFrame(leaveViewer);
+    if (removal.remaining) return;
+    requestAnimationFrame(creatorBacked && creatorReel.creatorId === creatorId ? leaveToExplore : leaveViewer);
   };
 
   // A creation deleted from its ••• leaves the reel as a blocked creator's
@@ -1405,23 +1435,23 @@ function ImmersivePreviewViewer() {
             listRef.current?.scrollToOffset({ offset: height * index, animated: false });
           });
         }}
-        // An owned library, or the lane a tile was tapped in, continues through
-        // the grid's cursor instead of stopping at whatever was loaded when the
-        // reel opened.
+        // An owned library, the lane a tile was tapped in, or the creator's
+        // grid continues through the grid's cursor instead of stopping at
+        // whatever was loaded when the reel opened.
         onEndReached={grid?.hasNextPage ? () => {
-          if (laneBacked) {
-            laneSource.fetchNextPage();
+          if (pagedGrid) {
+            pagedGrid.fetchNextPage();
             return;
           }
           if (!library.isFetchingNextPage) void library.fetchNextPage();
         } : undefined}
         onEndReachedThreshold={2}
-        ListFooterComponent={endSlide ? (
+        ListFooterComponent={endSlide && pagedGrid ? (
           <ReelEndSlide
             state={endSlide}
             width={width}
             height={height}
-            onRetry={laneSource.retryNextPage}
+            onRetry={pagedGrid.retryNextPage}
             onBack={zoom.dismiss}
           />
         ) : null}
@@ -1592,6 +1622,12 @@ function ImmersivePreviewViewer() {
                 commentCount,
               })
             );
+            // The sheet writes the lanes and the reel sources; a creator's
+            // grid, which a reel opened on it reads, is the reel's to write.
+            updateCachedCreatorGridPost(queryClient, activeItem.showcasePostId!, (item) => ({
+              ...item,
+              commentCount: Math.max(0, commentCount),
+            }));
           }}
           visible={commentsOpenItemId === activeItem.id}
         />
@@ -1711,6 +1747,11 @@ function leaveViewer() {
     router.back();
     return;
   }
+  router.replace('/(tabs)/showcase' as never);
+}
+
+/** Out of the reel to Explore, where a block made on a creator's page leaves it (`creator-profile-screen`). */
+function leaveToExplore() {
   router.replace('/(tabs)/showcase' as never);
 }
 

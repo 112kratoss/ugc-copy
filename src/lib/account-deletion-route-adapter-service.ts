@@ -5,7 +5,7 @@ import {
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import {
@@ -15,19 +15,28 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import {
-  executeInitialAccountDeletion,
+  AccountDeletionNotStartedError,
+  finishInitialAccountDeletion,
   markAccountDeletionStage,
+  startInitialAccountDeletion,
+  type InitialAccountDeletionStart,
 } from '@/lib/account-deletion-service';
 import {
   AppleAccountDeletionError,
   authorizeAppleAccountDeletion,
 } from '@/lib/apple-account-deletion-service';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import { getAuthoritativeAuthUserResult } from '@/lib/server-auth-user';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 const RECENT_AUTH_MAX_AGE_MS = 15 * 60 * 1000;
 const RECENT_AUTH_FUTURE_SKEW_MS = 60 * 1000;
+
+// Every refusal that a fresh sign-in clears says so in one field the website
+// and the app both read. It sits beside `code` rather than replacing it,
+// because installed apps open their sign-in-again card on the legacy codes.
+const REAUTHENTICATION_REQUIRED = 'reauthentication_required';
 
 type AccountDeletionDependencies = {
   authorizeAppleAccountDeletion?: typeof authorizeAppleAccountDeletion;
@@ -38,6 +47,7 @@ type AccountDeletionDependencies = {
   logError?: typeof logBackendRouteError;
   now?: () => Date;
   requireRegisteredUser?: typeof requireRegisteredUser;
+  runAfterResponse?: RunAfterResponse;
 };
 
 function hasRecentAuthentication(lastSignInAt: string | undefined, now: Date) {
@@ -95,6 +105,28 @@ function getBearerAccessToken(request: Request): string | undefined {
   return token || undefined;
 }
 
+// A 500 always says whether the account is untouched (`deletionScheduled:
+// false`, safe to retry) or already locked with a job the scheduler finishes.
+function deletionFailureResponse(request: Request, deletionScheduled: boolean) {
+  return applyPrivateNoStoreApiResponseHeaders(
+    NextResponse.json(
+      deletionScheduled
+        ? {
+            error: 'Your account is being deleted and will be removed automatically.',
+            code: 'ACCOUNT_DELETION_RETRY_SCHEDULED',
+            deletionScheduled: true,
+          }
+        : {
+            error: 'Account deletion could not be completed. Please try again.',
+            code: 'ACCOUNT_DELETION_NOT_STARTED',
+            deletionScheduled: false,
+          },
+      { status: 500 },
+    ),
+    request,
+  );
+}
+
 export async function deleteAccountRouteResponse({
   dependencies,
   request,
@@ -112,6 +144,7 @@ export async function deleteAccountRouteResponse({
     logError: dependencies?.logError ?? logBackendRouteError,
     now: dependencies?.now ?? (() => new Date()),
     requireRegisteredUser: dependencies?.requireRegisteredUser ?? requireRegisteredUser,
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
   };
   const userClient = resolved.createUserClient(request);
   let adminClient: ReturnType<typeof resolved.createServiceClient> | null = null;
@@ -172,6 +205,7 @@ export async function deleteAccountRouteResponse({
       NextResponse.json({
         error: 'Continue with Apple before permanently deleting your account.',
         code: 'APPLE_REAUTH_REQUIRED',
+        reason: REAUTHENTICATION_REQUIRED,
         reauthenticate: true,
       }, { status: 403 }),
       request,
@@ -183,6 +217,7 @@ export async function deleteAccountRouteResponse({
       NextResponse.json({
         error: 'Please sign in again before permanently deleting your account.',
         code: 'RECENT_AUTH_REQUIRED',
+        reason: REAUTHENTICATION_REQUIRED,
         reauthenticate: true,
       }, { status: 403 }),
       request,
@@ -203,10 +238,7 @@ export async function deleteAccountRouteResponse({
     }
 
     resolved.logError('Account deletion rate limit check failed:', error);
-    return applyPrivateNoStoreApiResponseHeaders(
-      NextResponse.json({ error: 'Account deletion could not be completed. Please try again.' }, { status: 500 }),
-      request,
-    );
+    return deletionFailureResponse(request, false);
   }
 
   if (appleIdentity) {
@@ -224,7 +256,9 @@ export async function deleteAccountRouteResponse({
           NextResponse.json({
             error: error.message,
             code: error.code,
-            ...(error.reauthenticate ? { reauthenticate: true } : {}),
+            ...(error.reauthenticate
+              ? { reason: REAUTHENTICATION_REQUIRED, reauthenticate: true }
+              : {}),
           }, { status: error.status }),
           request,
         );
@@ -240,35 +274,72 @@ export async function deleteAccountRouteResponse({
     }
   }
 
-  try {
-    const deletion = await executeInitialAccountDeletion({
-      accessToken: getBearerAccessToken(request),
-      admin,
-      userId: user.id,
-      onNonFatalError: resolved.logError,
-    });
-
-    resolved.invalidateShowcaseFeedCache();
-
-    return applyPrivateNoStoreApiResponseHeaders(
-      NextResponse.json({
-        success: true,
-        deleted: true,
-        cleanupPending: deletion.cleanupPending,
-        ...(deletion.alreadyCompleted ? { alreadyDeleted: true } : {}),
-      }),
-      request,
-    );
-  } catch (error) {
+  const userId = user.id;
+  // A `failed` stage puts the job in front of the scheduler's next run.
+  const persistDeletionFailure = async (error: unknown) => {
     try {
-      await markAccountDeletionStage(admin, user.id, 'failed', error);
+      await markAccountDeletionStage(admin, userId, 'failed', error);
     } catch (stageError) {
       resolved.logError('Account deletion failure stage could not be persisted:', stageError);
     }
     resolved.logError('Account deletion failed:', error);
+  };
+
+  let start: InitialAccountDeletionStart;
+  try {
+    start = await startInitialAccountDeletion({
+      accessToken: getBearerAccessToken(request),
+      admin,
+      userId,
+    });
+  } catch (error) {
+    await persistDeletionFailure(error);
+    return deletionFailureResponse(request, !(error instanceof AccountDeletionNotStartedError));
+  }
+
+  if (start.status === 'already_deleted') {
+    resolved.invalidateShowcaseFeedCache();
     return applyPrivateNoStoreApiResponseHeaders(
-      NextResponse.json({ error: 'Account deletion could not be completed. Please try again.' }, { status: 500 }),
+      NextResponse.json({
+        success: true,
+        deleted: true,
+        cleanupPending: start.result.cleanupPending,
+        alreadyDeleted: true,
+      }),
       request,
     );
   }
+
+  // The account can no longer be used and every session is gone, so nobody
+  // waits on the storage sweep: a slow one outlasted the app's request timeout
+  // and was reported as "not deleted" while it went on.
+  const { manifest } = start;
+  const finishDeletion = async () => {
+    try {
+      await finishInitialAccountDeletion({
+        admin,
+        userId,
+        manifest,
+        onNonFatalError: resolved.logError,
+      });
+    } catch (error) {
+      await persistDeletionFailure(error);
+      return;
+    }
+    resolved.invalidateShowcaseFeedCache();
+  };
+  try {
+    resolved.runAfterResponse(finishDeletion);
+  } catch (error) {
+    // Nothing runs the sweep behind this answer; the scheduler takes it over.
+    await persistDeletionFailure(error);
+  }
+
+  return applyPrivateNoStoreApiResponseHeaders(
+    NextResponse.json(
+      { success: true, deleted: false, deletionScheduled: true },
+      { status: 202 },
+    ),
+    request,
+  );
 }

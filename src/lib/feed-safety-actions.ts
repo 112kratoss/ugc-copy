@@ -135,8 +135,9 @@ export async function blockCreatorAfterConfirmation({
 }
 
 /**
- * Takes a block back, from the list of whom the viewer has blocked. Asked
- * first: it lets the other person see and follow the viewer again.
+ * Takes a block back, from the list of whom the viewer has blocked or from the
+ * blocked creator's own page. Asked first: it lets the other person see and
+ * follow the viewer again.
  */
 export async function unblockCreatorAfterConfirmation({
   userId,

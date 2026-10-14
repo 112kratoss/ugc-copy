@@ -10,6 +10,10 @@ const routerState = vi.hoisted(() => ({
   push: vi.fn(),
 }));
 
+const shareState = vi.hoisted(() => ({
+  share: vi.fn(async () => ({ action: 'sharedAction' })),
+}));
+
 vi.mock('expo-router', () => ({
   router: routerState,
 }));
@@ -69,6 +73,10 @@ vi.mock('react-native', () => ({
     OS: 'ios',
     select: (obj: Record<string, unknown>) => obj.ios || obj.default,
   },
+  Share: {
+    share: (...args: unknown[]) => shareState.share(...(args as [])),
+    sharedAction: 'sharedAction',
+  },
 }));
 
 vi.mock('@shopify/flash-list', () => ({
@@ -111,6 +119,7 @@ vi.mock('react-native-safe-area-context', () => ({
 }));
 
 vi.mock('lucide-react-native', () => ({
+  AtSign: (props: Record<string, unknown>) => React.createElement('at-sign-icon', props),
   ChevronRight: (props: Record<string, unknown>) => React.createElement('chevron-right-icon', props),
   CircleAlert: (props: Record<string, unknown>) => React.createElement('circle-alert-icon', props),
   Crown: (props: Record<string, unknown>) => React.createElement('crown-icon', props),
@@ -148,11 +157,12 @@ const authState = vi.hoisted(() => ({
     listOwnerPosts: vi.fn(),
     getSavedMedia: vi.fn(),
     getShowcaseFeed: vi.fn(),
+    shareCreatorProfile: vi.fn(async () => ({ success: true })),
   },
 }));
 
 const queryState = vi.hoisted(() => ({
-  profileData: { id: 'user-123', username: 'luna_dreams', displayName: 'Luna Dreams', avatarUrl: 'avatar.png' } as null | {
+  profileData: { id: 'user-123', username: 'luna-dreams', displayName: 'Luna Dreams', avatarUrl: 'avatar.png' } as null | {
     id: string;
     username: string;
     displayName: string;
@@ -420,7 +430,7 @@ describe('ProfileDashboard media tiles routing', () => {
     routerState.push.mockClear();
     authState.api.listGenerations.mockClear();
     authState.api.listOwnerPosts.mockClear();
-    queryState.profileData = { id: 'user-123', username: 'luna_dreams', displayName: 'Luna Dreams', avatarUrl: 'avatar.png' };
+    queryState.profileData = { id: 'user-123', username: 'luna-dreams', displayName: 'Luna Dreams', avatarUrl: 'avatar.png' };
     queryState.profileError = null;
     queryState.generations = [
       {
@@ -757,9 +767,9 @@ describe('ProfileDashboard media tiles routing', () => {
       renderer.create(<ProfileDashboard initialTab="Posts" />);
     });
 
+    // No sales summary: the Wallet reads the totals `/api/profile` carries.
     expect(authState.api.listOwnerPosts).toHaveBeenCalledWith({
       includeArchived: true,
-      includeSummary: true,
       pagination: 'cursor',
       limit: 24,
       offset: 0,
@@ -802,7 +812,6 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(authState.api.listGenerations).toHaveBeenCalledWith(true, { cursor: '24', limit: 24 });
     expect(authState.api.listOwnerPosts).toHaveBeenCalledWith({
       includeArchived: true,
-      includeSummary: false,
       limit: 24,
       offset: 24,
       visibility: 'all',
@@ -1742,5 +1751,97 @@ describe('ProfileDashboard media tiles routing', () => {
       queryState.generations = runs().filter((run) => run.status !== 'failed');
       expect(failedTiles(renderDashboard())).toHaveLength(0);
     });
+  });
+});
+
+/**
+ * Every account starts on a `creator-xxxxxxxx` placeholder handle, whose page
+ * stops resolving once a handle is claimed. The hero offers the public page and
+ * its link only for a claimed handle, as the web does, and otherwise offers to
+ * claim one.
+ */
+describe('ProfileDashboard public page and handle', () => {
+  const claimedProfile = { id: 'user-123', username: 'luna-dreams', displayName: 'Luna Dreams', avatarUrl: 'avatar.png' };
+
+  beforeEach(() => {
+    routerState.push.mockClear();
+    shareState.share.mockClear();
+    authState.api.shareCreatorProfile.mockClear();
+    queryState.profileData = claimedProfile;
+    queryState.profileError = null;
+    queryState.generations = [];
+    queryState.ownerPosts = [];
+    queryState.savedItems = [];
+    queryState.generationPages = null;
+    queryState.ownerPostPages = null;
+    queryState.savedPages = null;
+    queryState.generationsPageParam = undefined;
+    queryState.ownerPostsPageParam = undefined;
+    queryState.savedMediaPageParam = undefined;
+  });
+
+  function renderDashboard(initialTab?: 'Creations' | 'Posts' | 'Saved') {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab={initialTab} />);
+    });
+    return tree;
+  }
+
+  it('offers the public page and its link for a claimed handle, filed as the owner’s own share', async () => {
+    const tree = renderDashboard();
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Claim your handle' })).toHaveLength(0);
+
+    renderer.act(() => { findPressableByText(tree.root, 'View public profile').props.onPress(); });
+    expect(routerState.push).toHaveBeenCalledWith('/creators/luna-dreams');
+
+    await renderer.act(async () => {
+      findPressableByText(tree.root, 'Share profile').props.onPress();
+      for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
+    });
+    expect(shareState.share).toHaveBeenCalledWith(expect.objectContaining({
+      url: expect.stringMatching(/\/creators\/luna-dreams\?s=profile$/),
+    }));
+    expect(authState.api.shareCreatorProfile).toHaveBeenCalledWith('luna-dreams', { sourceSurface: 'profile' });
+  });
+
+  it('offers to claim a handle instead, on the signup placeholder', () => {
+    queryState.profileData = { ...claimedProfile, username: 'creator-1a2b3c4d' };
+    const tree = renderDashboard();
+
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'View public profile' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Share profile' })).toHaveLength(0);
+    const claim = tree.root.findByProps({ accessibilityLabel: 'Claim your handle' });
+    expect(claim.props.accessibilityRole).toBe('button');
+    renderer.act(() => { claim.props.onPress(); });
+    expect(routerState.push).toHaveBeenCalledWith('/edit-profile');
+  });
+
+  it('offers neither while the profile has not answered', () => {
+    queryState.profileData = null;
+    const tree = renderDashboard();
+
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Claim your handle' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'View public profile' })).toHaveLength(0);
+  });
+
+  it('counts Active and Archived posts from the server’s totals, as the Posts stat does', () => {
+    (queryState as { profileData: unknown }).profileData = {
+      ...claimedProfile,
+      stats: { creations: 3, posts: 19, archivedPosts: 4, saved: 2 },
+    };
+    const tree = renderDashboard('Posts');
+
+    expect(tree.root.findByProps({ accessibilityLabel: 'Active (19)' })).toBeTruthy();
+    expect(tree.root.findByProps({ accessibilityLabel: 'Archived (4)' })).toBeTruthy();
+  });
+
+  it('reads the Wallet from the profile alone, never from a Posts page', () => {
+    queryState.ownerPostPages = [{ posts: [], summary: { earningsUsdCents: 999, listingCount: 1, salesCount: 1 } }];
+    const tree = renderDashboard('Posts');
+    const wallet = findPressableByText(tree.root, 'Wallet');
+
+    expect(wallet.findAll((node) => node.type === 'text' && node.props.children === '–')).toHaveLength(1);
+    expect(wallet.findAll((node) => node.type === 'text' && node.props.children === '$9.99')).toHaveLength(0);
   });
 });

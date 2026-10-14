@@ -1,4 +1,5 @@
 import { accentFill } from '@/lib/theme';
+import type { QueryClient } from '@tanstack/react-query';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
@@ -7,10 +8,16 @@ import { Platform } from 'react-native';
 
 import type { MagicbookletApiClient } from './api-client';
 import { env } from './env';
+import { ALERTS_LIST_QUERY_KEY, NOTIFICATION_BADGE_QUERY_KEY } from './notification-badge';
 
 const DEVICE_ID_KEY = 'magicbooklet.mobileNotifications.deviceId';
 const EXPO_PUSH_TOKEN_KEY = 'magicbooklet.mobileNotifications.expoPushToken';
-let lastHandledNotificationResponseKey: string | null = null;
+/**
+ * Every push this launch has handled, by its key. A push is claimed before any
+ * of its handling is awaited: reading the launch push again while the first
+ * read was still being handled opened its screen twice.
+ */
+const handledNotificationResponseKeys = new Set<string>();
 
 export type MobileNotificationResponseEvent = {
   notificationId: string | null;
@@ -89,10 +96,10 @@ export function subscribeToNotificationsReceived(onReceived: (notification: Rece
 /**
  * True when a deep link's destination is the Alerts screen itself.
  *
- * Two of this account's live rows carry `/studio` — "New follower", whose real
- * destination is a profile the server does not name yet — and the screen's own
- * fallback for an unresolvable link was the same route. Tapping any of them
- * asked the router for the screen the reader was already on.
+ * "New follower" carries `/studio` when the follower has no handle, as does
+ * every one written before the server linked the follower's page, and a
+ * workflow run's alert carries it with the web's canvas on it. Tapping any of
+ * them asked the router for the screen the reader was already on.
  */
 export function deepLinkTargetsAlertsScreen(deepLink: unknown) {
   if (typeof deepLink !== 'string') return false;
@@ -277,13 +284,37 @@ export function navigateToNotificationDeepLink(deepLink: unknown) {
     return false;
   }
 
-  const target = deepLink.trim();
+  const target = postPageForLegacyPostAlert(deepLink.trim());
   if (!isAllowedNotificationDeepLink(target)) {
     return false;
   }
 
   router.push(target as never);
   return true;
+}
+
+/**
+ * Post alerts (saved, shared, remixed, a recipe unlocked) written before the
+ * server linked the post page open the For You reel with the post first. The
+ * post page sends a media post on to the reel and keeps a text post, or one
+ * behind the mature-content cover, on its own page: the reel has nothing to
+ * draw for either. Rows already written keep the old link, so it is read as the
+ * new one. Any other reel link is left as it is.
+ */
+function postPageForLegacyPostAlert(target: string) {
+  const queryStart = target.indexOf('?');
+  if (queryStart === -1 || target.slice(0, queryStart) !== '/viewer') return target;
+
+  let params: URLSearchParams;
+  try {
+    params = new URLSearchParams(target.slice(queryStart + 1).split('#', 1)[0]);
+  } catch {
+    // React Native's parser throws on a malformed escape; the link stays as written.
+    return target;
+  }
+  const postId = params.get('initialId')?.trim();
+  if (params.get('source') !== 'showcase-feed' || !postId) return target;
+  return `/showcase/${encodeURIComponent(postId)}`;
 }
 
 const NOTIFICATION_ROUTE_PATTERNS = [
@@ -358,20 +389,67 @@ async function handleNotificationResponse(
   }
 
   const responseKey = getNotificationResponseKey(response);
-  if (responseKey && responseKey === lastHandledNotificationResponseKey) {
-    return false;
+  if (responseKey) {
+    if (handledNotificationResponseKeys.has(responseKey)) return false;
+    handledNotificationResponseKeys.add(responseKey);
   }
 
   const event = getNotificationResponseEvent(response);
-  const handled = options.handleResponse
-    ? await options.handleResponse(event)
-    : navigateToNotificationDeepLink(event.deepLink);
-  if (handled && responseKey) {
-    lastHandledNotificationResponseKey = responseKey;
-    await clearLastNotificationResponseIfAvailable();
+  let handled = false;
+  try {
+    handled = options.handleResponse
+      ? await options.handleResponse(event)
+      : navigateToNotificationDeepLink(event.deepLink);
+  } catch (error) {
+    console.error('Failed to open a tapped notification', error);
   }
 
-  return handled;
+  if (!handled) {
+    // Left unclaimed, so a later delivery of the same push can still open it.
+    if (responseKey) handledNotificationResponseKeys.delete(responseKey);
+    return false;
+  }
+
+  if (responseKey) await clearLastNotificationResponseIfAvailable();
+  return true;
+}
+
+/**
+ * What a tapped push does: it opens what the alert is about, or Alerts when the
+ * app cannot open that link, and only then marks the alert read and refreshes
+ * the Alerts list and the tab badge, behind the move. The read and the list's
+ * refetch used to be awaited first, up to the client's 30 s timeout on a slow
+ * network, where a tap in the Alerts list (and on the web) moves at once.
+ */
+export function openTappedNotification(
+  { notificationId, deepLink }: MobileNotificationResponseEvent,
+  {
+    api,
+    queryClient,
+  }: {
+    api: Pick<MagicbookletApiClient, 'markMobileNotificationsRead'>;
+    queryClient: Pick<QueryClient, 'invalidateQueries'>;
+  },
+) {
+  const opened = navigateToNotificationDeepLink(deepLink) || navigateToNotificationDeepLink(ALERTS_ROUTE);
+
+  // By name, for whichever account is signed in when the read settles: a push
+  // that opened the app is handled before the stored session names the account.
+  const refreshAlerts = () => {
+    void queryClient.invalidateQueries({ queryKey: [ALERTS_LIST_QUERY_KEY] });
+    void queryClient.invalidateQueries({ queryKey: [NOTIFICATION_BADGE_QUERY_KEY] });
+  };
+  if (!notificationId) {
+    refreshAlerts();
+    return opened;
+  }
+
+  void api.markMobileNotificationsRead([notificationId])
+    .catch((error) => {
+      console.error('Failed to mark tapped notification read', error);
+    })
+    .then(refreshAlerts);
+  return opened;
 }
 
 export async function syncLastNotificationResponse(options: { handleResponse?: MobileNotificationResponseHandler } = {}) {

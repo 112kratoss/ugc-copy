@@ -209,4 +209,34 @@ describe('profile validate route adapter service', () => {
       },
     });
   });
+
+  it('refuses a reserved handle the account does not already hold', async () => {
+    const validate = (existingUsername: string | null) => {
+      validateProfileSubmission.mockResolvedValueOnce({
+        ok: true,
+        payload: { data: { username: 'support' }, fieldErrors: {} },
+        existingUsername,
+      });
+      return postProfileValidateRouteResponse({
+        request: new Request('http://localhost/api/profile/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: 'support', displayName: 'Creator Name' }),
+        }),
+        dependencies: { createUserClient, createServiceClient, enforceBackendRateLimit, validateProfileSubmission, logError },
+      });
+    };
+
+    const claimed = await validate('luna-dreams');
+    expect(claimed.status).toBe(400);
+    expect(claimed.headers.get('Cache-Control')).toBe('private, no-store');
+    await expect(claimed.json()).resolves.toEqual({
+      error: 'That handle is reserved.',
+      fieldErrors: { username: 'That handle is reserved.' },
+    });
+
+    const held = await validate('support');
+    expect(held.status).toBe(200);
+    await expect(held.json()).resolves.toEqual({ ok: true });
+  });
 });

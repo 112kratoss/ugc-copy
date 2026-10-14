@@ -8,6 +8,7 @@ import {
   withMobileNotificationHistory,
 } from '@/__tests__/fixtures/mobile-notification-history';
 import {
+  notifyRazorpayCreditPurchase,
   verifyCreditRazorpayPaymentForRoute as verifyCreditRazorpayPaymentForRouteImpl,
 } from '@/lib/razorpay-credit-verify-service';
 
@@ -119,12 +120,27 @@ function createAdminSupabaseMock({
   referralError = null as { message: string } | null,
   referralSettlement = { status: 'not_referred', rewards: [] } as Record<string, unknown>,
   onAddCredits = undefined as (() => void) | undefined,
+  /** The buyer's balance once the top-up and any referral bonus are in. */
+  balance = 1_005,
 } = {}) {
   const calls = {
     rpc: [] as Array<{ name: string; args: Record<string, unknown> }>,
+    tables: [] as string[],
   };
 
   const client = {
+    from(table: string) {
+      calls.tables.push(table);
+      if (table !== 'profiles') {
+        throw new Error(`Unexpected table: ${table}`);
+      }
+      const query = {
+        select: () => query,
+        eq: () => query,
+        maybeSingle: async () => ({ data: { credits: balance }, error: null }),
+      };
+      return query;
+    },
     rpc(name: string, args: Record<string, unknown>) {
       calls.rpc.push({ name, args });
       if (name === 'check_backend_rate_limit') {
@@ -260,12 +276,14 @@ describe('verifyCreditRazorpayPaymentForRoute', () => {
   it('assigns credits after signature, ownership, and transaction checks pass', async () => {
     const user = createUserSupabaseMock();
     const admin = createAdminSupabaseMock();
+    const notifyCreditPurchase = vi.fn(async () => null);
 
     const result = await verifyCreditRazorpayPaymentForRoute({
       keySecret: 'test-secret',
       readBody: vi.fn(async () => validBody()),
       createUserSupabase: vi.fn(() => user.client),
       createAdminSupabase: vi.fn(() => admin.client),
+      notifyCreditPurchase,
     });
 
     expect(result).toEqual({
@@ -286,6 +304,9 @@ describe('verifyCreditRazorpayPaymentForRoute', () => {
         p_payment_id: 'pay_123',
       },
     });
+    // This verify settled the top-up, so the buyer is told from here, once.
+    expect(notifyCreditPurchase).toHaveBeenCalledTimes(1);
+    expect(notifyCreditPurchase).toHaveBeenCalledWith(admin.client, { userId: 'user_123', transactionId: 'txn_123' });
   });
 
   it('treats already successful transactions as idempotently processed', async () => {
@@ -293,12 +314,14 @@ describe('verifyCreditRazorpayPaymentForRoute', () => {
       transaction: { id: 'txn_123', credits: 500, status: 'success' },
     });
     const admin = createAdminSupabaseMock();
+    const notifyCreditPurchase = vi.fn();
 
     const result = await verifyCreditRazorpayPaymentForRoute({
       keySecret: 'test-secret',
       readBody: vi.fn(async () => validBody()),
       createUserSupabase: vi.fn(() => user.client),
       createAdminSupabase: vi.fn(() => admin.client),
+      notifyCreditPurchase,
     });
 
     expect(result).toEqual({
@@ -309,6 +332,8 @@ describe('verifyCreditRazorpayPaymentForRoute', () => {
       'check_backend_rate_limit',
       'settle_referral_purchase_rewards',
     ]);
+    // Whoever settled it first told the buyer.
+    expect(notifyCreditPurchase).not.toHaveBeenCalled();
   });
 
   it('returns not found when the credit transaction is missing', async () => {
@@ -369,17 +394,21 @@ describe('verifyCreditRazorpayPaymentForRoute', () => {
       referralError: { message: 'referral database unavailable' },
     });
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const notifyCreditPurchase = vi.fn(async () => null);
 
     const result = await verifyCreditRazorpayPaymentForRoute({
       keySecret: 'test-secret',
       readBody: vi.fn(async () => validBody()),
       createUserSupabase: vi.fn(() => user.client),
       createAdminSupabase: vi.fn(() => admin.client),
+      notifyCreditPurchase,
     });
 
     expect(result).toEqual({ ok: true, body: { success: true } });
     expect(admin.calls.rpc.map((call) => call.name)).toContain('settle_referral_purchase_rewards');
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('credit_purchase_referral_settlement_deferred'));
+    // The top-up itself is still announced.
+    expect(notifyCreditPurchase).toHaveBeenCalledTimes(1);
     errorSpy.mockRestore();
   });
 
@@ -392,12 +421,14 @@ describe('verifyCreditRazorpayPaymentForRoute', () => {
         transaction.status = 'success';
       },
     });
+    const notifyCreditPurchase = vi.fn();
 
     const result = await verifyCreditRazorpayPaymentForRoute({
       keySecret: 'test-secret',
       readBody: vi.fn(async () => validBody()),
       createUserSupabase: vi.fn(() => user.client),
       createAdminSupabase: vi.fn(() => admin.client),
+      notifyCreditPurchase,
     });
 
     expect(result).toEqual({
@@ -410,6 +441,8 @@ describe('verifyCreditRazorpayPaymentForRoute', () => {
       'add_credits',
       'settle_referral_purchase_rewards',
     ]);
+    // The webhook settled it, and it tells the buyer.
+    expect(notifyCreditPurchase).not.toHaveBeenCalled();
   });
 
   it('returns 202 without granting credits while the provider payment is authorized', async () => {
@@ -510,9 +543,20 @@ describe('credit verify referral notifications', () => {
     expect.objectContaining({ user_id: 'inviter_123', type: 'referral_reward_earned', dedupe_key: rewardKeys[0] }),
     expect.objectContaining({ user_id: 'user_123', type: 'referral_reward_earned', dedupe_key: rewardKeys[1] }),
   ];
+  // "Credits added" for a top-up this verify settled, worded as one bought in
+  // the app: the balance it left, the bonus included.
+  const creditAlert = expect.objectContaining({
+    user_id: 'user_123',
+    type: 'credits_purchased',
+    category: 'commerce',
+    body: 'Your balance is now 1,005 credits.',
+    deep_link: '/profile',
+    dedupe_key: 'credits:txn_123',
+  });
 
   // The three ways a verified top-up reaches the referral settlement. Each has
-  // the buyer waiting on the checkout's answer.
+  // the buyer waiting on the checkout's answer. Only the verify that settled
+  // the top-up announces it; the rewards are announced every time, as before.
   const referredVerifications = [
     {
       kind: 'a fresh payment',
@@ -521,6 +565,8 @@ describe('credit verify referral notifications', () => {
         admin: createAdminSupabaseMock({ referralSettlement: referredFirstPurchase }),
       }),
       body: { success: true, referralBonusCredits: 5 },
+      deferredTasks: 2,
+      alerts: [...rewardNotifications, creditAlert],
     },
     {
       kind: 'a payment that was already settled',
@@ -529,6 +575,8 @@ describe('credit verify referral notifications', () => {
         admin: createAdminSupabaseMock({ referralSettlement: referredFirstPurchase }),
       }),
       body: { success: true, alreadyProcessed: true, referralBonusCredits: 5 },
+      deferredTasks: 1,
+      alerts: rewardNotifications,
     },
     {
       kind: 'a payment the webhook settles at the same moment',
@@ -546,12 +594,14 @@ describe('credit verify referral notifications', () => {
         };
       },
       body: { success: true, alreadyProcessed: true, referralBonusCredits: 5 },
+      deferredTasks: 1,
+      alerts: rewardNotifications,
     },
   ];
 
   it.each(referredVerifications)(
     'answers $kind before the referral rewards are announced when the caller can run work after the response',
-    async ({ setUp, body }) => {
+    async ({ setUp, body, deferredTasks, alerts }) => {
       const { user, admin } = setUp();
       const history = createMobileNotificationHistory();
       history.hold();
@@ -570,17 +620,17 @@ describe('credit verify referral notifications', () => {
       expect(await hasAnswered(verification)).toBe(true);
       await expect(verification).resolves.toEqual({ ok: true, body });
       expect(history.started).toEqual([]);
-      expect(deferred).toHaveLength(1);
+      expect(deferred).toHaveLength(deferredTasks);
 
       history.release();
-      await deferred[0]();
-      expect(history.sent).toEqual(rewardNotifications);
+      for (const task of deferred) await task();
+      expect(history.sent).toEqual(alerts);
     },
   );
 
   it.each(referredVerifications)(
     'announces the referral rewards before answering $kind when the caller has nowhere to run them afterwards',
-    async ({ setUp, body }) => {
+    async ({ setUp, body, alerts }) => {
       const { user, admin } = setUp();
       const history = createMobileNotificationHistory();
       history.hold();
@@ -597,25 +647,101 @@ describe('credit verify referral notifications', () => {
 
       history.release();
       await expect(verification).resolves.toEqual({ ok: true, body });
-      expect(history.sent).toEqual(rewardNotifications);
+      expect(history.sent).toEqual(alerts);
     },
   );
 
-  it('defers nothing for a buyer who was not referred', async () => {
+  it("announces a referred buyer's rewards and then the balance, in that order, when after() starts both at once", async () => {
     const user = createUserSupabaseMock();
-    const admin = createAdminSupabaseMock();
+    const admin = createAdminSupabaseMock({ referralSettlement: referredFirstPurchase });
     const history = createMobileNotificationHistory();
-    const runAfterResponse = vi.fn();
+    history.hold();
+    const deferred: Array<() => Promise<unknown>> = [];
 
     await expect(verifyCreditRazorpayPaymentForRoute({
       keySecret: 'test-secret',
       readBody: vi.fn(async () => validBody()),
       createUserSupabase: vi.fn(() => user.client),
       createAdminSupabase: vi.fn(() => withMobileNotificationHistory(admin.client, history)),
-      runAfterResponse,
+      runAfterResponse: (task) => { deferred.push(task); },
+    })).resolves.toEqual({ ok: true, body: { success: true, referralBonusCredits: 5 } });
+
+    // Next's after() starts everything it was handed at once. "Credits added"
+    // still waits for the rewards, as it does in the app.
+    const sending = Promise.all(deferred.map((task) => task()));
+    expect(await hasAnswered(sending)).toBe(false);
+    expect(history.started).toEqual(rewardKeys);
+
+    history.release();
+    await sending;
+    expect(history.sent).toEqual([...rewardNotifications, creditAlert]);
+  });
+
+  it('defers only the balance for a buyer who was not referred', async () => {
+    const user = createUserSupabaseMock();
+    const admin = createAdminSupabaseMock();
+    const history = createMobileNotificationHistory();
+    const deferred: Array<() => Promise<unknown>> = [];
+
+    await expect(verifyCreditRazorpayPaymentForRoute({
+      keySecret: 'test-secret',
+      readBody: vi.fn(async () => validBody()),
+      createUserSupabase: vi.fn(() => user.client),
+      createAdminSupabase: vi.fn(() => withMobileNotificationHistory(admin.client, history)),
+      runAfterResponse: (task) => { deferred.push(task); },
     })).resolves.toEqual({ ok: true, body: { success: true } });
 
-    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(deferred).toHaveLength(1);
     expect(history.started).toEqual([]);
+
+    await deferred[0]();
+    expect(history.sent).toEqual([creditAlert]);
+  });
+});
+
+describe('notifyRazorpayCreditPurchase', () => {
+  it('says the balance the top-up left, as a top-up in the app does', async () => {
+    const admin = createAdminSupabaseMock({ balance: 12_500 });
+    const history = createMobileNotificationHistory();
+
+    await notifyRazorpayCreditPurchase(withMobileNotificationHistory(admin.client, history), {
+      userId: 'user_123',
+      transactionId: 'txn_123',
+    });
+
+    expect(admin.calls.tables).toEqual(['profiles']);
+    expect(history.sent).toEqual([expect.objectContaining({
+      user_id: 'user_123',
+      type: 'credits_purchased',
+      category: 'commerce',
+      title: 'Credits added',
+      body: 'Your balance is now 12,500 credits.',
+      deep_link: '/profile',
+      object_type: 'credits',
+      object_id: 'txn_123',
+      dedupe_key: 'credits:txn_123',
+    })]);
+  });
+
+  it('still announces the top-up when the balance cannot be read', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const history = createMobileNotificationHistory();
+    const unreadable = {
+      from: () => {
+        throw new Error('profiles unavailable');
+      },
+    } as unknown as SupabaseClient;
+
+    await notifyRazorpayCreditPurchase(withMobileNotificationHistory(unreadable, history), {
+      userId: 'user_123',
+      transactionId: 'txn_123',
+    });
+
+    expect(history.sent).toEqual([expect.objectContaining({
+      body: 'Your credit purchase is complete.',
+      dedupe_key: 'credits:txn_123',
+    })]);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('razorpay_credit_notification_balance_unread'));
+    errorSpy.mockRestore();
   });
 });

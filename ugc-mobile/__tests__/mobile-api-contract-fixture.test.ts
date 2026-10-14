@@ -311,6 +311,7 @@ const extendedOperationCases: Array<{
   call: (api: MagicbookletApiClient) => Promise<unknown>;
 }> = [
   { key: 'getContentPreferences', call: (api) => api.getContentPreferences() },
+  { key: 'getCreatorPayoutState', call: (api) => api.getCreatorPayoutState() },
   { key: 'revealNsfwPost', call: (api) => api.revealNsfwPost('post-1') },
   { key: 'getGenerationDetails', call: (api) => api.getGenerationDetails('generation-1') },
   { key: 'deleteGeneration', call: (api) => api.deleteGeneration('generation-1') },

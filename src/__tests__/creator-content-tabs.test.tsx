@@ -1,4 +1,6 @@
-import type { ReactNode } from 'react';
+import { act, type ReactNode } from 'react';
+import { hydrateRoot } from 'react-dom/client';
+import { renderToString } from 'react-dom/server';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -7,8 +9,14 @@ import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
-const routerPush = vi.fn();
-const routerReplace = vi.fn();
+// One router for every render, so a test can read what a click asked of it.
+const routerMock = vi.hoisted(() => ({
+  push: vi.fn(),
+  replace: vi.fn(),
+  refresh: vi.fn(),
+}));
+const routerPush = routerMock.push;
+const routerReplace = routerMock.replace;
 const authState = vi.hoisted(() => ({
   session: null as { access_token: string } | null,
   user: null as { id: string } | null,
@@ -18,7 +26,7 @@ const searchState = vi.hoisted(() => ({ search: '' }));
 
 vi.mock('next/navigation', () => ({
   usePathname: () => '/creators/creator-name',
-  useRouter: () => ({ push: routerPush, replace: routerReplace }),
+  useRouter: () => routerMock,
   useSearchParams: () => new URLSearchParams(searchState.search),
 }));
 
@@ -40,6 +48,8 @@ vi.mock('@/app/showcase/ShowcaseReelViewer', () => ({
     isOpen,
     items: reelItems,
     selectedItemId,
+    savedItemIds,
+    hasMoreItems,
     onFeedback,
     onReportContent,
     onReportUser,
@@ -52,6 +62,8 @@ vi.mock('@/app/showcase/ShowcaseReelViewer', () => ({
     isOpen: boolean;
     items: ShowcaseFeedItem[];
     selectedItemId: string | null;
+    savedItemIds?: Set<string>;
+    hasMoreItems?: boolean;
     originLabel?: string;
     onFeedback?: unknown;
     onReportContent?: ReelHandler;
@@ -66,6 +78,8 @@ vi.mock('@/app/showcase/ShowcaseReelViewer', () => ({
       <div role="dialog" aria-label="Creator immersive viewer">
         <span>{selectedItemId}</span>
         <span>Closes to {originLabel ?? 'Explore'}</span>
+        <span data-testid="reel-saved">{[...(savedItemIds ?? [])].sort().join(',')}</span>
+        <span data-testid="reel-has-more">{String(Boolean(hasMoreItems))}</span>
         {selectedItemStatus ? <span>Linked post: {selectedItemStatus}</span> : null}
         {selectedItemStatus === 'failed' && onRetrySelectedItem
           ? <button type="button" onClick={onRetrySelectedItem}>Try again</button>
@@ -502,5 +516,230 @@ describe('CreatorContentTabs', () => {
       expect(requests.sent()).toHaveLength(0);
       expect(routerReplace).not.toHaveBeenCalled();
     });
+  });
+
+  // The Recipes tab filters the loaded posts. It said "No recipes yet" under
+  // "Recipes N" while recipes were still in unloaded pages, and its sentinel
+  // walked every page of a creator whose count said there were none.
+  describe('the Recipes tab', () => {
+    const post = (id: string, recipe = false): ShowcaseFeedItem => ({
+      ...items[recipe ? 1 : 0],
+      id,
+      title: `Post ${id}`,
+      mediaItems: items[0].mediaItems?.map((media) => ({ ...media, id: `media-${id}` })),
+      asset: recipe ? { ...items[1].asset!, id: `bundle-${id}`, postId: id } : null,
+    });
+    const page = (pageItems: ShowcaseFeedItem[], offset: number, hasMore: boolean) => ({
+      profile: initialData.profile,
+      items: pageItems,
+      pageInfo: { hasMore, limit: 24, offset, nextOffset: hasMore ? offset + 24 : null, nextLimit: hasMore ? 24 : null },
+    });
+    const answerPages = (pages: Record<number, ReturnType<typeof page>>) => {
+      const fetchMock = vi.fn(async (url: string) => {
+        const offset = Number(new URL(url, 'http://localhost').searchParams.get('offset'));
+        const answer = pages[offset];
+        if (!answer) throw new Error(`Unexpected page: ${url}`);
+        return { ok: true, status: 200, json: async () => answer };
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      return { offsets: () => fetchMock.mock.calls.map(([url]) => Number(new URL(url, 'http://localhost').searchParams.get('offset'))) };
+    };
+    const firstPage = (unlocks: number): CreatorProfilePageData => ({
+      ...initialData,
+      stats: { ...initialData.stats, unlocks },
+      items: [post('post-1'), post('post-2')],
+      pageInfo: { hasMore: true, limit: 24, offset: 0, nextOffset: 24, nextLimit: 24 },
+    });
+
+    it('says "No recipes yet" and loads nothing when the creator has none', async () => {
+      vi.stubGlobal('IntersectionObserver', undefined);
+      const pages = answerPages({});
+      render(<CreatorContentTabs initialData={firstPage(0)} profilePath="/creators/creator-name" />);
+
+      fireEvent.click(screen.getByRole('tab', { name: /recipes 0/i }));
+
+      expect(screen.getByRole('heading', { name: 'No recipes yet' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
+      expect(pages.offsets()).toEqual([]);
+      // Posts still pages as before.
+      fireEvent.click(screen.getByRole('tab', { name: /posts/i }));
+      expect(await screen.findByRole('button', { name: 'Load more posts' })).toBeInTheDocument();
+    });
+
+    it('looks for the recipes its count promises instead of saying there are none', async () => {
+      vi.stubGlobal('IntersectionObserver', undefined);
+      const pages = answerPages({ 24: page([post('post-3'), post('recipe-1', true)], 24, true) });
+      render(<CreatorContentTabs initialData={firstPage(1)} profilePath="/creators/creator-name" />);
+
+      fireEvent.click(screen.getByRole('tab', { name: /recipes 1/i }));
+
+      expect(screen.queryByRole('heading', { name: 'No recipes yet' })).not.toBeInTheDocument();
+      fireEvent.click(await screen.findByRole('button', { name: 'Load more recipes' }));
+
+      expect((await screen.findAllByRole('button', { name: /post recipe-1/i })).length).toBeGreaterThan(0);
+      expect(screen.queryByRole('button', { name: /post post-3/i })).not.toBeInTheDocument();
+      // Every recipe the count named is here: nothing more is asked for under this tab.
+      expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
+      expect(pages.offsets()).toEqual([24]);
+    });
+
+    it('pages on its own only until the recipes it counts have come', async () => {
+      const observers: Array<{ disconnected: boolean }> = [];
+      vi.stubGlobal('IntersectionObserver', class {
+        private state = { disconnected: false };
+        constructor(private readonly callback: (entries: Array<{ isIntersecting: boolean }>) => void) {
+          observers.push(this.state);
+        }
+        observe() {
+          // The sentinel is in view: say so as a browser does, once observed.
+          queueMicrotask(() => {
+            if (!this.state.disconnected) this.callback([{ isIntersecting: true }]);
+          });
+        }
+        disconnect() {
+          this.state.disconnected = true;
+        }
+      });
+      window.history.replaceState(null, '', '/creators/creator-name#creator-unlocks');
+      const pages = answerPages({
+        24: page([post('post-3'), post('post-4')], 24, true),
+        48: page([post('post-5'), post('recipe-1', true)], 48, true),
+      });
+      render(<CreatorContentTabs initialData={firstPage(1)} profilePath="/creators/creator-name" />);
+
+      expect(screen.getByRole('tab', { name: /recipes 1/i })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByText('Loading recipes')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'No recipes yet' })).not.toBeInTheDocument();
+
+      expect((await screen.findAllByRole('button', { name: /post recipe-1/i })).length).toBeGreaterThan(0);
+      await waitFor(() => expect(screen.queryByText('Loading recipes')).not.toBeInTheDocument());
+      // Page 72 exists, but the one recipe counted has come: no walk to the end.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(pages.offsets()).toEqual([24, 48]);
+      expect(observers.length).toBeGreaterThan(0);
+    });
+
+    it('says "No recipes yet" once no pages are left', async () => {
+      vi.stubGlobal('IntersectionObserver', undefined);
+      answerPages({ 24: page([post('post-3')], 24, false) });
+      render(<CreatorContentTabs initialData={firstPage(1)} profilePath="/creators/creator-name" />);
+
+      fireEvent.click(screen.getByRole('tab', { name: /recipes 1/i }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Load more recipes' }));
+
+      expect(await screen.findByRole('heading', { name: 'No recipes yet' })).toBeInTheDocument();
+    });
+
+    it('tells a reel opened on the recipes that more come only while the count says so', async () => {
+      vi.stubGlobal('IntersectionObserver', undefined);
+      answerPages({});
+      render(
+        <CreatorContentTabs
+          initialData={{ ...firstPage(1), items: [post('post-1'), post('recipe-1', true)] }}
+          profilePath="/creators/creator-name"
+        />
+      );
+
+      fireEvent.click(screen.getByRole('tab', { name: /recipes 1/i }));
+      fireEvent.click(screen.getAllByRole('button', { name: /post recipe-1/i })[0]);
+
+      expect(await screen.findByTestId('reel-has-more')).toHaveTextContent('false');
+    });
+  });
+
+  // Saved state: the save hook looks up the first page alone; every later
+  // page and a linked post carry the viewer's `isSaved` from the API.
+  describe('saved posts past the first page', () => {
+    const signIn = () => {
+      authState.session = { access_token: 'viewer-token' };
+      authState.user = { id: 'viewer-1' };
+    };
+
+    it("draws a later page's saved posts as saved, read with the viewer's token", async () => {
+      vi.stubGlobal('IntersectionObserver', undefined);
+      signIn();
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url.startsWith('/api/showcase/saved-state')) return { ok: true, status: 200, json: async () => [] };
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            profile: initialData.profile,
+            items: [
+              { ...items[0], id: 'item-3', title: 'Saved Frame', isSaved: true },
+              { ...items[0], id: 'item-4', title: 'Unsaved Frame', isSaved: false },
+            ],
+            pageInfo: { hasMore: false, limit: 24, offset: 24, nextOffset: null, nextLimit: null },
+          }),
+        };
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      render(
+        <CreatorContentTabs
+          initialData={{ ...initialData, pageInfo: { hasMore: true, limit: 24, offset: 0, nextOffset: 24, nextLimit: 24 } }}
+          profilePath="/creators/creator-name"
+        />
+      );
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Load more posts' }));
+      fireEvent.click((await screen.findAllByRole('button', { name: /saved frame/i }))[0]);
+
+      expect(await screen.findByTestId('reel-saved')).toHaveTextContent('item-3');
+      expect(screen.getByTestId('reel-saved')).not.toHaveTextContent('item-4');
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/creators/creator-name?limit=24&offset=24',
+        { headers: { Authorization: 'Bearer viewer-token' } },
+      );
+    });
+
+    it('draws a linked post the viewer saved as saved', async () => {
+      signIn();
+      searchState.search = '?post=item-linked';
+      window.history.replaceState(null, '', '/creators/creator-name?post=item-linked');
+      vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        if (url.startsWith('/api/showcase/saved-state')) return { ok: true, status: 200, json: async () => [] };
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, item: { ...items[0], id: 'item-linked', isSaved: true } }),
+        };
+      }));
+      render(<CreatorContentTabs initialData={initialData} profilePath="/creators/creator-name" />);
+
+      await waitFor(() => expect(screen.getByTestId('reel-saved')).toHaveTextContent('item-linked'));
+    });
+  });
+
+  // The server draws Posts. Reading the hash while hydrating drew another tab
+  // over the server's markup on a `#creator-unlocks` link.
+  it('picks the tab a link names once hydrated, without a mismatch', async () => {
+    window.history.replaceState(null, '', '/creators/creator-name');
+    const container = document.createElement('div');
+    container.innerHTML = renderToString(
+      <CreatorContentTabs initialData={initialData} profilePath="/creators/creator-name" />
+    );
+    document.body.appendChild(container);
+    window.history.replaceState(null, '', '/creators/creator-name#creator-unlocks');
+    const recoverableErrors: unknown[] = [];
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    let root: ReturnType<typeof hydrateRoot> | null = null;
+    await act(async () => {
+      root = hydrateRoot(
+        container,
+        <CreatorContentTabs initialData={initialData} profilePath="/creators/creator-name" />,
+        { onRecoverableError: (error) => recoverableErrors.push(error) },
+      );
+    });
+
+    expect(recoverableErrors).toEqual([]);
+    expect(within(container).getByRole('tab', { name: /recipes 3/i })).toHaveAttribute('aria-selected', 'true');
+    expect(within(container).getByText('Workflow Breakdown')).toBeInTheDocument();
+    expect(within(container).queryByText('Campaign Frame')).not.toBeInTheDocument();
+
+    await act(async () => {
+      root?.unmount();
+    });
+    container.remove();
   });
 });

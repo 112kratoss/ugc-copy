@@ -83,6 +83,57 @@ describe('a workflow run link', () => {
   });
 });
 
+describe('a post alert written before post alerts opened the post page', () => {
+  // Saved, shared, remixed and recipe-unlocked alerts written before the server
+  // linked the post page open the For You reel with the post first. The post
+  // page sends a media post on to the reel and keeps a text post, or one behind
+  // the mature-content cover, on its page.
+  const legacyLink = '/viewer?source=showcase-feed&initialId=post-1';
+
+  it('opens the post page the server writes now', () => {
+    expect(navigateToNotificationDeepLink(legacyLink)).toBe(true);
+    expect(routerMocks.push).toHaveBeenCalledTimes(1);
+    expect(routerMocks.push).toHaveBeenCalledWith(serverDeepLinks.showcasePost);
+  });
+
+  it('is where a tapped push for an old post alert lands', async () => {
+    lastResponse.current = {
+      notification: {
+        request: {
+          identifier: 'push-3',
+          content: { data: { notificationId: 'notification-3', deepLink: legacyLink } },
+        },
+      },
+    };
+
+    await expect(syncLastNotificationResponse()).resolves.toBe(true);
+    expect(routerMocks.push).toHaveBeenCalledTimes(1);
+    expect(routerMocks.push).toHaveBeenCalledWith(serverDeepLinks.showcasePost);
+  });
+
+  it('reads the post id wherever it sits among the parameters, and keeps it encoded', () => {
+    expect(navigateToNotificationDeepLink('/viewer?initialId=post%201&source=showcase-feed')).toBe(true);
+    expect(routerMocks.push).toHaveBeenCalledWith('/showcase/post%201');
+  });
+
+  it('leaves every other reel link as it is', () => {
+    expect(navigateToNotificationDeepLink(serverDeepLinks.generation)).toBe(true);
+    expect(navigateToNotificationDeepLink('/viewer?source=showcase-feed')).toBe(true);
+    expect(routerMocks.push.mock.calls).toEqual([
+      [serverDeepLinks.generation],
+      ['/viewer?source=showcase-feed'],
+    ]);
+  });
+
+  it.each([
+    '/viewer?source=showcase-feed&initialId=..%2Fauth',
+    '/viewer?source=showcase-feed&initialId=post-1%2Fedit',
+  ])('opens a post and nothing else: %s is refused', (link) => {
+    expect(navigateToNotificationDeepLink(link)).toBe(false);
+    expect(routerMocks.push).not.toHaveBeenCalled();
+  });
+});
+
 describe('a template run link', () => {
   // A run id is a UUID. This one is made up.
   const link = '/template-runs/00000000-0000-4000-8000-000000000001';

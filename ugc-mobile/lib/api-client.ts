@@ -111,6 +111,19 @@ export class ApiError extends Error {
 }
 
 /**
+ * True for a request this client gave up on at its own deadline. It had been
+ * sent, so the server may have acted on it; only the answer is missing. A
+ * request that cannot get out at all (no connection) fails at once instead.
+ */
+export function isRequestTimeoutError(error: unknown): boolean {
+  return error instanceof ApiError
+    && error.status === 0
+    && typeof error.details === 'object'
+    && error.details !== null
+    && (error.details as { timedOut?: unknown }).timedOut === true;
+}
+
+/**
  * Thrown when the server demands a forced app upgrade (HTTP 426) mid-session.
  * Callers can ignore it — the registered upgrade handler routes the user to
  * the update screen — or detect it via `instanceof` to skip error UI.
@@ -200,6 +213,55 @@ function notifySessionMerged(error: SessionMergedError) {
     sessionMergedHandler(error);
   } catch (handlerError) {
     console.warn('Session-merged handler failed', handlerError);
+  }
+}
+
+export const ACCOUNT_DELETING_CODE = 'ACCOUNT_DELETING';
+
+/**
+ * Thrown when the account this device is signed in to is being permanently
+ * deleted (HTTP 409 `ACCOUNT_DELETING`), whether the deletion was asked for on
+ * this phone or on another device.
+ *
+ * Nothing can stop it: a `deleting` identity is never reactivated, and the
+ * server finishes the job whatever the device does. Every account route refuses
+ * the session from now on, so the registered handler ends it on this device.
+ */
+export class AccountDeletingError extends ApiError {
+  constructor(message: string, details?: unknown, requestId?: string) {
+    super(message, 409, details, requestId, ACCOUNT_DELETING_CODE);
+    this.name = 'AccountDeletingError';
+  }
+}
+
+export type AccountDeletingHandler = (error: AccountDeletingError) => void;
+
+// Registered by the app shell (app/_layout.tsx), like the handlers above, and
+// throttled the same way: a deleting account fails every in-flight request at
+// once.
+const ACCOUNT_DELETING_RENOTIFY_INTERVAL_MS = 10_000;
+let accountDeletingHandler: AccountDeletingHandler | null = null;
+let accountDeletingNotifiedAt: number | null = null;
+
+export function setAccountDeletingHandler(handler: AccountDeletingHandler | null) {
+  accountDeletingHandler = handler;
+  accountDeletingNotifiedAt = null;
+}
+
+function notifyAccountDeleting(error: AccountDeletingError) {
+  if (!accountDeletingHandler) return;
+  const now = Date.now();
+  if (
+    accountDeletingNotifiedAt !== null
+    && now - accountDeletingNotifiedAt < ACCOUNT_DELETING_RENOTIFY_INTERVAL_MS
+  ) {
+    return;
+  }
+  accountDeletingNotifiedAt = now;
+  try {
+    accountDeletingHandler(error);
+  } catch (handlerError) {
+    console.warn('Account-deleting handler failed', handlerError);
   }
 }
 
@@ -330,6 +392,51 @@ export type BlockedUser = {
   blockedAt: string;
 };
 
+/**
+ * `DELETE /api/account`. 202 with `deletionScheduled` once the account is
+ * locked and signed out everywhere, while the server sweeps the rest behind the
+ * answer; 200 with `deleted` only for a deletion that had already completed.
+ */
+export type AccountDeletionResponse = {
+  success: boolean;
+  deleted: boolean;
+  deletionScheduled?: boolean;
+  alreadyDeleted?: boolean;
+  cleanupPending?: boolean;
+};
+
+export type CreatorPayoutRequestSummary = {
+  id: string;
+  amountTokenSubunits: number;
+  amountUsd: string;
+  status: 'requested' | 'paid' | 'rejected';
+  payoutMethod: string;
+  requestedAt: string;
+  resolvedAt: string | null;
+  resolutionNote: string | null;
+  externalReference: string | null;
+};
+
+/**
+ * `GET /api/creator/payouts`: the seller's wallet. Amounts are token subunits;
+ * the dollar strings are formatted by the server. A request already filed is
+ * held apart from `available` and is still paid if the account is deleted.
+ */
+export type CreatorPayoutStateResponse = {
+  success: true;
+  availableTokenSubunits: number;
+  heldTokenSubunits: number;
+  lifetimeEarnedTokenSubunits: number;
+  lifetimePaidOutTokenSubunits: number;
+  availableUsd: string;
+  minimumTokenSubunits: number;
+  minimumUsd: string;
+  /** False until the balance reaches the minimum and no request is open. */
+  canRequest: boolean;
+  pendingRequest: CreatorPayoutRequestSummary | null;
+  history: CreatorPayoutRequestSummary[];
+};
+
 export type ModerationReportSourceSurface =
   | 'showcase'
   | 'showcase-reel'
@@ -347,6 +454,12 @@ const DEFAULT_API_REQUEST_TIMEOUT_MS = 30_000;
  */
 export const GENERATION_START_TIMEOUT_MS = 120_000;
 const GENERATION_START_REQUEST_OPTIONS: RequestOptions = { timeoutMs: GENERATION_START_TIMEOUT_MS };
+/**
+ * A deletion is answered once the account is locked and every session revoked.
+ * At the usual 30 s a slow answer read as a failure, and the person was told
+ * the account survived while it was being erased.
+ */
+export const ACCOUNT_DELETION_TIMEOUT_MS = 120_000;
 const REQUEST_ID_HEADER = 'x-request-id';
 const FEED_INSTALLATION_ID_HEADER = 'x-magicbooklet-installation-id';
 
@@ -648,12 +761,20 @@ function throwHttpApiError(
     notifyUpgradeRequired(upgradeError);
     throw upgradeError;
   }
-  // Gated on the code, not the status: ACCOUNT_DELETING is also a 409 and must
-  // not tear down a registered session that is merely mid-deletion.
+  // Gated on the code, not the status: SESSION_MERGED and ACCOUNT_DELETING are
+  // both 409s, and each has a remedy of its own.
   if (status === 409 && code === SESSION_MERGED_CODE) {
     const mergedError = new SessionMergedError(message, body, requestId);
     notifySessionMerged(mergedError);
     throw mergedError;
+  }
+  // Only this device's own session can belong to the account being deleted. A
+  // token the caller supplied itself (the feed-event queue draining a previous
+  // identity) says nothing about who is signed in now.
+  if (status === 409 && code === ACCOUNT_DELETING_CODE) {
+    const deletingError = new AccountDeletingError(message, body, requestId);
+    if (sentSessionToken) notifyAccountDeleting(deletingError);
+    throw deletingError;
   }
   // Only a request that presented this device's session token can have had it
   // refused. A signed-out request to an account-only route is a 401 too, and a
@@ -771,7 +892,9 @@ export function createApiClient({
         upstreamSignal?.addEventListener('abort', abortFromUpstream, { once: true });
       }
       const timeoutMs = options.timeoutMs ?? requestTimeoutMs;
+      let timedOut = false;
       const timeoutId = setTimeout(() => {
+        timedOut = true;
         requestController.abort(new Error(`Request timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       try {
@@ -787,6 +910,9 @@ export function createApiClient({
         throw new ApiError(networkFailureMessage(root), 0, {
           url,
           cause: error instanceof Error ? error.message : String(error),
+          // Read by isRequestTimeoutError: the request had left, so the server
+          // may have acted on it.
+          ...(timedOut ? { timedOut: true } : {}),
         }, requestId);
       } finally {
         clearTimeout(timeoutId);
@@ -911,10 +1037,12 @@ export function createApiClient({
       confirmation: 'DELETE',
       options: { appleAuthorizationCode?: string } = {},
     ) =>
-      request<{ success: boolean; deleted: boolean }>('/api/account', {
+      request<AccountDeletionResponse>('/api/account', {
         method: 'DELETE',
         body: JSON.stringify({ confirmation, ...options }),
-      }),
+      }, { timeoutMs: ACCOUNT_DELETION_TIMEOUT_MS }),
+    /** The seller's unpaid balance, which deleting the account forfeits. */
+    getCreatorPayoutState: () => request<CreatorPayoutStateResponse>('/api/creator/payouts'),
     /**
      * Called while still a guest, immediately before the sign-in that will
      * replace this session. Returns a one-time ticket to persist securely.
@@ -1479,7 +1607,12 @@ export function createApiClient({
         body: JSON.stringify(body ?? {}),
         signal,
       }),
-    listMobileNotifications: (params?: Record<string, QueryValue>) =>
+    /**
+     * Newest first, by each alert's last event. `before` is the `updatedAt` of
+     * the oldest alert held: the server answers the alerts whose last event is
+     * older, so the Alerts list reads on past its first page.
+     */
+    listMobileNotifications: (params?: { limit?: number; before?: string | null; beforeId?: string | null }) =>
       request<MobileNotificationsResponse>(`/api/mobile/notifications${buildQuery(params)}`),
     markMobileNotificationsRead: (ids: string[]) =>
       request<{ success: boolean }>('/api/mobile/notifications/read', {

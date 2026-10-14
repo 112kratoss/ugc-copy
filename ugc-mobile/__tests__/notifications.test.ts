@@ -1,3 +1,4 @@
+import { QueryClient } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /** What `addPushTokenListener` really delivers: a native device token, never an Expo one. */
@@ -314,6 +315,91 @@ describe('mobile notifications helper', () => {
     expect(remove).toHaveBeenCalledTimes(1);
   });
 
+  it('opens the push the app was opened from once when a second subscription reads it too', async () => {
+    // The root layout subscribed again when the stored session landed after a
+    // cold start, and every subscription reads the launch push.
+    notificationsMocks.getLastNotificationResponseAsync.mockResolvedValue({
+      notification: {
+        request: {
+          identifier: 'notification-1',
+          content: { data: { notificationId: 'notification-db-1', deepLink: '/invite' } },
+        },
+      },
+    });
+    notificationsMocks.addNotificationResponseReceivedListener.mockImplementation((() => ({ remove: vi.fn() })) as never);
+    const handleResponse = vi.fn(() => true);
+
+    const { subscribeToNotificationResponses } = await import('../lib/notifications');
+    const unsubscribe = subscribeToNotificationResponses({ handleResponse });
+    unsubscribe();
+    subscribeToNotificationResponses({ handleResponse });
+    await vi.waitFor(() => expect(notificationsMocks.getLastNotificationResponseAsync).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(handleResponse).toHaveBeenCalledTimes(1);
+    expect(notificationsMocks.clearLastNotificationResponseAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it('claims a push before its handling settles, so reading it again meanwhile opens nothing', async () => {
+    notificationsMocks.getLastNotificationResponseAsync.mockResolvedValue({
+      notification: {
+        request: {
+          identifier: 'notification-2',
+          content: { data: { notificationId: 'notification-db-2', deepLink: '/invite' } },
+        },
+      },
+    });
+    let finish!: (handled: boolean) => void;
+    const handleResponse = vi.fn(() => new Promise<boolean>((resolve) => {
+      finish = resolve;
+    }));
+
+    const { syncLastNotificationResponse } = await import('../lib/notifications');
+    const first = syncLastNotificationResponse({ handleResponse });
+    await vi.waitFor(() => expect(handleResponse).toHaveBeenCalledTimes(1));
+
+    await expect(syncLastNotificationResponse({ handleResponse })).resolves.toBe(false);
+    expect(handleResponse).toHaveBeenCalledTimes(1);
+
+    finish(true);
+    await expect(first).resolves.toBe(true);
+    expect(notificationsMocks.clearLastNotificationResponseAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a push it could not open unclaimed, so a later delivery can still open it', async () => {
+    notificationsMocks.getLastNotificationResponseAsync.mockResolvedValue({
+      notification: {
+        request: {
+          identifier: 'notification-3',
+          content: { data: { notificationId: 'notification-db-3', deepLink: '/not-a-screen' } },
+        },
+      },
+    });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const { syncLastNotificationResponse } = await import('../lib/notifications');
+
+      // The app has no route for the link, and nothing else was asked to open it.
+      await expect(syncLastNotificationResponse()).resolves.toBe(false);
+      // A handler that throws opens nothing either, and says why.
+      await expect(syncLastNotificationResponse({
+        handleResponse: () => {
+          throw new Error('Navigator not ready');
+        },
+      })).resolves.toBe(false);
+      expect(consoleError).toHaveBeenCalledWith('Failed to open a tapped notification', expect.any(Error));
+      expect(routerMocks.push).not.toHaveBeenCalled();
+      expect(notificationsMocks.clearLastNotificationResponseAsync).not.toHaveBeenCalled();
+
+      const handleResponse = vi.fn(() => true);
+      await expect(syncLastNotificationResponse({ handleResponse })).resolves.toBe(true);
+      expect(handleResponse).toHaveBeenCalledTimes(1);
+      expect(notificationsMocks.clearLastNotificationResponseAsync).toHaveBeenCalledTimes(1);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it('unregisters the native token and clears the stored Expo token on logout cleanup', async () => {
     secureStoreMocks.getItemAsync
       .mockResolvedValueOnce('ExponentPushToken[old123]')
@@ -579,6 +665,88 @@ describe('mobile notifications helper', () => {
         consoleError.mockRestore();
       }
     });
+  });
+});
+
+describe('a tapped push', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    routerMocks.push.mockReset();
+  });
+
+  /** One account's Alerts list and badge, as the screen and the tab bar cache them. */
+  async function cachedAlerts() {
+    const { alertsListQueryKey, notificationBadgeQueryKey } = await import('../lib/notification-badge');
+    const queryClient = new QueryClient();
+    const listKey = alertsListQueryKey('user-1');
+    const badgeKey = notificationBadgeQueryKey('user-1');
+    queryClient.setQueryData(listKey, { pages: [{ success: true, notifications: [], unreadCount: 3 }], pageParams: [null] });
+    queryClient.setQueryData(badgeKey, 3);
+    const refreshed = () => [listKey, badgeKey].map((key) => queryClient.getQueryState(key)?.isInvalidated);
+    return { queryClient, refreshed };
+  }
+
+  it('opens what it is about first, then marks it read and refreshes Alerts behind the move', async () => {
+    const { queryClient, refreshed } = await cachedAlerts();
+    let settleRead!: () => void;
+    const api = {
+      markMobileNotificationsRead: vi.fn((_ids: string[]) => new Promise<{ success: boolean }>((resolve) => {
+        settleRead = () => resolve({ success: true });
+      })),
+    };
+    const { openTappedNotification } = await import('../lib/notifications');
+
+    // Answered at once: nothing waits on the network before the screen moves.
+    expect(openTappedNotification({ notificationId: 'notification-db-1', deepLink: '/showcase/post-1' }, { api, queryClient })).toBe(true);
+
+    expect(routerMocks.push).toHaveBeenCalledWith('/showcase/post-1');
+    expect(api.markMobileNotificationsRead).toHaveBeenCalledWith(['notification-db-1']);
+    expect(routerMocks.push.mock.invocationCallOrder[0]).toBeLessThan(api.markMobileNotificationsRead.mock.invocationCallOrder[0]);
+    // Read back before the server has the read, the alert would still count as unread.
+    expect(refreshed()).toEqual([false, false]);
+
+    settleRead();
+    await vi.waitFor(() => expect(refreshed()).toEqual([true, true]));
+  });
+
+  it('refreshes Alerts even when the read does not save', async () => {
+    const { queryClient, refreshed } = await cachedAlerts();
+    const api = { markMobileNotificationsRead: vi.fn(async (_ids: string[]): Promise<{ success: boolean }> => {
+      throw new Error('Network request failed');
+    }) };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const { openTappedNotification } = await import('../lib/notifications');
+
+      expect(openTappedNotification({ notificationId: 'notification-db-1', deepLink: '/invite' }, { api, queryClient })).toBe(true);
+
+      await vi.waitFor(() => expect(refreshed()).toEqual([true, true]));
+      expect(routerMocks.push).toHaveBeenCalledWith('/invite');
+      expect(consoleError).toHaveBeenCalledWith('Failed to mark tapped notification read', expect.any(Error));
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('lands on Alerts when the app cannot open the link', async () => {
+    const { queryClient } = await cachedAlerts();
+    const api = { markMobileNotificationsRead: vi.fn(async (_ids: string[]) => ({ success: true })) };
+    const { openTappedNotification } = await import('../lib/notifications');
+
+    expect(openTappedNotification({ notificationId: 'notification-db-1', deepLink: '/not-a-screen' }, { api, queryClient })).toBe(true);
+    expect(routerMocks.push.mock.calls).toEqual([['/studio']]);
+  });
+
+  it('refreshes Alerts at once when the push names no alert to mark', async () => {
+    const { queryClient, refreshed } = await cachedAlerts();
+    const api = { markMobileNotificationsRead: vi.fn(async (_ids: string[]) => ({ success: true })) };
+    const { openTappedNotification } = await import('../lib/notifications');
+
+    expect(openTappedNotification({ notificationId: null, deepLink: '/profile' }, { api, queryClient })).toBe(true);
+
+    expect(api.markMobileNotificationsRead).not.toHaveBeenCalled();
+    expect(refreshed()).toEqual([true, true]);
+    expect(routerMocks.push).toHaveBeenCalledWith('/profile');
   });
 });
 

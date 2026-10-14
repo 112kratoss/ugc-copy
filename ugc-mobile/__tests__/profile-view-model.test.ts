@@ -3,9 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
 import { mediaItemAspectRatio } from '../lib/media-zoom-transition';
 import {
+  OWN_PROFILE_SHARE_SOURCE,
   generationToProfileMediaCard,
+  getOwnerPostScopeCounts,
   getProfileStats,
   UNKNOWN_PROFILE_STAT_VALUE,
+  ownProfileShareUrl,
   ownerPostToProfileMediaCard,
   showcaseToSavedProfileMediaCard,
 } from '../lib/profile-view-model';
@@ -473,5 +476,28 @@ describe('profile stats from server totals', () => {
       { label: 'Posts', value: UNKNOWN_PROFILE_STAT_VALUE },
       { label: 'Saved', value: '3' },
     ]);
+  });
+});
+
+describe('the Posts scope counts', () => {
+  it('reads Active and Archived from the server’s totals when the profile has them', () => {
+    // The header's Posts stat is `stats.posts`; the chips under it agree with it
+    // instead of counting the 24 tiles loaded so far.
+    expect(getOwnerPostScopeCounts({ posts: 190, archivedPosts: 7 }, { active: 24, archived: 1 }))
+      .toEqual({ active: 190, archived: 7 });
+  });
+
+  it('counts the loaded tiles without totals', () => {
+    expect(getOwnerPostScopeCounts(null, { active: 2, archived: 1 })).toEqual({ active: 2, archived: 1 });
+    expect(getOwnerPostScopeCounts(undefined, { active: 0, archived: 0 })).toEqual({ active: 0, archived: 0 });
+  });
+});
+
+describe('sharing your own profile', () => {
+  it('files the share as the owner’s own and marks the link with it', () => {
+    expect(OWN_PROFILE_SHARE_SOURCE).toBe('profile');
+    expect(ownProfileShareUrl('https://magicbooklet.com/', 'luna-dreams'))
+      .toBe('https://magicbooklet.com/creators/luna-dreams?s=profile');
+    expect(ownProfileShareUrl('https://magicbooklet.com', 'a b')).toBe('https://magicbooklet.com/creators/a%20b?s=profile');
   });
 });

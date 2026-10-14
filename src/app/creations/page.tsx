@@ -1896,13 +1896,17 @@ export default function CreationsPage() {
                                         : profileReadiness.publicPublishReady
                                             ? 'Strengthen creator profile'
                                             : 'Finish creator identity',
+                                    // Handle and name are all that publishing and selling ask
+                                    // for; a photo and a bio only complete the profile.
                                     body: profileReadiness.profileComplete
                                         ? 'Your handle, name, avatar, and bio are ready for visitors and buyers.'
-                                        : profileReadiness.sellerReady
-                                            ? 'Your selling identity is ready. Add a short bio so visitors understand your work.'
-                                            : profileReadiness.publicPublishReady
-                                                ? 'Your public identity is ready. Add an avatar so people recognize your work.'
-                                                : 'Choose a custom handle and display name before publishing publicly.',
+                                        : profileReadiness.publicPublishReady
+                                            ? `Your public identity is ready to publish and sell. ${profileReadiness.missingForCompleteProfile.includes('avatar')
+                                                ? profileReadiness.missingForCompleteProfile.includes('bio')
+                                                    ? 'Add an avatar and a short bio so people recognize your work.'
+                                                    : 'Add an avatar so people recognize your work.'
+                                                : 'Add a short bio so visitors understand your work.'}`
+                                            : 'Choose a custom handle and display name before publishing publicly.',
                                     ready: profileReadiness.profileComplete,
                                 },
                                 {

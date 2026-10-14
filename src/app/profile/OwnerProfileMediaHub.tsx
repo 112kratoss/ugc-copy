@@ -45,7 +45,8 @@ import {
 } from '@/lib/feed-safety-actions';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';
-import { getBundleAccessLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
+import { formatUsdCents, getBundleAccessLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
+import type { OwnerProfileSales, OwnerProfileStats } from '@/lib/profile';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import type {
@@ -53,6 +54,7 @@ import type {
   ShowcaseFeedItem,
   ShowcaseMediaItem,
 } from '@/lib/showcase';
+import MatureContentSetting from './MatureContentSetting';
 
 type ProfileMediaTab = 'posts' | 'saved' | 'creations';
 
@@ -142,6 +144,13 @@ interface OwnerProfileMediaHubProps {
     coverUrl: string | null;
     credits: number | null;
   };
+  /**
+   * The server's library totals (`owner_profile_counts`), as the app's header
+   * draws them; null when the count could not be read, which draws "—".
+   */
+  stats?: OwnerProfileStats | null;
+  /** The seller totals (`get_owner_post_sales_summary`); null on a read failure. */
+  sales?: OwnerProfileSales | null;
   publicProfilePath?: string | null;
   publicProfileDisplayName?: string;
 }
@@ -370,6 +379,8 @@ function MediaCard({
 export default function OwnerProfileMediaHub({
   creator,
   profile = { bio: '', coverUrl: null, credits: null },
+  stats = null,
+  sales = null,
   publicProfilePath = null,
   publicProfileDisplayName = '',
 }: OwnerProfileMediaHubProps) {
@@ -378,6 +389,7 @@ export default function OwnerProfileMediaHub({
   const searchParams = useSearchParams();
   const { session, user } = useAuth();
   const accessToken = session?.access_token ?? null;
+  const userId = user?.id ?? null;
   const initialTab = isProfileMediaTab(searchParams.get('tab')) ? searchParams.get('tab') as ProfileMediaTab : 'posts';
   const [activeTab, setActiveTab] = useState<ProfileMediaTab>(initialTab);
   const [ownerPosts, setOwnerPosts] = useState<OwnerPost[]>([]);
@@ -390,15 +402,30 @@ export default function OwnerProfileMediaHub({
   const [selectedGeneration, setSelectedGeneration] = useState<OwnerGeneration | null>(null);
   const [creationsScope, setCreationsScope] = useState<CreationsScope>('ready');
   const [loadingTabs, setLoadingTabs] = useState<Set<ProfileMediaTab>>(() => new Set([initialTab]));
-  const [loadedTabs, setLoadedTabs] = useState<Set<ProfileMediaTab>>(() => new Set());
   const [loadingMoreTab, setLoadingMoreTab] = useState<ProfileMediaTab | null>(null);
   const [postsPageInfo, setPostsPageInfo] = useState<OffsetPageInfo>({ hasMore: false, nextOffset: null });
   const [savedPageInfo, setSavedPageInfo] = useState<OffsetPageInfo>({ hasMore: false, nextOffset: null });
   const [generationsPageInfo, setGenerationsPageInfo] = useState<GenerationPageInfo>({ hasMore: false, nextCursor: null });
   const [errors, setErrors] = useState<Partial<Record<ProfileMediaTab, string>>>({});
-  const loadedTokenRef = useRef<string | null>(null);
+  // The libraries are the account's, not the token's: a refreshed token (about
+  // hourly, and on coming back to a long-idle tab) keeps every page loaded and
+  // the open reel. The requests read the newest token through `authHeaders`.
+  const loadedUserRef = useRef<string | null>(null);
   const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(searchParams.get('post') ? 'direct' : null);
   const creationHistoryModeRef = useRef<'pushed' | 'direct' | null>(searchParams.get('generation') ? 'direct' : null);
+  // The server's Saved total moves with what is done here, as the app's header
+  // does, until the next server render brings a fresh one. Kept against the
+  // totals it applies to, so a fresh set starts again from the server's number.
+  const [savedAdjustment, setSavedAdjustment] = useState(() => ({ base: stats, delta: 0 }));
+  const savedTotal = stats
+    ? Math.max(0, stats.saved + (savedAdjustment.base === stats ? savedAdjustment.delta : 0))
+    : null;
+  const adjustSavedTotal = (change: number) => {
+    setSavedAdjustment((current) => ({
+      base: stats,
+      delta: (current.base === stats ? current.delta : 0) + change,
+    }));
+  };
 
   const authRequired = useCallback(() => {
     router.push(`/login?returnUrl=${encodeURIComponent('/profile')}`);
@@ -410,6 +437,7 @@ export default function OwnerProfileMediaHub({
     isSignedIn: Boolean(user && accessToken),
     onAuthRequired: authRequired,
     onError: (error) => console.error('Profile post save failed:', error),
+    onSuccess: ({ isSaved }) => adjustSavedTotal(isSaved ? 1 : -1),
     sourceSurface: 'creator-profile',
   });
   const savedSaveState = useOptimisticPostSave<ShowcaseFeedItem>({
@@ -418,6 +446,7 @@ export default function OwnerProfileMediaHub({
     isSignedIn: Boolean(user && accessToken),
     onAuthRequired: authRequired,
     onError: (error) => console.error('Profile saved-media update failed:', error),
+    onSuccess: ({ isSaved }) => adjustSavedTotal(isSaved ? 1 : -1),
     sourceSurface: 'creator-profile',
   });
   const setProfilePostItems = postSaveState.setItems;
@@ -426,11 +455,13 @@ export default function OwnerProfileMediaHub({
   // What is on screen now, for an answer that arrives after a question and a
   // request: the saved list can have grown and the reel moved on since.
   const savedItemsRef = useRef<ShowcaseFeedItem[]>(EMPTY_SHOWCASE_ITEMS);
+  const savedItemIdsRef = useRef<Set<string>>(savedSaveState.savedItemIds);
   const selectedPostIdRef = useRef<string | null>(selectedPostId);
   useEffect(() => {
     savedItemsRef.current = savedSaveState.items;
+    savedItemIdsRef.current = savedSaveState.savedItemIds;
     selectedPostIdRef.current = selectedPostId;
-  }, [savedSaveState.items, selectedPostId]);
+  }, [savedSaveState.items, savedSaveState.savedItemIds, selectedPostId]);
 
   const authHeaders = useMemo(() => accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined, [accessToken]);
 
@@ -502,7 +533,6 @@ export default function OwnerProfileMediaHub({
         [tab]: error instanceof Error ? error.message : fallback,
       }));
     } finally {
-      setLoadedTabs((current) => new Set(current).add(tab));
       setLoadingTabs((current) => {
         const next = new Set(current);
         next.delete(tab);
@@ -512,10 +542,9 @@ export default function OwnerProfileMediaHub({
   }, [loadGenerations, loadPosts, loadSaved]);
 
   useEffect(() => {
-    if (!accessToken || loadedTokenRef.current === accessToken) return;
-    loadedTokenRef.current = accessToken;
+    if (!userId || !accessToken || loadedUserRef.current === userId) return;
+    loadedUserRef.current = userId;
     setLoadingTabs(new Set<ProfileMediaTab>([initialTab]));
-    setLoadedTabs(new Set());
     setErrors({});
 
     void (async () => {
@@ -524,7 +553,7 @@ export default function OwnerProfileMediaHub({
         .filter((tab) => tab !== initialTab);
       await Promise.all(remainingTabs.map((tab) => runTabLoad(tab)));
     })();
-  }, [accessToken, initialTab, runTabLoad]);
+  }, [accessToken, initialTab, runTabLoad, userId]);
 
   useEffect(() => {
     const requestedGenerationId = searchParams.get('generation');
@@ -675,6 +704,12 @@ export default function OwnerProfileMediaHub({
     const currentItems = savedItemsRef.current;
     const openId = selectedPostIdRef.current;
     const openPosition = openId ? currentItems.findIndex((candidate) => candidate.id === openId) : -1;
+    // The Saved total drops by the posts of theirs still saved here; any on a
+    // page not loaded yet come off with the next server render.
+    const blockedSavedCount = currentItems
+      .filter((candidate) => isBlocked(candidate) && savedItemIdsRef.current.has(candidate.id))
+      .length;
+    if (blockedSavedCount > 0) adjustSavedTotal(-blockedSavedCount);
     setProfileSavedItems((latestItems) => latestItems.filter((candidate) => !isBlocked(candidate)));
     if (openPosition < 0 || !isBlocked(currentItems[openPosition])) return;
     const replacementItem = currentItems.slice(openPosition + 1).find((candidate) => !isBlocked(candidate))
@@ -738,9 +773,9 @@ export default function OwnerProfileMediaHub({
   const creationsScopeInEffect: CreationsScope = failedGenerations.length > 0 ? creationsScope : 'ready';
   const visibleGenerations = creationsScopeInEffect === 'failed' ? failedGenerations : readyGenerations;
   const tabs = [
-    { id: 'posts' as const, label: 'Posts', count: loadedTabs.has('posts') ? ownerPosts.length : null, icon: Layers3 },
-    { id: 'saved' as const, label: 'Saved', count: loadedTabs.has('saved') ? savedSaveState.items.length : null, icon: Heart },
-    { id: 'creations' as const, label: 'Creations', count: loadedTabs.has('creations') ? readyGenerations.length : null, icon: Sparkles },
+    { id: 'posts' as const, label: 'Posts', count: stats?.posts ?? null, icon: Layers3 },
+    { id: 'saved' as const, label: 'Saved', count: savedTotal, icon: Heart },
+    { id: 'creations' as const, label: 'Creations', count: stats?.creations ?? null, icon: Sparkles },
   ];
 
   const loadMore = async () => {
@@ -847,9 +882,9 @@ export default function OwnerProfileMediaHub({
 
           <dl className="mt-6 grid grid-cols-3 border-t border-white/8 pt-5">
             {[
-              { label: 'Creations', value: loadedTabs.has('creations') ? readyGenerations.length : '—' },
-              { label: 'Posts', value: loadedTabs.has('posts') ? ownerPosts.length : '—' },
-              { label: 'Saved by you', value: loadedTabs.has('saved') ? savedSaveState.items.length : '—' },
+              { label: 'Creations', value: stats?.creations ?? '—' },
+              { label: 'Posts', value: stats?.posts ?? '—' },
+              { label: 'Saved', value: savedTotal ?? '—' },
             ].map((stat, index) => (
               <div key={stat.label} className={`text-center ${index > 0 ? 'border-l border-white/8' : ''}`}>
                 <dd className="text-lg font-extrabold text-white sm:text-xl">{stat.value}</dd>
@@ -868,7 +903,7 @@ export default function OwnerProfileMediaHub({
         </Link>
         <Link href="/marketplace/sell" className="ui-focus-ring group flex min-h-28 items-center gap-3 rounded-[24px] border border-white/8 bg-[var(--ui-surface-1)] p-4 transition hover:-translate-y-0.5 hover:border-[rgba(255,122,89,0.24)] hover:bg-[var(--ui-surface-2)]">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]"><WalletCards className="h-5 w-5" aria-hidden /></span>
-          <span className="min-w-0"><span className="block text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Wallet</span><span className="mt-1 block truncate text-sm font-extrabold text-white sm:text-base">Open</span></span>
+          <span className="min-w-0"><span className="block text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Wallet</span><span className="mt-1 block truncate text-lg font-extrabold text-white">{sales ? formatUsdCents(sales.earningsUsdCents) : '—'}</span></span>
           <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-zinc-600 transition group-hover:translate-x-0.5 group-hover:text-zinc-300" aria-hidden />
         </Link>
         <Link href="/invite" className="ui-focus-ring group col-span-2 flex min-h-24 items-center gap-3 rounded-[24px] border border-amber-300/15 bg-[linear-gradient(135deg,rgba(245,158,11,0.08),rgba(24,24,27,0.86))] p-4 transition hover:-translate-y-0.5 hover:border-amber-300/25 lg:col-span-1">
@@ -882,11 +917,12 @@ export default function OwnerProfileMediaHub({
           <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-zinc-600 transition group-hover:translate-x-0.5 group-hover:text-zinc-300" aria-hidden />
         </Link>
         {/* The one way to see whom you blocked and take a block back: a blocked creator is left out of every place that would show them. Quiet, and a row of its own: it is housekeeping, not a destination. */}
-        <Link href="/profile/blocked" className="ui-focus-ring group col-span-2 flex min-h-14 items-center gap-3 rounded-[20px] border border-white/8 bg-[var(--ui-surface-1)] px-4 py-3 transition hover:border-white/15 hover:bg-[var(--ui-surface-2)] lg:col-span-4">
+        <Link href="/profile/blocked" className="ui-focus-ring group col-span-2 flex min-h-14 items-center gap-3 rounded-[20px] border border-white/8 bg-[var(--ui-surface-1)] px-4 py-3 transition hover:border-white/15 hover:bg-[var(--ui-surface-2)] lg:col-span-2">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.05] text-zinc-300"><Ban className="h-4 w-4" aria-hidden /></span>
           <span className="min-w-0"><span className="block text-sm font-bold text-white">Blocked users</span><span className="mt-0.5 block truncate text-xs text-zinc-500">See whom you blocked, and unblock them</span></span>
           <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-zinc-600 transition group-hover:translate-x-0.5 group-hover:text-zinc-300" aria-hidden />
         </Link>
+        <MatureContentSetting />
       </section>
 
       <section id="profile-media" className="mb-8 overflow-hidden rounded-[30px] border border-white/8 bg-[linear-gradient(145deg,rgba(24,24,27,0.78),rgba(8,8,10,0.94))] shadow-[0_28px_90px_rgba(0,0,0,0.3)]">
@@ -923,7 +959,7 @@ export default function OwnerProfileMediaHub({
                 role="tab"
                 aria-selected={selected}
                 aria-controls={`profile-panel-${tab.id}`}
-                aria-label={`${tab.label} ${tab.count ?? 'loading'}`}
+                aria-label={tab.count === null ? tab.label : `${tab.label} ${tab.count}`}
                 tabIndex={selected ? 0 : -1}
                 onClick={() => selectTab(tab.id)}
                 onKeyDown={(event) => handleTabKeyDown(event, tab.id)}

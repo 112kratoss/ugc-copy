@@ -3,6 +3,7 @@ import { useCallback } from 'react';
 
 import type { MagicbookletApiClient } from './api-client';
 import { useAuth } from './auth';
+import { setCachedCreatorProfileFollowing } from './creator-profile-view-model';
 import type { CreatorFollowAttribution } from './types';
 
 const FOLLOW_STATE_STALE_MS = 1000 * 60 * 5;
@@ -36,8 +37,9 @@ export function prefetchCreatorFollowState(
  * keyed by creator (not by post) and only fetched while `enabled` — an
  * off-screen slide never asks. The flip is optimistic: the button changes
  * under the thumb and the server answer settles it, the way the profile
- * screen's own follow button behaves. The creator profile's cache is
- * invalidated afterwards so the two surfaces agree.
+ * screen's own follow button behaves. The same answer is written into the
+ * creator's cached grid pages, so a creator page under the reel agrees
+ * without reading its pages again.
  */
 export function useCreatorFollow({
   creatorId,
@@ -70,14 +72,20 @@ export function useCreatorFollow({
       await queryClient.cancelQueries({ queryKey });
       const previous = queryClient.getQueryData<{ following: boolean }>(queryKey);
       queryClient.setQueryData<{ following: boolean }>(queryKey, { following });
+      setCachedCreatorProfileFollowing(queryClient, creatorId!, following);
       return { previous };
     },
-    onError: (_error, _following, context) => {
-      queryClient.setQueryData(queryKey, context?.previous ?? { following: false });
+    onSuccess: (result, following) => {
+      // The server's answer, in case a grid page landed between the press and it.
+      setCachedCreatorProfileFollowing(queryClient, creatorId!, result?.following ?? following);
+    },
+    onError: (_error, following, context) => {
+      const restored = context?.previous ?? { following: !following };
+      queryClient.setQueryData(queryKey, restored);
+      setCachedCreatorProfileFollowing(queryClient, creatorId!, restored.following);
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey });
-      void queryClient.invalidateQueries({ queryKey: ['creator-profile'] });
     },
   });
 

@@ -1,9 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   createMobileNotificationHistory,
   withMobileNotificationHistory,
+  type MobileNotificationHistory,
 } from '@/__tests__/fixtures/mobile-notification-history';
 import { createStoredRows } from '@/__tests__/fixtures/stored-rows';
 import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
@@ -14,7 +16,11 @@ import {
   hasMobilePushMaintenanceWork,
   hasPendingMobilePushReceipts,
   normalizeMobilePushTokenPayload,
+  notifyCreatorFollowed,
   notifyGenerationStatus,
+  notifyMobilePurchasesRestored,
+  notifyPostResourceUnlockCompleted,
+  notifyPostSocialActivity,
   processMobilePushMaintenance,
   processPendingMobilePushReceipts,
   sendExpoPushNotification,
@@ -23,6 +29,7 @@ import {
   toMobileNotificationRecord,
 } from '@/lib/mobile-notifications';
 import { EXTERNAL_API_REQUEST_TIMEOUT_MS } from '@/lib/provider-fetch';
+import { siteConfig } from '@/lib/seo';
 
 
 type PushTokenRow = { id: string; expo_push_token: string; platform: 'ios' | 'android' };
@@ -622,7 +629,7 @@ function unlockNotification(adminSupabase: unknown) {
     category: 'commerce',
     title: 'Post resources unlocked',
     body: 'The prompt, files, or workflow are ready to view.',
-    deepLink: '/viewer?source=showcase-feed&initialId=post-1',
+    deepLink: '/showcase/post-1',
     objectType: 'post',
     objectId: 'post-1',
   });
@@ -750,8 +757,11 @@ describe('mobile notifications', () => {
   it('builds mobile deep links for notification targets', () => {
     expect(buildMobileNotificationDeepLink({ kind: 'generation', generationId: 'gen-1' }))
       .toBe('/viewer?source=studio-creations&initialId=gen-1');
+    // The post page, which keeps a text or covered post off the For You reel.
     expect(buildMobileNotificationDeepLink({ kind: 'showcasePost', postId: 'post-1' }))
-      .toBe('/viewer?source=showcase-feed&initialId=post-1');
+      .toBe('/showcase/post-1');
+    expect(buildMobileNotificationDeepLink({ kind: 'creatorProfile', username: 'athul' }))
+      .toBe('/creators/athul');
     expect(buildMobileNotificationDeepLink({ kind: 'notifications' }))
       .toBe('/studio');
   });
@@ -1770,7 +1780,7 @@ describe('mobile notifications', () => {
         notificationId: 'notification-1',
         type: 'post_resource_unlocked',
         category: 'commerce',
-        deepLink: '/viewer?source=showcase-feed&initialId=post-1',
+        deepLink: '/showcase/post-1',
       },
     };
     expect(sentBodies(fetchMock)).toEqual([[
@@ -2148,7 +2158,7 @@ describe('mobile notifications', () => {
             category: 'social',
             title: 'Someone shared your post',
             body: 'Creator activity is grouped here to keep your phone quiet.',
-            deep_link: '/viewer?source=showcase-feed&initialId=post-1',
+            deep_link: '/showcase/post-1',
             object_type: 'post',
             object_id: 'post-1',
             event_count: 2,
@@ -2173,7 +2183,7 @@ describe('mobile notifications', () => {
       category: 'social',
       title: 'Someone shared your post',
       body: 'Creator activity is grouped here to keep your phone quiet.',
-      deepLink: '/viewer?source=showcase-feed&initialId=post-1',
+      deepLink: '/showcase/post-1',
       objectType: 'post',
       objectId: 'post-1',
       aggregationKey: 'post-social:post_shared:user-1:post-1:123',
@@ -2262,7 +2272,7 @@ describe('mobile notifications', () => {
 });
 
 describe('a failed generation notification', () => {
-  const FAILED_BODY = 'Open Magicbooklet to try again or adjust the prompt.';
+  const FAILED_BODY = `Open ${siteConfig.name} to try again or adjust the prompt.`;
   const creation = { id: 'gen-1', user_id: 'user-1', category: 'video', model: 'kling-3.0/video', template_run_id: null };
 
   /** The notification the real notifier writes, over a settled `generations` row it may read. */
@@ -2307,7 +2317,7 @@ describe('a failed generation notification', () => {
 
   it('reads no refund for a finished creation or a template step', async () => {
     const finished = await notified({ cost: 40, refunded: false }, creation, 'succeeded');
-    expect(finished.notification.body).toBe('Open it in your mobile history.');
+    expect(finished.notification.body).toBe('Open it in your history.');
     expect(finished.reads).toEqual([]);
 
     // A step's failure leads to its run, where the step is retried.
@@ -2336,5 +2346,76 @@ describe('a failed generation notification', () => {
 
     expect(logged.map((record) => record.msg)).toEqual(['generation_notification_refund_unread']);
     expect(history.sent).toEqual([expect.objectContaining({ title: 'Your video failed', body: FAILED_BODY })]);
+  });
+});
+
+describe('what each alert opens and says', () => {
+  // The real producers, against notification history that keeps every row
+  // they write. Anything else they reached for would throw here.
+  function writtenTo(history: MobileNotificationHistory) {
+    const elsewhere = (name: string) => {
+      throw new Error(`Unexpected call: ${name}`);
+    };
+    return withMobileNotificationHistory({
+      from: elsewhere,
+      rpc: async (name: string) => elsewhere(name),
+    } as unknown as SupabaseClient, history);
+  }
+
+  it('opens the post page from a saved, shared or recipe-unlocked alert', async () => {
+    // A finished remix's alert is pinned in completed-remix-notification.test.ts.
+    const history = createMobileNotificationHistory();
+    const client = writtenTo(history);
+
+    await notifyPostSocialActivity(client, { type: 'post_saved', recipientUserId: 'creator-1', actorUserId: 'reader-1', postId: 'post-1' });
+    await notifyPostSocialActivity(client, { type: 'post_shared', recipientUserId: 'creator-1', actorUserId: 'reader-1', postId: 'post-1' });
+    await notifyPostResourceUnlockCompleted(client, {
+      buyerUserId: 'reader-1',
+      ownerUserId: 'creator-1',
+      postId: 'post-1',
+      bundleId: 'bundle-1',
+    });
+
+    expect(history.sent.map((row) => [row.type, row.user_id, row.deep_link])).toEqual([
+      ['post_saved', 'creator-1', '/showcase/post-1'],
+      ['post_shared', 'creator-1', '/showcase/post-1'],
+      ['post_resource_unlocked', 'reader-1', '/showcase/post-1'],
+      ['post_resource_unlocked', 'creator-1', '/showcase/post-1'],
+    ]);
+  });
+
+  it("opens the follower's page from a New follower alert, and stays on Alerts with no handle to open", async () => {
+    const history = createMobileNotificationHistory();
+    const client = writtenTo(history);
+
+    await notifyCreatorFollowed(client, { followerUserId: 'follower-1', followingUserId: 'creator-1', followerUsername: 'athul' });
+    // An unclaimed handle is a real page on both clients, so it is opened like any other.
+    await notifyCreatorFollowed(client, { followerUserId: 'follower-2', followingUserId: 'creator-1', followerUsername: 'creator-1a2b3c4d' });
+    await notifyCreatorFollowed(client, { followerUserId: 'follower-3', followingUserId: 'creator-1', followerUsername: null });
+
+    expect(history.sent.map((row) => [row.body, row.deep_link])).toEqual([
+      ['@athul followed you.', '/creators/athul'],
+      ['@creator-1a2b3c4d followed you.', '/creators/creator-1a2b3c4d'],
+      ['Someone followed your creator profile.', '/studio'],
+    ]);
+  });
+
+  it('words its copy for both clients and spells the brand as the site does', async () => {
+    // The web's Alerts prints these bodies as written, beside the app.
+    const history = createMobileNotificationHistory();
+    const client = writtenTo(history);
+    const creation = { id: 'gen-1', user_id: 'user-1', category: 'image', template_run_id: null };
+
+    await notifyGenerationStatus(client, creation, 'succeeded');
+    await notifyGenerationStatus(client, creation, 'failed');
+    await notifyMobilePurchasesRestored(client, 'user-1');
+
+    const bodies = history.sent.map((row) => row.body);
+    expect(bodies).toEqual([
+      'Open it in your history.',
+      `Open ${siteConfig.name} to try again or adjust the prompt.`,
+      `Your ${siteConfig.name} credit balance was checked against verified purchase history.`,
+    ]);
+    expect(bodies.join(' ')).not.toMatch(/mobile|Magic Booklet/i);
   });
 });

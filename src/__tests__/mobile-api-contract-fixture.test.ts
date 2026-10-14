@@ -48,12 +48,20 @@ type MobileApiContractFixture = {
     deleteAccount: MobileApiContractEndpoint<{
       success: boolean;
       deleted: boolean;
-      cleanupPending: boolean;
+      deletionScheduled: boolean;
     }> & {
       request: { confirmation: 'DELETE'; appleAuthorizationCode: string };
+      status: 202;
+      responseVariants: {
+        alreadyDeleted: { success: true; deleted: true; cleanupPending: boolean; alreadyDeleted: true };
+      };
       errors: {
-        appleReauthenticationRequired: { status: 403; response: { code: string; reauthenticate: true } };
+        reauthenticationRequired: { status: 403; response: { code: string; reason: 'reauthentication_required'; reauthenticate: true } };
+        appleReauthenticationRequired: { status: 403; response: { code: string; reason: 'reauthentication_required'; reauthenticate: true } };
         appleVerificationUnavailable: { status: 503; response: { code: string } };
+        accountDeleting: { status: 409; response: { code: 'ACCOUNT_DELETING' } };
+        deletionNotStarted: { status: 500; response: { code: string; deletionScheduled: false } };
+        deletionRetryScheduled: { status: 500; response: { code: string; deletionScheduled: true } };
       };
     };
     mediaUploadIntent: MobileApiContractEndpoint<MediaUploadIntentResponse>;
@@ -222,15 +230,30 @@ describe('shared mobile API v1 contract fixture', () => {
         confirmation: 'DELETE',
         appleAuthorizationCode: 'fresh-one-time-apple-code',
       },
+      // The account is locked and signed out everywhere before the answer; the
+      // sweep runs behind it, so the app never reports a timed-out sweep as
+      // "still active".
+      status: 202,
+      response: { success: true, deleted: false, deletionScheduled: true },
+      responseVariants: {
+        alreadyDeleted: { success: true, deleted: true, alreadyDeleted: true },
+      },
       errors: {
+        reauthenticationRequired: {
+          status: 403,
+          response: { code: 'RECENT_AUTH_REQUIRED', reason: 'reauthentication_required', reauthenticate: true },
+        },
         appleReauthenticationRequired: {
           status: 403,
-          response: { code: 'APPLE_REAUTH_REQUIRED', reauthenticate: true },
+          response: { code: 'APPLE_REAUTH_REQUIRED', reason: 'reauthentication_required', reauthenticate: true },
         },
         appleVerificationUnavailable: {
           status: 503,
           response: { code: 'APPLE_REVOCATION_UNAVAILABLE' },
         },
+        accountDeleting: { status: 409, response: { code: 'ACCOUNT_DELETING' } },
+        deletionNotStarted: { status: 500, response: { code: 'ACCOUNT_DELETION_NOT_STARTED', deletionScheduled: false } },
+        deletionRetryScheduled: { status: 500, response: { code: 'ACCOUNT_DELETION_RETRY_SCHEDULED', deletionScheduled: true } },
       },
     });
     expect(Object.entries(contract.endpoints)

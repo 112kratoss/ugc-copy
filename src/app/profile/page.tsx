@@ -13,11 +13,24 @@ function getParam(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+// Sign-in comes back to this same address, its tab, open post and `next`
+// included.
+function buildProfileReturnPath(params: Record<string, string | string[] | undefined>): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    for (const item of Array.isArray(value) ? value : value === undefined ? [] : [value]) {
+      query.append(key, item);
+    }
+  }
+  const search = query.toString();
+  return search ? `/profile?${search}` : '/profile';
+}
+
 export default async function ProfilePage({ searchParams }: ProfilePageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const requestedNextPath = getParam(resolvedSearchParams.next);
   const nextPath = getSafeProfileNextPath(requestedNextPath);
-  const profileReturnPath = `/profile?next=${encodeURIComponent(nextPath)}`;
+  const profileReturnPath = buildProfileReturnPath(resolvedSearchParams);
   const {
     initialProfile,
     loadError,
@@ -25,7 +38,9 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
     publicProfileUsername,
     publicProfilePath,
     publicProfileDisplayName,
-  } = await loadOwnerProfile(profileReturnPath);
+    stats,
+    sales,
+  } = await loadOwnerProfile(profileReturnPath, { includeTotals: true });
   const isFirstRunProfile = !readiness.publicPublishReady;
   const setupSteps = [
     {
@@ -43,7 +58,7 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
     {
       label: 'Add an avatar',
       done: readiness.hasAvatar,
-      detail: 'Recommended now and required before selling recipes',
+      detail: 'Recommended — builds buyer trust',
     },
   ];
 
@@ -100,7 +115,6 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
 
             <DeferredCreatorProfileCard
               initialProfile={initialProfile}
-              isLoading={false}
               loadError={loadError}
               onboardingMode
               nextPath={nextPath}
@@ -120,6 +134,8 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
               coverUrl: initialProfile.coverUrl || null,
               credits: initialProfile.credits,
             }}
+            stats={stats}
+            sales={sales}
             publicProfilePath={publicProfilePath}
             publicProfileDisplayName={publicProfileDisplayName}
           />

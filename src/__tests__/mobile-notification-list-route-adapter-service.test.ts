@@ -48,9 +48,35 @@ describe('mobile notification list route adapter service', () => {
     expect(createUserClientDependency).toHaveBeenCalledWith(request);
     expect(getMobileNotificationInboxForRoute).toHaveBeenCalledWith({
       before: '2026-06-23T10:30:00.000Z',
+      beforeId: null,
       limitValue: '12',
       userSupabase,
     });
+  });
+
+  it('passes the cursor alert\'s id beside its time', async () => {
+    const getMobileNotificationInboxForRoute = vi.fn(
+      async (): Promise<MobileNotificationInboxRouteResult> => ({
+        ok: true,
+        body: { success: true, notifications: [], unreadCount: 0 },
+      }),
+    );
+    const query = new URLSearchParams({
+      limit: '50',
+      before: '2026-10-14T09:02:00.5+00:00',
+      beforeId: '00000000-0000-4000-8000-000000000005',
+    });
+
+    await getMobileNotificationListRouteResponse({
+      request: new Request(`http://localhost/api/mobile/notifications?${query}`),
+      dependencies: { createUserClient: () => createUserClient(), getMobileNotificationInboxForRoute },
+    });
+
+    expect(getMobileNotificationInboxForRoute).toHaveBeenCalledWith(expect.objectContaining({
+      // The `+` of the offset survives the query string.
+      before: '2026-10-14T09:02:00.5+00:00',
+      beforeId: '00000000-0000-4000-8000-000000000005',
+    }));
   });
 
   it('maps inbox failures with stable private headers', async () => {

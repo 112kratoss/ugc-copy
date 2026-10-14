@@ -55,10 +55,9 @@ export function profileOwnerPostsQueryOptions(
   return {
     queryKey: ['profile-owner-posts', userId] as const,
     initialPageParam: 0 as number | string,
-    // Only the first page pays for the sales-summary aggregate.
+    // No sales summary: `/api/profile` carries the seller totals the Wallet draws.
     queryFn: ({ pageParam }: { pageParam: number | string }) => api.listOwnerPosts({
       includeArchived: true,
-      includeSummary: pageParam === 0,
       limit: PROFILE_MEDIA_PAGE_SIZE,
       ...(typeof pageParam === 'string' ? { cursor: pageParam } : { offset: pageParam }),
       ...(pageParam === 0 || typeof pageParam === 'string' ? { pagination: 'cursor' } : {}),

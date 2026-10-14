@@ -1376,7 +1376,7 @@ export async function getShowcaseFeedPage(options: {
   return sanitizeShowcaseFeedPage(hydratedFeed);
 }
 
-async function attachViewerStateToFeed(
+export async function attachViewerStateToFeed(
   feed: ShowcaseFeedPage,
   viewerUserId: string | null,
   adminSupabase: ReturnType<typeof createServiceClient>

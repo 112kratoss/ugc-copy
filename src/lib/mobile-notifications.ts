@@ -3,6 +3,7 @@ import { MobilePushMaintenanceError } from '@/lib/mobile-push-maintenance-error'
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 import { getAudioGenerationKind, isAudioModel } from '@/lib/models';
+import { siteConfig } from '@/lib/seo';
 
 import {
   EXTERNAL_API_REQUEST_TIMEOUT_MS,
@@ -426,7 +427,10 @@ export function buildMobileNotificationDeepLink(target:
   }
 
   if (target.kind === 'showcasePost') {
-    return `/viewer?source=showcase-feed&initialId=${encodeURIComponent(target.postId)}`;
+    // The post page, as a shared link opens it: the app's /showcase/<id> sends
+    // a media post on to the reel and keeps a text or covered post on its own
+    // page, which the For You reel has nothing to draw for.
+    return `/showcase/${encodeURIComponent(target.postId)}`;
   }
 
   if (target.kind === 'marketplaceResource') {
@@ -1728,9 +1732,10 @@ export async function notifyGenerationStatus(
     ? templateStepCopy(label, status, finishedStep)
     : {
       title: status === 'succeeded' ? `Your ${label} is ready` : `Your ${label} failed`,
+      // The web's Alerts prints this body too, so it names no one client.
       body: status === 'succeeded'
-        ? 'Open it in your mobile history.'
-        : withReturnedCredits('Open Magicbooklet to try again or adjust the prompt.', returnedCredits),
+        ? 'Open it in your history.'
+        : withReturnedCredits(`Open ${siteConfig.name} to try again or adjust the prompt.`, returnedCredits),
     };
 
   return createMobileNotificationSafely({
@@ -1887,7 +1892,7 @@ export async function notifyMobilePurchasesRestored(adminSupabase: SupabaseClien
     type: 'purchases_restored',
     category: 'commerce',
     title: 'Purchase history refreshed',
-    body: 'Your Magic Booklet credit balance was checked against verified purchase history.',
+    body: `Your ${siteConfig.name} credit balance was checked against verified purchase history.`,
     deepLink: '/profile',
     objectType: 'purchase_history_refresh',
     objectId: userId,
@@ -1986,7 +1991,11 @@ export async function notifyCreatorFollowed(
     category: 'social',
     title: 'New follower',
     body: params.followerUsername ? `@${params.followerUsername} followed you.` : 'Someone followed your creator profile.',
-    deepLink: buildMobileNotificationDeepLink({ kind: 'notifications' }),
+    // The alert names a person, so it opens their page. With no handle to
+    // name, it stays on Alerts, where the row is read.
+    deepLink: params.followerUsername
+      ? buildMobileNotificationDeepLink({ kind: 'creatorProfile', username: params.followerUsername })
+      : buildMobileNotificationDeepLink({ kind: 'notifications' }),
     objectType: 'profile',
     objectId: params.followerUserId,
     dedupeKey: `creator-follow:${params.followerUserId}:${params.followingUserId}`,
@@ -2001,7 +2010,9 @@ function socialAggregationWindow(date = new Date()) {
 export async function notifyPostSocialActivity(
   adminSupabase: SupabaseClient,
   params: {
-    type: 'post_saved' | 'post_remixed' | 'post_shared';
+    // A remix is announced once it is finished, one per output, by
+    // `completed-remix-notification.ts`, never through this grouped alert.
+    type: 'post_saved' | 'post_shared';
     recipientUserId: string | null | undefined;
     actorUserId: string | null | undefined;
     postId: string;
@@ -2011,12 +2022,7 @@ export async function notifyPostSocialActivity(
     return null;
   }
 
-  const verb =
-    params.type === 'post_saved'
-      ? 'saved'
-      : params.type === 'post_remixed'
-        ? 'remixed'
-        : 'shared';
+  const verb = params.type === 'post_saved' ? 'saved' : 'shared';
 
   // The title already states what happened, so the body says what it means for
   // the creator. It used to be one boilerplate line about notifications being
@@ -2026,9 +2032,7 @@ export async function notifyPostSocialActivity(
   const body =
     params.type === 'post_saved'
       ? 'It is in their saved media now.'
-      : params.type === 'post_remixed'
-        ? 'They started a new creation from it.'
-        : 'They passed it on outside the app.';
+      : 'They passed it on outside the app.';
 
   return createMobileNotificationSafely({
     adminSupabase,

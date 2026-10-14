@@ -8,6 +8,7 @@ type ProfileRow = {
   display_name: string | null;
   bio: string | null;
   avatar_url: string | null;
+  identity_state: 'active' | 'merged' | 'deleting';
 };
 
 type GenerationRow = {
@@ -93,6 +94,7 @@ let postsSchemaMissing = false;
 let creatorStatsRpcState: Record<string, unknown> | null = null;
 let tableAccesses: string[] = [];
 let bundleSummaryRpcCalls = 0;
+let creatorStatsRpcCalls = 0;
 
 function createResourceBundleQuery() {
   const filters: Array<(row: ResourceBundleRow) => boolean> = [];
@@ -153,6 +155,7 @@ function createServiceClientMock() {
       if (name !== 'get_creator_profile_stats') {
         throw new Error(`Unexpected RPC access: ${name}`);
       }
+      creatorStatsRpcCalls += 1;
       if (creatorStatsRpcState === null) {
         return { data: null, error: { code: 'PGRST202' } };
       }
@@ -404,6 +407,7 @@ describe('creator profile data loader', () => {
         display_name: null,
         bio: 'Building UGC product demos.',
         avatar_url: 'https://example.com/avatar.jpg',
+        identity_state: 'active',
       },
     ];
     generationsState = [
@@ -483,6 +487,7 @@ describe('creator profile data loader', () => {
     creatorStatsRpcState = null;
     tableAccesses = [];
     bundleSummaryRpcCalls = 0;
+    creatorStatsRpcCalls = 0;
     resolveOwnedStoredMediaUrlMock.mockReset();
     resolveOwnedStoredMediaUrlMock.mockImplementation(async (_client, outputUrl: string, ownerUserId: string) => (
       outputUrl.startsWith(`generated_images/${ownerUserId}/`)
@@ -590,7 +595,7 @@ describe('creator profile data loader', () => {
     expect(serialized).not.toContain('1275');
   });
 
-  it('returns stable offset pages while keeping full-profile statistics', async () => {
+  it('returns stable offset pages, with full-profile statistics on the first page only', async () => {
     postsState = Array.from({ length: 5 }, (_, index) => ({
       ...postsState[0],
       id: `post-${index + 1}`,
@@ -609,8 +614,62 @@ describe('creator profile data loader', () => {
     expect(secondPage?.items.map((item) => item.id)).toEqual(['post-3', 'post-4']);
     expect(firstPage?.pageInfo).toMatchObject({ hasMore: true, nextOffset: 2, limit: 2, offset: 0 });
     expect(secondPage?.pageInfo).toMatchObject({ hasMore: true, nextOffset: 4, limit: 2, offset: 2 });
+    // The fallback that sums every post when the RPC is missing runs for the
+    // first page alone, like the RPC.
     expect(firstPage?.stats).toMatchObject({ publicCreations: 5, totalSaves: 15 });
-    expect(secondPage?.stats).toMatchObject({ publicCreations: 5, totalSaves: 15 });
+    expect(secondPage).not.toHaveProperty('stats');
+  });
+
+  it('asks the database for the totals on the first page only', async () => {
+    creatorStatsRpcState = {
+      publicCreations: 40,
+      totalSaves: 120,
+      totalRemixes: 9,
+      unlocks: 2,
+      totalUnlockSales: 5,
+      toolsUsed: [],
+    };
+
+    const { getCreatorProfilePageData } = await import('@/lib/creator-profile');
+    const firstPage = await getCreatorProfilePageData('Creator-Name', { limit: 24, offset: 0 });
+    const laterPage = await getCreatorProfilePageData('Creator-Name', { limit: 24, offset: 24 });
+
+    expect(firstPage?.stats).toMatchObject({ publicCreations: 40, unlocks: 2 });
+    expect(laterPage).not.toBeNull();
+    expect(laterPage).not.toHaveProperty('stats');
+    expect(creatorStatsRpcCalls).toBe(1);
+  });
+
+  it('leaves the totals off later pages of a legacy generations profile too', async () => {
+    postsSchemaMissing = true;
+
+    const { getCreatorProfilePageData } = await import('@/lib/creator-profile');
+    const firstPage = await getCreatorProfilePageData('Creator-Name');
+    const laterPage = await getCreatorProfilePageData('Creator-Name', { offset: 24 });
+
+    expect(firstPage?.stats).toMatchObject({ publicCreations: 1, totalSaves: 12 });
+    expect(laterPage).not.toBeNull();
+    expect(laterPage).not.toHaveProperty('stats');
+  });
+
+  it('treats a creator whose account deletion has started as gone', async () => {
+    profilesState[0].identity_state = 'deleting';
+
+    const { getCreatorProfilePageData, getCreatorProfileSummary } = await import('@/lib/creator-profile');
+
+    await expect(getCreatorProfilePageData('Creator-Name')).resolves.toBeNull();
+    await expect(getCreatorProfileSummary('Creator-Name')).resolves.toBeNull();
+    expect(tableAccesses).not.toContain('posts');
+    expect(creatorStatsRpcCalls).toBe(0);
+  });
+
+  it('keeps showing a creator whose account is active', async () => {
+    const { getCreatorProfileSummary } = await import('@/lib/creator-profile');
+
+    await expect(getCreatorProfileSummary('Creator-Name')).resolves.toMatchObject({
+      id: 'user-1',
+      username: 'creator-name',
+    });
   });
 
   it('binds legacy generation signing to the persisted generation owner', async () => {

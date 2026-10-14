@@ -18,6 +18,7 @@ import { AtSign, Clapperboard, ImageIcon, Sparkles, WandSparkles } from 'lucide-
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '@/lib/api-client';
+import { buildIdentityClaimBody } from '@/lib/edit-profile-form';
 import { isNetworkRequestFailedError } from '@/lib/supabase-auth-recovery';
 import { useAuth } from '@/lib/auth';
 import { useReducedMotion } from '@/lib/motion';
@@ -82,21 +83,6 @@ function isClaimedIdentity(profile: ProfileResponse | null) {
 function authDisplayName(metadata: Record<string, unknown> | undefined) {
   const candidate = metadata?.full_name ?? metadata?.name;
   return typeof candidate === 'string' ? candidate.trim() : '';
-}
-
-function profileUpdatePayload(profile: ProfileResponse, username: string, displayName: string) {
-  return {
-    username,
-    displayName,
-    bio: profile.bio,
-    avatarUrl: profile.avatarUrl,
-    coverUrl: profile.coverUrl,
-    websiteUrl: profile.websiteUrl,
-    twitterHandle: profile.twitterHandle,
-    instagramHandle: profile.instagramHandle,
-    tiktokHandle: profile.tiktokHandle,
-    location: profile.location,
-  };
 }
 
 /**
@@ -332,7 +318,7 @@ function OnboardingFlow() {
     setBusy(true);
     setMessage(null);
     try {
-      const payload = profileUpdatePayload(profile, normalizedUsername, displayName.trim());
+      const payload = buildIdentityClaimBody(normalizedUsername, displayName.trim());
       await api.validateProfile(payload);
       const updatedProfile = await api.updateProfile(payload);
       const nextWelcome = await api.getWelcomeCredits();

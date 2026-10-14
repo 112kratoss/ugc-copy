@@ -44,7 +44,6 @@ export async function refreshProfileLibraryHead({
   if (library === 'Posts') {
     const fresh = await api.listOwnerPosts({
       includeArchived: true,
-      includeSummary: true,
       limit: PROFILE_MEDIA_PAGE_SIZE,
       offset: 0,
       pagination: 'cursor',

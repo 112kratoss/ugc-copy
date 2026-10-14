@@ -3,10 +3,11 @@ import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import {
   verifyMarketplacePaymentForRoute,
   type MarketplaceVerifyRouteResult,
@@ -19,6 +20,7 @@ type MarketplaceVerifyRouteDependencies = {
   logError?: typeof logBackendRouteError;
   razorpayKeyId?: string | null;
   razorpayKeySecret?: string | null;
+  runAfterResponse?: RunAfterResponse;
   verifyMarketplacePaymentForRoute?: typeof verifyMarketplacePaymentForRoute;
 };
 
@@ -33,6 +35,7 @@ function resolveDependencies(dependencies: MarketplaceVerifyRouteDependencies | 
     razorpayKeySecret: dependencies && 'razorpayKeySecret' in dependencies
       ? dependencies.razorpayKeySecret
       : process.env.RAZORPAY_KEY_SECRET,
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
     verifyMarketplacePaymentForRoute:
       dependencies?.verifyMarketplacePaymentForRoute ?? verifyMarketplacePaymentForRoute,
   };
@@ -75,6 +78,9 @@ async function handleMarketplaceVerifyPOST({
       keyId: dependencies.razorpayKeyId,
       keySecret: dependencies.razorpayKeySecret,
       readBody: () => request.json(),
+      // The buyer waits on this answer with the payment already taken, so the
+      // purchase alerts go out behind it rather than in front.
+      runAfterResponse: dependencies.runAfterResponse,
     }));
   } catch (error) {
     dependencies.logError('Marketplace payment verification failed:', error);

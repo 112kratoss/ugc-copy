@@ -1,6 +1,7 @@
 import 'server-only';
 import { logBackendError } from '@/lib/backend-logger';
 
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { cache } from 'react';
 
 import {
@@ -54,8 +55,19 @@ interface CreatorProfileRow {
   instagram_handle: string | null;
   tiktok_handle: string | null;
   location: string | null;
+  identity_state?: string | null;
 }
 
+export interface CreatorProfileStats {
+  publicCreations: number;
+  totalSaves: number;
+  totalRemixes: number;
+  unlocks: number;
+  totalUnlockSales: number;
+  toolsUsed: Array<{ slug: string; label: string; count: number }>;
+}
+
+/** The first page (offset 0): the header, the creator's totals and the first posts. */
 export interface CreatorProfilePageData {
   profile: {
     id: string;
@@ -70,14 +82,7 @@ export interface CreatorProfilePageData {
     tiktokHandle: string | null;
     location: string | null;
   };
-  stats: {
-    publicCreations: number;
-    totalSaves: number;
-    totalRemixes: number;
-    unlocks: number;
-    totalUnlockSales: number;
-    toolsUsed: Array<{ slug: string; label: string; count: number }>;
-  };
+  stats: CreatorProfileStats;
   items: ShowcaseFeedItem[];
   pageInfo: {
     hasMore: boolean;
@@ -86,6 +91,21 @@ export interface CreatorProfilePageData {
     limit: number;
     offset: number;
   };
+}
+
+/**
+ * Any page. The totals are an aggregate over every post the creator has, and
+ * both clients read them from the first page alone, so later pages leave
+ * `stats` out.
+ */
+export type CreatorProfilePage = Omit<CreatorProfilePageData, 'stats'> & {
+  stats?: CreatorProfileStats;
+};
+
+interface CreatorProfilePageOptions {
+  limit?: number;
+  offset?: number;
+  countryCode?: string | null;
 }
 
 const CREATOR_PAGE_SIZE = 24;
@@ -100,7 +120,7 @@ const loadCreatorProfileRow = cache(async (username: string): Promise<CreatorPro
   const adminSupabase = createServiceClient();
   const { data, error } = await adminSupabase
     .from('profiles')
-    .select('id, username, display_name, bio, avatar_url, cover_url, website_url, twitter_handle, instagram_handle, tiktok_handle, location')
+    .select('id, username, display_name, bio, avatar_url, cover_url, website_url, twitter_handle, instagram_handle, tiktok_handle, location, identity_state')
     .eq('username', username)
     .maybeSingle();
 
@@ -109,7 +129,12 @@ const loadCreatorProfileRow = cache(async (username: string): Promise<CreatorPro
     throw error;
   }
 
-  return data as unknown as CreatorProfileRow | null;
+  const profile = data as unknown as CreatorProfileRow | null;
+  // A deletion signs the account out and removes its media before the auth
+  // user (and this row with it) goes, and a stuck deletion waits for the next
+  // job run. Visitors are told the account is gone from the first step, not
+  // shown a page of broken images.
+  return profile?.identity_state === 'deleting' ? null : profile;
 });
 
 function resolveItemCategory(category: string | null): ShowcaseItemCategory {
@@ -383,7 +408,7 @@ async function loadCreatorAssetSummaries(rows: PostRow[], adminSupabase: Creator
 async function summarizeCreatorPosts(
   rows: PostRow[],
   adminSupabase: CreatorServiceClient
-): Promise<CreatorProfilePageData['stats']> {
+): Promise<CreatorProfileStats> {
   const assets = await loadCreatorAssetSummaries(rows, adminSupabase);
   const toolCounts = new Map<string, { label: string; count: number }>();
 
@@ -420,7 +445,7 @@ function isMissingCreatorStatsRpcError(error: unknown): boolean {
 async function loadCreatorStats(
   adminSupabase: CreatorServiceClient,
   profileId: string
-): Promise<CreatorProfilePageData['stats'] | null> {
+): Promise<CreatorProfileStats | null> {
   if (typeof (adminSupabase as unknown as { rpc?: unknown }).rpc !== 'function') return null;
   const { data, error } = await adminSupabase.rpc('get_creator_profile_stats', {
     p_creator_id: profileId,
@@ -435,7 +460,7 @@ async function loadCreatorStats(
   const nonNegativeNumber = (value: unknown) =>
     typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
   const toolsUsed = Array.isArray(record.toolsUsed)
-    ? record.toolsUsed.flatMap((tool): CreatorProfilePageData['stats']['toolsUsed'] => {
+    ? record.toolsUsed.flatMap((tool): CreatorProfileStats['toolsUsed'] => {
         if (!tool || typeof tool !== 'object') return [];
         const candidate = tool as Record<string, unknown>;
         if (typeof candidate.slug !== 'string' || typeof candidate.label !== 'string') return [];
@@ -501,10 +526,59 @@ export const getCreatorProfileSummary = cache(async (rawUsername: string) => {
   return profile ? profileSummary(profile, username) : null;
 });
 
-export const getCreatorProfilePageData = cache(async (
+export interface CreatorBlockRelationship {
+  /** The creator blocked the viewer: their page answers as if they did not exist. */
+  creatorBlockedViewer: boolean;
+  /** The viewer blocked the creator: the header comes back so the viewer can unblock there. */
+  viewerBlockedCreator: boolean;
+}
+
+/**
+ * Which way a block between a viewer and a creator runs. Feeds hide a blocked
+ * pair either way (`isUserRelationshipBlocked`), but the creator's own page
+ * cannot: a creator who blocked someone stays invisible to them, while the
+ * person who did the blocking is shown whom they blocked, so they can undo it
+ * where they are. One read answers both directions.
+ */
+export async function loadCreatorBlockRelationship({
+  adminSupabase,
+  creatorId,
+  viewerUserId,
+}: {
+  adminSupabase: SupabaseClient;
+  creatorId: string;
+  viewerUserId: string;
+}): Promise<CreatorBlockRelationship> {
+  if (viewerUserId === creatorId) {
+    return { creatorBlockedViewer: false, viewerBlockedCreator: false };
+  }
+
+  const { data, error } = await adminSupabase
+    .from('user_blocks')
+    .select('blocker_user_id, blocked_user_id')
+    .in('blocker_user_id', [viewerUserId, creatorId])
+    .in('blocked_user_id', [viewerUserId, creatorId]);
+
+  if (error) {
+    logBackendError('failed_to_load_creator_block_relationship', { error });
+    throw error;
+  }
+
+  const rows = (data ?? []) as Array<{ blocker_user_id: string; blocked_user_id: string }>;
+  const blocks = (blocker: string, blocked: string) => rows.some((row) => (
+    row.blocker_user_id === blocker && row.blocked_user_id === blocked
+  ));
+
+  return {
+    creatorBlockedViewer: blocks(creatorId, viewerUserId),
+    viewerBlockedCreator: blocks(viewerUserId, creatorId),
+  };
+}
+
+const loadCreatorProfilePage = cache(async (
   rawUsername: string,
-  options?: { limit?: number; offset?: number; countryCode?: string | null }
-): Promise<CreatorProfilePageData | null> => {
+  options?: CreatorProfilePageOptions
+): Promise<CreatorProfilePage | null> => {
   const username = normalizeUsername(rawUsername);
   if (!username) return null;
 
@@ -514,6 +588,9 @@ export const getCreatorProfilePageData = cache(async (
   const requestedOffset = Number.isFinite(options?.offset) ? Math.round(options?.offset ?? 0) : 0;
   const limit = Math.min(CREATOR_PAGE_SIZE_MAX, Math.max(1, requestedLimit));
   const offset = Math.max(0, requestedOffset);
+  // The totals aggregate every post the creator has; scrolling a big creator
+  // repeated that once per page for numbers only the first page shows.
+  const includeStats = offset === 0;
 
   const profile = await loadCreatorProfileRow(username);
   if (!profile) return null;
@@ -528,7 +605,7 @@ export const getCreatorProfilePageData = cache(async (
       profileId: profile.id,
       take: limit + 1,
     }),
-    loadCreatorStats(adminSupabase, profile.id),
+    includeStats ? loadCreatorStats(adminSupabase, profile.id) : null,
   ]);
 
   if (pageRows === null) {
@@ -540,7 +617,7 @@ export const getCreatorProfilePageData = cache(async (
         profileId: profile.id,
         take: limit + 1,
       }),
-      loadAllLegacyGenerationMetricRows(adminSupabase, profile.id),
+      includeStats ? loadAllLegacyGenerationMetricRows(adminSupabase, profile.id) : null,
     ]);
     const hasMore = legacyPageRows.length > limit;
     const resolvedLegacyItems = await Promise.all<ShowcaseFeedItem | null>(
@@ -588,14 +665,18 @@ export const getCreatorProfilePageData = cache(async (
 
     return {
       profile: profileSummary(profile, username),
-      stats: {
-        publicCreations: legacyMetricRows.length,
-        totalSaves: legacyMetricRows.reduce((sum, item) => sum + (item.save_count ?? 0), 0),
-        totalRemixes: legacyMetricRows.reduce((sum, item) => sum + (item.remix_count ?? 0), 0),
-        unlocks: 0,
-        totalUnlockSales: 0,
-        toolsUsed: [],
-      },
+      ...(legacyMetricRows
+        ? {
+            stats: {
+              publicCreations: legacyMetricRows.length,
+              totalSaves: legacyMetricRows.reduce((sum, item) => sum + (item.save_count ?? 0), 0),
+              totalRemixes: legacyMetricRows.reduce((sum, item) => sum + (item.remix_count ?? 0), 0),
+              unlocks: 0,
+              totalUnlockSales: 0,
+              toolsUsed: [],
+            },
+          }
+        : {}),
       items: resolvedLegacyItems.filter((item): item is ShowcaseFeedItem => item !== null),
       pageInfo: creatorPageInfo({ hasMore, limit, offset }),
     };
@@ -611,10 +692,12 @@ export const getCreatorProfilePageData = cache(async (
   // item titles, sizes) and paid recipe text never leave the server.
   const items = (await resolvePostRowsToFeedItems(visibleRows, adminSupabase))
     .map(sanitizeShowcaseFeedItem);
-  const stats = aggregateStats ?? await summarizeCreatorPosts(
-    await loadAllCreatorPostMetricRows(adminSupabase, profile.id) ?? visibleRows,
-    adminSupabase
-  );
+  const stats = includeStats
+    ? aggregateStats ?? await summarizeCreatorPosts(
+        await loadAllCreatorPostMetricRows(adminSupabase, profile.id) ?? visibleRows,
+        adminSupabase
+      )
+    : null;
 
   const localizedAssets = new Map<string, NonNullable<ShowcaseFeedItem['asset']>>();
   for (const item of items) {
@@ -624,11 +707,28 @@ export const getCreatorProfilePageData = cache(async (
 
   return {
     profile: profileSummary(profile, username),
-    stats,
+    ...(stats ? { stats } : {}),
     items,
     pageInfo: creatorPageInfo({ hasMore, limit, offset }),
   };
 });
+
+/** The first page, which always carries the creator's totals. */
+export function getCreatorProfilePageData(
+  rawUsername: string,
+  options?: CreatorProfilePageOptions & { offset?: 0 }
+): Promise<CreatorProfilePageData | null>;
+/** Any page; only the first (offset 0) carries `stats`. */
+export function getCreatorProfilePageData(
+  rawUsername: string,
+  options?: CreatorProfilePageOptions
+): Promise<CreatorProfilePage | null>;
+export function getCreatorProfilePageData(
+  rawUsername: string,
+  options?: CreatorProfilePageOptions
+): Promise<CreatorProfilePage | null> {
+  return loadCreatorProfilePage(rawUsername, options);
+}
 
 /**
  * Public post count for a creator, used to decide whether their profile is

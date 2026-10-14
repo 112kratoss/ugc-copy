@@ -50,6 +50,7 @@ vi.mock('@/lib/viewer-media-cache', () => ({
 }));
 
 import { haptic } from '@/lib/haptics';
+import type { CreatorProfileResponse } from '@/lib/types';
 import { applyGenerationArchiveToCaches, refreshViewerMediaCaches, removeGenerationFromCaches } from '@/lib/viewer-media-cache';
 import { useViewerActionHandlers, type ViewerActionCallbacks } from '@/lib/use-viewer-action-handlers';
 
@@ -290,38 +291,69 @@ describe('Block user', () => {
   const invalidatedKeys = () => mocks.queryClient.invalidateQueries.mock.calls
     .map(([filters]) => (filters as { queryKey: unknown[] }).queryKey);
 
+  /** A page of a creator's grid, as the creator page caches it. */
+  const gridPage = (creatorId: string): CreatorProfileResponse => ({
+    profile: { id: creatorId, username: creatorId, displayName: creatorId } as CreatorProfileResponse['profile'],
+    stats: undefined,
+    items: [{ id: `${creatorId}-post` } as CreatorProfileResponse['items'][number]],
+    pageInfo: { hasMore: true, nextLimit: 48, nextOffset: 24, limit: 24, offset: 0 },
+    viewer: { isOwner: false, isFollowing: true, blockedByViewer: false },
+  });
+
+  /** What the block writes over every cached creator grid, applied to one. */
+  function blockedGrid(creatorId: string) {
+    const [filters, write] = mocks.queryClient.setQueriesData.mock.calls[0] as unknown as [
+      { queryKey: unknown[] },
+      (data: { pages: CreatorProfileResponse[]; pageParams: unknown[] } | undefined) => unknown,
+    ];
+    expect(filters).toEqual({ queryKey: ['creator-profile'] });
+    return write({ pages: [gridPage(creatorId), gridPage(creatorId)], pageParams: [0, 24] });
+  }
+
   // The reel used to refresh every feed and close: each lane behind it was read
   // again as a new ranked session, a reshuffle and dozens of deliveries served
   // that nobody saw (audit 02-4). The screen now takes the creator out itself.
-  it('hands the creator to the screen, then reads again only the creator page and the Saved list and count, never a lane', async () => {
+  // Every creator's grid was read again too, page by page (audit 02-8): the
+  // blocked creator's cached pages now say so instead.
+  it('hands the creator to the screen, writes their grid as blocked, and reads again only the Saved list and count, never a lane or a grid', async () => {
     mocks.showConfirmDialog.mockResolvedValue(true);
     mocks.auth.api.blockUser.mockResolvedValueOnce({ success: true });
     const onBlocked = vi.fn();
     const onSourceRefresh = vi.fn();
     mountHandlers(postItem(), { onBlocked, onSourceRefresh }).handleAction('block-user');
 
-    await vi.waitFor(() => expect(mocks.queryClient.invalidateQueries).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(mocks.queryClient.invalidateQueries).toHaveBeenCalledTimes(2));
     expect(mocks.auth.api.blockUser).toHaveBeenCalledWith('creator-1');
     expect(onBlocked.mock.calls).toEqual([['creator-1']]);
     expect(invalidatedKeys()).toEqual([
-      ['creator-profile'],
       ['profile-saved-media', 'viewer-1'],
       ['profile', 'viewer-1'],
     ]);
-    expect(invalidatedKeys().some((key) => key[0] === 'showcase-feed' || key[0] === 'immersive-preview-source')).toBe(false);
+    expect(invalidatedKeys().some((key) => ['showcase-feed', 'immersive-preview-source', 'creator-profile'].includes(key[0] as string))).toBe(false);
     expect(refreshViewerMediaCaches).not.toHaveBeenCalled();
     expect(onSourceRefresh).not.toHaveBeenCalled();
-    // Nothing is cut to its first page under a reader scrolled into it.
-    expect(mocks.queryClient.setQueryData).not.toHaveBeenCalled();
-    // The reel moves on as soon as the block is in, not after the reads.
+    // The creator's page, under a reel or later, says "You blocked": one page, no posts.
+    expect(blockedGrid('creator-1')).toMatchObject({
+      pages: [{ items: [], viewer: { blockedByViewer: true, isFollowing: false }, pageInfo: { hasMore: false } }],
+      pageParams: [0],
+    });
+    // Another creator's grid is left as it was.
+    expect(blockedGrid('creator-2')).toBeUndefined();
+    // A block ends both follows; nothing is cut to its first page under a reader.
+    expect(mocks.queryClient.setQueryData.mock.calls).toEqual([[['creator-follow-state', 'creator-1'], { following: false }]]);
+    // The grid says so before the screen moves on, and the reads come after it.
+    expect(mocks.queryClient.setQueriesData.mock.invocationCallOrder[0])
+      .toBeLessThan(onBlocked.mock.invocationCallOrder[0]);
     expect(onBlocked.mock.invocationCallOrder[0])
       .toBeLessThan(mocks.queryClient.invalidateQueries.mock.invocationCallOrder[0]);
+    expect(haptic.success).toHaveBeenCalledTimes(1);
     expect(mocks.announce).toHaveBeenCalledWith('@maya blocked.');
     expect(mocks.showErrorDialog).not.toHaveBeenCalled();
   });
 
   // The text post page offers Block with nowhere of its own to take the posts
-  // out of, so it keeps the full refresh it had.
+  // out of, so it keeps the full refresh it had; the creator's grid says
+  // "You blocked" there too.
   it('refreshes every cache, as before, on a screen that takes no posts out itself', async () => {
     mocks.showConfirmDialog.mockResolvedValue(true);
     mocks.auth.api.blockUser.mockResolvedValueOnce({ success: true });
@@ -331,6 +363,8 @@ describe('Block user', () => {
     await vi.waitFor(() => expect(onSourceRefresh).toHaveBeenCalledTimes(1));
     expect(refreshViewerMediaCaches).toHaveBeenCalledWith(mocks.queryClient, 'viewer-1');
     expect(mocks.queryClient.invalidateQueries).not.toHaveBeenCalled();
+    expect(blockedGrid('creator-1')).toMatchObject({ pages: [{ items: [], viewer: { blockedByViewer: true } }] });
+    expect(mocks.queryClient.setQueryData).toHaveBeenCalledWith(['creator-follow-state', 'creator-1'], { following: false });
   });
 
   it('leaves the reel and every cache alone when the block fails', async () => {
@@ -342,6 +376,8 @@ describe('Block user', () => {
     await vi.waitFor(() => expect(mocks.showErrorDialog).toHaveBeenCalledWith('Could not block user', expect.any(Error)));
     expect(onBlocked).not.toHaveBeenCalled();
     expect(mocks.queryClient.invalidateQueries).not.toHaveBeenCalled();
+    expect(mocks.queryClient.setQueriesData).not.toHaveBeenCalled();
+    expect(mocks.queryClient.setQueryData).not.toHaveBeenCalled();
     expect(refreshViewerMediaCaches).not.toHaveBeenCalled();
     expect(mocks.announce).not.toHaveBeenCalled();
   });

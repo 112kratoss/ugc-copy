@@ -40,11 +40,13 @@ const authState = vi.hoisted(() => ({
   api: {
     blockUser: vi.fn(),
     deleteGeneration: vi.fn(),
+    getCreatorProfile: vi.fn(),
     listGenerations: vi.fn(),
     listOwnerPosts: vi.fn(async () => ({ success: true, posts: [], pageInfo: { hasMore: false, nextOffset: null } })),
     getProfile: vi.fn(() => new Promise<never>(() => undefined)),
     getShowcaseFeed: vi.fn(),
     getShowcasePost: vi.fn(),
+    saveShowcasePost: vi.fn(),
     recordShowcaseFeedEvent: vi.fn((_request: { eventType: string; deliveryId?: string; postId?: string }) => Promise.resolve()),
     shareShowcasePost: vi.fn((_postId: string, _options: { sourceSurface: string }) => Promise.resolve()),
     undoFeedFeedback: vi.fn((_request: { feedbackType: string; postId?: string; creatorId?: string }) => (
@@ -245,7 +247,10 @@ vi.mock('@/lib/viewer-audio', () => ({
 }));
 vi.mock('@/lib/viewer-refresh-indicator', () => ({ useViewerRefreshSpinner: () => false }));
 vi.mock('@/lib/platform-glyphs', () => ({ BackGlyph: nothing }));
-vi.mock('@/lib/use-creator-follow', () => ({ useCreatorFollow: () => ({}) }));
+vi.mock('@/lib/use-creator-follow', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/use-creator-follow')>()),
+  useCreatorFollow: () => ({}),
+}));
 vi.mock('@/lib/use-hardware-back', () => ({ useHardwareBack: () => undefined }));
 vi.mock('@/lib/motion', () => ({ useReducedMotion: () => false }));
 vi.mock('@/lib/system-bars', () => ({ useNavigationBarSurface: () => undefined }));
@@ -273,7 +278,7 @@ import {
   resetFeedFeedbackRequestsForTests,
 } from '@/lib/showcase-feed-events';
 import { serializeShowcaseFeedLane, showcaseFeedLaneQueryOptions } from '@/lib/showcase-feed-lane';
-import type { ShowcaseFeedItem, ShowcaseFeedResponse } from '@/lib/types';
+import type { CreatorProfileResponse, ShowcaseFeedItem, ShowcaseFeedResponse } from '@/lib/types';
 import { useViewerActionHandlers } from '@/lib/use-viewer-action-handlers';
 
 const LANE = { sort: 'for-you' } as const;
@@ -344,8 +349,11 @@ async function settle() {
   });
 }
 
-async function renderReel(initialId = 'post-b') {
-  routerState.params = { source: 'showcase-feed', initialId, lane: serializeShowcaseFeedLane(LANE) };
+/** The route a lane's tile opens: the reel reads and pages that lane. */
+const LANE_ROUTE = { source: 'showcase-feed', lane: serializeShowcaseFeedLane(LANE) };
+
+async function renderReel(initialId = 'post-b', route: Record<string, string> = LANE_ROUTE) {
+  routerState.params = { ...route, initialId };
   let tree!: renderer.ReactTestRenderer;
   act(() => {
     tree = renderer.create(
@@ -473,8 +481,10 @@ describe('Block user from the reel', () => {
     expect(reelIds(tree)).toEqual(['post-a', 'post-d']);
     // The grid behind the reel reads the same pages, without Luna's posts.
     expect(laneIds(laneKey)).toEqual(['post-a', 'post-d']);
+    // No creator's grid is read again: Luna's cached pages say she is blocked
+    // instead (audit 02-8), and only the Saved list and its count are read.
     const invalidated = invalidate.mock.calls.map(([filters]) => filters?.queryKey);
-    expect(invalidated).toEqual([['creator-profile'], ['profile-saved-media', 'viewer-1'], ['profile', 'viewer-1']]);
+    expect(invalidated).toEqual([['profile-saved-media', 'viewer-1'], ['profile', 'viewer-1']]);
     expect(authState.api.getShowcaseFeed).not.toHaveBeenCalled();
     expect(screenState.zoom.dismiss).not.toHaveBeenCalled();
     expect(routerState.back).not.toHaveBeenCalled();
@@ -883,5 +893,172 @@ describe('Delete creation from the reel', () => {
 
     expect(routerState.back).toHaveBeenCalledTimes(1);
     expect(routerState.replace).not.toHaveBeenCalled();
+  });
+});
+
+// Audit 02-6, 02-5, 02-8: a reel opened on a creator's page reads and pages
+// the page's own grid, leaves for Explore after a Block, and reads no
+// creator's grid again for a Block.
+describe("a reel opened on a creator's page", () => {
+  const CREATOR_ROUTE = { source: 'creator-profile', creatorUsername: 'luna' };
+  const GRID_KEY = ['creator-profile', 'infinite', 'luna'] as const;
+  const lunaPost = (id: string) => feedItem(id, luna, `unused-${id}`);
+
+  function creatorPage(items: ShowcaseFeedItem[], { offset = 0, hasMore = false } = {}): CreatorProfileResponse {
+    return {
+      profile: {
+        id: luna.id,
+        username: luna.username,
+        displayName: 'Luna',
+        bio: null,
+        avatarUrl: null,
+        coverUrl: null,
+        websiteUrl: null,
+        twitterHandle: null,
+        instagramHandle: null,
+        tiktokHandle: null,
+        location: null,
+      },
+      items,
+      pageInfo: { hasMore, nextOffset: hasMore ? offset + 24 : null, nextLimit: null, limit: 24, offset },
+      viewer: { isOwner: false, isFollowing: true, blockedByViewer: false },
+    };
+  }
+
+  function seedGrid(pages: CreatorProfileResponse[]) {
+    queryClient.setQueryData<InfiniteData<CreatorProfileResponse>>(GRID_KEY, {
+      pages,
+      pageParams: pages.map((page) => page.pageInfo.offset),
+    });
+  }
+
+  const gridPages = () => queryClient.getQueryData<InfiniteData<CreatorProfileResponse>>(GRID_KEY)?.pages;
+  const gridIds = () => gridPages()?.flatMap((page) => page.items.map((item) => item.id));
+  const listProps = (tree: renderer.ReactTestRenderer) => tree.root.findByType('flat-list' as never).props as {
+    onEndReached?: () => void;
+    ListFooterComponent: React.ReactElement<{ state: string }> | null;
+  };
+
+  it("opens on the page's grid, in its order, and reads nothing of its own", async () => {
+    seedGrid([creatorPage([lunaPost('luna-1'), lunaPost('luna-2'), lunaPost('luna-3')], { hasMore: true })]);
+    const tree = await renderReel('luna-2', CREATOR_ROUTE);
+
+    expect(activeId()).toBe('luna-2');
+    expect(reelIds(tree)).toEqual(['luna-1', 'luna-2', 'luna-3']);
+    // The 48-post window the reel used to read for itself.
+    expect(authState.api.getCreatorProfile).not.toHaveBeenCalled();
+    expect(authState.api.getShowcasePost).not.toHaveBeenCalled();
+    // More pages to come: no closing slide yet.
+    expect(listProps(tree).ListFooterComponent).toBeNull();
+  });
+
+  it("pages on from its last post through the grid's offsets, and closes at the grid's end", async () => {
+    seedGrid([creatorPage([lunaPost('luna-1'), lunaPost('luna-2')], { hasMore: true })]);
+    authState.api.getCreatorProfile.mockResolvedValueOnce(creatorPage([lunaPost('luna-3')], { offset: 24 }));
+    const tree = await renderReel('luna-2', CREATOR_ROUTE);
+
+    await act(async () => {
+      listProps(tree).onEndReached!();
+    });
+    await settle();
+
+    expect(authState.api.getCreatorProfile.mock.calls).toEqual([['luna', { limit: 24, offset: 24 }]]);
+    expect(reelIds(tree)).toEqual(['luna-1', 'luna-2', 'luna-3']);
+    // The page under the reel holds the same pages.
+    expect(gridIds()).toEqual(['luna-1', 'luna-2', 'luna-3']);
+    expect(listProps(tree).onEndReached).toBeUndefined();
+    expect(listProps(tree).ListFooterComponent?.props.state).toBe('end');
+    expect(activeId()).toBe('luna-2');
+  });
+
+  it("goes on to Explore after a Block, leaves the page saying who was blocked, and reads no creator's grid again", async () => {
+    seedGrid([creatorPage([lunaPost('luna-1'), lunaPost('luna-2')], { hasMore: true })]);
+    const laneKey = seedLane('viewer-1', lanePosts());
+    queryClient.setQueryData(['creator-follow-state', luna.id], { following: true });
+    await renderReel('luna-2', CREATOR_ROUTE);
+
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    dialogs.confirm.mockResolvedValue(true);
+    authState.api.blockUser.mockResolvedValue({ success: true });
+    const actions = actionsFor(activeItem());
+    await act(async () => {
+      actions.handleAction('block-user');
+    });
+    await settle();
+
+    expect(authState.api.blockUser).toHaveBeenCalledWith('creator-luna');
+    // Back would have landed on the page of the person just blocked.
+    expect(routerState.replace.mock.calls).toEqual([['/(tabs)/showcase']]);
+    expect(routerState.back).not.toHaveBeenCalled();
+    expect(screenState.zoom.dismiss).not.toHaveBeenCalled();
+    // The page left behind says "You blocked @luna", from its cache.
+    expect(gridPages()).toEqual([expect.objectContaining({
+      items: [],
+      viewer: expect.objectContaining({ blockedByViewer: true, isFollowing: false }),
+      pageInfo: expect.objectContaining({ hasMore: false }),
+    })]);
+    expect(queryClient.getQueryData(['creator-follow-state', luna.id])).toEqual({ following: false });
+    // Her posts leave the lanes too, and nothing is read again but the Saved list and its count.
+    expect(laneIds(laneKey)).toEqual(['post-a', 'post-d']);
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey))
+      .toEqual([['profile-saved-media', 'viewer-1'], ['profile', 'viewer-1']]);
+    expect(authState.api.getCreatorProfile).not.toHaveBeenCalled();
+    expect(haptic.success).toHaveBeenCalledTimes(1);
+    expect(AccessibilityInfo.announceForAccessibility).toHaveBeenCalledWith('@luna blocked.');
+  });
+
+  it("fills the heart from the grid's pages, and the tile under the reel counts the save", async () => {
+    seedGrid([creatorPage([lunaPost('luna-1'), lunaPost('luna-2')])]);
+    authState.api.saveShowcasePost.mockResolvedValue({ success: true, isSaved: true, saveCount: 1, changed: true });
+    await renderReel('luna-2', CREATOR_ROUTE);
+    expect(activeItem().isSaved).toBe(false);
+
+    await act(async () => {
+      (screenState.callbacksFor!(activeItem()).onSave as (item: ImmersivePreviewItem) => void)(activeItem());
+    });
+    await settle();
+
+    expect(authState.api.saveShowcasePost).toHaveBeenCalledWith('luna-2', { shouldSave: true, sourceSurface: 'mobile-viewer' });
+    expect(activeItem()).toMatchObject({ id: 'luna-2', isSaved: true, saveCount: 1 });
+    expect(gridPages()?.[0].items[1]).toMatchObject({ id: 'luna-2', isSaved: true, saveCount: 1 });
+    expect(gridPages()?.[0].profile.id).toBe(luna.id);
+  });
+
+  it('counts a comment written in the reel on the post the grid holds', async () => {
+    seedGrid([creatorPage([lunaPost('luna-1'), lunaPost('luna-2')])]);
+    const tree = await renderReel('luna-2', CREATOR_ROUTE);
+    const sheet = tree.root.find((node) => typeof node.props.onCommentCountChange === 'function');
+
+    await act(async () => {
+      (sheet.props.onCommentCountChange as (count: number) => void)(3);
+    });
+    await settle();
+
+    expect(gridPages()?.[0].items[1]).toMatchObject({ id: 'luna-2', commentCount: 3 });
+    expect(activeItem()).toMatchObject({ id: 'luna-2', commentCount: 3 });
+  });
+
+  it('takes a reported post out of the reel and the grid, so the next page does not bring it back', async () => {
+    seedGrid([creatorPage([lunaPost('luna-1'), lunaPost('luna-2'), lunaPost('luna-3')], { hasMore: true })]);
+    authState.api.getCreatorProfile.mockResolvedValueOnce(creatorPage([lunaPost('luna-4')], { offset: 24 }));
+    const tree = await renderReel('luna-2', CREATOR_ROUTE);
+
+    await act(async () => {
+      (screenState.callbacksFor!(activeItem()).onReported as (item: ImmersivePreviewItem) => void)(activeItem());
+    });
+    await settle();
+
+    expect(activeId()).toBe('luna-3');
+    expect(reelIds(tree)).toEqual(['luna-1', 'luna-3']);
+    expect(gridIds()).toEqual(['luna-1', 'luna-3']);
+
+    await act(async () => {
+      listProps(tree).onEndReached!();
+    });
+    await settle();
+
+    expect(reelIds(tree)).toEqual(['luna-1', 'luna-3', 'luna-4']);
+    expect(authState.api.getShowcasePost).not.toHaveBeenCalled();
+    expect(routerState.back).not.toHaveBeenCalled();
   });
 });
