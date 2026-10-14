@@ -2,9 +2,10 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { Archive, ArrowRight, BadgeCheck, Loader2, PackageOpen, Sparkles } from 'lucide-react';
+import { Archive, ArrowRight, BadgeCheck, EyeOff, Loader2, PackageOpen, Sparkles, UserX } from 'lucide-react';
 
 import StudioCard, { STUDIO_GRID_CLASS, StudioChip, StudioKindBadge } from '@/app/creations/StudioCard';
+import { formatMoney, type SupportedCurrency } from '@/lib/currency';
 import { formatPostResourceCreditAmount } from '@/lib/post-resource-bundles';
 import { supabase } from '@/lib/supabase';
 
@@ -18,12 +19,23 @@ type UnlockItem = {
   priceUsdCents: number;
   purchasedAt: string;
   purchasePriceUsdCents: number;
+  paidWith: 'credits' | 'cash' | 'free';
+  /** Credits spent, or the cash amount in minor units (paise, cents). */
+  paidAmountSubunits: number | null;
+  paidCurrency: string | null;
   hasNewerRevision: boolean;
   retired: boolean;
   tombstoned: boolean;
+  /** No bundle or post is left: the creator deleted their account. */
+  detached: boolean;
+  isNsfw: boolean;
   post: {
     title: string;
+    /** The full original: an MP4 for a video. */
     mediaUrl: string | null;
+    mediaKind: 'image' | 'video' | null;
+    /** A still (a video's poster), when a ready one exists. */
+    previewUrl: string | null;
   } | null;
   creator: {
     username: string | null;
@@ -48,12 +60,41 @@ function formatPurchaseDate(value: string): string {
 }
 
 /**
+ * What the buyer paid, in what they paid with. A Razorpay purchase reads in
+ * its own currency, as its checkout quoted it (whole rupees, dollars with
+ * cents); it used to read as a credit charge.
+ */
+function formatPaidLabel(item: Pick<UnlockItem, 'paidWith' | 'paidAmountSubunits' | 'paidCurrency'>): string {
+  if (item.paidWith === 'free') return 'Free';
+  const amount = item.paidAmountSubunits ?? 0;
+  if (item.paidWith === 'credits') return formatPostResourceCreditAmount(amount);
+  const currency = (item.paidCurrency ?? 'USD') as SupportedCurrency;
+  return `${formatMoney(amount / 100, currency, currency === 'INR' ? 'en-IN' : 'en-US')} paid`;
+}
+
+/** A still for the tile; a video's own file is never one, since an `<img>` cannot draw it. */
+function unlockThumbnailSrc(post: UnlockItem['post']): string | null {
+  if (!post) return null;
+  return post.previewUrl ?? (post.mediaKind === 'image' ? post.mediaUrl : null);
+}
+
+/**
  * A creator can delist or delete a post after someone unlocked it, so this list
  * is the only place a buyer is guaranteed to find what they paid for. Both
  * states are labelled rather than hidden — an unexplained missing item reads as
  * a bug, and the point of the tombstone is that nothing was actually lost.
  */
 function UnlockStateBadge({ item }: { item: UnlockItem }) {
+  // A deleted account leaves neither flag set, and this is the row that most
+  // needs saying why its post is gone.
+  if (item.detached) {
+    return (
+      <StudioChip tone="muted" icon={<UserX className="h-3 w-3" />}>
+        Creator left
+      </StudioChip>
+    );
+  }
+
   if (item.tombstoned) {
     return (
       <StudioChip tone="amber" icon={<Archive className="h-3 w-3" />}>
@@ -82,16 +123,42 @@ function UnlockStateBadge({ item }: { item: UnlockItem }) {
 }
 
 /**
- * The unlocked post's media, or the package mark when there is none — also
+ * The unlocked post's still, or the package mark when there is none — also
  * when the URL no longer resolves, which is exactly the tombstoned and
  * delisted case: the creator's media can be gone while the unlock stays.
+ *
+ * A mature post's still waits under a plate until the buyer asks for it. The
+ * purchase entitles them to it; the click is their consent on this screen, so
+ * it reveals in place and asks the server nothing.
  */
-function UnlockMedia({ src }: { src: string | null }) {
+function UnlockMedia({ src, isNsfw }: { src: string | null; isNsfw: boolean }) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const [revealed, setRevealed] = useState(false);
   if (!src || failedSrc === src) {
     return (
       <div className="flex aspect-[4/5] w-full items-center justify-center bg-black/60">
         <PackageOpen className="h-8 w-8 text-zinc-600" />
+      </div>
+    );
+  }
+  if (isNsfw && !revealed) {
+    return (
+      <div className="flex aspect-[4/5] w-full flex-col items-center justify-center gap-3 bg-zinc-950 px-4 text-center">
+        <EyeOff className="h-6 w-6 text-zinc-500" aria-hidden="true" />
+        <p className="text-sm font-semibold text-zinc-200">Mature content</p>
+        <button
+          type="button"
+          aria-label="Show mature content"
+          onClick={(event) => {
+            // The tile sits inside the card's link: this click reveals, it does not open.
+            event.preventDefault();
+            event.stopPropagation();
+            setRevealed(true);
+          }}
+          className="ui-focus-ring inline-flex min-h-10 items-center rounded-full border border-white/15 bg-white/[0.06] px-4 text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.12]"
+        >
+          Show
+        </button>
       </div>
     );
   }
@@ -237,10 +304,10 @@ export default function UnlockLibrary() {
             // Not /showcase/:id -- that route only serves public, unarchived,
             // moderation-clean posts, so it 404s exactly the tombstoned and
             // delisted purchases this library exists to keep reachable. The
-            // /unlocks route checks entitlement and bounces back to the public
-            // page when the post is still publicly readable.
+            // /unlocks route checks entitlement and sends the buyer on to the
+            // post page only when that page would open for them.
             href={`/unlocks/${item.unlockId}`}
-            media={<UnlockMedia src={item.post?.mediaUrl ?? null} />}
+            media={<UnlockMedia src={unlockThumbnailSrc(item.post)} isNsfw={item.isNsfw} />}
             badge={(
               <StudioKindBadge tone="emerald" icon={<BadgeCheck className="h-3.5 w-3.5" />}>
                 Unlocked
@@ -248,9 +315,8 @@ export default function UnlockLibrary() {
             )}
             chips={(
               <>
-                {/* What was paid, in the credits it was paid with, written as the app writes it. */}
-                <StudioChip tone={item.purchasePriceUsdCents > 0 ? 'emerald' : 'sky'}>
-                  {item.purchasePriceUsdCents > 0 ? formatPostResourceCreditAmount(item.purchasePriceUsdCents) : 'Free'}
+                <StudioChip tone={item.paidWith === 'free' ? 'sky' : 'emerald'}>
+                  {formatPaidLabel(item)}
                 </StudioChip>
                 <UnlockStateBadge item={item} />
               </>
