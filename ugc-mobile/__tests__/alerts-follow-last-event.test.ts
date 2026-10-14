@@ -31,8 +31,15 @@ describe("Alerts follow each alert's last event", () => {
 
   it('lists the alerts in the order the server sent them', () => {
     expect(ordering.direction).toBe('descending');
-    expect(alertsScreen).toContain('const notifications = notificationsQuery.data?.notifications ?? [];');
+    // Page after page as read, each as sent (`alerts-screen.test.tsx` draws it).
+    expect(alertsScreen).toContain('const notifications = flattenAlertPages(notificationsQuery.data);');
+    expect(alertsScreen).toContain('for (const page of data?.pages ?? []) {');
     expect(alertsScreen).toContain('{notifications.map((notification) => (');
     expect(alertsScreen).not.toMatch(/\.(?:sort|toSorted|reverse|toReversed)\(/);
+  });
+
+  it('reads an older page from the field the list is ordered by', () => {
+    // The `before` cursor is the oldest alert's last event.
+    expect(alertsScreen).toContain(`alerts[alerts.length - 1]?.${ordering.by}`);
   });
 });

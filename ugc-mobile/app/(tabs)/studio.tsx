@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { useFocusEffect, useScrollToTop } from '@react-navigation/native';
 import { router } from 'expo-router';
 import {
@@ -13,8 +13,8 @@ import {
   ToggleRight,
   WandSparkles,
 } from 'lucide-react-native';
-import { useCallback, useEffect, useRef } from 'react';
-import { ActivityIndicator, Linking, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Linking, Pressable, RefreshControl, ScrollView, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { TopScrim } from '@/components/top-scrim';
@@ -22,8 +22,9 @@ import { AppText, Card, IconButton, PrimaryButton, SecondaryButton, StatusBlock 
 import { haptic } from '@/lib/haptics';
 import { formatRelativeTime } from '@/lib/home-view-model';
 import { useAuth } from '@/lib/auth';
-import { publishUnreadCount } from '@/lib/notification-badge';
+import { alertsListQueryKey, publishUnreadCount } from '@/lib/notification-badge';
 import {
+  ALERTS_ROUTE,
   deepLinkTargetsAlertsScreen,
   navigateToNotificationDeepLink,
   setAlertsScreenFocused,
@@ -35,7 +36,12 @@ import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme, type ThemeColorName } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
-import type { MobileNotification, MobileNotificationCategory, MobileNotificationPreferences as PreferenceState } from '@/lib/types';
+import type {
+  MobileNotification,
+  MobileNotificationCategory,
+  MobileNotificationPreferences as PreferenceState,
+  MobileNotificationsResponse,
+} from '@/lib/types';
 
 const NOTIFICATION_CATEGORIES = [
   {
@@ -66,6 +72,38 @@ const CATEGORY_META: Record<MobileNotificationCategory, { tone: ThemeColorName; 
   system: { tone: 'info', label: 'System', Icon: BellRing },
 };
 
+/** Alerts per read: the newest page, then each older one the reader asks for. */
+const ALERTS_PAGE_SIZE = 50;
+/** A list read longer ago than this is read again when the tab comes back into view. */
+const ALERTS_STALE_MS = 1000 * 20;
+
+/**
+ * The server's `before` cursor for the next older page: the last event time of
+ * the oldest alert held, the time the list is ordered by. A page shorter than
+ * asked for was the end of the list.
+ */
+function olderAlertsCursor(lastPage: MobileNotificationsResponse) {
+  const alerts = lastPage.notifications;
+  return alerts.length < ALERTS_PAGE_SIZE ? undefined : alerts[alerts.length - 1]?.updatedAt;
+}
+
+/**
+ * Every page in the order read, each alert once, whatever the server does with
+ * alerts that share the boundary time.
+ */
+function flattenAlertPages(data: InfiniteData<MobileNotificationsResponse> | undefined) {
+  const seen = new Set<string>();
+  const alerts: MobileNotification[] = [];
+  for (const page of data?.pages ?? []) {
+    for (const notification of page.notifications) {
+      if (seen.has(notification.id)) continue;
+      seen.add(notification.id);
+      alerts.push(notification);
+    }
+  }
+  return alerts;
+}
+
 export default function StudioScreen() {
   const theme = useAppTheme();
   const { user, api } = useAuth();
@@ -80,14 +118,19 @@ export default function StudioScreen() {
   const pageWidth = Math.min(width, 430);
   const isCompact = pageWidth < 390;
   const horizontalPadding = isCompact ? 16 : 18;
-  const queryKey = ['mobile-notifications', user?.id] as const;
+  const queryKey = alertsListQueryKey(user?.id);
   const preferencesQueryKey = ['mobile-notification-preferences', user?.id] as const;
 
-  const notificationsQuery = useQuery({
+  // The unread count covers every alert, and unread ones are never pruned, so
+  // the list pages on past its newest 50: "72 unread" over a list of 50 left
+  // the rest out of reach.
+  const notificationsQuery = useInfiniteQuery({
     queryKey,
     enabled: Boolean(user),
-    queryFn: () => api.listMobileNotifications({ limit: 50 }),
-    staleTime: 1000 * 20,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => api.listMobileNotifications({ limit: ALERTS_PAGE_SIZE, before: pageParam }),
+    getNextPageParam: olderAlertsCursor,
+    staleTime: ALERTS_STALE_MS,
   });
 
   const markReadMutation = useMutation({
@@ -119,13 +162,31 @@ export default function StudioScreen() {
   // While this list is on screen, an arriving alert is announced by the list
   // itself — a banner over it would repeat what the reader is already looking
   // at. `lib/notifications.ts` reads this when the system asks how to present.
+  //
+  // Coming back to the tab reads a stale list again, every page held, as the
+  // web's Alerts does when its tab regains focus. Before, only a push arriving,
+  // the app coming to the front or the Refresh button did.
+  const userId = user?.id;
   useFocusEffect(useCallback(() => {
     setAlertsScreenFocused(true);
+    const listKey = alertsListQueryKey(userId);
+    const listState = queryClient.getQueryState(listKey);
+    if (
+      listState
+      && listState.status !== 'pending'
+      && listState.fetchStatus === 'idle'
+      && (listState.isInvalidated || Date.now() - listState.dataUpdatedAt >= ALERTS_STALE_MS)
+    ) {
+      void queryClient.refetchQueries({ queryKey: listKey, exact: true, type: 'active' });
+    }
     return () => setAlertsScreenFocused(false);
-  }, []));
+  }, [queryClient, userId]));
 
-  const notifications = notificationsQuery.data?.notifications ?? [];
-  const unreadCount = notificationsQuery.data?.unreadCount
+  const notifications = flattenAlertPages(notificationsQuery.data);
+  const pages = notificationsQuery.data?.pages;
+  // The page read last carries the newest count: a refresh reads every page
+  // again from the newest down, and an older page is read after those above it.
+  const unreadCount = pages?.[pages.length - 1]?.unreadCount
     ?? notifications.filter((notification) => !notification.isRead).length;
   // The tab bar polls for this number once a minute; this screen learns it
   // first — on load, and again the moment a mark-read refetch lands. Pushing it
@@ -146,10 +207,35 @@ export default function StudioScreen() {
 
     // Marking it read is the whole of the response when there is nowhere else
     // to go. The row's own destination can be this very screen — "New follower"
-    // still carries `/studio` — and the old fallback for an unresolvable link
-    // asked the router for this screen too.
+    // carries `/studio` when the follower has no handle, as does every one
+    // written before the server linked the follower's page — and the old
+    // fallback for an unresolvable link asked the router for this screen too.
     if (deepLinkTargetsAlertsScreen(notification.deepLink)) return;
     navigateToNotificationDeepLink(notification.deepLink);
+  };
+
+  // Bound to the reader's own pull, never to a background refetch: on iOS a
+  // `refreshing` that flips without a drag shifts the list down and can leave
+  // it there (the note in components/home-dashboard.tsx).
+  const [pullRefreshing, setPullRefreshing] = useState(false);
+  // Back to the newest page, then read it again: kept, every older page the
+  // reader had opened would be read again as well.
+  const refreshNewestAlerts = () => {
+    queryClient.setQueryData<InfiniteData<MobileNotificationsResponse, string | null>>(queryKey, (current) => (
+      current && current.pages.length > 1
+        ? { pages: current.pages.slice(0, 1), pageParams: current.pageParams.slice(0, 1) }
+        : current
+    ));
+    return notificationsQuery.refetch();
+  };
+  const handlePullRefresh = () => {
+    haptic.light();
+    setPullRefreshing(true);
+    void refreshNewestAlerts().finally(() => setPullRefreshing(false));
+  };
+  const loadOlderAlerts = () => {
+    if (!notificationsQuery.hasNextPage || notificationsQuery.isFetchingNextPage) return;
+    void notificationsQuery.fetchNextPage();
   };
 
   return (
@@ -158,6 +244,15 @@ export default function StudioScreen() {
         ref={scrollRef}
         contentInsetAdjustmentBehavior="never"
         showsVerticalScrollIndicator={false}
+        refreshControl={user ? (
+          <RefreshControl
+            refreshing={pullRefreshing}
+            onRefresh={handlePullRefresh}
+            tintColor={theme.colors.faint}
+            colors={[theme.colors.primary]}
+            progressBackgroundColor={theme.colors.panelSoft}
+          />
+        ) : undefined}
         style={{ flex: 1, backgroundColor: theme.colors.background }}
         contentContainerStyle={{
           paddingTop: topInset + 18,
@@ -173,10 +268,11 @@ export default function StudioScreen() {
           signedIn={Boolean(user)}
           unreadCount={unreadCount}
           totalCount={notifications.length}
+          hasOlder={notificationsQuery.hasNextPage}
           isRefreshing={notificationsQuery.isRefetching}
           onRefresh={() => {
             haptic.light();
-            void notificationsQuery.refetch();
+            void refreshNewestAlerts();
           }}
           onMarkAllRead={() => markAllReadMutation.mutate()}
           canMarkAllRead={unreadCount > 0 && !markAllReadMutation.isPending}
@@ -188,7 +284,11 @@ export default function StudioScreen() {
               title="Sign in required"
               body="Sign in to review generation results, unlocks, follows, saves, remixes, and creator activity."
             />
-            <PrimaryButton label="Sign in" onPress={() => router.push('/auth')} accent="primary" />
+            <PrimaryButton
+              label="Sign in"
+              onPress={() => router.push({ pathname: '/auth', params: { returnTo: ALERTS_ROUTE } } as never)}
+              accent="primary"
+            />
             <NotificationCategoryList />
           </>
         ) : (
@@ -217,18 +317,35 @@ export default function StudioScreen() {
             ) : null}
             {notificationsQuery.isLoading ? (
               <LoadingState />
-            ) : notificationsQuery.isError ? (
+            ) : notificationsQuery.isLoadingError ? (
               <View style={{ gap: appTheme.spacing.gap }}>
                 <StatusBlock tone="danger" title="Could not load alerts" body="Check your connection, then try again." />
                 <SecondaryButton label="Retry notifications" onPress={() => void notificationsQuery.refetch()} />
               </View>
-            ) : notifications.length > 0 ? (
-              <NotificationList
-                notifications={notifications}
-                onPressNotification={handlePressNotification}
-              />
             ) : (
-              <CaughtUpState />
+              <>
+                {/* A list already drawn stays drawn when a later read fails. */}
+                {notificationsQuery.isRefetchError ? (
+                  <StatusBlock tone="danger" title="Could not refresh alerts" body="Check your connection, then pull down to try again." />
+                ) : null}
+                {notifications.length > 0 ? (
+                  <>
+                    <NotificationList
+                      notifications={notifications}
+                      onPressNotification={handlePressNotification}
+                    />
+                    {notificationsQuery.hasNextPage ? (
+                      <OlderAlertsFooter
+                        loading={notificationsQuery.isFetchingNextPage}
+                        failed={notificationsQuery.isFetchNextPageError}
+                        onPress={loadOlderAlerts}
+                      />
+                    ) : null}
+                  </>
+                ) : (
+                  <CaughtUpState />
+                )}
+              </>
             )}
             {preferencesQuery.isError ? (
               <View style={{ gap: appTheme.spacing.gap }}>
@@ -255,6 +372,7 @@ function NotificationHeader({
   signedIn,
   unreadCount,
   totalCount,
+  hasOlder,
   isRefreshing,
   onRefresh,
   onMarkAllRead,
@@ -263,12 +381,14 @@ function NotificationHeader({
   signedIn: boolean;
   unreadCount: number;
   totalCount: number;
+  /** More alerts than the list holds: the count is a floor. */
+  hasOlder: boolean;
   isRefreshing: boolean;
   onRefresh: () => void;
   onMarkAllRead: () => void;
   canMarkAllRead: boolean;
 }) {
-  const alertLabel = totalCount === 1 ? '1 alert' : `${totalCount} alerts`;
+  const alertLabel = hasOlder ? `${totalCount}+ alerts` : totalCount === 1 ? '1 alert' : `${totalCount} alerts`;
   const deliveryLabel = isRefreshing ? 'Syncing' : 'Mobile';
 
   return (
@@ -345,6 +465,34 @@ function NotificationList({
           onPress={() => onPressNotification(notification)}
         />
       ))}
+    </View>
+  );
+}
+
+/**
+ * The way to alerts past the newest page. A button rather than a read on
+ * reaching the end: the alert-type switches sit below the list, and a page
+ * read on the way down to them would push them away each time.
+ */
+function OlderAlertsFooter({
+  loading,
+  failed,
+  onPress,
+}: {
+  loading: boolean;
+  failed: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <View style={{ gap: appTheme.spacing.gap }}>
+      {failed ? (
+        <StatusBlock tone="danger" title="Could not load older alerts" body="Check your connection, then try again." />
+      ) : null}
+      <SecondaryButton
+        label={loading ? 'Loading older alerts…' : 'Load older alerts'}
+        disabled={loading}
+        onPress={onPress}
+      />
     </View>
   );
 }
@@ -447,9 +595,12 @@ function PushControlCard({
 
   if (preferencesReady) {
     title = pushEnabled ? 'Push alerts' : 'Push alerts paused';
+    // One setting for the account, not this phone: the server keeps a single
+    // preference per account and sends to every phone signed in to it, so a
+    // pause here pauses them all. The card said "this device".
     body = pushEnabled
-      ? 'Native delivery is on for this device.'
-      : 'History still appears here. Turn push back on when you want native delivery.';
+      ? 'Push notifications for your account on every device.'
+      : 'Paused for your account on every device. Alerts still appear here.';
   }
 
   if (isLoading) {
@@ -459,7 +610,7 @@ function PushControlCard({
     showToggle = false;
   } else if (result?.status === 'permission-required' || result === null) {
     title = 'Enable push alerts';
-    body = 'Get finished renders, creator activity, and unlock updates as native alerts.';
+    body = 'Get finished renders, creator activity, and unlock updates as notifications on this device.';
     action = onEnable;
     showToggle = false;
   } else if (result?.status === 'denied') {
@@ -484,6 +635,9 @@ function PushControlCard({
   }
 
   const iconColor = actionAccent === 'image' ? theme.colors.image : theme.colors.primary;
+  // What this phone allows is its own system permission, apart from the
+  // account's switch beside it.
+  const permissionLine = showToggle && result?.status === 'registered' ? 'This device allows notifications.' : null;
 
   return (
     <Card
@@ -502,11 +656,13 @@ function PushControlCard({
       <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
         <AppText variant="body" style={{ fontWeight: '700' }}>{title}</AppText>
         <AppText variant="caption" color="muted">{body}</AppText>
+        {permissionLine ? <AppText variant="caption" color="faint">{permissionLine}</AppText> : null}
       </View>
       {showToggle ? (
         <Pressable
           accessibilityRole="switch"
-          accessibilityLabel="Push alerts"
+          accessibilityLabel="Push alerts for your account"
+          accessibilityHint="Turns push alerts on or off on every device signed in to this account."
           accessibilityState={{ checked: pushEnabled, disabled: preferencesDisabled || !preferences }}
           disabled={preferencesDisabled || !preferences}
           onPress={() => onTogglePush(!pushEnabled)}

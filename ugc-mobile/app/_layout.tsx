@@ -47,7 +47,7 @@ import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { isReelBackdropShown, subscribeToReelBackdrop } from '@/lib/reel-backdrop';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
-import { navigateToNotificationDeepLink, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
+import { openTappedNotification, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
 import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
 import { installMediaQueryRetention, pruneInactiveMediaQueries } from '@/lib/media-query-retention';
 import { preloadPersistedAccountState } from '@/lib/persisted-account-state';
@@ -608,22 +608,12 @@ function NotificationResponseCoordinator() {
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
 
+  // Once for the app, not again for each account: subscribing reads the push
+  // the app was opened from, and subscribing again when the stored session
+  // landed after a cold start read that push a second time.
   useEffect(() => subscribeToNotificationResponses({
-    handleResponse: async ({ notificationId, deepLink }) => {
-      if (notificationId) {
-        await api.markMobileNotificationsRead([notificationId]).catch((error) => {
-          console.error('Failed to mark tapped notification read', error);
-        });
-      }
-
-      await queryClient.invalidateQueries({ queryKey: ['mobile-notifications', user?.id] });
-      if (!navigateToNotificationDeepLink(deepLink)) {
-        return navigateToNotificationDeepLink('/studio');
-      }
-
-      return true;
-    },
-  }), [api, queryClient, user?.id]);
+    handleResponse: (event) => openTappedNotification(event, { api, queryClient }),
+  }), [api, queryClient]);
 
   // An alert that arrives while the app is in front no longer always draws a
   // banner (HIG Notifications asks for "discoverable but not distracting"), so

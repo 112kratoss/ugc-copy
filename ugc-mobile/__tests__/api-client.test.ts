@@ -872,6 +872,25 @@ describe('mobile api client caching', () => {
     expect(response.pagination).toEqual({ limit: 24, hasMore: false, nextCursor: null });
   });
 
+  it('reads older alerts from the last event the server printed, its offset intact', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ success: true, notifications: [], unreadCount: 0 }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.listMobileNotifications({ limit: 50, before: null });
+    await api.listMobileNotifications({ limit: 50, before: '2026-10-14T11:11:00.000123+00:00' });
+
+    const [[firstUrl], [olderUrl]] = fetcher.mock.calls as unknown as Array<[string, RequestInit]>;
+    // The newest page asks for no cursor at all.
+    expect(firstUrl).toBe('https://magicbooklet.test/api/mobile/notifications?limit=50');
+    // A bare "+" in a query string reads as a space on the server.
+    expect(olderUrl).toBe('https://magicbooklet.test/api/mobile/notifications?limit=50&before=2026-10-14T11%3A11%3A00.000123%2B00%3A00');
+    expect(new URL(olderUrl).searchParams.get('before')).toBe('2026-10-14T11:11:00.000123+00:00');
+  });
+
   it('resolves every creation descriptor media URL against the API origin', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ generations: [{
       id: 'video-1', output_url: '/api/media?path=original.mp4',
