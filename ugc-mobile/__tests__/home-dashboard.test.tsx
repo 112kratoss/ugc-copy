@@ -2,11 +2,16 @@
 
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { Share } from 'react-native';
+import { AccessibilityInfo, Alert, Share } from 'react-native';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { FeedVideoActivationStore } from '../lib/feed-video-activation';
+import type { PlaybackNetwork } from '../lib/playback-metrics';
+
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
-type SentEvent = { eventType: string; deliveryId?: string; durationMs?: number };
+type SentEvent = { eventType: string; deliveryId?: string; durationMs?: number; clientEventId?: string };
+type NewestAnswer = { newestPostId: string | null; newestPublishedAt: string | null };
+type UndoAnswer = { ok: true; removed: boolean };
 
 // The header rail's pictures are `require`d at the screen's top level, as Metro
 // bundles them, and that call reaches Node's own loader, which would read a
@@ -42,8 +47,11 @@ const navState = vi.hoisted(() => ({ focused: true }));
 
 const queryState = vi.hoisted(() => ({
   pages: [] as Array<Record<string, unknown>>,
+  // When the lane's pages were fetched (React Query's `dataUpdatedAt`).
+  dataUpdatedAt: 1,
+  refetch: vi.fn(() => Promise.resolve()),
   client: {
-    getQueriesData: vi.fn(() => []),
+    getQueriesData: vi.fn((): Array<[readonly unknown[], unknown]> => []),
     invalidateQueries: vi.fn(() => Promise.resolve()),
     setQueriesData: vi.fn(),
     setQueryData: vi.fn(),
@@ -53,9 +61,15 @@ const queryState = vi.hoisted(() => ({
 // One object for every render, as the real context provides.
 const authState = vi.hoisted(() => ({
   api: {
+    getShowcaseFeedNewest: vi.fn((_params?: { category?: string }): Promise<NewestAnswer> => (
+      Promise.resolve({ newestPostId: null, newestPublishedAt: null })
+    )),
     getShowcasePost: vi.fn(),
     recordShowcaseFeedEvent: vi.fn((_request: SentEvent) => Promise.resolve()),
     shareShowcasePost: vi.fn((_postId: string, _options: { sourceSurface: string }) => Promise.resolve()),
+    undoFeedFeedback: vi.fn((_body: Record<string, string>): Promise<UndoAnswer> => (
+      Promise.resolve({ ok: true, removed: true })
+    )),
   },
   credits: 0,
   identityUserId: 'viewer-1' as string | null,
@@ -69,6 +83,19 @@ const trackers = vi.hoisted(() => [] as Array<{ handOff: (target: unknown) => vo
 
 const tabBarAmbient = vi.hoisted(() => ({ report: vi.fn() }));
 
+// AppState's foreground reports, as `subscribeToAppForeground` hands them on.
+const foregroundState = vi.hoisted(() => ({ listeners: new Set<(foreground: boolean) => void>() }));
+
+// The phone's network, as lib/playback-device.ts reports it: a store a test
+// switches, so the screen re-renders the way it does on a real change.
+const networkState = vi.hoisted(() => ({
+  kind: 'wifi' as PlaybackNetwork,
+  listeners: new Set<() => void>(),
+}));
+
+// Every playback store the screen makes, so a test can read what it plays and prepares.
+const activationStores = vi.hoisted(() => [] as FeedVideoActivationStore[]);
+
 vi.mock('@shopify/flash-list', () => ({
   FlashList: (props: MockProps) => React.createElement('flash-list', props),
 }));
@@ -76,7 +103,7 @@ vi.mock('@shopify/flash-list', () => ({
 vi.mock('@tanstack/react-query', () => ({
   useInfiniteQuery: () => ({
     data: { pages: queryState.pages, pageParams: [{ offset: 0 }] },
-    dataUpdatedAt: 1,
+    dataUpdatedAt: queryState.dataUpdatedAt,
     fetchNextPage: vi.fn(() => Promise.resolve()),
     fetchPreviousPage: vi.fn(() => Promise.resolve()),
     hasNextPage: false,
@@ -87,7 +114,7 @@ vi.mock('@tanstack/react-query', () => ({
     isFetchingNextPage: false,
     isLoading: false,
     isSuccess: true,
-    refetch: vi.fn(() => Promise.resolve()),
+    refetch: queryState.refetch,
   }),
   useQuery: () => ({ data: undefined }),
   useQueryClient: () => queryState.client,
@@ -138,12 +165,27 @@ vi.mock('lucide-react-native', () => ({
   Play: (props: MockProps) => React.createElement('play-icon', props),
   Plus: (props: MockProps) => React.createElement('plus-icon', props),
   Rocket: (props: MockProps) => React.createElement('rocket-icon', props),
+  Search: (props: MockProps) => React.createElement('search-icon', props),
   Sparkles: (props: MockProps) => React.createElement('sparkles-icon', props),
   WandSparkles: (props: MockProps) => React.createElement('wand-sparkles-icon', props),
 }));
 
 vi.mock('@/components/comments-sheet', () => ({
   CommentsSheet: (props: MockProps) => React.createElement('comments-sheet', props),
+}));
+
+// The overlay, the pill and the notice have suites of their own; here they are
+// the props the screen hands them.
+vi.mock('@/components/explore-search-overlay', () => ({
+  ExploreSearchOverlay: (props: MockProps) => React.createElement('explore-search-overlay', props),
+}));
+
+vi.mock('@/components/new-posts-pill', () => ({
+  NewPostsPill: (props: MockProps) => React.createElement('new-posts-pill', props),
+}));
+
+vi.mock('@/components/feed-undo-notice', () => ({
+  FeedUndoNotice: (props: MockProps) => React.createElement('feed-undo-notice', props),
 }));
 
 vi.mock('@/components/feed-feedback-sheet', () => ({
@@ -230,7 +272,44 @@ vi.mock('@/lib/use-active-generations', () => ({
 
 vi.mock('@/lib/app-foreground', () => ({
   useAppForeground: () => true,
+  subscribeToAppForeground: (listener: (foreground: boolean) => void) => {
+    foregroundState.listeners.add(listener);
+    return () => {
+      foregroundState.listeners.delete(listener);
+    };
+  },
 }));
+
+// The autoplay preference's storage: nothing stored, so Wi-Fi only.
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: {
+    getItem: () => Promise.resolve(null),
+    setItem: () => Promise.resolve(),
+  },
+}));
+
+vi.mock('@/lib/playback-device', async () => {
+  const { useSyncExternalStore } = await import('react');
+  const subscribe = (listener: () => void) => {
+    networkState.listeners.add(listener);
+    return () => {
+      networkState.listeners.delete(listener);
+    };
+  };
+  return { useNetworkKind: () => useSyncExternalStore(subscribe, () => networkState.kind) };
+});
+
+vi.mock('@/lib/feed-video-activation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/feed-video-activation')>();
+  return {
+    ...actual,
+    createFeedVideoActivationStore: () => {
+      const store = actual.createFeedVideoActivationStore();
+      activationStores.push(store);
+      return store;
+    },
+  };
+});
 
 vi.mock('@/lib/tab-bar-ambient', () => ({
   useTabBarAmbientFeed: () => tabBarAmbient.report,
@@ -266,8 +345,17 @@ vi.mock('@/lib/feed-attention-view-model', async (importOriginal) => {
 });
 
 import { HomeDashboard } from '../components/home-dashboard';
+import { resetAutoplayPreferenceForTests } from '../lib/autoplay-preference';
+import { haptic } from '../lib/haptics';
+import { FEED_PREPARED_WINDOW_STEP_MS } from '../lib/media-performance';
 import { schedulePersistHomeFeed } from '../lib/persisted-home-feed';
-import { SHOWCASE_DWELL_VIEWABILITY } from '../lib/showcase-feed-events';
+import {
+  SHOWCASE_DWELL_VIEWABILITY,
+  SHOWCASE_PLAYBACK_VIEWABILITY,
+  filterAnonymousSessionShowcaseFeedItems,
+  resetAnonymousShowcaseFeedRemovalsForTests,
+  resetFeedFeedbackRequestsForTests,
+} from '../lib/showcase-feed-events';
 import { showcaseFeedLaneQueryOptions } from '../lib/showcase-feed-lane';
 import { createShowcaseFeedViewerQueryKey } from '../lib/showcase-feed-query';
 
@@ -310,6 +398,15 @@ function mediaItem(id: string, deliveryId: string) {
   };
 }
 
+function videoItem(id: string, deliveryId: string) {
+  return {
+    ...mediaItem(id, deliveryId),
+    mediaUrl: `https://cdn.example.com/${id}.mp4`,
+    mediaKind: 'video',
+    category: 'video',
+  };
+}
+
 function textItem(id: string, deliveryId: string) {
   return {
     ...mediaItem(id, deliveryId),
@@ -346,12 +443,55 @@ function listProps(tree: renderer.ReactTestRenderer) {
   return tree.root.find((node) => String(node.type) === 'flash-list').props;
 }
 
+/** The props the screen hands a mocked child drawn as `type`. */
+function hostProps(tree: renderer.ReactTestRenderer, type: string) {
+  return tree.root.find((node) => String(node.type) === type).props;
+}
+
+/** The list header (top bar, rail and chips), drawn on its own so its controls can be pressed. */
+function renderHeader(tree: renderer.ReactTestRenderer) {
+  let header: renderer.ReactTestRenderer | undefined;
+  renderer.act(() => {
+    header = renderer.create(listProps(tree).ListHeaderComponent as React.ReactElement);
+  });
+  return header!;
+}
+
+function press(root: renderer.ReactTestRenderer, label: string) {
+  const control = root.root.find((node) => (
+    String(node.type) === 'pressable' && node.props.accessibilityLabel === label
+  ));
+  renderer.act(() => control.props.onPress());
+}
+
+const settlePromises = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** The app going to the background and coming back, as AppState reports it. */
+async function returnToApp() {
+  await renderer.act(async () => {
+    for (const listener of [...foregroundState.listeners]) listener(false);
+    for (const listener of [...foregroundState.listeners]) listener(true);
+    await settlePromises();
+  });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+}
+
 /** The handlers the screen gives the card at `index`, as the list would draw it. */
 function cardAt(tree: renderer.ReactTestRenderer, index: number) {
   const props = listProps(tree);
   const cell = props.renderItem({ item: props.data[index], index, target: 'Cell' }) as React.ReactElement<{
     children: React.ReactElement<{
       onAssetPress: () => void;
+      onFeedbackOpen: () => void;
       onOpen: (zoom: null) => void;
       onShare: () => void;
     }>;
@@ -359,17 +499,22 @@ function cardAt(tree: renderer.ReactTestRenderer, index: number) {
   return cell.props.children.props;
 }
 
-/** FlashList reporting these cards at the dwell's visibility (half on screen). */
-function reportOnScreen(tree: renderer.ReactTestRenderer, indexes: number[]) {
+/** FlashList reporting these cards at one viewability config's threshold. */
+function reportViewable(tree: renderer.ReactTestRenderer, config: unknown, indexes: number[]) {
   const props = listProps(tree);
-  const dwell = (props.viewabilityConfigCallbackPairs as Array<{
+  const pair = (props.viewabilityConfigCallbackPairs as Array<{
     viewabilityConfig: unknown;
     onViewableItemsChanged: (info: { viewableItems: unknown[]; changed: unknown[] }) => void;
-  }>).find((pair) => pair.viewabilityConfig === SHOWCASE_DWELL_VIEWABILITY);
-  renderer.act(() => dwell!.onViewableItemsChanged({
+  }>).find((candidate) => candidate.viewabilityConfig === config);
+  renderer.act(() => pair!.onViewableItemsChanged({
     viewableItems: indexes.map((index) => ({ index, isViewable: true, item: props.data[index], key: props.data[index].id })),
     changed: [],
   }));
+}
+
+/** FlashList reporting these cards at the dwell's visibility (half on screen). */
+function reportOnScreen(tree: renderer.ReactTestRenderer, indexes: number[]) {
+  reportViewable(tree, SHOWCASE_DWELL_VIEWABILITY, indexes);
 }
 
 function sentEvents(): SentEvent[] {
@@ -391,9 +536,24 @@ describe('Home screen', () => {
     authState.user = { id: 'viewer-1' };
     authState.identityUserId = 'viewer-1';
     queryState.pages = [];
+    queryState.dataUpdatedAt = 1;
+    // Back to each double's own answer after a test that changed it.
+    queryState.refetch.mockReset();
+    queryState.client.getQueriesData.mockReset();
+    authState.api.getShowcaseFeedNewest.mockReset();
+    authState.api.recordShowcaseFeedEvent.mockReset();
+    authState.api.undoFeedFeedback.mockReset();
+    foregroundState.listeners.clear();
+    networkState.kind = 'wifi';
+    networkState.listeners.clear();
+    activationStores.length = 0;
+    resetAutoplayPreferenceForTests('wifi');
+    resetAnonymousShowcaseFeedRemovalsForTests();
+    resetFeedFeedbackRequestsForTests();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -531,6 +691,337 @@ describe('Home screen', () => {
     expect(new Set(vi.mocked(createShowcaseFeedViewerQueryKey).mock.calls.map(([identity]) => identity)))
       .toEqual(new Set(['guest-1']));
     expect(schedulePersistHomeFeed).toHaveBeenCalledWith(queryState.client, 'guest-1');
+
+    renderer.act(() => tree.unmount());
+  });
+
+  // Product decision D2 (2026-10-14): a ranked lane is never refetched under
+  // the reader on a return to the app; a pill offers the newer posts instead.
+  it('offers newer posts on a return five minutes after the lane was fetched, and fetches nothing into the lane', async () => {
+    queryState.pages = [page([mediaItem('a', 'delivery-pill-a')])];
+    queryState.dataUpdatedAt = T0 - 5 * 60_000;
+    authState.api.getShowcaseFeedNewest.mockResolvedValue({
+      newestPostId: 'fresh',
+      newestPublishedAt: '2026-10-14T08:58:00.000Z',
+    });
+    const { tree } = renderHome();
+    expect(hostProps(tree, 'new-posts-pill').visible).toBe(false);
+    expect(authState.api.getShowcaseFeedNewest).not.toHaveBeenCalled();
+
+    await returnToApp();
+
+    // For You has no category: every post counts.
+    expect(authState.api.getShowcaseFeedNewest).toHaveBeenCalledTimes(1);
+    expect(authState.api.getShowcaseFeedNewest).toHaveBeenCalledWith({ category: 'all' });
+    const pill = hostProps(tree, 'new-posts-pill');
+    expect(pill.visible).toBe(true);
+    // Below the top bar's row (10pt above it, 48pt tall), clear of its controls.
+    expect(pill.topOffset).toBe(listProps(tree).contentContainerStyle.paddingTop + 10 + 48 + 8);
+    expect(queryState.refetch).not.toHaveBeenCalled();
+    expect(queryState.client.setQueryData).not.toHaveBeenCalled();
+
+    renderer.act(() => tree.unmount());
+  });
+
+  it('takes the pill’s tap to the top, then cuts the lane to its first page and refetches it, with no refresh control', async () => {
+    queryState.pages = [page([mediaItem('a', 'delivery-tap-a')])];
+    queryState.dataUpdatedAt = T0 - 10 * 60_000;
+    authState.api.getShowcaseFeedNewest.mockResolvedValue({
+      newestPostId: 'fresh',
+      newestPublishedAt: '2026-10-14T08:58:00.000Z',
+    });
+    const refetched = deferred<void>();
+    queryState.refetch.mockImplementation(() => refetched.promise);
+    const lightHaptic = vi.spyOn(haptic, 'light');
+    const { tree, list } = renderHome();
+    await returnToApp();
+    expect(hostProps(tree, 'new-posts-pill').visible).toBe(true);
+
+    renderer.act(() => hostProps(tree, 'new-posts-pill').onPress());
+
+    expect(hostProps(tree, 'new-posts-pill').visible).toBe(false);
+    expect(lightHaptic).toHaveBeenCalledTimes(1);
+    expect(list.scrollToOffset).toHaveBeenCalledWith({ offset: 0, animated: false });
+    const laneKey = vi.mocked(showcaseFeedLaneQueryOptions).mock.results.at(-1)!.value.queryKey;
+    expect(queryState.client.setQueryData).toHaveBeenCalledTimes(1);
+    const [trimmedKey, trim] = queryState.client.setQueryData.mock.calls[0] as [unknown, (current: unknown) => unknown];
+    expect(trimmedKey).toEqual(laneKey);
+    const firstPage = page([mediaItem('a', 'delivery-tap-a')]);
+    expect(trim({ pages: [firstPage, page([mediaItem('b', 'delivery-tap-b')])], pageParams: [{ offset: 0 }, { offset: 1 }] }))
+      .toEqual({ pages: [firstPage], pageParams: [{ offset: 0 }] });
+    expect(queryState.refetch).toHaveBeenCalledTimes(1);
+    expect(list.scrollToOffset.mock.invocationCallOrder[0]).toBeLessThan(queryState.refetch.mock.invocationCallOrder[0]);
+    // No pull is behind this refresh: the control stays down while the page loads.
+    expect(listProps(tree).refreshControl.props.refreshing).toBe(false);
+    await renderer.act(async () => {
+      refetched.resolve();
+      await settlePromises();
+    });
+    expect(listProps(tree).refreshControl.props.refreshing).toBe(false);
+
+    // A pull, by contrast, holds the control until its page has loaded.
+    const pulled = deferred<void>();
+    queryState.refetch.mockImplementation(() => pulled.promise);
+    renderer.act(() => listProps(tree).refreshControl.props.onRefresh());
+    expect(listProps(tree).refreshControl.props.refreshing).toBe(true);
+    await renderer.act(async () => {
+      pulled.resolve();
+      await settlePromises();
+    });
+    expect(listProps(tree).refreshControl.props.refreshing).toBe(false);
+
+    renderer.act(() => tree.unmount());
+  });
+
+  it('asks about the lane on screen, and nothing for Recent, which keeps its own refetch', async () => {
+    queryState.pages = [page([textItem('a', 'delivery-lanes-a')])];
+    queryState.dataUpdatedAt = T0 - 6 * 60_000;
+    const { tree } = renderHome();
+
+    let header = renderHeader(tree);
+    press(header, 'Notes');
+    renderer.act(() => header.unmount());
+    await returnToApp();
+    expect(authState.api.getShowcaseFeedNewest).toHaveBeenCalledTimes(1);
+    expect(authState.api.getShowcaseFeedNewest).toHaveBeenCalledWith({ category: 'text' });
+
+    header = renderHeader(tree);
+    press(header, 'Recent');
+    renderer.act(() => header.unmount());
+    await returnToApp();
+    expect(authState.api.getShowcaseFeedNewest).toHaveBeenCalledTimes(1);
+    expect(hostProps(tree, 'new-posts-pill').visible).toBe(false);
+
+    renderer.act(() => tree.unmount());
+  });
+
+  // Product decision D7 (2026-10-14): Undo is a preference delete, sent once
+  // the choice's own request has landed, and the post returns to its index.
+  it('offers a Not interested back, and puts the post at its index once the server has taken the choice back', async () => {
+    const items = [mediaItem('a', 'delivery-undo-a'), mediaItem('b', 'delivery-undo-b'), mediaItem('c', 'delivery-undo-c')];
+    queryState.pages = [page(items)];
+    const laneKey = ['showcase-feed', 'infinite', 'viewer-1', 'for-you'] as const;
+    queryState.client.getQueriesData.mockReturnValue([
+      [laneKey, { pages: [page(items)], pageParams: [{ offset: 0 }] }],
+      [['showcase-feed', 'infinite', 'viewer-1', 'notes'], {
+        pages: [page([textItem('t', 'delivery-undo-t')])],
+        pageParams: [{ offset: 0 }],
+      }],
+    ]);
+    const answer = deferred<UndoAnswer>();
+    authState.api.undoFeedFeedback.mockImplementation(() => answer.promise);
+    const { tree } = renderHome();
+
+    renderer.act(() => cardAt(tree, 1).onFeedbackOpen());
+    await renderer.act(async () => {
+      hostProps(tree, 'feed-feedback-sheet').onNotInterested();
+      await settlePromises();
+    });
+
+    expect(sentEvents()).toEqual([{ eventType: 'not_interested', deliveryId: 'delivery-undo-b' }]);
+    expect(queryState.client.setQueriesData).toHaveBeenCalledTimes(1);
+    const { clientEventId } = authState.api.recordShowcaseFeedEvent.mock.calls[0][0];
+    const shown = hostProps(tree, 'feed-undo-notice');
+    expect(shown.notice).toEqual({ id: clientEventId, message: 'Post hidden', onUndo: expect.any(Function) });
+    // Above the tab bar and its raised Create button: the room the last card keeps, less its own 24pt.
+    expect(shown.bottomOffset).toBe(listProps(tree).contentContainerStyle.paddingBottom - 24);
+    // The notice announces the choice; the request's success adds nothing.
+    expect(AccessibilityInfo.announceForAccessibility).not.toHaveBeenCalled();
+
+    await renderer.act(async () => {
+      shown.notice.onUndo();
+      await settlePromises();
+    });
+    expect(authState.api.undoFeedFeedback).toHaveBeenCalledWith({ feedbackType: 'not_interested', postId: 'b' });
+    // Nothing comes back before the server has answered.
+    expect(queryState.client.setQueryData).not.toHaveBeenCalled();
+
+    await renderer.act(async () => {
+      answer.resolve({ ok: true, removed: true });
+      await settlePromises();
+    });
+    // Only the lane that held the post changes, and the post is back where it was.
+    expect(queryState.client.setQueryData).toHaveBeenCalledTimes(1);
+    const [restoredKey, restore] = queryState.client.setQueryData.mock.calls[0] as [
+      unknown,
+      (current: unknown) => { pages: Array<{ items: Array<{ id: string }> }> },
+    ];
+    expect(restoredKey).toBe(laneKey);
+    const withoutB = { pages: [page([items[0], items[2]])], pageParams: [{ offset: 0 }] };
+    expect(restore(withoutB).pages[0].items.map((item) => item.id)).toEqual(['a', 'b', 'c']);
+    // An Undo is no feed event: the choice stays in the facts.
+    expect(sentEvents()).toHaveLength(1);
+
+    renderer.act(() => tree.unmount());
+  });
+
+  it('keeps the creator hidden, and says so, when the Undo does not go through', async () => {
+    const items = [mediaItem('a', 'delivery-undo-fail-a'), mediaItem('b', 'delivery-undo-fail-b')];
+    queryState.pages = [page(items)];
+    queryState.client.getQueriesData.mockReturnValue([
+      [['showcase-feed', 'infinite', 'viewer-1', 'for-you'], { pages: [page(items)], pageParams: [{ offset: 0 }] }],
+    ]);
+    authState.api.undoFeedFeedback.mockRejectedValue(new Error('offline'));
+    const errorHaptic = vi.spyOn(haptic, 'error');
+    const { tree } = renderHome();
+
+    renderer.act(() => cardAt(tree, 0).onFeedbackOpen());
+    await renderer.act(async () => {
+      hostProps(tree, 'feed-feedback-sheet').onHideCreator();
+      await settlePromises();
+    });
+    const shown = hostProps(tree, 'feed-undo-notice');
+    expect(shown.notice.message).toBe('Creator hidden');
+
+    await renderer.act(async () => {
+      shown.notice.onUndo();
+      await settlePromises();
+    });
+    expect(authState.api.undoFeedFeedback).toHaveBeenCalledWith({ feedbackType: 'hide_creator', creatorId: 'creator-a' });
+    expect(queryState.client.setQueryData).not.toHaveBeenCalled();
+    expect(errorHaptic).toHaveBeenCalledTimes(1);
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Couldn’t undo',
+      'The creator is still hidden. Check your connection and try again.',
+    );
+
+    renderer.act(() => tree.unmount());
+  });
+
+  it.each([
+    ['a device with no session forgets the choice itself', null, false],
+    ['a guest with a session asks the server', 'guest-1', true],
+  ] as const)('undoes a guest’s choice where it is kept: %s', async (_case, identityUserId, asksServer) => {
+    authState.user = null;
+    authState.identityUserId = identityUserId;
+    const items = [mediaItem('a', 'delivery-guest-undo-a'), mediaItem('b', 'delivery-guest-undo-b')];
+    queryState.pages = [page(items)];
+    queryState.client.getQueriesData.mockReturnValue([
+      [['showcase-feed', 'infinite', identityUserId, 'for-you'], { pages: [page(items)], pageParams: [{ offset: 0 }] }],
+    ]);
+    const { tree } = renderHome();
+
+    renderer.act(() => cardAt(tree, 1).onFeedbackOpen());
+    await renderer.act(async () => {
+      hostProps(tree, 'feed-feedback-sheet').onNotInterested();
+      await settlePromises();
+    });
+    // The device hides the post from later pages too.
+    expect(filterAnonymousSessionShowcaseFeedItems(items as never).map((item) => item.id)).toEqual(['a']);
+
+    await renderer.act(async () => {
+      hostProps(tree, 'feed-undo-notice').notice.onUndo();
+      await settlePromises();
+    });
+    if (asksServer) {
+      expect(authState.api.undoFeedFeedback).toHaveBeenCalledWith({ feedbackType: 'not_interested', postId: 'b' });
+    } else {
+      expect(authState.api.undoFeedFeedback).not.toHaveBeenCalled();
+    }
+    expect(filterAnonymousSessionShowcaseFeedItems(items as never).map((item) => item.id)).toEqual(['a', 'b']);
+    expect(queryState.client.setQueryData).toHaveBeenCalledTimes(1);
+
+    renderer.act(() => tree.unmount());
+  });
+
+  it('withdraws the notice when the choice itself fails, and an Undo waiting on it adds no second message', async () => {
+    const items = [mediaItem('a', 'delivery-hide-fail-a'), mediaItem('b', 'delivery-hide-fail-b')];
+    queryState.pages = [page(items)];
+    const laneKey = ['showcase-feed', 'infinite', 'viewer-1', 'for-you'];
+    const lane = { pages: [page(items)], pageParams: [{ offset: 0 }] };
+    queryState.client.getQueriesData.mockReturnValue([[laneKey, lane]]);
+    const sent = deferred<void>();
+    authState.api.recordShowcaseFeedEvent.mockImplementation(() => sent.promise);
+    authState.api.undoFeedFeedback.mockRejectedValue(new Error('offline'));
+    const { tree } = renderHome();
+
+    renderer.act(() => cardAt(tree, 1).onFeedbackOpen());
+    renderer.act(() => hostProps(tree, 'feed-feedback-sheet').onNotInterested());
+    // Undo while the choice is still on its way: it waits for that request.
+    await renderer.act(async () => {
+      hostProps(tree, 'feed-undo-notice').notice.onUndo();
+      await settlePromises();
+    });
+    expect(authState.api.undoFeedFeedback).not.toHaveBeenCalled();
+
+    await renderer.act(async () => {
+      sent.reject(new Error('offline'));
+      await settlePromises();
+    });
+    // The choice failed: the lane is put back from the copy taken before it, and the notice goes.
+    expect(queryState.client.setQueryData).toHaveBeenCalledWith(laneKey, lane);
+    expect(hostProps(tree, 'feed-undo-notice').notice).toBeNull();
+    // The Undo still went, since a failed request may have written the row; its failure says nothing more.
+    expect(authState.api.undoFeedFeedback).toHaveBeenCalledTimes(1);
+    expect(Alert.alert).toHaveBeenCalledTimes(1);
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Couldn’t update your feed',
+      'The post was restored. Check your connection and try again.',
+    );
+
+    renderer.act(() => tree.unmount());
+  });
+
+  // Product decision E1 (2026-10-14): Explore's search, a tap from Home.
+  it('opens the search from the top bar, and counts no card as read while the search covers it', () => {
+    queryState.pages = [page([mediaItem('a', 'delivery-search-a'), textItem('b', 'delivery-search-b')])];
+    const { tree } = renderHome();
+    expect(hostProps(tree, 'explore-search-overlay').visible).toBe(false);
+    reportOnScreen(tree, [0, 1]);
+
+    now = T0 + 3_000;
+    const header = renderHeader(tree);
+    press(header, 'Search creators, posts, and recipes');
+    expect(hostProps(tree, 'explore-search-overlay').visible).toBe(true);
+    expect(hostProps(tree, 'explore-search-overlay').api).toBe(authState.api);
+    // The stretch on screen ends as the search covers the cards.
+    expect(sentEvents()).toEqual([
+      { eventType: 'dwell', deliveryId: 'delivery-search-a', durationMs: 3_000 },
+      { eventType: 'dwell', deliveryId: 'delivery-search-b', durationMs: 3_000 },
+    ]);
+
+    now = T0 + 60_000;
+    renderer.act(() => hostProps(tree, 'explore-search-overlay').onClose());
+    expect(hostProps(tree, 'explore-search-overlay').visible).toBe(false);
+    // A minute spent searching is not read as a minute on either card.
+    navState.focused = false;
+    renderer.act(() => tree.update(<HomeDashboard />));
+    expect(sentEvents()).toHaveLength(2);
+
+    renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
+  // Product decision D3 (2026-10-14): Autoplay previews, Wi-Fi only by default.
+  it('prepares no neighbour video on mobile data under Wi-Fi only, and follows the network as it changes', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    networkState.kind = 'cellular';
+    queryState.pages = [page(['a', 'b', 'c', 'd'].map((id) => videoItem(id, `delivery-video-${id}`)))];
+    const { tree } = renderHome();
+    const store = activationStores.at(-1)!;
+    const settleWindow = () => renderer.act(() => {
+      vi.advanceTimersByTime(FEED_PREPARED_WINDOW_STEP_MS * 8);
+    });
+    const switchNetwork = (kind: PlaybackNetwork) => renderer.act(() => {
+      networkState.kind = kind;
+      for (const listener of [...networkState.listeners]) listener();
+    });
+
+    // On mobile data the card in view plays and nothing loads ahead.
+    reportViewable(tree, SHOWCASE_PLAYBACK_VIEWABILITY, [0]);
+    settleWindow();
+    expect(store.snapshot()).toEqual({ activeIds: ['a'], preparedIds: [] });
+
+    // On Wi-Fi its neighbour is made ready, as before the setting.
+    switchNetwork('wifi');
+    settleWindow();
+    expect(store.snapshot().activeIds).toEqual(['a']);
+    expect(store.snapshot().preparedIds).toContain('b');
+
+    // Back on mobile data the prepared players are let go.
+    switchNetwork('cellular');
+    settleWindow();
+    expect(store.snapshot()).toEqual({ activeIds: ['a'], preparedIds: [] });
 
     renderer.act(() => tree.unmount());
   });

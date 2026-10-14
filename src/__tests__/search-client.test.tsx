@@ -3,7 +3,7 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import SearchClient from '@/app/search/SearchClient';
-import type { CreatorSearchResult, PublicSearchResponse } from '@/lib/public-search';
+import type { CreatorSearchResult, PublicSearchResponse, RecipeSearchResult } from '@/lib/public-search';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 // One stable router object, like Next's real one. SearchClient keeps the URL in
@@ -71,6 +71,25 @@ function post(id: string, title: string, saveCount: number) {
     mediaKind: null,
     mediaUrl: null,
   } as unknown as ShowcaseFeedItem;
+}
+
+function recipe(id: string, title: string, sellerName: string): RecipeSearchResult {
+  return {
+    id,
+    postId: `post-${id}`,
+    title,
+    summary: 'Lighting, lens and grade',
+    previewText: '',
+    accessMode: 'free',
+    priceUsdCents: 0,
+    salesCount: 0,
+    allowRemix: true,
+    resourceKinds: ['prompt'],
+    createdAt: '2026-10-01T00:00:00.000Z',
+    seller: { id: `seller-${id}`, username: null, name: sellerName, avatar: null },
+    post: null,
+    priceQuote: { formatted: 'Free', currency: 'USD', amountSubunits: 0 },
+  };
 }
 
 function deferred<T>() {
@@ -384,6 +403,31 @@ describe('SearchClient', () => {
 
       expect(screen.getByText('1 save')).toBeInTheDocument();
       expect(screen.getByText('2 saves')).toBeInTheDocument();
+    });
+
+    it('marks a creator the viewer follows, and only that one', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(searchResponse({
+        creators: { items: [{ ...creator('Luna Studio'), isFollowing: true }, creator('Luna Lake')], nextCursor: null },
+      })));
+      render(<SearchClient initialQuery="luna" initialType="top" />);
+      await settle();
+
+      expect(screen.getByRole('link', { name: /Luna Studio/ })).toHaveTextContent('Following');
+      expect(screen.getByRole('link', { name: /Luna Lake/ })).not.toHaveTextContent('Following');
+      expect(screen.getAllByText('Following')).toHaveLength(1);
+    });
+
+    it('names who sells a recipe beside its price', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(searchResponse({
+        type: 'recipes',
+        recipes: { items: [recipe('recipe-1', 'Moonlit lighting', 'Luna Studio')], nextCursor: null },
+      })));
+      render(<SearchClient initialQuery="moonlit" initialType="recipes" />);
+      await settle();
+
+      const card = screen.getByRole('link', { name: /Moonlit lighting/ });
+      expect(card).toHaveTextContent('Luna Studio');
+      expect(card).toHaveTextContent('Free');
     });
   });
 });

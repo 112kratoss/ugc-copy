@@ -1,7 +1,7 @@
 import type { ViewToken } from '@shopify/flash-list';
 
-import { SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/lib/media-performance';
-import { selectActiveShowcaseVideoIds } from '@/lib/showcase-display';
+import { SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS, SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS } from '@/lib/media-performance';
+import { selectActiveShowcaseVideoIds, selectPreparedShowcaseVideoIds } from '@/lib/showcase-display';
 import type { ShowcaseFeedItem } from '@/lib/types';
 
 /**
@@ -27,6 +27,14 @@ export interface ShowcaseActivationState {
   candidates: ShowcaseFeedItem[];
   /** Committed winners. Reference-stable when an election changes nothing. */
   activeIds: string[];
+  /**
+   * Both set from the autoplay preference against the network
+   * (`lib/autoplay-preference.ts`). True: a report taken in motion elects
+   * nothing, even among drawn players.
+   */
+  electOnlyAtRest: boolean;
+  /** How many neighbour players the feed may prepare: `selectPreparedActivationIds`. */
+  preparedLimit: number;
 }
 
 export type ShowcaseActivationEvent =
@@ -36,12 +44,15 @@ export type ShowcaseActivationEvent =
   | { type: 'momentumEnd' }
   | { type: 'settleTimeout' }
   | { type: 'viewableItemsChanged'; items: ShowcaseFeedItem[] }
+  | { type: 'policyChanged'; electOnlyAtRest: boolean; preparedLimit: number }
   | { type: 'reset' };
 
 export const INITIAL_SHOWCASE_ACTIVATION_STATE: ShowcaseActivationState = {
   scroll: 'idle',
   candidates: [],
   activeIds: [],
+  electOnlyAtRest: false,
+  preparedLimit: SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS,
 };
 
 export function sameStringList(left: string[], right: string[]) {
@@ -81,6 +92,9 @@ export function getVisibleCardItems<Card extends { item: ShowcaseFeedItem }>(
  * resume rather than a mount. Such a feed passes `readyWhileMoving`: a report
  * taken in motion then elects among the candidates it accepts, plus the ones
  * already playing, and a winner it rejects waits for its readiness or for rest.
+ * `electOnlyAtRest` (on mobile data, under the Wi-Fi only preference) sets
+ * readiness aside: a feed that prepares nothing waits for rest, as one without
+ * readiness does.
  */
 export function reduceShowcaseActivation(
   state: ShowcaseActivationState,
@@ -89,8 +103,23 @@ export function reduceShowcaseActivation(
   readyWhileMoving?: (item: ShowcaseFeedItem) => boolean,
 ): ShowcaseActivationState {
   switch (event.type) {
-    case 'reset':
-      return INITIAL_SHOWCASE_ACTIVATION_STATE;
+    case 'reset': {
+      // The policy belongs to the phone, not to the list a refetch replaces.
+      const { electOnlyAtRest, preparedLimit } = state;
+      const initial = INITIAL_SHOWCASE_ACTIVATION_STATE;
+      return electOnlyAtRest === initial.electOnlyAtRest && preparedLimit === initial.preparedLimit
+        ? initial
+        : { ...initial, electOnlyAtRest, preparedLimit };
+    }
+
+    case 'policyChanged': {
+      const preparedLimit = Math.max(0, event.preparedLimit);
+      // Who plays stays as it is: a feed in motion keeps its winner to rest,
+      // and the next report or readiness change elects under the new policy.
+      return state.electOnlyAtRest === event.electOnlyAtRest && state.preparedLimit === preparedLimit
+        ? state
+        : { ...state, electOnlyAtRest: event.electOnlyAtRest, preparedLimit };
+    }
 
     case 'viewableItemsChanged': {
       const next = { ...state, candidates: event.items };
@@ -98,7 +127,7 @@ export function reduceShowcaseActivation(
       // and non-animated jumps all land here, and nothing else would re-fire
       // on a resting screen. Skipping them strands a stale winner.
       if (state.scroll === 'idle') return elect(next, limit);
-      if (!readyWhileMoving) return next;
+      if (!readyWhileMoving || state.electOnlyAtRest) return next;
       return electAmong(
         next,
         next.candidates.filter((item) => readyWhileMoving(item) || state.activeIds.includes(item.id)),
@@ -137,6 +166,22 @@ export function reduceShowcaseActivation(
     default:
       return state;
   }
+}
+
+/**
+ * The videos a feed keeps a paused, loaded player for beside the one playing
+ * (`selectPreparedShowcaseVideoIds`), under the activation's policy. A limit of
+ * 0 prepares nothing at all: not the neighbours, and not the card the reader is
+ * reaching either, whose player would otherwise start loading before the feed
+ * rests.
+ */
+export function selectPreparedActivationIds(
+  state: ShowcaseActivationState,
+  items: ShowcaseFeedItem[],
+  around: { viewableIds: string[]; anchorIds: string[]; activeIds: string[] },
+): string[] {
+  if (state.preparedLimit <= 0) return [];
+  return selectPreparedShowcaseVideoIds(items, around, state.preparedLimit);
 }
 
 function elect(state: ShowcaseActivationState, limit: number): ShowcaseActivationState {

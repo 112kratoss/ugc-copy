@@ -6,7 +6,7 @@ import { ApiError, POST_RESOURCE_FILE_URL_BATCH_LIMIT, createApiClient, type Mag
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
 import { buildImmersiveGenerationItems, buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
 import { buildShowcaseFeedEventRequest } from '../lib/showcase-feed-events';
-import type { ShowcaseFeedEventRequest, ShowcaseFeedEventType } from '../lib/types';
+import type { ShowcaseFeedEventRequest, ShowcaseFeedEventType, UndoFeedFeedbackRequest } from '../lib/types';
 import { getShowcaseViewerImageUrl } from '../lib/showcase-media';
 import { isAmbiguousGenerationStartFailure } from '../lib/generation-attempts';
 
@@ -194,6 +194,11 @@ const successCases: Array<{
       mobileApiContract.endpoints.recordShowcaseFeedEvents.request.events as Array<ShowcaseFeedEventRequest & { occurredAt: string }>,
       { accessToken: 'captured-token' },
     ),
+  },
+  { key: 'getShowcaseFeedNewest', call: (api) => api.getShowcaseFeedNewest({ category: 'media' }) },
+  {
+    key: 'undoFeedFeedback',
+    call: (api) => api.undoFeedFeedback(mobileApiContract.endpoints.undoFeedFeedback.request as UndoFeedFeedbackRequest),
   },
   { key: 'saveShowcasePost', call: (api) => api.saveShowcasePost('post-1', { shouldSave: true }) },
   { key: 'remixShowcasePost', call: (api) => api.remixShowcasePost('post-1') },
@@ -677,6 +682,42 @@ describe('mobile shared API v1 contract fixture', () => {
       { body: 'Reply', parentId: 'comment-1' },
       { followingId: 'creator-1', following: false },
       { followingId: 'creator-1', following: true, postId: 'post-1' },
+    ]);
+  });
+
+  // The "New posts" probe is public and cacheable; the undo deletes the caller's own row (D2, D7).
+  it('asks the newest probe without a token and sends an undo with one, in the shared shapes', async () => {
+    const newest = mobileApiContract.endpoints.getShowcaseFeedNewest;
+    const undo = mobileApiContract.endpoints.undoFeedFeedback;
+    expect(newest.auth).toBe('none');
+    expect(undo.auth).toBe('required');
+    const asked: Array<{ method: string; path: string; query: string; authorization: string | null; body: unknown }> = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      asked.push({
+        method: (init?.method ?? 'GET').toUpperCase(),
+        path: url.pathname,
+        query: url.search,
+        authorization: new Headers(init?.headers).get('Authorization'),
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return jsonResponse(url.pathname === newest.path
+        ? newest.responseVariants.emptyLane
+        : undo.responseVariants.nothingToRemove);
+    });
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await expect(api.getShowcaseFeedNewest({ category: 'text' })).resolves.toEqual({ newestPostId: null, newestPublishedAt: null });
+    await expect(api.undoFeedFeedback(undo.requestVariants.hideCreator as UndoFeedFeedbackRequest))
+      .resolves.toEqual({ ok: true, removed: false });
+
+    expect(asked).toEqual([
+      { method: 'GET', path: newest.path, query: '?category=text', authorization: null, body: null },
+      { method: 'POST', path: undo.path, query: '', authorization: 'Bearer token-1', body: undo.requestVariants.hideCreator },
     ]);
   });
 

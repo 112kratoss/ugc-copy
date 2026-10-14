@@ -26,7 +26,7 @@ const namedSymbols = new Set([
     creator: { username: 'creator' },
     canHideCreator: true,
     viewerIsOwner: false,
-    sessionOnly: false,
+    viewerKind: 'member',
     onNotInterested: noop,
     onHideCreator: noop,
     onReportContent: noop,

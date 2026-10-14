@@ -1,7 +1,7 @@
 import { useIsFocused } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { BookOpen, Clock3, Search, X } from 'lucide-react-native';
+import { BookOpen, Clock3, MessageCircle, Search, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -146,12 +146,36 @@ function SearchTab({
   );
 }
 
+// A state, not a control: the row opens the profile, where Follow lives. It
+// tells apart two creators with one name, as the web's search card does.
+function FollowingChip() {
+  const theme = useAppTheme();
+  const tone = theme.semantic.neutral;
+  return (
+    <View
+      style={{
+        borderRadius: appTheme.radii.pill,
+        borderWidth: 1,
+        borderColor: tone.border,
+        backgroundColor: tone.background,
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+      }}
+    >
+      <Text style={{ color: tone.foreground, fontSize: 11, fontWeight: '800' }}>Following</Text>
+    </View>
+  );
+}
+
 function CreatorRow({ creator, onOpen }: { creator: CreatorSearchResult; onOpen: () => void }) {
   const theme = useAppTheme();
+  // One line, as on the web card, where the browser folds a bio's line breaks
+  // into spaces.
+  const bio = creator.bio?.replace(/\s+/g, ' ').trim();
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Open ${creator.displayName}'s profile`}
+      accessibilityLabel={`Open ${creator.displayName}'s profile${creator.isFollowing ? ', following' : ''}`}
       onPress={() => {
         onOpen();
         router.push(`/creators/${encodeURIComponent(creator.username)}` as never);
@@ -171,8 +195,12 @@ function CreatorRow({ creator, onOpen }: { creator: CreatorSearchResult; onOpen:
     >
       <CreatorAvatar uri={creator.avatarUrl} name={creator.displayName} size={48} />
       <View style={{ flex: 1 }}>
-        <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>{creator.displayName}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>{creator.displayName}</Text>
+          {creator.isFollowing ? <FollowingChip /> : null}
+        </View>
         <Text numberOfLines={1} style={{ marginTop: 2, color: theme.colors.muted, fontSize: 13 }}>@{creator.username}</Text>
+        {bio ? <Text numberOfLines={1} style={{ marginTop: 2, color: theme.colors.faint, fontSize: 12 }}>{bio}</Text> : null}
       </View>
       <Text style={{ color: theme.colors.faint, fontSize: 12 }}>
         {`${creator.publicPostCount} ${creator.publicPostCount === 1 ? 'post' : 'posts'}`}
@@ -212,6 +240,16 @@ function PostRow({ item, onOpen }: { item: ShowcaseFeedItem; onOpen: () => void 
       <View style={{ gap: 3, padding: 12 }}>
         <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 14, fontWeight: '800' }}>{item.title}</Text>
         <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 12 }}>{item.creator.name}</Text>
+        {/* The web card's counts, in its order and words. */}
+        <View style={{ marginTop: 5, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.colors.faint, fontSize: 12 }}>
+            {`${item.saveCount} ${item.saveCount === 1 ? 'save' : 'saves'}`}
+          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <MessageCircle size={appTheme.icon.xs} color={theme.colors.faint} />
+            <Text style={{ color: theme.colors.faint, fontSize: 12 }}>{String(item.commentCount)}</Text>
+          </View>
+        </View>
       </View>
     </Pressable>
   );
@@ -251,9 +289,13 @@ function RecipeRow({ recipe, onOpen }: { recipe: RecipeSearchResult; onOpen: () 
       <View style={{ minWidth: 0, flex: 1, gap: 5, justifyContent: 'center', padding: 13 }}>
         <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 14, fontWeight: '800' }}>{recipe.title}</Text>
         <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 17 }}>{recipe.summary || recipe.previewText}</Text>
-        <Text style={{ color: theme.colors.success, fontSize: 12, fontWeight: '800' }}>
-          {recipe.accessMode === 'free' ? 'Free' : formatUnlockCreditPrice(recipe.priceUsdCents)}
-        </Text>
+        {/* Who sells it, on the price's line, as the web card has it. */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.colors.faint, fontSize: 12 }}>{recipe.seller.name}</Text>
+          <Text style={{ color: theme.colors.success, fontSize: 12, fontWeight: '800' }}>
+            {recipe.accessMode === 'free' ? 'Free' : formatUnlockCreditPrice(recipe.priceUsdCents)}
+          </Text>
+        </View>
       </View>
     </Pressable>
   );

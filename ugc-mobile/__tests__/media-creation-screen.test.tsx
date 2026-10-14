@@ -268,7 +268,9 @@ import { catalogV2 } from './generation-model-catalog-v2-fixtures';
 import type { CatalogInputMode, CatalogInputSlot, GenerationModelCatalog, GenerationModelDescriptor } from '../lib/generation-model-catalog';
 import { creationDraftStorageKey, ordinaryDraftScope, remixDraftScope } from '../lib/creation-draft-resume';
 import { activeGenerationRecordStorageKey } from '../lib/active-generation-record';
+import type { ModelCatalogKind, ModelCatalogSummary } from '../lib/model-catalog/protocol';
 import { PrimaryButton, SecondaryButton } from '../components/ui';
+import whatsNewContract from '../../contracts/whats-new-models-v1.json';
 
 const referenceModeIs = (value: 'frames' | 'elements') => [{ source: 'setting' as const, key: 'referenceMode', operator: 'equals' as const, value }];
 const frameSlots: CatalogInputSlot[] = [
@@ -2725,6 +2727,202 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       } finally {
         vi.mocked(PanResponder.create).mockImplementation((() => ({ panHandlers: {} })) as never);
       }
+    });
+  });
+
+  // D9: the catalog's New models at the top of the Create tab, read from the pages the screen
+  // already has, and opened the way a pick from the model picker is.
+  describe('the What’s new strip', () => {
+    const [newInTwoKinds, noneNew] = whatsNewContract.cases;
+    /** A fixture case as the catalog read hands it over: summaries, by sortOrder and then id. */
+    const summaries = (models: readonly { id: string; kind: string; badge: string | null; sortOrder: number; displayName: string }[]): ModelCatalogSummary[] => models
+      .map((model) => ({ ...model, kind: model.kind as ModelCatalogKind, description: `${model.displayName} summary`, recommended: false }))
+      .sort((left, right) => left.sortOrder - right.sortOrder || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+    /** Orbit Max and Pixel Flash as the catalog describes them once their details are in. */
+    const orbitMax = (): GenerationModelDescriptor => ({ ...parityKlingVideo(), id: 'orbit-max', displayName: 'Orbit Max', badge: 'new', recommended: false, sortOrder: 60 });
+    const pixelFlash = (): GenerationModelDescriptor => ({ ...parityImageModel('pixel-flash', 'Pixel Flash', 2), badge: 'NEW', sortOrder: 50 });
+    const strips = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => String(node.type) === 'view' && node.props.testID === 'whats-new-models');
+    const chips = (tree: renderer.ReactTestRenderer) => strips(tree)[0].findAll((node) => String(node.type) === 'pressable');
+    const chip = (tree: renderer.ReactTestRenderer, label: string) => chips(tree).find((node) => node.props.accessibilityLabel === label)!;
+    const toolTab = (tree: renderer.ReactTestRenderer, title: string) => tree.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === title);
+    const modelChip = (tree: renderer.ReactTestRenderer) => findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel as string;
+    const generateButton = (tree: renderer.ReactTestRenderer) => findPressableByLabelPrefix(tree.root, 'Generate');
+    /** Mounted, with the drafts read back from storage before anything is pressed. */
+    const open = async (element: React.ReactElement) => {
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(element); });
+      await renderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      return tree;
+    };
+
+    it('lists the fixture’s models in its order from the screen’s catalog read, under the header and above the composer', async () => {
+      catalogState.summaries = summaries(newInTwoKinds.models);
+      const tree = await open(<MediaCreationScreen initialTool="image" insideTab />);
+
+      expect(chips(tree).map((node) => node.props.accessibilityLabel)).toEqual(['Pixel Flash, Image', 'Orbit Max, Video', 'Aurora, Image', 'Orbit, Video']);
+      const text = collectText(tree.root);
+      expect(text.indexOf('Motion')).toBeLessThan(text.indexOf('What’s new'));
+      expect(text.indexOf('What’s new')).toBeLessThan(text.indexOf('Prompt'));
+    });
+
+    it('switches to the tapped model’s tool with the model in that tool’s draft, and leaves the others’ alone', async () => {
+      catalogState.catalog = createTestGenerationModelCatalog([orbitMax()]);
+      catalogState.summaries = summaries(newInTwoKinds.models);
+      const tree = await open(<MediaCreationScreen initialTool="image" insideTab />);
+      expect(modelChip(tree)).toContain('Nano Banana 2.0');
+
+      renderer.act(() => { chip(tree, 'Orbit Max, Video').props.onPress(); });
+
+      expect(toolTab(tree, 'Video').props.accessibilityState).toEqual({ selected: true });
+      expect(modelChip(tree)).toBe('Selected model Orbit Max. Change model');
+      expect(chip(tree, 'Orbit Max, Video').props.accessibilityState).toEqual(expect.objectContaining({ selected: true }));
+      // Its details were in, so the pick landed without the picker.
+      expect(collectText(tree.root)).not.toContain('Choose model');
+
+      renderer.act(() => { toolTab(tree, 'Image').props.onPress(); });
+      expect(modelChip(tree)).toContain('Nano Banana 2.0');
+    });
+
+    it('turns the chip while the model’s details load, holds Generate, and lands the model without the picker', async () => {
+      vi.useFakeTimers();
+      const full = createTestGenerationModelCatalog([pixelFlash()]);
+      catalogState.summaries = summaries(newInTwoKinds.models);
+      let release: () => void = () => undefined;
+      catalogState.loadDetails = async () => {
+        await new Promise<void>((resolve) => { release = resolve; });
+        catalogState.catalog = full;
+        return full;
+      };
+      let tree!: renderer.ReactTestRenderer;
+      renderer.act(() => { tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab />); });
+      renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('A bottle on linen'); });
+      await renderer.act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      expect(generateButton(tree).props.disabled).toBe(false);
+
+      renderer.act(() => { chip(tree, 'Pixel Flash, Image').props.onPress(); });
+
+      expect(chip(tree, 'Pixel Flash, Image').findAllByProps({ testID: 'whats-new-model-loading' })).not.toHaveLength(0);
+      expect(chips(tree).map((node) => node.props.disabled)).toEqual([true, true, true, true]);
+      expect(modelChip(tree)).toContain('Nano Banana 2.0');
+      expect(generateButton(tree).props.disabled).toBe(true);
+      // The newest models end their kind's list: a picker opened for the wait would show the rows above.
+      expect(collectText(tree.root)).not.toContain('Choose model');
+
+      await renderer.act(async () => {
+        release();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(modelChip(tree)).toBe('Selected model Pixel Flash. Change model');
+      expect(tree.root.findAllByProps({ testID: 'whats-new-model-loading' })).toHaveLength(0);
+      expect(chip(tree, 'Pixel Flash, Image').props.accessibilityState).toEqual(expect.objectContaining({ selected: true, disabled: false }));
+      expect(collectText(tree.root)).not.toContain('Choose model');
+    });
+
+    it('says under the strip why a model could not be picked, and tries again from its chip', async () => {
+      const full = createTestGenerationModelCatalog([orbitMax()]);
+      catalogState.summaries = summaries(newInTwoKinds.models);
+      const loadDetails = vi.fn()
+        .mockRejectedValueOnce(new Error('Could not load model settings.'))
+        .mockImplementationOnce(async () => {
+          catalogState.catalog = full;
+          return full;
+        });
+      catalogState.loadDetails = loadDetails;
+      const tree = await open(<MediaCreationScreen initialTool="image" insideTab />);
+
+      await renderer.act(async () => {
+        chip(tree, 'Orbit Max, Video').props.onPress();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(toolTab(tree, 'Video').props.accessibilityState).toEqual({ selected: true });
+      const failure = strips(tree)[0].find((node) => String(node.type) === 'text' && node.props.accessibilityRole === 'alert');
+      expect(failure.props.children).toBe('Could not load model settings.');
+      expect(modelChip(tree)).toContain('Kling 3.0 Cinematic');
+      expect(chip(tree, 'Orbit Max, Video').props.disabled).toBe(false);
+
+      await renderer.act(async () => {
+        chip(tree, 'Orbit Max, Video').props.onPress();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(loadDetails).toHaveBeenCalledTimes(2);
+      expect(modelChip(tree)).toBe('Selected model Orbit Max. Change model');
+      expect(strips(tree)[0].findAll((node) => String(node.type) === 'text' && node.props.accessibilityRole === 'alert')).toHaveLength(0);
+    });
+
+    it('drops a pick still loading when the tool changes, and leaves that tool’s draft alone', async () => {
+      const full = createTestGenerationModelCatalog([orbitMax()]);
+      catalogState.summaries = summaries(newInTwoKinds.models);
+      let release: () => void = () => undefined;
+      catalogState.loadDetails = async () => {
+        await new Promise<void>((resolve) => { release = resolve; });
+        catalogState.catalog = full;
+        return full;
+      };
+      const tree = await open(<MediaCreationScreen initialTool="image" insideTab />);
+
+      renderer.act(() => { chip(tree, 'Orbit Max, Video').props.onPress(); });
+      expect(tree.root.findAllByProps({ testID: 'whats-new-model-loading' })).not.toHaveLength(0);
+      renderer.act(() => { toolTab(tree, 'Image').props.onPress(); });
+      expect(tree.root.findAllByProps({ testID: 'whats-new-model-loading' })).toHaveLength(0);
+
+      await renderer.act(async () => {
+        release();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      renderer.act(() => { toolTab(tree, 'Video').props.onPress(); });
+
+      expect(modelChip(tree)).toContain('Kling 3.0 Cinematic');
+    });
+
+    it('keeps the tool while a run is going, back on the run, and picks nothing', async () => {
+      vi.useFakeTimers();
+      authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+      catalogState.summaries = summaries(newInTwoKinds.models);
+      const loadDetails = vi.fn(async () => catalogState.catalog);
+      catalogState.loadDetails = loadDetails;
+      let tree!: renderer.ReactTestRenderer;
+      renderer.act(() => { tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab />); });
+      renderer.act(() => {
+        tree.root.findAll((node) => String(node.type) === 'textinput')[0].props.onChangeText('Create an editorial product image.');
+      });
+      await renderer.act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      await renderer.act(async () => {
+        void findPressableByText(tree.root, 'Generate · 8 credits').props.onPress();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      renderer.act(() => { findPressableByText(tree.root, 'Minimize').props.onPress(); });
+      expect(collectText(tree.root)).not.toContain('Creating image');
+
+      renderer.act(() => { chip(tree, 'Orbit Max, Video').props.onPress(); });
+
+      expect(toolTab(tree, 'Image').props.accessibilityState).toEqual({ selected: true });
+      expect(collectText(tree.root)).toContain('Creating image');
+      expect(collectText(tree.root)).not.toContain('Choose model');
+      expect(loadDetails).not.toHaveBeenCalled();
+    });
+
+    it('draws nothing when no model carries New, or while the catalog is still loading', async () => {
+      catalogState.summaries = summaries(newInTwoKinds.models);
+      expect(strips(await open(<MediaCreationScreen initialTool="image" insideTab />))).toHaveLength(1);
+
+      catalogState.summaries = summaries(noneNew.models);
+      expect(strips(await open(<MediaCreationScreen initialTool="image" insideTab />))).toHaveLength(0);
+
+      catalogState.catalog = null;
+      catalogState.summaries = null;
+      catalogState.isLoading = true;
+      expect(strips(await open(<MediaCreationScreen initialTool="video" insideTab />))).toHaveLength(0);
+    });
+
+    it('is the Create tab’s alone: not on a creator opened from a link, nor on a first creation', async () => {
+      catalogState.summaries = summaries(newInTwoKinds.models);
+
+      expect(strips(await open(<MediaCreationScreen initialTool="image" insideTab />))).toHaveLength(1);
+      expect(strips(await open(<MediaCreationScreen initialTool="image" />))).toHaveLength(0);
+      expect(strips(await open(<MediaCreationScreen initialTool="image" insideTab guided />))).toHaveLength(0);
     });
   });
 

@@ -1,10 +1,21 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { POST_RESOURCE_FILE_URL_BATCH_LIMIT } from '@/lib/post-resource-bundles';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import { createPostResourceFileReadUrlForRoute } from '@/lib/post-resource-file-url-service';
 import { normalizeShowcaseCategory } from '@/lib/showcase';
-import { parseShowcaseFeedEventBatchPayload } from '@/lib/showcase-feed-events-service';
+import {
+  parseShowcaseFeedEventBatchPayload,
+  parseShowcaseFeedFeedbackUndoPayload,
+  undoShowcaseFeedFeedback,
+  type ShowcaseFeedFeedbackUndoResponse,
+  type ShowcaseFeedFeedbackUndoTarget,
+} from '@/lib/showcase-feed-events-service';
+import {
+  getShowcaseFeedNewestRouteResponse,
+  type ShowcaseFeedNewestResponse,
+} from '@/lib/showcase-feed-newest-route-adapter-service';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
@@ -57,6 +68,15 @@ type MobileApiContractFixture = {
     recordShowcaseFeedEvents: MobileApiContractEndpoint<ShowcaseFeedEventBatchResponse> & {
       request: { events: Array<ShowcaseFeedEventRequest & { occurredAt: string }> };
     };
+    getShowcaseFeedNewest: MobileApiContractEndpoint<ShowcaseFeedNewestResponse> & {
+      query: { category: string };
+      responseVariants: { emptyLane: ShowcaseFeedNewestResponse };
+    };
+    undoFeedFeedback: MobileApiContractEndpoint<ShowcaseFeedFeedbackUndoResponse> & {
+      request: Extract<ShowcaseFeedFeedbackUndoTarget, { feedbackType: 'not_interested' }>;
+      requestVariants: { hideCreator: Extract<ShowcaseFeedFeedbackUndoTarget, { feedbackType: 'hide_creator' }> };
+      responseVariants: { nothingToRemove: ShowcaseFeedFeedbackUndoResponse };
+    };
     createPostComment: MobileApiContractEndpoint<unknown> & {
       request: { body: string; parentId: string | null; deliveryId: string };
     };
@@ -85,7 +105,9 @@ const expectedEndpointKeys = [
   'getMotionGeneration',
   'enhancePrompt',
   'getShowcaseFeed',
+  'getShowcaseFeedNewest',
   'recordShowcaseFeedEvents',
+  'undoFeedFeedback',
   'searchPublicContent',
   'getSavedMedia',
   'getShowcasePost',
@@ -308,6 +330,81 @@ describe('shared mobile API v1 contract fixture', () => {
       // One outcome per event sent, in request order (04-11).
       results: events.map((_event, index) => ({ index, status: 200 })),
     });
+  });
+
+  // Undo (product decision D7) takes back a Not interested or a Hide. The
+  // bodies the clients send are the ones the server's parser reads, and the
+  // answers are the service's, for a row that was there and for none.
+  it('takes back a Not interested or a Hide in the shapes the fixture pins', async () => {
+    const endpoint = contract.endpoints.undoFeedFeedback;
+    expect(endpoint).toMatchObject({
+      method: 'POST',
+      path: '/api/showcase/feed/feedback/undo',
+      auth: 'required',
+    });
+    expect(parseShowcaseFeedFeedbackUndoPayload(endpoint.request)).toEqual({ ok: true, target: endpoint.request });
+    expect(parseShowcaseFeedFeedbackUndoPayload(endpoint.requestVariants.hideCreator))
+      .toEqual({ ok: true, target: endpoint.requestVariants.hideCreator });
+
+    const deleting = (deletedRows: Array<Record<string, string>>) => {
+      const query = {
+        delete: () => query,
+        eq: () => query,
+        is: () => query,
+        select: async () => ({ data: deletedRows, error: null }),
+      };
+      return { from: () => query } as unknown as SupabaseClient;
+    };
+    await expect(undoShowcaseFeedFeedback({
+      actorUserId: 'viewer-1',
+      serviceClient: deleting([{ post_id: endpoint.request.postId }]),
+      target: endpoint.request,
+    })).resolves.toEqual({ ok: true, body: endpoint.response });
+    await expect(undoShowcaseFeedFeedback({
+      actorUserId: 'viewer-1',
+      serviceClient: deleting([]),
+      target: endpoint.requestVariants.hideCreator,
+    })).resolves.toEqual({ ok: true, body: endpoint.responseVariants.nothingToRemove });
+  });
+
+  // The probe behind the "New posts" pill (D2): the query a lane sends, and
+  // the answer and cache policy the route serves from the row it reads.
+  it('answers the newest-post probe in the shape and cache policy the fixture pins', async () => {
+    const endpoint = contract.endpoints.getShowcaseFeedNewest;
+    expect(normalizeShowcaseCategory(endpoint.query.category)).toBe('media');
+    const probe = async (row: { id: string; created_at: string } | null) => {
+      const query = {
+        select: () => query,
+        eq: () => query,
+        is: () => query,
+        neq: () => query,
+        or: () => query,
+        order: () => query,
+        limit: () => query,
+        maybeSingle: async () => ({ data: row, error: null }),
+      };
+      const response = await getShowcaseFeedNewestRouteResponse({
+        request: new Request(`http://localhost${endpoint.path}?${new URLSearchParams(endpoint.query)}`),
+        dependencies: {
+          createServiceClient: vi.fn(() => ({ from: () => query }) as unknown as SupabaseClient),
+          enforceBackendRateLimit: vi.fn(async () => ({
+            allowed: true,
+            limit: 240,
+            remaining: 239,
+            retryAfterSeconds: 0,
+            resetAt: '2026-10-14T05:40:00.000Z',
+          })),
+          getFeedNetworkKeyHash: vi.fn(() => 'network-hash'),
+        },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
+      return response.json();
+    };
+
+    await expect(probe({ id: String(endpoint.response.newestPostId), created_at: '2026-10-14T05:30:00+00:00' }))
+      .resolves.toEqual(endpoint.response);
+    await expect(probe(null)).resolves.toEqual(endpoint.responseVariants.emptyLane);
   });
 
   // A bundle's files signed in one call: the request and the answer the app

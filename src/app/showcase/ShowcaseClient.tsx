@@ -2,11 +2,12 @@
 
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Loader2, Heart, Image as ImageIcon, Video, Layers, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, SlidersHorizontal, X, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/components/AuthProvider';
 import CreatorIdentity from '@/components/CreatorIdentity';
+import NewPostsPill, { newPostsScrollBehavior } from '@/components/NewPostsPill';
 import PublicShareButton from '@/components/PublicShareButton';
 import SkeletonLoader from '@/components/SkeletonLoader';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
@@ -17,11 +18,18 @@ import {
     warmShowcaseReelViewer,
 } from '@/app/showcase/showcase-reel-loader';
 import {
+    FEED_REMOVAL_UNDO_MS,
+    FEED_UNDO_FAILED_MESSAGE,
+    FeedRemovalUndoRow,
     QualifiedImpressionBoundary,
     ShowcaseFeedbackMenu,
+    feedRemovalLabel,
     getShowcaseFeedSessionId,
+    putBackRemovedFeedItems,
     sendShowcaseFeedEvent,
     sendShowcaseResourceOpenEvent,
+    undoShowcaseFeedFeedbackAfterHide,
+    type FeedRemoval,
     type ShowcaseEventSourceSurface,
     type ShowcaseFeedbackAction,
 } from '@/app/showcase/ShowcaseFeedInteraction';
@@ -31,6 +39,7 @@ import {
     type ShowcaseCategory,
     type ShowcaseFeedItem,
     type ShowcaseFeedPage,
+    type ShowcaseMediaItem,
     type ShowcasePriorityPosterData,
     type ShowcaseResourceFilter,
     type ShowcaseSort,
@@ -60,6 +69,7 @@ import {
     buildShowcaseClientCacheKey,
     claimVisitMemoryFor,
     filterFeedItemsForVisit,
+    forgetFeedPreferenceForVisit,
     forgetShowcaseClientSnapshot,
     getCreatorsBlockedThisVisit,
     getFeedPreferencesHiddenThisVisit,
@@ -68,7 +78,9 @@ import {
     writeShowcaseClientSnapshot,
     type ShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
+import { feedNewestCategoryFor, newestCreatedAtOf, useNewPostsProbe, type NewPostsProbeLane } from '@/lib/feed-newest-probe';
 import { scheduleIdleWork } from '@/lib/schedule-idle-work';
+import { useMediaQuery } from '@/lib/use-media-query';
 
 function ShowcaseReelLoadingFallback() {
     return (
@@ -242,6 +254,20 @@ function pickReelReplacement(
 }
 
 /**
+ * The grid's tiles with the "Hidden · Undo" row in the cell of a tile Not
+ * interested or Hide just took out (D7): the tiles after it stay in their
+ * cells until the removal stands.
+ */
+function withRemovalRow(tiles: ReactNode[], rowIndex: number | null, row: ReactNode): ReactNode[] {
+    if (rowIndex === null) {
+        return tiles;
+    }
+    const cells = tiles.slice();
+    cells.splice(Math.min(rowIndex, cells.length), 0, row);
+    return cells;
+}
+
+/**
  * The path of an Explore lane: its filters, each named only when it is not
  * the default. A lane change goes there, and a tile's links come back there.
  */
@@ -280,6 +306,129 @@ function buildShowcaseLanePath(
     return params.size > 0 ? `${pathname}?${params.toString()}` : pathname;
 }
 
+/**
+ * Where nothing hovers, Explore plays one tile's clip: a phone saw still tiles
+ * while Home played its cards and the app's Explore its one preview. Each step
+ * reports a tile's share of the screen again, so the choice follows the scroll.
+ */
+const VIDEO_TILE_VISIBILITY_STEPS = Array.from({ length: 11 }, (_, step) => step / 10);
+
+interface VideoTileVisibility {
+    id: string;
+    /** The frame's share in view at its last reported step; 0 off screen. */
+    ratio: number;
+}
+
+/**
+ * A tile opens on its cover, and the carousel streams a feed clip only where
+ * the server allowed one (a null `feedStreamUrl` is poster only) and the
+ * source is still there. A tile without one never takes the playing turn.
+ */
+function coverPlaysInGrid(cover: ShowcaseMediaItem | undefined): boolean {
+    return Boolean(
+        cover
+        && cover.mediaKind === 'video'
+        && !cover.sourceUnavailableAt
+        && (cover.feedStreamUrl === undefined || cover.feedStreamUrl)
+    );
+}
+
+/**
+ * The tile most in view. A row's tiles share a height and cross each step
+ * together, so a tie keeps the tile already playing, else goes to the first
+ * in the grid.
+ */
+function pickMostVisibleVideoTile(
+    tiles: ReadonlyMap<Element, VideoTileVisibility>,
+    playingId: string | null
+): string | null {
+    let best: { frame: Element; tile: VideoTileVisibility } | null = null;
+    for (const [frame, tile] of tiles) {
+        if (tile.ratio <= 0) {
+            continue;
+        }
+        const wins = !best
+            || tile.ratio > best.tile.ratio
+            || (tile.ratio === best.tile.ratio && best.tile.id !== playingId && (
+                tile.id === playingId
+                || Boolean(frame.compareDocumentPosition(best.frame) & Node.DOCUMENT_POSITION_FOLLOWING)
+            ));
+        if (wins) {
+            best = { frame, tile };
+        }
+    }
+    return best?.tile.id ?? null;
+}
+
+/**
+ * The tile whose clip the grid plays (none until one is in view, and none
+ * while `enabled` is off), and what a tile whose cover is a clip calls from
+ * its ref to hand its frame to the one observer that measures them all. The
+ * carousel still refuses motion under Save-Data and reduced motion, as on Home.
+ */
+function useMostVisibleVideoTile(enabled: boolean) {
+    const [playingId, setPlayingId] = useState<string | null>(null);
+    const playingIdRef = useRef<string | null>(null);
+    const tilesRef = useRef(new Map<Element, VideoTileVisibility>());
+    const observerRef = useRef<IntersectionObserver | null>(null);
+
+    const elect = useCallback(() => {
+        const nextId = pickMostVisibleVideoTile(tilesRef.current, playingIdRef.current);
+        if (nextId === playingIdRef.current) {
+            return;
+        }
+        playingIdRef.current = nextId;
+        setPlayingId(nextId);
+    }, []);
+
+    useEffect(() => {
+        if (!enabled || typeof IntersectionObserver === 'undefined') {
+            return;
+        }
+
+        const tiles = tilesRef.current;
+        const observer = new IntersectionObserver((entries) => {
+            for (const entry of entries) {
+                const tile = tiles.get(entry.target);
+                if (tile) {
+                    tile.ratio = entry.isIntersecting ? entry.intersectionRatio : 0;
+                }
+            }
+            elect();
+        }, { threshold: VIDEO_TILE_VISIBILITY_STEPS });
+        observerRef.current = observer;
+        // Tiles drawn before the observer (the first page, at hydration) are
+        // measured from here; later ones as they mount.
+        tiles.forEach((_tile, frame) => observer.observe(frame));
+
+        return () => {
+            observer.disconnect();
+            observerRef.current = null;
+            tiles.forEach((tile) => {
+                tile.ratio = 0;
+            });
+            elect();
+        };
+    }, [elect, enabled]);
+
+    const observeVideoTile = useCallback((id: string, frame: Element) => {
+        const tiles = tilesRef.current;
+        tiles.set(frame, { id, ratio: 0 });
+        observerRef.current?.observe(frame);
+        return () => {
+            tiles.delete(frame);
+            observerRef.current?.unobserve(frame);
+            // A playing tile that leaves the grid (hidden, reported, another
+            // lane) hands its turn on at once, not at the next scroll step.
+            if (playingIdRef.current === id) {
+                elect();
+            }
+        };
+    }, [elect]);
+
+    return [playingId, observeVideoTile] as const;
+}
+
 interface ShowcaseGridCardProps {
     item: ShowcaseFeedItem;
     index: number;
@@ -292,6 +441,9 @@ interface ShowcaseGridCardProps {
     viewerId: string | null;
     /** The lane the tile's links come back to (`buildShowcaseLanePath`). */
     returnTo: string;
+    /** This tile's clip is the one the grid plays (`useMostVisibleVideoTile`). */
+    autoPlayVideo: boolean;
+    observeVideoTile: (id: string, frame: Element) => () => void;
     onOpenPreview: (item: ShowcaseFeedItem, mediaIndex: number) => void;
     onToggleSave: (id: string) => void;
     onFeedback: (
@@ -323,6 +475,8 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
     accessToken,
     viewerId,
     returnTo,
+    autoPlayVideo,
+    observeVideoTile,
     onOpenPreview,
     onToggleSave,
     onFeedback,
@@ -334,6 +488,11 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
     const mediaItems = useMemo(() => getShowcaseItemMediaItems(item), [item]);
     const isMixedMedia = new Set(mediaItems.map((mediaItem) => mediaItem.mediaKind)).size > 1;
     const isOwnPost = Boolean(viewerId && item.creator.id === viewerId);
+    const coverPlays = coverPlaysInGrid(mediaItems[0]);
+    const measureVideoFrame = useCallback(
+        (frame: HTMLDivElement | null) => (frame && coverPlays ? observeVideoTile(item.id, frame) : undefined),
+        [coverPlays, item.id, observeVideoTile]
+    );
 
     return (
         <QualifiedImpressionBoundary
@@ -345,13 +504,14 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
         >
             {/* Pinterest Style Card Frame */}
             <div className="group relative overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition duration-200 hover:border-[rgba(255,122,89,0.28)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.42)] focus-within:border-[rgba(255,122,89,0.34)]">
-                <div className="relative overflow-hidden bg-black">
+                <div ref={measureVideoFrame} className="relative overflow-hidden bg-black">
                     {mediaItems.length > 0 ? (
                         <ShowcaseMediaCarousel
                             mediaItems={mediaItems}
                             title={item.title}
                             priority={isPriority}
                             priorityPoster={priorityPoster}
+                            autoPlayVideo={autoPlayVideo || undefined}
                             onOpen={(mediaIndex) => onOpenPreview(item, mediaIndex)}
                         />
                     ) : (
@@ -637,6 +797,17 @@ export default function ShowcaseClient({
         tone: 'success' | 'error';
         message: string;
     } | null>(null);
+    // The tile a Not interested or Hide just took out, while its cell offers Undo.
+    const [tileRemoval, setTileRemoval] = useState<FeedRemoval<ShowcaseFeedItem> | null>(null);
+    const removalIdRef = useRef(0);
+    // Removals the reader took back: their hide's answer, when it comes, changes nothing on screen.
+    const undoneRemovalIdsRef = useRef(new Set<number>());
+    // When the lane's first page was fetched, for the "New posts" probe (D2):
+    // a kept grid's is no later than when it was kept; the server's page
+    // counts from the mount (null).
+    const [laneFetchedAt, setLaneFetchedAt] = useState<number | null>(
+        () => restoredClientState.snapshot?.cachedAt ?? null
+    );
     const [selectedMediaIndex, setSelectedMediaIndex] = useState(() => {
         const value = Number(searchParams.get('media'));
         return Number.isInteger(value) && value >= 0 ? value : 0;
@@ -823,6 +994,13 @@ export default function ShowcaseClient({
     const priorityMediaItemId = renderedItems.find((item) => (
         item.postFormat !== 'text' && getShowcaseItemMediaItems(item).length > 0
     ))?.id ?? null;
+    // Where nothing hovers, one tile's clip plays, as on Home (FeedClient's
+    // `touchAutoplay`); pointers keep hover and focus. None while the reel is
+    // open over the grid: it plays its own, and a tile under it would stream
+    // unseen.
+    const touchAutoplay = useMediaQuery('(hover: none)');
+    const [mostVisibleVideoTileId, observeVideoTile] = useMostVisibleVideoTile(touchAutoplay);
+    const playingTileId = selectedItemId ? null : mostVisibleVideoTileId;
 
     useEffect(() => {
         const itemsWithSavedState = items.map((item) => ({
@@ -1061,6 +1239,9 @@ export default function ShowcaseClient({
         setPageInfo(initialFeed.pageInfo);
         setRenderedItemCount(Math.min(SHOWCASE_INITIAL_RENDER_COUNT, visibleInitialItems.length));
         setFeedSessionId(getShowcaseFeedSessionId(initialFeed));
+        setLaneFetchedAt(Date.now());
+        // Another page: a removal still offering Undo stands.
+        setTileRemoval(null);
         setIsLoadingMore(false);
         setLoadMoreError(null);
         setIsRefreshingLane(false);
@@ -1250,6 +1431,7 @@ export default function ShowcaseClient({
                     ));
                     setPageInfo(personalizedFeed.pageInfo);
                     setFeedSessionId(getShowcaseFeedSessionId(personalizedFeed));
+                    setLaneFetchedAt(Date.now());
                     setSavedItemIds((currentSavedItemIds) => {
                         const nextSavedItemIds = new Set(
                             visiblePersonalizedItems.filter((item) => item.isSaved).map((item) => item.id)
@@ -1520,6 +1702,8 @@ export default function ShowcaseClient({
         isLoadingMoreRef.current = true;
         setIsRefreshingLane(true);
         setLoadMoreError(null);
+        // The grid is drawn afresh: a removal still offering Undo stands.
+        setTileRemoval(null);
         // This page one is the viewer's own: For you's refresh, which a
         // guest's first interaction (this tap) starts, need not ask again.
         anonymousPersonalizationStartedRef.current = true;
@@ -1556,6 +1740,7 @@ export default function ShowcaseClient({
             setItems(visibleItems);
             setPageInfo(firstPage.pageInfo);
             setFeedSessionId(getShowcaseFeedSessionId(firstPage));
+            setLaneFetchedAt(Date.now());
             setRenderedItemCount(Math.min(SHOWCASE_INITIAL_RENDER_COUNT, visibleItems.length));
             setSavedItemIds(new Set(visibleItems.filter((item) => item.isSaved).map((item) => item.id)));
             // The reader was at the end of the old grid; the new one starts at the top.
@@ -1673,18 +1858,46 @@ export default function ShowcaseClient({
             }
         }
 
-        try {
-            await sendShowcaseFeedEvent({
-                item: feedbackItem,
-                eventType: action,
-                sourceSurface,
-                accessToken: accessTokenRef.current,
-                feedSessionId: feedSessionIdForEventsRef.current,
-                fallbackPosition: itemPosition >= 0 ? itemPosition : undefined,
-                metadata: {
-                    creatorId: feedbackItem.creator.id,
-                },
-            });
+        const hideRequest = sendShowcaseFeedEvent({
+            item: feedbackItem,
+            eventType: action,
+            sourceSurface,
+            accessToken: accessTokenRef.current,
+            feedSessionId: feedSessionIdForEventsRef.current,
+            fallbackPosition: itemPosition >= 0 ? itemPosition : undefined,
+            metadata: {
+                creatorId: feedbackItem.creator.id,
+            },
+        }).then(() => true, (error: unknown) => {
+            console.error('Failed to save showcase feedback:', error);
+            return false;
+        });
+        // The tile's cell offers Undo (D7), among the tiles left: a hidden
+        // creator's tiles before it go too. The reel moves on to the next post
+        // and has no cell to offer it in.
+        const removal: FeedRemoval<ShowcaseFeedItem> | null = sourceSurface === 'showcase' ? {
+            id: ++removalIdRef.current,
+            postId: feedbackItem.id,
+            label: feedRemovalLabel(action, feedbackItem.creator.name),
+            target: action === 'hide_creator' && feedbackItem.creator.id
+                ? { feedbackType: 'hide_creator', creatorId: feedbackItem.creator.id }
+                : { feedbackType: 'not_interested', postId: feedbackItem.id },
+            removed: removedItems,
+            rowIndex: currentItems
+                .slice(0, Math.max(itemPosition, 0))
+                .filter((candidate) => !removedIds.has(candidate.id) && !isTextOnlyPost(candidate))
+                .length,
+            hideRequest,
+        } : null;
+        if (removal) {
+            setTileRemoval(removal);
+        }
+        const isUndone = () => Boolean(removal && undoneRemovalIdsRef.current.has(removal.id));
+
+        if (await hideRequest) {
+            if (isUndone()) {
+                return;
+            }
             setFeedbackNotice({
                 tone: 'success',
                 message: !userId
@@ -1695,30 +1908,69 @@ export default function ShowcaseClient({
                         ? `Posts from ${feedbackItem.creator.name} are now hidden.`
                         : 'Thanks. We’ll show you fewer posts like that.',
             });
-        } catch (error) {
-            console.error('Failed to save showcase feedback:', error);
-            if (!userId) {
-                if (action === 'hide_creator' && feedbackItem.creator.id) {
-                    sessionHiddenCreatorIdsRef.current.delete(feedbackItem.creator.id);
-                } else {
-                    sessionHiddenPostIdsRef.current.delete(feedbackItem.id);
-                }
-            }
-            setItems((latestItems) => {
-                const restoredItems = [...latestItems];
-                removedItems.forEach(({ item: removedItem, index }) => {
-                    if (!restoredItems.some((candidate) => candidate.id === removedItem.id)) {
-                        restoredItems.splice(Math.min(index, restoredItems.length), 0, removedItem);
-                    }
-                });
-                return restoredItems;
-            });
-            setFeedbackNotice({
-                tone: 'error',
-                message: 'We couldn’t save that preference, so the post was restored. Please try again.',
-            });
+            return;
         }
+        // Taken back already: the tiles are in the grid and nothing was stored.
+        if (isUndone()) {
+            return;
+        }
+
+        if (!userId) {
+            if (action === 'hide_creator' && feedbackItem.creator.id) {
+                sessionHiddenCreatorIdsRef.current.delete(feedbackItem.creator.id);
+            } else {
+                sessionHiddenPostIdsRef.current.delete(feedbackItem.id);
+            }
+        }
+        if (removal) {
+            setTileRemoval((current) => (current?.id === removal.id ? null : current));
+        }
+        setItems((latestItems) => putBackRemovedFeedItems(latestItems, removedItems));
+        setFeedbackNotice({
+            tone: 'error',
+            message: 'We couldn’t save that preference, so the post was restored. Please try again.',
+        });
     }, [closePreview, selectPreviewItem, setItems, userId]);
+    // Undo: the tiles go back to their cells and this visit forgets the
+    // removal, in this grid and in what the tab remembers. A signed-in
+    // viewer's preference is deleted on the server once the hide it takes back
+    // has settled; a guest's lived on this page alone, and nothing is sent.
+    const undoTileRemoval = useCallback((removal: FeedRemoval<ShowcaseFeedItem>) => {
+        undoneRemovalIdsRef.current.add(removal.id);
+        setTileRemoval((current) => (current?.id === removal.id ? null : current));
+        // "Fewer posts like that" no longer holds.
+        setFeedbackNotice(null);
+        if (removal.target.feedbackType === 'hide_creator') {
+            sessionHiddenCreatorIdsRef.current.delete(removal.target.creatorId);
+        } else {
+            sessionHiddenPostIdsRef.current.delete(removal.target.postId);
+        }
+        forgetFeedPreferenceForVisit(userId, removal.target);
+        setItems((latestItems) => putBackRemovedFeedItems(latestItems, removal.removed));
+        const token = accessTokenRef.current;
+        if (!userId || !token || !removal.hideRequest) {
+            return;
+        }
+        void undoShowcaseFeedFeedbackAfterHide({
+            hideRequest: removal.hideRequest,
+            accessToken: token,
+            target: removal.target,
+        }).then((undone) => {
+            // The tile stays; the server will leave it out next time.
+            if (!undone) {
+                setFeedbackNotice({ tone: 'error', message: FEED_UNDO_FAILED_MESSAGE });
+            }
+        });
+    }, [setItems, userId]);
+    useEffect(() => {
+        if (!tileRemoval) {
+            return;
+        }
+        const timeout = window.setTimeout(() => {
+            setTileRemoval((current) => (current?.id === tileRemoval.id ? null : current));
+        }, FEED_REMOVAL_UNDO_MS);
+        return () => window.clearTimeout(timeout);
+    }, [tileRemoval]);
 
     // Report content, Report user and Block user, asked for and sent as the
     // feed card's are (`lib/feed-safety-actions.ts`). The server takes them
@@ -1797,6 +2049,33 @@ export default function ShowcaseClient({
         }
         showSafetyOutcome(outcome);
     }, [clearFeedbackNotice, removeAfterSafetyAction, requireAccount, showSafetyOutcome, userId]);
+
+    // "New posts" (D2): For you only, Recent has its own order to come back to
+    // and Saved, Remixed and Sales are not ordered by time; and only without a
+    // tool, recipe or kind filter, which the probe cannot name. The lane is the
+    // one the grid holds: the controls run ahead of it while a lane loads.
+    const probeLane = useMemo<NewPostsProbeLane | null>(() => (
+        initialSort === DEFAULT_SHOWCASE_SORT
+        && (initialTool ?? 'all') === 'all'
+        && initialUnlock === 'all'
+        && initialResource === 'all'
+            ? { key: showcaseClientCacheKey, category: feedNewestCategoryFor(requestCategoryFor(initialCategory)) }
+            : null
+    ), [initialCategory, initialResource, initialSort, initialTool, initialUnlock, showcaseClientCacheKey]);
+    const newestKnownAt = useMemo(() => newestCreatedAtOf(items.filter((item) => !isTextOnlyPost(item))), [items]);
+    const { hasNewer: hasNewerPosts, dismiss: dismissNewPosts } = useNewPostsProbe({
+        lane: isPending || isLoadingInitialFeed || tileableItems.length === 0 ? null : probeLane,
+        laneFetchedAt,
+        newestKnownAt,
+    });
+    // The pill's tap is the lane's own Refresh: its first page afresh, from the top.
+    const showNewPosts = () => {
+        dismissNewPosts();
+        if (window.scrollY > 0) {
+            window.scrollTo({ top: 0, behavior: newPostsScrollBehavior() });
+        }
+        void refreshLane();
+    };
 
     const activeFilterPills = [
         tool !== 'all' ? {
@@ -2033,6 +2312,15 @@ export default function ShowcaseClient({
                             </div>
                         </div>
                   ) : null}
+
+                  {hasNewerPosts ? (
+                    // Hangs under the filter bar, so it floats over the top
+                    // of the grid and stays in view with the bar as the
+                    // reader scrolls; takes no room.
+                    <div className="pointer-events-none absolute inset-x-0 top-full flex justify-center pt-3">
+                        <NewPostsPill onPress={showNewPosts} className="pointer-events-auto" />
+                    </div>
+                  ) : null}
                 </div>
 
                 {isLoadingInitialFeed ? (
@@ -2043,7 +2331,7 @@ export default function ShowcaseClient({
                             </div>
                         ))}
                     </div>
-                ) : tileableItems.length === 0 ? (
+                ) : tileableItems.length === 0 && !tileRemoval ? (
                     <div className="rounded-[28px] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-6 py-16 text-center text-[var(--ui-text-muted)]">
                         <span className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--ui-surface-2)] text-[var(--ui-text-faint)]">
                             <ImageIcon className="h-6 w-6" aria-hidden />
@@ -2060,7 +2348,7 @@ export default function ShowcaseClient({
                         onPointerEnter={warmShowcaseReelViewer}
                         onTouchStart={warmShowcaseReelViewer}
                     >
-                            {renderedItems.map((item, itemIndex) => (
+                            {withRemovalRow(renderedItems.map((item, itemIndex) => (
                                 <ShowcaseGridCard
                                     key={item.id}
                                     item={item}
@@ -2073,6 +2361,8 @@ export default function ShowcaseClient({
                                     accessToken={accessToken}
                                     viewerId={userId}
                                     returnTo={laneReturnPath}
+                                    autoPlayVideo={item.id === playingTileId}
+                                    observeVideoTile={observeVideoTile}
                                     onOpenPreview={openPreview}
                                     onToggleSave={handleToggleSave}
                                     onFeedback={handleFeedFeedback}
@@ -2080,7 +2370,14 @@ export default function ShowcaseClient({
                                     onReportUser={handleReportUser}
                                     onBlockUser={handleBlockUser}
                                 />
-                            ))}
+                            )), tileRemoval?.rowIndex ?? null, tileRemoval ? (
+                                <FeedRemovalUndoRow
+                                    key={`removed:${tileRemoval.postId}`}
+                                    label={tileRemoval.label}
+                                    onUndo={() => undoTileRemoval(tileRemoval)}
+                                    className="min-w-0"
+                                />
+                            ) : null)}
                     </div>
                 )}
 

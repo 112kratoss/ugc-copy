@@ -55,6 +55,7 @@ import type {
   RemixSourceBundle,
   ShowcaseFeedEventRequest,
   ShowcaseFeedEventBatchResponse,
+  ShowcaseFeedNewestResponse,
   ShowcaseFeedEventResponse,
   ShowcaseFeedResponse,
   ShowcasePostResponse,
@@ -76,6 +77,8 @@ import type {
   PublicSearchResponse,
   PublicSearchType,
   ShareChannel,
+  UndoFeedFeedbackRequest,
+  UndoFeedFeedbackResponse,
 } from './types';
 import {
   GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
@@ -1028,6 +1031,15 @@ export function createApiClient({
         : undefined,
       body: JSON.stringify({ events }),
     }, { auth: false }),
+    // Sent without the session token: the probe is public and cacheable, and
+    // the proxy would check (and refuse) an expired token it was given.
+    getShowcaseFeedNewest: (params?: { category?: 'media' | 'text' | 'all' }) =>
+      request<ShowcaseFeedNewestResponse>(`/api/showcase/feed/newest${buildQuery(params)}`, {}, { auth: false }),
+    undoFeedFeedback: (body: UndoFeedFeedbackRequest) =>
+      request<UndoFeedFeedbackResponse>('/api/showcase/feed/feedback/undo', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
     getSavedMedia: (params?: Record<string, QueryValue>) =>
       request<ShowcaseFeedResponse>(`/api/showcase/saved-media${buildQuery(params)}`),
     // A 404 here is authoritative. This used to fall back to scanning a recent

@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SheetActionGroup, SheetActionRow } from '@/components/sheet-action-group';
 import { SheetBackdrop, SheetGrabber, SheetPanel, sheetPanelStyle, useSheetDismissDrag } from '@/components/sheet-chrome';
+import { feedFeedbackNote, type FeedViewerKind } from '@/lib/feed-feedback-menu';
 import { useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
@@ -27,7 +28,7 @@ export function FeedFeedbackSheet({
   onReportContent,
   onReportUser,
   postTitle,
-  sessionOnly = false,
+  viewerKind,
   visible,
 }: {
   creatorLabel: string;
@@ -44,7 +45,8 @@ export function FeedFeedbackSheet({
   onReportContent?: () => void;
   onReportUser?: () => void;
   postTitle: string;
-  sessionOnly?: boolean;
+  /** A guest's Not interested and Hide rows add that the choice stays on this device, as the menu's do. */
+  viewerKind: FeedViewerKind;
   visible: boolean;
 }) {
   const theme = useAppTheme();
@@ -63,6 +65,8 @@ export function FeedFeedbackSheet({
   const reportUser = showsCreatorRows ? onReportUser : undefined;
   const blockUser = showsCreatorRows ? onBlockUser : undefined;
   const hasSafetyActions = Boolean(reportContent || reportUser || blockUser);
+  const note = feedFeedbackNote(viewerKind);
+  const withNote = (sentence: string) => (note ? `${sentence} ${note}.` : sentence);
 
   return (
     <Modal
@@ -98,18 +102,14 @@ export function FeedFeedbackSheet({
             </View>
             <SheetActionGroup>
               <SheetActionRow
-                body={sessionOnly
-                  ? 'Remove this post from your feed for this visit.'
-                  : 'Remove this post and show fewer recommendations like it.'}
+                body={withNote('Remove this post and show fewer recommendations like it.')}
                 icon={EyeOff}
                 label="Not interested"
                 onPress={onNotInterested}
               />
               {showsCreatorRows ? (
                 <SheetActionRow
-                  body={sessionOnly
-                    ? `Remove posts from ${creatorLabel} for this visit.`
-                    : `Remove posts from ${creatorLabel} from your recommendations.`}
+                  body={withNote(`Remove posts from ${creatorLabel} from your recommendations.`)}
                   icon={UserRoundX}
                   label={hideLabel}
                   onPress={onHideCreator}

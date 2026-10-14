@@ -370,6 +370,87 @@ describe('media preview repair retries', () => {
     expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 
+  it('lets a poster retry leave a video size alone, and still records an image size', async () => {
+    // A video's poster measures nothing. The rendition sweep may already have
+    // written the clip's size, and the retry's nulls used to blank it.
+    const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+    const previewFor = (async ({ storagePath }: { storagePath: string }) => {
+      const isVideo = storagePath.endsWith('.mp4');
+      return {
+        previewStoragePath: storagePath.replace(/\.\w+$/, '.preview.abc123.webp'),
+        previewThumbhash: 'thumbhash',
+        previewStatus: 'ready',
+        width: isVideo ? null : 1080,
+        height: isVideo ? null : 1350,
+      };
+    }) as never;
+    // Keyed by path, so the two concurrent workers may call in either order.
+    previewMocks.createPostMediaPreview
+      .mockImplementationOnce(previewFor)
+      .mockImplementationOnce(previewFor);
+    const updates: Array<{ id: unknown; payload: Record<string, unknown> }> = [];
+    const supabase = {
+      from: vi.fn((table: string) => ({
+        select: vi.fn(() => createSelectChain({
+          data: table === 'post_media'
+            ? [
+                {
+                  id: 'media-video-1',
+                  post_id: 'user',
+                  storage_path: 'posts/user/clip.mp4',
+                  media_kind: 'video',
+                  content_type: 'video/mp4',
+                  preview_attempt_count: 1,
+                },
+                {
+                  id: 'media-image-1',
+                  post_id: 'user',
+                  storage_path: 'posts/user/photo.png',
+                  media_kind: 'image',
+                  content_type: 'image/png',
+                  preview_attempt_count: 0,
+                },
+              ]
+            : [],
+          error: null,
+        })),
+        update: vi.fn((payload: Record<string, unknown>) => {
+          const update = { id: undefined as unknown, payload };
+          if (table === 'post_media') updates.push(update);
+          const query = {
+            eq: vi.fn((column: string, value: unknown) => {
+              if (column === 'id') update.id = value;
+              return query;
+            }),
+            then: (resolve: (result: { error: null }) => unknown) => Promise.resolve({ error: null }).then(resolve),
+          };
+          return query;
+        }),
+      })),
+      storage: {
+        from: vi.fn(() => ({
+          download: vi.fn(async () => ({ data: new Blob(['media']), error: null })),
+        })),
+      },
+    };
+
+    const summary = await repairMediaPreviews(withAdmissionFallback(supabase) as never, {
+      batchSize: 10,
+      invalidateFeedCache: vi.fn(),
+    });
+
+    expect(summary.failed).toBe(0);
+    const previewUpdate = (id: string) => updates.find(
+      (update) => update.id === id && update.payload.preview_status === 'ready',
+    )?.payload;
+    expect(previewUpdate('media-video-1')).toMatchObject({ preview_storage_path: 'posts/user/clip.preview.abc123.webp' });
+    expect(previewUpdate('media-video-1')).not.toHaveProperty('width');
+    expect(previewUpdate('media-video-1')).not.toHaveProperty('height');
+    expect(previewUpdate('media-image-1')).toMatchObject({ width: 1080, height: 1350 });
+    // No pass in the sweep wrote a null over a size.
+    expect(updates.filter(({ payload }) => payload.width === null || payload.height === null)).toEqual([]);
+  });
+
   it('bounds external generation media downloads with a timeout signal', async () => {
     const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
     const { createGenerationOutputPreview } = await import('@/lib/generation-output-preview');
@@ -825,6 +906,47 @@ describe('showcase feed rendition repair', () => {
       }),
     ]));
     expect(updates.some((update) => update.payload.rendition_status === 'ready')).toBe(false);
+  });
+
+  it('records the encoded size when a not-smaller skip still encoded the clip', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    // The source plays in the rendition's place; the encoder's output frame is
+    // upright, so a phone clip coded 640x360 reports 360x640.
+    renditionMocks.createPostMediaRendition.mockResolvedValueOnce({
+      status: 'skipped',
+      reason: 'not-smaller',
+      width: 360,
+      height: 640,
+    } as never);
+    const { supabase, updates } = createRenditionClient([pendingVideoRow]);
+
+    const summary = await repairPostMediaRenditions(withAdmissionFallback(supabase) as never);
+
+    expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
+    expect(updates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        table: 'post_media',
+        payload: expect.objectContaining({ rendition_status: 'skipped', width: 360, height: 640 }),
+      }),
+    ]));
+  });
+
+  it('writes no size for a skip that encoded nothing', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    renditionMocks.createPostMediaRendition.mockResolvedValueOnce({
+      status: 'skipped',
+      reason: 'too-large',
+      width: null,
+      height: null,
+    } as never);
+    const { supabase, updates } = createRenditionClient([pendingVideoRow]);
+
+    await repairPostMediaRenditions(withAdmissionFallback(supabase) as never);
+
+    const skip = updates.find((update) => update.payload.rendition_status === 'skipped');
+    expect(skip?.payload).toMatchObject({ rendition_error: 'Rendition skipped: too-large.' });
+    expect(skip?.payload).not.toHaveProperty('width');
+    expect(skip?.payload).not.toHaveProperty('height');
   });
 
   it('marks the row failed when the transcode throws', async () => {

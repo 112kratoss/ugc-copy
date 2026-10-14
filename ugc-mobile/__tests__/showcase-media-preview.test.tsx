@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
@@ -39,9 +39,14 @@ vi.mock('@/components/feed-video-preview', () => ({
   FeedVideoPreview: (props: MockProps) => React.createElement('feed-video-preview', props),
 }));
 
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: { getItem: vi.fn(async () => null), setItem: vi.fn(async () => undefined) },
+}));
+
 import {
   ShowcaseMediaPreview,
 } from '../components/showcase-media-preview';
+import { resetAutoplayPreferenceForTests, writeAutoplayPreference, type AutoplayPreference } from '../lib/autoplay-preference';
 import { MediaZoomTileShapedContext } from '../lib/media-zoom-tile-shape';
 import { getShowcasePreviewMediaItems } from '../lib/showcase-media';
 import type { ShowcaseFeedItem, ShowcaseMediaItem } from '../lib/types';
@@ -457,6 +462,65 @@ describe('ShowcaseMediaPreview', () => {
 
     it('asks a tile for no time where no one listens', () => {
       expect(renderVideo({ feedStreamUrl: 'https://cdn.example.com/clip.feed.mp4' }).props.onPlaybackTime).toBeUndefined();
+    });
+  });
+
+  describe('under Autoplay previews (Settings → Playback)', () => {
+    afterEach(() => resetAutoplayPreferenceForTests());
+
+    const clip = (overrides: Partial<ShowcaseMediaItem> = {}) => media({
+      id: 'clip',
+      url: 'https://cdn.example.com/clip.mp4',
+      previewUrl: 'https://cdn.example.com/clip.webp',
+      mediaKind: 'video',
+      contentType: 'video/mp4',
+      ...overrides,
+    });
+
+    function renderClip(videoActivation: 'visible' | 'prepared' | 'when-poster-missing', mediaItems = [clip()]) {
+      return renderPreview(
+        <ShowcaseMediaPreview
+          accent="#fb7185" height={180} width={160} radius={12} recyclingKey="home-feed:clip"
+          mediaItems={mediaItems} videoActivation={videoActivation}
+        />
+      );
+    }
+
+    function player(videoActivation: 'visible' | 'prepared' | 'when-poster-missing', mediaItems = [clip()]) {
+      const tree = renderClip(videoActivation, mediaItems);
+      const [video] = findAllByNodeType(tree, 'feed-video-preview');
+      const state = { active: video.props.active, prepared: video.props.prepared };
+      renderer.act(() => tree.unmount());
+      return state;
+    }
+
+    it.each(['wifi', 'always'] as AutoplayPreference[])('plays and prepares as the feed asks under %s', (preference) => {
+      resetAutoplayPreferenceForTests(preference);
+      expect(player('visible')).toEqual({ active: true, prepared: false });
+      expect(player('prepared')).toEqual({ active: false, prepared: true });
+      expect(player('when-poster-missing', [clip({ previewUrl: null })])).toEqual({ active: true, prepared: false });
+    });
+
+    it('keeps every video on its poster under Never, as Reduce Motion does', () => {
+      resetAutoplayPreferenceForTests('never');
+      expect(player('visible')).toEqual({ active: false, prepared: false });
+      expect(player('prepared')).toEqual({ active: false, prepared: false });
+      expect(player('when-poster-missing', [clip({ previewUrl: null })])).toEqual({ active: false, prepared: false });
+      // A carousel's current page as well.
+      expect(player('visible', [clip(), media({ id: 'second' })])).toEqual({ active: false, prepared: false });
+    });
+
+    it('turns a playing preview back into its poster the moment Never is chosen', async () => {
+      resetAutoplayPreferenceForTests('always');
+      const tree = renderClip('visible');
+      expect(findAllByNodeType(tree, 'feed-video-preview')[0].props.active).toBe(true);
+
+      await renderer.act(() => writeAutoplayPreference('never'));
+      expect(findAllByNodeType(tree, 'feed-video-preview')[0].props.active).toBe(false);
+
+      await renderer.act(() => writeAutoplayPreference('wifi'));
+      expect(findAllByNodeType(tree, 'feed-video-preview')[0].props.active).toBe(true);
+      renderer.act(() => tree.unmount());
     });
   });
 

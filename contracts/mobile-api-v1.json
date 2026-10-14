@@ -536,6 +536,25 @@
         }
       }
     },
+    "getShowcaseFeedNewest": {
+      "method": "GET",
+      "query": {
+        "category": "media"
+      },
+      "path": "/api/showcase/feed/newest",
+      "auth": "none",
+      "cacheControl": "public, max-age=30",
+      "response": {
+        "newestPostId": "8c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+        "newestPublishedAt": "2026-10-14T05:30:00.000Z"
+      },
+      "responseVariants": {
+        "emptyLane": {
+          "newestPostId": null,
+          "newestPublishedAt": null
+        }
+      }
+    },
     "recordShowcaseFeedEvents": {
       "method": "POST",
       "path": "/api/showcase/feed/events",
@@ -599,6 +618,32 @@
           { "index": 1, "status": 200 },
           { "index": 2, "status": 200 }
         ]
+      }
+    },
+    "undoFeedFeedback": {
+      "method": "POST",
+      "path": "/api/showcase/feed/feedback/undo",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "request": {
+        "feedbackType": "not_interested",
+        "postId": "5f0c6a52-8d1e-4b7a-9c3f-1a2b3c4d5e6f"
+      },
+      "requestVariants": {
+        "hideCreator": {
+          "feedbackType": "hide_creator",
+          "creatorId": "3b6f2c1e-7a4d-4e8b-9f10-2c3d4e5f6a7b"
+        }
+      },
+      "response": {
+        "ok": true,
+        "removed": true
+      },
+      "responseVariants": {
+        "nothingToRemove": {
+          "ok": true,
+          "removed": false
+        }
       }
     },
     "searchPublicContent": {

@@ -136,6 +136,7 @@ type PostMediaRow = {
   height: number | null;
   duration_seconds: number | null;
   sort_order: number;
+  preview_storage_path?: string | null;
 };
 
 let profilesState: ProfileRow[] = [];
@@ -438,6 +439,9 @@ function createServiceClientMock() {
       if (table === 'generations') {
         const filters: Record<string, unknown> = {};
         const sorts: Array<{ column: keyof GenerationModelRow; ascending: boolean }> = [];
+        // A read answers with the columns it asked for, as PostgREST does, so a
+        // column the select leaves out is missing here too.
+        let selectedColumns: string[] | null = null;
 
         const run = () => {
           const rows = [...generationModelsState]
@@ -460,11 +464,23 @@ function createServiceClientMock() {
               return 0;
             });
 
-          return { data: rows, error: null };
+          const columns = selectedColumns;
+          return {
+            data: columns
+              ? rows.map((row) => Object.fromEntries(columns.map((column) => [
+                  column,
+                  (row as Record<string, unknown>)[column] ?? null,
+                ])) as GenerationModelRow)
+              : rows,
+            error: null,
+          };
         };
 
         const query = {
-          select() {
+          select(columns?: string) {
+            selectedColumns = typeof columns === 'string' && columns.trim() !== '*'
+              ? columns.split(',').map((column) => column.trim())
+              : null;
             return query;
           },
           in(column: string, values: unknown[]) {
@@ -1005,6 +1021,10 @@ describe('showcase feed', () => {
       previewUrl: 'https://proxy.example.com/generated_videos/user-1/generated-video.preview.webp',
       previewStatus: 'ready',
       gridReady: true,
+      // On the cover itself too: the web carousel reads only these, and the
+      // app reads them before the descriptor's.
+      width: 720,
+      height: 1280,
       preview: {
         previewUrl: 'https://proxy.example.com/generated_videos/user-1/generated-video.preview.webp',
         status: 'ready',
@@ -1055,6 +1075,73 @@ describe('showcase feed', () => {
       width: null,
       height: null,
     });
+    expect(page.items[0].mediaItems?.[0]).toMatchObject({ width: null, height: null });
+  });
+
+  it('sizes a creation\'s cover row from its generation until the row has a poster of its own', async () => {
+    const creationPost = (id: string, createdAt: string) => createPostRow({
+      id,
+      created_at: createdAt,
+      output_url: `generated_videos/user-1/${id}.mp4`,
+      showcase_asset_path: `showcase/gen-${id}/${id}.mp4`,
+      category: 'video',
+      generation_id: `gen-${id}`,
+    });
+    const coverRow = (id: string, overrides: Partial<PostMediaRow> = {}): PostMediaRow => ({
+      id: `media-${id}`,
+      post_id: id,
+      storage_path: `showcase/gen-${id}/${id}.mp4`,
+      external_url: null,
+      media_kind: 'video',
+      content_type: 'video/mp4',
+      original_name: `${id}.mp4`,
+      width: null,
+      height: null,
+      duration_seconds: null,
+      sort_order: 0,
+      ...overrides,
+    });
+    postsState = [
+      creationPost('fresh', '2026-03-20T12:00:00.000Z'),
+      creationPost('measured', '2026-03-20T11:00:00.000Z'),
+      creationPost('postered', '2026-03-20T10:00:00.000Z'),
+    ];
+    postMediaState = [
+      // Published moments ago: the sweeps have built neither its poster nor its size.
+      coverRow('fresh'),
+      // A size of the row's own always wins.
+      coverRow('measured', { width: 1080, height: 1920 }),
+      // Its own poster is built, so it no longer shows the generation's.
+      coverRow('postered', { preview_storage_path: 'showcase/gen-postered/postered.preview.abc.webp' }),
+    ];
+    generationModelsState = ['fresh', 'measured', 'postered'].map((id) => ({
+      id: `gen-${id}`,
+      model: 'kling-3.0-video',
+      preview_url: `generated_videos/user-1/${id}.preview.webp`,
+      preview_width: 720,
+      preview_height: 1280,
+      category: 'video',
+      user_id: 'user-1',
+    }));
+    resourceBundlesState = [];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+    });
+    const covers = new Map(page.items.map((item) => [item.id, item.mediaItems?.[0]]));
+
+    expect(covers.get('fresh')).toMatchObject({
+      id: 'media-fresh',
+      width: 720,
+      height: 1280,
+      preview: { width: 720, height: 1280 },
+    });
+    expect(covers.get('measured')).toMatchObject({ id: 'media-measured', width: 1080, height: 1920 });
+    expect(covers.get('postered')).toMatchObject({ id: 'media-postered', width: null, height: null });
   });
 
   it('includes mixed image and video posts in any matching media filter', async () => {
@@ -1925,6 +2012,40 @@ describe('showcase feed', () => {
     });
 
     expect(page.items[0].creator.id).toBe('user-2');
+  });
+
+  it('sizes a legacy fallback cover from the generation\'s recorded preview', async () => {
+    postsSchemaMissingState = true;
+    resourceBundlesState = [];
+    generationModelsState = [{
+      id: 'legacy-portrait',
+      model: 'kling-3.0-video',
+      output_url: 'generated_videos/user-1/legacy-portrait.mp4',
+      showcase_asset_path: null,
+      preview_url: 'generated_videos/user-1/legacy-portrait.preview.webp',
+      preview_width: 720,
+      preview_height: 1280,
+      category: 'video',
+      prompt: 'A public video generation.',
+      title: 'Legacy Portrait',
+      save_count: 0,
+      remix_count: 0,
+      created_at: '2026-03-18T10:00:00.000Z',
+      user_id: 'user-1',
+      is_public: true,
+      status: 'succeeded',
+    }];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+    });
+
+    // The fake answers only the selected columns, so this pins the select too.
+    expect(page.items[0].mediaItems?.[0]).toMatchObject({ width: 720, height: 1280 });
   });
 
   describe('the post read by id', () => {

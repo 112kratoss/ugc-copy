@@ -61,15 +61,16 @@ Home sends no dwell, progress or skip events yet (plan §6), so meaningful and q
 
 After the delivery block, `scorecard` prints three sections from the v4 functions (plan `docs/plans/feed-algorithm-v4-industry-parity-2026-10-12.md` §2.8), over the same `--days` window with one block per version and arm. Before the v4 migration each prints `Not available` and the delivery block still prints.
 
-**Viewer grain** (`feed_scorecard_viewers`, over the last `--days` UTC days, today included). A viewer is a signed-in account or a guest's anonymous key, so a guest who signs up counts twice. Each rate prints its numerator and denominator, people rather than deliveries; `–` means nobody qualified for the denominator.
+**Viewer grain** (`feed_scorecard_viewers`, over the last `--days` UTC days, today included). A viewer is an account (a registered one, or an app guest's anonymous session: the app signs its guests in anonymously, and the feed ranks and logs them as users) or a web guest's feed cookie key, so a guest who signs up counts twice. Each rate prints its numerator and denominator, people rather than deliveries; `–` means nobody qualified for the denominator.
 
 | Line | What it counts | How to read it |
 | --- | --- | --- |
 | viewers, sessions per viewer | distinct viewers served; feed sessions per viewer. A session is one ranked list: opening the feed starts one unless the viewer opened it in the last two minutes. | How often people come back to the feed. |
 | D1 return | of the viewers served on a day whose next day lies wholly inside the window, those served again on that next day | Habit: the headline retention number. |
 | D7 return | the same with the second serve seven days later | Only viewers served more than a week before the window's end count, so it needs `--days` well above 7 and prints `0 / 0` and `–` otherwise. |
-| 7-day meaningful creation | signed-in viewers with a completed generation within 7 days of their first serve in the window, of the signed-in viewers served | Whether the feed leads people to make something, which is the point of it. Guests are on neither side. |
+| 7-day meaningful creation | signed-in viewers with a completed generation within 7 days of their first serve in the window, of the signed-in viewers served | Whether the feed leads people to make something, which is the point of it. App guests count as signed in on both sides; web guests are on neither. |
 | rendered, meaningful per viewer | | Depth per person, which the delivery rates hide when one heavy viewer dominates. |
+| signed in N (registered R · app guests A) · web guests W | the signed-in viewers split by `auth.users.is_anonymous` (registered accounts against the app's guests) and the viewers with no user id (the web's cookie-hash guests) | registered + app guests = signed in, and signed in + web guests = viewers, so a signed-in rate can be read against how many of its people are guests. `split by account not available` means the database predates the split migration (`20261014053528`). |
 
 `With N viewers, one viewer moves each rate by X points or more` is 100 / N: the smallest step a viewer rate can take.
 

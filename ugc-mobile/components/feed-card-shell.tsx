@@ -38,6 +38,7 @@ export function FeedCardShell({
   actions,
   body,
   categoryLabel,
+  modelLabel,
   creatorAvatar,
   creatorLabel,
   creatorName,
@@ -59,6 +60,12 @@ export function FeedCardShell({
   actions: ReactNode;
   body?: ReactNode;
   categoryLabel: string;
+  /**
+   * The model the post was made with, drawn after the category ("Video ·
+   * Kling 2.5") where the web card's metadata line names it too. Absent when
+   * the post names no model the catalog knows.
+   */
+  modelLabel?: string | null;
   creatorAvatar: string | null;
   creatorLabel: string;
   creatorName: string;
@@ -194,9 +201,11 @@ export function FeedCardShell({
           </Text>
         </Pressable>
         {statusChip}
-        <View>
-          <Text style={{ color: theme.colors.faint, ...appTheme.type.caption }}>
-            {categoryLabel}
+        {/* At most half the row, on one line: a long model name loses its end
+            before it can crowd the byline out. */}
+        <View style={{ flexShrink: 1, maxWidth: '50%' }}>
+          <Text numberOfLines={1} style={{ color: theme.colors.faint, ...appTheme.type.caption }}>
+            {modelLabel ? `${categoryLabel} · ${modelLabel}` : categoryLabel}
           </Text>
         </View>
         {renderMoreMenu ? renderMoreMenu({

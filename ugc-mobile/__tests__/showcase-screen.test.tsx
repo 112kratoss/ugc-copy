@@ -2,13 +2,16 @@
 
 import React from 'react';
 import renderer from 'react-test-renderer';
+import type { InfiniteData } from '@tanstack/react-query';
 import { Image } from 'expo-image';
-import { Alert } from 'react-native';
+import { AccessibilityInfo, Alert } from 'react-native';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
 const queryState = vi.hoisted(() => ({
+  /** When the lane's pages were fetched, as React Query reports it. */
+  dataUpdatedAt: 0,
   error: null as Error | null,
   fetchNextPage: vi.fn(() => Promise.resolve()),
   filter: 'all',
@@ -17,7 +20,7 @@ const queryState = vi.hoisted(() => ({
   isFetching: false,
   isFetchingNextPage: false,
   isLoading: false,
-  pages: [{ items: [], pageInfo: { hasMore: false, nextOffset: null } }] as Array<Record<string, unknown>>,
+  pages: [{ items: [], pageInfo: { hasMore: false, nextOffset: null } }] as object[],
   /** The key of the lane the screen last asked for. */
   queryKey: null as readonly unknown[] | null,
   refetch: vi.fn(() => Promise.resolve()),
@@ -29,21 +32,35 @@ const queryState = vi.hoisted(() => ({
 const authState = vi.hoisted(() => ({
   api: {
     blockUser: vi.fn(),
+    getShowcaseFeedNewest: vi.fn((_params?: { category?: string }) => Promise.resolve({
+      newestPostId: null as string | null,
+      newestPublishedAt: null as string | null,
+    })),
     recordShowcaseFeedEvent: vi.fn(() => Promise.resolve()),
     reportPost: vi.fn(),
     reportUser: vi.fn(),
+    undoFeedFeedback: vi.fn((_body: unknown) => Promise.resolve({ ok: true as const, removed: true })),
   },
   identityUserId: 'viewer-1' as string | null,
   user: { id: 'viewer-1' } as { id: string } | null,
 }));
 
-// One client for every render, as the real provider gives.
+type QueryKey = readonly unknown[];
+
+// One client for every render, as the real provider gives. `laneCache` below
+// gives it a cache for the tests that read one back.
 const queryClient = vi.hoisted(() => ({
-  getQueriesData: vi.fn(() => []),
+  getQueriesData: vi.fn((_filters: { queryKey: QueryKey }): Array<[QueryKey, unknown]> => []),
   invalidateQueries: vi.fn(() => Promise.resolve()),
-  setQueriesData: vi.fn(),
-  setQueryData: vi.fn(),
+  setQueriesData: vi.fn((_filters: { queryKey: QueryKey }, _updater: unknown): void => undefined),
+  setQueryData: vi.fn((_queryKey: QueryKey, _updater: unknown): void => undefined),
 }));
+
+const navigation = vi.hoisted(() => ({ isFocused: true }));
+
+// What the "New posts" probe subscribed to: a test brings the app back to the
+// foreground by calling it.
+const appForeground = vi.hoisted(() => ({ listeners: new Set<(foreground: boolean) => void>() }));
 
 vi.mock('@shopify/flash-list', () => ({
   FlashList: (props: MockProps) => React.createElement('flash-list', props, props.ListFooterComponent as React.ReactNode),
@@ -57,6 +74,7 @@ vi.mock('@tanstack/react-query', () => ({
         pages: queryState.pages,
         pageParams: [{ offset: 0 }],
       },
+      dataUpdatedAt: queryState.dataUpdatedAt,
       error: queryState.error,
       fetchNextPage: queryState.fetchNextPage,
       hasNextPage: queryState.hasNextPage,
@@ -80,8 +98,24 @@ vi.mock('expo-router', () => ({
 }));
 
 vi.mock('@react-navigation/native', () => ({
-  useIsFocused: () => true,
+  useIsFocused: () => navigation.isFocused,
   useScrollToTop: vi.fn(),
+}));
+
+vi.mock('@/lib/app-foreground', () => ({
+  isAppForeground: () => true,
+  subscribeToAppForeground: (listener: (foreground: boolean) => void) => {
+    appForeground.listeners.add(listener);
+    return () => {
+      appForeground.listeners.delete(listener);
+    };
+  },
+  useAppForeground: () => true,
+}));
+
+// The tiles read the Autoplay previews choice, which is kept on the device.
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: { getItem: vi.fn(async () => null), setItem: vi.fn(async () => undefined) },
 }));
 
 vi.mock('react-native', () => ({
@@ -138,6 +172,14 @@ vi.mock('@/components/feed-feedback-sheet', () => ({
   FeedFeedbackSheet: (props: MockProps) => React.createElement('feed-feedback-sheet', props),
 }));
 
+vi.mock('@/components/new-posts-pill', () => ({
+  NewPostsPill: (props: MockProps) => React.createElement('new-posts-pill', props),
+}));
+
+vi.mock('@/components/feed-undo-notice', () => ({
+  FeedUndoNotice: (props: MockProps) => React.createElement('feed-undo-notice', props),
+}));
+
 vi.mock('@/components/top-scrim', () => ({
   TopScrim: (props: MockProps) => React.createElement('top-scrim', props),
 }));
@@ -182,15 +224,29 @@ vi.mock('@/lib/feed-event-queue', () => ({
 
 vi.mock('@/lib/motion', () => ({
   MotionView: ({ children, ...props }: MockProps) => React.createElement('motion-view', props, children),
+  // No fade here: an overlay is drawn exactly while it is visible.
+  useOverlayPresence: (visible: boolean) => ({ mounted: visible, animatedStyle: undefined }),
   usePressMotion: () => ({
     animatedStyle: {},
     onPressIn: vi.fn(),
     onPressOut: vi.fn(),
   }),
+  useReducedMotion: () => false,
 }));
 
 import ShowcaseScreen, { partitionAspectRatiosByViewport } from '../app/(tabs)/showcase';
-import { SHOWCASE_ONSCREEN_VIEWABILITY, resetAnonymousShowcaseFeedRemovalsForTests } from '../lib/showcase-feed-events';
+import { resetAutoplayPreferenceForTests, type AutoplayPreference } from '../lib/autoplay-preference';
+import { createFeedVideoActivationStore, FeedVideoActivationContext } from '../lib/feed-video-activation';
+import { haptic } from '../lib/haptics';
+import { resolvedBottomInset, resolvedTopInset } from '../lib/safe-area';
+import {
+  SHOWCASE_ONSCREEN_VIEWABILITY,
+  resetAnonymousShowcaseFeedRemovalsForTests,
+  resetFeedFeedbackRequestsForTests,
+} from '../lib/showcase-feed-events';
+import { getMagicTabBarMetrics } from '../lib/tab-bar-layout';
+import type { ShowcaseFeedItem, ShowcaseFeedResponse } from '../lib/types';
+import { NEW_POSTS_PROBE_MIN_LANE_AGE_MS } from '../lib/use-new-posts-probe';
 
 function feedItem() {
   return {
@@ -289,9 +345,11 @@ function pinProps(list: ListProps, index: number): PinProps {
   return cell.props.children.props;
 }
 
-/** Picks a row from the first tile's ⋮ menu. */
-function selectTileMenuRow(list: ListProps, rowId: string) {
-  const pin = pinProps(list, 0);
+/** Picks a row from a tile's ⋮ menu: the first tile's, or the one showing `postId`. */
+function selectTileMenuRow(list: ListProps, rowId: string, postId?: string) {
+  const index = postId ? (list.data as Array<{ id: string }>).findIndex((card) => card.id === postId) : 0;
+  if (index < 0) throw new Error(`No tile shows ${postId}.`);
+  const pin = pinProps(list, index);
   const row = pin.feedbackMenu(pin.card.item).sections
     .flatMap((section) => section.items)
     .find((item) => item.id === rowId);
@@ -300,9 +358,88 @@ function selectTileMenuRow(list: ListProps, rowId: string) {
   renderer.act(() => select());
 }
 
+/** The one host element of this type the screen draws. */
+function hostElement(tree: renderer.ReactTestRenderer, type: string) {
+  return tree.root.find((node) => String(node.type) === type);
+}
+
+/** Lets the promises the screen started settle. */
+async function settle() {
+  await renderer.act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/** Reports the list header's title row and chips laid out at this height, as the native layout would. */
+function measureListHeader(tree: renderer.ReactTestRenderer, height: number) {
+  const header = renderAlone(hostElement(tree, 'flash-list').props.ListHeaderComponent);
+  const measured = header.root.find((node) => String(node.type) === 'view' && typeof node.props.onLayout === 'function');
+  renderer.act(() => measured.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 374, height } } }));
+  renderer.act(() => header.unmount());
+}
+
+/** The app coming back to the foreground, as `subscribeToAppForeground` reports it. */
+async function returnToApp() {
+  await renderer.act(async () => {
+    appForeground.listeners.forEach((listener) => listener(true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+type Lane = InfiniteData<ShowcaseFeedResponse>;
+
+/** One page of a lane, a post per entry, each the fixture post with the fields given. */
+function lanePage(posts: Array<{ id: string; creatorId?: string }>): ShowcaseFeedResponse {
+  return {
+    items: posts.map(({ id, creatorId = 'creator-1' }) => ({
+      ...feedItem(),
+      id,
+      title: id,
+      creator: { id: creatorId, username: creatorId, name: creatorId, avatar: null },
+    })) as unknown as ShowcaseFeedItem[],
+    pageInfo: { hasMore: false, nextOffset: null },
+  };
+}
+
+/**
+ * Gives the client double a cache holding these lanes, so what a removal takes
+ * out and an Undo puts back can be read back. Returns the post ids a lane holds
+ * now, in order.
+ */
+function laneCache(entries: Array<[QueryKey, Lane]>) {
+  const lanes = new Map(entries.map(([key, data]) => [JSON.stringify(key), { key, data }]));
+  const under = (prefix: QueryKey) => [...lanes.values()].filter(({ key }) => (
+    prefix.every((part, index) => JSON.stringify(key[index]) === JSON.stringify(part))
+  ));
+  const next = (current: Lane, updater: unknown) => (
+    typeof updater === 'function' ? (updater as (lane: Lane) => Lane)(current) : updater as Lane
+  );
+  queryClient.getQueriesData.mockImplementation(({ queryKey }) => (
+    under(queryKey).map(({ key, data }): [QueryKey, unknown] => [key, data])
+  ));
+  queryClient.setQueriesData.mockImplementation(({ queryKey }, updater) => {
+    for (const lane of under(queryKey)) lane.data = next(lane.data, updater);
+  });
+  queryClient.setQueryData.mockImplementation((queryKey, updater) => {
+    const lane = lanes.get(JSON.stringify(queryKey));
+    if (lane) lane.data = next(lane.data, updater);
+  });
+  return (key: QueryKey) => lanes.get(JSON.stringify(key))?.data.pages.flatMap((page) => page.items.map((item) => item.id));
+}
+
 describe('Showcase screen', () => {
   beforeEach(() => {
     vi.mocked(Image.loadAsync).mockClear();
+    queryClient.getQueriesData.mockReset();
+    queryClient.setQueriesData.mockReset();
+    queryClient.setQueryData.mockReset();
+    authState.api.getShowcaseFeedNewest.mockReset();
+    authState.api.recordShowcaseFeedEvent.mockReset();
+    authState.api.undoFeedFeedback.mockReset();
+    resetFeedFeedbackRequestsForTests();
+    resetAnonymousShowcaseFeedRemovalsForTests();
+    navigation.isFocused = true;
+    queryState.dataUpdatedAt = 0;
     queryState.error = null;
     queryState.fetchNextPage.mockClear();
     queryState.refetch.mockClear();
@@ -693,6 +830,404 @@ describe('Showcase screen', () => {
     } finally {
       vi.useRealTimers();
       if (tree) renderer.act(() => tree!.unmount());
+    }
+  });
+
+  // Product decision D2: a ranked lane is never swapped under the reader on a
+  // return to the app. A pill offers the refresh instead, and nothing comes
+  // into the lane until it is tapped.
+  describe('"New posts"', () => {
+    const fiveMinutesOld = () => Date.now() - NEW_POSTS_PROBE_MIN_LANE_AGE_MS;
+
+    function renderWithList() {
+      const list = { recomputeViewableItems: vi.fn(), scrollToOffset: vi.fn() };
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<ShowcaseScreen />, {
+          createNodeMock: (element) => (String(element.type) === 'flash-list' ? list : null),
+        });
+      });
+      const pill = () => hostElement(tree!, 'new-posts-pill').props;
+      return { list, tree: tree!, pill };
+    }
+
+    beforeEach(() => {
+      // The lane's newest post is from August; the server has one from today.
+      queryState.pages = [lanePage([{ id: 'post-1' }])];
+      authState.api.getShowcaseFeedNewest.mockResolvedValue({
+        newestPostId: 'post-9',
+        newestPublishedAt: '2026-10-14T05:00:00.000Z',
+      });
+    });
+
+    it('asks on a return to the app once the lane is five minutes old, and fetches nothing into it', async () => {
+      queryState.dataUpdatedAt = Date.now() - 60_000;
+      const { tree, pill } = renderWithList();
+      try {
+        expect(pill().visible).toBe(false);
+        await returnToApp();
+        expect(authState.api.getShowcaseFeedNewest).not.toHaveBeenCalled();
+
+        queryState.dataUpdatedAt = fiveMinutesOld();
+        renderer.act(() => tree.update(<ShowcaseScreen />));
+        await returnToApp();
+
+        // Every Explore lane is a ranked media lane.
+        expect(authState.api.getShowcaseFeedNewest).toHaveBeenCalledTimes(1);
+        expect(authState.api.getShowcaseFeedNewest).toHaveBeenCalledWith({ category: 'media' });
+        expect(pill().visible).toBe(true);
+        expect(queryState.refetch).not.toHaveBeenCalled();
+        expect(queryClient.setQueryData).not.toHaveBeenCalled();
+      } finally {
+        renderer.act(() => tree.unmount());
+      }
+    });
+
+    it('asks nothing while another tab is in front', async () => {
+      queryState.dataUpdatedAt = fiveMinutesOld();
+      navigation.isFocused = false;
+      const { tree, pill } = renderWithList();
+      try {
+        await returnToApp();
+        expect(authState.api.getShowcaseFeedNewest).not.toHaveBeenCalled();
+
+        navigation.isFocused = true;
+        renderer.act(() => tree.update(<ShowcaseScreen />));
+        await returnToApp();
+        expect(authState.api.getShowcaseFeedNewest).toHaveBeenCalledTimes(1);
+        expect(pill().visible).toBe(true);
+      } finally {
+        renderer.act(() => tree.unmount());
+      }
+    });
+
+    it('takes the reader to the top and fetches page 1 again, without the pull spinner', async () => {
+      queryState.dataUpdatedAt = fiveMinutesOld();
+      const { list, tree, pill } = renderWithList();
+      const refreshing = () => hostElement(tree, 'flash-list').props.refreshing;
+      let finishRefetch: () => void = () => undefined;
+      const heldRefetch = () => new Promise<void>((resolve) => {
+        finishRefetch = resolve;
+      });
+      try {
+        await returnToApp();
+        expect(pill().visible).toBe(true);
+        list.scrollToOffset.mockClear();
+
+        queryState.refetch.mockImplementationOnce(heldRefetch);
+        renderer.act(() => pill().onPress());
+
+        expect(pill().visible).toBe(false);
+        expect(list.scrollToOffset).toHaveBeenCalledTimes(1);
+        expect(list.scrollToOffset).toHaveBeenCalledWith({ offset: 0, animated: false });
+        // The lane trimmed to its first page, and that page fetched again,
+        // once the list is at the top.
+        expect(queryClient.setQueryData).toHaveBeenCalledTimes(1);
+        const [trimmedKey, trim] = queryClient.setQueryData.mock.calls[0];
+        expect(trimmedKey).toEqual(queryState.queryKey);
+        const pages = [lanePage([{ id: 'post-1' }]), lanePage([{ id: 'post-2' }])];
+        expect((trim as (lane: Lane) => Lane)({ pages, pageParams: [{ offset: 0 }, { offset: 12 }] }))
+          .toEqual({ pages: [pages[0]], pageParams: [{ offset: 0 }] });
+        expect(queryState.refetch).toHaveBeenCalledTimes(1);
+        expect(list.scrollToOffset.mock.invocationCallOrder[0])
+          .toBeLessThan(queryState.refetch.mock.invocationCallOrder[0]);
+        // No spinner while the page is on its way: set from a tap deep in the
+        // grid, it would shift the iOS list down and leave it there.
+        expect(refreshing()).toBe(false);
+        finishRefetch();
+        await settle();
+        expect(refreshing()).toBe(false);
+
+        // The same reading sees a pull's own spinner.
+        queryState.refetch.mockImplementationOnce(heldRefetch);
+        renderer.act(() => hostElement(tree, 'flash-list').props.onRefresh());
+        expect(refreshing()).toBe(true);
+        finishRefetch();
+        await settle();
+        expect(refreshing()).toBe(false);
+      } finally {
+        renderer.act(() => tree.unmount());
+      }
+    });
+
+    it('takes the pill down when a chip opens another lane, and leaves it down on coming back', async () => {
+      queryState.dataUpdatedAt = fiveMinutesOld();
+      const { tree, pill } = renderWithList();
+      const pressChip = (label: string) => {
+        const header = renderAlone(hostElement(tree, 'flash-list').props.ListHeaderComponent);
+        renderer.act(() => filterChip(header, label).props.onPress());
+        renderer.act(() => header.unmount());
+      };
+      try {
+        await returnToApp();
+        expect(pill().visible).toBe(true);
+
+        // This double gives every lane the same fetch time, so it is the
+        // screen, not a new fetch, that takes the pill down here.
+        pressChip('Free');
+        expect(pill().visible).toBe(false);
+        // Back on All, its pages unrefreshed: only the next return asks again.
+        pressChip('All');
+        expect(pill().visible).toBe(false);
+        expect(authState.api.getShowcaseFeedNewest).toHaveBeenCalledTimes(1);
+      } finally {
+        renderer.act(() => tree.unmount());
+      }
+    });
+
+    it('floats under the chips as they sit at rest', () => {
+      const { tree, pill } = renderWithList();
+      try {
+        measureListHeader(tree, 106);
+        expect(pill().topOffset).toBe(resolvedTopInset(24) + 12 + 106 + 8);
+      } finally {
+        renderer.act(() => tree.unmount());
+      }
+    });
+  });
+
+  // Product decision D7: Not interested and Hide offer an Undo for five
+  // seconds, and an Undo puts the posts back at the indices they left.
+  describe('Undo', () => {
+    const homeKey: QueryKey = ['showcase-feed', 'infinite', 'viewer-1', { sort: 'for-you' }];
+
+    /** Explore holding three posts, the last two by creator-2; Home holds one of them too. */
+    function renderWithLanes() {
+      const explore = lanePage([{ id: 'post-0' }, { id: 'post-1', creatorId: 'creator-2' }, { id: 'post-2', creatorId: 'creator-2' }]);
+      queryState.pages = [explore];
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<ShowcaseScreen />);
+      });
+      const exploreKey = queryState.queryKey!;
+      const idsIn = laneCache([
+        [exploreKey, { pages: [explore], pageParams: [{ offset: 0 }] }],
+        [homeKey, { pages: [lanePage([{ id: 'post-7' }, { id: 'post-1', creatorId: 'creator-2' }])], pageParams: [{ offset: 0 }] }],
+      ]);
+      return {
+        tree: tree!,
+        explore: () => idsIn(exploreKey),
+        home: () => idsIn(homeKey),
+        list: () => hostElement(tree!, 'flash-list').props,
+        noticeProps: () => hostElement(tree!, 'feed-undo-notice').props,
+        notice: () => hostElement(tree!, 'feed-undo-notice').props.notice as {
+          id: string;
+          message: string;
+          onUndo: () => void;
+        } | null,
+      };
+    }
+
+    it('puts a post back where it was in every lane once the server has taken the choice back', async () => {
+      const screen = renderWithLanes();
+      try {
+        vi.mocked(AccessibilityInfo.announceForAccessibility).mockClear();
+        selectTileMenuRow(screen.list(), 'not-interested', 'post-1');
+        await settle();
+        expect(screen.explore()).toEqual(['post-0', 'post-2']);
+        expect(screen.home()).toEqual(['post-7']);
+        // The notice says it, above the tab bar, and announces itself: the
+        // screen no longer announces the choice on its own.
+        expect(screen.notice()?.message).toBe('Post hidden');
+        expect(screen.noticeProps().bottomOffset)
+          .toBe(getMagicTabBarMetrics(390, resolvedBottomInset(24)).contentBottomPadding);
+        expect(AccessibilityInfo.announceForAccessibility).not.toHaveBeenCalled();
+
+        let answer: (value: { ok: true; removed: boolean }) => void = () => undefined;
+        authState.api.undoFeedFeedback.mockImplementationOnce(() => new Promise((resolve) => {
+          answer = resolve;
+        }));
+        const { onUndo } = screen.notice()!;
+        renderer.act(() => onUndo());
+        await settle();
+        expect(authState.api.undoFeedFeedback).toHaveBeenCalledWith({ feedbackType: 'not_interested', postId: 'post-1' });
+        // Not back before the server has answered.
+        expect(screen.explore()).toEqual(['post-0', 'post-2']);
+
+        answer({ ok: true, removed: true });
+        await settle();
+        expect(screen.explore()).toEqual(['post-0', 'post-1', 'post-2']);
+        expect(screen.home()).toEqual(['post-7', 'post-1']);
+      } finally {
+        renderer.act(() => screen.tree.unmount());
+      }
+    });
+
+    it('brings back every post a Hide took, each at its place', async () => {
+      const screen = renderWithLanes();
+      try {
+        selectTileMenuRow(screen.list(), 'hide-creator', 'post-1');
+        await settle();
+        expect(screen.explore()).toEqual(['post-0']);
+        expect(screen.home()).toEqual(['post-7']);
+        expect(screen.notice()?.message).toBe('Creator hidden');
+
+        const { onUndo } = screen.notice()!;
+        renderer.act(() => onUndo());
+        await settle();
+        expect(authState.api.undoFeedFeedback).toHaveBeenCalledWith({ feedbackType: 'hide_creator', creatorId: 'creator-2' });
+        expect(screen.explore()).toEqual(['post-0', 'post-1', 'post-2']);
+        expect(screen.home()).toEqual(['post-7', 'post-1']);
+      } finally {
+        renderer.act(() => screen.tree.unmount());
+      }
+    });
+
+    it('leaves the post hidden and says so when the undo is refused', async () => {
+      const screen = renderWithLanes();
+      const errorHaptic = vi.spyOn(haptic, 'error');
+      try {
+        selectTileMenuRow(screen.list(), 'not-interested', 'post-1');
+        await settle();
+        authState.api.undoFeedFeedback.mockRejectedValueOnce(new Error('Network request failed'));
+        vi.mocked(Alert.alert).mockClear();
+
+        const { onUndo } = screen.notice()!;
+        renderer.act(() => onUndo());
+        await settle();
+        expect(screen.explore()).toEqual(['post-0', 'post-2']);
+        expect(errorHaptic).toHaveBeenCalledTimes(1);
+        expect(Alert.alert).toHaveBeenCalledWith('Couldn’t undo', 'The post is still hidden. Check your connection and try again.');
+      } finally {
+        errorHaptic.mockRestore();
+        renderer.act(() => screen.tree.unmount());
+      }
+    });
+
+    it('undoes on the device alone when there is no session to send it from', async () => {
+      const registeredUser = authState.user;
+      authState.user = null;
+      authState.identityUserId = null;
+      const screen = renderWithLanes();
+      /** The posts the grid draws once it reads its pages again. */
+      const drawn = () => {
+        queryState.pages = [...queryState.pages];
+        renderer.act(() => screen.tree.update(<ShowcaseScreen />));
+        return (screen.list().data as Array<{ id: string }>).map((card) => card.id);
+      };
+      try {
+        selectTileMenuRow(screen.list(), 'not-interested', 'post-1');
+        await settle();
+        expect(screen.explore()).toEqual(['post-0', 'post-2']);
+        // The device's own memory keeps it out of the pages it already had.
+        expect(drawn()).not.toContain('post-1');
+
+        const { onUndo } = screen.notice()!;
+        renderer.act(() => onUndo());
+        await settle();
+        expect(authState.api.undoFeedFeedback).not.toHaveBeenCalled();
+        expect(screen.explore()).toEqual(['post-0', 'post-1', 'post-2']);
+        expect(drawn()).toContain('post-1');
+      } finally {
+        renderer.act(() => screen.tree.unmount());
+        authState.user = registeredUser;
+        authState.identityUserId = 'viewer-1';
+      }
+    });
+
+    it('withdraws the notice when the choice could not be sent', async () => {
+      authState.api.recordShowcaseFeedEvent.mockRejectedValueOnce(new Error('Network request failed'));
+      const screen = renderWithLanes();
+      try {
+        selectTileMenuRow(screen.list(), 'not-interested', 'post-1');
+        expect(screen.notice()?.message).toBe('Post hidden');
+        await settle();
+        expect(screen.notice()).toBeNull();
+        // As before: the post is back, and the reader is told.
+        expect(screen.explore()).toEqual(['post-0', 'post-1', 'post-2']);
+      } finally {
+        renderer.act(() => screen.tree.unmount());
+      }
+    });
+  });
+
+  // Product decision E2: Explore's only search entry is in the list header,
+  // which scrolls away with the grid.
+  it('keeps a compact search button at the top once the list header has scrolled off', () => {
+    queryState.pages = [lanePage([{ id: 'post-1' }])];
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ShowcaseScreen />);
+    });
+    const compactSearch = () => tree!.root.findAll((node) => (
+      String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Search creators, posts, and recipes'
+    ));
+    const scrollTo = (y: number) => {
+      renderer.act(() => hostElement(tree!, 'flash-list').props.onScroll({ nativeEvent: { contentOffset: { x: 0, y } } }));
+    };
+    try {
+      // Before the header is measured there is no telling where it is: it
+      // counts as on screen.
+      scrollTo(2000);
+      expect(compactSearch()).toHaveLength(0);
+      scrollTo(0);
+
+      // The title row and chips, 106pt, start 12pt below the status bar.
+      measureListHeader(tree!, 106);
+      scrollTo(117);
+      expect(compactSearch()).toHaveLength(0);
+      scrollTo(118);
+      expect(compactSearch()).toHaveLength(1);
+
+      renderer.act(() => compactSearch()[0].props.onPress());
+      expect(hostElement(tree!, 'explore-search-overlay').props.visible).toBe(true);
+
+      // Back up, the header's own button is in view again: one entry at a time.
+      scrollTo(60);
+      expect(compactSearch()).toHaveLength(0);
+    } finally {
+      renderer.act(() => tree!.unmount());
+    }
+  });
+
+  // Autoplay previews → Never keeps every tile on its poster, as Reduce Motion
+  // does, without changing which tile the grid elects (product decision D3).
+  it('keeps the play badge on an elected tile that Never holds on its poster', () => {
+    const base = feedItem();
+    queryState.pages = [{
+      items: [{
+        ...base,
+        id: 'clip-1',
+        // Drawn for real here, and the reel's copy of the post reads the body.
+        body: '',
+        category: 'video',
+        mediaKind: 'video',
+        mediaUrl: 'https://cdn.example.com/clip-1.mp4',
+        mediaItems: [{
+          ...base.mediaItems[0],
+          id: 'clip-1:media',
+          url: 'https://cdn.example.com/clip-1.mp4',
+          previewUrl: 'https://cdn.example.com/clip-1.poster.jpg',
+          mediaKind: 'video',
+          contentType: 'video/mp4',
+          feedStreamUrl: 'https://cdn.example.com/clip-1.teaser.mp4',
+        }],
+      }],
+      pageInfo: { hasMore: false, nextOffset: null },
+    }];
+    const list = flashListProps();
+    const store = createFeedVideoActivationStore();
+    store.publish({ activeIds: ['clip-1'] });
+    /** The corner play badges on the elected clip's tile under this choice. */
+    const badges = (preference: AutoplayPreference) => {
+      resetAutoplayPreferenceForTests(preference);
+      const tile = renderAlone(
+        <FeedVideoActivationContext.Provider value={store}>
+          {list.renderItem({ item: list.data[0], index: 0, target: 'Cell' })}
+        </FeedVideoActivationContext.Provider>
+      );
+      const count = tile.root.findAll((node) => String(node.type) === 'play-icon').length;
+      renderer.act(() => tile.unmount());
+      return count;
+    };
+    try {
+      // Playing: no play control over a clip that is already playing.
+      expect(badges('always')).toBe(0);
+      expect(badges('wifi')).toBe(0);
+      // Never: the same elected tile shows its poster, and the poster its badge.
+      expect(badges('never')).toBe(1);
+    } finally {
+      resetAutoplayPreferenceForTests();
     }
   });
 });

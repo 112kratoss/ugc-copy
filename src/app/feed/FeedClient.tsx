@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { useAuth } from '@/components/AuthProvider';
+import NewPostsPill, { newPostsScrollBehavior } from '@/components/NewPostsPill';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import { publishNavigationStart } from '@/components/navigation-progress-state';
 import FeedMediaLightbox from '@/app/feed/FeedMediaLightbox';
@@ -22,13 +23,21 @@ import {
 import { createPostFeedCardBuilder, type PostFeedCard } from '@/lib/post-feed-presentation';
 import { trackProductEvent } from '@/lib/product-analytics';
 import {
+    FEED_REMOVAL_UNDO_MS,
+    FEED_UNDO_FAILED_MESSAGE,
+    FeedRemovalUndoRow,
+    feedRemovalLabel,
     getShowcaseFeedSessionId,
     getShowcaseRecommendation,
+    putBackRemovedFeedItems,
     QualifiedImpressionBoundary,
     sendShowcaseFeedEvent,
     sendShowcaseResourceOpenEvent,
+    undoShowcaseFeedFeedbackAfterHide,
+    type FeedRemoval,
     type ShowcaseFeedbackAction,
 } from '@/app/showcase/ShowcaseFeedInteraction';
+import { feedNewestCategoryFor, newestCreatedAtOf, useNewPostsProbe, type NewPostsProbeLane } from '@/lib/feed-newest-probe';
 import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
 import { REMIX_UNLOCK_REQUIRED_CODE, requestShowcaseRemix, ShowcaseRemixRequestError } from '@/lib/showcase-remix-client';
 import { useMediaQuery } from '@/lib/use-media-query';
@@ -64,12 +73,18 @@ type FeedFetchMode = 'replace' | 'append' | 'merge';
 // windowed list, which then subscribed its scroll and resize listeners again.
 const getCardKey = (card: PostFeedCard) => card.id;
 
+// Where the top of an embedded lane lands when the pill takes the reader
+// there: under the shell's sticky top bar (64px, `--app-shell-topbar-height`).
+const EMBEDDED_FEED_TOP_OFFSET_PX = 80;
+
 type LaneCacheEntry = {
     items: ShowcaseFeedItem[];
     nextOffset: number | null;
     nextCursor: string | null;
     feedSessionId: string | null;
     cachedAt: number;
+    /** When the lane's page one was fetched; null for the page the feed opened with. */
+    fetchedAt: number | null;
 };
 
 type FeedbackNotice = { tone: 'success' | 'error'; message: string } | null;
@@ -252,11 +267,12 @@ export default function FeedClient({
     const cacheKey = useMemo(() => buildLaneCacheKey(chipId), [buildLaneCacheKey, chipId]);
     // Read once: a later read could pick up a snapshot this component just wrote
     // and clobber live state with a stale copy of itself.
-    const [restoredFeed] = useState(() => {
+    const [restoredSnapshot] = useState(() => {
         const snapshot = readShowcaseClientSnapshot(buildLaneCacheKey(initialChipId));
         if (!snapshot || snapshot.feed.items.length <= (initialFeed?.items.length ?? 0)) return null;
-        return feedFromSnapshot(snapshot);
+        return { feed: feedFromSnapshot(snapshot), cachedAt: snapshot.cachedAt };
     });
+    const restoredFeed = restoredSnapshot?.feed ?? null;
     // The viewer the feed mounted for: signing in or out elsewhere must not
     // swap the seed, which would reset the lane under the reader.
     const [removedAtMount] = useState(() => getRemovedThisVisit(viewerId));
@@ -288,6 +304,16 @@ export default function FeedClient({
     const [switching, setSwitching] = useState(needsInitialFetch);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [feedbackNotice, setFeedbackNotice] = useState<FeedbackNotice>(null);
+    // When the lane's page one was fetched, for the "New posts" probe (D2): a
+    // snapshot's is no later than when it was kept; the server's page counts
+    // from the mount (null).
+    const [laneFetchedAt, setLaneFetchedAt] = useState<number | null>(() => restoredSnapshot?.cachedAt ?? null);
+    // The card a Not interested or Hide just took out, while its place offers Undo.
+    const [pendingRemoval, setPendingRemoval] = useState<FeedRemoval<ShowcaseFeedItem> | null>(null);
+    const removalIdRef = useRef(0);
+    // Removals the reader took back: their hide's answer, when it comes, changes nothing on screen.
+    const undoneRemovalIdsRef = useRef(new Set<number>());
+    const rootRef = useRef<HTMLDivElement | null>(null);
     const [remixingId, setRemixingId] = useState<string | null>(null);
     // Autoplay the in-view clip where there is no pointer to hover with: a
     // phone's feed used to show posters until a clip was tapped open.
@@ -401,7 +427,11 @@ export default function FeedClient({
         pagingBlockedRef.current = true;
 
         if (append) pendingLoadMoreKeyRef.current = requestKey;
-        if (mode === 'replace') setSwitching(true);
+        if (mode === 'replace') {
+            setSwitching(true);
+            // The lane is drawn afresh: a removal still offering Undo stands.
+            setPendingRemoval(null);
+        }
         if (append) setLoadingMore(true);
         if (mode !== 'merge') setLoadError(null);
 
@@ -436,7 +466,10 @@ export default function FeedClient({
             if (requestId !== requestIdRef.current) return;
 
             const visibleItems = page.items.filter((item) => !isHiddenFromLane(removedForViewer, item));
-            if (!append) lanePageRef.current = page;
+            if (!append) {
+                lanePageRef.current = page;
+                setLaneFetchedAt(Date.now());
+            }
             if (!append && targetChipId === 'for-you') forYouFetchedRef.current = true;
             setItems((current) => {
                 if (mode === 'replace') return visibleItems;
@@ -592,12 +625,21 @@ export default function FeedClient({
             void fetchPage(chipId, 0, 'replace');
             return;
         }
-        laneCacheRef.current.set(chipId, { items, nextOffset, nextCursor, feedSessionId, cachedAt: Date.now() });
+        laneCacheRef.current.set(chipId, {
+            items,
+            nextOffset,
+            nextCursor,
+            feedSessionId,
+            cachedAt: Date.now(),
+            fetchedAt: laneFetchedAt,
+        });
         setChipId(nextChipId);
         setExpandedIds(new Set());
         setCommentsOpenIds(new Set());
         setLightbox(null);
         setFeedbackNotice(null);
+        // Another lane: a removal still offering Undo stands.
+        setPendingRemoval(null);
         writeLaneToUrl(nextChipId);
 
         const cached = laneCacheRef.current.get(nextChipId);
@@ -622,13 +664,14 @@ export default function FeedClient({
             setNextOffset(kept.nextOffset);
             setNextCursor(kept.nextCursor);
             setFeedSessionId(kept.feedSessionId);
+            setLaneFetchedAt(kept.fetchedAt);
             return;
         }
         setItems([]);
         setNextOffset(null);
         setNextCursor(null);
         void fetchPage(nextChipId, 0, 'replace');
-    }, [chipId, feedSessionId, fetchPage, items, nextCursor, nextOffset, removedForViewer, setItems]);
+    }, [chipId, feedSessionId, fetchPage, items, laneFetchedAt, nextCursor, nextOffset, removedForViewer, setItems]);
 
     // The static `/` renders For you whatever `?chip=` says. Back from a post
     // opened in another lane lands here, so that lane is shown after mount, as
@@ -653,6 +696,8 @@ export default function FeedClient({
             nextCursor: feed.pageInfo.hasMore ? feed.pageInfo.nextCursor ?? null : null,
             feedSessionId: getShowcaseFeedSessionId(feed),
             cachedAt: snapshot.cachedAt,
+            // Kept after its page one came, so its page is no younger.
+            fetchedAt: snapshot.cachedAt,
         });
         // Once, on mount: from then on the address follows the lane.
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -774,7 +819,8 @@ export default function FeedClient({
     }, [buildPostPath, router]);
     // Not interested / Hide creator, as the app's card menu and the showcase
     // grid offer: the post (or the creator's posts) leave the lane at once, the
-    // ranker hears why, and a failed save puts them back.
+    // ranker hears why, and a failed save puts them back. For five seconds the
+    // card's place offers Undo (D7).
     const handleFeedback = useCallback(async (postId: string, action: ShowcaseFeedbackAction) => {
         // The lane through the ref, as the other card handlers read it: with
         // `items` among its deps, every save and page made a new handler, and
@@ -809,13 +855,9 @@ export default function FeedClient({
         // Signed out, the server takes feedback only on a post it delivered,
         // and refuses the rest: page one of the static `/` and the Recent lane
         // carry no delivery. The removal stays with this visit; nothing is sent.
-        if (!user && !getShowcaseRecommendation(target)?.deliveryId) {
-            setFeedbackNotice({ tone: 'success', message: doneMessage });
-            return;
-        }
-
-        try {
-            await sendShowcaseFeedEvent({
+        const hideRequest = !user && !getShowcaseRecommendation(target)?.deliveryId
+            ? null
+            : sendShowcaseFeedEvent({
                 item: target,
                 eventType: action,
                 sourceSurface: 'feed',
@@ -823,27 +865,73 @@ export default function FeedClient({
                 feedSessionId,
                 fallbackPosition: removed[0].index,
                 metadata: { creatorId: target.creator.id },
+            }).then(() => true, (error: unknown) => {
+                console.error('Failed to save feed feedback:', error);
+                return false;
             });
-            setFeedbackNotice({ tone: 'success', message: doneMessage });
-        } catch (error) {
-            console.error('Failed to save feed feedback:', error);
-            if (action === 'hide_creator' && target.creator.id) hidden.creatorIds.delete(target.creator.id);
-            else hidden.postIds.delete(postId);
-            setItems((current) => {
-                const restored = [...current];
-                removed.forEach(({ item, index }) => {
-                    if (!restored.some((candidate) => candidate.id === item.id)) {
-                        restored.splice(Math.min(index, restored.length), 0, item);
-                    }
-                });
-                return restored;
-            });
-            setFeedbackNotice({
-                tone: 'error',
-                message: 'We couldn\u2019t save that preference, so the post was restored. Please try again.',
-            });
+        // The row stands where the card stood, among the cards left: a hidden
+        // creator's posts above it go too.
+        const anchorAt = removed.findIndex(({ item }) => item.id === postId);
+        const removal: FeedRemoval<ShowcaseFeedItem> = {
+            id: ++removalIdRef.current,
+            postId,
+            label: feedRemovalLabel(action, target.creator.name),
+            target: action === 'hide_creator' && target.creator.id
+                ? { feedbackType: 'hide_creator', creatorId: target.creator.id }
+                : { feedbackType: 'not_interested', postId },
+            removed,
+            rowIndex: removed[anchorAt].index - anchorAt,
+            hideRequest,
+        };
+        setPendingRemoval(removal);
+
+        if (!hideRequest || await hideRequest) {
+            if (!undoneRemovalIdsRef.current.has(removal.id)) {
+                setFeedbackNotice({ tone: 'success', message: doneMessage });
+            }
+            return;
         }
+        // Taken back already: the posts are on screen and nothing was stored.
+        if (undoneRemovalIdsRef.current.has(removal.id)) return;
+
+        if (action === 'hide_creator' && target.creator.id) hidden.creatorIds.delete(target.creator.id);
+        else hidden.postIds.delete(postId);
+        setPendingRemoval((current) => (current?.id === removal.id ? null : current));
+        setItems((current) => putBackRemovedFeedItems(current, removed));
+        setFeedbackNotice({
+            tone: 'error',
+            message: 'We couldn\u2019t save that preference, so the post was restored. Please try again.',
+        });
     }, [accessToken, feedSessionId, removedForViewer, setItems, user]);
+    // Undo: the posts go back where they were and this visit forgets the
+    // removal. A signed-in viewer's preference is deleted on the server once
+    // the hide it takes back has settled; a guest's removal lived on this page
+    // alone, and there is nothing to send.
+    const undoRemoval = useCallback((removal: FeedRemoval<ShowcaseFeedItem>) => {
+        undoneRemovalIdsRef.current.add(removal.id);
+        setPendingRemoval((current) => (current?.id === removal.id ? null : current));
+        // "Fewer posts like that" no longer holds.
+        setFeedbackNotice(null);
+        if (removal.target.feedbackType === 'hide_creator') removedForViewer.creatorIds.delete(removal.target.creatorId);
+        else removedForViewer.postIds.delete(removal.target.postId);
+        setItems((current) => putBackRemovedFeedItems(current, removal.removed));
+        if (!user || !accessToken || !removal.hideRequest) return;
+        void undoShowcaseFeedFeedbackAfterHide({
+            hideRequest: removal.hideRequest,
+            accessToken,
+            target: removal.target,
+        }).then((undone) => {
+            // The post stays on screen; the server will leave it out next time.
+            if (!undone) setFeedbackNotice({ tone: 'error', message: FEED_UNDO_FAILED_MESSAGE });
+        });
+    }, [accessToken, removedForViewer, setItems, user]);
+    useEffect(() => {
+        if (!pendingRemoval) return;
+        const timeout = window.setTimeout(() => {
+            setPendingRemoval((current) => (current?.id === pendingRemoval.id ? null : current));
+        }, FEED_REMOVAL_UNDO_MS);
+        return () => window.clearTimeout(timeout);
+    }, [pendingRemoval]);
     // Remix starts from the card, as it does in the app and on the showcase
     // grid; the pill used to be a link to the post page, one page short.
     const handleRemix = useCallback(async (postId: string) => {
@@ -968,6 +1056,46 @@ export default function FeedClient({
         ? { mediaId: initialPriorityPreview.mediaId, dataUrl: initialPriorityPreview.dataUrl }
         : null), [initialPriorityPreview]);
 
+    // "New posts" (D2): ranked lanes only. Recent has its own order to come
+    // back to, and Unlocks is a filter the probe cannot name, so the newest
+    // post there is rarely an unlock.
+    const probeLane = useMemo<NewPostsProbeLane | null>(() => {
+        const chip = getFeedChip(chipId);
+        return chip.sort === 'for-you' && chip.unlock === 'all'
+            ? { key: chipId, category: feedNewestCategoryFor(chip.category) }
+            : null;
+    }, [chipId]);
+    const newestKnownAt = useMemo(() => newestCreatedAtOf(items), [items]);
+    const { hasNewer: hasNewerPosts, dismiss: dismissNewPosts } = useNewPostsProbe({
+        lane: switching || loadError || items.length === 0 ? null : probeLane,
+        laneFetchedAt,
+        newestKnownAt,
+    });
+    // The pill's tap is the lane's own refresh, the active chip tapped again:
+    // page one afresh, from the top of the lane.
+    const showNewPosts = useCallback(() => {
+        dismissNewPosts();
+        const root = rootRef.current;
+        if (root) {
+            const top = isEmbedded
+                ? root.getBoundingClientRect().top + window.scrollY - EMBEDDED_FEED_TOP_OFFSET_PX
+                : 0;
+            if (window.scrollY > top) window.scrollTo({ top: Math.max(0, top), behavior: newPostsScrollBehavior() });
+        }
+        selectChip(chipId);
+    }, [chipId, dismissNewPosts, isEmbedded, selectChip]);
+
+    // The "Hidden · Undo" row stands where the card stood: above the card that
+    // followed it, or below the last. It shares that card's place in the
+    // windowed list rather than taking one: a place of its own would count as
+    // a card's height until measured, and push the cards after it out of the
+    // window. The card keeps its own place in the tree beside it, so a thread
+    // open on it, or a draft, lives on.
+    const removalRowAt = pendingRemoval ? Math.min(pendingRemoval.rowIndex, cards.length) : -1;
+    const removalRow = pendingRemoval ? (
+        <FeedRemovalUndoRow label={pendingRemoval.label} onUndo={() => undoRemoval(pendingRemoval)} />
+    ) : null;
+
     const chipRow = (
         <div className="flex flex-wrap items-center gap-2">
             {FEED_CHIPS.map((chip) => (
@@ -990,6 +1118,7 @@ export default function FeedClient({
 
     return (
         <div
+            ref={rootRef}
             className={isEmbedded
                 ? 'flex w-full flex-col gap-5'
                 : 'mx-auto flex w-full max-w-[680px] flex-col gap-5 px-4 pb-24 pt-6 sm:px-6'}
@@ -1062,7 +1191,7 @@ export default function FeedClient({
             ) : cards.length === 0 ? (
                 // A lane that failed to load is not an empty one: the alert
                 // above says so, with its Retry, and nothing invites a post.
-                loadError ? null : (
+                removalRow ?? (loadError ? null : (
                     <div className="rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-6 py-16 text-center">
                         <p className="text-lg font-bold text-[var(--ui-text-primary)]">Nothing in this lane yet</p>
                         <p className="mt-2 text-sm text-[var(--ui-text-muted)]">
@@ -1075,59 +1204,74 @@ export default function FeedClient({
                             Share the first post
                         </Link>
                     </div>
-                )
+                ))
             ) : (
-                <WindowedFeedList
-                    items={cards}
-                    getKey={getCardKey}
-                    // Comment threads own fetched pages, reply expansion and an
-                    // unsent draft. Keep an open conversation alive even after
-                    // its card scrolls beyond the ordinary 24-card window.
-                    pinnedKeys={commentsOpenIds}
-                    renderItem={(card, cardIndex) => (
-                        <QualifiedImpressionBoundary
-                            key={card.id}
-                            item={card.item}
-                            position={cardIndex}
-                            feedSessionId={feedSessionId}
-                            accessToken={accessToken}
-                            sourceSurface="feed"
-                            trackAttention
-                        >
-                        <FeedPostCard
-                            card={card}
-                            isSaved={savedItemIds.has(card.id)}
-                            saving={savingItemIds.has(card.id)}
-                            expanded={expandedIds.has(card.id)}
-                            commentsOpen={commentsOpenIds.has(card.id)}
-                            accessToken={accessToken}
-                            priorityMedia={cardIndex === 0}
-                            priorityPoster={card.id === initialPriorityPreview?.postId ? priorityPoster : null}
-                            detailContext={laneDetailContext}
-                            viewerIsOwner={Boolean(user && card.item.creator.id === user.id)}
-                            signedIn={Boolean(user)}
-                            remixing={remixingId === card.id}
-                            autoPlayMedia={touchAutoplay}
-                            cardIndex={cardIndex}
-                            onToggleExpanded={toggleExpanded}
-                            onToggleComments={toggleComments}
-                            onToggleSave={handleToggleSave}
-                            onShared={handleShared}
-                            onCommentCountChange={applyCommentCount}
-                            onOpenMedia={handleOpenMedia}
-                            onOpenPost={handleOpenPost}
-                            onRecordOpen={recordOpen}
-                            onPrefetchPost={handlePrefetchPost}
-                            onFeedback={handleFeedback}
-                            onRemix={handleRemix}
-                            onOpenResources={handleOpenResources}
-                            onReportContent={handleReportContent}
-                            onReportUser={handleReportUser}
-                            onBlockUser={handleBlockUser}
-                        />
-                        </QualifiedImpressionBoundary>
-                    )}
-                />
+                <div className="relative">
+                    {hasNewerPosts ? (
+                        // Floats over the top of the lane and stays under the
+                        // shell's bar as the reader scrolls; takes no room.
+                        <div className="pointer-events-none sticky top-[calc(var(--app-shell-topbar-height)+0.75rem)] z-40 flex h-0 justify-center">
+                            <NewPostsPill onPress={showNewPosts} className="pointer-events-auto translate-y-3" />
+                        </div>
+                    ) : null}
+                    <WindowedFeedList
+                        items={cards}
+                        getKey={getCardKey}
+                        // Comment threads own fetched pages, reply expansion and an
+                        // unsent draft. Keep an open conversation alive even after
+                        // its card scrolls beyond the ordinary 24-card window.
+                        pinnedKeys={commentsOpenIds}
+                        renderItem={(card, cardIndex) => (
+                            <>
+                                {cardIndex === removalRowAt ? <div className="mb-3">{removalRow}</div> : null}
+                                <QualifiedImpressionBoundary
+                                    key={card.id}
+                                    item={card.item}
+                                    position={cardIndex}
+                                    feedSessionId={feedSessionId}
+                                    accessToken={accessToken}
+                                    sourceSurface="feed"
+                                    trackAttention
+                                >
+                                <FeedPostCard
+                                    card={card}
+                                    isSaved={savedItemIds.has(card.id)}
+                                    saving={savingItemIds.has(card.id)}
+                                    expanded={expandedIds.has(card.id)}
+                                    commentsOpen={commentsOpenIds.has(card.id)}
+                                    accessToken={accessToken}
+                                    priorityMedia={cardIndex === 0}
+                                    priorityPoster={card.id === initialPriorityPreview?.postId ? priorityPoster : null}
+                                    detailContext={laneDetailContext}
+                                    viewerIsOwner={Boolean(user && card.item.creator.id === user.id)}
+                                    signedIn={Boolean(user)}
+                                    remixing={remixingId === card.id}
+                                    autoPlayMedia={touchAutoplay}
+                                    cardIndex={cardIndex}
+                                    onToggleExpanded={toggleExpanded}
+                                    onToggleComments={toggleComments}
+                                    onToggleSave={handleToggleSave}
+                                    onShared={handleShared}
+                                    onCommentCountChange={applyCommentCount}
+                                    onOpenMedia={handleOpenMedia}
+                                    onOpenPost={handleOpenPost}
+                                    onRecordOpen={recordOpen}
+                                    onPrefetchPost={handlePrefetchPost}
+                                    onFeedback={handleFeedback}
+                                    onRemix={handleRemix}
+                                    onOpenResources={handleOpenResources}
+                                    onReportContent={handleReportContent}
+                                    onReportUser={handleReportUser}
+                                    onBlockUser={handleBlockUser}
+                                />
+                                </QualifiedImpressionBoundary>
+                                {removalRowAt === cards.length && cardIndex === cards.length - 1
+                                    ? <div className="mt-3">{removalRow}</div>
+                                    : null}
+                            </>
+                        )}
+                    />
+                </div>
             )}
 
             {loadingMore ? (

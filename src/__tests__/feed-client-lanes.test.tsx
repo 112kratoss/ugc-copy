@@ -3,6 +3,8 @@ import { Activity } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import FeedClient, { forgetFeedRemovalsForTests } from '@/app/feed/FeedClient';
+import { FEED_REMOVAL_UNDO_MS } from '@/app/showcase/ShowcaseFeedInteraction';
+import { NEW_POSTS_PROBE_AFTER_MS } from '@/lib/feed-newest-probe';
 import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
 import { REMIX_UNLOCK_REQUIRED_CODE as SERVER_REMIX_UNLOCK_REQUIRED_CODE } from '@/lib/remix-access';
 import {
@@ -1054,5 +1056,297 @@ describe('FeedClient lanes and card actions', () => {
         expect(requestRemixMock).not.toHaveBeenCalled();
         expect(routerPush).not.toHaveBeenCalled();
         expect(screen.getByText('remix:post-1')).not.toBeDisabled();
+    });
+
+    // Undo for Not interested and Hide (D7, 2026-10-14): the card's place
+    // offers it for five seconds; the card comes back where it was.
+    describe('Undo', () => {
+        /** The lane as drawn, top to bottom, with the row where a card left. */
+        const laneOrder = () => Array.from(
+            document.querySelectorAll('h3, [role="group"]'),
+            (element) => (element.tagName === 'H3' ? element.textContent : 'Hidden · Undo'),
+        );
+        const undoRequests = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls
+            .filter(([url]) => String(url) === '/api/showcase/feed/feedback/undo');
+        const signIn = () => {
+            auth.state = { session: { access_token: 'token' }, user: { id: 'viewer-1' } };
+        };
+
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        it("shows Hidden · Undo in the card's place for five seconds, then lets the removal stand", async () => {
+            vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+            signIn();
+            const fetchMock = mockRoutedFetch(() => []);
+            render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
+
+            fireEvent.click(screen.getByText('not-interested:post-2'));
+
+            expect(laneOrder()).toEqual(['First', 'Hidden · Undo', 'Third']);
+            expect(screen.getByRole('group', { name: 'Post hidden' })).toHaveTextContent('Hidden · Undo');
+            await act(async () => undefined);
+            expect(screen.getByText('Thanks. We’ll show you fewer posts like that.')).toBeInTheDocument();
+
+            act(() => vi.advanceTimersByTime(FEED_REMOVAL_UNDO_MS - 1));
+            expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+            act(() => vi.advanceTimersByTime(1));
+
+            expect(laneOrder()).toEqual(['First', 'Third']);
+            expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+            expect(undoRequests(fetchMock)).toEqual([]);
+        });
+
+        it('puts the card back where it was, and takes the preference back on the server once the hide is stored', async () => {
+            signIn();
+            let storeHide: () => void = () => undefined;
+            sendEventMock.mockImplementationOnce(() => new Promise<undefined>((resolve) => {
+                storeHide = () => resolve(undefined);
+            }));
+            const fetchMock = mockRoutedFetch((url) => (url === '/api/showcase/feed/feedback/undo'
+                ? { ok: true, removed: true }
+                : []));
+            const { unmount } = render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
+
+            fireEvent.click(screen.getByText('not-interested:post-2'));
+            fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+
+            expect(laneOrder()).toEqual(['First', 'Second', 'Third']);
+            // The hide is still on its way: a delete now could land first.
+            await act(async () => undefined);
+            expect(undoRequests(fetchMock)).toEqual([]);
+
+            await act(async () => storeHide());
+
+            await waitFor(() => expect(undoRequests(fetchMock)).toHaveLength(1));
+            const [, init] = undoRequests(fetchMock)[0];
+            expect(init?.method).toBe('POST');
+            expect(init?.headers).toEqual(expect.objectContaining({ Authorization: 'Bearer token' }));
+            expect(JSON.parse(String(init?.body))).toEqual({ feedbackType: 'not_interested', postId: 'post-2' });
+            // Taken back: no word of fewer posts like it, and no word of failure.
+            expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+            // The visit forgot it: the page one the feed comes back to draws it.
+            unmount();
+            render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
+            expect(screen.getByText('Second')).toBeInTheDocument();
+        });
+
+        it("puts all of a hidden creator's posts back in their places", () => {
+            signIn();
+            mockRoutedFetch(() => []);
+            render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
+
+            fireEvent.click(screen.getByText('hide:post-3'));
+
+            // The row stands where Third stood, among the cards left.
+            expect(laneOrder()).toEqual(['Second', 'Hidden · Undo']);
+            expect(screen.getByRole('group', { name: 'Posts from Creator creator-1 hidden' })).toBeInTheDocument();
+
+            fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+
+            expect(laneOrder()).toEqual(['First', 'Second', 'Third']);
+        });
+
+        it("keeps a guest's Undo on the page: nothing is sent, and the visit forgets the removal", async () => {
+            // Delivered cards: the guest's hide is sent; there is no row of theirs to take back.
+            const fetchMock = mockRoutedFetch(() => []);
+            const { unmount } = render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
+
+            fireEvent.click(screen.getByText('hide:post-1'));
+            expect(sendEventMock).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'hide_creator' }));
+            fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+            await act(async () => undefined);
+
+            expect(laneOrder()).toEqual(['First', 'Second', 'Third']);
+            expect(undoRequests(fetchMock)).toEqual([]);
+
+            unmount();
+            render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
+            expect(screen.getByText('First')).toBeInTheDocument();
+            expect(screen.getByText('Third')).toBeInTheDocument();
+        });
+
+        it('takes back the word that the post was hidden along with the post', async () => {
+            signIn();
+            mockRoutedFetch((url) => (url === '/api/showcase/feed/feedback/undo' ? { ok: true, removed: true } : []));
+            render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
+
+            fireEvent.click(screen.getByText('not-interested:post-1'));
+            expect(await screen.findByText('Thanks. We\u2019ll show you fewer posts like that.')).toBeInTheDocument();
+            fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+
+            expect(screen.queryByText('Thanks. We\u2019ll show you fewer posts like that.')).not.toBeInTheDocument();
+            await act(async () => undefined);
+            expect(screen.queryByRole('status')).not.toBeInTheDocument();
+        });
+
+        it("keeps the card on screen and says so when the server kept the preference", async () => {
+            signIn();
+            mockRoutedFetch((url) => (url === '/api/showcase/feed/feedback/undo' ? { ok: true, removed: false } : []));
+            render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
+
+            fireEvent.click(screen.getByText('not-interested:post-1'));
+            fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+
+            expect(await screen.findByText('We couldn’t undo that. It stays hidden on your next visit.')).toBeInTheDocument();
+            expect(laneOrder()).toEqual(['First', 'Second', 'Third']);
+        });
+
+        it('lets one removal stand when the next card is hidden, and offers Undo for the last below the cards', () => {
+            mockRoutedFetch(() => []);
+            render(<FeedClient initialFeed={feed} initialChipId="for-you" />);
+
+            fireEvent.click(screen.getByText('not-interested:post-1'));
+            fireEvent.click(screen.getByText('not-interested:post-3'));
+
+            expect(laneOrder()).toEqual(['Second', 'Hidden · Undo']);
+            expect(screen.getAllByRole('button', { name: 'Undo' })).toHaveLength(1);
+        });
+    });
+
+    // "New posts" (D2, 2026-10-14): on a return to the tab five minutes or
+    // more after the lane came, the newest-post probe is asked; nothing is
+    // fetched into the lane before the pill's tap.
+    describe('New posts', () => {
+        const OPENED_AT = Date.parse('2026-07-28T12:00:00.000Z');
+        let visibility: DocumentVisibilityState = 'visible';
+        let newestPublishedAt = '2026-07-29T00:00:00.000Z';
+        const nextPageOne = { ...page([ranked(item('post-new', 'Newest'), '950'), ...rankedFeed.items]), feedSessionId: 'next-session' } as ShowcaseFeedPage;
+
+        const setVisibility = (next: DocumentVisibilityState) => {
+            visibility = next;
+            act(() => {
+                document.dispatchEvent(new Event('visibilitychange'));
+            });
+        };
+        const comeBackAfter = async (minutes: number) => {
+            setVisibility('hidden');
+            vi.setSystemTime(OPENED_AT + minutes * 60_000);
+            setVisibility('visible');
+            await act(async () => undefined);
+        };
+        const mockLaneAndProbe = () => mockRoutedFetch((url) => {
+            if (url.startsWith('/api/showcase/feed/newest')) return { newestPostId: 'post-new', newestPublishedAt };
+            if (url.startsWith('/api/showcase/feed?')) return url.includes('category=text') ? page([item('note-1', 'Note one')]) : nextPageOne;
+            return [];
+        });
+        const laneRequests = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls
+            .map(([url]) => String(url))
+            .filter((url) => url.startsWith('/api/showcase/feed?'));
+        const probeRequests = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls
+            .filter(([url]) => String(url).startsWith('/api/showcase/feed/newest'));
+
+        beforeEach(() => {
+            vi.useFakeTimers({ toFake: ['Date'] });
+            vi.setSystemTime(OPENED_AT);
+            visibility = 'visible';
+            newestPublishedAt = '2026-07-29T00:00:00.000Z';
+            Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+            auth.state = { session: { access_token: 'token' }, user: { id: 'viewer-1' } };
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+            delete (document as { visibilityState?: DocumentVisibilityState }).visibilityState;
+            Reflect.deleteProperty(window, 'scrollY');
+        });
+
+        it('shows on a return five minutes after the lane came, asks for no lane page, and its tap loads page one from the top', async () => {
+            const fetchMock = mockLaneAndProbe();
+            const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+            render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
+
+            await comeBackAfter(NEW_POSTS_PROBE_AFTER_MS / 60_000);
+
+            const pill = await screen.findByRole('button', { name: 'New posts' });
+            expect(probeRequests(fetchMock)).toHaveLength(1);
+            const [probeUrl, probeInit] = probeRequests(fetchMock)[0];
+            expect(probeUrl).toBe('/api/showcase/feed/newest?category=all');
+            // Asked as anyone: no token goes with it.
+            expect(probeInit?.headers).toBeUndefined();
+            expect(laneRequests(fetchMock)).toEqual([]);
+            expect(screen.queryByText('Newest')).not.toBeInTheDocument();
+
+            Object.defineProperty(window, 'scrollY', { configurable: true, value: 1_200 });
+            fireEvent.click(pill);
+
+            expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+            expect(screen.queryByRole('button', { name: 'New posts' })).not.toBeInTheDocument();
+            expect(await screen.findByText('Newest')).toBeInTheDocument();
+            expect(laneRequests(fetchMock)).toHaveLength(1);
+            expect(laneRequests(fetchMock)[0]).toContain('offset=0');
+            expect(laneRequests(fetchMock)[0]).toContain('sort=for-you');
+            scrollTo.mockRestore();
+        });
+
+        it('takes an embedded lane to its own top, under the shell bar, without motion for a reader who asks for none', async () => {
+            mockLaneAndProbe();
+            const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+            vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+                matches: query === '(prefers-reduced-motion: reduce)',
+                media: query,
+                addEventListener: vi.fn(),
+                removeEventListener: vi.fn(),
+            })));
+            render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" variant="embedded" />);
+
+            await comeBackAfter(6);
+            Object.defineProperty(window, 'scrollY', { configurable: true, value: 1_200 });
+            fireEvent.click(await screen.findByRole('button', { name: 'New posts' }));
+
+            // jsdom lays nothing out: the lane's top is where the page is, at 1,200 px.
+            expect(scrollTo).toHaveBeenCalledWith({ top: 1_120, behavior: 'auto' });
+            scrollTo.mockRestore();
+        });
+
+        it('shows nothing within five minutes, nor when the newest post is one the lane holds', async () => {
+            const fetchMock = mockLaneAndProbe();
+            render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
+
+            await comeBackAfter(4);
+            expect(probeRequests(fetchMock)).toEqual([]);
+
+            newestPublishedAt = '2026-07-28T00:00:00.000Z';
+            await comeBackAfter(6);
+            await waitFor(() => expect(probeRequests(fetchMock)).toHaveLength(1));
+            await act(async () => undefined);
+
+            expect(screen.queryByRole('button', { name: 'New posts' })).not.toBeInTheDocument();
+            expect(laneRequests(fetchMock)).toEqual([]);
+        });
+
+        it('never asks about the Recent lane, and asks about For you again once back on it', async () => {
+            const fetchMock = mockLaneAndProbe();
+            render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
+
+            fireEvent.click(screen.getByRole('button', { name: 'Recent' }));
+            expect(await screen.findByText('Newest')).toBeInTheDocument();
+            await comeBackAfter(30);
+            expect(probeRequests(fetchMock)).toEqual([]);
+
+            // The positive control: For you, loaded afresh on the way back
+            // (its kept copy is too old), is asked about five minutes later.
+            fireEvent.click(screen.getByRole('button', { name: 'For you' }));
+            await waitFor(() => expect(laneRequests(fetchMock)).toHaveLength(2));
+            await comeBackAfter(34);
+            expect(probeRequests(fetchMock)).toEqual([]);
+            await comeBackAfter(35);
+            await waitFor(() => expect(probeRequests(fetchMock)).toHaveLength(1));
+        });
+
+        it('goes away with a lane change', async () => {
+            mockLaneAndProbe();
+            render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);
+            await comeBackAfter(6);
+            expect(await screen.findByRole('button', { name: 'New posts' })).toBeInTheDocument();
+
+            fireEvent.click(screen.getByRole('button', { name: 'Notes' }));
+
+            expect(screen.queryByRole('button', { name: 'New posts' })).not.toBeInTheDocument();
+            expect(await screen.findByText('Note one')).toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: 'New posts' })).not.toBeInTheDocument();
+        });
     });
 });

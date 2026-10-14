@@ -172,18 +172,39 @@ function createCoverMediaClient({
   insertError = null,
   updateError = null,
   removeError = null,
+  generation = null,
+  generationError = null,
 }: {
   rows?: CoverRow[];
   selectError?: { message: string } | null;
   insertError?: { message?: string; code?: string } | null;
   updateError?: { message: string } | null;
   removeError?: { message: string } | null;
+  generation?: { preview_width: number | null; preview_height: number | null } | null;
+  generationError?: { message: string } | null;
 } = {}) {
   const inserts: Array<Record<string, unknown>> = [];
   const updates: Array<{ id: string; values: Record<string, unknown> }> = [];
   const removals: string[][] = [];
+  const generationReads: Array<{ columns: string; column: string; id: string }> = [];
   const client = {
     from(table: string) {
+      if (table === 'generations') {
+        return {
+          select(columns: string) {
+            return {
+              eq(column: string, id: string) {
+                return {
+                  maybeSingle: async () => {
+                    generationReads.push({ columns, column, id });
+                    return { data: generationError ? null : generation, error: generationError };
+                  },
+                };
+              },
+            };
+          },
+        };
+      }
       if (table !== 'post_media') throw new Error(`unexpected table ${table}`);
       return {
         select() {
@@ -217,7 +238,7 @@ function createCoverMediaClient({
       },
     },
   };
-  return { client: client as never, inserts, updates, removals };
+  return { client: client as never, inserts, updates, removals, generationReads };
 }
 
 describe('ensureGenerationPostCoverMedia', () => {
@@ -529,6 +550,94 @@ describe('ensureGenerationPostCoverMedia', () => {
       category: 'video',
     })).resolves.toEqual({ outcome: 'failed', error: { message: 'read rejected' } });
     expect(inserts).toEqual([]);
+  });
+
+  it('sizes a new cover row from the generation\'s recorded preview at publish', async () => {
+    const { ensureGenerationPostCoverMedia } = await import('@/lib/generation-post-media');
+    // A video row is otherwise sized only once the rendition sweep has run;
+    // the card needs its ratio from the start.
+    const { client, inserts, generationReads } = createCoverMediaClient({
+      generation: { preview_width: 405, preview_height: 720 },
+    });
+
+    const result = await ensureGenerationPostCoverMedia({
+      adminSupabase: client,
+      postId: 'post-1',
+      generationId: 'gen-1',
+      showcaseAssetPath: 'showcase/gen-1/generated_abc.348d1d89d1cf.mp4',
+      category: 'video',
+    });
+
+    expect(result).toEqual({ outcome: 'created', error: null });
+    expect(generationReads).toEqual([{ columns: 'preview_width, preview_height', column: 'id', id: 'gen-1' }]);
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]).toMatchObject({
+      storage_path: 'showcase/gen-1/generated_abc.348d1d89d1cf.mp4',
+      media_kind: 'video',
+      width: 405,
+      height: 720,
+    });
+  });
+
+  it('sizes a repointed cover from the generation instead of blanking it', async () => {
+    const { ensureGenerationPostCoverMedia } = await import('@/lib/generation-post-media');
+    const { client, updates } = createCoverMediaClient({
+      rows: [{ id: 'row-1', storage_path: 'showcase/gen-1/generated_old.111111111111.mp4', sort_order: 0 }],
+      generation: { preview_width: 720, preview_height: 405 },
+    });
+
+    const result = await ensureGenerationPostCoverMedia({
+      adminSupabase: client,
+      postId: 'post-1',
+      generationId: 'gen-1',
+      showcaseAssetPath: 'showcase/gen-1/generated_new.222222222222.mp4',
+      category: 'video',
+    });
+
+    expect(result).toEqual({ outcome: 'repointed', error: null });
+    expect(updates[0].values).toMatchObject({
+      storage_path: 'showcase/gen-1/generated_new.222222222222.mp4',
+      width: 720,
+      height: 405,
+      // The duration still describes the replaced file.
+      duration_seconds: null,
+    });
+  });
+
+  it('records the row without a size when the generation has none to give', async () => {
+    const { ensureGenerationPostCoverMedia } = await import('@/lib/generation-post-media');
+    const halfSized = createCoverMediaClient({ generation: { preview_width: 405, preview_height: null } });
+    const unreadable = createCoverMediaClient({ generationError: { message: 'read rejected' } });
+
+    for (const { client, inserts } of [halfSized, unreadable]) {
+      await expect(ensureGenerationPostCoverMedia({
+        adminSupabase: client,
+        postId: 'post-1',
+        generationId: 'gen-1',
+        showcaseAssetPath: 'showcase/gen-1/generated_abc.5f9c8ae3516b.png',
+        category: 'image',
+      })).resolves.toEqual({ outcome: 'created', error: null });
+      expect(inserts).toHaveLength(1);
+      expect(inserts[0]).not.toHaveProperty('width');
+      expect(inserts[0]).not.toHaveProperty('height');
+    }
+  });
+
+  it('reads no generation for a cover row that stays as it is', async () => {
+    const { ensureGenerationPostCoverMedia } = await import('@/lib/generation-post-media');
+    const { client, generationReads } = createCoverMediaClient({
+      rows: [{ id: 'row-1', storage_path: 'showcase/gen-1/generated_abc.348d1d89d1cf.mp4', sort_order: 0 }],
+      generation: { preview_width: 405, preview_height: 720 },
+    });
+
+    await expect(ensureGenerationPostCoverMedia({
+      adminSupabase: client,
+      postId: 'post-1',
+      generationId: 'gen-1',
+      showcaseAssetPath: 'showcase/gen-1/generated_abc.348d1d89d1cf.mp4',
+      category: 'video',
+    })).resolves.toEqual({ outcome: 'unchanged', error: null });
+    expect(generationReads).toEqual([]);
   });
 
   it('reports a failed repoint, the one path that can strand a row on a deleted object', async () => {

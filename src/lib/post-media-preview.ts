@@ -52,6 +52,10 @@ export async function createPostMediaImagePreview({
   const input = Buffer.from(await body.arrayBuffer());
   const image = sharp(input).rotate();
   const metadata = await image.metadata();
+  // metadata() describes the stored pixels, before the rotate() above. A phone
+  // photo stored 1200x800 with EXIF orientation 6 is drawn, and previewed,
+  // 800x1200, and a card laid out from the stored size would be landscape.
+  const { width, height } = metadata.autoOrient;
   const preview = await image
     .clone()
     .resize({
@@ -86,8 +90,8 @@ export async function createPostMediaImagePreview({
   const display = await encodeDisplayRendition({
     image,
     sourceBytes: input.byteLength,
-    width: metadata.width,
-    height: metadata.height,
+    width,
+    height,
   });
   let displayStoragePath: string | null = null;
   if (display) {
@@ -113,8 +117,8 @@ export async function createPostMediaImagePreview({
     previewStoragePath,
     previewThumbhash: await getPreviewThumbhash(preview),
     previewStatus: 'ready',
-    width: metadata.width ?? null,
-    height: metadata.height ?? null,
+    width: width ?? null,
+    height: height ?? null,
     displayStoragePath,
   } satisfies PostMediaPreviewResult;
 }

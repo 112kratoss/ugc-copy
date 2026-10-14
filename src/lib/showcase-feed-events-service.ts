@@ -426,6 +426,83 @@ async function persistFeedback({
   return null;
 }
 
+/** What an Undo takes back: the caller's Not interested on a post, or Hide on a creator. */
+export type ShowcaseFeedFeedbackUndoTarget =
+  | { feedbackType: 'not_interested'; postId: string }
+  | { feedbackType: 'hide_creator'; creatorId: string };
+
+export type ShowcaseFeedFeedbackUndoParseResult =
+  | { ok: true; target: ShowcaseFeedFeedbackUndoTarget }
+  | { ok: false; status: 400; body: { error: string } };
+
+/** `removed` is false when the caller had no such row: nothing was hidden, or it was already undone. */
+export type ShowcaseFeedFeedbackUndoResponse = { ok: true; removed: boolean };
+
+export type ShowcaseFeedFeedbackUndoResult =
+  | { ok: true; body: ShowcaseFeedFeedbackUndoResponse }
+  | { ok: false; status: 500; body: { error: string } };
+
+/** `{ feedbackType: 'not_interested', postId }` or `{ feedbackType: 'hide_creator', creatorId }`. */
+export function parseShowcaseFeedFeedbackUndoPayload(value: unknown): ShowcaseFeedFeedbackUndoParseResult {
+  if (!isRecord(value)) {
+    return { ok: false, status: 400, body: { error: 'Invalid feed preference undo payload.' } };
+  }
+
+  if (value.feedbackType === 'not_interested') {
+    return typeof value.postId === 'string' && UUID_IDENTIFIER_PATTERN.test(value.postId)
+      ? { ok: true, target: { feedbackType: 'not_interested', postId: value.postId } }
+      : { ok: false, status: 400, body: { error: 'Undoing Not interested needs a valid postId.' } };
+  }
+
+  if (value.feedbackType === 'hide_creator') {
+    return typeof value.creatorId === 'string' && UUID_IDENTIFIER_PATTERN.test(value.creatorId)
+      ? { ok: true, target: { feedbackType: 'hide_creator', creatorId: value.creatorId } }
+      : { ok: false, status: 400, body: { error: 'Undoing Hide needs a valid creatorId.' } };
+  }
+
+  return { ok: false, status: 400, body: { error: 'feedbackType must be not_interested or hide_creator.' } };
+}
+
+/**
+ * Undo is a preference delete, not a feed event (product decision D7,
+ * 2026-10-14). The Not interested or Hide event and its delivery outcome stay
+ * in the facts: the reader did hide the post, then changed their mind. Only
+ * the standing exclusion that event wrote goes (here or in the batch RPC),
+ * and only the caller's. `removed` is false when there was no such row.
+ */
+export async function undoShowcaseFeedFeedback({
+  actorUserId,
+  serviceClient,
+  target,
+}: {
+  actorUserId: string;
+  serviceClient: SupabaseClient;
+  target: ShowcaseFeedFeedbackUndoTarget;
+}): Promise<ShowcaseFeedFeedbackUndoResult> {
+  const { data, error } = target.feedbackType === 'not_interested'
+    ? await serviceClient
+      .from('feed_user_post_feedback')
+      .delete()
+      .eq('user_id', actorUserId)
+      .eq('post_id', target.postId)
+      // A report keeps its post out of the reporter's feed through this table
+      // too, with the reason 'reported' (post-report-service.ts). Taking back
+      // a Not interested must not lift a report.
+      .is('reason', null)
+      .select('post_id')
+    : await serviceClient
+      .from('feed_user_creator_feedback')
+      .delete()
+      .eq('user_id', actorUserId)
+      .eq('creator_user_id', target.creatorId)
+      .select('creator_user_id');
+  if (error) {
+    return { ok: false, status: 500, body: { error: 'Failed to undo the feed preference.' } };
+  }
+
+  return { ok: true, body: { ok: true, removed: Array.isArray(data) && data.length > 0 } };
+}
+
 async function loadExistingFeedEvent(
   serviceClient: SupabaseClient,
   clientEventId: string,

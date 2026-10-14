@@ -9,6 +9,7 @@ import type {
   CreatorSearchResult,
   PublicSearchResponse,
   PublicSearchType,
+  RecipeSearchResult,
   ShowcaseFeedItem,
 } from '../lib/types';
 
@@ -89,6 +90,7 @@ vi.mock('expo-router', () => ({
 vi.mock('lucide-react-native', () => ({
   BookOpen: (props: MockProps) => React.createElement('icon', props),
   Clock3: (props: MockProps) => React.createElement('icon', props),
+  MessageCircle: (props: MockProps) => React.createElement('icon', props),
   Search: (props: MockProps) => React.createElement('icon', props),
   X: (props: MockProps) => React.createElement('icon', props),
 }));
@@ -291,7 +293,11 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function creator(username: string, publicPostCount = 3): CreatorSearchResult {
+function creator(
+  username: string,
+  publicPostCount = 3,
+  extra: Partial<Pick<CreatorSearchResult, 'bio' | 'isFollowing'>> = {},
+): CreatorSearchResult {
   return {
     id: `id-${username}`,
     username,
@@ -300,18 +306,46 @@ function creator(username: string, publicPostCount = 3): CreatorSearchResult {
     avatarUrl: null,
     publicPostCount,
     isFollowing: false,
+    ...extra,
   };
 }
 
-function post(id: string): ShowcaseFeedItem {
+function post(id: string, counts: { saveCount?: number; commentCount?: number } = {}): ShowcaseFeedItem {
   // Only what a result card reads.
-  return { id, title: `Post ${id}`, creator: { name: 'Ana' }, mediaItems: [], mediaKind: 'image', mediaUrl: null } as unknown as ShowcaseFeedItem;
+  return {
+    id,
+    title: `Post ${id}`,
+    creator: { name: 'Ana' },
+    mediaItems: [],
+    mediaKind: 'image',
+    mediaUrl: null,
+    saveCount: counts.saveCount ?? 0,
+    commentCount: counts.commentCount ?? 0,
+  } as unknown as ShowcaseFeedItem;
+}
+
+function recipe(id: string, access: { accessMode: 'free' | 'paid'; priceUsdCents: number }, sellerName: string): RecipeSearchResult {
+  return {
+    id,
+    postId: `post-${id}`,
+    title: `Recipe ${id}`,
+    summary: 'Lighting, lens and grade',
+    previewText: '',
+    ...access,
+    salesCount: 0,
+    allowRemix: true,
+    resourceKinds: ['prompt'],
+    createdAt: '2026-10-01T00:00:00.000Z',
+    seller: { id: `seller-${id}`, username: null, name: sellerName, avatar: null },
+    post: null,
+    priceQuote: { formatted: '$9.00', currency: 'USD', amountSubunits: 900 },
+  };
 }
 
 function searchAnswer(
   query: string,
   type: PublicSearchType = 'top',
-  kinds: { creators?: CreatorSearchResult[]; posts?: ShowcaseFeedItem[]; creatorsCursor?: string } = {},
+  kinds: { creators?: CreatorSearchResult[]; posts?: ShowcaseFeedItem[]; recipes?: RecipeSearchResult[]; creatorsCursor?: string } = {},
 ): PublicSearchResponse {
   return {
     query,
@@ -319,7 +353,7 @@ function searchAnswer(
     type,
     creators: { items: kinds.creators ?? [], nextCursor: kinds.creatorsCursor ?? null },
     posts: { items: kinds.posts ?? [], nextCursor: null },
-    recipes: { items: [], nextCursor: null },
+    recipes: { items: kinds.recipes ?? [], nextCursor: null },
   };
 }
 
@@ -641,6 +675,66 @@ describe('ExploreSearchOverlay search', () => {
     await advance(300);
 
     expect(shownTexts(tree)).toEqual(expect.arrayContaining(['1 post', '2 posts']));
+
+    await act(async () => tree.unmount());
+  });
+
+  // What each result card reads, top to bottom: the web's search cards read the same.
+  function cardTexts(tree: Tree, label: string) {
+    return pressableLabelled(tree, label).findAll((node) => node.type === 'text').map(textOf);
+  }
+
+  it('gives a creator their bio on one line and marks one the viewer follows', async () => {
+    searchPublicContent.mockResolvedValueOnce(searchAnswer('jan', 'top', {
+      creators: [
+        creator('jane', 3, { bio: 'Films\nand  stills', isFollowing: true }),
+        creator('janet', 2),
+      ],
+    }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'jan');
+    await advance(300);
+
+    // A screen reader hears the mark too: the row reads as its label.
+    expect(cardTexts(tree, "Open Creator jane's profile, following"))
+      .toEqual(['Creator jane', 'Following', '@jane', 'Films and stills', '3 posts']);
+    const bio = pressableLabelled(tree, "Open Creator jane's profile, following")
+      .find((node) => node.type === 'text' && textOf(node) === 'Films and stills');
+    expect(bio.props.numberOfLines).toBe(1);
+    // No bio leaves no empty line, and no follow leaves no mark.
+    expect(cardTexts(tree, "Open Creator janet's profile")).toEqual(['Creator janet', '@janet', '2 posts']);
+
+    await act(async () => tree.unmount());
+  });
+
+  it("counts a post's saves, in the singular and the plural, and its comments", async () => {
+    searchPublicContent.mockResolvedValueOnce(searchAnswer('portrait', 'top', {
+      posts: [post('p1', { saveCount: 1, commentCount: 4 }), post('p2', { saveCount: 12 })],
+    }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'portrait');
+    await advance(300);
+
+    expect(cardTexts(tree, 'Open post Post p1')).toEqual(['Post p1', 'Ana', '1 save', '4']);
+    expect(cardTexts(tree, 'Open post Post p2')).toEqual(['Post p2', 'Ana', '12 saves', '0']);
+
+    await act(async () => tree.unmount());
+  });
+
+  it('names who sells a recipe on its price line', async () => {
+    searchPublicContent.mockResolvedValueOnce(searchAnswer('lighting', 'top', {
+      recipes: [
+        recipe('r1', { accessMode: 'free', priceUsdCents: 0 }, 'Luna Studio'),
+        recipe('r2', { accessMode: 'paid', priceUsdCents: 900 }, 'Noor'),
+      ],
+    }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'lighting');
+    await advance(300);
+
+    expect(cardTexts(tree, 'Open recipe Recipe r1')).toEqual(['Recipe r1', 'Lighting, lens and grade', 'Luna Studio', 'Free']);
+    // The app prices an unlock in credits where the web quotes cash; the seller reads the same.
+    expect(cardTexts(tree, 'Open recipe Recipe r2')).toEqual(['Recipe r2', 'Lighting, lens and grade', 'Noor', '900 credits']);
 
     await act(async () => tree.unmount());
   });

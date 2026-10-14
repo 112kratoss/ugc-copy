@@ -247,6 +247,12 @@ export async function searchPublicContent(
       countryCode: options.countryCode,
     })
     : [];
+  // search_public_posts already leaves NSFW-labelled posts out before its
+  // limit, which keeps pages full. Hydration covers a labelled post rather
+  // than dropping it, so a post labelled after the ranked read would still
+  // come back as a "Mature content" card matched on its hidden words. Explore
+  // drops such a post after hydration, and so does search.
+  const shownPosts = hydratedPosts.filter((item) => !item.isNsfw);
   const postCursorRow = postHasMore ? postRows[options.limit - 1] : null;
 
   // The list pages in raw rows and drops the ones it cannot show (a hidden
@@ -279,7 +285,7 @@ export async function searchPublicContent(
       : emptyPublicSearchPage(),
     posts: options.type === 'top' || options.type === 'posts'
       ? {
-        items: hydratedPosts,
+        items: shownPosts,
         nextCursor: postCursorRow
           ? encodePublicSearchCursor({
             version: 1,

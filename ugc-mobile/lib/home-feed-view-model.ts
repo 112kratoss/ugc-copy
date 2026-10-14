@@ -1,6 +1,7 @@
 import type { ToolAccent } from '@/lib/theme';
 import type { ShowcaseFeedItem } from '@/lib/types';
 import { HOME_TOOL_SHORTCUTS, formatCompactCount, formatRelativeTime, type HomeToolShortcut } from './home-view-model';
+import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from './media-creation-view-model';
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import type { ShowcaseFeedFilters } from './showcase-feed-query';
 import { getShowcaseRemixAccess, type ShowcaseRemixAccess } from './showcase-remix-access';
@@ -47,6 +48,12 @@ export interface HomeFeedCard {
   creatorAvatar: string | null;
   timeLabel: string;
   categoryLabel: string;
+  /**
+   * The model's product name after the category ("Video · Kling 2.5"), as the
+   * web card's metadata line names it; null for text posts and for a model the
+   * bundled catalog does not know, so a slug is never shown.
+   */
+  modelLabel: string | null;
   accent: ToolAccent;
   mediaUrl: string | null;
   mediaKind: 'image' | 'video' | null;
@@ -362,6 +369,7 @@ export function showcaseToHomeFeedCard(item: ShowcaseFeedItem, now = new Date())
     creatorAvatar: item.creator.avatar,
     timeLabel: formatRelativeTime(item.createdAt, now),
     categoryLabel: homeCategoryLabel(item),
+    modelLabel: previewKind === 'text' ? null : homeModelLabel(item.model),
     accent: homeCardAccent(item),
     mediaUrl: item.mediaUrl,
     mediaKind: item.mediaKind,
@@ -429,6 +437,19 @@ export function homeRecipeChip(
  */
 function formatFeedActionLabel(count: number | null | undefined, verb: string) {
   return (count ?? 0) > 0 ? formatCompactCount(count) : verb;
+}
+
+/**
+ * Mirrors the web's `getPostModelDisplayName`: model ids are internal slugs
+ * (`gpt-image-2`), and `magicbooklet`, `manual`, an outside tool's id or an
+ * unknown slug answer null so the line omits the model rather than leak it.
+ */
+export function homeModelLabel(model: string | null | undefined): string | null {
+  if (!model) return null;
+  const entry = (IMAGE_MODELS as Record<string, { displayName: string }>)[model]
+    ?? (VIDEO_MODELS as Record<string, { displayName: string }>)[model]
+    ?? (MOTION_MODELS as Record<string, { displayName: string }>)[model];
+  return entry?.displayName ?? null;
 }
 
 function homeCardBodyLines(previewKind: HomeFeedCard['previewKind']) {

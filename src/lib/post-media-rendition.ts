@@ -30,6 +30,12 @@ export type PostMediaRenditionOutcome =
   | {
       status: 'skipped';
       reason: 'not-video' | 'too-large' | 'not-smaller';
+      /**
+       * The encoded output's size when the encoder ran (a `not-smaller` skip):
+       * the source plays instead, and its card still needs a ratio.
+       */
+      width?: number | null;
+      height?: number | null;
     };
 
 /**
@@ -170,7 +176,7 @@ export async function createPostMediaRendition({
     });
   } catch (error) {
     if (error instanceof VideoRenditionSkipped) {
-      return { status: 'skipped', reason: error.reason };
+      return { status: 'skipped', reason: error.reason, width: error.width, height: error.height };
     }
     throw error;
   }

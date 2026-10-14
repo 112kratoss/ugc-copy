@@ -116,6 +116,26 @@ export function forgetBlockedCreatorForVisit(creatorId: string) {
 }
 
 /**
+ * The viewer took back a Not interested or a Hide (Undo): what this tab
+ * remembers of the server's answer stops leaving that post, or that creator's
+ * posts, out. Only that viewer's memory, and never a block: Undo lifts none.
+ */
+export function forgetFeedPreferenceForVisit(
+  viewerId: string | null,
+  target: { feedbackType: 'not_interested'; postId: string } | { feedbackType: 'hide_creator'; creatorId: string },
+) {
+  if (!isVisitMemoryOf(viewerId)) {
+    return;
+  }
+
+  if (target.feedbackType === 'hide_creator') {
+    creatorsHiddenThisVisit.delete(target.creatorId);
+  } else {
+    postsHiddenThisVisit.delete(target.postId);
+  }
+}
+
+/**
  * A feed page without the posts this tab already knows this viewer's own feed
  * leaves out: a blocked creator's on every lane, and on For you what the
  * viewer hid or marked not interested. The same list back when it knows of

@@ -31,6 +31,7 @@
     "backfill:showcase-assets": "node scripts/backfills/backfill-showcase-assets.mjs",
     "backfill:showcase-media-cache": "tsx --env-file-if-exists=.env.local scripts/backfills/backfill-showcase-media-cache.ts",
     "backfill:private-post-media": "tsx --env-file-if-exists=.env.local scripts/backfills/backfill-private-post-media.ts",
+    "backfill:post-media-dimensions": "node --env-file-if-exists=.env.local scripts/backfills/backfill-post-media-dimensions.mjs",
     "db:migrations:check": "node scripts/db/check-supabase-migration-drift.mjs",
     "db:inspect:performance": "node scripts/db/inspect-supabase-performance.mjs --local",
     "db:benchmark:scaling": "node scripts/db/benchmark-local-scaling.mjs",

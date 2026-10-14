@@ -171,6 +171,16 @@
       "path": "/api/showcase/feed/events",
       "auth": "optional"
     },
+    "getShowcaseFeedNewest": {
+      "method": "GET",
+      "path": "/api/showcase/feed/newest",
+      "auth": "none"
+    },
+    "undoFeedFeedback": {
+      "method": "POST",
+      "path": "/api/showcase/feed/feedback/undo",
+      "auth": "required"
+    },
     "getSavedMedia": {
       "method": "GET",
       "path": "/api/showcase/saved-media",

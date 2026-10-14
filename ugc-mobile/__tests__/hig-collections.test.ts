@@ -148,11 +148,14 @@ describe('HIG playing video — the play badge marks a poster, not a playing til
     expect(isShowcaseCoverVideoStreaming(feedItem([streaming]), true)).toBe(true);
   });
 
-  it('gates the rendered badge on that answer, with Reduce Motion folded in', () => {
+  it('gates the rendered badge on that answer, with Reduce Motion and Autoplay previews → Never folded in', () => {
     const screen = file('app/(tabs)/showcase.tsx');
 
     expect(screen).toContain('{isVideoCard && !coverVideoStreaming ? <VideoCornerPlay /> : null}');
-    expect(screen).toContain('isShowcaseCoverVideoStreaming(card.item, showActiveVideo && !reducedMotion)');
+    // Both keep an elected tile on its poster without moving the election, so
+    // the poster keeps its badge under either.
+    expect(screen).toContain('const previewsEnabled = useAutoplayPreviewsEnabled();');
+    expect(screen).toContain('isShowcaseCoverVideoStreaming(card.item, showActiveVideo && !reducedMotion && previewsEnabled)');
   });
 });
 

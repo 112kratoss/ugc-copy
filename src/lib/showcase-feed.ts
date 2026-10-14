@@ -33,7 +33,9 @@ import {
   coverNeedsGenerationPreview,
   graftGenerationPreviewOntoCover,
   loadGenerationPreviewInfoMap,
+  type GenerationPreviewInfo,
 } from '@/lib/generation-preview-info';
+import { toUsablePreviewSize } from '@/lib/preview-dimensions';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
@@ -111,6 +113,8 @@ interface LegacyGenerationRow {
   output_url: string | null;
   showcase_asset_path?: string | null;
   preview_url?: string | null;
+  preview_width?: number | null;
+  preview_height?: number | null;
   model: string;
   prompt: string | null;
   title: string | null;
@@ -142,6 +146,38 @@ async function resolveLegacyGenerationPreviewUrl(
   }
 
   return resolveItemCategory(generation.category) === 'image' ? mediaUrl : null;
+}
+
+/**
+ * Sizes a cover that shows its linked generation (one synthesised for a post
+ * with no `post_media` row, or a creation's row whose own poster the sweep has
+ * not built yet) from that generation's recorded preview size.
+ *
+ * The graft sizes only the cover's `preview` descriptor, but the web carousel
+ * reads the cover's own `width`/`height` alone and the app reads them first:
+ * without them web Home starts the card at 4:5 and resizes it once the image
+ * loads. The preview is a `fit: inside` resize of the output, so its ratio is
+ * the output's. A size the cover already has always wins.
+ */
+function withGenerationCoverSize(
+  mediaItems: PostMediaSummary[],
+  generationInfo: GenerationPreviewInfo | null | undefined,
+): PostMediaSummary[] {
+  const cover = mediaItems[0];
+  const size = toUsablePreviewSize(generationInfo?.previewWidth, generationInfo?.previewHeight);
+  if (!cover || !size || toUsablePreviewSize(cover.width, cover.height)) return mediaItems;
+
+  return [
+    {
+      ...cover,
+      width: size.width,
+      height: size.height,
+      preview: toUsablePreviewSize(cover.preview.width, cover.preview.height)
+        ? cover.preview
+        : { ...cover.preview, width: size.width, height: size.height },
+    },
+    ...mediaItems.slice(1),
+  ];
 }
 
 async function fetchPostRows(
@@ -666,7 +702,10 @@ export async function resolvePostRowsToFeedItems(
         row: post,
       });
       const generationInfo = post.generation_id ? generationInfoMap.get(post.generation_id) : null;
+      // Read before the graft, which gives such a cover a poster of its own.
+      const coverShowsGeneration = coverNeedsGenerationPreview(mediaItems);
       mediaItems = graftGenerationPreviewOntoCover(mediaItems, generationInfo);
+      if (coverShowsGeneration) mediaItems = withGenerationCoverSize(mediaItems, generationInfo);
       const coverMedia = mediaItems[0] ?? null;
       const mediaUrl = coverMedia?.url ?? await resolvePostMediaUrl(adminSupabase, post);
       const mediaKind = coverMedia?.mediaKind ?? getPostMediaKind(post.category, post.post_format);
@@ -942,7 +981,7 @@ async function fetchLegacyGenerationRows(
   // guaranteed 42703 before falling back — noise that would bury a real schema
   // fault. The preview columns have long since shipped; a missing column here
   // is now a genuine error and must surface.
-  const generationSelect = 'id, output_url, showcase_asset_path, preview_url, model, prompt, title, category, save_count, remix_count, created_at, user_id';
+  const generationSelect = 'id, output_url, showcase_asset_path, preview_url, preview_width, preview_height, model, prompt, title, category, save_count, remix_count, created_at, user_id';
 
   const buildQuery = (selectClause: string) => {
     let query = adminSupabase
@@ -1027,6 +1066,10 @@ async function getLegacyShowcaseFeedPageBase(
 
         const resolvedCategory = resolveItemCategory(generation.category);
         const previewUrl = await resolveLegacyGenerationPreviewUrl(adminSupabase, generation, mediaUrl);
+        // The stored preview is a `fit: inside` resize of this output, so its
+        // recorded size is the cover's shape. Without one the card is laid out
+        // at a guessed height and resized once the client has measured it.
+        const coverSize = toUsablePreviewSize(generation.preview_width, generation.preview_height);
         const profile = generation.user_id ? profilesMap[generation.user_id] : undefined;
 
         return {
@@ -1045,8 +1088,8 @@ async function getLegacyShowcaseFeedPageBase(
             mediaKind: getPostMediaKind(resolvedCategory, 'media') ?? 'image',
             contentType: null,
             originalName: null,
-            width: null,
-            height: null,
+            width: coverSize?.width ?? null,
+            height: coverSize?.height ?? null,
             durationSeconds: null,
             sortOrder: 0,
           }],

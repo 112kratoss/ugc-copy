@@ -9,6 +9,7 @@ import {
   readShowcaseClientSnapshotToRestore,
   filterFeedItemsForVisit,
   forgetBlockedCreatorForVisit,
+  forgetFeedPreferenceForVisit,
   forgetShowcaseClientSnapshot,
   getCreatorsBlockedThisVisit,
   hasFreshShowcaseClientSnapshot,
@@ -346,6 +347,29 @@ describe('showcase client cache', () => {
 
       expect([...getCreatorsBlockedThisVisit('viewer-1')]).toEqual(['other']);
       expect(filterFeedItemsForVisit(page, { forYou: true, viewerId: 'viewer-1' })).toEqual(page);
+    });
+
+    it('draws a post, or a creator, again once the viewer takes back Not interested or Hide, and keeps every block', () => {
+      rememberViewerExclusionsForVisit('viewer-1', { blockedCreatorIds: ['blocked'], hiddenCreatorIds: ['hidden'], hiddenPostIds: ['c-2'] });
+
+      forgetFeedPreferenceForVisit('viewer-1', { feedbackType: 'not_interested', postId: 'c-2' });
+      expect(filterFeedItemsForVisit(page, { forYou: true, viewerId: 'viewer-1' }).map((item) => item.id)).toEqual(['c-1', 'c-2', 'd-1']);
+
+      forgetFeedPreferenceForVisit('viewer-1', { feedbackType: 'hide_creator', creatorId: 'hidden' });
+      // Undo never lifts a block, even one named as if it were a Hide.
+      forgetFeedPreferenceForVisit('viewer-1', { feedbackType: 'hide_creator', creatorId: 'blocked' });
+      expect(filterFeedItemsForVisit(page, { forYou: true, viewerId: 'viewer-1' }).map((item) => item.id)).toEqual(['b-1', 'c-1', 'c-2', 'd-1']);
+      expect([...getCreatorsBlockedThisVisit('viewer-1')]).toEqual(['blocked']);
+    });
+
+    it("leaves what was remembered for one viewer alone when another takes something back", () => {
+      rememberViewerExclusionsForVisit('viewer-1', { blockedCreatorIds: [], hiddenCreatorIds: ['hidden'], hiddenPostIds: ['c-2'] });
+
+      forgetFeedPreferenceForVisit('viewer-2', { feedbackType: 'not_interested', postId: 'c-2' });
+      forgetFeedPreferenceForVisit(null, { feedbackType: 'hide_creator', creatorId: 'hidden' });
+
+      expect([...getFeedPreferencesHiddenThisVisit('viewer-1').postIds]).toEqual(['c-2']);
+      expect([...getFeedPreferencesHiddenThisVisit('viewer-1').creatorIds]).toEqual(['hidden']);
     });
 
     it('starts each test, like each tab, knowing nothing', () => {

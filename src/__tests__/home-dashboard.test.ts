@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
+import whatsNewContract from '../../contracts/whats-new-models-v1.json';
 import type { GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import {
   HOME_WORKSPACE_ACTIVE_STATUSES,
@@ -260,5 +263,23 @@ describe('selectWhatsNewModels', () => {
     expect(selectWhatsNewModels(models)).toHaveLength(4);
     expect(selectWhatsNewModels(models, 0)).toEqual([]);
     expect(selectWhatsNewModels([])).toEqual([]);
+  });
+
+  // The app's Create tab lists the same selection in its What's new strip
+  // (ugc-mobile/lib/whats-new-models.ts). The two share no module, since this
+  // suite cannot load an app file, so both answer one fixture.
+  describe('on the fixture the app shares', () => {
+    it.each(whatsNewContract.cases)('picks from $name as the fixture says', ({ models, expectedIds }) => {
+      const catalog = models.map(({ kind, ...model }) => buildModel({ ...model, kind: kind as GenerationModelDescriptor['kind'] }));
+
+      expect(selectWhatsNewModels(catalog).map((model) => model.id)).toEqual(expectedIds);
+    });
+
+    it('is asked the same cases by the app', () => {
+      const appTest = readFileSync('ugc-mobile/__tests__/whats-new-models.test.ts', 'utf8');
+
+      expect(appTest).toContain("from '../../contracts/whats-new-models-v1.json'");
+      expect(appTest).toContain('it.each(whatsNewContract.cases)');
+    });
   });
 });

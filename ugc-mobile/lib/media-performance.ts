@@ -60,6 +60,11 @@ export const FEED_PREVIEW_FORWARD_BUFFER_SECONDS = 8;
  * a moment in each handoff, the outgoing one waiting out its release grace.
  * Hardware decoders are a hard per-device limit: the Pixel emulator refuses a
  * fifth, which an earlier selection that briefly held five ran into.
+ *
+ * This is the most a feed prepares. Every prepared player downloads up to
+ * FEED_PREVIEW_FORWARD_BUFFER_SECONDS of a clip the reader may never reach, so
+ * on mobile data under the default Wi-Fi only autoplay preference a feed
+ * prepares none (`lib/autoplay-preference.ts`).
  */
 export const SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS = 2;
 

@@ -1115,3 +1115,130 @@ describe('feed ranking v4 migration', () => {
     expect(topLevel).not.toMatch(/CREATE FUNCTION/);
   });
 });
+
+// supabase/migrations/20261014053528_feed_scorecard_viewer_split.sql re-creates
+// v4's feed_scorecard_viewers with registered_viewers, anonymous_viewers and
+// web_guest_viewers appended (decision D1: app guests stay ranked as users, and
+// the scorecard shows the mix). Its SQL runs in
+// supabase/tests/database/feed_scorecard_viewer_split.test.sql; this pins that
+// the new definition is v4's with the split added and nothing else changed, so
+// signed_in_viewers and every other column read as before, and that the
+// function goes back to exactly the grants v4 gave it.
+describe('feed scorecard viewer split migration', () => {
+  const splitName = migrationNames.find((name) => name.endsWith('_feed_scorecard_viewer_split.sql'));
+  const split = readMigration('_feed_scorecard_viewer_split.sql');
+
+  /** The one `CREATE FUNCTION public.<name>(` statement, through its closing `$$;`. */
+  function createdFunction(sql: string, name: string): string {
+    const opener = `CREATE FUNCTION public.${name}(`;
+    expect(sql.split(opener), `${name} must be created exactly once`).toHaveLength(2);
+    const start = sql.indexOf(opener);
+    return sql.slice(start, sql.indexOf('\n$$;', start) + '\n$$;'.length);
+  }
+
+  it('is one file, ordered after v4', () => {
+    expect(splitName).toMatch(/^\d{14}_feed_scorecard_viewer_split\.sql$/);
+    expect((splitName as string).slice(0, 14) > (migrationName as string).slice(0, 14)).toBe(true);
+  });
+
+  it("drops v4's viewer scorecard and creates it again with the split added, nothing else changed", () => {
+    const drop = 'DROP FUNCTION IF EXISTS public.feed_scorecard_viewers(integer);';
+    expect(split.split(drop)).toHaveLength(2);
+    expect(split.indexOf(drop)).toBeLessThan(split.indexOf('CREATE FUNCTION public.feed_scorecard_viewers('));
+
+    let expected = replaceOnce(
+      functionDefinition(migration, 'feed_scorecard_viewers'),
+      'CREATE OR REPLACE FUNCTION public.feed_scorecard_viewers(',
+      'CREATE FUNCTION public.feed_scorecard_viewers(',
+    );
+    expected = replaceOnce(
+      expected,
+      '  meaningful_creators_7d bigint\n)',
+      '  meaningful_creators_7d bigint,\n'
+        + '  registered_viewers bigint,\n'
+        + '  anonymous_viewers bigint,\n'
+        + '  web_guest_viewers bigint\n)',
+    );
+    expected = replaceOnce(
+      expected,
+      '  with_creations AS (\n',
+      '  anonymous_users AS (\n'
+        + '    SELECT anonymous_ids.user_id\n'
+        + '    FROM public.feed_anonymous_viewer_ids(ARRAY(\n'
+        + '      SELECT DISTINCT viewer_days.day_viewer_user_id\n'
+        + '      FROM viewer_days\n'
+        + '      WHERE viewer_days.day_viewer_user_id IS NOT NULL\n'
+        + '    )) AS anonymous_ids\n'
+        + '  ),\n'
+        + '  with_creations AS (\n',
+    );
+    expected = replaceOnce(
+      expected,
+      '      ) AS created_within_7d\n    FROM per_viewer\n',
+      '      ) AS created_within_7d,\n'
+        + '      EXISTS (\n'
+        + '        SELECT 1\n'
+        + '        FROM anonymous_users\n'
+        + '        WHERE anonymous_users.user_id = per_viewer.viewer_user_id\n'
+        + '      ) AS is_anonymous_user\n'
+        + '    FROM per_viewer\n',
+    );
+    expected = replaceOnce(
+      expected,
+      '    count(*) FILTER (WHERE with_creations.created_within_7d)::bigint\n  FROM with_creations\n',
+      '    count(*) FILTER (WHERE with_creations.created_within_7d)::bigint,\n'
+        + '    count(*) FILTER (\n'
+        + '      WHERE with_creations.viewer_user_id IS NOT NULL AND NOT with_creations.is_anonymous_user\n'
+        + '    )::bigint,\n'
+        + '    count(*) FILTER (WHERE with_creations.is_anonymous_user)::bigint,\n'
+        + '    count(*) FILTER (WHERE with_creations.viewer_user_id IS NULL)::bigint\n'
+        + '  FROM with_creations\n',
+    );
+    const viewers = createdFunction(split, 'feed_scorecard_viewers');
+    expect(viewers).toBe(expected);
+    // The v4 columns keep their places; the split comes after them.
+    expect(listEntries(viewers, 'RETURNS TABLE (').slice(16)).toEqual([
+      'signed_in_viewers bigint',
+      'meaningful_creators_7d bigint',
+      'registered_viewers bigint',
+      'anonymous_viewers bigint',
+      'web_guest_viewers bigint',
+    ]);
+  });
+
+  it('reads is_anonymous through a definer helper that only the service role may call', () => {
+    expect(functionDefinition(split, 'feed_anonymous_viewer_ids')).toBe([
+      'CREATE OR REPLACE FUNCTION public.feed_anonymous_viewer_ids(p_user_ids uuid[])',
+      'RETURNS TABLE (user_id uuid)',
+      'LANGUAGE sql',
+      'STABLE',
+      'SECURITY DEFINER',
+      "SET search_path = ''",
+      'AS $$',
+      '  SELECT users.id',
+      '  FROM auth.users AS users',
+      '  WHERE users.id = ANY (p_user_ids)',
+      '    AND users.is_anonymous;',
+      '$$;',
+    ].join('\n'));
+    expect(split.indexOf('CREATE OR REPLACE FUNCTION public.feed_anonymous_viewer_ids('))
+      .toBeLessThan(split.indexOf('CREATE FUNCTION public.feed_scorecard_viewers('));
+  });
+
+  it('grants the scorecard what v4 granted it, the helper the same, and nothing on auth.users', () => {
+    const { revoke, grant } = grantPair('feed_scorecard_viewers', FUNCTION_SIGNATURES.feed_scorecard_viewers);
+    expect(migration).toContain(revoke);
+    expect(migration).toContain(grant);
+    expect(split.match(/^REVOKE [^;]+;/gm)).toEqual([
+      'REVOKE ALL ON FUNCTION public.feed_anonymous_viewer_ids(uuid[])\n  FROM PUBLIC, anon, authenticated;',
+      revoke,
+    ]);
+    expect(split.match(/^GRANT [^;]+;/gm)).toEqual([
+      'GRANT EXECUTE ON FUNCTION public.feed_anonymous_viewer_ids(uuid[])\n  TO service_role;',
+      grant,
+    ]);
+    expect(split.indexOf(revoke)).toBeGreaterThan(split.indexOf('CREATE FUNCTION public.feed_scorecard_viewers('));
+    expect(split).toContain('COMMENT ON FUNCTION public.feed_scorecard_viewers(integer) IS');
+    expect(split).toContain('COMMENT ON FUNCTION public.feed_anonymous_viewer_ids(uuid[]) IS');
+  });
+});

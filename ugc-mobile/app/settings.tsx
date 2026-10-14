@@ -4,6 +4,7 @@ import { ArrowUpRight, Ban, Bell, ChevronRight, CircleHelp, CreditCard, FileText
 import { Linking, Pressable, View } from 'react-native';
 
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
+import { AutoplaySetting } from '@/components/autoplay-setting';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
 import { useAiDataConsent } from '@/lib/ai-data-consent';
 import { formatAppVersionLabel, readAppVersionParts, readUpdateRuntime } from '@/lib/app-version-label';
@@ -85,6 +86,9 @@ export default function SettingsScreen() {
           <AppearanceSetting />
         </>
       ) : null}
+
+      <GroupLabel>Playback</GroupLabel>
+      <AutoplaySetting />
 
       <GroupLabel>Privacy</GroupLabel>
 

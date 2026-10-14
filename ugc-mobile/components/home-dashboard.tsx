@@ -9,6 +9,7 @@ import {
   Play,
   Plus,
   Rocket,
+  Search,
   Sparkles,
   WandSparkles,
 } from 'lucide-react-native';
@@ -17,11 +18,14 @@ import { AccessibilityInfo, ActivityIndicator, Linking, Platform, Pressable, Ref
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
+import { ExploreSearchOverlay } from '@/components/explore-search-overlay';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
+import { FeedUndoNotice, type FeedUndoNoticeModel } from '@/components/feed-undo-notice';
 import { HomeFeedCardView } from '@/components/home-feed-card';
 import { MediaZoomSurface } from '@/components/media-zoom';
 import { HomeSideMenu } from '@/components/home-side-menu';
+import { NewPostsPill } from '@/components/new-posts-pill';
 import { WorkspaceSideMenuGlyph, WORKSPACE_SIDE_MENU_LABEL } from '@/components/workspace-side-menu-gesture-layer';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
 import { Reveal } from '@/components/reveal';
@@ -30,6 +34,7 @@ import { TopScrim } from '@/components/top-scrim';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
 import { useAuth } from '@/lib/auth';
+import { useAutoplayPolicy } from '@/lib/autoplay-preference';
 import { env } from '@/lib/env';
 import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE } from '@/lib/viewer-actions';
 import { feedWindowPaginationPosition } from '@/lib/feed-page-window';
@@ -85,12 +90,19 @@ import {
   SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
   buildShowcaseFeedEventRequest,
   canRecordShowcaseFeedEvent,
+  feedFeedbackUndoMessage,
   filterAnonymousSessionShowcaseFeedItems,
+  findShowcaseFeedItemPositions,
   forgetAnonymousShowcaseFeedRemoval,
   getQualifiedImpressionKey,
   rememberAnonymousShowcaseFeedRemoval,
   removeShowcaseFeedItemsFromInfiniteData,
+  restoreShowcaseFeedItemsToInfiniteData,
+  trackFeedFeedbackRequest,
+  undoFeedFeedback,
   type ShowcaseFeedEventDetails,
+  type ShowcaseFeedFeedbackTarget,
+  type ShowcaseFeedFeedbackType,
 } from '@/lib/showcase-feed-events';
 import {
   enqueueShowcaseFeedEvent,
@@ -126,6 +138,7 @@ import type {
 import { buildShareUrl, getNativeRemixCreateHref } from '@/lib/viewer-actions';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
 import { useActiveGenerationCount } from '@/lib/use-active-generations';
+import { newPostsProbeCategory, newestFeedPostIn, useNewPostsProbe } from '@/lib/use-new-posts-probe';
 
 const TOOL_PREVIEW_IMAGES = {
   kingdom: require('../assets/images/home-previews/image.jpg'),
@@ -163,6 +176,10 @@ const RAIL_PREVIEW_SCRIM: ViewStyle = {
 // Only the cards that can be on screen when a lane first lands rise into
 // place; everything past that mounts plain while scrolling.
 const FEED_REVEAL_COUNT = 6;
+// Where the top bar's row ends below the safe area: the list header's 10pt top
+// padding and the row's 48pt. The "New posts" pill floats under it, clear of
+// the row's controls while the list is at its top.
+const HOME_TOP_BAR_BOTTOM = 10 + 48;
 
 export function HomeDashboard() {
   const theme = useAppTheme();
@@ -196,6 +213,8 @@ export function HomeDashboard() {
   const slideWidth = Math.round(contentWidth * 0.82);
 
   const [menuVisible, setMenuVisible] = useState(false);
+  // The search Explore opens, opened over Home from its top bar.
+  const [searchVisible, setSearchVisible] = useState(false);
   const [activeChipId, setActiveChipId] = useState<HomeFeedChipId>('for-you');
   // Playback lives outside React state: each tile subscribes to its own id,
   // so an election re-renders that tile and never this screen or the list.
@@ -203,6 +222,16 @@ export function HomeDashboard() {
   const [playbackController] = useState(() => createHomeFeedPlaybackController(activationStore));
   const foreground = useAppForeground();
   useEffect(() => playbackController.connect(), [playbackController]);
+  // Autoplay previews (Settings → Playback): on mobile data under Wi-Fi only
+  // the feed prepares no neighbour and hands the playing slot over only at rest.
+  const autoplayPolicy = useAutoplayPolicy();
+  useEffect(() => {
+    playbackController.dispatch({
+      type: 'policyChanged',
+      electOnlyAtRest: autoplayPolicy.electOnlyAtRest,
+      preparedLimit: autoplayPolicy.preparedLimit,
+    });
+  }, [autoplayPolicy.electOnlyAtRest, autoplayPolicy.preparedLimit, playbackController]);
   useEffect(() => {
     if (!isFocused || !foreground) playbackController.dispatch({ type: 'stop' });
   }, [foreground, isFocused, playbackController]);
@@ -234,6 +263,9 @@ export function HomeDashboard() {
   // so the sheet still has something to draw while it leaves.
   const [unlockRemixItem, setUnlockRemixItem] = useState<ShowcaseFeedItem | null>(null);
   const [unlockRemixOpen, setUnlockRemixOpen] = useState(false);
+  // The last Not interested or Hide, offered back for five seconds. One at a
+  // time: a new choice replaces the notice, and the one it replaces stands.
+  const [undoNotice, setUndoNotice] = useState<FeedUndoNoticeModel | null>(null);
 
   const activeChip = HOME_FEED_CHIPS.find((chip) => chip.id === activeChipId) ?? HOME_FEED_CHIPS[0];
   // The reel a card opens reads and pages these very pages (`lane` below).
@@ -315,10 +347,11 @@ export function HomeDashboard() {
   // cards on screen are read again from these whenever the data changes.
   const dwellIndexesRef = useRef<number[]>([]);
   // A stretch on screen counts only while Home is in front: focused, with the
-  // app in the foreground. Leaving ends it, and the dwell goes then.
+  // app in the foreground and no search open over the cards. Leaving ends it,
+  // and the dwell goes then.
   useEffect(() => {
-    recordAttention(attention.setActive(isFocused && foreground, Date.now()));
-  }, [attention, foreground, isFocused, recordAttention]);
+    recordAttention(attention.setActive(isFocused && foreground && !searchVisible, Date.now()));
+  }, [attention, foreground, isFocused, recordAttention, searchVisible]);
   useEffect(() => () => recordAttention(attention.setActive(false, Date.now())), [attention, recordAttention]);
 
   // Tints the dock from the card nearest it, and hands the neutral dock back
@@ -495,6 +528,20 @@ export function HomeDashboard() {
   // Anywhere else the shift is kept, so every background refetch left the feed
   // permanently pushed down by another notch.
   const [pullRefreshing, setPullRefreshing] = useState(false);
+  // "New posts" (product decision D2): a ranked lane is never refetched under
+  // the reader on a return to the app. Back five minutes or more after the lane
+  // was fetched, the server is asked whether it has a newer post, and the pill
+  // offers the refresh; nothing is fetched into the lane before the tap. Recent
+  // is unranked and keeps its own refetch.
+  const newestHeld = newestFeedPostIn(feedQuery.data);
+  const newPosts = useNewPostsProbe({
+    api,
+    category: newPostsProbeCategory(activeChip.filters.category),
+    enabled: isFocused && activeChip.filters.sort !== 'recent',
+    laneFetchedAt: feedQuery.dataUpdatedAt,
+    newestKnownPublishedAt: newestHeld.publishedAt,
+    newestKnownPostId: newestHeld.postId,
+  });
 
   const { toggleSave } = useShowcaseSaveMutation();
 
@@ -547,16 +594,32 @@ export function HomeDashboard() {
     requestNextPage();
   };
 
-  const handleRefresh = () => {
-    haptic.light();
-    setPullRefreshing(true);
+  // The lane cut back to its first page and fetched again: what a pull to
+  // refresh and the "New posts" pill both do.
+  const refreshFirstPage = () => {
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
     queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
       if (!current?.pages.length) return current;
       return { pages: current.pages.slice(0, 1), pageParams: [{ offset: 0 }] };
     });
-    void feedQuery.refetch().finally(() => setPullRefreshing(false));
+    return feedQuery.refetch();
+  };
+
+  const handleRefresh = () => {
+    haptic.light();
+    setPullRefreshing(true);
+    void refreshFirstPage().finally(() => setPullRefreshing(false));
+  };
+
+  // The pill's tap lands the reader on the lane's top and refreshes it there.
+  // `pullRefreshing` stays out of it: no pull is behind this refresh, and a
+  // control engaged without one shifts the list (see above).
+  const showNewPosts = () => {
+    haptic.light();
+    newPosts.dismiss();
+    feedRef.current?.scrollToOffset({ offset: 0, animated: false });
+    void refreshFirstPage();
   };
 
   const selectChip = (chipId: HomeFeedChipId) => {
@@ -727,14 +790,22 @@ export function HomeDashboard() {
       .finally(() => setRemixingItemId(null));
   };
 
-  const applyFeedFeedback = (item: ShowcaseFeedItem | null, eventType: 'not_interested' | 'hide_creator') => {
+  const dismissUndoNotice = (id: string) => setUndoNotice((current) => (current?.id === id ? null : current));
+
+  const applyFeedFeedback = (item: ShowcaseFeedItem | null, eventType: ShowcaseFeedFeedbackType) => {
     if (!item) return;
     if (eventType === 'hide_creator' && (!item.creator.id || item.creator.id === user?.id)) return;
 
     const target = eventType === 'hide_creator' ? { creatorId: item.creator.id } : { postId: item.id };
+    const feedbackTarget: ShowcaseFeedFeedbackTarget = { ...target, feedbackType: eventType };
     const cachedFeeds = queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({
       queryKey: viewerFeedQueryKey,
     });
+    // Where each post sat in each lane, read before the removal: Undo puts it
+    // back at the index it left (product decision D7).
+    const positions = cachedFeeds.map(([cachedQueryKey, cachedData]) => (
+      [cachedQueryKey, findShowcaseFeedItemPositions(cachedData, target)] as const
+    ));
 
     if (!user) rememberAnonymousShowcaseFeedRemoval(target);
 
@@ -756,11 +827,15 @@ export function HomeDashboard() {
       { metadata: { surface: 'home-feed' } }
     );
 
-    void runtime.api.recordShowcaseFeedEvent(request)
-      .then(() => AccessibilityInfo.announceForAccessibility(
-        eventType === 'hide_creator' ? 'Creator hidden from your feed.' : 'Post removed. Your feed will adapt.'
-      ))
+    // Set once the choice itself has failed and its post is back: an Undo
+    // waiting on it then has nothing left to say.
+    const outcome = { failed: false };
+    // Tracked so an Undo waits for this request, and announced by the notice
+    // below rather than on success (VoiceOver would say the choice twice).
+    void trackFeedFeedbackRequest(feedbackTarget, runtime.api.recordShowcaseFeedEvent(request))
       .catch(() => {
+        outcome.failed = true;
+        dismissUndoNotice(request.clientEventId);
         if (!user) forgetAnonymousShowcaseFeedRemoval(target);
         cachedFeeds.forEach(([cachedQueryKey, cachedData]) => {
           queryClient.setQueryData(cachedQueryKey, cachedData);
@@ -771,6 +846,35 @@ export function HomeDashboard() {
           message: 'The post was restored. Check your connection and try again.',
         });
       });
+
+    setUndoNotice({
+      id: request.clientEventId,
+      message: feedFeedbackUndoMessage(eventType),
+      // The post comes back only once the server has taken the choice back; a
+      // device with no session takes back its own memory of it instead.
+      onUndo: () => {
+        void undoFeedFeedback(api, feedbackTarget, { hasSession: Boolean(identityUserId) })
+          .then(() => {
+            positions.forEach(([cachedQueryKey, lanePositions]) => {
+              if (!lanePositions.length) return;
+              queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(
+                cachedQueryKey,
+                (current) => restoreShowcaseFeedItemsToInfiniteData(current, lanePositions)
+              );
+            });
+          })
+          .catch(() => {
+            if (outcome.failed) return;
+            haptic.error();
+            showMessageDialog({
+              title: 'Couldn’t undo',
+              message: eventType === 'hide_creator'
+                ? 'The creator is still hidden. Check your connection and try again.'
+                : 'The post is still hidden. Check your connection and try again.',
+            });
+          });
+      },
+    });
   };
 
   const requireModerationSignIn = () => {
@@ -865,7 +969,7 @@ export function HomeDashboard() {
     creator: item.creator,
     canHideCreator: canHideFeedCreator(item.creator.id, user?.id),
     viewerIsOwner: isOwnFeedPost(item.creator.id, user?.id),
-    sessionOnly: !user,
+    viewerKind: user ? 'member' : 'guest',
     onNotInterested: () => applyFeedFeedback(item, 'not_interested'),
     onHideCreator: () => applyFeedFeedback(item, 'hide_creator'),
     onReportContent: () => reportFeedbackContent(item),
@@ -969,7 +1073,11 @@ export function HomeDashboard() {
         ListHeaderComponent={(
           <View style={{ gap: 18, paddingTop: 10, paddingBottom: 6 }}>
             <View style={{ paddingHorizontal: horizontalPadding }}>
-              <HomeTopBar credits={credits} onMenuPress={() => setMenuVisible(true)} />
+              <HomeTopBar
+                credits={credits}
+                onMenuPress={() => setMenuVisible(true)}
+                onSearchPress={() => setSearchVisible(true)}
+              />
             </View>
 
             <TopSlider
@@ -1042,6 +1150,20 @@ export function HomeDashboard() {
 
       <TopScrim topInset={topInset} />
 
+      <NewPostsPill
+        visible={newPosts.hasNewer}
+        onPress={showNewPosts}
+        topOffset={topInset + HOME_TOP_BAR_BOTTOM + appTheme.spacing.compact}
+      />
+
+      <FeedUndoNotice
+        notice={undoNotice}
+        onDismiss={dismissUndoNotice}
+        bottomOffset={tabBarMetrics.contentBottomPadding}
+      />
+
+      <ExploreSearchOverlay api={api} visible={searchVisible} onClose={() => setSearchVisible(false)} />
+
       <FeedFeedbackSheet
         creatorLabel={feedbackItem?.creator.username || feedbackItem?.creator.name || 'this creator'}
         hideLabel={hideCreatorLabel(feedbackItem?.creator ?? {})}
@@ -1054,7 +1176,7 @@ export function HomeDashboard() {
         onReportContent={() => reportFeedbackContent(feedbackItem)}
         onReportUser={() => reportFeedbackUser(feedbackItem)}
         postTitle={feedbackItem?.title || 'this post'}
-        sessionOnly={!user}
+        viewerKind={user ? 'member' : 'guest'}
         visible={Boolean(feedbackItem)}
       />
 
@@ -1102,7 +1224,15 @@ export function HomeDashboard() {
   );
 }
 
-function HomeTopBar({ credits, onMenuPress }: { credits: number | null; onMenuPress: () => void }) {
+function HomeTopBar({
+  credits,
+  onMenuPress,
+  onSearchPress,
+}: {
+  credits: number | null;
+  onMenuPress: () => void;
+  onSearchPress: () => void;
+}) {
   const theme = useAppTheme();
   return (
     <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
@@ -1126,6 +1256,18 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number | null; onMenuPr
       <View style={{ flex: 1, minWidth: 0 }} />
 
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+        {/* Explore's search, a tap from the feed (product decision E1). The
+            overlay focuses its field as it opens. */}
+        <TopBarControl
+          accessibilityLabel="Search creators, posts, and recipes"
+          onPress={() => {
+            haptic.light();
+            onSearchPress();
+          }}
+          style={{ width: 48 }}
+        >
+          <Search size={appTheme.icon.default} color={theme.colors.text} />
+        </TopBarControl>
         <TopBarControl
           accessibilityLabel="Open credits"
           onPress={() => {
