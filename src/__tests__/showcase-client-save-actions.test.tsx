@@ -1,5 +1,5 @@
 import type { AnchorHTMLAttributes, ComponentProps, HTMLAttributes, ReactNode } from 'react';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseClient from '@/app/showcase/ShowcaseClient';
@@ -12,6 +12,7 @@ import {
   SHOWCASE_PAGE_SIZE,
   type ShowcaseFeedItem,
   type ShowcaseFeedPage,
+  type ShowcaseMediaItem,
   type ShowcaseSort,
 } from '@/lib/showcase';
 import type { SourceToolOption } from '@/lib/source-tools';
@@ -173,7 +174,10 @@ describe('ShowcaseClient save actions', () => {
     disconnect: ReturnType<typeof vi.fn>;
     observedTargets: Element[];
     rootMargin: string;
+    thresholds: readonly number[];
     trigger: (isIntersecting?: boolean, entry?: Partial<IntersectionObserverEntry>) => void;
+    /** One report of several targets, as a browser batches them. */
+    deliver: (entries: Array<Partial<IntersectionObserverEntry>>) => void;
   }> = [];
 
   beforeEach(() => {
@@ -214,12 +218,18 @@ describe('ShowcaseClient save actions', () => {
       options?: IntersectionObserverInit
     ) {
       const observedTargets: Element[] = [];
+      const thresholds = Array.isArray(options?.threshold)
+        ? options.threshold
+        : [options?.threshold ?? 0];
       const observer = {
         root: null,
         rootMargin: options?.rootMargin ?? '0px',
-        thresholds: [0],
+        thresholds,
         observe: vi.fn((target: Element) => { observedTargets.push(target); }),
-        unobserve: vi.fn(),
+        unobserve: vi.fn((target: Element) => {
+          const index = observedTargets.indexOf(target);
+          if (index >= 0) observedTargets.splice(index, 1);
+        }),
         disconnect: vi.fn(),
         takeRecords: vi.fn(() => []),
       } satisfies IntersectionObserver;
@@ -229,6 +239,7 @@ describe('ShowcaseClient save actions', () => {
         disconnect: observer.disconnect,
         observedTargets,
         rootMargin: observer.rootMargin,
+        thresholds,
         trigger: (isIntersecting = true, entry = {}) => {
           callback([
             {
@@ -237,6 +248,9 @@ describe('ShowcaseClient save actions', () => {
               ...entry,
             } as unknown as IntersectionObserverEntry,
           ], observer);
+        },
+        deliver: (entries) => {
+          callback(entries as unknown as IntersectionObserverEntry[], observer);
         },
       });
 
@@ -651,6 +665,272 @@ describe('ShowcaseClient save actions', () => {
 
       expect(new URLSearchParams(window.location.search).get('post')).toBe('post-1');
       expect(wayBack()).toBe('/showcase?category=video&sort=recent');
+    });
+  });
+
+  // Where nothing hovers, Explore plays one tile's clip, the one most in view,
+  // as Home plays its cards' and the app's Explore its one preview. A phone
+  // used to see still tiles until one was tapped open.
+  describe('the one clip the grid plays where nothing hovers', () => {
+    /** `(hover: none)` and reduced motion as the page reads them; `set` changes them as a device would. */
+    const stubViewport = (initial: { hover: boolean; reducedMotion?: boolean }) => {
+      const preferences = { reducedMotion: false, ...initial };
+      const listeners = new Set<() => void>();
+      vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+        get matches() {
+          return (!preferences.hover && query === '(hover: none)')
+            || (preferences.reducedMotion && query === '(prefers-reduced-motion: reduce)');
+        },
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn((_type: string, listener: () => void) => { listeners.add(listener); }),
+        removeEventListener: vi.fn((_type: string, listener: () => void) => { listeners.delete(listener); }),
+        dispatchEvent: vi.fn(),
+      })));
+      return {
+        set: (next: Partial<typeof preferences>) => {
+          Object.assign(preferences, next);
+          act(() => listeners.forEach((listener) => listener()));
+        },
+      };
+    };
+    const clipTile = (n: number, media: Partial<ShowcaseMediaItem> = {}) => createShowcaseItem({
+      id: `clip-${n}`,
+      generationId: `clip-gen-${n}`,
+      title: `Clip ${n}`,
+      mediaUrl: `https://example.com/clip-${n}.mp4`,
+      mediaKind: 'video',
+      category: 'video',
+      mediaItems: [{
+        id: `clip-${n}-media`,
+        url: `https://example.com/clip-${n}.mp4`,
+        feedStreamUrl: `https://example.com/clip-${n}-teaser.mp4`,
+        mediaKind: 'video',
+        contentType: 'video/mp4',
+        originalName: `clip-${n}.mp4`,
+        width: 1080,
+        height: 1350,
+        durationSeconds: 8,
+        sortOrder: 0,
+        ...media,
+      }],
+    });
+    const postIdOf = (element: Element) => (
+      element.closest('[data-showcase-post-id]')?.getAttribute('data-showcase-post-id') ?? null
+    );
+    // The grid's own observer reports a tile's share at many steps; a
+    // carousel's reports at three, an impression's at one.
+    const gridObservers = () => intersectionObservers.filter((observer) => observer.thresholds.length > 3);
+    const gridObserver = () => {
+      const observer = gridObservers().at(-1);
+      if (!observer) throw new Error('the grid measures no tile');
+      return observer;
+    };
+    const measuredTiles = () => gridObserver().observedTargets.map(postIdOf);
+    const reportShares = (shares: Record<string, number>) => {
+      const observer = gridObserver();
+      const entries = Object.entries(shares).map(([postId, intersectionRatio]) => {
+        const target = observer.observedTargets.find((frame) => postIdOf(frame) === postId);
+        if (!target) throw new Error(`${postId} is not measured`);
+        return { target, isIntersecting: intersectionRatio > 0, intersectionRatio };
+      });
+      act(() => observer.deliver(entries));
+    };
+    // A carousel plays only while its own report has 0.45 of it in view. Here
+    // every carousel's has, so the grid's choice alone decides.
+    const showEveryCarousel = () => {
+      act(() => {
+        intersectionObservers
+          .filter((observer) => observer.thresholds.includes(0.45))
+          .forEach((observer) => observer.trigger(true, { intersectionRatio: 0.7 }));
+      });
+    };
+    // A grid clip plays once its carousel attaches the stream. The reel draws
+    // no impression boundary, so these are the grid's tiles alone.
+    const playingClips = () => Array.from(
+      document.querySelectorAll('[data-showcase-post-id] video[src]'),
+      postIdOf
+    );
+    const gridVideo = (postId: string) => {
+      const video = document.querySelector<HTMLVideoElement>(`[data-showcase-post-id="${postId}"] video`);
+      if (!video) throw new Error(`${postId} draws no video`);
+      return video;
+    };
+
+    beforeEach(() => {
+      vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+      vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      // Unmounted while jsdom's media methods are still stubbed: it has no
+      // pause() of its own, and each clip pauses as it goes.
+      cleanup();
+      Reflect.deleteProperty(window.navigator, 'connection');
+    });
+
+    it('plays the clip most in view, and hands it on as the reader scrolls', () => {
+      stubViewport({ hover: false });
+      renderShowcase([
+        clipTile(1),
+        clipTile(2),
+        createShowcaseItem({ id: 'picture', generationId: 'picture-gen', title: 'Picture' }),
+        clipTile(3),
+        // The server allowed this clip no stream: poster only.
+        clipTile(4, { feedStreamUrl: null }),
+      ]);
+      showEveryCarousel();
+
+      // One observer measures every tile that opens on a clip it may stream.
+      expect(gridObservers()).toHaveLength(1);
+      expect(measuredTiles()).toEqual(['clip-1', 'clip-2', 'clip-3']);
+      expect(playingClips()).toEqual([]);
+
+      reportShares({ 'clip-1': 0.6, 'clip-2': 1, 'clip-3': 0.2 });
+      expect(playingClips()).toEqual(['clip-2']);
+      expect(vi.mocked(HTMLMediaElement.prototype.play).mock.contexts).toEqual([gridVideo('clip-2')]);
+
+      // Scrolling on, the third comes most into view. The turn passing draws
+      // the two tiles it passes between, and no other.
+      tileRenders.mockClear();
+      reportShares({ 'clip-1': 0, 'clip-2': 0.4, 'clip-3': 0.9 });
+      expect(playingClips()).toEqual(['clip-3']);
+      expect(new Set(tileRenders.mock.calls.map(([postId]) => postId))).toEqual(new Set(['clip-2', 'clip-3']));
+
+      // A step that leaves the same tile ahead draws nothing.
+      tileRenders.mockClear();
+      reportShares({ 'clip-3': 1, 'clip-2': 0.3 });
+      expect(playingClips()).toEqual(['clip-3']);
+      expect(tileRenders).not.toHaveBeenCalled();
+
+      // The playing tile leaves the screen: the next most in view takes over.
+      reportShares({ 'clip-3': 0 });
+      expect(playingClips()).toEqual(['clip-2']);
+    });
+
+    it('gives a tie to the first in the grid, and keeps a playing clip through one', () => {
+      stubViewport({ hover: false });
+      renderShowcase([clipTile(1), clipTile(2)]);
+      showEveryCarousel();
+
+      // A row's tiles cross every step together.
+      reportShares({ 'clip-1': 0.5, 'clip-2': 0.5 });
+      expect(playingClips()).toEqual(['clip-1']);
+
+      reportShares({ 'clip-1': 0.4, 'clip-2': 0.6 });
+      expect(playingClips()).toEqual(['clip-2']);
+
+      reportShares({ 'clip-1': 0.7, 'clip-2': 0.7 });
+      expect(playingClips()).toEqual(['clip-2']);
+    });
+
+    it('plays none while Save-Data is on, as Home, and the chosen clip once it is off', () => {
+      stubViewport({ hover: false });
+      const connectionListeners = new Set<() => void>();
+      const connection = {
+        saveData: true,
+        addEventListener: vi.fn((_type: string, listener: () => void) => { connectionListeners.add(listener); }),
+        removeEventListener: vi.fn((_type: string, listener: () => void) => { connectionListeners.delete(listener); }),
+      };
+      Object.defineProperty(window.navigator, 'connection', { configurable: true, value: connection });
+      renderShowcase([clipTile(1), clipTile(2)]);
+      showEveryCarousel();
+
+      reportShares({ 'clip-1': 1, 'clip-2': 0.5 });
+      expect(playingClips()).toEqual([]);
+      expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+
+      connection.saveData = false;
+      act(() => connectionListeners.forEach((listener) => listener()));
+      expect(playingClips()).toEqual(['clip-1']);
+    });
+
+    it('plays none while the reader asks for reduced motion, as Home, and the chosen clip once they do not', () => {
+      const viewport = stubViewport({ hover: false, reducedMotion: true });
+      renderShowcase([clipTile(1), clipTile(2)]);
+      showEveryCarousel();
+
+      reportShares({ 'clip-1': 0.5, 'clip-2': 1 });
+      expect(playingClips()).toEqual([]);
+      expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+
+      viewport.set({ reducedMotion: false });
+      expect(playingClips()).toEqual(['clip-2']);
+    });
+
+    it('leaves pointers to hover as before: no tile is measured or played until one is hovered', () => {
+      stubViewport({ hover: true });
+      renderShowcase([clipTile(1), clipTile(2)]);
+      showEveryCarousel();
+
+      expect(gridObservers()).toEqual([]);
+      expect(playingClips()).toEqual([]);
+
+      const hovered = gridVideo('clip-2').closest('[data-showcase-media-viewport]');
+      fireEvent.mouseEnter(hovered!);
+      expect(playingClips()).toEqual(['clip-2']);
+      fireEvent.mouseLeave(hovered!);
+      expect(playingClips()).toEqual([]);
+    });
+
+    // After hydration the query turns true a render later (its server answer
+    // is false), once the first page's tiles are already drawn.
+    it('measures the tiles already drawn once the query turns, and stops when a hovering pointer takes over', () => {
+      const viewport = stubViewport({ hover: true });
+      renderShowcase([clipTile(1), clipTile(2)]);
+      showEveryCarousel();
+      expect(gridObservers()).toEqual([]);
+
+      viewport.set({ hover: false });
+      expect(measuredTiles()).toEqual(['clip-1', 'clip-2']);
+      reportShares({ 'clip-1': 0.3, 'clip-2': 0.8 });
+      expect(playingClips()).toEqual(['clip-2']);
+
+      viewport.set({ hover: true });
+      expect(gridObserver().disconnect).toHaveBeenCalled();
+      expect(playingClips()).toEqual([]);
+    });
+
+    it('plays no tile under the open reel, and the chosen clip again once it closes', async () => {
+      // Back from the reel as the browser does it: the URL loses `post`, then popstate.
+      vi.spyOn(window.history, 'back').mockImplementation(() => {
+        window.history.replaceState(null, '', '/showcase');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      stubViewport({ hover: false });
+      renderShowcase([clipTile(1), clipTile(2)]);
+      showEveryCarousel();
+      reportShares({ 'clip-1': 1, 'clip-2': 0.3 });
+      expect(playingClips()).toEqual(['clip-1']);
+
+      fireEvent.click(gridVideo('clip-2'));
+      const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+      // As the other reel tests do, act in the reel once its rows are drawn.
+      expect(await within(reel).findByRole('button', { name: /more actions for clip 2/i })).toBeInTheDocument();
+      expect(playingClips()).toEqual([]);
+
+      fireEvent.click(within(reel).getByRole('button', { name: 'Explore' }));
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
+      });
+      expect(playingClips()).toEqual(['clip-1']);
+    });
+
+    it('hands the turn on at once when the playing tile leaves the grid', () => {
+      stubViewport({ hover: false });
+      renderShowcase([clipTile(1), clipTile(2), clipTile(3)]);
+      showEveryCarousel();
+      reportShares({ 'clip-1': 1, 'clip-2': 0.6, 'clip-3': 0.2 });
+      expect(playingClips()).toEqual(['clip-1']);
+
+      fireEvent.click(screen.getByRole('button', { name: /more actions for clip 1/i }));
+      fireEvent.click(screen.getByRole('menuitem', { name: /not interested/i }));
+
+      // No report has come since the tile went.
+      expect(measuredTiles()).toEqual(['clip-2', 'clip-3']);
+      expect(playingClips()).toEqual(['clip-2']);
     });
   });
 

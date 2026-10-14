@@ -31,6 +31,7 @@ import {
     type ShowcaseCategory,
     type ShowcaseFeedItem,
     type ShowcaseFeedPage,
+    type ShowcaseMediaItem,
     type ShowcasePriorityPosterData,
     type ShowcaseResourceFilter,
     type ShowcaseSort,
@@ -69,6 +70,7 @@ import {
     type ShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
 import { scheduleIdleWork } from '@/lib/schedule-idle-work';
+import { useMediaQuery } from '@/lib/use-media-query';
 
 function ShowcaseReelLoadingFallback() {
     return (
@@ -280,6 +282,129 @@ function buildShowcaseLanePath(
     return params.size > 0 ? `${pathname}?${params.toString()}` : pathname;
 }
 
+/**
+ * Where nothing hovers, Explore plays one tile's clip: a phone saw still tiles
+ * while Home played its cards and the app's Explore its one preview. Each step
+ * reports a tile's share of the screen again, so the choice follows the scroll.
+ */
+const VIDEO_TILE_VISIBILITY_STEPS = Array.from({ length: 11 }, (_, step) => step / 10);
+
+interface VideoTileVisibility {
+    id: string;
+    /** The frame's share in view at its last reported step; 0 off screen. */
+    ratio: number;
+}
+
+/**
+ * A tile opens on its cover, and the carousel streams a feed clip only where
+ * the server allowed one (a null `feedStreamUrl` is poster only) and the
+ * source is still there. A tile without one never takes the playing turn.
+ */
+function coverPlaysInGrid(cover: ShowcaseMediaItem | undefined): boolean {
+    return Boolean(
+        cover
+        && cover.mediaKind === 'video'
+        && !cover.sourceUnavailableAt
+        && (cover.feedStreamUrl === undefined || cover.feedStreamUrl)
+    );
+}
+
+/**
+ * The tile most in view. A row's tiles share a height and cross each step
+ * together, so a tie keeps the tile already playing, else goes to the first
+ * in the grid.
+ */
+function pickMostVisibleVideoTile(
+    tiles: ReadonlyMap<Element, VideoTileVisibility>,
+    playingId: string | null
+): string | null {
+    let best: { frame: Element; tile: VideoTileVisibility } | null = null;
+    for (const [frame, tile] of tiles) {
+        if (tile.ratio <= 0) {
+            continue;
+        }
+        const wins = !best
+            || tile.ratio > best.tile.ratio
+            || (tile.ratio === best.tile.ratio && best.tile.id !== playingId && (
+                tile.id === playingId
+                || Boolean(frame.compareDocumentPosition(best.frame) & Node.DOCUMENT_POSITION_FOLLOWING)
+            ));
+        if (wins) {
+            best = { frame, tile };
+        }
+    }
+    return best?.tile.id ?? null;
+}
+
+/**
+ * The tile whose clip the grid plays (none until one is in view, and none
+ * while `enabled` is off), and what a tile whose cover is a clip calls from
+ * its ref to hand its frame to the one observer that measures them all. The
+ * carousel still refuses motion under Save-Data and reduced motion, as on Home.
+ */
+function useMostVisibleVideoTile(enabled: boolean) {
+    const [playingId, setPlayingId] = useState<string | null>(null);
+    const playingIdRef = useRef<string | null>(null);
+    const tilesRef = useRef(new Map<Element, VideoTileVisibility>());
+    const observerRef = useRef<IntersectionObserver | null>(null);
+
+    const elect = useCallback(() => {
+        const nextId = pickMostVisibleVideoTile(tilesRef.current, playingIdRef.current);
+        if (nextId === playingIdRef.current) {
+            return;
+        }
+        playingIdRef.current = nextId;
+        setPlayingId(nextId);
+    }, []);
+
+    useEffect(() => {
+        if (!enabled || typeof IntersectionObserver === 'undefined') {
+            return;
+        }
+
+        const tiles = tilesRef.current;
+        const observer = new IntersectionObserver((entries) => {
+            for (const entry of entries) {
+                const tile = tiles.get(entry.target);
+                if (tile) {
+                    tile.ratio = entry.isIntersecting ? entry.intersectionRatio : 0;
+                }
+            }
+            elect();
+        }, { threshold: VIDEO_TILE_VISIBILITY_STEPS });
+        observerRef.current = observer;
+        // Tiles drawn before the observer (the first page, at hydration) are
+        // measured from here; later ones as they mount.
+        tiles.forEach((_tile, frame) => observer.observe(frame));
+
+        return () => {
+            observer.disconnect();
+            observerRef.current = null;
+            tiles.forEach((tile) => {
+                tile.ratio = 0;
+            });
+            elect();
+        };
+    }, [elect, enabled]);
+
+    const observeVideoTile = useCallback((id: string, frame: Element) => {
+        const tiles = tilesRef.current;
+        tiles.set(frame, { id, ratio: 0 });
+        observerRef.current?.observe(frame);
+        return () => {
+            tiles.delete(frame);
+            observerRef.current?.unobserve(frame);
+            // A playing tile that leaves the grid (hidden, reported, another
+            // lane) hands its turn on at once, not at the next scroll step.
+            if (playingIdRef.current === id) {
+                elect();
+            }
+        };
+    }, [elect]);
+
+    return [playingId, observeVideoTile] as const;
+}
+
 interface ShowcaseGridCardProps {
     item: ShowcaseFeedItem;
     index: number;
@@ -292,6 +417,9 @@ interface ShowcaseGridCardProps {
     viewerId: string | null;
     /** The lane the tile's links come back to (`buildShowcaseLanePath`). */
     returnTo: string;
+    /** This tile's clip is the one the grid plays (`useMostVisibleVideoTile`). */
+    autoPlayVideo: boolean;
+    observeVideoTile: (id: string, frame: Element) => () => void;
     onOpenPreview: (item: ShowcaseFeedItem, mediaIndex: number) => void;
     onToggleSave: (id: string) => void;
     onFeedback: (
@@ -323,6 +451,8 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
     accessToken,
     viewerId,
     returnTo,
+    autoPlayVideo,
+    observeVideoTile,
     onOpenPreview,
     onToggleSave,
     onFeedback,
@@ -334,6 +464,11 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
     const mediaItems = useMemo(() => getShowcaseItemMediaItems(item), [item]);
     const isMixedMedia = new Set(mediaItems.map((mediaItem) => mediaItem.mediaKind)).size > 1;
     const isOwnPost = Boolean(viewerId && item.creator.id === viewerId);
+    const coverPlays = coverPlaysInGrid(mediaItems[0]);
+    const measureVideoFrame = useCallback(
+        (frame: HTMLDivElement | null) => (frame && coverPlays ? observeVideoTile(item.id, frame) : undefined),
+        [coverPlays, item.id, observeVideoTile]
+    );
 
     return (
         <QualifiedImpressionBoundary
@@ -345,13 +480,14 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
         >
             {/* Pinterest Style Card Frame */}
             <div className="group relative overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition duration-200 hover:border-[rgba(255,122,89,0.28)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.42)] focus-within:border-[rgba(255,122,89,0.34)]">
-                <div className="relative overflow-hidden bg-black">
+                <div ref={measureVideoFrame} className="relative overflow-hidden bg-black">
                     {mediaItems.length > 0 ? (
                         <ShowcaseMediaCarousel
                             mediaItems={mediaItems}
                             title={item.title}
                             priority={isPriority}
                             priorityPoster={priorityPoster}
+                            autoPlayVideo={autoPlayVideo || undefined}
                             onOpen={(mediaIndex) => onOpenPreview(item, mediaIndex)}
                         />
                     ) : (
@@ -823,6 +959,13 @@ export default function ShowcaseClient({
     const priorityMediaItemId = renderedItems.find((item) => (
         item.postFormat !== 'text' && getShowcaseItemMediaItems(item).length > 0
     ))?.id ?? null;
+    // Where nothing hovers, one tile's clip plays, as on Home (FeedClient's
+    // `touchAutoplay`); pointers keep hover and focus. None while the reel is
+    // open over the grid: it plays its own, and a tile under it would stream
+    // unseen.
+    const touchAutoplay = useMediaQuery('(hover: none)');
+    const [mostVisibleVideoTileId, observeVideoTile] = useMostVisibleVideoTile(touchAutoplay);
+    const playingTileId = selectedItemId ? null : mostVisibleVideoTileId;
 
     useEffect(() => {
         const itemsWithSavedState = items.map((item) => ({
@@ -2073,6 +2216,8 @@ export default function ShowcaseClient({
                                     accessToken={accessToken}
                                     viewerId={userId}
                                     returnTo={laneReturnPath}
+                                    autoPlayVideo={item.id === playingTileId}
+                                    observeVideoTile={observeVideoTile}
                                     onOpenPreview={openPreview}
                                     onToggleSave={handleToggleSave}
                                     onFeedback={handleFeedFeedback}
