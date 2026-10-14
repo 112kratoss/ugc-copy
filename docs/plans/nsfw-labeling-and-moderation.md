@@ -25,7 +25,7 @@ Current store declarations, for the age-screen work: IARC rating Everyone / PEGI
 
 Creators can mark a post “NSFW / mature” while composing or editing on web and mobile. Quick publish on web can add the label; the full editor can remove it. Older clients that omit the field preserve the stored label. The existing prohibited-content checks and reporting/takedown rules still apply.
 
-Public feed, creator, search, saved-post and standalone post responses replace labeled media, title, caption, prompt and recipe previews with a warning. The cover is opaque rather than a CSS blur of a downloaded original. Labeled posts are excluded from For You recommendations and marketplace lists. Owners can still access their work in the editor.
+Public feed, creator, saved-post and standalone post responses replace labeled media, title, caption, prompt and recipe previews with a warning. The cover is opaque rather than a CSS blur of a downloaded original. Labeled posts are excluded from For You recommendations, marketplace lists and search results (migration `20261014053048`: a hidden title or prompt can no longer be matched). Owners can still access their work in the editor.
 
 Viewing requires a registered active account, website opt-in with an 18+ confirmation, and a separate reveal action for each post. The mobile app links to the website for the preference. Reveal responses are private/no-store, bound to the current content revision, and expire after ten minutes. Hiding a post, leaving the page/app, or expiration clears the displayed original; turning off the website preference revokes backend grants. Revealed content is never written to shared feed caches. The mobile persisted feed cache version changes to discard pre-feature snapshots.
 

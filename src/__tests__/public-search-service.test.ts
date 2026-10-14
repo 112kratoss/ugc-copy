@@ -53,6 +53,68 @@ describe('public search service', () => {
     });
   });
 
+  it('never returns an NSFW-labelled post on Top or Posts, keeps text posts, and pages from the ranked rows', async () => {
+    // search_public_posts leaves labelled posts out in SQL. The second row
+    // stands for a post labelled between the ranked read and hydration, which
+    // hydration covers ("Mature content") instead of dropping.
+    const rows = [
+      { post_id: '11111111-1111-4111-8111-111111111111', creator_user_id: 'creator-1', search_score: 9 },
+      { post_id: '22222222-2222-4222-8222-222222222222', creator_user_id: 'creator-2', search_score: 8 },
+      { post_id: '33333333-3333-4333-8333-333333333333', creator_user_id: 'creator-3', search_score: 7 },
+      { post_id: '44444444-4444-4444-8444-444444444444', creator_user_id: 'creator-4', search_score: 6 },
+    ];
+    const [mediaPost, labelledPost, textPost, laterPost] = rows.map((row) => row.post_id);
+    const rpc = vi.fn(async (name: string, args: { p_limit: number }) => {
+      if (name === 'search_public_creators') return { data: [], error: null };
+      if (name !== 'search_public_posts') throw new Error(`Unexpected RPC ${name}`);
+      return { data: rows.slice(0, args.p_limit), error: null };
+    });
+    const getShowcaseFeedItemsByPostIds = vi.fn(async ({ postIds }: { postIds: string[] }) => postIds.map((id) => (
+      id === labelledPost
+        ? { id, isNsfw: true, nsfwRevealed: false, title: 'Mature content', postFormat: 'text' }
+        : { id, isNsfw: false, postFormat: id === textPost ? 'text' : 'media' }
+    )));
+    const search = (type: 'top' | 'posts', viewerUserId: string | null) => searchPublicContent({
+      query: 'lantern',
+      normalizedQuery: 'lantern',
+      type,
+      cursor: null,
+      limit: 3,
+      viewerUserId,
+      countryCode: null,
+    }, {
+      createServiceClient: vi.fn(() => ({ rpc }) as unknown as SupabaseClient),
+      getMarketplaceResourceList: vi.fn(async () => ({
+        items: [],
+        pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 6 },
+      })) as never,
+      getShowcaseFeedItemsByPostIds: getShowcaseFeedItemsByPostIds as never,
+      loadBlockedCreatorIds: vi.fn(async () => new Set()) as never,
+    });
+
+    // Signed out on Top and signed in on Posts: the label hides a post from everyone.
+    const top = await search('top', null);
+    const posts = await search('posts', 'viewer-1');
+
+    // The labelled post reached hydration in both, so its absence below is the filter's.
+    expect(getShowcaseFeedItemsByPostIds.mock.calls.map(([options]) => options.postIds)).toEqual([
+      [mediaPost, labelledPost, textPost, laterPost],
+      [mediaPost, labelledPost, textPost],
+    ]);
+    expect(top.posts.items.map((item) => item.id)).toEqual([mediaPost, textPost, laterPost]);
+    expect(top.posts.nextCursor).toBeNull();
+    expect(posts.posts.items.map((item) => item.id)).toEqual([mediaPost, textPost]);
+    // The keyset cursor is still the page's last ranked row, so the next page
+    // continues after it: nothing repeats and nothing else is skipped.
+    expect(decodePublicSearchCursor(posts.posts.nextCursor, 'posts')).toEqual({
+      version: 1,
+      type: 'posts',
+      score: 7,
+      id: textPost,
+    });
+    expect([...top.posts.items, ...posts.posts.items].some((item) => item.isNsfw)).toBe(false);
+  });
+
   it('removes blocked creators before any result reaches the response', async () => {
     const rpc = vi.fn(async () => ({
       data: [
