@@ -29,9 +29,10 @@ describe('the reel reads the lane it was opened from', () => {
   });
 
   it('pages on from its last post and closes the lane at its end', () => {
-    expect(slice('onEndReached={grid?.hasNextPage ? () => {', '} : undefined}')).toContain('laneSource.fetchNextPage();');
-    expect(viewer).toContain('ListFooterComponent={endSlide ? (');
-    expect(viewer).toContain('onRetry={laneSource.retryNextPage}');
+    expect(viewer).toContain('const pagedGrid = laneBacked ? laneSource : creatorBacked ? creatorReel : null;');
+    expect(slice('onEndReached={grid?.hasNextPage ? () => {', '} : undefined}')).toContain('pagedGrid.fetchNextPage();');
+    expect(viewer).toContain('ListFooterComponent={endSlide && pagedGrid ? (');
+    expect(viewer).toContain('onRetry={pagedGrid.retryNextPage}');
   });
 
   it("keeps a lane's posts when the lane's refresh leaves them out, and never refreshes it twice", () => {
@@ -47,11 +48,23 @@ describe('the reel reads the lane it was opened from', () => {
     expect(slice('const viewerFeedQueryKey = useMemo(', ');')).toContain('createShowcaseFeedViewerQueryKey(identityUserId)');
     expect(slice('const laneSource = useShowcaseLaneSource({', '});')).toContain('userId: identityUserId,');
     expect(viewer.match(
-      /readCachedImmersiveSourceSnapshot\(queryClient, source, user\?\.id, initialId, routeFeedSessionId, creatorUsername, identityUserId\)/g
+      /readCachedImmersiveSourceSnapshot\(queryClient, source, user\?\.id, initialId, routeFeedSessionId, identityUserId\)/g
     )).toHaveLength(2);
     expect(viewer).not.toContain('createShowcaseFeedViewerQueryKey(user?.id)');
     expect(viewer).toContain("queryKey: ['profile', user?.id],");
     expect(viewer).toContain("['profile-saved-media', user?.id]");
+  });
+
+  // Audit 02-6: the reel used to read a 48-post window of its own and stop
+  // there. Behaviour: `use-creator-reel-source.test.tsx`, and
+  // `viewer-reel-actions.test.tsx`, "a reel opened on a creator's page".
+  it("reads and pages the creator page's own grid, and drops a post missing from it", () => {
+    expect(viewer).toContain("const creatorBacked = source === 'creator-profile' && Boolean(creatorUsername);");
+    expect(slice('const creatorReel = useCreatorReelSource({', '});')).toContain('enabled: creatorBacked,');
+    expect(viewer).toContain('const grid = libraryBacked ? library : laneBacked ? laneSource : creatorBacked ? creatorReel : null;');
+    // The grid is no ranked session: a post its pages no longer hold is gone.
+    expect(viewer).toContain('{ keepMissing: laneBacked }');
+    expect(viewer).toContain('loadImmersiveSourceData({ api, source, initialId, mediaOnly })');
   });
 
   it('comes back to the same lane after sign-in', () => {
@@ -90,12 +103,16 @@ describe('Not interested, Hide, Report and Block move the reader on', () => {
       .toContain('onReported: takeOutReportedPost,');
   });
 
-  // A block used to close the reel (audit 02-4). Behaviour:
-  // `viewer-reel-actions.test.tsx`, "Block user from the reel".
+  // A block used to close the reel (audit 02-4), and one made in a reel opened
+  // on the creator's own page went back to it (audit 02-5). Behaviour:
+  // `viewer-reel-actions.test.tsx`, "Block user from the reel" and "a reel
+  // opened on a creator's page".
   it('uses it for a block, every post by the creator, and stays open on what is left', () => {
     const takeOut = slice('const takeOutBlockedCreator = (creatorId: string) => {', '\n  };');
     expect(takeOut).toContain('const removal = removeFromReel({ creatorId });');
-    expect(takeOut).toContain('if (!removal.remaining) requestAnimationFrame(leaveViewer);');
+    expect(takeOut).toContain('if (removal.remaining) return;');
+    expect(takeOut).toContain('requestAnimationFrame(creatorBacked && creatorReel.creatorId === creatorId ? leaveToExplore : leaveViewer);');
+    expect(slice('function leaveToExplore() {', '}')).toContain("router.replace('/(tabs)/showcase' as never);");
     expect(slice('const actionCallbacksFor = (item: ImmersivePreviewItem): ViewerActionCallbacks => ({', '\n  });'))
       .toContain('onBlocked: takeOutBlockedCreator,');
     expect(viewer).not.toContain('onBlocked: () => zoom.dismiss()');

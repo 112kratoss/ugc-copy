@@ -131,20 +131,19 @@ describe('immersive preview source data', () => {
     const api = {
       getShowcaseFeed: vi.fn(async () => ({ items: [showcaseItem('post-1')] })),
       getSavedMedia: vi.fn(async () => ({ items: [] })),
-      getCreatorProfile: vi.fn(async () => creatorProfile([])),
       getShowcasePost: vi.fn(async (): Promise<never> => { throw new ApiError('Post not found.', 404); }),
     };
 
     // A 404 loads the window without the post: the reel says it is not available.
     for (const source of ['showcase-feed', 'profile-saved', 'creator-profile'] as const) {
-      const data = await loadImmersiveSourceData({ api: api as never, source, initialId: 'post-9', creatorUsername: 'luna' });
+      const data = await loadImmersiveSourceData({ api: api as never, source, initialId: 'post-9' });
       expect(data.showcaseItems?.some((item) => item.id === 'post-9')).toBe(false);
     }
 
     // A dropped connection used to read the same way, with no way to try again.
     api.getShowcasePost.mockImplementation(async () => { throw new ApiError('Network request failed', 0); });
     for (const source of ['showcase-feed', 'profile-saved', 'creator-profile'] as const) {
-      await expect(loadImmersiveSourceData({ api: api as never, source, initialId: 'post-9', creatorUsername: 'luna' }))
+      await expect(loadImmersiveSourceData({ api: api as never, source, initialId: 'post-9' }))
         .rejects.toMatchObject({ status: 0 });
     }
   });
@@ -278,65 +277,41 @@ describe('immersive preview source data', () => {
       .rejects.toThrow('Network unavailable');
   });
 
-  it('loads creator profile source data from the creator profile endpoint', async () => {
+  // A reel opened on a creator's page reads and pages that page's grid
+  // (`use-creator-reel-source`). This loader used to read a 48-post window of
+  // the creator's own that stopped there (audit 02-6); a link that names no
+  // creator now opens on the post alone, and nothing reads the creator's posts.
+  it("reads no creator's posts for a creator's reel: the post alone", async () => {
     const item = showcaseItem('post-1');
     const api = {
-      getCreatorProfile: vi.fn(async () => creatorProfile([item])),
+      getCreatorProfile: vi.fn(async () => creatorProfile([showcaseItem('post-2'), item])),
       getSavedMedia: vi.fn(),
       getShowcaseFeed: vi.fn(),
-      getShowcasePost: vi.fn(),
+      getShowcasePost: vi.fn(async () => ({ success: true, item })),
       getOwnerPost: vi.fn(),
       listGenerations: vi.fn(),
       listOwnerPosts: vi.fn(),
     };
 
-    const data = await loadImmersiveSourceData({
-      api,
-      source: 'creator-profile',
-      initialId: 'post-1',
-      creatorUsername: 'luna',
-    });
+    const data = await loadImmersiveSourceData({ api, source: 'creator-profile', initialId: 'post-1' });
 
     expect(data.showcaseItems).toEqual([item]);
-    expect(api.getCreatorProfile).toHaveBeenCalledWith('luna', { limit: 48 });
+    expect(api.getShowcasePost).toHaveBeenCalledWith('post-1');
+    expect(api.getCreatorProfile).not.toHaveBeenCalled();
     expect(api.getShowcaseFeed).not.toHaveBeenCalled();
   });
 
-  it('reads cached creator profile items for creator profile viewer launches', () => {
+  it("opens a creator's reel on no other cache, its grid or a lane that holds the post", () => {
     const queryClient = new QueryClient();
     const item = showcaseItem('post-1');
     queryClient.setQueryData(['creator-profile', 'infinite', 'luna'], { pages: [creatorProfile([item])], pageParams: [0] });
-
-    expect(readCachedImmersiveSourceData(queryClient, 'creator-profile', 'user-1', 'post-1', null, 'luna')).toEqual({
-      showcaseItems: [item],
-    });
-  });
-
-  it("opens a creator's reel on that creator's grid alone", () => {
-    // Visiting A then B used to open B's reel with A's posts first.
-    const queryClient = new QueryClient();
-    const novaPost = { ...showcaseItem('nova-post'), creator: { id: 'creator-2', username: 'nova', name: 'Nova', avatar: null } };
-    queryClient.setQueryData(['creator-profile', 'infinite', 'nova'], { pages: [creatorProfile([novaPost])], pageParams: [0] });
-    queryClient.setQueryData(['creator-profile', 'infinite', 'luna'], { pages: [creatorProfile([showcaseItem('luna-post')])], pageParams: [0] });
-
-    expect(readCachedImmersiveSourceData(queryClient, 'creator-profile', 'user-1', 'luna-post', null, 'luna')?.showcaseItems?.map((item) => item.id))
-      .toEqual(['luna-post']);
-    // A reel that names no creator reads no creator's cache.
-    expect(readCachedImmersiveSourceData(queryClient, 'creator-profile', 'user-1', 'luna-post')).toBeUndefined();
-  });
-
-  it('reads and deduplicates pages from the infinite creator profile cache', () => {
-    const queryClient = new QueryClient();
-    const first = creatorProfile([showcaseItem('post-1'), showcaseItem('post-2')]);
-    const second = creatorProfile([showcaseItem('post-2'), showcaseItem('post-3')]);
-    queryClient.setQueryData(['creator-profile', 'infinite', 'luna'], {
-      pages: [first, second],
-      pageParams: [0, 48],
+    queryClient.setQueryData(['showcase-feed', 'infinite', 'user-1', { sort: 'for-you' }], {
+      pages: [{ items: [showcaseItem('post-0'), item], feedSessionId: 'session-1' }],
+      pageParams: [{ offset: 0 }],
     });
 
-    expect(readCachedImmersiveSourceData(queryClient, 'creator-profile', 'user-1', 'post-3', null, 'luna')).toEqual({
-      showcaseItems: [first.items[0], first.items[1], second.items[1]],
-    });
+    expect(readCachedImmersiveSourceData(queryClient, 'creator-profile', 'user-1', 'post-1', null, 'user-1')).toBeUndefined();
+    expect(readCachedImmersiveSourceData(queryClient, 'creator-profile', 'user-1', 'post-1')).toBeUndefined();
   });
 
   it('reads paginated profile caches for viewer launches', () => {
@@ -407,7 +382,6 @@ describe('immersive preview source data', () => {
       'user-1',
       'post-1',
       'session-1',
-      null,
       'user-1'
     )).toEqual({
       showcaseItems: rankedItems,
@@ -434,7 +408,6 @@ describe('immersive preview source data', () => {
       'showcase-feed',
       'user-1',
       'post-1',
-      null,
       null,
       'user-1'
     )).toMatchObject({
@@ -465,14 +438,13 @@ describe('immersive preview source data', () => {
       undefined,
       'post-1',
       null,
-      null,
       'guest-1'
     )?.data).toMatchObject({
       showcaseItems: [{ title: 'Guest ranking' }],
       feedSessionId: 'guest-session',
     });
     // A device with no identity yet reads the installation's lane.
-    expect(readCachedImmersiveSourceData(queryClient, 'showcase-feed', undefined, 'post-1', null, null, null))
+    expect(readCachedImmersiveSourceData(queryClient, 'showcase-feed', undefined, 'post-1', null, null))
       .toMatchObject({ feedSessionId: 'installation-session' });
   });
 

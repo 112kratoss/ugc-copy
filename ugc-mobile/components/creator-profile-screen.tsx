@@ -29,10 +29,14 @@ import {
   creatorProfileSocialLinks,
   creatorProfileTabItems,
   flattenCreatorProfilePages,
-  getNextCreatorProfileOffset,
   setCachedCreatorProfileBlocked,
   type CreatorProfileTab,
 } from '@/lib/creator-profile-view-model';
+import {
+  CREATOR_PROFILE_PAGE_SIZE,
+  creatorProfileGridQueryKey,
+  creatorProfileGridQueryOptions,
+} from '@/lib/use-creator-reel-source';
 import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
 import { invalidateProfileStats } from '@/lib/profile-stats';
 import { removeShowcaseFeedItems, removeShowcaseFeedItemsFromInfiniteData } from '@/lib/showcase-feed-events';
@@ -58,7 +62,6 @@ import { buildShareUrl } from '@/lib/viewer-actions';
 import { formatUnlockCreditPrice } from '@/lib/pricing';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 
-const PROFILE_PAGE_SIZE = 24;
 
 /** How a creator page's pages carry their posts, for the first-page merge. */
 const CREATOR_PROFILE_PAGES: ProfilePageAdapter<CreatorProfileResponse, ShowcaseFeedItem> = {
@@ -110,17 +113,12 @@ export function CreatorProfileScreen({
   const contentWidth = Math.min(width, 430);
   const horizontalPadding = contentWidth < 390 ? 14 : 16;
   const tileWidth = Math.floor((contentWidth - horizontalPadding * 2 - GRID_GAP) / 2);
-  const queryKey = useMemo(() => ['creator-profile', 'infinite', username] as const, [username]);
+  const queryKey = useMemo(() => creatorProfileGridQueryKey(username), [username]);
+  // The reel opened on this page reads the same query, so the page size and
+  // the key come from one place: two sizes would leave a gap at a refetch.
   const profileQuery = useInfiniteQuery({
-    queryKey,
+    ...creatorProfileGridQueryOptions(api, username),
     enabled: Boolean(username),
-    initialPageParam: 0,
-    queryFn: ({ pageParam }) => api.getCreatorProfile(username, {
-      limit: PROFILE_PAGE_SIZE,
-      offset: pageParam,
-    }),
-    getNextPageParam: getNextCreatorProfileOffset,
-    staleTime: 1000 * 60,
   });
   const data = profileQuery.data?.pages[0];
   const items = useMemo(() => flattenCreatorProfilePages(profileQuery.data?.pages), [profileQuery.data?.pages]);
@@ -151,7 +149,7 @@ export function CreatorProfileScreen({
   // a post from deep in it.
   const refreshFirstPage = useCallback(async () => {
     try {
-      const fresh = await api.getCreatorProfile(username, { limit: PROFILE_PAGE_SIZE, offset: 0 });
+      const fresh = await api.getCreatorProfile(username, { limit: CREATOR_PROFILE_PAGE_SIZE, offset: 0 });
       queryClient.setQueryData<InfiniteData<CreatorProfileResponse, number>>(queryKey, (current) => (
         mergeRefreshedFirstPage(current, fresh, 0, CREATOR_PROFILE_PAGES)
       ));
