@@ -3,8 +3,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   parseShowcaseFeedEventBatchPayload,
+  parseShowcaseFeedFeedbackUndoPayload,
   recordShowcaseFeedEvent,
   recordShowcaseFeedEvents,
+  undoShowcaseFeedFeedback,
   type ShowcaseFeedEventPayload,
 } from '@/lib/showcase-feed-events-service';
 
@@ -609,5 +611,110 @@ describe('recordShowcaseFeedEvents RPC wrapper', () => {
       status: 500,
       body: { error: 'Failed to record feed event batch.' },
     });
+  });
+});
+
+describe('undoShowcaseFeedFeedback', () => {
+  const POST_ID = '7a000000-0000-4000-8000-00000000000a';
+  const CREATOR_ID = '7c000000-0000-4000-8000-00000000000a';
+
+  // The delete as the service builds it: each builder call kept in order, and
+  // the rows the delete answers with chosen by the test.
+  function deletingClient(result: { data: unknown; error: unknown }) {
+    const calls: unknown[][] = [];
+    const query = {
+      delete: () => {
+        calls.push(['delete']);
+        return query;
+      },
+      eq: (column: string, value: unknown) => {
+        calls.push(['eq', column, value]);
+        return query;
+      },
+      is: (column: string, value: unknown) => {
+        calls.push(['is', column, value]);
+        return query;
+      },
+      select: async (columns: string) => {
+        calls.push(['select', columns]);
+        return result;
+      },
+    };
+    const from = vi.fn((table: string) => {
+      calls.push(['from', table]);
+      return query;
+    });
+    return { client: { from } as unknown as SupabaseClient, calls };
+  }
+
+  it('reads the two undo bodies and refuses anything else', () => {
+    expect(parseShowcaseFeedFeedbackUndoPayload({ feedbackType: 'not_interested', postId: POST_ID }))
+      .toEqual({ ok: true, target: { feedbackType: 'not_interested', postId: POST_ID } });
+    expect(parseShowcaseFeedFeedbackUndoPayload({ feedbackType: 'hide_creator', creatorId: CREATOR_ID }))
+      .toEqual({ ok: true, target: { feedbackType: 'hide_creator', creatorId: CREATOR_ID } });
+
+    for (const body of [
+      null,
+      'not_interested',
+      [],
+      {},
+      { feedbackType: 'not_interested_undo', postId: POST_ID },
+      { feedbackType: 'not_interested', postId: 'post-1' },
+      { feedbackType: 'not_interested', creatorId: CREATOR_ID },
+      { feedbackType: 'hide_creator', postId: POST_ID },
+      { feedbackType: 'hide_creator', creatorId: 42 },
+    ]) {
+      expect(parseShowcaseFeedFeedbackUndoPayload(body), JSON.stringify(body)).toMatchObject({ ok: false, status: 400 });
+    }
+  });
+
+  it("deletes only the caller's own Not interested, never a report's exclusion", async () => {
+    const { client, calls } = deletingClient({ data: [{ post_id: POST_ID }], error: null });
+
+    const result = await undoShowcaseFeedFeedback({
+      actorUserId: 'viewer-1',
+      serviceClient: client,
+      target: { feedbackType: 'not_interested', postId: POST_ID },
+    });
+
+    expect(result).toEqual({ ok: true, body: { ok: true, removed: true } });
+    expect(calls).toEqual([
+      ['from', 'feed_user_post_feedback'],
+      ['delete'],
+      ['eq', 'user_id', 'viewer-1'],
+      ['eq', 'post_id', POST_ID],
+      ['is', 'reason', null],
+      ['select', 'post_id'],
+    ]);
+  });
+
+  it("deletes only the caller's own Hide of the creator named", async () => {
+    const { client, calls } = deletingClient({ data: [], error: null });
+
+    const result = await undoShowcaseFeedFeedback({
+      actorUserId: 'viewer-1',
+      serviceClient: client,
+      target: { feedbackType: 'hide_creator', creatorId: CREATOR_ID },
+    });
+
+    // No row: the Hide was already undone, or never stored.
+    expect(result).toEqual({ ok: true, body: { ok: true, removed: false } });
+    expect(calls).toEqual([
+      ['from', 'feed_user_creator_feedback'],
+      ['delete'],
+      ['eq', 'user_id', 'viewer-1'],
+      ['eq', 'creator_user_id', CREATOR_ID],
+      ['select', 'creator_user_id'],
+    ]);
+  });
+
+  it('answers a retryable 500 when the delete fails', async () => {
+    const { client } = deletingClient({ data: null, error: { message: 'connection reset' } });
+
+    await expect(undoShowcaseFeedFeedback({
+      actorUserId: 'viewer-1',
+      serviceClient: client,
+      target: { feedbackType: 'not_interested', postId: POST_ID },
+    })).resolves.toEqual({ ok: false, status: 500, body: { error: 'Failed to undo the feed preference.' } });
   });
 });

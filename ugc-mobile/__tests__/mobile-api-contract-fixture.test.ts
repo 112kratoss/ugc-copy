@@ -6,7 +6,7 @@ import { ApiError, POST_RESOURCE_FILE_URL_BATCH_LIMIT, createApiClient, type Mag
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
 import { buildImmersiveGenerationItems, buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
 import { buildShowcaseFeedEventRequest } from '../lib/showcase-feed-events';
-import type { ShowcaseFeedEventRequest, ShowcaseFeedEventType } from '../lib/types';
+import type { ShowcaseFeedEventRequest, ShowcaseFeedEventType, UndoFeedFeedbackRequest } from '../lib/types';
 import { getShowcaseViewerImageUrl } from '../lib/showcase-media';
 import { isAmbiguousGenerationStartFailure } from '../lib/generation-attempts';
 
@@ -194,6 +194,11 @@ const successCases: Array<{
       mobileApiContract.endpoints.recordShowcaseFeedEvents.request.events as Array<ShowcaseFeedEventRequest & { occurredAt: string }>,
       { accessToken: 'captured-token' },
     ),
+  },
+  { key: 'getShowcaseFeedNewest', call: (api) => api.getShowcaseFeedNewest({ category: 'media' }) },
+  {
+    key: 'undoFeedFeedback',
+    call: (api) => api.undoFeedFeedback(mobileApiContract.endpoints.undoFeedFeedback.request as UndoFeedFeedbackRequest),
   },
   { key: 'saveShowcasePost', call: (api) => api.saveShowcasePost('post-1', { shouldSave: true }) },
   { key: 'remixShowcasePost', call: (api) => api.remixShowcasePost('post-1') },

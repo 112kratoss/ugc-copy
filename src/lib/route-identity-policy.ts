@@ -13,7 +13,8 @@
  *
  *   guest       accepts an active guest or a registered user
  *   registered  rejects anonymous and linked-guest sessions
- *   public      no authentication, or optional auth where guests read as signed out
+ *   public      no authentication, or optional auth (what a guest's token means
+ *               there is the route's own: see PUBLIC_ROUTES)
  *   service     not user-facing: cron, webhooks, ops, admin console
  */
 export type RouteIdentityPolicy = 'guest' | 'registered' | 'public' | 'service';
@@ -67,6 +68,11 @@ const GUEST_ROUTES = [
   '/api/uploads/workflow-asset/read-url',
   '/api/media',
   '/api/showcase/preview',
+
+  // The identity's own feed preferences. An app guest's Not interested or
+  // Hide is kept under the guest uid (see PUBLIC_ROUTES), so taking one back
+  // is the guest's to do as much as a registered user's.
+  '/api/showcase/feed/feedback/undo',
 ] as const;
 
 /**
@@ -180,10 +186,15 @@ const REGISTERED_ROUTES = [
 /**
  * Public routes.
  *
- * Optional-auth surfaces treat a guest as an unsigned viewer: a guest has no
- * follows, saves or blocks to personalise against, and feeding an anonymous id
- * into viewer-scoped queries would attribute engagement to an identity that is
- * about to be linked away.
+ * No token is needed. One that is sent must still be a live identity (the
+ * proxy checks it), and each route decides what a guest's identity means to
+ * it. The feed and its events rank and log a verified guest session as the
+ * user it is: the app's guest holds an anonymous Supabase session, so its
+ * interest weights build up, and its Not interested and Hide are kept under
+ * the guest uid, which the device holds until sign-out (product decision D1,
+ * 2026-10-14). The unsigned viewer is the web's guest, who sends no token and
+ * is known only by a hashed cookie: no weights, and feedback that lasts the
+ * visit.
  */
 const PUBLIC_ROUTES = [
   '/api/app-version',
@@ -200,6 +211,9 @@ const PUBLIC_ROUTES = [
   '/api/search',
   '/api/showcase/feed',
   '/api/showcase/feed/events',
+  // Whether a lane has a post newer than the one a client holds: no identity
+  // is read, and every caller gets the same cacheable answer.
+  '/api/showcase/feed/newest',
   '/api/showcase/posts/[postId]',
   '/api/marketplace/resources',
   '/api/marketplace/resources/[resourceId]',

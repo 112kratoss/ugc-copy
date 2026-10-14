@@ -869,6 +869,23 @@ export interface CreatePostCommentBody {
   deliveryId?: string | null;
 }
 
+/** `GET /api/showcase/feed/newest`: the newest visible post of a lane, for the "New posts" pill. Nulls for an empty lane. */
+export interface ShowcaseFeedNewestResponse {
+  newestPostId: string | null;
+  newestPublishedAt: string | null;
+}
+
+/** `POST /api/showcase/feed/feedback/undo`: takes back the caller's own Not interested or Hide. A preference delete, not a feed event. */
+export type UndoFeedFeedbackRequest =
+  | { feedbackType: 'not_interested'; postId: string }
+  | { feedbackType: 'hide_creator'; creatorId: string };
+
+export interface UndoFeedFeedbackResponse {
+  ok: true;
+  /** False when no row existed: already undone, never stored, or a report's exclusion, which Undo never lifts. */
+  removed: boolean;
+}
+
 export interface ShowcaseFeedEventResponse {
   success: boolean;
   accepted?: boolean;
