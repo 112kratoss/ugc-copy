@@ -48,18 +48,52 @@ type GenerationRow = {
   studio_visible?: boolean;
   /** Set when the output's only source is known to be gone; see the 20260908061500 migration. */
   source_unavailable_at?: string | null;
+  /** Written by the failure settlement once it has given the held cost back. */
+  refunded?: boolean | null;
+  error_message?: string | null;
+  /** Set by an admin removal, which archives the row too (20260820010000). */
+  moderation_removed_at?: string | null;
 };
+
+/**
+ * Runs whose outputs reach Studio. A succeeded run is represented by its one
+ * canonical result. A cancelled or failed run has no result, and its finished
+ * steps are credits the person spent, so each one that the run's ending made
+ * studio-visible is listed. Creator test runs never are.
+ */
+const STUDIO_TEMPLATE_RUN_STATUSES = ['succeeded', 'cancelled', 'failed'] as const;
+type StudioTemplateRunStatus = typeof STUDIO_TEMPLATE_RUN_STATUSES[number];
+
+function isStudioTemplateRunStatus(status: string): status is StudioTemplateRunStatus {
+  return (STUDIO_TEMPLATE_RUN_STATUSES as readonly string[]).includes(status);
+}
 
 type TemplateRunStudioRow = {
   id: string;
   template_id: string;
-  result_generation_id: string;
+  result_generation_id: string | null;
+  status: string;
 };
 
 type TemplateStudioMetadata = {
   runId: string;
   templateId: string;
   templateTitle: string | null;
+  runStatus: StudioTemplateRunStatus;
+};
+
+type LinkedPostBundleRow = {
+  post_id: string;
+  access_mode: 'free' | 'paid';
+  status: 'draft' | 'published';
+  price_usd_cents: number;
+};
+
+/** The recipe a linked post sells, summarized as the owner's post list summarizes it. */
+type LinkedPostBundle = {
+  accessMode: 'free' | 'paid';
+  status: 'draft' | 'published';
+  priceUsdCents: number;
 };
 
 type LinkedPostRow = {
@@ -305,6 +339,56 @@ async function loadLinkedPostMap(params: {
   return linkedPostMap;
 }
 
+/**
+ * The bundle of each linked post on the page, in one read. A card cannot take
+ * it from the owner's first posts page alone: a post older than that page
+ * would read as having no recipe. `post_id` is unique on the table, so a post
+ * has one bundle or none. A sold bundle its creator removed stays as a draft
+ * row (`retired_at` set) and reads as a draft here, as it does in the owner's
+ * post list, so a card says the same whichever list found its post.
+ */
+async function loadLinkedPostBundleMap(params: {
+  supabase: OwnerGenerationsRouteClient;
+  postIds: string[];
+}): Promise<Map<string, LinkedPostBundle>> {
+  const bundleMap = new Map<string, LinkedPostBundle>();
+  if (params.postIds.length === 0) {
+    return bundleMap;
+  }
+
+  const { data, error } = await params.supabase
+    .from('post_resource_bundles')
+    .select('post_id, access_mode, status, price_usd_cents')
+    .in('post_id', params.postIds);
+  if (error) {
+    // Degrades like the linked posts it describes: the library still loads.
+    logBackendError('failed_to_load_linked_post_bundles_for_generations', { error });
+    return bundleMap;
+  }
+
+  for (const row of (data ?? []) as LinkedPostBundleRow[]) {
+    bundleMap.set(row.post_id, {
+      accessMode: row.access_mode,
+      status: row.status,
+      priceUsdCents: row.price_usd_cents,
+    });
+  }
+
+  return bundleMap;
+}
+
+/**
+ * Why a failed creation failed, as its settlement stored it: the provider's
+ * reason already rewritten for the creator (`provider-failure-messages.ts`),
+ * or the public start-failure copy. The creator's own status poll returns the
+ * same text. Any other status carries none.
+ */
+function readFailureReason(generation: GenerationRow): string | null {
+  if (generation.status !== 'failed') return null;
+  const reason = generation.error_message?.trim();
+  return reason ? reason : null;
+}
+
 function parsePositiveInteger(value: string | null, fallback: number): number {
   if (!value) {
     return fallback;
@@ -349,9 +433,11 @@ async function fetchOwnerGenerations({
   pageLimit: number;
 }): Promise<{ rows: GenerationRow[]; hasMore: boolean }> {
   const projectionColumns = 'template_run_id, template_run_step_id, studio_visible';
-  const statusColumns = `id, status, created_at, completed_at, model, category, archived_at, ${projectionColumns}`;
-  const baseColumns = `id, user_id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at, ${projectionColumns}`;
-  const columns = statusOnly
+  const statusColumns = `id, status, created_at, completed_at, model, category, archived_at, refunded, ${projectionColumns}`;
+  const baseColumns = `id, user_id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at, refunded, error_message, moderation_removed_at, ${projectionColumns}`;
+  // Typed as a plain string: postgrest-js parses a literal select at the type
+  // level, and this one outgrew what the checker can represent (TS2590).
+  const columns: string = statusOnly
     ? statusColumns
     : `${baseColumns}, preview_url, display_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode, playback_rendition_path, playback_rendition_source, playback_rendition_status, source_unavailable_at`;
 
@@ -413,21 +499,22 @@ async function authorizeOwnerStudioProjection({
     generation.template_run_id ? [generation.template_run_id] : []
   ))));
   const templateMetadata = new Map<string, TemplateStudioMetadata>();
+  const runsById = new Map<string, TemplateRunStudioRow>();
+  const templateTitles = new Map<string, string | null>();
 
   if (candidateRunIds.length > 0) {
     const { data: runData, error: runError } = await adminSupabase
       .from('template_runs')
-      .select('id, template_id, result_generation_id')
+      .select('id, template_id, result_generation_id, status')
       .in('id', candidateRunIds)
       // Guests run templates too, so the same linked-owner rule applies.
       .in('user_id', ownerUserIds)
-      .eq('status', 'succeeded')
+      .in('status', STUDIO_TEMPLATE_RUN_STATUSES)
       .eq('is_test', false);
     if (runError) throw runError;
 
     const runs = (runData ?? []) as unknown as TemplateRunStudioRow[];
     const templateIds = Array.from(new Set(runs.map((run) => run.template_id)));
-    const templateTitles = new Map<string, string | null>();
     if (templateIds.length > 0) {
       const { data: templateData, error: templateError } = await adminSupabase
         .from('templates')
@@ -439,28 +526,42 @@ async function authorizeOwnerStudioProjection({
       }
     }
 
-    for (const run of runs) {
-      templateMetadata.set(run.result_generation_id, {
-        runId: run.id,
-        templateId: run.template_id,
-        templateTitle: templateTitles.get(run.template_id) ?? null,
-      });
+    for (const run of runs) runsById.set(run.id, run);
+  }
+
+  const admitted: GenerationRow[] = [];
+  for (const generation of generations) {
+    if (!generation.template_run_id && !generation.template_run_step_id) {
+      admitted.push(generation);
+      continue;
     }
+
+    const run = generation.template_run_id ? runsById.get(generation.template_run_id) : undefined;
+    // The query admits only these statuses; anything else here fails closed.
+    const runStatus = run && isStudioTemplateRunStatus(run.status) ? run.status : null;
+    if (
+      !run
+      || !runStatus
+      || generation.studio_visible !== true
+      || generation.status !== 'succeeded'
+      || !generation.template_run_step_id
+      // A succeeded run is represented by its result alone; its other steps stay private.
+      || (runStatus === 'succeeded' && run.result_generation_id !== generation.id)
+    ) {
+      continue;
+    }
+
+    admitted.push(generation);
+    templateMetadata.set(generation.id, {
+      runId: run.id,
+      templateId: run.template_id,
+      templateTitle: templateTitles.get(run.template_id) ?? null,
+      runStatus,
+    });
   }
 
   return {
-    generations: generations.filter((generation) => {
-      const isOrdinary = !generation.template_run_id && !generation.template_run_step_id;
-      if (isOrdinary) return true;
-      const metadata = templateMetadata.get(generation.id);
-      return Boolean(
-        generation.studio_visible === true
-        && generation.status === 'succeeded'
-        && generation.template_run_id
-        && generation.template_run_step_id
-        && metadata?.runId === generation.template_run_id,
-      );
-    }),
+    generations: admitted,
     templateMetadata,
   };
 }
@@ -535,6 +636,8 @@ export async function listOwnerGenerationsForRoute({
           model: template ? 'template-workflow' : generation.model,
           origin: template ? 'template' : 'creation',
           template,
+          // A run polled to `failed` can say its credits came back without a second read.
+          refunded: generation.refunded === true,
         };
       }),
       pagination: buildPagination(pageLimit, hasMore, cursorOffset),
@@ -543,13 +646,18 @@ export async function listOwnerGenerationsForRoute({
 
   const generationIds = generations.map((generation) => generation.id).filter(Boolean);
   const ordinaryGenerationIds = generationIds.filter((generationId) => !templateMetadata.has(generationId));
-  const [linkedPostMap, inputMediaMap, resolvedMediaUrls] = await Promise.all([
-    loadLinkedPostMap({
+  const linkedPostMapPromise = loadLinkedPostMap({
+    supabase: adminSupabase,
+    generationIds,
+    ownerUserIds,
+    includeArchived,
+  });
+  const [linkedPostMap, linkedPostBundleMap, inputMediaMap, resolvedMediaUrls] = await Promise.all([
+    linkedPostMapPromise,
+    linkedPostMapPromise.then((linkedPosts) => loadLinkedPostBundleMap({
       supabase: adminSupabase,
-      generationIds,
-      ownerUserIds,
-      includeArchived,
-    }),
+      postIds: Array.from(new Set(Array.from(linkedPosts.values(), (post) => post.id))),
+    })),
     summaryOnly
       ? Promise.resolve(new Map<string, GenerationInputMediaItem[]>())
       : loadGenerationInputMediaMap({
@@ -669,6 +777,12 @@ export async function listOwnerGenerationsForRoute({
       linked_post_title: linkedPost?.title ?? null,
       linked_post_visibility: linkedPost?.visibility ?? null,
       linked_post_archived_at: linkedPost?.archived_at ?? null,
+      linked_post_bundle: linkedPost ? linkedPostBundleMap.get(linkedPost.id) ?? null : null,
+      // A failed card shows what came back and why in place of a cost it did not keep.
+      refunded: generation.refunded === true,
+      error_message: readFailureReason(generation),
+      // Removal archives the row, and Restore refuses it (generation-lifecycle-service.ts).
+      moderation_removed_at: generation.moderation_removed_at ?? null,
     };
   }));
 

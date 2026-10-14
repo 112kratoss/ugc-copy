@@ -1,10 +1,71 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { createStoredRows } from '@/__tests__/fixtures/stored-rows';
 import {
   listOwnerGenerationsForRoute,
   projectGenerationForStudio,
   type OwnerGenerationsRouteClient,
 } from '@/lib/owner-generations-route-service';
+
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
+
+const OWNER = 'user-1';
+
+/** One `generations` row with every column the library route selects, so stored rows can answer each read. */
+function libraryRow(overrides: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: 'generation',
+    user_id: OWNER,
+    output_url: null,
+    showcase_asset_path: null,
+    status: 'succeeded',
+    created_at: '2026-10-14T08:00:00.000Z',
+    completed_at: '2026-10-14T08:01:00.000Z',
+    duration: null,
+    cost: 8,
+    model: 'nano-banana-2',
+    category: 'image',
+    is_public: false,
+    title: null,
+    description: null,
+    prompt: 'private prompt',
+    workflow_settings: {},
+    archived_at: null,
+    refunded: false,
+    error_message: null,
+    moderation_removed_at: null,
+    template_run_id: null,
+    template_run_step_id: null,
+    studio_visible: true,
+    preview_url: null,
+    display_url: null,
+    preview_thumbhash: null,
+    preview_status: 'pending',
+    preview_width: null,
+    preview_height: null,
+    creation_mode: null,
+    playback_rendition_path: null,
+    playback_rendition_source: null,
+    playback_rendition_status: 'pending',
+    source_unavailable_at: null,
+    ...overrides,
+  };
+}
+
+/** The owner library over rows that apply its filters, the way Postgres would. */
+async function listStoredLibrary(tables: Record<string, Array<Record<string, unknown>>>, query: string) {
+  const stored = createStoredRows({
+    profiles: [{ id: 'someone-else', merged_into_user_id: null }],
+    ...tables,
+  });
+  const payload = await listOwnerGenerationsForRoute({
+    userId: OWNER,
+    supabase: stored.client,
+    getAdminSupabase: () => stored.client,
+    searchParams: new URLSearchParams(query),
+  });
+  return { generations: payload.generations as Array<Record<string, unknown>>, reads: stored.reads };
+}
 
 type GenerationStatusRow = {
   id: string;
@@ -21,7 +82,7 @@ type GenerationStatusRow = {
 function createStatusClient(
   rows: GenerationStatusRow[],
   options: {
-    runs?: Array<{ id: string; template_id: string; result_generation_id: string }>;
+    runs?: Array<{ id: string; template_id: string; result_generation_id: string | null; status: string }>;
     templates?: Array<{ id: string; name: string | null }>;
   } = {},
 ) {
@@ -131,7 +192,7 @@ describe('listOwnerGenerationsForRoute', () => {
       // The linked-account lookup: work made before the person registered keeps
       // its guest UUID, so the owner filter has to be a set rather than an id.
       'id',
-      'id, status, created_at, completed_at, model, category, archived_at, template_run_id, template_run_step_id, studio_visible',
+      'id, status, created_at, completed_at, model, category, archived_at, refunded, template_run_id, template_run_step_id, studio_visible',
     ]);
     expect(ownerClient.inFilters).toContainEqual({ column: 'user_id', values: ['user-1'] });
     expect(ownerClient.nullFilters).toEqual(['archived_at']);
@@ -151,6 +212,7 @@ describe('listOwnerGenerationsForRoute', () => {
           model: 'nano-banana-2',
           origin: 'creation',
           template: null,
+          refunded: false,
         },
       ],
       pagination: {
@@ -445,7 +507,7 @@ describe('listOwnerGenerationsForRoute', () => {
         studio_visible: true,
       },
     ], {
-      runs: [{ id: 'run-1', template_id: 'template-1', result_generation_id: 'final-1' }],
+      runs: [{ id: 'run-1', template_id: 'template-1', result_generation_id: 'final-1', status: 'succeeded' }],
       templates: [{ id: 'template-1', name: 'Ghost rider transformation' }],
     });
 
@@ -467,8 +529,251 @@ describe('listOwnerGenerationsForRoute', () => {
         runId: 'run-1',
         templateId: 'template-1',
         templateTitle: 'Ghost rider transformation',
+        runStatus: 'succeeded',
       },
     });
+  });
+
+  it('lists the finished steps of a cancelled or failed run with how the run ended, and never a test run', async () => {
+    const step = (id: string, run: string, overrides: Record<string, unknown> = {}) => libraryRow({
+      id,
+      template_run_id: run,
+      template_run_step_id: `${id}-step`,
+      ...overrides,
+    });
+    const run = (id: string, status: string, overrides: Record<string, unknown> = {}) => ({
+      id,
+      user_id: OWNER,
+      template_id: 'template-1',
+      status,
+      is_test: false,
+      result_generation_id: null,
+      ...overrides,
+    });
+    const tables = {
+      generations: [
+        step('cancelled-step', 'run-cancelled'),
+        // The run's ending makes only finished steps studio-visible.
+        step('cancelled-hidden', 'run-cancelled', { studio_visible: false }),
+        step('cancelled-failed', 'run-cancelled', { status: 'failed' }),
+        step('failed-run-step', 'run-failed'),
+        step('test-run-step', 'run-test'),
+        step('running-step', 'run-running'),
+        step('succeeded-intermediate', 'run-succeeded'),
+        step('succeeded-result', 'run-succeeded'),
+      ],
+      template_runs: [
+        run('run-cancelled', 'cancelled'),
+        run('run-failed', 'failed'),
+        // A creator's test of their own draft stays off the library however it ended.
+        run('run-test', 'cancelled', { is_test: true }),
+        run('run-running', 'processing'),
+        run('run-succeeded', 'succeeded', { result_generation_id: 'succeeded-result' }),
+      ],
+      templates: [{ id: 'template-1', name: 'Ghost rider transformation' }],
+      posts: [],
+    };
+
+    const status = await listStoredLibrary(tables, 'detail=status');
+
+    expect(status.generations.map((generation) => [
+      generation.id,
+      (generation.template as { runStatus?: string } | null)?.runStatus,
+    ])).toEqual([
+      ['cancelled-step', 'cancelled'],
+      ['failed-run-step', 'failed'],
+      ['succeeded-result', 'succeeded'],
+    ]);
+    expect(status.generations[0]).toMatchObject({
+      origin: 'template',
+      model: 'template-workflow',
+      template: {
+        runId: 'run-cancelled',
+        templateId: 'template-1',
+        templateTitle: 'Ghost rider transformation',
+        runStatus: 'cancelled',
+      },
+    });
+    expect(status.reads).toContainEqual({
+      table: 'template_runs',
+      columns: ['id', 'template_id', 'result_generation_id', 'status'],
+    });
+
+    // The library read keeps the template's recipe private for these steps too.
+    const library = await listStoredLibrary(tables, 'detail=summary');
+    expect(library.generations.map((generation) => generation.id)).toEqual([
+      'cancelled-step',
+      'failed-run-step',
+      'succeeded-result',
+    ]);
+    expect(library.generations[0]).toMatchObject({
+      origin: 'template',
+      model: 'template-workflow',
+      template: { runId: 'run-cancelled', runStatus: 'cancelled' },
+    });
+    expect(library.generations[0]).not.toHaveProperty('prompt');
+  });
+
+  it('sends what a failed run gave back and why, and a removal by moderation', async () => {
+    const { generations } = await listStoredLibrary({
+      generations: [
+        libraryRow({
+          id: 'refunded-failure',
+          status: 'failed',
+          cost: 40,
+          refunded: true,
+          completed_at: null,
+          error_message: '  This model would not accept the reference image.  ',
+        }),
+        // A row from before the column had a default, and a blank reason.
+        libraryRow({ id: 'kept-failure', status: 'failed', cost: 12, refunded: null, error_message: '   ' }),
+        libraryRow({
+          id: 'removed',
+          archived_at: '2026-10-01T09:00:00.000Z',
+          moderation_removed_at: '2026-10-01T09:00:00.000Z',
+          // A finished creation has no failure to explain.
+          error_message: 'An earlier attempt failed.',
+        }),
+      ],
+      posts: [],
+    }, 'detail=summary&includeArchived=true');
+
+    expect(generations.map(({ id, cost, refunded, error_message, moderation_removed_at }) => ({
+      id, cost, refunded, error_message, moderation_removed_at,
+    }))).toEqual([
+      {
+        id: 'refunded-failure',
+        cost: 40,
+        refunded: true,
+        error_message: 'This model would not accept the reference image.',
+        moderation_removed_at: null,
+      },
+      { id: 'kept-failure', cost: 12, refunded: false, error_message: null, moderation_removed_at: null },
+      { id: 'removed', cost: 8, refunded: false, error_message: null, moderation_removed_at: '2026-10-01T09:00:00.000Z' },
+    ]);
+    // The shape the contract's `failed-video-1` example documents.
+    expect(generations[0]).toMatchObject({ output_url: null, preview_url: null, media: null });
+  });
+
+  it('tells a status poll whether a failed run gave its credits back', async () => {
+    const { generations } = await listStoredLibrary({
+      generations: [
+        libraryRow({ id: 'refunded-failure', status: 'failed', refunded: true }),
+        libraryRow({ id: 'kept-failure', status: 'failed', refunded: null }),
+      ],
+    }, 'detail=status');
+
+    expect(generations.map(({ id, refunded }) => ({ id, refunded }))).toEqual([
+      { id: 'refunded-failure', refunded: true },
+      { id: 'kept-failure', refunded: false },
+    ]);
+  });
+
+  it('sends the bundle a linked post sells, read once for the page', async () => {
+    const post = (id: string, generationId: string) => ({
+      id,
+      user_id: OWNER,
+      generation_id: generationId,
+      title: id,
+      visibility: 'public',
+      archived_at: null,
+    });
+    const { generations, reads } = await listStoredLibrary({
+      generations: [
+        libraryRow({ id: 'sold' }),
+        libraryRow({ id: 'retired' }),
+        libraryRow({ id: 'plain' }),
+        libraryRow({ id: 'unposted' }),
+      ],
+      posts: [post('post-sold', 'sold'), post('post-retired', 'retired'), post('post-plain', 'plain')],
+      post_resource_bundles: [
+        { post_id: 'post-sold', access_mode: 'paid', status: 'published', price_usd_cents: 900, retired_at: null },
+        // Removed by its creator after a sale: kept for the buyers as a draft.
+        { post_id: 'post-retired', access_mode: 'paid', status: 'draft', price_usd_cents: 500, retired_at: '2026-10-02T00:00:00.000Z' },
+        { post_id: 'post-elsewhere', access_mode: 'free', status: 'published', price_usd_cents: 0, retired_at: null },
+      ],
+    }, 'detail=summary');
+
+    expect(generations.map(({ id, linked_post_id, linked_post_bundle }) => ({ id, linked_post_id, linked_post_bundle }))).toEqual([
+      {
+        id: 'sold',
+        linked_post_id: 'post-sold',
+        linked_post_bundle: { accessMode: 'paid', status: 'published', priceUsdCents: 900 },
+      },
+      {
+        id: 'retired',
+        linked_post_id: 'post-retired',
+        linked_post_bundle: { accessMode: 'paid', status: 'draft', priceUsdCents: 500 },
+      },
+      { id: 'plain', linked_post_id: 'post-plain', linked_post_bundle: null },
+      { id: 'unposted', linked_post_id: null, linked_post_bundle: null },
+    ]);
+    expect(reads.filter((read) => read.table === 'post_resource_bundles')).toEqual([
+      { table: 'post_resource_bundles', columns: ['post_id', 'access_mode', 'status', 'price_usd_cents'] },
+    ]);
+  });
+
+  it('carries the same fields on the full read', async () => {
+    const rows: Record<string, unknown[]> = {
+      profiles: [],
+      generations: [
+        libraryRow({ id: 'refunded-failure', status: 'failed', cost: 40, refunded: true, error_message: 'Provider refused.' }),
+        libraryRow({ id: 'posted' }),
+      ],
+      posts: [{ id: 'post-1', generation_id: 'posted', title: 'Post', visibility: 'private', archived_at: null }],
+      post_resource_bundles: [{ post_id: 'post-1', access_mode: 'free', status: 'draft', price_usd_cents: 0 }],
+      generation_input_media: [],
+    };
+    const from = vi.fn((table: string) => ({
+      select: vi.fn(() => {
+        const query = {
+          eq: vi.fn(() => query),
+          in: vi.fn(() => query),
+          is: vi.fn(() => query),
+          or: vi.fn(() => query),
+          order: vi.fn(() => query),
+          range: vi.fn(() => query),
+          then: (resolve: (result: { data: unknown[]; error: null }) => unknown) => (
+            Promise.resolve({ data: rows[table] ?? [], error: null }).then(resolve)
+          ),
+        };
+        return query;
+      }),
+    }));
+    const client = { from } as unknown as OwnerGenerationsRouteClient;
+
+    const payload = await listOwnerGenerationsForRoute({
+      userId: OWNER,
+      supabase: client,
+      getAdminSupabase: () => client,
+      searchParams: new URLSearchParams('limit=10'),
+    });
+
+    expect(payload.generations).toEqual([
+      expect.objectContaining({
+        id: 'refunded-failure',
+        refunded: true,
+        error_message: 'Provider refused.',
+        moderation_removed_at: null,
+        linked_post_bundle: null,
+      }),
+      expect.objectContaining({
+        id: 'posted',
+        refunded: false,
+        error_message: null,
+        linked_post_bundle: { accessMode: 'free', status: 'draft', priceUsdCents: 0 },
+      }),
+    ]);
+  });
+
+  it('sends each field the shared contract documents for a creation', async () => {
+    const added = ['refunded', 'error_message', 'moderation_removed_at', 'linked_post_bundle'];
+    for (const example of mobileApiContract.endpoints.listGenerations.response.generations) {
+      for (const key of added) expect(example, `contract example ${example.id} lacks "${key}"`).toHaveProperty(key);
+    }
+
+    const { generations } = await listStoredLibrary({ generations: [libraryRow({})], posts: [] }, 'detail=summary');
+    for (const key of added) expect(generations[0], `route payload is missing "${key}"`).toHaveProperty(key);
   });
 
   it('removes private template fields from the Studio projection', () => {

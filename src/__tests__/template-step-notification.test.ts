@@ -100,6 +100,8 @@ function storedGeneration(overrides: Row = {}): Row {
     user_id: OWNER,
     prediction_id: 'task-1',
     status: 'processing',
+    cost: 0,
+    refunded: false,
     output_url: null,
     model: 'nano-banana-2',
     category: 'image',
@@ -622,7 +624,9 @@ describe('a caller that hands the notifier no run', () => {
 
     await notifyGenerationStatus(world.client, { ...unaware, template_run_id: templateRunId }, 'failed');
 
-    expect(world.reads).toEqual([]);
+    // An ordinary creation's failure push names the credits that came back, so
+    // that one read of the settled row is the only read the notifier makes.
+    expect(world.reads).toEqual(templateRunId ? [] : [{ table: 'generations', columns: ['cost', 'refunded'] }]);
     expect(world.history.sent).toHaveLength(1);
   });
 

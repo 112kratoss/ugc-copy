@@ -563,6 +563,7 @@ describe('/api/generations route', () => {
       {
         id: 'gen-status-1',
         status: 'succeeded',
+        refunded: false,
         created_at: '2026-03-24T11:00:00.000Z',
         completed_at: '2026-03-24T11:01:00.000Z',
         category: 'image',

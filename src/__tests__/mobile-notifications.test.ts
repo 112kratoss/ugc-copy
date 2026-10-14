@@ -1,5 +1,12 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  createMobileNotificationHistory,
+  withMobileNotificationHistory,
+} from '@/__tests__/fixtures/mobile-notification-history';
+import { createStoredRows } from '@/__tests__/fixtures/stored-rows';
+import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 import {
   MobileNotificationError,
   buildMobileNotificationDeepLink,
@@ -7,6 +14,7 @@ import {
   hasMobilePushMaintenanceWork,
   hasPendingMobilePushReceipts,
   normalizeMobilePushTokenPayload,
+  notifyGenerationStatus,
   processMobilePushMaintenance,
   processPendingMobilePushReceipts,
   sendExpoPushNotification,
@@ -2250,5 +2258,83 @@ describe('mobile notifications', () => {
         }),
       }),
     ]);
+  });
+});
+
+describe('a failed generation notification', () => {
+  const FAILED_BODY = 'Open Magicbooklet to try again or adjust the prompt.';
+  const creation = { id: 'gen-1', user_id: 'user-1', category: 'video', model: 'kling-3.0/video', template_run_id: null };
+
+  /** The notification the real notifier writes, over a settled `generations` row it may read. */
+  async function notified(
+    row: Record<string, unknown>,
+    subject: Parameters<typeof notifyGenerationStatus>[1] = creation,
+    status: 'succeeded' | 'failed' = 'failed',
+  ) {
+    const stored = createStoredRows({ generations: [{ id: 'gen-1', template_run_id: null, ...row }] });
+    const history = createMobileNotificationHistory();
+    await notifyGenerationStatus(withMobileNotificationHistory(stored.client, history), subject, status);
+    expect(history.sent).toHaveLength(1);
+    return { notification: history.sent[0], reads: stored.reads };
+  }
+
+  it.each([
+    ['its credits were returned', { cost: 40, refunded: true }, `${FAILED_BODY} Your 40 credits were returned.`],
+    ['its one credit was returned', { cost: 1, refunded: true }, `${FAILED_BODY} Your 1 credit was returned.`],
+    ['nothing was returned', { cost: 40, refunded: false }, FAILED_BODY],
+    ['the run cost nothing', { cost: 0, refunded: true }, FAILED_BODY],
+    ['the row predates the refund flag', { cost: 40, refunded: null }, FAILED_BODY],
+  ])('says so when %s', async (_case, row, body) => {
+    const { notification, reads } = await notified(row);
+
+    expect(notification).toMatchObject({ type: 'generation_failed', title: 'Your video failed', body });
+    // Read after the settlement: a row the caller read before it still says `refunded: false`.
+    expect(reads).toEqual([{ table: 'generations', columns: ['cost', 'refunded'] }]);
+  });
+
+  it('looks the refund up after the run, for a caller that did not say which it was', async () => {
+    const { notification, reads } = await notified(
+      { cost: 40, refunded: true },
+      { id: 'gen-1', user_id: 'user-1', category: 'video', model: 'kling-3.0/video' },
+    );
+
+    expect(notification.body).toBe(`${FAILED_BODY} Your 40 credits were returned.`);
+    expect(reads).toEqual([
+      { table: 'generations', columns: ['template_run_id'] },
+      { table: 'generations', columns: ['cost', 'refunded'] },
+    ]);
+  });
+
+  it('reads no refund for a finished creation or a template step', async () => {
+    const finished = await notified({ cost: 40, refunded: false }, creation, 'succeeded');
+    expect(finished.notification.body).toBe('Open it in your mobile history.');
+    expect(finished.reads).toEqual([]);
+
+    // A step's failure leads to its run, where the step is retried.
+    const step = await notified({ cost: 40, refunded: true }, { ...creation, template_run_id: 'run-1' });
+    expect(step.notification.body).toBe('Open your template run to retry this step.');
+    expect(step.reads).toEqual([]);
+  });
+
+  it('still sends the failure, without the credits line, when the refund cannot be read', async () => {
+    const history = createMobileNotificationHistory();
+    const unreadable = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({ single: async () => ({ data: null, error: { message: 'permission denied' } }) }),
+        }),
+      }),
+    } as unknown as SupabaseClient;
+    const logged: BackendLogRecord[] = [];
+    const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+    try {
+      await expect(notifyGenerationStatus(withMobileNotificationHistory(unreadable, history), creation, 'failed'))
+        .resolves.not.toBeNull();
+    } finally {
+      restoreLogSink();
+    }
+
+    expect(logged.map((record) => record.msg)).toEqual(['generation_notification_refund_unread']);
+    expect(history.sent).toEqual([expect.objectContaining({ title: 'Your video failed', body: FAILED_BODY })]);
   });
 });

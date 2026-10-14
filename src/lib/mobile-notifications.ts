@@ -1628,9 +1628,12 @@ export type FinishedTemplateStep = 'review' | 'result';
 /**
  * The run a generation is a step of, for a caller that did not say. A row that
  * cannot be read is taken for an ordinary creation, which nearly every one is,
- * so the notification still goes out.
+ * so the notification still goes out; `readable` says which it was.
  */
-async function readTemplateRunId(adminSupabase: SupabaseClient, generationId: string): Promise<string | null> {
+async function readTemplateRunId(
+  adminSupabase: SupabaseClient,
+  generationId: string,
+): Promise<{ templateRunId: string | null; readable: boolean }> {
   try {
     const { data, error } = await adminSupabase
       .from('generations')
@@ -1640,11 +1643,42 @@ async function readTemplateRunId(adminSupabase: SupabaseClient, generationId: st
     if (error) throw error;
 
     const templateRunId = (data as { template_run_id?: unknown } | null)?.template_run_id;
-    return typeof templateRunId === 'string' ? templateRunId : null;
+    return { templateRunId: typeof templateRunId === 'string' ? templateRunId : null, readable: true };
   } catch (error) {
     logBackendError('generation_notification_run_unread', { generationId, error });
+    return { templateRunId: null, readable: false };
+  }
+}
+
+/**
+ * The credits a failed creation's settlement gave back, or null when none did.
+ * Read here, after the settlement, and never taken from the caller: a row read
+ * before it still says `refunded: false`. The settlement returns a held cost
+ * once and marks the row `refunded`, so a refunded row with a cost is credits
+ * the person has back. An unreadable row costs the sentence, not the notification.
+ */
+async function readReturnedCredits(adminSupabase: SupabaseClient, generationId: string): Promise<number | null> {
+  try {
+    const { data, error } = await adminSupabase
+      .from('generations')
+      .select('cost, refunded')
+      .eq('id', generationId)
+      .single();
+    if (error) throw error;
+
+    const row = data as { cost?: unknown; refunded?: unknown } | null;
+    return row?.refunded === true && typeof row.cost === 'number' && Number.isInteger(row.cost) && row.cost > 0
+      ? row.cost
+      : null;
+  } catch (error) {
+    logBackendError('generation_notification_refund_unread', { generationId, error });
     return null;
   }
+}
+
+/** The creators' own refund line, word for word, so the push and the screen agree. */
+function withReturnedCredits(body: string, credits: number | null): string {
+  return credits ? `${body} Your ${credits} credit${credits === 1 ? ' was' : 's were'} returned.` : body;
 }
 
 function templateStepCopy(label: string, status: 'succeeded' | 'failed', finishedStep?: FinishedTemplateStep) {
@@ -1681,16 +1715,22 @@ export async function notifyGenerationStatus(
   finishedStep?: FinishedTemplateStep,
 ) {
   const label = generationLabel(generation.category, generation.model);
-  const templateRunId = (generation.template_run_id === undefined
+  const runLookup = generation.template_run_id === undefined
     ? await readTemplateRunId(adminSupabase, generation.id)
-    : generation.template_run_id) || null;
+    : { templateRunId: generation.template_run_id, readable: true };
+  const templateRunId = runLookup.templateRunId || null;
+  // A failed creation's push says its credits came back, as its Studio card
+  // does. A row that just failed to read is not asked again.
+  const returnedCredits = status === 'failed' && !templateRunId && runLookup.readable
+    ? await readReturnedCredits(adminSupabase, generation.id)
+    : null;
   const copy = templateRunId
     ? templateStepCopy(label, status, finishedStep)
     : {
       title: status === 'succeeded' ? `Your ${label} is ready` : `Your ${label} failed`,
       body: status === 'succeeded'
         ? 'Open it in your mobile history.'
-        : 'Open Magicbooklet to try again or adjust the prompt.',
+        : withReturnedCredits('Open Magicbooklet to try again or adjust the prompt.', returnedCredits),
     };
 
   return createMobileNotificationSafely({
