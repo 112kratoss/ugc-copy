@@ -3,7 +3,7 @@
 import { Loader2, PenLine } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { useAuth } from '@/components/AuthProvider';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
@@ -19,9 +19,11 @@ import {
     reportPostAfterConfirmation,
     type FeedSafetyOutcome,
 } from '@/lib/feed-safety-actions';
-import { buildPostFeedCards } from '@/lib/post-feed-presentation';
+import { createPostFeedCardBuilder, type PostFeedCard } from '@/lib/post-feed-presentation';
+import { trackProductEvent } from '@/lib/product-analytics';
 import {
     getShowcaseFeedSessionId,
+    getShowcaseRecommendation,
     QualifiedImpressionBoundary,
     sendShowcaseFeedEvent,
     sendShowcaseResourceOpenEvent,
@@ -37,6 +39,7 @@ import {
     writeShowcaseClientSnapshot,
     type ShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
+import { mergeShowcaseFeedKeepingVisibleItems } from '@/lib/showcase-feed-stability';
 import { scheduleIdleDebouncedWork } from '@/lib/schedule-idle-work';
 
 const PAGE_DETAIL_CONTEXT: FeedDetailContext = { from: 'community', returnTo: '/feed' };
@@ -45,6 +48,21 @@ const FEED_SNAPSHOT_IDLE_TIMEOUT_MS = 1_000;
 // A lane left and come back to within this long shows what it showed, as the
 // app's per-lane query cache does; after it the lane loads afresh.
 const LANE_CACHE_TTL_MS = 5 * 60_000;
+
+/**
+ * How a request for a lane's posts lands:
+ * - `replace`: the lane's page one, behind the lane's spinner;
+ * - `append`: the next page, after the posts already there;
+ * - `merge`: page one again, under the posts already drawn (a guest's own
+ *   page one). They keep their places and take the page's copies, with its
+ *   deliveries, and the rest of the page follows them. No spinner and no
+ *   alert: the lane as drawn works without it.
+ */
+type FeedFetchMode = 'replace' | 'append' | 'merge';
+
+// One function for the life of the module: a new one each render re-keyed the
+// windowed list, which then subscribed its scroll and resize listeners again.
+const getCardKey = (card: PostFeedCard) => card.id;
 
 type LaneCacheEntry = {
     items: ShowcaseFeedItem[];
@@ -63,8 +81,46 @@ function isHiddenFromLane(hidden: HiddenFromLane, item: ShowcaseFeedItem) {
     return hidden.postIds.has(item.id) || Boolean(item.creator.id && hidden.creatorIds.has(item.creator.id));
 }
 
+/**
+ * What the card menu removed this visit, per viewer as the lane snapshots are
+ * kept. Module state, not the feed's: opening a post unmounts the feed, and
+ * the page one it comes back to would draw again a post a signed-out viewer
+ * was told was gone "for this visit". A page load starts a new visit.
+ */
+const removedThisVisit = new Map<string, HiddenFromLane>();
+
+function getRemovedThisVisit(viewerId: string | null): HiddenFromLane {
+    // The server renders the feed for every visitor; only a browser has a
+    // visit, and a server-wide map would keep one entry per viewer for good.
+    if (typeof window === 'undefined') return { postIds: new Set(), creatorIds: new Set() };
+    const key = viewerId ?? 'signed-out';
+    let removed = removedThisVisit.get(key);
+    if (!removed) {
+        removed = { postIds: new Set(), creatorIds: new Set() };
+        removedThisVisit.set(key, removed);
+    }
+    return removed;
+}
+
+/** Test helper: each case starts a new visit. */
+export function forgetFeedRemovalsForTests() {
+    removedThisVisit.clear();
+}
+
 function emptyFeedPage(): ShowcaseFeedPage {
     return { items: [], pageInfo: { hasMore: false, nextOffset: 0, nextCursor: null } as ShowcaseFeedPage['pageInfo'] };
+}
+
+/**
+ * A snapshot's page with its save set put back on the posts: `isSaved` rides
+ * on the item, so a save made before navigating away would come back undone.
+ */
+function feedFromSnapshot(snapshot: ShowcaseClientSnapshot): ShowcaseFeedPage {
+    const savedItemIds = new Set(snapshot.savedItemIds);
+    return {
+        ...snapshot.feed,
+        items: snapshot.feed.items.map((item) => ({ ...item, isSaved: savedItemIds.has(item.id) })),
+    };
 }
 
 /** Keeps `?chip=` in step with the lane, so a reload or Back lands on it. */
@@ -73,6 +129,38 @@ function writeLaneToUrl(laneId: FeedChipId) {
     const url = new URL(window.location.href);
     if (laneId === 'for-you') url.searchParams.delete('chip'); else url.searchParams.set('chip', laneId);
     window.history.replaceState(window.history.state, '', url);
+}
+
+/** The lane `?chip=` names, For you when it names none. */
+function readLaneFromUrl(): FeedChipId {
+    return getFeedChip(new URLSearchParams(window.location.search).get('chip')).id;
+}
+
+/** The post page's way back, to the lane the post was opened from. */
+function withLaneInReturnTo(context: FeedDetailContext, laneId: FeedChipId): FeedDetailContext {
+    const url = new URL(context.returnTo, 'https://return.invalid');
+    if (laneId === 'for-you') url.searchParams.delete('chip'); else url.searchParams.set('chip', laneId);
+    const returnTo = `${url.pathname}${url.search}${url.hash}`;
+    return returnTo === context.returnTo ? context : { ...context, returnTo };
+}
+
+/**
+ * Takes a post's free recipe for the viewer, as the post page's recipe panel
+ * and the reel do, with their funnel events: a recipe got from a Home card
+ * counts as one got there.
+ */
+async function claimFreeRecipe(postId: string, accessToken: string) {
+    trackProductEvent('recipe_unlock_started', { method: 'free', post_id: postId });
+    const response = await fetch(`/api/posts/${postId}/resource-bundle/unlock-free`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}` },
+    }).catch(() => null);
+    if (!response?.ok) {
+        const data = await response?.json().catch(() => null) as { error?: unknown } | null | undefined;
+        trackProductEvent('recipe_unlock_failed', { method: 'free', post_id: postId });
+        throw new Error(typeof data?.error === 'string' && data.error ? data.error : 'Failed to get the free recipe.');
+    }
+    trackProductEvent('recipe_unlock_succeeded', { method: 'free', post_id: postId });
 }
 
 /**
@@ -94,6 +182,12 @@ interface FeedClientProps {
      */
     initialFeed: ShowcaseFeedPage | null;
     initialChipId: FeedChipId;
+    /**
+     * The page could not read `?chip=` (the static signed-out `/`), so it
+     * rendered `initialChipId`; the lane the address names is switched to
+     * after mount, from its snapshot when there is one.
+     */
+    laneFromUrl?: boolean;
     /**
      * `page` (default) renders the standalone /feed page: own header, page
      * gutters, Share CTA. `embedded` drops the header and gutters so the feed
@@ -119,17 +213,23 @@ function toggleInSet(current: Set<string>, id: string) {
 export default function FeedClient({
     initialFeed,
     initialChipId,
+    laneFromUrl = false,
     variant = 'page',
     detailContext = PAGE_DETAIL_CONTEXT,
     initialPriorityPreview = null,
 }: FeedClientProps) {
     const router = useRouter();
-    const { session, user } = useAuth();
+    const { session, user, isLoading: authLoading } = useAuth();
     const accessToken = session?.access_token ?? null;
     const isEmbedded = variant === 'embedded';
 
     const [chipId, setChipId] = useState<FeedChipId>(initialChipId);
     const viewerId = user?.id ?? null;
+    // Posts and creators removed through the card menu. Pages and lanes that
+    // arrive afterwards are filtered the same way, for the rest of the visit.
+    const removedForViewer = useMemo(() => getRemovedThisVisit(viewerId), [viewerId]);
+    // "Back to Home" from a post lands on the lane it was opened from.
+    const laneDetailContext = useMemo(() => withLaneInReturnTo(detailContext, chipId), [chipId, detailContext]);
 
     // Opening a post unmounts this feed, so everything paged in after the server's
     // first page lives only in React state and dies on the way out. Coming back
@@ -155,19 +255,17 @@ export default function FeedClient({
     const [restoredFeed] = useState(() => {
         const snapshot = readShowcaseClientSnapshot(buildLaneCacheKey(initialChipId));
         if (!snapshot || snapshot.feed.items.length <= (initialFeed?.items.length ?? 0)) return null;
-
-        // `isSaved` rides on the item, so a save made before navigating away would
-        // come back undone unless the snapshot's save set is reapplied.
-        const restoredSavedItemIds = new Set(snapshot.savedItemIds);
-        return {
-            ...snapshot.feed,
-            items: snapshot.feed.items.map((item) => ({
-                ...item,
-                isSaved: restoredSavedItemIds.has(item.id),
-            })),
-        };
+        return feedFromSnapshot(snapshot);
     });
-    const seedFeed = useMemo(() => restoredFeed ?? initialFeed ?? emptyFeedPage(), [initialFeed, restoredFeed]);
+    // The viewer the feed mounted for: signing in or out elsewhere must not
+    // swap the seed, which would reset the lane under the reader.
+    const [removedAtMount] = useState(() => getRemovedThisVisit(viewerId));
+    const seedFeed = useMemo(() => {
+        const feed = restoredFeed ?? initialFeed ?? emptyFeedPage();
+        // The server's page one still holds what was removed before this mount.
+        const items = feed.items.filter((item) => !isHiddenFromLane(removedAtMount, item));
+        return items.length === feed.items.length ? feed : { ...feed, items };
+    }, [initialFeed, removedAtMount, restoredFeed]);
     const needsInitialFetch = initialFeed === null && !restoredFeed;
 
     const [nextOffset, setNextOffset] = useState<number | null>(
@@ -200,8 +298,9 @@ export default function FeedClient({
     // accumulates 50+ cards, and each would otherwise carry its own Escape
     // listener, scroll lock and focus trap.
     const [lightbox, setLightbox] = useState<FeedLightboxState>(null);
-    // Hovering the same card repeatedly must not re-issue the prefetch.
-    const prefetchedIdsRef = useRef<Set<string>>(new Set());
+    // Hovering the same card repeatedly must not re-issue the prefetch. Keyed
+    // by address: the post's way back names the lane it is opened from.
+    const prefetchedHrefsRef = useRef<Set<string>>(new Set());
     const requestIdRef = useRef(0);
     const activeRequestRef = useRef<AbortController | null>(null);
     const pendingLoadMoreKeyRef = useRef<string | null>(null);
@@ -214,13 +313,9 @@ export default function FeedClient({
     const laneCacheRef = useRef(new Map<FeedChipId, LaneCacheEntry>());
     // The last page one of the current lane; a snapshot carries its session.
     const lanePageRef = useRef<ShowcaseFeedPage | null>(initialFeed);
-    // Posts and creators removed through the card menu. Pages that arrive
-    // afterwards are filtered the same way; a signed-out viewer's choices live
-    // here for the visit only.
-    const hiddenRef = useRef<HiddenFromLane>({
-        postIds: new Set(),
-        creatorIds: new Set(),
-    });
+    // For you's page one has been read by this client for this viewer, so a
+    // guest's own page one is not asked for again.
+    const forYouFetchedRef = useRef(false);
     const pendingFeedSnapshotRef = useRef<{
         key: string;
         snapshot: Omit<ShowcaseClientSnapshot, 'cachedAt'>;
@@ -239,6 +334,7 @@ export default function FeedClient({
         items,
         setItems,
         savedItemIds,
+        addSavedItemIds,
         savingItemIds,
         toggleSave,
     } = useOptimisticPostSave<ShowcaseFeedItem>({
@@ -253,7 +349,9 @@ export default function FeedClient({
         onAuthRequired: () => { router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath('/feed'))}`); },
         onError: (error) => {
             console.error('Failed to save feed post:', error);
-            setLoadError('Could not update that save. Try again.');
+            // The notice, not the load alert: that alert's Retry loads a page,
+            // and at the end of a lane it reloads the lane from the top.
+            setFeedbackNotice({ tone: 'error', message: 'Could not update that save. Try again.' });
         },
         // The ranker hears a save from the Home feed as it does from Explore and
         // the reel. Best effort: the hook never undoes a save for its failure.
@@ -275,21 +373,26 @@ export default function FeedClient({
         feedItemsForEventsRef.current = items;
     }, [items]);
 
-    const cards = useMemo(() => buildPostFeedCards(items), [items]);
+    // An item that did not change keeps its card, and the memoised card skips
+    // its render: a save re-renders the saved card alone, and a page only its
+    // own cards.
+    const [buildCards] = useState(() => createPostFeedCardBuilder());
+    const cards = useMemo(() => buildCards(items), [buildCards, items]);
 
     const fetchPage = useCallback(async (
         targetChipId: FeedChipId,
         offset: number,
-        replace: boolean,
+        mode: FeedFetchMode,
         cursor: string | null = null,
     ) => {
-        if (!replace && pagingBlockedRef.current) return;
+        const append = mode === 'append';
+        if (append && pagingBlockedRef.current) return;
 
-        // A lane switch always restarts the ranking, so it never carries a
-        // cursor forward from the lane it is leaving.
-        const continuationCursor = replace ? null : cursor;
+        // Page one always restarts the ranking, so it never carries a cursor
+        // forward from the lane it is leaving.
+        const continuationCursor = append ? cursor : null;
         const requestKey = `${targetChipId}:${continuationCursor ?? offset}`;
-        if (!replace && pendingLoadMoreKeyRef.current === requestKey) return;
+        if (append && pendingLoadMoreKeyRef.current === requestKey) return;
 
         const requestId = ++requestIdRef.current;
         activeRequestRef.current?.abort();
@@ -297,9 +400,10 @@ export default function FeedClient({
         activeRequestRef.current = controller;
         pagingBlockedRef.current = true;
 
-        if (!replace) pendingLoadMoreKeyRef.current = requestKey;
-        if (replace) setSwitching(true); else setLoadingMore(true);
-        setLoadError(null);
+        if (append) pendingLoadMoreKeyRef.current = requestKey;
+        if (mode === 'replace') setSwitching(true);
+        if (append) setLoadingMore(true);
+        if (mode !== 'merge') setLoadError(null);
 
         try {
             const chip = getFeedChip(targetChipId);
@@ -331,20 +435,30 @@ export default function FeedClient({
             const page = await response.json() as ShowcaseFeedPage;
             if (requestId !== requestIdRef.current) return;
 
-            const visibleItems = page.items.filter((item) => !isHiddenFromLane(hiddenRef.current, item));
-            if (replace) lanePageRef.current = page;
-            setItems((current) => (replace
-                ? visibleItems
+            const visibleItems = page.items.filter((item) => !isHiddenFromLane(removedForViewer, item));
+            if (!append) lanePageRef.current = page;
+            if (!append && targetChipId === 'for-you') forYouFetchedRef.current = true;
+            setItems((current) => {
+                if (mode === 'replace') return visibleItems;
+                if (mode === 'merge') {
+                    const merged = mergeShowcaseFeedKeepingVisibleItems(current, visibleItems, current.length);
+                    // Nothing new keeps the array, and with it every card.
+                    return merged.length === current.length && merged.every((item, index) => item === current[index])
+                        ? current
+                        : merged;
+                }
                 // The ranker can repeat an item across pages; the id guard keeps
                 // React keys unique rather than trusting the page boundary.
-                : [...current, ...visibleItems.filter((item) => !current.some((existing) => existing.id === item.id))]));
+                return [...current, ...visibleItems.filter((item) => !current.some((existing) => existing.id === item.id))];
+            });
+            addSavedItemIds(visibleItems.filter((item) => item.isSaved).map((item) => item.id));
             setNextOffset(page.pageInfo.hasMore ? page.pageInfo.nextOffset : null);
             setNextCursor(page.pageInfo.hasMore ? page.pageInfo.nextCursor ?? null : null);
-            // A lane switch starts a new session and adopts whatever the page
-            // says, including nothing. Paging within a lane keeps the session it
+            // Page one starts a new session and adopts whatever the page says,
+            // including nothing. Paging within a lane keeps the session it
             // already has rather than dropping it for an unranked page.
             const nextFeedSessionId = getShowcaseFeedSessionId(page);
-            if (replace || nextFeedSessionId) {
+            if (!append || nextFeedSessionId) {
                 setFeedSessionId(nextFeedSessionId);
             }
         } catch (error) {
@@ -352,7 +466,10 @@ export default function FeedClient({
             if (requestId !== requestIdRef.current) return;
 
             console.error('Failed to load feed page:', error);
-            if (replace) {
+            if (mode === 'merge') {
+                // The lane as drawn still works; asking again would fail again.
+                forYouFetchedRef.current = true;
+            } else if (mode === 'replace') {
                 setItems([]);
                 setNextOffset(null);
                 setNextCursor(null);
@@ -371,7 +488,7 @@ export default function FeedClient({
                 setSwitching(false);
             }
         }
-    }, [accessToken, setItems]);
+    }, [accessToken, addSavedItemIds, removedForViewer, setItems]);
 
     useEffect(() => () => {
         requestIdRef.current += 1;
@@ -383,11 +500,30 @@ export default function FeedClient({
         // effect cleanup (strict mode, Fast Refresh) aborts the request in
         // flight, and the re-run has to start it again.
         if (!needsInitialFetch || items.length > 0 || loadError) return;
-        void fetchPage(initialChipId, 0, true);
+        // The lane the address names is fetched by the switch after mount.
+        if (laneFromUrl && readLaneFromUrl() !== initialChipId) return;
+        void fetchPage(initialChipId, 0, 'replace');
         // `items` and `loadError` are read, not reacted to: a token refresh
         // mid-request must not start a second one.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [fetchPage, initialChipId, needsInitialFetch]);
+
+    // A guest's page one on the static `/` (and on a signed-out `/feed`) is
+    // built for everyone: it has no session and no card has a delivery, so
+    // nothing on it reaches the ranker and the menu's feedback has nothing to
+    // name. The guest's own page one, asked for once the page is live (the
+    // request sets the feed cookie and starts the session), gives the cards
+    // already drawn their deliveries in place, and the lane its cursor. Keyed
+    // on what the lane shows, as the fetch above is: a cleanup that aborts the
+    // request lets the re-run ask again.
+    useEffect(() => {
+        if (authLoading || viewerId || chipId !== 'for-you' || feedSessionId) return;
+        if (switching || loadError || forYouFetchedRef.current) return;
+        // The lane the address names is switched to after mount, and this run
+        // still sees For you.
+        if (laneFromUrl && readLaneFromUrl() !== chipId) return;
+        void fetchPage('for-you', 0, 'merge');
+    }, [authLoading, chipId, feedSessionId, fetchPage, laneFromUrl, loadError, switching, viewerId]);
 
     useEffect(() => {
         // An empty list is the transient state mid chip-switch, never a
@@ -440,7 +576,7 @@ export default function FeedClient({
                 !pagingBlockedRef.current
                 && entries.some((entry) => entry.isIntersecting)
             ) {
-                void fetchPage(chipId, nextOffset ?? 0, false, nextCursor);
+                void fetchPage(chipId, nextOffset ?? 0, 'append', nextCursor);
             }
         }, { rootMargin: '600px 0px' });
 
@@ -448,10 +584,12 @@ export default function FeedClient({
         return () => observer.disconnect();
     }, [chipId, fetchPage, loadingMore, nextCursor, nextOffset, switching]);
 
-    const selectChip = useCallback((nextChipId: FeedChipId) => {
+    // `snapshot`: the lane as an earlier mount of the feed left it, shown when
+    // this mount has no fresher copy of its own.
+    const selectChip = useCallback((nextChipId: FeedChipId, snapshot: LaneCacheEntry | null = null) => {
         if (nextChipId === chipId) {
             // The active chip again is the one way to refresh from the top.
-            void fetchPage(chipId, 0, true);
+            void fetchPage(chipId, 0, 'replace');
             return;
         }
         laneCacheRef.current.set(chipId, { items, nextOffset, nextCursor, feedSessionId, cachedAt: Date.now() });
@@ -463,7 +601,10 @@ export default function FeedClient({
         writeLaneToUrl(nextChipId);
 
         const cached = laneCacheRef.current.get(nextChipId);
-        if (cached && cached.items.length > 0 && Date.now() - cached.cachedAt < LANE_CACHE_TTL_MS) {
+        const kept = cached && cached.items.length > 0 && Date.now() - cached.cachedAt < LANE_CACHE_TTL_MS
+            ? cached
+            : snapshot;
+        if (kept && kept.items.length > 0) {
             // Back to a lane seen minutes ago: show it as it was, no spinner.
             requestIdRef.current += 1;
             activeRequestRef.current?.abort();
@@ -472,18 +613,50 @@ export default function FeedClient({
             setSwitching(false);
             setLoadingMore(false);
             setLoadError(null);
-            // A post removed from another lane since this one was left stays gone.
-            setItems(cached.items.filter((item) => !isHiddenFromLane(hiddenRef.current, item)));
-            setNextOffset(cached.nextOffset);
-            setNextCursor(cached.nextCursor);
-            setFeedSessionId(cached.feedSessionId);
+            // A post removed from another lane since this one was left stays
+            // gone. Its saves need no adding back: the saved set is shared by
+            // every lane and already holds what this lane's pages brought,
+            // while the posts' own flags are as old as the cache and would
+            // bring back a save undone since.
+            setItems(kept.items.filter((item) => !isHiddenFromLane(removedForViewer, item)));
+            setNextOffset(kept.nextOffset);
+            setNextCursor(kept.nextCursor);
+            setFeedSessionId(kept.feedSessionId);
             return;
         }
         setItems([]);
         setNextOffset(null);
         setNextCursor(null);
-        void fetchPage(nextChipId, 0, true);
-    }, [chipId, feedSessionId, fetchPage, items, nextCursor, nextOffset, setItems]);
+        void fetchPage(nextChipId, 0, 'replace');
+    }, [chipId, feedSessionId, fetchPage, items, nextCursor, nextOffset, removedForViewer, setItems]);
+
+    // The static `/` renders For you whatever `?chip=` says. Back from a post
+    // opened in another lane lands here, so that lane is shown after mount, as
+    // it was left when its snapshot is still fresh. Before the first paint: a
+    // frame of For you would flash under the lane's chip.
+    useLayoutEffect(() => {
+        if (!laneFromUrl) return;
+        const urlLaneId = readLaneFromUrl();
+        if (urlLaneId === initialChipId) return;
+
+        const snapshot = readShowcaseClientSnapshot(buildLaneCacheKey(urlLaneId));
+        if (!snapshot || snapshot.feed.items.length === 0) {
+            selectChip(urlLaneId);
+            return;
+        }
+        const feed = feedFromSnapshot(snapshot);
+        lanePageRef.current = feed;
+        addSavedItemIds(feed.items.filter((item) => item.isSaved).map((item) => item.id));
+        selectChip(urlLaneId, {
+            items: feed.items,
+            nextOffset: feed.pageInfo.hasMore ? feed.pageInfo.nextOffset : null,
+            nextCursor: feed.pageInfo.hasMore ? feed.pageInfo.nextCursor ?? null : null,
+            feedSessionId: getShowcaseFeedSessionId(feed),
+            cachedAt: snapshot.cachedAt,
+        });
+        // Once, on mount: from then on the address follows the lane.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const toggleExpanded = useCallback((id: string) => {
         setExpandedIds((current) => toggleInSet(current, id));
@@ -558,55 +731,88 @@ export default function FeedClient({
             index: mediaIndex,
         });
     }, []);
-    const handleOpenPost = useCallback((postId: string) => {
-        // The ranker's seen-suppression reads opens as well as impressions;
-        // the Home feed used to report only shares.
+    // Every way into a post sends `open`: the card, its title link, a new tab,
+    // Read more. The ranker counts it toward the post's usefulness and the
+    // viewer's interests; seen-suppression reads impressions only.
+    const recordOpen = useCallback((postId: string) => {
         const cardIndex = cardsRef.current.findIndex((candidate) => candidate.id === postId);
-        const card = cardIndex >= 0 ? cardsRef.current[cardIndex] : null;
-        if (card) {
-            void sendShowcaseFeedEvent({
-                item: card.item,
-                eventType: 'open',
-                sourceSurface: 'feed',
-                accessToken,
-                feedSessionId,
-                fallbackPosition: cardIndex,
-            }).catch(() => undefined);
-        }
+        if (cardIndex < 0) return;
+        void sendShowcaseFeedEvent({
+            item: cardsRef.current[cardIndex].item,
+            eventType: 'open',
+            sourceSurface: 'feed',
+            accessToken,
+            feedSessionId,
+            fallbackPosition: cardIndex,
+        }).catch(() => undefined);
+    }, [accessToken, feedSessionId]);
+    // The post's address carries the card's delivery, so a report or a comment
+    // filed on the post page is credited to it. Opened and warmed alike: the
+    // prefetch has to be of the address the click opens.
+    const buildPostPath = useCallback((postId: string, section?: 'resources') => {
+        const item = cardsRef.current.find((card) => card.id === postId)?.item;
+        return buildShowcaseDetailPath(postId, {
+            ...laneDetailContext,
+            section,
+            deliveryId: item ? getShowcaseRecommendation(item)?.deliveryId : null,
+        });
+    }, [laneDetailContext]);
+    const handleOpenPost = useCallback((postId: string) => {
+        recordOpen(postId);
         // An imperative push raises no link status, so the progress bar has to
         // be told the click happened. Client-side navigation keeps the shell
         // alive; a full document load here made every post click pay for a
         // cold reload out and another one back.
         publishNavigationStart();
-        router.push(buildShowcaseDetailPath(postId, detailContext));
-    }, [accessToken, detailContext, feedSessionId, router]);
+        router.push(buildPostPath(postId));
+    }, [buildPostPath, recordOpen, router]);
     const handlePrefetchPost = useCallback((postId: string) => {
-        if (prefetchedIdsRef.current.has(postId)) return;
-        prefetchedIdsRef.current.add(postId);
-        router.prefetch(buildShowcaseDetailPath(postId, detailContext));
-    }, [detailContext, router]);
+        const href = buildPostPath(postId);
+        if (prefetchedHrefsRef.current.has(href)) return;
+        prefetchedHrefsRef.current.add(href);
+        router.prefetch(href);
+    }, [buildPostPath, router]);
     // Not interested / Hide creator, as the app's card menu and the showcase
     // grid offer: the post (or the creator's posts) leave the lane at once, the
     // ranker hears why, and a failed save puts them back.
     const handleFeedback = useCallback(async (postId: string, action: ShowcaseFeedbackAction) => {
-        const target = items.find((candidate) => candidate.id === postId);
+        // The lane through the ref, as the other card handlers read it: with
+        // `items` among its deps, every save and page made a new handler, and
+        // every mounted card rendered again for it.
+        const lane = cardsRef.current.map((card) => card.item);
+        const target = lane.find((candidate) => candidate.id === postId);
         if (!target) return;
         if (action === 'hide_creator' && (!target.creator.id || target.creator.id === user?.id)) return;
 
-        const removed = items
+        const removed = lane
             .map((item, index) => ({ item, index }))
             .filter(({ item }) => (action === 'hide_creator'
                 ? item.creator.id === target.creator.id
                 : item.id === postId));
         if (removed.length === 0) return;
 
-        const hidden = hiddenRef.current;
+        const hidden = removedForViewer;
         if (action === 'hide_creator' && target.creator.id) hidden.creatorIds.add(target.creator.id);
         else hidden.postIds.add(postId);
         const removedIds = new Set(removed.map(({ item }) => item.id));
         setFeedbackNotice(null);
         setItems((current) => current.filter((item) => !removedIds.has(item.id)));
         setLightbox((current) => (current && removedIds.has(current.postId) ? null : current));
+
+        const doneMessage = !user
+            ? action === 'hide_creator'
+                ? `Posts from ${target.creator.name} are hidden for this visit.`
+                : 'Post removed for this visit.'
+            : action === 'hide_creator'
+                ? `Posts from ${target.creator.name} are now hidden.`
+                : 'Thanks. We\u2019ll show you fewer posts like that.';
+        // Signed out, the server takes feedback only on a post it delivered,
+        // and refuses the rest: page one of the static `/` and the Recent lane
+        // carry no delivery. The removal stays with this visit; nothing is sent.
+        if (!user && !getShowcaseRecommendation(target)?.deliveryId) {
+            setFeedbackNotice({ tone: 'success', message: doneMessage });
+            return;
+        }
 
         try {
             await sendShowcaseFeedEvent({
@@ -618,16 +824,7 @@ export default function FeedClient({
                 fallbackPosition: removed[0].index,
                 metadata: { creatorId: target.creator.id },
             });
-            setFeedbackNotice({
-                tone: 'success',
-                message: !user
-                    ? action === 'hide_creator'
-                        ? `Posts from ${target.creator.name} are hidden for this visit.`
-                        : 'Post removed for this visit.'
-                    : action === 'hide_creator'
-                        ? `Posts from ${target.creator.name} are now hidden.`
-                        : 'Thanks. We\u2019ll show you fewer posts like that.',
-            });
+            setFeedbackNotice({ tone: 'success', message: doneMessage });
         } catch (error) {
             console.error('Failed to save feed feedback:', error);
             if (action === 'hide_creator' && target.creator.id) hidden.creatorIds.delete(target.creator.id);
@@ -646,12 +843,12 @@ export default function FeedClient({
                 message: 'We couldn\u2019t save that preference, so the post was restored. Please try again.',
             });
         }
-    }, [accessToken, feedSessionId, items, setItems, user]);
+    }, [accessToken, feedSessionId, removedForViewer, setItems, user]);
     // Remix starts from the card, as it does in the app and on the showcase
     // grid; the pill used to be a link to the post page, one page short.
     const handleRemix = useCallback(async (postId: string) => {
         if (!user || !accessToken) {
-            router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(detailContext.returnTo))}`);
+            router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(laneDetailContext.returnTo))}`);
             return;
         }
         const cardIndex = cardsRef.current.findIndex((candidate) => candidate.id === postId);
@@ -659,6 +856,10 @@ export default function FeedClient({
         setRemixingId(postId);
         setFeedbackNotice(null);
         try {
+            // A remix the creator sells with a recipe that costs nothing: the
+            // tap takes the recipe on its way, as the app's Remix does. A paid
+            // one is the card's link to the recipe, never this tap.
+            if (card?.remixAccess === 'free-unlock') await claimFreeRecipe(postId, accessToken);
             const { redirectTo } = await requestShowcaseRemix({ accessToken, postId });
             if (card) {
                 void sendShowcaseFeedEvent({
@@ -687,7 +888,7 @@ export default function FeedClient({
                     });
                 }
                 publishNavigationStart();
-                router.push(buildShowcaseDetailPath(postId, { ...detailContext, section: 'resources' }));
+                router.push(buildPostPath(postId, 'resources'));
                 return;
             }
             setFeedbackNotice({
@@ -697,16 +898,16 @@ export default function FeedClient({
         } finally {
             setRemixingId(null);
         }
-    }, [accessToken, detailContext, feedSessionId, router, user]);
+    }, [accessToken, buildPostPath, feedSessionId, laneDetailContext, router, user]);
     // Report content, Report user and Block user, asked for and sent as
     // Explore's tile and the reel send them (`lib/feed-safety-actions.ts`). The
     // server takes them from registered accounts only, so a signed-out viewer
     // is asked to sign in first, and comes back here.
     const requireAccount = useCallback((): string | null => {
         if (user && accessToken) return accessToken;
-        router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(detailContext.returnTo))}`);
+        router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(laneDetailContext.returnTo))}`);
         return null;
-    }, [accessToken, detailContext.returnTo, router, user]);
+    }, [accessToken, laneDetailContext.returnTo, router, user]);
     const removeFromLane = useCallback((predicate: (item: ShowcaseFeedItem) => boolean) => {
         setItems((current) => current.filter((item) => !predicate(item)));
         setLightbox((current) => {
@@ -733,11 +934,11 @@ export default function FeedClient({
             deliveryId,
         });
         if (outcome.status === 'done') {
-            hiddenRef.current.postIds.add(postId);
+            removedForViewer.postIds.add(postId);
             removeFromLane((item) => item.id === postId);
         }
         showOutcome(outcome);
-    }, [clearNotice, removeFromLane, requireAccount, showOutcome]);
+    }, [clearNotice, removeFromLane, removedForViewer, requireAccount, showOutcome]);
     const handleReportUser = useCallback(async (postId: string) => {
         const creatorId = cardsRef.current.find((card) => card.id === postId)?.item.creator.id;
         if (!creatorId || creatorId === user?.id) return;
@@ -758,11 +959,11 @@ export default function FeedClient({
             onSend: clearNotice,
         });
         if (outcome.status === 'done') {
-            hiddenRef.current.creatorIds.add(creatorId);
+            removedForViewer.creatorIds.add(creatorId);
             removeFromLane((item) => item.creator.id === creatorId);
         }
         showOutcome(outcome);
-    }, [clearNotice, removeFromLane, requireAccount, showOutcome, user?.id]);
+    }, [clearNotice, removeFromLane, removedForViewer, requireAccount, showOutcome, user?.id]);
     const priorityPoster = useMemo(() => (initialPriorityPreview
         ? { mediaId: initialPriorityPreview.mediaId, dataUrl: initialPriorityPreview.dataUrl }
         : null), [initialPriorityPreview]);
@@ -830,7 +1031,7 @@ export default function FeedClient({
                             nextOffset ?? 0,
                             // Nothing left to continue from means retrying has
                             // to restart the lane rather than page on.
-                            nextOffset === null && nextCursor === null,
+                            nextOffset === null && nextCursor === null ? 'replace' : 'append',
                             nextCursor,
                         )}
                         className="ui-focus-ring min-h-11 rounded-full border border-current px-4 text-xs font-bold"
@@ -859,22 +1060,26 @@ export default function FeedClient({
                     Loading this lane…
                 </p>
             ) : cards.length === 0 ? (
-                <div className="rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-6 py-16 text-center">
-                    <p className="text-lg font-bold text-[var(--ui-text-primary)]">Nothing in this lane yet</p>
-                    <p className="mt-2 text-sm text-[var(--ui-text-muted)]">
-                        Switch lanes, or share a note, prompt, or creation to start it.
-                    </p>
-                    <Link
-                        href={`/post/new?from=community&returnTo=${encodeURIComponent(detailContext.returnTo)}`}
-                        className="ui-focus-ring mt-5 inline-flex min-h-12 items-center rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)]"
-                    >
-                        Share the first post
-                    </Link>
-                </div>
+                // A lane that failed to load is not an empty one: the alert
+                // above says so, with its Retry, and nothing invites a post.
+                loadError ? null : (
+                    <div className="rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-6 py-16 text-center">
+                        <p className="text-lg font-bold text-[var(--ui-text-primary)]">Nothing in this lane yet</p>
+                        <p className="mt-2 text-sm text-[var(--ui-text-muted)]">
+                            Switch lanes, or share a note, prompt, or creation to start it.
+                        </p>
+                        <Link
+                            href={`/post/new?from=community&returnTo=${encodeURIComponent(laneDetailContext.returnTo)}`}
+                            className="ui-focus-ring mt-5 inline-flex min-h-12 items-center rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)]"
+                        >
+                            Share the first post
+                        </Link>
+                    </div>
+                )
             ) : (
                 <WindowedFeedList
                     items={cards}
-                    getKey={(card) => card.id}
+                    getKey={getCardKey}
                     // Comment threads own fetched pages, reply expansion and an
                     // unsent draft. Keep an open conversation alive even after
                     // its card scrolls beyond the ordinary 24-card window.
@@ -898,7 +1103,7 @@ export default function FeedClient({
                             accessToken={accessToken}
                             priorityMedia={cardIndex === 0}
                             priorityPoster={card.id === initialPriorityPreview?.postId ? priorityPoster : null}
-                            detailContext={detailContext}
+                            detailContext={laneDetailContext}
                             viewerIsOwner={Boolean(user && card.item.creator.id === user.id)}
                             signedIn={Boolean(user)}
                             remixing={remixingId === card.id}
@@ -911,6 +1116,7 @@ export default function FeedClient({
                             onCommentCountChange={applyCommentCount}
                             onOpenMedia={handleOpenMedia}
                             onOpenPost={handleOpenPost}
+                            onRecordOpen={recordOpen}
                             onPrefetchPost={handlePrefetchPost}
                             onFeedback={handleFeedback}
                             onRemix={handleRemix}
@@ -940,7 +1146,7 @@ export default function FeedClient({
                     <p className="text-sm font-semibold text-[var(--ui-text-muted)]">You&apos;re all caught up.</p>
                     <button
                         type="button"
-                        onClick={() => void fetchPage(chipId, 0, true)}
+                        onClick={() => void fetchPage(chipId, 0, 'replace')}
                         className="ui-focus-ring inline-flex min-h-11 items-center rounded-full border border-[var(--ui-border-default)] px-4 text-xs font-bold text-[var(--ui-text-secondary)] transition hover:text-[var(--ui-text-primary)]"
                     >
                         Refresh this lane

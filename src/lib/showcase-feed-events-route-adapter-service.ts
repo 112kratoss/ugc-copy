@@ -18,6 +18,8 @@ import {
   parseShowcaseFeedEventBatchPayload,
   recordShowcaseFeedEvent,
   recordShowcaseFeedEvents,
+  type ShowcaseFeedEventBatchOutcome,
+  type ShowcaseFeedEventRecordResult,
 } from '@/lib/showcase-feed-events-service';
 import {
   FEED_ANONYMOUS_COOKIE_MAX_AGE_SECONDS,
@@ -75,6 +77,26 @@ function attachAnonymousFeedCookie(response: NextResponse, identity: FeedAnonymo
     maxAge: FEED_ANONYMOUS_COOKIE_MAX_AGE_SECONDS,
   });
   return response;
+}
+
+/**
+ * One outcome per event the client sent, in its order: 200 when recorded (a
+ * replay of a recorded event included), otherwise the status and error that
+ * event would have been answered with on its own. `recorded` and `rejected`
+ * still count what the database answered, so an event refused while parsing
+ * appears here only.
+ */
+function batchEventOutcomes(
+  parsed: { payloadIndexes: number[]; refused: ShowcaseFeedEventBatchOutcome[] },
+  results: ShowcaseFeedEventRecordResult[],
+): ShowcaseFeedEventBatchOutcome[] {
+  const answered = results.map((result, position): ShowcaseFeedEventBatchOutcome => {
+    const index = parsed.payloadIndexes[position];
+    return result.ok
+      ? { index, status: 200 }
+      : { index, status: result.status, error: result.body.error };
+  });
+  return [...answered, ...parsed.refused].sort((left, right) => left.index - right.index);
 }
 
 async function getOptionalActorUserId(
@@ -199,8 +221,10 @@ async function handleShowcaseFeedEventPOST(
         anonymousIdentity,
       );
     }
+    // `results` says which events this 200 refused and why, so a client can
+    // count its losses; it retries none of them.
     return attachAnonymousFeedCookie(
-      NextResponse.json(result.body),
+      NextResponse.json({ ...result.body, results: batchEventOutcomes(parsed, result.results) }),
       anonymousIdentity,
     );
   } catch (error) {

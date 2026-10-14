@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   SHOWCASE_CLIENT_CACHE_TTL_MS,
@@ -6,9 +6,12 @@ import {
   claimVisitMemoryFor,
   clearShowcaseClientCacheForTests,
   readShowcaseClientSnapshot,
+  readShowcaseClientSnapshotToRestore,
   filterFeedItemsForVisit,
   forgetBlockedCreatorForVisit,
+  forgetShowcaseClientSnapshot,
   getCreatorsBlockedThisVisit,
+  hasFreshShowcaseClientSnapshot,
   getFeedPreferencesHiddenThisVisit,
   rememberViewerExclusionsForVisit,
   takeBlockedCreatorOffClientFeeds,
@@ -143,6 +146,77 @@ describe('showcase client cache', () => {
 
     expect(snapshot.feed.items).toHaveLength(SHOWCASE_SNAPSHOT_MAX_OFFSET_ITEMS);
     expect(snapshot.feed.pageInfo.nextOffset).toBe(SHOWCASE_SNAPSHOT_MAX_OFFSET_ITEMS);
+  });
+
+  // Explore's Refresh at the end of a lane: a back navigation must not bring
+  // the old grid back while page one is on its way, or after.
+  it('forgets one lane, in memory and in the tab, and keeps the others', () => {
+    const refreshedLane = buildKey('user-1');
+    const otherLane = buildShowcaseClientCacheKey({
+      viewerId: 'user-1',
+      category: 'all',
+      sort: 'recent',
+      tool: null,
+      unlock: 'all',
+      resource: 'all',
+    });
+    writeShowcaseClientSnapshot(refreshedLane, { feed, renderedItemCount: 4, savedItemIds: [] });
+    writeShowcaseClientSnapshot(otherLane, { feed, renderedItemCount: 4, savedItemIds: [] });
+
+    forgetShowcaseClientSnapshot(refreshedLane);
+
+    expect(readShowcaseClientSnapshot(refreshedLane)).toBeNull();
+    expect(Object.keys(window.sessionStorage).filter((key) => key.endsWith(refreshedLane))).toEqual([]);
+    expect(readShowcaseClientSnapshot(otherLane)).not.toBeNull();
+  });
+
+  // A reload asks for the page afresh: the grid kept from before it came back
+  // for ten minutes, with the new session merged in under it.
+  describe('after the browser reloads the page', () => {
+    function navigationIs(type: string, url = window.location.href) {
+      vi.spyOn(performance, 'getEntriesByType').mockImplementation((entryType: string) => (
+        entryType === 'navigation' ? [{ type, name: url } as unknown as PerformanceEntry] : []
+      ));
+    }
+    const keptBeforeTheReload = performance.timeOrigin - 60_000;
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('does not open Explore with what was kept before the reload, and the bootstrap does not hand over for it', () => {
+      const cacheKey = buildKey('user-1');
+      writeShowcaseClientSnapshot(cacheKey, { feed, renderedItemCount: 4, savedItemIds: [] }, keptBeforeTheReload);
+      navigationIs('reload');
+
+      expect(readShowcaseClientSnapshotToRestore(cacheKey)).toBeNull();
+      expect(hasFreshShowcaseClientSnapshot(cacheKey)).toBe(false);
+      // The home feed reads the same copies, and keeps its own rule.
+      expect(readShowcaseClientSnapshot(cacheKey)).not.toBeNull();
+    });
+
+    // The navigation entry says 'reload' for the whole life of the document,
+    // pages reached inside the app afterwards included.
+    it('opens Explore with what was kept since the reload, as on any return to it', () => {
+      const cacheKey = buildKey('user-1');
+      writeShowcaseClientSnapshot(cacheKey, { feed, renderedItemCount: 4, savedItemIds: [] });
+      navigationIs('reload');
+
+      expect(readShowcaseClientSnapshotToRestore(cacheKey)).toMatchObject({ renderedItemCount: 4 });
+      expect(hasFreshShowcaseClientSnapshot(cacheKey)).toBe(true);
+    });
+
+    it('restores after any other navigation, and after a reload of another page', () => {
+      const cacheKey = buildKey('user-1');
+      writeShowcaseClientSnapshot(cacheKey, { feed, renderedItemCount: 4, savedItemIds: [] }, keptBeforeTheReload);
+
+      navigationIs('navigate');
+      expect(readShowcaseClientSnapshotToRestore(cacheKey)).not.toBeNull();
+      navigationIs('back_forward');
+      expect(readShowcaseClientSnapshotToRestore(cacheKey)).not.toBeNull();
+      navigationIs('reload', new URL('/somewhere-else', window.location.href).href);
+      expect(readShowcaseClientSnapshotToRestore(cacheKey)).not.toBeNull();
+    });
   });
 
   // A creator can be blocked away from the pages that keep a snapshot: on

@@ -129,6 +129,23 @@ function shouldRetry(error: unknown) {
   return status === null || status === 0 || status === 408 || status === 429 || status >= 500;
 }
 
+/**
+ * Adds the entries a batch reply refused to `counts`, by the server's reason.
+ * A 200 can refuse some of its entries: an ended feed session, a delivery
+ * served to another identity (audit 04-11). They are not retried, since the
+ * same entry would be refused again. A server that sends no `results` adds
+ * nothing.
+ */
+function countRejectedEntries(reply: unknown, counts: Map<string, number>) {
+  if (!isRecord(reply) || !Array.isArray(reply.results)) return;
+  for (const result of reply.results) {
+    if (!isRecord(result) || typeof result.status !== 'number') continue;
+    if (result.status >= 200 && result.status < 300) continue;
+    const reason = typeof result.error === 'string' && result.error ? result.error : `HTTP ${result.status}`;
+    counts.set(reason, (counts.get(reason) ?? 0) + 1);
+  }
+}
+
 export function createFeedEventQueue(dependencies: FeedEventQueueDependencies) {
   const now = dependencies.now ?? Date.now;
   const random = dependencies.random ?? Math.random;
@@ -355,6 +372,7 @@ export function createFeedEventQueue(dependencies: FeedEventQueueDependencies) {
       if (bucket) bucket.push(entry);
       else readyByIdentity.set(entry.identityKey, [entry]);
     }
+    const rejectedByReason = new Map<string, number>();
 
     for (const [identityKey, identityEntries] of readyByIdentity) {
       for (let index = 0; index < identityEntries.length; index += FEED_EVENT_QUEUE_CHUNK_SIZE) {
@@ -387,10 +405,11 @@ export function createFeedEventQueue(dependencies: FeedEventQueueDependencies) {
         }
 
         try {
-          await dependencies.sendBatch(
+          const reply = await dependencies.sendBatch(
             chunk.map((entry) => entry.event),
             { accessToken },
           );
+          countRejectedEntries(reply, rejectedByReason);
           // Acknowledgement is the commit point. Until this resolves, the
           // chunk remains in AsyncStorage so suspension or termination can
           // only cause an idempotent replay, never silent loss.
@@ -412,6 +431,11 @@ export function createFeedEventQueue(dependencies: FeedEventQueueDependencies) {
       }
     }
 
+    // One line per flush, so a surface whose events are all refused can be
+    // told from a quiet one in the device log.
+    if (rejectedByReason.size > 0) {
+      console.warn('Feed events rejected by the server', Object.fromEntries(rejectedByReason));
+    }
     await persist();
     scheduleTimer(await dependencies.getCurrentIdentityKey().catch(() => null));
   }

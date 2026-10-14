@@ -13,7 +13,7 @@ import {
   WandSparkles,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Linking, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type NativeScrollEvent, type NativeSyntheticEvent, type ViewStyle } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Linking, Platform, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type NativeScrollEvent, type NativeSyntheticEvent, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
@@ -174,7 +174,11 @@ export function HomeDashboard() {
     replyTo?: string | string[];
   }>();
   // `user` gates the community actions on this screen (remix, save, follow).
-  const { user, api, credits, isLoading: isAuthLoading, signOut } = useAuth();
+  // The lanes are keyed by `identityUserId`, a guest's included: a guest minted
+  // after the first request, or the next one after a sign-out, needs a page
+  // ranked for it, since the server refuses events against another viewer's
+  // feed session.
+  const { user, identityUserId, api, credits, isLoading: isAuthLoading, signOut } = useAuth();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
@@ -234,11 +238,11 @@ export function HomeDashboard() {
   const activeChip = HOME_FEED_CHIPS.find((chip) => chip.id === activeChipId) ?? HOME_FEED_CHIPS[0];
   // The reel a card opens reads and pages these very pages (`lane` below).
   const laneQueryOptions = useMemo(
-    () => showcaseFeedLaneQueryOptions(api, activeChip.filters, user?.id),
-    [activeChip, api, user?.id]
+    () => showcaseFeedLaneQueryOptions(api, activeChip.filters, identityUserId),
+    [activeChip, api, identityUserId]
   );
   const queryKey = laneQueryOptions.queryKey;
-  const viewerFeedQueryKey = useMemo(() => createShowcaseFeedViewerQueryKey(user?.id), [user?.id]);
+  const viewerFeedQueryKey = useMemo(() => createShowcaseFeedViewerQueryKey(identityUserId), [identityUserId]);
 
   const profileQuery = useQuery({
     queryKey: ['profile', user?.id],
@@ -440,6 +444,15 @@ export function HomeDashboard() {
   useEffect(() => {
     playbackController.dispatch({ type: 'itemsChanged', items: cards.map((card) => card.item) });
   }, [cards, playbackController]);
+  // FlashList reports viewability by index, not by post: new posts landing on
+  // the indices already on screen (a refresh, the network page replacing the
+  // one restored at launch, a removed post) report nothing. Their impressions
+  // would wait, and the election would hold a post that has gone, until the
+  // next scroll. Recomputing reports the posts now there; a delivery already
+  // impressed is not sent again (`qualifiedImpressionsRef`).
+  useEffect(() => {
+    if (cards.length) feedRef.current?.recomputeViewableItems();
+  }, [cards]);
   const slidePreviews = useMemo(() => pickHomeSlidePreviews(cards), [cards]);
   const hasItems = cards.length > 0;
   const isFirstLoad = feedQuery.isLoading && !hasItems;
@@ -468,8 +481,8 @@ export function HomeDashboard() {
   // lanes are a tap away and not worth the storage.
   useEffect(() => {
     if (isAuthLoading || activeChipId !== PERSISTED_HOME_FEED_CHIP_ID || !feedQuery.isSuccess) return;
-    schedulePersistHomeFeed(queryClient, user?.id);
-  }, [activeChipId, feedQuery.dataUpdatedAt, feedQuery.isSuccess, isAuthLoading, queryClient, user?.id]);
+    schedulePersistHomeFeed(queryClient, identityUserId);
+  }, [activeChipId, feedQuery.dataUpdatedAt, feedQuery.isSuccess, identityUserId, isAuthLoading, queryClient]);
   // A save still waiting when home unmounts is dropped. An error boundary that
   // replaces home unmounts it too, and a page that failed to draw must not be
   // the one the next launch restores.
@@ -561,7 +574,11 @@ export function HomeDashboard() {
   };
 
   const openPost = (item: ShowcaseFeedItem, zoom: AppleZoomOpen | null = null, initialPage?: 'details', initialSection?: FeedReadMoreSection) => {
-    recordFeedEvent(item, 'open');
+    // The reel reads this very delivery from the lane and files its dwell as
+    // the reader leaves the post. The server keeps a delivery's first dwell,
+    // which would otherwise be the card's seconds before the tap, filed as
+    // Home blurs.
+    attention.handOff(item);
     queryClient.setQueryData<ShowcasePostResponse>(createShowcasePostQueryKey(item.id, user?.id), {
       success: true,
       item,
@@ -585,9 +602,11 @@ export function HomeDashboard() {
    * through other showcase posts — so a written post opens its own screen
    * rather than being dropped into a reel of other people's media.
    */
-  const openCard = (card: HomeFeedCard, options: { comments?: boolean; initialPage?: 'details'; initialSection?: FeedReadMoreSection; zoom?: AppleZoomOpen | null } = {}) => {
+  const openCard = (card: HomeFeedCard, options: { comments?: boolean; initialPage?: 'details'; initialSection?: FeedReadMoreSection; zoom?: AppleZoomOpen | null; recordOpen?: boolean } = {}) => {
+    // Every way into the post is an `open` but the recipe chip, which reports
+    // its resources opening instead (`resource_open`, as the web defines it).
+    if (options.recordOpen !== false) recordFeedEvent(card.item, 'open');
     if (getHomeFeedCardOpenTarget(card) === 'post') {
-      recordFeedEvent(card.item, 'open');
       // Seeded so the post screen paints from cache instead of refetching.
       queryClient.setQueryData<ShowcasePostResponse>(
         createShowcasePostQueryKey(card.item.id, user?.id),
@@ -612,15 +631,13 @@ export function HomeDashboard() {
 
   const shareItem = async (item: ShowcaseFeedItem) => {
     const url = buildShareUrl(env.siteUrl, `/showcase/${item.id}`, 'feed');
-    try {
-      const result = await Share.share({ title: item.title, message: `${item.title}\n${url}`, url });
-      if (result.action === Share.sharedAction) {
-        void api.shareShowcasePost(item.id, { sourceSurface: 'feed' }).catch(() => null);
-        recordFeedEvent(item, 'share');
-      }
-    } catch {
-      // A dismissed share sheet is not an error worth surfacing.
-    }
+    // A dismissed share sheet is not an error worth surfacing. `.catch` rather
+    // than try…catch, which React Compiler cannot compile around the check below.
+    const result = await Share.share({ title: item.title, message: `${item.title}\n${url}`, url }).catch(() => null);
+    // Android's share intent cannot report a dismissal (it answers "shared" either way), so only iOS counts a share.
+    if (Platform.OS !== 'ios' || result?.action !== Share.sharedAction) return;
+    void api.shareShowcasePost(item.id, { sourceSurface: 'feed' }).catch(() => null);
+    recordFeedEvent(item, 'share');
   };
 
   const remixItem = (item: ShowcaseFeedItem, options: { unlocked?: boolean } = {}) => {
@@ -898,7 +915,7 @@ export function HomeDashboard() {
         onShare={() => void shareItem(card.item)}
         onAssetPress={() => {
           recordResourceOpen(card.item);
-          openCard(card, { initialPage: 'details' });
+          openCard(card, { initialPage: 'details', recordOpen: false });
         }}
         onVideoProgress={(progress, durationMs) => (
           recordAttention(attention.recordProgress(card.item, progress, durationMs))

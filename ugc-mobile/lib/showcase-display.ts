@@ -37,10 +37,6 @@ export function isShowcaseCoverVideoStreaming(item: ShowcaseFeedItem, active: bo
   return Boolean(cover && cover.mediaKind === 'video' && getShowcaseFeedStreamUrl(cover));
 }
 
-export function selectActiveShowcaseVideoId(items: ShowcaseFeedItem[]) {
-  return items.find(isShowcaseVideoPreviewCandidate)?.id ?? null;
-}
-
 /**
  * Picks which visible videos may play, holding the ones already playing.
  *

@@ -180,7 +180,9 @@ export async function searchPublicContent(
   const contentQueryAllowed = options.normalizedQuery.length >= 3;
   const creatorTake = isTop ? 5 : options.limit + 1;
   const postTake = isTop ? 12 : options.limit + 1;
-  const recipeTake = isTop ? 6 : options.limit + 1;
+  // The marketplace list already reads one row past the page to learn whether
+  // there is more, so it is asked for the page itself.
+  const recipeTake = isTop ? 6 : options.limit;
 
   const creatorsPromise = options.type === 'top' || options.type === 'creators'
     ? searchCreators({
@@ -247,12 +249,16 @@ export async function searchPublicContent(
     : [];
   const postCursorRow = postHasMore ? postRows[options.limit - 1] : null;
 
-  const recipeHasMore = !isTop && recipePage.items.length > options.limit;
+  // The list pages in raw rows and drops the ones it cannot show (a hidden
+  // post, a failed quality check, a match only in resource text), so only its
+  // own nextOffset says where the next page starts. Counting returned items
+  // repeated a row after a drop, or ended the list early after two.
+  const recipeNextOffset = !isTop && recipePage.pageInfo.hasMore
+    ? recipePage.pageInfo.nextOffset
+    : null;
   const visibleRecipes = recipePage.items
-    .slice(0, isTop ? recipeTake : options.limit)
     .filter((item) => !blockedIds.has(item.seller.id))
     .map(recipeResult);
-  const recipeOffset = options.type === 'recipes' ? options.cursor?.offset ?? 0 : 0;
 
   return {
     query: options.query,
@@ -287,11 +293,11 @@ export async function searchPublicContent(
     recipes: options.type === 'top' || options.type === 'recipes'
       ? {
         items: visibleRecipes,
-        nextCursor: recipeHasMore
+        nextCursor: recipeNextOffset !== null
           ? encodePublicSearchCursor({
             version: 1,
             type: 'recipes',
-            offset: recipeOffset + options.limit,
+            offset: recipeNextOffset,
           })
           : null,
       }

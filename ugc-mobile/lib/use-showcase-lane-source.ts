@@ -2,6 +2,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { MagicbookletApiClient } from './api-client';
+import { useAuth } from './auth';
 import { readShowcasePostOrMissing } from './immersive-preview-source-data';
 import { buildImmersiveShowcaseItems, type ImmersivePreviewItem } from './immersive-preview-view-model';
 import { filterAnonymousSessionShowcaseFeedItems } from './showcase-feed-events';
@@ -30,6 +31,12 @@ type LaneApi = Pick<MagicbookletApiClient, 'getShowcaseFeed' | 'getShowcasePost'
  * The post the route named is looked up on its own only when the lane's loaded
  * pages do not hold it (sign-in can bring the reader back to a lane of another
  * account's), and then stays at the head of the list for this visit.
+ *
+ * `userId` names the lane: the backend identity, guest or registered
+ * (`identityUserId`), which the grids key their lanes by. What a registered
+ * account changes is read from auth, as the grids read it: a guest's removals
+ * last for this visit and leave the reel too, and only an account's own post
+ * offers Edit post.
  */
 export function useShowcaseLaneSource({
   api,
@@ -40,13 +47,15 @@ export function useShowcaseLaneSource({
   enabled = true,
 }: {
   api: LaneApi;
-  userId: string | undefined;
+  /** The backend identity, guest or registered: `identityUserId` from `useAuth`. */
+  userId: string | null | undefined;
   lane: ShowcaseFeedLane | null;
   initialId: string;
   /** Explore's reel leaves out posts with nothing to show, as its grid does. */
   mediaOnly?: boolean;
   enabled?: boolean;
 }) {
+  const registeredUserId = useAuth().user?.id ?? null;
   const active = enabled && Boolean(lane);
   const laneQuery = useInfiniteQuery({
     ...showcaseFeedLaneQueryOptions(api, lane ?? {}, userId),
@@ -60,15 +69,23 @@ export function useShowcaseLaneSource({
 
   const laneItems = useMemo(() => {
     const flattened = flattenShowcaseFeedPages(pages);
-    const visible = userId ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
-    return buildImmersiveShowcaseItems('showcase-feed', visible, userId ?? null)
+    const visible = registeredUserId ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
+    return buildImmersiveShowcaseItems('showcase-feed', visible, registeredUserId)
       .filter((item) => !mediaOnly || Boolean(item.mediaItems.length || item.mediaUrl));
-  }, [mediaOnly, pages, userId]);
+  }, [mediaOnly, pages, registeredUserId]);
   const selectedInLane = Boolean(initialId) && laneItems.some((item) => item.id === initialId);
+  // A post the lane held and then dropped (Not interested, Hide, Report take it
+  // out of the lane's pages) is not looked up again: the server would still
+  // return it, and it would come back at the end of the reel the reader just
+  // removed it from. Only a post the lane never held is fetched on its own.
+  const [selectionWasInLane, setSelectionWasInLane] = useState(false);
+  useEffect(() => {
+    if (selectedInLane) setSelectionWasInLane(true);
+  }, [selectedInLane]);
 
   const selectionQuery = useQuery({
-    queryKey: ['showcase-lane-selection', userId ?? 'anonymous', initialId],
-    enabled: active && Boolean(initialId) && laneHasData && !selectedInLane,
+    queryKey: ['showcase-lane-selection', userId?.trim() || 'installation', initialId],
+    enabled: active && Boolean(initialId) && laneHasData && !selectedInLane && !selectionWasInLane,
     staleTime: 1000 * 60,
     retry: false,
     queryFn: (): Promise<ShowcaseFeedItem | null> => readShowcasePostOrMissing(api, initialId),
@@ -84,15 +101,18 @@ export function useShowcaseLaneSource({
     if (!active) return [];
     if (!selectionPinned) return laneItems;
     const pinned = laneItems.find((item) => item.id === initialId)
-      ?? (selectionQuery.data ? buildImmersiveShowcaseItems('showcase-feed', [selectionQuery.data], userId ?? null)[0] : null);
+      ?? (selectionQuery.data ? buildImmersiveShowcaseItems('showcase-feed', [selectionQuery.data], registeredUserId)[0] : null);
     return pinned ? [pinned, ...laneItems.filter((item) => item.id !== initialId)] : laneItems;
-  }, [active, initialId, laneItems, selectionPinned, selectionQuery.data, userId]);
+  }, [active, initialId, laneItems, registeredUserId, selectionPinned, selectionQuery.data]);
 
   const selectionFound = Boolean(initialId) && items.some((item) => item.id === initialId);
   const selection: ProfileLibrarySelection = !active || !initialId
     ? 'none'
     : selectionFound
       ? 'found'
+      // Taken out of the lane by the reader: the reel moved on, nothing to find.
+      : selectionWasInLane
+        ? 'none'
       : !laneHasData && laneQuery.isError && !laneQuery.isFetching
         ? 'error'
         : !laneHasData || selectionQuery.fetchStatus === 'fetching' || (selectionQuery.data && !selectionPinned)

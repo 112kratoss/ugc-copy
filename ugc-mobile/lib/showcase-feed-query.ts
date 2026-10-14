@@ -42,10 +42,10 @@ const DEFAULT_FEED_FILTERS = {
 
 export function createShowcaseFeedQueryKey(
   filters: ShowcaseFeedFilters = {},
-  viewerUserId?: string | null
+  identityUserId?: string | null
 ) {
   return [
-    ...createShowcaseFeedViewerQueryKey(viewerUserId),
+    ...createShowcaseFeedViewerQueryKey(identityUserId),
     {
       category: filters.category ?? DEFAULT_FEED_FILTERS.category,
       resource: filters.resource ?? DEFAULT_FEED_FILTERS.resource,
@@ -56,8 +56,17 @@ export function createShowcaseFeedQueryKey(
   ] as const;
 }
 
-export function createShowcaseFeedViewerQueryKey(viewerUserId?: string | null) {
-  return ['showcase-feed', 'infinite', viewerUserId?.trim() || 'anonymous'] as const;
+/**
+ * Every lane of one viewer. Keyed by the backend identity the feed request
+ * carries (`identityUserId` from `useAuth`: a guest's uid or a registered
+ * one), because the server ranks the page for that identity and refuses its
+ * session, cursor and events to any other. A guest has a lane of its own, so
+ * when the guest session arrives after a first page was read without one, the
+ * lane is read again under the guest (audit 04-3). `'installation'` is a
+ * device with no identity yet, whose requests carry only the installation id.
+ */
+export function createShowcaseFeedViewerQueryKey(identityUserId?: string | null) {
+  return ['showcase-feed', 'infinite', identityUserId?.trim() || 'installation'] as const;
 }
 
 export function createShowcasePostQueryKey(postId: string | undefined, userId: string | null | undefined) {
@@ -124,17 +133,6 @@ export function flattenShowcaseFeedPages(pages: ShowcaseFeedResponse[] | undefin
   }
 
   return items;
-}
-
-export function findShowcaseFeedItemById(pages: ShowcaseFeedResponse[] | undefined, postId: string | undefined) {
-  if (!postId) return undefined;
-
-  for (const page of pages ?? []) {
-    const item = page.items.find((candidate) => candidate.id === postId);
-    if (item) return item;
-  }
-
-  return undefined;
 }
 
 export function getNextShowcaseFeedOffset(lastPage: ShowcaseFeedResponse): number | null {

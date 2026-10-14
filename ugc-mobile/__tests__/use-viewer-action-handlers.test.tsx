@@ -8,6 +8,7 @@ import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 
 const mocks = vi.hoisted(() => ({
   router: { push: vi.fn() },
+  announce: vi.fn(),
   showActionSheet: vi.fn(),
   showConfirmDialog: vi.fn(),
   showErrorDialog: vi.fn(),
@@ -20,7 +21,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('expo-router', () => ({ router: mocks.router }));
-vi.mock('react-native', () => ({ Linking: { openURL: vi.fn() }, Platform: { OS: 'ios' } }));
+vi.mock('react-native', () => ({
+  AccessibilityInfo: { announceForAccessibility: mocks.announce },
+  Linking: { openURL: vi.fn() },
+  Platform: { OS: 'ios' },
+}));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => mocks.queryClient }));
 vi.mock('@/lib/auth', () => ({ useAuth: () => mocks.auth }));
 vi.mock('@/lib/action-sheet', () => ({ showActionSheet: mocks.showActionSheet }));
@@ -265,6 +270,79 @@ describe('Report user', () => {
       sourceSurface: 'showcase-reel',
       details: 'Reported from post post-1.',
     });
+  });
+});
+
+describe('Block user', () => {
+  const invalidatedKeys = () => mocks.queryClient.invalidateQueries.mock.calls
+    .map(([filters]) => (filters as { queryKey: unknown[] }).queryKey);
+
+  // The reel used to refresh every feed and close: each lane behind it was read
+  // again as a new ranked session, a reshuffle and dozens of deliveries served
+  // that nobody saw (audit 02-4). The screen now takes the creator out itself.
+  it('hands the creator to the screen, then reads again only the creator page and the Saved list and count, never a lane', async () => {
+    mocks.showConfirmDialog.mockResolvedValue(true);
+    mocks.auth.api.blockUser.mockResolvedValueOnce({ success: true });
+    const onBlocked = vi.fn();
+    const onSourceRefresh = vi.fn();
+    mountHandlers(postItem(), { onBlocked, onSourceRefresh }).handleAction('block-user');
+
+    await vi.waitFor(() => expect(mocks.queryClient.invalidateQueries).toHaveBeenCalledTimes(3));
+    expect(mocks.auth.api.blockUser).toHaveBeenCalledWith('creator-1');
+    expect(onBlocked.mock.calls).toEqual([['creator-1']]);
+    expect(invalidatedKeys()).toEqual([
+      ['creator-profile'],
+      ['profile-saved-media', 'viewer-1'],
+      ['profile', 'viewer-1'],
+    ]);
+    expect(invalidatedKeys().some((key) => key[0] === 'showcase-feed' || key[0] === 'immersive-preview-source')).toBe(false);
+    expect(refreshViewerMediaCaches).not.toHaveBeenCalled();
+    expect(onSourceRefresh).not.toHaveBeenCalled();
+    // Nothing is cut to its first page under a reader scrolled into it.
+    expect(mocks.queryClient.setQueryData).not.toHaveBeenCalled();
+    // The reel moves on as soon as the block is in, not after the reads.
+    expect(onBlocked.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.queryClient.invalidateQueries.mock.invocationCallOrder[0]);
+    expect(mocks.announce).toHaveBeenCalledWith('@maya blocked.');
+    expect(mocks.showErrorDialog).not.toHaveBeenCalled();
+  });
+
+  // The text post page offers Block with nowhere of its own to take the posts
+  // out of, so it keeps the full refresh it had.
+  it('refreshes every cache, as before, on a screen that takes no posts out itself', async () => {
+    mocks.showConfirmDialog.mockResolvedValue(true);
+    mocks.auth.api.blockUser.mockResolvedValueOnce({ success: true });
+    const onSourceRefresh = vi.fn();
+    mountHandlers(postItem(), { onSourceRefresh }).handleAction('block-user');
+
+    await vi.waitFor(() => expect(onSourceRefresh).toHaveBeenCalledTimes(1));
+    expect(refreshViewerMediaCaches).toHaveBeenCalledWith(mocks.queryClient, 'viewer-1');
+    expect(mocks.queryClient.invalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it('leaves the reel and every cache alone when the block fails', async () => {
+    mocks.showConfirmDialog.mockResolvedValue(true);
+    mocks.auth.api.blockUser.mockRejectedValueOnce(new Error('Network request failed'));
+    const onBlocked = vi.fn();
+    mountHandlers(postItem(), { onBlocked }).handleAction('block-user');
+
+    await vi.waitFor(() => expect(mocks.showErrorDialog).toHaveBeenCalledWith('Could not block user', expect.any(Error)));
+    expect(onBlocked).not.toHaveBeenCalled();
+    expect(mocks.queryClient.invalidateQueries).not.toHaveBeenCalled();
+    expect(refreshViewerMediaCaches).not.toHaveBeenCalled();
+    expect(mocks.announce).not.toHaveBeenCalled();
+  });
+
+  it('blocks nobody when the reader backs out of the confirmation', async () => {
+    mocks.showConfirmDialog.mockResolvedValue(false);
+    const onBlocked = vi.fn();
+    mountHandlers(postItem(), { onBlocked }).handleAction('block-user');
+
+    await vi.waitFor(() => expect(mocks.showConfirmDialog).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(mocks.auth.api.blockUser).not.toHaveBeenCalled();
+    expect(onBlocked).not.toHaveBeenCalled();
+    expect(mocks.queryClient.invalidateQueries).not.toHaveBeenCalled();
   });
 });
 

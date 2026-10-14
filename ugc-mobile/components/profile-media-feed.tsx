@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import {
   AccessibilityInfo,
   ActivityIndicator,
+  Platform,
   Pressable,
   Share,
   Text,
@@ -301,8 +302,10 @@ export function ProfileMediaFeedScreen() {
       return;
     }
 
-    const result = await Share.share({ ...intent.content });
-    if (result.action !== Share.sharedAction || !item.showcasePostId) return;
+    // A dismissed share sheet is not an error worth surfacing.
+    const result = await Share.share({ ...intent.content }).catch(() => null);
+    // Android's share intent cannot report a dismissal (it answers "shared" either way), so only iOS counts a share.
+    if (Platform.OS !== 'ios' || result?.action !== Share.sharedAction || !item.showcasePostId) return;
     await api
       .shareShowcasePost(item.showcasePostId, { sourceSurface: getViewerShareSourceSurface(item.source) })
       .catch(() => null);

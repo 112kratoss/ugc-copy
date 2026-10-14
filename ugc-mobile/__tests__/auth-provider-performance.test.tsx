@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   clearPersistedAccountState: vi.fn(),
   clearPersistedHomeFeed: vi.fn(),
   clearPersistedSession: vi.fn(),
+  clearSearchHistory: vi.fn(),
   deleteAccount: vi.fn(),
   duringSignOut: vi.fn(),
   getSession: vi.fn(),
@@ -75,6 +76,7 @@ vi.mock('../lib/guest-merge-ticket-storage', () => ({
   clearGuestMergeTicket: vi.fn(async () => undefined),
 }));
 vi.mock('../lib/persisted-home-feed', () => ({ clearPersistedHomeFeed: state.clearPersistedHomeFeed }));
+vi.mock('../lib/search-history', () => ({ clearSearchHistory: state.clearSearchHistory }));
 vi.mock('../lib/persisted-account-state', () => ({
   clearPersistedAccountState: state.clearPersistedAccountState,
   persistAccountStateOnChange: state.persistAccountStateOnChange,
@@ -145,6 +147,7 @@ describe('AuthProvider startup performance', () => {
     state.clearLocalPush.mockReset().mockResolvedValue(undefined);
     state.clearPersistedSession.mockReset().mockResolvedValue(undefined);
     state.clearPersistedHomeFeed.mockReset().mockResolvedValue(undefined);
+    state.clearSearchHistory.mockReset().mockResolvedValue(undefined);
     state.clearPersistedAccountState.mockReset().mockResolvedValue(undefined);
     state.persistAccountStateOnChange.mockReset().mockReturnValue(() => undefined);
     state.restoreAccountState.mockReset().mockResolvedValue(null);
@@ -356,6 +359,8 @@ describe('AuthProvider startup performance', () => {
     expect(state.clearPersistedSession).toHaveBeenCalledOnce();
     // The home feed saved for the next launch was ranked for the person leaving.
     expect(state.clearPersistedHomeFeed).toHaveBeenCalledOnce();
+    // So were the recent searches, which the next account on this phone must not see.
+    expect(state.clearSearchHistory).toHaveBeenCalledOnce();
     expect(latest.current?.user).toBeNull();
     expect(state.routerReplace).toHaveBeenCalledWith('/auth');
     expect(warn).toHaveBeenCalledOnce();
@@ -391,6 +396,7 @@ describe('AuthProvider startup performance', () => {
 
     expect((failure as Error).message).toBe('Keychain unavailable');
     expect(state.clearPersistedSession).not.toHaveBeenCalled();
+    expect(state.clearSearchHistory).not.toHaveBeenCalled();
     expect(latest.current?.user?.id).toBe('user-1');
     expect(latest.current?.isSigningOut).toBe(false);
     expect(state.routerReplace).not.toHaveBeenCalled();
@@ -461,12 +467,14 @@ describe('AuthProvider startup performance', () => {
     await expect(latest.current?.deleteAccount()).rejects.toThrow('Reauthentication required');
     expect(state.clearLocalPush).not.toHaveBeenCalled();
     expect(state.clearPersistedSession).not.toHaveBeenCalled();
+    expect(state.clearSearchHistory).not.toHaveBeenCalled();
     expect(state.queryClient.clear).not.toHaveBeenCalled();
 
     state.deleteAccount.mockResolvedValueOnce({ success: true, deleted: true });
     await expect(latest.current?.deleteAccount()).resolves.toBeUndefined();
     expect(state.clearLocalPush).toHaveBeenCalledOnce();
     expect(state.clearPersistedSession).toHaveBeenCalledOnce();
+    expect(state.clearSearchHistory).toHaveBeenCalledOnce();
     expect(state.queryClient.clear).toHaveBeenCalledOnce();
 
     renderer.act(() => tree?.unmount());

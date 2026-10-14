@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildShowcaseMasonry, getShowcaseGridLayout, getShowcaseMediaHeight } from '../lib/showcase-feed-view-model';
+import { applyShowcaseSaveStateToFeedResponse } from '../lib/showcase-save-cache';
 import type { ShowcaseFeedItem } from '../lib/types';
 
 function item(overrides: Partial<ShowcaseFeedItem>): ShowcaseFeedItem {
@@ -81,16 +82,12 @@ describe('showcase feed view model', () => {
       badge: 'Free recipe',
       creatorAvatar: null,
       creatorLabel: 'luna',
-      saveLabel: '1.2K',
-      remixLabel: '92',
       unlock: {
         accent: 'workflow',
         ctaLabel: 'Get resources — Free',
         label: 'Free recipe',
         summary: 'Prompt + Files + Remix',
       },
-      viewerSource: 'showcase-feed',
-      sourceId: 'image-post',
     });
     expect(cards[1]).toMatchObject({
       accent: 'video',
@@ -210,6 +207,31 @@ describe('showcase feed view model', () => {
     const cards = buildShowcaseMasonry([sourceItem]);
 
     expect(cards[0]?.item).toBe(sourceItem);
+  });
+
+  // FlashList re-renders a pin whose item is a new object, so a card that is
+  // rebuilt for an unchanged post re-renders that pin for nothing. A card reads
+  // its item and nothing else, so the item object is the whole key.
+  it('hands back the card it built for the same item', () => {
+    const post = item({ id: 'kept' });
+    const [first] = buildShowcaseMasonry([post]);
+    // The next page landing rebuilds the list with the same item object.
+    const [again, appended] = buildShowcaseMasonry([post, item({ id: 'next-page' })]);
+
+    expect(again).toBe(first);
+    expect(appended?.id).toBe('next-page');
+  });
+
+  it('builds a new card only for the post a save changed', () => {
+    const page = { items: [item({ id: 'a' }), item({ id: 'b' }), item({ id: 'c' })] };
+    const before = buildShowcaseMasonry(page.items);
+    const saved = applyShowcaseSaveStateToFeedResponse(page, { postId: 'b', isSaved: true, saveCount: 1201 })!;
+    const after = buildShowcaseMasonry(saved.items);
+
+    expect(after[0]).toBe(before[0]);
+    expect(after[1]).not.toBe(before[1]);
+    expect(after[1]?.item.isSaved).toBe(true);
+    expect(after[2]).toBe(before[2]);
   });
 
   it('uses each media ratio for bounded masonry heights', () => {

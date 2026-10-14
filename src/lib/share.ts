@@ -31,6 +31,15 @@ const SHARE_CHANNELS = ['native-share', 'copy-link'] as const;
  */
 export const SHARE_SOURCE_QUERY_PARAM = 's';
 
+/**
+ * The query param that carries a ranked card's delivery
+ * (`recommendation.deliveryId`) into the post page, so a report or a comment
+ * filed there is credited to the card that showed the post, as the app's post
+ * route carries `deliveryId`. Only the in-app link a card opens carries it: the
+ * share URL and the canonical path are built from the post id alone.
+ */
+export const SHOWCASE_DELIVERY_QUERY_PARAM = 'delivery';
+
 export type GenerationShareSourceSurface = (typeof SHARE_SOURCE_SURFACES)[number];
 export type ProfileShareSourceSurface = (typeof PROFILE_SHARE_SOURCE_SURFACES)[number];
 export type GenerationShareChannel = (typeof SHARE_CHANNELS)[number];
@@ -41,6 +50,8 @@ export interface ShowcaseDetailPathOptions {
   from?: ShowcaseReturnSource | string | null;
   returnTo?: string | null;
   section?: 'resources' | string | null;
+  /** The feed delivery the post is opened from, when a ranked card showed it. */
+  deliveryId?: string | null;
 }
 
 export interface ShowcaseReturnContext {
@@ -138,6 +149,10 @@ export function stripShowcaseViewerState(path: string): string {
   // into in-app navigation, or an internal click would be counted as a visit
   // from outside.
   params.delete(SHARE_SOURCE_QUERY_PARAM);
+  // Nor a card's delivery: it rides only on the link that card opened, so a
+  // way back to a post page does not credit the card with what is done there
+  // afterwards.
+  params.delete(SHOWCASE_DELIVERY_QUERY_PARAM);
 
   return `${pathname}${params.size > 0 ? `?${params.toString()}` : ''}${hash}`;
 }
@@ -215,6 +230,7 @@ export function buildShowcaseDetailPath(generationId: string, options?: Showcase
     : '';
   const requestedSection = options?.section?.trim();
   const section = requestedSection === 'resources' ? 'recipe' : requestedSection;
+  const deliveryId = options?.deliveryId?.trim();
 
   if (source) {
     params.set('from', source);
@@ -222,6 +238,10 @@ export function buildShowcaseDetailPath(generationId: string, options?: Showcase
 
   if (returnTo) {
     params.set('returnTo', returnTo);
+  }
+
+  if (deliveryId) {
+    params.set(SHOWCASE_DELIVERY_QUERY_PARAM, deliveryId);
   }
 
   return [
@@ -239,7 +259,8 @@ export function buildShowcaseDetailPath(generationId: string, options?: Showcase
  * bookmark, a search result, or a pasted link — and it attributes the visit back
  * to the surface the share came from, which the landing page cannot infer.
  * `alternates.canonical` still points at the bare path, so nothing here is
- * visible to search engines.
+ * visible to search engines. Nor does a share carry the sharer's `delivery`:
+ * the URL is built from the post id alone.
  */
 export function buildShowcaseDetailUrl(
   generationId: string,

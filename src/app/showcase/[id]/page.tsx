@@ -26,6 +26,7 @@ import {
 } from '@/lib/showcase-seo';
 import {
   SHARE_SOURCE_QUERY_PARAM,
+  SHOWCASE_DELIVERY_QUERY_PARAM,
   buildShowcaseDetailPath,
   getShowcaseReturnContext,
   isGenerationShareSourceSurface,
@@ -215,6 +216,11 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
     from: returnFrom,
     returnTo,
   });
+  // The delivery of the ranked card that opened this page, when one did: a
+  // report or a comment filed here is credited to that card. It is not checked
+  // here: the server keeps it only when it is a delivery of this post to this
+  // viewer, so an id in a pasted link credits no one.
+  const deliveryId = getParam(resolvedSearchParams[SHOWCASE_DELIVERY_QUERY_PARAM])?.trim() || null;
 
   // Independent of each other, so pay for one round trip rather than two.
   const [auth, headerStore] = await Promise.all([getServerAuthState(), headers()]);
@@ -233,6 +239,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
       redirect(buildShowcaseDetailPath(reference.id, {
         from: returnContext.source,
         returnTo: returnContext.href,
+        deliveryId,
       }));
     }
 
@@ -272,6 +279,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
         detail={detail}
         viewerUserId={viewerUserId}
         returnContext={returnContext}
+        deliveryId={deliveryId}
       />
     </>
   );

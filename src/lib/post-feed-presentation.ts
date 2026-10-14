@@ -144,15 +144,18 @@ export interface PostFeedCard {
     clampLines: number;
     categoryLabel: string;
     /**
-     * Creation context for media posts — `Image · GPT Image 2 · Remixable` —
-     * shown under the title instead of the old type chip. Null for text posts,
-     * which keep the chip (they have no model or remix story).
+     * Creation context for media posts — `Image · GPT Image 2` — shown under
+     * the title instead of the old type chip. Null for text posts, which keep
+     * the chip (they have no model).
      */
     metadataLabel: string | null;
     creatorLabel: string;
     timeLabel: string;
     saveLabel: string;
     commentLabel: string;
+    /** What a tap on Remix has to get through first; null when the card has no Remix. */
+    remixAccess: PostFeedRemixAccess | null;
+    /** `Remix`, with its count; behind a paid unlock, the unlock's price. */
     remixLabel: string;
     /** The recipe behind the post, where the action row has reason to name it. */
     recipeChip: PostFeedRecipeChip | null;
@@ -166,26 +169,53 @@ export interface PostFeedRecipeChip {
 }
 
 /**
+ * What stands between the viewer and remixing a post: nothing (`open`), or a
+ * recipe the creator sells the remix with, which costs nothing
+ * (`free-unlock`, taken in the Remix tap itself) or costs something
+ * (`paid-unlock`, sold on the post's recipe). The web reel draws Remix on the
+ * same rule, and the app decides the same three
+ * (ugc-mobile/lib/showcase-remix-access.ts).
+ */
+export type PostFeedRemixAccess = 'open' | 'free-unlock' | 'paid-unlock';
+
+export function getPostFeedRemixAccess(
+    item: Pick<ShowcaseFeedItem, 'asset' | 'canRemix' | 'remixCapability' | 'remixTarget'>,
+): PostFeedRemixAccess | null {
+    if (item.canRemix) return 'open';
+    if (item.remixCapability !== 'unlock_required' || !item.asset?.allowRemix) return null;
+    // Workflow and text-template remixes stay out, as the server's own
+    // `canRemix` leaves them out.
+    if (item.remixTarget === 'workflow' || item.remixTarget === 'text_template') return null;
+    // The free unlock takes only a recipe that is free by its mode.
+    return item.asset.accessMode === 'free' ? 'free-unlock' : 'paid-unlock';
+}
+
+/**
  * The recipe behind a post, as a chip at the end of the card's action row. It
  * is drawn only where it says something the row does not already:
  *
  * - a paid recipe always shows its price, so a post that sells something is
- *   visible while scrolling;
+ *   visible while scrolling. Where the recipe is what locks Remix, the locked
+ *   Remix carries the price instead, and there is no second pill;
  * - a free one shows only on a card with no Remix, where it is the one way to
- *   the prompt. Beside Remix it would say nothing Remix does not.
+ *   the prompt. Beside Remix it would say nothing Remix does not: that tap
+ *   takes a free unlock on its way.
  *
  * It replaced a full-width bar under the media that repeated the post's title.
  * Mirrors `homeRecipeChip` in ugc-mobile/lib/home-feed-view-model.ts;
  * `contracts/feed-recipe-chip-v1.json` holds both to the same cases.
  */
-export function getPostFeedRecipeChip(item: Pick<ShowcaseFeedItem, 'asset' | 'canRemix'>): PostFeedRecipeChip | null {
+export function getPostFeedRecipeChip(
+    item: Pick<ShowcaseFeedItem, 'asset' | 'canRemix' | 'remixCapability' | 'remixTarget'>,
+): PostFeedRecipeChip | null {
     if (!item.asset) return null;
+    const remixAccess = getPostFeedRemixAccess(item);
 
     if (!isFreeRecipeAsset(item.asset)) {
-        return { label: getAssetAccessLabel(item.asset), tone: 'paid' };
+        return remixAccess === 'paid-unlock' ? null : { label: getAssetAccessLabel(item.asset), tone: 'paid' };
     }
 
-    return item.canRemix ? null : { label: getAssetAccessLabel(item.asset), tone: 'free' };
+    return remixAccess ? null : { label: getAssetAccessLabel(item.asset), tone: 'free' };
 }
 
 /** Width the feed column gives body text, used only for the line estimate. */
@@ -210,7 +240,8 @@ export function getPostModelDisplayName(model: string | null | undefined): strin
 
 /**
  * The creation-context line for media posts. Text posts return null — their
- * type chip stays, and they carry no model or remix affordance.
+ * type chip stays, and they carry no model. It does not say the post can be
+ * remixed: the card's Remix pill says so.
  */
 export function getPostFeedMetadataLabel(item: ShowcaseFeedItem, kind: PostPreviewKind): string | null {
     if (kind === 'text') return null;
@@ -218,7 +249,6 @@ export function getPostFeedMetadataLabel(item: ShowcaseFeedItem, kind: PostPrevi
     const parts = [
         getPostCategoryLabel(item),
         getPostModelDisplayName(item.model),
-        item.canRemix ? 'Remixable' : null,
     ].filter((part): part is string => Boolean(part));
 
     return parts.length > 0 ? parts.join(' · ') : null;
@@ -237,6 +267,7 @@ export function buildPostFeedCard(item: ShowcaseFeedItem, now = new Date()): Pos
     const body = getPostFeedBody(item, kind);
     const clampLines = getPostBodyClampLines(kind);
     const creatorName = item.creator.name || item.creator.username || 'Creator';
+    const remixAccess = getPostFeedRemixAccess(item);
 
     return {
         id: item.id,
@@ -251,7 +282,12 @@ export function buildPostFeedCard(item: ShowcaseFeedItem, now = new Date()): Pos
         timeLabel: formatRelativeTime(item.createdAt, now),
         saveLabel: formatActionLabel(item.saveCount, 'Save'),
         commentLabel: formatActionLabel(item.commentCount, 'Comment'),
-        remixLabel: item.remixCount > 0 ? `Remix · ${formatCompactCount(item.remixCount)}` : 'Remix',
+        remixAccess,
+        // A remix sold with its recipe wears the recipe's price, as the app's
+        // locked Remix does: the lock says the rest.
+        remixLabel: remixAccess === 'paid-unlock' && item.asset
+            ? getAssetAccessLabel(item.asset)
+            : item.remixCount > 0 ? `Remix · ${formatCompactCount(item.remixCount)}` : 'Remix',
         recipeChip: getPostFeedRecipeChip(item),
         // A text post never expands in place — the card itself opens the post,
         // so a clamped body ends in an ellipsis that reads as "there is more".
@@ -260,6 +296,21 @@ export function buildPostFeedCard(item: ShowcaseFeedItem, now = new Date()): Pos
     };
 }
 
-export function buildPostFeedCards(items: ShowcaseFeedItem[], now = new Date()) {
-    return items.map((item) => buildPostFeedCard(item, now));
+/**
+ * Builds a lane's cards, keeping the card of an item it has built before. The
+ * lane's array is new after every save, page and comment count while nearly
+ * all of its items are the objects they were, and a new card for each of them
+ * re-rendered every mounted card for the one that changed. The clock is a
+ * card's one input besides its item, so a kept card whose time label has moved
+ * on is built again (the app's Home cards are kept the same way).
+ */
+export function createPostFeedCardBuilder() {
+    const cards = new WeakMap<ShowcaseFeedItem, PostFeedCard>();
+    return (items: ShowcaseFeedItem[], now = new Date()): PostFeedCard[] => items.map((item) => {
+        const kept = cards.get(item);
+        if (kept && kept.timeLabel === formatRelativeTime(item.createdAt, now)) return kept;
+        const card = buildPostFeedCard(item, now);
+        cards.set(item, card);
+        return card;
+    });
 }

@@ -34,9 +34,22 @@ interface ReportPostButtonProps {
    * registered accounts only.
    */
   creator?: Pick<ShowcaseCreator, 'id' | 'name'> | null;
+  /**
+   * The delivery of the ranked card that opened the page
+   * (`recommendation.deliveryId`). Sent with the report, as the feed's own
+   * menus send theirs: the server files the report as that delivery's `report`
+   * event, and one without a delivery reaches neither the post's stats nor the
+   * reporter's interests.
+   */
+  deliveryId?: string | null;
 }
 
-export default function ReportPostButton({ postId, bundleId = null, creator = null }: ReportPostButtonProps) {
+export default function ReportPostButton({
+  postId,
+  bundleId = null,
+  creator = null,
+  deliveryId = null,
+}: ReportPostButtonProps) {
   const router = useRouter();
   // The live session, as the engagement row reads it. The token the page was
   // rendered with expires (an hour at Supabase's default), and a report sent
@@ -85,6 +98,7 @@ export default function ReportPostButton({ postId, bundleId = null, creator = nu
           reason,
           details,
           bundleId,
+          ...(deliveryId ? { deliveryId } : {}),
         }),
       });
       const data = await response.json();

@@ -13,7 +13,6 @@ type FeedMediaFrameBaseProps = {
   borderColor?: string;
   borderWidth?: number;
   children?: ReactNode;
-  priority?: 'low' | 'normal' | 'high';
   radius?: number;
   recyclingKey?: string;
   cacheKey?: string;

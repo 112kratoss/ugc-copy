@@ -119,10 +119,12 @@ describe('FeedClient request ordering', () => {
 
         render(
             <FeedClient
-                initialFeed={feed(
-                    [item('initial', 'Initial post')],
-                    { hasMore: true, nextOffset: 12 }
-                )}
+                // A ranked page names its session; one without would first be
+                // read again for the guest, before any paging.
+                initialFeed={{
+                    ...feed([item('initial', 'Initial post')], { hasMore: true, nextOffset: 12 }),
+                    feedSessionId: 'ranked-session',
+                }}
                 initialChipId="for-you"
             />
         );

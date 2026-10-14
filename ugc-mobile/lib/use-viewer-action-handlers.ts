@@ -1,6 +1,6 @@
 import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { Linking } from 'react-native';
+import { AccessibilityInfo, Linking } from 'react-native';
 
 import type { createApiClient } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
@@ -20,7 +20,7 @@ import {
   type PostLifecyclePost,
 } from '@/lib/post-lifecycle';
 import type { OwnerPostsResponse } from '@/lib/types';
-import { adjustProfileStats } from '@/lib/profile-stats';
+import { adjustProfileStats, invalidateProfileStats } from '@/lib/profile-stats';
 import { getViewerSafetyActions } from '@/lib/viewer-actions';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 
@@ -43,6 +43,11 @@ export interface ViewerActionCallbacks {
   onSave?: (item: ImmersivePreviewItem) => void;
   onShare: () => void;
   onDeleted?: (postId: string) => void;
+  /**
+   * A block went through, and the screen takes the creator's posts out of what
+   * it shows and of the feed lanes: the reel, which then moves on to the next
+   * post by someone else. Without it, a block refreshes every cache instead.
+   */
   onBlocked?: (userId: string) => void;
   /** A report about the post went through: the reel takes the post out and moves on, as the web's does. */
   onReported?: (item: ImmersivePreviewItem) => void;
@@ -390,12 +395,30 @@ export function useViewerActionHandlers({
         if (!confirmed) return;
         try {
           await api.blockUser(creatorId);
-          await refreshMedia();
-          onBlocked?.(creatorId);
         } catch (error) {
           haptic.error();
           showErrorDialog('Could not block user', error);
+          return;
         }
+        if (!onBlocked) {
+          // A screen that takes no posts out itself (the text post page) still
+          // refreshes every cache that may show the creator.
+          await refreshMedia();
+          return;
+        }
+        // The reel takes the creator's posts out of itself and the feed lanes
+        // and moves on, as Explore's tile and the web reel do. Refreshing every
+        // feed instead re-ranked the lanes behind the reel as new sessions
+        // (audit 02-4), so only what a block changes is read again: the
+        // creator's page, and the reader's Saved list and its count, which
+        // leave out a blocked creator's posts.
+        onBlocked(creatorId);
+        void AccessibilityInfo.announceForAccessibility(`${item.creatorLabel} blocked.`);
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['creator-profile'] }),
+          queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] }),
+          invalidateProfileStats(queryClient, user?.id),
+        ]);
       });
       return;
     }

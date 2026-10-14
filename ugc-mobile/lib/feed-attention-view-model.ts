@@ -40,6 +40,14 @@ export interface FeedAttentionTracker<T> {
   setActive(active: boolean, now: number): FeedAttentionEvent<T>[];
   /** A playback sample from a card's inline video, as a share of the post's video. */
   recordProgress(target: T, progress: number, durationMs: number | null): FeedAttentionEvent<T>[];
+  /**
+   * The card opened its post in the reel, which reads the same delivery and
+   * files that delivery's dwell as the reader leaves the post. The server keeps
+   * a delivery's first dwell only, so the card's stretch ends here without one,
+   * and the delivery files none from this feed later. What its video played is
+   * still sent with the rest (the server keeps the furthest point).
+   */
+  handOff(target: T): void;
 }
 
 type AttentionEntry<T> = {
@@ -55,10 +63,11 @@ type AttentionEntry<T> = {
  * tracked, since the server credits these events to a delivery only). A
  * delivery's dwell is its first stretch of qualified visibility that lasts at
  * least a second, measured to the moment it ends and capped at two minutes; a
- * shorter stretch reports nothing, and a later one may still qualify. Its
- * progress keeps the furthest point reached and is sent as the reel sends its
- * own: at each milestone, and again as the card leaves view or the screen goes
- * away. The server keeps the maximum per delivery.
+ * shorter stretch reports nothing, and a later one may still qualify until the
+ * card hands its post to the reel (`handOff`). Its progress keeps the furthest
+ * point reached and is sent as the reel sends its own: at each milestone, and
+ * again as the card leaves view or the screen goes away. The server keeps the
+ * maximum per delivery.
  */
 export function createFeedAttentionTracker<T>(
   keyOf: (target: T) => string | null | undefined
@@ -149,6 +158,14 @@ export function createFeedAttentionTracker<T>(
       const events: FeedAttentionEvent<T>[] = [];
       if (entry.progress.record(progress, durationMs)) flushProgress(entry, events);
       return events;
+    },
+
+    handOff(target) {
+      const key = keyOf(target);
+      if (!key) return;
+      const entry = entryFor(key, target);
+      entry.visibleSince = null;
+      entry.dwellRecorded = true;
     },
   };
 }

@@ -1,23 +1,36 @@
-import type { AnchorHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
+import type { AnchorHTMLAttributes, ComponentProps, HTMLAttributes, ReactNode } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseClient from '@/app/showcase/ShowcaseClient';
 import {
+  flushShowcaseFeedEvents,
+  resetShowcaseFeedEventQueueForTests,
+} from '@/app/showcase/ShowcaseFeedInteraction';
+import {
   SHOWCASE_INITIAL_RENDER_COUNT,
   SHOWCASE_PAGE_SIZE,
   type ShowcaseFeedItem,
   type ShowcaseFeedPage,
+  type ShowcaseSort,
 } from '@/lib/showcase';
 import type { SourceToolOption } from '@/lib/source-tools';
 import {
+  buildShowcaseClientCacheKey,
   clearShowcaseClientCacheForTests,
   forgetShowcaseSnapshotsInMemoryForTests,
+  readShowcaseClientSnapshot,
   takeBlockedCreatorOffClientFeeds,
+  writeShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
 
-const mockPush = vi.fn();
-const mockReplace = vi.fn();
+// One router object for every render, as Next's is.
+const routerMock = vi.hoisted(() => ({
+  push: vi.fn(),
+  replace: vi.fn(),
+}));
+const mockPush = routerMock.push;
+const mockReplace = routerMock.replace;
 const authState = vi.hoisted(() => ({
   session: {
     access_token: 'test-token',
@@ -29,10 +42,7 @@ const authState = vi.hoisted(() => ({
 }));
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: mockPush,
-    replace: mockReplace,
-  }),
+  useRouter: () => routerMock,
   usePathname: () => '/showcase',
   useSearchParams: () => new URLSearchParams(window.location.search),
 }));
@@ -70,6 +80,19 @@ vi.mock('framer-motion', () => ({
   },
   useReducedMotion: () => false,
 }));
+
+// Every Explore tile is drawn inside one impression boundary, which holds no
+// state of its own, and nothing else on the page draws one (the reel does
+// not): its renders are the tiles' renders. The real boundary is drawn.
+const tileRenders = vi.hoisted(() => vi.fn<(postId: string) => void>());
+vi.mock('@/app/showcase/ShowcaseFeedInteraction', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/app/showcase/ShowcaseFeedInteraction')>();
+  function CountedImpressionBoundary(props: ComponentProps<typeof actual.QualifiedImpressionBoundary>) {
+    tileRenders(props.item.id);
+    return <actual.QualifiedImpressionBoundary {...props} />;
+  }
+  return { ...actual, QualifiedImpressionBoundary: CountedImpressionBoundary };
+});
 
 const SOURCE_TOOL_OPTIONS: SourceToolOption[] = [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
@@ -150,7 +173,7 @@ describe('ShowcaseClient save actions', () => {
     disconnect: ReturnType<typeof vi.fn>;
     observedTargets: Element[];
     rootMargin: string;
-    trigger: (isIntersecting?: boolean) => void;
+    trigger: (isIntersecting?: boolean, entry?: Partial<IntersectionObserverEntry>) => void;
   }> = [];
 
   beforeEach(() => {
@@ -184,6 +207,8 @@ describe('ShowcaseClient save actions', () => {
       configurable: true,
       value: vi.fn(),
     });
+    // jsdom does not scroll the window; a lane change and a Refresh ask it to.
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
     vi.stubGlobal('IntersectionObserver', vi.fn(function IntersectionObserverMock(
       callback: IntersectionObserverCallback,
       options?: IntersectionObserverInit
@@ -204,11 +229,12 @@ describe('ShowcaseClient save actions', () => {
         disconnect: observer.disconnect,
         observedTargets,
         rootMargin: observer.rootMargin,
-        trigger: (isIntersecting = true) => {
+        trigger: (isIntersecting = true, entry = {}) => {
           callback([
             {
               isIntersecting,
               target: document.createElement('div'),
+              ...entry,
             } as unknown as IntersectionObserverEntry,
           ], observer);
         },
@@ -387,6 +413,245 @@ describe('ShowcaseClient save actions', () => {
       vi.advanceTimersByTime(160);
     });
     expect(screen.getByText(`Desktop Campaign ${SHOWCASE_INITIAL_RENDER_COUNT + 5}`)).toBeInTheDocument();
+  });
+
+  // The ticks went through the transition of the lane controls, whose pending
+  // state committed first, synchronously: every tick drew the page once more
+  // just to turn the chips and the sort off and on again.
+  it('leaves the lane controls alone while the reveal ticks fill the grid', () => {
+    vi.useFakeTimers();
+    const items = Array.from({ length: SHOWCASE_INITIAL_RENDER_COUNT + 3 }, (_, index) => createShowcaseItem({
+      id: `post-${index + 1}`,
+      generationId: `gen-${index + 1}`,
+      title: `Campaign ${index + 1}`,
+      mediaUrl: `https://example.com/campaign-${index + 1}.jpg`,
+    }));
+    renderShowcase(items);
+    const sortSelect = screen.getByRole('combobox', { name: 'Sort community posts' });
+    const imagesChip = screen.getByRole('button', { name: 'Images' });
+    const disabledChanges: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => {
+      disabledChanges.push(...records);
+    });
+    observer.observe(sortSelect, { attributes: true, attributeFilter: ['disabled'] });
+    observer.observe(imagesChip, { attributes: true, attributeFilter: ['disabled'] });
+
+    act(() => {
+      vi.advanceTimersByTime(160 * 3);
+    });
+    disabledChanges.push(...observer.takeRecords());
+    observer.disconnect();
+
+    expect(screen.getByText(`Campaign ${items.length}`)).toBeInTheDocument();
+    expect(disabledChanges).toEqual([]);
+    expect(sortSelect).toBeEnabled();
+    expect(imagesChip).toBeEnabled();
+  });
+
+  // A tile draws again only when what it shows changes. Drawn inline, every
+  // tile on the page drew again at each reel landing, media swipe, save and
+  // reveal tick, and the grid is not windowed: the cost grew with each page.
+  describe('what draws a tile again', () => {
+    const drawsOf = (postId: string) => tileRenders.mock.calls.filter(([id]) => id === postId).length;
+    const threeTiles = () => [
+      createShowcaseItem(),
+      createShowcaseItem({
+        id: 'post-2',
+        generationId: 'gen-2',
+        title: 'Second Frame',
+        mediaUrl: 'https://example.com/second.jpg',
+      }),
+      createShowcaseItem({
+        id: 'post-3',
+        generationId: 'gen-3',
+        title: 'Third Frame',
+        mediaUrl: 'https://example.com/third.jpg',
+        mediaItems: [
+          {
+            id: 'third-media-1',
+            url: 'https://example.com/third.jpg',
+            mediaKind: 'image',
+            contentType: 'image/jpeg',
+            originalName: 'third.jpg',
+            width: 800,
+            height: 1000,
+            durationSeconds: null,
+            sortOrder: 0,
+          },
+          {
+            id: 'third-media-2',
+            url: 'https://example.com/third-second.jpg',
+            mediaKind: 'image',
+            contentType: 'image/jpeg',
+            originalName: 'third-second.jpg',
+            width: 1200,
+            height: 800,
+            durationSeconds: null,
+            sortOrder: 1,
+          },
+        ],
+      }),
+    ];
+
+    beforeEach(() => {
+      tileRenders.mockClear();
+    });
+
+    it('draws none as the reel opens, lands on other posts, swipes media and closes', async () => {
+      vi.spyOn(window.history, 'pushState');
+      // Back from the reel as the browser does it: the URL loses `post`, then popstate.
+      vi.spyOn(window.history, 'back').mockImplementation(() => {
+        window.history.replaceState(null, '', '/showcase');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      const feed = createFeed(threeTiles());
+      // A new element with the same props, as Next draws the page again when
+      // its URL changes.
+      const drawShowcase = () => (
+        <ShowcaseClient
+          initialFeed={feed}
+          initialCategory="all"
+          initialSort="recent"
+          initialTool={null}
+          initialUnlock="all"
+          initialResource="all"
+          sourceToolOptions={SOURCE_TOOL_OPTIONS}
+        />
+      );
+      const reel = async () => within(await screen.findByRole('dialog', { name: 'Explore reel viewer' }));
+      const { rerender } = render(drawShowcase());
+      // The count sees the tiles: each drew once.
+      expect(['post-1', 'post-2', 'post-3'].map(drawsOf)).toEqual([1, 1, 1]);
+      const tileDraws = tileRenders.mock.calls.length;
+
+      fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+      expect(await (await reel()).findByRole('button', { name: /more actions for campaign frame/i })).toBeInTheDocument();
+
+      // A landing from the reel: its Next post (`selectPreviewItem`).
+      fireEvent.click((await reel()).getByRole('button', { name: 'Next post' }));
+      expect(await (await reel()).findByRole('button', { name: /more actions for second frame/i })).toBeInTheDocument();
+      expect(new URLSearchParams(window.location.search).get('post')).toBe('post-2');
+
+      // A landing from the URL (a link, the browser's history): `?post=` changes.
+      window.history.replaceState(null, '', '/showcase?post=post-3');
+      rerender(drawShowcase());
+      expect(await (await reel()).findByRole('button', { name: /more actions for third frame/i })).toBeInTheDocument();
+
+      // A media swipe in the reel: `?media=` changes.
+      fireEvent.click((await reel()).getByRole('button', { name: 'Next media' }));
+      await waitFor(() => {
+        expect(new URLSearchParams(window.location.search).get('media')).toBe('1');
+      });
+
+      fireEvent.click((await reel()).getByRole('button', { name: 'Explore' }));
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
+      });
+
+      expect(tileRenders.mock.calls.length).toBe(tileDraws);
+    });
+
+    it('draws the saved tile alone when a post is saved', async () => {
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/showcase/save') {
+          return { ok: true, json: async () => ({ success: true, isSaved: true, saveCount: 5, changed: true }) };
+        }
+        if (url.startsWith('/api/showcase/saved-state')) {
+          return { ok: true, json: async () => [] };
+        }
+        return { ok: true, json: async () => ({ success: true }) };
+      }));
+      renderShowcase(threeTiles());
+      // The viewer's saved state answers after the first draw, and saves nothing here.
+      await waitFor(() => {
+        expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).startsWith('/api/showcase/saved-state')))
+          .toBe(true);
+      });
+      await act(async () => undefined);
+      const [firstDraws, savedDraws, thirdDraws] = ['post-1', 'post-2', 'post-3'].map(drawsOf);
+
+      fireEvent.click(screen.getByRole('button', { name: /save second frame\. 4 saves/i }));
+
+      const savedButton = await screen.findByRole('button', { name: /remove save from second frame\. 5 saves/i });
+      expect(savedButton).toHaveAttribute('aria-pressed', 'true');
+      // The save has come back: the heart takes taps again.
+      await waitFor(() => expect(savedButton).toBeEnabled());
+      expect(drawsOf('post-2')).toBeGreaterThan(savedDraws);
+      expect(drawsOf('post-1')).toBe(firstDraws);
+      expect(drawsOf('post-3')).toBe(thirdDraws);
+    });
+
+    it('draws none of the tiles already shown when a reveal tick adds the next one', () => {
+      vi.useFakeTimers();
+      const items = Array.from({ length: SHOWCASE_INITIAL_RENDER_COUNT + 2 }, (_, index) => createShowcaseItem({
+        id: `post-${index + 1}`,
+        generationId: `gen-${index + 1}`,
+        title: `Campaign ${index + 1}`,
+        mediaUrl: `https://example.com/campaign-${index + 1}.jpg`,
+      }));
+      const shownIds = items.slice(0, SHOWCASE_INITIAL_RENDER_COUNT).map((item) => item.id);
+      const revealedId = items[SHOWCASE_INITIAL_RENDER_COUNT].id;
+      renderShowcase(items);
+      const shownDraws = shownIds.map(drawsOf);
+      expect(drawsOf(revealedId)).toBe(0);
+
+      act(() => {
+        vi.advanceTimersByTime(160);
+      });
+
+      expect(screen.getByText(`Campaign ${SHOWCASE_INITIAL_RENDER_COUNT + 1}`)).toBeInTheDocument();
+      expect(drawsOf(revealedId)).toBeGreaterThan(0);
+      expect(shownIds.map(drawsOf)).toEqual(shownDraws);
+    });
+
+    it("draws none when a lane is tapped, before that lane's page comes", () => {
+      renderShowcase(threeTiles());
+      const tileDraws = tileRenders.mock.calls.length;
+
+      fireEvent.click(screen.getByRole('button', { name: 'Videos' }));
+
+      expect(screen.getByRole('button', { name: 'Videos' })).toHaveAttribute('aria-pressed', 'true');
+      expect(mockReplace).toHaveBeenCalledWith('/showcase?category=video&sort=recent', { scroll: false });
+      expect(tileRenders.mock.calls.length).toBe(tileDraws);
+    });
+
+    it("names the lane alone as a tile's way back: not the reel's post, nor anything else the URL carries", async () => {
+      window.history.replaceState(null, '', '/showcase?category=video&sort=recent&utm_source=newsletter');
+      vi.spyOn(window.history, 'pushState');
+      render(
+        <ShowcaseClient
+          initialFeed={createFeed(createShowcaseItem({
+            asset: {
+              id: 'bundle-1',
+              postId: 'post-1',
+              title: 'Campaign Frame Unlock',
+              accessMode: 'paid',
+              priceUsdCents: 900,
+              previewText: 'Prompt and workflow included.',
+              allowRemix: false,
+              resourceKinds: ['prompt'],
+            },
+          }))}
+          initialCategory="video"
+          initialSort="recent"
+          initialTool={null}
+          initialUnlock="all"
+          initialResource="all"
+          sourceToolOptions={SOURCE_TOOL_OPTIONS}
+        />
+      );
+      const recipeLink = screen.getByRole('link', { name: /unlock for \$9\.00/i });
+      const wayBack = () => new URL(recipeLink.getAttribute('href') ?? '', 'https://magicbooklet.test')
+        .searchParams.get('returnTo');
+      expect(wayBack()).toBe('/showcase?category=video&sort=recent');
+
+      fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
+      await screen.findByRole('dialog', { name: 'Explore reel viewer' });
+
+      expect(new URLSearchParams(window.location.search).get('post')).toBe('post-1');
+      expect(wayBack()).toBe('/showcase?category=video&sort=recent');
+    });
   });
 
   it('establishes an anonymous feed session only after demand and an idle window', () => {
@@ -581,6 +846,51 @@ describe('ShowcaseClient save actions', () => {
         name: /remove save from campaign frame\. 4 saves/i,
       })).toHaveAttribute('aria-pressed', 'true');
     });
+  });
+
+  // A lane change is a server navigation, and the server builds every lane's
+  // first page for everyone: its posts arrive unsaved. The lookup ran for the
+  // first lane only, so a saved post drew an empty heart, and a tap saved it again.
+  it("asks once whether the viewer saved a new lane's posts, and draws their hearts", async () => {
+    const savedStateRequests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/saved-state')) {
+        savedStateRequests.push(url);
+        return { ok: true, json: async () => (url.includes('post-saved') ? ['post-saved'] : []) };
+      }
+      return { ok: true, json: async () => ({ success: true }) };
+    }));
+    const lane = (sort: ShowcaseSort, feed: ShowcaseFeedPage) => (
+      <ShowcaseClient
+        initialFeed={feed}
+        initialCategory="all"
+        initialSort={sort}
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+    const view = render(lane('recent', createFeed(createShowcaseItem())));
+    await waitFor(() => expect(savedStateRequests).toHaveLength(1));
+
+    view.rerender(lane('top-saves', createFeed(createShowcaseItem({
+      id: 'post-saved',
+      generationId: 'gen-saved',
+      title: 'Saved Frame',
+      isSaved: false,
+    }))));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /remove save from saved frame/i }))
+        .toHaveAttribute('aria-pressed', 'true');
+    });
+    await act(async () => Promise.resolve());
+    expect(savedStateRequests).toEqual([
+      '/api/showcase/saved-state?ids=post-1%2Cgen-1',
+      '/api/showcase/saved-state?ids=post-saved%2Cgen-saved',
+    ]);
   });
 
   it('labels paid unlock links with the price instead of a generic view action', () => {
@@ -979,8 +1289,8 @@ describe('ShowcaseClient save actions', () => {
 
     fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
     const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
-    fireEvent.click(await within(reel).findByRole('button', { name: 'Show comments on Campaign Frame (0)' }));
-    expect(await within(reel).findByRole('button', { name: 'Hide comments on Campaign Frame (3)' })).toBeInTheDocument();
+    fireEvent.click(await within(reel).findByRole('button', { name: 'Show comments on Campaign Frame (0)' }, { timeout: 3000 }));
+    expect(await within(reel).findByRole('button', { name: 'Hide comments on Campaign Frame (3)' }, { timeout: 3000 })).toBeInTheDocument();
 
     fireEvent.click(within(reel).getByRole('button', { name: 'Explore' }));
     await waitFor(() => {
@@ -1470,6 +1780,444 @@ describe('ShowcaseClient save actions', () => {
     ]);
   });
 
+  // The first page is built for everyone and carries no deliveries. The tiles
+  // drawn from it stayed the objects they were when the viewer's own page
+  // came, so the most-seen rows of Explore never reported an impression.
+  it("reports a drawn tile's impression with the delivery the viewer's own page gave it", async () => {
+    resetShowcaseFeedEventQueueForTests();
+    const rankedCopy = createShowcaseItem({
+      recommendation: { deliveryId: 'delivery-drawn', position: 0, reason: 'Based on your saves', algorithmVersion: 'for-you-rules-v4' },
+    });
+    const rankedNext = createShowcaseItem({
+      id: 'post-ranked-next',
+      generationId: 'gen-ranked-next',
+      title: 'Ranked Next',
+      recommendation: { deliveryId: 'delivery-next', position: 1, reason: 'Fresh creator', algorithmVersion: 'for-you-rules-v4' },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/feed?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            items: [rankedCopy, rankedNext],
+            feedSessionId: 'session-ranked',
+            pageInfo: { hasMore: false, nextOffset: null, nextCursor: null, limit: 12, offset: 0 },
+          }),
+        };
+      }
+      return { ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) };
+    }));
+
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed(createShowcaseItem(), { hasMore: true, nextOffset: 12, limit: 12 })}
+        initialCategory="all"
+        initialSort="for-you"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+
+    expect(await screen.findByText('Ranked Next')).toBeInTheDocument();
+    // The drawn tile keeps its place.
+    expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual([
+      'Campaign Frame',
+      'Ranked Next',
+    ]);
+
+    const tileObserver = intersectionObservers.findLast((observer) => observer.observedTargets.some((target) => (
+      target.getAttribute('data-showcase-post-id') === 'post-1'
+    )));
+    vi.useFakeTimers();
+    act(() => {
+      tileObserver?.trigger(true, { intersectionRatio: 1 });
+    });
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    await act(async () => {
+      await flushShowcaseFeedEvents();
+    });
+
+    const sentEvents = vi.mocked(fetch).mock.calls
+      .filter(([input]) => String(input) === '/api/showcase/feed/events')
+      .flatMap(([, init]) => JSON.parse(String(init?.body)).events ?? []);
+    expect(sentEvents).toContainEqual(expect.objectContaining({
+      eventType: 'impression',
+      postId: 'post-1',
+      deliveryId: 'delivery-drawn',
+      feedSessionId: 'session-ranked',
+    }));
+  });
+
+  // Until the viewer's own For you page comes, the first page has no cursor,
+  // and Load More did nothing: for a guest that page waits on a first
+  // interaction, and the button was not one.
+  it("asks for a guest's own For you page from Load More, then follows its cursor", async () => {
+    authState.session = null;
+    authState.user = null;
+    vi.stubGlobal('requestIdleCallback', vi.fn((callback: IdleRequestCallback) => {
+      callback({ didTimeout: false, timeRemaining: () => 50 });
+      return 1;
+    }));
+    vi.stubGlobal('cancelIdleCallback', vi.fn());
+    const rankedItem = createShowcaseItem({
+      id: 'post-ranked',
+      generationId: 'gen-ranked',
+      title: 'Ranked for you',
+      recommendation: { deliveryId: 'delivery-ranked', position: 0, reason: 'Popular', algorithmVersion: 'for-you-rules-v4' },
+    });
+    const continuedItem = createShowcaseItem({ id: 'post-continued', generationId: 'gen-continued', title: 'More for you' });
+    const feedRequests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/feed?')) {
+        feedRequests.push(url);
+        return {
+          ok: true,
+          json: async () => (url.includes('cursor=')
+            ? {
+              items: [continuedItem],
+              feedSessionId: 'guest-session',
+              pageInfo: { hasMore: false, nextOffset: null, nextCursor: null, limit: 12, offset: 12 },
+            }
+            : {
+              items: [rankedItem],
+              feedSessionId: 'guest-session',
+              pageInfo: { hasMore: true, nextOffset: 12, nextCursor: 'cursor-2', limit: 12, offset: 0 },
+            }),
+        };
+      }
+      return { ok: true, json: async () => ({ success: true }) };
+    }));
+
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed(createShowcaseItem({ title: 'Server fallback' }), { hasMore: true, nextOffset: 12, limit: 12 })}
+        initialCategory="all"
+        initialSort="for-you"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+    await act(async () => Promise.resolve());
+    expect(feedRequests).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load More' }));
+
+    expect(await screen.findByText('Ranked for you')).toBeInTheDocument();
+    expect(feedRequests).toEqual([`/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}&category=media`]);
+    expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual([
+      'Server fallback',
+      'Ranked for you',
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load More' }));
+
+    expect(await screen.findByText('More for you')).toBeInTheDocument();
+    expect(feedRequests[1]).toBe(`/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}&cursor=cursor-2&category=media`);
+  });
+
+  it("says so with Retry when the viewer's own For you page cannot be had, and Retry asks again", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const settle = () => act(async () => {
+      for (let tick = 0; tick < 20; tick += 1) {
+        await Promise.resolve();
+      }
+    });
+    let failing = true;
+    const rankedItem = createShowcaseItem({
+      id: 'post-ranked',
+      generationId: 'gen-ranked',
+      title: 'Ranked for you',
+      recommendation: { deliveryId: 'delivery-ranked', position: 0, reason: 'Based on your saves', algorithmVersion: 'for-you-rules-v4' },
+    });
+    const feedFetch = vi.fn(async () => (failing
+      ? { ok: false, status: 503, json: async () => ({ error: 'Temporarily unavailable' }) }
+      : {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: [rankedItem],
+          feedSessionId: 'session-1',
+          pageInfo: { hasMore: true, nextOffset: 12, nextCursor: 'cursor-2', limit: 12, offset: 0 },
+        }),
+      }));
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/feed?')) {
+        return feedFetch();
+      }
+      return { ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) };
+    }));
+
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed(createShowcaseItem({ title: 'Server fallback' }), { hasMore: true, nextOffset: 12, limit: 12 })}
+        initialCategory="all"
+        initialSort="for-you"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+
+    await settle();
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+    await settle();
+    act(() => {
+      vi.advanceTimersByTime(4_000);
+    });
+    await settle();
+
+    // The first try and its two retries, then the row that says so.
+    expect(feedFetch).toHaveBeenCalledTimes(3);
+    const notice = screen.getByRole('alert');
+    expect(notice).toHaveTextContent('Could not load more posts');
+
+    failing = false;
+    fireEvent.click(within(notice).getByRole('button', { name: 'Retry' }));
+    await settle();
+
+    expect(feedFetch).toHaveBeenCalledTimes(4);
+    expect(screen.getByText('Ranked for you')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  // A viewer's own page that came without a cursor (no session was kept for
+  // it) still says there is more: the next page is asked for by offset.
+  it("goes on by offset when the viewer's own For you page came without a cursor", async () => {
+    const feedRequests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/feed?')) {
+        feedRequests.push(url);
+        return {
+          ok: true,
+          json: async () => (url.includes('offset=')
+            ? {
+              items: [createShowcaseItem({ id: 'post-later', generationId: 'gen-later', title: 'Later by offset' })],
+              pageInfo: { hasMore: false, nextOffset: null, nextCursor: null, limit: 12, offset: 12 },
+            }
+            : {
+              items: [createShowcaseItem({ id: 'post-own', generationId: 'gen-own', title: 'Own page' })],
+              pageInfo: { hasMore: true, nextOffset: 12, nextCursor: null, limit: 12, offset: 0 },
+            }),
+        };
+      }
+      return { ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) };
+    }));
+
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed(createShowcaseItem({ title: 'Server fallback' }), { hasMore: true, nextOffset: 12, limit: 12 })}
+        initialCategory="all"
+        initialSort="for-you"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+    expect(await screen.findByText('Own page')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load More' }));
+
+    expect(await screen.findByText('Later by offset')).toBeInTheDocument();
+    expect(feedRequests).toEqual([
+      `/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}&category=media`,
+      `/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}&offset=12&category=media`,
+    ]);
+  });
+
+  // The app's end of Explore: "You're all caught up." on its For you, the
+  // lane named otherwise. The web's lanes stopped with nothing said.
+  it.each([
+    { sort: 'for-you', filters: {}, message: "You're all caught up." },
+    { sort: 'recent', filters: {}, message: "You've reached the end of Recent." },
+    { sort: 'for-you', filters: { initialCategory: 'video' }, message: "You've reached the end of Videos." },
+    { sort: 'top-saves', filters: { initialUnlock: 'free' }, message: "You've reached the end of Free." },
+  ] as const)('ends the $sort lane with "$message" and a Refresh', ({ sort, filters, message }) => {
+    authState.session = null;
+    authState.user = null;
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed(createShowcaseItem())}
+        initialCategory="all"
+        initialSort={sort}
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+        {...filters}
+      />
+    );
+
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Load More' })).not.toBeInTheDocument();
+  });
+
+  it('says nothing about an end while the lane has more', () => {
+    authState.session = null;
+    authState.user = null;
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed(createShowcaseItem(), { hasMore: true, nextOffset: 12, limit: 12 })}
+        initialCategory="all"
+        initialSort="recent"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Load More' })).toBeInTheDocument();
+    expect(screen.queryByText(/reached the end|all caught up/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Refresh' })).not.toBeInTheDocument();
+  });
+
+  it('refreshes a lane from its end: drops what was kept of it, asks for page one and opens it at the top', async () => {
+    const cacheKey = buildShowcaseClientCacheKey({
+      viewerId: 'user-1',
+      category: 'all',
+      sort: 'recent',
+      tool: null,
+      unlock: 'all',
+      resource: 'all',
+    });
+    writeShowcaseClientSnapshot(cacheKey, {
+      feed: createFeed(createShowcaseItem({ id: 'post-kept', generationId: 'gen-kept', title: 'Kept Frame' })),
+      renderedItemCount: 1,
+      savedItemIds: [],
+    });
+    let answerPageOne: (response: unknown) => void = () => undefined;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/showcase/feed?')) {
+        return new Promise((resolve) => {
+          answerPageOne = resolve;
+        });
+      }
+      return { ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) };
+    }));
+
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed(createShowcaseItem({ id: 'post-server', generationId: 'gen-server', title: 'Server Frame' }))}
+        initialCategory="all"
+        initialSort="recent"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+    expect(screen.getByText('Kept Frame')).toBeInTheDocument();
+    expect(screen.getByText("You've reached the end of Recent.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(readShowcaseClientSnapshot(cacheKey)).toBeNull();
+    expect(fetch).toHaveBeenCalledWith(
+      `/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}&category=media&sort=recent`,
+      { headers: { Authorization: 'Bearer test-token' } }
+    );
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeDisabled();
+
+    await act(async () => {
+      answerPageOne({
+        ok: true,
+        json: async () => ({
+          items: [createShowcaseItem({ id: 'post-fresh', generationId: 'gen-fresh', title: 'Fresh Frame' })],
+          pageInfo: { hasMore: false, nextOffset: null, limit: 12, offset: 0 },
+        }),
+      });
+    });
+
+    expect(await screen.findByText('Fresh Frame')).toBeInTheDocument();
+    expect(screen.queryByText('Kept Frame')).not.toBeInTheDocument();
+    expect(window.scrollTo).toHaveBeenCalledTimes(1);
+    expect(window.scrollTo).toHaveBeenCalledWith({ top: 0 });
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+  });
+
+  // A reload asks for the page afresh. The kept grid came back for ten
+  // minutes after its last change, with the new session merged in under it.
+  it('draws the server page, not the kept grid, when the browser reloaded Explore', () => {
+    const cacheKey = buildShowcaseClientCacheKey({
+      viewerId: 'user-1',
+      category: 'all',
+      sort: 'recent',
+      tool: null,
+      unlock: 'all',
+      resource: 'all',
+    });
+    writeShowcaseClientSnapshot(cacheKey, {
+      feed: createFeed(createShowcaseItem({ id: 'post-kept', generationId: 'gen-kept', title: 'Kept Frame' })),
+      renderedItemCount: 1,
+      savedItemIds: [],
+    }, performance.timeOrigin - 60_000);
+    vi.spyOn(performance, 'getEntriesByType').mockImplementation((entryType: string) => (
+      entryType === 'navigation'
+        ? [{ type: 'reload', name: window.location.href } as unknown as PerformanceEntry]
+        : []
+    ));
+
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed(createShowcaseItem({ id: 'post-server', generationId: 'gen-server', title: 'Server Frame' }))}
+        initialCategory="all"
+        initialSort="recent"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+
+    expect(screen.getByText('Server Frame')).toBeInTheDocument();
+    expect(screen.queryByText('Kept Frame')).not.toBeInTheDocument();
+  });
+
+  // The filter bar stays on screen deep in the grid. A lane changed from
+  // there opened at the bottom of the new, shorter page.
+  it('opens another lane at the top, and keeps the place for a new page of the same lane or a new viewer', () => {
+    const lane = (sort: ShowcaseSort, title: string) => (
+      <ShowcaseClient
+        initialFeed={createFeed(createShowcaseItem({ title }))}
+        initialCategory="all"
+        initialSort={sort}
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+    const view = render(lane('recent', 'First page'));
+
+    view.rerender(lane('recent', 'Same lane, new page'));
+    authState.session = { access_token: 'other-token', user: { id: 'user-2' } };
+    authState.user = { id: 'user-2' };
+    view.rerender(lane('recent', 'Same lane, new page'));
+    expect(window.scrollTo).not.toHaveBeenCalled();
+
+    view.rerender(lane('top-saves', 'Saved lane'));
+
+    expect(window.scrollTo).toHaveBeenCalledTimes(1);
+    expect(window.scrollTo).toHaveBeenCalledWith({ top: 0 });
+  });
+
   it('optimistically removes a post after Not interested and records ranked feedback', async () => {
     const rankedItem = createShowcaseItem({
       recommendation: {
@@ -1890,6 +2638,48 @@ describe('ShowcaseClient save actions', () => {
     });
     expect(within(screen.getByRole('dialog')).getByRole('button', { name: /more actions for second frame/i }))
       .toBeInTheDocument();
+  });
+
+  // The next post was picked by index from what was left, so the creator's
+  // earlier post going too skipped one: [A1, B, A2*, C, D] landed on D.
+  it("moves the reel to the post after the open one when Hide takes that creator's earlier posts too", async () => {
+    vi.spyOn(window.history, 'pushState');
+    const hiddenCreator = { id: 'creator-a', username: 'creator-a', name: 'Creator A', avatar: null };
+    renderShowcase([
+      createShowcaseItem({ id: 'post-a1', generationId: 'gen-a1', title: 'A One', creator: hiddenCreator }),
+      createShowcaseItem({ id: 'post-b', generationId: 'gen-b', title: 'B Frame', creator: otherCreator }),
+      createShowcaseItem({ id: 'post-a2', generationId: 'gen-a2', title: 'A Two', creator: hiddenCreator }),
+      createShowcaseItem({ id: 'post-c', generationId: 'gen-c', title: 'C Frame', creator: otherCreator }),
+      createShowcaseItem({ id: 'post-d', generationId: 'gen-d', title: 'D Frame', creator: otherCreator }),
+    ]);
+
+    fireEvent.click(screen.getByRole('img', { name: 'A Two' }));
+    const reel = await screen.findByRole('dialog');
+    fireEvent.click(await within(reel).findByRole('button', { name: /more actions for a two/i }));
+    fireEvent.click(within(reel).getByRole('menuitem', { name: /hide @creator-a/i }));
+
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get('post')).toBe('post-c');
+    });
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: /more actions for c frame/i }))
+      .toBeInTheDocument();
+  });
+
+  it('moves the reel to the post before when Not interested takes the last one', async () => {
+    vi.spyOn(window.history, 'pushState');
+    renderShowcase([
+      createShowcaseItem({ id: 'post-a1', generationId: 'gen-a1', title: 'A One' }),
+      createShowcaseItem({ id: 'post-b', generationId: 'gen-b', title: 'B Frame', creator: otherCreator }),
+    ]);
+
+    fireEvent.click(screen.getByRole('img', { name: 'B Frame' }));
+    const reel = await screen.findByRole('dialog');
+    fireEvent.click(await within(reel).findByRole('button', { name: /more actions for b frame/i }));
+    fireEvent.click(within(reel).getByRole('menuitem', { name: /not interested/i }));
+
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get('post')).toBe('post-a1');
+    });
   });
 
   it('names the delivery the reel showed when a ranked post is reported from it', async () => {

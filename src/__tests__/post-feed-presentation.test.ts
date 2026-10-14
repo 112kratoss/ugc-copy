@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
     buildPostFeedCard,
-    buildPostFeedCards,
+    createPostFeedCardBuilder,
     estimateWrappedLineCount,
     formatCompactCount,
     formatRelativeTime,
     getPostBodyClampLines,
     getPostCategoryLabel,
     getPostFeedBody,
+    getPostFeedRemixAccess,
     getPostFeedTitle,
     isTextOnlyPost,
     resolvePostPreviewKind,
@@ -183,8 +184,9 @@ describe('post feed presentation', () => {
         });
 
         it('builds a creation metadata line for media posts only', () => {
+            // No "Remixable": the card's Remix pill already says so.
             const known = buildPostFeedCard(item({ model: 'gpt-image-2', canRemix: true }));
-            expect(known.metadataLabel).toBe('Image · GPT Image 2 · Remixable');
+            expect(known.metadataLabel).toBe('Image · GPT Image 2');
 
             // Unknown model slugs are omitted rather than leaked.
             const unknown = buildPostFeedCard(item({ model: 'mystery-model-9', canRemix: false }));
@@ -197,8 +199,104 @@ describe('post feed presentation', () => {
             const source = item();
 
             expect(buildPostFeedCard(source).item).toBe(source);
-            expect(buildPostFeedCards([source, textItem({ id: 'post-2' })]).map((card) => card.id))
+            expect(createPostFeedCardBuilder()([source, textItem({ id: 'post-2' })]).map((card) => card.id))
                 .toEqual(['post-1', 'post-2']);
+        });
+
+        // A lane's array is new after every save and page while its items are
+        // mostly the objects they were; a new card for each re-rendered every
+        // memoised card on Home.
+        it('keeps the card of an item it has built, and builds one for an item that changed', () => {
+            const buildCards = createPostFeedCardBuilder();
+            const now = new Date('2026-07-28T03:00:00.000Z');
+            const first = item();
+            const second = textItem({ id: 'post-2' });
+            const [firstCard, secondCard] = buildCards([first, second], now);
+            const saved = { ...second, saveCount: 1 };
+
+            const [firstAgain, savedCard, thirdCard] = buildCards([first, saved, item({ id: 'post-3' })], now);
+
+            expect(firstAgain).toBe(firstCard);
+            expect(savedCard).not.toBe(secondCard);
+            expect(savedCard.saveLabel).toBe('1');
+            expect(thirdCard.id).toBe('post-3');
+            // A builder of its own starts with nothing kept.
+            expect(createPostFeedCardBuilder()([first], now)[0]).not.toBe(firstCard);
+        });
+
+        it('builds a kept card again once its time label has moved on', () => {
+            const buildCards = createPostFeedCardBuilder();
+            const source = item();
+            const [card] = buildCards([source], new Date('2026-07-28T03:00:00.000Z'));
+
+            // Still "3h" twenty minutes on: the same card.
+            expect(buildCards([source], new Date('2026-07-28T03:20:00.000Z'))[0]).toBe(card);
+
+            const [later] = buildCards([source], new Date('2026-07-28T04:00:00.000Z'));
+            expect(later).not.toBe(card);
+            expect(later.timeLabel).toBe('4h');
+        });
+    });
+
+    // The web reel's rule, and the app's three answers: open, behind a free
+    // unlock taken in the same tap, behind a paid one sold on the recipe.
+    describe('remix access', () => {
+        const recipe = {
+            id: 'bundle-1',
+            postId: 'post-1',
+            title: 'A launch frame',
+            accessMode: 'free',
+            priceUsdCents: 0,
+            previewText: '',
+            allowRemix: true,
+        } as NonNullable<ShowcaseFeedItem['asset']>;
+        const paidRecipe = { ...recipe, accessMode: 'paid', priceUsdCents: 900 } as NonNullable<ShowcaseFeedItem['asset']>;
+        const locked = (overrides: Partial<ShowcaseFeedItem> = {}) => item({
+            canRemix: false,
+            remixCapability: 'unlock_required',
+            remixTarget: 'image',
+            asset: recipe,
+            ...overrides,
+        });
+
+        it('opens a post anyone may remix', () => {
+            const card = buildPostFeedCard(item({ asset: recipe }));
+
+            expect(card.remixAccess).toBe('open');
+            expect(card.remixLabel).toBe('Remix · 8');
+        });
+
+        it('keeps Remix behind a free unlock, reading as any other Remix, with no chip beside it', () => {
+            const card = buildPostFeedCard(locked());
+
+            expect(card.remixAccess).toBe('free-unlock');
+            expect(card.remixLabel).toBe('Remix · 8');
+            expect(card.recipeChip).toBeNull();
+        });
+
+        it('puts the price on a Remix behind a paid unlock, and names it once', () => {
+            const card = buildPostFeedCard(locked({ asset: paidRecipe }));
+
+            expect(card.remixAccess).toBe('paid-unlock');
+            expect(card.remixLabel).toBe('$9.00 recipe');
+            expect(card.recipeChip).toBeNull();
+        });
+
+        it('keeps the price on the chip where the paid recipe does not lock Remix', () => {
+            expect(buildPostFeedCard(item({ asset: paidRecipe }))).toMatchObject({
+                remixAccess: 'open',
+                remixLabel: 'Remix · 8',
+                recipeChip: { label: '$9.00 recipe', tone: 'paid' },
+            });
+        });
+
+        it('offers no Remix where an unlock would lead nowhere or include none', () => {
+            expect(getPostFeedRemixAccess(locked({ remixTarget: 'workflow' }))).toBeNull();
+            expect(getPostFeedRemixAccess(locked({ remixTarget: 'text_template' }))).toBeNull();
+            expect(getPostFeedRemixAccess(locked({ asset: { ...recipe, allowRemix: false } }))).toBeNull();
+            expect(getPostFeedRemixAccess(locked({ asset: null }))).toBeNull();
+            expect(getPostFeedRemixAccess(locked({ remixCapability: 'none' }))).toBeNull();
+            expect(getPostFeedRemixAccess(locked({ remixCapability: undefined }))).toBeNull();
         });
     });
 

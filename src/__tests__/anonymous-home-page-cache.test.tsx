@@ -171,6 +171,8 @@ describe('Anonymous home cacheability', () => {
     expect(feedClientPropsMock).toHaveBeenCalledWith(expect.objectContaining({
       variant: 'embedded',
       initialChipId: 'for-you',
+      // The page cannot read `?chip=`; the client switches to the lane it names.
+      laneFromUrl: true,
       detailContext: { from: 'home', returnTo: '/' },
     }));
   });
@@ -333,5 +335,9 @@ describe('Anonymous home cacheability', () => {
 
     expect(html).not.toContain('Could not load the community feed');
     expect(html).toContain('feed-client');
+    expect(feedClientPropsMock).toHaveBeenCalledWith(expect.objectContaining({
+      initialFeed: null,
+      laneFromUrl: true,
+    }));
   });
 });

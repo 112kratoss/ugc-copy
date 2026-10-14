@@ -34,6 +34,7 @@ let simulateLegacyResourceColumns = false;
 let rpcBundleRows: TestBundleRow[] | null = null;
 let rpcCalls: Array<{ offset: number; limit: number }> = [];
 let hiddenLinkedPostIds = new Set<string>();
+let nsfwPostIds = new Set<string>();
 
 function buildLinkedPost(postId: string) {
   return {
@@ -169,9 +170,11 @@ vi.mock('@/lib/server-helpers', () => ({
           then(resolve: (value: { data: ReturnType<typeof buildLinkedPost>[]; error: null }) => void) {
             if (!ratingOnly) linkedPostHydrationCalls.push([...postIds]);
             resolve({
-              data: postIds
-                .filter((postId) => !hiddenLinkedPostIds.has(postId))
-                .map(buildLinkedPost),
+              data: ratingOnly
+                ? postIds.map((postId) => ({ ...buildLinkedPost(postId), is_nsfw: nsfwPostIds.has(postId) }))
+                : postIds
+                  .filter((postId) => !hiddenLinkedPostIds.has(postId))
+                  .map(buildLinkedPost),
               error: null,
             });
           },
@@ -224,6 +227,7 @@ describe('marketplace resource list missing-RPC fallback batching', () => {
     rpcBundleRows = null;
     rpcCalls = [];
     hiddenLinkedPostIds = new Set();
+    nsfwPostIds = new Set();
   });
 
   it('advances past a returned lookahead row when hydration drops an earlier row', async () => {
@@ -247,6 +251,27 @@ describe('marketplace resource list missing-RPC fallback batching', () => {
       { offset: 0, limit: 3 },
       { offset: 3, limit: 3 },
     ]);
+  });
+
+  it('counts a bundle hydration dropped as NSFW in the next page offset', async () => {
+    rpcBundleRows = Array.from({ length: 5 }, (_, index) => (
+      buildBundleRow(index, `Launch recipe ${index}`)
+    ));
+    nsfwPostIds.add('post-001');
+    const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+    const firstPage = await getMarketplaceResourceList({ offset: 0, limit: 2 });
+    const secondPage = await getMarketplaceResourceList({
+      offset: firstPage.pageInfo.nextOffset ?? 0,
+      limit: 2,
+    });
+
+    // The hidden row keeps its raw position: the next page starts after it,
+    // so nothing already returned comes back.
+    expect(firstPage.items.map((item) => item.postId)).toEqual(['post-000', 'post-002']);
+    expect(firstPage.pageInfo).toMatchObject({ hasMore: true, nextOffset: 3 });
+    expect(secondPage.items.map((item) => item.postId)).toEqual(['post-003', 'post-004']);
+    expect(secondPage.pageInfo).toMatchObject({ hasMore: false, nextOffset: null });
   });
 
   it('leaves an unreturned eligible lookahead at the next page offset', async () => {

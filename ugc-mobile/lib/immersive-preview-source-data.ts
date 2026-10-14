@@ -14,6 +14,7 @@ import {
   createShowcaseFeedViewerQueryKey,
   flattenShowcaseFeedPages,
   getShowcaseFeedSessionContext,
+  SHOWCASE_FEED_PAGE_SIZE,
 } from '@/lib/showcase-feed-query';
 import type {
   GenerationListItem,
@@ -213,8 +214,11 @@ export async function loadImmersiveSourceData({
   // page of For You, so the post is read beside the feed rather than after
   // it: one round trip instead of two before anything shows. A reel opened
   // from a grid reads the grid's own lane instead (`use-showcase-lane-source`).
+  // One page, as a lane asks for: every post the page holds is served to this
+  // reader, and posts served and never reached count against them in the
+  // ranking (audit 04-10; 48 was clamped to 24 by the route).
   const [response, selected] = await Promise.all([
-    api.getShowcaseFeed({ limit: 48, sort: 'for-you', ...(mediaOnly ? { category: 'media' } : {}) }),
+    api.getShowcaseFeed({ limit: SHOWCASE_FEED_PAGE_SIZE, sort: 'for-you', ...(mediaOnly ? { category: 'media' } : {}) }),
     initialId ? readShowcasePostOrMissing(api, initialId) : Promise.resolve(null),
   ]);
   let showcaseItems = response.items;
@@ -245,13 +249,21 @@ export type ImmersiveSourceSnapshot = {
   updatedAt: number;
 };
 
+/**
+ * `userId` is the registered account, whose own libraries and saved posts are
+ * keyed by it. `identityUserId` is the backend identity, guest or registered
+ * (`identityUserId` from `useAuth`), which the feed lanes are keyed by: a
+ * showcase reel can open on the lane that holds its post. A caller that reads
+ * only an account's libraries can leave it out.
+ */
 export function readCachedImmersiveSourceSnapshot(
   queryClient: QueryClient,
   source: PreviewViewerSource,
   userId: string | undefined,
   initialId: string,
   feedSessionId?: string | null,
-  creatorUsername?: string | null
+  creatorUsername?: string | null,
+  identityUserId?: string | null
 ): ImmersiveSourceSnapshot | undefined {
   const snapshot = isGenerationSource(source)
     ? cachedGenerations(queryClient, userId)
@@ -259,7 +271,7 @@ export function readCachedImmersiveSourceSnapshot(
       ? cachedOwnerPosts(queryClient, userId)
       : source === 'creator-profile'
         ? cachedCreatorProfileItems(queryClient, creatorUsername)
-        : cachedShowcaseItems(queryClient, source, userId, initialId, feedSessionId);
+        : cachedShowcaseItems(queryClient, source, userId, identityUserId, initialId, feedSessionId);
   return snapshot && sourceDataContains(snapshot.data, initialId) ? snapshot : undefined;
 }
 
@@ -269,9 +281,18 @@ export function readCachedImmersiveSourceData(
   userId: string | undefined,
   initialId: string,
   feedSessionId?: string | null,
-  creatorUsername?: string | null
+  creatorUsername?: string | null,
+  identityUserId?: string | null
 ): ImmersiveSourceData | undefined {
-  return readCachedImmersiveSourceSnapshot(queryClient, source, userId, initialId, feedSessionId, creatorUsername)?.data;
+  return readCachedImmersiveSourceSnapshot(
+    queryClient,
+    source,
+    userId,
+    initialId,
+    feedSessionId,
+    creatorUsername,
+    identityUserId
+  )?.data;
 }
 
 export function readCachedProfile(queryClient: QueryClient, userId: string | undefined): ProfileResponse | undefined {
@@ -282,6 +303,7 @@ function cachedShowcaseItems(
   queryClient: QueryClient,
   source: PreviewViewerSource,
   userId: string | undefined,
+  identityUserId: string | null | undefined,
   initialId: string,
   feedSessionId?: string | null
 ): ImmersiveSourceSnapshot | undefined {
@@ -298,7 +320,7 @@ function cachedShowcaseItems(
   }
 
   const feedQueries = queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({
-    queryKey: createShowcaseFeedViewerQueryKey(userId),
+    queryKey: createShowcaseFeedViewerQueryKey(identityUserId),
   });
   const rankedSources = feedQueries
     .filter((entry): entry is [QueryKey, InfiniteData<ShowcaseFeedResponse>] => Boolean(entry[1]?.pages.length));
@@ -347,9 +369,9 @@ function cachedCreatorProfileItems(
 }
 
 /**
- * `profile-generations` is paginated; `home-generations` and `generations` stay
- * single-page. Owner posts are not merged in: generation viewers load linked-post
- * details as separate enrichment.
+ * `profile-generations` is paginated; `generations` stays single-page. Owner
+ * posts are not merged in: generation viewers load linked-post details as
+ * separate enrichment.
  */
 function cachedGenerations(queryClient: QueryClient, userId: string | undefined): ImmersiveSourceSnapshot | undefined {
   return mergeCachedEntities(

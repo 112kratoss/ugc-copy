@@ -124,6 +124,50 @@ describe('Home feed dwell', () => {
   });
 });
 
+// Feed fix run 2026-10-14 (04-5): the server keeps a delivery's first dwell.
+// When a Home card opens the reel on its post, the reel's dwell on that same
+// delivery has to be the one kept, not the seconds the card was looked at.
+describe('a Home card handing its post to the reel', () => {
+  it('ends that card’s stretch without a dwell, and the other cards on screen file theirs', () => {
+    const attention = tracker();
+    const opened = card('a');
+    const other = card('b');
+
+    attention.setVisible([opened, other], 0);
+    attention.handOff(opened);
+    // Home blurs as the reel opens over it, 4 s after both came on screen.
+    expect(attention.setActive(false, 4_000)).toEqual([{ eventType: 'dwell', target: other, durationMs: 4_000 }]);
+  });
+
+  it('files no dwell for that delivery later, and still sends what its video played', () => {
+    const attention = tracker();
+    const opened = card('a');
+
+    attention.setVisible([opened], 0);
+    attention.recordProgress(opened, 0.2, 9_000);
+    attention.handOff(opened);
+    expect(attention.setActive(false, 3_000)).toEqual([
+      { eventType: 'media_progress', target: opened, progress: 0.2, durationMs: 9_000 },
+    ]);
+    // Back from the reel with the card still on screen, then scrolled away.
+    expect(attention.setActive(true, 60_000)).toEqual([]);
+    expect(attention.setVisible([], 90_000)).toEqual([]);
+  });
+
+  it('holds for a card opened before it was half on screen, and passes over a card with no delivery', () => {
+    const attention = tracker();
+    const opened = card('a');
+    const unranked = card('b', null);
+    const other = card('c');
+
+    // The recipe chip of a card mostly below the fold.
+    attention.handOff(opened);
+    attention.handOff(unranked);
+    attention.setVisible([opened, unranked, other], 0);
+    expect(attention.setVisible([], 5_000)).toEqual([{ eventType: 'dwell', target: other, durationMs: 5_000 }]);
+  });
+});
+
 describe('Home feed inline video progress', () => {
   it('sends progress at each milestone, the furthest point across loops', () => {
     const attention = tracker();

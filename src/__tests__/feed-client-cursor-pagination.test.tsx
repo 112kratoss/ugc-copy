@@ -52,6 +52,10 @@ function page(
 ): ShowcaseFeedPage {
     return {
         items,
+        // A page with a cursor was ranked, and names the session that ranked
+        // it. A signed-out For you page without one is the page built for
+        // everyone, which the feed reads again for the guest first.
+        ...(pageInfo.nextCursor ? { feedSessionId: 'ranked-session' } : {}),
         pageInfo: {
             hasMore: pageInfo.nextOffset !== null || Boolean(pageInfo.nextCursor),
             ...pageInfo,
@@ -130,7 +134,7 @@ describe('FeedClient cursor pagination', () => {
 
         render(<FeedClient
             initialFeed={page([item('post-1'), item('post-2')], { nextOffset: 2 })}
-            initialChipId="for-you"
+            initialChipId="recent"
         />);
 
         intersect?.();

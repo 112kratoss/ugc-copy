@@ -1,7 +1,5 @@
 import type { ToolAccent } from '@/lib/theme';
 import type { ShowcaseFeedItem } from '@/lib/types';
-import type { PreviewViewerSource } from './immersive-preview-view-model';
-import { formatCompactCount } from './home-view-model';
 import { resourceKindLabel } from './post-resource-bundle-view-model';
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import { isTextOnlyShowcasePost } from './showcase-display';
@@ -11,23 +9,22 @@ export interface ShowcaseMasonryCard {
   id: string;
   item: ShowcaseFeedItem;
   title: string;
-  prompt: string;
   creatorLabel: string;
   creatorAvatar: string | null;
   mediaUrl: string | null;
   previewUrl: string | null;
+  /**
+   * Not drawn by the pin but read off the list's viewability tokens: on iOS
+   * the tab bar takes its tint from the card nearest it
+   * (`selectBottomVisibleAmbientSource`, lib/tab-bar-ambient.ts).
+   */
   previewThumbhash: string | null;
-  previewCacheKey: string;
   mediaKind: 'image' | 'video' | null;
   badge: string;
   accent: ToolAccent;
   unlock: ShowcaseMasonryUnlock | null;
   aspectRatio: number | null;
   height: number;
-  saveLabel: string;
-  remixLabel: string;
-  viewerSource: PreviewViewerSource;
-  sourceId: string;
 }
 
 export interface ShowcaseMasonryUnlock {
@@ -48,6 +45,17 @@ const MAX_SHOWCASE_MEDIA_HEIGHT = 320;
 const FALLBACK_VIDEO_ASPECT_RATIO = 16 / 9;
 
 /**
+ * Each item's card, for as long as the item object lives. FlashList re-renders
+ * a pin whose item is a new object, and every page, save and refetch rebuilds
+ * the lane's cards; a save writes a new object for the saved post alone
+ * (`applyShowcaseSaveStateToFeedResponse`), and a refetch keeps the objects of
+ * the posts it did not change. A card is built from its item and nothing else,
+ * and items are never edited in place, so the same item object always has the
+ * same card.
+ */
+const masonryCardCache = new WeakMap<ShowcaseFeedItem, ShowcaseMasonryCard>();
+
+/**
  * Showcase is the media grid. Text-only posts belong to the home feed, which
  * can render a written post at full width — the grid can only offer them a
  * media-shaped tile. The filter lives here rather than in the screen so the
@@ -56,7 +64,14 @@ const FALLBACK_VIDEO_ASPECT_RATIO = 16 / 9;
 export function buildShowcaseMasonry(items: ShowcaseFeedItem[]) {
   return items
     .filter((item) => !isTextOnlyShowcasePost(item))
-    .map(showcaseToMasonryCard);
+    .map((item) => {
+      let card = masonryCardCache.get(item);
+      if (!card) {
+        card = showcaseToMasonryCard(item);
+        masonryCardCache.set(item, card);
+      }
+      return card;
+    });
 }
 
 export function getShowcaseGridLayout(windowWidth: number): ShowcaseGridLayout {
@@ -79,23 +94,17 @@ export function showcaseToMasonryCard(item: ShowcaseFeedItem): ShowcaseMasonryCa
     id: item.id,
     item,
     title: cardTitle(item),
-    prompt: item.body || item.prompt || 'A creator-ready idea from the Magicbooklet community.',
     creatorLabel: item.creator.username || item.creator.name,
     creatorAvatar: item.creator.avatar,
     mediaUrl: item.mediaUrl,
     previewUrl: preview?.previewUrl ?? cover?.previewUrl ?? null,
     previewThumbhash: preview?.thumbhash ?? cover?.previewThumbhash ?? null,
-    previewCacheKey: preview?.cacheKey ?? cover?.previewCacheKey ?? cover?.id ?? item.id,
     mediaKind: item.mediaKind,
     badge: unlock?.label ?? cardBadge(item),
     accent,
     unlock,
     aspectRatio: getCardAspectRatio(item),
     height: cardHeight(item),
-    saveLabel: formatCompactCount(item.saveCount),
-    remixLabel: formatCompactCount(item.remixCount),
-    viewerSource: 'showcase-feed',
-    sourceId: item.id,
   };
 }
 
@@ -152,10 +161,13 @@ export function getShowcaseMediaHeight(
  * the measurement the moment it lands is what makes a resting feed resize
  * itself under the reader.
  *
- * So a ratio for a card that is currently on screen is held, and released the
- * next time viewability reports that the card has left. The cost of the rule is
- * that such a card keeps its placeholder height, and therefore a cover crop,
- * until it scrolls away — a wrong crop is a smaller harm than a moving page.
+ * So a ratio for a card that is currently on screen is held. When it may land
+ * is the screen's call: Explore releases it only once the card is below the
+ * last card on screen, or at a refresh, since a card above the screen moves the
+ * ones being read too (`partitionAspectRatiosByViewport`, app/(tabs)/showcase.tsx).
+ * The cost of the rule is that such a card keeps its placeholder height, and
+ * therefore a cover crop, until then — a wrong crop is a smaller harm than a
+ * moving page.
  */
 export function partitionAspectRatioUpdates(
   updates: Record<string, number>,

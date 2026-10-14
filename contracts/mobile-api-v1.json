@@ -593,7 +593,12 @@
       "response": {
         "success": true,
         "recorded": 3,
-        "rejected": 0
+        "rejected": 0,
+        "results": [
+          { "index": 0, "status": 200 },
+          { "index": 1, "status": 200 },
+          { "index": 2, "status": 200 }
+        ]
       }
     },
     "searchPublicContent": {

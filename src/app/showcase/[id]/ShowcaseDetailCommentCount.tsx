@@ -41,10 +41,13 @@ export function ShowcaseDetailComments({
   postId,
   postCreatorId,
   commentCount,
+  deliveryId = null,
 }: {
   postId: string;
   postCreatorId: string | null;
   commentCount: number;
+  /** The delivery of the ranked card that opened the page, sent with each new comment. */
+  deliveryId?: string | null;
 }) {
   const setCount = useContext(CommentCountContext)?.setCount;
 
@@ -54,6 +57,7 @@ export function ShowcaseDetailComments({
       postCreatorId={postCreatorId}
       commentCount={commentCount}
       onCommentCountChange={setCount}
+      deliveryId={deliveryId}
     />
   );
 }

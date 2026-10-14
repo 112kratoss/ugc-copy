@@ -301,7 +301,13 @@ describe('shared mobile API v1 contract fixture', () => {
       vi.useRealTimers();
     }
     const batch: ShowcaseFeedEventBatchResponse = contract.endpoints.recordShowcaseFeedEvents.response;
-    expect(batch).toEqual({ success: true, recorded: events.length, rejected: 0 });
+    expect(batch).toEqual({
+      success: true,
+      recorded: events.length,
+      rejected: 0,
+      // One outcome per event sent, in request order (04-11).
+      results: events.map((_event, index) => ({ index, status: 200 })),
+    });
   });
 
   // A bundle's files signed in one call: the request and the answer the app

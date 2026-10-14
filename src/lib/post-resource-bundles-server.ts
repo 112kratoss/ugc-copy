@@ -1812,11 +1812,17 @@ async function getMarketplaceResourceListBase(
   const rows = ((data ?? []) as BundleRow[]).slice(0, limit + 1);
   const hasMore = rows.length > limit;
   const hydratedItems = await hydrateBundleRows(rows, null, 'public', true);
+  // Walked by raw row, not by hydrated item: hydration drops an NSFW bundle
+  // before this loop, and a dropped row still occupies its raw position. Left
+  // out of the count, nextOffset fell short by one per hidden row and the next
+  // page re-read (and repeated) the rows after it.
+  const hydratedById = new Map(hydratedItems.map((item) => [item.id, item]));
   const pageItems: MarketplaceResourceListItem[] = [];
   let consumedRowCount = 0;
 
-  for (const item of hydratedItems) {
-    if (!item.post) {
+  for (const row of rows) {
+    const item = hydratedById.get(row.id);
+    if (!item?.post) {
       consumedRowCount += 1;
       continue;
     }

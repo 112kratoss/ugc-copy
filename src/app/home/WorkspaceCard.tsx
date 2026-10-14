@@ -153,10 +153,12 @@ export default function WorkspaceCard({
     return rankHomeWorkspaceGenerations(views);
   }, [initialGenerations, statusSnapshot]);
   // The page renders this card twice, in the strip and in the rail, and the
-  // stylesheet shows one of them per width. Only the shown one ticks.
+  // stylesheet shows one of them per width. Only the shown one ticks, and only
+  // the rail reads the clock: the strip shows a count, so a tick there would
+  // re-render a phone's Home every second for nothing.
   const isRailWidth = useMediaQuery('(min-width: 80rem)');
   const isShown = variant === 'rail' ? isRailWidth : !isRailWidth;
-  const nowMs = useTicker(active.length > 0 && isShown);
+  const nowMs = useTicker(active.length > 0 && isShown && variant === 'rail');
 
   const creditsPill = (
     <Link

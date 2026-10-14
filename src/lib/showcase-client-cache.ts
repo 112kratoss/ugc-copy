@@ -239,6 +239,50 @@ export function readShowcaseClientSnapshot(
   return snapshot;
 }
 
+/**
+ * Whether a snapshot was kept before the browser reloaded the page it would be
+ * restored on. A reload asks for the page afresh: restoring the grid showed
+ * the same posts again, with the new session's merged in under them. The
+ * document's navigation entry says 'reload' for as long as the document
+ * lives, pages reached inside the app afterwards included, so this asks about
+ * a snapshot from before the document loaded, on the path that was reloaded;
+ * a snapshot written since is a page come back to, and is restored.
+ */
+function predatesReloadOfThisPage(snapshot: ShowcaseClientSnapshot): boolean {
+  if (
+    typeof window === 'undefined'
+    || typeof performance === 'undefined'
+    || typeof performance.getEntriesByType !== 'function'
+  ) {
+    return false;
+  }
+
+  const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+  if (navigation?.type !== 'reload' || snapshot.cachedAt >= performance.timeOrigin) {
+    return false;
+  }
+
+  try {
+    return new URL(navigation.name, window.location.href).pathname === window.location.pathname;
+  } catch {
+    return false;
+  }
+}
+
+/** The snapshot Explore opens with: none kept from before a reload of the page. */
+export function readShowcaseClientSnapshotToRestore(
+  cacheKey: string,
+  now = Date.now()
+): ShowcaseClientSnapshot | null {
+  const snapshot = readShowcaseClientSnapshot(cacheKey, now);
+  return snapshot && !predatesReloadOfThisPage(snapshot) ? snapshot : null;
+}
+
+/** A lane asked for afresh (Explore's Refresh): what was kept of it is not brought back. */
+export function forgetShowcaseClientSnapshot(cacheKey: string) {
+  removeSnapshot(cacheKey);
+}
+
 export function writeShowcaseClientSnapshot(
   cacheKey: string,
   snapshot: Omit<ShowcaseClientSnapshot, 'cachedAt'>,
@@ -334,8 +378,9 @@ export function takeBlockedCreatorOffClientFeeds(creatorId: string) {
   }
 }
 
+/** Whether Explore would open with a snapshot: the bootstrap hands over at once for one. */
 export function hasFreshShowcaseClientSnapshot(cacheKey: string): boolean {
-  return readShowcaseClientSnapshot(cacheKey) !== null;
+  return readShowcaseClientSnapshotToRestore(cacheKey) !== null;
 }
 
 /** Test helper: drops the copies kept in memory, and leaves what the tab remembers of the viewer. */

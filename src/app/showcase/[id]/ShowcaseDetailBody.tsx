@@ -81,10 +81,13 @@ export default function ShowcaseDetailBody({
   detail,
   viewerUserId,
   returnContext,
+  deliveryId = null,
 }: {
   detail: PublicPostDetail;
   viewerUserId: string | null;
   returnContext?: ShowcaseReturnContext;
+  /** The delivery of the ranked card that opened the page, for the report and the thread. */
+  deliveryId?: string | null;
 }) {
   // The server never reveals, so an NSFW post arrives as its cover: the
   // creator, counts and visibility are real, the content is a placeholder. The
@@ -226,6 +229,7 @@ export default function ShowcaseDetailBody({
         postId={detail.id}
         postCreatorId={detail.creator.id}
         commentCount={detail.commentCount}
+        deliveryId={deliveryId}
       />
     </div>
   ) : null;
@@ -449,6 +453,7 @@ export default function ShowcaseDetailBody({
                   postId={detail.id}
                   bundleId={detail.resourceBundle?.id ?? null}
                   creator={detail.creator}
+                  deliveryId={deliveryId}
                 />
               )}
             </div>

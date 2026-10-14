@@ -8,6 +8,7 @@ import {
   readCachedImmersiveSourceData,
   readCachedImmersiveSourceSnapshot,
 } from '../lib/immersive-preview-source-data';
+import { SHOWCASE_FEED_PAGE_SIZE } from '../lib/showcase-feed-query';
 import type { CreatorProfileResponse, GenerationListItem, ShowcaseFeedItem } from '../lib/types';
 
 function generation(id: string, overrides: Partial<GenerationListItem> = {}): GenerationListItem {
@@ -89,9 +90,25 @@ describe('immersive preview source data', () => {
   it('retains Explore media filtering when refreshing the reel', async () => {
     const api = { getShowcaseFeed: vi.fn(async () => ({ items: [] })) };
     await loadImmersiveSourceData({ api: api as never, source: 'showcase-feed', initialId: '', mediaOnly: true });
-    expect(api.getShowcaseFeed).toHaveBeenLastCalledWith({ limit: 48, sort: 'for-you', category: 'media' });
+    expect(api.getShowcaseFeed).toHaveBeenLastCalledWith({ limit: 12, sort: 'for-you', category: 'media' });
     await loadImmersiveSourceData({ api: api as never, source: 'showcase-feed', initialId: '' });
-    expect(api.getShowcaseFeed).toHaveBeenLastCalledWith({ limit: 48, sort: 'for-you' });
+    expect(api.getShowcaseFeed).toHaveBeenLastCalledWith({ limit: 12, sort: 'for-you' });
+  });
+
+  // Every post the page holds is served to the reader, and a post served and
+  // never reached counts against it in the ranking. 48 (clamped to 24 by the
+  // route) served two dozen posts for a reel opened from a link or a search
+  // result (audit 04-10).
+  it('asks one page of For You for a reel opened without a lane, as a lane does', async () => {
+    const api = {
+      getShowcaseFeed: vi.fn(async () => ({ items: [showcaseItem('post-1')], feedSessionId: 'session-1' })),
+      getShowcasePost: vi.fn(async () => ({ item: showcaseItem('post-9') })),
+    };
+    await loadImmersiveSourceData({ api: api as never, source: 'showcase-feed', initialId: 'post-9' });
+
+    expect(api.getShowcaseFeed).toHaveBeenCalledTimes(1);
+    expect(api.getShowcaseFeed.mock.calls[0]).toEqual([{ limit: SHOWCASE_FEED_PAGE_SIZE, sort: 'for-you' }]);
+    expect(SHOWCASE_FEED_PAGE_SIZE).toBe(12);
   });
 
   it('reads the opened post beside the feed and puts it first when the feed lacks it', async () => {
@@ -389,7 +406,9 @@ describe('immersive preview source data', () => {
       'showcase-feed',
       'user-1',
       'post-1',
-      'session-1'
+      'session-1',
+      null,
+      'user-1'
     )).toEqual({
       showcaseItems: rankedItems,
       feedSessionId: 'session-1',
@@ -397,12 +416,12 @@ describe('immersive preview source data', () => {
     });
   });
 
-  it('does not reuse an anonymous ranked session for a signed-in viewer', () => {
+  it('does not reuse the installation ranked session for a signed-in viewer', () => {
     const queryClient = new QueryClient();
-    const anonymousItem = { ...showcaseItem('post-1'), title: 'Anonymous ranking' };
+    const installationItem = { ...showcaseItem('post-1'), title: 'Installation ranking' };
     const signedInItem = { ...showcaseItem('post-1'), title: 'Signed-in ranking' };
-    queryClient.setQueryData(['showcase-feed', 'infinite', 'anonymous', { sort: 'for-you' }], {
-      pages: [{ items: [anonymousItem], feedSessionId: 'anonymous-session' }],
+    queryClient.setQueryData(['showcase-feed', 'infinite', 'installation', { sort: 'for-you' }], {
+      pages: [{ items: [installationItem], feedSessionId: 'installation-session' }],
       pageParams: [{ offset: 0 }],
     });
     queryClient.setQueryData(['showcase-feed', 'infinite', 'user-1', { sort: 'for-you' }], {
@@ -414,11 +433,47 @@ describe('immersive preview source data', () => {
       queryClient,
       'showcase-feed',
       'user-1',
-      'post-1'
+      'post-1',
+      null,
+      null,
+      'user-1'
     )).toMatchObject({
       showcaseItems: [{ title: 'Signed-in ranking' }],
       feedSessionId: 'user-session',
     });
+  });
+
+  // The grids key a guest's lanes by the guest's identity (audit 04-3), and a
+  // guest has no registered id at all: a lookup by that id read the
+  // installation's lane, whose session the server refuses for the guest.
+  it("opens a guest's reel on the guest's own lane, not the installation's", () => {
+    const queryClient = new QueryClient();
+    const installationItem = { ...showcaseItem('post-1'), title: 'Installation ranking' };
+    const guestItem = { ...showcaseItem('post-1'), title: 'Guest ranking' };
+    queryClient.setQueryData(['showcase-feed', 'infinite', 'installation', { sort: 'for-you' }], {
+      pages: [{ items: [installationItem], feedSessionId: 'installation-session' }],
+      pageParams: [{ offset: 0 }],
+    });
+    queryClient.setQueryData(['showcase-feed', 'infinite', 'guest-1', { sort: 'for-you' }], {
+      pages: [{ items: [guestItem], feedSessionId: 'guest-session' }],
+      pageParams: [{ offset: 0 }],
+    });
+
+    expect(readCachedImmersiveSourceSnapshot(
+      queryClient,
+      'showcase-feed',
+      undefined,
+      'post-1',
+      null,
+      null,
+      'guest-1'
+    )?.data).toMatchObject({
+      showcaseItems: [{ title: 'Guest ranking' }],
+      feedSessionId: 'guest-session',
+    });
+    // A device with no identity yet reads the installation's lane.
+    expect(readCachedImmersiveSourceData(queryClient, 'showcase-feed', undefined, 'post-1', null, null, null))
+      .toMatchObject({ feedSessionId: 'installation-session' });
   });
 
   it('keeps the newest copy of a creation found in two caches, and the older cache\'s age', () => {

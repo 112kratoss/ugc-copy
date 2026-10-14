@@ -18,6 +18,8 @@ const queryState = vi.hoisted(() => ({
   isFetchingNextPage: false,
   isLoading: false,
   pages: [{ items: [], pageInfo: { hasMore: false, nextOffset: null } }] as Array<Record<string, unknown>>,
+  /** The key of the lane the screen last asked for. */
+  queryKey: null as readonly unknown[] | null,
   refetch: vi.fn(() => Promise.resolve()),
   tool: undefined as string | undefined,
 }));
@@ -31,7 +33,16 @@ const authState = vi.hoisted(() => ({
     reportPost: vi.fn(),
     reportUser: vi.fn(),
   },
-  user: { id: 'viewer-1' },
+  identityUserId: 'viewer-1' as string | null,
+  user: { id: 'viewer-1' } as { id: string } | null,
+}));
+
+// One client for every render, as the real provider gives.
+const queryClient = vi.hoisted(() => ({
+  getQueriesData: vi.fn(() => []),
+  invalidateQueries: vi.fn(() => Promise.resolve()),
+  setQueriesData: vi.fn(),
+  setQueryData: vi.fn(),
 }));
 
 vi.mock('@shopify/flash-list', () => ({
@@ -39,27 +50,25 @@ vi.mock('@shopify/flash-list', () => ({
 }));
 
 vi.mock('@tanstack/react-query', () => ({
-  useInfiniteQuery: () => ({
-    data: {
-      pages: queryState.pages,
-      pageParams: [{ offset: 0 }],
-    },
-    error: queryState.error,
-    fetchNextPage: queryState.fetchNextPage,
-    hasNextPage: queryState.hasNextPage,
-    isFetchNextPageError: queryState.isFetchNextPageError,
-    isFetching: queryState.isFetching,
-    isFetchingNextPage: queryState.isFetchingNextPage,
-    isLoading: queryState.isLoading,
-    isRefetching: false,
-    refetch: queryState.refetch,
-  }),
-  useQueryClient: () => ({
-    getQueriesData: vi.fn(() => []),
-    invalidateQueries: vi.fn(() => Promise.resolve()),
-    setQueriesData: vi.fn(),
-    setQueryData: vi.fn(),
-  }),
+  useInfiniteQuery: (options: { queryKey: readonly unknown[] }) => {
+    queryState.queryKey = options.queryKey;
+    return {
+      data: {
+        pages: queryState.pages,
+        pageParams: [{ offset: 0 }],
+      },
+      error: queryState.error,
+      fetchNextPage: queryState.fetchNextPage,
+      hasNextPage: queryState.hasNextPage,
+      isFetchNextPageError: queryState.isFetchNextPageError,
+      isFetching: queryState.isFetching,
+      isFetchingNextPage: queryState.isFetchingNextPage,
+      isLoading: queryState.isLoading,
+      isRefetching: false,
+      refetch: queryState.refetch,
+    };
+  },
+  useQueryClient: () => queryClient,
 }));
 
 vi.mock('expo-router', () => ({
@@ -180,7 +189,8 @@ vi.mock('@/lib/motion', () => ({
   }),
 }));
 
-import ShowcaseScreen from '../app/(tabs)/showcase';
+import ShowcaseScreen, { partitionAspectRatiosByViewport } from '../app/(tabs)/showcase';
+import { SHOWCASE_ONSCREEN_VIEWABILITY, resetAnonymousShowcaseFeedRemovalsForTests } from '../lib/showcase-feed-events';
 
 function feedItem() {
   return {
@@ -261,6 +271,33 @@ function filterChip(header: renderer.ReactTestRenderer, label: string) {
     && node.props.accessibilityState !== undefined
     && node.findAll((child) => String(child.type) === 'text' && child.props.children === label).length > 0
   ));
+}
+
+type ListProps = renderer.ReactTestInstance['props'];
+
+type PinProps = {
+  card: { id: string; item: unknown };
+  onAspectRatio: (cardId: string, ratio: number) => void;
+  feedbackMenu: (item: unknown) => { sections: Array<{ items: Array<{ id?: string; onSelect?: () => void }> }> };
+};
+
+/** What the grid hands the pin at `index`, rendered as FlashList would render it. */
+function pinProps(list: ListProps, index: number): PinProps {
+  const cell = list.renderItem({ item: list.data[index], index, target: 'Cell' }) as React.ReactElement<{
+    children: React.ReactElement<PinProps>;
+  }>;
+  return cell.props.children.props;
+}
+
+/** Picks a row from the first tile's ⋮ menu. */
+function selectTileMenuRow(list: ListProps, rowId: string) {
+  const pin = pinProps(list, 0);
+  const row = pin.feedbackMenu(pin.card.item).sections
+    .flatMap((section) => section.items)
+    .find((item) => item.id === rowId);
+  if (!row?.onSelect) throw new Error(`The tile menu has no ${rowId} row.`);
+  const select = row.onSelect;
+  renderer.act(() => select());
 }
 
 describe('Showcase screen', () => {
@@ -514,5 +551,208 @@ describe('Showcase screen', () => {
     expect(tree!.root.findAll((node) => String(node.type) === 'activity-indicator')).toHaveLength(1);
     expect(tree!.root.findAllByProps({ accessibilityLabel: "Couldn't load more. Retry" })).toHaveLength(0);
     renderer.act(() => tree!.unmount());
+  });
+
+  // The web's feed, Explore and reel, and this app's reel and Home, all file a
+  // reported creator under `harassment`; the tile was the one that differed.
+  it('files a creator reported from a tile under the reason every other surface uses', async () => {
+    queryState.pages = [{ items: [feedItem()], pageInfo: { hasMore: false, nextOffset: null } }];
+    authState.api.reportUser.mockReset();
+    authState.api.reportUser.mockResolvedValue({ success: true });
+    vi.mocked(Alert.alert).mockClear();
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ShowcaseScreen />);
+    });
+    selectTileMenuRow(tree!.root.find((node) => String(node.type) === 'flash-list').props, 'report-user');
+
+    const buttons = vi.mocked(Alert.alert).mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
+    await renderer.act(async () => {
+      buttons.find((button) => button.text === 'Report user')?.onPress?.();
+    });
+
+    expect(authState.api.reportUser).toHaveBeenCalledWith('creator-1', {
+      reason: 'harassment',
+      sourceSurface: 'showcase',
+      details: 'Reported from post post-1.',
+    });
+    renderer.act(() => tree!.unmount());
+  });
+
+  // A guest has no `user` but has a backend identity, and the server refuses a
+  // page's events and cursor from anyone but the identity it was ranked for.
+  it("keys a guest's lane, and what the guest removes from it, by the guest's identity", () => {
+    const registeredUser = authState.user;
+    authState.user = null;
+    authState.identityUserId = 'guest-1';
+    queryState.pages = [{ items: [feedItem()], pageInfo: { hasMore: false, nextOffset: null } }];
+    queryClient.setQueriesData.mockClear();
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    try {
+      renderer.act(() => {
+        tree = renderer.create(<ShowcaseScreen />);
+      });
+      expect(queryState.queryKey?.slice(0, 3)).toEqual(['showcase-feed', 'infinite', 'guest-1']);
+
+      selectTileMenuRow(tree!.root.find((node) => String(node.type) === 'flash-list').props, 'not-interested');
+      expect(queryClient.setQueriesData).toHaveBeenCalledWith(
+        { queryKey: ['showcase-feed', 'infinite', 'guest-1'] },
+        expect.any(Function),
+      );
+    } finally {
+      if (tree) renderer.act(() => tree!.unmount());
+      resetAnonymousShowcaseFeedRemovalsForTests();
+      authState.user = registeredUser;
+      authState.identityUserId = 'viewer-1';
+    }
+  });
+
+  // A cover without dimensions is measured once it loads. With MVCP off, a card
+  // above the screen that changes height moves every card being read.
+  it('lets a measured cover resize its card only below the screen, or at a refresh', async () => {
+    const base = feedItem();
+    queryState.pages = [{
+      items: Array.from({ length: 6 }, (_, index) => ({
+        ...base,
+        id: `post-${index}`,
+        mediaItems: base.mediaItems.map((media) => ({ ...media, width: null, height: null })),
+      })),
+      pageInfo: { hasMore: false, nextOffset: null },
+    }];
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    const listProps = () => tree!.root.find((node) => String(node.type) === 'flash-list').props;
+    // FlashList's ref hands out the list's current props, data included.
+    const list = {
+      recomputeViewableItems: vi.fn(),
+      scrollToOffset: vi.fn(),
+      get props() {
+        return listProps();
+      },
+    };
+    /** FlashList's "any pixel on screen" report, for the cards at these indices. */
+    const onScreen = (indices: number[]) => {
+      const props = listProps();
+      const pair = (props.viewabilityConfigCallbackPairs as Array<{
+        viewabilityConfig: unknown;
+        onViewableItemsChanged: (info: { viewableItems: unknown[]; changed: unknown[] }) => void;
+      }>).find((candidate) => candidate.viewabilityConfig === SHOWCASE_ONSCREEN_VIEWABILITY);
+      renderer.act(() => pair!.onViewableItemsChanged({
+        viewableItems: indices.map((index) => ({
+          index,
+          isViewable: true,
+          item: props.data[index],
+          key: props.data[index].id,
+          timestamp: 0,
+        })),
+        changed: [],
+      }));
+    };
+    /** Covers loading: each pin reports its ratio, and the grid's flush runs. */
+    const measure = (ratios: Record<string, number>) => {
+      const props = listProps();
+      for (const [cardId, ratio] of Object.entries(ratios)) {
+        const index = (props.data as Array<{ id: string }>).findIndex((card) => card.id === cardId);
+        pinProps(props, index).onAspectRatio(cardId, ratio);
+      }
+      renderer.act(() => {
+        vi.advanceTimersByTime(50);
+      });
+    };
+    const applied = () => listProps().extraData.resolvedAspectRatios;
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      renderer.act(() => {
+        tree = renderer.create(<ShowcaseScreen />, {
+          createNodeMock: (element) => (String(element.type) === 'flash-list' ? list : null),
+        });
+      });
+
+      onScreen([2, 3]);
+      measure({ 'post-0': 1.25, 'post-2': 0.5, 'post-5': 2 });
+      // Below the screen it applies at once; on the screen and above it, it waits.
+      expect(applied()).toEqual({ 'post-5': 2 });
+
+      // Scrolling on, post-2 leaves through the top and keeps its height.
+      onScreen([4, 5]);
+      expect(applied()).toEqual({ 'post-5': 2 });
+
+      // Scrolling back up past it, post-2 leaves through the bottom.
+      onScreen([0, 1]);
+      expect(applied()).toEqual({ 'post-5': 2, 'post-2': 0.5 });
+
+      // A refresh re-places every card anyway, so whatever still waits lands.
+      await renderer.act(async () => {
+        listProps().onRefresh();
+      });
+      expect(queryState.refetch).toHaveBeenCalledTimes(1);
+      expect(applied()).toEqual({ 'post-5': 2, 'post-2': 0.5, 'post-0': 1.25 });
+    } finally {
+      vi.useRealTimers();
+      if (tree) renderer.act(() => tree!.unmount());
+    }
+  });
+});
+
+describe('partitionAspectRatiosByViewport', () => {
+  const cards = ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => ({ id }));
+
+  it('applies a ratio at once only to a card past the last one on screen', () => {
+    const { apply, hold } = partitionAspectRatiosByViewport(
+      { a: 1.25, c: 0.5, e: 2, f: 0.75 },
+      cards,
+      { onScreenCardIds: new Set(['c', 'd']), lastViewableIndex: 3 },
+    );
+
+    expect(apply).toEqual({ e: 2, f: 0.75 });
+    // c is on screen; a is above it, so its height would move c and d.
+    expect(hold).toEqual({ a: 1.25, c: 0.5 });
+  });
+
+  it('keeps holding a card that left through the top, and releases it through the bottom', () => {
+    const held = { c: 0.5 };
+
+    expect(partitionAspectRatiosByViewport(held, cards, {
+      onScreenCardIds: new Set(['e', 'f']),
+      lastViewableIndex: 5,
+    })).toEqual({ apply: {}, hold: { c: 0.5 } });
+    expect(partitionAspectRatiosByViewport(held, cards, {
+      onScreenCardIds: new Set(['a', 'b']),
+      lastViewableIndex: 1,
+    })).toEqual({ apply: { c: 0.5 }, hold: {} });
+  });
+
+  it('holds an off-screen card listed before the last one on screen', () => {
+    // Masonry: a short card in one column scrolls off the top while a tall card
+    // listed before it still shows in the other, so its index sits inside the
+    // on-screen range while the card is above the screen.
+    expect(partitionAspectRatiosByViewport({ c: 0.5 }, cards, {
+      onScreenCardIds: new Set(['b', 'd']),
+      lastViewableIndex: 3,
+    })).toEqual({ apply: {}, hold: { c: 0.5 } });
+  });
+
+  it('holds a card on screen whatever its index says', () => {
+    expect(partitionAspectRatiosByViewport({ e: 2 }, cards, {
+      onScreenCardIds: new Set(['e']),
+      lastViewableIndex: 3,
+    })).toEqual({ apply: {}, hold: { e: 2 } });
+  });
+
+  it('holds everything until a card is known to be on screen', () => {
+    expect(partitionAspectRatiosByViewport({ a: 1.25, f: 0.75 }, cards, {
+      onScreenCardIds: new Set(),
+      lastViewableIndex: -1,
+    })).toEqual({ apply: {}, hold: { a: 1.25, f: 0.75 } });
+  });
+
+  it('holds a card the list no longer has', () => {
+    expect(partitionAspectRatiosByViewport({ gone: 1 }, cards, {
+      onScreenCardIds: new Set(['a']),
+      lastViewableIndex: 0,
+    })).toEqual({ apply: {}, hold: { gone: 1 } });
   });
 });

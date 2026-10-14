@@ -6,7 +6,6 @@ import {
   createShowcaseFeedQueryKey,
   createShowcaseFeedViewerQueryKey,
   createShowcasePostQueryKey,
-  findShowcaseFeedItemById,
   flattenShowcaseFeedPages,
   getNextShowcaseFeedOffset,
   getNextShowcaseFeedPageParam,
@@ -59,7 +58,7 @@ describe('showcase feed query helpers', () => {
     expect(createShowcaseFeedQueryKey()).toEqual([
       'showcase-feed',
       'infinite',
-      'anonymous',
+      'installation',
       { category: 'all', resource: 'all', sort: 'for-you', tool: 'all', unlock: 'all' },
     ]);
     expect(createShowcaseFeedQueryKey({}, 'user-1')).toEqual([
@@ -73,6 +72,21 @@ describe('showcase feed query helpers', () => {
       'infinite',
       'user-1',
     ]);
+  });
+
+  // Audit 04-3: the server ranks a page, and accepts its session, cursor and
+  // events, for the identity the request carried. A guest's lane is its own.
+  it('keys lanes by the backend identity, and a device with none yet as the installation', () => {
+    for (const missing of [null, undefined, '', '  ']) {
+      expect(createShowcaseFeedViewerQueryKey(missing)).toEqual(['showcase-feed', 'infinite', 'installation']);
+      expect(createShowcaseFeedQueryKey({}, missing)[2]).toBe('installation');
+    }
+
+    const guest = createShowcaseFeedQueryKey({}, 'guest-uid');
+    expect(guest[2]).toBe('guest-uid');
+    expect(guest).not.toEqual(createShowcaseFeedQueryKey({}, null));
+    expect(guest).not.toEqual(createShowcaseFeedQueryKey({}, 'next-guest-uid'));
+    expect(createShowcaseFeedViewerQueryKey(' guest-uid ')).toEqual(createShowcaseFeedViewerQueryKey('guest-uid'));
   });
 
   it('flattens multiple pages in order', () => {
@@ -98,24 +112,6 @@ describe('showcase feed query helpers', () => {
     expect(flattenShowcaseFeedPages(pages).map((post) => post.id)).toEqual(['post-1', 'post-2', 'post-3']);
   });
 
-  it('finds a post inside paginated feed pages', () => {
-    const pages: ShowcaseFeedResponse[] = [
-      { items: [item({ id: 'post-1' }), item({ id: 'post-2' })] },
-      { items: [item({ id: 'post-3', title: 'Cached detail' }), item({ id: 'post-4' })] },
-    ];
-
-    expect(findShowcaseFeedItemById(pages, 'post-3')).toMatchObject({
-      id: 'post-3',
-      title: 'Cached detail',
-    });
-  });
-
-  it('does not find missing or empty post IDs', () => {
-    expect(findShowcaseFeedItemById([{ items: [item({ id: 'post-1' })] }], 'post-2')).toBeUndefined();
-    expect(findShowcaseFeedItemById(undefined, 'post-1')).toBeUndefined();
-    expect(findShowcaseFeedItemById([{ items: [item({ id: 'post-1' })] }], undefined)).toBeUndefined();
-  });
-
   it('builds detail query keys that match the viewer-specific detail query', () => {
     expect(createShowcasePostQueryKey('post-1', 'user-1')).toEqual(['showcase-post', 'post-1', 'user-1']);
     expect(createShowcasePostQueryKey('post-1', undefined)).toEqual(['showcase-post', 'post-1', undefined]);
@@ -138,7 +134,7 @@ describe('showcase feed query helpers', () => {
     expect(createShowcaseFeedQueryKey({ unlock: 'free', resource: 'remix' })).toEqual([
       'showcase-feed',
       'infinite',
-      'anonymous',
+      'installation',
       { category: 'all', resource: 'remix', sort: 'for-you', tool: 'all', unlock: 'free' },
     ]);
   });

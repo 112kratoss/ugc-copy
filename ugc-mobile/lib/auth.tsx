@@ -52,6 +52,7 @@ import {
 } from './persisted-account-state';
 import { clearPersistedHomeFeed } from './persisted-home-feed';
 import { devicePushQueryKey } from './push-registration';
+import { clearSearchHistory } from './search-history';
 import {
   clearPersistedSupabaseAuthSession,
   duringSignOut,
@@ -760,9 +761,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       feedIdentityTransition?.commit();
       if (isSupabaseConfigured) await clearPersistedSupabaseAuthSession();
-      // The home feed and the account numbers saved for the next launch are
-      // this person's.
+      // The home feed, the recent searches and the account numbers saved for
+      // the next launch are this person's.
       await clearPersistedHomeFeed();
+      await clearSearchHistory();
       await clearPersistedAccountState();
       resetAuthState();
       // Signing out drops back to a guest identity rather than to nothing, so
@@ -817,6 +819,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await clearPersistedSupabaseAuthSession().catch(() => undefined);
     }
     await clearPersistedHomeFeed();
+    await clearSearchHistory();
     await clearPersistedAccountState();
     feedIdentityTransition?.commit();
     resetAuthState();
@@ -888,6 +891,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
     await clearPersistedSupabaseAuthSession().catch(() => undefined);
     await clearPersistedHomeFeed();
+    await clearSearchHistory();
     await clearPersistedAccountState();
     // Guests never register for push, so only a registered session has any.
     if (!wasGuest) await clearLocalMobilePushRegistration().catch(() => undefined);
@@ -935,6 +939,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           feedIdentityTransition?.commit();
           await clearPersistedSupabaseAuthSession();
           await clearPersistedHomeFeed();
+          await clearSearchHistory();
           await clearPersistedAccountState();
           resetAuthState();
           router.replace('/auth');
@@ -963,6 +968,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.warn('Could not clear the guest merge ticket after account deletion', error);
       }),
       clearPersistedHomeFeed(),
+      clearSearchHistory(),
       clearPersistedAccountState(),
     ]);
     queryClient.clear();
@@ -1010,6 +1016,7 @@ async function recoverInvalidAuthSession(error: unknown) {
 
   await clearPersistedSupabaseAuthSession();
   await clearPersistedHomeFeed();
+  await clearSearchHistory();
   await clearPersistedAccountState();
   return true;
 }

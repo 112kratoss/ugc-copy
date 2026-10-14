@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface SaveablePostItem {
   id: string;
@@ -156,6 +156,20 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
     };
   }, [accessToken, initialItems, savedStateLookupIds.length, savedStateLookupKey]);
 
+  // The saved set is derived from `initialItems` alone. A caller that adds
+  // items later (another page, another lane) passes on the `isSaved` they
+  // arrived with, or a saved post among them draws an empty heart and its
+  // first tap "saves" it again.
+  const addSavedItemIds = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    setSavedItemIds((current) => {
+      if (ids.every((id) => current.has(id))) return current;
+      const next = new Set(current);
+      ids.forEach((id) => next.add(id));
+      return next;
+    });
+  }, []);
+
   const toggleSave = async (id: string, actionSourceSurface = sourceSurface) => {
     if (!isSignedIn || !accessToken) {
       onAuthRequired();
@@ -224,6 +238,7 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
     setItems,
     savedItemIds,
     setSavedItemIds,
+    addSavedItemIds,
     savingItemIds,
     toggleSave,
   };

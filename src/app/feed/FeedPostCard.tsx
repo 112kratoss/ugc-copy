@@ -1,6 +1,6 @@
 'use client';
 
-import { Heart, Loader2, MessageCircle, Repeat2, ShoppingBag } from 'lucide-react';
+import { Heart, Loader2, LockKeyhole, MessageCircle, Repeat2, ShoppingBag } from 'lucide-react';
 import Link from 'next/link';
 import { memo } from 'react';
 
@@ -89,6 +89,12 @@ interface FeedPostCardProps {
     /** Opens the post page. Fired by a click on the card outside any control. */
     onOpenPost: (postId: string) => void;
     /**
+     * The post was opened a way the card does not navigate itself (its title
+     * link, a new tab, Read more): tells the ranker as `onOpenPost` does, and
+     * does not navigate.
+     */
+    onRecordOpen: (postId: string) => void;
+    /**
      * Warms the post page on hover or focus, so the click that follows is a
      * cache hit rather than a cold round trip. Safe to call repeatedly.
      */
@@ -133,6 +139,7 @@ function FeedPostCardView({
     onCommentCountChange,
     onOpenMedia,
     onOpenPost,
+    onRecordOpen,
     onPrefetchPost,
     onFeedback,
     onRemix,
@@ -157,7 +164,10 @@ function FeedPostCardView({
     const coverAspectRatio = cover?.width && cover?.height
         ? cover.width / cover.height
         : 'auto';
-    const detailHref = buildShowcaseDetailPath(item.id, detailContext);
+    // The post page credits a report or a comment to the delivery the card
+    // was opened from.
+    const detailHref = buildShowcaseDetailPath(item.id, { ...detailContext, deliveryId });
+    const recipeHref = buildShowcaseDetailPath(item.id, { ...detailContext, section: 'resources', deliveryId });
 
     // Reddit's rule: the media expands in place, and everywhere else on the card
     // opens the post. The title stays a real <Link> — it is the one focusable
@@ -167,7 +177,10 @@ function FeedPostCardView({
     const isOwnClick = (target: EventTarget | null) =>
         !(target instanceof HTMLElement) || !target.closest(INTERACTIVE_SELECTOR);
 
-    const openInNewTab = () => window.open(detailHref, '_blank', 'noopener,noreferrer');
+    const openInNewTab = () => {
+        onRecordOpen(item.id);
+        window.open(detailHref, '_blank', 'noopener,noreferrer');
+    };
 
     return (
         <article
@@ -254,7 +267,20 @@ function FeedPostCardView({
                     Styling is unchanged; this is the outline only.
                 */}
                 <h3 className="text-lg font-extrabold leading-snug tracking-[-0.01em] text-[var(--ui-text-primary)] sm:text-xl">
-                    <Link href={detailHref} prefetch={false} className="ui-focus-ring rounded-sm hover:text-white">
+                    <Link
+                        href={detailHref}
+                        prefetch={false}
+                        className="ui-focus-ring rounded-sm hover:text-white"
+                        // The link navigates, or opens a tab or window, by
+                        // itself; the ranker hears of it here. Alt-click
+                        // downloads the page rather than opening the post.
+                        onClick={(event) => {
+                            if (!event.altKey) onRecordOpen(item.id);
+                        }}
+                        onAuxClick={(event) => {
+                            if (event.button === 1) onRecordOpen(item.id);
+                        }}
+                    >
                         {card.title}
                     </Link>
                 </h3>
@@ -271,7 +297,13 @@ function FeedPostCardView({
                         clampLines={card.clampLines}
                         canExpand={card.canExpandBody}
                         expanded={expanded}
-                        onToggle={() => onToggleExpanded(item.id)}
+                        onToggle={() => {
+                            // Read more is how the web card opens the rest of
+                            // the post (the app's opens the post page), so it
+                            // is an open; Show less is not.
+                            if (!expanded) onRecordOpen(item.id);
+                            onToggleExpanded(item.id);
+                        }}
                     />
                 ) : null}
             </div>
@@ -308,10 +340,26 @@ function FeedPostCardView({
             ) : null}
 
             <div className="mt-2 flex flex-wrap items-center gap-1 px-2 pb-2 sm:px-3">
-                {item.canRemix ? (
+                {card.remixAccess === 'paid-unlock' ? (
+                    // The creator sells the remix with the recipe: the pill
+                    // opens the recipe where it is sold, with the lock and the
+                    // price where "Remix" would be, and the row names that
+                    // price once. Heard as the recipe chip is, `resource_open`.
+                    <Link
+                        href={recipeHref}
+                        prefetch={false}
+                        aria-label={`Unlock ${card.title} to remix it, ${card.remixLabel}`}
+                        onClick={() => onOpenResources?.(item.id)}
+                        className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-amber-300/20 bg-amber-400/[0.08] px-4 text-xs font-extrabold text-amber-100 transition hover:border-amber-300/35"
+                    >
+                        <LockKeyhole className="h-4 w-4" aria-hidden="true" />
+                        {card.remixLabel}
+                    </Link>
+                ) : card.remixAccess ? (
                     // The product's differentiated verb leads the row as a labeled
                     // pill; save/comment/share are universal socials and follow.
-                    // It starts the remix here, as the app's card does.
+                    // It starts the remix here, as the app's card does, taking
+                    // a free unlock on the way.
                     <button
                         type="button"
                         onClick={() => onRemix(item.id)}
@@ -357,7 +405,7 @@ function FeedPostCardView({
                     // with no Remix (`getPostFeedRecipeChip`). It opens the post at
                     // its recipe, as the bar it replaced did.
                     <Link
-                        href={buildShowcaseDetailPath(item.id, { ...detailContext, section: 'resources' })}
+                        href={recipeHref}
                         prefetch={false}
                         aria-label={`${card.recipeChip.label}: ${card.title}`}
                         onClick={() => onOpenResources?.(item.id)}

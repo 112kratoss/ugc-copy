@@ -88,6 +88,7 @@ function renderCard(overrides: Partial<ShowcaseFeedItem> = {}, props: Record<str
         onCommentCountChange: vi.fn(),
         onOpenMedia: vi.fn(),
         onOpenPost: vi.fn(),
+        onRecordOpen: vi.fn(),
         onPrefetchPost: vi.fn(),
         onFeedback: vi.fn(),
         onRemix: vi.fn(),
@@ -147,16 +148,18 @@ describe('FeedPostCard click routing', () => {
     });
 
     it('opens the post when the card itself is clicked', () => {
-        const { onOpenPost, onOpenMedia } = renderCard();
+        const { onOpenPost, onOpenMedia, onRecordOpen } = renderCard();
 
         fireEvent.click(cardSurface());
 
         expect(onOpenPost).toHaveBeenCalledTimes(1);
         expect(onOpenMedia).not.toHaveBeenCalled();
+        // `onOpenPost` tells the ranker itself; once is enough.
+        expect(onRecordOpen).not.toHaveBeenCalled();
     });
 
     it('leaves the title to its own link so there is exactly one permalink', () => {
-        const { onOpenPost } = renderCard();
+        const { onOpenPost, onRecordOpen } = renderCard();
         const title = screen.getByRole('link', { name: 'A launch frame' });
 
         expect(title).toHaveAttribute(
@@ -166,17 +169,57 @@ describe('FeedPostCard click routing', () => {
 
         fireEvent.click(title);
 
-        // The <Link> navigates; the card handler must not fire a second time.
+        // The <Link> navigates; the card handler must not fire a second time,
+        // and the ranker still hears that the post was opened.
         expect(onOpenPost).not.toHaveBeenCalled();
+        expect(onRecordOpen).toHaveBeenCalledTimes(1);
+        expect(onRecordOpen).toHaveBeenCalledWith('post-1');
+    });
+
+    it('counts a title opened in a new tab, but not one downloaded with alt', () => {
+        const { onRecordOpen } = renderCard();
+        const title = screen.getByRole('link', { name: 'A launch frame' });
+
+        // The browser opens the tab itself: no window.open of the card's.
+        middleClick(title);
+        fireEvent.click(title, { metaKey: true });
+        fireEvent.click(title, { altKey: true });
+
+        expect(onRecordOpen).toHaveBeenCalledTimes(2);
+        expect(window.open).not.toHaveBeenCalled();
     });
 
     it('opens the lightbox — not the post — when the media is clicked', () => {
-        const { onOpenMedia, onOpenPost } = renderCard();
+        const { onOpenMedia, onOpenPost, onRecordOpen } = renderCard();
 
         fireEvent.click(screen.getByRole('button', { name: 'A launch frame' }));
 
         expect(onOpenMedia).toHaveBeenCalledWith('post-1', 0);
         expect(onOpenPost).not.toHaveBeenCalled();
+        expect(onRecordOpen).not.toHaveBeenCalled();
+    });
+
+    // The web card opens the rest of a post in place; the app's Read more opens
+    // the post page. Either way the reader went into the post.
+    it('counts Read more as an open, and Show less as nothing', () => {
+        // A mixed post's own words, long enough to clamp.
+        const long = { postFormat: 'mixed', body: 'A long note about the light in this frame. '.repeat(20) } as const;
+        const { onRecordOpen, onToggleExpanded, onOpenPost } = renderCard(long);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Read more' }));
+
+        expect(onRecordOpen).toHaveBeenCalledTimes(1);
+        expect(onRecordOpen).toHaveBeenCalledWith('post-1');
+        expect(onToggleExpanded).toHaveBeenCalledWith('post-1');
+        expect(onOpenPost).not.toHaveBeenCalled();
+
+        cleanup();
+        const expanded = renderCard(long, { expanded: true });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Show less' }));
+
+        expect(expanded.onToggleExpanded).toHaveBeenCalledWith('post-1');
+        expect(expanded.onRecordOpen).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -239,7 +282,7 @@ describe('FeedPostCard click routing', () => {
     });
 
     it('opens a new tab on cmd-click instead of navigating in place', () => {
-        const { onOpenPost } = renderCard();
+        const { onOpenPost, onRecordOpen } = renderCard();
 
         fireEvent.click(cardSurface(), { metaKey: true });
 
@@ -249,10 +292,11 @@ describe('FeedPostCard click routing', () => {
             'noopener,noreferrer'
         );
         expect(onOpenPost).not.toHaveBeenCalled();
+        expect(onRecordOpen).toHaveBeenCalledWith('post-1');
     });
 
     it('opens a new tab on middle click', () => {
-        const { onOpenPost } = renderCard();
+        const { onOpenPost, onRecordOpen } = renderCard();
 
         middleClick(cardSurface());
 
@@ -262,14 +306,16 @@ describe('FeedPostCard click routing', () => {
             'noopener,noreferrer'
         );
         expect(onOpenPost).not.toHaveBeenCalled();
+        expect(onRecordOpen).toHaveBeenCalledWith('post-1');
     });
 
     it('ignores a middle click that lands on a control', () => {
-        renderCard();
+        const { onRecordOpen } = renderCard();
 
         middleClick(screen.getByRole('link', { name: /Batman/i }));
 
         expect(window.open).not.toHaveBeenCalled();
+        expect(onRecordOpen).not.toHaveBeenCalled();
     });
 
     it('warms the post on pointer intent, before any click', () => {
@@ -432,11 +478,93 @@ describe("FeedPostCard's recipe chip", () => {
 
     it('tells the feed the card’s resources were opened', () => {
         const onOpenResources = vi.fn();
-        renderCard({ asset: recipe({ accessMode: 'paid', priceUsdCents: 250 }), canRemix: true }, { onOpenResources });
+        const { onRecordOpen } = renderCard({ asset: recipe({ accessMode: 'paid', priceUsdCents: 250 }), canRemix: true }, { onOpenResources });
 
         fireEvent.click(screen.getByRole('link', { name: '$2.50 recipe: A launch frame' }));
 
         expect(onOpenResources).toHaveBeenCalledWith('post-1');
+        // The chip is heard as `resource_open` alone, on both clients: not an open.
+        expect(onRecordOpen).not.toHaveBeenCalled();
+    });
+});
+
+// The card drew Remix only when `canRemix`, which the server sets false where
+// the creator sells the remix with the recipe; the app and the web reel draw
+// it in all three cases (01-4).
+describe("FeedPostCard's Remix behind a recipe", () => {
+    beforeEach(() => {
+        vi.stubGlobal('IntersectionObserver', IntersectionObserverMock);
+    });
+
+    afterEach(() => {
+        cleanup();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    function lockedBehind(overrides: Partial<ShowcaseAssetSummary>): Partial<ShowcaseFeedItem> {
+        return {
+            canRemix: false,
+            remixCapability: 'unlock_required',
+            remixTarget: 'image',
+            asset: {
+                id: 'bundle-1',
+                postId: 'post-1',
+                title: 'A launch frame',
+                accessMode: 'free',
+                priceUsdCents: 0,
+                previewText: '',
+                allowRemix: true,
+                ...overrides,
+            } as ShowcaseAssetSummary,
+        };
+    }
+
+    const recipeHref = buildShowcaseDetailPath('post-1', { ...DETAIL_CONTEXT, section: 'resources' });
+
+    it('starts a remix that sits behind a free unlock from Remix, with no chip beside it', () => {
+        const onOpenResources = vi.fn();
+        const { onRemix, onOpenPost } = renderCard(lockedBehind({}), { onOpenResources });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Remix · 1' }));
+
+        // The feed takes the free recipe on the way (FeedClient's handler).
+        expect(onRemix).toHaveBeenCalledWith('post-1');
+        expect(onOpenPost).not.toHaveBeenCalled();
+        expect(screen.queryByText('Free recipe')).not.toBeInTheDocument();
+        expect(document.querySelector(`a[href="${recipeHref}"]`)).toBeNull();
+    });
+
+    it('sells a remix behind a paid unlock on the recipe, with the price drawn once', () => {
+        const onOpenResources = vi.fn();
+        const { onRemix, onOpenPost, onRecordOpen } = renderCard(
+            lockedBehind({ accessMode: 'paid', priceUsdCents: 250 }),
+            { onOpenResources },
+        );
+
+        const remix = screen.getByRole('link', { name: 'Unlock A launch frame to remix it, $2.50 recipe' });
+
+        expect(remix).toHaveAttribute('href', recipeHref);
+        expect(remix.textContent).toBe('$2.50 recipe');
+        // No second pill with the same price at the end of the row.
+        expect(screen.getAllByText('$2.50 recipe')).toHaveLength(1);
+        expect(screen.queryByRole('button', { name: /Remix/ })).not.toBeInTheDocument();
+
+        fireEvent.click(remix);
+
+        expect(onOpenResources).toHaveBeenCalledWith('post-1');
+        expect(onRemix).not.toHaveBeenCalled();
+        expect(onOpenPost).not.toHaveBeenCalled();
+        expect(onRecordOpen).not.toHaveBeenCalled();
+    });
+
+    it('draws no Remix where the unlock would not include one', () => {
+        renderCard({ ...lockedBehind({ accessMode: 'paid', priceUsdCents: 250, allowRemix: false }) });
+
+        expect(screen.queryByRole('button', { name: /Remix/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /to remix it/ })).not.toBeInTheDocument();
+        // The recipe is still for sale, on its chip.
+        expect(screen.getByRole('link', { name: '$2.50 recipe: A launch frame' })).toHaveAttribute('href', recipeHref);
     });
 });
 
@@ -461,6 +589,36 @@ describe("FeedPostCard's feed telemetry", () => {
         renderCard(ranked, { commentsOpen: true });
 
         expect(postCommentsProps.current).toMatchObject({ postId: 'post-1', deliveryId: '9001' });
+    });
+
+    // The post page reads `?delivery=` and credits a report or a comment
+    // filed there to the card that showed the post (C2).
+    it("carries a ranked card's delivery into the post page from its links", () => {
+        const recipe = {
+            id: 'bundle-1',
+            postId: 'post-1',
+            title: 'A launch frame',
+            accessMode: 'paid',
+            priceUsdCents: 250,
+            previewText: '',
+            allowRemix: false,
+        } as ShowcaseAssetSummary;
+        vi.stubGlobal('open', vi.fn());
+        renderCard({ ...ranked, asset: recipe });
+
+        const title = screen.getByRole('link', { name: 'A launch frame' });
+        const chip = screen.getByRole('link', { name: '$2.50 recipe: A launch frame' });
+
+        expect(title).toHaveAttribute('href', buildShowcaseDetailPath('post-1', { ...DETAIL_CONTEXT, deliveryId: '9001' }));
+        expect(title.getAttribute('href')).toContain('delivery=9001');
+        expect(chip).toHaveAttribute(
+            'href',
+            buildShowcaseDetailPath('post-1', { ...DETAIL_CONTEXT, section: 'resources', deliveryId: '9001' }),
+        );
+
+        // A new tab opens the same address.
+        fireEvent.click(screen.getByText(/Image/i, { selector: 'p' }), { metaKey: true });
+        expect(window.open).toHaveBeenCalledWith(title.getAttribute('href'), '_blank', 'noopener,noreferrer');
     });
 
     it('sends no delivery with a comment under an unranked card', () => {
@@ -493,6 +651,7 @@ describe("FeedPostCard's feed telemetry", () => {
                     onCommentCountChange={noop}
                     onOpenMedia={noop}
                     onOpenPost={noop}
+                    onRecordOpen={noop}
                     onPrefetchPost={noop}
                     onFeedback={noop}
                     onRemix={noop}

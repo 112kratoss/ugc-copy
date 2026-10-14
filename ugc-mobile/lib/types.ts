@@ -879,6 +879,8 @@ export interface ShowcaseFeedEventBatchResponse {
   success: true;
   recorded: number;
   rejected: number;
+  /** Per-entry outcomes, in request order; absent from an older server. */
+  results?: Array<{ index: number; status: number; error?: string }>;
 }
 
 export interface ShowcaseFeedItem {

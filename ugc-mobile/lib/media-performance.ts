@@ -1,5 +1,3 @@
-export const IMMERSIVE_DETAILS_PRESENTATION = 'sheet' as const;
-
 export const IMMERSIVE_VERTICAL_LIST_TUNING = {
   initialNumToRender: 1,
   maxToRenderPerBatch: 2,
@@ -107,8 +105,6 @@ export const FEED_FAST_COAST_PT_PER_MS = 1;
  * start admits it is loading.
  */
 export const FEED_PREVIEW_BUFFERING_INDICATOR_DELAY_MS = 1000;
-
-export const HOME_RAIL_DRAW_DISTANCE = 400;
 
 /**
  * Auto-retry policy for a failed image load in StableMediaImage.

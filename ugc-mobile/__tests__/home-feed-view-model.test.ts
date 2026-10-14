@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// `lib/tab-bar-ambient.ts` reads `Platform.OS`, and vitest cannot parse
+// react-native's own entry point.
+vi.mock('react-native', () => ({ Platform: { OS: 'ios' } }));
 
 import feedRecipeChipContract from '../../contracts/feed-recipe-chip-v1.json';
 import {
@@ -12,7 +16,6 @@ import {
   canExpandHomeFeedBody,
   estimateWrappedLineCount,
   getHomeFeedCardOpenTarget,
-  getHomeFeedChip,
   getHomeFeedMediaHeight,
   getHomeFeedSlides,
   getHomeSlideIndexFromOffset,
@@ -24,9 +27,13 @@ import {
   shouldAutoAdvanceHomeSlides,
   shouldTurnHomeSlides,
   showcaseToHomeFeedCard,
+  type HomeFeedChipId,
 } from '@/lib/home-feed-view-model';
+import { HOME_TOOL_SHORTCUTS } from '@/lib/home-view-model';
 import { FREE_RECIPE_LABEL } from '@/lib/pricing';
 import { createShowcaseFeedQueryKey, getShowcaseFeedPageParams } from '@/lib/showcase-feed-query';
+import { applyShowcaseSaveStateToFeedResponse } from '@/lib/showcase-save-cache';
+import { selectBottomVisibleAmbientSource } from '@/lib/tab-bar-ambient';
 import type { ShowcaseFeedItem } from '@/lib/types';
 
 function item(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem {
@@ -54,27 +61,26 @@ function item(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem {
 
 describe('home feed view model', () => {
   describe('chips', () => {
+    const chipFilters = (id: HomeFeedChipId) => HOME_FEED_CHIPS.find((chip) => chip.id === id)!.filters;
+
     it('maps each chip to feed params the API already supports', () => {
-      expect(HOME_FEED_CHIPS.map((chip) => chip.id)).toEqual(['for-you', 'notes', 'recent', 'unlocks']);
-      expect(getHomeFeedChip('recent').filters).toEqual({ sort: 'recent' });
-      expect(getHomeFeedChip('unlocks').filters).toEqual({ sort: 'for-you', unlock: 'with-unlock' });
-      expect(getHomeFeedChip('notes').filters).toEqual({ sort: 'for-you', category: 'text' });
+      expect(HOME_FEED_CHIPS.map(({ id, filters }) => [id, filters])).toEqual([
+        ['for-you', { sort: 'for-you' }],
+        ['notes', { sort: 'for-you', category: 'text' }],
+        ['recent', { sort: 'recent' }],
+        ['unlocks', { sort: 'for-you', unlock: 'with-unlock' }],
+      ]);
     });
 
     it('asks the API for the text category on the notes chip and nothing else', () => {
       // Home is the only client sending `category=text`; the showcase grid has
       // no text lane, so this is the contract that keeps the chip working.
-      const params = getShowcaseFeedPageParams(getHomeFeedChip('notes').filters);
+      const params = getShowcaseFeedPageParams(chipFilters('notes'));
 
       expect(params).toMatchObject({ category: 'text', sort: 'for-you' });
       expect(params).not.toHaveProperty('unlock');
       expect(params).not.toHaveProperty('resource');
       expect(params).not.toHaveProperty('tool');
-    });
-
-    it('falls back to For You for an unknown chip', () => {
-      expect(getHomeFeedChip('nonsense').id).toBe('for-you');
-      expect(getHomeFeedChip(null).id).toBe('for-you');
     });
 
     it('keeps chip query keys under the shared showcase-feed prefix', () => {
@@ -86,7 +92,7 @@ describe('home feed view model', () => {
     });
 
     it('gives the unlocks chip the same key the showcase unlocks filter uses', () => {
-      expect(createShowcaseFeedQueryKey(getHomeFeedChip('unlocks').filters, 'viewer-1'))
+      expect(createShowcaseFeedQueryKey(chipFilters('unlocks'), 'viewer-1'))
         .toEqual(createShowcaseFeedQueryKey({ sort: 'for-you', unlock: 'with-unlock' }, 'viewer-1'));
     });
   });
@@ -100,7 +106,10 @@ describe('home feed view model', () => {
     });
 
     it('omits shortcuts that have no destination yet', () => {
-      expect(getHomeFeedSlides().some((slide) => slide.id === 'workflow')).toBe(false);
+      const [image, ...rest] = HOME_TOOL_SHORTCUTS;
+
+      expect(getHomeFeedSlides([{ ...image, href: null }, ...rest]).map((slide) => slide.id))
+        .toEqual(['workspace', 'video', 'motion']);
     });
   });
 
@@ -180,8 +189,56 @@ describe('home feed view model', () => {
       })).accent).toBe('amber');
     });
 
-    it('opens into the shared showcase viewer source', () => {
-      expect(showcaseToHomeFeedCard(item()).viewerSource).toBe('showcase-feed');
+    // Nothing on the card draws the thumbhash, which makes it look unused: the
+    // tab bar reads it off the list's viewability tokens to take its tint.
+    it("carries its cover's thumbhash to the tab bar's tint", () => {
+      const card = showcaseToHomeFeedCard(item({
+        mediaItems: [{ id: 'media-1', url: 'https://cdn.example.test/post-1.png', previewThumbhash: 'cover-hash' }],
+      } as Partial<ShowcaseFeedItem>));
+
+      expect(selectBottomVisibleAmbientSource([{ index: 0, isViewable: true, item: card }]))
+        .toEqual({ thumbhash: 'cover-hash' });
+    });
+  });
+
+  // FlashList re-renders a cell whose item is a new object, so a card that is
+  // rebuilt for an unchanged post re-renders that post's cell for nothing.
+  describe('card identity across rebuilds', () => {
+    it('hands back the card it built for the same item', () => {
+      const post = item();
+      const [first] = buildHomeFeedCards([post]);
+      // The next page landing rebuilds the list with the same item object.
+      const [again, appended] = buildHomeFeedCards([post, item({ id: 'post-2' })]);
+
+      expect(again).toBe(first);
+      expect(appended.id).toBe('post-2');
+    });
+
+    it('builds a new card only for the post a save changed', () => {
+      const page = { items: [item({ id: 'a' }), item({ id: 'b' }), item({ id: 'c' })] };
+      const before = buildHomeFeedCards(page.items);
+      const saved = applyShowcaseSaveStateToFeedResponse(page, { postId: 'b', isSaved: true, saveCount: 1201 })!;
+      const after = buildHomeFeedCards(saved.items);
+
+      expect(after[0]).toBe(before[0]);
+      expect(after[1]).not.toBe(before[1]);
+      expect(after[1]).toMatchObject({ id: 'b', isSaved: true });
+      expect(after[2]).toBe(before[2]);
+    });
+
+    it('builds a new card when the clock moves its time label, and only then', () => {
+      // The clock is the one input a card has besides its item: the viewer's
+      // own state (saved, remixable) arrives on the item.
+      const post = item({ createdAt: '2026-10-14T10:00:00.000Z' });
+      const [atFive] = buildHomeFeedCards([post], new Date('2026-10-14T10:05:00.000Z'));
+      const [laterInTheMinute] = buildHomeFeedCards([post], new Date('2026-10-14T10:05:59.000Z'));
+      const [atSix] = buildHomeFeedCards([post], new Date('2026-10-14T10:06:00.000Z'));
+
+      expect(atFive.timeLabel).toBe('5m ago');
+      expect(laterInTheMinute).toBe(atFive);
+      expect(atSix).not.toBe(atFive);
+      expect(atSix.timeLabel).toBe('6m ago');
+      expect(buildHomeFeedCards([post], new Date('2026-10-14T10:06:30.000Z'))[0]).toBe(atSix);
     });
   });
 
@@ -530,7 +587,8 @@ describe("a Home card's recipe chip", () => {
   });
 
   it('leaves a free recipe to Remix when that tap takes the unlock on its way', () => {
-    // The web has no Remix on this post, so there the chip is drawn.
+    // The web card takes the free unlock on the Remix tap too, so neither
+    // client draws the chip beside Remix.
     const card = showcaseToHomeFeedCard(item({
       canRemix: false,
       remixCapability: 'unlock_required',
