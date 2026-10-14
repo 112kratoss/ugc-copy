@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { defaultPostMediaKey } from '@/lib/post-media-key';
+import { toUsablePreviewSize, type PreviewSize } from '@/lib/preview-dimensions';
 import { openAllowlistedRemoteMedia } from '@/lib/remote-media-security';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
@@ -182,6 +183,32 @@ function isDuplicateRowError(error: { code?: string } | null): boolean {
 }
 
 /**
+ * The size a generation's cover row starts with: the generation's recorded
+ * preview size. That preview is a `fit: inside` resize of this same output, so
+ * its ratio is the output's, and a ratio is what a card is laid out from before
+ * the media arrives. The sweeps replace it with the stored file's own measure
+ * (the preview sweep for an image, the rendition sweep for a video) and never
+ * with nothing. A failed read seeds nothing: the row matters more than its size.
+ */
+async function readGenerationCoverSize(
+  adminSupabase: SupabaseClient,
+  generationId: string,
+): Promise<PreviewSize | null> {
+  try {
+    const { data, error } = await adminSupabase
+      .from('generations')
+      .select('preview_width, preview_height')
+      .eq('id', generationId)
+      .maybeSingle();
+    if (error || !data) return null;
+    const generation = data as { preview_width?: number | null; preview_height?: number | null };
+    return toUsablePreviewSize(generation.preview_width, generation.preview_height);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Gives a generation-backed post the `post_media` row its public derivative
  * needs, and keeps that row pointed at the derivative the post actually serves.
  *
@@ -196,7 +223,9 @@ function isDuplicateRowError(error: { code?: string } | null): boolean {
  * Derivatives are left pending for the sweeps rather than built here: publish
  * stays fast, and nothing regresses while they wait, because the feed grafts
  * the generation's preview onto a cover that has none and
- * `resolvePostVideoFeedStreamUrl` keeps a pending rendition poster-only.
+ * `resolvePostVideoFeedStreamUrl` keeps a pending rendition poster-only. The
+ * row's size is not left waiting: it starts as the generation's recorded
+ * preview size, so the cover has a ratio from the moment it is published.
  *
  * Publishing re-runs on every caption edit and visibility flip, so this is
  * idempotent by design:
@@ -271,6 +300,7 @@ export async function ensureGenerationPostCoverMedia({
       return { outcome: 'skipped', error: null };
     }
 
+    const coverSize = await readGenerationCoverSize(adminSupabase, generationId);
     const { error } = await adminSupabase
       .from('post_media')
       .update({
@@ -299,9 +329,10 @@ export async function ensureGenerationPostCoverMedia({
         teaser_generated_at: null,
         teaser_error: null,
         teaser_attempt_count: 0,
-        // Measured from the replaced file, so they describe the wrong media.
-        width: null,
-        height: null,
+        // The old values were measured from the replaced file. The seed
+        // describes the file the row now points at.
+        width: coverSize?.width ?? null,
+        height: coverSize?.height ?? null,
         duration_seconds: null,
         // A sweep already working on the old file finishes with an update
         // conditioned on holding the lease. Releasing it here makes that write
@@ -321,6 +352,7 @@ export async function ensureGenerationPostCoverMedia({
     return { outcome: error ? 'failed' : 'repointed', error: error ?? null };
   }
 
+  const coverSize = await readGenerationCoverSize(adminSupabase, generationId);
   const { error } = await adminSupabase
     .from('post_media')
     .insert({
@@ -335,6 +367,7 @@ export async function ensureGenerationPostCoverMedia({
       preview_attempt_count: 0,
       rendition_status: renditionStatus,
       rendition_attempt_count: 0,
+      ...(coverSize ? { width: coverSize.width, height: coverSize.height } : {}),
     });
 
   // A concurrent publish of the same post won the unique index on

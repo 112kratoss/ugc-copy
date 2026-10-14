@@ -76,11 +76,25 @@ export type VideoProbeResult = {
 
 export class VideoRenditionSkipped extends Error {
   readonly reason: 'too-large' | 'not-smaller';
+  /**
+   * The encoded output's frame size, when the encoder got as far as writing
+   * one (a `not-smaller` skip). The source then plays in the rendition's
+   * place, and its card still needs a ratio to be laid out by. Null when
+   * nothing was encoded.
+   */
+  readonly width: number | null;
+  readonly height: number | null;
 
-  constructor(reason: 'too-large' | 'not-smaller', message: string) {
+  constructor(
+    reason: 'too-large' | 'not-smaller',
+    message: string,
+    size: { width: number | null; height: number | null } | null = null,
+  ) {
     super(message);
     this.name = 'VideoRenditionSkipped';
     this.reason = reason;
+    this.width = size?.width ?? null;
+    this.height = size?.height ?? null;
   }
 }
 
@@ -167,7 +181,30 @@ export function parseVideoProbeOutput(output: string): VideoProbeResult {
   return { width, height, durationSeconds };
 }
 
-async function runFfmpeg(args: string[], signal?: AbortSignal, leaseFds: number[] = [], maxOutputBytes?: number): Promise<string> {
+/**
+ * The frame size of the stream an encode wrote, from the encoder's own log.
+ * Only the `Output #0` block is read: it is printed once the output header is
+ * written, before the first packet, and gives the size after autorotation and
+ * the scale filter, so display-oriented, the way a card is laid out. The
+ * `Input #0` block above it holds the coded size, which ignores a phone clip's
+ * rotation.
+ */
+export function parseEncodedFrameSize(encoderLog: string): { width: number | null; height: number | null } {
+  const outputBlock = /^Output #0\b/m.exec(encoderLog);
+  if (!outputBlock) return { width: null, height: null };
+  const { width, height } = parseVideoProbeOutput(encoderLog.slice(outputBlock.index));
+  return { width, height };
+}
+
+async function runFfmpeg(
+  args: string[],
+  signal?: AbortSignal,
+  leaseFds: number[] = [],
+  maxOutputBytes?: number,
+  // Receives the whole stderr however the process ends, including the size
+  // limit's kill, which rejects without it.
+  log?: { stderr: string },
+): Promise<string> {
   signal?.throwIfAborted();
   const ffmpegPath = getFfmpegPath();
   const command = maxOutputBytes === undefined ? { executable: ffmpegPath, args }
@@ -192,10 +229,11 @@ async function runFfmpeg(args: string[], signal?: AbortSignal, leaseFds: number[
     child.on('error', (error) => { processError = error; });
     child.on('close', (code, signal) => {
       if (processError) { reject(processError); return; }
+      const output = Buffer.concat(stderr).toString('utf8');
+      if (log) log.stderr = output;
       if (signal === 'SIGXFSZ' && maxOutputBytes !== undefined) {
         reject(new MediaOutputLimitError(maxOutputBytes)); return;
       }
-      const output = Buffer.concat(stderr).toString('utf8');
       if (code === 0) {
         resolve(output);
         return;
@@ -274,16 +312,23 @@ export async function createVideoRenditionFromFile(
   const maxOutputBytes = Math.max(1024, Math.ceil(sourceBytes * RENDITION_MIN_SAVING_RATIO / 1024) * 1024);
   const workspace = await createMediaScratchWorkspace(maxOutputBytes);
   const outputPath = path.join(workspace.mediaDirectory, 'rendition.mp4');
+  // A not-smaller skip takes its size from here, not from probing the file:
+  // the usual way an encode ends up not smaller is the size limit killing it,
+  // and that leaves a file with no moov atom, which no probe can read. The
+  // input probe is no substitute either, as it reads the coded size.
+  const encoderLog = { stderr: '' };
 
   try {
     await runFfmpeg(buildRenditionArgs(inputPath, outputPath), options.signal,
-      [options.sourceLeaseFd, workspace.readerLeaseFd].filter((fd): fd is number => fd !== undefined), maxOutputBytes);
+      [options.sourceLeaseFd, workspace.readerLeaseFd].filter((fd): fd is number => fd !== undefined), maxOutputBytes,
+      encoderLog);
 
     const { size } = await stat(outputPath);
     if (size >= sourceBytes * RENDITION_MIN_SAVING_RATIO) {
       throw new VideoRenditionSkipped(
         'not-smaller',
         `Rendition (${size} bytes) is not meaningfully smaller than the source (${sourceBytes} bytes).`,
+        parseEncodedFrameSize(encoderLog.stderr),
       );
     }
 
@@ -297,7 +342,11 @@ export async function createVideoRenditionFromFile(
     };
   } catch (error) {
     if (error instanceof MediaOutputLimitError) {
-      throw new VideoRenditionSkipped('not-smaller', 'Rendition exceeded its useful output size.');
+      throw new VideoRenditionSkipped(
+        'not-smaller',
+        'Rendition exceeded its useful output size.',
+        parseEncodedFrameSize(encoderLog.stderr),
+      );
     }
     throw error;
   } finally {

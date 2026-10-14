@@ -12,6 +12,7 @@ import { createVideoPosterBuffer } from '@/lib/video-poster';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { createPostMediaRendition, type PostMediaTeaserOutcome } from '@/lib/post-media-rendition';
 import type { VideoProbeResult } from '@/lib/video-rendition';
+import { toUsablePreviewSize } from '@/lib/preview-dimensions';
 import { downloadAllowlistedRemoteMedia } from '@/lib/remote-media-security';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import {
@@ -107,6 +108,18 @@ type ClaimedRows<T> = { rows: T[]; leased: boolean };
 
 function hasRows(data: unknown): boolean {
   return Array.isArray(data) && data.length > 0;
+}
+
+/**
+ * A `post_media` row's width and height for an update, or nothing at all.
+ * Several passes measure a row (the preview, the rendition, the publish seed),
+ * and a pass that measured nothing must leave the others' answer alone: a
+ * video's poster carries no size, and writing its nulls blanked the size the
+ * rendition sweep had recorded.
+ */
+function measuredSizeUpdate(width: number | null | undefined, height: number | null | undefined) {
+  const size = toUsablePreviewSize(width, height);
+  return size ? { width: size.width, height: size.height } : {};
 }
 
 export function canRepairPreview(attemptCount: number | null | undefined, leased = false): boolean {
@@ -479,8 +492,7 @@ async function repairPostMedia(
       preview_attempt_count: reservedAttempt,
       preview_error: null,
       preview_generated_at: new Date().toISOString(),
-      width: preview.width,
-      height: preview.height,
+      ...measuredSizeUpdate(preview.width, preview.height),
       preview_locked_at: null,
       preview_locked_by: null,
     }).eq('id', row.id);
@@ -565,6 +577,9 @@ async function repairPostMediaRendition(
         rendition_status: 'skipped',
         rendition_attempt_count: reservedAttempt,
         rendition_error: `Rendition skipped: ${rendition.reason}.`,
+        // The source plays in the rendition's place. A not-smaller skip still
+        // encoded it, and the encoder's output size gives its card a ratio.
+        ...measuredSizeUpdate(rendition.width, rendition.height),
         ...midFlightSpread(),
         rendition_locked_at: null,
         rendition_locked_by: null,
@@ -1182,9 +1197,8 @@ export async function regenerateVideoPosters(
         log(`post_media ${row.id}: poster already at the first frame`);
         continue;
       }
-      // Only the poster fields. A video row's width/height describe the clip
-      // and a poster result carries none, so the repair's habit of writing
-      // them would blank real dimensions here.
+      // Only the poster fields. A video row's width/height describe the clip,
+      // and a poster result carries none.
       const update = await supabase.from('post_media').update({
         preview_storage_path: preview.previewStoragePath,
         preview_thumbhash: preview.previewThumbhash,

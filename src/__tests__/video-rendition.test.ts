@@ -1,9 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { getFfmpegPath } from '@/lib/video-poster';
 import {
   buildRenditionArgs,
   buildRenditionScaleFilter,
   createVideoRenditionFromFile,
+  parseEncodedFrameSize,
   parseVideoProbeOutput,
   probeVideoFile,
   RENDITION_MAX_HEIGHT,
@@ -167,6 +173,96 @@ describe('rendition skip signalling', () => {
     // A 32 MB source transcoded to 2 MB is worth storing; 31.9 MB is not.
     expect(2_031_616 < 33_831_055 * RENDITION_MIN_SAVING_RATIO).toBe(true);
     expect(33_400_000 < 33_831_055 * RENDITION_MIN_SAVING_RATIO).toBe(false);
+  });
+
+  it('carries no size when nothing was encoded', () => {
+    const skipped = new VideoRenditionSkipped('too-large', 'Source video is too large.');
+    expect(skipped.width).toBeNull();
+    expect(skipped.height).toBeNull();
+  });
+});
+
+describe('a not-smaller skip still reports the size the encoder wrote', () => {
+  // Shaped like the bundled ffmpeg's log of a rendition encode: a phone clip
+  // coded 640x360, stood upright by a display matrix.
+  const encoderLog = [
+    "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'input-video':",
+    '  Duration: 00:00:02.00, start: 0.000000, bitrate: 40 kb/s',
+    '  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 640x360 [SAR 1:1 DAR 16:9], 35 kb/s, 30 fps, 30 tbr, 15360 tbn (default)',
+    '    Side data:',
+    '      displaymatrix: rotation of 90.00 degrees',
+    'Stream mapping:',
+    '  Stream #0:0 -> #0:0 (h264 (native) -> h264 (libx264))',
+    "Output #0, mp4, to 'rendition.mp4':",
+    '  Stream #0:0(und): Video: h264 (avc1 / 0x31637661), yuv420p(tv, progressive), 360x640 [SAR 1:1 DAR 9:16], q=2-31, 30 fps, 15360 tbn (default)',
+    'frame=    0 fps=0.0 q=0.0 size=       0kB time=00:00:00.00 bitrate=N/A speed=N/A',
+  ].join('\n');
+
+  it('reads the output block, which is upright, and never the coded input', () => {
+    // Control: the first stream in the log is the input's coded size.
+    expect(parseVideoProbeOutput(encoderLog)).toMatchObject({ width: 640, height: 360 });
+
+    expect(parseEncodedFrameSize(encoderLog)).toEqual({ width: 360, height: 640 });
+  });
+
+  it('reports no size when the encoder never wrote an output header', () => {
+    expect(parseEncodedFrameSize(encoderLog.slice(0, encoderLog.indexOf('Output #0')))).toEqual({
+      width: null,
+      height: null,
+    });
+    expect(parseEncodedFrameSize('')).toEqual({ width: null, height: null });
+  });
+
+  describe('from a real encode', () => {
+    let directory = '';
+    let phoneClip = '';
+
+    beforeAll(async () => {
+      directory = await mkdtemp(path.join(os.tmpdir(), 'magicbooklet-rendition-skip-'));
+      const codedClip = path.join(directory, 'coded.mp4');
+      phoneClip = path.join(directory, 'phone.mp4');
+      // Lean on purpose (CRF 51), so a rendition at CRF 30 cannot come out
+      // smaller; then stored the way a phone stores a portrait clip: coded
+      // landscape, with a display matrix that stands it upright.
+      for (const args of [
+        ['-f', 'lavfi', '-i', 'testsrc=s=640x360:r=30', '-t', '2', '-c:v', 'libx264', '-crf', '51', '-pix_fmt', 'yuv420p', codedClip],
+        ['-display_rotation:v:0', '90', '-i', codedClip, '-c', 'copy', phoneClip],
+      ]) {
+        const encoded = spawnSync(getFfmpegPath(), ['-hide_banner', '-loglevel', 'error', '-y', ...args], {
+          encoding: 'utf8',
+        });
+        if (encoded.status !== 0) {
+          throw new Error(`Could not build the rendition fixture: ${encoded.stderr}`);
+        }
+      }
+    });
+
+    // The encode's scratch workspace lands under this test's own directory.
+    beforeEach(() => {
+      vi.stubEnv('TMPDIR', directory);
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    afterAll(async () => {
+      if (directory) await rm(directory, { recursive: true, force: true });
+    });
+
+    it('carries the upright size of the clip it gave up on', async () => {
+      // Control: the input probe reads the coded size, which is landscape.
+      await expect(probeVideoFile(phoneClip)).resolves.toMatchObject({ width: 640, height: 360 });
+      const { size } = await stat(phoneClip);
+
+      const outcome = await createVideoRenditionFromFile(phoneClip, size).then(
+        () => 'a rendition was kept',
+        (error: unknown) => error,
+      );
+
+      expect(outcome).toBeInstanceOf(VideoRenditionSkipped);
+      expect(outcome).toMatchObject({ reason: 'not-smaller', width: 360, height: 640 });
+    }, 60_000);
   });
 });
 

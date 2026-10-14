@@ -78,6 +78,45 @@ describe('post media image previews', () => {
     });
   });
 
+  it('records a phone photo at the size it is drawn, with its EXIF rotation applied', async () => {
+    // Stored 1200x800 with orientation 6: every viewer draws it 800x1200.
+    const input = await sharp({
+      create: {
+        width: 1200,
+        height: 800,
+        channels: 3,
+        background: '#7c3aed',
+      },
+    }).jpeg().withMetadata({ orientation: 6 }).toBuffer();
+    // Control: the stored header itself still says landscape.
+    expect(await sharp(input).metadata()).toMatchObject({ width: 1200, height: 800, orientation: 6 });
+    const upload = vi.fn(async (path: string, body: Blob, options: Record<string, unknown>) => {
+      void path;
+      void body;
+      void options;
+      return { error: null };
+    });
+    const supabase = {
+      storage: {
+        from: () => ({ upload, download: async () => ({ error: null, data: upload.mock.calls[0]?.[1] }) }),
+      },
+    };
+
+    const result = await createPostMediaImagePreview({
+      body: new Blob([Uint8Array.from(input)], { type: 'image/jpeg' }),
+      contentType: 'image/jpeg',
+      storagePath: 'posts/post-1/0/phone.jpg',
+      supabase: supabase as never,
+    });
+
+    expect(result).toMatchObject({ width: 800, height: 1200 });
+    // The stored preview is portrait as well, so the card and its picture agree.
+    const previewBody = upload.mock.calls[0]?.[1];
+    expect(previewBody).toBeInstanceOf(Blob);
+    const previewBytes = Buffer.from(await previewBody!.arrayBuffer());
+    expect(await sharp(previewBytes).metadata()).toMatchObject({ width: 480, height: 720 });
+  });
+
   it('skips video inputs without uploading', async () => {
     const upload = vi.fn();
     const supabase = {
