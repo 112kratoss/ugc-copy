@@ -4,14 +4,28 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { ImageIcon, MoreVertical, Play, RefreshCw, Search, X } from 'lucide-react-native';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, AccessibilityInfo, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import {
+  ActivityIndicator,
+  AccessibilityInfo,
+  Pressable,
+  ScrollView,
+  Text,
+  useWindowDimensions,
+  View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
 import { showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
+import { FeedUndoNotice, type FeedUndoNoticeModel } from '@/components/feed-undo-notice';
 import { NativeMenu } from '@/components/native-menu';
+import { NewPostsPill } from '@/components/new-posts-pill';
 import { ExploreSearchOverlay } from '@/components/explore-search-overlay';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
@@ -24,6 +38,7 @@ import {
   useWorkspaceSideMenu,
 } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
+import { useAutoplayPreviewsEnabled } from '@/lib/autoplay-preference';
 import { createFeedVideoActivationStore, FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
 import { buildFeedFeedbackMenu, canHideFeedCreator, isOwnFeedPost } from '@/lib/feed-feedback-menu';
 import { hideCreatorLabel } from '@/lib/hide-creator-label';
@@ -57,13 +72,21 @@ import {
   SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
   buildShowcaseFeedEventRequest,
   canRecordShowcaseFeedEvent,
+  feedFeedbackUndoMessage,
   filterAnonymousSessionShowcaseFeedItems,
+  findShowcaseFeedItemPositions,
   forgetAnonymousShowcaseFeedRemoval,
   getQualifiedImpressionKey,
   rememberAnonymousShowcaseFeedRemoval,
   removeShowcaseFeedItemsFromInfiniteData,
+  restoreShowcaseFeedItemsToInfiniteData,
+  trackFeedFeedbackRequest,
+  undoFeedFeedback,
   type ShowcaseFeedEventDetails,
+  type ShowcaseFeedFeedbackTarget,
+  type ShowcaseFeedFeedbackType,
 } from '@/lib/showcase-feed-events';
+import { newPostsProbeCategory, newestFeedPostIn, useNewPostsProbe } from '@/lib/use-new-posts-probe';
 import {
   enqueueShowcaseFeedEvent,
   flushShowcaseFeedEvents,
@@ -85,7 +108,7 @@ import { Reveal } from '@/components/reveal';
 import { SkeletonBone } from '@/components/skeleton';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
-import { MotionView, usePressMotion, useReducedMotion } from '@/lib/motion';
+import { MotionView, useOverlayPresence, usePressMotion, useReducedMotion } from '@/lib/motion';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentColor, appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -132,6 +155,8 @@ const SKELETON_HEIGHTS = [
 ];
 const LOAD_MORE_COOLDOWN_MS = 800;
 const FEED_HORIZONTAL_PADDING = 8;
+/** How far below the status bar the list header starts: the 12 in the list's `paddingTop: topInset + 12`. */
+const LIST_HEADER_TOP_GAP = 12;
 /** One relayout per tick instead of one per resolved preview image. */
 const SHOWCASE_ASPECT_RATIO_FLUSH_MS = 50;
 
@@ -266,6 +291,16 @@ export default function ShowcaseScreen() {
   const [isSwipingMedia, setIsSwipingMedia] = useState(false);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const [searchVisible, setSearchVisible] = useState(false);
+  // The last Not interested or Hide, offering Undo for five seconds; one at a
+  // time (`FeedUndoNotice`).
+  const [undoNotice, setUndoNotice] = useState<FeedUndoNoticeModel | null>(null);
+  const dismissUndoNotice = (id: string) => setUndoNotice((current) => (current?.id === id ? null : current));
+  // The list header's title row and chips, as laid out (0 until measured), and
+  // whether the list has scrolled past them: the compact search button stands
+  // in for the header's own once it has (`CompactSearchButton`).
+  const [listHeaderHeight, setListHeaderHeight] = useState(0);
+  const [listHeaderScrolledOff, setListHeaderScrolledOff] = useState(false);
+  const listHeaderScrolledOffRef = useRef(false);
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMorePageCountRef = useRef<number | null>(null);
@@ -476,6 +511,20 @@ export default function ShowcaseScreen() {
   // put it back unless the list is at the top, so a background refetch — a save
   // used to fire one — walks the feed downward a notch at a time.
   const [pullRefreshing, setPullRefreshing] = useState(false);
+  // "New posts" (product decision D2): on a return to the app five minutes or
+  // more after the lane was fetched, the server is asked whether it has a post
+  // newer than any the lane holds, and nothing is fetched into the lane until
+  // the pill is tapped. Every Explore lane is ranked; none is the unranked
+  // Recent lane, which keeps its own refetch.
+  const newestHeld = newestFeedPostIn(showcaseQuery.data);
+  const newPosts = useNewPostsProbe({
+    api,
+    category: newPostsProbeCategory(queryFilters.category),
+    enabled: isFocused,
+    laneFetchedAt: showcaseQuery.dataUpdatedAt,
+    newestKnownPublishedAt: newestHeld.publishedAt,
+    newestKnownPostId: newestHeld.postId,
+  });
   const endMessage = activeToolLabel
     ? `You've reached the end of ${activeToolLabel}.`
     : activeFilterId === 'all'
@@ -494,6 +543,10 @@ export default function ShowcaseScreen() {
     dispatchActivation({ type: 'reset' });
     activationStore.publish({ activeIds: [] });
     setFeedbackItem(null);
+    // The pill answered for the lane being left. The other lane's fetch time
+    // already hides it; this keeps it down on coming back to this lane too,
+    // until the next return to the app asks again.
+    newPosts.dismiss();
     // Every carousel is about to unmount; their releases would land after the
     // new list has already opened locks of its own.
     mediaDragCountRef.current = 0;
@@ -551,9 +604,8 @@ export default function ShowcaseScreen() {
     requestNextPage();
   };
 
-  const handleRefresh = () => {
-    haptic.light();
-    setPullRefreshing(true);
+  /** The lane trimmed to its first page and that page fetched again: a pull, Refresh, and the "New posts" pill. */
+  const refetchFirstPage = () => {
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
     queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
@@ -563,12 +615,38 @@ export default function ShowcaseScreen() {
         pageParams: current.pageParams.slice(0, 1),
       };
     });
-    void showcaseQuery.refetch().finally(() => {
-      setPullRefreshing(false);
+    return showcaseQuery.refetch().finally(() => {
       // Cards that left through the top kept their placeholder height until
       // now; the refreshed page re-places every card anyway.
       releaseHeldAspectRatios('refresh');
     });
+  };
+
+  const handleRefresh = () => {
+    haptic.light();
+    setPullRefreshing(true);
+    void refetchFirstPage().finally(() => setPullRefreshing(false));
+  };
+
+  // The pill's refresh leaves `pullRefreshing` alone: tapped deep in the grid,
+  // a programmatic spinner would shift the iOS list down and strand it there
+  // (the note at `pullRefreshing`). The list goes to the top first, at once, so
+  // the trimmed lane lands where the reader is looking.
+  const showNewPosts = () => {
+    haptic.light();
+    newPosts.dismiss();
+    feedRef.current?.scrollToOffset({ offset: 0, animated: false });
+    void refetchFirstPage();
+  };
+
+  // Scroll events arrive every frame; only the moment the header passes under
+  // the status bar, one way or the other, reaches React.
+  const trackListOffset = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const scrolledOff = listHeaderHeight > 0
+      && event.nativeEvent.contentOffset.y >= LIST_HEADER_TOP_GAP + listHeaderHeight;
+    if (scrolledOff === listHeaderScrolledOffRef.current) return;
+    listHeaderScrolledOffRef.current = scrolledOff;
+    setListHeaderScrolledOff(scrolledOff);
   };
 
   const openPost = useCallback((item: ShowcaseFeedItem, zoom: AppleZoomOpen | null = null) => {
@@ -591,7 +669,7 @@ export default function ShowcaseScreen() {
     }) as never);
   }, [queryClient, user?.id, recordFeedEvent, feedSession.feedSessionId, feedSession.algorithmVersion, queryFilters]);
 
-  const applyFeedFeedback = (item: ShowcaseFeedItem | null, eventType: 'not_interested' | 'hide_creator') => {
+  const applyFeedFeedback = (item: ShowcaseFeedItem | null, eventType: ShowcaseFeedFeedbackType) => {
     if (!item) return;
     if (eventType === 'hide_creator' && (!item.creator.id || item.creator.id === user?.id)) {
       return;
@@ -599,9 +677,15 @@ export default function ShowcaseScreen() {
     const target = eventType === 'hide_creator'
       ? { creatorId: item.creator.id }
       : { postId: item.id };
+    const feedbackTarget: ShowcaseFeedFeedbackTarget = { ...target, feedbackType: eventType };
     const cachedFeeds = queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({
       queryKey: viewerFeedQueryKey,
     });
+    // Read before the removal: where each post sat in each lane, so Undo puts
+    // it back at the index it left (product decision D7).
+    const positions = cachedFeeds.map(([cachedQueryKey, cachedData]) => (
+      [cachedQueryKey, findShowcaseFeedItemPositions(cachedData, target)] as const
+    ));
 
     if (!user) rememberAnonymousShowcaseFeedRemoval(target);
 
@@ -620,15 +704,11 @@ export default function ShowcaseScreen() {
       sourceSurface: 'showcase',
     });
 
-    void runtime.api.recordShowcaseFeedEvent(request)
-      .then(() => AccessibilityInfo.announceForAccessibility(eventType === 'hide_creator'
-        ? user
-          ? `${formatCreatorLabel(item.creator.username || item.creator.name)} hidden from your feed.`
-          : `${formatCreatorLabel(item.creator.username || item.creator.name)} hidden for this visit.`
-        : user
-          ? 'Post removed. Your feed will adapt.'
-          : 'Post removed for this visit.'))
+    // No announcement of its own on success: the notice below announces itself.
+    // Tracked, so an Undo waits for this request rather than overtaking it.
+    void trackFeedFeedbackRequest(feedbackTarget, runtime.api.recordShowcaseFeedEvent(request))
       .catch(() => {
+        dismissUndoNotice(request.clientEventId);
         if (!user) forgetAnonymousShowcaseFeedRemoval(target);
         cachedFeeds.forEach(([cachedQueryKey, cachedData]) => {
           queryClient.setQueryData(cachedQueryKey, cachedData);
@@ -641,6 +721,30 @@ export default function ShowcaseScreen() {
           'Couldn’t update your feed. The post was restored.'
         );
       });
+    setUndoNotice({
+      id: request.clientEventId,
+      message: feedFeedbackUndoMessage(eventType),
+      onUndo: () => {
+        // The posts come back only once the server has taken the choice back,
+        // in place in every lane that held them, so a page loaded since stays.
+        void undoFeedFeedback(api, feedbackTarget, { hasSession: Boolean(identityUserId) })
+          .then(() => {
+            positions.forEach(([cachedQueryKey, lanePositions]) => {
+              queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(
+                cachedQueryKey,
+                (current) => restoreShowcaseFeedItemsToInfiniteData(current, lanePositions),
+              );
+            });
+          })
+          .catch(() => {
+            haptic.error();
+            showMessageDialog({
+              title: 'Couldn’t undo',
+              message: 'It is still hidden. Check your connection and try again.',
+            });
+          });
+      },
+    });
   };
 
   const requireModerationSignIn = () => {
@@ -812,6 +916,7 @@ export default function ShowcaseScreen() {
         })}
         onMomentumScrollBegin={() => dispatchActivation({ type: 'momentumBegin' })}
         onMomentumScrollEnd={() => dispatchActivation({ type: 'momentumEnd' })}
+        onScroll={trackListOffset}
         getItemType={(item) => item.mediaKind ?? item.item.category}
         keyExtractor={(item) => item.id}
         // FlashList's default keeps whichever post is first on screen in place
@@ -855,7 +960,7 @@ export default function ShowcaseScreen() {
         // started. Loading, failure and emptiness render in ListEmptyComponent.
         ListHeaderComponent={
           <View style={{ paddingBottom: 16 }}>
-            <View style={{ gap: 10 }}>
+            <View style={{ gap: 10 }} onLayout={(event) => setListHeaderHeight(event.nativeEvent.layout.height)}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                 {/* The edge swipe used to be the only way into the workspace
                     menu from here, which Gestures forbids — a shortcut gesture
@@ -949,6 +1054,27 @@ export default function ShowcaseScreen() {
 
         <TopScrim topInset={topInset} />
 
+        {/* Under the chips as they sit at rest, over the grid once they scroll. */}
+        <NewPostsPill
+          visible={newPosts.hasNewer}
+          onPress={showNewPosts}
+          topOffset={topInset + LIST_HEADER_TOP_GAP + listHeaderHeight + appTheme.spacing.compact}
+        />
+
+        {/* Centred on the header's last control as it sat at rest. */}
+        <CompactSearchButton
+          visible={listHeaderScrolledOff}
+          onPress={() => setSearchVisible(true)}
+          top={topInset + LIST_HEADER_TOP_GAP + (appTheme.touch.compact - COMPACT_SEARCH_SIZE) / 2}
+          right={FEED_HORIZONTAL_PADDING + (appTheme.touch.compact - COMPACT_SEARCH_SIZE) / 2}
+        />
+
+        <FeedUndoNotice
+          notice={undoNotice}
+          onDismiss={dismissUndoNotice}
+          bottomOffset={tabBarMetrics.contentBottomPadding}
+        />
+
         <ExploreSearchOverlay api={api} visible={searchVisible} onClose={() => setSearchVisible(false)} />
 
         <FeedFeedbackSheet
@@ -1041,6 +1167,62 @@ function IconButton({
     >
       {children}
     </Pressable>
+  );
+}
+
+const COMPACT_SEARCH_SIZE = 40;
+
+/**
+ * Search once the list header, and the search button in it, has scrolled away
+ * (product decision E2): a compact button floating at the top of the screen.
+ * It fades in and out as an overlay does, at once under Reduce Motion, and is
+ * not there while the header is on screen, so search never shows two entries.
+ */
+function CompactSearchButton({
+  onPress,
+  right,
+  top,
+  visible,
+}: {
+  onPress: () => void;
+  right: number;
+  top: number;
+  visible: boolean;
+}) {
+  const theme = useAppTheme();
+  const presence = useOverlayPresence(visible);
+  if (!presence.mounted) return null;
+
+  return (
+    <MotionView
+      pointerEvents={visible ? 'auto' : 'none'}
+      style={[{ position: 'absolute', top, right, zIndex: 2 }, presence.animatedStyle as StyleProp<ViewStyle>]}
+    >
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Search creators, posts, and recipes"
+        accessibilityElementsHidden={!visible}
+        importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
+        disabled={!visible}
+        hitSlop={4}
+        onPress={onPress}
+        style={({ pressed }) => ({
+          width: COMPACT_SEARCH_SIZE,
+          height: COMPACT_SEARCH_SIZE,
+          alignItems: 'center',
+          justifyContent: 'center',
+          borderRadius: appTheme.radii.pill,
+          borderCurve: 'continuous',
+          borderWidth: 1,
+          borderColor: theme.colors.borderStrong,
+          backgroundColor: theme.colors.panel,
+          boxShadow: theme.shadow.soft.boxShadow,
+          opacity: pressed ? appTheme.opacity.pressed : 1,
+        })}
+      >
+        <Search size={appTheme.icon.default} color={theme.colors.text} />
+      </Pressable>
+    </MotionView>
   );
 }
 
@@ -1157,10 +1339,12 @@ const MasonryPin = memo(function MasonryPin({
   const activation = useFeedVideoActivation(activationStore, card.id);
   const activeVideo = playbackEligible && activation === 'visible';
   const showActiveVideo = isVideoCard && activeVideo && Boolean(card.mediaUrl);
-  // Reduce Motion turns every preview back into a poster without changing the
-  // election, so the badge asks the same question the tile does.
+  // Reduce Motion and Autoplay previews → Never turn every preview back into a
+  // poster without changing the election, so the badge asks the same question
+  // the tile does.
   const reducedMotion = useReducedMotion();
-  const coverVideoStreaming = isShowcaseCoverVideoStreaming(card.item, showActiveVideo && !reducedMotion);
+  const previewsEnabled = useAutoplayPreviewsEnabled();
+  const coverVideoStreaming = isShowcaseCoverVideoStreaming(card.item, showActiveVideo && !reducedMotion && previewsEnabled);
   const creatorLabel = formatCreatorLabel(card.creatorLabel);
   const signal = card.unlock;
   // The pin is the rectangle the reel grows out of, and empties into while the
