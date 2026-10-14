@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  AccountDeletionNotStartedError,
   executeInitialAccountDeletion,
   hasDueAccountDeletionInitialRetries,
   parseAccountDeletionStorageManifest,
   processAccountDeletionCleanup,
   processAccountDeletionInitialRetries,
   processAccountDeletionResweeps,
+  recordAccountDeletionWalletBalances,
   removeAccountStorage,
+  startInitialAccountDeletion,
 } from '@/lib/account-deletion-service';
 
 const USER_ID = '87c4b811-7a50-4e1a-9c38-7ab2693c1182';
@@ -94,6 +97,51 @@ function storageMock(options: {
       }),
     },
   };
+}
+
+const SELLER_WALLET = {
+  user_id: USER_ID,
+  available_token_subunits: 412500,
+  held_token_subunits: 0,
+  lifetime_earned_token_subunits: 500000,
+  lifetime_refunded_token_subunits: 87500,
+  lifetime_paid_out_token_subunits: 0,
+};
+
+/** The two Data API tables the wallet ledger touches: wallets read, records written. */
+function walletTables(options: {
+  wallets?: Array<Record<string, unknown>>;
+  readError?: unknown;
+  onRead?: (userIds: string[]) => void;
+  onRecord?: () => void;
+} = {}) {
+  const recorded: Array<{ rows: unknown; options: unknown }> = [];
+  const from = vi.fn((table: string) => {
+    if (table === 'creator_resource_wallets') {
+      const query = {
+        select: vi.fn(),
+        in: vi.fn(async (_column: string, userIds: string[]) => {
+          options.onRead?.(userIds);
+          return options.readError
+            ? { data: null, error: options.readError }
+            : { data: options.wallets ?? [], error: null };
+        }),
+      };
+      query.select.mockReturnValue(query);
+      return query;
+    }
+    if (table === 'account_deletion_wallet_records') {
+      return {
+        upsert: vi.fn(async (rows: unknown, upsertOptions: unknown) => {
+          options.onRecord?.();
+          recorded.push({ rows, options: upsertOptions });
+          return { data: null, error: null };
+        }),
+      };
+    }
+    throw new Error(`Unexpected table: ${table}`);
+  });
+  return { from, recorded };
 }
 
 describe('account deletion cleanup service', () => {
@@ -235,13 +283,18 @@ describe('account deletion cleanup service', () => {
         calls.push('record-claimed-fingerprints');
         return { usersWithGrants: 0, fingerprintRows: 0 };
       }),
+      recordWalletBalances: vi.fn(async () => {
+        calls.push('record-wallet-balances');
+        return { walletsRecorded: 0 };
+      }),
     })).resolves.toMatchObject({
       alreadyCompleted: false,
       authUserAlreadyMissing: false,
       cleanupPending: true,
     });
-    // The claim ledger is written while the auth rows still exist — after the
-    // storage sweep settles, strictly before the destructive Auth stage.
+    // The claim and wallet ledgers are written while the auth rows still exist
+    // — after the storage sweep settles, strictly before the destructive Auth
+    // stage.
     expect(calls).toEqual([
       'prepare_account_deletion:',
       'mark_account_deletion_stage:storage_deleting',
@@ -249,10 +302,94 @@ describe('account deletion cleanup service', () => {
       'retain-purchased-files',
       'mark_account_deletion_stage:storage_deleted',
       'record-claimed-fingerprints',
+      'record-wallet-balances',
       'mark_account_deletion_stage:auth_deleting',
       `delete:${USER_ID}`,
       'mark_account_deletion_stage:completed',
     ]);
+  });
+
+  it('records the seller wallet through the Data API before the Auth delete that cascades it away', async () => {
+    const calls: string[] = [];
+    const wallets = walletTables({
+      wallets: [SELLER_WALLET],
+      onRead: (userIds) => calls.push(`read-wallets:${userIds.join(',')}`),
+      onRecord: () => calls.push('insert-wallet-records'),
+    });
+    const admin = {
+      from: wallets.from,
+      storage: storageMock().storage,
+      auth: {
+        admin: {
+          deleteUser: vi.fn(async (userId: string) => {
+            calls.push(`delete:${userId}`);
+            return { data: null, error: null };
+          }),
+        },
+      },
+      rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+        calls.push(`${name}:${String(args.p_status ?? '')}`);
+        if (name === 'prepare_account_deletion') {
+          return { data: { status: 'prepared', storage_manifest: storageManifest }, error: null };
+        }
+        if (name === 'mark_account_deleted_upload_reservations') {
+          return { data: { status: 'ok', marked: 1 }, error: null };
+        }
+        return { data: { status: args.p_status }, error: null };
+      }),
+    };
+
+    await executeInitialAccountDeletion({
+      admin: admin as never,
+      userId: USER_ID,
+      retainPurchasedFiles: vi.fn(async () => ({ revisionsRetained: 0, filesRetained: 0 })),
+      recordClaimedFingerprints: vi.fn(async () => ({ usersWithGrants: 0, fingerprintRows: 0 })),
+    });
+
+    expect(wallets.recorded).toEqual([{
+      rows: [{ job_id: USER_ID, ...SELLER_WALLET }],
+      options: { onConflict: 'user_id,job_id', ignoreDuplicates: true },
+    }]);
+    expect(calls.indexOf(`read-wallets:${USER_ID}`)).toBeGreaterThan(
+      calls.indexOf('mark_account_deletion_stage:storage_deleted'),
+    );
+    expect(calls.indexOf('insert-wallet-records')).toBeGreaterThan(calls.indexOf(`read-wallets:${USER_ID}`));
+    expect(calls.indexOf('insert-wallet-records')).toBeLessThan(
+      calls.indexOf('mark_account_deletion_stage:auth_deleting'),
+    );
+    expect(calls.indexOf('insert-wallet-records')).toBeLessThan(calls.indexOf(`delete:${USER_ID}`));
+  });
+
+  it('keeps Auth when the wallet cannot be read, so the job retries with the balance unrecorded', async () => {
+    const deleteUser = vi.fn();
+    const stages: string[] = [];
+    const wallets = walletTables({ readError: { message: 'wallet read outage' } });
+    const admin = {
+      from: wallets.from,
+      storage: storageMock().storage,
+      auth: { admin: { deleteUser } },
+      rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+        if (name === 'prepare_account_deletion') {
+          return { data: { status: 'prepared', storage_manifest: storageManifest }, error: null };
+        }
+        if (name === 'mark_account_deleted_upload_reservations') {
+          return { data: { status: 'ok', marked: 1 }, error: null };
+        }
+        stages.push(String(args.p_status));
+        return { data: { status: args.p_status }, error: null };
+      }),
+    };
+
+    await expect(executeInitialAccountDeletion({
+      admin: admin as never,
+      userId: USER_ID,
+      retainPurchasedFiles: vi.fn(async () => ({ revisionsRetained: 0, filesRetained: 0 })),
+      recordClaimedFingerprints: vi.fn(async () => ({ usersWithGrants: 0, fingerprintRows: 0 })),
+    })).rejects.toThrow('wallet read outage');
+
+    expect(stages).toEqual(['storage_deleting', 'storage_deleted']);
+    expect(wallets.recorded).toEqual([]);
+    expect(deleteUser).not.toHaveBeenCalled();
   });
 
   it('does not sweep source storage or delete Auth when purchased-file retention fails', async () => {
@@ -330,6 +467,7 @@ describe('account deletion cleanup service', () => {
     };
 
     const fingerprintedOwners: string[][] = [];
+    const recordWalletBalances = vi.fn(async () => ({ walletsRecorded: 0 }));
     await executeInitialAccountDeletion({
       admin: admin as never,
       userId: USER_ID,
@@ -342,11 +480,14 @@ describe('account deletion cleanup service', () => {
         fingerprintedOwners.push(ownerUserIds);
         return { usersWithGrants: 0, fingerprintRows: 0 };
       }),
+      recordWalletBalances,
     });
 
     // Guests cannot claim, but the ledger pass receives every linked identity
     // and filters by actual grants itself.
     expect(fingerprintedOwners).toEqual([[USER_ID, GUEST_ID]]);
+    // Every linked wallet is recorded under the target's deletion job.
+    expect(recordWalletBalances).toHaveBeenCalledWith(admin, USER_ID, [USER_ID, GUEST_ID]);
 
     expect(retainedOwners).toEqual([USER_ID, GUEST_ID]);
     expect(mockStorage.removed).toContainEqual({
@@ -492,7 +633,14 @@ describe('account deletion cleanup service', () => {
     });
     let claims = 0;
     const transitions: string[] = [];
-    const deleteUser = vi.fn(async () => ({ data: null, error: null }));
+    const deleteUser = vi.fn(async () => {
+      events.push('delete-auth');
+      return { data: null, error: null };
+    });
+    const recordWalletBalances = vi.fn(async () => {
+      events.push('record-wallet-balances');
+      return { walletsRecorded: 1 };
+    });
     const admin = {
       storage: mockStorage.storage,
       auth: { admin: { deleteUser } },
@@ -542,6 +690,7 @@ describe('account deletion cleanup service', () => {
         return { revisionsRetained: 0, filesRetained: 0 };
       }),
       recordClaimedFingerprints: vi.fn(async () => ({ usersWithGrants: 0, fingerprintRows: 0 })),
+      recordWalletBalances,
     })).resolves.toEqual({
       claimed: 1,
       storageSwept: 1,
@@ -552,6 +701,10 @@ describe('account deletion cleanup service', () => {
       objectsRemoved: 1,
     });
     expect(deleteUser).toHaveBeenCalledWith(USER_ID);
+    // A job whose immediate pass never reached the Auth step still leaves the
+    // wallet on record before the cascade.
+    expect(recordWalletBalances).toHaveBeenCalledWith(admin, USER_ID, [USER_ID]);
+    expect(events.indexOf('record-wallet-balances')).toBeLessThan(events.indexOf('delete-auth'));
     expect(events.indexOf('mark-reservations')).toBeLessThan(
       events.indexOf('retain-purchased-files'),
     );
@@ -651,16 +804,22 @@ describe('account deletion cleanup service', () => {
       }),
     };
 
+    const recordWalletBalances = vi.fn(async () => ({ walletsRecorded: 0 }));
     await expect(processAccountDeletionInitialRetries({
       admin: admin as never,
       workerId: 'account-deletion-worker:test',
       limit: 1,
       recordClaimedFingerprints: vi.fn(async () => ({ usersWithGrants: 0, fingerprintRows: 0 })),
+      recordWalletBalances,
     })).resolves.toMatchObject({
       claimed: 1,
       retryScheduled: 1,
       resweepScheduled: 0,
     });
+    expect(recordWalletBalances).toHaveBeenCalledWith(admin, USER_ID, [USER_ID]);
+    expect(recordWalletBalances.mock.invocationCallOrder[0]).toBeLessThan(
+      deleteUser.mock.invocationCallOrder[0],
+    );
     expect(transitions).toEqual(['auth_deleting', 'failed']);
     expect(admin.rpc).toHaveBeenCalledWith('mark_account_deleted_upload_reservations', {
       p_owner_user_ids: [USER_ID],
@@ -886,5 +1045,116 @@ describe('account deletion cleanup service', () => {
       p_succeeded: false,
       p_error_message: 'Could not inspect profiles account files.',
     }));
+  });
+
+  it('starts by locking the account and revoking every session, and leaves the sweep for later', async () => {
+    const calls: string[] = [];
+    const admin = {
+      auth: {
+        admin: {
+          deleteUser: vi.fn(),
+          signOut: vi.fn(async (_token: string, scope: string) => {
+            calls.push(`sign-out:${scope}`);
+            return { data: null, error: null };
+          }),
+        },
+      },
+      rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+        calls.push(`${name}:${String(args.p_status ?? '')}`);
+        if (name === 'prepare_account_deletion') {
+          return { data: { status: 'prepared', storage_manifest: storageManifest }, error: null };
+        }
+        return { data: { status: args.p_status }, error: null };
+      }),
+      storage: { from: vi.fn() },
+    };
+
+    await expect(startInitialAccountDeletion({
+      accessToken: 'token',
+      admin: admin as never,
+      userId: USER_ID,
+    })).resolves.toEqual({
+      status: 'started',
+      manifest: parseAccountDeletionStorageManifest(storageManifest),
+    });
+    expect(calls).toEqual([
+      'prepare_account_deletion:',
+      'mark_account_deletion_stage:storage_deleting',
+      'sign-out:global',
+    ]);
+    expect(admin.storage.from).not.toHaveBeenCalled();
+    expect(admin.auth.admin.deleteUser).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed prepare as not started, before any session is revoked', async () => {
+    const signOut = vi.fn();
+    const admin = {
+      auth: { admin: { signOut } },
+      rpc: vi.fn(async () => ({ data: null, error: { message: 'prepare unavailable' } })),
+    };
+
+    const start = startInitialAccountDeletion({
+      accessToken: 'token',
+      admin: admin as never,
+      userId: USER_ID,
+    });
+    await expect(start).rejects.toBeInstanceOf(AccountDeletionNotStartedError);
+    await expect(start).rejects.toThrow('prepare unavailable');
+    expect(signOut).not.toHaveBeenCalled();
+  });
+
+  it('treats a committed prepare with an unusable manifest as started, never as untouched', async () => {
+    const admin = {
+      auth: { admin: { signOut: vi.fn() } },
+      rpc: vi.fn(async () => ({ data: { status: 'prepared', storage_manifest: {} }, error: null })),
+    };
+
+    const start = startInitialAccountDeletion({ admin: admin as never, userId: USER_ID });
+    // prepare_account_deletion has already marked the identity `deleting`.
+    await expect(start).rejects.toThrow('Account deletion storage manifest is invalid.');
+    await expect(start).rejects.not.toBeInstanceOf(AccountDeletionNotStartedError);
+  });
+
+  it('records a linked guest wallet under the target deletion job', async () => {
+    const guestWallet = { ...SELLER_WALLET, user_id: GUEST_ID, available_token_subunits: -400 };
+    const wallets = walletTables({ wallets: [SELLER_WALLET, guestWallet] });
+
+    await expect(recordAccountDeletionWalletBalances(
+      { from: wallets.from } as never,
+      USER_ID,
+      [USER_ID, GUEST_ID],
+    )).resolves.toEqual({ walletsRecorded: 2 });
+    expect(wallets.recorded).toEqual([{
+      rows: [
+        { job_id: USER_ID, ...SELLER_WALLET },
+        { job_id: USER_ID, ...guestWallet },
+      ],
+      options: { onConflict: 'user_id,job_id', ignoreDuplicates: true },
+    }]);
+  });
+
+  it('writes nothing for owners without a wallet', async () => {
+    const wallets = walletTables({ wallets: [] });
+
+    await expect(recordAccountDeletionWalletBalances(
+      { from: wallets.from } as never,
+      USER_ID,
+      [USER_ID],
+    )).resolves.toEqual({ walletsRecorded: 0 });
+    expect(wallets.from).toHaveBeenCalledTimes(1);
+    expect(wallets.recorded).toEqual([]);
+  });
+
+  it('refuses to record an amount that did not arrive as an exact integer', async () => {
+    const wallets = walletTables({
+      wallets: [{ ...SELLER_WALLET, available_token_subunits: '412500' }],
+    });
+
+    await expect(recordAccountDeletionWalletBalances(
+      { from: wallets.from } as never,
+      USER_ID,
+      [USER_ID],
+    )).rejects.toThrow('Could not read creator wallets before account deletion.');
+    expect(wallets.recorded).toEqual([]);
   });
 });

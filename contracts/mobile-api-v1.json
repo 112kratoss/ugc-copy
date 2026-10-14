@@ -92,15 +92,34 @@
       },
       "response": {
         "success": true,
-        "deleted": true,
-        "cleanupPending": true
+        "deleted": false,
+        "deletionScheduled": true
+      },
+      "status": 202,
+      "responseVariants": {
+        "alreadyDeleted": {
+          "success": true,
+          "deleted": true,
+          "cleanupPending": false,
+          "alreadyDeleted": true
+        }
       },
       "errors": {
+        "reauthenticationRequired": {
+          "status": 403,
+          "response": {
+            "error": "Please sign in again before permanently deleting your account.",
+            "code": "RECENT_AUTH_REQUIRED",
+            "reason": "reauthentication_required",
+            "reauthenticate": true
+          }
+        },
         "appleReauthenticationRequired": {
           "status": 403,
           "response": {
             "error": "Continue with Apple before permanently deleting your account.",
             "code": "APPLE_REAUTH_REQUIRED",
+            "reason": "reauthentication_required",
             "reauthenticate": true
           }
         },
@@ -109,6 +128,29 @@
           "response": {
             "error": "Apple account verification is temporarily unavailable. Your account is still active; please try again later.",
             "code": "APPLE_REVOCATION_UNAVAILABLE"
+          }
+        },
+        "accountDeleting": {
+          "status": 409,
+          "response": {
+            "error": "This account is being permanently deleted.",
+            "code": "ACCOUNT_DELETING"
+          }
+        },
+        "deletionNotStarted": {
+          "status": 500,
+          "response": {
+            "error": "Account deletion could not be completed. Please try again.",
+            "code": "ACCOUNT_DELETION_NOT_STARTED",
+            "deletionScheduled": false
+          }
+        },
+        "deletionRetryScheduled": {
+          "status": 500,
+          "response": {
+            "error": "Your account is being deleted and will be removed automatically.",
+            "code": "ACCOUNT_DELETION_RETRY_SCHEDULED",
+            "deletionScheduled": true
           }
         }
       }
@@ -614,9 +656,18 @@
         "recorded": 3,
         "rejected": 0,
         "results": [
-          { "index": 0, "status": 200 },
-          { "index": 1, "status": 200 },
-          { "index": 2, "status": 200 }
+          {
+            "index": 0,
+            "status": 200
+          },
+          {
+            "index": 1,
+            "status": 200
+          },
+          {
+            "index": 2,
+            "status": 200
+          }
         ]
       }
     },

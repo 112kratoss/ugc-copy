@@ -26,6 +26,9 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
   let extraObjects: { bucket: string; path: string }[], postIds: string[], templateIds: string[], generationIds: string[];
   let bundle: string | null, post: string | null, order: string | null, purchase: string | null, revision: string | null;
   let config: { API_URL: string; ANON_KEY: string; SERVICE_ROLE_KEY: string };
+  // What the route hands to after(); a test runs it once it has read the answer.
+  let deferred: Array<() => Promise<unknown>>;
+  const settle = async () => { while (deferred.length) await deferred.shift()!(); };
   const objects = async (owner = owners[0]) => (await db.query('select bucket_id,name from storage.objects where name like $1 order by bucket_id,name', [owner + '/%'])).rows;
   const job = async () => (await db.query('select status,last_error,resweep_after,next_attempt_at from public.account_deletion_jobs where user_id=$1', [owners[0]])).rows[0];
   const authExists = async (owner = owners[0]) => (await db.query('select id from auth.users where id=$1', [owner])).rows.length > 0;
@@ -82,6 +85,7 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
       createServiceClient: () => admin,
       createUserClient: () => options.anonymous ? createClient(config.API_URL, config.ANON_KEY, { auth: { persistSession: false } }) : userClient,
       invalidateShowcaseFeedCache: () => {}, logError: () => {},
+      runAfterResponse: task => { deferred.push(task); },
       ...(options.now ? { now: () => options.now! } : {}),
     },
   });
@@ -141,7 +145,7 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
   });
   afterAll(async () => { await db?.end(); vi.unstubAllEnvs(); });
   beforeEach(async () => {
-    owners = []; deletedAuth = []; fixtureFingerprints = []; telemetryIds = []; extraObjects = []; postIds = []; templateIds = []; generationIds = []; fail = null; bundle = null; post = null; order = null; purchase = null; revision = null;
+    owners = []; deletedAuth = []; fixtureFingerprints = []; telemetryIds = []; extraObjects = []; postIds = []; templateIds = []; generationIds = []; fail = null; bundle = null; post = null; order = null; purchase = null; revision = null; deferred = [];
     for (let index = 0; index < 2; index++) {
       const email = randomUUID() + '@example.invalid', password = randomUUID() + 'aZ!7';
       const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
@@ -179,12 +183,15 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
     await db.query('delete from public.credit_grant_identity_fingerprints where program_key=$1 and fingerprint=any($2::text[])', ['welcome_credits_v1', fixtureFingerprints]);
     await db.query('delete from auth.users where id=any($1::uuid[])', [owners]);
     await db.query('delete from public.account_deletion_jobs where user_id=any($1::uuid[])', [owners]);
+    // Append-only for service_role; the fixture connection owns the table.
+    await db.query('delete from public.account_deletion_wallet_records where user_id=any($1::uuid[])', [owners]);
     await db.query('delete from public.upload_path_tombstones where owner_user_id=any($1::uuid[])', [owners]);
     await db.query('delete from public.blocked_upload_owners where owner_user_id=any($1::uuid[])', [owners]);
     const rateKeys = owners.flatMap(owner => [owner, 'audit-' + owner]);
     await db.query('delete from public.backend_rate_limits where subject_key=any($1::text[])', [rateKeys]);
     for (const owner of owners) { expect(await objects(owner)).toEqual([]); expect(await authExists(owner)).toBe(false); }
     expect(await job()).toBeUndefined();
+    expect((await db.query('select user_id from public.account_deletion_wallet_records where user_id=any($1::uuid[])', [owners])).rows).toEqual([]);
     expect((await db.query('select fingerprint from public.credit_grant_identity_fingerprints where fingerprint=any($1::text[])', [fixtureFingerprints])).rows).toEqual([]);
     expect((await db.query('select owner_user_id from public.blocked_upload_owners where owner_user_id=any($1::uuid[])', [owners])).rows).toEqual([]);
     expect((await db.query('select owner_user_id from public.upload_path_tombstones where owner_user_id=any($1::uuid[])', [owners])).rows).toEqual([]);
@@ -391,17 +398,34 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
   it('requires recent authentication before creating destructive work', async () => {
     const response = await route({ confirmation: 'DELETE' }, { now: new Date(Date.now() + 20 * 60 * 1000) });
     expect(response.status).toBe(403);
-    expect(await response.json()).toMatchObject({ reauthenticate: true });
+    expect(await response.json()).toMatchObject({ code: 'RECENT_AUTH_REQUIRED', reason: 'reauthentication_required', reauthenticate: true });
     expect(await authExists()).toBe(true); expect(await objects()).toHaveLength(2);
     expect(await job()).toBeUndefined();
   });
   it('deletes the verified caller and ignores a forged target identity in the body', async () => {
     const response = await route({ confirmation: 'DELETE', userId: owners[1] });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ success: true, deleted: true, cleanupPending: true });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ success: true, deleted: false, deletionScheduled: true });
+    // Answered once the identity is locked and every session is revoked; the
+    // storage sweep and the Auth delete run behind the answer.
+    expect((await db.query('select identity_state from public.profiles where id=$1', [owners[0]])).rows[0].identity_state).toBe('deleting');
+    expect((await db.query('select id from auth.sessions where user_id=$1', [owners[0]])).rows).toEqual([]);
+    expect(await authExists()).toBe(true); expect(await objects()).toHaveLength(2);
+    expect(deferred).toHaveLength(1);
+    await settle();
     expect(await authExists()).toBe(false); expect(await objects()).toEqual([]);
     expect(await authExists(owners[1])).toBe(true); expect(await objects(owners[1])).toHaveLength(2);
     expect(await job()).toMatchObject({ status: 'resweep_waiting' });
+  });
+  it('keeps what a deleted seller was owed after the wallet cascades away', async () => {
+    await sold();
+    const columns = 'available_token_subunits,held_token_subunits,lifetime_earned_token_subunits,lifetime_refunded_token_subunits,lifetime_paid_out_token_subunits';
+    const wallets = (await db.query(`select ${columns} from public.creator_resource_wallets where user_id=$1`, [owners[0]])).rows;
+    expect(wallets).toHaveLength(1); expect(Number(wallets[0].available_token_subunits)).toBeGreaterThan(0);
+    expect(await initial()).toMatchObject({ cleanupPending: true });
+    expect(await authExists()).toBe(false);
+    expect((await db.query('select user_id from public.creator_resource_wallets where user_id=$1', [owners[0]])).rows).toEqual([]);
+    expect((await db.query(`select job_id,${columns} from public.account_deletion_wallet_records where user_id=$1`, [owners[0]])).rows).toEqual([{ job_id: owners[0], ...wallets[0] }]);
   });
   it('preserves a purchased file in neutral Storage after the creator is deleted', async () => {
     await sold();
