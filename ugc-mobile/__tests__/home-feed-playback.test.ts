@@ -175,6 +175,27 @@ describe('Home feed playback', () => {
     disconnect();
   });
 
+  // The same policy's other half: a prepared limit of 0 loads nothing ahead.
+  it('lets prepared players go one per step under a limit of 0, prepares none at the next card, and refills on Wi-Fi', () => {
+    const { store, controller, disconnect, publishes, step, settle } = restingOnB();
+    expect(store.snapshot()).toEqual({ activeIds: ['b'], preparedIds: ['c', 'a'] });
+    controller.dispatch({ type: 'policyChanged', electOnlyAtRest: true, preparedLimit: 0 });
+    // Releases are native view changes, so they go one per step, never with the election.
+    step();
+    expect(store.snapshot().preparedIds).toHaveLength(1);
+    step();
+    expect(store.snapshot()).toEqual({ activeIds: ['b'], preparedIds: [] });
+    // At rest the next card plays; the one it took over from goes, and nothing is loaded beside it.
+    controller.dispatch(see('c'));
+    settle();
+    expect(store.snapshot()).toEqual({ activeIds: ['c'], preparedIds: [] });
+    expect(withinBudget(publishes)).toBe(true);
+    controller.dispatch({ type: 'policyChanged', electOnlyAtRest: false, preparedLimit: SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS });
+    settle();
+    expect(store.snapshot()).toEqual({ activeIds: ['c'], preparedIds: ['d', 'b'] });
+    disconnect();
+  });
+
   it('elects a cold winner only once the feed rests', () => {
     const { store, controller, disconnect } = restingOnB(['b']);
     controller.dispatch({ type: 'dragBegin' });
