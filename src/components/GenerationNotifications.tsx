@@ -15,6 +15,7 @@ import {
   announceGenerationStatusSynced,
   subscribeToGenerationStarted,
 } from '@/lib/generation-status-client';
+import { HOME_WORKSPACE_ACTIVE_STATUSES } from '@/lib/home-dashboard';
 import { supabase } from '@/lib/supabase';
 
 const STATUS_CACHE_STORAGE_KEY = 'magicbooklet:generation-status-cache:v1';
@@ -37,10 +38,16 @@ interface GenerationRecord {
 
 interface NotificationItem {
   id: string;
+  generationId: string;
   status: 'succeeded' | 'failed';
   kind: GenerationKind;
   title: string;
   description: string;
+}
+
+/** In flight as the Home card and Studio count it, `pending` included. */
+function isActiveGenerationStatus(status: string | undefined): boolean {
+  return status !== undefined && (HOME_WORKSPACE_ACTIVE_STATUSES as readonly string[]).includes(status);
 }
 
 function readStatusCache(): Record<string, string> {
@@ -195,6 +202,7 @@ export default function GenerationNotifications() {
       const copy = getGenerationNotificationCopy(kind, status, getCompletionDurationMs(generation));
       const nextNotification: NotificationItem = {
         id: existingId,
+        generationId: generation.id,
         status,
         kind,
         title: copy.title,
@@ -249,15 +257,27 @@ export default function GenerationNotifications() {
         }, {});
 
         if (Object.keys(previousStatuses).length > 0) {
+          let anyRunFailed = false;
           generations.forEach((generation) => {
-            const previousStatus = previousStatuses[generation.id];
+            // From `pending` too: a held start that the reaper fails at 45
+            // minutes, returning its credits, used to end without a word.
             if (
-              (previousStatus === 'processing' || previousStatus === 'waiting') &&
+              isActiveGenerationStatus(previousStatuses[generation.id]) &&
               (generation.status === 'succeeded' || generation.status === 'failed')
             ) {
               enqueueNotification(generation, generation.status);
+              if (generation.status === 'failed') {
+                anyRunFailed = true;
+              }
             }
           });
+          if (anyRunFailed) {
+            // Settling a failure returns its credits. The account shell and the
+            // creators' balance gate re-read the balance on this event, which
+            // only a creator that watched the run sent, so a refund that landed
+            // off-screen left "Insufficient credits" in place until a reload.
+            window.dispatchEvent(new Event('credits_updated'));
+          }
         }
 
         knownStatusesRef.current = nextStatuses;
@@ -272,7 +292,7 @@ export default function GenerationNotifications() {
             // `pending` too: the workspace card counts it as in progress, and a
             // run still queued when a poll lands used to stay "in progress"
             // until a reload.
-            .filter((generation) => generation.status === 'processing' || generation.status === 'waiting' || generation.status === 'pending')
+            .filter((generation) => isActiveGenerationStatus(generation.status))
             .map((generation) => generation.id),
         );
         shouldFetchFullList = pollingRequestVersion !== requestVersionAtStart;
@@ -389,8 +409,9 @@ export default function GenerationNotifications() {
                       <Clock3 className="h-3.5 w-3.5" />
                       {notification.kind}
                     </div>
+                    {/* Studio opens and points at this run, as the alert's own link does. */}
                     <Link
-                      href="/creations"
+                      href={`/creations?generation=${encodeURIComponent(notification.generationId)}`}
                       className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-100 transition hover:bg-white/[0.08]"
                     >
                       View Studio

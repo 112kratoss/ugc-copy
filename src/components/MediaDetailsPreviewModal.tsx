@@ -4,7 +4,7 @@ import InlineMediaVideo from '@/components/InlineMediaVideo';
 import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { Check, ChevronDown, Copy, Film, Image as ImageIcon, Maximize2, Volume2, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Check, ChevronDown, Copy, Film, Image as ImageIcon, Loader2, Maximize2, Volume2, X } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
 import CreatorIdentity from '@/components/CreatorIdentity';
@@ -25,6 +25,21 @@ export interface MediaDetailsAdditionalMediaItem extends ActiveMediaPreview {
   id: string;
 }
 
+/**
+ * What a run with nothing to play says in the media's place: a failed run,
+ * one still rendering, or one whose only file is gone. A notification opens
+ * such a run here, and an empty modal told the viewer nothing about it.
+ */
+export interface MediaDetailsStatusNote {
+  /** The state, e.g. "Failed" or "Still rendering". */
+  label: string;
+  tone?: 'danger' | 'pending' | 'neutral';
+  /** Why, or what happens next: a failed run's stored reason. */
+  message?: string | null;
+  /** The credits line, e.g. "40 credits returned". */
+  detail?: string | null;
+}
+
 interface MediaDetailsPreviewModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -42,6 +57,8 @@ interface MediaDetailsPreviewModalProps {
     value: string;
   }>;
   actions?: ReactNode;
+  /** Shown in place of the media when `src` is null. */
+  statusNote?: MediaDetailsStatusNote | null;
 }
 
 export default function MediaDetailsPreviewModal({
@@ -58,8 +75,9 @@ export default function MediaDetailsPreviewModal({
   creator,
   metadata,
   actions,
+  statusNote,
 }: MediaDetailsPreviewModalProps) {
-  if (!isOpen || (!src && mediaType !== 'text')) {
+  if (!isOpen || (!src && mediaType !== 'text' && !statusNote)) {
     return null;
   }
 
@@ -78,7 +96,34 @@ export default function MediaDetailsPreviewModal({
       creator={creator}
       metadata={metadata}
       actions={actions}
+      statusNote={statusNote}
     />
+  );
+}
+
+const STATUS_NOTE_TONE_CLASS: Record<NonNullable<MediaDetailsStatusNote['tone']>, string> = {
+  danger: 'border-rose-400/25 bg-rose-500/10 text-rose-100',
+  pending: 'border-amber-400/25 bg-amber-500/10 text-amber-100',
+  neutral: 'border-white/10 bg-white/[0.04] text-zinc-200',
+};
+
+function MediaDetailsStatusNoteView({ note }: { note: MediaDetailsStatusNote }) {
+  const tone = note.tone ?? 'neutral';
+  const icon = tone === 'danger'
+    ? <AlertCircle className="h-3.5 w-3.5" aria-hidden="true" />
+    : tone === 'pending'
+      ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+      : <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />;
+
+  return (
+    <div className="flex w-full max-w-xl flex-col items-center gap-3 px-6 py-8 text-center">
+      <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${STATUS_NOTE_TONE_CLASS[tone]}`}>
+        {icon}
+        {note.label}
+      </span>
+      {note.message ? <p className="text-sm leading-6 text-zinc-300">{note.message}</p> : null}
+      {note.detail ? <p className="text-sm font-semibold text-emerald-200">{note.detail}</p> : null}
+    </div>
   );
 }
 
@@ -95,6 +140,7 @@ function MediaDetailsPreviewDialog({
   creator,
   metadata,
   actions,
+  statusNote,
 }: Omit<MediaDetailsPreviewModalProps, 'isOpen'>) {
   const titleId = useId();
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
@@ -222,7 +268,7 @@ function MediaDetailsPreviewDialog({
         );
       }
 
-      return null;
+      return statusNote ? <MediaDetailsStatusNoteView note={statusNote} /> : null;
     }
 
     if (mediaType === 'image') {

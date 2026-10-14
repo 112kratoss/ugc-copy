@@ -32,6 +32,12 @@ export interface CreationWorkspaceGeneration {
   linked_post_title?: string | null;
   linked_post_visibility?: 'public' | 'unlisted' | 'private' | null;
   linked_post_archived_at?: string | null;
+  /**
+   * The linked post's recipe as the creations list sends it. Studio loads only
+   * the newest page of posts, so for an older post this is the only copy, and
+   * without it a post that sells a recipe read "No recipe" / "Add recipe".
+   */
+  linked_post_bundle?: CreationWorkspacePost['bundle'];
 }
 
 export interface CreationWorkspacePost {
@@ -166,7 +172,7 @@ function resolveLinkedPost(
     publicPath: canShareLinkedPost(visibility, archivedAt) ? `/showcase/${generation.linked_post_id}` : null,
     ownerPath: `/post/${generation.linked_post_id}/edit`,
     canShare: canShareLinkedPost(visibility, archivedAt),
-    bundle: null,
+    bundle: generation.linked_post_bundle ?? null,
   };
 }
 

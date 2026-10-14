@@ -1,9 +1,10 @@
 /**
- * The three safety actions a post's menu and a creator's page offer, as the
- * app sends them (`ugc-mobile/components/home-dashboard.tsx`,
- * `creator-profile-screen.tsx`): report the post, report its creator, block
- * its creator. All three need a registered account; the server answers 401 to
- * a guest or a signed-out request.
+ * The safety actions the web offers, as the app sends them
+ * (`ugc-mobile/components/home-dashboard.tsx`, `creator-profile-screen.tsx`,
+ * `lib/use-viewer-action-handlers.ts`): report a post, report its creator,
+ * block its creator, report what a model made for you. All of them need a
+ * registered account; the server answers 401 to a guest or a signed-out
+ * request.
  */
 
 export class ModerationRequestError extends Error {
@@ -140,6 +141,29 @@ export function reportCreator({
     targetType: 'user',
     targetId: userId,
     ...CREATOR_REPORTS[surface],
+  });
+}
+
+/**
+ * One of the viewer's own creations goes to the safety team, so the model's
+ * and the provider's output can be reviewed. The surface is checked twice, by
+ * the endpoint's list and by the table's `moderation_reports_source_surface_check`,
+ * and neither has a Studio entry, so this files under the app's
+ * `generation-viewer`, with the app's reason, and says where in its note.
+ */
+export function reportGeneration({
+  generationId,
+  accessToken,
+}: {
+  generationId: string;
+  accessToken: string;
+}) {
+  return postModerationRequest('/api/moderation/reports', accessToken, {
+    targetType: 'generation',
+    targetId: generationId,
+    reason: 'offensive_ai_output',
+    sourceSurface: 'generation-viewer',
+    details: 'Reported from the web Studio.',
   });
 }
 

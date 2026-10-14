@@ -15,6 +15,13 @@ interface CreationMediaFrameProps {
     alt: string;
     outputCount?: number;
     onOpen: () => void;
+    /**
+     * The same file through the media route, which signs a new address on
+     * every request. Studio's addresses are signed for an hour, so a tab left
+     * open past that fails a tile that is fine: one load from here comes
+     * first, and only a second failure counts as the file being unreadable.
+     */
+    retrySrc?: string | null;
     onRestore?: () => void;
     isRestoring?: boolean;
 }
@@ -27,6 +34,7 @@ export default function CreationMediaFrame({
     alt,
     outputCount = 1,
     onOpen,
+    retrySrc,
     onRestore,
     isRestoring = false,
 }: CreationMediaFrameProps) {
@@ -44,6 +52,21 @@ export default function CreationMediaFrame({
     const [loadState, setLoadState] = useState<'loading' | 'loaded' | 'error'>(
         defersVideoBytes || mediaKind === 'audio' ? 'loaded' : 'loading',
     );
+    const [isRetrying, setIsRetrying] = useState(false);
+    const shownSrc = isRetrying && retrySrc ? retrySrc : src;
+
+    // "Preview unavailable" offers Restore, which overwrites the creation with
+    // an upload, so an address that merely expired must not get that far.
+    const handleMediaError = () => {
+        if (!isRetrying && retrySrc && retrySrc !== src) {
+            setIsRetrying(true);
+            // A deferred video loads nothing until it is played again, so it
+            // keeps its poster rather than a spinner that would never end.
+            setLoadState(defersVideoBytes ? 'loaded' : 'loading');
+            return;
+        }
+        setLoadState('error');
+    };
 
     const safelyPlayVideo = (event: MouseEvent<HTMLVideoElement>) => {
         const playback = event.currentTarget.play();
@@ -101,12 +124,12 @@ export default function CreationMediaFrame({
                 >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                        src={src}
+                        src={shownSrc}
                         alt={alt}
                         loading="lazy"
                         decoding="async"
                         onLoad={() => setLoadState('loaded')}
-                        onError={() => setLoadState('error')}
+                        onError={handleMediaError}
                         className="h-full w-full object-contain transition duration-500 group-hover:scale-[1.015]"
                     />
                 </button>
@@ -133,14 +156,14 @@ export default function CreationMediaFrame({
                     aria-label="Open video details"
                 >
                     <video
-                        src={src}
+                        src={shownSrc}
                         poster={posterSrc ?? undefined}
                         muted
                         loop
                         playsInline
                         preload={defersVideoBytes ? 'none' : 'metadata'}
                         onLoadedMetadata={() => setLoadState('loaded')}
-                        onError={() => setLoadState('error')}
+                        onError={handleMediaError}
                         onMouseEnter={safelyPlayVideo}
                         onMouseLeave={resetVideo}
                         className="h-full w-full object-contain"

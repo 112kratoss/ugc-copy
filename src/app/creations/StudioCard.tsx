@@ -152,7 +152,7 @@ const SURFACE_TONE_CLASS: Record<StudioCardTone, string> = {
   default:
     'border-white/[0.07] bg-[linear-gradient(180deg,rgba(24,24,27,0.78),rgba(8,8,10,0.96))] shadow-[0_18px_60px_rgba(0,0,0,0.34)] hover:border-white/14 hover:shadow-[0_24px_80px_rgba(0,0,0,0.46)]',
   processing: 'border-yellow-500/20 bg-white/[0.02]',
-  failed: 'border-red-500/20 bg-white/[0.02] opacity-60',
+  failed: 'border-red-500/20 bg-white/[0.02]',
   archived: 'border-white/[0.08] bg-white/[0.02]',
 };
 
@@ -182,6 +182,10 @@ export interface StudioCardProps {
   href?: string;
   as?: 'div' | 'article' | 'li';
   testId?: string;
+  /** The element id, so a link can bring the card into view. */
+  anchorId?: string;
+  /** Rings the card that a link pointed at, e.g. a notification's run. */
+  highlighted?: boolean;
   className?: string;
 }
 
@@ -202,6 +206,8 @@ export default function StudioCard({
   href,
   as: Tag = 'article',
   testId,
+  anchorId,
+  highlighted = false,
   className = '',
 }: StudioCardProps) {
   const isCompact = density === 'compact';
@@ -227,7 +233,11 @@ export default function StudioCard({
     </div>
   ) : null;
 
-  const surface = `group relative overflow-hidden rounded-[24px] border backdrop-blur-md transition duration-300 ${SURFACE_TONE_CLASS[tone]} ${className}`;
+  // A failed card is dimmed, except the one a link pointed at: its ring would dim with it.
+  const stateClass = highlighted
+    ? 'ring-2 ring-[var(--ui-primary)] ring-offset-2 ring-offset-black'
+    : tone === 'failed' ? 'opacity-60' : '';
+  const surface = `group relative overflow-hidden rounded-[24px] border backdrop-blur-md transition duration-300 ${SURFACE_TONE_CLASS[tone]} ${stateClass} ${className}`;
 
   const body = isCompact ? (
     <>
@@ -267,9 +277,11 @@ export default function StudioCard({
 
   const layout = isCompact ? 'flex h-full flex-col' : 'block';
 
+  const highlightAttribute = highlighted ? { 'data-highlighted': 'true' } : {};
+
   if (href) {
     return (
-      <Tag data-testid={testId} className="h-full">
+      <Tag id={anchorId} data-testid={testId} {...highlightAttribute} className="h-full">
         <Link href={href} className={`${surface} ${layout} ui-focus-ring`}>
           {body}
         </Link>
@@ -278,7 +290,7 @@ export default function StudioCard({
   }
 
   return (
-    <Tag data-testid={testId} className={`${surface} ${layout}`}>
+    <Tag id={anchorId} data-testid={testId} {...highlightAttribute} className={`${surface} ${layout}`}>
       {body}
     </Tag>
   );

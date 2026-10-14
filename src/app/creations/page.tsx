@@ -3,9 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Archive, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Globe, ImageIcon, Loader2, PencilLine, Plus, RotateCcw, Trash2, UserRound, Volume2, Wand2, Zap } from 'lucide-react';
+import { Archive, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Flag, Globe, ImageIcon, Loader2, PencilLine, Plus, RotateCcw, Trash2, UserRound, Volume2, Wand2, Zap } from 'lucide-react';
 import { useAuth } from '@/components/AuthProvider';
-import MediaDetailsPreviewModal, { type MediaDetailsType } from '@/components/MediaDetailsPreviewModal';
+import MediaDetailsPreviewModal, {
+    type MediaDetailsStatusNote,
+    type MediaDetailsType,
+} from '@/components/MediaDetailsPreviewModal';
 import PostVisibilityMenu from '@/components/PostVisibilityMenu';
 import StudioOverflowMenu, { type StudioOverflowMenuItem } from '@/components/StudioOverflowMenu';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
@@ -36,10 +39,11 @@ import { formatDurationShort, formatTimeAgoShort } from '@/lib/generation-timing
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';
-import { getStoredMediaLocation } from '@/lib/media-urls';
+import { buildMediaProxyUrl, getDisplayMediaUrl, getStoredMediaLocation } from '@/lib/media-urls';
 import { isAudioModel, isImageModel, isMotionModel } from '@/lib/client-generation-models';
 import { pushToast, requestConfirmation } from '@/components/feedback-state';
 import { HOME_WORKSPACE_ACTIVE_STATUSES } from '@/lib/home-dashboard';
+import { reportGeneration } from '@/lib/moderation-client';
 import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profile';
 import { resolveRemixTool } from '@/lib/remix-tools';
 import { formatUsdCents, getPostResourceKindLabel } from '@/lib/post-resource-bundles';
@@ -75,12 +79,26 @@ interface Generation {
     linked_post_title?: string | null;
     linked_post_visibility?: 'public' | 'unlisted' | 'private' | null;
     linked_post_archived_at?: string | null;
+    /** The linked post's recipe, for a post older than the loaded posts page. */
+    linked_post_bundle?: {
+        accessMode: 'free' | 'paid';
+        status: 'draft' | 'published';
+        priceUsdCents: number;
+    } | null;
+    /** A failed run whose cost settlement gave back. */
+    refunded?: boolean;
+    /** Why a failed run failed, in public words; null for every other status. */
+    error_message?: string | null;
+    /** Moderation took it down: it is archived, and Restore refuses it. */
+    moderation_removed_at?: string | null;
     paywallPrefill?: GenerationPaywallPrefill | null;
     origin?: 'creation' | 'template';
     template?: {
         runId: string;
         templateId: string;
         templateTitle: string | null;
+        /** How the run ended; a cancelled or failed run lists its finished steps. */
+        runStatus?: 'succeeded' | 'cancelled' | 'failed';
     } | null;
 }
 
@@ -154,6 +172,12 @@ const CREATIONS_WORKSPACE_CACHE_TTL_MS = 5 * 60 * 1000;
 const CREATIONS_GENERATIONS_PAGE_SIZE = 36;
 const CREATIONS_POSTS_PAGE_SIZE = 36;
 const SIGNED_MEDIA_URL_REFRESH_BUFFER_MS = 5 * 60 * 1000;
+const GENERATION_HIGHLIGHT_MS = 4000;
+
+function getGenerationCardAnchorId(generationId: string): string {
+    return `studio-generation-${generationId}`;
+}
+
 function getCreationsWorkspaceCacheKey(userId: string) {
     return `magicbooklet:creations-cache:v1:${userId}`;
 }
@@ -283,6 +307,47 @@ function canRecreate(generation: Generation): boolean {
     return generation.origin !== 'template' && !isAudioModel(generation.model);
 }
 
+/** "40 credits returned" when settling a failed run gave its cost back; null when it kept it. */
+function getReturnedCreditsLabel(generation: Generation): string | null {
+    const cost = generation.cost ?? 0;
+    if (generation.status !== 'failed' || generation.refunded !== true || cost <= 0) {
+        return null;
+    }
+    return `${cost} credit${cost === 1 ? '' : 's'} returned`;
+}
+
+/**
+ * How the template run behind a finished step ended, when it did not succeed.
+ * Those steps are listed so you keep what you paid for, but only a succeeded
+ * run's result may publish (`showcase-publish-service.ts`).
+ */
+function getEndedTemplateRunStatus(generation: Generation): 'cancelled' | 'failed' | null {
+    const runStatus = generation.origin === 'template' ? generation.template?.runStatus : undefined;
+    return runStatus === 'cancelled' || runStatus === 'failed' ? runStatus : null;
+}
+
+/**
+ * The tile's file through the media route, which signs a new address on
+ * every request, or the original's when the tile already plays through the
+ * route (a playback rendition). Null when the route can serve neither.
+ */
+function getFreshTileUrl(tileUrl: string, originalUrl: string): string | null {
+    return [getDisplayMediaUrl(tileUrl), getDisplayMediaUrl(originalUrl)]
+        .find((candidate) => Boolean(candidate) && candidate !== tileUrl) ?? null;
+}
+
+/**
+ * A download through the media route, which answers with an attachment: a
+ * Storage address is cross-origin, so browsers ignore `download` on it and
+ * only opened a tab. A file the route cannot serve keeps its own address.
+ */
+function getCreationDownloadUrl(url: string, filename: string): string {
+    const location = getStoredMediaLocation(url);
+    return location
+        ? buildMediaProxyUrl(location.bucket, location.filePath, { download: true, filename })
+        : url;
+}
+
 function preserveStableMediaUrl(
     previousUrl: string | null | undefined,
     incomingUrl: string | null | undefined
@@ -352,7 +417,16 @@ function getNextGenerationCursor(payload: GenerationsApiResponse): string | null
 function mergeGenerationRefresh(
     previousGenerations: Generation[],
     incomingGenerations: Generation[],
-    options: { preserveMissing?: boolean } = {}
+    options: {
+        /**
+         * Later pages are loaded: keep the rows the fresh first page no longer
+         * reaches because newer work pushed them down. A row missing from
+         * inside the fresh page's own range was deleted, and stays gone.
+         */
+        keepOlderThanFreshPage?: boolean;
+        /** Rows kept whatever the fresh page says, e.g. the one a link asked for. */
+        keepIds?: ReadonlySet<string>;
+    } = {}
 ): Generation[] {
     const previousById = new Map(previousGenerations.map((generation) => [generation.id, generation]));
 
@@ -388,15 +462,26 @@ function mergeGenerationRefresh(
         };
     });
 
-    if (!options.preserveMissing) {
-        return refreshedGenerations;
-    }
-
     const refreshedIds = new Set(refreshedGenerations.map((generation) => generation.id));
-    return [
-        ...refreshedGenerations,
-        ...previousGenerations.filter((generation) => !refreshedIds.has(generation.id)),
-    ];
+    const freshCreatedAtMs = incomingGenerations
+        .map((generation) => Date.parse(generation.created_at))
+        .filter((createdAtMs) => Number.isFinite(createdAtMs));
+    const oldestFreshMs = freshCreatedAtMs.length > 0 ? Math.min(...freshCreatedAtMs) : null;
+    const keptGenerations = previousGenerations.filter((generation) => {
+        if (refreshedIds.has(generation.id)) {
+            return false;
+        }
+        if (options.keepIds?.has(generation.id)) {
+            return true;
+        }
+        if (!options.keepOlderThanFreshPage) {
+            return false;
+        }
+        const createdAtMs = Date.parse(generation.created_at);
+        return oldestFreshMs === null || (Number.isFinite(createdAtMs) && createdAtMs < oldestFreshMs);
+    });
+
+    return [...refreshedGenerations, ...keptGenerations];
 }
 
 function mergeGenerationAppend(previousGenerations: Generation[], incomingGenerations: Generation[]): Generation[] {
@@ -470,10 +555,14 @@ export default function CreationsPage() {
     const [generationDetailLoadingId, setGenerationDetailLoadingId] = useState<string | null>(null);
     const [generationDetailError, setGenerationDetailError] = useState<string | null>(null);
     const generationsRef = useRef<Generation[]>([]);
+    // Pages of the creations list loaded since the last full first-page load.
+    const loadedGenerationPagesRef = useRef(0);
     const generationStatusRefreshInFlightRef = useRef(false);
     const [filter, setFilter] = useState<FilterType>('all');
     const [previewGen, setPreviewGen] = useState<Generation | null>(null);
     const requestedGenerationRef = useRef<string | null>(null);
+    const [highlightedGenerationId, setHighlightedGenerationId] = useState<string | null>(null);
+    const scrolledToGenerationRef = useRef<string | null>(null);
     const [publishTarget, setPublishTarget] = useState<Generation | null>(null);
     const [showPaidShortcutInPublishModal, setShowPaidShortcutInPublishModal] = useState(true);
     const [restoreTarget, setRestoreTarget] = useState<Generation | null>(null);
@@ -490,6 +579,16 @@ export default function CreationsPage() {
     const creationsReturnPath = searchParams.toString()
         ? `${pathname}?${searchParams.toString()}`
         : pathname;
+    // Read by the loaders at the moment they need it, so a change of view does
+    // not give them a new identity and refetch the whole workspace.
+    const creationsReturnPathRef = useRef(creationsReturnPath);
+    useEffect(() => {
+        creationsReturnPathRef.current = creationsReturnPath;
+    }, [creationsReturnPath]);
+    // Sign-in comes back to the view and the run the viewer was on.
+    const redirectToSignIn = useCallback(() => {
+        router.push(`/login?returnUrl=${encodeURIComponent(creationsReturnPathRef.current)}`);
+    }, [router]);
     const buildStudioDetailPath = (postId: string, section?: string) =>
         buildShowcaseDetailPath(postId, {
             from: 'studio',
@@ -524,6 +623,14 @@ export default function CreationsPage() {
                 ...generation,
                 ...(patch.visibility !== undefined ? { linked_post_visibility: patch.visibility } : {}),
                 ...(patch.archivedAt !== undefined ? { linked_post_archived_at: patch.archivedAt } : {}),
+                ...(patch.bundleStatus !== undefined && generation.linked_post_bundle
+                    ? {
+                        linked_post_bundle: {
+                            ...generation.linked_post_bundle,
+                            status: patch.bundleStatus ?? generation.linked_post_bundle.status,
+                        },
+                    }
+                    : {}),
             };
         });
         postsRef.current = nextPosts;
@@ -547,6 +654,7 @@ export default function CreationsPage() {
                     linked_post_title: null,
                     linked_post_visibility: null,
                     linked_post_archived_at: null,
+                    linked_post_bundle: null,
                 }
                 : generation
         ));
@@ -561,20 +669,27 @@ export default function CreationsPage() {
         });
     }, [userId]);
 
-    const handleLifecycleAuthRequired = useCallback(() => {
-        router.push(`/login?returnUrl=${encodeURIComponent(creationsReturnPath)}`);
-    }, [creationsReturnPath, router]);
+    const dropGeneration = useCallback((generationId: string) => {
+        const nextGenerations = generationsRef.current.filter((generation) => generation.id !== generationId);
+        generationsRef.current = nextGenerations;
+        setGenerations(nextGenerations);
+        writeCreationsWorkspaceCache(userId, {
+            generations: nextGenerations,
+            posts: postsRef.current,
+            profile: profileRef.current,
+        });
+    }, [userId]);
 
     const postLifecycle = usePostLifecycle({
         accessToken,
-        onAuthRequired: handleLifecycleAuthRequired,
+        onAuthRequired: redirectToSignIn,
         onPatch: patchPost,
         onRemoved: removePost,
     });
 
     // A generation card's linked post is the full owner record when it is
     // loaded, so policy can see its bundle; otherwise the generation's own
-    // linkage columns are enough to act on.
+    // linkage columns and the list's bundle summary are enough to act on.
     const resolveLinkedPostTarget = (
         generation: Generation,
         linkedPost: NonNullable<CreationWorkspaceCardState['linkedPost']>,
@@ -585,7 +700,10 @@ export default function CreationsPage() {
             generationId: generation.id,
             visibility: linkedPost.visibility,
             archivedAt: linkedPost.archivedAt,
-            bundle: null,
+            // The summary has no sales count, so a confirmation leaves out its line about buyers.
+            bundle: linkedPost.bundle
+                ? { accessMode: linkedPost.bundle.accessMode, status: linkedPost.bundle.status, salesCount: 0 }
+                : null,
         };
     };
 
@@ -605,7 +723,7 @@ export default function CreationsPage() {
 
     const fetchCreations = useCallback(async () => {
         if (!accessToken || !userId) {
-            router.push('/login');
+            redirectToSignIn();
             return;
         }
 
@@ -627,12 +745,25 @@ export default function CreationsPage() {
             let nextGenerations: Generation[] | null = null;
             if (generationsRes.ok) {
                 const loadedGenerations = (generationsData.generations || []) as Generation[];
+                const freshCursor = getNextGenerationCursor(generationsData);
+                // With later pages loaded, they stay, and Load more goes on after
+                // them; rewinding the cursor made it fetch pages already on
+                // screen. One page loaded, or a first page that holds the whole
+                // library, is simply replaced: keeping every row it no longer
+                // has is how a deleted creation stayed in the grid.
+                const keepsLaterPages = loadedGenerationPagesRef.current > 1 && freshCursor !== null;
+                const requestedId = requestedGenerationRef.current;
                 nextGenerations = mergeGenerationRefresh(generationsRef.current, loadedGenerations, {
-                    preserveMissing: generationsRef.current.length > loadedGenerations.length,
+                    keepOlderThanFreshPage: keepsLaterPages,
+                    // The run a link opened stays on screen when it is older than the first page.
+                    keepIds: requestedId ? new Set([requestedId]) : undefined,
                 });
                 generationsRef.current = nextGenerations;
                 setGenerations(nextGenerations);
-                setGenerationsNextCursor(getNextGenerationCursor(generationsData));
+                if (!keepsLaterPages) {
+                    loadedGenerationPagesRef.current = 1;
+                    setGenerationsNextCursor(freshCursor);
+                }
                 setGenerationsLoadMoreError(null);
             } else {
                 setLoadError('Could not load your creations. Check your connection and try again.');
@@ -672,11 +803,11 @@ export default function CreationsPage() {
         } finally {
             setIsLoading(false);
         }
-    }, [accessToken, router, userId]);
+    }, [accessToken, redirectToSignIn, userId]);
 
     const loadMoreGenerations = useCallback(async () => {
         if (!accessToken || !userId) {
-            router.push('/login');
+            redirectToSignIn();
             return;
         }
 
@@ -700,6 +831,7 @@ export default function CreationsPage() {
             const loadedGenerations = Array.isArray(data.generations) ? data.generations : [];
             const nextGenerations = mergeGenerationAppend(generationsRef.current, loadedGenerations);
             generationsRef.current = nextGenerations;
+            loadedGenerationPagesRef.current += 1;
             setGenerations(nextGenerations);
             setGenerationsNextCursor(getNextGenerationCursor(data));
             writeCreationsWorkspaceCache(userId, {
@@ -713,7 +845,7 @@ export default function CreationsPage() {
         } finally {
             setIsLoadingMoreGenerations(false);
         }
-    }, [accessToken, generationsNextCursor, isLoadingMoreGenerations, posts, profile, router, userId]);
+    }, [accessToken, generationsNextCursor, isLoadingMoreGenerations, posts, profile, redirectToSignIn, userId]);
 
     const refreshProcessingGenerationStatuses = useCallback(async () => {
         if (!accessToken || generationStatusRefreshInFlightRef.current) return;
@@ -769,7 +901,7 @@ export default function CreationsPage() {
 
     const loadMorePosts = useCallback(async () => {
         if (!accessToken || !userId) {
-            router.push('/login');
+            redirectToSignIn();
             return;
         }
         if (postsNextOffset === null || isLoadingMorePosts) return;
@@ -798,7 +930,7 @@ export default function CreationsPage() {
         } finally {
             setIsLoadingMorePosts(false);
         }
-    }, [accessToken, isLoadingMorePosts, posts, postsNextOffset, profile, router, userId]);
+    }, [accessToken, isLoadingMorePosts, posts, postsNextOffset, profile, redirectToSignIn, userId]);
 
     const cacheGenerations = useCallback((nextGenerations: Generation[]) => {
         generationsRef.current = nextGenerations;
@@ -819,7 +951,7 @@ export default function CreationsPage() {
         }
 
         if (!accessToken || !userId) {
-            router.push('/login');
+            redirectToSignIn();
             throw new Error('Authentication required.');
         }
 
@@ -858,7 +990,7 @@ export default function CreationsPage() {
         } finally {
             setGenerationDetailLoadingId(null);
         }
-    }, [accessToken, cacheGenerations, router, userId]);
+    }, [accessToken, cacheGenerations, redirectToSignIn, userId]);
 
     const loadGenerationDetail = useCallback(
         (generation: Generation) => loadGenerationById(generation.id, generation),
@@ -883,6 +1015,7 @@ export default function CreationsPage() {
             .then((generation) => {
                 if (requestedGenerationRef.current === requestedGenerationId) {
                     setPreviewGen(generation);
+                    setHighlightedGenerationId(generation.id);
                 }
             })
             .catch(() => {
@@ -891,6 +1024,29 @@ export default function CreationsPage() {
                 }
             });
     }, [accessToken, loadGenerationById, requestedGenerationId, userId]);
+
+    // An alert opens one run: its card is brought into view once it is drawn
+    // (a failed run's sits below the whole Completed grid) and ringed until a
+    // few seconds after its details close.
+    useEffect(() => {
+        if (!highlightedGenerationId || scrolledToGenerationRef.current === highlightedGenerationId) {
+            return;
+        }
+        const card = document.getElementById(getGenerationCardAnchorId(highlightedGenerationId));
+        if (!card) {
+            return;
+        }
+        scrolledToGenerationRef.current = highlightedGenerationId;
+        card.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    }, [generations, highlightedGenerationId, isLoading]);
+
+    useEffect(() => {
+        if (!highlightedGenerationId || previewGen?.id === highlightedGenerationId) {
+            return;
+        }
+        const timeoutId = window.setTimeout(() => setHighlightedGenerationId(null), GENERATION_HIGHLIGHT_MS);
+        return () => window.clearTimeout(timeoutId);
+    }, [highlightedGenerationId, previewGen?.id]);
 
     useEffect(() => {
         void fetchCreations();
@@ -973,7 +1129,7 @@ export default function CreationsPage() {
         }
 
         if (!session?.access_token) {
-            router.push('/login?returnUrl=/creations');
+            redirectToSignIn();
             return;
         }
 
@@ -1019,7 +1175,7 @@ export default function CreationsPage() {
 
     const handleGenerationArchive = async (generationId: string) => {
         if (!session?.access_token) {
-            router.push('/login?returnUrl=/creations');
+            redirectToSignIn();
             return;
         }
 
@@ -1053,7 +1209,7 @@ export default function CreationsPage() {
 
     const handleGenerationRestore = async (generationId: string) => {
         if (!session?.access_token) {
-            router.push('/login?returnUrl=/creations');
+            redirectToSignIn();
             return;
         }
 
@@ -1078,7 +1234,7 @@ export default function CreationsPage() {
 
     const handleGenerationDelete = async (generationId: string) => {
         if (!session?.access_token) {
-            router.push('/login?returnUrl=/creations');
+            redirectToSignIn();
             return;
         }
 
@@ -1103,11 +1259,47 @@ export default function CreationsPage() {
             if (!response.ok || !data.success) {
                 throw new Error(data.error || 'Failed to delete creation.');
             }
-
-            await fetchCreations();
         } catch (error) {
             console.error('Failed to delete creation:', error);
             pushToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not delete the creation.' });
+            return;
+        }
+
+        // Gone on the server, so gone here: from the grid, from the snapshot a
+        // reload draws first, and from an open preview, whatever the refresh
+        // below brings back.
+        dropGeneration(generationId);
+        setPreviewGen((current) => (current?.id === generationId ? null : current));
+        await fetchCreations();
+    };
+
+    const handleReportAiOutput = async (generationId: string) => {
+        if (!session?.access_token) {
+            redirectToSignIn();
+            return;
+        }
+
+        const confirmed = await requestConfirmation({
+            title: 'Report offensive AI output?',
+            message: 'Send this generated result to the safety team so the model and provider output can be reviewed.',
+            confirmLabel: 'Report AI output',
+            tone: 'danger',
+        });
+        if (!confirmed) {
+            return;
+        }
+
+        try {
+            await reportGeneration({ generationId, accessToken: session.access_token });
+            pushToast({ tone: 'success', message: 'The generated output was sent to the safety team.' });
+        } catch (error) {
+            console.error('Failed to report AI output:', error);
+            pushToast({
+                tone: 'error',
+                message: error instanceof Error && error.message
+                    ? `Could not report AI output. ${error.message}`
+                    : 'Could not report AI output.',
+            });
         }
     };
 
@@ -1207,7 +1399,10 @@ export default function CreationsPage() {
         if (!source) {
             const mediaKind = getMediaKind(generation);
             if (generation.origin === 'template') {
-                return `Final ${mediaKind} created from a reusable template. Open the run to review its progress or publish the result.`;
+                const endedRunStatus = getEndedTemplateRunStatus(generation);
+                return endedRunStatus
+                    ? `A finished step of a template run that was ${endedRunStatus}. Open the run to see every step.`
+                    : `Final ${mediaKind} created from a reusable template. Open the run to review its progress or publish the result.`;
             }
             return `${mediaKind === 'audio' ? 'Audio' : mediaKind === 'image' ? 'Image' : 'Video'} is ready to preview, publish, or turn into a reusable recipe.`;
         }
@@ -1272,35 +1467,135 @@ export default function CreationsPage() {
             month: 'short',
             day: 'numeric',
         });
-        const completedLabel = getCompletedInLabel(generation);
+        // A failed run's end is not a render time.
+        const completedLabel = generation.status === 'succeeded' ? getCompletedInLabel(generation) : null;
+        const endedRunStatus = getEndedTemplateRunStatus(generation);
 
         return [
             { label: 'Type', value: mediaLabel },
-            generation.origin === 'template' ? { label: 'Origin', value: 'Template' } : null,
+            generation.origin === 'template'
+                ? { label: 'Origin', value: endedRunStatus ? `Template · run ${endedRunStatus}` : 'Template' }
+                : null,
             { label: 'Model', value: generation.model },
             { label: 'Created', value: createdLabel },
-            generation.cost !== null ? { label: 'Credits', value: `${generation.cost} credits` } : null,
+            // A refunded run's credits are told by its status note instead: it cost nothing.
+            generation.cost !== null && !getReturnedCreditsLabel(generation)
+                ? { label: 'Credits', value: `${generation.cost} credits` }
+                : null,
             completedLabel ? { label: 'Render time', value: completedLabel.replace('Completed in ', '') } : null,
         ].filter((item): item is { label: string; value: string } => Boolean(item));
     };
 
+    // In place of the media for a run that has none: an alert opens failed and
+    // rendering runs here, and the modal used to show nothing for them.
+    const getPreviewStatusNote = (generation: Generation): MediaDetailsStatusNote | null => {
+        if (generation.output_url) {
+            return null;
+        }
+        if (generation.status === 'failed') {
+            return {
+                label: 'Failed',
+                tone: 'danger',
+                message: generation.error_message?.trim() || 'The model did not return a result.',
+                detail: getReturnedCreditsLabel(generation),
+            };
+        }
+        if (isActiveGenerationStatus(generation.status)) {
+            const startedAgo = getStartedAgoLabel(generation);
+            return {
+                label: 'Still rendering',
+                tone: 'pending',
+                message: `${startedAgo ? `${startedAgo}. ` : ''}It moves into Completed when the model returns it.`,
+            };
+        }
+        if (generation.source_unavailable_at) {
+            return {
+                label: 'File no longer available',
+                message: 'Its only copy expired at the provider before it could be saved.',
+            };
+        }
+        return {
+            label: 'No media to show',
+            message: 'Its file could not be loaded. Refresh Studio to try again.',
+        };
+    };
+
     const renderPreviewActions = (generation: Generation) => {
+        const primaryClass = 'inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 sm:w-auto sm:min-w-36';
+        const secondaryClass = 'inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white sm:w-auto';
+        const quietIconClass = 'inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white';
+        const dangerIconClass = 'inline-flex h-11 w-11 items-center justify-center rounded-full border border-rose-400/20 bg-rose-500/10 text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15';
+        const isTemplateResult = generation.origin === 'template';
+        const deleteButton = !isTemplateResult ? (
+            <button
+                type="button"
+                onClick={() => void handleGenerationDelete(generation.id)}
+                className={dangerIconClass}
+                title="Delete creation"
+                aria-label="Delete creation"
+            >
+                <Trash2 className="h-4 w-4" />
+            </button>
+        ) : null;
+
+        // A run that did not finish has nothing to publish or download: the
+        // modal offers what its card does.
+        if (generation.status === 'failed') {
+            return (
+                <>
+                    {canRecreate(generation) ? (
+                        <Link href={recreateHref(generation)} className={primaryClass}>
+                            <RotateCcw className="h-4 w-4" />
+                            Try again
+                        </Link>
+                    ) : null}
+                    {deleteButton}
+                </>
+            );
+        }
+        if (isActiveGenerationStatus(generation.status)) {
+            return null;
+        }
+        if (generation.archived_at) {
+            return (
+                <>
+                    {!generation.moderation_removed_at ? (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setPreviewGen(null);
+                                void handleGenerationRestore(generation.id);
+                            }}
+                            className={secondaryClass}
+                        >
+                            <RotateCcw className="h-4 w-4" />
+                            Restore
+                        </button>
+                    ) : null}
+                    {deleteButton}
+                </>
+            );
+        }
+
         const workspaceState = resolveCreationWorkspaceCardState(generation, posts);
         const mediaKind = getMediaKind(generation);
-        const isTemplateResult = generation.origin === 'template';
         const canManageFromCreation = mediaKind !== 'audio' && isShareSupported(generation);
-        const primaryIsPublish = workspaceState.primaryAction.type === 'publish';
+        // Publishing needs the file, and only a succeeded run's result may publish.
+        const primaryIsPublish = workspaceState.primaryAction.type === 'publish'
+            && !generation.source_unavailable_at
+            && !getEndedTemplateRunStatus(generation);
         const primaryIsUnlock =
             workspaceState.primaryAction.type === 'add-paywall' ||
             workspaceState.primaryAction.type === 'manage-paywall';
         const customizeHref = canManageFromCreation && !isTemplateResult
             ? buildCreationCustomizePath(generation, workspaceState)
             : null;
-        const downloadHref = generation.output_url;
-        const primaryClass = 'inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 sm:w-auto sm:min-w-36';
-        const secondaryClass = 'inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white sm:w-auto';
-        const quietIconClass = 'inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white';
-        const dangerIconClass = 'inline-flex h-11 w-11 items-center justify-center rounded-full border border-rose-400/20 bg-rose-500/10 text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15';
+        const downloadHref = generation.output_url
+            ? getCreationDownloadUrl(
+                generation.output_url,
+                `creation_${generation.id}.${inferDownloadExtension(generation)}`,
+            )
+            : null;
 
         return (
             <>
@@ -1366,27 +1661,17 @@ export default function CreationsPage() {
                 ) : null}
 
                 {!isTemplateResult ? (
-                    <>
-                        <button
-                            type="button"
-                            onClick={() => void handleGenerationArchive(generation.id)}
-                            className={quietIconClass}
-                            title="Archive creation"
-                            aria-label="Archive creation"
-                        >
-                            <Archive className="h-4 w-4" />
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => void handleGenerationDelete(generation.id)}
-                            className={dangerIconClass}
-                            title="Delete creation"
-                            aria-label="Delete creation"
-                        >
-                            <Trash2 className="h-4 w-4" />
-                        </button>
-                    </>
+                    <button
+                        type="button"
+                        onClick={() => void handleGenerationArchive(generation.id)}
+                        className={quietIconClass}
+                        title="Archive creation"
+                        aria-label="Archive creation"
+                    >
+                        <Archive className="h-4 w-4" />
+                    </button>
                 ) : null}
+                {deleteButton}
             </>
         );
     };
@@ -1818,6 +2103,8 @@ export default function CreationsPage() {
                                     key={gen.id}
                                     density="compact"
                                     tone="processing"
+                                    anchorId={getGenerationCardAnchorId(gen.id)}
+                                    highlighted={highlightedGenerationId === gen.id}
                                     media={(
                                         <div className="flex aspect-[4/5] items-center justify-center bg-black/60">
                                             <div className="flex flex-col items-center gap-3">
@@ -1870,10 +2157,13 @@ export default function CreationsPage() {
                                     ? postLifecycle.pendingAction(linkedPostTarget.id)
                                     : null;
                                 const primaryIsPublish = workspaceState.primaryAction.type === 'publish';
+                                const endedRunStatus = getEndedTemplateRunStatus(gen);
                                 const hasPrimaryAction =
                                     canManageFromCreation &&
                                     // Publishing needs the file; a lost source keeps its post's recipe actions.
                                     !(primaryIsPublish && gen.source_unavailable_at) &&
+                                    // The server publishes only a succeeded run's result.
+                                    !(primaryIsPublish && endedRunStatus) &&
                                     workspaceState.primaryAction.type !== 'none' &&
                                     Boolean(workspaceState.primaryAction.label);
                                 const primaryIsUnlock =
@@ -1902,12 +2192,13 @@ export default function CreationsPage() {
                                     });
                                 }
                                 if (primaryMediaUrl) {
+                                    const downloadName = `creation_${gen.id}.${inferDownloadExtension(gen)}`;
                                     overflowItems.push({
                                         key: 'download',
                                         label: 'Download creation',
                                         icon: <Download className="h-4 w-4" />,
-                                        href: primaryMediaUrl,
-                                        download: `creation_${gen.id}.${inferDownloadExtension(gen)}`,
+                                        href: getCreationDownloadUrl(primaryMediaUrl, downloadName),
+                                        download: downloadName,
                                     });
                                 }
                                 if (!isTemplateResult && !isAudio) {
@@ -1934,23 +2225,37 @@ export default function CreationsPage() {
                                             tone: 'danger',
                                             onSelect: () => void handleGenerationDelete(gen.id),
                                         },
+                                        // What a model made is its maker's to report, as in the app's reel.
+                                        {
+                                            key: 'report-ai-output',
+                                            label: 'Report AI output',
+                                            icon: <Flag className="h-4 w-4" />,
+                                            tone: 'danger',
+                                            onSelect: () => void handleReportAiOutput(gen.id),
+                                        },
                                     );
                                 }
+                                const tileSrc = primaryMediaUrl
+                                    ? isImage
+                                        ? gen.preview_url ?? primaryMediaUrl
+                                        : resolvePlaybackUrl({ url: primaryMediaUrl, renditionUrl: gen.media?.renditionUrl })
+                                    : null;
                                 return (
                                     <StudioCard
                                         key={gen.id}
                                         density="compact"
                                         testId={`creation-card-${gen.id}`}
+                                        anchorId={getGenerationCardAnchorId(gen.id)}
+                                        highlighted={highlightedGenerationId === gen.id}
                                         media={gen.source_unavailable_at ? (
                                             <UnavailableMediaNote testId={`creation-unavailable-${gen.id}`} />
-                                        ) : primaryMediaUrl ? (
+                                        ) : primaryMediaUrl && tileSrc ? (
                                             <CreationMediaFrame
                                                 key={primaryMediaUrl}
                                                 id={gen.id}
                                                 mediaKind={mediaKind}
-                                                src={isImage
-                                                    ? gen.preview_url ?? primaryMediaUrl
-                                                    : resolvePlaybackUrl({ url: primaryMediaUrl, renditionUrl: gen.media?.renditionUrl })}
+                                                src={tileSrc}
+                                                retrySrc={getFreshTileUrl(tileSrc, primaryMediaUrl)}
                                                 posterSrc={gen.preview_url}
                                                 alt={isImage ? 'Generated image' : `${badgeLabel} generation`}
                                                 outputCount={Math.max(outputUrls.length, gen.output_count ?? 0)}
@@ -1966,7 +2271,11 @@ export default function CreationsPage() {
                                         )}
                                         chips={(
                                             <>
-                                                {isTemplateResult ? <StudioChip tone="emerald">From template</StudioChip> : null}
+                                                {isTemplateResult ? (
+                                                    <StudioChip tone={endedRunStatus ? 'amber' : 'emerald'}>
+                                                        {endedRunStatus ? `From template · run ${endedRunStatus}` : 'From template'}
+                                                    </StudioChip>
+                                                ) : null}
                                                 <StudioChip tone={getPublishBadgeTone(publishBadgeLabel)}>{publishBadgeLabel}</StudioChip>
                                                 <StudioChip tone={getMonetizationBadgeTone(workspaceState.monetizationKind)}>{monetizationBadgeLabel}</StudioChip>
                                             </>
@@ -2092,11 +2401,17 @@ export default function CreationsPage() {
                         <div className={STUDIO_GRID_CLASS}>
                             {failedGenerations.map((gen) => {
                                 const failedTitle = getPreviewTitle(gen);
+                                // Settlement gives a failed run's credits back, so a refunded
+                                // run says so where its cost was; one that kept them shows it.
+                                const returnedCredits = getReturnedCreditsLabel(gen);
                                 return (
                                     <StudioCard
                                         key={gen.id}
                                         density="compact"
                                         tone="failed"
+                                        testId={`failed-card-${gen.id}`}
+                                        anchorId={getGenerationCardAnchorId(gen.id)}
+                                        highlighted={highlightedGenerationId === gen.id}
                                         media={(
                                             <div className="flex aspect-[4/5] items-center justify-center bg-black/60">
                                                 <span className="text-xs text-red-400/60">Generation failed</span>
@@ -2104,17 +2419,20 @@ export default function CreationsPage() {
                                         )}
                                         chips={<StudioChip tone="rose">Failed</StudioChip>}
                                         title={failedTitle}
+                                        subtitle={gen.error_message?.trim() || undefined}
                                         meta={[
                                             { label: 'Created', value: formatDate(gen.created_at) },
-                                            ...(gen.cost ? [{
-                                                label: 'Credits',
-                                                value: (
-                                                    <>
-                                                        <Zap className="h-3 w-3 text-zinc-500" />
-                                                        {gen.cost}
-                                                    </>
-                                                ),
-                                            }] : []),
+                                            ...(returnedCredits
+                                                ? [{ label: 'Refund', value: returnedCredits }]
+                                                : gen.cost ? [{
+                                                    label: 'Credits',
+                                                    value: (
+                                                        <>
+                                                            <Zap className="h-3 w-3 text-zinc-500" />
+                                                            {gen.cost}
+                                                        </>
+                                                    ),
+                                                }] : []),
                                         ]}
                                         menu={(
                                             <StudioOverflowMenu
@@ -2151,20 +2469,28 @@ export default function CreationsPage() {
                         <div className={STUDIO_GRID_CLASS}>
                             {archivedGenerations.map((gen) => {
                                 const archivedTitle = getPreviewTitle(gen);
+                                // A takedown archives the row too, and Restore refuses it
+                                // with "Creation not found.", so it is named and not offered.
+                                const isModerationRemoved = Boolean(gen.moderation_removed_at);
                                 return (
                                     <StudioCard
                                         key={gen.id}
                                         density="compact"
                                         tone="archived"
+                                        testId={`archived-card-${gen.id}`}
+                                        anchorId={getGenerationCardAnchorId(gen.id)}
+                                        highlighted={highlightedGenerationId === gen.id}
                                         media={(
                                             <div className="flex aspect-[4/5] items-center justify-center bg-black/60">
                                                 <Archive className="h-8 w-8 text-zinc-600" />
                                             </div>
                                         )}
-                                        chips={<StudioChip tone="muted">Archived</StudioChip>}
+                                        chips={isModerationRemoved
+                                            ? <StudioChip tone="rose">Removed by moderation</StudioChip>
+                                            : <StudioChip tone="muted">Archived</StudioChip>}
                                         title={archivedTitle}
                                         meta={[{ label: 'Created', value: formatDate(gen.created_at) }]}
-                                        actions={(
+                                        actions={isModerationRemoved ? undefined : (
                                             <button
                                                 type="button"
                                                 onClick={() => void handleGenerationRestore(gen.id)}
@@ -2481,6 +2807,7 @@ export default function CreationsPage() {
                 additionalMedia={previewGen ? getAdditionalPreviewMedia(previewGen) : []}
                 metadata={previewGen ? getPreviewMetadata(previewGen) : []}
                 actions={previewGen ? renderPreviewActions(previewGen) : null}
+                statusNote={previewGen ? getPreviewStatusNote(previewGen) : null}
             />
 
             <PublishToShowcaseModal
