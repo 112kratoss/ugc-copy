@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import contract from '../../contracts/template-run-media-v1.json';
 import { createApiClient } from '../lib/api-client';
+import { templateRunLinkedPost } from '../lib/media-templates';
+
+function apiAnswering(body: unknown) {
+  return createApiClient({ baseUrl: 'https://app.test', getAccessToken: async () => 'token', fetcher: async () => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } }) });
+}
 
 describe('template media wire contract', () => {
   it('absolutizes originals, playback and posters independently', async () => {
@@ -15,6 +20,16 @@ describe('template media wire contract', () => {
     const { run } = await api.getTemplateRun('old');
     expect(run.result).toMatchObject({ url: 'https://app.test/old.mp4', renditionUrl: null, previewUrl: null });
     expect(run.steps[0]).not.toHaveProperty('renditionUrl');
+  });
+  it('passes the post a result was published as through, and none when there is none', async () => {
+    const { run: unposted } = await apiAnswering(contract.response).getTemplateRun('contract-run');
+    expect(unposted.result).toHaveProperty('linkedPost', null);
+    expect(templateRunLinkedPost(unposted.result)).toBeNull();
+
+    const posted = { run: { ...contract.response.run, result: { ...contract.response.run.result, linkedPost: { id: 'post-1', visibility: 'public' } } } };
+    const { run } = await apiAnswering(posted).getTemplateRun('contract-run');
+    expect(run.result).toMatchObject({ url: 'https://app.test/original.mp4', linkedPost: { id: 'post-1', visibility: 'public' } });
+    expect(templateRunLinkedPost(run.result)).toEqual({ id: 'post-1', visibility: 'public' });
   });
 });
 
