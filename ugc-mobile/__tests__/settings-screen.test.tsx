@@ -9,8 +9,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 
 const authState = vi.hoisted(() => ({
+  api: { getContentPreferences: vi.fn() },
   credits: 120,
   user: { id: 'user-1', email: 'creator@example.com' } as { id: string; email: string } | null,
+}));
+
+const platform = vi.hoisted(() => ({ os: 'ios' as 'ios' | 'android' }));
+const contentPreferences = vi.hoisted(() => ({
+  query: { data: undefined as { showMature: boolean } | undefined, isError: false },
+  options: null as null | { queryKey: unknown; enabled: boolean; queryFn: unknown },
+}));
+
+vi.mock('@tanstack/react-query', () => ({
+  useQuery: (options: { queryKey: unknown; enabled: boolean; queryFn: unknown }) => {
+    contentPreferences.options = options;
+    return contentPreferences.query;
+  },
 }));
 
 const routerPush = vi.hoisted(() => vi.fn());
@@ -25,6 +39,11 @@ vi.mock('expo-router', () => ({
 
 vi.mock('react-native', () => ({
   Linking: { openURL: openUrl },
+  Platform: {
+    get OS() {
+      return platform.os;
+    },
+  },
   Pressable: ({ children, style: _style, ...props }: MockProps & { style?: unknown }) =>
     React.createElement('pressable', props, typeof children === 'function' ? (children as (s: { pressed: boolean }) => React.ReactNode)({ pressed: false }) : children),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
@@ -39,6 +58,7 @@ vi.mock('lucide-react-native', () => {
     ChevronRight: icon('ChevronRight'),
     CircleHelp: icon('CircleHelp'),
     CreditCard: icon('CreditCard'),
+    EyeOff: icon('EyeOff'),
     FileText: icon('FileText'),
     Gift: icon('Gift'),
     ShieldCheck: icon('ShieldCheck'),
@@ -136,6 +156,9 @@ beforeEach(() => {
   routerPush.mockClear();
   openUrl.mockClear();
   authState.user = { id: 'user-1', email: 'creator@example.com' };
+  platform.os = 'ios';
+  contentPreferences.query = { data: { showMature: false }, isError: false };
+  contentPreferences.options = null;
   versionLabel.value = VERSION_LABEL;
   updateRuntime.value = { runtimeVersion: null, channel: null };
   resetCreatorSessionForTests();
@@ -227,6 +250,7 @@ describe('settings screen (HIG S16)', () => {
     const tree = renderScreen();
     const links = rows(tree).filter((node) => node.props.accessibilityRole === 'link');
     expect(links.map((node) => String(node.props.accessibilityLabel).split('.')[0])).toEqual([
+      'Mature content',
       'Privacy policy',
       'Terms of service',
       'Child safety standards',
@@ -256,13 +280,14 @@ describe('settings screen (HIG S16)', () => {
   it('opens AI data sharing, whose row says whether prompts and media may go to AI services', () => {
     const notAllowed = rowByTitle(renderScreen(), 'AI data sharing');
     expect(notAllowed.props.accessibilityRole).toBe('button');
-    expect(notAllowed.props.accessibilityLabel).toContain('Not allowed. You’ll be asked before anything is sent to AI services.');
+    // The answer is kept on this phone, not on the account (D7).
+    expect(notAllowed.props.accessibilityLabel).toContain('Not allowed on this phone. You’ll be asked before anything is sent to AI services.');
     renderer.act(() => { (notAllowed.props.onPress as () => void)(); });
     expect(routerPush).toHaveBeenCalledWith('/ai-data-sharing');
 
     aiDataConsent.grantedAt = '2026-09-25T08:00:00.000Z';
     const allowed = rowByTitle(renderScreen(), 'AI data sharing');
-    expect(allowed.props.accessibilityLabel).toContain('Allowed. Your prompts and media go to AI services when you create.');
+    expect(allowed.props.accessibilityLabel).toContain('Allowed on this phone. Your prompts and media go to AI services when you create.');
   });
 
   // The one place a block can be taken back: a blocked creator is left out of everywhere else.
@@ -339,5 +364,48 @@ describe('settings screen (HIG S16)', () => {
     const tree = renderScreen();
     const texts = tree.root.findAll((node) => String(node.type) === 'text');
     expect(texts.some((node) => String(node.props.children).startsWith('Version'))).toBe(false);
+  });
+});
+
+// Someone who had turned mature content on could turn it off only from the next
+// mature post they opened (audit 04-9, D6).
+describe('settings screen — mature content', () => {
+  it("reads the signed-in account's setting", () => {
+    renderScreen();
+    expect(contentPreferences.options).toMatchObject({ queryKey: ['content-preferences', 'user-1'], enabled: true });
+    expect(contentPreferences.options?.queryFn).toBe(authState.api.getContentPreferences);
+  });
+
+  it('shows the setting on iOS without changing it, and sends a change to the website', () => {
+    const off = rowByTitle(renderScreen(), 'Mature content');
+    expect(off.props.accessibilityRole).toBe('link');
+    expect(off.props.accessibilityLabel).toBe('Mature content. Off. Mature posts stay covered. Change on the website.');
+    renderer.act(() => { (off.props.onPress as () => void)(); });
+    expect(openUrl).toHaveBeenCalledWith('https://site.example/profile');
+
+    contentPreferences.query = { data: { showMature: true }, isError: false };
+    expect(rowByTitle(renderScreen(), 'Mature content').props.accessibilityLabel)
+      .toBe('Mature content. On. Mature posts can be revealed one at a time. Change on the website.');
+  });
+
+  it('never guesses the setting while it is read, or when the read fails', () => {
+    contentPreferences.query = { data: undefined, isError: false };
+    expect(rowByTitle(renderScreen(), 'Mature content').props.accessibilityLabel)
+      .toBe('Mature content. Change on the website.');
+
+    contentPreferences.query = { data: undefined, isError: true };
+    expect(rowByTitle(renderScreen(), 'Mature content').props.accessibilityLabel)
+      .toBe('Mature content. Could not be checked. Change on the website.');
+  });
+
+  it('has no row on Android, which never reveals a mature post, or for a signed-out visitor', () => {
+    platform.os = 'android';
+    expect(() => rowByTitle(renderScreen(), 'Mature content')).toThrow('No settings row titled "Mature content"');
+    expect(contentPreferences.options).toBeNull();
+
+    platform.os = 'ios';
+    authState.user = null;
+    expect(() => rowByTitle(renderScreen(), 'Mature content')).toThrow('No settings row titled "Mature content"');
+    expect(contentPreferences.options).toBeNull();
   });
 });

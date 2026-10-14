@@ -27,8 +27,14 @@ import { nativeMenuTouchGuardProps } from '@/lib/native-menu-shield';
 import { SignOutOverlay } from '@/components/sign-out-overlay';
 import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
 import { useOtaUpdateGate } from '@/lib/use-ota-update-gate';
-import { setSessionMergedHandler, setSessionRejectedHandler, setUpgradeRequiredHandler } from '@/lib/api-client';
-import { AuthProvider, useAuth } from '@/lib/auth';
+import {
+  setAccountDeletingHandler,
+  setSessionMergedHandler,
+  setSessionRejectedHandler,
+  setUpgradeRequiredHandler,
+} from '@/lib/api-client';
+import { ACCOUNT_DELETION_SCHEDULED_NOTICE, AuthProvider, useAuth } from '@/lib/auth';
+import { showMessageDialog } from '@/lib/dialog';
 import { notificationBadgeQueryKey } from '@/lib/notification-badge';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { readAppVersionParts } from '@/lib/app-version-label';
@@ -218,6 +224,7 @@ function RootLayoutNav() {
           <UpgradeRequiredCoordinator />
           <SessionMergedCoordinator />
           <SessionRejectedCoordinator />
+          <AccountDeletingCoordinator />
           <OtaUpdateCoordinator />
           <MediaDiagnosticsCoordinator />
           <SafeAreaProvider>
@@ -564,6 +571,34 @@ function SessionRejectedCoordinator() {
       });
     });
     return () => setSessionRejectedHandler(null);
+  }, []);
+
+  return null;
+}
+
+function AccountDeletingCoordinator() {
+  // Ends the session of an account the server is deleting (409
+  // ACCOUNT_DELETING), asked for on another device or by a request whose answer
+  // this phone never saw, and says why the person is now a guest on Home.
+  // Registered here for the same reason as SessionMergedCoordinator.
+  const { leaveDeletingAccount } = useAuth();
+  const leaveRef = useRef(leaveDeletingAccount);
+
+  useEffect(() => {
+    leaveRef.current = leaveDeletingAccount;
+  }, [leaveDeletingAccount]);
+
+  useEffect(() => {
+    setAccountDeletingHandler(() => {
+      void leaveRef.current()
+        .then((ended) => {
+          if (ended) showMessageDialog(ACCOUNT_DELETION_SCHEDULED_NOTICE);
+        })
+        .catch((error) => {
+          console.warn('Could not end the session of the account being deleted', error);
+        });
+    });
+    return () => setAccountDeletingHandler(null);
   }, []);
 
   return null;
