@@ -6,6 +6,7 @@ import type {
   TemplateInputSlot,
   TemplateMediaKind,
   TemplateRun,
+  TemplateRunLinkedPost,
   TemplateRunStatus,
   TemplateRunStep,
 } from './types';
@@ -212,6 +213,18 @@ function normalizeSteps(run: UnknownRecord): TemplateRunStep[] {
   ].filter((step): step is TemplateRunStep => Boolean(step));
 }
 
+/**
+ * A post whose visibility is not one we know still counts as posted, and as
+ * private: offering Publish again would overwrite it.
+ */
+function normalizeLinkedPost(value: unknown): TemplateRunLinkedPost | null {
+  const post = asRecord(value);
+  const id = nullableString(post, ['id']);
+  if (!id) return null;
+  const visibility = post.visibility === 'public' || post.visibility === 'unlisted' ? post.visibility : 'private';
+  return { id, visibility };
+}
+
 function normalizeInputs(value: unknown): Record<string, string> {
   if (Array.isArray(value)) {
     return Object.fromEntries(value.flatMap((item, index) => {
@@ -261,6 +274,7 @@ export function normalizeTemplateRun(value: unknown): TemplateRun {
       url: resultUrl,
       ...(resultRecord.renditionUrl !== undefined ? { renditionUrl: nullableString(resultRecord, ['renditionUrl']) } : {}),
       ...(resultRecord.previewUrl !== undefined ? { previewUrl: nullableString(resultRecord, ['previewUrl']) } : {}),
+      ...(resultRecord.linkedPost !== undefined ? { linkedPost: normalizeLinkedPost(resultRecord.linkedPost) } : {}),
     } : null,
     estimatedTotalCredits: numberValue(run, ['estimatedTotalCredits', 'estimated_total_credits']),
     estimatedRemainingCredits: numberValue(run, ['estimatedRemainingCredits', 'estimated_remaining_credits'])

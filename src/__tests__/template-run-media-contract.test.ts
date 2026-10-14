@@ -11,7 +11,17 @@ describe('template media wire contract', () => {
   it('accepts older responses without derivatives', () => {
     const run = normalizeTemplateRun({ run: { id: 'old', steps: [{ id: 'step', outputUrl: '/old.mp4', mediaKind: 'video' }], result: { kind: 'video', url: '/old.mp4' } } });
     expect(run.result).not.toHaveProperty('renditionUrl');
+    expect(run.result).not.toHaveProperty('linkedPost');
     expect(run.steps[0]).not.toHaveProperty('previewUrl');
+  });
+  it('carries the post made from the result, and counts a post of unknown visibility as private', () => {
+    const withPost = (linkedPost: unknown) => normalizeTemplateRun({
+      run: { ...contract.response.run, result: { ...contract.response.run.result, linkedPost } },
+    }).result?.linkedPost;
+    expect(withPost({ id: 'post-1', visibility: 'unlisted' })).toEqual({ id: 'post-1', visibility: 'unlisted' });
+    expect(withPost({ id: 'post-1', visibility: 'archived' })).toEqual({ id: 'post-1', visibility: 'private' });
+    expect(withPost({ visibility: 'public' })).toBeNull();
+    expect(withPost(null)).toBeNull();
   });
 });
 

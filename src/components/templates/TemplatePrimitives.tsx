@@ -48,6 +48,7 @@ import {
   isStepBusy,
   isStepCutShort,
   isStepFailed,
+  isStepStalled,
   isStepSuccessful,
 } from './types';
 
@@ -425,13 +426,13 @@ function StepMedia({
       </div>
     );
   }
-  if (isStepFailed(step)) {
+  if (isStepFailed(step) || isStepStalled(runStatus, step)) {
     return (
       <div className="flex h-full min-h-52 flex-col items-center justify-center gap-3 px-6 text-center text-rose-100">
         <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-rose-300/20 bg-rose-400/10">
           <AlertTriangle className="h-5 w-5" aria-hidden />
         </div>
-        <span className="text-sm font-bold">No result was created</span>
+        <span className="text-sm font-bold">{isStepFailed(step) ? 'No result was created' : 'This step did not start'}</span>
         <span className="max-w-xs text-xs font-medium leading-5 text-zinc-400">Your uploads and completed steps are still saved.</span>
       </div>
     );
@@ -465,7 +466,7 @@ function stepPill(
   // What is left on a run that has ended failed by itself, and cannot be retried.
   if (runStatus !== undefined && isRunTerminal(runStatus)) return { label: 'Failed', accent: 'video' };
   if (isStepAwaitingApproval(step)) return { label: 'Review', accent: 'commerce' };
-  if (isStepFailed(step)) return { label: 'Needs attention', accent: 'video' };
+  if (isStepFailed(step) || isStepStalled(runStatus, step)) return { label: 'Needs attention', accent: 'video' };
   if (isStepBusy(step)) return { label: 'In progress', accent: 'video' };
   return { label: step.status.replaceAll('_', ' '), accent: 'neutral' };
 }
@@ -502,6 +503,7 @@ export function TemplateRunStepCard({
   const cutShort = isStepCutShort(runStatus, step);
   const showApprove = isStepAwaitingApproval(step) && !runEnded;
   const isFailed = isStepFailed(step) && !cutShort;
+  const stalled = isStepStalled(runStatus, step);
   const isServiceMisconfigured = isFailed && step.failureCode === 'service_misconfigured';
   const requiresNewInput = isFailed && requiresReplacementGenerationInput({
     code: step.failureCode,
@@ -510,7 +512,7 @@ export function TemplateRunStepCard({
   const showRetry = step.canRetry
     && !runEnded
     && !requiresNewInput
-    && (isStepAwaitingApproval(step) || isFailed);
+    && (isStepAwaitingApproval(step) || isFailed || stalled);
   const unfinishedTitle = step.kind === 'approval' ? 'This review was not completed' : 'This generation did not finish';
   const mediaAspect = !step.outputUrl ? '16 / 9' : step.mediaKind === 'video' ? '16 / 10' : '4 / 5';
   const knownRetryCost = step.estimatedRetryCredits !== null ? step.estimatedRetryCredits : null;
@@ -580,6 +582,13 @@ export function TemplateRunStepCard({
               body={step.errorMessage || (runStatus === 'cancelled'
                 ? 'The run was cancelled before this step finished.'
                 : 'The run stopped before this step finished.')}
+              className="mt-5"
+            />
+          ) : stalled ? (
+            <StatusCallout
+              tone="warning"
+              title="This step did not start"
+              body="Retry it to continue. Earlier completed steps are safe."
               className="mt-5"
             />
           ) : step.errorMessage ? (
@@ -657,7 +666,7 @@ export function TemplateRunStepCard({
                 ) : null}
                 {showRetry && missingRetryCredits === 0 ? (
                   <Button
-                    variant={isFailed ? 'primary' : 'secondary'}
+                    variant={isFailed || stalled ? 'primary' : 'secondary'}
                     icon={busyAction === 'retry' ? Loader2 : RefreshCw}
                     disabled={disabled}
                     onClick={requestRetry}
