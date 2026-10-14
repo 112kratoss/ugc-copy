@@ -495,18 +495,21 @@ describe('PostComments', () => {
         vi.stubGlobal('fetch', server.fetchMock);
         vi.spyOn(window, 'confirm').mockReturnValue(true);
 
+        // Sixty comments are drawn and re-read here, so under a loaded runner each step
+        // can take longer than the default one-second wait (main's Quality run missed
+        // it twice on 2026-10-13/14 while the PR runs passed).
         render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={61} />);
-        await screen.findByText('Comment 20');
+        await screen.findByText('Comment 20', undefined, { timeout: 5000 });
         fireEvent.click(screen.getByRole('button', { name: 'Load more comments' }));
-        await screen.findByText('Comment 40');
+        await screen.findByText('Comment 40', undefined, { timeout: 5000 });
         fireEvent.click(screen.getByRole('button', { name: 'Load more comments' }));
-        await screen.findByText('Comment 60');
+        await screen.findByText('Comment 60', undefined, { timeout: 5000 });
         expect(threadItems()).toHaveLength(60);
         server.reads.length = 0;
 
         fireEvent.click(screen.getByRole('button', { name: 'Delete your comment' }));
-        await waitFor(() => expect(server.reads).toHaveLength(2));
-        await screen.findByRole('button', { name: 'Load more comments' });
+        await waitFor(() => expect(server.reads).toHaveLength(2), { timeout: 5000 });
+        await screen.findByRole('button', { name: 'Load more comments' }, { timeout: 5000 });
 
         // Everything loaded is read again from the top, 50 at a time (the
         // server's cap), rather than page 1 alone.
@@ -519,7 +522,7 @@ describe('PostComments', () => {
 
         // "Load more" picks up at the shifted offset: nothing skipped or repeated.
         fireEvent.click(screen.getByRole('button', { name: 'Load more comments' }));
-        expect(await screen.findByText('Comment 61')).toBeInTheDocument();
+        expect(await screen.findByText('Comment 61', undefined, { timeout: 5000 })).toBeInTheDocument();
         expect(server.reads.at(-1)?.offset).toBe(59);
         expect(threadItems()).toHaveLength(60);
     });
