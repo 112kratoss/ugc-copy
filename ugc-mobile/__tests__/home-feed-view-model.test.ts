@@ -123,6 +123,22 @@ describe('home feed view model', () => {
       expect(cards.map((card) => card.id)).toEqual(['post-1', 'text-post']);
     });
 
+    it('names the model after the category as the web card does, never a slug', () => {
+      // Mirrors the web's getPostModelDisplayName cases (post-feed-presentation.test.ts).
+      expect(showcaseToHomeFeedCard(item({ model: 'imagen-4' })).modelLabel).toBe('Imagen 4');
+      expect(showcaseToHomeFeedCard(item({ model: 'magicbooklet' })).modelLabel).toBeNull();
+      expect(showcaseToHomeFeedCard(item({ model: 'manual' })).modelLabel).toBeNull();
+      expect(showcaseToHomeFeedCard(item({ model: 'some-unknown-model' })).modelLabel).toBeNull();
+      expect(showcaseToHomeFeedCard(item({ model: undefined })).modelLabel).toBeNull();
+      expect(showcaseToHomeFeedCard(item({
+        model: 'imagen-4',
+        postFormat: 'text',
+        mediaUrl: null,
+        mediaKind: null,
+        body: 'A note with no media.',
+      })).modelLabel).toBeNull();
+    });
+
     it('renders a mixed post as title plus body plus media', () => {
       const card = showcaseToHomeFeedCard(item({
         postFormat: 'mixed',

@@ -90,6 +90,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   return (
     <FeedCardShell
       categoryLabel={card.categoryLabel}
+      modelLabel={card.modelLabel}
       creatorAvatar={card.creatorAvatar}
       creatorLabel={card.creatorLabel}
       creatorName={card.creatorName}
