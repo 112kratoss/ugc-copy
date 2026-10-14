@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseClient from '@/app/showcase/ShowcaseClient';
 import {
+  FEED_REMOVAL_UNDO_MS,
   flushShowcaseFeedEvents,
   resetShowcaseFeedEventQueueForTests,
 } from '@/app/showcase/ShowcaseFeedInteraction';
@@ -20,7 +21,9 @@ import {
   buildShowcaseClientCacheKey,
   clearShowcaseClientCacheForTests,
   forgetShowcaseSnapshotsInMemoryForTests,
+  getFeedPreferencesHiddenThisVisit,
   readShowcaseClientSnapshot,
+  rememberViewerExclusionsForVisit,
   takeBlockedCreatorOffClientFeeds,
   writeShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
@@ -3249,6 +3252,222 @@ describe('ShowcaseClient save actions', () => {
 
       expect(screen.getByText('Blocked Frame')).toBeInTheDocument();
       await waitFor(() => expect(exclusionRequests()).toHaveLength(1));
+    });
+  });
+
+  // Undo for Not interested and Hide (D7, 2026-10-14): the tile's cell offers
+  // it for five seconds; the tile comes back to its cell.
+  describe('Undo', () => {
+    const thirdCreator = { id: 'creator-3', username: 'third-creator', name: 'Third Creator', avatar: null };
+    // Three tiles by three creators: Hide takes one tile.
+    const frames = [
+      createShowcaseItem({ id: 'post-a', generationId: 'gen-a', title: 'Frame A' }),
+      createShowcaseItem({ id: 'post-b', generationId: 'gen-b', title: 'Frame B', creator: otherCreator }),
+      createShowcaseItem({ id: 'post-c', generationId: 'gen-c', title: 'Frame C', creator: thirdCreator }),
+    ];
+    /** The grid's cells in order: each tile by its post, and the row where one left. */
+    const gridCells = () => Array.from(
+      document.querySelectorAll('[data-showcase-post-id], [role="group"][aria-label$=" hidden"]'),
+      (cell) => cell.getAttribute('data-showcase-post-id') ?? 'Hidden · Undo',
+    );
+    const undoRequests = () => vi.mocked(fetch).mock.calls
+      .filter(([input]) => String(input) === '/api/showcase/feed/feedback/undo');
+    function answer({ storeHide = Promise.resolve(), removed = true }: { storeHide?: Promise<void>; removed?: boolean } = {}) {
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/showcase/feed/events') {
+          await storeHide;
+          return { ok: true, json: async () => ({ success: true }) };
+        }
+        if (url === '/api/showcase/feed/feedback/undo') {
+          return { ok: true, json: async () => ({ ok: true, removed }) };
+        }
+        return { ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) };
+      }));
+    }
+
+    it("shows Hidden · Undo in the tile's cell for five seconds, then lets the removal stand", async () => {
+      answer();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      renderShowcase(frames);
+      expect(gridCells()).toEqual(['post-a', 'post-b', 'post-c']);
+
+      chooseFromTileMenu('Frame B', /not interested/i);
+
+      expect(gridCells()).toEqual(['post-a', 'Hidden · Undo', 'post-c']);
+      expect(screen.queryByText('Frame B')).not.toBeInTheDocument();
+      await act(async () => undefined);
+      expect(screen.getByRole('status')).toHaveTextContent(/show you fewer posts like that/i);
+
+      act(() => vi.advanceTimersByTime(FEED_REMOVAL_UNDO_MS - 1));
+      expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(1));
+
+      expect(gridCells()).toEqual(['post-a', 'post-c']);
+      expect(undoRequests()).toEqual([]);
+    });
+
+    it('puts the tile back in its cell, takes the preference back once the hide is stored, and forgets it for the visit', async () => {
+      let storeHide: () => void = () => undefined;
+      answer({ storeHide: new Promise<void>((resolve) => { storeHide = resolve; }) });
+      // What the tab learned of this viewer's own Not interested.
+      rememberViewerExclusionsForVisit('user-1', { blockedCreatorIds: [], hiddenCreatorIds: [], hiddenPostIds: ['post-b'] });
+      renderShowcase(frames);
+
+      chooseFromTileMenu('Frame B', /not interested/i);
+      fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+
+      expect(gridCells()).toEqual(['post-a', 'post-b', 'post-c']);
+      expect(getFeedPreferencesHiddenThisVisit('user-1').postIds.has('post-b')).toBe(false);
+      // The hide is still on its way: a delete now could land first.
+      await act(async () => undefined);
+      expect(undoRequests()).toEqual([]);
+
+      await act(async () => storeHide());
+
+      await waitFor(() => expect(undoRequests()).toHaveLength(1));
+      const [, init] = undoRequests()[0];
+      expect(init?.headers).toEqual(expect.objectContaining({ Authorization: 'Bearer test-token' }));
+      expect(JSON.parse(String(init?.body))).toEqual({ feedbackType: 'not_interested', postId: 'post-b' });
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('takes back the word that the post was hidden along with the post', async () => {
+      answer();
+      renderShowcase(frames);
+
+      chooseFromTileMenu('Frame A', /not interested/i);
+      expect(await screen.findByRole('status')).toHaveTextContent(/show you fewer posts like that/i);
+      fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+      await waitFor(() => expect(undoRequests()).toHaveLength(1));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it("keeps a guest's Undo on the page and sends nothing", async () => {
+      authState.session = null;
+      authState.user = null;
+      answer();
+      renderShowcase(frames);
+
+      chooseFromTileMenu('Frame A', /not interested/i);
+      expect(gridCells()).toEqual(['Hidden · Undo', 'post-b', 'post-c']);
+      fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+      await act(async () => undefined);
+
+      expect(gridCells()).toEqual(['post-a', 'post-b', 'post-c']);
+      expect(undoRequests()).toEqual([]);
+    });
+
+    it("keeps the tile and says so when the server kept the preference", async () => {
+      answer({ removed: false });
+      renderShowcase(frames);
+
+      chooseFromTileMenu('Frame C', /hide @/i);
+      expect(gridCells()).toEqual(['post-a', 'post-b', 'Hidden · Undo']);
+      fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('We couldn’t undo that. It stays hidden on your next visit.');
+      expect(gridCells()).toEqual(['post-a', 'post-b', 'post-c']);
+    });
+  });
+
+  // "New posts" (D2, 2026-10-14): on a return to the tab five minutes or more
+  // after For you came, the newest-post probe is asked, and only the pill's
+  // tap asks for a page.
+  describe('New posts', () => {
+    const OPENED_AT = Date.parse('2026-03-28T12:00:00.000Z');
+    let visibility: DocumentVisibilityState = 'visible';
+    const setVisibility = (next: DocumentVisibilityState) => {
+      visibility = next;
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+    };
+    const comeBackAfter = async (minutes: number) => {
+      setVisibility('hidden');
+      vi.setSystemTime(OPENED_AT + minutes * 60_000);
+      setVisibility('visible');
+      await act(async () => undefined);
+    };
+    const laneRequests = () => vi.mocked(fetch).mock.calls.filter(([input]) => String(input).startsWith('/api/showcase/feed?'));
+    const probeRequests = () => vi.mocked(fetch).mock.calls.filter(([input]) => String(input).startsWith('/api/showcase/feed/newest'));
+    const renderLane = (sort: ShowcaseSort) => render(
+      <ShowcaseClient
+        initialFeed={createFeed(createShowcaseItem())}
+        initialCategory="all"
+        initialSort={sort}
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(OPENED_AT);
+      visibility = 'visible';
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/showcase/feed/newest')) {
+          return { ok: true, json: async () => ({ newestPostId: 'post-new', newestPublishedAt: '2026-03-29T08:00:00.000Z' }) };
+        }
+        if (url.startsWith('/api/showcase/feed?')) {
+          return {
+            ok: true,
+            json: async () => createFeed(laneRequests().length > 1
+              ? [createShowcaseItem({ id: 'post-new', generationId: 'gen-new', title: 'Newest Frame' }), createShowcaseItem()]
+              : createShowcaseItem()),
+          };
+        }
+        return { ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) };
+      }));
+    });
+
+    afterEach(() => {
+      delete (document as { visibilityState?: DocumentVisibilityState }).visibilityState;
+      Reflect.deleteProperty(window, 'scrollY');
+    });
+
+    it('shows on a return to For you five minutes after it came, asks for no page, and its tap refreshes from the top', async () => {
+      renderLane('for-you');
+      // The viewer's own For you page, as every signed-in visit asks for it.
+      await waitFor(() => expect(laneRequests()).toHaveLength(1));
+      await act(async () => undefined);
+
+      await comeBackAfter(4);
+      expect(probeRequests()).toEqual([]);
+
+      await comeBackAfter(10);
+      const pill = await screen.findByRole('button', { name: 'New posts' });
+      expect(probeRequests()).toHaveLength(1);
+      const [probeUrl, probeInit] = probeRequests()[0];
+      expect(String(probeUrl)).toBe('/api/showcase/feed/newest?category=media');
+      expect(probeInit?.headers).toBeUndefined();
+      expect(laneRequests()).toHaveLength(1);
+
+      Object.defineProperty(window, 'scrollY', { configurable: true, value: 900 });
+      fireEvent.click(pill);
+
+      expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+      expect(screen.queryByRole('button', { name: 'New posts' })).not.toBeInTheDocument();
+      expect(await screen.findByText('Newest Frame')).toBeInTheDocument();
+      expect(laneRequests()).toHaveLength(2);
+      expect(laneRequests()[1][1]).toEqual({ headers: { Authorization: 'Bearer test-token' } });
+    });
+
+    it('never asks about Recent', async () => {
+      renderLane('recent');
+      await act(async () => undefined);
+
+      await comeBackAfter(30);
+
+      expect(probeRequests()).toEqual([]);
+      expect(screen.queryByRole('button', { name: 'New posts' })).not.toBeInTheDocument();
     });
   });
 });

@@ -8,11 +8,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createFeedCardAttention,
   FEED_DWELL_MAX_MS,
+  FeedRemovalUndoRow,
   flushShowcaseFeedEvents,
+  putBackRemovedFeedItems,
   QualifiedImpressionBoundary,
   resetShowcaseFeedEventQueueForTests,
+  sendShowcaseFeedEvent,
   sendShowcaseResourceOpenEvent,
   ShowcaseFeedbackMenu,
+  undoShowcaseFeedFeedback,
+  undoShowcaseFeedFeedbackAfterHide,
   useFeedCardTelemetry,
   type FeedCardTelemetry,
 } from '@/app/showcase/ShowcaseFeedInteraction';
@@ -871,5 +876,121 @@ describe('QualifiedImpressionBoundary attention', () => {
     });
 
     expect(sentEvents().map((event) => event.eventType)).toEqual(['impression']);
+  });
+});
+
+// Undo for Not interested and Hide (product decision D7, 2026-10-14): a
+// preference delete, sent with the bearer, after the hide it takes back.
+describe('taking back Not interested and Hide', () => {
+  const settle = () => new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+  const requestedUrls = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls.map(([url]) => String(url));
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetShowcaseFeedEventQueueForTests();
+  });
+
+  it('asks the undo route with the bearer, and reads whether a row went', async () => {
+    const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+      async () => new Response(JSON.stringify({ ok: true, removed: true })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(undoShowcaseFeedFeedback('token-1', { feedbackType: 'hide_creator', creatorId: 'creator-1' }))
+      .resolves.toEqual({ removed: true });
+    const [url, request] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/showcase/feed/feedback/undo');
+    expect(request?.method).toBe('POST');
+    expect(request?.headers).toEqual(expect.objectContaining({ Authorization: 'Bearer token-1' }));
+    expect(JSON.parse(String(request?.body))).toEqual({ feedbackType: 'hide_creator', creatorId: 'creator-1' });
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, removed: false })));
+    await expect(undoShowcaseFeedFeedback('token-1', { feedbackType: 'not_interested', postId: 'post-1' }))
+      .resolves.toEqual({ removed: false });
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 }));
+    await expect(undoShowcaseFeedFeedback('token-1', { feedbackType: 'not_interested', postId: 'post-1' }))
+      .rejects.toThrow('401');
+  });
+
+  it("sends the undo once the hide's own request has settled, and nothing for a hide that was not stored", async () => {
+    let answerHide: (response: Response) => void = () => undefined;
+    const fetchMock = vi.fn(async (url: string) => (url === '/api/showcase/feed/events'
+      ? new Promise<Response>((resolve) => { answerHide = resolve; })
+      : new Response(JSON.stringify({ ok: true, removed: true }))));
+    vi.stubGlobal('fetch', fetchMock);
+    const target = { feedbackType: 'not_interested', postId: 'post-1' } as const;
+
+    const hideRequest = sendShowcaseFeedEvent({
+      item: createShowcaseItem(),
+      eventType: 'not_interested',
+      sourceSurface: 'feed',
+      accessToken: 'token-1',
+    }).then(() => true, () => false);
+    // Sent at once, never held in the queue the watch events wait in.
+    expect(requestedUrls(fetchMock)).toEqual(['/api/showcase/feed/events']);
+
+    const undone = undoShowcaseFeedFeedbackAfterHide({ hideRequest, accessToken: 'token-1', target });
+    await settle();
+    // A delete beside the hide could land first and find nothing to take back.
+    expect(requestedUrls(fetchMock)).toEqual(['/api/showcase/feed/events']);
+
+    answerHide(new Response(JSON.stringify({ success: true })));
+    await expect(undone).resolves.toBe(true);
+    expect(requestedUrls(fetchMock)).toEqual(['/api/showcase/feed/events', '/api/showcase/feed/feedback/undo']);
+
+    fetchMock.mockClear();
+    await expect(undoShowcaseFeedFeedbackAfterHide({ hideRequest: Promise.resolve(false), accessToken: 'token-1', target }))
+      .resolves.toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('answers false when the server kept the preference, or could not be asked', async () => {
+    const target = { feedbackType: 'hide_creator', creatorId: 'creator-1' } as const;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, removed: false }))));
+    await expect(undoShowcaseFeedFeedbackAfterHide({ hideRequest: Promise.resolve(true), accessToken: 'token-1', target }))
+      .resolves.toBe(false);
+
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    await expect(undoShowcaseFeedFeedbackAfterHide({ hideRequest: Promise.resolve(true), accessToken: 'token-1', target }))
+      .resolves.toBe(false);
+  });
+
+  it('puts removed posts back where they were', () => {
+    const [first, second, third, fourth] = ['first', 'second', 'third', 'fourth'].map((id) => ({ id }));
+
+    expect(putBackRemovedFeedItems([second, fourth], [{ item: first, index: 0 }, { item: third, index: 2 }]))
+      .toEqual([first, second, third, fourth]);
+    // One already back by another way stays where it is.
+    expect(putBackRemovedFeedItems([first, second, fourth], [{ item: first, index: 0 }, { item: third, index: 2 }]))
+      .toEqual([first, second, third, fourth]);
+    // A list that got shorter meanwhile takes it at its end.
+    expect(putBackRemovedFeedItems([first], [{ item: fourth, index: 3 }])).toEqual([first, fourth]);
+  });
+
+  it("offers Undo in the card's place, and takes the focus the card's menu took away with it", () => {
+    const onUndo = vi.fn();
+    render(<FeedRemovalUndoRow label="Posts from Creator Name hidden" onUndo={onUndo} />);
+
+    expect(screen.getByRole('group', { name: 'Posts from Creator Name hidden' })).toHaveTextContent('Hidden · Undo');
+    const undo = screen.getByRole('button', { name: 'Undo' });
+    expect(undo).toHaveFocus();
+
+    fireEvent.click(undo);
+    expect(onUndo).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the focus where the reader has put it', () => {
+    const { rerender } = render(<button type="button">Elsewhere</button>);
+    screen.getByRole('button', { name: 'Elsewhere' }).focus();
+
+    rerender(
+      <>
+        <button type="button">Elsewhere</button>
+        <FeedRemovalUndoRow label="Post hidden" onUndo={() => undefined} />
+      </>
+    );
+
+    expect(screen.getByRole('button', { name: 'Elsewhere' })).toHaveFocus();
   });
 });

@@ -276,6 +276,115 @@ export async function sendShowcaseFeedEvent({
 }
 
 /**
+ * How long a card's place offers Undo after Not interested or Hide (product
+ * decision D7, 2026-10-14), as long as the app's notice offers it. After it
+ * the removal stands.
+ */
+export const FEED_REMOVAL_UNDO_MS = 5_000;
+
+/** What an Undo takes back (`POST /api/showcase/feed/feedback/undo`). */
+export type ShowcaseFeedbackUndoTarget =
+  | { feedbackType: 'not_interested'; postId: string }
+  | { feedbackType: 'hide_creator'; creatorId: string };
+
+/**
+ * A card just taken out by Not interested or Hide, while its place offers
+ * Undo. The posts it took out are kept with the places they held, so Undo puts
+ * them back where they were.
+ */
+export interface FeedRemoval<TItem> {
+  /** This removal; the next one lets it stand. */
+  id: number;
+  /** The card whose place shows the row. */
+  postId: string;
+  /** What the row tells assistive technology was hidden. */
+  label: string;
+  target: ShowcaseFeedbackUndoTarget;
+  /** Every post the choice took out, at its index in the list then. */
+  removed: Array<{ item: TItem; index: number }>;
+  /** Where the row stands among what is left: Home's cards, Explore's tiles. */
+  rowIndex: number;
+  /** The hide's own request, true once stored; null when nothing was sent. */
+  hideRequest: Promise<boolean> | null;
+}
+
+/** What the row's group is called for assistive technology: what the choice hid. */
+export function feedRemovalLabel(action: ShowcaseFeedbackAction, creatorName: string): string {
+  return action === 'hide_creator' ? `Posts from ${creatorName} hidden` : 'Post hidden';
+}
+
+/**
+ * Puts removed posts back where they were, the first first, so each index is
+ * the one it had among the posts before it. One that came back by another way
+ * is left where it is.
+ */
+export function putBackRemovedFeedItems<TItem extends { id: string }>(
+  items: TItem[],
+  removed: ReadonlyArray<{ item: TItem; index: number }>,
+): TItem[] {
+  const restored = [...items];
+  removed.forEach(({ item, index }) => {
+    if (!restored.some((candidate) => candidate.id === item.id)) {
+      restored.splice(Math.min(index, restored.length), 0, item);
+    }
+  });
+  return restored;
+}
+
+/**
+ * Takes back the viewer's own Not interested or Hide. It is a preference
+ * delete, not a feed event: the event and its delivery stay in the ranker's
+ * facts. The route reads the bearer token, as the events route that wrote the
+ * row does, and refuses a cookie alone. `removed` is false when the server
+ * held no such row. Throws when the request fails.
+ */
+export async function undoShowcaseFeedFeedback(
+  accessToken: string,
+  target: ShowcaseFeedbackUndoTarget,
+): Promise<{ removed: boolean }> {
+  const response = await fetch('/api/showcase/feed/feedback/undo', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(target),
+  });
+  if (!response.ok) {
+    throw new Error(`Feed preference undo failed with ${response.status}`);
+  }
+  const body = await response.json().catch(() => null) as { removed?: unknown } | null;
+  return { removed: body?.removed === true };
+}
+
+/**
+ * Undo, once the hide it takes back has settled. Not interested and Hide are
+ * sent at once, never queued (`BATCHED_EVENT_TYPES` leaves them out), so the
+ * hide is on its way or done: a delete sent beside it could land first, find
+ * nothing, and leave the event to write the row after it. A hide that was not
+ * stored leaves nothing to take back. True when nothing of it stands.
+ */
+export async function undoShowcaseFeedFeedbackAfterHide({
+  hideRequest,
+  accessToken,
+  target,
+}: {
+  hideRequest: Promise<boolean>;
+  accessToken: string;
+  target: ShowcaseFeedbackUndoTarget;
+}): Promise<boolean> {
+  if (!(await hideRequest)) return true;
+  try {
+    return (await undoShowcaseFeedFeedback(accessToken, target)).removed;
+  } catch {
+    return false;
+  }
+}
+
+/** What the viewer reads when Undo put the post back on screen but the server kept the preference. */
+export const FEED_UNDO_FAILED_MESSAGE = 'We couldn’t undo that. It stays hidden on your next visit.';
+
+/**
  * What a feed card reports about the attention it was given beyond its
  * impression: how long it was read (`dwell`) and how far its inline video
  * played (`media_progress`). `createFeedCardAttention` is the bookkeeping, pure
@@ -913,6 +1022,51 @@ export function ShowcaseFeedbackMenu({
       </button>
 
       {isOpen ? (usesPortal && anchor && typeof document !== 'undefined' ? createPortal(menu, document.body) : menu) : null}
+    </div>
+  );
+}
+
+/**
+ * What a card's place shows for `FEED_REMOVAL_UNDO_MS` after Not interested or
+ * Hide: the card is gone, and Undo brings it back where it was (D7). Compact,
+ * and no status: the notice the feed shows says what was done.
+ */
+export function FeedRemovalUndoRow({
+  label,
+  onUndo,
+  className = '',
+}: {
+  label: string;
+  onUndo: () => void;
+  className?: string;
+}) {
+  const undoRef = useRef<HTMLButtonElement | null>(null);
+  // The menu that was used sat in the card that left, and focus left with it.
+  // It lands on Undo, the one thing there is to do here, not at the page's top.
+  useEffect(() => {
+    const active = document.activeElement;
+    if (!active || active === document.body) {
+      undoRef.current?.focus({ preventScroll: true });
+    }
+  }, []);
+
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className={`flex min-h-14 items-center justify-center gap-2 rounded-[1.25rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-4 text-sm text-[var(--ui-text-muted)] ${className}`}
+    >
+      {/* The spaces read "Hidden · Undo" as text; a flex row lays out by its gap and drops them. */}
+      <span>Hidden</span>{' '}
+      <span aria-hidden="true">·</span>{' '}
+      <button
+        ref={undoRef}
+        type="button"
+        onClick={onUndo}
+        className="ui-focus-ring inline-flex min-h-11 items-center rounded-full px-3 font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-2)]"
+      >
+        Undo
+      </button>
     </div>
   );
 }

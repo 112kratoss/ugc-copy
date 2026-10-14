@@ -69,6 +69,7 @@
 @source "../components/JsonLd.tsx";
 @source "../components/MediaDetailsPreviewModal.tsx";
 @source "../components/NavigationProgress.tsx";
+@source "../components/NewPostsPill.tsx";
 @source "../components/OptimizedPreviewImage.tsx";
 @source "../components/PostCommentAvatar.tsx";
 @source "../components/PostComments.tsx";
