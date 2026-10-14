@@ -40,6 +40,7 @@ import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
 import { AppSchemeScope } from '@/components/app-scheme-scope';
 import { CommentsSheet } from '@/components/comments-sheet';
+import { FeedUndoNotice, type FeedUndoNoticeModel } from '@/components/feed-undo-notice';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { ViewerActionsMenuProvider } from '@/components/viewer-actions-menu';
 import type { ViewerActionCallbacks } from '@/lib/use-viewer-action-handlers';
@@ -102,13 +103,21 @@ import {
   SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
   buildShowcaseFeedEventRequest,
   canRecordShowcaseFeedEvent,
+  createShowcaseFeedClientEventId,
+  feedFeedbackUndoMessage,
   filterAnonymousSessionShowcaseFeedItems,
+  findShowcaseFeedItemPositions,
   forgetAnonymousShowcaseFeedRemoval,
   getQualifiedImpressionKey,
   rememberAnonymousShowcaseFeedRemoval,
   removeShowcaseFeedItems,
   removeShowcaseFeedItemsFromInfiniteData,
+  restoreShowcaseFeedItemsToInfiniteData,
+  trackFeedFeedbackRequest,
+  undoFeedFeedback,
   type ShowcaseFeedEventDetails,
+  type ShowcaseFeedFeedbackTarget,
+  type ShowcaseFeedFeedbackType,
   type ShowcaseFeedRemovalTarget,
 } from '@/lib/showcase-feed-events';
 import { getReelEndSlideState, readViewerLane, type ReelEndSlideState } from '@/lib/showcase-feed-lane';
@@ -273,6 +282,8 @@ function ImmersivePreviewViewer() {
   // create screen — and the tap has to look like it landed for both.
   const [remixingItemId, setRemixingItemId] = useState<string | null>(null);
   const [ownerActionPending, setOwnerActionPending] = useState<string | null>(null);
+  // The Undo offered after Not interested or Hide; one at a time (`dismissRecommendation`).
+  const [undoNotice, setUndoNotice] = useState<FeedUndoNoticeModel | null>(null);
   const [isHorizontalScrolling, setIsHorizontalScrolling] = useState(false);
   const qualifiedImpressionsRef = useRef(new Set<string>());
   const skipInitialRankedFeedRefreshRef = useRef(Boolean(routeFeedSessionId));
@@ -1066,16 +1077,23 @@ function ImmersivePreviewViewer() {
    * and every feed lane, and moves the reader on to the next post that stays.
    * The target is chosen from the reel's own list before anything is removed
    * (`pickViewerItemAfterRemoval`). Returns whether any post is left, and how
-   * to put everything back for a removal the server then refuses.
+   * to put the posts back: for a removal the server then refuses, and for an
+   * Undo (product decision D7, 2026-10-14).
+   *
+   * They go back to the indices they left, in the lists as those are by then.
+   * Copies of the lists taken here would also take back what came after the
+   * removal: a page loaded, a save, another removal that stands. An Undo
+   * comes seconds later, held for as long as a screen reader runs.
    */
   const removeFromReel = (target: ShowcaseFeedRemovalTarget) => {
     const next = pickViewerItemAfterRemoval(items, activeIndex, (candidate) => isRemovedFromViewer(candidate, target));
-    const previous = {
-      position: savedPosition,
-      ordered: sessionItems.ordered,
-      sourceData: queryClient.getQueryData<ImmersiveSourceData>(sourceQueryKey),
-      feeds: queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({ queryKey: viewerFeedQueryKey }),
-    };
+    const positionBefore = savedPosition;
+    const removedFromReel = indexedEntries(sessionItems.ordered, (item) => isRemovedFromViewer(item, target));
+    const sourceShowcaseItems = queryClient.getQueryData<ImmersiveSourceData>(sourceQueryKey)?.showcaseItems ?? [];
+    const keptInSource = new Set(removeShowcaseFeedItems(sourceShowcaseItems, target));
+    const removedFromSource = indexedEntries(sourceShowcaseItems, (item) => !keptInSource.has(item));
+    const removedFromLanes = queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({ queryKey: viewerFeedQueryKey })
+      .map(([cachedQueryKey, cachedData]) => [cachedQueryKey, findShowcaseFeedItemPositions(cachedData, target)] as const);
     if (next) setSavedPosition(initialViewerPosition(next));
     setSessionItems((current) => ({ ...current, ordered: removeViewerSessionItems(current.ordered, target) }));
     queryClient.setQueryData<ImmersiveSourceData>(sourceQueryKey, (data) => data ? {
@@ -1088,45 +1106,60 @@ function ImmersivePreviewViewer() {
     );
     return {
       remaining: Boolean(next),
+      // Puts the posts back and the reader on the one they were on. Running it
+      // twice puts nothing back twice.
       restore: () => {
-        queryClient.setQueryData(sourceQueryKey, previous.sourceData);
-        previous.feeds.forEach(([cachedQueryKey, cachedData]) => {
-          queryClient.setQueryData(cachedQueryKey, cachedData);
+        // Only the caches a post left: writing one dates it as fetched now.
+        if (removedFromSource.length) {
+          queryClient.setQueryData<ImmersiveSourceData>(sourceQueryKey, (data) => data ? {
+            ...data,
+            showcaseItems: putBackAtIndices(data.showcaseItems ?? [], removedFromSource),
+          } : data);
+        }
+        removedFromLanes.forEach(([cachedQueryKey, positions]) => {
+          if (!positions.length) return;
+          queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(
+            cachedQueryKey,
+            (data) => restoreShowcaseFeedItemsToInfiniteData(data, positions)
+          );
         });
-        setSessionItems((current) => ({ ...current, ordered: previous.ordered }));
-        setSavedPosition(previous.position);
+        setSessionItems((current) => ({ ...current, ordered: putBackAtIndices(current.ordered, removedFromReel) }));
+        setSavedPosition(positionBefore);
       },
     };
   };
 
+  const dismissUndoNotice = (id: string) => setUndoNotice((current) => (current?.id === id ? null : current));
+
   const dismissRecommendation = (
     item: ImmersivePreviewItem,
-    eventType: 'not_interested' | 'hide_creator'
+    eventType: ShowcaseFeedFeedbackType
   ) => {
     if (!item.showcasePostId) return;
     if (eventType === 'hide_creator' && (!item.creatorId || item.creatorId === user?.id)) return;
     const target = eventType === 'hide_creator' && item.creatorId
       ? { creatorId: item.creatorId }
       : { postId: item.showcasePostId };
+    const feedbackTarget: ShowcaseFeedFeedbackTarget = { ...target, feedbackType: eventType };
+    const noticeId = createShowcaseFeedClientEventId();
+    // Set when the choice failed to send and the post was put back and said
+    // so. An Undo pressed while it was on its way then has nothing to report.
+    const sendOutcome = { restored: false };
 
     if (!user) rememberAnonymousShowcaseFeedRemoval(target);
 
     setActionsOpenItemId(null);
     const removal = removeFromReel(target);
-    void submitViewerFeedEvent(item, eventType)
+    // Tracked so an Undo waits for it: sent first, the delete could land
+    // before the row it deletes. The notice speaks for a choice that went
+    // through (VoiceOver announces it, TalkBack reads its live region).
+    void trackFeedFeedbackRequest(feedbackTarget, submitViewerFeedEvent(item, eventType))
       .then(() => {
-        void AccessibilityInfo.announceForAccessibility(eventType === 'hide_creator'
-          ? user
-            ? `${item.creatorLabel} hidden from your feed.`
-            : `${item.creatorLabel} hidden for this visit.`
-          : user
-            ? 'Post removed. Your feed will adapt.'
-            : 'Post removed for this visit.');
-        if (!removal.remaining) {
-          requestAnimationFrame(leaveViewer);
-        }
+        if (!removal.remaining) requestAnimationFrame(leaveViewer);
       })
       .catch(() => {
+        sendOutcome.restored = true;
+        dismissUndoNotice(noticeId);
         if (!user) forgetAnonymousShowcaseFeedRemoval(target);
         removal.restore();
         showMessageDialog({
@@ -1137,6 +1170,27 @@ function ImmersivePreviewViewer() {
           'Couldn’t update your feed. The post was restored.'
         );
       });
+    // Undo for five seconds (D7). The session is the identity's, a guest's
+    // included: a guest's choice is stored under its id and taken back there;
+    // a device with no session undoes from its own memory and sends nothing.
+    // A removal that empties the reel leaves it and offers none, as before; a
+    // notice still up from an earlier choice goes with it, and that one stands.
+    setUndoNotice(removal.remaining ? {
+      id: noticeId,
+      message: feedFeedbackUndoMessage(eventType),
+      onUndo: () => {
+        void undoFeedFeedback(api, feedbackTarget, { hasSession: Boolean(identityUserId) })
+          .then(() => removal.restore())
+          .catch(() => {
+            if (sendOutcome.restored) return;
+            haptic.error();
+            showMessageDialog({
+              title: 'Couldn’t undo',
+              message: 'It is still hidden. Check your connection and try again.',
+            });
+          });
+      },
+    } : null);
   };
 
   // A report went through: the post leaves the reel and the reader moves on,
@@ -1481,6 +1535,14 @@ function ImmersivePreviewViewer() {
       )}
       </>
       ) : null}
+      {/* Undo after Not interested or Hide. The reel has no tab bar, so it
+          stands just above the safe area, over the caption, under the rail;
+          part of the chrome, so a close into the tile fades it with the rest. */}
+      <FeedUndoNotice
+        notice={undoNotice}
+        onDismiss={dismissUndoNotice}
+        bottomOffset={bottomInset + appTheme.spacing.gap}
+      />
       </MediaZoomChrome>
       <AppSchemeScope>
       {activeItem ? (
@@ -1633,6 +1695,33 @@ function leaveViewer() {
     return;
   }
   router.replace('/(tabs)/showcase' as never);
+}
+
+/** The entries of a list a removal takes out, each with the index it held. */
+function indexedEntries<T>(list: readonly T[], taken: (entry: T) => boolean) {
+  return list.flatMap((item, index) => (taken(item) ? [{ index, item }] : []));
+}
+
+/**
+ * Puts entries a removal took out of a list back at the indices they held,
+ * lowest first so each lands where it was before any of them left, as
+ * `restoreShowcaseFeedItemsToInfiniteData` does for a lane's pages. One the
+ * list holds again is not added twice.
+ */
+function putBackAtIndices<T extends { id: string }>(list: T[], removed: readonly { index: number; item: T }[]) {
+  const held = new Set(list.map((entry) => entry.id));
+  const returning: { index: number; item: T }[] = [];
+  for (const entry of removed) {
+    if (held.has(entry.item.id)) continue;
+    held.add(entry.item.id);
+    returning.push(entry);
+  }
+  if (!returning.length) return list;
+  const next = [...list];
+  for (const { index, item } of returning.sort((left, right) => left.index - right.index)) {
+    next.splice(Math.min(index, next.length), 0, item);
+  }
+  return next;
 }
 
 /**

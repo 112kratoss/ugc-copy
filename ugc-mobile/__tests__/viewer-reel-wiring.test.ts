@@ -75,6 +75,13 @@ describe('Not interested, Hide, Report and Block move the reader on', () => {
     expect(viewer).not.toContain('Math.min(current, remainingItems.length - 1)');
   });
 
+  // D1 (2026-10-14): an app guest's choice is kept under its own id, so nothing
+  // the reel says may call it a visit's. The Undo notice announces the choice.
+  // Behaviour: `viewer-reel-actions.test.tsx`, "Undo after Not interested or Hide".
+  it('says nothing of a visit about a choice', () => {
+    expect(viewer).not.toContain('for this visit');
+  });
+
   it('uses it for a report as for a dismissal', () => {
     expect(slice('const dismissRecommendation = (', 'removal.restore();')).toContain('const removal = removeFromReel(target);');
     expect(slice('const takeOutReportedPost = (reported: ImmersivePreviewItem) => {', '};'))
