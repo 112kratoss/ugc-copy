@@ -424,6 +424,7 @@ export default function LoginClient({
                             <button
                                 type="submit"
                                 disabled={loading}
+                                aria-describedby={!isLogin ? 'signup-agreement' : undefined}
                                 className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 {loading ? (
@@ -435,6 +436,19 @@ export default function LoginClient({
                                     isLogin ? 'Sign in' : 'Create account'
                                 )}
                             </button>
+
+                            {/* A new account agrees to the terms, and learns where its prompts go, before it exists; the app says the same on its sign-in screen. */}
+                            {!isLogin ? (
+                                <p id="signup-agreement" className="text-center text-xs leading-5 text-[var(--ui-text-muted)]">
+                                    By continuing you agree to the{' '}
+                                    <Link href="/terms" prefetch={false} className="font-bold text-[var(--ui-text-secondary)] underline underline-offset-2 hover:text-[var(--ui-text-primary)]">Terms</Link>
+                                    {' '}and the{' '}
+                                    <Link href="/privacy" prefetch={false} className="font-bold text-[var(--ui-text-secondary)] underline underline-offset-2 hover:text-[var(--ui-text-primary)]">Privacy Policy</Link>
+                                    . Prompts and media you generate are processed by the AI providers{' '}
+                                    <Link href="/privacy#ai-processing" prefetch={false} className="font-bold text-[var(--ui-text-secondary)] underline underline-offset-2 hover:text-[var(--ui-text-primary)]">listed in the policy</Link>
+                                    .
+                                </p>
+                            ) : null}
                         </form>
 
                         <div className="relative my-8">

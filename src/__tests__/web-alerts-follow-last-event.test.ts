@@ -21,9 +21,12 @@ describe("web Alerts follow each alert's last event", () => {
     ]);
   });
 
+  // `web-alerts-page.test.tsx` draws the rows in the server's order across a
+  // refresh and an older page; this holds the source to never re-order them.
   it('lists the alerts in the order the server sent them', () => {
     expect(ordering.direction).toBe('descending');
-    expect(alertsPage).toContain('setNotifications(data.notifications || []);');
+    expect(alertsPage).toContain('const newest: WebNotification[] = data.notifications || [];');
+    expect(alertsPage).toContain('const older: WebNotification[] = data.notifications || [];');
     expect(alertsPage).not.toMatch(/\.(?:sort|toSorted|reverse|toReversed)\(/);
   });
 });
