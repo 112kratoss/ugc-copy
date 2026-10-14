@@ -4,17 +4,16 @@ import {
   FEED_FAST_COAST_PT_PER_MS,
   FEED_PREPARED_WINDOW_STEP_MS,
   SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS,
-  SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS,
 } from './media-performance';
 import {
   isShowcaseVideoPreviewCandidate,
   selectActiveShowcaseVideoIds,
-  selectPreparedShowcaseVideoIds,
 } from './showcase-display';
 import {
   INITIAL_SHOWCASE_ACTIVATION_STATE,
   reduceShowcaseActivation,
   sameStringList,
+  selectPreparedActivationIds,
   SHOWCASE_SETTLE_CONFIRM_MS,
   type ShowcaseActivationEvent,
 } from './showcase-feed-activation';
@@ -70,7 +69,8 @@ export function fastCoastHoldMs(releaseVelocity: number | undefined) {
  *   player and unmounting a released one are the native view changes that cost
  *   a frame, so none of them shares a commit with the election or with each
  *   other. Releases go before mounts, so live players never exceed one playing
- *   plus `SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS`, plus one waiting out its
+ *   plus the autoplay policy's prepared limit (`SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS`
+ *   on Wi-Fi, 0 on mobile data under "Wi-Fi only"), plus one waiting out its
  *   release grace.
  *
  * The election itself touches only the winner and the video it takes over
@@ -222,11 +222,9 @@ export function createHomeFeedPlaybackController(store: FeedVideoActivationStore
       return;
     }
     const { activeIds, preparedIds } = store.snapshot();
-    const target = selectPreparedShowcaseVideoIds(
-      items,
-      { viewableIds, anchorIds, activeIds },
-      SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS,
-    );
+    // The autoplay policy's limit: 0 on mobile data under "Wi-Fi only", so
+    // nothing is prepared ahead and what is prepared is released.
+    const target = selectPreparedActivationIds(activation, items, { viewableIds, anchorIds, activeIds });
     const range = anchorIds.length ? anchorIds : viewableIds;
     const gap = (id: string) => videoGap(items, id, range);
     const release = (id: string) => {
@@ -235,7 +233,7 @@ export function createHomeFeedPlaybackController(store: FeedVideoActivationStore
     };
 
     // Players the reader has left behind go first, always.
-    const distant = preparedIds.find((id) => !target.includes(id) && gap(id) > KEPT_VIDEO_GAP);
+    const distant = preparedIds.find((id) => !target.includes(id) && (activation.preparedLimit === 0 || gap(id) > KEPT_VIDEO_GAP));
     if (distant !== undefined) {
       release(distant);
       return;
@@ -246,7 +244,7 @@ export function createHomeFeedPlaybackController(store: FeedVideoActivationStore
       builtFor = [...builtFor.filter((id) => !anchorIds.includes(id)), ...anchorIds].slice(-2);
       return;
     }
-    const hasRoom = new Set([...activeIds, ...preparedIds]).size < SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS + SHOWCASE_MAX_PREPARED_VIDEO_PREVIEWS;
+    const hasRoom = new Set([...activeIds, ...preparedIds]).size < SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS + activation.preparedLimit;
     const reached = missing.find((id) => anchorIds.includes(id));
     const movedOn = anchorIds.some((id) => !builtFor.includes(id));
     if (!hasRoom && reached === undefined && !movedOn) return;

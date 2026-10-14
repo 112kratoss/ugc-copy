@@ -159,6 +159,22 @@ describe('Home feed playback', () => {
     disconnect();
   });
 
+  // Autoplay previews, Wi-Fi only, on mobile data: the screen dispatches the
+  // policy, and the election waits for rest even where a player has drawn.
+  it('hands over only at rest once the autoplay policy says so, drawn neighbour or not', () => {
+    const { store, controller, disconnect } = restingOnB();
+    controller.dispatch({ type: 'policyChanged', electOnlyAtRest: true, preparedLimit: 0 });
+    controller.dispatch({ type: 'dragBegin' });
+    controller.dispatch(see('c'));
+    // On Wi-Fi 'c' starts here (above); now 'b' keeps the slot until rest.
+    expect(store.snapshot().activeIds).toEqual(['b']);
+    store.setReady('d', true);
+    expect(store.snapshot().activeIds).toEqual(['b']);
+    controller.dispatch({ type: 'dragEnd', velocityY: 0 });
+    expect(store.snapshot().activeIds).toEqual(['c']);
+    disconnect();
+  });
+
   it('elects a cold winner only once the feed rests', () => {
     const { store, controller, disconnect } = restingOnB(['b']);
     controller.dispatch({ type: 'dragBegin' });

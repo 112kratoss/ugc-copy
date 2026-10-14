@@ -98,6 +98,11 @@ vi.mock('@/lib/dialog', () => ({ showMessageDialog }));
 
 const aiDataConsent = vi.hoisted(() => ({ grantedAt: null as string | null }));
 
+// The Playback row is the real one; nothing has been stored yet.
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: { getItem: vi.fn(async () => null), setItem: vi.fn(async () => undefined) },
+}));
+
 vi.mock('@/lib/ai-data-consent', () => ({
   useAiDataConsent: () => ({ hydrated: true, grantedAt: aiDataConsent.grantedAt }),
 }));
@@ -136,16 +141,30 @@ beforeEach(() => {
   resetCreatorSessionForTests();
 });
 
+function radioGroups(tree: renderer.ReactTestRenderer) {
+  return tree.root.findAll((node) => String(node.type) === 'view' && node.props.accessibilityRole === 'radiogroup');
+}
+
+function radioOptions(tree: renderer.ReactTestRenderer, group: string) {
+  return radioGroups(tree)
+    .filter((node) => node.props.accessibilityLabel === group)
+    .flatMap((node) => node.findAll((child) => String(child.type) === 'pressable' && child.props.accessibilityRole === 'radio'));
+}
+
 function appearanceOptions(tree: renderer.ReactTestRenderer) {
-  return tree.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityRole === 'radio');
+  return radioOptions(tree, 'Appearance');
+}
+
+function groupLabels(tree: renderer.ReactTestRenderer) {
+  return tree.root.findAll((node) => String(node.type) === 'text' && node.props.variant === 'label' && node.props.color === 'muted')
+    .map((node) => node.props.children);
 }
 
 describe('settings screen — appearance', () => {
   it('offers System, Light and Dark as one radio group, checked by the stored choice', () => {
     appearance.preference = 'light';
     const tree = renderScreen();
-    const group = tree.root.find((node) => String(node.type) === 'view' && node.props.accessibilityRole === 'radiogroup');
-    expect(group.props.accessibilityLabel).toBe('Appearance');
+    expect(radioGroups(tree).map((node) => node.props.accessibilityLabel)).toEqual(['Appearance', 'Autoplay previews']);
 
     const options = appearanceOptions(tree);
     expect(options.map((node) => node.props.accessibilityLabel)).toEqual(['System', 'Light', 'Dark']);
@@ -175,6 +194,23 @@ describe('settings screen — appearance', () => {
     appearance.available = false;
     const tree = renderScreen();
     expect(appearanceOptions(tree)).toHaveLength(0);
+  });
+});
+
+describe('settings screen — playback', () => {
+  it('groups Autoplay previews under Playback, between Display and Privacy', () => {
+    const tree = renderScreen();
+    expect(groupLabels(tree)).toEqual(['Account', 'Display', 'Playback', 'Privacy', 'Support & legal']);
+    const autoplay = radioOptions(tree, 'Autoplay previews');
+    expect(autoplay.map((node) => node.props.accessibilityLabel)).toEqual(['Wi-Fi only', 'Always', 'Never']);
+    expect(autoplay.map((node) => node.props.accessibilityState.checked)).toEqual([true, false, false]);
+  });
+
+  it('keeps Playback on a binary that still pins the app dark', () => {
+    appearance.available = false;
+    const tree = renderScreen();
+    expect(groupLabels(tree)).toEqual(['Account', 'Playback', 'Privacy', 'Support & legal']);
+    expect(radioOptions(tree, 'Autoplay previews')).toHaveLength(3);
   });
 });
 
