@@ -30,6 +30,7 @@ import {
   type TemplateInputSlot,
   type TemplateMediaKind,
   type TemplateRunDto,
+  type TemplateRunLinkedPostDto,
   type TemplateRunStatus,
   type TemplateVersionSnapshot,
 } from '@/lib/media-template-types';
@@ -103,6 +104,10 @@ const TEMPLATE_STEP_REFUSED_MESSAGE =
 // new row too.
 const TEMPLATE_STEP_REFUSED_FOR_GOOD_MESSAGE =
   'This step could not be started because of a problem on our side, and retrying it will not help. No credits were used for it. Start a new run to try again.';
+// What a step the worker tries again by itself says while it waits. The
+// provider's own words ask for a retry, which is offered only once the wait
+// is over.
+const TEMPLATE_STEP_BUSY_WAIT_MESSAGE = 'The provider is busy. We\'ll keep trying for up to 30 minutes.';
 const MAX_IDEMPOTENCY_KEY_LENGTH = 256;
 const ACTIVE_GENERATION_STATUSES = new Set(['pending', 'waiting', 'processing']);
 const TERMINAL_RUN_STATUSES = new Set<TemplateRunStatus>(['succeeded', 'failed', 'cancelled']);
@@ -297,6 +302,23 @@ function stepBusySince(step: TemplateRunStepRow): number | null {
   return Number.isFinite(time) ? time : null;
 }
 
+/**
+ * Whether a step is the attempt a retry by hand wrote when the write that sets
+ * its run going again was lost. The worker leaves a run that waits on the
+ * person alone, and a client that read the run again knows only this attempt,
+ * so retrying it is what sets the run going. The caller passes the latest
+ * attempt of its node. An attempt 0 has not been tried and waits on the steps
+ * before it; one waiting out a busy provider is the worker's to try.
+ */
+function isStrandedRetryAttempt(run: Pick<TemplateRunRow, 'status'>, step: TemplateRunStepRow) {
+  return step.kind === 'generation'
+    && step.status === 'queued'
+    && step.attempt > 0
+    && step.can_retry
+    && stepBusySince(step) === null
+    && (run.status === 'needs_attention' || run.status === 'awaiting_approval');
+}
+
 async function loadOwnedRun(client: SupabaseClient, runId: string, userId: string): Promise<TemplateRunRow> {
   const { data, error } = await client.from('template_runs').select(RUN_SELECT)
     .eq('id', runId).eq('user_id', userId).maybeSingle();
@@ -344,6 +366,32 @@ async function loadRunState(client: SupabaseClient, runId: string, userId: strin
   };
 }
 
+/**
+ * The post the owner made from a run's result. A post deleted after it sold
+ * is kept as a tombstone for its buyers and counts as gone. A failed read
+ * leaves the run without it rather than failing the whole run read.
+ */
+async function loadLinkedResultPost(
+  client: SupabaseClient,
+  ownerId: string,
+  generationId: string,
+): Promise<TemplateRunLinkedPostDto | null> {
+  const { data, error } = await client.from('posts').select('id, visibility, archived_at, tombstoned_at')
+    .eq('generation_id', generationId).eq('user_id', ownerId).maybeSingle();
+  if (error) {
+    logBackendError('template_run_linked_post_unavailable', { generationId, error });
+    return null;
+  }
+  const post = data as {
+    id: string;
+    visibility: TemplateRunLinkedPostDto['visibility'];
+    archived_at: string | null;
+    tombstoned_at: string | null;
+  } | null;
+  if (!post || post.tombstoned_at) return null;
+  return { id: post.id, visibility: post.archived_at ? 'private' : post.visibility };
+}
+
 function generationCredits(generations: Iterable<GenerationRow>): number {
   let credits = 0;
   for (const generation of generations) {
@@ -364,13 +412,17 @@ async function toRunDto(client: SupabaseClient, state: RunState): Promise<Templa
     const step = state.latestSteps.get(node.id);
     return step ? [step] : [];
   });
-  const media = await resolveTemplateRunMedia({
-    client, ownerId: state.run.user_id, runId: state.run.id, generations: state.generations.values(),
-    outputs: [
-      ...orderedLatestSteps.map((step) => ({ url: step.output_url, generationId: step.generation_id, kind: step.media_kind })),
-      { url: state.run.result_url, generationId: state.run.result_generation_id, kind: state.run.output_kind },
-    ],
-  });
+  const resultGenerationId = state.run.result_generation_id;
+  const [media, linkedPost] = await Promise.all([
+    resolveTemplateRunMedia({
+      client, ownerId: state.run.user_id, runId: state.run.id, generations: state.generations.values(),
+      outputs: [
+        ...orderedLatestSteps.map((step) => ({ url: step.output_url, generationId: step.generation_id, kind: step.media_kind })),
+        { url: state.run.result_url, generationId: resultGenerationId, kind: state.run.output_kind },
+      ],
+    }),
+    resultGenerationId ? loadLinkedResultPost(client, state.run.user_id, resultGenerationId) : null,
+  ]);
   const steps = orderedLatestSteps.map((step, index) => ({
     id: step.id,
     kind: step.kind,
@@ -382,7 +434,8 @@ async function toRunDto(client: SupabaseClient, state: RunState): Promise<Templa
     ...(media[index].previewUrl ? { previewUrl: media[index].previewUrl } : {}),
     errorMessage: step.error_message,
     failureCode: stepFailureCode(step),
-    canRetry: step.can_retry && (step.status === 'failed' || step.status === 'awaiting_approval'),
+    canRetry: (step.can_retry && (step.status === 'failed' || step.status === 'awaiting_approval'))
+      || isStrandedRetryAttempt(state.run, step),
     estimatedRetryCredits: Math.max(0, step.estimated_credits),
   }));
   const resultMedia = media[orderedLatestSteps.length];
@@ -396,13 +449,14 @@ async function toRunDto(client: SupabaseClient, state: RunState): Promise<Templa
     inputSlots,
     inputs: publicInputs,
     steps,
-    result: resultUrl && state.run.result_generation_id
+    result: resultUrl && resultGenerationId
       ? {
-        generationId: state.run.result_generation_id,
+        generationId: resultGenerationId,
         kind: state.run.output_kind,
         url: resultUrl,
         ...(resultMedia.renditionUrl ? { renditionUrl: resultMedia.renditionUrl } : {}),
         ...(resultMedia.previewUrl ? { previewUrl: resultMedia.previewUrl } : {}),
+        linkedPost,
       }
       : null,
     estimatedTotalCredits: Math.max(0, state.run.estimated_total_credits),
@@ -1432,13 +1486,13 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
         }
         if (retryAsNextAttempt) {
           await insertRetryStep(client, step, {
-            error_message: failure.message,
+            error_message: TEMPLATE_STEP_BUSY_WAIT_MESSAGE,
             output_snapshot: outputSnapshot,
           });
         }
         await client.from('template_run_steps').update({
           status: stepStatus,
-          error_message: failure.message,
+          error_message: stepStatus === 'queued' ? TEMPLATE_STEP_BUSY_WAIT_MESSAGE : failure.message,
           output_snapshot: outputSnapshot,
           finished_at: stepStatus === 'failed' ? new Date().toISOString() : null,
         }).eq('id', step.id);
@@ -1485,6 +1539,24 @@ async function removeTemplateRunInputs(
     return false;
   }
   return true;
+}
+
+/**
+ * A run that ends without its result still leaves what the person paid for in
+ * their library: the output of every generation step that finished, earlier
+ * attempts included. A creator's test run stays on the canvas, as its result
+ * does. Returns the database's error when it refused the read or the write.
+ */
+async function keepFinishedStepOutputs(client: SupabaseClient, run: Pick<TemplateRunRow, 'id' | 'is_test'>) {
+  if (run.is_test) return null;
+  const { data, error } = await client.from('template_run_steps').select('id')
+    .eq('run_id', run.id).eq('kind', 'generation').eq('status', 'succeeded');
+  if (error) return error;
+  const stepIds = ((data ?? []) as Array<Pick<TemplateRunStepRow, 'id'>>).map((step) => step.id);
+  if (!stepIds.length) return null;
+  const { error: keepError } = await client.from('generations').update({ studio_visible: true })
+    .eq('template_run_id', run.id).in('template_run_step_id', stepIds).eq('status', 'succeeded');
+  return keepError;
 }
 
 async function cleanupTemplateRunInputs(client: SupabaseClient, state: RunState) {
@@ -1694,6 +1766,10 @@ export async function retryTemplateRunStep(params: {
       'STALE_STEP_ATTEMPT',
     );
   }
+  if (isStrandedRetryAttempt(state.run, step)) {
+    await resumeGenerationRetry(params.adminClient, state.run.id);
+    return toRunDto(params.adminClient, await loadRunState(params.adminClient, state.run.id, params.userId));
+  }
   if (!step.can_retry || !['failed', 'awaiting_approval'].includes(step.status)) {
     throw new MediaTemplateError('This step cannot be retried right now.', 409, 'STEP_NOT_RETRYABLE');
   }
@@ -1769,9 +1845,10 @@ export async function cancelTemplateRun(client: SupabaseClient, runId: string, u
         logBackendError('failed_to_synchronize_template_generations', { error: error });
       }
       state = await loadRunState(client, runId, userId);
-      await refreshGenerationSteps(client, state);
-      state = await loadRunState(client, runId, userId);
     }
+    // A generation can finish before a pass of the worker records it on its
+    // step, so this runs whether or not one was still active.
+    await refreshGenerationSteps(client, state);
     const now = new Date().toISOString();
     // A run that could not be cancelled keeps its steps: closing them would
     // leave it in progress with nothing left to run. The person can ask again.
@@ -1796,6 +1873,8 @@ export async function cancelTemplateRun(client: SupabaseClient, runId: string, u
       error_message: TEMPLATE_CANCELLED_MID_GENERATION_MESSAGE,
     }).eq('run_id', state.run.id).eq('status', 'processing');
     if (generatingError) logBackendError('template_run_cancel_cleanup_failed', { runId, error: generatingError });
+    const keepError = await keepFinishedStepOutputs(client, state.run);
+    if (keepError) logBackendError('template_run_cancel_cleanup_failed', { runId, error: keepError });
   }
   const cancelledState = await loadRunState(client, runId, userId);
   return toRunDto(client, await cleanupTemplateRunInputs(client, cancelledState));
@@ -1830,10 +1909,11 @@ export async function abandonTemplateRun(params: {
   }).eq('id', runId).eq('user_id', userId)
     .in('status', ['queued', 'processing'])
     .lt('updated_at', params.idleBefore)
-    .select('id, user_id, input_storage_paths')
+    .select('id, user_id, input_storage_paths, is_test')
     .maybeSingle();
   if (error) throw error;
   if (!ended) return false;
+  const endedRun = ended as unknown as Pick<TemplateRunRow, 'id' | 'user_id' | 'input_storage_paths' | 'is_test'>;
 
   // The run has ended. What follows tidies it, and none of it undoes that.
   try {
@@ -1861,10 +1941,9 @@ export async function abandonTemplateRun(params: {
       error_message: TEMPLATE_ABANDONED_MID_GENERATION_MESSAGE,
     }).eq('run_id', runId).eq('status', 'processing');
     if (generatingError) logBackendError('template_run_abandon_cleanup_failed', { runId, error: generatingError });
-    await removeTemplateRunInputs(
-      client,
-      ended as unknown as Pick<TemplateRunRow, 'id' | 'user_id' | 'input_storage_paths'>,
-    );
+    const keepError = await keepFinishedStepOutputs(client, endedRun);
+    if (keepError) logBackendError('template_run_abandon_cleanup_failed', { runId, error: keepError });
+    await removeTemplateRunInputs(client, endedRun);
   } catch (cleanupError) {
     logBackendError('template_run_abandon_cleanup_failed', { runId, error: cleanupError });
   }

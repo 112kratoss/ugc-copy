@@ -125,6 +125,8 @@ export function createTemplateRunDatabase(options: { credits?: number } = {}) {
     template_run_steps: steps,
     generations: [],
     profiles: [profile],
+    // A run read looks up the post made from its result.
+    posts: [],
   };
   const rpcCalls: Array<{ fn: string; args: Row; status: string | null; error: string | null }> = [];
   /** The uploads storage was asked to delete. */
@@ -517,6 +519,7 @@ export function createTemplateRunDatabase(options: { credits?: number } = {}) {
     removedInputs,
     run,
     generations: tables.generations,
+    posts: tables.posts,
     steps: tables.template_run_steps,
     credits: () => profile.credits as number,
     /** Every attempt of each image step, oldest attempt first, in the order the worker starts the steps. */

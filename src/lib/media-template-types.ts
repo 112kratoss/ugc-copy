@@ -115,12 +115,22 @@ export type TemplateRunStepDto = {
   estimatedRetryCredits: number;
 };
 
+/** The post its owner made from a run's result. An archived post reads
+ * `private`: it is off every public surface, so there is no link to share. */
+export type TemplateRunLinkedPostDto = {
+  id: string;
+  visibility: 'public' | 'unlisted' | 'private';
+};
+
 export type TemplateRunResultDto = {
   renditionUrl?: string | null;
   previewUrl?: string | null;
   generationId: string;
   kind: TemplateMediaKind;
   url: string;
+  /** Null when the result has no post. A client offers this post instead of
+   * publishing the result again, which would write over the post. */
+  linkedPost: TemplateRunLinkedPostDto | null;
 };
 
 /** Consumer-safe run contract. Step IDs are database UUIDs; graph node IDs and
