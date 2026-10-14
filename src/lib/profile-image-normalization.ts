@@ -2,6 +2,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
 
 import { logBackendWarning } from '@/lib/backend-logger';
+import { assertStoredPreviewIsIntact } from '@/lib/media-preview-integrity';
+import { getMediaContentHash } from '@/lib/media-preview-metadata';
+import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 import { toStorageUploadBody } from '@/lib/storage-upload-body';
 
 /**
@@ -35,6 +38,8 @@ export const PROFILE_IMAGE_MAX_EDGE = {
 } as const;
 
 export type ProfileImageRole = keyof typeof PROFILE_IMAGE_MAX_EDGE;
+
+const PROFILE_IMAGE_BUCKET = 'profiles';
 
 /**
  * Every screen draws a cover as a wide strip, and the web editor frames it at
@@ -72,21 +77,163 @@ export function getProfileImageRole(filePath: string): ProfileImageRole | null {
   return null;
 }
 
+const NORMALIZED_PROFILE_IMAGE_NAME = /\.normalized\.[0-9a-f]{16}\.webp$/;
+
 /**
- * Resizes a freshly uploaded profile image in place when it is larger than its
- * role needs, and cuts a cover to its 40:9 frame.
+ * Where the normalised copy of a profile upload lives: beside it, as
+ * `<name without extension>.normalized.<content hash>.webp`.
  *
- * In place, at the same path, on purpose: the URL the client just received
- * stays correct, no column has to be rewritten, and no superseded object is
- * orphaned in a public bucket. The object is seconds old, so nothing has cached
- * it yet.
+ * The signing route mints names with exactly one dot, so no upload capability
+ * can ever be issued for one of these paths. The hash makes the name say what
+ * the bytes are, so writing the copy again writes the same picture, and a
+ * cached copy can never go stale under its URL.
+ */
+export function buildNormalizedProfileImagePath(filePath: string, contentHash: string): string {
+  const extensionIndex = filePath.lastIndexOf('.');
+  const basePath = extensionIndex > filePath.lastIndexOf('/')
+    ? filePath.slice(0, extensionIndex)
+    : filePath;
+  return `${basePath}.normalized.${contentHash}.webp`;
+}
+
+export function isNormalizedProfileImagePath(filePath: string): boolean {
+  return NORMALIZED_PROFILE_IMAGE_NAME.test(filePath.split('/').pop() ?? '');
+}
+
+const PUBLIC_PROFILE_OBJECT_PREFIX = `/storage/v1/object/public/${PROFILE_IMAGE_BUCKET}/`;
+
+/**
+ * The public URL of `filePath`, spelled on the origin of the URL the client
+ * sent, so the profile's host rules accept it when the client sends it back.
+ * Null when the source is not a public profile URL, or when the result would
+ * not parse back to exactly this path and owner.
+ */
+export function buildProfileImagePublicUrl(sourceUrl: string, filePath: string): string | null {
+  const prefixIndex = sourceUrl.indexOf(PUBLIC_PROFILE_OBJECT_PREFIX);
+  if (prefixIndex < 0) return null;
+  const url = sourceUrl.slice(0, prefixIndex + PUBLIC_PROFILE_OBJECT_PREFIX.length)
+    + filePath.split('/').map(encodeURIComponent).join('/');
+  const location = getUserOwnedStoredMediaLocation(url, filePath.split('/')[0] ?? '');
+  return location?.bucket === PROFILE_IMAGE_BUCKET && location.filePath === filePath ? url : null;
+}
+
+/**
+ * The WebP a profile image should be stored as, or null when it is already
+ * right for its role: within its size, in its frame, and not carrying needless
+ * bytes. A cover cut to a new frame always gets one; anything else only when
+ * the result is genuinely smaller, so a tiny hand-tuned avatar keeps its own
+ * bytes rather than be re-encoded for nothing.
+ */
+async function encodeNormalizedProfileImage(input: Buffer, role: ProfileImageRole): Promise<Buffer | null> {
+  const maxEdge = PROFILE_IMAGE_MAX_EDGE[role];
+  const image = sharp(input).rotate();
+  const metadata = await image.metadata();
+  // Upright: a phone photo often stores its pixels a quarter turn round.
+  const { width, height } = metadata.autoOrient;
+  const longestEdge = Math.max(width, height);
+  const coverFrame = role === 'cover' && width > 0 && height > 0
+    ? getProfileCoverFrame(width, height)
+    : null;
+  const reframe = coverFrame !== null && (coverFrame.width !== width || coverFrame.height !== height);
+  if (!reframe && longestEdge > 0 && longestEdge <= maxEdge && input.byteLength <= 300_000) {
+    return null;
+  }
+
+  const resized = await image
+    .resize(coverFrame
+      ? { ...coverFrame, fit: 'cover', position: 'centre' }
+      : { width: maxEdge, height: maxEdge, fit: 'inside', withoutEnlargement: true })
+    .webp({ quality: 82 })
+    .toBuffer();
+
+  if (!reframe && resized.byteLength >= input.byteLength) return null;
+  return resized;
+}
+
+/**
+ * Writes the normalised copy of a profile upload beside it and says where the
+ * profile should point instead. This is what a profile save uses.
+ *
+ * Beside, not in place: once an upload's reservation starts finalizing, its
+ * path is tombstoned and Storage refuses every write to it
+ * (`guard_upload_storage_object_write`, pinned by
+ * `profile-media-postgrest.test.ts`), so an in-place resize has not landed on
+ * any upload since 2026-08-19. A fresh path under the owner's prefix is not
+ * tombstoned. The service role writes it without a reservation, as it writes
+ * generation previews and display renditions, and the account-deletion sweep
+ * removes it with the rest of the prefix. The upload itself is never touched,
+ * so every check the upload state machine makes against it still holds.
+ *
+ * Null when there is nothing to do (the image is already right, the path is
+ * already a normalised copy, the URL is not a public profile URL) and when
+ * anything fails, which is logged: the profile then keeps the upload it was
+ * given, a correct if oversized image, and the save goes on.
+ */
+export async function deriveNormalizedProfileImage({
+  adminSupabase,
+  filePath,
+  sourceUrl,
+}: {
+  adminSupabase: SupabaseClient;
+  filePath: string;
+  sourceUrl: string;
+}): Promise<{ filePath: string; url: string } | null> {
+  const role = getProfileImageRole(filePath);
+  if (!role || isNormalizedProfileImagePath(filePath)) return null;
+  // Refused before spending a download: a copy no URL can name is no use.
+  if (!buildProfileImagePublicUrl(sourceUrl, filePath)) return null;
+
+  try {
+    const storage = adminSupabase.storage.from(PROFILE_IMAGE_BUCKET);
+    const download = await storage.download(filePath);
+    if (download.error || !download.data) {
+      throw download.error ?? new Error(`Profile image ${filePath} could not be read.`);
+    }
+
+    const normalized = await encodeNormalizedProfileImage(
+      Buffer.from(await download.data.arrayBuffer()),
+      role,
+    );
+    if (!normalized) return null;
+
+    const normalizedPath = buildNormalizedProfileImagePath(filePath, getMediaContentHash(normalized));
+    const url = buildProfileImagePublicUrl(sourceUrl, normalizedPath);
+    if (!url) return null;
+
+    const upload = await storage.upload(normalizedPath, toStorageUploadBody(normalized, 'image/webp'), {
+      contentType: 'image/webp',
+      // The name is the content's hash, so a second write is the same bytes.
+      upsert: true,
+      cacheControl: '3600',
+    });
+    if (upload.error) throw upload.error;
+
+    // A profile is never revisited once it points somewhere, so a copy that
+    // landed damaged would stay broken; read it back before pointing at it.
+    await assertStoredPreviewIsIntact({
+      supabase: adminSupabase,
+      location: { bucket: PROFILE_IMAGE_BUCKET, filePath: normalizedPath },
+      expected: normalized,
+    });
+    return { filePath: normalizedPath, url };
+  } catch (error) {
+    logBackendWarning('failed_to_normalize_profile_image', { error, filePath });
+    return null;
+  }
+}
+
+/**
+ * Resizes a stored profile image in place, for the backfill of images that
+ * predate server-side normalisation; a profile save writes a copy instead
+ * (`deriveNormalizedProfileImage`).
+ *
+ * In place, so no column has to be rewritten. That only works for an object
+ * whose path was never tombstoned: Storage refuses the rewrite of any upload
+ * finalized since 2026-08-19, so for those this is a logged no-op. A
+ * normalised copy is never rewritten, because its name is its content's hash.
  *
  * Returns whether it rewrote the object. A failure is reported as `false` and
- * logged, never thrown: the profile save that triggered this must not fail
- * because a resize did, and the original is a correct if oversized image.
- * Storage refuses the rewrite once an upload has been finalized (finalizing
- * tombstones its path; `profile-media-postgrest.test.ts` pins it), so for
- * those uploads this is a logged no-op.
+ * logged, never thrown.
  */
 export async function normalizeStoredProfileImage({
   adminSupabase,
@@ -98,42 +245,20 @@ export async function normalizeStoredProfileImage({
   filePath: string;
 }): Promise<boolean> {
   const role = getProfileImageRole(filePath);
-  if (!role) return false;
-  const maxEdge = PROFILE_IMAGE_MAX_EDGE[role];
+  if (!role || isNormalizedProfileImagePath(filePath)) return false;
 
   try {
     const storage = adminSupabase.storage.from(bucket);
     const download = await storage.download(filePath);
     if (download.error || !download.data) return false;
 
-    const input = Buffer.from(await download.data.arrayBuffer());
-    const image = sharp(input).rotate();
-    const metadata = await image.metadata();
-    // Upright: a phone photo often stores its pixels a quarter turn round.
-    const { width, height } = metadata.autoOrient;
-    const longestEdge = Math.max(width, height);
-    const coverFrame = role === 'cover' && width > 0 && height > 0
-      ? getProfileCoverFrame(width, height)
-      : null;
-    const reframe = coverFrame !== null && (coverFrame.width !== width || coverFrame.height !== height);
-    // Already within its role's size and shape, and not carrying needless bytes.
-    if (!reframe && longestEdge > 0 && longestEdge <= maxEdge && input.byteLength <= 300_000) {
-      return false;
-    }
+    const normalized = await encodeNormalizedProfileImage(
+      Buffer.from(await download.data.arrayBuffer()),
+      role,
+    );
+    if (!normalized) return false;
 
-    const resized = await image
-      .resize(coverFrame
-        ? { ...coverFrame, fit: 'cover', position: 'centre' }
-        : { width: maxEdge, height: maxEdge, fit: 'inside', withoutEnlargement: true })
-      .webp({ quality: 82 })
-      .toBuffer();
-
-    // Only replace what is genuinely smaller; a tiny hand-tuned avatar should
-    // keep its own bytes rather than be re-encoded for nothing. A cover cut to
-    // a new frame replaces its original whatever the bytes.
-    if (!reframe && resized.byteLength >= input.byteLength) return false;
-
-    const upload = await storage.upload(filePath, toStorageUploadBody(resized, 'image/webp'), {
+    const upload = await storage.upload(filePath, toStorageUploadBody(normalized, 'image/webp'), {
       contentType: 'image/webp',
       upsert: true,
       cacheControl: '3600',

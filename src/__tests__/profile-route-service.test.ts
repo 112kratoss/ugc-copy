@@ -1,3 +1,4 @@
+import sharp from 'sharp';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -7,6 +8,7 @@ import {
   type ProfileRouteClient,
   type ProfileRouteUser,
 } from '@/lib/profile-route-service';
+import type { UploadReservationRow } from '@/lib/upload-finalization';
 
 type ProfileRow = {
   id: string;
@@ -36,6 +38,7 @@ function createClient({
   profiles = [] as ProfileRow[],
   rateLimitAllowed = true,
   upsertError = null as { code?: string; message?: string } | null,
+  upsertStatus = undefined as number | undefined,
   counts = COUNTS as unknown,
   countsError = null as { message: string } | null,
   sales = SALES as unknown,
@@ -94,7 +97,7 @@ function createClient({
             return {
               async single() {
                 if (upsertError) {
-                  return { data: null, error: upsertError };
+                  return { data: null, error: upsertError, status: upsertStatus };
                 }
 
                 const profileId = values.id as string;
@@ -131,6 +134,200 @@ function createClient({
     upserts,
   };
 }
+
+const PUBLIC_PROFILES = 'https://project.supabase.co/storage/v1/object/public/profiles/';
+
+type StoredObject = { body: Buffer; contentType: string; id: string; version: string };
+
+/** A profile photo the client signed, uploaded and finalized, as the upload state machine records it. */
+function finalizedProfileUpload(role: 'avatar' | 'cover', uploadId: string, body: Buffer) {
+  const storagePath = `${user.id}/${role}-${uploadId}-photo.png`;
+  const reservation: UploadReservationRow = {
+    id: uploadId,
+    user_id: user.id,
+    bucket_id: 'profiles',
+    storage_path: storagePath,
+    declared_bytes: body.byteLength,
+    reserved_bytes: 5 * 1024 * 1024,
+    expected_content_type: 'image/png',
+    actual_bytes: body.byteLength,
+    actual_content_type: 'image/png',
+    actual_storage_id: `object-${uploadId}`,
+    actual_storage_version: `version-${uploadId}`,
+    finalization_status: 'finalized',
+    issued_at: '2026-10-14T09:00:00.000Z',
+    finalized_at: '2026-10-14T09:01:00.000Z',
+    client_finalized_at: '2026-10-14T09:01:00.000Z',
+    expires_at: '2026-10-14T11:00:00.000Z',
+    released_at: null,
+    consumed_at: null,
+    consumption_disposition: null,
+    consumption_lease_id: null,
+    consumption_lease_expires_at: null,
+    consumption_outcome_unknown_at: null,
+    legacy_compatibility_mode: false,
+    status_updated_at: '2026-10-14T09:01:00.000Z',
+    reclaim_not_before: null,
+    reclaim_after: null,
+  };
+  return { url: PUBLIC_PROFILES + storagePath, storagePath, body, reservation };
+}
+
+async function solidPng(width: number, height: number) {
+  return sharp({ create: { width, height, channels: 3, background: '#336699' } }).png().toBuffer();
+}
+
+/**
+ * The profile client plus what a save with photos touches: the reservation
+ * table the real finalizer reads and moves, the lease RPCs as the database
+ * applies them, and Storage.
+ */
+function createMediaClient({
+  uploads,
+  uploadError = null as { message: string } | null,
+  ...options
+}: Parameters<typeof createClient>[0] & {
+  uploads: Array<ReturnType<typeof finalizedProfileUpload>>;
+  uploadError?: { message: string } | null;
+}) {
+  const base = createClient(options);
+  const reservations = uploads.map((upload) => ({ ...upload.reservation }));
+  const objects = new Map<string, StoredObject>(uploads.map((upload) => [upload.storagePath, {
+    body: upload.body,
+    contentType: 'image/png',
+    id: upload.reservation.actual_storage_id as string,
+    version: upload.reservation.actual_storage_version as string,
+  }]));
+
+  const reservationQuery = () => {
+    const filters: Array<[string, unknown]> = [];
+    let changes: Partial<UploadReservationRow> | null = null;
+    const query = {
+      select: () => query,
+      update: (values: Partial<UploadReservationRow>) => {
+        changes = values;
+        return query;
+      },
+      eq: (column: string, value: unknown) => {
+        filters.push([column, value]);
+        return query;
+      },
+      is: (column: string, value: unknown) => {
+        filters.push([column, value]);
+        return query;
+      },
+      async maybeSingle() {
+        const row = reservations.find((candidate) => filters.every(([column, value]) => (
+          (candidate as Record<string, unknown>)[column] === value
+        )));
+        if (row && changes) Object.assign(row, changes);
+        return { data: row ? { ...row } : null, error: null };
+      },
+    };
+    return query;
+  };
+
+  const rpc = vi.fn(async (name: string, args: Record<string, unknown> = {}) => {
+    const row = reservations.find((candidate) => (
+      candidate.id === args.p_upload_id && candidate.user_id === args.p_user_id
+    ));
+    if (name === 'claim_upload_byte_reservation_consumption') {
+      if (!row || !['finalized', 'consumed'].includes(row.finalization_status) || row.consumption_lease_id) {
+        return { data: false, error: null };
+      }
+      Object.assign(row, {
+        finalization_status: 'consuming',
+        consumption_disposition: args.p_disposition,
+        consumption_lease_id: args.p_lease_id,
+        consumption_lease_expires_at: '2026-10-14T09:31:00.000Z',
+      });
+      return { data: true, error: null };
+    }
+    if (name === 'complete_upload_byte_reservation_consumption') {
+      if (
+        !row
+        || row.finalization_status !== 'consuming'
+        || row.consumption_lease_id !== args.p_lease_id
+        || row.consumption_disposition !== args.p_disposition
+      ) return { data: false, error: null };
+      Object.assign(row, {
+        finalization_status: 'consumed',
+        consumed_at: '2026-10-14T09:02:00.000Z',
+        consumption_lease_id: null,
+        consumption_lease_expires_at: null,
+      });
+      return { data: true, error: null };
+    }
+    if (name === 'abort_upload_byte_reservation_consumption') {
+      if (!row || row.finalization_status !== 'consuming' || row.consumption_lease_id !== args.p_lease_id) {
+        return { data: false, error: null };
+      }
+      Object.assign(row, {
+        finalization_status: row.consumed_at === null ? 'finalized' : 'consumed',
+        consumption_disposition: row.consumed_at === null ? null : row.consumption_disposition,
+        consumption_lease_id: null,
+        consumption_lease_expires_at: null,
+      });
+      return { data: true, error: null };
+    }
+    return base.rpc(name);
+  });
+
+  const missing = { message: 'Object not found', statusCode: '404' };
+  const storageApi = {
+    info: vi.fn(async (path: string) => {
+      const object = objects.get(path);
+      return object
+        ? {
+            data: {
+              id: object.id,
+              version: object.version,
+              bucketId: 'profiles',
+              contentType: object.contentType,
+              size: object.body.byteLength,
+            },
+            error: null,
+          }
+        : { data: null, error: missing };
+    }),
+    download: vi.fn(async (path: string) => {
+      const object = objects.get(path);
+      return object
+        ? { data: new Blob([new Uint8Array(object.body)], { type: object.contentType }), error: null }
+        : { data: null, error: missing };
+    }),
+    upload: vi.fn(async (path: string, body: Blob, uploadOptions: { contentType?: string } = {}) => {
+      if (uploadError) return { data: null, error: uploadError };
+      objects.set(path, {
+        body: Buffer.from(await body.arrayBuffer()),
+        contentType: uploadOptions.contentType ?? 'application/octet-stream',
+        id: `object-${path}`,
+        version: 'version-1',
+      });
+      return { data: { path }, error: null };
+    }),
+    remove: vi.fn(async (paths: string[]) => {
+      for (const path of paths) objects.delete(path);
+      return { data: paths.map((name) => ({ name })), error: null };
+    }),
+  };
+
+  return {
+    ...base,
+    client: {
+      rpc,
+      from: (table: string) => (table === 'upload_byte_reservations' ? reservationQuery() : base.from(table)),
+      storage: { from: vi.fn(() => storageApi) },
+    } as unknown as ProfileRouteClient,
+    rpc,
+    reservations,
+    objects,
+    storageApi,
+  };
+}
+
+const AVATAR_UPLOAD_ID = '22222222-2222-4222-8222-222222222222';
+const COVER_UPLOAD_ID = '33333333-3333-4333-8333-333333333333';
 
 function emptyProfileRow(id: string): ProfileRow {
   return {
@@ -479,6 +676,148 @@ describe('profile route service', () => {
     });
 
     expect(result).toMatchObject({ ok: true, response: { username: 'support', bio: 'Answers within a day.' } });
+  });
+
+  it('points the profile at a normalised copy of each new photo and releases the uploads to the reclaim job', async () => {
+    const avatar = finalizedProfileUpload('avatar', AVATAR_UPLOAD_ID, await solidPng(1024, 1024));
+    const cover = finalizedProfileUpload('cover', COVER_UPLOAD_ID, await solidPng(1200, 1200));
+    const client = createMediaClient({ profiles: [storedProfile()], uploads: [avatar, cover] });
+
+    const result = await updateProfileForRoute({
+      userId: user.id,
+      body: { username: 'luna', avatarUrl: avatar.url, coverUrl: cover.url },
+      client: client.client,
+      invalidateFeedCache: vi.fn(),
+    });
+
+    const avatarCopy = new RegExp(`^${PUBLIC_PROFILES}${user.id}/avatar-${AVATAR_UPLOAD_ID}-photo\\.normalized\\.[0-9a-f]{16}\\.webp$`);
+    const coverCopy = new RegExp(`^${PUBLIC_PROFILES}${user.id}/cover-${COVER_UPLOAD_ID}-photo\\.normalized\\.[0-9a-f]{16}\\.webp$`);
+    expect(client.upserts).toHaveLength(1);
+    expect(client.upserts[0].avatar_url).toMatch(avatarCopy);
+    expect(client.upserts[0].cover_url).toMatch(coverCopy);
+    expect(result).toMatchObject({
+      ok: true,
+      response: { avatarUrl: client.upserts[0].avatar_url, coverUrl: client.upserts[0].cover_url },
+    });
+
+    // The copies are what the profile shows; the uploads stay byte for byte.
+    const avatarCopyPath = String(client.upserts[0].avatar_url).slice(PUBLIC_PROFILES.length);
+    const coverCopyPath = String(client.upserts[0].cover_url).slice(PUBLIC_PROFILES.length);
+    const avatarMetadata = await sharp(client.objects.get(avatarCopyPath)!.body).metadata();
+    const coverMetadata = await sharp(client.objects.get(coverCopyPath)!.body).metadata();
+    expect([avatarMetadata.width, avatarMetadata.height]).toEqual([512, 512]);
+    expect([coverMetadata.width, coverMetadata.height]).toEqual([1200, 270]);
+    expect(client.objects.get(avatar.storagePath)?.body.equals(avatar.body)).toBe(true);
+    expect(client.objects.get(cover.storagePath)?.body.equals(cover.body)).toBe(true);
+    expect(client.storageApi.upload.mock.calls.map(([path]) => path)).toEqual([avatarCopyPath, coverCopyPath]);
+
+    // Each upload was leased for the read, then released rather than kept:
+    // nothing references it, so the reclaim job deletes it.
+    const leaseRpcs = client.rpc.mock.calls
+      .filter(([name]) => String(name).endsWith('_upload_byte_reservation_consumption'))
+      .map(([name, args]) => [name, (args as Record<string, unknown>).p_upload_id]);
+    expect(leaseRpcs).toEqual([
+      ['claim_upload_byte_reservation_consumption', AVATAR_UPLOAD_ID],
+      ['claim_upload_byte_reservation_consumption', COVER_UPLOAD_ID],
+      ['abort_upload_byte_reservation_consumption', AVATAR_UPLOAD_ID],
+      ['abort_upload_byte_reservation_consumption', COVER_UPLOAD_ID],
+    ]);
+    expect(client.reservations.map((row) => [row.finalization_status, row.consumption_disposition])).toEqual([
+      ['finalized', null],
+      ['finalized', null],
+    ]);
+  });
+
+  it('keeps a photo that is already right as it is, and holds its upload for good', async () => {
+    const avatar = finalizedProfileUpload('avatar', AVATAR_UPLOAD_ID, await solidPng(256, 256));
+    const client = createMediaClient({ profiles: [storedProfile()], uploads: [avatar] });
+
+    const result = await updateProfileForRoute({
+      userId: user.id,
+      body: { username: 'luna', avatarUrl: avatar.url },
+      client: client.client,
+      invalidateFeedCache: vi.fn(),
+    });
+
+    expect(result).toMatchObject({ ok: true, response: { avatarUrl: avatar.url } });
+    expect(client.upserts[0].avatar_url).toBe(avatar.url);
+    expect(client.storageApi.upload).not.toHaveBeenCalled();
+    expect(client.reservations[0]).toMatchObject({
+      finalization_status: 'consumed',
+      consumption_disposition: 'preserve',
+    });
+  });
+
+  it('saves the upload itself when its copy cannot be written', async () => {
+    const avatar = finalizedProfileUpload('avatar', AVATAR_UPLOAD_ID, await solidPng(1024, 1024));
+    const client = createMediaClient({
+      profiles: [storedProfile()],
+      uploads: [avatar],
+      uploadError: { message: 'Upload owner has been permanently blocked' },
+    });
+
+    const result = await updateProfileForRoute({
+      userId: user.id,
+      body: { username: 'luna', avatarUrl: avatar.url },
+      client: client.client,
+      invalidateFeedCache: vi.fn(),
+    });
+
+    expect(result).toMatchObject({ ok: true, response: { avatarUrl: avatar.url } });
+    expect(client.reservations[0]).toMatchObject({
+      finalization_status: 'consumed',
+      consumption_disposition: 'preserve',
+    });
+  });
+
+  it('takes back the copy\'s own URL on a later save without copying it again', async () => {
+    const avatar = finalizedProfileUpload('avatar', AVATAR_UPLOAD_ID, await solidPng(1024, 1024));
+    const client = createMediaClient({ profiles: [storedProfile()], uploads: [avatar] });
+    await updateProfileForRoute({
+      userId: user.id,
+      body: { username: 'luna', avatarUrl: avatar.url },
+      client: client.client,
+      invalidateFeedCache: vi.fn(),
+    });
+    const copyUrl = String(client.upserts[0].avatar_url);
+    client.storageApi.download.mockClear();
+    client.storageApi.upload.mockClear();
+
+    // The web sends every field back on every save, the photo URL included.
+    const result = await updateProfileForRoute({
+      userId: user.id,
+      body: { username: 'luna', bio: 'Painting with light.', avatarUrl: copyUrl },
+      client: client.client,
+      invalidateFeedCache: vi.fn(),
+    });
+
+    expect(result).toMatchObject({ ok: true, response: { avatarUrl: copyUrl, bio: 'Painting with light.' } });
+    expect(client.upserts[1].avatar_url).toBe(copyUrl);
+    expect(client.storageApi.download).not.toHaveBeenCalled();
+    expect(client.storageApi.upload).not.toHaveBeenCalled();
+  });
+
+  it('a save the database refuses after the copy releases the upload and leaves the copy alone', async () => {
+    const avatar = finalizedProfileUpload('avatar', AVATAR_UPLOAD_ID, await solidPng(1024, 1024));
+    const client = createMediaClient({
+      profiles: [storedProfile()],
+      uploads: [avatar],
+      upsertError: { code: '23505', message: 'duplicate key' },
+      upsertStatus: 409,
+    });
+
+    await expect(updateProfileForRoute({
+      userId: user.id,
+      body: { username: 'luna', avatarUrl: avatar.url },
+      client: client.client,
+      invalidateFeedCache: vi.fn(),
+    })).resolves.toMatchObject({ ok: false, status: 409 });
+
+    expect(client.reservations[0]).toMatchObject({ finalization_status: 'finalized', consumption_disposition: null });
+    expect(client.rpc).not.toHaveBeenCalledWith('complete_upload_byte_reservation_consumption', expect.anything());
+    // Content-addressed: an earlier save of the same upload may point at it.
+    expect(client.storageApi.remove).not.toHaveBeenCalled();
+    expect([...client.objects.keys()].some((path) => path.includes('.normalized.'))).toBe(true);
   });
 
   it('exports the totals loader the web profile page reads', async () => {

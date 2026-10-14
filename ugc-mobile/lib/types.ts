@@ -814,8 +814,9 @@ export type GenerationShareSourceSurface =
   | 'detail-page'
   | 'feed';
 
-/** Mirror of PROFILE_SHARE_SOURCE_SURFACES. Mobile only ever shares from the
- * creator profile screen; 'profile' is the web owner-profile surface. */
+/** Mirror of PROFILE_SHARE_SOURCE_SURFACES. 'creator-profile' is a share from a
+ * creator's public page; 'profile' is the owner sharing from their own profile,
+ * which both the app and the web file. */
 export type ProfileShareSourceSurface = 'creator-profile' | 'profile';
 
 export type ShareChannel = 'native-share' | 'copy-link';

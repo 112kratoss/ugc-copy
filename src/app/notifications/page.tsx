@@ -250,7 +250,7 @@ export default function NotificationsPage() {
       if (!session?.access_token) throw new Error('No session to read older alerts');
 
       // The inbox pages on its own order, each alert's last event (`updatedAt`).
-      const query = new URLSearchParams({ limit: String(ALERTS_PAGE_SIZE), before: oldest.updatedAt });
+      const query = new URLSearchParams({ limit: String(ALERTS_PAGE_SIZE), before: oldest.updatedAt, beforeId: oldest.id });
       const response = await fetch(`/api/mobile/notifications?${query}`, {
         headers: {
           Authorization: `Bearer ${session.access_token}`,

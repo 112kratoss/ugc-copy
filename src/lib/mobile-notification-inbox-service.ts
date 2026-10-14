@@ -43,7 +43,10 @@ type AuthenticatedInput = {
 };
 
 export type MobileNotificationInboxGetInput = AuthenticatedInput & {
+  /** The `updatedAt` of the oldest alert the reader holds, exactly as it was sent. */
   before?: string | null;
+  /** That alert's id, which places the cursor among alerts sharing its time. */
+  beforeId?: string | null;
   limitValue?: string | null;
 };
 
@@ -68,6 +71,12 @@ async function getAuthenticatedMobileUserId(userSupabase: UserSupabaseClient) {
   // stranded the moment that identity is linked to an account.
   return authError || !user || isGuestUser(user) ? null : user.id;
 }
+
+// Both halves of the cursor are written into a PostgREST `or` filter, where a
+// comma or a parenthesis is syntax, so each must have its exact shape. The time
+// keeps the microseconds the server sent: rounded, it would match no row.
+const NOTIFICATION_CURSOR_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}(?::?\d{2})?)$/;
+const NOTIFICATION_CURSOR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function clampLimit(value?: string | null) {
   const parsed = Number(value);
@@ -157,7 +166,15 @@ export async function getMobileNotificationInboxForRoute(
       .limit(clampLimit(input.limitValue));
 
     if (input.before) {
-      query = query.lt('last_event_at', input.before);
+      const before = input.before;
+      const beforeId = input.beforeId ?? '';
+      query = NOTIFICATION_CURSOR_TIME.test(before) && NOTIFICATION_CURSOR_ID.test(beforeId)
+        // Alerts that share the cursor's time come after it only below its id,
+        // as the order above sorts them; a time alone skipped them. The `lte`
+        // bound starts the (user_id, last_event_at, id) index scan at the
+        // cursor, so the `or` only settles the rows at that exact time.
+        ? query.lte('last_event_at', before).or(`last_event_at.lt.${before},id.lt.${beforeId}`)
+        : query.lt('last_event_at', before);
     }
 
     const [{ data, error }, unreadResult] = await Promise.all([

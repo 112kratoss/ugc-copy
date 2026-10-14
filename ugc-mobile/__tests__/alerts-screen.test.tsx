@@ -307,7 +307,7 @@ describe('older alerts (finding 03-9)', () => {
     const newest = twoPages();
     const { tree, queryClient } = await renderAlerts();
 
-    expect(mocks.api.listMobileNotifications).toHaveBeenCalledWith({ limit: 50, before: null });
+    expect(mocks.api.listMobileNotifications).toHaveBeenCalledWith({ limit: 50, before: null, beforeId: null });
     expect(alertTitles(tree)).toHaveLength(50);
     expect(header(tree)).toBe('72 unread · 50+ alerts · Mobile');
 
@@ -318,6 +318,7 @@ describe('older alerts (finding 03-9)', () => {
     expect(mocks.api.listMobileNotifications).toHaveBeenLastCalledWith({
       limit: 50,
       before: '2026-10-14T11:11:00.000123+00:00',
+      beforeId: newest.notifications[49].id,
     });
     expect(alertTitles(tree)).toEqual(Array.from({ length: 70 }, (_, index) => `Alert ${index}`));
     // The count from the page read last, for the header and the tab's badge.
@@ -391,7 +392,7 @@ describe('pull to refresh (finding 03-10)', () => {
 
     expect(refreshControl(tree).props.refreshing).toBe(true);
     expect(mocks.haptic.light).toHaveBeenCalledTimes(1);
-    expect(mocks.api.listMobileNotifications.mock.calls).toEqual([[{ limit: 50, before: null }]]);
+    expect(mocks.api.listMobileNotifications.mock.calls).toEqual([[{ limit: 50, before: null, beforeId: null }]]);
 
     await act(async () => answer(alertsPage(0, 50, 60)));
     await settle();
@@ -452,8 +453,8 @@ describe('coming back to the tab (finding 03-10)', () => {
     await returnToTab();
 
     expect(mocks.api.listMobileNotifications.mock.calls).toEqual([
-      [{ limit: 50, before: null }],
-      [{ limit: 50, before: newest.notifications[49].updatedAt }],
+      [{ limit: 50, before: null, beforeId: null }],
+      [{ limit: 50, before: newest.notifications[49].updatedAt, beforeId: newest.notifications[49].id }],
     ]);
     expect(alertTitles(tree)).toHaveLength(70);
     expect(mocks.setAlertsScreenFocused.mock.calls).toEqual([[true], [false], [true]]);

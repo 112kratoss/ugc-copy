@@ -1605,7 +1605,7 @@ export function createApiClient({
      * the oldest alert held: the server answers the alerts whose last event is
      * older, so the Alerts list reads on past its first page.
      */
-    listMobileNotifications: (params?: { limit?: number; before?: string | null }) =>
+    listMobileNotifications: (params?: { limit?: number; before?: string | null; beforeId?: string | null }) =>
       request<MobileNotificationsResponse>(`/api/mobile/notifications${buildQuery(params)}`),
     markMobileNotificationsRead: (ids: string[]) =>
       request<{ success: boolean }>('/api/mobile/notifications/read', {

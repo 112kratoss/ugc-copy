@@ -48,6 +48,8 @@ function createInboxClient({
     order: vi.fn(() => listQuery),
     limit: vi.fn(() => listQuery),
     lt: vi.fn(() => listQuery),
+    lte: vi.fn(() => listQuery),
+    or: vi.fn(() => listQuery),
     ...resolvedQuery({
       data: [{
         id: 'notification-1',
@@ -121,6 +123,74 @@ function createInboxClient({
   };
 }
 
+type InboxRow = { id: string; last_event_at: string };
+
+/**
+ * The inbox as PostgREST would answer it: the filters the service writes,
+ * applied to these rows of user-1's, in the inbox order (last event, then id,
+ * both descending). Timestamps share one format, so they compare as text.
+ */
+function createPagedInboxClient(rows: InboxRow[]) {
+  const compare = (operator: string, left: string, right: string) => (
+    operator === 'lt' ? left < right : operator === 'lte' ? left <= right : left === right
+  );
+  const listQuery = () => {
+    const filters: Array<(row: InboxRow & { user_id: string }) => boolean> = [];
+    let limit = Infinity;
+    const query = {
+      eq: (column: string, value: string) => {
+        filters.push((row) => (row as Record<string, string>)[column] === value);
+        return query;
+      },
+      lt: (column: string, value: string) => {
+        filters.push((row) => compare('lt', (row as Record<string, string>)[column], value));
+        return query;
+      },
+      lte: (column: string, value: string) => {
+        filters.push((row) => compare('lte', (row as Record<string, string>)[column], value));
+        return query;
+      },
+      or: (expression: string) => {
+        const clauses = expression.split(',').map((clause) => {
+          const [column, operator, ...value] = clause.split('.');
+          return { column, operator, value: value.join('.') };
+        });
+        filters.push((row) => clauses.some(({ column, operator, value }) => (
+          compare(operator, (row as Record<string, string>)[column], value)
+        )));
+        return query;
+      },
+      order: () => query,
+      limit: (count: number) => {
+        limit = count;
+        return query;
+      },
+      then<TResult>(onfulfilled: (value: { data: unknown[]; error: null }) => TResult) {
+        const data = rows
+          .map((row) => ({ ...row, user_id: 'user-1' }))
+          .filter((row) => filters.every((filter) => filter(row)))
+          .sort((left, right) => (
+            right.last_event_at.localeCompare(left.last_event_at) || right.id.localeCompare(left.id)
+          ))
+          .slice(0, limit)
+          .map((row) => ({ ...row, type: 'post_saved', category: 'social', title: 'Saved', body: '', created_at: row.last_event_at }));
+        return Promise.resolve({ data, error: null }).then(onfulfilled);
+      },
+    };
+    return query;
+  };
+  const unreadQuery = {
+    eq: () => unreadQuery,
+    ...resolvedQuery({ count: 0, data: null, error: null }),
+  };
+  return {
+    auth: { getUser: async () => ({ data: { user: { id: 'user-1' } }, error: null }) },
+    from: () => ({
+      select: (_fields: string, options?: Record<string, unknown>) => (options?.head ? unreadQuery : listQuery()),
+    }),
+  };
+}
+
 describe('mobile notification inbox service', () => {
   it('loads a bounded cursor page and unread count for the authenticated user', async () => {
     const inbox = createInboxClient();
@@ -177,6 +247,67 @@ describe('mobile notification inbox service', () => {
         }],
       },
     });
+  });
+
+  // A time alone skipped every alert that shared the oldest alert's time but
+  // had not fit on its page. Alerts written in one transaction share it to
+  // the microsecond.
+  it('pages by last event and then id, so no alert sharing the cursor\'s time is skipped', async () => {
+    const tied = '2026-10-14T09:02:00.500000+00:00';
+    const rows: InboxRow[] = [
+      { id: '00000000-0000-4000-8000-000000000001', last_event_at: '2026-10-14T09:03:00.000001+00:00' },
+      { id: '00000000-0000-4000-8000-000000000005', last_event_at: tied },
+      { id: '00000000-0000-4000-8000-000000000004', last_event_at: tied },
+      { id: '00000000-0000-4000-8000-000000000003', last_event_at: tied },
+      { id: '00000000-0000-4000-8000-000000000002', last_event_at: tied },
+      { id: '00000000-0000-4000-8000-000000000006', last_event_at: '2026-10-14T09:01:00.000000+00:00' },
+    ];
+    const client = createPagedInboxClient(rows);
+
+    const seen: string[] = [];
+    let cursor: { before: string; beforeId: string } | null = null;
+    for (let page = 0; page < 6; page += 1) {
+      const result = await getMobileNotificationInboxForRoute({ ...cursor, limitValue: '2', userSupabase: client });
+      if (!result.ok || !('notifications' in result.body)) throw new Error('The inbox did not answer.');
+      const { notifications } = result.body;
+      if (notifications.length === 0) break;
+      seen.push(...notifications.map((notification) => notification.id));
+      const oldest = notifications[notifications.length - 1];
+      cursor = { before: oldest.updatedAt, beforeId: oldest.id };
+    }
+
+    expect(seen).toEqual(rows.map((row) => row.id));
+  });
+
+  it('keeps the time-only cursor for a caller that sends no id', async () => {
+    const inbox = createInboxClient();
+
+    await getMobileNotificationInboxForRoute({ before: '2026-06-22T06:02:00.000Z', userSupabase: inbox.client });
+
+    expect(inbox.listQuery.lt).toHaveBeenCalledWith('last_event_at', '2026-06-22T06:02:00.000Z');
+    expect(inbox.listQuery.or).not.toHaveBeenCalled();
+  });
+
+  it('writes the cursor into the filter only in its exact shapes', async () => {
+    const id = '00000000-0000-4000-8000-000000000005';
+    for (const cursor of [
+      { before: '2026-06-22T06:02:00.000Z,user_id.neq.user-1', beforeId: id },
+      { before: '2026-06-22T06:02:00.000Z', beforeId: 'id),or(id.gt.0' },
+      { before: '2026-06-22 06:02:00+00', beforeId: id },
+    ]) {
+      const inbox = createInboxClient();
+
+      await getMobileNotificationInboxForRoute({ ...cursor, userSupabase: inbox.client });
+
+      expect(inbox.listQuery.or).not.toHaveBeenCalled();
+      expect(inbox.listQuery.lt).toHaveBeenCalledWith('last_event_at', cursor.before);
+    }
+
+    const inbox = createInboxClient();
+    await getMobileNotificationInboxForRoute({ before: '2026-06-22T06:02:00.123456+00:00', beforeId: id, userSupabase: inbox.client });
+    expect(inbox.listQuery.lte).toHaveBeenCalledWith('last_event_at', '2026-06-22T06:02:00.123456+00:00');
+    expect(inbox.listQuery.or).toHaveBeenCalledWith(`last_event_at.lt.2026-06-22T06:02:00.123456+00:00,id.lt.${id}`);
+    expect(inbox.listQuery.lt).not.toHaveBeenCalled();
   });
 
   it('rejects unauthenticated inbox reads before querying notifications', async () => {

@@ -245,7 +245,7 @@ import {
   resetFeedFeedbackRequestsForTests,
 } from '../lib/showcase-feed-events';
 import { getMagicTabBarMetrics } from '../lib/tab-bar-layout';
-import type { ShowcaseFeedItem, ShowcaseFeedResponse } from '../lib/types';
+import type { CreatorProfileResponse, ShowcaseFeedItem, ShowcaseFeedResponse } from '../lib/types';
 import { NEW_POSTS_PROBE_MIN_LANE_AGE_MS } from '../lib/use-new-posts-probe';
 
 function feedItem() {
@@ -411,8 +411,9 @@ function laneCache(entries: Array<[QueryKey, Lane]>) {
   const under = (prefix: QueryKey) => [...lanes.values()].filter(({ key }) => (
     prefix.every((part, index) => JSON.stringify(key[index]) === JSON.stringify(part))
   ));
+  // As React Query does: an updater that answers `undefined` leaves the data as it was.
   const next = (current: Lane, updater: unknown) => (
-    typeof updater === 'function' ? (updater as (lane: Lane) => Lane)(current) : updater as Lane
+    typeof updater === 'function' ? (updater as (lane: Lane) => Lane | undefined)(current) ?? current : updater as Lane
   );
   queryClient.getQueriesData.mockImplementation(({ queryKey }) => (
     under(queryKey).map(({ key, data }): [QueryKey, unknown] => [key, data])
@@ -425,6 +426,29 @@ function laneCache(entries: Array<[QueryKey, Lane]>) {
     if (lane) lane.data = next(lane.data, updater);
   });
   return (key: QueryKey) => lanes.get(JSON.stringify(key))?.data.pages.flatMap((page) => page.items.map((item) => item.id));
+}
+
+/** A creator's cached grid with two pages loaded, as `['creator-profile', 'infinite', <handle>]` holds it. */
+function creatorGrid(creatorId: string): InfiniteData<CreatorProfileResponse> {
+  const page = (offset: number): CreatorProfileResponse => ({
+    profile: {
+      id: creatorId,
+      username: creatorId,
+      displayName: creatorId,
+      bio: null,
+      avatarUrl: null,
+      coverUrl: null,
+      websiteUrl: null,
+      twitterHandle: null,
+      instagramHandle: null,
+      tiktokHandle: null,
+      location: null,
+    },
+    items: lanePage([{ id: `${creatorId}-post-${offset}`, creatorId }]).items,
+    pageInfo: { hasMore: true, nextLimit: 24, nextOffset: offset + 24, limit: 24, offset },
+    viewer: { isOwner: false, isFollowing: true, blockedByViewer: false },
+  });
+  return { pages: [page(0), page(24)], pageParams: [0, 24] };
 }
 
 describe('Showcase screen', () => {
@@ -715,6 +739,62 @@ describe('Showcase screen', () => {
       details: 'Reported from post post-1.',
     });
     renderer.act(() => tree!.unmount());
+  });
+
+  // The creator page's Block writes the server's blocked answer into that
+  // creator's cached grid (WP10). The tile's Block invalidated every cached
+  // creator grid instead, which read every loaded page of each one again.
+  it('blocks a creator from a tile by writing their cached grid as blocked, and reads no grid again', async () => {
+    const tile = lanePage([{ id: 'post-1' }, { id: 'post-2', creatorId: 'creator-2' }]);
+    queryState.pages = [tile];
+    authState.api.blockUser.mockReset();
+    authState.api.blockUser.mockResolvedValue({ success: true });
+    queryClient.invalidateQueries.mockClear();
+    vi.mocked(Alert.alert).mockClear();
+    vi.mocked(AccessibilityInfo.announceForAccessibility).mockClear();
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ShowcaseScreen />);
+    });
+    try {
+      const exploreKey = queryState.queryKey!;
+      const blockedGridKey: QueryKey = ['creator-profile', 'infinite', 'creator-1'];
+      const otherGridKey: QueryKey = ['creator-profile', 'infinite', 'creator-2'];
+      const otherGrid = creatorGrid('creator-2');
+      const idsIn = laneCache([
+        [exploreKey, { pages: [tile], pageParams: [{ offset: 0 }] }],
+        [blockedGridKey, creatorGrid('creator-1') as unknown as Lane],
+        [otherGridKey, otherGrid as unknown as Lane],
+      ]);
+
+      selectTileMenuRow(hostElement(tree!, 'flash-list').props, 'block-user', 'post-1');
+      const buttons = vi.mocked(Alert.alert).mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
+      await renderer.act(async () => {
+        buttons.find((button) => button.text === 'Block user')?.onPress?.();
+      });
+      await settle();
+
+      expect(authState.api.blockUser).toHaveBeenCalledWith('creator-1');
+      expect(idsIn(exploreKey)).toEqual(['post-2']);
+      // Their grid is the page the server answers now: one page, no posts, blocked.
+      const [[, blocked]] = queryClient.getQueriesData({ queryKey: blockedGridKey }) as Array<
+        [QueryKey, InfiniteData<CreatorProfileResponse>]
+      >;
+      expect(blocked.pages).toHaveLength(1);
+      expect(blocked.pages[0]).toMatchObject({
+        items: [],
+        pageInfo: { hasMore: false, nextOffset: null },
+        viewer: { isOwner: false, isFollowing: false, blockedByViewer: true },
+      });
+      // Another creator's grid keeps its pages, and its age.
+      expect(queryClient.getQueriesData({ queryKey: otherGridKey })[0]?.[1]).toBe(otherGrid);
+      // Only the Saved list, which loses their posts, is read again.
+      expect(queryClient.invalidateQueries.mock.calls).toEqual([[{ queryKey: ['profile-saved-media', 'viewer-1'] }]]);
+      expect(AccessibilityInfo.announceForAccessibility).toHaveBeenCalledWith('@creator-1 blocked.');
+    } finally {
+      renderer.act(() => tree!.unmount());
+    }
   });
 
   // A guest has no `user` but has a backend identity, and the server refuses a

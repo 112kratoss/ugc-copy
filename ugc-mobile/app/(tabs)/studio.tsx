@@ -82,10 +82,15 @@ const ALERTS_STALE_MS = 1000 * 20;
  * the oldest alert held, the time the list is ordered by. A page shorter than
  * asked for was the end of the list.
  */
-function olderAlertsCursor(lastPage: MobileNotificationsResponse) {
+function olderAlertsCursor(lastPage: MobileNotificationsResponse): OlderAlertsCursor | undefined {
   const alerts = lastPage.notifications;
-  return alerts.length < ALERTS_PAGE_SIZE ? undefined : alerts[alerts.length - 1]?.updatedAt;
+  const oldest = alerts[alerts.length - 1];
+  // The id beside the time: alerts sharing the boundary time would otherwise
+  // be skipped by a time-only cursor.
+  return alerts.length < ALERTS_PAGE_SIZE || !oldest ? undefined : { before: oldest.updatedAt, beforeId: oldest.id };
 }
+
+type OlderAlertsCursor = { before: string; beforeId: string };
 
 /**
  * Every page in the order read, each alert once, whatever the server does with
@@ -127,8 +132,8 @@ export default function StudioScreen() {
   const notificationsQuery = useInfiniteQuery({
     queryKey,
     enabled: Boolean(user),
-    initialPageParam: null as string | null,
-    queryFn: ({ pageParam }) => api.listMobileNotifications({ limit: ALERTS_PAGE_SIZE, before: pageParam }),
+    initialPageParam: null as OlderAlertsCursor | null,
+    queryFn: ({ pageParam }) => api.listMobileNotifications({ limit: ALERTS_PAGE_SIZE, before: pageParam?.before ?? null, beforeId: pageParam?.beforeId ?? null }),
     getNextPageParam: olderAlertsCursor,
     staleTime: ALERTS_STALE_MS,
   });
