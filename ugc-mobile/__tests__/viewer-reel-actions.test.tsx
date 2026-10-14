@@ -667,7 +667,7 @@ describe('Undo after Not interested or Hide in the reel', () => {
     expect(haptic.error).toHaveBeenCalledTimes(1);
     expect(dialogs.message.mock.calls).toEqual([[{
       title: 'Couldn’t undo',
-      message: 'It is still hidden. Check your connection and try again.',
+      message: 'The post is still hidden. Check your connection and try again.',
     }]]);
   });
 

@@ -1087,7 +1087,7 @@ describe('Showcase screen', () => {
         await settle();
         expect(screen.explore()).toEqual(['post-0', 'post-2']);
         expect(errorHaptic).toHaveBeenCalledTimes(1);
-        expect(Alert.alert).toHaveBeenCalledWith('Couldn’t undo', 'It is still hidden. Check your connection and try again.');
+        expect(Alert.alert).toHaveBeenCalledWith('Couldn’t undo', 'The post is still hidden. Check your connection and try again.');
       } finally {
         errorHaptic.mockRestore();
         renderer.act(() => screen.tree.unmount());

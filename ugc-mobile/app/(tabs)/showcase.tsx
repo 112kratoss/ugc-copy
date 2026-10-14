@@ -740,7 +740,9 @@ export default function ShowcaseScreen() {
             haptic.error();
             showMessageDialog({
               title: 'Couldn’t undo',
-              message: 'It is still hidden. Check your connection and try again.',
+              message: feedbackTarget.feedbackType === 'hide_creator'
+                ? 'The creator is still hidden. Check your connection and try again.'
+                : 'The post is still hidden. Check your connection and try again.',
             });
           });
       },
