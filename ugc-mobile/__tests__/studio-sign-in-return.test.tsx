@@ -13,7 +13,8 @@ const routerState = vi.hoisted(() => ({ push: vi.fn() }));
 // a new identity to every effect keyed on it.
 const authState = vi.hoisted(() => ({ user: null as { id: string } | null, api: {} }));
 const queryState = vi.hoisted(() => ({
-  query: { data: undefined, isRefetching: false, isLoading: false, isError: false, error: null, refetch: () => Promise.resolve() },
+  // The Alerts list pages (useInfiniteQuery since #453); signed out it never asks.
+  query: { data: undefined, isRefetching: false, isLoading: false, isError: false, error: null, refetch: () => Promise.resolve(), fetchNextPage: () => Promise.resolve(), hasNextPage: false, isFetchingNextPage: false },
   mutation: { mutate: () => undefined, isPending: false, error: null },
   client: {},
 }));
@@ -89,6 +90,7 @@ vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
 
 vi.mock('@tanstack/react-query', () => ({
   useQuery: () => queryState.query,
+  useInfiniteQuery: () => queryState.query,
   useMutation: () => queryState.mutation,
   useQueryClient: () => queryState.client,
 }));
