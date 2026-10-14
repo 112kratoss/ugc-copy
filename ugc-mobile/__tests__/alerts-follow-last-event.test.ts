@@ -39,7 +39,7 @@ describe("Alerts follow each alert's last event", () => {
   });
 
   it('reads an older page from the field the list is ordered by', () => {
-    // The `before` cursor is the oldest alert's last event.
-    expect(alertsScreen).toContain(`alerts[alerts.length - 1]?.${ordering.by}`);
+    // The `before` cursor is the oldest alert's last event (its id rides beside it).
+    expect(alertsScreen).toContain(`before: oldest.${ordering.by}`);
   });
 });
