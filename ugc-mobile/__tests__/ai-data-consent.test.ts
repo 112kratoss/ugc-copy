@@ -26,6 +26,7 @@ import {
   AI_DATA_CONSENT_TITLE,
   AI_DATA_CONSENT_VERSION,
   AI_DATA_RECIPIENTS,
+  AI_DATA_SHARED_ITEMS,
   AI_MODEL_MAKERS,
   askAiDataConsentOnOpen,
   ensureAiDataConsent,
@@ -63,6 +64,13 @@ describe('what the question says', () => {
     for (const maker of AI_MODEL_MAKERS) {
       expect(AI_DATA_CONSENT_MESSAGE).toContain(maker);
       expect(AI_DATA_RECIPIENTS).toContain(maker);
+    }
+  });
+
+  // Settings' "What is sent" names every action that passes the gate.
+  it('says when it is sent: generating, enhancing, a template, and preparing a Seedance reference', () => {
+    for (const action of ['generate', 'enhance a prompt', 'start a template', 'prepare a Seedance reference']) {
+      expect(AI_DATA_SHARED_ITEMS).toContain(action);
     }
   });
 
