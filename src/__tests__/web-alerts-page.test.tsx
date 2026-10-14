@@ -196,6 +196,9 @@ describe('the web Alerts page', () => {
   });
 
   // The unread count covers every alert, but the list stopped at the newest 50.
+  // The three tests below draw 100 to 150 alert rows and re-run every effect; they take
+  // about 1.5 s here and the shared CI runner is three to four times slower (#453's run
+  // timed two of them out at 5 s), so they get the workflow page tests' longer limit.
   it("reads older alerts with the server's before cursor and lists them after the newest page", async () => {
     const newest = rows(1, 50);
     const older = rows(51, 3);
@@ -218,7 +221,7 @@ describe('the web Alerts page', () => {
     // A short page is the end of the inbox.
     expect(screen.queryByRole('button', { name: 'Load older alerts' })).toBeNull();
     expect(screen.getByText('60 unread alerts')).toBeInTheDocument();
-  });
+  }, 20_000);
 
   // auth-js reports a sign-in on every return to the tab, and a hidden
   // <Activity> runs every effect again; each reads the newest page.
@@ -250,7 +253,7 @@ describe('the web Alerts page', () => {
     expect(titles()).toEqual([...fresh, first[49], ...older].map((row) => row.title));
     expect(screen.getByRole('button', { name: 'Load older alerts' })).toBeInTheDocument();
     expect(screen.getByText('101 unread alerts')).toBeInTheDocument();
-  });
+  }, 20_000);
 
   it('starts the list again when the newest page does not reach the alerts already read', async () => {
     const first = rows(1, 50);
@@ -267,5 +270,5 @@ describe('the web Alerts page', () => {
 
     await waitFor(() => expect(titles()).toEqual(burst.map((row) => row.title)));
     expect(screen.getByRole('button', { name: 'Load older alerts' })).toBeInTheDocument();
-  });
+  }, 20_000);
 });
