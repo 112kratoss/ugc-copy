@@ -1,5 +1,5 @@
-import type { HTMLAttributes, ReactNode } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { Activity, type HTMLAttributes, type ReactNode, type Ref } from 'react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProfileActions } from '@/app/creators/[username]/ProfileActions';
@@ -13,8 +13,14 @@ import {
   writeShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
 
-const mockPush = vi.fn();
-const mockReplace = vi.fn();
+// One router for every render, so a test can read what a click asked of it.
+const routerMock = vi.hoisted(() => ({
+  push: vi.fn(),
+  replace: vi.fn(),
+  refresh: vi.fn(),
+}));
+const mockPush = routerMock.push;
+const mockReplace = routerMock.replace;
 const supabaseMocks = vi.hoisted(() => ({
   getSession: vi.fn(),
 }));
@@ -23,22 +29,46 @@ let followState = false;
 let fetchMock: ReturnType<typeof vi.fn>;
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: mockPush,
-    replace: mockReplace,
-    refresh: vi.fn(),
-  }),
+  useRouter: () => routerMock,
 }));
 
 vi.mock('framer-motion', () => ({
   AnimatePresence: ({ children }: { children: ReactNode }) => <>{children}</>,
   motion: {
-    div: ({ children, ...props }: HTMLAttributes<HTMLDivElement>) => <div {...props}>{children}</div>,
+    div: ({
+      children,
+      initial: _initial,
+      animate: _animate,
+      exit: _exit,
+      transition: _transition,
+      ...props
+    }: HTMLAttributes<HTMLDivElement> & { ref?: Ref<HTMLDivElement>; initial?: unknown; animate?: unknown; exit?: unknown; transition?: unknown }) => {
+      void _initial;
+      void _animate;
+      void _exit;
+      void _transition;
+      return <div {...props}>{children}</div>;
+    },
   },
 }));
 
+// The editor, as far as the dialog meets it: the profile it was handed, one
+// field, and a save.
 vi.mock('@/app/creations/CreatorProfileCard', () => ({
-  default: () => <div data-testid="creator-profile-card" />,
+  default: ({ initialProfile, onProfileSaved }: {
+    initialProfile: EditableCreatorProfile;
+    onProfileSaved?: (profile: EditableCreatorProfile) => void;
+  }) => (
+    <form data-testid="creator-profile-card" data-display-name={initialProfile.displayName}>
+      <label>
+        Bio
+        <input name="bio" defaultValue={initialProfile.bio} />
+      </label>
+      <button type="button" onClick={() => onProfileSaved?.({ ...initialProfile, bio: 'Saved bio' })}>
+        Save changes
+      </button>
+    </form>
+  ),
 }));
 
 vi.mock('@/lib/supabase', () => ({
@@ -68,6 +98,7 @@ describe('ProfileActions', () => {
   beforeEach(() => {
     mockPush.mockReset();
     mockReplace.mockReset();
+    routerMock.refresh.mockReset();
     resetFeedbackState();
     clearShowcaseClientCacheForTests();
     followState = false;
@@ -259,7 +290,7 @@ describe('ProfileActions', () => {
 
     render(<ProfileActions profile={profile} />);
 
-    expect(await screen.findByRole('button', { name: /edit profile/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Edit profile' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^follow$/i })).not.toBeInTheDocument();
   });
 
@@ -461,6 +492,247 @@ describe('ProfileActions', () => {
       expect(mockReplace).not.toHaveBeenCalled();
       // Nobody was blocked, so nothing is taken out of what Explore kept.
       expect(keptExplorePosts()).toEqual(['theirs', 'someone-elses']);
+    });
+  });
+
+  // The server render says the viewer blocked this creator; the page's own
+  // panel offers Unblock.
+  describe('a creator the viewer blocked', () => {
+    const viewerSession = {
+      data: { session: { access_token: 'viewer-token', user: { id: 'viewer-1' } } },
+    };
+
+    it('offers Report user alone: no Follow, no Share, no Block, and reads no follow state', async () => {
+      supabaseMocks.getSession.mockResolvedValue(viewerSession);
+      render(<ProfileActions profile={profile} blockedByViewer />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'More actions for @creator-name' }));
+
+      const rows = screen.getAllByRole('menuitem').map((row) => row.querySelector('.font-semibold')?.textContent);
+      expect(rows).toEqual(['Report user']);
+      expect(screen.queryByRole('button', { name: /follow/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /share/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /edit profile/i })).not.toBeInTheDocument();
+      await Promise.resolve();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('still reports them', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      supabaseMocks.getSession.mockResolvedValue(viewerSession);
+      fetchMock.mockImplementation(async () => ({ ok: true, status: 200, json: async () => ({ success: true }) }));
+      render(<ProfileActions profile={profile} blockedByViewer />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'More actions for @creator-name' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: /report user/i }));
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/moderation/reports', expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer viewer-token' }),
+      })));
+    });
+  });
+
+  // The owner's Edit profile dialog: read when asked for, named, closable from
+  // the keyboard, and never throwing edits away without asking.
+  describe('the owner editor', () => {
+    const ownerSession = {
+      data: { session: { access_token: 'owner-token', user: { id: profile.id } } },
+    };
+    const privateProfile = {
+      id: profile.id,
+      username: profile.username,
+      suggestedUsername: profile.username,
+      displayName: 'Private Name',
+      bio: 'Private bio',
+      avatarUrl: '',
+      coverUrl: '',
+      websiteUrl: '',
+      twitterHandle: '',
+      instagramHandle: '',
+      tiktokHandle: '',
+      location: '',
+      credits: 10,
+    };
+    const profileReads = () => fetchMock.mock.calls.filter(([url]) => url === '/api/profile');
+    const answerProfileRead = (answer: () => unknown = () => ({ ok: true, status: 200, json: async () => privateProfile })) => {
+      fetchMock.mockImplementation(async (url: string) => {
+        if (url === '/api/profile') return answer();
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+    };
+    const openEditor = async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Edit profile' }));
+      return screen.findByRole('dialog', { name: 'Edit profile' });
+    };
+
+    beforeEach(() => {
+      supabaseMocks.getSession.mockResolvedValue(ownerSession);
+    });
+
+    it('reads the private profile when Edit profile is pressed, not on the visit', async () => {
+      answerProfileRead();
+      render(<ProfileActions profile={profile} />);
+
+      await screen.findByRole('button', { name: 'Edit profile' });
+      await Promise.resolve();
+      expect(profileReads()).toHaveLength(0);
+
+      const dialog = await openEditor();
+
+      expect(dialog).toHaveAttribute('aria-modal', 'true');
+      expect(await within(dialog).findByTestId('creator-profile-card')).toHaveAttribute('data-display-name', 'Private Name');
+      expect(profileReads()).toHaveLength(1);
+      expect(profileReads()[0][1]).toMatchObject({ headers: { Authorization: 'Bearer owner-token' } });
+    });
+
+    it('draws the form only once the read has landed', async () => {
+      let answerRead: (value: unknown) => void = () => undefined;
+      answerProfileRead(() => new Promise((resolve) => {
+        answerRead = resolve;
+      }));
+      render(<ProfileActions profile={profile} />);
+
+      const dialog = await openEditor();
+
+      expect(within(dialog).getByRole('status', { name: 'Loading your profile' })).toBeInTheDocument();
+      expect(within(dialog).queryByTestId('creator-profile-card')).not.toBeInTheDocument();
+
+      answerRead({ ok: true, status: 200, json: async () => privateProfile });
+
+      expect(await within(dialog).findByTestId('creator-profile-card')).toBeInTheDocument();
+      expect(within(dialog).queryByRole('status', { name: 'Loading your profile' })).not.toBeInTheDocument();
+    });
+
+    it('says when the read fails, and reads again on Try again', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      let failing = true;
+      answerProfileRead(() => (failing
+        ? { ok: false, status: 500, json: async () => ({ error: 'Failed' }) }
+        : { ok: true, status: 200, json: async () => privateProfile }));
+      render(<ProfileActions profile={profile} />);
+
+      const dialog = await openEditor();
+
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent('Could not load your profile.');
+      failing = false;
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Try again' }));
+
+      expect(await within(dialog).findByTestId('creator-profile-card')).toBeInTheDocument();
+      expect(profileReads()).toHaveLength(2);
+    });
+
+    it('closes from its labelled Close button and from Escape, asking nothing when untouched', async () => {
+      const confirm = vi.spyOn(window, 'confirm');
+      answerProfileRead();
+      render(<ProfileActions profile={profile} />);
+
+      let dialog = await openEditor();
+      await within(dialog).findByTestId('creator-profile-card');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Edit profile' })).toHaveFocus();
+
+      dialog = await openEditor();
+      await within(dialog).findByTestId('creator-profile-card');
+      fireEvent.keyDown(window, { key: 'Escape' });
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(confirm).not.toHaveBeenCalled();
+    });
+
+    it('asks before throwing changes away, from Close and from Escape', async () => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      answerProfileRead();
+      render(<ProfileActions profile={profile} />);
+
+      const dialog = await openEditor();
+      const bio = await within(dialog).findByRole('textbox', { name: 'Bio' });
+      fireEvent.change(bio, { target: { value: 'A new bio' } });
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+      expect(confirm).toHaveBeenCalledWith('Discard your profile changes?');
+      expect(screen.getByRole('dialog', { name: 'Edit profile' })).toBeInTheDocument();
+      expect(bio).toHaveValue('A new bio');
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(confirm).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole('dialog', { name: 'Edit profile' })).toBeInTheDocument();
+
+      confirm.mockReturnValue(true);
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('starts each opening unchanged', async () => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      answerProfileRead();
+      render(<ProfileActions profile={profile} />);
+
+      let dialog = await openEditor();
+      fireEvent.change(await within(dialog).findByRole('textbox', { name: 'Bio' }), { target: { value: 'Draft' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+      expect(confirm).toHaveBeenCalledTimes(1);
+
+      dialog = await openEditor();
+      await within(dialog).findByTestId('creator-profile-card');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('closes after a save without asking, and draws the page again', async () => {
+      const confirm = vi.spyOn(window, 'confirm');
+      answerProfileRead();
+      render(<ProfileActions profile={profile} />);
+
+      const dialog = await openEditor();
+      fireEvent.change(await within(dialog).findByRole('textbox', { name: 'Bio' }), { target: { value: 'Saved bio' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(confirm).not.toHaveBeenCalled();
+      await waitFor(() => expect(routerMock.refresh).toHaveBeenCalledTimes(1));
+    });
+
+    // A hidden <Activity> (and Fast Refresh) runs every cleanup, the key
+    // listener's included; the effects that run again put it back.
+    it('keeps its Escape guard when every effect runs again', async () => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      answerProfileRead();
+      const inActivity = (mode: 'visible' | 'hidden') => (
+        <Activity mode={mode}>
+          <ProfileActions profile={profile} />
+        </Activity>
+      );
+      const { rerender } = render(inActivity('visible'));
+
+      const dialog = await openEditor();
+      fireEvent.change(await within(dialog).findByRole('textbox', { name: 'Bio' }), { target: { value: 'Draft' } });
+      rerender(inActivity('hidden'));
+      rerender(inActivity('visible'));
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('dialog', { name: 'Edit profile' })).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: 'Bio' })).toHaveValue('Draft');
+    });
+
+    it('keeps Tab inside the dialog', async () => {
+      answerProfileRead();
+      render(<ProfileActions profile={profile} />);
+
+      const dialog = await openEditor();
+      const save = await within(dialog).findByRole('button', { name: 'Save changes' });
+      const close = within(dialog).getByRole('button', { name: 'Close' });
+
+      save.focus();
+      fireEvent.keyDown(window, { key: 'Tab' });
+      expect(close).toHaveFocus();
+
+      fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+      expect(save).toHaveFocus();
     });
   });
 });
