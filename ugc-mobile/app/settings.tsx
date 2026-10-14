@@ -1,7 +1,8 @@
+import { useQuery } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
 import { router } from 'expo-router';
-import { ArrowUpRight, Ban, Bell, ChevronRight, CircleHelp, CreditCard, FileText, Gift, ShieldCheck, Sparkles, Trash2, UserRound } from 'lucide-react-native';
-import { Linking, Pressable, View } from 'react-native';
+import { ArrowUpRight, Ban, Bell, ChevronRight, CircleHelp, CreditCard, EyeOff, FileText, Gift, ShieldCheck, Sparkles, Trash2, UserRound } from 'lucide-react-native';
+import { Linking, Platform, Pressable, View } from 'react-native';
 
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
 import { AutoplaySetting } from '@/components/autoplay-setting';
@@ -24,6 +25,7 @@ import {
   summarizeMediaDiagnostics,
 } from '@/lib/media-diagnostics';
 import { haptic } from '@/lib/haptics';
+import { canRevealNsfwInApp } from '@/lib/nsfw-reveal-policy';
 import { CREDIT_BALANCE_LOADING_LABEL, formatCreditAmount } from '@/lib/pricing';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
@@ -96,8 +98,8 @@ export default function SettingsScreen() {
         icon={<Sparkles size={appTheme.icon.feature} color={theme.colors.primary} />}
         title="AI data sharing"
         body={aiDataConsent.grantedAt
-          ? 'Allowed. Your prompts and media go to AI services when you create.'
-          : 'Not allowed. You’ll be asked before anything is sent to AI services.'}
+          ? 'Allowed on this phone. Your prompts and media go to AI services when you create.'
+          : 'Not allowed on this phone. You’ll be asked before anything is sent to AI services.'}
         onPress={() => router.push('/ai-data-sharing' as never)}
       />
 
@@ -111,6 +113,10 @@ export default function SettingsScreen() {
           onPress={() => router.push('/blocked-users' as never)}
         />
       ) : null}
+
+      {/* Only where a mature post can be revealed at all: Android never
+          reveals one, so it has nothing to show here. */}
+      {user && canRevealNsfwInApp(Platform.OS) ? <MatureContentSetting /> : null}
 
       <GroupLabel>Support & legal</GroupLabel>
 
@@ -201,6 +207,35 @@ async function copyMediaDiagnostics(versionLabel: string) {
       ? `${summary.total} media events this session: ${summary.stalls} stalled, ${summary.failures} failed, ${summary.recoveries} recovered.`
       : 'No media problems recorded this session.',
   });
+}
+
+/**
+ * The account's mature-content setting, shown and never changed here: on iOS
+ * an adult turns it on from the website (Apple's rule for mature user content),
+ * then reveals a post at a time. Until this row, someone who had turned it on
+ * could turn it off only from the next mature post they happened to open.
+ */
+function MatureContentSetting() {
+  const theme = useAppTheme();
+  const { api, user } = useAuth();
+  const preferences = useQuery({
+    queryKey: ['content-preferences', user?.id ?? null],
+    enabled: Boolean(user),
+    queryFn: api.getContentPreferences,
+  });
+  const state = preferences.data
+    ? (preferences.data.showMature ? 'On. Mature posts can be revealed one at a time.' : 'Off. Mature posts stay covered.')
+    : preferences.isError ? 'Could not be checked.' : null;
+
+  return (
+    <SettingsCard
+      icon={<EyeOff size={appTheme.icon.feature} color={theme.colors.text} />}
+      title="Mature content"
+      body={state ? `${state} Change on the website.` : 'Change on the website.'}
+      external
+      onPress={() => void Linking.openURL(`${env.siteUrl}/profile`)}
+    />
+  );
 }
 
 const APPEARANCE_LABELS: Record<AppearancePreference, string> = {

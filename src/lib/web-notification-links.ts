@@ -15,6 +15,7 @@ export function resolveWebNotificationPath(deepLink: string | null | undefined) 
     const initialId = url.searchParams.get('initialId');
 
     if (url.pathname === '/viewer') {
+      // A post alert written before post alerts linked /showcase/<id>.
       if (url.searchParams.get('source') === 'showcase-feed' && initialId) {
         return `/showcase/${encodeURIComponent(initialId)}`;
       }
@@ -30,8 +31,10 @@ export function resolveWebNotificationPath(deepLink: string | null | undefined) 
       // A workflow run's notification. The app has no canvas, so the link is
       // its Alerts route with the canvas on it, and the canvas is here.
       const canvasId = url.searchParams.get('workflowCanvas');
-      // A bare /studio is the app's Alerts tab itself ("New follower" links
-      // there): the alert is read and the viewer stays on Alerts, as in the app.
+      // A bare /studio is the app's Alerts tab itself (a "New follower" alert
+      // with no handle to open, and every one written before they opened the
+      // follower's page): the alert is read and the viewer stays on Alerts, as
+      // in the app.
       return canvasId ? `/create-workflow?canvas=${encodeURIComponent(canvasId)}` : null;
     }
 

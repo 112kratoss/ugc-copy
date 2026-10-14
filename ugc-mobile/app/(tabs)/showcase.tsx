@@ -39,6 +39,7 @@ import {
 } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
 import { useAutoplayPreviewsEnabled } from '@/lib/autoplay-preference';
+import { setCachedCreatorProfileBlocked } from '@/lib/creator-profile-view-model';
 import { createFeedVideoActivationStore, FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
 import { buildFeedFeedbackMenu, canHideFeedCreator, isOwnFeedPost } from '@/lib/feed-feedback-menu';
 import { hideCreatorLabel } from '@/lib/hide-creator-label';
@@ -835,10 +836,11 @@ export default function ShowcaseScreen() {
           { queryKey: viewerFeedQueryKey },
           (current) => removeShowcaseFeedItemsFromInfiniteData(current, { creatorId })
         );
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['creator-profile'] }),
-          queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] }),
-        ]);
+        // Their cached grid becomes the server's blocked answer, as the creator
+        // page's own Block leaves it. Invalidating ['creator-profile'] read
+        // every loaded page of every cached grid again.
+        setCachedCreatorProfileBlocked(queryClient, creatorId);
+        await queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] });
         void AccessibilityInfo.announceForAccessibility(`${creatorLabel} blocked.`);
       };
       // `.catch` rather than try/catch: React Compiler cannot yet compile

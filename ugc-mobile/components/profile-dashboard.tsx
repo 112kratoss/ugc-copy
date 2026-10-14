@@ -5,6 +5,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import {
+  AtSign,
   AudioLines,
   ChevronRight,
   Crown,
@@ -38,7 +39,7 @@ import { AppText, IconButton, SecondaryButton, StatusBlock } from '@/components/
 import { useAppForeground } from '@/lib/app-foreground';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
-import { buildShareUrl } from '@/lib/viewer-actions';
+import { isClaimedProfileUsername } from '@/lib/edit-profile-form';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { formatUsdCents } from '@/lib/home-view-model';
 import { getGenerationKind, getGenerationLabel } from '@/lib/generation-media';
@@ -49,14 +50,17 @@ import { MotionView, usePressMotion } from '@/lib/motion';
 import {
   DEFAULT_PROFILE_MEDIA_TAB,
   FALLBACK_PROFILE_MEDIA,
+  OWN_PROFILE_SHARE_SOURCE,
   PROFILE_MEDIA_TABS,
   generationToProfileMediaCard,
+  getOwnerPostScopeCounts,
   getProfileMediaEmptyTitle,
   getProfileMediaSwipeTarget,
   getProfileHandle,
   getProfileInitials,
   getProfileName,
   getProfileStats,
+  ownProfileShareUrl,
   ownerPostToProfileMediaCard,
   savedShowcaseToProfileMediaCards,
   type ProfileMediaCard,
@@ -120,13 +124,13 @@ export function ProfileDashboard({
   const theme = useAppTheme();
   const { user, api, credits } = useAuth();
 
-  // The same share as a creator page's, for the viewer's own: Profile offered
-  // no way to share or preview the public page (the web /profile has both).
+  // Profile offered no way to share or preview the public page (the web
+  // /profile has both). Filed as the owner's own share, not a visitor's.
   const shareOwnProfile = async (username: string, name: string) => {
-    const url = buildShareUrl(env.siteUrl, `/creators/${encodeURIComponent(username)}`, 'creator-profile');
+    const url = ownProfileShareUrl(env.siteUrl, username);
     const result = await Share.share({ message: `${name} on Magicbooklet\n${url}`, url, title: name });
     if (result.action !== Share.sharedAction) return;
-    await api.shareCreatorProfile(username, { sourceSurface: 'creator-profile' }).catch(() => null);
+    await api.shareCreatorProfile(username, { sourceSurface: OWN_PROFILE_SHARE_SOURCE }).catch(() => null);
   };
   const isFocused = useIsFocused();
   const [activeTab, setActiveTab] = useState<ProfileMediaTab>(initialTab);
@@ -264,11 +268,8 @@ export function ProfileDashboard({
   const archivedPostCards = useMemo(() => allPostCards.filter((card) => card.isArchived), [allPostCards]);
   const postCards = postsScope === 'archived' ? archivedPostCards : activePostCards;
   const profile = profileQuery.data;
-  // The seller total the server put on the profile, or the one the Posts page
-  // carried while a server without it is live. Unknown until either answers.
-  const earningsUsdCents = profile?.sales?.earningsUsdCents
-    ?? postsQuery.data?.pages[0]?.summary?.earningsUsdCents
-    ?? null;
+  // The seller total the server puts on the profile; unknown until it answers.
+  const earningsUsdCents = profile?.sales?.earningsUsdCents ?? null;
   const displayName = getProfileName(profile, user?.email);
   const handle = getProfileHandle(profile, user?.email);
   const initials = getProfileInitials(profile, user?.email);
@@ -430,8 +431,10 @@ export function ProfileDashboard({
     );
   }
 
-  // The public page exists once a handle is claimed.
-  const publicUsername = profile?.username ?? null;
+  // The public page and its link wait for a claimed handle. Every account
+  // starts on a `creator-xxxxxxxx` placeholder, whose page stops resolving the
+  // moment a handle is claimed; until then the hero offers to claim one.
+  const publicUsername = profile?.username && isClaimedProfileUsername(profile.username) ? profile.username : null;
 
   return (
     <ProfileMediaList
@@ -444,7 +447,7 @@ export function ProfileDashboard({
       postsScope={activeTab === 'Creations' ? creationsScope : postsScope}
       postsScopeCounts={activeTab === 'Creations'
         ? { active: activeCreationCards.length, archived: archivedCreationCards.length }
-        : { active: activePostCards.length, archived: archivedPostCards.length }}
+        : getOwnerPostScopeCounts(profile?.stats, { active: activePostCards.length, archived: archivedPostCards.length })}
       onPostsScopeChange={activeTab === 'Creations' ? setCreationsScope : setPostsScope}
       renderingCreations={showRenderingStrip ? renderingCreations : undefined}
       // Times on the strip are as of the page they were read from, which the
@@ -469,6 +472,7 @@ export function ProfileDashboard({
             onEdit={() => router.push('/edit-profile' as never)}
             onViewPublic={publicUsername ? () => router.push(`/creators/${encodeURIComponent(publicUsername)}` as never) : undefined}
             onShare={publicUsername ? () => void shareOwnProfile(publicUsername, displayName) : undefined}
+            onClaimHandle={profile && !publicUsername ? () => router.push('/edit-profile' as never) : undefined}
           />
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <BalanceCard
@@ -798,6 +802,7 @@ function ProfileHeroCard({
   onEdit,
   onViewPublic,
   onShare,
+  onClaimHandle,
 }: {
   profile?: ProfileResponse | null;
   displayName: string;
@@ -809,6 +814,8 @@ function ProfileHeroCard({
   /** Present once a handle is claimed: the public page exists then. */
   onViewPublic?: () => void;
   onShare?: () => void;
+  /** Present while the account still holds the signup placeholder. */
+  onClaimHandle?: () => void;
 }) {
   const theme = useAppTheme();
   return (
@@ -903,6 +910,37 @@ function ProfileHeroCard({
               </Pressable>
             ) : null}
           </View>
+        ) : null}
+        {onClaimHandle ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Claim your handle"
+            accessibilityHint="Opens Edit profile"
+            onPress={onClaimHandle}
+            style={({ pressed }) => ({
+              marginTop: 10,
+              minHeight: 44,
+              borderRadius: 14,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 10,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+            })}
+          >
+            <AtSign size={appTheme.icon.sm} color={theme.colors.primary} />
+            <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+              <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 13, fontWeight: '700' }}>Claim your handle</Text>
+              {/* The web's line for the same step (`/profile`'s setup card). */}
+              <Text numberOfLines={2} style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 16 }}>
+                Choose a custom handle for your public URL
+              </Text>
+            </View>
+            <ChevronRight size={appTheme.icon.sm} color={theme.colors.faint} />
+          </Pressable>
         ) : null}
 
         <View style={{ gap: 5, paddingTop: 12 }}>

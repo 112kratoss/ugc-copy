@@ -18,9 +18,10 @@ const state = vi.hoisted(() => ({
   getSession: vi.fn(),
   persistAccountStateOnChange: vi.fn(),
   profileResolve: null as null | ((profile: { credits: number }) => void),
-  queryClient: { clear: vi.fn(), fetchQuery: vi.fn() },
+  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), removeQueries: vi.fn() },
   readPersistedSession: vi.fn(),
   restoreAccountState: vi.fn(),
+  routerDismissTo: vi.fn(),
   routerReplace: vi.fn(),
   sessionResolve: null as null | ((result: unknown) => void),
   signOut: vi.fn(),
@@ -38,7 +39,7 @@ vi.mock('expo-constants', () => ({
 }));
 
 vi.mock('expo-router', () => ({
-  router: { replace: state.routerReplace },
+  router: { dismissTo: state.routerDismissTo, replace: state.routerReplace },
 }));
 
 vi.mock('react-native', () => ({
@@ -52,7 +53,9 @@ vi.mock('../lib/env', () => ({
 }));
 
 vi.mock('../lib/api-client', () => ({
+  ACCOUNT_DELETING_CODE: 'ACCOUNT_DELETING',
   ApiError: class ApiError extends Error {},
+  isRequestTimeoutError: () => false,
   createApiClient: (options: { getAccessToken: () => Promise<string | null> }) => ({
     deleteAccount: state.deleteAccount,
     getAccessTokenForTest: options.getAccessToken,
@@ -154,6 +157,8 @@ describe('AuthProvider startup performance', () => {
     state.readPersistedSession.mockReset().mockResolvedValue(null);
     state.deleteAccount.mockReset();
     state.queryClient.clear.mockReset();
+    state.queryClient.removeQueries.mockReset();
+    state.routerDismissTo.mockReset();
     state.routerReplace.mockReset();
     state.signOut.mockReset().mockResolvedValue({ error: null });
     state.unregisterPush.mockReset().mockResolvedValue(undefined);
@@ -396,6 +401,7 @@ describe('AuthProvider startup performance', () => {
 
     expect((failure as Error).message).toBe('Keychain unavailable');
     expect(state.clearPersistedSession).not.toHaveBeenCalled();
+    expect(state.queryClient.removeQueries).not.toHaveBeenCalled();
     expect(state.clearSearchHistory).not.toHaveBeenCalled();
     expect(latest.current?.user?.id).toBe('user-1');
     expect(latest.current?.isSigningOut).toBe(false);
@@ -471,7 +477,7 @@ describe('AuthProvider startup performance', () => {
     expect(state.queryClient.clear).not.toHaveBeenCalled();
 
     state.deleteAccount.mockResolvedValueOnce({ success: true, deleted: true });
-    await expect(latest.current?.deleteAccount()).resolves.toBeUndefined();
+    await expect(latest.current?.deleteAccount()).resolves.toBe('deleted');
     expect(state.clearLocalPush).toHaveBeenCalledOnce();
     expect(state.clearPersistedSession).toHaveBeenCalledOnce();
     expect(state.clearSearchHistory).toHaveBeenCalledOnce();
@@ -564,6 +570,33 @@ describe('AuthProvider startup performance', () => {
     expect(state.clearPersistedAccountState).toHaveBeenCalledOnce();
     expect(stopSaving).toHaveBeenCalled();
     expect(latest.current?.user).toBeNull();
+    unmount();
+  });
+
+  // Creator pages are cached without the viewer in their key, and the next
+  // person on the phone saw the last one's Following and owner controls
+  // (audit 04-6).
+  it('forgets the creator pages and follow states, which carry who was signed in, when the person signs out', async () => {
+    state.readPersistedSession.mockResolvedValue(session);
+    const { latest, unmount } = renderProvider();
+    await settle();
+    await renderer.act(async () => {
+      state.sessionResolve?.({ data: { session }, error: null });
+    });
+    await settle();
+    expect(state.queryClient.removeQueries).not.toHaveBeenCalled();
+
+    await renderer.act(async () => {
+      await latest.current?.signOut();
+    });
+
+    expect(state.queryClient.removeQueries.mock.calls).toEqual([
+      [{ queryKey: ['creator-profile'] }],
+      [{ queryKey: ['creator-follow-state'] }],
+    ]);
+    // Gone before the sign-in screen, or a creator page, can draw them again.
+    expect(state.queryClient.removeQueries.mock.invocationCallOrder[1])
+      .toBeLessThan(state.routerReplace.mock.invocationCallOrder[0]);
     unmount();
   });
 });

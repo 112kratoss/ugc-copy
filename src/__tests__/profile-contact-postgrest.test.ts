@@ -89,6 +89,22 @@ describe.skipIf(!configPath || !connectionString)('profile and contact services 
     expect((await db.query('select username from public.profiles where id=$1', [owner])).rows[0].username).not.toBe(username);
   });
 
+  it('keeps every stored column a partial save leaves out, and clears one sent as null', async () => {
+    const links = { websiteUrl: 'https://audit.example', instagramHandle: 'instagram.com/audit.creator', location: 'Bengaluru' };
+    expect(await update(owner, { ...body(), ...links })).toMatchObject({ ok: true });
+    const columns = 'select display_name,bio,website_url,instagram_handle,location from public.profiles where id=$1';
+
+    expect(await update(owner, { username, bio: 'Only the bio' })).toMatchObject({ ok: true, response: { websiteUrl: 'https://audit.example' } });
+    expect((await db.query(columns, [owner])).rows[0]).toEqual({
+      display_name: 'Audit creator', bio: 'Only the bio', website_url: 'https://audit.example', instagram_handle: 'audit.creator', location: 'Bengaluru',
+    });
+
+    expect(await update(owner, { username, websiteUrl: null })).toMatchObject({ ok: true });
+    expect((await db.query(columns, [owner])).rows[0]).toEqual({
+      display_name: 'Audit creator', bio: 'Only the bio', website_url: null, instagram_handle: 'audit.creator', location: 'Bengaluru',
+    });
+  });
+
   it('stores a normalized contact message and default subject', async () => {
     expect(await contact()).toMatchObject({ ok: true });
     expect((await db.query('select name,email,subject,message from public.contact_messages where email=$1', [email])).rows)

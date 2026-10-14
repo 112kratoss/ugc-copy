@@ -10,7 +10,8 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { settleCreditPurchaseReferralRewards } from '@/lib/credit-referral-integration';
-import type { RunAfterResponse } from '@/lib/deferrable-notification';
+import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
+import { notifyMobileCreditPurchase } from '@/lib/mobile-notifications';
 import {
   createPendingPaymentResultBody,
   verifyRazorpayPaymentAgainstOrder,
@@ -62,6 +63,55 @@ function normalizeBody(value: unknown): CreditVerifyBody {
     : {};
 }
 
+/**
+ * "Credits added" for a top-up paid through Razorpay, worded as a top-up in
+ * the app is: the balance it left. Read when the alert is sent, the balance
+ * includes a referral bonus granted with the purchase; when it cannot be read
+ * the alert still goes, without the number. Whichever of the buyer's verify
+ * and the webhook settled the top-up calls this, once; the alert's dedupe key
+ * makes a second call harmless. Never rejects.
+ */
+export async function notifyRazorpayCreditPurchase(
+  adminSupabase: SupabaseClient,
+  { userId, transactionId }: { userId: string; transactionId: string },
+) {
+  let credits: number | null = null;
+  try {
+    const { data, error } = await adminSupabase
+      .from('profiles')
+      .select('credits')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error) throw error;
+    const balance = (data as { credits?: unknown } | null)?.credits;
+    credits = typeof balance === 'number' ? balance : null;
+  } catch (error) {
+    logBackendError('razorpay_credit_notification_balance_unread', { transactionId, error });
+  }
+
+  try {
+    return await notifyMobileCreditPurchase(adminSupabase, { userId, credits, transactionId });
+  } catch (error) {
+    logBackendError('razorpay_credit_notification_failed', { transactionId, error });
+    return null;
+  }
+}
+
+/**
+ * A referred buyer's top-up announces the rewards it earned, then the balance
+ * they left. Next's after() starts everything it is handed at once, so the two
+ * are queued one behind the other, as the app's purchases queue theirs.
+ */
+function oneAtATime(runAfterResponse: RunAfterResponse): RunAfterResponse {
+  let previous: Promise<unknown> = Promise.resolve();
+
+  return (task) => runAfterResponse(() => {
+    // The next one goes either way: an alert that failed holds nothing back.
+    previous = previous.then(task, task);
+    return previous;
+  });
+}
+
 export async function verifyCreditRazorpayPaymentForRoute({
   keyId,
   keySecret,
@@ -70,6 +120,7 @@ export async function verifyCreditRazorpayPaymentForRoute({
   createAdminSupabase,
   verifySignature = verifyRazorpayPaymentSignature,
   fetchPayment = defaultFetchRazorpayPayment,
+  notifyCreditPurchase = notifyRazorpayCreditPurchase,
   runAfterResponse,
 }: {
   keyId?: string | null;
@@ -79,10 +130,12 @@ export async function verifyCreditRazorpayPaymentForRoute({
   createAdminSupabase: () => SupabaseClient;
   verifySignature?: typeof verifyRazorpayPaymentSignature;
   fetchPayment?: typeof defaultFetchRazorpayPayment;
+  notifyCreditPurchase?: typeof notifyRazorpayCreditPurchase;
   /**
    * Runs a task once the caller has answered its request. The route passes one
-   * so a referred buyer's reward notifications stop holding the checkout's
-   * answer back; without it they are sent before this returns.
+   * so a referred buyer's reward notifications, and the "Credits added" of a
+   * top-up this call settles, stop holding the checkout's answer back; without
+   * it they are sent before this returns.
    */
   runAfterResponse?: RunAfterResponse;
 }): Promise<CreditRazorpayVerifyRouteResult> {
@@ -301,13 +354,21 @@ export async function verifyCreditRazorpayPaymentForRoute({
     };
   }
 
+  // This call settled the top-up, so the buyer is told here: their rewards,
+  // then the balance, in that order even when both go out behind the answer.
+  // When the webhook settles one, the webhook tells them.
+  const runInOrder = runAfterResponse && oneAtATime(runAfterResponse);
   const referral = await settleCreditPurchaseReferralRewards({
     adminSupabase,
     purchaserUserId: user.id,
     transactionId: transaction.id,
     source: 'razorpay_verify',
-    runAfterResponse,
+    runAfterResponse: runInOrder,
   });
+  await sendDeferrableNotification(runInOrder, () => notifyCreditPurchase(adminSupabase, {
+    userId: user.id,
+    transactionId: transaction.id,
+  }));
 
   return {
     ok: true,

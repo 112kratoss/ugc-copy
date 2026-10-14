@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  ACCOUNT_DELETION_TIMEOUT_MS,
+  AccountDeletingError,
   ApiError,
   GENERATION_START_TIMEOUT_MS,
   SessionMergedError,
   SessionRejectedError,
   UpgradeRequiredError,
   createApiClient,
+  isRequestTimeoutError,
+  setAccountDeletingHandler,
   setSessionMergedHandler,
   setSessionRejectedHandler,
   setUpgradeRequiredHandler,
@@ -157,6 +161,77 @@ describe('mobile api client caching', () => {
       confirmation: 'DELETE',
       appleAuthorizationCode: 'one-time-apple-code',
     });
+  });
+
+  it('reads the scheduled deletion the server answers once the account is locked', async () => {
+    const answer = { success: true, deleted: false, deletionScheduled: true };
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: vi.fn(async () => new Response(JSON.stringify(answer), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      })) as unknown as typeof fetch,
+    });
+
+    await expect(api.deleteAccount('DELETE')).resolves.toEqual(answer);
+  });
+
+  // At 30 s a slow answer read as "Account was not deleted" while the server
+  // went on erasing it (audit 04-2).
+  it('waits two minutes for a deletion before calling it unanswered, and says it had been sent', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const fetcher = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      if (init?.signal) signals.push(init.signal);
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason ?? new Error('aborted')), { once: true });
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+      requestTimeoutMs: 100,
+    });
+    try {
+      const deletion = api.deleteAccount('DELETE').catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(ACCOUNT_DELETION_TIMEOUT_MS - 1_000);
+      expect(signals).toHaveLength(1);
+      expect(signals[0].aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(ACCOUNT_DELETION_TIMEOUT_MS).toBe(120_000);
+      expect(signals[0].aborted).toBe(true);
+      const error = await deletion;
+      expect(error).toMatchObject({ name: 'ApiError', status: 0 });
+      expect(isRequestTimeoutError(error)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('tells a request that never got out from one it stopped waiting for', async () => {
+    const offline = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: vi.fn(async () => {
+        throw new TypeError('Network request failed');
+      }) as unknown as typeof fetch,
+    });
+    const refused = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: vi.fn(async () => new Response(JSON.stringify({ error: 'Backend unavailable' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      })) as unknown as typeof fetch,
+    });
+
+    const offlineError = await offline.deleteAccount('DELETE').catch((error: unknown) => error);
+    expect(offlineError).toMatchObject({ name: 'ApiError', status: 0 });
+    expect(isRequestTimeoutError(offlineError)).toBe(false);
+    expect(isRequestTimeoutError(await refused.deleteAccount('DELETE').catch((error: unknown) => error))).toBe(false);
+    expect(isRequestTimeoutError(new Error('Request timed out after 5ms'))).toBe(false);
   });
 
   it('sends a request id with backend calls', async () => {
@@ -795,6 +870,25 @@ describe('mobile api client caching', () => {
     const [url] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
     expect(url).toBe('https://magicbooklet.test/api/generations?detail=summary&includeArchived=false&limit=24&cursor=24');
     expect(response.pagination).toEqual({ limit: 24, hasMore: false, nextCursor: null });
+  });
+
+  it('reads older alerts from the last event the server printed, its offset intact', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ success: true, notifications: [], unreadCount: 0 }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.listMobileNotifications({ limit: 50, before: null });
+    await api.listMobileNotifications({ limit: 50, before: '2026-10-14T11:11:00.000123+00:00' });
+
+    const [[firstUrl], [olderUrl]] = fetcher.mock.calls as unknown as Array<[string, RequestInit]>;
+    // The newest page asks for no cursor at all.
+    expect(firstUrl).toBe('https://magicbooklet.test/api/mobile/notifications?limit=50');
+    // A bare "+" in a query string reads as a space on the server.
+    expect(olderUrl).toBe('https://magicbooklet.test/api/mobile/notifications?limit=50&before=2026-10-14T11%3A11%3A00.000123%2B00%3A00');
+    expect(new URL(olderUrl).searchParams.get('before')).toBe('2026-10-14T11:11:00.000123+00:00');
   });
 
   it('resolves every creation descriptor media URL against the API origin', async () => {
@@ -1651,8 +1745,9 @@ describe('mobile api client merged-guest-session handling', () => {
   });
 
   it('leaves a mid-deletion account alone: 409 ACCOUNT_DELETING is not a merged session', async () => {
-    // Both failures are 409. Only the merged one may tear down the session —
-    // signing a deleting user out would strand them mid-flow for no reason.
+    // Both failures are 409. The merged-guest teardown belongs to the merged
+    // one only: it would refuse a registered session, which is what is being
+    // deleted. ACCOUNT_DELETING has a handler of its own.
     const handler = vi.fn();
     setSessionMergedHandler(handler);
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
@@ -1688,6 +1783,83 @@ describe('mobile api client merged-guest-session handling', () => {
     expect(error).toBeInstanceOf(ApiError);
     expect(error).not.toBeInstanceOf(SessionMergedError);
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe('mobile api client account-deleting handling', () => {
+  afterEach(() => {
+    setAccountDeletingHandler(null);
+    setSessionMergedHandler(null);
+    vi.useRealTimers();
+  });
+
+  function accountDeletingResponse() {
+    return new Response(JSON.stringify({
+      code: 'ACCOUNT_DELETING',
+      error: 'This account is being permanently deleted.',
+    }), {
+      status: 409,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  function apiWithToken(fetcher: ReturnType<typeof vi.fn>, token: string | null = 'token-1') {
+    return createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => token,
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+  }
+
+  // A deletion asked for on another device, or one whose answer this phone
+  // never saw, refused every request with a plain error (audit 04-2).
+  it('ends the session once for a burst of 409 ACCOUNT_DELETING answers', async () => {
+    const handler = vi.fn();
+    const merged = vi.fn();
+    setAccountDeletingHandler(handler);
+    setSessionMergedHandler(merged);
+    const fetcher = vi.fn(async () => accountDeletingResponse());
+    const api = apiWithToken(fetcher);
+
+    const results = await Promise.allSettled([api.getProfile(), api.getShowcaseFeed(), api.getWelcomeCredits()]);
+
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    for (const result of results) {
+      expect((result as PromiseRejectedResult).reason).toBeInstanceOf(AccountDeletingError);
+      expect((result as PromiseRejectedResult).reason).toBeInstanceOf(ApiError);
+    }
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toMatchObject({ name: 'AccountDeletingError', status: 409, code: 'ACCOUNT_DELETING' });
+    expect(merged).not.toHaveBeenCalled();
+  });
+
+  it('ignores a token the caller supplied itself', async () => {
+    // The feed-event queue drains a previous identity's events with that
+    // identity's own token: its account says nothing about who is signed in now.
+    const handler = vi.fn();
+    setAccountDeletingHandler(handler);
+    const api = apiWithToken(vi.fn(async () => accountDeletingResponse()));
+
+    const error = await api.recordShowcaseFeedEvents([], { accessToken: 'previous-identity-token' })
+      .catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(AccountDeletingError);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('notifies again after the renotify window', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-14T10:00:00.000Z'), toFake: ['Date'] });
+    const handler = vi.fn();
+    setAccountDeletingHandler(handler);
+    const api = apiWithToken(vi.fn(async () => accountDeletingResponse()));
+
+    await expect(api.getProfile()).rejects.toBeInstanceOf(AccountDeletingError);
+    await expect(api.getProfile()).rejects.toBeInstanceOf(AccountDeletingError);
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date('2026-10-14T10:00:11.000Z'));
+    await expect(api.getProfile()).rejects.toBeInstanceOf(AccountDeletingError);
+    expect(handler).toHaveBeenCalledTimes(2);
   });
 });
 

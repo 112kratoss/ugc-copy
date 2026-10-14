@@ -29,6 +29,7 @@ import {
 } from '@/lib/blocked-users-view-model';
 import { showConfirmDialog, showErrorDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
+import { invalidateProfileStats } from '@/lib/profile-stats';
 
 /**
  * Settings → Blocked users: whom the viewer has blocked, and the way to take a
@@ -81,10 +82,16 @@ export default function BlockedUsersScreen() {
       (current) => withoutBlockedUser(current, blocked.id),
     );
     await Promise.all([
-      // Their posts may be drawn again: the lists a block emptied are read afresh.
-      queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
+      // Their posts may be drawn again. The feeds are marked stale and read on
+      // their next refresh, not now: reading them behind this screen re-ranked
+      // Home as a new session, which the reel's block avoids for the same reason.
+      queryClient.invalidateQueries({ queryKey: ['showcase-feed'], refetchType: 'none' }),
       queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
+      // What an unblock changes is read again: their page stops drawing them
+      // blocked, and the Saved list and its count take their posts back.
+      queryClient.invalidateQueries({ queryKey: ['creator-profile'] }),
       queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] }),
+      invalidateProfileStats(queryClient, user?.id),
       // A list cut at its limit has a place free now: it is read again for the
       // people blocked before the ones shown.
       ...(listWasCut ? [queryClient.invalidateQueries({ queryKey })] : []),
@@ -102,7 +109,10 @@ export default function BlockedUsersScreen() {
       {!user ? (
         <>
           <StatusBlock title="Sign in to see whom you blocked" body="Blocks belong to your account." />
-          <PrimaryButton label="Sign in" onPress={() => router.push('/auth' as never)} />
+          <PrimaryButton
+            label="Sign in"
+            onPress={() => router.push({ pathname: '/auth', params: { returnTo: '/blocked-users' } } as never)}
+          />
         </>
       ) : listQuery.isPending ? (
         <CardListSkeleton rows={3} label="Loading blocked users" />

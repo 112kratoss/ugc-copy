@@ -13,7 +13,7 @@ const state = vi.hoisted(() => ({
   clearPersistedSession: vi.fn(),
   getSession: vi.fn(),
   probe: vi.fn(),
-  queryClient: { clear: vi.fn(), fetchQuery: vi.fn() },
+  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), removeQueries: vi.fn() },
   refreshSession: vi.fn(),
   replace: vi.fn(),
   sessionResolve: null as null | ((result: unknown) => void),

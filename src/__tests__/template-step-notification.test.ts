@@ -16,6 +16,7 @@ import type { CompiledTemplateGraph } from '@/lib/media-template-types';
 import { buildMobileNotificationDeepLink, notifyGenerationStatus } from '@/lib/mobile-notifications';
 import { listOwnerGenerationsForRoute } from '@/lib/owner-generations-route-service';
 import { notifyRunStepStartFailure } from '@/lib/run-step-start-failure-notification';
+import { siteConfig } from '@/lib/seo';
 import { reapStalledGenerations } from '@/lib/stalled-generation-reaper';
 import { getTemplateStepDefinitions } from '@/lib/template-graph-compiler';
 import {
@@ -578,12 +579,12 @@ describe('what a template step notification says', () => {
   it('leaves an ordinary creation worded as it was, whatever it is told about steps', async () => {
     expect(await written({ category: 'image', template_run_id: null }, 'succeeded', 'review')).toMatchObject({
       title: 'Your image is ready',
-      body: 'Open it in your mobile history.',
+      body: 'Open it in your history.',
       deep_link: '/viewer?source=studio-creations&initialId=gen-1',
     });
     expect(await written({ category: 'video', template_run_id: null }, 'failed')).toMatchObject({
       title: 'Your video failed',
-      body: 'Open Magicbooklet to try again or adjust the prompt.',
+      body: `Open ${siteConfig.name} to try again or adjust the prompt.`,
       deep_link: '/viewer?source=studio-creations&initialId=gen-1',
     });
   });
@@ -608,7 +609,7 @@ describe('a caller that hands the notifier no run', () => {
     await notifyGenerationStatus(world.client, unaware, 'failed');
 
     expect(world.history.sent[0]).toMatchObject({
-      body: 'Open Magicbooklet to try again or adjust the prompt.',
+      body: `Open ${siteConfig.name} to try again or adjust the prompt.`,
       deep_link: '/viewer?source=studio-creations&initialId=gen-1',
     });
   });

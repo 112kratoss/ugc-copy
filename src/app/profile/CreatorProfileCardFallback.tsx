@@ -2,14 +2,13 @@ import type { EditableCreatorProfile } from '@/lib/profile';
 
 interface CreatorProfileCardFallbackProps {
   initialProfile: EditableCreatorProfile | null;
-  isLoading: boolean;
   loadError: string | null;
   onboardingMode?: boolean;
 }
 
+/** The editor's place-holder while it waits for an idle moment and its code. */
 export default function CreatorProfileCardFallback({
   initialProfile,
-  isLoading,
   loadError,
   onboardingMode = false,
 }: CreatorProfileCardFallbackProps) {
@@ -27,7 +26,8 @@ export default function CreatorProfileCardFallback({
 
   return (
     <section
-      aria-busy={isLoading || undefined}
+      aria-busy="true"
+      aria-label="Loading the profile editor"
       className="overflow-hidden rounded-[28px] border border-white/8 bg-zinc-950/80 shadow-[0_24px_70px_rgba(0,0,0,0.35)]"
     >
       <div className="h-24 bg-gradient-to-r from-[#19191c] via-[#202024] to-[#2a1b1a]" />

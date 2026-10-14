@@ -8,11 +8,14 @@ import {
   settleCreditPurchaseReferralRewards,
 } from '@/lib/credit-referral-integration';
 import { invalidateMarketplaceResourceListCache as defaultInvalidateMarketplaceResourceListCache } from '@/lib/marketplace-resource-list-cache';
+import { notifyRazorpayMarketplacePurchase } from '@/lib/marketplace-verify-service';
 import { recordPostResourceBundlePurchaseFeedEvent } from '@/lib/post-resource-bundle-order-service';
+import { notifyRazorpayPostResourcePurchase } from '@/lib/post-resource-bundle-verify-service';
 import {
   RAZORPAY_WEBHOOK_PROCESSING_SERVICE_NAME,
   recordPaymentWebhookProcessingFailure,
 } from '@/lib/provider-dependency-telemetry';
+import { notifyRazorpayCreditPurchase } from '@/lib/razorpay-credit-verify-service';
 import { verifyRazorpayPaymentAgainstOrder } from '@/lib/razorpay-payment-verification';
 import {
   parseRazorpayPaymentResponse,
@@ -90,6 +93,9 @@ type ProcessRazorpayWebhookParams = {
   rawBody: string;
   invalidateMarketplaceResourceListCache?: () => void;
   recordPurchaseFeedEvent?: typeof recordPostResourceBundlePurchaseFeedEvent;
+  notifyCreditPurchase?: typeof notifyRazorpayCreditPurchase;
+  notifyMarketplacePurchase?: typeof notifyRazorpayMarketplacePurchase;
+  notifyPostResourcePurchase?: typeof notifyRazorpayPostResourcePurchase;
 };
 
 function parseWebhookEvent(rawBody: string): RazorpayWebhookEvent {
@@ -116,6 +122,9 @@ export async function processRazorpayWebhookForRoute({
   rawBody,
   invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
   recordPurchaseFeedEvent = recordPostResourceBundlePurchaseFeedEvent,
+  notifyCreditPurchase = notifyRazorpayCreditPurchase,
+  notifyMarketplacePurchase = notifyRazorpayMarketplacePurchase,
+  notifyPostResourcePurchase = notifyRazorpayPostResourcePurchase,
 }: ProcessRazorpayWebhookParams): Promise<RazorpayWebhookRouteResult> {
   const event = parseWebhookEvent(rawBody);
   let supabaseAdmin: SupabaseClient | null = null;
@@ -281,6 +290,15 @@ export async function processRazorpayWebhookForRoute({
       transactionId: typedTxn.id,
       source: 'razorpay_webhook',
     });
+    // Settled here rather than by the buyer's verify, so the buyer is told
+    // here, after their rewards. A top-up the verify settled at the same
+    // moment is announced by the verify.
+    if (rpcSuccess) {
+      await notifyCreditPurchase(getSupabaseAdmin(), {
+        userId: typedTxn.user_id,
+        transactionId: typedTxn.id,
+      });
+    }
 
     logBackendInfo('razorpay_webhook_credits_assigned', {
       userId: typedTxn.user_id,
@@ -611,6 +629,9 @@ export async function processRazorpayWebhookForRoute({
     }
 
     logBackendInfo('razorpay_webhook_marketplace_purchase_completed', { buyerUserId: typedMarketplaceOrder.buyer_user_id, orderId });
+    // Settled here rather than by the buyer's verify, so the buyer and the
+    // seller are told here.
+    await notifyMarketplacePurchase(getSupabaseAdmin(), orderId);
     return { handled: true, shouldRetry: false };
   }
 
@@ -714,6 +735,9 @@ export async function processRazorpayWebhookForRoute({
     // Telemetry on a settled purchase: it never fails the webhook, and the
     // buyer's own verify writing the same purchase first makes this a duplicate.
     await recordPurchaseFeedEvent(getSupabaseAdmin(), { razorpayOrderId: orderId });
+    // Settled here rather than by the buyer's verify, so the buyer and the
+    // owner are told here.
+    await notifyPostResourcePurchase(getSupabaseAdmin(), orderId);
     return { handled: true, shouldRetry: false };
   }
 

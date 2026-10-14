@@ -29,7 +29,13 @@ import {
   type AccountDeletionReauthentication,
   type AccountReauthenticationMethod,
 } from './account-reauthentication';
-import { ApiError, createApiClient, type MagicbookletApiClient } from './api-client';
+import {
+  ACCOUNT_DELETING_CODE,
+  ApiError,
+  createApiClient,
+  isRequestTimeoutError,
+  type MagicbookletApiClient,
+} from './api-client';
 import { getFeedInstallationId } from './feed-installation-id';
 import {
   beginShowcaseFeedEventIdentityTransition,
@@ -122,8 +128,22 @@ interface AuthContextValue {
    * ended, signs this device out locally and leaves it on a fresh guest.
    */
   recoverRejectedSession: () => Promise<void>;
+  /**
+   * Ends this device's session on an account the server is deleting (409
+   * ACCOUNT_DELETING) and leaves it on Home as a fresh guest. Resolves true
+   * when it did, so the caller can say why; false when there was nothing to
+   * end, or when a deletion asked for on this phone is ending it already.
+   */
+  leaveDeletingAccount: () => Promise<boolean>;
   accountReauthenticationMethods: AccountReauthenticationMethod[];
-  deleteAccount: (reauthentication?: AccountDeletionReauthentication) => Promise<void>;
+  /**
+   * Deletes the account. Once the server has it, this device is signed out
+   * and left on Home as a fresh guest, and the promise says how far the server
+   * got: `scheduled` (locked and signed out everywhere, the rest under way) or
+   * `deleted` (finished before this request). Rejects only when the account
+   * was not touched, or when the person must sign in again first.
+   */
+  deleteAccount: (reauthentication?: AccountDeletionReauthentication) => Promise<AccountDeletionOutcome>;
   refreshProfile: () => Promise<void>;
   updateCredits: (credits: number | null) => void;
 }
@@ -136,9 +156,49 @@ const SIGN_OUT_PUSH_UNREGISTER_DEADLINE_MS = 10 * 1000;
 
 export { getRegisteredUser, isGuestSession } from './guest-session';
 
+export type AccountDeletionOutcome = 'deleted' | 'scheduled';
+
+/** What the app says once an account it was signed in to is being deleted. */
+export const ACCOUNT_DELETION_SCHEDULED_NOTICE = {
+  title: 'Your account is being deleted',
+  message: 'You have been signed out.',
+} as const;
+
+function apiErrorDetail(error: ApiError, key: string): unknown {
+  return typeof error.details === 'object' && error.details !== null
+    ? (error.details as Record<string, unknown>)[key]
+    : undefined;
+}
+
+/**
+ * A deletion refused until the person signs in again. The server marks each
+ * such refusal with `reason`; the legacy codes it still sends beside it keep
+ * this true against a server from before the marker.
+ */
 export function isAccountReauthenticationRequired(error: unknown) {
   return error instanceof ApiError
-    && (error.code === 'RECENT_AUTH_REQUIRED' || error.code === 'APPLE_REAUTH_REQUIRED');
+    && (apiErrorDetail(error, 'reason') === 'reauthentication_required'
+      || error.code === 'RECENT_AUTH_REQUIRED'
+      || error.code === 'APPLE_REAUTH_REQUIRED');
+}
+
+/**
+ * Whether a deletion request that did not come back a success started the
+ * deletion all the same, which nothing can undo:
+ * - 409 ACCOUNT_DELETING: the account is being deleted already.
+ * - 500: only `deletionScheduled: false` means nothing was touched (the server
+ *   could not start). The server's other 500 comes after the account was
+ *   locked, and its scheduler finishes the job; a platform 500 with no JSON is
+ *   read the same way, because the route may have locked the account first.
+ * - this app's own deadline: the request had been sent, and the server goes on
+ *   with it whether or not anyone waits for the answer.
+ */
+export function isAccountDeletionUnderway(error: unknown) {
+  if (isRequestTimeoutError(error)) return true;
+  if (!(error instanceof ApiError)) return false;
+  if (error.status === 409) return error.code === ACCOUNT_DELETING_CODE;
+  if (error.status === 500) return apiErrorDetail(error, 'deletionScheduled') !== false;
+  return false;
 }
 
 function getUsableCachedAccessToken(session: Session | null, now = Date.now()): string | null {
@@ -171,6 +231,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const sessionRef = useRef<Session | null>(null);
   const guestBootstrapRef = useRef(false);
   const rejectedSessionRecoveryRef = useRef<Promise<void> | null>(null);
+  // A deletion asked for on this phone owns the session's end, whatever other
+  // requests are told meanwhile.
+  const accountDeletionInFlightRef = useRef(false);
+  // The account whose session this device has already ended for a deletion. Its
+  // old token is refused everywhere afterwards (401 or 409), and none of those
+  // refusals may end the session, or move the person, a second time.
+  const deletedAccountUserIdRef = useRef<string | null>(null);
   const [mergeState, setMergeState] = useState<GuestMergeState>('idle');
   const [mergeOutcome, setMergeOutcome] = useState<GuestAccountMergeStatus | null>(null);
   const authStateVersionRef = useRef(0);
@@ -766,6 +833,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await clearPersistedHomeFeed();
       await clearSearchHistory();
       await clearPersistedAccountState();
+      // Creator pages are kept without the viewer in their key, and carry
+      // whether this person follows or owns them: the next one on this phone
+      // would see that for up to a minute (five for the follow buttons).
+      queryClient.removeQueries({ queryKey: ['creator-profile'] });
+      queryClient.removeQueries({ queryKey: ['creator-follow-state'] });
       resetAuthState();
       // Signing out drops back to a guest identity rather than to nothing, so
       // browsing and buying keep working. The bootstrap latch is cleared because
@@ -882,6 +954,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // The refusal was about the identity it replaced.
     const currentSession = sessionRef.current;
     if (currentSession && currentSession.user?.id !== refusedSession.user?.id) return;
+    // A deletion revokes every session of the account before it is answered.
+    // The deletion ends this device's session itself once its answer is in, and
+    // a refusal of the account it ended must not sign out, and move, again.
+    if (accountDeletionInFlightRef.current || deletedAccountUserIdRef.current === refusedSession.user?.id) return;
 
     const wasGuest = isGuestSession(refusedSession);
     const feedIdentityTransition = beginFeedIdentityTransition(refusedSession);
@@ -906,10 +982,63 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!wasGuest) router.replace('/auth?notice=signed-out');
   };
 
-  const deleteAccount = async (reauthentication?: AccountDeletionReauthentication) => {
+  /**
+   * How every way out of a deleted account ends: the deletion answered on this
+   * phone, and a 409 ACCOUNT_DELETING from any request. The server has revoked,
+   * or is removing, every session, so nothing here asks it for anything.
+   */
+  const endDeletedAccountSession = async (userId: string) => {
+    deletedAccountUserIdRef.current = userId;
+    await Promise.all([
+      clearLocalMobilePushRegistration().catch((error) => {
+        console.warn('Could not clear local push state after account deletion', error);
+      }),
+      clearPersistedSupabaseAuthSession().catch((error) => {
+        console.warn('Could not clear the local auth session after account deletion', error);
+      }),
+      clearGuestMergeTicket().catch((error) => {
+        console.warn('Could not clear the guest merge ticket after account deletion', error);
+      }),
+      clearPersistedHomeFeed(),
+      clearSearchHistory(),
+      clearPersistedAccountState(),
+    ]);
+    queryClient.clear();
+    resetAuthState();
+    // A fresh guest, as after a sign-out, so browsing and buying keep working.
+    // Without one, Pricing said the session was still starting until the next
+    // launch.
+    guestBootstrapRef.current = false;
+    void ensureGuestSession();
+    // One move, to Home: every screen above it belonged to the account.
+    router.dismissTo('/');
+  };
+
+  /**
+   * Every account route answers 409 ACCOUNT_DELETING from the moment a deletion
+   * starts, asked for on this phone or on another device, and the server
+   * finishes it whatever this device does: the session is over.
+   */
+  const leaveDeletingAccount = async () => {
+    const deletingSession = sessionRef.current;
+    const userId = getRegisteredUser(deletingSession)?.id;
+    // Only a registered account is ever deleted. A deletion asked for on this
+    // phone ends the session itself, in its own words, once its answer is in.
+    if (!userId || accountDeletionInFlightRef.current || deletedAccountUserIdRef.current === userId) {
+      return false;
+    }
+    beginFeedIdentityTransition(deletingSession)?.commit();
+    await endDeletedAccountSession(userId);
+    return true;
+  };
+
+  const runAccountDeletion = async (
+    reauthentication?: AccountDeletionReauthentication,
+  ): Promise<AccountDeletionOutcome> => {
     if (!registeredUser) {
       throw new Error('Sign in before deleting your account.');
     }
+    const deletingUserId = registeredUser.id;
     // Capture the original account before reauthentication can replace the
     // Supabase session (including the mismatch path below).
     const feedIdentityTransition = beginFeedIdentityTransition(sessionRef.current);
@@ -950,30 +1079,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
+    let outcome: AccountDeletionOutcome;
     try {
-      await api.deleteAccount('DELETE', appleAuthorizationCode ? { appleAuthorizationCode } : {});
+      const result = await api.deleteAccount('DELETE', appleAuthorizationCode ? { appleAuthorizationCode } : {});
+      outcome = result.deleted ? 'deleted' : 'scheduled';
     } catch (error) {
-      feedIdentityTransition?.cancel();
-      throw error;
+      // "Not deleted" is said only when it is true: a deletion the server has
+      // started is finished by it, and a retry would be refused.
+      if (!isAccountDeletionUnderway(error)) {
+        feedIdentityTransition?.cancel();
+        throw error;
+      }
+      outcome = 'scheduled';
     }
     feedIdentityTransition?.commit();
-    await Promise.all([
-      clearLocalMobilePushRegistration().catch((error) => {
-        console.warn('Could not clear local push state after account deletion', error);
-      }),
-      clearPersistedSupabaseAuthSession().catch((error) => {
-        console.warn('Could not clear the local auth session after account deletion', error);
-      }),
-      clearGuestMergeTicket().catch((error) => {
-        console.warn('Could not clear the guest merge ticket after account deletion', error);
-      }),
-      clearPersistedHomeFeed(),
-      clearSearchHistory(),
-      clearPersistedAccountState(),
-    ]);
-    queryClient.clear();
-    resetAuthState();
-    router.replace('/auth');
+    await endDeletedAccountSession(deletingUserId);
+    return outcome;
+  };
+
+  const deleteAccount = (reauthentication?: AccountDeletionReauthentication) => {
+    accountDeletionInFlightRef.current = true;
+    return runAccountDeletion(reauthentication).finally(() => {
+      accountDeletionInFlightRef.current = false;
+    });
   };
 
   return (
@@ -998,6 +1126,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isSigningOut,
         abandonMergedGuestSession,
         recoverRejectedSession,
+        leaveDeletingAccount,
         accountReauthenticationMethods,
         deleteAccount,
         refreshProfile,

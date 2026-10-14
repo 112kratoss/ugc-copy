@@ -1598,6 +1598,9 @@ function IdentityCreationScreen({
   const prepareSeedanceAsset = async (mediaId: string) => {
     const media = videoReferenceById(mediaId);
     if (!media) return;
+    // Preparing hands the file to the AI service, as a run does, so it waits for the
+    // same permission; a refusal leaves the reference unprepared and the button free.
+    if (!(await ensureAiDataConsent())) return;
     const assetType = seedanceAssetKindOf(media);
     setPreparingAssetId(mediaId);
     try {

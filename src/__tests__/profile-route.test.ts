@@ -100,28 +100,33 @@ function createAdminClient() {
                 async single() {
                   const profileId = values.id as string;
                   const index = profilesState.findIndex((profile) => profile.id === profileId);
+                  // PostgREST's merge upsert: an existing row changes only in
+                  // the columns the body carries; a new row starts from the
+                  // column defaults.
                   const nextProfile = {
-                    id: profileId,
-                    username: (values.username as string | null) ?? null,
-                    display_name: (values.display_name as string | null) ?? null,
-                    bio: (values.bio as string | null) ?? null,
-                    avatar_url: (values.avatar_url as string | null) ?? null,
-                    cover_url: (values.cover_url as string | null) ?? null,
-                    website_url: (values.website_url as string | null) ?? null,
-                    twitter_handle: (values.twitter_handle as string | null) ?? null,
-                    instagram_handle: (values.instagram_handle as string | null) ?? null,
-                    tiktok_handle: (values.tiktok_handle as string | null) ?? null,
-                    location: (values.location as string | null) ?? null,
-                    credits: index === -1 ? null : profilesState[index].credits,
-                  };
+                    ...(index === -1
+                      ? {
+                        id: profileId,
+                        username: null,
+                        display_name: null,
+                        bio: null,
+                        avatar_url: null,
+                        cover_url: null,
+                        website_url: null,
+                        twitter_handle: null,
+                        instagram_handle: null,
+                        tiktok_handle: null,
+                        location: null,
+                        credits: null,
+                      }
+                      : profilesState[index]),
+                    ...values,
+                  } as ProfileRow;
 
                   if (index === -1) {
                     profilesState.push(nextProfile);
                   } else {
-                    profilesState[index] = {
-                      ...profilesState[index],
-                      ...nextProfile,
-                    };
+                    profilesState[index] = nextProfile;
                   }
 
                   return { data: nextProfile, error: null };
@@ -517,5 +522,86 @@ describe('/api/profile route', () => {
     const data = await response.json();
     expect(response.status).toBe(409);
     expect(data.fieldErrors.username).toContain('already taken');
+  });
+
+  it('keeps every stored field a PATCH leaves out and clears one sent as null', async () => {
+    profilesState[0] = {
+      ...profilesState[0],
+      username: 'luna',
+      website_url: 'https://luna.example',
+      twitter_handle: 'luna_dreams',
+      location: 'Bengaluru',
+    };
+    const { PATCH } = await import('@/app/api/profile/route');
+    const patch = (body: Record<string, unknown>) => PATCH(new Request('http://localhost/api/profile', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }) as never);
+
+    const bioOnly = await patch({ username: 'luna', bio: 'Painting with light.' });
+    expect(bioOnly.status).toBe(200);
+    expect(await bioOnly.json()).toMatchObject({
+      displayName: 'Existing Creator',
+      bio: 'Painting with light.',
+      websiteUrl: 'https://luna.example',
+      twitterHandle: 'luna_dreams',
+      location: 'Bengaluru',
+    });
+
+    const cleared = await patch({ username: 'luna', websiteUrl: null });
+    expect(cleared.status).toBe(200);
+    expect(profilesState[0]).toMatchObject({
+      bio: 'Painting with light.',
+      website_url: null,
+      twitter_handle: 'luna_dreams',
+      location: 'Bengaluru',
+    });
+  });
+
+  it('refuses a reserved handle on validate and on save, before anything is written', async () => {
+    const { POST } = await import('@/app/api/profile/validate/route');
+    const validate = await POST(new Request('http://localhost/api/profile/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'Admin', displayName: 'Creator Name' }),
+    }) as never);
+    expect(validate.status).toBe(400);
+    expect(await validate.json()).toEqual({
+      error: 'That handle is reserved.',
+      fieldErrors: { username: 'That handle is reserved.' },
+    });
+
+    const { PATCH } = await import('@/app/api/profile/route');
+    const save = await PATCH(new Request('http://localhost/api/profile', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', displayName: 'Creator Name' }),
+    }) as never);
+    expect(save.status).toBe(400);
+    expect((await save.json()).fieldErrors).toEqual({ username: 'That handle is reserved.' });
+    expect(profilesState[0].username).toBeNull();
+    expect(showcaseCacheMocks.invalidate).not.toHaveBeenCalled();
+  });
+
+  it('returns D4 field errors for a social link to another site', async () => {
+    const { PATCH } = await import('@/app/api/profile/route');
+    const response = await PATCH(new Request('http://localhost/api/profile', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: 'creator-name',
+        displayName: 'Creator Name',
+        tiktokHandle: 'https://tiktok.evil.example/@luna',
+        location: 'L'.repeat(81),
+      }),
+    }) as never);
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).fieldErrors).toEqual({
+      tiktokHandle: 'Enter your TikTok username or profile link.',
+      location: 'Location must be 80 characters or fewer.',
+    });
+    expect(profilesState[0].username).toBeNull();
   });
 });

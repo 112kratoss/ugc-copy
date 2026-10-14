@@ -117,17 +117,39 @@ it.skipIf(!enabled).each(modes)('profile media with actual Storage and SQL: %s',
       // injected local Storage client, whose fetch rejects external origins.
       const avatarUrl = 'https://profile-fixture.invalid/storage/v1/object/public/profiles/' + intent.path;
       const body = { username: 'audit-' + owner.slice(0, 12), displayName: 'Profile fixture', avatarUrl };
-      expect(await updateProfileForRoute({ userId: owner, body, client: admin, invalidateFeedCache: () => {} })).toMatchObject({ ok: true });
+      const saved = await updateProfileForRoute({ userId: owner, body, client: admin, invalidateFeedCache: () => {} });
+      expect(saved).toMatchObject({ ok: true });
       const stored = await admin.storage.from('profiles').download(intent.path);
       expect(stored.error).toBeNull();
-      // The existing Storage write guard rejects an in-place rewrite after
-      // finalization. Normalization is best-effort; the exact image survives.
+      // The Storage write guard refuses any write to a finalized upload's
+      // path, so the upload survives exactly and the profile points at a
+      // normalised copy written beside it.
       expect(Buffer.from(await stored.data!.arrayBuffer()).equals(largePng)).toBe(true);
-      expect((await db.query('select r.finalization_status,r.consumption_disposition,r.actual_storage_version=o.version::text version_matches from public.upload_byte_reservations r join storage.objects o on o.bucket_id=r.bucket_id and o.name=r.storage_path where r.id=$1', [intent.uploadId])).rows)
-        .toEqual([{ finalization_status: 'consumed', consumption_disposition: 'preserve', version_matches: true }]);
-      expect(await updateProfileForRoute({ userId: owner, body: { ...body, displayName: 'Edited fixture' }, client: admin, invalidateFeedCache: () => {} })).toMatchObject({ ok: true });
+      const copyUrl = saved.ok ? saved.response.avatarUrl ?? '' : '';
+      expect(copyUrl.startsWith(avatarUrl.replace(/\.png$/, '.normalized.'))).toBe(true);
+      expect(copyUrl).toMatch(/\.normalized\.[0-9a-f]{16}\.webp$/);
+      const copyPath = copyUrl.slice(avatarUrl.length - intent.path.length);
+      paths.push(copyPath);
+      const copy = await admin.storage.from('profiles').download(copyPath);
+      expect(copy.error).toBeNull();
+      const copyMetadata = await sharp(Buffer.from(await copy.data!.arrayBuffer())).metadata();
+      expect({ format: copyMetadata.format, width: copyMetadata.width, height: copyMetadata.height })
+        .toEqual({ format: 'webp', width: 512, height: 512 });
+      // The copy is the service role's own object: no capability, no reservation, no tombstone.
+      expect((await db.query("select (select count(*) from public.upload_byte_reservations where bucket_id='profiles' and storage_path=$1)::int reservations,(select count(*) from public.upload_path_tombstones where bucket_id='profiles' and storage_path=$1)::int tombstones", [copyPath])).rows)
+        .toEqual([{ reservations: 0, tombstones: 0 }]);
+      // Nothing references the upload, so its lease went back to the reclaim
+      // job instead of preserving it; it is still bound to the exact object.
+      expect((await db.query('select r.finalization_status,r.consumption_disposition,r.consumed_at is null unconsumed,r.actual_storage_version=o.version::text version_matches from public.upload_byte_reservations r join storage.objects o on o.bucket_id=r.bucket_id and o.name=r.storage_path where r.id=$1', [intent.uploadId])).rows)
+        .toEqual([{ finalization_status: 'finalized', consumption_disposition: null, unconsumed: true, version_matches: true }]);
+      // The upload's URL again reaches the same copy, whose name is its content.
+      expect(await updateProfileForRoute({ userId: owner, body: { ...body, displayName: 'Edited fixture' }, client: admin, invalidateFeedCache: () => {} }))
+        .toMatchObject({ ok: true, response: { avatarUrl: copyUrl } });
+      // The copy's URL back, as the web sends every field on every save, keeps it.
+      expect(await updateProfileForRoute({ userId: owner, body: { ...body, displayName: 'Edited again', avatarUrl: copyUrl }, client: admin, invalidateFeedCache: () => {} }))
+        .toMatchObject({ ok: true, response: { avatarUrl: copyUrl } });
       expect((await admin.storage.from('profiles').download(intent.path)).error).toBeNull();
-      expect((await db.query('select avatar_url,display_name from public.profiles where id=$1', [owner])).rows).toEqual([{ avatar_url: avatarUrl, display_name: 'Edited fixture' }]);
+      expect((await db.query('select avatar_url,display_name from public.profiles where id=$1', [owner])).rows).toEqual([{ avatar_url: copyUrl, display_name: 'Edited again' }]);
     } else if (mode === 'avatar' || mode === 'cover') {
       const result = await createProfileMediaUploadIntent({ body: { ...metadata, role: mode, userId: other, path: paths[1] }, userId: owner, client: admin });
       expect(result.ok).toBe(true);

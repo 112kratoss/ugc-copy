@@ -1,18 +1,40 @@
+import { useSyncExternalStore } from 'react';
 import { ArrowUpRight, Mail, MessageCircle, ShieldCheck } from 'lucide-react-native';
 import { Linking, Pressable, View } from 'react-native';
 
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
+import { formatAppVersionLabel, readAppVersionParts, readUpdateRuntime } from '@/lib/app-version-label';
+import { formatSupportDetails, readCreatorSession, subscribeCreatorSession } from '@/lib/creator-session-diagnostics';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
+const SUPPORT_EMAIL = 'info@magicbooklet.com';
+
+/**
+ * The support mail, with the lines at the foot of Settings below room for the
+ * message: which build, update and runtime this phone runs, which support
+ * otherwise has to ask for before it can answer.
+ */
+function supportMailUrl(details: Array<string | null>) {
+  const lines = details.filter((line): line is string => Boolean(line));
+  const body = lines.length > 0 ? `&body=${encodeURIComponent(`\n\n${lines.join('\n')}`)}` : '';
+  return `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('Magicbooklet app support')}${body}`;
+}
+
 export default function HelpScreen() {
   const theme = useAppTheme();
+  const creatorSession = useSyncExternalStore(subscribeCreatorSession, readCreatorSession, readCreatorSession);
+  const mailUrl = supportMailUrl([
+    formatAppVersionLabel(readAppVersionParts()),
+    formatSupportDetails({ ...readUpdateRuntime(), session: creatorSession }),
+  ]);
+
   return (
     <Screen>
       <SectionTitle
         eyebrow="Help & Support"
         title="We can help."
-        body="Find quick guidance for credits, publishing, unlocks, and account support."
+        body="Find quick guidance for creations, unlocks, and contacting support."
       />
 
       <HelpCard
@@ -28,8 +50,8 @@ export default function HelpScreen() {
       <HelpCard
         icon={<Mail size={appTheme.icon.feature} color={theme.colors.amber} />}
         title="Contact support"
-        body="Email info@magicbooklet.com for account or purchase help."
-        onPress={() => void Linking.openURL('mailto:info@magicbooklet.com?subject=Magicbooklet%20app%20support')}
+        body={`Email ${SUPPORT_EMAIL} for account or purchase help.`}
+        onPress={() => void Linking.openURL(mailUrl)}
       />
     </Screen>
   );

@@ -70,14 +70,28 @@ type AccountDeletionCleanupSummary = {
   resweeps: AccountDeletionResweepSummary;
 };
 
-type ExecuteInitialAccountDeletionOptions = {
+type StartInitialAccountDeletionOptions = {
   accessToken?: string;
   admin: SupabaseClient;
   userId: string;
+};
+
+type FinishInitialAccountDeletionOptions = {
+  admin: SupabaseClient;
+  userId: string;
+  manifest: AccountDeletionStorageManifest;
   onNonFatalError?: (message: string, error: unknown) => void;
   retainPurchasedFiles?: typeof retainPurchasedUnlockFiles;
   recordClaimedFingerprints?: typeof recordClaimedIdentityFingerprints;
+  recordWalletBalances?: typeof recordAccountDeletionWalletBalances;
 };
+
+type ExecuteInitialAccountDeletionOptions = StartInitialAccountDeletionOptions
+  & Omit<FinishInitialAccountDeletionOptions, 'manifest'>;
+
+export type InitialAccountDeletionStart =
+  | { status: 'already_deleted'; result: InitialAccountDeletionResult }
+  | { status: 'started'; manifest: AccountDeletionStorageManifest };
 
 type ProcessAccountDeletionResweepsOptions = {
   admin: SupabaseClient;
@@ -89,7 +103,32 @@ type ProcessAccountDeletionResweepsOptions = {
 type ProcessAccountDeletionInitialRetriesOptions = ProcessAccountDeletionResweepsOptions & {
   retainPurchasedFiles?: typeof retainPurchasedUnlockFiles;
   recordClaimedFingerprints?: typeof recordClaimedIdentityFingerprints;
+  recordWalletBalances?: typeof recordAccountDeletionWalletBalances;
 };
+
+/**
+ * prepare_account_deletion refused or failed. It commits nothing unless it
+ * answers `prepared`, so the account is untouched and still usable (barring a
+ * lost acknowledgement; see prepareAccountDeletion). Every later failure leaves
+ * the identity locked as `deleting` with a durable job the scheduler finishes.
+ */
+export class AccountDeletionNotStartedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AccountDeletionNotStartedError';
+  }
+}
+
+const WALLET_BALANCE_COLUMNS = [
+  'available_token_subunits',
+  'held_token_subunits',
+  'lifetime_earned_token_subunits',
+  'lifetime_refunded_token_subunits',
+  'lifetime_paid_out_token_subunits',
+] as const;
+
+type AccountDeletionWalletRecord = { job_id: string; user_id: string }
+  & Record<(typeof WALLET_BALANCE_COLUMNS)[number], number>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -433,7 +472,12 @@ async function prepareAccountDeletion(admin: SupabaseClient, userId: string) {
     || !isRecord(data)
     || !['prepared', 'already_completed'].includes(String(data.status))
   ) {
-    throw new Error(errorMessage(error, 'Could not prepare account deletion.'));
+    // An acknowledgement lost after a commit also lands here. The identity is
+    // then already `deleting`, so a retry meets 409 ACCOUNT_DELETING rather
+    // than a second deletion, and the scheduler picks the job up.
+    throw new AccountDeletionNotStartedError(
+      errorMessage(error, 'Could not prepare account deletion.'),
+    );
   }
 
   if (data.status === 'already_completed') {
@@ -474,29 +518,78 @@ export async function markAccountDeletionStage(
 }
 
 /**
- * Performs the immediate, user-authorized deletion pass. The operation is
- * idempotent: storage deletes tolerate already-missing objects and every
- * database stage is persisted before the next destructive action.
- *
- * A successful Auth deletion schedules a second Storage sweep after all
- * previously issued signed-upload tokens have expired. Therefore
- * `cleanupPending` remains true until the resweep worker finalizes the job.
+ * Writes what each wallet in the deletion still holds to an append-only ledger
+ * (D1). creator_resource_wallets cascades away with auth.users, and an unpaid
+ * liability must outlive the account it was owed to. Owners without a wallet
+ * write nothing. Idempotent per wallet and job, so a retry repeats it safely; a
+ * failure throws and leaves the job retryable rather than deleting Auth with
+ * the balance unrecorded.
  */
-export async function executeInitialAccountDeletion({
+export async function recordAccountDeletionWalletBalances(
+  admin: SupabaseClient,
+  jobUserId: string,
+  ownerUserIds: string[],
+): Promise<{ walletsRecorded: number }> {
+  const { data, error } = await admin
+    .from('creator_resource_wallets')
+    .select(
+      'user_id,available_token_subunits,held_token_subunits,lifetime_earned_token_subunits,lifetime_refunded_token_subunits,lifetime_paid_out_token_subunits',
+    )
+    .in('user_id', ownerUserIds);
+  if (error) {
+    throw new Error(errorMessage(error, 'Could not read creator wallets before account deletion.'));
+  }
+
+  const records: AccountDeletionWalletRecord[] = [];
+  for (const wallet of (data ?? []) as unknown[]) {
+    if (!isRecord(wallet) || typeof wallet.user_id !== 'string') {
+      throw new Error('Could not read creator wallets before account deletion.');
+    }
+    const record = { job_id: jobUserId, user_id: wallet.user_id } as AccountDeletionWalletRecord;
+    for (const column of WALLET_BALANCE_COLUMNS) {
+      const amount = wallet[column];
+      // A rounded or missing amount would be a wrong ledger entry, and the
+      // wallet it came from is about to be deleted.
+      if (typeof amount !== 'number' || !Number.isSafeInteger(amount)) {
+        throw new Error('Could not read creator wallets before account deletion.');
+      }
+      record[column] = amount;
+    }
+    records.push(record);
+  }
+  if (records.length === 0) return { walletsRecorded: 0 };
+
+  const { error: insertError } = await admin
+    .from('account_deletion_wallet_records')
+    .upsert(records, { onConflict: 'user_id,job_id', ignoreDuplicates: true });
+  if (insertError) {
+    throw new Error(errorMessage(insertError, 'Could not record creator wallets before account deletion.'));
+  }
+
+  return { walletsRecorded: records.length };
+}
+
+/**
+ * The part of the immediate pass a person waits for. Once it returns `started`
+ * the identity is locked as `deleting` for good, the job is durable and every
+ * session is revoked; the sweep that remains is `finishInitialAccountDeletion`,
+ * which the scheduler resumes if it fails or never runs.
+ */
+export async function startInitialAccountDeletion({
   accessToken,
   admin,
   userId,
-  onNonFatalError,
-  retainPurchasedFiles = retainPurchasedUnlockFiles,
-  recordClaimedFingerprints = recordClaimedIdentityFingerprints,
-}: ExecuteInitialAccountDeletionOptions): Promise<InitialAccountDeletionResult> {
+}: StartInitialAccountDeletionOptions): Promise<InitialAccountDeletionStart> {
   const preparation = await prepareAccountDeletion(admin, userId);
   if (preparation.alreadyCompleted) {
     return {
-      alreadyCompleted: true,
-      authUserAlreadyMissing: true,
-      cleanupPending: false,
-      storage: { bucketsScanned: 0, objectsRemoved: 0 },
+      status: 'already_deleted',
+      result: {
+        alreadyCompleted: true,
+        authUserAlreadyMissing: true,
+        cleanupPending: false,
+        storage: { bucketsScanned: 0, objectsRemoved: 0 },
+      },
     };
   }
 
@@ -507,18 +600,24 @@ export async function executeInitialAccountDeletion({
   );
   if (storageDeletingStatus === 'already_completed') {
     return {
-      alreadyCompleted: true,
-      authUserAlreadyMissing: true,
-      cleanupPending: false,
-      storage: { bucketsScanned: 0, objectsRemoved: 0 },
+      status: 'already_deleted',
+      result: {
+        alreadyCompleted: true,
+        authUserAlreadyMissing: true,
+        cleanupPending: false,
+        storage: { bucketsScanned: 0, objectsRemoved: 0 },
+      },
     };
   }
   if (storageDeletingStatus === 'resweep_pending') {
     return {
-      alreadyCompleted: false,
-      authUserAlreadyMissing: true,
-      cleanupPending: true,
-      storage: { bucketsScanned: 0, objectsRemoved: 0 },
+      status: 'already_deleted',
+      result: {
+        alreadyCompleted: false,
+        authUserAlreadyMissing: true,
+        cleanupPending: true,
+        storage: { bucketsScanned: 0, objectsRemoved: 0 },
+      },
     };
   }
 
@@ -529,13 +628,25 @@ export async function executeInitialAccountDeletion({
     }
   }
 
+  return { status: 'started', manifest: preparation.manifest };
+}
+
+export async function finishInitialAccountDeletion({
+  admin,
+  userId,
+  manifest,
+  onNonFatalError,
+  retainPurchasedFiles = retainPurchasedUnlockFiles,
+  recordClaimedFingerprints = recordClaimedIdentityFingerprints,
+  recordWalletBalances = recordAccountDeletionWalletBalances,
+}: FinishInitialAccountDeletionOptions): Promise<InitialAccountDeletionResult> {
   // Close reservation issuance/finalization before copying retained sources;
   // otherwise a legacy signed capability could race the source snapshot.
-  await markAccountDeletedUploadReservations(admin, preparation.manifest.ownerUserIds);
+  await markAccountDeletedUploadReservations(admin, manifest.ownerUserIds);
   // Retention is a hard gate: never sweep creator-prefixed storage or delete
   // Auth until every purchased revision has a durable neutral copy.
-  await retainPurchasedFilesForOwners(admin, preparation.manifest, retainPurchasedFiles);
-  const storage = await removeAccountStorage(admin, userId, preparation.manifest);
+  await retainPurchasedFilesForOwners(admin, manifest, retainPurchasedFiles);
+  const storage = await removeAccountStorage(admin, userId, manifest);
   const storageDeletedStatus = await markAccountDeletionStage(
     admin,
     userId,
@@ -555,7 +666,9 @@ export async function executeInitialAccountDeletion({
   // the claim (a swapped email, a newly linked provider) only exist on the live
   // rows. Idempotent, so the resweep retry path repeats it safely; a failure
   // throws and leaves the job retryable rather than deleting Auth unrecorded.
-  await recordClaimedFingerprints(admin, preparation.manifest.ownerUserIds);
+  await recordClaimedFingerprints(admin, manifest.ownerUserIds);
+  // The wallet ledger follows the same rule, as late as it can be written.
+  await recordWalletBalances(admin, userId, manifest.ownerUserIds);
 
   const authDeletingStatus = await markAccountDeletionStage(admin, userId, 'auth_deleting');
   if (authDeletingStatus === 'already_completed' || authDeletingStatus === 'resweep_pending') {
@@ -571,7 +684,7 @@ export async function executeInitialAccountDeletion({
     await deleteLinkedAuthUsersGuestFirst(
       admin,
       userId,
-      preparation.manifest.ownerUserIds,
+      manifest.ownerUserIds,
     );
 
   try {
@@ -593,6 +706,31 @@ export async function executeInitialAccountDeletion({
     cleanupPending: true,
     storage,
   };
+}
+
+/**
+ * Performs the immediate, user-authorized deletion pass. The operation is
+ * idempotent: storage deletes tolerate already-missing objects and every
+ * database stage is persisted before the next destructive action.
+ *
+ * A successful Auth deletion schedules a second Storage sweep after all
+ * previously issued signed-upload tokens have expired. Therefore
+ * `cleanupPending` remains true until the resweep worker finalizes the job.
+ */
+export async function executeInitialAccountDeletion({
+  accessToken,
+  admin,
+  userId,
+  ...finishOptions
+}: ExecuteInitialAccountDeletionOptions): Promise<InitialAccountDeletionResult> {
+  const start = await startInitialAccountDeletion({ accessToken, admin, userId });
+  if (start.status === 'already_deleted') return start.result;
+  return finishInitialAccountDeletion({
+    ...finishOptions,
+    admin,
+    userId,
+    manifest: start.manifest,
+  });
 }
 
 function parseClaimedResweep(value: unknown):
@@ -833,6 +971,7 @@ export async function processAccountDeletionInitialRetries({
   leaseSeconds = ACCOUNT_DELETION_RESWEEP_LEASE_SECONDS,
   retainPurchasedFiles = retainPurchasedUnlockFiles,
   recordClaimedFingerprints = recordClaimedIdentityFingerprints,
+  recordWalletBalances = recordAccountDeletionWalletBalances,
 }: ProcessAccountDeletionInitialRetriesOptions): Promise<AccountDeletionInitialRetrySummary> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
     throw new Error('Account deletion retry limit must be between 1 and 100.');
@@ -932,10 +1071,11 @@ export async function processAccountDeletionInitialRetries({
       if (!claim.manifest) {
         throw new Error('Account deletion storage manifest is invalid.');
       }
-      // Same ledger write as the immediate pass: a job that crashed before the
+      // Same ledger writes as the immediate pass: a job that crashed before the
       // Auth step lands here with its auth rows still present, so the retry
-      // must record fingerprints before it deletes them.
+      // must record fingerprints and wallets before it deletes them.
       await recordClaimedFingerprints(admin, claim.manifest.ownerUserIds);
+      await recordWalletBalances(admin, claim.userId, claim.manifest.ownerUserIds);
       await deleteLinkedAuthUsersGuestFirst(
         admin,
         claim.userId,

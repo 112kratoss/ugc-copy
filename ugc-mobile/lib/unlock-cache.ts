@@ -1,7 +1,7 @@
 import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 
 import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
-import type { ShowcaseFeedItem, ShowcaseFeedResponse, ShowcasePostResponse } from '@/lib/types';
+import type { CreatorProfileResponse, ShowcaseFeedItem, ShowcaseFeedResponse, ShowcasePostResponse } from '@/lib/types';
 
 export interface UnlockedBundleRef {
   postId: string;
@@ -81,6 +81,14 @@ export async function refreshUnlockedBundleCaches(queryClient: UnlockCacheClient
   queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
     { queryKey: ['profile-saved-media'] },
     (current) => applyBundleUnlockToInfiniteFeed(current, unlock.postId)
+  );
+  // A creator's grid is what the reel opened on their page draws from, so the
+  // unlock has to reach it the way it reaches a lane.
+  queryClient.setQueriesData<InfiniteData<CreatorProfileResponse>>(
+    { queryKey: ['creator-profile'] },
+    (current) => current?.pages
+      ? { ...current, pages: current.pages.map((page) => ({ ...page, items: page.items.map((item) => applyBundleUnlockToItem(item, unlock.postId)) })) }
+      : current
   );
   queryClient.setQueriesData<ImmersiveSourceData>(
     { queryKey: ['immersive-preview-source'] },

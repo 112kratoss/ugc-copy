@@ -1,14 +1,16 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import OwnerProfileMediaHub from '@/app/profile/OwnerProfileMediaHub';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
-const pushMock = vi.fn();
+// One router object for every render, as Next's is.
+const router = vi.hoisted(() => ({ push: vi.fn() }));
+const pushMock = router.push;
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: pushMock }),
+  useRouter: () => router,
   usePathname: () => '/profile',
   useSearchParams: () => new URLSearchParams(window.location.search),
 }));
@@ -26,6 +28,7 @@ vi.mock('next/dynamic', () => ({
     onReportContent,
     onReportUser,
     onBlockUser,
+    onToggleSave,
     originLabel,
     loadMoreError,
   }: {
@@ -38,6 +41,7 @@ vi.mock('next/dynamic', () => ({
     onReportContent?: ReelHandler;
     onReportUser?: ReelHandler;
     onBlockUser?: ReelHandler;
+    onToggleSave?: (id: string) => void | Promise<void>;
     loadMoreError?: string | null;
   }) {
     const item = items.find((candidate) => candidate.id === selectedItemId);
@@ -48,6 +52,7 @@ vi.mock('next/dynamic', () => ({
         {loadMoreError ? <span role="alert">{loadMoreError}</span> : null}
         <a href={buildDetailPath(item.id, 'resources')}>Post details</a>
         <span>Closes to {originLabel ?? 'Explore'}</span>
+        {onToggleSave ? <button type="button" onClick={() => void onToggleSave(item.id)}>Toggle save</button> : null}
         {onFeedback ? <button type="button">Feed rows</button> : null}
         {onReportContent ? <button type="button" onClick={() => void onReportContent(item)}>Report content</button> : null}
         {onReportUser ? <button type="button" onClick={() => void onReportUser(item)}>Report user</button> : null}
@@ -57,11 +62,15 @@ vi.mock('next/dynamic', () => ({
   },
 }));
 
+// One object for the whole file: a test swaps its session to stand for a
+// token refresh, and the hook hands the hub whatever it holds now.
+const authState = vi.hoisted(() => ({
+  session: { access_token: 'profile-token', user: { id: 'owner-1' } },
+  user: { id: 'owner-1' },
+}));
+
 vi.mock('@/components/AuthProvider', () => ({
-  useAuth: () => ({
-    session: { access_token: 'profile-token', user: { id: 'owner-1' } },
-    user: { id: 'owner-1' },
-  }),
+  useAuth: () => authState,
 }));
 
 vi.mock('@/components/HoverVideo', () => ({
@@ -160,6 +169,9 @@ const savedPost: ShowcaseFeedItem = {
   canRemix: true,
 };
 
+// What the server counted for this owner, as `/profile` hands it over.
+const TOTALS = { creations: 1, posts: 2, archivedPosts: 0, saved: 1 };
+
 describe('OwnerProfileMediaHub', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -168,9 +180,14 @@ describe('OwnerProfileMediaHub', () => {
   beforeEach(() => {
     pushMock.mockReset();
     resetFeedbackState();
+    authState.session = { access_token: 'profile-token', user: { id: 'owner-1' } };
+    authState.user = { id: 'owner-1' };
     window.history.replaceState(null, '', '/profile');
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url === '/api/content-preferences') {
+        return response({ showMature: false });
+      }
       if (url.startsWith('/api/posts?')) {
         return response({ posts: [publicPost, privatePost], pageInfo: { hasMore: false, nextOffset: null } });
       }
@@ -247,12 +264,147 @@ describe('OwnerProfileMediaHub', () => {
     await screen.findByRole('button', { name: /open public post/i });
   });
 
-  it('keeps raw creations in a focused preview instead of the Showcase reel', async () => {
+  // Mature content could only be changed from the gate on an NSFW post.
+  it('keeps the mature-content setting beside Blocked users', async () => {
     render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} />);
+
+    const shortcuts = screen.getByRole('region', { name: 'Creator account shortcuts' });
+    expect(within(shortcuts).getByRole('link', { name: /blocked users/i })).toBeInTheDocument();
+    expect(await within(shortcuts).findByRole('switch', { name: 'Mature content' })).toHaveAttribute('aria-checked', 'false');
+    await screen.findByRole('button', { name: /open public post/i });
+  });
+
+  describe('the header totals', () => {
+    const owner = { id: 'owner-1', username: 'owner', name: 'Owner', avatar: null };
+    const statFor = (label: string) => screen.getByText(label, { selector: 'dt' }).parentElement?.querySelector('dd')?.textContent;
+
+    // The header and the tab chips printed the lengths of the pages loaded so
+    // far, 24 a page, and the Wallet said "Open"; the app and the web Studio
+    // print the server's totals.
+    it("prints the server's totals before any page loads, and the earnings in the Wallet", async () => {
+      render(
+        <OwnerProfileMediaHub
+          creator={owner}
+          stats={{ creations: 200, posts: 31, archivedPosts: 4, saved: 7 }}
+          sales={{ earningsUsdCents: 123456, listingCount: 3, salesCount: 9 }}
+        />
+      );
+
+      expect(statFor('Creations')).toBe('200');
+      expect(statFor('Posts')).toBe('31');
+      expect(statFor('Saved')).toBe('7');
+      expect(screen.getByRole('tab', { name: 'Posts 31' })).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: 'Saved 7' })).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: 'Creations 200' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /wallet/i })).toHaveTextContent('$1,234.56');
+
+      // Two posts load; the number stays the one the server counted.
+      await screen.findByRole('button', { name: /open public post/i });
+      expect(statFor('Posts')).toBe('31');
+    });
+
+    it('draws — for a count the server could not read, never the loaded pages, and $0.00 for no earnings', async () => {
+      render(
+        <OwnerProfileMediaHub
+          creator={owner}
+          stats={null}
+          sales={{ earningsUsdCents: 0, listingCount: 0, salesCount: 0 }}
+        />
+      );
+
+      await screen.findByRole('button', { name: /open public post/i });
+      expect(statFor('Creations')).toBe('—');
+      expect(statFor('Posts')).toBe('—');
+      expect(statFor('Saved')).toBe('—');
+      // A count it does not have is not read out as one.
+      expect(screen.getByRole('tab', { name: 'Posts' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /wallet/i })).toHaveTextContent('$0.00');
+    });
+
+    it('draws — in the Wallet when the seller totals could not be read', async () => {
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} sales={null} />);
+
+      expect(screen.getByRole('link', { name: /wallet/i })).toHaveTextContent('—');
+      await screen.findByRole('button', { name: /open public post/i });
+    });
+
+    it('takes an unsave in the Saved reel off the Saved total, and puts a save back on', async () => {
+      const answerPage = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
+      const saveBodies: unknown[] = [];
+      vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/api/showcase/save') {
+          const body = JSON.parse(String(init?.body)) as { shouldSave: boolean };
+          saveBodies.push(body);
+          return response({ success: true, isSaved: body.shouldSave, saveCount: 4 });
+        }
+        return answerPage(input);
+      }));
+      render(<OwnerProfileMediaHub creator={owner} stats={{ ...TOTALS, saved: 7 }} />);
+      await screen.findByRole('button', { name: /open public post/i });
+      fireEvent.click(screen.getByRole('tab', { name: /saved/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /open saved inspiration/i }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle save' }));
+
+      await waitFor(() => expect(statFor('Saved')).toBe('6'));
+      expect(screen.getByRole('tab', { name: 'Saved 6' })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle save' }));
+
+      await waitFor(() => expect(statFor('Saved')).toBe('7'));
+      expect(saveBodies).toMatchObject([
+        { postId: 'saved-post', shouldSave: false },
+        { postId: 'saved-post', shouldSave: true },
+      ]);
+    });
+  });
+
+  // A refreshed token swaps the session object (about hourly, and on coming
+  // back to a long-idle tab). The hub read that as a new account: it blanked
+  // every tab, read page 1 of all three again, dropped the pages loaded with
+  // Load more, and closed a reel open on one of them.
+  it('keeps the loaded pages and the open reel when the token is refreshed', async () => {
+    const secondPagePost = { ...publicPost, id: 'post-page-two', title: 'Second page post' };
+    const answerPage = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
+    const listRequests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (/^\/api\/(posts|showcase\/saved-media|generations)\?/.test(url)) listRequests.push(url);
+      if (url.startsWith('/api/posts?')) {
+        return url.includes('offset=24')
+          ? response({ posts: [secondPagePost], pageInfo: { hasMore: false, nextOffset: null } })
+          : response({ posts: [publicPost], pageInfo: { hasMore: true, nextOffset: 24 } });
+      }
+      return answerPage(input);
+    }));
+    const owner = { id: 'owner-1', username: 'owner', name: 'Owner', avatar: null };
+    const { rerender } = render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+    await screen.findByRole('button', { name: /open public post/i });
+    fireEvent.click(screen.getByRole('button', { name: 'Load more posts' }));
+    fireEvent.click(await screen.findByRole('button', { name: /open second page post/i }));
+    await waitFor(() => expect(listRequests).toHaveLength(4));
+
+    authState.session = { access_token: 'refreshed-token', user: { id: 'owner-1' } };
+    authState.user = { id: 'owner-1' };
+    rerender(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(listRequests).toHaveLength(4);
+    expect(screen.getByRole('dialog', { name: /second page post showcase reel/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /open public post/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /open second page post/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Posts 2' })).toBeInTheDocument();
+  });
+
+  it('keeps raw creations in a focused preview instead of the Showcase reel', async () => {
+    render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} stats={TOTALS} />);
 
     await screen.findByRole('button', { name: /open public post/i });
     fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
-    fireEvent.click(screen.getByRole('button', { name: /open raw frame/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /open raw frame/i }));
 
     expect(screen.getByRole('dialog', { name: /raw frame creation preview/i })).toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: /showcase reel/i })).not.toBeInTheDocument();
@@ -284,22 +436,22 @@ describe('OwnerProfileMediaHub', () => {
       return baseFetch(input);
     }));
 
-    render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} />);
+    render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} stats={TOTALS} />);
 
     await screen.findByRole('button', { name: /open public post/i });
     fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
 
-    expect(screen.getByText('Expired clip')).toBeInTheDocument();
+    expect(await screen.findByText('Expired clip')).toBeInTheDocument();
     expect(screen.getByText('This file is no longer available')).toBeInTheDocument();
   });
 
   it('keeps failed runs out of the grid but reachable, and never as a dead control', async () => {
-    render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} />);
+    render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} stats={TOTALS} />);
 
     await screen.findByRole('button', { name: /open public post/i });
     fireEvent.click(screen.getByRole('tab', { name: /creations 1/i }));
 
-    expect(screen.getByRole('button', { name: /open raw frame/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /open raw frame/i })).toBeInTheDocument();
     expect(screen.queryByText('Failed clip')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /failed runs/i }));
@@ -483,6 +635,19 @@ describe('OwnerProfileMediaHub', () => {
       expect(screen.queryByRole('button', { name: /open second by the same creator/i })).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: /open saved from someone else/i })).toBeInTheDocument();
       expect(window.location.search).toContain('post=saved-other');
+    });
+
+    it("takes the blocked creator's saved posts off the Saved total", async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      answerRequests([savedPost, secondSavedPost, otherSavedPost]);
+      render(<OwnerProfileMediaHub creator={owner} stats={{ ...TOTALS, saved: 3 }} />);
+      await screen.findByRole('button', { name: /open public post/i });
+      fireEvent.click(screen.getByRole('tab', { name: /saved/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /open saved inspiration/i }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Block user' }));
+
+      expect(await screen.findByRole('tab', { name: 'Saved 1' })).toBeInTheDocument();
     });
 
     it('closes the reel when the blocked creator made everything that was saved', async () => {

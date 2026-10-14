@@ -10,7 +10,6 @@ import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
 import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import {
   getCreatorFollowStateForRoute,
-  notifyCreatorFollowForRoute,
   updateCreatorFollowForRoute,
   type ProfileFollowRouteResult,
 } from '@/lib/profile-follow-service';
@@ -20,7 +19,6 @@ type ProfileFollowRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   getCreatorFollowStateForRoute?: typeof getCreatorFollowStateForRoute;
-  notifyCreatorFollowForRoute?: typeof notifyCreatorFollowForRoute;
   runAfterResponse?: RunAfterResponse;
   updateCreatorFollowForRoute?: typeof updateCreatorFollowForRoute;
   logError?: typeof logBackendRouteError;
@@ -32,8 +30,6 @@ function resolveDependencies(dependencies: ProfileFollowRouteDependencies | unde
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     getCreatorFollowStateForRoute: dependencies?.getCreatorFollowStateForRoute
       ?? getCreatorFollowStateForRoute,
-    notifyCreatorFollowForRoute: dependencies?.notifyCreatorFollowForRoute
-      ?? notifyCreatorFollowForRoute,
     runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
     updateCreatorFollowForRoute: dependencies?.updateCreatorFollowForRoute
       ?? updateCreatorFollowForRoute,
@@ -117,30 +113,6 @@ async function handleProfileFollowPOST(
   }
 }
 
-async function handleProfileFollowNotifyPOST(
-  request: Request,
-  dependencies: ReturnType<typeof resolveDependencies>,
-) {
-  try {
-    const followerId = await getAuthenticatedUserId(request, dependencies);
-    if (!followerId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const body = await request.json().catch(() => null);
-    return createProfileFollowResponse(await dependencies.notifyCreatorFollowForRoute({
-      adminSupabase: dependencies.createServiceClient,
-      followerId,
-      body,
-      // As above: whoever sent this waits on the answer, not on the pushes.
-      runAfterResponse: dependencies.runAfterResponse,
-    }));
-  } catch (error) {
-    dependencies.logError('Creator follow notification failed:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
-  }
-}
-
 export async function getProfileFollowRouteResponse({
   request,
   dependencies,
@@ -151,20 +123,6 @@ export async function getProfileFollowRouteResponse({
   const resolvedDependencies = resolveDependencies(dependencies);
   return applyPrivateNoStoreApiResponseHeaders(
     await handleProfileFollowGET(request, resolvedDependencies),
-    request,
-  );
-}
-
-export async function postProfileFollowNotifyRouteResponse({
-  request,
-  dependencies,
-}: {
-  request: Request;
-  dependencies?: ProfileFollowRouteDependencies;
-}) {
-  const resolvedDependencies = resolveDependencies(dependencies);
-  return applyPrivateNoStoreApiResponseHeaders(
-    await handleProfileFollowNotifyPOST(request, resolvedDependencies),
     request,
   );
 }

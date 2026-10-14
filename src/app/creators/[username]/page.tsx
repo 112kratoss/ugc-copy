@@ -1,8 +1,10 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
+import { cache } from 'react';
 import Image from 'next/image';
-import { headers } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { notFound } from 'next/navigation';
+import { after } from 'next/server';
 import {
   Globe2,
   Heart,
@@ -19,20 +21,42 @@ import {
   getCreatorProfilePageData,
   getCreatorProfileSummary,
   getCreatorPublicPostCount,
+  loadCreatorBlockRelationship,
+  type CreatorBlockRelationship,
 } from '@/lib/creator-profile';
-import { buildCreatorProfilePath } from '@/lib/profile';
+import {
+  E2E_AUTH_COOKIE_NAME,
+  hasE2EAuthCookie,
+  isE2EAuthBypassEnabled,
+} from '@/lib/e2e-auth';
+import {
+  buildCreatorProfilePath,
+  normalizeSocialProfileHandle,
+  type SocialProfileField,
+} from '@/lib/profile';
+import { recordProfileShareEvent } from '@/lib/profile-share-events';
 import { JsonLd } from '@/components/JsonLd';
 import {
   buildBreadcrumbSchema,
   buildProfilePageSchema,
   createMetadata,
 } from '@/lib/seo';
-import { OptionalAuth } from '@/components/RouteAuthBoundary';
+import { createServiceClient } from '@/lib/server-helpers';
+import {
+  SHARE_SOURCE_QUERY_PARAM,
+  isProfileShareSourceSurface,
+  type ProfileShareSourceSurface,
+} from '@/lib/share';
+import { hasSupabaseAuthCookie } from '@/lib/supabase-auth-cookie';
+import { getServerAuthState } from '@/lib/supabase-server';
+import { RequestHintedOptionalAuth } from '@/components/RouteAuthBoundary';
+import { BlockedCreatorPanel } from './BlockedCreatorPanel';
 import { CreatorContentTabs } from './CreatorContentTabs';
 import { ProfileActions } from './ProfileActions';
 
 type CreatorPageProps = {
   params: Promise<{ username: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 /**
@@ -52,6 +76,25 @@ const MIN_PUBLIC_POSTS_FOR_INDEXING = 1;
  */
 const MIN_BIO_LENGTH_FOR_DESCRIPTION = 40;
 
+const UNBLOCKED: CreatorBlockRelationship = { creatorBlockedViewer: false, viewerBlockedCreator: false };
+
+/**
+ * Social pills, each opening the platform it names. A row saved before the
+ * server checked handles can hold any text, a link to another site included,
+ * so a pill is drawn only for a value that reads as that platform's handle (a
+ * pasted link on its own host counts), and the handle is encoded into the path.
+ */
+const SOCIAL_LINKS: ReadonlyArray<{
+  field: SocialProfileField;
+  label: string;
+  icon: ReactNode;
+  buildHref: (encodedHandle: string) => string;
+}> = [
+  { field: 'instagramHandle', label: 'Instagram', icon: <Instagram className="h-4 w-4" />, buildHref: (handle) => `https://instagram.com/${handle}` },
+  { field: 'tiktokHandle', label: 'TikTok', icon: <Music2 className="h-4 w-4" />, buildHref: (handle) => `https://tiktok.com/@${handle}` },
+  { field: 'twitterHandle', label: 'X', icon: <Twitter className="h-4 w-4" />, buildHref: (handle) => `https://x.com/${handle}` },
+];
+
 function buildCreatorDescription(
   displayName: string,
   username: string,
@@ -70,6 +113,67 @@ function buildCreatorDescription(
   return `${displayName} (@${username}) has published ${countLabel} — AI images, videos, and motion-transfer work, with the prompts and workflows behind them.`;
 }
 
+/**
+ * Which way a block runs between this request's viewer and the creator, as the
+ * API answers it: a creator who blocked the viewer is not there for them, and a
+ * viewer who blocked the creator is shown whom they blocked, so they can undo
+ * it here. Only a request carrying a Supabase session cookie (the hint
+ * `RequestHintedOptionalAuth` reads) is verified and checked, so a signed-out
+ * render reads neither the session nor the blocks; the E2E stand-in session has
+ * no account to block or be blocked. Per request, for the metadata and the page.
+ */
+const loadViewerBlockRelationship = cache(async (creatorId: string): Promise<CreatorBlockRelationship> => {
+  const cookieStore = await cookies();
+  const hasSessionCookie = hasSupabaseAuthCookie(
+    cookieStore.getAll().map(({ name }) => `${name}=1`).join(';')
+  );
+  const hasE2ESession = isE2EAuthBypassEnabled()
+    && hasE2EAuthCookie(cookieStore.get(E2E_AUTH_COOKIE_NAME)?.value);
+  if (!hasSessionCookie || hasE2ESession) {
+    return UNBLOCKED;
+  }
+
+  const viewerUserId = (await getServerAuthState()).session?.user?.id;
+  if (!viewerUserId) {
+    return UNBLOCKED;
+  }
+
+  // A failed read throws to the page's error boundary ("Could not load this
+  // creator", with Retry), as the API answers 500: never shown as unblocked.
+  return loadCreatorBlockRelationship({
+    adminSupabase: createServiceClient(),
+    creatorId,
+    viewerUserId,
+  });
+});
+
+/**
+ * Shared profile links carry `?s=<surface>`; links inside the product never
+ * do. A value that names no profile surface still marks an arrival from a
+ * share, filed as the creator page it landed on, as the post page files an
+ * unknown one as its own page.
+ */
+function getProfileShareVisitSurface(value: string | string[] | undefined): ProfileShareSourceSurface | null {
+  const surface = Array.isArray(value) ? value[0] : value;
+  if (!surface) {
+    return null;
+  }
+
+  return isProfileShareSourceSurface(surface) ? surface : 'creator-profile';
+}
+
+/**
+ * A share visit is the document load a shared link makes. A prefetch is not a
+ * visit, and an RSC request is the page refreshing or moving inside the app:
+ * `router.refresh()` after an unblock or a profile save keeps `?s=` in the
+ * address and must not count the same arrival again.
+ */
+function isShareArrival(headerStore: Headers): boolean {
+  return headerStore.get('purpose') !== 'prefetch'
+    && headerStore.get('next-router-prefetch') === null
+    && headerStore.get('rsc') === null;
+}
+
 export async function generateMetadata({ params }: CreatorPageProps): Promise<Metadata> {
   const { username } = await params;
   const profile = await getCreatorProfileSummary(username);
@@ -78,7 +182,16 @@ export async function generateMetadata({ params }: CreatorPageProps): Promise<Me
     return { title: 'Creator Not Found' };
   }
 
-  const publicCreations = await getCreatorPublicPostCount(profile.id);
+  const [relationship, publicCreations] = await Promise.all([
+    loadViewerBlockRelationship(profile.id),
+    getCreatorPublicPostCount(profile.id),
+  ]);
+
+  // The page answers a viewer the creator blocked with not-found; its title
+  // does not name the creator to them either.
+  if (relationship.creatorBlockedViewer) {
+    return { title: 'Creator Not Found' };
+  }
 
   return createMetadata({
     title: `${profile.displayName} (@${profile.username})`,
@@ -94,21 +207,48 @@ export async function generateMetadata({ params }: CreatorPageProps): Promise<Me
   });
 }
 
-export default async function CreatorPage({ params }: CreatorPageProps) {
+export default async function CreatorPage({ params, searchParams }: CreatorPageProps) {
   const { username } = await params;
-  const headerStore = await headers();
-  const data = await getCreatorProfilePageData(username, {
-    limit: 24,
-    offset: 0,
-    countryCode: headerStore.get('x-vercel-ip-country'),
-  });
+  const [headerStore, resolvedSearchParams, profile] = await Promise.all([
+    headers(),
+    searchParams ?? Promise.resolve<Record<string, string | string[] | undefined>>({}),
+    getCreatorProfileSummary(username),
+  ]);
 
-  if (!data) notFound();
+  if (!profile) notFound();
+
+  // Side by side, so a viewer with no block waits for neither read in turn.
+  // The page read reuses the profile row read above (a per-request cache).
+  const [relationship, data] = await Promise.all([
+    loadViewerBlockRelationship(profile.id),
+    getCreatorProfilePageData(username, {
+      limit: 24,
+      offset: 0,
+      countryCode: headerStore.get('x-vercel-ip-country'),
+    }),
+  ]);
+
+  if (!data || relationship.creatorBlockedViewer) notFound();
+
+  // The header and totals stay; the posts, Follow and Share do not, and the
+  // page offers Unblock where the posts would be.
+  const blockedByViewer = relationship.viewerBlockedCreator;
+
+  const shareVisitSurface = getProfileShareVisitSurface(resolvedSearchParams[SHARE_SOURCE_QUERY_PARAM]);
+  if (shareVisitSurface && !blockedByViewer && isShareArrival(headerStore)) {
+    // After the response: nothing on the page waits for an analytics write,
+    // and the recorder logs its own failures.
+    after(() => recordProfileShareEvent({
+      profileUserId: data.profile.id,
+      eventType: 'share_visit',
+      sourceSurface: shareVisitSurface,
+    }));
+  }
 
   const profilePath = buildCreatorProfilePath(data.profile.username);
   const stats = [
     { label: 'Posts', value: data.stats.publicCreations, icon: Images },
-    { label: 'Saves received', value: data.stats.totalSaves, icon: Heart },
+    { label: 'Saves', value: data.stats.totalSaves, icon: Heart },
     { label: 'Remixes', value: data.stats.totalRemixes, icon: Repeat2 },
     { label: 'Recipes', value: data.stats.unlocks, icon: LockKeyhole },
   ];
@@ -212,7 +352,7 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
               </div>
 
               <div className="pb-1 lg:shrink-0">
-                <ProfileActions profile={profileForActions} />
+                <ProfileActions profile={profileForActions} blockedByViewer={blockedByViewer} />
               </div>
             </div>
 
@@ -220,15 +360,13 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
               {data.profile.websiteUrl ? (
                 <SocialLink href={data.profile.websiteUrl} label="Website" icon={<Globe2 className="h-4 w-4" />} />
               ) : null}
-              {data.profile.instagramHandle ? (
-                <SocialLink href={`https://instagram.com/${data.profile.instagramHandle}`} label="Instagram" icon={<Instagram className="h-4 w-4" />} />
-              ) : null}
-              {data.profile.tiktokHandle ? (
-                <SocialLink href={`https://tiktok.com/@${data.profile.tiktokHandle}`} label="TikTok" icon={<Music2 className="h-4 w-4" />} />
-              ) : null}
-              {data.profile.twitterHandle ? (
-                <SocialLink href={`https://x.com/${data.profile.twitterHandle}`} label="X" icon={<Twitter className="h-4 w-4" />} />
-              ) : null}
+              {SOCIAL_LINKS.map(({ field, label, icon, buildHref }) => {
+                const storedValue = data.profile[field];
+                const handle = storedValue ? normalizeSocialProfileHandle(field, storedValue) : null;
+                return handle ? (
+                  <SocialLink key={field} href={buildHref(encodeURIComponent(handle))} label={label} icon={icon} />
+                ) : null;
+              })}
             </div>
 
             <div className="mt-5 grid grid-cols-4 divide-x divide-white/8 border-t border-white/8 pt-5">
@@ -245,9 +383,13 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
           </div>
         </section>
 
-        <OptionalAuth>
-          <CreatorContentTabs initialData={data} profilePath={profilePath} />
-        </OptionalAuth>
+        <RequestHintedOptionalAuth>
+          {blockedByViewer ? (
+            <BlockedCreatorPanel creatorId={data.profile.id} username={data.profile.username} />
+          ) : (
+            <CreatorContentTabs initialData={data} profilePath={profilePath} />
+          )}
+        </RequestHintedOptionalAuth>
       </div>
     </main>
   );

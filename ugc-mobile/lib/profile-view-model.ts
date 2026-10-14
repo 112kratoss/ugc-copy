@@ -1,4 +1,11 @@
-import type { GenerationListItem, OwnerPostListItem, ProfileResponse, ProfileStatsResponse, ShowcaseFeedItem } from '@/lib/types';
+import type {
+  GenerationListItem,
+  OwnerPostListItem,
+  ProfileResponse,
+  ProfileShareSourceSurface,
+  ProfileStatsResponse,
+  ShowcaseFeedItem,
+} from '@/lib/types';
 import { buildImmersiveShowcaseItems, type ImmersivePreviewItem, type PreviewViewerSource } from './immersive-preview-view-model';
 
 import { isCreationLibraryMember } from './creation-library';
@@ -211,6 +218,36 @@ export function getProfileStats({
 }
 
 export type ProfilePostsScope = 'active' | 'archived';
+
+/**
+ * The Active and Archived counts on the Posts scope control. The server's
+ * totals when the profile carries them, as the Posts stat above it does, so an
+ * account with 200 posts does not read "Active (24)" until it scrolls; the
+ * loaded tiles otherwise. Archiving moves both totals locally
+ * (`adjustProfileStats`), so the chips move with the grid.
+ */
+export function getOwnerPostScopeCounts(
+  totals: Pick<ProfileStatsResponse, 'posts' | 'archivedPosts'> | null | undefined,
+  loaded: Record<ProfilePostsScope, number>,
+): Record<ProfilePostsScope, number> {
+  const posts = totals?.posts;
+  const archivedPosts = totals?.archivedPosts;
+  return {
+    active: typeof posts === 'number' && Number.isFinite(posts) ? posts : loaded.active,
+    archived: typeof archivedPosts === 'number' && Number.isFinite(archivedPosts) ? archivedPosts : loaded.archived,
+  };
+}
+
+/**
+ * Sharing your own page is filed as `profile`, as the web files it, and the
+ * link carries `?s=profile`, so a visit it brings can be credited to it. It
+ * used to go out as `creator-profile`, counted as a visitor's share.
+ */
+export const OWN_PROFILE_SHARE_SOURCE: ProfileShareSourceSurface = 'profile';
+
+export function ownProfileShareUrl(siteUrl: string, username: string) {
+  return `${siteUrl.replace(/\/$/, '')}/creators/${encodeURIComponent(username)}?s=${OWN_PROFILE_SHARE_SOURCE}`;
+}
 
 export function getProfileMediaEmptyTitle(tab: ProfileMediaTab, postsScope: ProfilePostsScope = 'active') {
   if (tab === 'Saved') return 'No saved media yet';

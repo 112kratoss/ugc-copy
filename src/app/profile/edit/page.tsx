@@ -32,7 +32,6 @@ export default async function EditProfilePage() {
 
         <DeferredCreatorProfileCard
           initialProfile={initialProfile}
-          isLoading={false}
           loadError={loadError}
           collapseOptionalDetails
           hideIntro

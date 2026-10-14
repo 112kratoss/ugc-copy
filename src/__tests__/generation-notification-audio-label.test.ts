@@ -9,6 +9,7 @@ import { processGenerationOutputImportJobs } from '@/lib/generation-output-impor
 import { syncGenerationStatusByPredictionId } from '@/lib/generation-status-sync';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import { SOUND_EFFECT_MODELS, VOICEOVER_MODELS } from '@/lib/models';
+import { siteConfig } from '@/lib/seo';
 
 // The provider key is read once, when the generation modules load.
 vi.hoisted(() => {
@@ -120,7 +121,7 @@ describe('what an audio generation is called in its notification', () => {
       type: 'generation_succeeded',
       category: 'generation',
       title: 'Your sound effect is ready',
-      body: 'Open it in your mobile history.',
+      body: 'Open it in your history.',
       deep_link: '/viewer?source=studio-creations&initialId=gen-1',
       object_type: 'generation',
       object_id: 'gen-1',
@@ -133,7 +134,7 @@ describe('what an audio generation is called in its notification', () => {
       type: 'generation_failed',
       category: 'generation',
       title: 'Your voiceover failed',
-      body: 'Open Magicbooklet to try again or adjust the prompt.',
+      body: `Open ${siteConfig.name} to try again or adjust the prompt.`,
       deep_link: '/viewer?source=studio-creations&initialId=gen-1',
       object_type: 'generation',
       object_id: 'gen-1',

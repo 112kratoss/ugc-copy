@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { NativeMenu } from '@/components/native-menu';
-import { AppText, SecondaryButton, StatusBlock } from '@/components/ui';
+import { AppText, PrimaryButton, SecondaryButton, StatusBlock } from '@/components/ui';
 import { showActionSheet } from '@/lib/action-sheet';
 import { mergeRefreshedFirstPage, type ProfilePageAdapter } from '@/lib/profile-media-refresh';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
@@ -21,15 +21,26 @@ import { actionSheetFromMenu, menuAction, type NativeMenuModel } from '@/lib/nat
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { useAuth } from '@/lib/auth';
+import { UNBLOCK_CONFIRM_MESSAGE, blockedUsersQueryKey, withoutBlockedUser } from '@/lib/blocked-users-view-model';
 import {
   CREATOR_PROFILE_TABS,
   creatorInitial,
+  creatorProfileLoadErrorCopy,
   creatorProfileSocialLinks,
   creatorProfileTabItems,
   flattenCreatorProfilePages,
-  getNextCreatorProfileOffset,
+  setCachedCreatorProfileBlocked,
   type CreatorProfileTab,
 } from '@/lib/creator-profile-view-model';
+import {
+  CREATOR_PROFILE_PAGE_SIZE,
+  creatorProfileGridQueryKey,
+  creatorProfileGridQueryOptions,
+} from '@/lib/use-creator-reel-source';
+import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
+import { invalidateProfileStats } from '@/lib/profile-stats';
+import { removeShowcaseFeedItems, removeShowcaseFeedItemsFromInfiniteData } from '@/lib/showcase-feed-events';
+import { creatorFollowStateQueryKey } from '@/lib/use-creator-follow';
 import { env } from '@/lib/env';
 import { formatCompactCount } from '@/lib/home-view-model';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
@@ -41,17 +52,16 @@ import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia, hasShowcaseVideoWithoutPreview } from '@/lib/showcase-media';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from '@/lib/showcase-display';
-import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
+import { createShowcaseFeedViewerQueryKey, createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { CreatorProfileSkeleton } from '@/components/skeleton';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentColor, appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
-import type { CreatorProfileResponse, ShowcaseFeedItem } from '@/lib/types';
+import type { CreatorProfileResponse, CreatorProfileStats, ShowcaseFeedItem, ShowcaseFeedResponse } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
 import { formatUnlockCreditPrice } from '@/lib/pricing';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 
-const PROFILE_PAGE_SIZE = 24;
 
 /** How a creator page's pages carry their posts, for the first-page merge. */
 const CREATOR_PROFILE_PAGES: ProfilePageAdapter<CreatorProfileResponse, ShowcaseFeedItem> = {
@@ -66,13 +76,14 @@ const CREATOR_PROFILE_PAGES: ProfilePageAdapter<CreatorProfileResponse, Showcase
 const GRID_GAP = 10;
 const LOAD_MORE_COOLDOWN_MS = 800;
 
-type CreatorTool = CreatorProfileResponse['stats']['toolsUsed'][number];
+type CreatorTool = CreatorProfileStats['toolsUsed'][number];
 type CreatorListItem =
   | { kind: 'header'; key: 'header' }
   | { kind: 'tabs'; key: 'tabs' }
   | { kind: 'post'; key: string; item: ShowcaseFeedItem }
   | { kind: 'tool'; key: string; tool: CreatorTool }
-  | { kind: 'empty'; key: 'empty'; tab: CreatorProfileTab };
+  | { kind: 'empty'; key: 'empty'; tab: CreatorProfileTab }
+  | { kind: 'blocked'; key: 'blocked' };
 
 export function CreatorProfileScreen({
   initialTab = 'creations',
@@ -82,7 +93,7 @@ export function CreatorProfileScreen({
   username: string;
 }) {
   const theme = useAppTheme();
-  const { api, user } = useAuth();
+  const { api, identityUserId, user } = useAuth();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
   const previousFocusRef = useRef(isFocused);
@@ -94,6 +105,7 @@ export function CreatorProfileScreen({
   const [activeTab, setActiveTab] = useState<CreatorProfileTab>(initialTab);
   const [activeVideoItemId, setActiveVideoItemId] = useState<string | null>(null);
   const [followError, setFollowError] = useState<string | null>(null);
+  const [unblocking, setUnblocking] = useState(false);
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMorePageCountRef = useRef<number | null>(null);
@@ -101,26 +113,26 @@ export function CreatorProfileScreen({
   const contentWidth = Math.min(width, 430);
   const horizontalPadding = contentWidth < 390 ? 14 : 16;
   const tileWidth = Math.floor((contentWidth - horizontalPadding * 2 - GRID_GAP) / 2);
-  const queryKey = useMemo(() => ['creator-profile', 'infinite', username] as const, [username]);
+  const queryKey = useMemo(() => creatorProfileGridQueryKey(username), [username]);
+  // The reel opened on this page reads the same query, so the page size and
+  // the key come from one place: two sizes would leave a gap at a refetch.
   const profileQuery = useInfiniteQuery({
-    queryKey,
+    ...creatorProfileGridQueryOptions(api, username),
     enabled: Boolean(username),
-    initialPageParam: 0,
-    queryFn: ({ pageParam }) => api.getCreatorProfile(username, {
-      limit: PROFILE_PAGE_SIZE,
-      offset: pageParam,
-    }),
-    getNextPageParam: getNextCreatorProfileOffset,
-    staleTime: 1000 * 60,
   });
   const data = profileQuery.data?.pages[0];
   const items = useMemo(() => flattenCreatorProfilePages(profileQuery.data?.pages), [profileQuery.data?.pages]);
   const profilePageCount = profileQuery.data?.pages.length ?? 0;
   const currentTabItems = useMemo(() => creatorProfileTabItems(items, activeTab), [activeTab, items]);
   const socialLinks = useMemo(() => data ? creatorProfileSocialLinks(data.profile) : [], [data]);
+  const blockedByViewer = Boolean(data?.viewer.blockedByViewer);
   const listItems = useMemo<CreatorListItem[]>(() => {
+    // Someone the viewer blocked: who they are and the way to undo it, and
+    // none of their work (the server sends none).
+    if (blockedByViewer) return [{ kind: 'header', key: 'header' }, { kind: 'blocked', key: 'blocked' }];
+
     const content: CreatorListItem[] = activeTab === 'tools'
-      ? (data?.stats.toolsUsed ?? []).map((tool) => ({ kind: 'tool', key: `tool:${tool.slug}`, tool }))
+      ? (data?.stats?.toolsUsed ?? []).map((tool) => ({ kind: 'tool', key: `tool:${tool.slug}`, tool }))
       : currentTabItems.map((item) => ({ kind: 'post', key: `post:${item.id}`, item }));
 
     return [
@@ -128,7 +140,7 @@ export function CreatorProfileScreen({
       { kind: 'tabs', key: 'tabs' },
       ...(content.length ? content : [{ kind: 'empty', key: 'empty', tab: activeTab } as const]),
     ];
-  }, [activeTab, currentTabItems, data?.stats.toolsUsed]);
+  }, [activeTab, blockedByViewer, currentTabItems, data?.stats?.toolsUsed]);
 
   // Coming back to the screen, or following, refreshes the first page and
   // merges it over the cached pages (the profile dashboard's pattern, audit
@@ -137,7 +149,7 @@ export function CreatorProfileScreen({
   // a post from deep in it.
   const refreshFirstPage = useCallback(async () => {
     try {
-      const fresh = await api.getCreatorProfile(username, { limit: PROFILE_PAGE_SIZE, offset: 0 });
+      const fresh = await api.getCreatorProfile(username, { limit: CREATOR_PROFILE_PAGE_SIZE, offset: 0 });
       queryClient.setQueryData<InfiniteData<CreatorProfileResponse, number>>(queryKey, (current) => (
         mergeRefreshedFirstPage(current, fresh, 0, CREATOR_PROFILE_PAGES)
       ));
@@ -174,6 +186,11 @@ export function CreatorProfileScreen({
         })),
       } : current);
       return { previous };
+    },
+    onSuccess: (result, following) => {
+      // The reel keeps its own answer for this creator (`useCreatorFollow`),
+      // and agrees with this button without asking again.
+      if (data) queryClient.setQueryData(creatorFollowStateQueryKey(data.profile.id), { following: result?.following ?? following });
     },
     onError: (_error, _following, context) => {
       if (context?.previous) queryClient.setQueryData(queryKey, context.previous);
@@ -253,25 +270,95 @@ export function CreatorProfileScreen({
 
   const handleBlockUser = () => {
     if (!data || data.viewer.isOwner || !requireSafetySignIn()) return;
+    const creator = data.profile;
     void showConfirmDialog({
-      title: `Block @${data.profile.username}?`,
+      title: `Block @${creator.username}?`,
       message: 'Their posts will be hidden, and neither of you will be able to follow the other.',
       confirmLabel: 'Block user',
       destructive: true,
     }).then(async (confirmed) => {
       if (!confirmed) return;
       try {
-        await api.blockUser(data.profile.id);
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
-          queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
-          queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] }),
-        ]);
-        router.replace('/(tabs)/showcase' as never);
+        await api.blockUser(creator.id);
       } catch (error) {
         haptic.error();
         showErrorDialog('Could not block user', error);
+        return;
       }
+      leaveBlockedCreator(creator);
+    });
+  };
+
+  /**
+   * The block went through, so the page leaves at once, as the web's does.
+   * It used to wait for every feed lane to refetch first, with nothing on
+   * screen to say the tap had landed, and the reader then met lanes re-ranked
+   * as new sessions (audit 02-4). Now the caches let the creator go
+   * synchronously, as the reel's block does, and only what the server counts
+   * differently after a block (the Saved list and its total) is read again,
+   * behind the move.
+   */
+  const leaveBlockedCreator = (creator: CreatorProfileResponse['profile']) => {
+    const target = { creatorId: creator.id };
+    queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+      { queryKey: createShowcaseFeedViewerQueryKey(identityUserId) },
+      (current) => removeShowcaseFeedItemsFromInfiniteData(current, target),
+    );
+    queryClient.setQueriesData<ImmersiveSourceData>(
+      { queryKey: ['immersive-preview-source'] },
+      // `undefined` leaves a reel source without their posts as it was, its age included.
+      (source) => (source?.showcaseItems?.some((item) => item.creator.id === creator.id)
+        ? { ...source, showcaseItems: removeShowcaseFeedItems(source.showcaseItems, target) }
+        : undefined),
+    );
+    setCachedCreatorProfileBlocked(queryClient, creator.id);
+    // A block ends both follows; the reel's Follow must not remember one.
+    queryClient.setQueryData(creatorFollowStateQueryKey(creator.id), { following: false });
+    router.replace('/(tabs)/showcase' as never);
+    haptic.success();
+    AccessibilityInfo.announceForAccessibility(`@${creator.username} blocked.`);
+    void queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] });
+    void invalidateProfileStats(queryClient, user?.id);
+  };
+
+  /**
+   * Unblock from the page itself, as the web's panel does, with the question
+   * Settings → Blocked users asks. The page is then read again, so their posts
+   * and Follow come back under the reader. The feed lanes are only marked
+   * stale: refetching each of them now would re-rank them behind the reader.
+   */
+  const handleUnblockUser = () => {
+    if (!data?.viewer.blockedByViewer || unblocking) return;
+    const creator = data.profile;
+    void showConfirmDialog({
+      title: `Unblock @${creator.username}?`,
+      message: UNBLOCK_CONFIRM_MESSAGE,
+      confirmLabel: 'Unblock',
+    }).then(async (confirmed) => {
+      if (!confirmed) return;
+      setUnblocking(true);
+      try {
+        await api.unblockUser(creator.id);
+      } catch (error) {
+        setUnblocking(false);
+        haptic.error();
+        showErrorDialog('Could not unblock', error);
+        return;
+      }
+      haptic.success();
+      AccessibilityInfo.announceForAccessibility(`@${creator.username} unblocked.`);
+      queryClient.setQueryData<Awaited<ReturnType<typeof api.listBlockedUsers>>>(
+        blockedUsersQueryKey(user?.id),
+        (current) => withoutBlockedUser(current, creator.id),
+      );
+      void queryClient.invalidateQueries({ queryKey: ['showcase-feed'], refetchType: 'none' });
+      void queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] });
+      void invalidateProfileStats(queryClient, user?.id);
+      const reloaded = await profileQuery.refetch();
+      // A page that could not be read again must not go on saying "You
+      // blocked": it starts over, and says what failed with a way to retry.
+      if (reloaded.isError) await queryClient.resetQueries({ queryKey, exact: true });
+      setUnblocking(false);
     });
   };
 
@@ -295,7 +382,8 @@ export function CreatorProfileScreen({
       id: 'safety',
       items: [
         menuAction({ id: 'report-user', label: 'Report user', systemImage: 'exclamationmark.shield', destructive: true, onSelect: handleReportUser }),
-        menuAction({ id: 'block-user', label: 'Block user', systemImage: 'nosign', destructive: true, onSelect: handleBlockUser }),
+        // Someone already blocked is unblocked from the page's own panel.
+        ...(blockedByViewer ? [] : [menuAction({ id: 'block-user', label: 'Block user', systemImage: 'nosign', destructive: true, onSelect: handleBlockUser })]),
       ],
     }],
   };
@@ -369,7 +457,6 @@ export function CreatorProfileScreen({
   }, []);
   const viewabilityConfig = useMemo(() => ({ itemVisiblePercentThreshold: 55, minimumViewTime: 160 }), []);
 
-  const notFound = isNotFoundError(profileQuery.error);
   if (profileQuery.isLoading && !data) {
     return (
       <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -387,6 +474,8 @@ export function CreatorProfileScreen({
     // understand why", which means copy that names the situation and a control
     // that moves them on: a missing creator is not retryable, so it offers
     // Explore instead of a Retry that would fail the same way.
+    const failure = creatorProfileLoadErrorCopy(profileQuery.error);
+    const notFound = !failure.canRetry;
     return (
       <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
         <Stack.Screen options={{ title: 'Creator' }} />
@@ -394,10 +483,8 @@ export function CreatorProfileScreen({
         <View style={{ flex: 1, paddingTop: 16, paddingHorizontal: 16, gap: appTheme.spacing.gap }}>
         <StatusBlock
           tone={notFound ? 'neutral' : 'danger'}
-          title={notFound ? 'Creator not found' : 'Could not load creator'}
-          body={notFound
-            ? 'This profile may have been removed, or the handle may have changed.'
-            : 'Check your connection, then try again.'}
+          title={failure.title}
+          body={failure.body}
         />
         <SecondaryButton
           label={notFound ? 'Go to Explore' : 'Try again'}
@@ -437,6 +524,9 @@ export function CreatorProfileScreen({
     }
     if (item.kind === 'tool') {
       return <CreatorToolRow tool={item.tool} />;
+    }
+    if (item.kind === 'blocked') {
+      return <CreatorBlockedPanel onUnblock={handleUnblockUser} unblocking={unblocking} username={data.profile.username} />;
     }
     if (item.kind === 'empty') {
       return (
@@ -492,7 +582,8 @@ export function CreatorProfileScreen({
         refreshing={pullRefreshing}
         renderItem={renderItem}
         showsVerticalScrollIndicator={false}
-        stickyHeaderIndices={[1]}
+        // The tabs stick; a blocked creator's page has none.
+        stickyHeaderIndices={blockedByViewer ? undefined : [1]}
         viewabilityConfig={viewabilityConfig}
         style={{ flex: 1, width: '100%', maxWidth: 430, alignSelf: 'center', backgroundColor: theme.colors.background }}
         contentContainerStyle={{
@@ -638,7 +729,7 @@ function CreatorHeader({
           <View style={{ flexDirection: 'row', gap: 8, flexShrink: 0 }}>
             {data.viewer.isOwner ? (
               <EditProfileButton onPress={onEditProfile} />
-            ) : (
+            ) : data.viewer.blockedByViewer ? null : (
               <FollowButton following={data.viewer.isFollowing} loading={isFollowLoading} onPress={onFollowPress} />
             )}
             <CircleAction label="Share profile" onPress={onShareProfile}>
@@ -688,24 +779,25 @@ function CreatorHeader({
           </View>
         ) : null}
 
-        <CreatorStats data={data} />
+        {data.stats ? <CreatorStats stats={data.stats} /> : null}
       </View>
     </View>
   );
 }
 
-function CreatorStats({ data }: { data: CreatorProfileResponse }) {
+function CreatorStats({ stats }: { stats: CreatorProfileStats }) {
   const theme = useAppTheme();
-  const stats = [
-    { label: 'Posts', value: data.stats.publicCreations },
-    { label: 'Saves', value: data.stats.totalSaves },
-    { label: 'Remixes', value: data.stats.totalRemixes },
-    { label: 'Recipes', value: data.stats.unlocks },
+  // "Saves" is the web's label too (decision D10): saves of this creator's posts.
+  const rows = [
+    { label: 'Posts', value: stats.publicCreations },
+    { label: 'Saves', value: stats.totalSaves },
+    { label: 'Remixes', value: stats.totalRemixes },
+    { label: 'Recipes', value: stats.unlocks },
   ];
 
   return (
     <View style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: theme.colors.borderSubtle, paddingTop: 14 }}>
-      {stats.map((stat, index) => (
+      {rows.map((stat, index) => (
         <View key={stat.label} style={{ flex: 1, minWidth: 0, alignItems: 'center', gap: 3, borderLeftWidth: index ? 1 : 0, borderLeftColor: theme.colors.borderSubtle, paddingHorizontal: 2 }}>
           <Text style={{ color: theme.colors.text, fontSize: 18, lineHeight: 22, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatCompactCount(stat.value)}</Text>
           <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{stat.label}</Text>
@@ -717,16 +809,17 @@ function CreatorStats({ data }: { data: CreatorProfileResponse }) {
 
 function CreatorTabs({ activeTab, data, onChange }: { activeTab: CreatorProfileTab; data: CreatorProfileResponse; onChange: (tab: CreatorProfileTab) => void }) {
   const theme = useAppTheme();
-  const counts: Record<CreatorProfileTab, number> = {
-    creations: data.stats.publicCreations,
-    unlocks: data.stats.unlocks,
-    tools: data.stats.toolsUsed.length,
+  const counts: Record<CreatorProfileTab, number | null> = {
+    creations: data.stats?.publicCreations ?? null,
+    unlocks: data.stats?.unlocks ?? null,
+    tools: data.stats?.toolsUsed.length ?? null,
   };
 
   return (
     <View style={{ flexDirection: 'row', gap: 4, borderRadius: 18, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceInset, padding: 4 }}>
       {CREATOR_PROFILE_TABS.map((tab) => {
         const active = activeTab === tab.id;
+        const count = counts[tab.id];
         return (
           <Pressable
             key={tab.id}
@@ -736,7 +829,7 @@ function CreatorTabs({ activeTab, data, onChange }: { activeTab: CreatorProfileT
             style={({ pressed }) => ({ flex: 1, minHeight: appTheme.touch.default, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: active ? theme.colors.primaryFill : 'transparent', opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 5 })}
           >
             <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: active ? theme.colors.onPrimary : theme.colors.muted, ...appTheme.type.label, fontWeight: '700' }}>
-              {tab.label} {formatCompactCount(counts[tab.id])}
+              {count === null ? tab.label : `${tab.label} ${formatCompactCount(count)}`}
             </Text>
           </Pressable>
         );
@@ -904,6 +997,26 @@ function EmptyState({ body, icon, title }: { body: string; icon: ReactNode; titl
   );
 }
 
-function isNotFoundError(error: unknown) {
-  return Boolean(error && typeof error === 'object' && 'status' in error && error.status === 404);
+/**
+ * Under the header of someone the viewer blocked, in place of their work. It
+ * used to read "Creator not found", which told the person who blocked them
+ * that the account was gone, and the way back was three screens deep in
+ * Settings.
+ */
+function CreatorBlockedPanel({ onUnblock, unblocking, username }: { onUnblock: () => void; unblocking: boolean; username: string }) {
+  return (
+    <View style={{ gap: appTheme.spacing.gap }}>
+      <StatusBlock
+        title={`You blocked @${username}`}
+        body="You won't see their posts, and neither of you can follow the other."
+      />
+      <PrimaryButton
+        label="Unblock"
+        loading={unblocking}
+        loadingLabel="Unblocking…"
+        accessibilityHint={`Unblocks @${username}.`}
+        onPress={onUnblock}
+      />
+    </View>
+  );
 }

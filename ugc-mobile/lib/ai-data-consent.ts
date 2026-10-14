@@ -11,8 +11,9 @@ import { showConfirmDialog } from '@/lib/dialog';
  * rejected 0.1.6 (55) under guidelines 5.1.1(i) and 5.1.2(i): an app that sends
  * personal data to a third-party AI service has to say what it sends, name who
  * receives it, and ask first. Every path that does so passes
- * `ensureAiDataConsent`: generating and enhancing a prompt on the create screen,
- * and starting, retrying or approving a template run.
+ * `ensureAiDataConsent`: generating, enhancing a prompt and preparing a Seedance
+ * reference on the create screen, and starting, retrying or approving a template
+ * run.
  *
  * The question is also put when a creation screen first opens
  * (`askAiDataConsentOnOpen`). App Review rejected 0.1.8 (58) under the same
@@ -73,7 +74,7 @@ export const AI_DATA_CONSENT_MESSAGE =
  * provider-name guard in `__tests__/backend-boundary.test.ts` lets through.
  */
 export const AI_DATA_SHARED_ITEMS =
-  'Your prompt, and any photos, videos or audio you add. Only when you generate, enhance a prompt or start a template.';
+  'Your prompt, and any photos, videos or audio you add. Only when you generate, enhance a prompt, start a template or prepare a Seedance reference.';
 
 export const AI_DATA_RECIPIENTS =
   'Kie.ai, which runs our AI models, and the company that made the model you choose: '
@@ -212,8 +213,9 @@ export function ensureAiDataConsent(): Promise<boolean> {
  * typed or added there, so it does not depend on Generate being pressable.
  *
  * Once in a run of the app. Someone who answers "Don’t Allow" is not asked on
- * every visit, and is still asked when they generate, enhance or start a
- * template. Nothing is asked of someone who has already allowed it.
+ * every visit, and is still asked when they generate, enhance, prepare a
+ * Seedance reference or start a template. Nothing is asked of someone who has
+ * already allowed it.
  */
 export function askAiDataConsentOnOpen() {
   if (askedOnOpen) return;

@@ -21,6 +21,10 @@ import { useAppTheme } from '@/lib/theme-context';
  * (`askAiDataConsentOnOpen`) and again before a prompt or media would leave the
  * phone (`ensureAiDataConsent`); this screen says the same things at more
  * length, shows the answer, and changes it.
+ *
+ * The answer is kept on this phone, not on the account: another phone asks
+ * afresh and the website does not ask. So the status line says "from this
+ * phone", rather than promising more than a withdrawal here does.
  */
 export default function AiDataSharingScreen() {
   const theme = useAppTheme();
@@ -56,8 +60,8 @@ export default function AiDataSharingScreen() {
           <AppText variant="cardTitle">{consent.grantedAt ? 'Allowed' : 'Not allowed'}</AppText>
           <AppText variant="bodySm" color="muted">
             {consent.grantedAt
-              ? `${grantedOn ? `You allowed this on ${grantedOn}. ` : ''}If you withdraw, nothing more is sent, and you’ll be asked again the next time you create.`
-              : 'Nothing is sent until you allow it. You’ll be asked the first time you create.'}
+              ? `${grantedOn ? `You allowed this on ${grantedOn}. ` : ''}If you withdraw, nothing more is sent from this phone, and you’ll be asked again the next time you create.`
+              : 'Nothing is sent from this phone until you allow it. You’ll be asked the first time you create.'}
           </AppText>
         </View>
         {consent.grantedAt ? (

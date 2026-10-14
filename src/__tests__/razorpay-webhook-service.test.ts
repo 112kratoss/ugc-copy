@@ -43,6 +43,8 @@ function createAdminSupabaseMock(state: {
   creditAdjustmentStatus?: string;
   /** What `settle_referral_purchase_rewards` reports. Unset: the buyer was not referred. */
   referralSettlement?: Record<string, unknown>;
+  /** The buyer's balance once a top-up is in. */
+  balance?: number;
 }) {
   const tableReads: string[] = [];
   const rpcCalls: Array<{ name: string; payload: Record<string, unknown> }> = [];
@@ -116,6 +118,10 @@ function createAdminSupabaseMock(state: {
                         : null,
                       error: null,
                     };
+                  }
+
+                  if (table === 'profiles') {
+                    return { data: { credits: state.balance ?? 110 }, error: null };
                   }
 
                   throw new Error(`Unexpected table access: ${table}`);
@@ -313,14 +319,19 @@ describe('processRazorpayWebhookForRoute', () => {
       },
     });
     const createAdminSupabase = vi.fn(() => admin.client);
+    const notifyCreditPurchase = vi.fn(async () => null);
 
     const result = await processRazorpayWebhookForRoute({
       createAdminSupabase,
       rawBody: paymentCapturedBody(),
+      notifyCreditPurchase,
     });
 
     expect(result).toEqual({ status: 200, body: 'OK' });
     expect(admin.tableReads).toEqual(['transactions']);
+    // The webhook settled this top-up, so it tells the buyer, once.
+    expect(notifyCreditPurchase).toHaveBeenCalledTimes(1);
+    expect(notifyCreditPurchase).toHaveBeenCalledWith(admin.client, { userId: 'user-1', transactionId: 'txn-1' });
     expect(admin.rpcCalls).toEqual([
       {
         name: 'add_credits',
@@ -342,11 +353,12 @@ describe('processRazorpayWebhookForRoute', () => {
     expect(admin.providerDependencyInserts).toEqual([]);
   });
 
-  it('announces a referred buyer\'s rewards before it acknowledges the capture', async () => {
+  it('announces a referred buyer\'s rewards, then the balance, before it acknowledges the capture', async () => {
     // Nobody waits on a webhook, and what it acknowledges is what Razorpay's
     // redelivery hangs on. So it hands the settlement no way to run work after
     // the response: the rewards are announced first, as they always were, even
-    // now that the checkout's own verify route answers ahead of them.
+    // now that the checkout's own verify route answers ahead of them, and the
+    // top-up it settled after them, as a top-up in the app is.
     const admin = createAdminSupabaseMock({
       creditTransaction: {
         id: 'txn-1',
@@ -397,7 +409,13 @@ describe('processRazorpayWebhookForRoute', () => {
     expect(history.sent.map((notification) => [notification.type, notification.user_id])).toEqual([
       ['referral_reward_earned', 'inviter-1'],
       ['referral_reward_earned', 'user-1'],
+      ['credits_purchased', 'user-1'],
     ]);
+    expect(history.sent[2]).toMatchObject({
+      body: 'Your balance is now 110 credits.',
+      deep_link: '/profile',
+      dedupe_key: 'credits:txn-1',
+    });
   });
 
   it('asks Razorpay to retry when the credit transaction load fails transiently', async () => {
@@ -555,12 +573,14 @@ describe('processRazorpayWebhookForRoute', () => {
     });
     const invalidateMarketplaceResourceListCache = vi.fn();
     const recordPurchaseFeedEvent = vi.fn(async () => ({ status: 'recorded' as const, deliveryId: null }));
+    const notifyPostResourcePurchase = vi.fn(async () => null);
 
     const result = await processRazorpayWebhookForRoute({
       createAdminSupabase: () => admin.client,
       rawBody: paymentCapturedBody(),
       invalidateMarketplaceResourceListCache,
       recordPurchaseFeedEvent,
+      notifyPostResourcePurchase,
     });
 
     expect(result).toEqual({ status: 200, body: 'OK' });
@@ -569,6 +589,9 @@ describe('processRazorpayWebhookForRoute', () => {
     // first makes this one a duplicate.
     expect(recordPurchaseFeedEvent).toHaveBeenCalledTimes(1);
     expect(recordPurchaseFeedEvent).toHaveBeenCalledWith(admin.client, { razorpayOrderId: 'order_123' });
+    // The webhook settled this recipe sale, so it tells the buyer and the owner, once.
+    expect(notifyPostResourcePurchase).toHaveBeenCalledTimes(1);
+    expect(notifyPostResourcePurchase).toHaveBeenCalledWith(admin.client, 'order_123');
   });
 
   it('acknowledges a completed bundle purchase even when its feed event fails', async () => {
@@ -582,9 +605,58 @@ describe('processRazorpayWebhookForRoute', () => {
       rawBody: paymentCapturedBody(),
       invalidateMarketplaceResourceListCache: vi.fn(),
       recordPurchaseFeedEvent: vi.fn(async () => ({ status: 'failed' as const, reason: 'error' as const })),
+      notifyPostResourcePurchase: vi.fn(async () => null),
     });
 
     expect(result).toEqual({ status: 200, body: 'OK' });
+  });
+
+  it('tells the buyer and the seller about a marketplace purchase it settled, once', async () => {
+    const admin = createAdminSupabaseMock({
+      marketplaceOrder: { id: 'marketplace-order-1', buyer_user_id: 'user-1', status: 'created' },
+    });
+    const notifyMarketplacePurchase = vi.fn(async () => null);
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+      notifyMarketplacePurchase,
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(admin.rpcCalls.map((call) => call.name)).toEqual(['complete_marketplace_purchase']);
+    expect(notifyMarketplacePurchase).toHaveBeenCalledTimes(1);
+    expect(notifyMarketplacePurchase).toHaveBeenCalledWith(admin.client, 'order_123');
+  });
+
+  it.each([
+    ['a top-up', {
+      creditTransaction: {
+        id: 'txn-1', user_id: 'user-1', credits: 100, razorpay_payment_id: 'pay_123', status: 'success' as const,
+      },
+    }],
+    ['a marketplace purchase', {
+      marketplaceOrder: { id: 'marketplace-order-1', buyer_user_id: 'user-1', razorpay_payment_id: 'pay_123', status: 'paid' as const },
+    }],
+    ['a recipe purchase', {
+      bundleOrder: { id: 'bundle-order-1', buyer_user_id: 'user-1', razorpay_payment_id: 'pay_123', status: 'paid' as const },
+    }],
+  ])('tells nobody about %s the buyer\'s verify already settled: the verify did', async (_kind, state) => {
+    const admin = createAdminSupabaseMock(state);
+    const notifiers = {
+      notifyCreditPurchase: vi.fn(),
+      notifyMarketplacePurchase: vi.fn(),
+      notifyPostResourcePurchase: vi.fn(),
+    };
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+      ...notifiers,
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(notifiers.notifyCreditPurchase).not.toHaveBeenCalled();
+    expect(notifiers.notifyMarketplacePurchase).not.toHaveBeenCalled();
+    expect(notifiers.notifyPostResourcePurchase).not.toHaveBeenCalled();
   });
 
   it('accepts an add_credits false result only after verifying concurrent durable settlement', async () => {
@@ -597,10 +669,12 @@ describe('processRazorpayWebhookForRoute', () => {
       },
       creditRpcMode: 'false-settled',
     });
+    const notifyCreditPurchase = vi.fn();
 
     const result = await processRazorpayWebhookForRoute({
       createAdminSupabase: () => admin.client,
       rawBody: paymentCapturedBody(),
+      notifyCreditPurchase,
     });
 
     expect(result).toEqual({ status: 200, body: 'OK' });
@@ -609,6 +683,8 @@ describe('processRazorpayWebhookForRoute', () => {
       name: 'settle_referral_purchase_rewards',
       payload: { p_transaction_id: 'txn-1' },
     });
+    // The verify settled it at the same moment, and it tells the buyer.
+    expect(notifyCreditPurchase).not.toHaveBeenCalled();
   });
 
   it('asks Razorpay to retry when add_credits returns false without durable settlement', async () => {

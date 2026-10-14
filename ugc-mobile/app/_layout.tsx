@@ -27,8 +27,14 @@ import { nativeMenuTouchGuardProps } from '@/lib/native-menu-shield';
 import { SignOutOverlay } from '@/components/sign-out-overlay';
 import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
 import { useOtaUpdateGate } from '@/lib/use-ota-update-gate';
-import { setSessionMergedHandler, setSessionRejectedHandler, setUpgradeRequiredHandler } from '@/lib/api-client';
-import { AuthProvider, useAuth } from '@/lib/auth';
+import {
+  setAccountDeletingHandler,
+  setSessionMergedHandler,
+  setSessionRejectedHandler,
+  setUpgradeRequiredHandler,
+} from '@/lib/api-client';
+import { ACCOUNT_DELETION_SCHEDULED_NOTICE, AuthProvider, useAuth } from '@/lib/auth';
+import { showMessageDialog } from '@/lib/dialog';
 import { notificationBadgeQueryKey } from '@/lib/notification-badge';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { readAppVersionParts } from '@/lib/app-version-label';
@@ -41,7 +47,7 @@ import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { isReelBackdropShown, subscribeToReelBackdrop } from '@/lib/reel-backdrop';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
-import { navigateToNotificationDeepLink, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
+import { openTappedNotification, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
 import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
 import { installMediaQueryRetention, pruneInactiveMediaQueries } from '@/lib/media-query-retention';
 import { preloadPersistedAccountState } from '@/lib/persisted-account-state';
@@ -218,6 +224,7 @@ function RootLayoutNav() {
           <UpgradeRequiredCoordinator />
           <SessionMergedCoordinator />
           <SessionRejectedCoordinator />
+          <AccountDeletingCoordinator />
           <OtaUpdateCoordinator />
           <MediaDiagnosticsCoordinator />
           <SafeAreaProvider>
@@ -569,26 +576,44 @@ function SessionRejectedCoordinator() {
   return null;
 }
 
+function AccountDeletingCoordinator() {
+  // Ends the session of an account the server is deleting (409
+  // ACCOUNT_DELETING), asked for on another device or by a request whose answer
+  // this phone never saw, and says why the person is now a guest on Home.
+  // Registered here for the same reason as SessionMergedCoordinator.
+  const { leaveDeletingAccount } = useAuth();
+  const leaveRef = useRef(leaveDeletingAccount);
+
+  useEffect(() => {
+    leaveRef.current = leaveDeletingAccount;
+  }, [leaveDeletingAccount]);
+
+  useEffect(() => {
+    setAccountDeletingHandler(() => {
+      void leaveRef.current()
+        .then((ended) => {
+          if (ended) showMessageDialog(ACCOUNT_DELETION_SCHEDULED_NOTICE);
+        })
+        .catch((error) => {
+          console.warn('Could not end the session of the account being deleted', error);
+        });
+    });
+    return () => setAccountDeletingHandler(null);
+  }, []);
+
+  return null;
+}
+
 function NotificationResponseCoordinator() {
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
 
+  // Once for the app, not again for each account: subscribing reads the push
+  // the app was opened from, and subscribing again when the stored session
+  // landed after a cold start read that push a second time.
   useEffect(() => subscribeToNotificationResponses({
-    handleResponse: async ({ notificationId, deepLink }) => {
-      if (notificationId) {
-        await api.markMobileNotificationsRead([notificationId]).catch((error) => {
-          console.error('Failed to mark tapped notification read', error);
-        });
-      }
-
-      await queryClient.invalidateQueries({ queryKey: ['mobile-notifications', user?.id] });
-      if (!navigateToNotificationDeepLink(deepLink)) {
-        return navigateToNotificationDeepLink('/studio');
-      }
-
-      return true;
-    },
-  }), [api, queryClient, user?.id]);
+    handleResponse: (event) => openTappedNotification(event, { api, queryClient }),
+  }), [api, queryClient]);
 
   // An alert that arrives while the app is in front no longer always draws a
   // banner (HIG Notifications asks for "discoverable but not distracting"), so

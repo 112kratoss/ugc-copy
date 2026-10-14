@@ -86,6 +86,7 @@ describe('postMarketplaceVerifyRouteResponse', () => {
       keyId: 'test-key-id',
       keySecret: 'test-secret',
       readBody: expect.any(Function),
+      runAfterResponse: expect.any(Function),
     });
   });
 

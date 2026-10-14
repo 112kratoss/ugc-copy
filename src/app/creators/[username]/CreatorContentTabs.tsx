@@ -21,7 +21,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { loadShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
-import type { CreatorProfilePageData } from '@/lib/creator-profile';
+import type { CreatorProfilePage, CreatorProfilePageData } from '@/lib/creator-profile';
 import {
   blockCreatorAfterConfirmation,
   reportCreatorAfterConfirmation,
@@ -99,9 +99,10 @@ export function CreatorContentTabs({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { session, user } = useAuth();
-  const [activeTab, setActiveTab] = useState<CreatorTab>(() =>
-    typeof window === 'undefined' ? 'creations' : getTabFromHash(window.location.hash)
-  );
+  // The server draws Posts. A `#creator-unlocks` or `#creator-tools` link
+  // picks its tab once the page is live (below), so hydration meets the
+  // markup the server sent.
+  const [activeTab, setActiveTab] = useState<CreatorTab>('creations');
   const [pageInfo, setPageInfo] = useState(initialData.pageInfo);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -123,7 +124,7 @@ export function CreatorContentTabs({
     items,
     setItems,
     savedItemIds,
-    setSavedItemIds,
+    addSavedItemIds,
     savingItemIds,
     toggleSave,
   } = useOptimisticPostSave({
@@ -140,6 +141,14 @@ export function CreatorContentTabs({
   const viewerItems = selectedItemId && !visibleItems.some((item) => item.id === selectedItemId)
     ? items
     : visibleItems;
+  // Recipes arrive among the posts, page by page, and the count says how many
+  // there are: the Recipes tab (and a reel opened on it) asks for pages only
+  // while some are still to come, instead of walking every page under an
+  // empty tab, and says "No recipes yet" only when none can come.
+  const recipesStillToCome = pageInfo.hasMore && unlockItems.length < initialData.stats.unlocks;
+  const tabWantsMore = activeTab === 'unlocks' ? recipesStillToCome : pageInfo.hasMore;
+  const isLookingForRecipes = activeTab === 'unlocks' && unlockItems.length === 0 && recipesStillToCome;
+  const reelHasMore = viewerItems === unlockItems ? recipesStillToCome : pageInfo.hasMore;
   const tabs = [
     { id: 'creations' as const, label: 'Posts', count: initialData.stats.publicCreations },
     { id: 'unlocks' as const, label: 'Recipes', count: initialData.stats.unlocks },
@@ -190,6 +199,7 @@ export function CreatorContentTabs({
 
   useEffect(() => {
     const handleHashChange = () => setActiveTab(getTabFromHash(window.location.hash));
+    handleHashChange();
     const handlePopState = () => {
       const params = new URLSearchParams(window.location.search);
       const postId = params.get('post');
@@ -247,6 +257,8 @@ export function CreatorContentTabs({
         return;
       }
       setItems((current) => current.some((candidate) => candidate.id === item.id) ? current : [...current, item]);
+      // A signed-in read says whether the viewer saved it.
+      if (item.isSaved) addSavedItemIds([item.id]);
       setSelectedItemId(item.id);
       setDirectPostStatus(null);
     }).catch((error) => {
@@ -263,7 +275,7 @@ export function CreatorContentTabs({
         directPostRequestRef.current = null;
       }
     };
-  }, [directPostAttempt, initialData.profile.username, items, searchParams, session?.access_token, setItems]);
+  }, [addSavedItemIds, directPostAttempt, initialData.profile.username, items, searchParams, session?.access_token, setItems]);
 
   const retryDirectPost = useCallback(() => {
     directPostRequestRef.current = null;
@@ -297,7 +309,8 @@ export function CreatorContentTabs({
         `/api/creators/${encodeURIComponent(initialData.profile.username)}?${params.toString()}`,
         session?.access_token ? { headers: { Authorization: `Bearer ${session.access_token}` } } : undefined
       );
-      const nextPage = await response.json() as CreatorProfilePageData;
+      // Later pages carry no totals; the first page's stay in `initialData`.
+      const nextPage = await response.json() as CreatorProfilePage;
       if (!response.ok || !Array.isArray(nextPage.items)) {
         throw new Error('Could not load more posts.');
       }
@@ -306,13 +319,9 @@ export function CreatorContentTabs({
         ...current,
         ...nextPage.items.filter((item) => !current.some((candidate) => candidate.id === item.id)),
       ]);
-      setSavedItemIds((current) => {
-        const next = new Set(current);
-        nextPage.items.forEach((item) => {
-          if (item.isSaved) next.add(item.id);
-        });
-        return next;
-      });
+      // A signed-in read carries each post's saved state on every page; the
+      // lookup the save hook makes covers the first page alone.
+      addSavedItemIds(nextPage.items.filter((item) => item.isSaved).map((item) => item.id));
       setPageInfo(nextPage.pageInfo);
     } catch (error) {
       console.error('Failed to load more creator posts:', error);
@@ -321,7 +330,7 @@ export function CreatorContentTabs({
       loadingMoreRef.current = false;
       setIsLoadingMore(false);
     }
-  }, [initialData.profile.username, pageInfo.hasMore, pageInfo.nextOffset, session, setItems, setSavedItemIds]);
+  }, [addSavedItemIds, initialData.profile.username, pageInfo.hasMore, pageInfo.nextOffset, session, setItems]);
 
   useEffect(() => {
     if (typeof IntersectionObserver === 'undefined') {
@@ -330,14 +339,14 @@ export function CreatorContentTabs({
       return;
     }
     const sentinel = sentinelRef.current;
-    if (!sentinel || !pageInfo.hasMore || activeTab === 'tools') return;
+    if (!sentinel || !tabWantsMore || activeTab === 'tools') return;
 
     const observer = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) void loadMore();
     }, { rootMargin: '900px 0px' });
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [activeTab, loadMore, pageInfo.hasMore]);
+  }, [activeTab, loadMore, tabWantsMore]);
 
   const handleTabSelect = (tab: CreatorTab) => {
     setActiveTab(tab);
@@ -479,7 +488,7 @@ export function CreatorContentTabs({
               <CreatorCard key={item.id} item={item} onOpen={openViewer} />
             ))}
           </div>
-        ) : (
+        ) : isLookingForRecipes ? null : (
           <EmptyState
             icon={activeTab === 'unlocks' ? <LockKeyhole className="h-6 w-6" /> : <Images className="h-6 w-6" />}
             title={activeTab === 'unlocks' ? 'No recipes yet' : 'No posts yet'}
@@ -490,7 +499,7 @@ export function CreatorContentTabs({
         )}
       </div>
 
-      {activeTab !== 'tools' && pageInfo.hasMore ? (
+      {activeTab !== 'tools' && tabWantsMore ? (
         <div ref={sentinelRef} className="flex min-h-24 items-center justify-center py-6" aria-live="polite">
           {loadError ? (
             <div className="flex flex-col items-center gap-3 text-center">
@@ -502,13 +511,13 @@ export function CreatorContentTabs({
                 <RefreshCw className="h-4 w-4" /> Retry
               </button>
             </div>
-          ) : isLoadingMore ? (
+          ) : isLoadingMore || (isLookingForRecipes && observerSupported) ? (
             <div className="inline-flex items-center gap-2 text-sm font-semibold text-zinc-400">
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading posts
+              <Loader2 className="h-4 w-4 animate-spin" /> {activeTab === 'unlocks' ? 'Loading recipes' : 'Loading posts'}
             </div>
           ) : !observerSupported ? (
             <button type="button" onClick={() => void loadMore()} className="ui-focus-ring min-h-11 rounded-full border border-white/12 bg-white/[0.05] px-5 text-sm font-bold text-white">
-              Load more posts
+              {activeTab === 'unlocks' ? 'Load more recipes' : 'Load more posts'}
             </button>
           ) : null}
         </div>
@@ -523,7 +532,7 @@ export function CreatorContentTabs({
           savedItemIds={savedItemIds}
           savingItemIds={savingItemIds}
           accessToken={session?.access_token ?? null}
-          hasMoreItems={pageInfo.hasMore}
+          hasMoreItems={reelHasMore}
           isLoadingMoreItems={isLoadingMore}
           loadMoreError={loadError}
           onLoadMoreItems={loadMore}

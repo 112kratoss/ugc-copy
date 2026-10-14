@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import LoginClient from '@/app/login/LoginClient';
@@ -201,6 +201,25 @@ describe('LoginPage onboarding redirects', () => {
     expect(redirectTo.origin).toBe('https://magicbooklet.com');
     expect(redirectTo.pathname).toBe('/auth/callback');
     expect(redirectTo.searchParams.get('next')).toBe('/create');
+  });
+
+  // Web sign-up had no agreement line, and never said where prompts go.
+  it('puts the terms and the AI-processing sentence under the sign-up button', () => {
+    renderLogin();
+    expect(screen.queryByText(/By continuing you agree to the/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
+
+    const agreement = screen.getByText(/By continuing you agree to the/);
+    expect(agreement).toHaveTextContent(
+      'By continuing you agree to the Terms and the Privacy Policy. Prompts and media you generate are processed by the AI providers listed in the policy.',
+    );
+    expect(within(agreement).getByRole('link', { name: 'Terms' })).toHaveAttribute('href', '/terms');
+    expect(within(agreement).getByRole('link', { name: 'Privacy Policy' })).toHaveAttribute('href', '/privacy');
+    expect(within(agreement).getByRole('link', { name: 'listed in the policy' })).toHaveAttribute('href', '/privacy#ai-processing');
+    expect(screen.getByRole('button', { name: /^create account$/i })).toHaveAccessibleDescription(
+      expect.stringContaining('By continuing you agree to the Terms and the Privacy Policy.'),
+    );
   });
 
   it('does not advertise Apple while the provider is unavailable', () => {

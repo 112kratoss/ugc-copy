@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { logBackendError } from '@/lib/backend-logger';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 import {
   BackendRateLimitError,
@@ -16,14 +16,16 @@ import {
   buildFallbackUsername,
   getAuthAvatarUrl,
   getCreatorDisplayName,
+  getReservedProfileUsernameError,
   type ProfileApiResponse,
   type ProfileFieldErrors,
+  type ProfileFieldUpdate,
   type ProfileUpdatePayload,
 } from '@/lib/profile';
 import { parseOwnerPostSalesSummary } from '@/lib/owner-post-sales-summary';
 import { parseOwnerProfileCounts } from '@/lib/owner-profile-counts';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
-import { normalizeStoredProfileImage } from '@/lib/profile-image-normalization';
+import { deriveNormalizedProfileImage } from '@/lib/profile-image-normalization';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 import {
   abortNullableUploadByteConsumption,
@@ -95,6 +97,33 @@ function buildStarterProfileApiResponse(user: ProfileRouteUser): ProfileApiRespo
   };
 }
 
+function presentColumns(columns: Record<string, ProfileFieldUpdate>): Record<string, string | null> {
+  return Object.fromEntries(
+    Object.entries(columns).filter((entry): entry is [string, string | null] => entry[1] !== undefined)
+  );
+}
+
+/**
+ * Releases the leases on uploads a normalised copy replaced, so the reclaim job
+ * deletes them like any upload that was finalized and never saved. Best
+ * effort: a lease that fails to release expires into the retained state, which
+ * is what every profile upload got before, and the saved profile is unaffected.
+ */
+async function releaseSupersededProfileUploads(
+  client: ProfileRouteClient,
+  claims: readonly UploadConsumptionClaim[],
+): Promise<void> {
+  await Promise.all(claims.map(async (claim) => {
+    const released = await abortNullableUploadByteConsumption(client, claim);
+    if (!released.ok) {
+      logBackendWarning('failed_to_release_superseded_profile_upload', {
+        uploadId: claim.uploadId,
+        error: released.error,
+      });
+    }
+  }));
+}
+
 function mapRateLimitError(error: BackendRateLimitError): ProfileRouteResult {
   return {
     ok: false,
@@ -154,9 +183,10 @@ export async function getProfileForRoute({
  * The totals `/api/profile` carries: the library counts and the seller
  * summary, each from its own service-role RPC. A count that fails is logged
  * and left out — the profile never fails over a number, and a missing field
- * makes the app draw its unknown placeholder rather than a 0.
+ * makes the app draw its unknown placeholder rather than a 0. Exported so the
+ * web's own profile page reads the same numbers as the app.
  */
-async function loadOwnerProfileTotals(
+export async function loadOwnerProfileTotals(
   client: ProfileRouteClient,
   userId: string,
 ): Promise<Pick<ProfileApiResponse, 'stats' | 'sales'>> {
@@ -222,37 +252,39 @@ export async function updateProfileForRoute({
     };
   }
 
-  const profileValues = {
-    id: userId,
-    username: validation.payload.data.username ?? validation.existingUsername,
-    display_name: validation.payload.data.displayName,
-    bio: validation.payload.data.bio,
-    avatar_url: validation.payload.data.avatarUrl,
-    cover_url: validation.payload.data.coverUrl,
-    website_url: validation.payload.data.websiteUrl,
-    twitter_handle: validation.payload.data.twitterHandle,
-    instagram_handle: validation.payload.data.instagramHandle,
-    tiktok_handle: validation.payload.data.tiktokHandle,
-    location: validation.payload.data.location,
-  };
+  const { data } = validation.payload;
+  const reservedUsernameError = getReservedProfileUsernameError(data.username, validation.existingUsername);
+  if (reservedUsernameError) {
+    return {
+      ok: false,
+      status: 400,
+      error: reservedUsernameError,
+      fieldErrors: { username: reservedUsernameError },
+    };
+  }
 
-  const submittedProfileMedia = [profileValues.avatar_url, profileValues.cover_url]
-    .flatMap((value) => typeof value === 'string'
-      ? [getUserOwnedStoredMediaLocation(value, userId)]
-      : [])
-    .filter((location): location is { bucket: string; filePath: string } => (
-      location?.bucket === 'profiles'
-    ))
-    .filter((location, index, entries) => entries.findIndex((candidate) => (
-      candidate.bucket === location.bucket && candidate.filePath === location.filePath
+  const submittedProfileMedia = [data.avatarUrl, data.coverUrl]
+    .flatMap((value) => {
+      if (typeof value !== 'string') return [];
+      const location = getUserOwnedStoredMediaLocation(value, userId);
+      return location?.bucket === 'profiles' ? [{ url: value, location }] : [];
+    })
+    .filter((media, index, entries) => entries.findIndex((candidate) => (
+      candidate.location.filePath === media.location.filePath
     )) === index);
   const consumptionClaims: UploadConsumptionClaim[] = [];
+  // An upload the profile will point at is kept for good. One whose
+  // normalised copy takes its place is referenced by nothing once the row is
+  // written, so its lease is released to the reclaim job instead.
+  const preservedClaims: UploadConsumptionClaim[] = [];
+  const supersededClaims: UploadConsumptionClaim[] = [];
+  const normalizedUrls = new Map<string, string>();
   try {
-    for (const location of submittedProfileMedia) {
+    for (const media of submittedProfileMedia) {
       const finalization = await finalizeUploadForConsumption(resolvedClient, {
         userId,
-        bucket: location.bucket,
-        storagePath: location.filePath,
+        bucket: media.location.bucket,
+        storagePath: media.location.filePath,
         disposition: 'preserve',
       });
       if (!finalization.ok) {
@@ -267,15 +299,20 @@ export async function updateProfileForRoute({
         };
       }
       if (finalization.consumptionClaim) consumptionClaims.push(finalization.consumptionClaim);
-      // Resized in place once the upload is accounted for, so the URL the
-      // client already holds stays correct and no oversized copy is left
-      // behind. A failure here is logged and ignored: an unresized avatar is
-      // still a correct avatar, and the save must not fail for it.
-      await normalizeStoredProfileImage({
+      // Read under the lease, so the reclaim job cannot take the upload
+      // mid-read. A failure is logged and ignored: the profile keeps the
+      // upload it was given, a correct if oversized image, and the save goes on.
+      const normalized = await deriveNormalizedProfileImage({
         adminSupabase: resolvedClient,
-        bucket: location.bucket,
-        filePath: location.filePath,
+        filePath: media.location.filePath,
+        sourceUrl: media.url,
       });
+      if (normalized) {
+        normalizedUrls.set(`${media.location.bucket}/${media.location.filePath}`, normalized.url);
+      }
+      if (finalization.consumptionClaim) {
+        (normalized ? supersededClaims : preservedClaims).push(finalization.consumptionClaim);
+      }
     }
   } catch (error) {
     await Promise.all(consumptionClaims.map((claim) => (
@@ -284,6 +321,32 @@ export async function updateProfileForRoute({
     logBackendError('failed_to_prepare_profile_upload_consumption', { error });
     return { ok: false, status: 500, error: 'Failed to verify profile media.' };
   }
+
+  const toStoredMediaUrl = (value: ProfileFieldUpdate): ProfileFieldUpdate => {
+    if (typeof value !== 'string') return value;
+    const location = getUserOwnedStoredMediaLocation(value, userId);
+    return (location && normalizedUrls.get(`${location.bucket}/${location.filePath}`)) ?? value;
+  };
+
+  // Partial PATCH: only the columns the request carried are written. When the
+  // row exists, a PostgREST upsert updates exactly the columns in its body, so
+  // a field left out keeps its stored value inside the same statement — no
+  // read-then-write window in which another client's newer edit is undone.
+  const profileValues = {
+    id: userId,
+    username: data.username ?? validation.existingUsername,
+    ...presentColumns({
+      display_name: data.displayName,
+      bio: data.bio,
+      avatar_url: toStoredMediaUrl(data.avatarUrl),
+      cover_url: toStoredMediaUrl(data.coverUrl),
+      website_url: data.websiteUrl,
+      twitter_handle: data.twitterHandle,
+      instagram_handle: data.instagramHandle,
+      tiktok_handle: data.tiktokHandle,
+      location: data.location,
+    }),
+  };
 
   let updatedProfile: unknown = null;
   let updateError: { code?: string } | null = null;
@@ -330,7 +393,10 @@ export async function updateProfileForRoute({
     };
   }
 
-  const completed = await completeUploadByteConsumptions(resolvedClient, consumptionClaims);
+  const [completed] = await Promise.all([
+    completeUploadByteConsumptions(resolvedClient, preservedClaims),
+    releaseSupersededProfileUploads(resolvedClient, supersededClaims),
+  ]);
   if (!completed.ok) {
     return { ok: false, status: 500, error: completed.error };
   }

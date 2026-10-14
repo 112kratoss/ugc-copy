@@ -39,6 +39,7 @@ export async function getMobileNotificationListRouteResponse({
   return applyPrivateNoStoreApiResponseHeaders(
     toJsonResponse(await dependencies.getMobileNotificationInboxForRoute({
       before: searchParams.get('before'),
+      beforeId: searchParams.get('beforeId'),
       limitValue: searchParams.get('limit'),
       userSupabase: dependencies.createUserClient(request),
     })),

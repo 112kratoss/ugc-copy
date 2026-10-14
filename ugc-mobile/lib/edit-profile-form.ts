@@ -1,4 +1,5 @@
 import { ApiError } from './api-client';
+import type { ProfileResponse } from './types';
 
 /**
  * The profile form's field rules, in one place.
@@ -21,17 +22,131 @@ export const PROFILE_USERNAME_MIN_LENGTH = 3;
 export const PROFILE_USERNAME_MAX_LENGTH = 24;
 export const PROFILE_DISPLAY_NAME_MAX_LENGTH = 60;
 export const PROFILE_BIO_MAX_LENGTH = 280;
+/** The server's caps (`src/lib/profile.ts`): a field takes no more than a save keeps. */
+export const PROFILE_WEBSITE_MAX_LENGTH = 2048;
+export const PROFILE_LOCATION_MAX_LENGTH = 80;
 
 /** Stated wherever the field is, rather than only when it is already wrong. */
 export const PROFILE_USERNAME_RULE = '3–24 lowercase letters, numbers, or hyphens.';
 
-export interface EditProfileFormSnapshot {
-  username?: string | null;
-  displayName?: string | null;
-  bio?: string | null;
-  avatarUrl?: string | null;
-  coverUrl?: string | null;
+/**
+ * The handle every account is given at signup (`handle_new_user`). It holds a
+ * place and is nobody's public name: the server refuses it on every save.
+ */
+export const PROFILE_PLACEHOLDER_USERNAME_PATTERN = /^creator-[a-f0-9]{8}$/;
+/** Onboarding's words for the same refusal (`app/onboarding.tsx`), so both forms say one thing. */
+export const PROFILE_PLACEHOLDER_USERNAME_ERROR = 'Use 3–24 lowercase letters, numbers, or hyphens for your handle.';
+
+/**
+ * Handles no account may newly claim (D3). The server reads
+ * `contracts/reserved-handles-v1.json`; Metro cannot load a file from outside
+ * the app, so this is a copy, and `edit-profile-form.test.ts` holds it to the
+ * contract.
+ */
+export const RESERVED_PROFILE_USERNAMES: readonly string[] = [
+  'admin',
+  'administrator',
+  'support',
+  'help',
+  'magicbooklet',
+  'official',
+  'staff',
+  'team',
+  'moderator',
+  'mod',
+  'root',
+  'system',
+  'api',
+  'www',
+  'mail',
+  'security',
+  'legal',
+  'billing',
+  'privacy',
+  'terms',
+  'about',
+  'contact',
+  'login',
+  'signup',
+  'settings',
+  'profile',
+  'creators',
+  'explore',
+  'showcase',
+  'marketplace',
+  'pricing',
+  'invite',
+  'null',
+  'undefined',
+];
+export const RESERVED_PROFILE_USERNAME_ERROR = 'That handle is reserved.';
+
+/**
+ * Whether a stored handle is one the person chose. The signup placeholder has a
+ * page, but nobody should be sent to it: a link shared from it stops working
+ * once a handle is claimed. Mirrors `isClaimedProfileUsername` in
+ * `src/lib/profile.ts`, which gates the web's View public and Share.
+ */
+export function isClaimedProfileUsername(value: string | null | undefined): boolean {
+  const username = value?.trim().replace(/^@+/, '').toLowerCase();
+  return Boolean(
+    username
+      && PROFILE_USERNAME_PATTERN.test(username)
+      && !PROFILE_PLACEHOLDER_USERNAME_PATTERN.test(username)
+  );
 }
+
+/** The editor's text, one string per field; an empty string is an empty field. */
+export interface EditProfileFormValues {
+  username: string;
+  displayName: string;
+  bio: string;
+  avatarUrl: string;
+  coverUrl: string;
+  websiteUrl: string;
+  location: string;
+  twitterHandle: string;
+  instagramHandle: string;
+  tiktokHandle: string;
+}
+
+export const EMPTY_EDIT_PROFILE_FORM: EditProfileFormValues = {
+  username: '',
+  displayName: '',
+  bio: '',
+  avatarUrl: '',
+  coverUrl: '',
+  websiteUrl: '',
+  location: '',
+  twitterHandle: '',
+  instagramHandle: '',
+  tiktokHandle: '',
+};
+
+/**
+ * The form a stored profile opens as. A placeholder handle opens as an empty
+ * field, as onboarding opens it: it is not a name to keep, and the field then
+ * asks for one before a save uploads anything.
+ */
+export function editProfileFormFromProfile(profile: ProfileResponse): EditProfileFormValues {
+  const username = profile.username ?? profile.suggestedUsername ?? '';
+  return {
+    username: PROFILE_PLACEHOLDER_USERNAME_PATTERN.test(username) ? '' : username,
+    displayName: profile.displayName ?? '',
+    bio: profile.bio ?? '',
+    avatarUrl: profile.avatarUrl ?? '',
+    coverUrl: profile.coverUrl ?? '',
+    websiteUrl: profile.websiteUrl ?? '',
+    location: profile.location ?? '',
+    twitterHandle: profile.twitterHandle ?? '',
+    instagramHandle: profile.instagramHandle ?? '',
+    tiktokHandle: profile.tiktokHandle ?? '',
+  };
+}
+
+export type EditProfileFormSnapshot = Partial<Record<keyof EditProfileFormValues, string | null>>;
+
+const EDIT_PROFILE_FORM_FIELDS = Object.keys(EMPTY_EDIT_PROFILE_FORM) as Array<keyof EditProfileFormValues>;
 
 export function hasEditProfileChanges({
   current,
@@ -46,13 +161,7 @@ export function hasEditProfileChanges({
 }) {
   if (hasAvatarDraft || hasCoverDraft) return true;
 
-  return (
-    cleanField(current.username) !== cleanField(initial.username) ||
-    cleanField(current.displayName) !== cleanField(initial.displayName) ||
-    cleanField(current.bio) !== cleanField(initial.bio) ||
-    cleanField(current.avatarUrl) !== cleanField(initial.avatarUrl) ||
-    cleanField(current.coverUrl) !== cleanField(initial.coverUrl)
-  );
+  return EDIT_PROFILE_FORM_FIELDS.some((field) => cleanField(current[field]) !== cleanField(initial[field]));
 }
 
 function cleanField(value: string | null | undefined) {
@@ -76,19 +185,59 @@ export function normalizeUsername(value: string) {
   return normalized.length > 0 ? normalized : null;
 }
 
-export type EditProfileField = 'username' | 'displayName' | 'bio';
+/** The fields typed into; the two photos are picked. */
+export type EditProfileField =
+  | 'username'
+  | 'displayName'
+  | 'bio'
+  | 'websiteUrl'
+  | 'location'
+  | 'twitterHandle'
+  | 'instagramHandle'
+  | 'tiktokHandle';
 export type EditProfileFieldErrors = Partial<Record<EditProfileField | 'avatarUrl' | 'coverUrl', string>>;
+
+const EDIT_PROFILE_TEXT_FIELDS: readonly EditProfileField[] = [
+  'username',
+  'displayName',
+  'bio',
+  'websiteUrl',
+  'location',
+  'twitterHandle',
+  'instagramHandle',
+  'tiktokHandle',
+];
+
+/**
+ * What the form can say about a handle without asking the server: the signup
+ * placeholder, and the reserved list (D3, "before the live check"). Neither
+ * costs a round trip. A reserved handle the account already holds stays its
+ * own, as the server keeps it.
+ */
+export function readLocalUsernameRejection(value: string, savedUsername?: string | null): string | null {
+  const username = normalizeUsername(value);
+  if (!username || !PROFILE_USERNAME_PATTERN.test(username)) return null;
+  if (PROFILE_PLACEHOLDER_USERNAME_PATTERN.test(username)) return PROFILE_PLACEHOLDER_USERNAME_ERROR;
+  if (RESERVED_PROFILE_USERNAMES.includes(username) && username !== normalizeUsername(savedUsername ?? '')) {
+    return RESERVED_PROFILE_USERNAME_ERROR;
+  }
+  return null;
+}
 
 /**
  * One field's verdict. Used by the blur handler and by the save path, so the
  * two can never disagree about what is wrong.
  */
-export function validateProfileField(field: EditProfileField, value: string): string | undefined {
+export function validateProfileField(
+  field: EditProfileField,
+  value: string,
+  { savedUsername }: { savedUsername?: string | null } = {},
+): string | undefined {
   if (field === 'username') {
     const username = normalizeUsername(value);
     if (!username) return 'Choose a username for your profile.';
     if (!PROFILE_USERNAME_PATTERN.test(username)) return `Use ${PROFILE_USERNAME_RULE.toLowerCase()}`;
-    return undefined;
+    return readLocalUsernameRejection(username, savedUsername) ?? undefined;
   }
 
   if (field === 'displayName') {
@@ -101,19 +250,126 @@ export function validateProfileField(field: EditProfileField, value: string): st
       : undefined;
   }
 
-  return value.trim().length > PROFILE_BIO_MAX_LENGTH
-    ? `Bio must be ${PROFILE_BIO_MAX_LENGTH} characters or fewer.`
-    : undefined;
+  if (field === 'bio') {
+    return value.trim().length > PROFILE_BIO_MAX_LENGTH
+      ? `Bio must be ${PROFILE_BIO_MAX_LENGTH} characters or fewer.`
+      : undefined;
+  }
+
+  if (field === 'websiteUrl') {
+    const website = value.trim();
+    if (!website) return undefined;
+    if (website.length > PROFILE_WEBSITE_MAX_LENGTH) return 'Website URL must be 2,048 characters or fewer.';
+    // The server parses the link. A missing scheme is the slip a phone keyboard
+    // invites, and every link the server keeps starts with one of these two.
+    return /^https?:/i.test(website) ? undefined : 'Website URL must start with http:// or https://.';
+  }
+
+  if (field === 'location') {
+    return value.trim().length > PROFILE_LOCATION_MAX_LENGTH
+      ? `Location must be ${PROFILE_LOCATION_MAX_LENGTH} characters or fewer.`
+      : undefined;
+  }
+
+  // X, Instagram and TikTok take a handle or the platform's own profile link
+  // (D4). That rule is the server's, and a save asks it before any photo uploads.
+  return undefined;
 }
 
-export function validateProfileForm(form: { username: string; displayName: string; bio: string }) {
+export function validateProfileForm(
+  form: Pick<EditProfileFormValues, 'username' | 'displayName' | 'bio'> & Partial<EditProfileFormValues>,
+  context: { savedUsername?: string | null } = {},
+) {
   const errors: EditProfileFieldErrors = {};
-  for (const field of ['username', 'displayName', 'bio'] as const) {
-    const error = validateProfileField(field, form[field]);
+  for (const field of EDIT_PROFILE_TEXT_FIELDS) {
+    const error = validateProfileField(field, form[field] ?? '', context);
     if (error) errors[field] = error;
   }
   return errors;
 }
+
+/** What `PATCH /api/profile` is sent. */
+export type ProfileUpdateBody = Partial<Pick<ProfileResponse, keyof EditProfileFormValues>>;
+
+const PROFILE_UPDATE_TEXT_FIELDS = [
+  'displayName',
+  'bio',
+  'websiteUrl',
+  'location',
+  'twitterHandle',
+  'instagramHandle',
+  'tiktokHandle',
+] as const satisfies ReadonlyArray<keyof EditProfileFormValues>;
+
+/**
+ * A save's body. The PATCH is partial (a key left out keeps the stored value,
+ * `null` clears it), so the body carries the handle every save must, and only
+ * the fields edited since the form opened. A field this screen did not touch
+ * can then never write its stale copy over a newer edit made on the web.
+ */
+export function buildProfileUpdateBody({
+  current,
+  initial,
+  avatarUrl,
+  coverUrl,
+}: {
+  current: EditProfileFormValues;
+  initial: EditProfileFormValues;
+  /** A photo uploaded for this save; without one, the stored photo stays. */
+  avatarUrl?: string | null;
+  coverUrl?: string | null;
+}): ProfileUpdateBody {
+  const body: ProfileUpdateBody = { username: normalizeUsername(current.username) };
+  for (const field of PROFILE_UPDATE_TEXT_FIELDS) {
+    if (cleanField(current[field]) === cleanField(initial[field])) continue;
+    const value = current[field].trim();
+    // The server refuses a null display name; the form never saves a blank one.
+    if (field === 'displayName' && !value) continue;
+    body[field] = value || null;
+  }
+  if (avatarUrl) body.avatarUrl = avatarUrl;
+  if (coverUrl) body.coverUrl = coverUrl;
+  return body;
+}
+
+/**
+ * Onboarding's body: the handle and the name its identity step claims, and
+ * nothing else. An echo of the copy read at the start of the step could write
+ * over a newer edit, and a `null` in it would clear the field.
+ */
+export function buildIdentityClaimBody(username: string, displayName: string): ProfileUpdateBody {
+  return { username, displayName };
+}
+
+/**
+ * Whether a refused profile request was the server's verdict on the fields (a
+ * 400 or a 409), rather than a request that failed and said nothing about them.
+ */
+export function isProfileFieldVerdict(error: unknown): error is ApiError {
+  return error instanceof ApiError && (error.status === 400 || error.status === 409);
+}
+
+/**
+ * How a profile photo is cropped as it is picked: the system crop's ratio, or
+ * null to take the photo whole. The avatar is cropped square everywhere. On
+ * iOS the system crop is always square (`aspect` is Android-only in
+ * expo-image-picker), which cut a cover to a square the wide strip then showed
+ * a quarter of; so iOS takes the cover whole and the server frames it at 40:9.
+ * Android keeps its own 16:9 crop.
+ */
+export function profilePhotoCropAspect(role: 'avatar' | 'cover', platformOS: string): [number, number] | null {
+  if (role === 'avatar') return [1, 1];
+  return platformOS === 'ios' ? null : [16, 9];
+}
+
+/** JPEG quality for a cropped photo. */
+export const PROFILE_PHOTO_QUALITY = 0.9;
+/**
+ * JPEG quality for a cover taken whole. The crop used to shrink the photo; a
+ * whole 24 MP camera photo at 0.9 can run past the 5 MB profile upload cap, and
+ * a cover is drawn 1600 px wide at most.
+ */
+export const PROFILE_UNCROPPED_COVER_QUALITY = 0.6;
 
 export type UsernameAvailability = 'idle' | 'checking' | 'available' | 'taken';
 
@@ -137,6 +393,8 @@ export function shouldCheckUsernameAvailability({
   const username = normalizeUsername(value);
   if (!username) return false;
   if (!PROFILE_USERNAME_PATTERN.test(username)) return false;
+  // Answered on the phone, before the live check (D3).
+  if (readLocalUsernameRejection(username, savedUsername)) return false;
   // The endpoint validates the whole submission, so a blank display name comes
   // back as a 400 that says nothing about the name. Its own field reports that.
   if (!displayName.trim()) return false;

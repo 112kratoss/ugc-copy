@@ -1,7 +1,7 @@
 'use client';
 
-import { startTransition, useEffect, useRef, useState } from 'react';
-import { Edit2, Loader2, X } from 'lucide-react';
+import { startTransition, useEffect, useEffectEvent, useId, useRef, useState } from 'react';
+import { Edit2, Loader2, RefreshCw, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
 
@@ -19,9 +19,24 @@ import {
 
 interface ProfileActionsProps {
   profile: EditableCreatorProfile;
+  /**
+   * The signed-in viewer blocked this creator (the server render checked).
+   * Follow and Share are not offered; Report user stays, and Unblock is the
+   * page's own panel where the posts would be.
+   */
+  blockedByViewer?: boolean;
 }
 
-export function ProfileActions({ profile }: ProfileActionsProps) {
+const EDITOR_FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled]):not([type="hidden"])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ');
+
+export function ProfileActions({ profile, blockedByViewer = false }: ProfileActionsProps) {
   const router = useRouter();
   const [isOwner, setIsOwner] = useState<boolean | null>(null);
   // Captured alongside ownership so a share can be attributed to the viewer
@@ -33,7 +48,18 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
   const [followStatusMessage, setFollowStatusMessage] = useState<string | null>(null);
   const [pendingFollowIntent, setPendingFollowIntent] = useState<boolean | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [privateProfile, setPrivateProfile] = useState<EditableCreatorProfile>(profile);
+  // The owner's own copy of the profile, read when Edit profile is pressed: a
+  // read on every visit could land after the owner had started typing and
+  // reset the form. The editor is drawn once it lands.
+  const [editorProfile, setEditorProfile] = useState<EditableCreatorProfile | null>(null);
+  const [editorLoadError, setEditorLoadError] = useState<string | null>(null);
+  const editorReadRef = useRef(0);
+  // Set by the first edit in the open editor: closing it then asks before the
+  // changes are thrown away.
+  const editorChangedRef = useRef(false);
+  const editButtonRef = useRef<HTMLButtonElement | null>(null);
+  const editorDialogRef = useRef<HTMLDivElement | null>(null);
+  const editorTitleId = useId();
   const followStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearFollowStatusTimer = () => {
@@ -55,6 +81,11 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
   useEffect(() => clearFollowStatusTimer, []);
 
   useEffect(() => {
+    // A blocked creator offers no Follow: there is no state to read.
+    if (blockedByViewer) {
+      return;
+    }
+
     let isActive = true;
 
     const checkOwnership = async () => {
@@ -72,48 +103,34 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
       setFollowError(null);
       setFollowStatusMessage(null);
 
-      if (!ownsProfile || !session?.access_token) {
-        if (session?.user?.id) {
-          try {
-            const params = new URLSearchParams({ followingId: profile.id });
-            const response = await fetch(`/api/profile/follow?${params.toString()}`, {
-              headers: { Authorization: `Bearer ${session.access_token}` },
-            });
-
-            if (!isActive) {
-              return;
-            }
-
-            if (!response.ok) {
-              throw new Error('Failed to load follow state');
-            }
-
-            const data = await response.json();
-            setIsFollowing(Boolean(data.following));
-          } catch (error) {
-            console.error('Failed to load follow state', error);
-            setFollowError('Failed to load follow state.');
-          }
-        } else {
-          setIsFollowing(false);
-        }
-
+      if (ownsProfile) {
         return;
       }
 
-      // Fetch the full private profile for the edit modal.
+      if (!session?.access_token) {
+        setIsFollowing(false);
+        return;
+      }
+
       try {
-        const res = await fetch('/api/profile', {
+        const params = new URLSearchParams({ followingId: profile.id });
+        const response = await fetch(`/api/profile/follow?${params.toString()}`, {
           headers: { Authorization: `Bearer ${session.access_token}` },
         });
-        if (!res.ok || !isActive) {
+
+        if (!isActive) {
           return;
         }
 
-        const data = (await res.json()) as ProfileApiResponse;
-        setPrivateProfile(toEditableCreatorProfile(data));
+        if (!response.ok) {
+          throw new Error('Failed to load follow state');
+        }
+
+        const data = await response.json();
+        setIsFollowing(Boolean(data.following));
       } catch (error) {
-        console.error('Failed to fetch private profile', error);
+        console.error('Failed to load follow state', error);
+        setFollowError('Failed to load follow state.');
       }
     };
 
@@ -121,22 +138,107 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
     return () => {
       isActive = false;
     };
-  }, [profile.id]);
+  }, [blockedByViewer, profile.id]);
 
-  if (isOwner === null) {
-    return (
-      <div className="flex items-center gap-3">
-        <div className="h-11 w-24 animate-pulse rounded-full bg-white/10" />
-        <ProfileShareButton
-          username={profile.username}
-          displayName={profile.displayName}
-          sourceSurface="creator-profile"
-          accessToken={accessToken}
-          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-5 py-2.5 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-70"
-        />
-      </div>
-    );
-  }
+  const loadEditorProfile = async () => {
+    const read = ++editorReadRef.current;
+    setEditorProfile(null);
+    setEditorLoadError(null);
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error('No session to read the profile with');
+      }
+
+      const response = await fetch('/api/profile', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!response.ok) {
+        throw new Error(`Profile read answered ${response.status}`);
+      }
+
+      const data = (await response.json()) as ProfileApiResponse;
+      // A read the owner closed the editor on, or asked again over, is dropped.
+      if (read !== editorReadRef.current) return;
+      setEditorProfile(toEditableCreatorProfile(data));
+    } catch (error) {
+      if (read !== editorReadRef.current) return;
+      console.error('Failed to fetch private profile', error);
+      setEditorLoadError('Could not load your profile.');
+    }
+  };
+
+  const openEditor = () => {
+    editorChangedRef.current = false;
+    setIsEditing(true);
+    void loadEditorProfile();
+  };
+
+  const closeEditor = () => {
+    editorReadRef.current += 1;
+    editorChangedRef.current = false;
+    setIsEditing(false);
+    setEditorProfile(null);
+    setEditorLoadError(null);
+    editButtonRef.current?.focus();
+  };
+
+  // The editor's own guard covers leaving the page; closing the dialog
+  // unmounts it, so the dialog asks first.
+  const requestCloseEditor = () => {
+    if (editorChangedRef.current && !window.confirm('Discard your profile changes?')) {
+      return;
+    }
+    closeEditor();
+  };
+
+  const keepFocusInEditor = (event: KeyboardEvent) => {
+    const dialog = editorDialogRef.current;
+    if (!dialog) return;
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(EDITOR_FOCUSABLE_SELECTOR));
+    if (focusable.length === 0) {
+      event.preventDefault();
+      dialog.focus();
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    const isOutside = active === dialog || !dialog.contains(active);
+    if (event.shiftKey && (active === first || isOutside)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (active === last || isOutside)) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  const onEditorKeyDown = useEffectEvent((event: KeyboardEvent) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      requestCloseEditor();
+      return;
+    }
+    if (event.key === 'Tab') {
+      keepFocusInEditor(event);
+    }
+  });
+
+  useEffect(() => {
+    if (!isEditing) {
+      return;
+    }
+
+    editorDialogRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => onEditorKeyDown(event);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isEditing]);
 
   const returnUrl = profile.username
     ? `/creators/${profile.username}`
@@ -178,6 +280,35 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
     // viewer goes to Explore, as the app's creator screen sends them.
     if (outcome.status === 'done') router.replace('/showcase');
   };
+
+  if (blockedByViewer) {
+    return (
+      <div className="flex flex-wrap items-center gap-3">
+        <ShowcaseFeedbackMenu
+          itemTitle={`@${profile.username}`}
+          creator={{ username: profile.username, name: profile.displayName }}
+          variant="outline"
+          portal
+          onReportUser={() => void handleReportUser()}
+        />
+      </div>
+    );
+  }
+
+  if (isOwner === null) {
+    return (
+      <div className="flex items-center gap-3">
+        <div className="h-11 w-24 animate-pulse rounded-full bg-white/10" />
+        <ProfileShareButton
+          username={profile.username}
+          displayName={profile.displayName}
+          sourceSurface="creator-profile"
+          accessToken={accessToken}
+          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-5 py-2.5 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-70"
+        />
+      </div>
+    );
+  }
 
   const handleFollowToggle = async () => {
     setFollowError(null);
@@ -245,11 +376,13 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
       <div className="flex flex-wrap items-center gap-3">
         {isOwner ? (
           <button
-            onClick={() => setIsEditing(true)}
+            ref={editButtonRef}
+            type="button"
+            onClick={openEditor}
             className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full bg-white px-5 text-sm font-bold text-black transition hover:bg-zinc-200"
           >
             <Edit2 className="h-4 w-4" />
-            Edit Profile
+            Edit profile
           </button>
         ) : (
           <button
@@ -306,44 +439,78 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm sm:p-6"
           >
             <motion.div
+              ref={editorDialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={editorTitleId}
+              tabIndex={-1}
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-              className="relative flex h-full max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-[32px] border border-white/10 bg-zinc-950 shadow-2xl"
+              className="relative flex h-full max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-[32px] border border-white/10 bg-zinc-950 shadow-2xl outline-none"
             >
               {/* Fixed Header */}
               <div className="flex shrink-0 items-center justify-between border-b border-white/5 bg-zinc-900/50 px-6 py-4">
-                <h2 className="text-xl font-semibold text-white">Edit Profile</h2>
+                <h2 id={editorTitleId} className="text-xl font-semibold text-white">Edit profile</h2>
                 <button
-                  onClick={() => setIsEditing(false)}
-                  className="rounded-full bg-white/5 p-2 text-zinc-400 transition-colors hover:bg-white/10 hover:text-white"
+                  type="button"
+                  onClick={requestCloseEditor}
+                  aria-label="Close"
+                  className="ui-focus-ring rounded-full bg-white/5 p-2 text-zinc-400 transition-colors hover:bg-white/10 hover:text-white"
                 >
-                  <X className="h-5 w-5" />
+                  <X className="h-5 w-5" aria-hidden />
                 </button>
               </div>
-              
-              {/* Scrollable Content */}
-              <div className="flex-1 overflow-y-auto p-4 sm:p-6 custom-scrollbar">
-                <CreatorProfileCard
-                  initialProfile={privateProfile}
-                  isLoading={false}
-                  loadError={null}
-                  isEmbedded={true}
-                  onProfileSaved={(nextProfile) => {
-                    setPrivateProfile(nextProfile);
-                    setIsEditing(false);
 
-                    startTransition(() => {
-                      if (nextProfile.username !== profile.username) {
-                        router.replace(`/creators/${nextProfile.username}`);
-                        return;
-                      }
+              {/* Scrollable Content. Any field the editor changes reports here. */}
+              <div
+                className="flex-1 overflow-y-auto p-4 sm:p-6 custom-scrollbar"
+                onChange={() => {
+                  editorChangedRef.current = true;
+                }}
+              >
+                {editorProfile ? (
+                  <CreatorProfileCard
+                    initialProfile={editorProfile}
+                    loadError={null}
+                    isEmbedded={true}
+                    onProfileSaved={(nextProfile) => {
+                      closeEditor();
 
-                      router.refresh();
-                    });
-                  }}
-                />
+                      startTransition(() => {
+                        if (nextProfile.username !== profile.username) {
+                          router.replace(`/creators/${nextProfile.username}`);
+                          return;
+                        }
+
+                        router.refresh();
+                      });
+                    }}
+                  />
+                ) : editorLoadError ? (
+                  <div role="alert" className="rounded-3xl border border-rose-300/20 bg-rose-500/5 p-6 text-sm text-rose-100">
+                    <p className="font-bold">{editorLoadError}</p>
+                    <button
+                      type="button"
+                      onClick={() => void loadEditorProfile()}
+                      className="ui-focus-ring mt-4 inline-flex min-h-11 items-center gap-2 rounded-full border border-rose-300/25 bg-rose-400/10 px-4 font-bold"
+                    >
+                      <RefreshCw className="h-4 w-4" aria-hidden />
+                      Try again
+                    </button>
+                  </div>
+                ) : (
+                  <div role="status" aria-label="Loading your profile" className="rounded-3xl border border-white/5 p-6">
+                    <div className="h-6 w-48 animate-pulse rounded bg-white/10" />
+                    <div className="mt-3 h-4 w-80 max-w-full animate-pulse rounded bg-white/5" />
+                    <div className="mt-6 grid gap-4 md:grid-cols-2">
+                      <div className="h-12 animate-pulse rounded-2xl bg-black/40" />
+                      <div className="h-12 animate-pulse rounded-2xl bg-black/40" />
+                      <div className="h-24 animate-pulse rounded-2xl bg-black/40 md:col-span-2" />
+                    </div>
+                  </div>
+                )}
               </div>
             </motion.div>
           </motion.div>

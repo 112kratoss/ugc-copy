@@ -30,6 +30,16 @@ export function notificationBadgeQueryKey(userId: string | undefined) {
 }
 
 /**
+ * The Alerts screen's own list: every page of alerts it has read. A tapped
+ * push refreshes it by this name as well as the badge.
+ */
+export const ALERTS_LIST_QUERY_KEY = 'mobile-notifications';
+
+export function alertsListQueryKey(userId: string | undefined) {
+  return [ALERTS_LIST_QUERY_KEY, userId] as const;
+}
+
+/**
  * `null` means "draw nothing" — an empty badge is worse than no badge, and HIG
  * reserves the oval for information that actually warrants attention. Counts
  * past the cap read as "99+" rather than growing the oval.

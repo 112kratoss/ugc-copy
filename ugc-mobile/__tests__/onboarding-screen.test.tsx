@@ -15,6 +15,8 @@ const harness = vi.hoisted(() => ({
     getProfile: vi.fn(),
     getWelcomeCredits: vi.fn(),
     updateOnboardingState: vi.fn(),
+    validateProfile: vi.fn(),
+    updateProfile: vi.fn(),
   },
   user: {
     id: 'creator-1',
@@ -243,6 +245,44 @@ describe('authenticated onboarding entry', () => {
 
     expect(router.replace).toHaveBeenCalledWith('/(tabs)');
     expect(queryClient.getQueryData(welcomeCreditsQueryKey('creator-1'))).toEqual(settled);
+
+    act(() => tree?.unmount());
+  });
+});
+
+describe('claiming a creator name', () => {
+  beforeEach(() => {
+    harness.api.getProfile.mockReset().mockResolvedValue(profile);
+    harness.api.getWelcomeCredits.mockReset().mockResolvedValue(welcome);
+    harness.api.updateOnboardingState.mockReset().mockResolvedValue(undefined);
+    harness.api.validateProfile.mockReset().mockResolvedValue({ ok: true });
+    harness.api.updateProfile.mockReset().mockImplementation(async (body: Record<string, unknown>) => ({ ...profile, ...body }));
+    harness.localUpdates.length = 0;
+  });
+
+  it('sends the handle and the name, and none of the fields this step does not hold', async () => {
+    // `PATCH /api/profile` is partial: a key left out keeps the stored value.
+    // The step used to echo the bio, photos, links and location it read on
+    // entry, which could write over a newer edit, and a `null` among them
+    // would clear a field.
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+
+    const handle = tree!.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === 'Unique handle');
+    await act(async () => { handle.props.onChangeText('sarath-makes'); });
+    const save = tree!.root.find((node) => String(node.type) === 'primary-button' && node.props.label === 'Save creator name');
+    await act(async () => {
+      save.props.onPress();
+      await settle();
+    });
+
+    expect(harness.api.validateProfile).toHaveBeenCalledWith({ username: 'sarath-makes', displayName: 'Sarath' });
+    expect(harness.api.updateProfile).toHaveBeenCalledTimes(1);
+    expect(harness.api.updateProfile).toHaveBeenCalledWith({ username: 'sarath-makes', displayName: 'Sarath' });
 
     act(() => tree?.unmount());
   });

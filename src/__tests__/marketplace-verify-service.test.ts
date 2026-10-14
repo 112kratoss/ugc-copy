@@ -3,6 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
+  createMobileNotificationHistory,
+  hasAnswered,
+  withMobileNotificationHistory,
+} from '@/__tests__/fixtures/mobile-notification-history';
+import {
+  notifyRazorpayMarketplacePurchase,
   verifyMarketplacePaymentForRoute as verifyMarketplacePaymentForRouteImpl,
 } from '@/lib/marketplace-verify-service';
 
@@ -25,15 +31,29 @@ function createAdminSupabaseMock({
   completionResult = true,
   completionError = null as { message: string } | null,
   refreshedStatus = 'paid' as OrderRow['status'],
+  /** The resource a settled order names, and its seller. */
+  settledAsset = null as { assetId: string; sellerUserId: string } | null,
 } = {}) {
   const calls = {
     rpc: [] as Array<{ name: string; args: Record<string, unknown> }>,
     tables: [] as string[],
+    filters: [] as Array<[string, unknown]>,
   };
 
   const client = {
     from(table: string) {
       calls.tables.push(table);
+      if (table === 'marketplace_assets' && settledAsset) {
+        const assetQuery = {
+          select: () => assetQuery,
+          eq(column: string, value: unknown) {
+            calls.filters.push([column, value]);
+            return assetQuery;
+          },
+          maybeSingle: async () => ({ data: { seller_user_id: settledAsset.sellerUserId }, error: null }),
+        };
+        return assetQuery;
+      }
       if (table !== 'marketplace_orders') {
         throw new Error(`Unexpected table: ${table}`);
       }
@@ -42,14 +62,19 @@ function createAdminSupabaseMock({
         select() {
           return query;
         },
-        eq() {
+        eq(column: string, value: unknown) {
+          calls.filters.push([column, value]);
           return query;
         },
         async maybeSingle() {
           if (calls.rpc.some((call) => call.name === 'complete_marketplace_purchase')) {
             return {
               data: order
-                ? { status: refreshedStatus, razorpay_payment_id: 'pay_123' }
+                ? {
+                    status: refreshedStatus,
+                    razorpay_payment_id: 'pay_123',
+                    ...(settledAsset ? { asset_id: settledAsset.assetId, buyer_user_id: order.buyer_user_id } : {}),
+                  }
                 : null,
               error: null,
             };
@@ -184,12 +209,14 @@ describe('verifyMarketplacePaymentForRoute', () => {
 
   it('completes an owned created order after signature verification', async () => {
     const admin = createAdminSupabaseMock();
+    const notifyPurchase = vi.fn(async () => null);
 
     const result = await verifyMarketplacePaymentForRoute({
       adminSupabase: admin.client,
       buyerUserId: 'user-1',
       keySecret: 'test-secret',
       readBody: vi.fn(async () => validBody()),
+      notifyPurchase,
     });
 
     expect(result).toEqual({
@@ -203,18 +230,23 @@ describe('verifyMarketplacePaymentForRoute', () => {
         p_razorpay_payment_id: 'pay_123',
       },
     });
+    // This verify settled it, so the buyer and the seller are told from here, once.
+    expect(notifyPurchase).toHaveBeenCalledTimes(1);
+    expect(notifyPurchase).toHaveBeenCalledWith(admin.client, 'order_123');
   });
 
   it('treats an already paid order as idempotently processed', async () => {
     const admin = createAdminSupabaseMock({
       order: { id: 'order-row', buyer_user_id: 'user-1', status: 'paid' },
     });
+    const notifyPurchase = vi.fn();
 
     const result = await verifyMarketplacePaymentForRoute({
       adminSupabase: admin.client,
       buyerUserId: 'user-1',
       keySecret: 'test-secret',
       readBody: vi.fn(async () => validBody()),
+      notifyPurchase,
     });
 
     expect(result).toEqual({
@@ -222,6 +254,8 @@ describe('verifyMarketplacePaymentForRoute', () => {
       body: { success: true, alreadyProcessed: true },
     });
     expect(admin.calls.rpc.map((call) => call.name)).toEqual(['check_backend_rate_limit']);
+    // Whoever settled it first sent its alerts.
+    expect(notifyPurchase).not.toHaveBeenCalled();
   });
 
   it('returns not found when the order belongs to another buyer', async () => {
@@ -246,12 +280,14 @@ describe('verifyMarketplacePaymentForRoute', () => {
 
   it('returns already processed when completion races with another verifier', async () => {
     const admin = createAdminSupabaseMock({ completionResult: false, refreshedStatus: 'paid' });
+    const notifyPurchase = vi.fn();
 
     const result = await verifyMarketplacePaymentForRoute({
       adminSupabase: admin.client,
       buyerUserId: 'user-1',
       keySecret: 'test-secret',
       readBody: vi.fn(async () => validBody()),
+      notifyPurchase,
     });
 
     expect(result).toEqual({
@@ -259,6 +295,8 @@ describe('verifyMarketplacePaymentForRoute', () => {
       body: { success: true, alreadyProcessed: true },
     });
     expect(admin.calls.tables).toEqual(['marketplace_orders', 'marketplace_orders']);
+    // The webhook settled it, and it sends the alerts.
+    expect(notifyPurchase).not.toHaveBeenCalled();
   });
 
   it('returns 202 without creating an entitlement for an authorized payment', async () => {
@@ -319,5 +357,104 @@ describe('verifyMarketplacePaymentForRoute', () => {
       body: { error: 'Payment details do not match the order.' },
     });
     expect(admin.calls.rpc.map((call) => call.name)).toEqual(['check_backend_rate_limit']);
+  });
+});
+
+describe('alerts for a marketplace resource bought on the web', () => {
+  // The real alerts, written to notification history: what a purchase made in
+  // the app writes, "Resource unlocked" and "You made a resource sale".
+  const settledAsset = { assetId: 'asset-1', sellerUserId: 'seller-1' };
+  const purchaseAlerts = [
+    expect.objectContaining({
+      user_id: 'user-1',
+      type: 'marketplace_unlocked',
+      category: 'commerce',
+      deep_link: '/marketplace/asset-1',
+      dedupe_key: 'marketplace-unlock:asset-1:user-1',
+    }),
+    expect.objectContaining({
+      user_id: 'seller-1',
+      actor_user_id: 'user-1',
+      type: 'marketplace_unlocked',
+      category: 'commerce',
+      deep_link: '/marketplace/asset-1',
+      dedupe_key: 'marketplace-sale:asset-1:user-1',
+    }),
+  ];
+
+  function settle(
+    admin: ReturnType<typeof createAdminSupabaseMock>,
+    history: ReturnType<typeof createMobileNotificationHistory>,
+    runAfterResponse?: (task: () => Promise<unknown>) => void,
+  ) {
+    return verifyMarketplacePaymentForRoute({
+      adminSupabase: withMobileNotificationHistory(admin.client, history),
+      buyerUserId: 'user-1',
+      keySecret: 'test-secret',
+      readBody: vi.fn(async () => validBody()),
+      runAfterResponse,
+    });
+  }
+
+  it('tells the buyer and the seller, once, behind the answer of the verify that settled it', async () => {
+    const admin = createAdminSupabaseMock({ settledAsset });
+    const history = createMobileNotificationHistory();
+    const deferred: Array<() => Promise<unknown>> = [];
+
+    await expect(settle(admin, history, (task) => { deferred.push(task); }))
+      .resolves.toEqual({ ok: true, body: { success: true } });
+    // The checkout's answer waits on no alert.
+    expect(history.started).toEqual([]);
+    expect(deferred).toHaveLength(1);
+
+    await deferred[0]();
+    expect(history.sent).toEqual(purchaseAlerts);
+    // The seller is the resource's, read from the order the checkout names.
+    expect(admin.calls.filters).toContainEqual(['id', 'asset-1']);
+  });
+
+  it('tells them before answering when the caller has nowhere to run work after it', async () => {
+    const admin = createAdminSupabaseMock({ settledAsset });
+    const history = createMobileNotificationHistory();
+    history.hold();
+
+    const verification = settle(admin, history);
+    expect(await hasAnswered(verification)).toBe(false);
+
+    history.release();
+    await expect(verification).resolves.toEqual({ ok: true, body: { success: true } });
+    expect(history.sent).toEqual(purchaseAlerts);
+  });
+
+  it.each([
+    ['an order that was already paid', { order: { id: 'order-row', buyer_user_id: 'user-1', status: 'paid' as const } }],
+    ['an order the webhook settled at the same moment', { completionResult: false }],
+  ])('tells nobody from the verify for %s: whoever settled it did', async (_kind, options) => {
+    const admin = createAdminSupabaseMock({ ...options, settledAsset });
+    const history = createMobileNotificationHistory();
+    const runAfterResponse = vi.fn();
+
+    await expect(settle(admin, history, runAfterResponse))
+      .resolves.toEqual({ ok: true, body: { success: true, alreadyProcessed: true } });
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(history.sent).toEqual([]);
+  });
+
+  it('sends nothing, and never throws, when the order cannot be read', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const history = createMobileNotificationHistory();
+    const unreadable = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'read failed' } }) }),
+        }),
+      }),
+    } as unknown as SupabaseClient;
+
+    await expect(notifyRazorpayMarketplacePurchase(withMobileNotificationHistory(unreadable, history), 'order_123'))
+      .resolves.toBeNull();
+    expect(history.started).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('razorpay_marketplace_notification_failed'));
+    errorSpy.mockRestore();
   });
 });

@@ -6,7 +6,6 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   BackendRateLimitError,
   CREATOR_FOLLOW_MUTATION_RATE_LIMIT,
-  CREATOR_FOLLOW_NOTIFICATION_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
@@ -26,8 +25,6 @@ export type ProfileFollowRouteResult =
     ok: true;
     body: {
       following: boolean;
-    } | {
-      success: true;
     };
   }
   | {
@@ -281,63 +278,4 @@ export async function updateCreatorFollowForRoute({
   }
 
   return { ok: true, body: { following: false } };
-}
-
-export async function notifyCreatorFollowForRoute({
-  adminSupabase,
-  followerId,
-  body,
-  runAfterResponse,
-}: {
-  adminSupabase: ProfileFollowClientInput;
-  followerId: string;
-  body: unknown;
-  /** As for `updateCreatorFollowForRoute`: the route passes one, and the answer goes first. */
-  runAfterResponse?: RunAfterResponse;
-}): Promise<ProfileFollowRouteResult> {
-  const followingId = readFollowingId(body);
-  if (!followingId || followingId === followerId) {
-    return missingCreatorProfile();
-  }
-
-  const resolvedClient = resolveClient(adminSupabase);
-  try {
-    await enforceBackendRateLimit(resolvedClient, {
-      ...CREATOR_FOLLOW_NOTIFICATION_RATE_LIMIT,
-      key: followerId,
-    });
-  } catch (error) {
-    if (error instanceof BackendRateLimitError) {
-      return createRateLimitResult(error);
-    }
-
-    logBackendError('creator_follow_notification_rate_limit_check_failed', { error: error });
-    return { ok: false, status: 500, body: { error: 'Failed to check follow notification limits.' } };
-  }
-
-  if (await isFollowRelationshipUnavailable({
-    adminSupabase: resolvedClient,
-    followerId,
-    followingId,
-  })) {
-    return { ok: false, status: 404, body: { error: 'Follow not found.' } };
-  }
-
-  const { data: followRecord, error: followError } = await loadFollowRecord(resolvedClient, followerId, followingId);
-  if (followError) {
-    return { ok: false, status: 500, body: { error: 'Failed to verify follow state.' } };
-  }
-
-  if (!followRecord) {
-    return { ok: false, status: 404, body: { error: 'Follow not found.' } };
-  }
-
-  const followerUsername = await loadFollowerUsername(resolvedClient, followerId);
-  await sendDeferrableNotification(runAfterResponse, () => notifyCreatorFollowed(resolvedClient, {
-    followerUserId: followerId,
-    followingUserId: followingId,
-    followerUsername,
-  }));
-
-  return { ok: true, body: { success: true } };
 }

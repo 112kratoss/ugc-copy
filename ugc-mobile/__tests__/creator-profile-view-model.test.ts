@@ -1,13 +1,19 @@
+import { QueryClient, type InfiniteData } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 
+import { ApiError } from '../lib/api-client';
 import {
   CREATOR_PROFILE_TABS,
+  blockedCreatorProfilePage,
   creatorInitial,
+  creatorProfileLoadErrorCopy,
   creatorProfileSocialLinks,
   creatorProfileTabItems,
   flattenCreatorProfilePages,
   getNextCreatorProfileOffset,
   normalizeCreatorProfileTab,
+  setCachedCreatorProfileBlocked,
+  setCachedCreatorProfileFollowing,
 } from '../lib/creator-profile-view-model';
 import type { CreatorProfileResponse, ShowcaseFeedItem } from '../lib/types';
 
@@ -122,5 +128,146 @@ describe('creator profile view model', () => {
       { label: 'TikTok', url: 'https://tiktok.com/@luna.tok' },
       { label: 'X', url: 'https://x.com/luna' },
     ]);
+  });
+});
+
+// Decision D4: a social field holds a handle. Rows saved before the server's
+// rule may still hold a link, and a pill that says Instagram must only ever
+// open Instagram.
+describe('creator social pills', () => {
+  const pills = (overrides: Partial<CreatorProfileResponse['profile']>) => creatorProfileSocialLinks(profile(overrides));
+
+  it('opens the platform for a handle, with or without its @', () => {
+    expect(pills({ instagramHandle: 'luna.studio', tiktokHandle: '@luna_tok', twitterHandle: '@Luna_X' })).toEqual([
+      { label: 'Instagram', url: 'https://instagram.com/luna.studio' },
+      { label: 'TikTok', url: 'https://tiktok.com/@luna_tok' },
+      { label: 'X', url: 'https://x.com/Luna_X' },
+    ]);
+  });
+
+  it("reads the handle out of a link on the platform's own host, never opening the stored link", () => {
+    expect(pills({
+      instagramHandle: 'https://www.instagram.com/luna.studio/?hl=en',
+      tiktokHandle: 'tiktok.com/@luna_tok',
+      twitterHandle: 'HTTPS://Twitter.com/luna_x',
+    })).toEqual([
+      { label: 'Instagram', url: 'https://instagram.com/luna.studio' },
+      { label: 'TikTok', url: 'https://tiktok.com/@luna_tok' },
+      { label: 'X', url: 'https://x.com/luna_x' },
+    ]);
+  });
+
+  it('leaves out a value that is a link anywhere else, or no handle at all', () => {
+    expect(pills({
+      websiteUrl: 'https://luna.example',
+      instagramHandle: 'https://evil.example/luna',
+      tiktokHandle: 'https://tiktok.com.evil.example/@luna',
+      twitterHandle: 'javascript:alert(1)',
+    })).toEqual([{ label: 'Website', url: 'https://luna.example' }]);
+    expect(pills({
+      instagramHandle: 'https://instagram.com/',
+      tiktokHandle: 'a',
+      twitterHandle: 'this_handle_is_too_long_for_x',
+    })).toEqual([]);
+  });
+});
+
+function page(
+  creatorId: string,
+  offset: number,
+  overrides: Partial<CreatorProfileResponse> = {},
+): CreatorProfileResponse {
+  return {
+    profile: profile({ id: creatorId, username: creatorId }),
+    ...(offset === 0 ? {
+      stats: { publicCreations: 30, totalSaves: 4, totalRemixes: 2, unlocks: 1, totalUnlockSales: 0, toolsUsed: [] },
+    } : {}),
+    items: [item(`${creatorId}-post-${offset}`)],
+    pageInfo: { hasMore: true, nextLimit: 24, nextOffset: offset + 24, limit: 24, offset },
+    viewer: { isOwner: false, isFollowing: false, blockedByViewer: false },
+    ...overrides,
+  };
+}
+
+function grid(creatorId: string, pageCount: number): InfiniteData<CreatorProfileResponse, number> {
+  const offsets = Array.from({ length: pageCount }, (_, index) => index * 24);
+  return { pages: offsets.map((offset) => page(creatorId, offset)), pageParams: offsets };
+}
+
+describe('creator grid cache writers', () => {
+  it('writes a follow into every cached page of that creator and nowhere else', () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(['creator-profile', 'infinite', 'luna'], grid('luna', 2));
+    queryClient.setQueryData(['creator-profile', 'infinite', 'Luna'], grid('luna', 1));
+    const other = grid('nova', 1);
+    queryClient.setQueryData(['creator-profile', 'infinite', 'nova'], other);
+    const otherUpdatedAt = queryClient.getQueryState(['creator-profile', 'infinite', 'nova'])?.dataUpdatedAt;
+
+    setCachedCreatorProfileFollowing(queryClient, 'luna', true);
+
+    for (const key of ['luna', 'Luna']) {
+      const cached = queryClient.getQueryData<InfiniteData<CreatorProfileResponse>>(['creator-profile', 'infinite', key]);
+      expect(cached?.pages.map((cachedPage) => cachedPage.viewer.isFollowing)).toEqual(key === 'luna' ? [true, true] : [true]);
+      expect(cached?.pages[0].items).toHaveLength(1);
+    }
+    // Another creator's grid is not rewritten, so its age stands too.
+    expect(queryClient.getQueryData(['creator-profile', 'infinite', 'nova'])).toBe(other);
+    expect(queryClient.getQueryState(['creator-profile', 'infinite', 'nova'])?.dataUpdatedAt).toBe(otherUpdatedAt);
+  });
+
+  it('turns a blocked creator\'s grid into the page the server now answers', () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(['creator-profile', 'infinite', 'luna'], grid('luna', 3));
+    const other = grid('nova', 2);
+    queryClient.setQueryData(['creator-profile', 'infinite', 'nova'], other);
+
+    setCachedCreatorProfileBlocked(queryClient, 'luna');
+
+    const blocked = queryClient.getQueryData<InfiniteData<CreatorProfileResponse, number>>(['creator-profile', 'infinite', 'luna']);
+    expect(blocked?.pageParams).toEqual([0]);
+    expect(blocked?.pages).toEqual([blockedCreatorProfilePage(page('luna', 0))]);
+    expect(blocked?.pages[0]).toMatchObject({
+      items: [],
+      pageInfo: { hasMore: false, nextOffset: null, nextLimit: null },
+      viewer: { isOwner: false, isFollowing: false, blockedByViewer: true },
+      stats: { publicCreations: 30 },
+    });
+    expect(getNextCreatorProfileOffset(blocked!.pages[0])).toBeUndefined();
+    expect(queryClient.getQueryData(['creator-profile', 'infinite', 'nova'])).toBe(other);
+  });
+});
+
+describe('creator page load errors', () => {
+  it('names a missing creator, with Explore as the way on', () => {
+    expect(creatorProfileLoadErrorCopy(new ApiError('Creator not found.', 404))).toEqual({
+      title: 'Creator not found',
+      body: 'This profile may have been removed, or the handle may have changed.',
+      canRetry: false,
+    });
+  });
+
+  // A rate limit clears with time; the connection is fine.
+  it('asks the reader to wait out a rate limit, for as long as the server said', () => {
+    const limited = (retryAfterSeconds?: number) => creatorProfileLoadErrorCopy(
+      new ApiError('Too many requests.', 429, retryAfterSeconds === undefined ? { code: 'RATE_LIMITED' } : { retryAfterSeconds }),
+    );
+    expect(limited(30)).toEqual({
+      title: 'Could not load creator',
+      body: 'Too many requests in a short time. Try again in 30 seconds.',
+      canRetry: true,
+    });
+    expect(limited(1).body).toBe('Too many requests in a short time. Try again in 1 second.');
+    expect(limited(125).body).toBe('Too many requests in a short time. Try again in 3 minutes.');
+    expect(limited().body).toBe('Too many requests in a short time. Wait a moment, then try again.');
+  });
+
+  it('keeps the connection advice for every other failure', () => {
+    for (const error of [new ApiError('offline', 0), new ApiError('boom', 500), new Error('boom'), null]) {
+      expect(creatorProfileLoadErrorCopy(error)).toEqual({
+        title: 'Could not load creator',
+        body: 'Check your connection, then try again.',
+        canRetry: true,
+      });
+    }
   });
 });

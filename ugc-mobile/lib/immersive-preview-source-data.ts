@@ -9,7 +9,6 @@ import {
   type ImmersivePreviewItem,
   type PreviewViewerSource,
 } from '@/lib/immersive-preview-view-model';
-import { flattenCreatorProfilePages } from '@/lib/creator-profile-view-model';
 import {
   createShowcaseFeedViewerQueryKey,
   flattenShowcaseFeedPages,
@@ -19,7 +18,6 @@ import {
 import type {
   GenerationListItem,
   GenerationListResponse,
-  CreatorProfileResponse,
   OwnerPostsResponse,
   ProfileResponse,
   ShowcaseFeedItem,
@@ -56,7 +54,6 @@ export interface ImmersivePreviewApi {
     params?: Record<string, QueryValue>,
     options?: { auth?: boolean }
   ) => Promise<ShowcaseFeedResponse>;
-  getCreatorProfile: (username: string, params?: Record<string, QueryValue>) => Promise<CreatorProfileResponse>;
   getSavedMedia: (params?: Record<string, QueryValue>) => Promise<ShowcaseFeedResponse>;
   getShowcasePost: (postId: string) => Promise<ShowcasePostResponse>;
   /** The first argument is `includeArchived`, as in the API client itself. */
@@ -135,13 +132,11 @@ export async function loadImmersiveSourceData({
   api,
   source,
   initialId,
-  creatorUsername,
   mediaOnly = false,
 }: {
   api: ImmersivePreviewApi;
   source: PreviewViewerSource;
   initialId: string;
-  creatorUsername?: string | null;
   mediaOnly?: boolean;
 }): Promise<ImmersiveSourceData> {
   if (isGenerationSource(source)) {
@@ -192,20 +187,10 @@ export async function loadImmersiveSourceData({
   }
 
   if (source === 'creator-profile') {
-    if (creatorUsername) {
-      const response = await api.getCreatorProfile(creatorUsername, { limit: 48 });
-      let showcaseItems = response.items;
-
-      if (initialId && !showcaseItems.some((item) => item.id === initialId)) {
-        const selected = await readShowcasePostOrMissing(api, initialId);
-        if (selected) {
-          showcaseItems = [selected, ...showcaseItems];
-        }
-      }
-
-      return { showcaseItems };
-    }
-
+    // A reel opened on a creator's page reads and pages that page's own grid
+    // (`use-creator-reel-source`); it used to load a 48-post window of its own
+    // here, which stopped where the grid could have gone on (audit 02-6). A
+    // link that names no creator has no grid to read: the post on its own.
     const selected = initialId ? await readShowcasePostOrMissing(api, initialId) : null;
     return { showcaseItems: selected ? [selected] : [] };
   }
@@ -255,6 +240,10 @@ export type ImmersiveSourceSnapshot = {
  * (`identityUserId` from `useAuth`), which the feed lanes are keyed by: a
  * showcase reel can open on the lane that holds its post. A caller that reads
  * only an account's libraries can leave it out.
+ *
+ * A creator's reel has no snapshot here: one opened on their page reads the
+ * page's grid itself (`use-creator-reel-source`), and no other cache holds
+ * their posts in their order.
  */
 export function readCachedImmersiveSourceSnapshot(
   queryClient: QueryClient,
@@ -262,16 +251,14 @@ export function readCachedImmersiveSourceSnapshot(
   userId: string | undefined,
   initialId: string,
   feedSessionId?: string | null,
-  creatorUsername?: string | null,
   identityUserId?: string | null
 ): ImmersiveSourceSnapshot | undefined {
+  if (source === 'creator-profile') return undefined;
   const snapshot = isGenerationSource(source)
     ? cachedGenerations(queryClient, userId)
     : source === 'profile-posts'
       ? cachedOwnerPosts(queryClient, userId)
-      : source === 'creator-profile'
-        ? cachedCreatorProfileItems(queryClient, creatorUsername)
-        : cachedShowcaseItems(queryClient, source, userId, identityUserId, initialId, feedSessionId);
+      : cachedShowcaseItems(queryClient, source, userId, identityUserId, initialId, feedSessionId);
   return snapshot && sourceDataContains(snapshot.data, initialId) ? snapshot : undefined;
 }
 
@@ -281,7 +268,6 @@ export function readCachedImmersiveSourceData(
   userId: string | undefined,
   initialId: string,
   feedSessionId?: string | null,
-  creatorUsername?: string | null,
   identityUserId?: string | null
 ): ImmersiveSourceData | undefined {
   return readCachedImmersiveSourceSnapshot(
@@ -290,7 +276,6 @@ export function readCachedImmersiveSourceData(
     userId,
     initialId,
     feedSessionId,
-    creatorUsername,
     identityUserId
   )?.data;
 }
@@ -346,25 +331,6 @@ function cachedShowcaseItems(
   const showcaseItems = dedupeById(readCachedPages(saved).flatMap((page) => page.items));
   return showcaseItems.length
     ? { data: { showcaseItems }, updatedAt: oldestUpdatedAt(queryClient, [savedKey]) }
-    : undefined;
-}
-
-/**
- * The creator's own grid, the one `creator-profile-screen` pages, and no other
- * creator's: every cached creator used to be merged in, so B's reel opened
- * with A's posts for as long as A's grid was fresh (audit 03-11).
- */
-function cachedCreatorProfileItems(
-  queryClient: QueryClient,
-  creatorUsername: string | null | undefined
-): ImmersiveSourceSnapshot | undefined {
-  if (!creatorUsername) return undefined;
-  const key: QueryKey = ['creator-profile', 'infinite', creatorUsername];
-  const showcaseItems = flattenCreatorProfilePages(
-    queryClient.getQueryData<InfiniteData<CreatorProfileResponse>>(key)?.pages
-  );
-  return showcaseItems.length
-    ? { data: { showcaseItems }, updatedAt: oldestUpdatedAt(queryClient, [key]) }
     : undefined;
 }
 

@@ -125,7 +125,6 @@ const REGISTERED_ROUTES = [
   '/api/showcase/posts/[postId]/comments',
   '/api/showcase/posts/[postId]/comments/[commentId]',
   '/api/profile/follow',
-  '/api/profile/follow/notify',
   '/api/moderation/reports',
   '/api/moderation/blocks',
   '/api/moderation/blocks/[userId]',

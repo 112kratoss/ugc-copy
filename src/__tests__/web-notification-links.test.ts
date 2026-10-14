@@ -9,13 +9,26 @@ describe('resolveWebNotificationPath', () => {
   });
 
   it('maps showcase viewer links to the post detail route', () => {
+    // Post alerts written before they linked the post page directly.
     expect(resolveWebNotificationPath('/viewer?source=showcase-feed&initialId=post-1'))
       .toBe('/showcase/post-1');
   });
 
+  it('opens a post alert on the post page as written', () => {
+    // Saved, shared, remixed and recipe-unlocked alerts link /showcase/<id>.
+    expect(resolveWebNotificationPath('/showcase/post-1')).toBe('/showcase/post-1');
+    expect(resolveWebNotificationPath('/showcase/post%201')).toBe('/showcase/post%201');
+  });
+
+  it("opens the follower's page from a New follower alert", () => {
+    expect(resolveWebNotificationPath('/creators/athul')).toBe('/creators/athul');
+    expect(resolveWebNotificationPath('/creators/creator-1a2b3c4d')).toBe('/creators/creator-1a2b3c4d');
+  });
+
   it('keeps a bare Alerts-tab link on the Alerts page, as the app does', () => {
-    // "New follower" alerts link to /studio, the app's Alerts tab; opening
-    // the Creations library for a follow made no sense.
+    // A "New follower" alert with no handle to open, and every one written
+    // before they named the follower, link to /studio, the app's Alerts tab;
+    // opening the Creations library for a follow made no sense.
     expect(resolveWebNotificationPath('/studio')).toBeNull();
     expect(resolveWebNotificationPath('/studio?tab=alerts')).toBeNull();
   });
