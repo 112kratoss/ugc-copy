@@ -125,7 +125,6 @@ describe('CreatorProfileCard', () => {
     render(
       <CreatorProfileCard
         initialProfile={profile}
-        isLoading={false}
         loadError={null}
         onProfileSaved={onProfileSaved}
       />
@@ -172,7 +171,6 @@ describe('CreatorProfileCard', () => {
     render(
       <CreatorProfileCard
         initialProfile={{ ...profile, displayName: '', bio: '' }}
-        isLoading={false}
         loadError={null}
       />
     );
@@ -231,7 +229,7 @@ describe('CreatorProfileCard', () => {
       const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
       const pushState = vi.spyOn(window.history, 'pushState');
       const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
-      render(<CreatorProfileCard initialProfile={profile} isLoading={false} loadError={null} />);
+      render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
       expect(pushState).not.toHaveBeenCalled();
 
       typeName('New Name');
@@ -259,7 +257,7 @@ describe('CreatorProfileCard', () => {
     it('lets Back through without a question once the changes are reset', () => {
       const confirm = vi.spyOn(window, 'confirm');
       const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
-      render(<CreatorProfileCard initialProfile={profile} isLoading={false} loadError={null} />);
+      render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
       typeName('New Name');
       fireEvent.click(screen.getByRole('button', { name: /reset changes/i }));
 
@@ -279,7 +277,7 @@ describe('CreatorProfileCard', () => {
         }
         throw new Error(`Unexpected fetch to ${url}`);
       });
-      render(<CreatorProfileCard initialProfile={profile} isLoading={false} loadError={null} />);
+      render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
       typeName('New Name');
 
       fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
@@ -293,7 +291,7 @@ describe('CreatorProfileCard', () => {
     it('steps off its entry before following a link the person chose to leave by', async () => {
       vi.spyOn(window, 'confirm').mockReturnValue(true);
       const back = answerBackLater();
-      render(<CreatorProfileCard initialProfile={profile} isLoading={false} loadError={null} />);
+      render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
       const link = addPageLink('/showcase?tab=new');
       typeName('New Name');
 
@@ -307,7 +305,7 @@ describe('CreatorProfileCard', () => {
 
     it('asks nothing for a click that opens a new tab', () => {
       const confirm = vi.spyOn(window, 'confirm');
-      render(<CreatorProfileCard initialProfile={profile} isLoading={false} loadError={null} />);
+      render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
       const link = addPageLink('/showcase');
       typeName('New Name');
       // The browser would open a new tab; jsdom would navigate this one instead.
@@ -323,7 +321,6 @@ describe('CreatorProfileCard', () => {
     render(
       <CreatorProfileCard
         initialProfile={profile}
-        isLoading={false}
         loadError={null}
       />
     );
@@ -341,7 +338,6 @@ describe('CreatorProfileCard', () => {
           bio: '',
           avatarUrl: '',
         }}
-        isLoading={false}
         loadError={null}
         onboardingMode
       />
@@ -358,7 +354,6 @@ describe('CreatorProfileCard', () => {
     render(
       <CreatorProfileCard
         initialProfile={profile}
-        isLoading={false}
         loadError={null}
       />
     );
@@ -373,7 +368,7 @@ describe('CreatorProfileCard', () => {
   // lines said it was required before selling recipes.
   it('recommends a photo for buyer trust without calling it a requirement', () => {
     const { unmount } = render(
-      <CreatorProfileCard initialProfile={{ ...profile, avatarUrl: '' }} isLoading={false} loadError={null} />
+      <CreatorProfileCard initialProfile={{ ...profile, avatarUrl: '' }} loadError={null} />
     );
 
     expect(screen.getByText('Recommended — builds buyer trust. JPG, PNG, or WebP up to 5MB.')).toBeInTheDocument();
@@ -383,7 +378,6 @@ describe('CreatorProfileCard', () => {
     render(
       <CreatorProfileCard
         initialProfile={{ ...profile, avatarUrl: '' }}
-        isLoading={false}
         loadError={null}
         onboardingMode
       />
@@ -397,7 +391,7 @@ describe('CreatorProfileCard', () => {
   // link, and caps the website and the location; the inputs had no limit and
   // asked for a "username" only.
   it('takes a handle or a profile link in the social fields, within the server caps', () => {
-    render(<CreatorProfileCard initialProfile={profile} isLoading={false} loadError={null} />);
+    render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
 
     for (const label of [/x \(twitter\) handle/i, /instagram handle/i, /tiktok handle/i]) {
       const input = screen.getByLabelText(label);
@@ -417,7 +411,7 @@ describe('CreatorProfileCard', () => {
         fieldErrors: { instagramHandle: 'Enter your Instagram username or profile link.' },
       }),
     } as Response);
-    render(<CreatorProfileCard initialProfile={profile} isLoading={false} loadError={null} />);
+    render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
     fireEvent.change(screen.getByLabelText(/instagram handle/i), {
       target: { value: 'https://example.com/luna' },
     });
@@ -438,7 +432,6 @@ describe('CreatorProfileCard', () => {
           displayName: '',
           avatarUrl: '',
         }}
-        isLoading={false}
         loadError={null}
         onboardingMode
       />
@@ -458,7 +451,6 @@ describe('CreatorProfileCard', () => {
           displayName: '',
           avatarUrl: '',
         }}
-        isLoading={false}
         loadError={null}
         onboardingMode
       />
@@ -497,7 +489,6 @@ describe('CreatorProfileCard', () => {
     render(
       <CreatorProfileCard
         initialProfile={{ ...profile, username: 'my-studio', displayName: 'My Studio' }}
-        isLoading={false}
         loadError={null}
         onboardingMode
         nextPath="/create-video?model=kling"
@@ -527,7 +518,6 @@ describe('CreatorProfileCard', () => {
     render(
       <CreatorProfileCard
         initialProfile={profile}
-        isLoading={false}
         loadError={null}
         nextPath="/post/new?generationId=gen-1"
         returnAfterSave
@@ -546,7 +536,6 @@ describe('CreatorProfileCard', () => {
     render(
       <CreatorProfileCard
         initialProfile={{ ...profile, username: 'creator-a1b2c3d4', displayName: '' }}
-        isLoading={false}
         loadError={null}
         onboardingMode
         nextPath="/create-image?model=gpt-image-2"
@@ -568,7 +557,6 @@ describe('CreatorProfileCard', () => {
     render(
       <CreatorProfileCard
         initialProfile={profile}
-        isLoading={false}
         loadError={null}
       />
     );
@@ -604,7 +592,6 @@ describe('CreatorProfileCard', () => {
     render(
       <CreatorProfileCard
         initialProfile={profile}
-        isLoading={false}
         loadError={null}
       />
     );
@@ -635,7 +622,6 @@ describe('CreatorProfileCard', () => {
     render(
       <CreatorProfileCard
         initialProfile={profile}
-        isLoading={false}
         loadError={null}
       />
     );
@@ -665,7 +651,6 @@ describe('CreatorProfileCard', () => {
     render(
       <CreatorProfileCard
         initialProfile={profile}
-        isLoading={false}
         loadError={null}
       />
     );
@@ -752,7 +737,6 @@ describe('CreatorProfileCard', () => {
     render(
       <CreatorProfileCard
         initialProfile={profile}
-        isLoading={false}
         loadError={null}
       />
     );
