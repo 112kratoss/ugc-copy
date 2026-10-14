@@ -22,7 +22,6 @@ import { supabase } from '@/lib/supabase';
 
 interface CreatorProfileCardProps {
   initialProfile: EditableCreatorProfile | null;
-  isLoading: boolean;
   loadError: string | null;
   onProfileSaved?: (profile: EditableCreatorProfile) => void;
   isEmbedded?: boolean;
@@ -34,8 +33,14 @@ interface CreatorProfileCardProps {
 }
 
 const EMPTY_ERRORS: ProfileFieldErrors = {};
+const LEAVE_WITHOUT_SAVING_QUESTION = 'Leave this page without saving your profile changes?';
 const MAX_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_BIO_LENGTH = 280;
+// The server's caps (`src/lib/profile.ts`). A social field also takes a pasted
+// profile link, tracking parameters and all, and the server keeps the handle.
+const MAX_WEBSITE_URL_LENGTH = 2048;
+const MAX_LOCATION_LENGTH = 80;
+const MAX_SOCIAL_INPUT_LENGTH = 200;
 const AVATAR_CROP_SIZE = 512;
 const COVER_CROP_WIDTH = 1600;
 const COVER_CROP_HEIGHT = 360;
@@ -95,6 +100,14 @@ function getProfileFormFingerprint(profile: EditableCreatorProfile | null): stri
   }
 
   return JSON.stringify(buildProfilePayload(profile));
+}
+
+/** Adds the leave guard's entry (the same address) and returns that address. */
+function pushLeaveGuardEntry(): string {
+  // The current state is carried over, so Next's router takes a Back onto the
+  // page's own entry as staying on the page.
+  window.history.pushState(window.history.state, '', window.location.href);
+  return window.location.href;
 }
 
 function getMediaObjectStyle(crop: MediaCrop): CSSProperties {
@@ -233,7 +246,6 @@ async function buildCroppedCoverFile(file: File, crop: MediaCrop): Promise<File>
 
 export default function CreatorProfileCard({
   initialProfile,
-  isLoading,
   loadError,
   onProfileSaved,
   isEmbedded = false,
@@ -265,6 +277,12 @@ export default function CreatorProfileCard({
   const formRef = useRef<HTMLFormElement | null>(null);
   const optionalDetailsRef = useRef<HTMLDetailsElement | null>(null);
   const allowDirtyNavigationRef = useRef(false);
+  const isDirtyRef = useRef(false);
+  // Whether the leave guard's entry is on top of history now, at which address.
+  const leaveGuardEntryRef = useRef(false);
+  const leaveGuardUrlRef = useRef<string | null>(null);
+  // Where the editor itself is going once Back has taken the guard entry off.
+  const afterLeaveGuardPopRef = useRef<(() => void) | null>(null);
 
   const validateProfileImage = (file: File, field: 'avatarUrl' | 'coverUrl') => {
     if (!file.type.startsWith('image/')) {
@@ -567,6 +585,11 @@ export default function CreatorProfileCard({
     };
 
     const handleDocumentClick = (event: MouseEvent) => {
+      // A click that opens a new tab or window leaves nothing behind.
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+        return;
+      }
+
       const target = event.target instanceof Element ? event.target : null;
       const anchor = target?.closest<HTMLAnchorElement>('a[href]');
       if (
@@ -588,7 +611,7 @@ export default function CreatorProfileCard({
         return;
       }
 
-      if (!window.confirm('Leave this page without saving your profile changes?')) {
+      if (!window.confirm(LEAVE_WITHOUT_SAVING_QUESTION)) {
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -598,6 +621,16 @@ export default function CreatorProfileCard({
       window.setTimeout(() => {
         allowDirtyNavigationRef.current = false;
       }, 0);
+
+      if (leaveGuardEntryRef.current) {
+        // Off the guard entry first, then on: left under the next page, it
+        // would be a Back that goes nowhere.
+        event.preventDefault();
+        event.stopPropagation();
+        const href = `${destination.pathname}${destination.search}${destination.hash}`;
+        afterLeaveGuardPopRef.current = () => router.push(href);
+        window.history.back();
+      }
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -606,7 +639,61 @@ export default function CreatorProfileCard({
       window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('click', handleDocumentClick, true);
     };
-  }, [isDirty]);
+  }, [isDirty, router]);
+
+  // Back, and a phone browser's back swipe, leave through history, which
+  // neither the click guard nor `beforeunload` sees. While the page's form is
+  // dirty, one entry for the same address sits on top of the page's own: Back
+  // takes it off without leaving, and the question is asked there. The
+  // creator page's modal is left to its own close guard.
+  useEffect(() => {
+    isDirtyRef.current = isDirty;
+    if (isDirty && !isEmbedded && !leaveGuardEntryRef.current) {
+      leaveGuardUrlRef.current = pushLeaveGuardEntry();
+      leaveGuardEntryRef.current = true;
+    }
+  }, [isDirty, isEmbedded]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const afterPop = afterLeaveGuardPopRef.current;
+      if (afterPop) {
+        afterLeaveGuardPopRef.current = null;
+        leaveGuardEntryRef.current = false;
+        afterPop();
+        return;
+      }
+      if (!leaveGuardEntryRef.current) return;
+      leaveGuardEntryRef.current = false;
+      // A jump several entries back has already left the page: nothing to hold.
+      if (window.location.href !== leaveGuardUrlRef.current) return;
+      if (isDirtyRef.current) {
+        if (!window.confirm(LEAVE_WITHOUT_SAVING_QUESTION)) {
+          leaveGuardUrlRef.current = pushLeaveGuardEntry();
+          leaveGuardEntryRef.current = true;
+          return;
+        }
+        // Asked and answered: the page this Back reaches may be another site.
+        allowDirtyNavigationRef.current = true;
+      }
+      // Finish the Back that was asked for.
+      window.history.back();
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // The editor's own ways out (a save, Skip for now) step off the guard entry
+  // before they move on, for the same reason as a confirmed link.
+  const leaveEditor = (navigate: () => void) => {
+    if (!leaveGuardEntryRef.current) {
+      navigate();
+      return;
+    }
+    afterLeaveGuardPopRef.current = navigate;
+    window.history.back();
+  };
 
   const focusFirstInvalidField = (errors: ProfileFieldErrors) => {
     const fieldOrder: Array<keyof ProfileFieldErrors> = [
@@ -676,8 +763,10 @@ export default function CreatorProfileCard({
     } catch (error) {
       console.warn('Could not remember skipped creator onboarding:', error);
     } finally {
-      router.replace(getSafeProfileNextPath(nextPath));
-      router.refresh();
+      leaveEditor(() => {
+        router.replace(getSafeProfileNextPath(nextPath));
+        router.refresh();
+      });
       setIsSkipping(false);
     }
   };
@@ -849,18 +938,28 @@ export default function CreatorProfileCard({
         ),
       });
 
-      const data = await response.json();
       if (!response.ok) {
-        await cleanupUploadedMedia();
-        if (data.fieldErrors) {
-          const nextErrors = data.fieldErrors as ProfileFieldErrors;
+        const errorData = await response.json().catch(() => null) as {
+          error?: string;
+          fieldErrors?: ProfileFieldErrors;
+        } | null;
+        // Only a refusal (4xx) says the row was not written. After a 5xx the
+        // row may already point at the new files, so they are left to the
+        // server's reclaim job, as is everything after a lost answer.
+        if (response.status >= 400 && response.status < 500) {
+          await cleanupUploadedMedia();
+        }
+        if (errorData?.fieldErrors) {
+          const nextErrors = errorData.fieldErrors;
           setFieldErrors(nextErrors);
           focusFirstInvalidField(nextErrors);
         }
 
-        setFormError(data.error || 'Failed to update profile.');
+        setFormError(errorData?.error || 'Failed to update profile.');
         return;
       }
+
+      const data = await response.json();
 
       const nextProfile: EditableCreatorProfile = {
         id: data.id,
@@ -905,39 +1004,22 @@ export default function CreatorProfileCard({
       onProfileSaved?.(nextProfile);
 
       if (!isEmbedded) {
-        if (
-          returnAfterSave
+        const destination = returnAfterSave
           || (onboardingMode && getCreatorProfileReadiness(nextProfile).publicPublishReady)
-        ) {
-          router.replace(getSafeProfileNextPath(nextPath));
+          ? getSafeProfileNextPath(nextPath)
+          : '/profile';
+        leaveEditor(() => {
+          router.replace(destination);
           router.refresh();
-        } else {
-          router.replace('/profile');
-          router.refresh();
-        }
+        });
       }
     } catch (error) {
-      await cleanupUploadedMedia();
       console.error('Failed to update profile:', error);
       setFormError('Failed to update profile.');
     } finally {
       setIsSaving(false);
     }
   };
-
-  if (isLoading) {
-    return (
-      <div className="mb-8 rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-6">
-        <div className="h-6 w-48 animate-pulse rounded bg-white/10" />
-        <div className="mt-3 h-4 w-80 animate-pulse rounded bg-white/5" />
-        <div className="mt-6 grid gap-4 md:grid-cols-2">
-          <div className="h-12 animate-pulse rounded-2xl bg-black/40" />
-          <div className="h-12 animate-pulse rounded-2xl bg-black/40" />
-          <div className="h-24 animate-pulse rounded-2xl bg-black/40 md:col-span-2" />
-        </div>
-      </div>
-    );
-  }
 
   if (loadError) {
     return (
@@ -1091,6 +1173,7 @@ export default function CreatorProfileCard({
             value={form.websiteUrl || ''}
             onChange={(event) => updateField('websiteUrl', event.target.value)}
             placeholder="https://your-site.com"
+            maxLength={MAX_WEBSITE_URL_LENGTH}
             autoComplete="url"
             className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3 text-[var(--ui-text-primary)] outline-none transition placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-focus)]"
             aria-invalid={Boolean(fieldErrors.websiteUrl)}
@@ -1110,6 +1193,7 @@ export default function CreatorProfileCard({
             value={form.location || ''}
             onChange={(event) => updateField('location', event.target.value)}
             placeholder="City, country"
+            maxLength={MAX_LOCATION_LENGTH}
             autoComplete="address-level2"
             className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3 text-[var(--ui-text-primary)] outline-none transition placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-focus)]"
             aria-invalid={Boolean(fieldErrors.location)}
@@ -1125,22 +1209,22 @@ export default function CreatorProfileCard({
         ] as const).map(([field, label]) => (
           <label key={field} className={field === 'tiktokHandle' ? 'block md:col-span-2' : 'block'} htmlFor={`profile-${field}`}>
             <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">{label}</span>
-            <div className="relative">
-              <span aria-hidden className="absolute left-4 top-3.5 text-zinc-500">@</span>
-              <input
-                id={`profile-${field}`}
-                name={field}
-                type="text"
-                value={form[field] || ''}
-                onChange={(event) => updateField(field, event.target.value)}
-                placeholder="username"
-                autoCapitalize="none"
-                autoCorrect="off"
-                className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] py-3 pl-8 pr-4 text-[var(--ui-text-primary)] outline-none transition placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-focus)]"
-                aria-invalid={Boolean(fieldErrors[field])}
-                aria-describedby={fieldErrors[field] ? `profile-${field}-error` : undefined}
-              />
-            </div>
+            {/* No "@" drawn in front: a pasted profile link is as welcome as a handle. */}
+            <input
+              id={`profile-${field}`}
+              name={field}
+              type="text"
+              value={form[field] || ''}
+              onChange={(event) => updateField(field, event.target.value)}
+              placeholder="@username or profile link"
+              maxLength={MAX_SOCIAL_INPUT_LENGTH}
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3 text-[var(--ui-text-primary)] outline-none transition placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-focus)]"
+              aria-invalid={Boolean(fieldErrors[field])}
+              aria-describedby={fieldErrors[field] ? `profile-${field}-error` : undefined}
+            />
             {fieldErrors[field] ? <p id={`profile-${field}-error`} className="mt-2 text-xs text-red-300">{fieldErrors[field]}</p> : null}
           </label>
         ))}
@@ -1245,7 +1329,7 @@ export default function CreatorProfileCard({
             </p>
             <p className={`mt-3 flex items-center gap-2 text-sm ${currentReadiness.hasAvatar ? 'text-emerald-200' : 'text-zinc-500'}`}>
               <CheckCircle2 className="h-4 w-4" aria-hidden />
-              {currentReadiness.hasAvatar ? 'Avatar added — ready to build buyer trust.' : 'Avatar recommended before selling recipes.'}
+              {currentReadiness.hasAvatar ? 'Avatar added — ready to build buyer trust.' : 'Avatar recommended — builds buyer trust.'}
             </p>
           </div>
 
@@ -1348,10 +1432,11 @@ export default function CreatorProfileCard({
             <div className="space-y-4 border-t border-[var(--ui-border-subtle)] pt-6 md:col-span-2">
               <div>
                 <span className="block text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                  Avatar <span className="normal-case tracking-normal text-zinc-600">Recommended</span>
+                  Avatar <span className="normal-case tracking-normal text-zinc-600">Optional</span>
                 </span>
+                {/* A photo is never required to publish or sell (marketplace-trust.ts). */}
                 <p id="profile-avatar-help" className="mt-2 text-xs leading-5 text-zinc-500">
-                  A recognizable portrait builds trust and is required before selling recipes. JPG, PNG, or WebP up to 5MB.
+                  Recommended — builds buyer trust. JPG, PNG, or WebP up to 5MB.
                 </p>
               </div>
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center">

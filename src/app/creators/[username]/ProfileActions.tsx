@@ -473,7 +473,6 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
                 {editorProfile ? (
                   <CreatorProfileCard
                     initialProfile={editorProfile}
-                    isLoading={false}
                     loadError={null}
                     isEmbedded={true}
                     onProfileSaved={(nextProfile) => {

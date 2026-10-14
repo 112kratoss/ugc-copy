@@ -23,6 +23,17 @@ type ProfileRow = {
 };
 
 let profileState: ProfileRow | null = null;
+// What the two count RPCs answer; an `error` stands for a failed read.
+const rpcAnswers = vi.hoisted(() => ({
+  owner_profile_counts: { data: null, error: null } as { data: unknown; error: unknown },
+  get_owner_post_sales_summary: { data: null, error: null } as { data: unknown; error: unknown },
+}));
+const rpcMock = vi.hoisted(() => vi.fn(async (name: string) => {
+  if (name !== 'owner_profile_counts' && name !== 'get_owner_post_sales_summary') {
+    throw new Error(`Unexpected rpc: ${name}`);
+  }
+  return rpcAnswers[name];
+}));
 
 const getServerAuthStateMock = vi.fn(async () => ({
   session: {
@@ -47,6 +58,7 @@ vi.mock('@/lib/supabase-server', () => ({
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({
+    rpc: rpcMock,
     from(table: string) {
       if (table !== 'profiles') {
         throw new Error(`Unexpected table: ${table}`);
@@ -118,11 +130,21 @@ vi.mock('@/app/profile/OwnerProfileMediaHub', () => ({
   default: ({
     creator,
     publicProfilePath,
+    stats,
+    sales,
   }: {
     creator: { name: string; username: string | null };
     publicProfilePath?: string | null;
+    stats?: unknown;
+    sales?: unknown;
   }) => (
-    <div data-testid="owner-profile-media-hub" data-creator-name={creator.name} data-username={creator.username ?? ''}>
+    <div
+      data-testid="owner-profile-media-hub"
+      data-creator-name={creator.name}
+      data-username={creator.username ?? ''}
+      data-stats={JSON.stringify(stats ?? null)}
+      data-sales={JSON.stringify(sales ?? null)}
+    >
       Profile media hub
       {publicProfilePath ? <a href={publicProfilePath}>View public profile</a> : null}
       <a href="/profile/edit">Edit profile</a>
@@ -134,6 +156,9 @@ describe('ProfilePage', () => {
   beforeEach(() => {
     mockRedirect.mockClear();
     getServerAuthStateMock.mockClear();
+    rpcMock.mockClear();
+    rpcAnswers.owner_profile_counts = { data: { creations: 0, posts: 0, archivedPosts: 0, saved: 0 }, error: null };
+    rpcAnswers.get_owner_post_sales_summary = { data: { earningsUsdCents: 0, listingCount: 0, salesCount: 0 }, error: null };
   });
 
   afterEach(() => {
@@ -169,6 +194,67 @@ describe('ProfilePage', () => {
     expect(screen.getByRole('link', { name: /edit profile/i })).toHaveAttribute('href', '/profile/edit');
   });
 
+  // The web /profile ran neither count RPC: its header printed the lengths of
+  // the pages loaded so far, and its Wallet no amount.
+  it("hands the hub the server's library totals and seller earnings", async () => {
+    profileState = {
+      id: 'a1b2c3d4-1111-2222-3333-444455556666',
+      username: 'persisted-name',
+      display_name: 'Creator Name',
+      bio: null,
+      avatar_url: null,
+      cover_url: null,
+      website_url: null,
+      twitter_handle: null,
+      instagram_handle: null,
+      tiktok_handle: null,
+      location: null,
+      credits: 10,
+    };
+    rpcAnswers.owner_profile_counts = { data: { creations: 200, posts: 31, archivedPosts: 4, saved: 7 }, error: null };
+    rpcAnswers.get_owner_post_sales_summary = { data: { earningsUsdCents: 4250, listingCount: 2, salesCount: 5 }, error: null };
+
+    render(await ProfilePage({}));
+
+    const hub = screen.getByTestId('owner-profile-media-hub');
+    expect(JSON.parse(hub.getAttribute('data-stats') ?? 'null')).toEqual({ creations: 200, posts: 31, archivedPosts: 4, saved: 7 });
+    expect(JSON.parse(hub.getAttribute('data-sales') ?? 'null')).toEqual({ earningsUsdCents: 4250, listingCount: 2, salesCount: 5 });
+    expect(rpcMock).toHaveBeenCalledWith('owner_profile_counts', { p_user_id: 'a1b2c3d4-1111-2222-3333-444455556666' });
+    expect(rpcMock).toHaveBeenCalledWith('get_owner_post_sales_summary', { p_owner_id: 'a1b2c3d4-1111-2222-3333-444455556666' });
+  });
+
+  it('still draws the profile when a count fails, with that total left unknown', async () => {
+    profileState = {
+      id: 'a1b2c3d4-1111-2222-3333-444455556666',
+      username: 'persisted-name',
+      display_name: 'Creator Name',
+      bio: null,
+      avatar_url: null,
+      cover_url: null,
+      website_url: null,
+      twitter_handle: null,
+      instagram_handle: null,
+      tiktok_handle: null,
+      location: null,
+      credits: 10,
+    };
+    rpcAnswers.owner_profile_counts = { data: null, error: { message: 'statement timeout' } };
+
+    render(await ProfilePage({}));
+
+    const hub = screen.getByTestId('owner-profile-media-hub');
+    expect(hub).toHaveAttribute('data-stats', 'null');
+    expect(JSON.parse(hub.getAttribute('data-sales') ?? 'null')).toEqual({ earningsUsdCents: 0, listingCount: 0, salesCount: 0 });
+  });
+
+  it('sends a signed-out visitor to sign in and back to this same address', async () => {
+    getServerAuthStateMock.mockResolvedValueOnce({ session: null, credits: null } as never);
+
+    await expect(ProfilePage({
+      searchParams: Promise.resolve({ tab: 'saved', post: 'post-1' }),
+    })).rejects.toThrow('NEXT_REDIRECT:/login?returnUrl=%2Fprofile%3Ftab%3Dsaved%26post%3Dpost-1');
+  });
+
   it('keeps first-time users on /profile and prefills the suggested username', async () => {
     profileState = {
       id: 'a1b2c3d4-1111-2222-3333-444455556666',
@@ -189,6 +275,9 @@ describe('ProfilePage', () => {
 
     expect(await screen.findByText('creator-a1b2c3d4')).toBeInTheDocument();
     expect(screen.getByText(/profile setup/i)).toBeInTheDocument();
+    // A photo is never required to sell.
+    expect(screen.getByText('Recommended — builds buyer trust')).toBeInTheDocument();
+    expect(screen.queryByText(/required before selling/i)).not.toBeInTheDocument();
     expect(screen.getByTestId('deferred-creator-profile-card')).toHaveAttribute('data-onboarding', 'true');
     expect(screen.getByTestId('deferred-creator-profile-card')).toHaveAttribute('data-display-name', 'OAuth Creator');
     expect(screen.getByTestId('deferred-creator-profile-card')).toHaveAttribute('data-avatar-url', 'https://cdn.example.com/oauth-avatar.jpg');

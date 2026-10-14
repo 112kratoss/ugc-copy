@@ -11,9 +11,24 @@ import {
   toEditableCreatorProfile,
 } from '@/lib/profile';
 import type { EditableCreatorProfile, ProfileApiResponse } from '@/lib/profile';
+import { loadOwnerProfileTotals } from '@/lib/profile-route-service';
 import { buildProfileApiResponse, PROFILE_SELECT_FIELDS, type ProfileRow } from '@/lib/profile-server';
 import { createServiceClient } from '@/lib/server-helpers';
 import { getServerAuthState } from '@/lib/supabase-server';
+
+type OwnerProfileTotals = Pick<ProfileApiResponse, 'stats' | 'sales'>;
+
+// A failed count draws its unknown mark on the page; it never fails the page.
+async function readOwnerProfileTotals(
+  client: ReturnType<typeof createServiceClient>,
+  userId: string
+): Promise<OwnerProfileTotals> {
+  try {
+    return await loadOwnerProfileTotals(client, userId);
+  } catch {
+    return {};
+  }
+}
 
 function buildStarterProfile({
   userId,
@@ -42,7 +57,10 @@ function buildStarterProfile({
   };
 }
 
-export async function loadOwnerProfile(returnPath: string) {
+export async function loadOwnerProfile(
+  returnPath: string,
+  { includeTotals = false }: { includeTotals?: boolean } = {}
+) {
   const auth = await getServerAuthState();
 
   if (!auth.session?.user) {
@@ -51,11 +69,19 @@ export async function loadOwnerProfile(returnPath: string) {
 
   const user = auth.session.user;
   const adminSupabase = createServiceClient();
-  const { data: profile, error } = await adminSupabase
-    .from('profiles')
-    .select(PROFILE_SELECT_FIELDS)
-    .eq('id', user.id)
-    .maybeSingle();
+  // The header's totals and the Wallet amount are the server's, read beside
+  // the row as `GET /api/profile` reads them for the app: the lengths of the
+  // pages the hub has loaded are not totals.
+  const [{ data: profile, error }, totals] = await Promise.all([
+    adminSupabase
+      .from('profiles')
+      .select(PROFILE_SELECT_FIELDS)
+      .eq('id', user.id)
+      .maybeSingle(),
+    includeTotals
+      ? readOwnerProfileTotals(adminSupabase, user.id)
+      : Promise.resolve<OwnerProfileTotals>({}),
+  ]);
 
   const shouldUseStarterProfile = !profile && (!error || isE2EAuthBypassEnabled());
   const authDisplayName =
@@ -103,5 +129,7 @@ export async function loadOwnerProfile(returnPath: string) {
     publicProfilePath: publicProfileUsername ? `/creators/${publicProfileUsername}` : null,
     publicProfileDisplayName:
       profile?.display_name?.trim() || authDisplayName || publicProfileUsername,
+    stats: totals.stats ?? null,
+    sales: totals.sales ?? null,
   };
 }

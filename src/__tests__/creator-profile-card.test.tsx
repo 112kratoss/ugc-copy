@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
@@ -15,6 +15,7 @@ const supabaseMocks = vi.hoisted(() => ({
 }));
 
 const routerMocks = vi.hoisted(() => ({
+  push: vi.fn(),
   replace: vi.fn(),
   refresh: vi.fn(),
 }));
@@ -52,6 +53,7 @@ const profile: EditableCreatorProfile = {
 
 describe('CreatorProfileCard', () => {
   beforeEach(() => {
+    routerMocks.push.mockReset();
     routerMocks.replace.mockReset();
     routerMocks.refresh.mockReset();
     supabaseMocks.getSession.mockResolvedValue({
@@ -196,6 +198,127 @@ describe('CreatorProfileCard', () => {
     });
   });
 
+  describe('the leave guard on Back', () => {
+    const LEAVE_QUESTION = 'Leave this page without saving your profile changes?';
+    // The browser's Back: the entry on top comes off and popstate follows.
+    const pressBack = () => act(() => {
+      window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
+    });
+    // `history.back()` from the page itself, answered as a browser would: later.
+    const answerBackLater = () => vi.spyOn(window.history, 'back').mockImplementation(() => {
+      window.setTimeout(() => window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state })), 0);
+    });
+    const typeName = (value: string) => fireEvent.change(screen.getByPlaceholderText('Your creator name'), {
+      target: { value },
+    });
+    // A plain link elsewhere on the page, as the shell's are.
+    const pageLinks: HTMLAnchorElement[] = [];
+    const addPageLink = (href: string) => {
+      const link = document.createElement('a');
+      link.href = href;
+      link.textContent = 'Explore';
+      document.body.append(link);
+      pageLinks.push(link);
+      return link;
+    };
+    afterEach(() => {
+      pageLinks.splice(0).forEach((link) => link.remove());
+    });
+
+    // Back and a phone's back swipe left /profile/edit without a word: the
+    // guard saw link clicks and tab closes only.
+    it('asks before Back leaves typed changes, and keeps them when the person stays', () => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+      const pushState = vi.spyOn(window.history, 'pushState');
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      render(<CreatorProfileCard initialProfile={profile} isLoading={false} loadError={null} />);
+      expect(pushState).not.toHaveBeenCalled();
+
+      typeName('New Name');
+
+      // One entry for the same address goes on top while the form is dirty.
+      expect(pushState).toHaveBeenCalledTimes(1);
+      expect(pushState.mock.calls[0][2]).toBe(window.location.href);
+
+      pressBack();
+
+      expect(confirm).toHaveBeenLastCalledWith(LEAVE_QUESTION);
+      // Staying: the entry goes back on top and nothing typed is lost.
+      expect(pushState).toHaveBeenCalledTimes(2);
+      expect(back).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText('Your creator name')).toHaveValue('New Name');
+
+      pressBack();
+
+      // Leaving: the Back that was asked for is finished.
+      expect(confirm).toHaveBeenCalledTimes(2);
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(pushState).toHaveBeenCalledTimes(2);
+    });
+
+    it('lets Back through without a question once the changes are reset', () => {
+      const confirm = vi.spyOn(window, 'confirm');
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      render(<CreatorProfileCard initialProfile={profile} isLoading={false} loadError={null} />);
+      typeName('New Name');
+      fireEvent.click(screen.getByRole('button', { name: /reset changes/i }));
+
+      pressBack();
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(back).toHaveBeenCalledTimes(1);
+    });
+
+    it('steps off its entry before a save moves on, so no stop is left behind', async () => {
+      const back = answerBackLater();
+      vi.mocked(fetch).mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.endsWith('/api/profile/validate')) return { ok: true, json: async () => ({ ok: true }) } as Response;
+        if (url.endsWith('/api/profile')) {
+          return { ok: true, json: async () => ({ ...profile, displayName: 'New Name' }) } as Response;
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+      });
+      render(<CreatorProfileCard initialProfile={profile} isLoading={false} loadError={null} />);
+      typeName('New Name');
+
+      fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+      await waitFor(() => expect(routerMocks.replace).toHaveBeenCalledWith('/profile'));
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(back.mock.invocationCallOrder[0]).toBeLessThan(routerMocks.replace.mock.invocationCallOrder[0]);
+      expect(routerMocks.refresh).toHaveBeenCalled();
+    });
+
+    it('steps off its entry before following a link the person chose to leave by', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const back = answerBackLater();
+      render(<CreatorProfileCard initialProfile={profile} isLoading={false} loadError={null} />);
+      const link = addPageLink('/showcase?tab=new');
+      typeName('New Name');
+
+      const click = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+      fireEvent(link, click);
+
+      expect(click.defaultPrevented).toBe(true);
+      await waitFor(() => expect(routerMocks.push).toHaveBeenCalledWith('/showcase?tab=new'));
+      expect(back.mock.invocationCallOrder[0]).toBeLessThan(routerMocks.push.mock.invocationCallOrder[0]);
+    });
+
+    it('asks nothing for a click that opens a new tab', () => {
+      const confirm = vi.spyOn(window, 'confirm');
+      render(<CreatorProfileCard initialProfile={profile} isLoading={false} loadError={null} />);
+      const link = addPageLink('/showcase');
+      typeName('New Name');
+      // The browser would open a new tab; jsdom would navigate this one instead.
+      link.addEventListener('click', (event) => event.preventDefault());
+
+      fireEvent.click(link, { metaKey: true });
+
+      expect(confirm).not.toHaveBeenCalled();
+    });
+  });
+
   it('marks the display name as a required field', () => {
     render(
       <CreatorProfileCard
@@ -244,6 +367,66 @@ describe('CreatorProfileCard', () => {
     expect(screen.getByText(/^Website$/i)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'More about you' })).toBeInTheDocument();
     expect(screen.getByText(/^X \(Twitter\) Handle$/i)).toBeInTheDocument();
+  });
+
+  // A photo is never required to publish or sell (marketplace-trust.ts); two
+  // lines said it was required before selling recipes.
+  it('recommends a photo for buyer trust without calling it a requirement', () => {
+    const { unmount } = render(
+      <CreatorProfileCard initialProfile={{ ...profile, avatarUrl: '' }} isLoading={false} loadError={null} />
+    );
+
+    expect(screen.getByText('Recommended — builds buyer trust. JPG, PNG, or WebP up to 5MB.')).toBeInTheDocument();
+    expect(screen.queryByText(/required before selling/i)).not.toBeInTheDocument();
+    unmount();
+
+    render(
+      <CreatorProfileCard
+        initialProfile={{ ...profile, avatarUrl: '' }}
+        isLoading={false}
+        loadError={null}
+        onboardingMode
+      />
+    );
+
+    expect(screen.getByText('Avatar recommended — builds buyer trust.')).toBeInTheDocument();
+    expect(screen.queryByText(/before selling/i)).not.toBeInTheDocument();
+  });
+
+  // The server stores the handle from a handle or the platform's own profile
+  // link, and caps the website and the location; the inputs had no limit and
+  // asked for a "username" only.
+  it('takes a handle or a profile link in the social fields, within the server caps', () => {
+    render(<CreatorProfileCard initialProfile={profile} isLoading={false} loadError={null} />);
+
+    for (const label of [/x \(twitter\) handle/i, /instagram handle/i, /tiktok handle/i]) {
+      const input = screen.getByLabelText(label);
+      expect(input).toHaveAttribute('placeholder', '@username or profile link');
+      expect(input).toHaveAttribute('maxLength', '200');
+    }
+    expect(screen.getByLabelText(/website/i)).toHaveAttribute('maxLength', '2048');
+    expect(screen.getByLabelText(/location/i)).toHaveAttribute('maxLength', '80');
+  });
+
+  it("draws the server's refusal of a social field under that field", async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        error: 'Please fix the highlighted fields.',
+        fieldErrors: { instagramHandle: 'Enter your Instagram username or profile link.' },
+      }),
+    } as Response);
+    render(<CreatorProfileCard initialProfile={profile} isLoading={false} loadError={null} />);
+    fireEvent.change(screen.getByLabelText(/instagram handle/i), {
+      target: { value: 'https://example.com/luna' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    expect(await screen.findByText('Enter your Instagram username or profile link.')).toBeInTheDocument();
+    expect(screen.getByLabelText(/instagram handle/i)).toHaveAttribute('aria-invalid', 'true');
+    await waitFor(() => expect(screen.getByLabelText(/instagram handle/i)).toHaveFocus());
   });
 
   it('keeps optional details collapsed during first-run setup', () => {
@@ -507,8 +690,8 @@ describe('CreatorProfileCard', () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
   });
 
-  it('removes newly uploaded media if the profile patch fails after upload', async () => {
-    vi.spyOn(Date, 'now').mockReturnValue(1712345678901);
+  // Answers an avatar upload as the server does, and the PATCH with `patch`.
+  function answerAvatarSave(patch: () => Promise<Response>) {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockImplementation(async (input) => {
       const url = String(input);
@@ -544,21 +727,13 @@ describe('CreatorProfileCard', () => {
             path: 'test-user-id/avatar-server-issued.png',
             storagePath: 'profiles/test-user-id/avatar-server-issued.png',
             contentType: 'image/png',
-            sizeBytes: file.size,
+            sizeBytes: 6,
           }),
         } as Response;
       }
 
       if (url.endsWith('/api/profile')) {
-        return {
-          ok: false,
-          json: async () => ({
-            error: 'That username is already taken.',
-            fieldErrors: {
-              username: 'That username is already taken.',
-            },
-          }),
-        } as Response;
+        return patch();
       }
 
       if (url.endsWith('/api/profile/media/cleanup')) {
@@ -570,7 +745,10 @@ describe('CreatorProfileCard', () => {
 
       throw new Error(`Unexpected fetch to ${url}`);
     });
+    return fetchMock;
+  }
 
+  function saveWithNewAvatar() {
     render(
       <CreatorProfileCard
         initialProfile={profile}
@@ -581,12 +759,63 @@ describe('CreatorProfileCard', () => {
 
     const fileInputs = document.querySelectorAll<HTMLInputElement>('input[type="file"]');
     const file = new File(['avatar'], 'avatar.png', { type: 'image/png' });
-
     fireEvent.change(fileInputs[0], {
       target: { files: [file] },
     });
-
     fireEvent.submit(screen.getByRole('button', { name: /save changes/i }).closest('form')!);
+    return file;
+  }
+
+  const cleanupCalls = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/api/profile/media/cleanup'));
+  const patchCalls = () => vi.mocked(fetch).mock.calls.filter(([url, init]) => (
+    String(url).endsWith('/api/profile') && (init as RequestInit | undefined)?.method === 'PATCH'
+  ));
+
+  // A 5xx, or no answer at all, can follow a PATCH that already pointed the
+  // row at the new files; deleting them then left the profile with a dead
+  // photo. Those are the server's reclaim job's to remove.
+  it('keeps just-uploaded media when the profile save answers 5xx', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    answerAvatarSave(async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: 'Failed to update profile.' }),
+    } as Response));
+
+    saveWithNewAvatar();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to update profile.');
+    expect(patchCalls()).toHaveLength(1);
+    expect(cleanupCalls()).toHaveLength(0);
+  });
+
+  it('keeps just-uploaded media when the profile save gets no answer', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    answerAvatarSave(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+
+    saveWithNewAvatar();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to update profile.');
+    expect(patchCalls()).toHaveLength(1);
+    expect(cleanupCalls()).toHaveLength(0);
+  });
+
+  it('removes newly uploaded media if the profile patch is refused after upload', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1712345678901);
+    const fetchMock = answerAvatarSave(async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        error: 'That username is already taken.',
+        fieldErrors: {
+          username: 'That username is already taken.',
+        },
+      }),
+    } as Response));
+
+    const file = saveWithNewAvatar();
 
     await waitFor(() => {
       expect(screen.getAllByText(/already taken/i).length).toBeGreaterThan(0);

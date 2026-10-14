@@ -1,14 +1,13 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 
 import type { EditableCreatorProfile } from '@/lib/profile';
 import CreatorProfileCardFallback from './CreatorProfileCardFallback';
 
 interface DeferredCreatorProfileCardProps {
   initialProfile: EditableCreatorProfile | null;
-  isLoading: boolean;
   loadError: string | null;
   onboardingMode?: boolean;
   nextPath?: string;
@@ -22,8 +21,20 @@ type IdleWindow = Window & {
   cancelIdleCallback?: (handle: number) => void;
 };
 
+// A `dynamic` loading component is handed no props of its own, so the
+// skeleton drawn while the editor's code downloads reads them from here.
+const DeferredCardPropsContext = createContext<DeferredCreatorProfileCardProps | null>(null);
+
+function EditorDownloadFallback() {
+  const props = useContext(DeferredCardPropsContext);
+  return props ? <CreatorProfileCardFallback {...props} /> : null;
+}
+
 const CreatorProfileCard = dynamic(() => import('@/app/creations/CreatorProfileCard'), {
   ssr: false,
+  // The skeleton stays up until the editor can draw: the page was blank
+  // between the idle wait and the code arriving.
+  loading: EditorDownloadFallback,
 });
 
 function useDeferredUntilIdle() {
@@ -55,9 +66,9 @@ export default function DeferredCreatorProfileCard(props: DeferredCreatorProfile
   const isDeferredReady = useDeferredUntilIdle();
   const isReady = props.onboardingMode || isDeferredReady;
 
-  if (!isReady) {
-    return <CreatorProfileCardFallback {...props} />;
-  }
-
-  return <CreatorProfileCard {...props} />;
+  return (
+    <DeferredCardPropsContext.Provider value={props}>
+      {isReady ? <CreatorProfileCard {...props} /> : <CreatorProfileCardFallback {...props} />}
+    </DeferredCardPropsContext.Provider>
+  );
 }

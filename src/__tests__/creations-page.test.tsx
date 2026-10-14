@@ -1031,6 +1031,50 @@ describe('CreationsPage', () => {
     expect(await screen.findByText('No audio creations yet')).toBeInTheDocument();
   });
 
+  // A photo is never required to sell. The card said "Your selling identity is
+  // ready. Add a short bio" to a creator who had a bio and no photo.
+  it.each([
+    [
+      'a bio and no photo',
+      { bio: 'I make short clips.' },
+      'Your public identity is ready to publish and sell. Add an avatar so people recognize your work.',
+    ],
+    [
+      'a photo and no bio',
+      { avatarUrl: 'https://cdn.example.com/avatar.jpg' },
+      'Your public identity is ready to publish and sell. Add a short bio so visitors understand your work.',
+    ],
+    [
+      'neither',
+      {},
+      'Your public identity is ready to publish and sell. Add an avatar and a short bio so people recognize your work.',
+    ],
+  ])('asks a creator with a handle, a name and %s for what the profile still lacks', async (_case, details, expected) => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.startsWith('/api/generations')) {
+        return Promise.resolve(jsonResponse({ generations: [] }));
+      }
+
+      if (url.startsWith('/api/posts')) {
+        return Promise.resolve(jsonResponse({ posts: [] }));
+      }
+
+      if (url === '/api/profile') {
+        return Promise.resolve(jsonResponse({ username: 'creator-user1', displayName: 'Creator User', ...details }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    }));
+
+    render(<CreationsPage />);
+
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+    expect(screen.getByText('Strengthen creator profile')).toBeInTheDocument();
+    expect(screen.queryByText(/selling identity/i)).not.toBeInTheDocument();
+  });
+
   it('does not poll while every generation is idle', async () => {
     const setIntervalSpy = vi.spyOn(window, 'setInterval').mockImplementation(
       () => 1 as unknown as ReturnType<typeof window.setInterval>
