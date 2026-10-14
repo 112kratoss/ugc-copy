@@ -8,7 +8,9 @@ import {
   POST_RESOURCE_ORDER_VERIFY_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
 import { invalidateMarketplaceResourceListCache as defaultInvalidateMarketplaceResourceListCache } from '@/lib/marketplace-resource-list-cache';
+import { notifyPostResourceUnlockCompleted } from '@/lib/mobile-notifications';
 import { recordPostResourceBundlePurchaseFeedEvent } from '@/lib/post-resource-bundle-order-service';
 import {
   createPendingPaymentResultBody,
@@ -59,6 +61,53 @@ function normalizeBody(value: unknown): PostResourceBundleVerifyBody {
     : {};
 }
 
+/**
+ * Tells the buyer and the owner about a recipe bought through Razorpay, as a
+ * purchase in the app is told ("Post resources unlocked", "Someone unlocked
+ * your post"). A checkout names its order alone, so the post and its owner are
+ * read from it. Whichever of the buyer's verify and the webhook settled the
+ * order calls this, once; the alerts' dedupe keys make a second call harmless.
+ * Never rejects: the purchase is settled whatever becomes of its alerts.
+ */
+export async function notifyRazorpayPostResourcePurchase(
+  adminSupabase: SupabaseClient,
+  razorpayOrderId: string,
+) {
+  try {
+    const { data, error } = await adminSupabase
+      .from('post_resource_bundle_orders')
+      .select('bundle_id, buyer_user_id, post_resource_bundles(post_id, owner_user_id)')
+      .eq('razorpay_order_id', razorpayOrderId)
+      .maybeSingle();
+    if (error) throw error;
+
+    const order = data as { bundle_id?: unknown; buyer_user_id?: unknown; post_resource_bundles?: unknown } | null;
+    const bundle = (Array.isArray(order?.post_resource_bundles)
+      ? order.post_resource_bundles[0]
+      : order?.post_resource_bundles) as { post_id?: unknown; owner_user_id?: unknown } | null | undefined;
+    if (
+      typeof order?.bundle_id !== 'string'
+      || typeof order.buyer_user_id !== 'string'
+      || typeof bundle?.post_id !== 'string'
+      || typeof bundle.owner_user_id !== 'string'
+    ) {
+      logBackendError('razorpay_post_resource_notification_order_unreadable', { razorpayOrderId });
+      return null;
+    }
+
+    return await notifyPostResourceUnlockCompleted(adminSupabase, {
+      buyerUserId: order.buyer_user_id,
+      ownerUserId: bundle.owner_user_id,
+      postId: bundle.post_id,
+      bundleId: order.bundle_id,
+      alreadyProcessed: false,
+    });
+  } catch (error) {
+    logBackendError('razorpay_post_resource_notification_failed', { razorpayOrderId, error });
+    return null;
+  }
+}
+
 export async function verifyPostResourceBundlePaymentForRoute({
   adminSupabase,
   buyerUserId,
@@ -69,6 +118,8 @@ export async function verifyPostResourceBundlePaymentForRoute({
   fetchPayment = defaultFetchRazorpayPayment,
   invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
   recordPurchaseFeedEvent = recordPostResourceBundlePurchaseFeedEvent,
+  notifyPurchase = notifyRazorpayPostResourcePurchase,
+  runAfterResponse,
 }: {
   adminSupabase: SupabaseClient;
   buyerUserId: string;
@@ -79,6 +130,13 @@ export async function verifyPostResourceBundlePaymentForRoute({
   fetchPayment?: typeof defaultFetchRazorpayPayment;
   invalidateMarketplaceResourceListCache?: () => void;
   recordPurchaseFeedEvent?: typeof recordPostResourceBundlePurchaseFeedEvent;
+  notifyPurchase?: typeof notifyRazorpayPostResourcePurchase;
+  /**
+   * Runs a task once the caller has answered. With one, the purchase's alerts
+   * go out behind the checkout's answer; without one they are sent before
+   * this returns.
+   */
+  runAfterResponse?: RunAfterResponse;
 }): Promise<PostResourceBundleVerifyRouteResult> {
   try {
     await enforceBackendRateLimit(adminSupabase, {
@@ -251,6 +309,9 @@ export async function verifyPostResourceBundlePaymentForRoute({
   // The purchase is settled. Its feed event never fails this answer and holds
   // it no longer than the event's short timeout.
   await recordPurchaseFeedEvent(adminSupabase, { razorpayOrderId });
+  // This call settled the order, so its alerts are sent from here; when the
+  // webhook settles one, the webhook sends them.
+  await sendDeferrableNotification(runAfterResponse, () => notifyPurchase(adminSupabase, razorpayOrderId));
 
   return { ok: true, body: { success: true } };
 }

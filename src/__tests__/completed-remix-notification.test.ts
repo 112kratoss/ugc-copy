@@ -3,9 +3,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 const notify = vi.hoisted(() => vi.fn());
 const recordFeedEvent = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/mobile-notifications', () => ({
+vi.mock('@/lib/mobile-notifications', async (importOriginal) => ({
   createMobileNotification: notify,
-  buildMobileNotificationDeepLink: ({ postId }: { postId: string }) => `/post/${postId}`,
+  // The real builder, so the link the alert carries is the one the server writes.
+  buildMobileNotificationDeepLink:
+    (await importOriginal<typeof import('@/lib/mobile-notifications')>()).buildMobileNotificationDeepLink,
 }));
 vi.mock('@/lib/showcase-feed-events-service', () => ({
   recordAuthoritativeFeedEvent: recordFeedEvent,
@@ -69,6 +71,16 @@ describe('completed remix notifications', () => {
     await notifyCompletedRemix(db, 'prediction');
     expect(query.eq).toHaveBeenCalledWith('notification_eligible', true);
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ userId: 'creator', actorUserId: 'reader', dedupeKey: 'completed-remix:output', body: 'They finished a new creation from it.' }));
+  });
+
+  it('opens the remixed post page, as every post alert does', async () => {
+    const { db } = client(recorded);
+    await notifyCompletedRemix(db, 'prediction');
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'post_remixed',
+      deepLink: '/showcase/post',
+      objectId: 'post',
+    }));
   });
 
   // This runs on the tail of every successful settlement, so the generation

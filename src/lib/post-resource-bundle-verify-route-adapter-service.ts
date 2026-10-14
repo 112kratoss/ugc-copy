@@ -3,10 +3,11 @@ import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import {
   verifyPostResourceBundlePaymentForRoute,
   type PostResourceBundleVerifyRouteResult,
@@ -18,6 +19,7 @@ type PostResourceBundleVerifyRouteDependencies = {
   createUserClient?: typeof createUserClient;
   razorpayKeyId?: string | null;
   razorpayKeySecret?: string | null;
+  runAfterResponse?: RunAfterResponse;
   verifyPostResourceBundlePaymentForRoute?: typeof verifyPostResourceBundlePaymentForRoute;
 };
 
@@ -31,6 +33,7 @@ function resolveDependencies(dependencies: PostResourceBundleVerifyRouteDependen
     razorpayKeySecret: dependencies && 'razorpayKeySecret' in dependencies
       ? dependencies.razorpayKeySecret
       : process.env.RAZORPAY_KEY_SECRET,
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
     verifyPostResourceBundlePaymentForRoute:
       dependencies?.verifyPostResourceBundlePaymentForRoute ?? verifyPostResourceBundlePaymentForRoute,
   };
@@ -71,6 +74,9 @@ async function handlePostResourceBundleVerifyPOST(
     keyId: dependencies.razorpayKeyId,
     keySecret: dependencies.razorpayKeySecret,
     readBody: () => request.json(),
+    // The buyer waits on this answer with the payment already taken, so the
+    // purchase alerts go out behind it rather than in front.
+    runAfterResponse: dependencies.runAfterResponse,
   }));
 }
 

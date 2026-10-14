@@ -106,6 +106,7 @@ describe('post resource bundle verification route adapter service', () => {
       keyId: 'test-key-id',
       keySecret: 'test-secret',
       readBody: expect.any(Function),
+      runAfterResponse: expect.any(Function),
     });
   });
 

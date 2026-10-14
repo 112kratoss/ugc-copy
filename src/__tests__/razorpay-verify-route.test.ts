@@ -82,12 +82,27 @@ const mocks = vi.hoisted(() => {
     void args;
     return { data: true, error: null };
   });
-  const createServiceClient = vi.fn(() => ({ rpc }));
+  // The buyer's balance, which "Credits added" reports. Nothing else is read
+  // through the service client here.
+  const serviceFrom = vi.fn((table: string) => {
+    if (table !== 'profiles') throw new Error(`Unexpected service table: ${table}`);
+    const query = {
+      select: () => query,
+      eq: () => query,
+      maybeSingle: async () => ({ data: { credits: 1005 }, error: null }),
+    };
+    return query;
+  });
+  const createServiceClient = vi.fn(() => ({ rpc, from: serviceFrom }));
 
   // Stands in for Next's after(): it runs the task on the spot unless a test
   // holds it back to look at the answer first.
   const after = vi.fn((task: () => Promise<unknown>): unknown => task());
   const notifyReferralReward = vi.fn(async (...args: unknown[]): Promise<null> => {
+    void args;
+    return null;
+  });
+  const notifyMobileCreditPurchase = vi.fn(async (...args: unknown[]): Promise<null> => {
     void args;
     return null;
   });
@@ -99,6 +114,7 @@ const mocks = vi.hoisted(() => {
     createUserClient,
     firstEq,
     from,
+    notifyMobileCreditPurchase,
     notifyReferralReward,
     rawGetUser,
     rpc,
@@ -124,6 +140,7 @@ vi.mock('@supabase/supabase-js', () => ({
 }));
 
 vi.mock('@/lib/mobile-notifications', () => ({
+  notifyMobileCreditPurchase: (...args: unknown[]) => mocks.notifyMobileCreditPurchase(...args),
   notifyReferralReward: (...args: unknown[]) => mocks.notifyReferralReward(...args),
 }));
 
@@ -175,6 +192,7 @@ describe('/api/razorpay/verify route', () => {
   beforeEach(() => {
     vi.resetModules();
     mocks.after.mockReset();
+    mocks.notifyMobileCreditPurchase.mockClear();
     mocks.notifyReferralReward.mockClear();
     mocks.createClient.mockClear();
     mocks.createServiceClient.mockClear();
@@ -346,7 +364,16 @@ describe('/api/razorpay/verify route', () => {
       p_transaction_id: 'txn_123',
       p_user_id: 'user_123',
     });
-    expect(mocks.after).not.toHaveBeenCalled();
+    // The top-up this verify settled is announced behind the answer, once,
+    // with the balance it left.
+    expect(mocks.after).toHaveBeenCalledTimes(1);
+    await mocks.after.mock.results[0].value;
+    expect(mocks.notifyMobileCreditPurchase).toHaveBeenCalledTimes(1);
+    expect(mocks.notifyMobileCreditPurchase).toHaveBeenCalledWith(expect.anything(), {
+      userId: 'user_123',
+      credits: 1005,
+      transactionId: 'txn_123',
+    });
   });
 
   it('queues a referred buyer\'s reward notifications behind the response instead of sending them first', async () => {
@@ -399,27 +426,32 @@ describe('/api/razorpay/verify route', () => {
 
       return { data: true, error: null };
     });
-    mocks.after.mockImplementationOnce(() => undefined);
+    mocks.after.mockImplementation(() => undefined);
 
     const { POST } = await import('@/app/api/razorpay/verify/route');
     const response = await POST(buildVerifyRequest(buildSignedPayload(), {
       'x-request-id': 'credit-verify-after-1',
     }));
 
-    // The route as deployed hands the task to Next's after(), which runs it
+    // The route as deployed hands the tasks to Next's after(), which runs them
     // once the response has gone out. The bonus is in the answer already.
     expect(response.status).toBe(200);
     expectPrivateNoStoreTraceHeaders(response, 'credit-verify-after-1');
     expect(await response.json()).toEqual({ success: true, referralBonusCredits: 5 });
-    expect(mocks.after).toHaveBeenCalledTimes(1);
+    // The rewards, then the balance this verify settled.
+    expect(mocks.after).toHaveBeenCalledTimes(2);
     expect(mocks.notifyReferralReward).not.toHaveBeenCalled();
+    expect(mocks.notifyMobileCreditPurchase).not.toHaveBeenCalled();
 
-    await mocks.after.mock.calls[0][0]();
+    await Promise.all(mocks.after.mock.calls.map(([task]) => task()));
     expect(mocks.notifyReferralReward).toHaveBeenCalledTimes(2);
     expect(mocks.notifyReferralReward).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       userId: 'user_123',
       rewardId: 'reward-invitee',
       eventKey: 'grant:invitee',
     }));
+    expect(mocks.notifyMobileCreditPurchase).toHaveBeenCalledTimes(1);
+    expect(mocks.notifyMobileCreditPurchase.mock.invocationCallOrder[0])
+      .toBeGreaterThan(Math.max(...mocks.notifyReferralReward.mock.invocationCallOrder));
   });
 });
