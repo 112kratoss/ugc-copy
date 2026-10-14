@@ -895,9 +895,24 @@ export type ViewerRateCounts = {
   /** The same seven days out. */
   d7EligibleViewers: number;
   d7ReturnedViewers: number;
-  /** Signed-in viewers served, and those with a completed generation within 7 days of their first serve. */
+  /**
+   * Viewers served with an account id (registered accounts and the app's guests), and those with a
+   * completed generation within 7 days of their first serve.
+   */
   signedInViewers: number;
   meaningfulCreators7d: number;
+};
+
+/**
+ * Who the viewers are (supabase/migrations/20261014053528_feed_scorecard_viewer_split.sql):
+ * registered + app guests = signed in, and signed in + web guests = viewers.
+ */
+export type ViewerAccountSplit = {
+  registeredViewers: number;
+  /** Anonymous accounts: the app's guests, whom the feed ranks as users. */
+  anonymousViewers: number;
+  /** No account id: a web visitor's feed cookie, or an app installation with no session yet. */
+  webGuestViewers: number;
 };
 
 export type ViewerScorecardLine = ScorecardArm & ViewerRateCounts & {
@@ -906,6 +921,8 @@ export type ViewerScorecardLine = ScorecardArm & ViewerRateCounts & {
   sessionsPerViewer: number | null;
   renderedPerViewer: number | null;
   meaningfulPerViewer: number | null;
+  /** Null when the database's function predates the split. */
+  accountSplit: ViewerAccountSplit | null;
   /** D1 return, D7 return and 7-day meaningful creation, from the counts. */
   rates: ScorecardRate[];
 };
@@ -926,6 +943,27 @@ const VIEWERS_SOURCE = 'feed_scorecard_viewers';
 const POSITIONS_SOURCE = 'feed_scorecard_positions';
 const FORMATS_SOURCE = 'feed_scorecard_formats';
 
+const VIEWER_SPLIT_COLUMNS = ['registered_viewers', 'anonymous_viewers', 'web_guest_viewers'] as const;
+
+/**
+ * The split by account, or null from a database without the split migration, whose function returns
+ * none of its three columns. One or two of them is a contract mismatch, and so is a split that does not
+ * add up to the signed-in viewers and the viewers.
+ */
+function viewerAccountSplit(row: Row, signedInViewers: number, viewers: number): ViewerAccountSplit | null {
+  if (VIEWER_SPLIT_COLUMNS.every((column) => !(column in row))) return null;
+  const split: ViewerAccountSplit = {
+    registeredViewers: sectionCount(row, 'registered_viewers', VIEWERS_SOURCE),
+    anonymousViewers: sectionCount(row, 'anonymous_viewers', VIEWERS_SOURCE),
+    webGuestViewers: sectionCount(row, 'web_guest_viewers', VIEWERS_SOURCE),
+  };
+  if (split.registeredViewers + split.anonymousViewers !== signedInViewers
+    || signedInViewers + split.webGuestViewers !== viewers) {
+    throw new Error(`${VIEWERS_SOURCE} returned an account split that does not add up to its viewers.`);
+  }
+  return split;
+}
+
 /** One line per version and arm from `feed_scorecard_viewers`. */
 export function buildViewerScorecardLines(
   rawRows: readonly unknown[],
@@ -945,16 +983,18 @@ export function buildViewerScorecardLines(
         signedInViewers: sectionCount(row, 'signed_in_viewers', VIEWERS_SOURCE),
         meaningfulCreators7d: sectionCount(row, 'meaningful_creators_7d', VIEWERS_SOURCE),
       };
+      const viewers = sectionCount(row, 'viewers', VIEWERS_SOURCE);
       return {
         ...resolved,
         line: {
           ...resolved.arm,
-          viewers: sectionCount(row, 'viewers', VIEWERS_SOURCE),
+          viewers,
           sessions: sectionCount(row, 'sessions', VIEWERS_SOURCE),
           sessionsPerViewer: sectionRatio(row, 'sessions_per_viewer', VIEWERS_SOURCE),
           renderedPerViewer: sectionRatio(row, 'rendered_per_viewer', VIEWERS_SOURCE),
           meaningfulPerViewer: sectionRatio(row, 'meaningful_per_viewer', VIEWERS_SOURCE),
           ...counts,
+          accountSplit: viewerAccountSplit(row, counts.signedInViewers, viewers),
           rates: computeViewerRates(counts),
         },
       };
@@ -1110,6 +1150,21 @@ function sectionRateCells(rates: readonly ScorecardRate[]): string[] {
 }
 
 /**
+ * The signed-in viewers and who they are. The app's guests sign in anonymously and the feed ranks them
+ * as users, so they count as signed in, in the creation rate's denominator too; the web's guests have
+ * no account id.
+ */
+function formatViewerAccountSplit(line: ViewerScorecardLine): string {
+  const signedIn = `  signed in ${line.signedInViewers}`;
+  const split = line.accountSplit;
+  if (!split) {
+    return `${signedIn} · split by account not available (is the feed scorecard viewer split migration applied?)`;
+  }
+  return `${signedIn} (registered ${split.registeredViewers} · app guests ${split.anonymousViewers})`
+    + ` · web guests ${split.webGuestViewers}`;
+}
+
+/**
  * The viewer, position and format sections, after the delivery-grain block.
  * Builds every line before returning, so a contract mismatch prints nothing.
  */
@@ -1139,6 +1194,7 @@ export function formatScorecardV2(
       '',
       `${line.versionLabel} · ${line.armLabel}`,
       `  viewers ${line.viewers} · sessions ${line.sessions} · sessions per viewer ${formatRatio(line.sessionsPerViewer, 2)}`,
+      formatViewerAccountSplit(line),
       `  rendered per viewer ${formatRatio(line.renderedPerViewer, 1)}`
         + ` · meaningful per viewer ${formatRatio(line.meaningfulPerViewer, 1)}`,
       ...alignColumns(line.rates.map((rate) => [

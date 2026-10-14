@@ -880,8 +880,10 @@ const V3_TREATMENT_ARM: Row = {
   variant_key: 'treatment',
 };
 
-// feed_scorecard_viewers' columns as the v4 migration returns them: the rates
-// and the counts behind each.
+// feed_scorecard_viewers' columns as the v4 migration returns them, with the
+// split by account from 20261014053528_feed_scorecard_viewer_split.sql: the
+// rates, the counts behind each, and who the 16 viewers are (7 registered + 3
+// app guests = 10 signed in, and 6 web guests).
 function viewerRow(overrides: Row = {}): Row {
   return {
     ...V1_OUTSIDE,
@@ -899,8 +901,20 @@ function viewerRow(overrides: Row = {}): Row {
     d7_returned_viewers: 1,
     signed_in_viewers: 10,
     meaningful_creators_7d: 2,
+    registered_viewers: 7,
+    anonymous_viewers: 3,
+    web_guest_viewers: 6,
     ...overrides,
   };
+}
+
+/** The same row from a database whose function predates the split. */
+function viewerRowBeforeSplit(overrides: Row = {}): Row {
+  const row = viewerRow(overrides);
+  delete row.registered_viewers;
+  delete row.anonymous_viewers;
+  delete row.web_guest_viewers;
+  return row;
 }
 
 function positionRow(bucket: string, counts: Row = {}, arm: Row = V1_OUTSIDE): Row {
@@ -1003,7 +1017,13 @@ describe('scorecard v2: sections', () => {
 
   it('labels viewer lines by version and arm, outside the experiment first, with the counts behind each rate', () => {
     const lines = buildViewerScorecardLines(
-      [viewerRow({ ...V3_TREATMENT_ARM, viewers: 8, sessions: 12 }), viewerRow()],
+      [
+        viewerRow({
+          ...V3_TREATMENT_ARM, viewers: 8, sessions: 12,
+          signed_in_viewers: 5, registered_viewers: 4, anonymous_viewers: 1, web_guest_viewers: 3,
+        }),
+        viewerRow(),
+      ],
       versions,
       [RUNNING_EXPERIMENT],
     );
@@ -1022,8 +1042,31 @@ describe('scorecard v2: sections', () => {
       d7ReturnedViewers: 1,
       signedInViewers: 10,
       meaningfulCreators7d: 2,
+      accountSplit: { registeredViewers: 7, anonymousViewers: 3, webGuestViewers: 6 },
     });
+    expect(lines[1].accountSplit).toEqual({ registeredViewers: 4, anonymousViewers: 1, webGuestViewers: 3 });
     expect(lines[0].rates.map((rate) => rate.value)).toEqual([(4 / 14) * 100, (1 / 6) * 100, 20]);
+  });
+
+  it('reads no split from a database without the split migration, and refuses a partial or inconsistent one', () => {
+    const before = buildViewerScorecardLines([viewerRowBeforeSplit()], versions, []);
+    expect(before[0].accountSplit).toBeNull();
+    expect(before[0].signedInViewers).toBe(10);
+
+    const partial = viewerRow();
+    delete partial.anonymous_viewers;
+    expect(() => buildViewerScorecardLines([partial], versions, [])).toThrow(
+      'feed_scorecard_viewers returned no anonymous_viewers column.',
+    );
+    expect(() => buildViewerScorecardLines([viewerRow({ web_guest_viewers: -1 })], versions, [])).toThrow(
+      'feed_scorecard_viewers returned an invalid web_guest_viewers.',
+    );
+    // 6 + 3 is not the 10 signed in, and 10 + 5 is not the 16 viewers.
+    for (const overrides of [{ registered_viewers: 6 }, { web_guest_viewers: 5 }]) {
+      expect(() => buildViewerScorecardLines([viewerRow(overrides)], versions, [])).toThrow(
+        'feed_scorecard_viewers returned an account split that does not add up to its viewers.',
+      );
+    }
   });
 
   it('refuses a negative count and a missing column', () => {
@@ -1090,6 +1133,8 @@ describe('scorecard v2: the command', () => {
       scorecard: [V1_TRENDING],
       viewers: [viewerRow(), viewerRow({
         ...V3_TREATMENT_ARM, viewers: 1, d1_eligible_viewers: 0, d1_returned_viewers: 0, d1_return_rate: null,
+        signed_in_viewers: 1, meaningful_creators_7d: 0, meaningful_creation_7d_rate: 0,
+        registered_viewers: 0, anonymous_viewers: 1, web_guest_viewers: 0,
       })],
       positions: POSITION_ROWS,
       formats: FORMAT_ROWS,
@@ -1110,6 +1155,7 @@ describe('scorecard v2: the command', () => {
     expect(stdout).toContain([
       'for-you-rules-v1 · no experiment',
       '  viewers 16 · sessions 40 · sessions per viewer 2.50',
+      '  signed in 10 (registered 7 · app guests 3) · web guests 6',
       '  rendered per viewer 30.1 · meaningful per viewer 2.4',
       '  D1 return                  4 / 14  28.6%',
       '  D7 return                   1 / 6  16.7%',
@@ -1117,7 +1163,8 @@ describe('scorecard v2: the command', () => {
       '  With 16 viewers, one viewer moves each rate by 6.3 points or more.',
     ].join('\n'));
     expect(stdout).toContain('for-you-rules-v3 · v3-vs-v1/treatment');
-    expect(stdout).toMatch(/v3-vs-v1\/treatment\n(.*\n){2}  D1 return\s+0 \/ 0\s+–\n/);
+    expect(stdout).toContain('  signed in 1 (registered 0 · app guests 1) · web guests 0');
+    expect(stdout).toMatch(/v3-vs-v1\/treatment\n(.*\n){3}  D1 return\s+0 \/ 0\s+–\n/);
     expect(stdout).toContain('  With 1 viewer, one viewer moves each rate by 100.0 points or more.');
 
     expect(stdout).toContain('Position buckets (feed_scorecard_positions): 1 is the top of the feed, last 7 days.');
@@ -1148,6 +1195,21 @@ describe('scorecard v2: the command', () => {
       '  Not available: feed_scorecard_positions is not in the database (is the feed ranking v4 migration applied?)',
     );
     expect(result.stdout).toContain('No viewer was served in the last 7 days.');
+  });
+
+  it('says when the database predates the split, and prints nothing for a split that does not add up', async () => {
+    const before = await run(['scorecard'], { scorecard: [V1_TRENDING], viewers: [viewerRowBeforeSplit()] });
+    expect(before.exitCode).toBe(0);
+    expect(before.stdout).toContain([
+      '  viewers 16 · sessions 40 · sessions per viewer 2.50',
+      '  signed in 10 · split by account not available (is the feed scorecard viewer split migration applied?)',
+      '  rendered per viewer 30.1 · meaningful per viewer 2.4',
+    ].join('\n'));
+
+    const broken = await run(['scorecard'], { scorecard: [V1_TRENDING], viewers: [viewerRow({ anonymous_viewers: 4 })] });
+    expect(broken.exitCode).toBe(1);
+    expect(broken.stderr).toContain('feed_scorecard_viewers returned an account split that does not add up to its viewers.');
+    expect(broken.stdout).toBe('');
   });
 
   it('exits 1 without printing when a section fails or breaks its contract', async () => {
