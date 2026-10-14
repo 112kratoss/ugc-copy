@@ -3,20 +3,25 @@ import { useState } from 'react';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { PackageOpen } from 'lucide-react-native';
-import { Pressable, View } from 'react-native';
+import { Platform, Pressable, View } from 'react-native';
 
+import { MatureCover } from '@/components/mature-cover';
 import { CardListSkeleton } from '@/components/skeleton';
 import { AppText, Card, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
+import { canRevealNsfwInApp } from '@/lib/nsfw-reveal-policy';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
+import type { ViewerUnlockItem } from '@/lib/types';
 import {
   formatUnlockDate,
-  formatUnlockPrice,
+  formatUnlockPaid,
   getUnlockDestination,
   getUnlockStateBadge,
+  getUnlockThumbnailUrl,
   summarizeUnlockCount,
 } from '@/lib/unlock-library-view-model';
+import { useMediaSource } from '@/lib/use-media-source';
 
 export default function UnlocksScreen() {
   const { user, api } = useAuth();
@@ -25,6 +30,7 @@ export default function UnlocksScreen() {
     error,
     fetchNextPage,
     hasNextPage,
+    isFetchNextPageError,
     isFetchingNextPage,
     isLoading,
     refetch,
@@ -56,6 +62,10 @@ export default function UnlocksScreen() {
 
   const items = data?.pages.flatMap((page) => page.items) ?? [];
   const total = data?.pages[0]?.pageInfo?.total ?? items.length;
+  // A later page that fails is not a library that failed: what loaded stays,
+  // and the failure is told by the button that asked for the page.
+  const firstLoadError = data ? null : error;
+  const nextPageFailed = isFetchNextPageError && !isFetchingNextPage;
 
   return (
     <Screen>
@@ -71,22 +81,27 @@ export default function UnlocksScreen() {
 
       {isLoading ? <CardListSkeleton label="Loading unlocks" /> : null}
 
-      {error ? (
+      {firstLoadError ? (
         <View style={{ gap: appTheme.spacing.gap }}>
           <StatusBlock
             tone="danger"
             title="Could not load your unlocks"
-            body={error instanceof Error ? error.message : 'Your unlocks are safe. Check your connection, then retry.'}
+            body={firstLoadError instanceof Error ? firstLoadError.message : 'Your unlocks are safe. Check your connection, then retry.'}
           />
           <SecondaryButton label="Retry unlocks" onPress={() => void refetch()} />
         </View>
       ) : null}
 
-      {!isLoading && !error && items.length === 0 ? (
-        <StatusBlock
-          title="No unlocks yet"
-          body="When you unlock a creator's prompt, workflow, or reference files, it lands here and stays here."
-        />
+      {!isLoading && !firstLoadError && items.length === 0 ? (
+        <View style={{ gap: appTheme.spacing.gap }}>
+          <StatusBlock
+            title="No unlocks yet"
+            body="When you unlock a creator's prompt, workflow, or reference files, it lands here and stays here."
+          />
+          {/* A way on from an empty library, as the web has. Home reads no chip
+              from a link, so this lands on its feed, not its Unlocks chip. */}
+          <PrimaryButton label="Browse unlocks" accent="primary" onPress={() => router.dismissTo('/(tabs)' as never)} />
+        </View>
       ) : null}
 
       {items.length > 0 ? (
@@ -95,58 +110,91 @@ export default function UnlocksScreen() {
         </AppText>
       ) : null}
 
-      {items.map((item) => {
-        const badge = getUnlockStateBadge(item);
-        const destination = getUnlockDestination(item);
-
-        return (
-          <Pressable
-            key={item.unlockId}
-            accessibilityRole="button"
-            accessibilityLabel={`${item.title}, by ${item.creator.displayName}. ${formatUnlockPrice(item.purchasePriceUsdCents)}.`}
-            onPress={() => {
-              router.push(destination as never);
-            }}
-            style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
-          >
-            <Card style={{ marginBottom: 12 }}>
-              <View style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
-                <UnlockThumbnail uri={item.post?.mediaUrl ?? null} />
-
-                <View style={{ flex: 1, gap: 4 }}>
-                  <AppText color="text">{item.title}</AppText>
-                  <AppText variant="caption" color="muted">
-                    by {item.creator.displayName}
-                  </AppText>
-
-                  {badge ? (
-                    <AppText
-                      variant="caption"
-                      color={badge.tone === 'updated' ? 'commerce' : 'muted'}
-                    >
-                      {badge.label}
-                    </AppText>
-                  ) : null}
-
-                  <AppText variant="caption" color="muted">
-                    {formatUnlockPrice(item.purchasePriceUsdCents)} · {formatUnlockDate(item.purchasedAt)}
-                  </AppText>
-                </View>
-              </View>
-            </Card>
-          </Pressable>
-        );
-      })}
+      {items.map((item) => <UnlockRow key={item.unlockId} item={item} />)}
 
       {hasNextPage ? (
-        <SecondaryButton
-          label={isFetchingNextPage ? 'Loading…' : 'Load more'}
-          onPress={() => fetchNextPage()}
-        />
+        <View style={{ gap: appTheme.spacing.gap }}>
+          {nextPageFailed ? (
+            <StatusBlock
+              tone="danger"
+              title="Could not load more unlocks"
+              body={error instanceof Error ? error.message : 'Check your connection, then retry.'}
+            />
+          ) : null}
+          <SecondaryButton
+            label={isFetchingNextPage ? 'Loading…' : nextPageFailed ? 'Retry' : 'Load more'}
+            onPress={() => fetchNextPage()}
+          />
+        </View>
       ) : null}
     </Screen>
   );
 }
+
+function UnlockRow({ item }: { item: ViewerUnlockItem }) {
+  const [matureShown, setMatureShown] = useState(false);
+  const badge = getUnlockStateBadge(item);
+  const thumbnailUrl = getUnlockThumbnailUrl(item);
+  const paid = formatUnlockPaid(item);
+  // Only a picture there is to draw needs covering; a row without one keeps its icon.
+  const matureCovered = item.isNsfw && Boolean(thumbnailUrl) && !matureShown;
+  const canShowMature = matureCovered && canRevealNsfwInApp(Platform.OS);
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${item.title}, by ${item.creator.displayName}.${item.isNsfw ? ' Mature content.' : ''} ${paid}.`}
+      // The plate's Show sits inside this row's button, where a screen reader
+      // cannot reach it on its own.
+      accessibilityActions={canShowMature ? [{ name: 'showMature', label: 'Show mature content' }] : undefined}
+      onAccessibilityAction={canShowMature ? (event) => {
+        if (event.nativeEvent.actionName === 'showMature') setMatureShown(true);
+      } : undefined}
+      onPress={() => {
+        router.push(getUnlockDestination(item) as never);
+      }}
+      style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
+    >
+      <Card style={{ marginBottom: 12 }}>
+        <View style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
+          <UnlockThumbnail
+            url={thumbnailUrl}
+            thumbhash={item.post?.previewThumbhash ?? null}
+            covered={matureCovered}
+            onShow={() => setMatureShown(true)}
+          />
+
+          <View style={{ flex: 1, gap: 4 }}>
+            <AppText color="text">{item.title}</AppText>
+            <AppText variant="caption" color="muted">
+              by {item.creator.displayName}
+            </AppText>
+
+            {badge ? (
+              <AppText
+                variant="caption"
+                color={badge.tone === 'updated' ? 'commerce' : 'muted'}
+              >
+                {badge.label}
+              </AppText>
+            ) : null}
+
+            {item.isNsfw ? (
+              <AppText variant="caption" color="muted">
+                Mature content
+              </AppText>
+            ) : null}
+
+            <AppText variant="caption" color="muted">
+              {paid} · {formatUnlockDate(item.purchasedAt)}
+            </AppText>
+          </View>
+        </View>
+      </Card>
+    </Pressable>
+  );
+}
+
 const THUMBNAIL_SIZE = 56;
 
 /**
@@ -158,10 +206,26 @@ const THUMBNAIL_SIZE = 56;
  * when there is no media keeps the row looking deliberate either way, and the
  * placeholder colour sits behind the image so a slow load is never a hole.
  */
-function UnlockThumbnail({ uri }: { uri: string | null }) {
+function UnlockThumbnail({
+  url,
+  thumbhash,
+  covered,
+  onShow,
+}: {
+  url: string | null;
+  thumbhash: string | null;
+  /** A mature post's still, behind its plate until the buyer asks for it. */
+  covered: boolean;
+  onShow: () => void;
+}) {
   const theme = useAppTheme();
-  const [failed, setFailed] = useState(false);
-  const showPlaceholder = !uri || failed;
+  // Absolute, and with the session's bearer: an uploaded post's preview is a
+  // relative, private `/api/media` link, which a bare `{ uri }` never loaded.
+  const { source, requestKey } = useMediaSource(url ?? '');
+  // A sign-in or a renewed session tries a failed image again.
+  const sourceKey = `${url}|${requestKey}`;
+  const [failedKey, setFailedKey] = useState<string | null>(null);
+  const showImage = Boolean(url) && !covered && failedKey !== sourceKey;
 
   return (
     <View
@@ -180,17 +244,20 @@ function UnlockThumbnail({ uri }: { uri: string | null }) {
           that is still loading — or one that quietly resolves to nothing
           without ever firing onError — would otherwise leave a blank tile. */}
       <PackageOpen size={20} color={theme.colors.muted} />
-      {showPlaceholder ? null : (
+      {covered ? <MatureCover variant="tile" onShow={onShow} /> : null}
+      {showImage ? (
         <Image
           accessibilityIgnoresInvertColors
-          source={{ uri }}
+          source={source}
+          placeholder={thumbhash ? { thumbhash } : undefined}
+          placeholderContentFit="cover"
           contentFit="cover"
           cachePolicy="memory-disk"
-          recyclingKey={uri}
-          onError={() => setFailed(true)}
+          recyclingKey={url}
+          onError={() => setFailedKey(sourceKey)}
           style={{ position: 'absolute', inset: 0 }}
         />
-      )}
+      ) : null}
     </View>
   );
 }

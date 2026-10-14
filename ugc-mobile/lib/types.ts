@@ -1558,11 +1558,23 @@ export interface MobileNotificationPreferences {
 }
 
 /**
+ * What a purchase cost, from the purchase row and its order reference. Mirrors
+ * ViewerUnlockPayment on the web side.
+ */
+export interface ViewerUnlockPayment {
+  paidWith: 'credits' | 'cash' | 'free';
+  /** Credits spent (credits), minor units such as paise or cents (cash), null (free). */
+  paidAmountSubunits: number | null;
+  /** 'INR' or 'USD' for cash; null for credits and free. */
+  paidCurrency: string | null;
+}
+
+/**
  * An item in the buyer's unlock library. Mirrors ViewerUnlockItem on the web
  * side; `retired` and `tombstoned` mean the creator removed the unlock or the
  * whole post, which the buyer keeps regardless.
  */
-export interface ViewerUnlockItem {
+export interface ViewerUnlockItem extends ViewerUnlockPayment {
   unlockId: string;
   bundleId: string | null;
   postId: string | null;
@@ -1575,12 +1587,20 @@ export interface ViewerUnlockItem {
   hasNewerRevision: boolean;
   retired: boolean;
   tombstoned: boolean;
+  /** No bundle or post is left (the creator deleted their account); only the purchased version remains. */
+  detached: boolean;
+  /** The post is marked NSFW: its thumbnail stays covered until the buyer asks to see it. */
+  isNsfw: boolean;
   post: {
     title: string;
     category: string;
     postFormat: string;
+    /** The full original, a video's MP4 included; a thumbnail draws `previewUrl`. */
     mediaUrl: string | null;
     mediaKind: string | null;
+    /** A small still (a video's poster), often a relative `/api/media` link. */
+    previewUrl: string | null;
+    previewThumbhash: string | null;
   } | null;
   creator: {
     username: string | null;
@@ -1614,7 +1634,7 @@ export interface ViewerUnlockRevision {
   mediaItems: ShowcaseMediaItem[];
 }
 
-export interface ViewerUnlockDetail {
+export interface ViewerUnlockDetail extends ViewerUnlockPayment {
   unlockId: string;
   bundleId: string | null;
   postId: string | null;
@@ -1635,7 +1655,12 @@ export interface ViewerUnlockDetail {
   retired: boolean;
   tombstoned: boolean;
   postVisibility: string | null;
-  post: MarketplaceResource['post'] | null;
+  /** The post is marked NSFW: its cover stays covered until the buyer asks to see it. */
+  isNsfw: boolean;
+  /** The post page would open for this buyer: public or unlisted, live, and no block either way. */
+  postReachable: boolean;
+  /** `mediaPreviewUrl` is the first media item's still, the cover the detail draws. */
+  post: (NonNullable<MarketplaceResource['post']> & { mediaPreviewUrl: string | null }) | null;
   mediaItems: ShowcaseMediaItem[];
 }
 

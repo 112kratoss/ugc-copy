@@ -8,21 +8,34 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 
-const routerPush = vi.hoisted(() => vi.fn());
-const authUser = vi.hoisted(() => ({ current: { id: 'user-1' } as { id: string } | null }));
+const { authUser, mediaSource, platform, query, routerDismissTo, routerPush } = vi.hoisted(() => ({
+  authUser: { current: { id: 'user-1' } as { id: string } | null },
+  // Stands in for the hook that makes a link absolute and adds the bearer.
+  mediaSource: (url: string) => ({
+    source: { uri: `https://api.test${url}`, headers: { Authorization: 'Bearer token-1' } },
+    requestKey: 'user-1:1',
+  }),
+  platform: { OS: 'ios' },
+  // One object for every render; each test sets what the query returns.
+  query: { current: {} as Record<string, unknown> },
+  routerDismissTo: vi.fn(),
+  routerPush: vi.fn(),
+}));
+const useMediaSource = vi.hoisted(() => vi.fn(mediaSource));
 
 vi.mock('expo-router', () => ({
-  router: { push: routerPush, replace: vi.fn(), canGoBack: () => true },
+  router: { push: routerPush, replace: vi.fn(), dismissTo: routerDismissTo, canGoBack: () => true },
 }));
 
 vi.mock('react-native', () => ({
-  Image: (props: MockProps) => React.createElement('image', props),
+  Platform: platform,
   Pressable: ({ children, style: _style, ...props }: MockProps & { style?: unknown }) =>
     React.createElement('pressable', props, typeof children === 'function' ? (children as (s: { pressed: boolean }) => React.ReactNode)({ pressed: false }) : children),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
 }));
 
 vi.mock('lucide-react-native', () => ({
+  EyeOff: (props: MockProps) => React.createElement('icon', { name: 'EyeOff', ...props }),
   PackageOpen: (props: MockProps) => React.createElement('icon', { name: 'PackageOpen', ...props }),
 }));
 
@@ -44,47 +57,87 @@ vi.mock('@/lib/auth', () => ({
   useAuth: () => ({ user: authUser.current, api: {} }),
 }));
 
+vi.mock('@/lib/use-media-source', () => ({ useMediaSource }));
+
 vi.mock('@tanstack/react-query', () => ({
-  useInfiniteQuery: () => ({
-    data: {
-      pages: [{
-        items: [{
-          unlockId: 'unlock-1',
-          title: 'Moody Bathroom Portrait Prompt Pack',
-          creator: { displayName: 'fluffy' },
-          purchasePriceUsdCents: 900,
-          purchasedAt: '2026-08-12T00:00:00.000Z',
-          post: { mediaUrl: null },
-        }],
-        pageInfo: { total: 1, nextOffset: null },
-      }],
-    },
-    error: null,
-    fetchNextPage: vi.fn(),
-    hasNextPage: false,
-    isFetchingNextPage: false,
-    isLoading: false,
-    refetch: vi.fn(),
-  }),
+  useInfiniteQuery: () => query.current,
 }));
 
 import UnlocksScreen from '../app/unlocks';
 
+const fetchNextPage = vi.fn();
+const refetch = vi.fn();
+
+function unlockRow(overrides: Record<string, unknown> = {}) {
+  return {
+    unlockId: 'unlock-1',
+    title: 'Moody Bathroom Portrait Prompt Pack',
+    creator: { displayName: 'fluffy' },
+    purchasePriceUsdCents: 900,
+    purchasedAt: '2026-08-12T00:00:00.000Z',
+    detached: false,
+    isNsfw: false,
+    paidWith: 'credits',
+    paidAmountSubunits: 900,
+    paidCurrency: null,
+    post: { mediaUrl: null, mediaKind: 'image', previewUrl: null, previewThumbhash: null },
+    ...overrides,
+  };
+}
+
+function loaded(items: unknown[], extra: Record<string, unknown> = {}) {
+  query.current = {
+    data: { pages: [{ items, pageInfo: { total: items.length, nextOffset: null } }] },
+    error: null,
+    fetchNextPage,
+    hasNextPage: false,
+    isFetchNextPageError: false,
+    isFetchingNextPage: false,
+    isLoading: false,
+    refetch,
+    ...extra,
+  };
+}
+
+function renderScreen() {
+  let tree!: renderer.ReactTestRenderer;
+  renderer.act(() => {
+    tree = renderer.create(React.createElement(UnlocksScreen));
+  });
+  return tree;
+}
+
+function findRow(tree: renderer.ReactTestRenderer) {
+  const row = tree.root.findAll((node) => String(node.type) === 'pressable'
+    && String(node.props.accessibilityLabel ?? '').startsWith('Moody Bathroom'))[0];
+  if (!row) throw new Error('No unlock row rendered');
+  return row;
+}
+
+function texts(tree: renderer.ReactTestRenderer) {
+  return tree.root.findAll((node) => String(node.type) === 'text')
+    .map((node) => [node.props.children].flat().join(''));
+}
+
+function images(tree: renderer.ReactTestRenderer) {
+  return tree.root.findAll((node) => String(node.type) === 'image');
+}
+
 beforeEach(() => {
   authUser.current = { id: 'user-1' };
+  platform.OS = 'ios';
   routerPush.mockClear();
+  routerDismissTo.mockClear();
+  fetchNextPage.mockClear();
+  refetch.mockClear();
+  useMediaSource.mockClear();
+  loaded([unlockRow()]);
 });
 
 describe('unlocks library (HIG S7)', () => {
   it('wires each row as a labelled button that opens its unlock', () => {
-    let tree!: renderer.ReactTestRenderer;
-    renderer.act(() => {
-      tree = renderer.create(React.createElement(UnlocksScreen));
-    });
-
-    const row = tree.root.findAll((node) => String(node.type) === 'pressable'
-      && String(node.props.accessibilityLabel ?? '').startsWith('Moody Bathroom'))[0];
-    if (!row) throw new Error('No unlock row rendered');
+    const tree = renderScreen();
+    const row = findRow(tree);
 
     expect(row.props.accessibilityRole).toBe('button');
     expect(String(row.props.accessibilityLabel)).toContain('by fluffy');
@@ -95,25 +148,174 @@ describe('unlocks library (HIG S7)', () => {
   });
 
   it('holds the thumbnail slot with the placeholder when a row has no media', () => {
-    let tree!: renderer.ReactTestRenderer;
-    renderer.act(() => {
-      tree = renderer.create(React.createElement(UnlocksScreen));
-    });
+    const tree = renderScreen();
 
     expect(tree.root.findAll((node) => String(node.type) === 'icon' && node.props.name === 'PackageOpen')).toHaveLength(1);
-    expect(tree.root.findAll((node) => String(node.type) === 'image')).toHaveLength(0);
+    expect(images(tree)).toHaveLength(0);
   });
 
   it('brings a signed-out reader back to the library after sign-in', () => {
     authUser.current = null;
-    let tree!: renderer.ReactTestRenderer;
-    renderer.act(() => {
-      tree = renderer.create(React.createElement(UnlocksScreen));
-    });
+    const tree = renderScreen();
 
     const signIn = tree.root.findAll((node) => String(node.type) === 'primary-button' && node.props.label === 'Sign in')[0];
     if (!signIn) throw new Error('No sign-in button');
     renderer.act(() => { (signIn.props.onPress as () => void)(); });
     expect(routerPush).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/unlocks' } });
+  });
+});
+
+describe('unlock thumbnails (03-3, 03-4)', () => {
+  it('draws a private preview through the authenticated media source, with its thumbhash', () => {
+    // An uploaded post's preview is a relative /api/media link: a bare
+    // { uri } had neither the host nor the bearer, so the row showed the icon.
+    const previewUrl = '/api/media?bucket=post_media&path=private-posts%2Fcreator%2Fpreview.webp';
+    loaded([unlockRow({ post: { mediaUrl: null, mediaKind: 'video', previewUrl, previewThumbhash: 'thumb-1' } })]);
+    const tree = renderScreen();
+
+    expect(useMediaSource).toHaveBeenCalledWith(previewUrl);
+    const [image] = images(tree);
+    expect(image?.props.source).toEqual({
+      uri: `https://api.test${previewUrl}`,
+      headers: { Authorization: 'Bearer token-1' },
+    });
+    expect(image?.props.placeholder).toEqual({ thumbhash: 'thumb-1' });
+  });
+
+  it('keeps the icon for a video with no poster, and never asks for its MP4', () => {
+    loaded([unlockRow({ post: { mediaUrl: 'https://cdn.test/clip.mp4', mediaKind: 'video', previewUrl: null, previewThumbhash: null } })]);
+    const tree = renderScreen();
+
+    expect(images(tree)).toHaveLength(0);
+    expect(tree.root.findAll((node) => String(node.type) === 'icon' && node.props.name === 'PackageOpen')).toHaveLength(1);
+    expect(useMediaSource).not.toHaveBeenCalledWith('https://cdn.test/clip.mp4');
+  });
+
+  it('falls back to the original of a picture post', () => {
+    loaded([unlockRow({ post: { mediaUrl: '/api/media?bucket=post_media&path=look.jpg', mediaKind: 'image', previewUrl: null, previewThumbhash: null } })]);
+    const tree = renderScreen();
+
+    expect(images(tree)[0]?.props.source).toEqual(expect.objectContaining({ uri: 'https://api.test/api/media?bucket=post_media&path=look.jpg' }));
+  });
+});
+
+describe('mature unlocks', () => {
+  const matureRow = () => unlockRow({
+    isNsfw: true,
+    post: { mediaUrl: null, mediaKind: 'image', previewUrl: '/api/media?bucket=post_media&path=still.webp', previewThumbhash: 'thumb-1' },
+  });
+
+  it('covers the thumbnail with a plate, and draws it in place on Show without opening the unlock', () => {
+    loaded([matureRow()]);
+    const tree = renderScreen();
+
+    expect(images(tree)).toHaveLength(0);
+    expect(texts(tree)).toContain('Mature content');
+    expect(String(findRow(tree).props.accessibilityLabel)).toContain('Mature content');
+    const show = tree.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Show mature content');
+
+    renderer.act(() => { (show.props.onPress as () => void)(); });
+
+    expect(images(tree)[0]?.props.source).toEqual(expect.objectContaining({ uri: 'https://api.test/api/media?bucket=post_media&path=still.webp' }));
+    expect(tree.root.findAll((node) => node.props.accessibilityLabel === 'Show mature content')).toHaveLength(0);
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it('offers a screen reader the same Show as an action on the row', () => {
+    loaded([matureRow()]);
+    const tree = renderScreen();
+    const row = findRow(tree);
+    expect(row.props.accessibilityActions).toEqual([{ name: 'showMature', label: 'Show mature content' }]);
+
+    renderer.act(() => {
+      (row.props.onAccessibilityAction as (event: unknown) => void)({ nativeEvent: { actionName: 'showMature' } });
+    });
+
+    expect(images(tree)).toHaveLength(1);
+    expect(findRow(tree).props.accessibilityActions).toBeUndefined();
+  });
+
+  it('keeps the plate up for good on Android, which shows no mature media', () => {
+    platform.OS = 'android';
+    loaded([matureRow()]);
+    const tree = renderScreen();
+
+    expect(images(tree)).toHaveLength(0);
+    expect(tree.root.findAll((node) => node.props.accessibilityLabel === 'Show mature content')).toHaveLength(0);
+    expect(tree.root.findAll((node) => String(node.type) === 'icon' && node.props.name === 'EyeOff')).toHaveLength(1);
+    expect(findRow(tree).props.accessibilityActions).toBeUndefined();
+  });
+});
+
+describe('what each row says it cost, and who left (03-2, 03-8)', () => {
+  it('prints a cash purchase as a receipt in its own currency', () => {
+    loaded([unlockRow({ paidWith: 'cash', paidAmountSubunits: 75000, paidCurrency: 'INR' })]);
+    const tree = renderScreen();
+
+    expect(texts(tree).some((line) => line.startsWith('₹750 paid · '))).toBe(true);
+    expect(String(findRow(tree).props.accessibilityLabel)).toContain('₹750 paid');
+  });
+
+  it('calls a free unlock free', () => {
+    loaded([unlockRow({ paidWith: 'free', paidAmountSubunits: null, purchasePriceUsdCents: 0 })]);
+    const tree = renderScreen();
+
+    expect(texts(tree).some((line) => line.startsWith('Free · '))).toBe(true);
+  });
+
+  it('says the creator left on a row whose creator deleted their account', () => {
+    loaded([unlockRow({ detached: true, post: null })]);
+    const tree = renderScreen();
+
+    expect(texts(tree)).toContain('Creator left');
+  });
+});
+
+describe('loading and empty states (03-6, 03-10)', () => {
+  it('keeps the loaded rows when a later page fails, and offers Retry by the button', () => {
+    loaded([unlockRow()], {
+      hasNextPage: true,
+      isFetchNextPageError: true,
+      error: new Error('Network request failed. Please check your connection and try again.'),
+    });
+    const tree = renderScreen();
+
+    expect(findRow(tree)).toBeTruthy();
+    const blocks = tree.root.findAll((node) => String(node.type) === 'status-block');
+    expect(blocks.map((node) => node.props.title)).toEqual(['Could not load more unlocks']);
+    expect(blocks[0]?.props.body).toBe('Network request failed. Please check your connection and try again.');
+    const retry = tree.root.find((node) => String(node.type) === 'secondary-button' && node.props.label === 'Retry');
+    renderer.act(() => { (retry.props.onPress as () => void)(); });
+    expect(fetchNextPage).toHaveBeenCalledTimes(1);
+    expect(refetch).not.toHaveBeenCalled();
+  });
+
+  it('says Loading… on the button while that page is asked for again', () => {
+    loaded([unlockRow()], { hasNextPage: true, isFetchNextPageError: true, isFetchingNextPage: true, error: new Error('offline') });
+    const tree = renderScreen();
+
+    expect(tree.root.findAll((node) => String(node.type) === 'status-block')).toHaveLength(0);
+    expect(tree.root.findAll((node) => String(node.type) === 'secondary-button').map((node) => node.props.label)).toContain('Loading…');
+  });
+
+  it('shows the first-load failure only when nothing loaded', () => {
+    query.current = { ...query.current, data: undefined, error: new Error('offline') };
+    const tree = renderScreen();
+
+    expect(tree.root.findAll((node) => String(node.type) === 'status-block').map((node) => node.props.title))
+      .toEqual(['Could not load your unlocks']);
+    const retry = tree.root.find((node) => String(node.type) === 'secondary-button' && node.props.label === 'Retry unlocks');
+    renderer.act(() => { (retry.props.onPress as () => void)(); });
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives an empty library a way on to browse unlocks', () => {
+    loaded([]);
+    const tree = renderScreen();
+
+    expect(tree.root.findAll((node) => String(node.type) === 'status-block').map((node) => node.props.title)).toEqual(['No unlocks yet']);
+    const browse = tree.root.find((node) => String(node.type) === 'primary-button' && node.props.label === 'Browse unlocks');
+    renderer.act(() => { (browse.props.onPress as () => void)(); });
+    expect(routerDismissTo).toHaveBeenCalledWith('/(tabs)');
   });
 });
