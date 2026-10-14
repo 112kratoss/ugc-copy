@@ -73,6 +73,7 @@ describe('feed feedback sheet', () => {
           onReportContent={onReportContent}
           onReportUser={onReportUser}
           postTitle="Serum reveal"
+          viewerKind="member"
           visible
         />
       );
@@ -110,6 +111,7 @@ describe('feed feedback sheet', () => {
         onReportContent={vi.fn()}
         onReportUser={vi.fn()}
         postTitle="My post"
+        viewerKind="member"
         {...props}
       />
     );
@@ -172,6 +174,7 @@ describe('feed feedback sheet', () => {
           onHideCreator={vi.fn()}
           onNotInterested={vi.fn()}
           postTitle="Serum reveal"
+          viewerKind="member"
           visible
         />
       );
@@ -180,7 +183,10 @@ describe('feed feedback sheet', () => {
     expect(pressable(tree!.root, 'Hide @luna').props.accessibilityHint).toContain('Remove posts from luna');
   });
 
-  it('labels anonymous feedback as limited to this visit', () => {
+  // The app's guest is ranked as a user and its choice is kept under its own
+  // id, which stays on the device until sign-out (D1, 2026-10-14). The rows
+  // said "for this visit" until then.
+  function preferenceHints(viewerKind: 'guest' | 'member') {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(
@@ -191,13 +197,36 @@ describe('feed feedback sheet', () => {
           onHideCreator={vi.fn()}
           onNotInterested={vi.fn()}
           postTitle="Serum reveal"
-          sessionOnly
+          viewerKind={viewerKind}
           visible
         />
       );
     });
+    const hints = ['Not interested', 'Hide @luna'].map((label) => pressable(tree!.root, label).props.accessibilityHint as string);
+    const captions = tree!.root.findAll((node) => String(node.type) === 'text' && typeof node.props.children === 'string')
+      .map((node) => node.props.children as string);
+    return { hints, captions };
+  }
 
-    expect(pressable(tree!.root, 'Not interested').props.accessibilityHint).toContain('for this visit');
-    expect(pressable(tree!.root, 'Hide @luna').props.accessibilityHint).toContain('for this visit');
+  it("tells a guest the choice stays on this device, on both preference rows", () => {
+    const { hints, captions } = preferenceHints('guest');
+
+    expect(hints).toEqual([
+      'Remove this post and show fewer recommendations like it. Hidden on this device.',
+      'Remove posts from @luna from your recommendations. Hidden on this device.',
+    ]);
+    // What the hint says is what the row shows.
+    expect(captions).toEqual(expect.arrayContaining(hints));
+    expect(captions.join(' ')).not.toMatch(/this visit/i);
+  });
+
+  it("adds nothing to a member's rows", () => {
+    const { hints, captions } = preferenceHints('member');
+
+    expect(hints).toEqual([
+      'Remove this post and show fewer recommendations like it.',
+      'Remove posts from @luna from your recommendations.',
+    ]);
+    expect(captions.join(' ')).not.toMatch(/on this device|this visit/i);
   });
 });

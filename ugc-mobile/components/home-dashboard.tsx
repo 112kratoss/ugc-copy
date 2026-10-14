@@ -865,7 +865,7 @@ export function HomeDashboard() {
     creator: item.creator,
     canHideCreator: canHideFeedCreator(item.creator.id, user?.id),
     viewerIsOwner: isOwnFeedPost(item.creator.id, user?.id),
-    sessionOnly: !user,
+    viewerKind: user ? 'member' : 'guest',
     onNotInterested: () => applyFeedFeedback(item, 'not_interested'),
     onHideCreator: () => applyFeedFeedback(item, 'hide_creator'),
     onReportContent: () => reportFeedbackContent(item),
@@ -1054,7 +1054,7 @@ export function HomeDashboard() {
         onReportContent={() => reportFeedbackContent(feedbackItem)}
         onReportUser={() => reportFeedbackUser(feedbackItem)}
         postTitle={feedbackItem?.title || 'this post'}
-        sessionOnly={!user}
+        viewerKind={user ? 'member' : 'guest'}
         visible={Boolean(feedbackItem)}
       />
 

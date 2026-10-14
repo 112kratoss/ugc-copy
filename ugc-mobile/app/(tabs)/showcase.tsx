@@ -751,7 +751,7 @@ export default function ShowcaseScreen() {
     creator: item.creator,
     canHideCreator: canHideFeedCreator(item.creator.id, user?.id),
     viewerIsOwner: isOwnFeedPost(item.creator.id, user?.id),
-    sessionOnly: !user,
+    viewerKind: user ? 'member' : 'guest',
     onNotInterested: () => applyFeedFeedback(item, 'not_interested'),
     onHideCreator: () => applyFeedFeedback(item, 'hide_creator'),
     onReportContent: () => reportFeedbackContent(item),
@@ -963,7 +963,7 @@ export default function ShowcaseScreen() {
           onReportContent={() => reportFeedbackContent(feedbackItem)}
           onReportUser={feedbackItem?.creator.id ? () => reportFeedbackUser(feedbackItem) : undefined}
           postTitle={feedbackItem?.title || feedbackItem?.prompt || 'This post'}
-          sessionOnly={!user}
+          viewerKind={user ? 'member' : 'guest'}
           visible={Boolean(feedbackItem)}
         />
       </View>

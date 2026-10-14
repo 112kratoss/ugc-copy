@@ -685,6 +685,42 @@ describe('mobile shared API v1 contract fixture', () => {
     ]);
   });
 
+  // The "New posts" probe is public and cacheable; the undo deletes the caller's own row (D2, D7).
+  it('asks the newest probe without a token and sends an undo with one, in the shared shapes', async () => {
+    const newest = mobileApiContract.endpoints.getShowcaseFeedNewest;
+    const undo = mobileApiContract.endpoints.undoFeedFeedback;
+    expect(newest.auth).toBe('none');
+    expect(undo.auth).toBe('required');
+    const asked: Array<{ method: string; path: string; query: string; authorization: string | null; body: unknown }> = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      asked.push({
+        method: (init?.method ?? 'GET').toUpperCase(),
+        path: url.pathname,
+        query: url.search,
+        authorization: new Headers(init?.headers).get('Authorization'),
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return jsonResponse(url.pathname === newest.path
+        ? newest.responseVariants.emptyLane
+        : undo.responseVariants.nothingToRemove);
+    });
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await expect(api.getShowcaseFeedNewest({ category: 'text' })).resolves.toEqual({ newestPostId: null, newestPublishedAt: null });
+    await expect(api.undoFeedFeedback(undo.requestVariants.hideCreator as UndoFeedFeedbackRequest))
+      .resolves.toEqual({ ok: true, removed: false });
+
+    expect(asked).toEqual([
+      { method: 'GET', path: newest.path, query: '?category=text', authorization: null, body: null },
+      { method: 'POST', path: undo.path, query: '', authorization: 'Bearer token-1', body: undo.requestVariants.hideCreator },
+    ]);
+  });
+
   it('sends auth for mobile showcase share calls so social notifications can identify the actor', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));

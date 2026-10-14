@@ -159,10 +159,13 @@ describe('feed menu', () => {
   };
 
   it("offers the sheet's rows: preferences first, then the destructive safety rows", () => {
-    const menu = buildFeedFeedbackMenu({ creator: { username: 'maya', name: 'Maya R' }, canHideCreator: true, viewerIsOwner: false, sessionOnly: false, ...handlers });
+    const menu = buildFeedFeedbackMenu({ creator: { username: 'maya', name: 'Maya R' }, canHideCreator: true, viewerIsOwner: false, viewerKind: 'member', ...handlers });
 
     expect(menu.sections.map((section) => section.title)).toEqual([undefined, 'Safety']);
     expect(menu.sections[0].items.map((item) => item.label)).toEqual(['Not interested', 'Hide @maya']);
+    // A member's choice goes with the account: the rows say nothing extra.
+    expect(menu.sections[0].items.map((item) => (item.kind === 'action' ? item.subtitle : null)))
+      .toEqual([undefined, undefined]);
     expect(menu.sections[1].items).toEqual([
       expect.objectContaining({ label: 'Report content', destructive: true }),
       expect.objectContaining({ label: 'Report user', destructive: true }),
@@ -170,12 +173,19 @@ describe('feed menu', () => {
     ]);
   });
 
-  it("tells a guest the choice lasts for the visit, as a heading on iOS and a line on each row elsewhere", () => {
-    const menu = buildFeedFeedbackMenu({ creator: { username: 'maya', name: 'Maya R' }, canHideCreator: true, viewerIsOwner: false, sessionOnly: true, ...handlers });
+  // The app's guest is ranked as a user: its choice is kept under its own id,
+  // which stays on the device until sign-out (D1, 2026-10-14). The rows said
+  // "For this visit" until then.
+  it("tells a guest the choice stays on this device, as a heading on iOS and a line on each row elsewhere", () => {
+    const menu = buildFeedFeedbackMenu({ creator: { username: 'maya', name: 'Maya R' }, canHideCreator: true, viewerIsOwner: false, viewerKind: 'guest', ...handlers });
 
-    expect(menu.sections[0].title).toBe('For this visit');
+    expect(menu.sections[0].title).toBe('Hidden on this device');
     expect(menu.sections[0].items.map((item) => (item.kind === 'action' ? item.subtitle : null)))
-      .toEqual(['For this visit', 'For this visit']);
+      .toEqual(['Hidden on this device', 'Hidden on this device']);
+    // The Safety rows are the same for anyone.
+    expect(menu.sections[1].title).toBe('Safety');
+    expect(menu.sections[1].items.map((item) => (item.kind === 'action' ? item.subtitle : null)))
+      .toEqual([undefined, undefined, undefined]);
   });
 
   // Nothing can make hiding, reporting or blocking yourself possible, and a
@@ -183,7 +193,7 @@ describe('feed menu', () => {
   // not dimmed: the reel's menu and the web's do the same. Report content
   // stayed on your own post in the app until 2026-10-09.
   it('leaves the creator rows and Report content out on your own post, whatever handlers it was given', () => {
-    const menu = buildFeedFeedbackMenu({ creator: { username: 'me', name: 'Me' }, canHideCreator: false, viewerIsOwner: true, sessionOnly: false, ...handlers });
+    const menu = buildFeedFeedbackMenu({ creator: { username: 'me', name: 'Me' }, canHideCreator: false, viewerIsOwner: true, viewerKind: 'member', ...handlers });
 
     expect(rowIds(menu)).toEqual(['not-interested']);
     // No row is left under the Safety heading, so no heading is drawn.
@@ -192,7 +202,7 @@ describe('feed menu', () => {
   });
 
   it("keeps Report content on a post with no creator account, which is no one's own", () => {
-    const menu = buildFeedFeedbackMenu({ creator: {}, canHideCreator: false, viewerIsOwner: false, sessionOnly: false, ...handlers });
+    const menu = buildFeedFeedbackMenu({ creator: {}, canHideCreator: false, viewerIsOwner: false, viewerKind: 'member', ...handlers });
 
     expect(menu.sections.map((section) => section.items.map((item) => item.label)))
       .toEqual([['Not interested'], ['Report content']]);
@@ -203,7 +213,7 @@ describe('feed menu', () => {
       creator: { username: 'maya', name: 'Maya R' },
       canHideCreator: true,
       viewerIsOwner: false,
-      sessionOnly: false,
+      viewerKind: 'member',
       onNotInterested: noop,
       onHideCreator: noop,
       onReportContent: noop,
@@ -215,7 +225,7 @@ describe('feed menu', () => {
   // One meaning for red across the two menus that share these rows: a feed
   // card's and the reel's. Hide was red in the reel and plain on a card.
   it("colours each row as the reel's menu colours the same row", () => {
-    const menu = buildFeedFeedbackMenu({ creator: { username: 'maya', name: 'Maya R' }, canHideCreator: true, viewerIsOwner: false, sessionOnly: false, ...handlers });
+    const menu = buildFeedFeedbackMenu({ creator: { username: 'maya', name: 'Maya R' }, canHideCreator: true, viewerIsOwner: false, viewerKind: 'member', ...handlers });
     const rows = menu.sections.flatMap((section) => section.items);
 
     expect(rows.map((row) => row.id)).toEqual(['not-interested', 'hide-creator', 'report-content', 'report-user', 'block-user']);
@@ -254,7 +264,7 @@ describe('the Hide row', () => {
       creator: { username: 'maya', name: 'Maya R' },
       canHideCreator: true,
       viewerIsOwner: false,
-      sessionOnly: false,
+      viewerKind: 'member',
       onNotInterested: noop,
       onHideCreator: noop,
     });
@@ -315,7 +325,7 @@ describe('the Safety rows of a post, on its card and in the reel', () => {
     creator: {},
     canHideCreator: canHideFeedCreator(creatorId, viewerId),
     viewerIsOwner: isOwnFeedPost(creatorId, viewerId),
-    sessionOnly: !viewerId,
+    viewerKind: viewerId ? 'member' : 'guest',
     ...handlers,
   }).sections.find((section) => section.id === 'safety')?.items.map((item) => item.id);
 

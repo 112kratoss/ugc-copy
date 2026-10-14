@@ -1,6 +1,26 @@
 import { hideCreatorLabel } from '@/lib/hide-creator-label';
 import { menuAction, type NativeMenuModel } from '@/lib/native-menu';
 
+/**
+ * Who is choosing. A guest is anyone not signed in to an account: the app's
+ * guest holds an anonymous session (`lib/guest-session.ts`), and the feed keeps
+ * a guest's Not interested and Hide under that guest's own id, as it keeps a
+ * member's (product decision D1, 2026-10-14). The id stays on this device until
+ * sign-out, so the choice does too.
+ */
+export type FeedViewerKind = 'guest' | 'member';
+
+/**
+ * The line a guest's Not interested and Hide rows carry, in the menu and in
+ * its fallback sheet. Until 2026-10-14 they said "For this visit", which was
+ * never true of the app's guest. A member's rows carry nothing extra.
+ */
+export const GUEST_FEED_FEEDBACK_NOTE = 'Hidden on this device';
+
+export function feedFeedbackNote(viewerKind: FeedViewerKind): string | undefined {
+  return viewerKind === 'guest' ? GUEST_FEED_FEEDBACK_NOTE : undefined;
+}
+
 export interface FeedFeedbackMenuInput {
   /** The post's creator, whom the Hide row names (`lib/hide-creator-label.ts`). */
   creator: { username?: string | null; name?: string | null };
@@ -16,8 +36,8 @@ export interface FeedFeedbackMenuInput {
    * given no handler for it there (`FeedPostCard`).
    */
   viewerIsOwner: boolean;
-  /** A guest's choices last for this visit only; a signed-in viewer's retrain the feed. */
-  sessionOnly: boolean;
+  /** A guest's Not interested and Hide rows say the choice stays on this device; a member's say nothing extra. */
+  viewerKind: FeedViewerKind;
   onNotInterested: () => void;
   onHideCreator: () => void;
   onReportContent?: () => void;
@@ -50,7 +70,7 @@ export function canHideFeedCreator(creatorId: string | null | undefined, viewerI
  *
  * The sheet explained every row in a sentence; a menu row has room for one short
  * line, so only the line that changes what a choice means survives: a guest's
- * choice lasts for the visit.
+ * choice stays on this device (`feedFeedbackNote`).
  *
  * Your own post has no Hide, Report user or Block user row. A dimmed row says
  * "not now"; nothing can ever make these apply to yourself, so they are left
@@ -66,14 +86,14 @@ export function buildFeedFeedbackMenu({
   creator,
   canHideCreator,
   viewerIsOwner,
-  sessionOnly,
+  viewerKind,
   onNotInterested,
   onHideCreator,
   onReportContent,
   onReportUser,
   onBlockUser,
 }: FeedFeedbackMenuInput): NativeMenuModel {
-  const forThisVisit = sessionOnly ? 'For this visit' : undefined;
+  const note = feedFeedbackNote(viewerKind);
   return {
     quickActions: [],
     sections: [
@@ -81,19 +101,19 @@ export function buildFeedFeedbackMenu({
         id: 'preferences',
         // iOS draws the guest's note once, as the section's heading; its rows
         // carry no subtitle there (`native-menu.ios.tsx`).
-        title: forThisVisit,
+        title: note,
         items: [
           menuAction({
             id: 'not-interested',
             label: 'Not interested',
-            subtitle: forThisVisit,
+            subtitle: note,
             systemImage: 'eye.slash',
             onSelect: onNotInterested,
           }),
           ...(canHideCreator ? [menuAction({
             id: 'hide-creator',
             label: hideCreatorLabel(creator),
-            subtitle: forThisVisit,
+            subtitle: note,
             systemImage: 'person.crop.circle.badge.xmark',
             onSelect: onHideCreator,
           })] : []),
