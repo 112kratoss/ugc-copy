@@ -6,7 +6,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { Camera, Check, ImageIcon } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, Pressable, ScrollView, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
@@ -15,14 +15,26 @@ import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { showConfirmDialog } from '@/lib/dialog';
 import {
+  EMPTY_EDIT_PROFILE_FORM,
   PROFILE_BIO_MAX_LENGTH,
   PROFILE_DISPLAY_NAME_MAX_LENGTH,
+  PROFILE_LOCATION_MAX_LENGTH,
+  PROFILE_PHOTO_QUALITY,
+  PROFILE_UNCROPPED_COVER_QUALITY,
   PROFILE_USERNAME_MAX_LENGTH,
+  PROFILE_WEBSITE_MAX_LENGTH,
+  type EditProfileField,
   type EditProfileFieldErrors,
+  type EditProfileFormValues,
   type UsernameAvailability,
+  buildProfileUpdateBody,
+  editProfileFormFromProfile,
   hasEditProfileChanges,
+  isProfileFieldVerdict,
   normalizeUsername,
   normalizeUsernameInput,
+  profilePhotoCropAspect,
+  readLocalUsernameRejection,
   readUsernameRejection,
   shouldCheckUsernameAvailability,
   usernameHint,
@@ -44,21 +56,12 @@ import { invalidateWelcomeCredits } from '@/lib/use-onboarding-destination';
 /** Debounce before the availability round trip. The endpoint is rate limited. */
 const USERNAME_CHECK_DELAY_MS = 400;
 
-interface EditProfileForm {
-  username: string;
-  displayName: string;
-  bio: string;
-  avatarUrl: string;
-  coverUrl: string;
-}
-
-const emptyForm: EditProfileForm = {
-  username: '',
-  displayName: '',
-  bio: '',
-  avatarUrl: '',
-  coverUrl: '',
-};
+/** The web editor's labels (`CreatorProfileCard`), in the order the form reads. */
+const SOCIAL_FIELDS = [
+  { field: 'twitterHandle', label: 'X (Twitter) handle' },
+  { field: 'instagramHandle', label: 'Instagram handle' },
+  { field: 'tiktokHandle', label: 'TikTok handle' },
+] as const;
 
 export function EditProfileScreen() {
   const theme = useAppTheme();
@@ -74,7 +77,9 @@ export function EditProfileScreen() {
   const isCompact = pageWidth < 390;
   const horizontalPadding = isCompact ? 16 : 20;
 
-  const [form, setForm] = useState<EditProfileForm>(emptyForm);
+  const [form, setForm] = useState<EditProfileFormValues>(EMPTY_EDIT_PROFILE_FORM);
+  // What the form opened as: the measure of unsaved changes and of what a save sends.
+  const [initialForm, setInitialForm] = useState<EditProfileFormValues | null>(null);
   const [avatarDraftUri, setAvatarDraftUri] = useState<string | null>(null);
   const [coverDraftUri, setCoverDraftUri] = useState<string | null>(null);
   const [avatarAsset, setAvatarAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
@@ -91,28 +96,18 @@ export function EditProfileScreen() {
   // Return advances through the form rather than dismissing the keyboard.
   const usernameRef = useRef<TextInput | null>(null);
   const bioRef = useRef<TextInput | null>(null);
+  const websiteRef = useRef<TextInput | null>(null);
+  const locationRef = useRef<TextInput | null>(null);
+  const twitterRef = useRef<TextInput | null>(null);
+  const instagramRef = useRef<TextInput | null>(null);
+  const tiktokRef = useRef<TextInput | null>(null);
+  const socialRefs = { twitterHandle: twitterRef, instagramHandle: instagramRef, tiktokHandle: tiktokRef };
 
   const profileQuery = useQuery({
     queryKey: ['profile', user?.id],
     enabled: Boolean(user),
     queryFn: api.getProfile,
   });
-
-  useEffect(() => {
-    if (profileQuery.data) {
-      setForm(formFromProfile(profileQuery.data));
-      setAvatarDraftUri(null);
-      setCoverDraftUri(null);
-      setAvatarAsset(null);
-      setCoverAsset(null);
-      setFieldErrors({});
-      setMessage(null);
-      setPhotoAccessDenied(false);
-      setProgressMessage(null);
-      setUsernameAvailability('idle');
-      setUsernameMessage(null);
-    }
-  }, [profileQuery.data]);
 
   const profile = profileQuery.data;
 
@@ -135,10 +130,9 @@ export function EditProfileScreen() {
     };
   }, [form.bio, form.displayName, form.username, profile, user?.email, user?.id]);
 
-  const initialForm = useMemo(() => (profile ? formFromProfile(profile) : emptyForm), [profile]);
   const hasProfileChanges = hasEditProfileChanges({
     current: form,
-    initial: initialForm,
+    initial: initialForm ?? EMPTY_EDIT_PROFILE_FORM,
     hasAvatarDraft: Boolean(avatarAsset),
     hasCoverDraft: Boolean(coverAsset),
   });
@@ -150,6 +144,14 @@ export function EditProfileScreen() {
    * arrived after two uploads had run for nothing.
    */
   useEffect(() => {
+    // The placeholder and the reserved list are answered here, before any
+    // round trip, in the words the server would use (D3).
+    const localRejection = readLocalUsernameRejection(form.username, profile?.username);
+    if (localRejection) {
+      setUsernameAvailability('taken');
+      setUsernameMessage(localRejection);
+      return;
+    }
     if (!shouldCheckUsernameAvailability({
       value: form.username,
       displayName: form.displayName,
@@ -225,6 +227,31 @@ export function EditProfileScreen() {
     && usernameAvailability !== 'taken';
 
   /**
+   * The form opens from the first profile read of this visit. A later read
+   * replaces it only while nothing is edited and nothing is saving. The profile
+   * is read again on every auth event, on a return to the app and when a run
+   * finishes, and each read used to rebuild the form, taking typed text and a
+   * picked photo with it. A picked photo is itself a change, so it is never
+   * cleared here.
+   */
+  useEffect(() => {
+    if (!profile) return;
+    if (initialForm && (hasProfileChanges || isSaving)) return;
+    const next = editProfileFormFromProfile(profile);
+    if (initialForm && !hasEditProfileChanges({
+      current: next,
+      initial: initialForm,
+      hasAvatarDraft: false,
+      hasCoverDraft: false,
+    })) return;
+    setInitialForm(next);
+    setForm(next);
+    // Errors described values that are no longer in the form.
+    setFieldErrors({});
+    setMessage(null);
+  }, [hasProfileChanges, initialForm, isSaving, profile]);
+
+  /**
    * Modality: "if closing a modal could result in loss of user-generated
    * content, present an alert" — and this route is `presentation: 'modal'`, so
    * the swipe-down discards the form too. One guard covers the Close control,
@@ -272,12 +299,18 @@ export function EditProfileScreen() {
     }
     setPhotoAccessDenied(false);
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: role === 'avatar' ? [1, 1] : [16, 9],
-      quality: 0.9,
-    });
+    const aspect = profilePhotoCropAspect(role, Platform.OS);
+    const result = await ImagePicker.launchImageLibraryAsync(aspect
+      ? { mediaTypes: ['images'], allowsEditing: true, aspect, quality: PROFILE_PHOTO_QUALITY }
+      : {
+          mediaTypes: ['images'],
+          allowsEditing: false,
+          // Taken whole, a library photo comes back as its own file, HEIC
+          // included, which most browsers cannot draw. The compatible
+          // representation is a JPEG.
+          preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+          quality: PROFILE_UNCROPPED_COVER_QUALITY,
+        });
 
     if (result.canceled || !result.assets[0]) {
       return;
@@ -299,18 +332,30 @@ export function EditProfileScreen() {
     if (!user) {
       throw new Error('Sign in before editing your profile.');
     }
-    if (!profile) {
+    if (!profile || !initialForm) {
       throw new Error('Load your profile before saving changes.');
     }
 
-    const validationErrors = validateProfileForm(form);
+    const validationErrors = validateProfileForm(form, { savedUsername: profile.username });
     setFieldErrors(validationErrors);
     if (Object.keys(validationErrors).length > 0) {
       throw new Error('Fix the highlighted profile fields.');
     }
 
-    let avatarUrl = form.avatarUrl || null;
-    let coverUrl = form.coverUrl || null;
+    if (avatarAsset || coverAsset) {
+      // The links follow the server's rules (D4), so the server is asked before
+      // anything uploads. A refused field is drawn and nothing is spent; a
+      // request that fails without a verdict leaves the save to report.
+      setProgressMessage('Checking your changes…');
+      try {
+        await api.validateProfile(buildProfileUpdateBody({ current: form, initial: initialForm }));
+      } catch (error) {
+        if (isProfileFieldVerdict(error)) throw error;
+      }
+    }
+
+    let avatarUrl: string | null = null;
+    let coverUrl: string | null = null;
 
     if (avatarAsset) {
       setProgressMessage('Uploading display photo…');
@@ -335,21 +380,10 @@ export function EditProfileScreen() {
     }
 
     setProgressMessage('Saving profile…');
-    await api.updateProfile({
-      username: normalizeUsername(form.username),
-      displayName: form.displayName,
-      bio: form.bio,
-      avatarUrl,
-      coverUrl,
-      websiteUrl: profile.websiteUrl ?? null,
-      twitterHandle: profile.twitterHandle ?? null,
-      instagramHandle: profile.instagramHandle ?? null,
-      tiktokHandle: profile.tiktokHandle ?? null,
-      location: profile.location ?? null,
-    });
+    await api.updateProfile(buildProfileUpdateBody({ current: form, initial: initialForm, avatarUrl, coverUrl }));
   }
 
-  function editField(field: 'username' | 'displayName' | 'bio', value: string) {
+  function editField(field: EditProfileField, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
     setFieldErrors((current) => ({ ...current, [field]: undefined }));
   }
@@ -358,8 +392,11 @@ export function EditProfileScreen() {
    * Text fields: "when creating a user name or password, validation needs to
    * happen before people switch to another field."
    */
-  function validateOnBlur(field: 'username' | 'displayName' | 'bio') {
-    setFieldErrors((current) => ({ ...current, [field]: validateProfileField(field, form[field]) }));
+  function validateOnBlur(field: EditProfileField) {
+    setFieldErrors((current) => ({
+      ...current,
+      [field]: validateProfileField(field, form[field], { savedUsername: profile?.username }),
+    }));
   }
 
   /**
@@ -561,6 +598,77 @@ export function EditProfileScreen() {
               inputRef={bioRef}
             />
           </GlassForm>
+
+          {/*
+            The web editor's "Links and location" group. The app could not edit
+            these five and sent back the copy it held, so a link changed on the
+            web was undone by an unrelated save here.
+          */}
+          <View style={{ gap: appTheme.spacing.compact }}>
+            <AppText heading variant="cardTitle">Links and location</AppText>
+            <AppText variant="bodySm" color="muted">Website and social handles</AppText>
+          </View>
+          <GlassForm>
+            <AppTextInput
+              label="Website"
+              value={form.websiteUrl}
+              onChangeText={(websiteUrl) => editField('websiteUrl', websiteUrl)}
+              onBlur={() => validateOnBlur('websiteUrl')}
+              onClear={() => editField('websiteUrl', '')}
+              error={fieldErrors.websiteUrl}
+              placeholder="https://your-site.com"
+              maxLength={PROFILE_WEBSITE_MAX_LENGTH}
+              keyboardType="url"
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
+              autoComplete="url"
+              textContentType="URL"
+              returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => locationRef.current?.focus()}
+              inputRef={websiteRef}
+            />
+            <AppTextInput
+              label="Location"
+              value={form.location}
+              onChangeText={(location) => editField('location', location)}
+              onBlur={() => validateOnBlur('location')}
+              onClear={() => editField('location', '')}
+              error={fieldErrors.location}
+              placeholder="City, country"
+              maxLength={PROFILE_LOCATION_MAX_LENGTH}
+              autoCapitalize="words"
+              returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => socialRefs.twitterHandle.current?.focus()}
+              inputRef={locationRef}
+            />
+            {SOCIAL_FIELDS.map(({ field, label }, index) => {
+              const next = SOCIAL_FIELDS[index + 1];
+              return (
+                <AppTextInput
+                  key={field}
+                  label={label}
+                  value={form[field]}
+                  onChangeText={(value) => editField(field, value)}
+                  onBlur={() => validateOnBlur(field)}
+                  onClear={() => editField(field, '')}
+                  error={fieldErrors[field]}
+                  // A handle or the profile link, as the server takes either (D4).
+                  hint="Username or profile link"
+                  placeholder="username"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  spellCheck={false}
+                  returnKeyType={next ? 'next' : 'done'}
+                  submitBehavior={next ? 'submit' : 'blurAndSubmit'}
+                  onSubmitEditing={next ? () => socialRefs[next.field].current?.focus() : undefined}
+                  inputRef={socialRefs[field]}
+                />
+              );
+            })}
+          </GlassForm>
         </>
       )}
     </EditProfileShell>
@@ -738,16 +846,6 @@ function FieldError({ text }: { text: string }) {
       {text}
     </AppText>
   );
-}
-
-function formFromProfile(profile: ProfileResponse): EditProfileForm {
-  return {
-    username: profile.username ?? profile.suggestedUsername ?? '',
-    displayName: profile.displayName ?? '',
-    bio: profile.bio ?? '',
-    avatarUrl: profile.avatarUrl ?? '',
-    coverUrl: profile.coverUrl ?? '',
-  };
 }
 
 function emptyProfile(id: string): ProfileResponse {

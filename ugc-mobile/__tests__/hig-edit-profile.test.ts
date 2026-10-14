@@ -65,11 +65,14 @@ describe('HIG S15 — the profile form validates as you type', () => {
   it('checks every field on blur and again on save, from one rule set', () => {
     // Text fields: "when creating a user name or password, validation needs to
     // happen before people switch to another field."
-    for (const field of ['displayName', 'username', 'bio']) {
+    for (const field of ['displayName', 'username', 'bio', 'websiteUrl', 'location']) {
       expect(screen).toContain(`onBlur={() => validateOnBlur('${field}')}`);
     }
-    expect(screen).toContain('validateProfileField(field, form[field])');
-    expect(screen).toContain('validateProfileForm(form)');
+    // The three social fields are drawn from one list.
+    expect(screen).toContain('onBlur={() => validateOnBlur(field)}');
+    // Both are told the saved handle, which keeps a reserved handle the account already holds.
+    expect(screen).toContain('validateProfileField(field, form[field], { savedUsername: profile?.username })');
+    expect(screen).toContain('validateProfileForm(form, { savedUsername: profile.username })');
   });
 
   it('asks the server about a username before the images upload, not after', () => {
@@ -136,9 +139,10 @@ describe('HIG S15 — the form is the app’s form', () => {
     // selection colour and its own label idiom — the S2 finding, on the app's
     // other form.
     expect(screen).not.toContain('function ProfileTextField');
-    // All three fields, and no hand-rolled one beside them. (`TextInput` still
-    // appears as the type of the two focus refs; only a rendered one counts.)
-    expect(screen.match(/<AppTextInput\b/g)).toHaveLength(3);
+    // The three identity fields, website, location and the one drawn for each
+    // social handle, and no hand-rolled one beside them. (`TextInput` still
+    // appears as the type of the focus refs; only a rendered one counts.)
+    expect(screen.match(/<AppTextInput\b/g)).toHaveLength(6);
     expect(screen).not.toMatch(/<TextInput\n|<TextInput ref=/);
   });
 
@@ -212,7 +216,15 @@ describe('HIG S15 — the way out and the way through', () => {
     // The platform check lives there and nowhere else, so no call site can
     // drift into different copy or a different button order.
     expect(screen).not.toContain('Alert.alert');
-    expect(screen).not.toContain('Platform.OS');
+    const guard = screen.slice(
+      screen.indexOf('usePreventRemove('),
+      screen.indexOf('async function pickProfileImage')
+    );
+    expect(guard).not.toContain('Platform');
+    // The screen's one platform question is the photo picker's: iOS can only
+    // crop square, so its cover is taken whole (`profilePhotoCropAspect`).
+    expect(screen.match(/Platform\.OS/g)).toHaveLength(1);
+    expect(screen).toContain('profilePhotoCropAspect(role, Platform.OS)');
   });
 
   it('leaves the destructive answer unreachable by a stray tap', () => {
