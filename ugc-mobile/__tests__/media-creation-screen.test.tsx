@@ -4817,6 +4817,86 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(authState.refreshProfile).toHaveBeenCalledTimes(1);
     });
 
+    describe('the wait', () => {
+      const waitPanel = (tree: renderer.ReactTestRenderer) => tree.root.find((node) => (
+        String(node.type) === 'view' && node.props.accessibilityRole === 'progressbar'
+      ));
+      const estimate = (tree: renderer.ReactTestRenderer) => waitPanel(tree).findAll((node) => (
+        String(node.type) === 'view' && node.props.testID === 'generation-wait-estimate'
+      ));
+      const barWidth = (tree: renderer.ReactTestRenderer) => (waitPanel(tree).find((node) => (
+        String(node.type) === 'view' && node.props.testID === 'generation-wait-bar'
+      )).props.style as { width: string }).width;
+      const spinners = (tree: renderer.ReactTestRenderer) => waitPanel(tree).findAll((node) => String(node.type) === 'activity-indicator');
+      /** The status as the server's image route sends it, from a start fixed at the first read. */
+      const processing = (estimatedTotalMs: number | null) => {
+        let startedAtMs: number | null = null;
+        return async () => {
+          startedAtMs ??= Date.now() - 15_000;
+          return {
+            status: 'processing',
+            timing: { appStatus: 'processing', providerState: 'generating', phaseLabel: 'Generating', startedAtMs, updatedAtMs: null, completedAtMs: null, elapsedMs: 15_000, completedInMs: null, estimatedTotalMs },
+          };
+        };
+      };
+
+      it('counts down the server’s estimate on a filling bar, and says so once the estimate has passed', async () => {
+        authState.api.startGeneration.mockResolvedValue(started('pred-estimate'));
+        authState.api.getImageGeneration.mockImplementation(processing(60_000));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+        await pressGenerate(tree);
+
+        expect(estimate(tree)).toHaveLength(1);
+        expect(spinners(tree)).toHaveLength(0);
+        expect(collectText(waitPanel(tree))).toContain('Est. 0:45 left');
+        expect(barWidth(tree)).toBe('25%');
+        // The phase and the time it has run stay under it.
+        expect(collectText(waitPanel(tree)).join(' ')).toContain('The model is working on it now. Running for');
+
+        await renderer.act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+        expect(collectText(waitPanel(tree))).toContain('Est. 0:15 left');
+        expect(barWidth(tree)).toBe('75%');
+
+        await renderer.act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+        expect(collectText(waitPanel(tree))).toContain('Taking longer than usual');
+        expect(barWidth(tree)).toBe('96%');
+      });
+
+      it('keeps the spinner, the phase and the time it has run for a status with no estimate', async () => {
+        authState.api.startGeneration.mockResolvedValue(started('pred-no-estimate'));
+        authState.api.getImageGeneration.mockImplementation(processing(null));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+        await pressGenerate(tree);
+
+        expect(estimate(tree)).toHaveLength(0);
+        expect(spinners(tree)).toHaveLength(1);
+        const said = collectText(waitPanel(tree)).join(' ');
+        expect(said).toContain('Making your image');
+        expect(said).toContain('The model is working on it now. Running for 0:00.');
+        expect(said).not.toContain('Est.');
+      });
+
+      it('tells a guest whose run outlasts the watch to sign in for an alert, rather than to check Alerts', async () => {
+        // A guest gets no push, and Alerts asks them to sign in.
+        authState.user = null;
+        authState.isGuest = true;
+        authState.api.startGeneration.mockResolvedValue(started('pred-guest-long'));
+        authState.api.getImageGeneration.mockResolvedValue({ status: 'processing' });
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+        await pressGenerate(tree);
+
+        await renderer.act(async () => { await vi.advanceTimersByTimeAsync(13 * 60_000); });
+
+        const said = text(tree);
+        expect(said).toContain('Progress check interrupted');
+        expect(said).toContain('Generation is still processing. Sign in to get an alert when it’s done. Until then, come back to this screen.');
+        expect(said).not.toContain('Check Alerts');
+      });
+    });
+
     describe('saved drafts', () => {
       it('keeps every tool’s draft after a run succeeds, as saved', async () => {
         memory.set(ordinaryKey, savedDrafts({ video: { prompt: 'My video idea' } }));

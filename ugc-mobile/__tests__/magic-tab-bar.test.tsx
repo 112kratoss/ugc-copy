@@ -272,6 +272,38 @@ describe('MagicTabBar', () => {
     })).toBeTruthy();
   });
 
+  it.each([
+    ['Liquid Glass', true],
+    ['the adaptive bar', false],
+  ])('rings the iOS create disc the same way over %s, beside the disc rather than inside the material', async (_surface, glass) => {
+    // The ring and its label arrived with the Android dock, and the iOS disc
+    // went on running the count's poll with nothing to show for it.
+    glassState.platform = 'ios';
+    glassState.available = glass;
+    const idle = await renderTabBarAsync(0);
+    expect(idle.tree.root.findAllByProps({ testID: 'generation-ring' })).toHaveLength(0);
+    const idleDisc = idle.tree.root.findByProps({ accessibilityLabel: 'Open create menu' });
+    expect(idleDisc.props.accessibilityState).toEqual({ expanded: false, busy: false });
+
+    runningGenerations = 2;
+    const busy = await renderTabBarAsync(0);
+    expect(busy.tree.root.findAllByProps({ testID: 'android-navigation-dock' })).toHaveLength(0);
+    const disc = busy.tree.root.findByProps({ accessibilityLabel: 'Open create menu, 2 creations in progress' });
+    expect(disc.props.accessibilityState.busy).toBe(true);
+    const rings = busy.tree.root.findAll((node) => String(node.type) === 'view' && node.props.testID === 'generation-ring');
+    expect(rings).toHaveLength(1);
+    // Held with the disc alone: the nearest control around the ring is Create,
+    // not the row of tabs inside the bar's surface.
+    const pressablesIn = (node: renderer.ReactTestInstance) => node.findAll((child) => String(child.type) === 'pressable');
+    let holder = rings[0].parent;
+    while (holder && pressablesIn(holder).length === 0) holder = holder.parent;
+    expect(pressablesIn(holder!).map((node) => node.props.accessibilityLabel)).toEqual(['Open create menu, 2 creations in progress']);
+    const surface = glass
+      ? busy.tree.root.find((node) => String(node.type) === 'glass-view')
+      : adaptiveFallbacks(busy.tree)[0];
+    expect(surface.findAllByProps({ testID: 'generation-ring' })).toHaveLength(0);
+  });
+
   it('keeps the Android dock inert when hidden and respects prevented tab presses', async () => {
     glassState.platform = 'android';
     const { tree, navigation } = await renderTabBarAsync(0, { hidden: true });

@@ -12,6 +12,7 @@ const notificationsMocks = vi.hoisted(() => ({
   clearLastNotificationResponseAsync: vi.fn(),
   setNotificationChannelAsync: vi.fn(),
   addNotificationResponseReceivedListener: vi.fn(() => ({ remove: vi.fn() })),
+  addNotificationReceivedListener: vi.fn((_listener: (notification: unknown) => void) => ({ remove: vi.fn() })),
   addPushTokenListener: vi.fn((_listener: (token: MockDevicePushToken) => void) => ({ remove: vi.fn() })),
   unregisterForNotificationsAsync: vi.fn(),
   setNotificationHandler: vi.fn(),
@@ -39,6 +40,7 @@ vi.mock('expo-notifications', () => ({
   clearLastNotificationResponseAsync: notificationsMocks.clearLastNotificationResponseAsync,
   setNotificationChannelAsync: notificationsMocks.setNotificationChannelAsync,
   addNotificationResponseReceivedListener: notificationsMocks.addNotificationResponseReceivedListener,
+  addNotificationReceivedListener: notificationsMocks.addNotificationReceivedListener,
   addPushTokenListener: notificationsMocks.addPushTokenListener,
   unregisterForNotificationsAsync: notificationsMocks.unregisterForNotificationsAsync,
   setNotificationHandler: notificationsMocks.setNotificationHandler,
@@ -277,6 +279,37 @@ describe('mobile notifications helper', () => {
     });
 
     expect(routerMocks.push).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands an alert that lands while the app is in front to the app with its type', async () => {
+    // The root layout refreshes the balance on a failed run's alert: its credits
+    // came back on the server while nothing on screen was watching the run.
+    let listener: ((notification: unknown) => void) | null = null;
+    const remove = vi.fn();
+    notificationsMocks.addNotificationReceivedListener.mockImplementation((callback: (notification: unknown) => void) => {
+      listener = callback;
+      return { remove };
+    });
+    const received = vi.fn();
+
+    const { subscribeToNotificationsReceived } = await import('../lib/notifications');
+    const unsubscribe = subscribeToNotificationsReceived(received);
+    const deliver = (data: unknown) => (listener as unknown as (notification: unknown) => void)({
+      request: { identifier: 'notification-1', content: { title: 'Your video failed', data } },
+    });
+    deliver({ notificationId: 'row-1', type: 'generation_failed', category: 'generation', deepLink: '/viewer?source=profile-creations&initialId=gen-1' });
+    deliver({ notificationId: 'row-2', type: 'creator_followed' });
+    deliver({ notificationId: 'row-3' });
+    deliver(null);
+
+    expect(received.mock.calls).toEqual([
+      [{ type: 'generation_failed' }],
+      [{ type: 'creator_followed' }],
+      [{ type: null }],
+      [{ type: null }],
+    ]);
     unsubscribe();
     expect(remove).toHaveBeenCalledTimes(1);
   });

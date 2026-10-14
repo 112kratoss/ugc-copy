@@ -32,7 +32,7 @@ describe('feed render cost on iOS', () => {
 
   it('gives the Create disc a path shadow instead of a masked box shadow', () => {
     const bar = source('components/magic-tab-bar.tsx');
-    const disc = bar.slice(bar.indexOf('accessibilityLabel="Open create menu"'), bar.indexOf('<Plus size'));
+    const disc = bar.slice(bar.indexOf('accessibilityLabel={createControlLabel(runningGenerations)}'), bar.indexOf('<Plus size'));
     expect(disc).not.toContain('boxShadow');
     expect(disc).toContain('...CREATE_DISC_SHADOW_SHAPE');
     expect(disc).toContain('shadowColor: theme.tabBar.discShadowColor');

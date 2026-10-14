@@ -24,6 +24,7 @@ import { formatRelativeTime } from '@/lib/home-view-model';
 import { useAuth } from '@/lib/auth';
 import { publishUnreadCount } from '@/lib/notification-badge';
 import {
+  ALERTS_ROUTE,
   deepLinkTargetsAlertsScreen,
   navigateToNotificationDeepLink,
   setAlertsScreenFocused,
@@ -188,7 +189,12 @@ export default function StudioScreen() {
               title="Sign in required"
               body="Sign in to review generation results, unlocks, follows, saves, remixes, and creator activity."
             />
-            <PrimaryButton label="Sign in" onPress={() => router.push('/auth')} accent="primary" />
+            {/* Back to Alerts afterwards; a bare /auth ended on Home. */}
+            <PrimaryButton
+              label="Sign in"
+              onPress={() => router.push({ pathname: '/auth', params: { returnTo: ALERTS_ROUTE } } as never)}
+              accent="primary"
+            />
             <NotificationCategoryList />
           </>
         ) : (
