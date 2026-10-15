@@ -8,12 +8,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   authCallback: null as null | ((event: string, session: unknown) => void),
-  clearGuestMergeTicket: vi.fn(),
+  forgetGuestMergeTickets: vi.fn(),
   clearPersistedSession: vi.fn(),
   getSession: vi.fn(),
   pathname: '/',
   prepareGuestAccountMerge: vi.fn(),
-  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), removeQueries: vi.fn() },
+  removeGuestMergeTicket: vi.fn(),
+  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), getQueryCache: () => ({ subscribe: () => () => undefined }), removeQueries: vi.fn() },
   replace: vi.fn(),
   sessionResolve: null as null | ((result: unknown) => void),
   signInAnonymously: vi.fn(),
@@ -63,9 +64,14 @@ vi.mock('../lib/feed-event-queue', () => ({
   restoreShowcaseFeedEvents: vi.fn(async () => undefined),
 }));
 vi.mock('../lib/guest-merge-ticket-storage', () => ({
-  readGuestMergeTicket: vi.fn(async () => null),
+  bindGuestMergeTicket: vi.fn(async () => undefined),
+  clearGuestMergeOutcome: vi.fn(async () => undefined),
+  forgetGuestMergeTicketsFor: state.forgetGuestMergeTickets,
+  readGuestMergeOutcome: vi.fn(async () => null),
+  readGuestMergeTickets: vi.fn(async () => []),
+  removeGuestMergeTicket: state.removeGuestMergeTicket,
+  storeGuestMergeOutcome: vi.fn(async () => undefined),
   storeGuestMergeTicket: vi.fn(async () => undefined),
-  clearGuestMergeTicket: state.clearGuestMergeTicket,
 }));
 vi.mock('../lib/generation-model-catalog', () => ({ GENERATION_MODEL_CATALOG_SCHEMA_VERSION: 1 }));
 vi.mock('../lib/persisted-account-state', () => ({
@@ -163,7 +169,8 @@ describe('abandoning a guest session the server has merged', () => {
     state.prepareGuestAccountMerge.mockReset();
     state.signInWithPassword.mockReset();
     state.clearPersistedSession.mockReset().mockResolvedValue(undefined);
-    state.clearGuestMergeTicket.mockReset().mockResolvedValue(undefined);
+    state.forgetGuestMergeTickets.mockReset().mockResolvedValue(undefined);
+    state.removeGuestMergeTicket.mockReset().mockResolvedValue(undefined);
     state.replace.mockReset();
     state.signOut.mockReset().mockResolvedValue({ error: null });
     state.signInAnonymously.mockReset().mockResolvedValue({
@@ -234,7 +241,8 @@ describe('abandoning a guest session the server has merged', () => {
       await latest.current?.abandonMergedGuestSession();
     });
 
-    expect(state.clearGuestMergeTicket).not.toHaveBeenCalled();
+    expect(state.forgetGuestMergeTickets).not.toHaveBeenCalled();
+    expect(state.removeGuestMergeTicket).not.toHaveBeenCalled();
 
     unmount();
   });

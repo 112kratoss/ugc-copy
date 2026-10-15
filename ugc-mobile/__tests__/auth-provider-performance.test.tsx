@@ -18,7 +18,7 @@ const state = vi.hoisted(() => ({
   getSession: vi.fn(),
   persistAccountStateOnChange: vi.fn(),
   profileResolve: null as null | ((profile: { credits: number }) => void),
-  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), removeQueries: vi.fn() },
+  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), getQueryCache: () => ({ subscribe: () => () => undefined }), removeQueries: vi.fn() },
   readPersistedSession: vi.fn(),
   restoreAccountState: vi.fn(),
   routerDismissTo: vi.fn(),
@@ -75,9 +75,14 @@ vi.mock('../lib/feed-event-queue', () => ({
   restoreShowcaseFeedEvents: vi.fn(async () => undefined),
 }));
 vi.mock('../lib/guest-merge-ticket-storage', () => ({
-  readGuestMergeTicket: vi.fn(async () => null),
+  bindGuestMergeTicket: vi.fn(async () => undefined),
+  clearGuestMergeOutcome: vi.fn(async () => undefined),
+  forgetGuestMergeTicketsFor: vi.fn(async () => undefined),
+  readGuestMergeOutcome: vi.fn(async () => null),
+  readGuestMergeTickets: vi.fn(async () => []),
+  removeGuestMergeTicket: vi.fn(async () => undefined),
+  storeGuestMergeOutcome: vi.fn(async () => undefined),
   storeGuestMergeTicket: vi.fn(async () => undefined),
-  clearGuestMergeTicket: vi.fn(async () => undefined),
 }));
 vi.mock('../lib/persisted-home-feed', () => ({ clearPersistedHomeFeed: state.clearPersistedHomeFeed }));
 vi.mock('../lib/search-history', () => ({ clearSearchHistory: state.clearSearchHistory }));

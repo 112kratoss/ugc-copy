@@ -7,19 +7,30 @@ import { AppState, Platform } from 'react-native';
 
 import { env, getMissingMobileEnvKeys } from './env';
 import {
+  combineGuestMergeOutcomes,
+  GUEST_MERGE_TICKET_MIN_VALIDITY_MS,
+  GUEST_MERGE_TICKET_RENEW_WITHIN_MS,
+  guestMergeOutcomeOf,
+  keptGuestMergeTicketFor,
   resolveMergeRedeemAction,
   resolveMergeRedeemFailureAction,
   shouldPrepareGuestMerge,
-  shouldRedeemGuestMerge,
+  ticketsRedeemableFor,
+  type GuestMergeOutcome,
   type GuestMergeState,
 } from './guest-merge';
 import {
-  clearGuestMergeTicket,
-  readGuestMergeTicket,
+  bindGuestMergeTicket,
+  clearGuestMergeOutcome,
+  forgetGuestMergeTicketsFor,
+  readGuestMergeOutcome,
+  readGuestMergeTickets,
+  removeGuestMergeTicket,
+  storeGuestMergeOutcome,
   storeGuestMergeTicket,
+  type KeptGuestMergeOutcome,
 } from './guest-merge-ticket-storage';
 import { getRegisteredUser, isGuestSession } from './guest-session';
-import type { GuestAccountMergeStatus } from './types';
 import { signInWithNativeApple } from './apple-auth';
 import { signInWithGoogleOAuth } from './google-auth';
 import {
@@ -110,11 +121,34 @@ interface AuthContextValue {
   identityUserId: string | null;
   /** Lifecycle of the guest->account link. `pending` survives app restarts. */
   mergeState: GuestMergeState;
-  /** Set only for a settled outcome the user must be told about. */
-  mergeOutcome: GuestAccountMergeStatus | null;
-  /** Dismisses the recovery banner without touching the stored ticket. */
-  acknowledgeMergeOutcome: () => void;
+  /**
+   * What linking guest identities to the account signed in came to (audit
+   * 02-8): the credits it moved, or why it moved none. Kept on the device
+   * until dismissed, shown to that account only; null when there is nothing
+   * to say.
+   */
+  guestMergeOutcome: GuestMergeOutcome | null;
+  /** Dismisses the outcome, on this device. The tickets are untouched. */
+  dismissGuestMergeOutcome: () => void;
+  /**
+   * Keeps a merge ticket for the guest on this device, minting one when none is
+   * kept for it (audit 02-7). Called once a guest holds something worth
+   * carrying to an account: credits, a creation. A no-op for a registered
+   * session. Never rejects.
+   */
+  ensureGuestMergeTicket: () => Promise<void>;
+  /**
+   * Records "Set up later" on the account, in the user metadata the web reads,
+   * so the choice holds on every device (audit 02-11). A no-op for a guest.
+   * Never rejects.
+   */
+  markIdentityDeferredOnAccount: () => Promise<void>;
   credits: number | null;
+  /**
+   * When `credits` was last set from the server (a profile read, a link) or by
+   * a spend or purchase this app made, in epoch ms; null until then.
+   */
+  creditsUpdatedAt: number | null;
   isLoading: boolean;
   isAuthConfigured: boolean;
   missingEnvKeys: string[];
@@ -166,6 +200,43 @@ const CACHED_ACCESS_TOKEN_MIN_TTL_MS = 30 * 1000;
 const SIGN_OUT_PUSH_UNREGISTER_DEADLINE_MS = 10 * 1000;
 
 export { getRegisteredUser, isGuestSession } from './guest-session';
+export type { GuestMergeOutcome } from './guest-merge';
+
+/**
+ * A guest bootstrap that failed is tried again after 5 s, 30 s and 2 min, then
+ * every 5 min (audit 02-6). A launch offline, anonymous sign-ups over the
+ * per-IP limit, a refused refresh token: buying without an account needs this
+ * identity, and nothing short of a cold restart used to try again.
+ */
+export const GUEST_BOOTSTRAP_RETRY_DELAYS_MS = [5_000, 30_000, 120_000, 300_000] as const;
+
+/** The wait before the next attempt, after `failures` failed attempts in a row. */
+export function guestBootstrapRetryDelayMs(failures: number) {
+  const step = Math.min(Math.max(failures, 1), GUEST_BOOTSTRAP_RETRY_DELAYS_MS.length) - 1;
+  return GUEST_BOOTSTRAP_RETRY_DELAYS_MS[step];
+}
+
+/**
+ * The balance is read again when the app comes back to the foreground, at most
+ * this often (audit 03-4): a purchase settled by a store webhook or on the web,
+ * and a referral reward, all land while the app is away.
+ */
+export const RESUME_PROFILE_REFRESH_INTERVAL_MS = 30_000;
+
+/** The web's record of "Set up later": its `user_metadata` key and version (src/lib/auth-onboarding.ts). */
+export const IDENTITY_DEFERRED_METADATA_KEY = 'creator_profile_onboarding_skipped_version';
+export const IDENTITY_DEFERRED_METADATA_VERSION = 1;
+
+/**
+ * Whether the account has "Set up later" on record, made on the web or in this
+ * app (audit 02-11), read the way the web reads it.
+ */
+export function isIdentityDeferredOnAccount(user: Pick<User, 'user_metadata'> | null | undefined) {
+  const metadata: unknown = user?.user_metadata;
+  if (typeof metadata !== 'object' || metadata === null) return false;
+  const version = (metadata as Record<string, unknown>)[IDENTITY_DEFERRED_METADATA_KEY];
+  return typeof version === 'number' && version >= IDENTITY_DEFERRED_METADATA_VERSION;
+}
 
 export type AccountDeletionOutcome = 'deleted' | 'scheduled' | 'unconfirmed';
 
@@ -300,6 +371,9 @@ async function unregisterPushBeforeSignOut(api: MagicbookletApiClient) {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [credits, setCredits] = useState<number | null>(null);
+  const [creditsUpdatedAt, setCreditsUpdatedAt] = useState<number | null>(null);
+  // The balance on screen, for the foreground handler (see the resume effect).
+  const creditsRef = useRef<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const signOutInFlightRef = useRef<Promise<void> | null>(null);
@@ -307,7 +381,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const missingEnvKeys = useMemo(() => getMissingMobileEnvKeys(), []);
   const sessionUserIdRef = useRef<string | null>(null);
   const sessionRef = useRef<Session | null>(null);
-  const guestBootstrapRef = useRef(false);
+  // The guest bootstrap under way, and its retry after a failure (audit 02-6):
+  // failed attempts in a row, the time before which only a foreground return
+  // tries again, and the timer that tries then.
+  const guestBootstrapRef = useRef<Promise<void> | null>(null);
+  const guestBootstrapFailuresRef = useRef(0);
+  const guestBootstrapRetryAtRef = useRef(0);
+  const guestBootstrapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // False while the provider's effects are stopped (unmounted, or hidden by an
+  // <Activity>): no retry timer is armed then, and the effect arms it again.
+  const guestBootstrapActiveRef = useRef(true);
+  // Sign-ins under way. A guest bootstrap does not start beside one: the
+  // anonymous session it made could land after the account's and replace it.
+  const signInsInFlightRef = useRef(0);
   const rejectedSessionRecoveryRef = useRef<Promise<void> | null>(null);
   // A deletion asked for on this phone owns the session's end, whatever other
   // requests are told meanwhile.
@@ -326,9 +412,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // sign-out can send the person back to it after signing in (audit 01-12).
   const currentRouteRef = useRef<string | null>(null);
   const [mergeState, setMergeState] = useState<GuestMergeState>('idle');
-  const [mergeOutcome, setMergeOutcome] = useState<GuestAccountMergeStatus | null>(null);
+  // The link outcome kept until dismissed, with the account it is for. The ref
+  // is `undefined` until the copy on the device has been read or replaced.
+  const [keptMergeOutcome, setKeptMergeOutcome] = useState<KeptGuestMergeOutcome | null>(null);
+  const keptMergeOutcomeRef = useRef<KeptGuestMergeOutcome | null | undefined>(undefined);
+  const mergeOutcomeLoadRef = useRef<Promise<void> | null>(null);
+  // One redemption run at a time, and one ticket mint per guest.
+  const guestMergeRedemptionRef = useRef<Promise<void> | null>(null);
+  const guestTicketMintsRef = useRef(new Map<string, Promise<void>>());
   const authStateVersionRef = useRef(0);
   const profileRefreshRef = useRef<{ promise: Promise<void>; userId: string; version: number } | null>(null);
+  // When the last profile read started, which paces the one on a foreground return.
+  const lastProfileRefreshAtRef = useRef(0);
+  // How many times this app has set the balance from an answer of its own (a
+  // spend, a purchase, a link). A profile read that set out before the last of
+  // them carries an older balance, and does not replace it.
+  const creditsMovedHereRef = useRef(0);
   // The auth version whose balance has come from the server, or from a spend or
   // purchase this app made. The copy saved on the device never overwrites that.
   const creditsSettledVersionRef = useRef(-1);
@@ -356,7 +455,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     sessionUserIdRef.current = nextUserId;
     sessionRef.current = nextSession;
     setSession(nextSession);
-    if (userChanged || !nextUserId) setCredits(null);
+    if (userChanged || !nextUserId) {
+      setCredits(null);
+      setCreditsUpdatedAt(null);
+    }
+    if (nextSession) {
+      // A session in hand ends any wait for a guest one (audit 02-6).
+      guestBootstrapFailuresRef.current = 0;
+      guestBootstrapRetryAtRef.current = 0;
+      if (guestBootstrapTimerRef.current) clearTimeout(guestBootstrapTimerRef.current);
+      guestBootstrapTimerRef.current = null;
+    }
     // A launch or a sign-in: the numbers this account last showed go back on
     // screen while the profile refresh fetches fresh ones.
     if (userChanged && nextUserId) restoreAccountState(nextUserId, authStateVersionRef.current);
@@ -383,29 +492,74 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    * behaviour it had before guests existed: signed out, with sign-in prompts on
    * the surfaces that need an account. A hard failure here would leave a
    * first-launch user staring at a dead app.
+   *
+   * A failure is tried again while the app runs (audit 02-6): by a timer, after
+   * 5 s, 30 s and 2 min and then every 5 min; at once on a return to the
+   * foreground; and by a request that finds no session, once the wait is over
+   * (`whenDue`). Attempts never overlap.
    */
-  const ensureGuestSession = useCallback(async () => {
-    if (!isSupabaseConfigured || guestBootstrapRef.current) return;
-    guestBootstrapRef.current = true;
+  const ensureGuestSession = useCallback((options: { whenDue?: boolean } = {}): Promise<void> => {
+    const attempt = (whenDue: boolean): Promise<void> => {
+      if (!isSupabaseConfigured) return Promise.resolve();
+      if (guestBootstrapRef.current) return guestBootstrapRef.current;
 
-    try {
-      await initializeSupabaseAuth();
-      const { data, error } = await supabase.auth.getSession();
-      if (error) throw error;
-      if (data.session) return;
+      const retryLater = (delayMs: number) => {
+        guestBootstrapRetryAtRef.current = Date.now() + delayMs;
+        if (guestBootstrapTimerRef.current) clearTimeout(guestBootstrapTimerRef.current);
+        guestBootstrapTimerRef.current = null;
+        if (!guestBootstrapActiveRef.current) return;
+        guestBootstrapTimerRef.current = setTimeout(() => {
+          guestBootstrapTimerRef.current = null;
+          void attempt(true);
+        }, delayMs);
+      };
 
-      // Drain events recorded while fully signed out before replacing the
-      // installation identity with a Supabase guest. Installation-scoped
-      // entries remain sendable after the transition if this best-effort flush
-      // has to back off.
-      void flushShowcaseFeedEvents();
-      const { data: guest, error: guestError } = await supabase.auth.signInAnonymously();
-      if (guestError) throw guestError;
-      if (guest.session) applySessionState(guest.session);
-    } catch (error) {
-      console.warn('Could not start a guest session; continuing signed out', error);
-      guestBootstrapRef.current = false;
-    }
+      const waitMs = guestBootstrapRetryAtRef.current - Date.now();
+      if (whenDue && waitMs > 0) {
+        // Not yet. The timer waiting for that moment takes it, armed again here
+        // if an effect cleanup has cleared it.
+        if (!guestBootstrapTimerRef.current) retryLater(waitMs);
+        return Promise.resolve();
+      }
+      if (guestBootstrapTimerRef.current) clearTimeout(guestBootstrapTimerRef.current);
+      guestBootstrapTimerRef.current = null;
+
+      const bootstrap = (async () => {
+        try {
+          await initializeSupabaseAuth();
+          const { data, error } = await supabase.auth.getSession();
+          if (error) throw error;
+          if (!data.session) {
+            // A sign-in under way gives this device its session. Should it fail,
+            // the retry after the shortest wait finds none and starts a guest.
+            if (signInsInFlightRef.current > 0) {
+              retryLater(GUEST_BOOTSTRAP_RETRY_DELAYS_MS[0]);
+              return;
+            }
+            // Drain events recorded while fully signed out before replacing the
+            // installation identity with a Supabase guest. Installation-scoped
+            // entries remain sendable after the transition if this best-effort
+            // flush has to back off.
+            void flushShowcaseFeedEvents();
+            const { data: guest, error: guestError } = await supabase.auth.signInAnonymously();
+            if (guestError) throw guestError;
+            if (!guest.session) throw new Error('The guest sign-in returned no session.');
+            applySessionState(guest.session);
+          }
+          guestBootstrapFailuresRef.current = 0;
+          guestBootstrapRetryAtRef.current = 0;
+        } catch (error) {
+          console.warn('Could not start a guest session; continuing signed out', error);
+          guestBootstrapFailuresRef.current += 1;
+          retryLater(guestBootstrapRetryDelayMs(guestBootstrapFailuresRef.current));
+        }
+      })();
+      guestBootstrapRef.current = bootstrap.finally(() => {
+        guestBootstrapRef.current = null;
+      });
+      return guestBootstrapRef.current;
+    };
+    return attempt(options.whenDue === true);
   }, [applySessionState]);
 
   const getAccessToken = useCallback(async () => {
@@ -418,24 +572,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return cachedAccessToken;
     }
 
+    // Asked for a token with no session to give: the device has no identity at
+    // all, so a guest bootstrap that failed is tried again, as often as its
+    // backoff allows (audit 02-6). This request goes without one.
     try {
       await initializeSupabaseAuth();
       const { data, error } = await supabase.auth.getSession();
       if (error) {
         if (await recoverInvalidAuthSession(error)) {
+          void ensureGuestSession({ whenDue: true });
           return null;
         }
         throw error;
       }
       sessionRef.current = data.session ?? null;
+      if (!data.session) void ensureGuestSession({ whenDue: true });
       return data.session?.access_token ?? null;
     } catch (error) {
       if (await recoverInvalidAuthSession(error)) {
+        void ensureGuestSession({ whenDue: true });
         return null;
       }
       throw error;
     }
-  }, []);
+  }, [ensureGuestSession]);
 
   const api = useMemo(
     () => createApiClient({
@@ -476,6 +636,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const version = authStateVersionRef.current;
     if (existing?.userId === userId && existing.version === version) return existing.promise;
 
+    lastProfileRefreshAtRef.current = Date.now();
+    const movesAtStart = creditsMovedHereRef.current;
     let promise: Promise<void>;
     promise = queryClient.fetchQuery({
       queryKey: ['profile', userId],
@@ -486,9 +648,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       staleTime: 0,
     })
       .then((profile) => {
-        if (sessionUserIdRef.current === userId && authStateVersionRef.current === version) {
+        if (
+          sessionUserIdRef.current === userId
+          && authStateVersionRef.current === version
+          && creditsMovedHereRef.current === movesAtStart
+        ) {
           creditsSettledVersionRef.current = version;
           setCredits(profile.credits ?? null);
+          setCreditsUpdatedAt(Date.now());
         }
       })
       .catch((error) => {
@@ -622,6 +789,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (await recoverInvalidAuthSession(error)) {
           answered = true;
           resetAuthState();
+          // The stored session is gone for good: the device starts over as a
+          // guest, as a first launch does, rather than with no identity at all
+          // until its next cold start (audit 02-6).
+          void ensureGuestSession();
           return;
         }
         // Refreshing the stored session failed on the network, and auth-js keeps
@@ -682,8 +853,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // settled as a server answer, and the saved copy must not overwrite it either.
   const updateCredits = useCallback((nextCredits: number | null) => {
     creditsSettledVersionRef.current = authStateVersionRef.current;
+    creditsMovedHereRef.current += 1;
     setCredits(nextCredits);
+    setCreditsUpdatedAt(Date.now());
   }, []);
+
+  useEffect(() => {
+    creditsRef.current = credits;
+  }, [credits]);
+
+  // The balance follows every read of this identity's profile, not only the
+  // refreshes made here: Home, Profile and the side menu read the same query,
+  // and the balance kept here stayed behind what they had just fetched (audit
+  // 03-4). Values written into the cache by hand (the saved copy, edits made in
+  // place) are not reads, and are left out.
+  useEffect(() => {
+    if (!identityUserId) return;
+    // The app's own balance changes counted when the read now landing set out.
+    let movesAtReadStart = creditsMovedHereRef.current;
+    return queryClient.getQueryCache().subscribe((event) => {
+      if (event.type !== 'updated') return;
+      const [scope, userId] = event.query.queryKey;
+      if (scope !== 'profile' || userId !== identityUserId) return;
+      if (event.action.type === 'fetch') {
+        movesAtReadStart = creditsMovedHereRef.current;
+        return;
+      }
+      if (event.action.type !== 'success' || event.action.manual) return;
+      if (sessionUserIdRef.current !== identityUserId || creditsMovedHereRef.current !== movesAtReadStart) return;
+      const profile = event.query.state.data as { credits?: number | null } | undefined;
+      if (!profile) return;
+      creditsSettledVersionRef.current = authStateVersionRef.current;
+      setCredits(profile.credits ?? null);
+      setCreditsUpdatedAt(event.query.state.dataUpdatedAt || Date.now());
+    });
+  }, [identityUserId, queryClient]);
 
   // Saves what the account shows — balance, profile, sales total, unread count —
   // whenever one of them settles, so the next launch can draw them before the
@@ -692,8 +896,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!identityUserId) return;
     return persistAccountStateOnChange(queryClient, { userId: identityUserId, credits });
   }, [credits, identityUserId, queryClient]);
-
-  const acknowledgeMergeOutcome = useCallback(() => setMergeOutcome(null), []);
 
   useEffect(() => {
     // A referral reward is for signing up. Claiming it against a guest row
@@ -706,23 +908,80 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [api, registeredUser]);
 
   /**
+   * Keeps a merge ticket for the guest on this device (audit 02-7), minting one
+   * when none is kept for it, or when the one kept is near its expiry.
+   *
+   * A guest's credits and creations exist nowhere but on its identity, and a
+   * ticket used to be minted only at sign-in: a guest whose session ended first
+   * (a refresh token refused, the bootstrap starting a fresh guest) took them
+   * with it. Kept from the moment the guest holds something, the ticket moves
+   * them onto the account at the next sign-in on this device.
+   */
+  const ensureGuestMergeTicket = useCallback((): Promise<void> => {
+    const guestSession = sessionRef.current;
+    const guestUserId = isGuestSession(guestSession) ? guestSession?.user?.id : null;
+    if (!guestUserId) return Promise.resolve();
+    const minting = guestTicketMintsRef.current.get(guestUserId);
+    if (minting) return minting;
+
+    const mint = (async () => {
+      try {
+        const kept = keptGuestMergeTicketFor(await readGuestMergeTickets(), guestUserId, {
+          now: Date.now(),
+          validForMs: GUEST_MERGE_TICKET_RENEW_WITHIN_MS,
+        });
+        if (kept) return;
+        const { ticket, expiresAt } = await api.prepareGuestAccountMerge();
+        // A sign-in that replaced this guest meanwhile kept a ticket of its own.
+        if (sessionRef.current?.user?.id !== guestUserId) return;
+        await storeGuestMergeTicket({ guestUserId, ticket, expiresAt: expiresAt ?? null });
+      } catch (error) {
+        console.warn('Could not keep a merge ticket for this guest yet', error);
+      }
+    })().finally(() => {
+      guestTicketMintsRef.current.delete(guestUserId);
+    });
+    guestTicketMintsRef.current.set(guestUserId, mint);
+    return mint;
+  }, [api]);
+
+  // From the moment a guest holds credits: a purchase, or a balance bought
+  // before tickets were kept this way, read at launch.
+  const guestHoldsCredits = isGuest && credits !== null && credits > 0;
+  useEffect(() => {
+    if (guestHoldsCredits) void ensureGuestMergeTicket();
+  }, [ensureGuestMergeTicket, guestHoldsCredits, identityUserId]);
+
+  /**
    * Mint and store the ticket that will carry this guest's credits across.
    *
    * Runs *before* authentication, while the guest session is still the caller.
    * Throws on failure, and the sign-in is abandoned as a result: continuing
    * would replace the only session that can prove ownership of the guest's
    * balance, with nothing held back to reclaim it. Losing purchased credits
-   * silently is far worse than a sign-in the user can retry.
+   * silently is far worse than a sign-in the user can retry. The one exception
+   * is a ticket kept for this guest since it first held credits, which carries
+   * them just as well (audit 02-7).
    */
   const prepareGuestMerge = useCallback(async (previousSession: Session | null) => {
-    if (!shouldPrepareGuestMerge(previousSession)) return;
+    const guestUserId = previousSession?.user?.id;
+    if (!shouldPrepareGuestMerge(previousSession) || !guestUserId) return;
 
     setMergeState('preparing');
     try {
-      const { ticket } = await api.prepareGuestAccountMerge();
-      await storeGuestMergeTicket(ticket);
+      const { ticket, expiresAt } = await api.prepareGuestAccountMerge();
+      await storeGuestMergeTicket({ guestUserId, ticket, expiresAt: expiresAt ?? null });
       setMergeState('pending');
     } catch (error) {
+      const kept = keptGuestMergeTicketFor(await readGuestMergeTickets(), guestUserId, {
+        now: Date.now(),
+        validForMs: GUEST_MERGE_TICKET_MIN_VALIDITY_MS,
+      });
+      if (kept) {
+        console.warn('Could not mint a fresh guest ticket; signing in on the one kept', error);
+        setMergeState('pending');
+        return;
+      }
       setMergeState('failed');
       console.warn('Could not prepare the guest account link', error);
       // The code, not the wording, is what the sign-in screen maps to its
@@ -736,40 +995,130 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [api]);
 
+  // Reads the outcome kept on the device, once. An outcome decided in this run
+  // of the app before the read lands stands over it.
+  const loadKeptMergeOutcome = useCallback(() => {
+    mergeOutcomeLoadRef.current ??= readGuestMergeOutcome().then((stored) => {
+      if (keptMergeOutcomeRef.current !== undefined) return;
+      keptMergeOutcomeRef.current = stored;
+      setKeptMergeOutcome(stored);
+    });
+    return mergeOutcomeLoadRef.current;
+  }, []);
+
   /**
-   * Redeem the stored ticket against the registered session.
-   *
-   * Safe to call at any time: it is a no-op without a ticket, and the ticket is
-   * only cleared on a settled outcome. Failures are swallowed because the ticket
-   * survives them — this runs again at the next launch or foreground, which is
-   * what makes a crash between sign-in and redemption survivable.
+   * Folds a redemption's outcome into the one kept for the account (credits of
+   * two successes add up; one that cannot arrive outranks the rest), and keeps
+   * the result until the person dismisses it (audit 02-8).
    */
-  const redeemGuestMerge = useCallback(async () => {
+  const keepGuestMergeOutcome = useCallback(async (accountUserId: string, next: GuestMergeOutcome) => {
+    await loadKeptMergeOutcome();
+    const current = keptMergeOutcomeRef.current;
+    const base = current?.accountUserId === accountUserId ? current : null;
+    const combined = combineGuestMergeOutcomes(base, next);
+    if (!combined || combined === base) return;
+    const kept: KeptGuestMergeOutcome = { ...combined, accountUserId };
+    keptMergeOutcomeRef.current = kept;
+    setKeptMergeOutcome(kept);
+    await storeGuestMergeOutcome(kept);
+  }, [loadKeptMergeOutcome]);
+
+  const dismissGuestMergeOutcome = useCallback(() => {
+    keptMergeOutcomeRef.current = null;
+    setKeptMergeOutcome(null);
+    void clearGuestMergeOutcome();
+  }, []);
+
+  useEffect(() => {
+    // Only an account is ever shown an outcome, so a guest never reads it.
+    if (registeredUser) void loadKeptMergeOutcome();
+  }, [loadKeptMergeOutcome, registeredUser]);
+
+  const guestMergeOutcome = useMemo<GuestMergeOutcome | null>(() => {
+    if (!keptMergeOutcome || keptMergeOutcome.accountUserId !== registeredUser?.id) return null;
+    const { status, creditsMoved, at } = keptMergeOutcome;
+    return { status, creditsMoved, at };
+  }, [keptMergeOutcome, registeredUser]);
+
+  const runGuestMergeRedemption = useCallback(async () => {
     // Read from the session already in hand rather than asking Supabase again.
     // This runs on every launch and every foreground, and auth-provider-
     // performance.test.tsx pins the number of getSession() calls at startup
     // precisely so additions like this cannot quietly add I/O to the cold path.
-    const ticket = await readGuestMergeTicket();
-    if (!shouldRedeemGuestMerge(ticket, sessionRef.current)) return;
+    const accountUserId = getRegisteredUser(sessionRef.current)?.id;
+    if (!accountUserId) return;
+    const tickets = ticketsRedeemableFor(await readGuestMergeTickets(), accountUserId);
+    if (tickets.length === 0) return;
 
     setMergeState('merging');
+    let waiting = false;
+    let lost = false;
+    let outcome: GuestMergeOutcome | null = null;
+    for (const stored of tickets) {
+      // The account left this device mid-run: the rest wait for its next sign-in.
+      if (getRegisteredUser(sessionRef.current)?.id !== accountUserId) {
+        waiting = true;
+        break;
+      }
+      if (stored.redeemedForUserId === null) {
+        try {
+          // Recorded before it is sent, since the server may spend it for this
+          // account even when the answer never arrives.
+          await bindGuestMergeTicket(stored.ticket, accountUserId);
+        } catch (error) {
+          console.warn('Could not record the account a guest ticket is for; will retry', error);
+          waiting = true;
+          continue;
+        }
+      }
 
-    // The decision itself lives in guest-merge.ts so it is testable without
-    // rendering: it is what determines whether a bad network costs someone the
-    // credits they paid for.
-    let action;
-    try {
-      const result = await api.mergeGuestAccount(ticket as string);
-      action = resolveMergeRedeemAction(result.status);
-    } catch (error) {
-      console.warn('Could not link guest data yet; will retry', error);
-      action = resolveMergeRedeemFailureAction();
+      // The decision itself lives in guest-merge.ts so it is testable without
+      // rendering: it is what determines whether a bad network costs someone the
+      // credits they paid for.
+      let action;
+      try {
+        const result = await api.mergeGuestAccount(stored.ticket);
+        action = resolveMergeRedeemAction(result.status);
+        outcome = combineGuestMergeOutcomes(outcome, guestMergeOutcomeOf(result, Date.now()));
+        // The account's balance once the credits moved, as the server counted it.
+        if (typeof result.credits === 'number' && sessionUserIdRef.current === accountUserId) {
+          creditsSettledVersionRef.current = authStateVersionRef.current;
+          creditsMovedHereRef.current += 1;
+          setCredits(result.credits);
+          setCreditsUpdatedAt(Date.now());
+        }
+      } catch (error) {
+        console.warn('Could not link guest data yet; will retry', error);
+        action = resolveMergeRedeemFailureAction();
+      }
+      if (action.clearTicket) await removeGuestMergeTicket(stored.ticket);
+      if (action.nextState === 'pending') waiting = true;
+      if (action.nextState === 'failed') lost = true;
     }
 
-    if (action.clearTicket) await clearGuestMergeTicket();
-    setMergeState(action.nextState);
-    setMergeOutcome(action.outcome);
-  }, [api]);
+    setMergeState(waiting ? 'pending' : lost ? 'failed' : 'idle');
+    if (outcome) await keepGuestMergeOutcome(accountUserId, outcome);
+  }, [api, keepGuestMergeOutcome]);
+
+  /**
+   * Redeem the kept tickets against the registered session (audit 02-7, 04-8):
+   * every ticket already sent for this account, and every one not yet sent for
+   * any, each recorded against the account before it goes. A ticket sent for
+   * another account is left for that one.
+   *
+   * Safe to call at any time: it is a no-op without a ticket, and a ticket is
+   * only cleared on a settled outcome. Failures are swallowed because the ticket
+   * survives them — this runs again at the next launch or foreground, which is
+   * what makes a crash between sign-in and redemption survivable. A call made
+   * while a run is under way joins it, so the sign-in's own redemption and the
+   * launch retry beside it send each ticket once.
+   */
+  const redeemGuestMerge = useCallback((): Promise<void> => {
+    guestMergeRedemptionRef.current ??= runGuestMergeRedemption().finally(() => {
+      guestMergeRedemptionRef.current = null;
+    });
+    return guestMergeRedemptionRef.current;
+  }, [runGuestMergeRedemption]);
 
   useEffect(() => {
     // The retry that makes a ticket worth having. A crash, a dead network, or
@@ -785,6 +1134,58 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => subscription.remove();
   }, [redeemGuestMerge, registeredUser]);
+
+  /**
+   * "Set up later" on the account (audit 02-11): the `user_metadata` record the
+   * web keeps and reads at every sign-in there, so a creator who chose it on one
+   * device is not sent to set up a profile on another. The install keeps its own
+   * record beside it (the onboarding state), which this does not touch.
+   */
+  const markIdentityDeferredOnAccount = useCallback(async () => {
+    const account = getRegisteredUser(sessionRef.current);
+    if (!isSupabaseConfigured || !account || isIdentityDeferredOnAccount(account)) return;
+    try {
+      await initializeSupabaseAuth();
+      const { error } = await supabase.auth.updateUser({
+        data: { [IDENTITY_DEFERRED_METADATA_KEY]: IDENTITY_DEFERRED_METADATA_VERSION },
+      });
+      if (error) throw error;
+    } catch (error) {
+      // The choice still holds on this device, which keeps its own record of it.
+      console.warn('Could not record "Set up later" on the account', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    guestBootstrapActiveRef.current = true;
+    // A retry that was waiting when this effect last stopped (an <Activity>
+    // hiding the provider clears its timer) is armed again.
+    if (guestBootstrapRetryAtRef.current > 0) void ensureGuestSession({ whenDue: true });
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      const current = sessionRef.current;
+      if (!current) {
+        // No identity: the guest bootstrap is tried again now, whatever its
+        // backoff says. The network may well have come back with the person.
+        void ensureGuestSession();
+        return;
+      }
+      // Purchases settled by a store webhook or on the web, and referral
+      // rewards, land while the app is away (audit 03-4).
+      if (Date.now() - lastProfileRefreshAtRef.current >= RESUME_PROFILE_REFRESH_INTERVAL_MS) {
+        void refreshProfile();
+      }
+      // A ticket mint that failed for a guest holding credits is tried again.
+      const held = creditsRef.current;
+      if (isGuestSession(current) && held !== null && held > 0) void ensureGuestMergeTicket();
+    });
+    return () => {
+      guestBootstrapActiveRef.current = false;
+      subscription.remove();
+      if (guestBootstrapTimerRef.current) clearTimeout(guestBootstrapTimerRef.current);
+      guestBootstrapTimerRef.current = null;
+    };
+  }, [ensureGuestMergeTicket, ensureGuestSession, refreshProfile]);
 
   const beginFeedIdentityTransition = (previousSession: Session | null) => {
     const userId = previousSession?.user?.id;
@@ -822,7 +1223,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     linkedGuestUserIdsRef.current.set(accountUserId, linked);
   };
 
-  const signInWithPassword = async (email: string, password: string) => {
+  const runPasswordSignIn = async (email: string, password: string) => {
     if (!isSupabaseConfigured) {
       throw new Error(`Configure mobile auth first: ${missingEnvKeys.join(', ')}`);
     }
@@ -851,7 +1252,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await refreshProfile();
   };
 
-  const signInWithApple = async (mode: AuthMode) => {
+  const runAppleSignIn = async (mode: AuthMode) => {
     if (!isSupabaseConfigured) {
       throw new Error(`Configure mobile auth first: ${missingEnvKeys.join(', ')}`);
     }
@@ -879,7 +1280,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await refreshProfile();
   };
 
-  const signInWithGoogle = async () => {
+  const runGoogleSignIn = async () => {
     if (!isSupabaseConfigured) {
       throw new Error(`Configure mobile auth first: ${missingEnvKeys.join(', ')}`);
     }
@@ -906,6 +1307,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await redeemGuestMerge();
     await refreshProfile();
   };
+
+  /**
+   * Runs a sign-in with no guest bootstrap beside it (audit 02-6). One under
+   * way finishes first, so the guest it makes is the one this sign-in prepares
+   * a ticket for, rather than one that lands after the account and replaces
+   * it; and none starts until the sign-in is over. A guest ticket being minted
+   * is waited for too, so it is kept before the sign-in's own replaces it,
+   * never after the account has been sent the one it has.
+   */
+  const duringSignIn = async (signIn: () => Promise<void>) => {
+    signInsInFlightRef.current += 1;
+    try {
+      await Promise.all([guestBootstrapRef.current, ...guestTicketMintsRef.current.values()]);
+      await signIn();
+    } finally {
+      signInsInFlightRef.current -= 1;
+    }
+  };
+
+  const signInWithPassword = (email: string, password: string) => duringSignIn(() => runPasswordSignIn(email, password));
+  const signInWithApple = (mode: AuthMode) => duringSignIn(() => runAppleSignIn(mode));
+  const signInWithGoogle = () => duringSignIn(runGoogleSignIn);
 
   const isEndedDeletionSession = (candidate: Session | null) => (
     Boolean(candidate?.access_token) && candidate?.access_token === endedDeletionSessionTokenRef.current
@@ -968,10 +1391,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           console.warn('Could not clear local push state', error);
         })
         : undefined,
-      // A ticket still pending for a deleted account goes with it, so the next
-      // account on this phone cannot redeem that guest's credits. On any other
-      // way out it is the only copy of a guest's credit secret, and stays.
-      deleted ? clearGuestMergeTicket() : undefined,
+      // The tickets a deleted account could still redeem go with it, so the next
+      // account on this phone cannot take those guests' credits; so does what
+      // its links came to. On any other way out a ticket is the only copy of a
+      // guest's credit secret, and stays.
+      deleted ? forgetGuestMergeTicketsFor(endedUserId) : undefined,
+      deleted ? clearGuestMergeOutcome() : undefined,
       ...draftOwners.flatMap((userId) => [
         clearCreationDraftsForUser(userId),
         clearComposerDraftsForUser(userId),
@@ -987,11 +1412,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // would see that for up to a minute (five for the follow buttons).
       queryClient.removeQueries({ predicate: isViewerlessCreatorQuery });
     }
+    if (deleted) {
+      keptMergeOutcomeRef.current = null;
+      setKeptMergeOutcome(null);
+    }
     resetAuthState();
     // Every way out drops back to a guest identity rather than to nothing, so
-    // browsing and buying keep working. The bootstrap latch is cleared because
-    // the previous guest session is gone too.
-    guestBootstrapRef.current = false;
+    // browsing and buying keep working.
     void ensureGuestSession();
   };
 
@@ -1272,9 +1699,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isGuest,
         identityUserId,
         mergeState,
-        mergeOutcome,
-        acknowledgeMergeOutcome,
+        guestMergeOutcome,
+        dismissGuestMergeOutcome,
+        ensureGuestMergeTicket,
+        markIdentityDeferredOnAccount,
         credits,
+        creditsUpdatedAt,
         isLoading,
         isAuthConfigured: isSupabaseConfigured,
         missingEnvKeys,

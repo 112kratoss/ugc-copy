@@ -24,12 +24,30 @@ vi.mock('expo-secure-store', () => ({
 }));
 
 const {
-  clearGuestMergeTicket,
-  readGuestMergeTicket,
+  bindGuestMergeTicket,
+  clearGuestMergeOutcome,
+  forgetGuestMergeTicketsFor,
+  GUEST_MERGE_TICKETS_STORAGE_KEY,
+  LEGACY_GUEST_MERGE_TICKET_STORAGE_KEY,
+  readGuestMergeOutcome,
+  readGuestMergeTickets,
+  removeGuestMergeTicket,
+  storeGuestMergeOutcome,
   storeGuestMergeTicket,
 } = await import('@/lib/guest-merge-ticket-storage');
 
 const TICKET = 'b'.repeat(64);
+const OTHER_TICKET = 'c'.repeat(64);
+const THIRD_TICKET = 'd'.repeat(64);
+const EXPIRES_AT = '2026-11-14T06:00:00.000Z';
+
+function keep(ticket = TICKET, guestUserId = 'guest-1') {
+  return storeGuestMergeTicket({ guestUserId, ticket, expiresAt: EXPIRES_AT });
+}
+
+async function keptTickets() {
+  return (await readGuestMergeTickets()).map(({ ticket }) => ticket);
+}
 
 describe('guest merge failure modes', () => {
   beforeEach(() => {
@@ -45,10 +63,12 @@ describe('guest merge failure modes', () => {
       // token: the token dies with the process, so a user who killed the app
       // right after signing up would have lost their purchased credits with no
       // way to prove they were theirs.
-      await storeGuestMergeTicket(TICKET);
+      await keep();
 
       // Simulate a cold start — nothing in memory, only what survived on disk.
-      await expect(readGuestMergeTicket()).resolves.toBe(TICKET);
+      await expect(readGuestMergeTickets()).resolves.toEqual([
+        { ticket: TICKET, guestUserId: 'guest-1', redeemedForUserId: null, expiresAt: EXPIRES_AT },
+      ]);
     });
   });
 
@@ -58,17 +78,15 @@ describe('guest merge failure modes', () => {
 
       expect(action.clearTicket).toBe(false);
       expect(action.nextState).toBe('pending');
-      // Nothing to tell the user yet: it is still on its way.
-      expect(action.outcome).toBeNull();
     });
 
     it('survives a failed request without losing the stored ticket', async () => {
-      await storeGuestMergeTicket(TICKET);
+      await keep();
       const action = resolveMergeRedeemFailureAction();
 
-      if (action.clearTicket) await clearGuestMergeTicket();
+      if (action.clearTicket) await removeGuestMergeTicket(TICKET);
 
-      await expect(readGuestMergeTicket()).resolves.toBe(TICKET);
+      await expect(keptTickets()).resolves.toEqual([TICKET]);
     });
   });
 
@@ -76,15 +94,14 @@ describe('guest merge failure modes', () => {
     it('clears only after the data actually arrived', async () => {
       for (const status of ['merged', 'already_merged'] as const) {
         store.clear();
-        await storeGuestMergeTicket(TICKET);
+        await keep();
         const action = resolveMergeRedeemAction(status);
 
         expect(action.clearTicket).toBe(true);
         expect(action.nextState).toBe('idle');
-        expect(action.outcome).toBeNull();
 
-        await clearGuestMergeTicket();
-        await expect(readGuestMergeTicket()).resolves.toBeNull();
+        await removeGuestMergeTicket(TICKET);
+        await expect(readGuestMergeTickets()).resolves.toEqual([]);
       }
     });
 
@@ -93,26 +110,154 @@ describe('guest merge failure modes', () => {
       // instinct is to clean up — but the server left the ticket redeemable
       // precisely because this can be transient, and the secret exists nowhere
       // else. Clearing it strands the credits permanently.
-      await storeGuestMergeTicket(TICKET);
+      await keep();
       const action = resolveMergeRedeemAction('not_eligible');
 
       expect(action.clearTicket).toBe(false);
       expect(action.nextState).toBe('pending');
 
-      await expect(readGuestMergeTicket()).resolves.toBe(TICKET);
+      await expect(keptTickets()).resolves.toEqual([TICKET]);
     });
 
-    it('reports expiry and conflict as failures the user must see', async () => {
+    it('clears expiry and conflict, which spend the ticket, as failures', async () => {
       for (const status of ['expired', 'conflict'] as const) {
         const action = resolveMergeRedeemAction(status);
 
-        // Spent server-side, so keeping it buys nothing...
+        // Spent server-side, so keeping it buys nothing; what the person is
+        // told is guestMergeOutcomeOf's (guest-merge.test.ts).
         expect(action.clearTicket).toBe(true);
-        // ...but the balance is smaller than expected and only support can fix
-        // it, so this must never pass silently.
         expect(action.nextState).toBe('failed');
-        expect(action.outcome).toBe(status);
       }
+    });
+  });
+
+  // Audit 02-7 / 04-8: one slot meant the next guest's ticket overwrote a
+  // pending one, and whichever account signed in next redeemed it.
+  describe('several guests on one device', () => {
+    it("keeps each guest's ticket beside the others", async () => {
+      await keep(TICKET, 'guest-1');
+      await keep(OTHER_TICKET, 'guest-2');
+
+      await expect(readGuestMergeTickets()).resolves.toEqual([
+        { ticket: TICKET, guestUserId: 'guest-1', redeemedForUserId: null, expiresAt: EXPIRES_AT },
+        { ticket: OTHER_TICKET, guestUserId: 'guest-2', redeemedForUserId: null, expiresAt: EXPIRES_AT },
+      ]);
+    });
+
+    it('replaces a guest\'s unsent ticket with its fresher one', async () => {
+      await keep(TICKET, 'guest-1');
+      await keep(OTHER_TICKET, 'guest-1');
+
+      await expect(keptTickets()).resolves.toEqual([OTHER_TICKET]);
+    });
+
+    it('records the account a ticket is sent for, and refuses to record another', async () => {
+      await keep(TICKET, 'guest-1');
+      await bindGuestMergeTicket(TICKET, 'account-a');
+      // Sent again for the same account: a retry, allowed.
+      await bindGuestMergeTicket(TICKET, 'account-a');
+
+      await expect(bindGuestMergeTicket(TICKET, 'account-b')).rejects.toThrow(/another account/);
+      await expect(readGuestMergeTickets()).resolves.toEqual([
+        { ticket: TICKET, guestUserId: 'guest-1', redeemedForUserId: 'account-a', expiresAt: EXPIRES_AT },
+      ]);
+    });
+
+    it('never lets a fresh ticket push out one already sent for an account', async () => {
+      await keep(TICKET, 'guest-1');
+      await bindGuestMergeTicket(TICKET, 'account-a');
+      await keep(OTHER_TICKET, 'guest-1');
+
+      await expect(keptTickets()).resolves.toEqual([TICKET, OTHER_TICKET]);
+    });
+
+    it('loses neither of two changes asked for at once', async () => {
+      await Promise.all([keep(TICKET, 'guest-1'), keep(OTHER_TICKET, 'guest-2'), keep(THIRD_TICKET, 'guest-3')]);
+
+      await expect(keptTickets()).resolves.toEqual([TICKET, OTHER_TICKET, THIRD_TICKET]);
+    });
+  });
+
+  describe('a ticket kept by a build from before keyed tickets', () => {
+    it('is read, as a ticket no account has been sent', async () => {
+      store.set(LEGACY_GUEST_MERGE_TICKET_STORAGE_KEY, TICKET);
+
+      await expect(readGuestMergeTickets()).resolves.toEqual([
+        { ticket: TICKET, guestUserId: null, redeemedForUserId: null, expiresAt: null },
+      ]);
+    });
+
+    it('moves into the list at the first change, and only then leaves its old slot', async () => {
+      store.set(LEGACY_GUEST_MERGE_TICKET_STORAGE_KEY, TICKET);
+      await bindGuestMergeTicket(TICKET, 'account-a');
+
+      expect(store.has(LEGACY_GUEST_MERGE_TICKET_STORAGE_KEY)).toBe(false);
+      await expect(readGuestMergeTickets()).resolves.toEqual([
+        { ticket: TICKET, guestUserId: null, redeemedForUserId: 'account-a', expiresAt: null },
+      ]);
+    });
+
+    it('stays in its old slot when the list could not be written', async () => {
+      store.set(LEGACY_GUEST_MERGE_TICKET_STORAGE_KEY, TICKET);
+      failures.set = true;
+
+      await expect(bindGuestMergeTicket(TICKET, 'account-a')).rejects.toThrow();
+      expect(store.get(LEGACY_GUEST_MERGE_TICKET_STORAGE_KEY)).toBe(TICKET);
+    });
+
+    it('goes once the server has settled it', async () => {
+      store.set(LEGACY_GUEST_MERGE_TICKET_STORAGE_KEY, TICKET);
+      await removeGuestMergeTicket(TICKET);
+
+      await expect(readGuestMergeTickets()).resolves.toEqual([]);
+      expect(store.has(LEGACY_GUEST_MERGE_TICKET_STORAGE_KEY)).toBe(false);
+    });
+  });
+
+  describe('an account deleted on this device', () => {
+    it('takes its tickets, and the unsent ones, but leaves another account\'s', async () => {
+      await keep(TICKET, 'guest-1');
+      await bindGuestMergeTicket(TICKET, 'account-a');
+      await keep(OTHER_TICKET, 'guest-2');
+      await bindGuestMergeTicket(OTHER_TICKET, 'account-b');
+      await keep(THIRD_TICKET, 'guest-3');
+      store.set(LEGACY_GUEST_MERGE_TICKET_STORAGE_KEY, 'e'.repeat(64));
+
+      await forgetGuestMergeTicketsFor('account-a');
+
+      await expect(keptTickets()).resolves.toEqual([OTHER_TICKET]);
+      expect(store.has(LEGACY_GUEST_MERGE_TICKET_STORAGE_KEY)).toBe(false);
+    });
+
+    it('takes every ticket when the list cannot be read', async () => {
+      await keep(TICKET, 'guest-1');
+      failures.get = true;
+
+      await expect(forgetGuestMergeTicketsFor('account-a')).resolves.toBeUndefined();
+      expect(store.has(GUEST_MERGE_TICKETS_STORAGE_KEY)).toBe(false);
+    });
+  });
+
+  describe('the outcome kept until dismissed', () => {
+    it('is read back after a restart, and forgotten once dismissed', async () => {
+      const outcome = { accountUserId: 'account-a', status: 'merged' as const, creditsMoved: 250, at: 1_700_000_000_000 };
+      await storeGuestMergeOutcome(outcome);
+
+      await expect(readGuestMergeOutcome()).resolves.toEqual(outcome);
+
+      await clearGuestMergeOutcome();
+      await expect(readGuestMergeOutcome()).resolves.toBeNull();
+    });
+
+    it('never rejects, whatever the keychain does', async () => {
+      failures.set = true;
+      failures.get = true;
+      failures.delete = true;
+
+      await expect(storeGuestMergeOutcome({ accountUserId: 'a', status: 'conflict', creditsMoved: 0, at: 1 }))
+        .resolves.toBeUndefined();
+      await expect(readGuestMergeOutcome()).resolves.toBeNull();
+      await expect(clearGuestMergeOutcome()).resolves.toBeUndefined();
     });
   });
 
@@ -124,29 +269,38 @@ describe('guest merge failure modes', () => {
       // failure.
       failures.set = true;
 
-      await expect(storeGuestMergeTicket(TICKET)).rejects.toThrow();
+      await expect(keep()).rejects.toThrow();
     });
 
     it('refuses to store a malformed ticket at all', async () => {
-      await expect(storeGuestMergeTicket('not-a-ticket')).rejects.toThrow(/malformed/i);
+      await expect(keep('not-a-ticket')).rejects.toThrow(/malformed/i);
       expect(store.size).toBe(0);
     });
 
-    it('degrades to no-ticket rather than crashing startup on a read failure', async () => {
+    it('never writes over a list it could not read', async () => {
+      await keep(TICKET, 'guest-1');
+      failures.get = true;
+
+      await expect(keep(OTHER_TICKET, 'guest-2')).rejects.toThrow();
+      failures.get = false;
+      await expect(keptTickets()).resolves.toEqual([TICKET]);
+    });
+
+    it('degrades to no tickets rather than crashing startup on a read failure', async () => {
       // This runs on every launch. Throwing here would break the app for
       // everyone, including the overwhelming majority who have no ticket.
       failures.get = true;
 
-      await expect(readGuestMergeTicket()).resolves.toBeNull();
+      await expect(readGuestMergeTickets()).resolves.toEqual([]);
     });
 
     it('tolerates a failed delete', async () => {
       // A ticket that cannot be deleted is harmless: it is already consumed
       // server-side, so the next redemption returns already_merged or conflict.
-      await storeGuestMergeTicket(TICKET);
+      await keep();
       failures.delete = true;
 
-      await expect(clearGuestMergeTicket()).resolves.toBeUndefined();
+      await expect(removeGuestMergeTicket(TICKET)).resolves.toBeUndefined();
     });
   });
 });

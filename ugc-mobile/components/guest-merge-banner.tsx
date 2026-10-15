@@ -1,51 +1,33 @@
 import { View } from 'react-native';
 
 import { useAuth } from '@/lib/auth';
-import { describeMergeOutcome } from '@/lib/guest-merge';
+import { describeGuestMergeOutcome } from '@/lib/guest-merge';
 import { appTheme } from '@/lib/theme';
 
 import { SecondaryButton, StatusBlock } from './ui';
 
 /**
- * Tells a registered user what happened to the guest credits they arrived with.
+ * Tells a registered user what happened to the guest credits they arrived with
+ * (audit 02-8): how many were added, or why they were not.
  *
- * Non-blocking by design. A pending link is not an error — the ticket is stored
- * and retried on every launch and foreground — but the balance on screen is
- * smaller than the person expects until it lands, and saying nothing reads as
- * money that vanished at sign-up.
+ * The outcome is kept on the device until the person dismisses it here, so a
+ * restart before they look loses nothing, and a balance that jumped at sign-up
+ * has its reason on screen. A link still on its way is not shown: the ticket is
+ * retried on every launch and foreground, and a banner that came and went with
+ * each retry would be noise.
  *
- * Renders nothing in the common case, which is every user who was never a guest.
+ * Renders nothing without an outcome, which is everyone who was never a guest
+ * with credits, so it can be mounted for guests and accounts alike.
  */
 export function GuestMergeBanner() {
-  const { user, mergeState, mergeOutcome, acknowledgeMergeOutcome } = useAuth();
+  const { guestMergeOutcome, dismissGuestMergeOutcome } = useAuth();
+  const copy = guestMergeOutcome ? describeGuestMergeOutcome(guestMergeOutcome) : null;
+  if (!copy) return null;
 
-  if (!user) return null;
-
-  if (mergeOutcome) {
-    const outcome = describeMergeOutcome(mergeOutcome);
-    return (
-      <View style={{ gap: appTheme.spacing.compact }}>
-        <StatusBlock
-          tone={outcome.tone === 'success' ? 'success' : 'warning'}
-          title={outcome.tone === 'success' ? 'Guest credits added' : 'Guest credits not added yet'}
-          body={outcome.message}
-        />
-        <SecondaryButton label="Dismiss" onPress={acknowledgeMergeOutcome} />
-      </View>
-    );
-  }
-
-  // 'merging' is deliberately not surfaced: it lasts one request, and a banner
-  // that flashes on every foreground is noise rather than information.
-  if (mergeState === 'pending') {
-    return (
-      <StatusBlock
-        tone="info"
-        title="Adding your guest credits"
-        body="The credits and creations from before you signed up are still on their way. We keep retrying — you do not need to do anything."
-      />
-    );
-  }
-
-  return null;
+  return (
+    <View style={{ gap: appTheme.spacing.compact }}>
+      <StatusBlock tone={copy.tone} title={copy.title} body={copy.message} />
+      <SecondaryButton label="Dismiss" onPress={dismissGuestMergeOutcome} />
+    </View>
+  );
 }

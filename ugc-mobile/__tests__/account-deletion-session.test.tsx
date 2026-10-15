@@ -14,7 +14,7 @@ const state = vi.hoisted(() => ({
   clearComposerDrafts: vi.fn(),
   clearCreationDrafts: vi.fn(),
   clearGenerationAttempt: vi.fn(),
-  clearGuestMergeTicket: vi.fn(),
+  forgetGuestMergeTickets: vi.fn(),
   clearHomeFeed: vi.fn(),
   clearLocalPush: vi.fn(),
   clearPersistedSession: vi.fn(),
@@ -25,7 +25,7 @@ const state = vi.hoisted(() => ({
   getSession: vi.fn(),
   prepareGuestAccountMerge: vi.fn(),
   probe: vi.fn(),
-  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), removeQueries: vi.fn() },
+  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), getQueryCache: () => ({ subscribe: () => () => undefined }), removeQueries: vi.fn() },
   refreshSession: vi.fn(),
   replace: vi.fn(),
   sessionResolve: null as null | ((result: unknown) => void),
@@ -82,9 +82,14 @@ vi.mock('../lib/feed-event-queue', () => ({
   restoreShowcaseFeedEvents: vi.fn(async () => undefined),
 }));
 vi.mock('../lib/guest-merge-ticket-storage', () => ({
-  readGuestMergeTicket: vi.fn(async () => null),
+  bindGuestMergeTicket: vi.fn(async () => undefined),
+  clearGuestMergeOutcome: vi.fn(async () => undefined),
+  forgetGuestMergeTicketsFor: state.forgetGuestMergeTickets,
+  readGuestMergeOutcome: vi.fn(async () => null),
+  readGuestMergeTickets: vi.fn(async () => []),
+  removeGuestMergeTicket: vi.fn(async () => undefined),
+  storeGuestMergeOutcome: vi.fn(async () => undefined),
   storeGuestMergeTicket: vi.fn(async () => undefined),
-  clearGuestMergeTicket: state.clearGuestMergeTicket,
 }));
 vi.mock('../lib/persisted-account-state', () => ({
   clearPersistedAccountState: vi.fn(async () => undefined),
@@ -233,7 +238,7 @@ beforeEach(() => {
     state.clearLocalPush,
     state.clearHomeFeed,
     state.clearSearchHistory,
-    state.clearGuestMergeTicket,
+    state.forgetGuestMergeTickets,
     state.clearCreationDrafts,
     state.clearComposerDrafts,
     state.clearGenerationAttempt,
@@ -371,6 +376,9 @@ describe('deleting the account from this phone', () => {
 
     expect(outcome).toBe('scheduled');
     expectSessionEndedOnce();
+    // The guest tickets the account could still redeem go with it, so the next
+    // account on this phone cannot take those credits (audit 04-8).
+    expect(state.forgetGuestMergeTickets).toHaveBeenCalledWith('user-1');
     expect(state.feedTransition.commit).toHaveBeenCalledOnce();
     expect(state.feedTransition.cancel).not.toHaveBeenCalled();
     expect(latest.current?.user).toBeNull();
