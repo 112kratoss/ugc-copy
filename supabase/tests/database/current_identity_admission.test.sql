@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(21);
+select plan(28);
 
 -- Fixtures: an active account with a live session, a banned account, an
 -- account whose profile is missing, a merged guest, a soft-deleted account.
@@ -178,6 +178,74 @@ select set_config(
 );
 select is(public.current_identity_admission(), null,
   'an unknown subject gets no admission');
+
+-- An account being deleted. The deletion start marks the account deleting,
+-- then signs it out everywhere before it answers (account-deletion-service.ts),
+-- so its other devices still hold unexpired tokens whose session row is gone.
+-- The row must still say deleting: route-identity-admission.ts answers that
+-- with 409 ACCOUNT_DELETING ahead of the session check, where a bare 401 would
+-- tell the other phone nothing had happened to the account.
+reset role;
+insert into auth.users (
+  id, email, aud, role, is_anonymous, raw_app_meta_data, raw_user_meta_data,
+  created_at
+) values (
+  '92000000-0000-4000-8000-000000000006'::uuid, 'admission-deleting@example.invalid',
+  'authenticated', 'authenticated', false, '{}'::jsonb, '{}'::jsonb,
+  '2026-08-22T00:00:00Z'
+);
+insert into auth.sessions (id, user_id, created_at, updated_at) values
+  ('f2000000-0000-4000-8000-000000000016'::uuid,
+   '92000000-0000-4000-8000-000000000006'::uuid,
+   timezone('utc'::text, now()), timezone('utc'::text, now()));
+
+select is(
+  public.prepare_account_deletion('92000000-0000-4000-8000-000000000006'::uuid) ->> 'status',
+  'prepared',
+  'the deletion of the account is durably started'
+);
+
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"92000000-0000-4000-8000-000000000006","role":"authenticated","session_id":"f2000000-0000-4000-8000-000000000016"}',
+  true
+);
+select is(public.current_identity_admission() ->> 'state', 'deleting',
+  'an account being deleted reports the deleting state');
+select is((public.current_identity_admission() ->> 'session_valid')::boolean, true,
+  'its session is valid until the sign-out lands');
+
+-- The deletion's global sign-out removes every session of the account.
+reset role;
+delete from auth.sessions
+where user_id = '92000000-0000-4000-8000-000000000006'::uuid;
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"92000000-0000-4000-8000-000000000006","role":"authenticated","session_id":"f2000000-0000-4000-8000-000000000016"}',
+  true
+);
+select isnt(public.current_identity_admission(), null,
+  'a revoked token of an account being deleted still gets an admission row');
+select is(public.current_identity_admission() ->> 'state', 'deleting',
+  'that row reports the deleting state');
+select is((public.current_identity_admission() ->> 'session_valid')::boolean, false,
+  'and reports the revoked session invalid, so state must be read first');
+
+-- Once the sweep deletes the auth user, the same token gets no row at all,
+-- which the proxy answers 401.
+reset role;
+delete from auth.users
+where id = '92000000-0000-4000-8000-000000000006'::uuid;
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"92000000-0000-4000-8000-000000000006","role":"authenticated","session_id":"f2000000-0000-4000-8000-000000000016"}',
+  true
+);
+select is(public.current_identity_admission(), null,
+  'after the sweep removes the auth user, the same token gets no admission');
 
 -- The function inspects only the caller: another subject''s data is never
 -- addressable, because there is no argument to ask with.
