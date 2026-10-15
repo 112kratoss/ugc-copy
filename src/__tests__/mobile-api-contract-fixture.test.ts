@@ -1,6 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
+import { getAppVersionRouteResponse } from '@/lib/app-version-route-adapter-service';
+import {
+  MOBILE_CLIENT_COMPATIBILITY_POLICY,
+  type MobileCriticalUpdate,
+} from '@/lib/mobile-client-compatibility';
 import { POST_RESOURCE_FILE_URL_BATCH_LIMIT } from '@/lib/post-resource-bundles';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import { createPostResourceFileReadUrlForRoute } from '@/lib/post-resource-file-url-service';
@@ -43,7 +48,9 @@ type MobileApiContractEndpoint<Response> = {
 type MobileApiContractFixture = {
   schemaVersion: 1;
   endpoints: Record<string, MobileApiContractEndpoint<unknown>> & {
-    appVersion: MobileApiContractEndpoint<AppVersionResponse>;
+    appVersion: MobileApiContractEndpoint<AppVersionResponse & { criticalUpdate: MobileCriticalUpdate | null }> & {
+      responseVariants: { criticalUpdate: AppVersionResponse & { criticalUpdate: MobileCriticalUpdate } };
+    };
     mobileUpdateRequired: MobileApiContractEndpoint<MobileCompatibilityErrorResponse>;
     deleteAccount: MobileApiContractEndpoint<{
       success: boolean;
@@ -161,6 +168,7 @@ const expectedEndpointKeys = [
   'getMobileNotificationPreferences',
   'updateMobileNotificationPreferences',
   'readPostMedia',
+  'recordReferralVisit',
 ] as const;
 
 describe('shared mobile API v1 contract fixture', () => {
@@ -269,10 +277,9 @@ describe('shared mobile API v1 contract fixture', () => {
     const commerceSync: MobileCommerceSyncResponse = contract.endpoints.mobileCommerceSync.response;
     const notifications: MobileNotificationsResponse = contract.endpoints.mobileNotifications.response;
 
-    expect(appVersion.mobileCompatibility).toMatchObject({
-      currentApiVersion: 1,
-      minimumAppVersion: '0.0.1',
-    });
+    // The example is the policy the server enforces, not a placeholder: the app
+    // and its tests read the floor from here (04-5).
+    expect(appVersion.mobileCompatibility).toEqual(MOBILE_CLIENT_COMPATIBILITY_POLICY);
     expect(updateRequired).toMatchObject({
       code: 'MOBILE_UPDATE_REQUIRED',
       compatibility: appVersion.mobileCompatibility,
@@ -298,6 +305,27 @@ describe('shared mobile API v1 contract fixture', () => {
       category: 'commerce',
       isRead: false,
     });
+  });
+
+  // The critical-update lever (04-9) rides on the same answer: null until the
+  // deployment sets both variables, then the runtimes and instant they name.
+  it('answers /api/app-version in the shapes the fixture pins', async () => {
+    const endpoint = contract.endpoints.appVersion;
+    const answer = async (environment: Record<string, string>) => {
+      const response = await getAppVersionRouteResponse({
+        request: new Request(`http://localhost${endpoint.path}`),
+        environment: { VERCEL_GIT_COMMIT_SHA: 'build-123', ...environment },
+      });
+      expect(response.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
+      return response.json();
+    };
+
+    await expect(answer({})).resolves.toEqual(endpoint.response);
+    const { criticalUpdate } = endpoint.responseVariants.criticalUpdate;
+    await expect(answer({
+      MOBILE_CRITICAL_UPDATE_RUNTIME: criticalUpdate.runtimeVersions.join(','),
+      MOBILE_CRITICAL_UPDATE_AFTER: criticalUpdate.publishedAfter,
+    })).resolves.toEqual(endpoint.responseVariants.criticalUpdate);
   });
 
   // Feed ranking v4 (docs/plans/feed-algorithm-v4-industry-parity-2026-10-12.md

@@ -32,6 +32,17 @@ export type ReferralClaimOutcome = {
   reason?: string;
 };
 
+/** The program's terms as both clients print them: percents and days. */
+export type ReferralProgramTerms = {
+  inviterPercent: number;
+  inviteeFirstPurchasePercent: number;
+  attributionWindowDays: number;
+};
+
+const REFERRAL_PROGRAM_TERMS_CACHE_TTL_MS = 5 * 60 * 1000;
+let cachedReferralProgramTerms: { expiresAt: number; terms: ReferralProgramTerms | null } | null = null;
+let pendingReferralProgramTerms: Promise<ReferralProgramTerms | null> | null = null;
+
 function isRecord(value: unknown): value is JsonRecord {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
@@ -43,6 +54,69 @@ function stringValue(value: unknown) {
 function numberValue(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+// The program stores basis points; both clients print a percent.
+function referralProgramTerms(offer: JsonRecord): ReferralProgramTerms {
+  return {
+    inviterPercent: numberValue(offer.inviterRewardBps) / 100,
+    inviteeFirstPurchasePercent: numberValue(offer.inviteeRewardBps) / 100,
+    attributionWindowDays: numberValue(offer.attributionWindowDays),
+  };
+}
+
+async function readActiveReferralProgramTerms(): Promise<ReferralProgramTerms | null> {
+  // get_referral_dashboard answers only for a profile, so this reads the row it
+  // and create_referral_visit pick: the active program with the highest
+  // version, the one a visit made now binds to.
+  const { data, error } = await createServiceClient()
+    .from('referral_programs')
+    .select('inviter_reward_bps, invitee_reward_bps, attribution_window_days')
+    .eq('status', 'active')
+    .order('version', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!isRecord(data)) return null;
+  return referralProgramTerms({
+    inviterRewardBps: data.inviter_reward_bps,
+    inviteeRewardBps: data.invitee_reward_bps,
+    attributionWindowDays: data.attribution_window_days,
+  });
+}
+
+/**
+ * The terms `/api/referrals/me` carries as `program`, for surfaces that show them
+ * to someone without an account: the referral landing (on the visit answer) and
+ * the pricing banner. `null` while no program is active or when the terms cannot
+ * be read, and the surface then leaves the numbers out. Cached for five minutes
+ * per server instance; a failed read is not cached.
+ */
+export async function loadReferralProgramTerms(): Promise<ReferralProgramTerms | null> {
+  if (cachedReferralProgramTerms && cachedReferralProgramTerms.expiresAt > Date.now()) {
+    return cachedReferralProgramTerms.terms;
+  }
+  if (!pendingReferralProgramTerms) {
+    pendingReferralProgramTerms = readActiveReferralProgramTerms()
+      .then((terms) => {
+        cachedReferralProgramTerms = { expiresAt: Date.now() + REFERRAL_PROGRAM_TERMS_CACHE_TTL_MS, terms };
+        return terms;
+      })
+      .catch((error: unknown) => {
+        logBackendError('referral_program_terms_unavailable', { error });
+        return null;
+      })
+      .finally(() => {
+        pendingReferralProgramTerms = null;
+      });
+  }
+  return pendingReferralProgramTerms;
+}
+
+/** Test seam: the cache lives as long as the process, so a test must be able to start clean. */
+export function resetReferralProgramTermsCacheForTests(): void {
+  cachedReferralProgramTerms = null;
+  pendingReferralProgramTerms = null;
 }
 
 function referralErrorResponse(request: Request, message: string, status: number) {
@@ -110,11 +184,7 @@ function normalizeDashboard(data: unknown) {
 
   return {
     success: true as const,
-    program: {
-      inviterPercent: numberValue(data.offer.inviterRewardBps) / 100,
-      inviteeFirstPurchasePercent: numberValue(data.offer.inviteeRewardBps) / 100,
-      attributionWindowDays: numberValue(data.offer.attributionWindowDays),
-    },
+    program: referralProgramTerms(data.offer),
     code: enabled ? code : null,
     shareUrl: enabled && code ? buildReferralShareUrl(code) : null,
     stats: {
@@ -258,6 +328,9 @@ export async function recordReferralVisitResponse(request: Request) {
     visitToken,
     code: responseCode,
     expiresAt,
+    // The landing pages read the offer from here rather than printing their own
+    // numbers (03-7).
+    program: await loadReferralProgramTerms(),
   });
   if (source === 'web') {
     response.cookies.set({

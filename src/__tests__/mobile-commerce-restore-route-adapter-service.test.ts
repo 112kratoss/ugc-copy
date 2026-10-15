@@ -97,11 +97,18 @@ describe('mobile commerce restore route adapter service', () => {
 
   it('restores mobile entitlements after auth and restore throttling', async () => {
     const adminSupabase = { service: 'admin' } as unknown as SupabaseClient;
+    // A purchase the restore could not settle reaches the app as it was
+    // reported, beside what did settle (03-10).
     const restoreResult = {
       success: true,
       credits: 42,
       restoredCreditPurchases: 1,
       alreadyProcessedCreditPurchases: 0,
+      skipped: [{
+        transactionId: 'GPA.3301-2207-4419-55021',
+        productId: 'magicbooklet.credits.starter',
+        reason: 'transaction_conflict' as const,
+      }],
       entitlements: [],
     };
     const restoreMobileEntitlements = vi.fn(async () => restoreResult);
@@ -140,6 +147,7 @@ describe('mobile commerce restore route adapter service', () => {
       credits: 42,
       restoredCreditPurchases: 1,
       alreadyProcessedCreditPurchases: 0,
+      skipped: [],
       entitlements: [],
     };
     const notify = vi.fn(async () => null);

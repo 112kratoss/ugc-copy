@@ -3,9 +3,13 @@ import 'server-only';
 import { NextResponse } from 'next/server';
 
 import { API_CACHE_CONTROL, createApiResponseHeaders } from '@/lib/api-cache';
-import { MOBILE_CLIENT_COMPATIBILITY_POLICY } from '@/lib/mobile-client-compatibility';
+import {
+  MOBILE_CLIENT_COMPATIBILITY_POLICY,
+  readMobileCriticalUpdate,
+  type MobileCriticalUpdateEnvironment,
+} from '@/lib/mobile-client-compatibility';
 
-type AppVersionEnvironment = {
+type AppVersionEnvironment = MobileCriticalUpdateEnvironment & {
   RELEASE_GIT_SHA?: string;
   VERCEL_GIT_COMMIT_SHA?: string;
   VERCEL_DEPLOYMENT_ID?: string;
@@ -38,6 +42,8 @@ function readProcessEnvironment(): AppVersionEnvironment {
     VERCEL_GIT_COMMIT_SHA: process.env.VERCEL_GIT_COMMIT_SHA,
     VERCEL_DEPLOYMENT_ID: process.env.VERCEL_DEPLOYMENT_ID,
     VERCEL_URL: process.env.VERCEL_URL,
+    MOBILE_CRITICAL_UPDATE_RUNTIME: process.env.MOBILE_CRITICAL_UPDATE_RUNTIME,
+    MOBILE_CRITICAL_UPDATE_AFTER: process.env.MOBILE_CRITICAL_UPDATE_AFTER,
   };
 }
 
@@ -52,6 +58,7 @@ export async function getAppVersionRouteResponse({
     {
       buildId: resolveBuildId(environment),
       mobileCompatibility: MOBILE_CLIENT_COMPATIBILITY_POLICY,
+      criticalUpdate: readMobileCriticalUpdate(environment),
     },
     {
       headers: createApiResponseHeaders(request, API_CACHE_CONTROL.appVersionNoStore),

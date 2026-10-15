@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { logBackendError } from '@/lib/backend-logger';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 import {
   notifyReferralRewardSettlement,
   settleCreditPurchaseReferralRewards,
@@ -19,7 +19,7 @@ import {
   isExternalServiceTimeoutError,
 } from '@/lib/provider-fetch';
 import { isProductionDeployment } from '@/lib/backend-environment';
-import { PRICING_PLAN_MAP, type PricingPlan } from '@/lib/pricing';
+import { PRICING_PLAN_MAP, PRICING_PLANS, type PricingPlan, type PricingPlanId } from '@/lib/pricing';
 import type {
   ReferralRewardNotification,
   ReferralRewardSettlement,
@@ -76,20 +76,35 @@ export type RunAfterResponse = (task: () => Promise<unknown>) => void;
 export class MobileCommerceError extends Error {
   constructor(
     message: string,
-    public status = 400
+    public status = 400,
+    /**
+     * The settlement RPC status behind the refusal, for callers that must tell
+     * apart refusals sharing one message.
+     */
+    public settlementStatus: string | null = null,
   ) {
     super(message);
     this.name = 'MobileCommerceError';
   }
 }
 
-const MOBILE_CREDIT_PRODUCTS = {
-  'magicbooklet.credits.starter': 'starter',
-  'magicbooklet.credits.creator': 'creator',
-  'magicbooklet.credits.pro': 'pro',
-} as const;
+/**
+ * A purchase the restore left alone, reported rather than failing the restore.
+ * `transaction_conflict`: the store transaction is already on file for another
+ * account, product or store label, so it cannot settle here.
+ */
+export interface SkippedMobileCreditPurchase {
+  transactionId: string;
+  productId: string;
+  reason: 'transaction_conflict';
+}
 
-type MobileCreditProductId = keyof typeof MOBILE_CREDIT_PRODUCTS;
+// Store product → pack, from contracts/credit-packs-v1.json: the same list the
+// app's store products are pinned to, so a pack the app sells is one this grants.
+// A Map, so no prototype key ('constructor', '__proto__', …) can resolve.
+const MOBILE_CREDIT_PRODUCTS: ReadonlyMap<string, PricingPlanId> = new Map(
+  PRICING_PLANS.map((plan) => [plan.mobileProductId, plan.id]),
+);
 
 interface RevenueCatPurchase {
   id?: string | number | null;
@@ -163,13 +178,8 @@ export function normalizeMobileCommercePayload(body: unknown): NormalizedMobileC
 }
 
 export function resolveMobileCreditProduct(productId: string): PricingPlan | null {
-  // Object.hasOwn keeps prototype keys ('constructor', '__proto__', …) from
-  // resolving to truthy Object.prototype members through the plain-object map.
-  if (!Object.hasOwn(MOBILE_CREDIT_PRODUCTS, productId)) {
-    return null;
-  }
-
-  return PRICING_PLAN_MAP[MOBILE_CREDIT_PRODUCTS[productId as MobileCreditProductId]];
+  const planId = MOBILE_CREDIT_PRODUCTS.get(productId);
+  return planId ? PRICING_PLAN_MAP[planId] : null;
 }
 
 function providerStoreMatches(provider: MobilePurchaseProvider, store: string | null | undefined) {
@@ -616,7 +626,7 @@ function throwMobileSettlementError(status: string | null, entitlementType: Mobi
     || status === 'product_mismatch'
     || status === 'price_mismatch'
   ) {
-    throw new MobileCommerceError('Mobile purchase does not match the server-issued intent.', 409);
+    throw new MobileCommerceError('Mobile purchase does not match the server-issued intent.', 409, status);
   }
   if (status === 'revoked') {
     throw new MobileCommerceError('This mobile store transaction has been revoked.', 409);
@@ -1178,19 +1188,41 @@ export async function restoreMobileEntitlements(
     revenueCatApiKey: options.revenueCatApiKey,
   });
   const creditResults: MobileCommerceSyncResult[] = [];
+  const skipped: SkippedMobileCreditPurchase[] = [];
   let restoredCreditPurchases = 0;
   let alreadyProcessedCreditPurchases = 0;
   const runAfterResponse = options.runAfterResponse && oneAtATime(options.runAfterResponse);
 
   for (const purchase of listRestorableMobileCreditPurchases(revenueCatResponse)) {
-    const result = await completeMobileCreditPurchase({
-      adminSupabase,
-      userId,
-      productId: purchase.productId,
-      provider: purchase.provider,
-      transactionId: purchase.transactionId,
-      runAfterResponse,
-    });
+    let result: MobileCommerceSyncResult;
+    try {
+      result = await completeMobileCreditPurchase({
+        adminSupabase,
+        userId,
+        productId: purchase.productId,
+        provider: purchase.provider,
+        transactionId: purchase.transactionId,
+        runAfterResponse,
+      });
+    } catch (error) {
+      // A transaction already on file elsewhere (a guest's receipt RevenueCat
+      // moved to this account, say) can never settle here, and failing on it
+      // would stop every other purchase from settling too. It is reported instead.
+      if (error instanceof MobileCommerceError && error.settlementStatus === 'transaction_conflict') {
+        logBackendWarning('mobile_restore_purchase_skipped', {
+          reason: 'transaction_conflict',
+          productId: purchase.productId,
+          provider: purchase.provider,
+        });
+        skipped.push({
+          transactionId: purchase.transactionId,
+          productId: purchase.productId,
+          reason: 'transaction_conflict',
+        });
+        continue;
+      }
+      throw error;
+    }
     creditResults.push(result);
     if (result.alreadyProcessed) {
       alreadyProcessedCreditPurchases += 1;
@@ -1234,13 +1266,18 @@ export async function restoreMobileEntitlements(
       : [];
   });
 
-  await sendPurchaseNotification(runAfterResponse, () => notifyMobilePurchasesRestored(adminSupabase, userId));
+  // Each purchase settled above has announced itself already. A refresh that
+  // settled nothing new has nothing to tell, so only one that did says so.
+  if (restoredCreditPurchases > 0) {
+    await sendPurchaseNotification(runAfterResponse, () => notifyMobilePurchasesRestored(adminSupabase, userId));
+  }
 
   return {
     success: true,
     credits,
     restoredCreditPurchases,
     alreadyProcessedCreditPurchases,
+    skipped,
     entitlements: [...creditResults, ...marketplaceEntitlements, ...postEntitlements],
   };
 }
