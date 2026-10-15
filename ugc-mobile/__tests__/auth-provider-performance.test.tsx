@@ -551,7 +551,9 @@ describe('AuthProvider startup performance', () => {
 
     expect(state.queryClient.getQueryData).toHaveBeenCalledWith(['profile', 'user-1']);
     expect(latest.current?.credits).toBe(1400);
-    expect(latest.current?.marketplaceSpendableCredits).toBe(1100);
+    // The saved total fell by 100 since the saved profile's split; a spend draws
+    // promotional credits first, so the spendable part stands at 1200.
+    expect(latest.current?.marketplaceSpendableCredits).toBe(1200);
 
     await renderer.act(async () => {
       state.sessionResolve?.({ data: { session }, error: null });
