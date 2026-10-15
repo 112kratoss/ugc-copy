@@ -113,14 +113,17 @@ export class ApiError extends Error {
 /**
  * True for a request this client gave up on at its own deadline. It had been
  * sent, so the server may have acted on it; only the answer is missing. A
- * request that cannot get out at all (no connection) fails at once instead.
+ * request that cannot get out at all (no connection) fails at once instead,
+ * and one the deadline caught still waiting for its session token never left
+ * the device (`sent: false`), so nothing can have happened on the server.
  */
 export function isRequestTimeoutError(error: unknown): boolean {
   return error instanceof ApiError
     && error.status === 0
     && typeof error.details === 'object'
     && error.details !== null
-    && (error.details as { timedOut?: unknown }).timedOut === true;
+    && (error.details as { timedOut?: unknown }).timedOut === true
+    && (error.details as { sent?: unknown }).sent !== false;
 }
 
 /**
@@ -486,6 +489,33 @@ function networkFailureMessage(root: string) {
   }
 
   return 'Network request failed. Please check your connection and try again.';
+}
+
+const GAVE_UP = Symbol('gave up');
+
+/**
+ * What `work` settles with, or GAVE_UP if `signal` aborts first. Nothing here
+ * can cancel `work`: it runs on, and a late result or failure is dropped.
+ */
+function unlessGivenUp<T>(work: Promise<T>, signal: AbortSignal): Promise<T | typeof GAVE_UP> {
+  return new Promise((resolve, reject) => {
+    const giveUp = () => resolve(GAVE_UP);
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', giveUp);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', giveUp);
+        reject(error);
+      },
+    );
+    if (signal.aborted) {
+      giveUp();
+    } else {
+      signal.addEventListener('abort', giveUp, { once: true });
+    }
+  });
 }
 
 function absolutizeMediaUrl(root: string, url: string | null | undefined) {
@@ -870,19 +900,14 @@ export function createApiClient({
         }
       }
       const requestId = headers.get(REQUEST_ID_HEADER) ?? undefined;
-
-      let sentSessionToken = false;
-      if (options.auth !== false) {
-        const token = await getAccessToken();
-        if (token) {
-          headers.set('Authorization', `Bearer ${token}`);
-          sentSessionToken = true;
-        }
-      }
-
       const url = `${root}${path}`;
       let response: Response;
       let body: unknown;
+      // Armed before the wait for a session token, so the deadline and the
+      // caller's cancellation cover that wait too. It can be a token refresh
+      // stalled on the network and holding auth-js's lock, which Android's
+      // HTTP client never times out; without this every request queued
+      // behind it would spin for good.
       const requestController = new AbortController();
       const upstreamSignal = init.signal;
       const abortFromUpstream = () => requestController.abort(upstreamSignal?.reason);
@@ -897,23 +922,48 @@ export function createApiClient({
         timedOut = true;
         requestController.abort(new Error(`Request timed out after ${timeoutMs}ms`));
       }, timeoutMs);
+      let sentSessionToken = false;
       try {
-        response = await fetcher(url, {
-          ...init,
-          headers,
-          signal: requestController.signal,
-        });
-        // fetch resolves at headers. Keep timeout and caller cancellation
-        // active until the body is consumed, including signed-link responses.
-        body = await parseResponse(response);
-      } catch (error) {
-        throw new ApiError(networkFailureMessage(root), 0, {
-          url,
-          cause: error instanceof Error ? error.message : String(error),
-          // Read by isRequestTimeoutError: the request had left, so the server
-          // may have acted on it.
-          ...(timedOut ? { timedOut: true } : {}),
-        }, requestId);
+        if (options.auth !== false) {
+          // Given up on, never cancelled: only a sign-out may cut a refresh
+          // short (lib/supabase-fetch.ts). The refresh keeps the lock and runs
+          // on, and a later request gets the token it ends with.
+          const token = await unlessGivenUp(getAccessToken(), requestController.signal);
+          if (token && token !== GAVE_UP) {
+            headers.set('Authorization', `Bearer ${token}`);
+            sentSessionToken = true;
+          }
+        }
+        if (requestController.signal.aborted) {
+          throw new ApiError(networkFailureMessage(root), 0, {
+            url,
+            cause: timedOut
+              ? `Request timed out after ${timeoutMs}ms before it was sent`
+              : 'Request canceled before it was sent',
+            ...(timedOut ? { timedOut: true } : {}),
+            // Read by isRequestTimeoutError: nothing left the device.
+            sent: false,
+          }, requestId);
+        }
+
+        try {
+          response = await fetcher(url, {
+            ...init,
+            headers,
+            signal: requestController.signal,
+          });
+          // fetch resolves at headers. Keep timeout and caller cancellation
+          // active until the body is consumed, including signed-link responses.
+          body = await parseResponse(response);
+        } catch (error) {
+          throw new ApiError(networkFailureMessage(root), 0, {
+            url,
+            cause: error instanceof Error ? error.message : String(error),
+            // Read by isRequestTimeoutError: the request had left, so the server
+            // may have acted on it.
+            ...(timedOut ? { timedOut: true } : {}),
+          }, requestId);
+        }
       } finally {
         clearTimeout(timeoutId);
         upstreamSignal?.removeEventListener('abort', abortFromUpstream);
