@@ -1201,6 +1201,19 @@ describe('mobile external post composer', () => {
     expect(routerState.replace).toHaveBeenCalledWith({ pathname: '/(tabs)/profile', params: { tab: 'posts', postId: 'post-123', published: '1' } });
   });
 
+  // An edit refreshed Your Sales and a new post did not, so a listing made in
+  // the composer was missing from it.
+  it('refreshes Your Sales after a new post', async () => {
+    paramsState.params = {};
+    await renderScreen();
+    queryClientState.invalidateQueries.mockClear();
+    renderer.act(() => mutationState.options?.onSuccess?.({ postId: 'post-123' }));
+    // The composer leaves on the next tick; waiting keeps that out of the next test.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(queryClientState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['seller-dashboard-posts', 'user-123'] });
+  });
+
   describe('after saving an edit', () => {
     const editedPost = {
       id: 'post-edit-1',

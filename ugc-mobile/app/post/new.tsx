@@ -2309,6 +2309,10 @@ function NewPostComposer() {
             (current) => upsertOptimisticOwnerPostInfiniteData(current, optimisticPost)
           );
         }
+        // Your Sales keeps the list it read, so a post made with a recipe, a new
+        // listing, was missing from it; an edit refreshes it with the screens it
+        // returns to.
+        void queryClient.invalidateQueries({ queryKey: ['seller-dashboard-posts', user?.id] });
       }
       void invalidatePostCaches(queryClient, user?.id);
       if (isEditMode && targetPostId) {

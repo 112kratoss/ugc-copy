@@ -280,7 +280,8 @@ const successCases: Array<{
     }),
   },
   { key: 'listPosts', call: (api) => api.listPosts({ limit: 10 }) },
-  { key: 'listOwnerPosts', call: (api) => api.listOwnerPosts({ limit: 10 }) },
+  // Your Sales' first page: listings only, with the seller totals (audit 03-7).
+  { key: 'listOwnerPosts', call: (api) => api.listOwnerPosts({ limit: 10, listingsOnly: true, includeSummary: true }) },
   { key: 'getOwnerPost', call: (api) => api.getOwnerPost('post-1') },
   { key: 'updatePost', call: (api) => api.updatePost('post-1', { title: 'Updated post' }) },
   { key: 'archivePost', call: (api) => api.archivePost('post-1') },

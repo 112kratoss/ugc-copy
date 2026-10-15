@@ -7,6 +7,7 @@ import {
   type MobileCriticalUpdate,
 } from '@/lib/mobile-client-compatibility';
 import { MobileCommerceError, unlockPostResourceBundleWithCredits } from '@/lib/mobile-commerce';
+import { listOwnerPostsForRoute } from '@/lib/owner-post-list-route-service';
 import { POST_RESOURCE_FILE_URL_BATCH_LIMIT } from '@/lib/post-resource-bundles';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import { createPostResourceFileReadUrlForRoute } from '@/lib/post-resource-file-url-service';
@@ -314,6 +315,31 @@ describe('shared mobile API v1 contract fixture', () => {
       type: 'credits_purchased',
       category: 'commerce',
       isRead: false,
+    });
+  });
+
+  // Your Sales asks for listings only (audit 03-7): the route has to take the
+  // query the fixture documents and answer with listings and the seller totals.
+  it('serves Your Sales the listings-only owner list the fixture documents', async () => {
+    const endpoint = mobileApiContract.endpoints.listOwnerPosts;
+    const loadOwnerPosts = vi.fn(async () => endpoint.response.posts);
+    const loadOwnerPostSalesSummary = vi.fn(async () => endpoint.response.summary);
+
+    const result = await listOwnerPostsForRoute({
+      userId: 'user-1',
+      searchParams: new URLSearchParams(endpoint.query),
+      loadOwnerPosts,
+      loadOwnerPostSalesSummary,
+    });
+
+    expect(loadOwnerPosts).toHaveBeenCalledWith('user-1', expect.objectContaining({ listingsOnly: true }));
+    expect(loadOwnerPostSalesSummary).toHaveBeenCalledWith('user-1');
+    expect(result).toMatchObject({ ok: true, posts: endpoint.response.posts, summary: endpoint.response.summary });
+    // The state a listing row is drawn from: moderation, the listing check,
+    // retirement, and a post deleted while it had buyers.
+    expect(endpoint.response.posts[0]).toMatchObject({
+      tombstonedAt: null,
+      bundle: { reviewStatus: 'visible', quality: { eligible: true, message: null }, retiredAt: null },
     });
   });
 

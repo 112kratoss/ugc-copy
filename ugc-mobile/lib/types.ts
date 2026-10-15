@@ -1471,6 +1471,9 @@ export interface MarketplaceResourceDetailResponse {
   bundle: MarketplaceResourceDetail;
 }
 
+/** A post's moderation state: anything but 'visible' keeps its recipe off the marketplace. */
+export type OwnerPostReviewStatus = 'visible' | 'flagged' | 'hidden';
+
 export interface OwnerPostBundleSummary {
   id: string;
   accessMode: 'free' | 'paid';
@@ -1479,6 +1482,15 @@ export interface OwnerPostBundleSummary {
   salesCount: number;
   earningsUsdCents: number;
   resourceKinds: PostResourceKind[];
+  /** The post's moderation state, as the web sell page reads it. */
+  reviewStatus?: OwnerPostReviewStatus | null;
+  /**
+   * The marketplace's listing check and its first issue, graded by the server
+   * as the web sell page grades it; null when it could not be graded.
+   */
+  quality?: { eligible: boolean; message: string | null } | null;
+  /** Set once the creator removed the recipe after it had buyers; it is no longer sold. */
+  retiredAt?: string | null;
 }
 
 export interface OwnerPostListItem {
@@ -1506,6 +1518,11 @@ export interface OwnerPostListItem {
   ownerPath?: string;
   bundle: OwnerPostBundleSummary | null;
   archivedAt?: string | null;
+  /**
+   * Set when the owner deleted the post while it had buyers: it is kept for
+   * them, and the server refuses to edit or restore it (409 POST_DELETED).
+   */
+  tombstonedAt?: string | null;
   generationId?: string | null;
   sourceTool?: string | null;
   sourceToolSlug?: string | null;

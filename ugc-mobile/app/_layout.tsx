@@ -36,6 +36,7 @@ import {
 import { ACCOUNT_DELETION_SCHEDULED_NOTICE, AuthProvider, useAuth } from '@/lib/auth';
 import { showMessageDialog } from '@/lib/dialog';
 import { notificationBadgeQueryKey } from '@/lib/notification-badge';
+import { CREATOR_PAYOUTS_QUERY_KEY } from '@/lib/use-creator-payout-state';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { readAppVersionParts } from '@/lib/app-version-label';
 import { subscribeToAppForeground } from '@/lib/app-foreground';
@@ -639,6 +640,12 @@ function NotificationResponseCoordinator() {
   useEffect(() => subscribeToNotificationsReceived(({ type }) => {
     void queryClient.invalidateQueries({ queryKey: notificationBadgeQueryKey(user?.id) });
     void queryClient.invalidateQueries({ queryKey: ['mobile-notifications', user?.id] });
+    // A sale, a free open or a payout's outcome moves Your Sales and the payout
+    // balance, and a push only refreshed the alerts (audit 03-6). Every alert,
+    // so a kind added later is not missed: only a screen on display refetches,
+    // and the rest are read fresh when they next open.
+    void queryClient.invalidateQueries({ queryKey: ['seller-dashboard-posts'] });
+    void queryClient.invalidateQueries({ queryKey: [CREATOR_PAYOUTS_QUERY_KEY] });
     // A run that failed with no creator watching it was refunded on the server,
     // and the balance on screen still holds its cost — the creators would refuse
     // Generate on it and point at Pricing. A purchase or a reward settled while

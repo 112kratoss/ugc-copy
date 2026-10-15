@@ -1455,9 +1455,16 @@
               "resourceKinds": [
                 "prompt",
                 "notes"
-              ]
+              ],
+              "reviewStatus": "visible",
+              "quality": {
+                "eligible": true,
+                "message": null
+              },
+              "retiredAt": null
             },
             "archivedAt": null,
+            "tombstonedAt": null,
             "generationId": "generation-1",
             "sourceTool": "Magicbooklet",
             "sourceToolSlug": "magicbooklet",
@@ -1468,6 +1475,11 @@
     },
     "listOwnerPosts": {
       "method": "GET",
+      "query": {
+        "scope": "owner",
+        "listingsOnly": "true",
+        "includeSummary": "true"
+      },
       "path": "/api/posts",
       "auth": "required",
       "cacheControl": "private, no-store",
@@ -1501,9 +1513,16 @@
               "resourceKinds": [
                 "prompt",
                 "notes"
-              ]
+              ],
+              "reviewStatus": "visible",
+              "quality": {
+                "eligible": true,
+                "message": null
+              },
+              "retiredAt": null
             },
             "archivedAt": null,
+            "tombstonedAt": null,
             "generationId": "generation-1",
             "sourceTool": "Magicbooklet",
             "sourceToolSlug": "magicbooklet",
@@ -1516,6 +1535,11 @@
           "offset": 0,
           "nextOffset": null,
           "nextCursor": null
+        },
+        "summary": {
+          "earningsUsdCents": 0,
+          "listingCount": 1,
+          "salesCount": 0
         }
       },
       "pagination": {
@@ -1561,9 +1585,16 @@
             "resourceKinds": [
               "prompt",
               "notes"
-            ]
+            ],
+            "reviewStatus": "visible",
+            "quality": {
+              "eligible": true,
+              "message": null
+            },
+            "retiredAt": null
           },
           "archivedAt": null,
+          "tombstonedAt": null,
           "generationId": "generation-1",
           "sourceTool": "Magicbooklet",
           "sourceToolSlug": "magicbooklet",

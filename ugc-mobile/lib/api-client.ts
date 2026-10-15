@@ -350,6 +350,20 @@ type RequestOptions = {
   timeoutMs?: number;
 };
 
+/** What `GET /api/posts?scope=owner` takes: offset pages by default, cursor pages on request. */
+export type OwnerPostsQuery = {
+  visibility?: 'all' | 'public' | 'unlisted' | 'private' | 'archived';
+  includeArchived?: boolean;
+  /** Only posts with a recipe, paged by the server: the listings on Your Sales. */
+  listingsOnly?: boolean;
+  /** The seller totals (`summary`), asked for with the first page. */
+  includeSummary?: boolean;
+  limit?: number;
+  offset?: number;
+  pagination?: 'cursor';
+  cursor?: string;
+};
+
 export interface SaveShowcasePostOptions {
   shouldSave: boolean;
   sourceSurface?: string;
@@ -1627,7 +1641,7 @@ export function createApiClient({
         body: JSON.stringify(body),
       }),
     listPosts: (params?: Record<string, QueryValue>) => request(`/api/posts${buildQuery(params)}`),
-    listOwnerPosts: (params?: Record<string, QueryValue>) =>
+    listOwnerPosts: (params?: OwnerPostsQuery) =>
       request<OwnerPostsResponse>(`/api/posts${buildQuery({ ...params, scope: 'owner' })}`),
     getOwnerPost: (postId: string) =>
       request<{
