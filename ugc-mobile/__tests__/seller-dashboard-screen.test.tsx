@@ -488,6 +488,20 @@ describe('Your Sales payout balance', () => {
     expect(line?.props.accessibilityLabel).toBe('Payout balance loading');
   });
 
+  // Android never clears a label that goes back to undefined: the S24 read
+  // "Payout balance loading" under a loaded balance (2026-10-15).
+  it('says what the line shows once the balance has loaded, or could not be', () => {
+    for (const isError of [false, true]) {
+      signedInWith([listing('a')]);
+      payout.result = { data: state, isError, refetch: vi.fn() };
+      const tree = renderScreen();
+
+      const shown = isError ? 'Balance unavailable' : 'Payout balance $12.50 · Payouts start at $100.00';
+      const line = ofType(tree.root, 'app-text').find((node) => textOf(node) === shown);
+      expect(line?.props.accessibilityLabel).toBe(shown);
+    }
+  });
+
   it('stays on screen when the listings could not load', () => {
     authState.user = { id: 'seller-1', email: 'seller@example.com' };
     listings.result = listingsResult({ isLoadingError: true });

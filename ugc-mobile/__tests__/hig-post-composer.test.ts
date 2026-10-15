@@ -201,7 +201,7 @@ describe('S11 — the row, not the card, runs the drag', () => {
   // Drag and drop asks for feedback "throughout" the drag; a shift a screen
   // reader cannot see is no feedback at all.
   it('announces the slot under the card while it is held', () => {
-    expect(card).toContain('? { text: describeDropTarget(drag.to, totalItems) }');
+    expect(card).toContain('text: isDragging ? describeDropTarget(drag.to, totalItems)');
     expect(describeDropTarget(0, 5)).toBe('Drop as cover, 1 of 5');
     expect(describeDropTarget(3, 5)).toBe('Drop at position 4 of 5');
   });
@@ -219,8 +219,12 @@ describe('S11 — the row, not the card, runs the drag', () => {
     expect(card).toContain('onReorderMedia(item.id, index + 1)');
   });
 
-  it('names every card, whether or not it can be dragged', () => {
-    expect(card).toContain('accessibilityLabel={`${label}, ${index + 1} of ${totalItems}`}');
+  // The name, and the position as the value, whether or not the card can be
+  // dragged: on Android a value that goes back to undefined clears the whole
+  // description, and the only card was left without its name.
+  it('names every card, and says where it is, whether or not it can be dragged', () => {
+    expect(card).toContain('accessibilityLabel={label}');
+    expect(card).toContain(': `${index + 1} of ${totalItems}` }}');
   });
 
   it('still refuses the gesture until the hold completes', () => {

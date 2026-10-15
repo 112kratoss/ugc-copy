@@ -358,9 +358,13 @@ export function PostDetailsPage({
               {details.title}
             </Text>
           )}
+          {/* Labelled in both states: Android never clears a label that goes
+              back to undefined, so "Open …" would outlive the link. */}
           <Pressable
             accessibilityRole={canOpenCreator ? 'button' : undefined}
-            accessibilityLabel={canOpenCreator ? `Open ${meta.creatorLabel} profile` : undefined}
+            accessibilityLabel={canOpenCreator
+              ? `Open ${meta.creatorLabel} profile`
+              : [meta.creatorLabel, meta.timeLabel].filter(Boolean).join(' · ')}
             disabled={!canOpenCreator}
             onPress={() => onCreatorOpen?.(item)}
             hitSlop={verticalHitSlop(CREATOR_ROW_HEIGHT)}

@@ -1078,9 +1078,36 @@ describe('Home screen', () => {
       slide = renderer.create(rail.props.renderItem({ item: rail.props.data[workspace], index: workspace }) as React.ReactElement);
     });
     expect(slide!.root.findAllByProps({ children: '2 renders in progress' }).length).toBeGreaterThan(0);
-    press(slide!, 'Open your creations');
+    const count = slide!.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === '2 renders in progress');
+    expect(count.props.accessibilityHint).toBe('Opens your creations');
+    press(slide!, '2 renders in progress');
 
     expect(routerState.push).toHaveBeenCalledWith({ pathname: '/profile', params: { tab: 'Creations' } });
+
+    renderer.act(() => slide!.unmount());
+    renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
+  // Android never clears a label that goes back to undefined: the emulator read
+  // "Open your creations" over "Creator workspace" once the renders were done.
+  it('says what the workspace slide shows when nothing is rendering', () => {
+    authState.user = null;
+    authState.identityUserId = 'guest-1';
+    activeGenerationState.count = 0;
+    const { tree } = renderHome();
+    const header = renderHeader(tree);
+
+    const rail = header.root.find((node) => String(node.type) === 'flash-list' && node.props.horizontal === true);
+    const workspace = (rail.props.data as Array<{ slide: { kind: string } }>).findIndex((item) => item.slide.kind === 'workspace');
+    let slide: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      slide = renderer.create(rail.props.renderItem({ item: rail.props.data[workspace], index: workspace }) as React.ReactElement);
+    });
+    const status = slide!.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Creator workspace');
+    expect(status.props.disabled).toBe(true);
+    expect(status.props.accessibilityHint).toBeUndefined();
+    expect(status.findAllByProps({ children: 'Creator workspace' }).length).toBeGreaterThan(0);
 
     renderer.act(() => slide!.unmount());
     renderer.act(() => header.unmount());

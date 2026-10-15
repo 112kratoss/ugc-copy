@@ -1337,10 +1337,11 @@ describe('mobile external post composer', () => {
     const tree = await renderScreen();
     await choosePreparedMedia(tree);
 
-    const videoCard = tree.root.findAll((node) => node.props.accessibilityLabel === 'Media 2, 2 of 2')[0];
+    // A card is named by its label and placed by its value.
+    const videoCard = tree.root.findAll((node) => node.props.accessibilityLabel === 'Media 2' && node.props.accessibilityValue?.text === '2 of 2')[0];
     renderer.act(() => videoCard.props.onAccessibilityAction({ nativeEvent: { actionName: 'decrement' } }));
     expect(tree.root.findAll((node) => String(node.type) === 'text' && node.props.children === 'clip.mp4')).toHaveLength(1);
-    expect(tree.root.findAll((node) => node.props.accessibilityLabel === 'Cover, 1 of 2').length).toBeGreaterThan(0);
+    expect(tree.root.findAll((node) => node.props.accessibilityLabel === 'Cover' && node.props.accessibilityValue?.text === '1 of 2').length).toBeGreaterThan(0);
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Mixed gallery'));
 
     authState.api.createPost.mockResolvedValueOnce({ postId: 'post-mixed' });

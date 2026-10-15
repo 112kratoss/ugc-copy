@@ -1605,6 +1605,9 @@ function TopSlide({
   const cardMotion = usePressMotion(false, { scale: appTheme.motion.scale.pressedCard });
   if (slide.kind === 'workspace') {
     const title = signedIn ? `Ready when you are, ${displayName}` : 'Create something worth sharing';
+    const status = activeGenerationCount > 0
+      ? `${activeGenerationCount} render${activeGenerationCount === 1 ? '' : 's'} in progress`
+      : 'Creator workspace';
 
     return (
       <View
@@ -1622,10 +1625,14 @@ function TopSlide({
       >
         <View style={{ gap: 6 }}>
           {/* The count opens the creations list: it used to be a label on a
-              slide that rotated away, with no way to the renders it counted. */}
+              slide that rotated away, with no way to the renders it counted.
+              It is labelled with what it shows, in both states, and the hint
+              says where it goes: Android never clears a label that goes back
+              to undefined, so "Open your creations" outlived the renders. */}
           <Pressable
             accessibilityRole={activeGenerationCount > 0 ? 'button' : undefined}
-            accessibilityLabel={activeGenerationCount > 0 ? 'Open your creations' : undefined}
+            accessibilityLabel={status}
+            accessibilityHint={activeGenerationCount > 0 ? 'Opens your creations' : undefined}
             disabled={activeGenerationCount === 0}
             onPress={() => router.push({ pathname: '/profile', params: { tab: 'Creations' } } as never)}
             hitSlop={8}
@@ -1633,9 +1640,7 @@ function TopSlide({
           >
             <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: activeGenerationCount > 0 ? theme.colors.success : theme.colors.primary }} />
             <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase' }}>
-              {activeGenerationCount > 0
-                ? `${activeGenerationCount} render${activeGenerationCount === 1 ? '' : 's'} in progress`
-                : 'Creator workspace'}
+              {status}
             </Text>
           </Pressable>
           <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82} style={{ color: theme.colors.text, fontSize: 22, lineHeight: 27, fontWeight: '800', letterSpacing: -0.45 }}>

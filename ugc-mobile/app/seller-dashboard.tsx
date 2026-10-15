@@ -173,7 +173,9 @@ function PayoutBalance({ payout }: { payout: Pick<ReturnType<typeof useCreatorPa
 
   return (
     <Card>
-      <AppText variant="bodySm" color="textSecondary" accessibilityLabel={loading ? 'Payout balance loading' : undefined}>
+      {/* A string in every state: Android never clears a label that goes back
+          to undefined, and TalkBack read "loading" under the loaded balance. */}
+      <AppText variant="bodySm" color="textSecondary" accessibilityLabel={loading ? 'Payout balance loading' : line}>
         {line}
       </AppText>
       <WebLinkButton href={`${env.siteUrl}/marketplace/sell`} label="Request a payout on the web" />
