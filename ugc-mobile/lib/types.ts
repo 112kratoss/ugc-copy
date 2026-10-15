@@ -10,9 +10,21 @@ export interface MobileCompatibilityPolicy {
   unversionedClientsUseApiVersion: number;
 }
 
+/**
+ * An OTA update the server wants installed before the next cold start: a
+ * downloaded update is critical when its runtime is listed and it was
+ * published at or after `publishedAfter`. Null when nothing is flagged;
+ * absent from an older server.
+ */
+export interface MobileCriticalUpdate {
+  runtimeVersions: string[];
+  publishedAfter: string;
+}
+
 export interface AppVersionResponse {
   buildId: string;
   mobileCompatibility: MobileCompatibilityPolicy;
+  criticalUpdate?: MobileCriticalUpdate | null;
 }
 
 export interface MobileCompatibilityErrorResponse {
@@ -237,6 +249,8 @@ export interface ReferralVisitResponse {
   visitToken: string;
   code: string;
   expiresAt: string;
+  /** The program's terms for the landing page; null while no program is active, absent from an older server. */
+  program?: ReferralProgramSummary | null;
 }
 
 export interface ReferralClaimRequest {
