@@ -1,6 +1,8 @@
 # Studio parity fix run, 2026-10-14 — plan, PR body and run log
 
-A copy of the run records that live outside the repository on the owner's Mac (`archive/web-mobile-studio-compare-2026-10-14/`), committed so a cloud session can carry the run on. Branch `fix/studio-parity-2026-10-14`; waves 1–3 (13 package commits) are done; WP12 (wave 4) is the last package. Move this file to `docs/archive/` with a dated status line once the work ships.
+**Status (2026-10-15):** shipped on branch `fix/studio-parity-2026-10-14` (seventeen commits: the fourteen packages, the merge of #453, two test leftovers, this document); the OTAs follow the merge. Archived under the plans lifecycle rule; the live records stay outside the repository.
+
+A copy of the run records that live outside the repository on the owner's Mac (`archive/web-mobile-studio-compare-2026-10-14/`), committed so a cloud session can carry the run on. Branch `fix/studio-parity-2026-10-14`; waves 1–3 (13 package commits) are done; WP12 (wave 4) is the last package. Moved here from `docs/plans/` when the work shipped.
 
 ## Remaining work package — WP12: app multi-output creations (finding 01-2)
 
