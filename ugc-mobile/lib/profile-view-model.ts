@@ -6,7 +6,12 @@ import type {
   ProfileStatsResponse,
   ShowcaseFeedItem,
 } from '@/lib/types';
-import { buildImmersiveShowcaseItems, type ImmersivePreviewItem, type PreviewViewerSource } from './immersive-preview-view-model';
+import {
+  buildImmersiveShowcaseItems,
+  getGenerationOutputCount,
+  type ImmersivePreviewItem,
+  type PreviewViewerSource,
+} from './immersive-preview-view-model';
 
 import { isCreationLibraryMember } from './creation-library';
 import {
@@ -58,6 +63,11 @@ export interface ProfileMediaCard {
    * step of a run that ended without succeeding, which can never be posted.
    */
   templateNote?: string | null;
+  /**
+   * How many files the run made, when it made more than one: the tile marks
+   * it, and the details slide lists them all.
+   */
+  outputCount?: number | null;
   badge?: string;
   detailLabel?: string;
   statusLabel?: string;
@@ -350,6 +360,7 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
     isArchived,
     moderationRemoved,
     templateNote: runStatus === 'cancelled' || runStatus === 'failed' ? `From template · run ${runStatus}` : null,
+    outputCount: getGenerationOutputCount(item),
     badge: label,
     detailLabel: label,
     statusLabel: generationStatusLabel(item.status),

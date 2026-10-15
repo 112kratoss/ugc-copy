@@ -1,4 +1,4 @@
-import { ArchiveRestore, FileText, Globe, ImageOff, LockKeyhole, MessageCircle, Repeat2, Wand2 } from 'lucide-react-native';
+import { ArchiveRestore, FileText, Globe, ImageOff, Images, LockKeyhole, MessageCircle, Repeat2, Wand2 } from 'lucide-react-native';
 import { memo } from 'react';
 import { Text, View } from 'react-native';
 
@@ -6,7 +6,9 @@ import { AudioCreationPlayer } from '@/components/audio-creation-player';
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
 import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
+import { hexWithAlpha } from '@/lib/eased-fade';
 import { FEED_CARD_MEDIA_RADIUS, feedCardMediaWidth } from '@/lib/feed-card-geometry';
+import { formatOutputCount } from '@/lib/immersive-preview-view-model';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import { PostReadMore, PostTextBlock } from '@/components/post-text-block';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
@@ -17,7 +19,7 @@ import {
 } from '@/lib/profile-feed-card-view-model';
 import { mediaItemAspectRatio, showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { ShareGlyph } from '@/lib/platform-glyphs';
-import { accentColor, appTheme, type ThemeColors } from '@/lib/theme';
+import { accentColor, appTheme, mediaColors, type ThemeColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { getProfileFeedCardSlots, type ViewerStateTone } from '@/lib/viewer-actions';
 
@@ -68,6 +70,7 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
     enabled: card.hasMedia,
   });
   const slots = getProfileFeedCardSlots(item);
+  const outputsLabel = formatOutputCount(item.details?.generationInfo?.outputCount);
 
   return (
     <FeedCardShell
@@ -89,7 +92,7 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
       onOpen={() => zoomSource.capture(onOpen)}
       onOpenTouchStart={zoomSource.prepare}
       nativeZoom={Boolean(zoomSource.appleZoomId)}
-      openAccessibilityLabel={`Open ${card.title}`}
+      openAccessibilityLabel={outputsLabel ? `Open ${card.title}, ${outputsLabel}` : `Open ${card.title}`}
       statusChip={card.state ? <ProfileStateChip label={card.state.label} tone={card.state.tone} /> : null}
       timeLabel={card.timeLabel}
       title={card.title}
@@ -117,6 +120,7 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
             videoBackdrop="none"
             videoContentFit="cover"
           />
+          {outputsLabel ? <OutputsBadge label={outputsLabel} /> : null}
         </MediaZoomSourceView>
       ) : card.sourceUnavailable ? (
         <UnavailableMediaPlate height={mediaHeight} />
@@ -209,6 +213,37 @@ function UnavailableMediaPlate({ height }: { height: number }) {
       <Text style={{ color: theme.colors.muted, ...appTheme.type.caption, textAlign: 'center' }}>
         Its only copy expired at the provider before it could be saved.
       </Text>
+    </View>
+  );
+}
+
+/**
+ * The media is the first file of a run that made several, which is all the
+ * library sends; this says how many, in the web Studio's words, and the
+ * details slide lists them. Drawn like the carousel's page counter.
+ */
+function OutputsBadge({ label }: { label: string }) {
+  return (
+    <View
+      testID="profile-feed-outputs-badge"
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        right: 10,
+        bottom: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        borderRadius: appTheme.radii.pill,
+        borderWidth: 1,
+        borderColor: hexWithAlpha(mediaColors.onMedia, 0.1),
+        backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.68),
+        paddingHorizontal: 8,
+        paddingVertical: 1,
+      }}
+    >
+      <Images size={appTheme.icon.xs} color={mediaColors.onMedia} />
+      <Text style={{ color: mediaColors.onMedia, ...appTheme.type.caption, fontWeight: '800' }}>{label}</Text>
     </View>
   );
 }

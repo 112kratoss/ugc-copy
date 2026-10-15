@@ -20,7 +20,11 @@ vi.mock('react-native', () => ({
   Pressable: (p: Props) => React.createElement('pressable', p),
   Linking: { openURL: vi.fn() },
 }));
-vi.mock('lucide-react-native', () => ({ FileText: () => null, ImageIcon: () => null }));
+vi.mock('lucide-react-native', () => ({
+  FileText: () => null,
+  ImageIcon: () => null,
+  Play: (p: Props) => React.createElement('play-icon', p),
+}));
 vi.mock('@/components/feed-media-frame', () => ({ FeedMediaFrame: (p: Props) => React.createElement('media-frame', p) }));
 vi.mock('@/components/media-lightbox', () => ({ MediaLightbox: (p: Props) => React.createElement('lightbox', p) }));
 vi.mock('@/components/ui', () => ({ SecondaryButton: (p: Props) => React.createElement('button', p) }));
@@ -30,7 +34,7 @@ vi.mock('@tanstack/react-query', () => ({ useQuery: (options: unknown) => {
   return { data: state.data, isError: state.isError, refetch: state.refetch };
 } }));
 
-import { GenerationReferences } from '@/components/generation-references';
+import { GenerationOutputs, GenerationReferences } from '@/components/generation-references';
 
 function generation(url: string | null): GenerationListItem {
   return { id: 'gen-1', model: 'nano-banana-2', category: 'image', status: 'succeeded',
@@ -115,5 +119,136 @@ describe('GenerationReferences', () => {
     state.user = null;
     expect(render().toJSON()).toBeNull();
     expect(state.queryOptions.mock.calls[0][0].enabled).toBe(false);
+  });
+});
+
+/**
+ * A run of several files: the library sends the first only, and the details
+ * slide lists every one from the full record (audit 01-2).
+ */
+describe('GenerationOutputs', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    state.user = { id: 'owner-1' };
+    state.data = undefined;
+    state.isError = false;
+    state.refetch.mockReset();
+  });
+
+  function run(kind: 'image' | 'video', overrides: Partial<GenerationListItem> = {}): GenerationListItem {
+    const extension = kind === 'video' ? 'mp4' : 'png';
+    return { id: 'gen-1', model: 'model', category: kind, status: 'succeeded', created_at: '2026-10-14',
+      output_url: `https://signed.test/out-0.${extension}`,
+      output_urls: [0, 1, 2].map((index) => `https://signed.test/out-${index}.${extension}`),
+      output_count: 3, preview_url: 'https://signed.test/out-0.poster.webp', input_media: [], ...overrides };
+  }
+  function renderOutputs(count = 3) {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<GenerationOutputs generationId="gen-1" count={count} />); });
+    return tree;
+  }
+  const cards = (tree: renderer.ReactTestRenderer) => tree.root.findAllByType('pressable' as never);
+  const frames = (tree: renderer.ReactTestRenderer) => tree.root.findAllByType('media-frame' as never);
+  const lightbox = (tree: renderer.ReactTestRenderer) => tree.root.findByType('lightbox' as never);
+  const texts = (tree: renderer.ReactTestRenderer) => tree.root.findAllByType('text' as never).map((node) => node.props.children);
+
+  it('reads the record the references read', () => {
+    renderOutputs();
+    expect(state.queryOptions.mock.calls[0][0].queryKey).toEqual(['owner-generation-details', 'owner-1', 'gen-1']);
+  });
+
+  it('holds a place for each output while the record loads', () => {
+    const tree = renderOutputs();
+    expect(cards(tree).map((card) => [card.props.accessibilityLabel, card.props.disabled])).toEqual([
+      ['Output 1 of 3, loading', true], ['Output 2 of 3, loading', true], ['Output 3 of 3, loading', true],
+    ]);
+  });
+
+  it('lists every output and opens the lightbox at the one tapped, with its own file', () => {
+    const record = run('image');
+    state.data = record;
+    const tree = renderOutputs();
+    expect(cards(tree).map((card) => card.props.accessibilityLabel))
+      .toEqual(['Open output 1 of 3', 'Open output 2 of 3', 'Open output 3 of 3']);
+    // The first draws its poster; the others have none and draw themselves.
+    expect(frames(tree).map((frame) => frame.props.url)).toEqual([
+      'https://signed.test/out-0.poster.webp', 'https://signed.test/out-1.png', 'https://signed.test/out-2.png',
+    ]);
+    expect(texts(tree)).toContain('Main output');
+
+    renderer.act(() => cards(tree)[2].props.onPress());
+    expect(lightbox(tree).props.activeIndex).toBe(2);
+    expect(lightbox(tree).props.items.map((item: { url: string }) => item.url)).toEqual(record.output_urls);
+    expect(lightbox(tree).props.items[2]).toMatchObject({ id: 'gen-1:output:2', url: 'https://signed.test/out-2.png',
+      mediaKind: 'image', label: 'Output 3' });
+    renderer.act(() => lightbox(tree).props.onNavigate(0));
+    expect(lightbox(tree).props.activeIndex).toBe(0);
+    renderer.act(() => lightbox(tree).props.onClose());
+    expect(lightbox(tree).props.activeIndex).toBeNull();
+  });
+
+  it('draws a video by its poster and a play mark, and never hands its file to the image view', () => {
+    state.data = run('video');
+    const tree = renderOutputs();
+    expect(frames(tree).map((frame) => [frame.props.kind, frame.props.url]))
+      .toEqual([['image', 'https://signed.test/out-0.poster.webp']]);
+    expect(tree.root.findAllByType('play-icon' as never)).toHaveLength(3);
+
+    renderer.act(() => cards(tree)[1].props.onPress());
+    expect(lightbox(tree).props.items[1]).toMatchObject({ url: 'https://signed.test/out-1.mp4', mediaKind: 'video' });
+  });
+
+  it('gives the poster to the primary output where an older run listed it later', () => {
+    state.data = run('video', {
+      output_url: 'https://signed.test/out-2.mp4',
+      media: { id: 'gen-1', kind: 'video', url: 'https://signed.test/out-2.mp4', previewUrl: 'https://signed.test/out-2.poster.webp' } as GenerationListItem['media'],
+      preview_url: 'https://signed.test/out-2.poster.webp',
+    });
+    const tree = renderOutputs();
+    const withPoster = cards(tree).filter((card) => card.findAllByType('media-frame' as never).length > 0);
+    expect(withPoster.map((card) => card.props.accessibilityLabel)).toEqual(['Open output 3 of 3']);
+  });
+
+  it('renews an output from a fresh read when the lightbox retries it', async () => {
+    state.data = run('image');
+    state.refetch.mockResolvedValue({ data: run('image', {
+      output_urls: ['https://signed.test/new-0.png', 'https://signed.test/new-1.png', 'https://signed.test/new-2.png'],
+    }) });
+    const tree = renderOutputs();
+    renderer.act(() => cards(tree)[1].props.onPress());
+    await expect(lightbox(tree).props.items[1].resolveRetryUrl()).resolves.toBe('https://signed.test/new-1.png');
+    expect(state.refetch).toHaveBeenCalledWith({ throwOnError: true });
+    state.refetch.mockResolvedValue({ data: run('image', { output_urls: ['https://signed.test/new-0.png'] }) });
+    await expect(lightbox(tree).props.items[1].resolveRetryUrl()).rejects.toThrow('This output is unavailable.');
+  });
+
+  it('marks a picture that failed, and loads it again when it is opened', () => {
+    state.data = run('image');
+    const tree = renderOutputs();
+    renderer.act(() => frames(tree)[1].props.onImageError());
+    expect(frames(tree)).toHaveLength(2);
+    expect(texts(tree)).toContain('Unavailable · Tap to retry');
+    renderer.act(() => cards(tree)[1].props.onPress());
+    expect(frames(tree)).toHaveLength(3);
+  });
+
+  it('offers a retry when the record cannot be read', () => {
+    state.isError = true;
+    const tree = renderOutputs();
+    const retry = tree.root.findByType('button' as never);
+    expect(retry.props.label).toBe('Retry outputs');
+    renderer.act(() => retry.props.onPress());
+    expect(state.refetch).toHaveBeenCalled();
+    expect(cards(tree)).toHaveLength(0);
+  });
+
+  it('lists nothing for a single file, for sound, or once signed out', () => {
+    state.data = run('image', { output_urls: ['https://signed.test/out-0.png'] });
+    expect(renderOutputs().toJSON()).toBeNull();
+    state.data = { ...run('image'), category: 'audio' };
+    expect(renderOutputs().toJSON()).toBeNull();
+    state.data = run('image');
+    state.user = null;
+    expect(renderOutputs().toJSON()).toBeNull();
   });
 });

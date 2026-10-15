@@ -4,7 +4,7 @@ import { useCallback, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { ResourcePrompt } from '@/components/resource-prompt';
-import { GenerationReferences } from '@/components/generation-references';
+import { GenerationOutputs, GenerationReferences } from '@/components/generation-references';
 import { PostResourceBundleContent, ResourceRevisionSwitch } from '@/components/post-resource-bundle-content';
 import { ResourceAction } from '@/components/resource-action';
 import { ResourceKindRow } from '@/components/resource-kind-row';
@@ -207,6 +207,9 @@ export function PostDetailsPage({
   const generationStats = buildGenerationStats(details.generationInfo ?? null);
   // A failed run's reason, as its settlement stored it; the web's failed card prints the same line.
   const failureReason = details.generationInfo?.failureReason?.trim() || null;
+  // The slide shows a run's first file, which is all the library sends; a run
+  // of several lists every one under its facts.
+  const outputCount = details.generationInfo?.outputCount ?? 0;
   const meta = buildPostDetailsMeta(item);
   const canOpenCreator = Boolean(onCreatorOpen && item.creatorUsername);
   const commentCount = Math.max(0, item.commentCount ?? 0);
@@ -290,6 +293,10 @@ export function PostDetailsPage({
               <DetailStat key={stat.label} label={stat.label} value={stat.value} />
             ))}
           </View>
+        ) : null}
+
+        {active && user && item.sourceType === 'generation' && item.generationId && outputCount > 1 ? (
+          <GenerationOutputs key={`${user.id}:${item.generationId}`} generationId={item.generationId} count={outputCount} />
         ) : null}
 
         {failureReason ? (

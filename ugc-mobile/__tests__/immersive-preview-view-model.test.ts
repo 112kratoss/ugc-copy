@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
   buildImmersiveGenerationItems,
+  formatOutputCount,
+  getGenerationOutputCount,
   getImmersiveStatusSlide,
   buildImmersiveOwnerPostItems,
   buildImmersiveShowcaseItems,
@@ -1057,5 +1059,37 @@ describe('Share on a creation', () => {
     expect(linked('private')).toMatchObject({ canShare: false, sharePath: null });
     expect(linked('public', { linked_post_archived_at: '2026-10-01T00:00:00.000Z' })).toMatchObject({ canShare: false, sharePath: null });
     expect(linked('public', { archived_at: '2026-10-01T00:00:00.000Z' }).canShare).toBe(false);
+  });
+});
+
+describe('a run that made several files', () => {
+  // The library is read with `detail=summary`, which sends the count and the
+  // first output only: the others were unreachable in the app (audit 01-2).
+  it('carries the count onto its details, which state it, and keeps one slide', () => {
+    const [item] = buildImmersiveGenerationItems('profile-creations', [generation({ output_count: 4 })], owner);
+
+    expect(item.details?.generationInfo?.outputCount).toBe(4);
+    expect(buildGenerationStats(item.details?.generationInfo)).toContainEqual({ label: 'Outputs', value: '4' });
+    expect(item.mediaItems).toHaveLength(1);
+  });
+
+  it('says nothing of a run of one, or of files that cannot be opened', () => {
+    const [single] = buildImmersiveGenerationItems('profile-creations', [generation({ output_count: 1 })], owner);
+
+    expect(single.details?.generationInfo?.outputCount).toBeNull();
+    expect(buildGenerationStats(single.details?.generationInfo).map((stat) => stat.label)).not.toContain('Outputs');
+    expect(getGenerationOutputCount({})).toBeNull();
+    expect(getGenerationOutputCount({ output_count: 3, moderation_removed_at: '2026-10-01T00:00:00.000Z' })).toBeNull();
+    expect(getGenerationOutputCount({ output_count: 3, source_unavailable_at: '2026-10-01T00:00:00.000Z' })).toBeNull();
+  });
+
+  it('counts a full record by its addresses when it carries no count', () => {
+    expect(getGenerationOutputCount({ output_urls: ['https://cdn.example.com/a.png', 'https://cdn.example.com/b.png'] })).toBe(2);
+  });
+
+  it('words the count the way the web Studio does', () => {
+    expect(formatOutputCount(3)).toBe('3 outputs');
+    expect(formatOutputCount(1)).toBeNull();
+    expect(formatOutputCount(null)).toBeNull();
   });
 });

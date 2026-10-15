@@ -74,6 +74,12 @@ export interface ImmersivePostDetails {
     refunded?: boolean;
     /** Why a failed run failed, in the server's public words. */
     failureReason?: string | null;
+    /**
+     * How many files the run made, when it made more than one
+     * (`getGenerationOutputCount`). The slide shows the first; the details
+     * page reads the full record to list them all.
+     */
+    outputCount?: number | null;
     inputMedia: Array<{ url?: string | null; kind?: string | null }> | null;
   } | null;
 }
@@ -677,6 +683,27 @@ function showcaseToImmersiveItem(
   };
 }
 
+/**
+ * How many files a run made, when it made more than one that can still be
+ * opened; null otherwise. The library is read with `detail=summary`, which
+ * sends this count and only the first output's addresses, so the others were
+ * out of reach until something said they were there. Moderation takes down
+ * every file of a removed creation, and one whose source is gone has none
+ * left to open.
+ */
+export function getGenerationOutputCount(
+  item: Pick<GenerationListItem, 'output_count' | 'output_urls' | 'moderation_removed_at' | 'source_unavailable_at'>
+): number | null {
+  if (item.moderation_removed_at || item.source_unavailable_at) return null;
+  const count = Math.max(item.output_count ?? 0, item.output_urls?.length ?? 0);
+  return count > 1 ? count : null;
+}
+
+/** The web Studio's words for a run of several files, "3 outputs"; null for a run of one. */
+export function formatOutputCount(count: number | null | undefined): string | null {
+  return count && count > 1 ? `${count} outputs` : null;
+}
+
 function generationToImmersiveItem(
   source: PreviewViewerSource,
   item: GenerationListItem,
@@ -785,6 +812,7 @@ function generationToImmersiveItem(
         cost: item.cost ?? null,
         refunded: item.refunded === true,
         failureReason: item.error_message?.trim() || null,
+        outputCount: getGenerationOutputCount(item),
         inputMedia: item.input_media ?? null,
       },
     },

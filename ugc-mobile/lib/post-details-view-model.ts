@@ -96,7 +96,13 @@ export function formatReturnedCredits(
  * way `buildPostDetailsMeta` leaves out "0 saves".
  */
 export function buildGenerationStats(
-  info: { model?: string | null; duration?: number | null; cost?: number | null; refunded?: boolean } | null | undefined
+  info: {
+    model?: string | null;
+    duration?: number | null;
+    cost?: number | null;
+    refunded?: boolean;
+    outputCount?: number | null;
+  } | null | undefined
 ): PostDetailsStat[] {
   if (!info) return [];
   const stats: PostDetailsStat[] = [];
@@ -106,6 +112,11 @@ export function buildGenerationStats(
 
   const duration = info.duration ?? 0;
   if (duration > 0) stats.push({ label: 'Duration', value: `${duration}s` });
+
+  // The slide shows one file of a run that made several; the web Studio says
+  // how many, and the outputs row under these tiles opens the rest.
+  const outputCount = info.outputCount ?? 0;
+  if (outputCount > 1) stats.push({ label: 'Outputs', value: String(outputCount) });
 
   // A refunded run keeps its `cost` on the row, and "Cost: 40 credits" read as
   // a charge for a run that cost nothing. Its tile says what came back instead.

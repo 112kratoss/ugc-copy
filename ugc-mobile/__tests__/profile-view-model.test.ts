@@ -277,6 +277,29 @@ describe('profile view model media cards', () => {
     })).toMatchObject({ title: 'Template result', templateNote: null });
   });
 
+  // The library sends a run's first file only, so the others were out of reach (audit 01-2).
+  it('marks a run of several files with how many, and a run of one or a removed run with nothing', () => {
+    const base: GenerationListItem = {
+      id: 'takes',
+      output_url: 'https://cdn.example.com/takes-0.jpg',
+      status: 'succeeded',
+      created_at: '2026-10-14T10:00:00.000Z',
+      model: 'nano-banana-2',
+      category: 'image',
+      title: 'Four takes',
+    };
+
+    expect(generationToProfileMediaCard({ ...base, output_count: 4 }).outputCount).toBe(4);
+    expect(generationToProfileMediaCard({ ...base, output_count: 1 }).outputCount).toBeNull();
+    expect(generationToProfileMediaCard(base).outputCount).toBeNull();
+    expect(generationToProfileMediaCard({
+      ...base,
+      output_count: 4,
+      archived_at: '2026-10-01T00:00:00.000Z',
+      moderation_removed_at: '2026-10-01T00:00:00.000Z',
+    }).outputCount).toBeNull();
+  });
+
   it('marks owner posts without usable preview content as not grid-ready', () => {
     const base: OwnerPostListItem = {
       id: 'post-base',

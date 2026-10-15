@@ -282,3 +282,22 @@ describe('what a failed run gave back', () => {
       .toEqual({ label: 'Cost', value: '40 credits' });
   });
 });
+
+describe('a run that made several files', () => {
+  // The slide shows one of them; the web Studio says how many (audit 01-2).
+  it('says how many after what made it, before what it cost', () => {
+    expect(buildGenerationStats({ model: 'Seedance 2', duration: 5, cost: 120, outputCount: 3 })).toEqual([
+      { label: 'Model', value: 'Seedance 2' },
+      { label: 'Duration', value: '5s' },
+      { label: 'Outputs', value: '3' },
+      { label: 'Cost', value: '120 credits' },
+    ]);
+  });
+
+  it('has no Outputs tile for a run of one', () => {
+    expect(buildGenerationStats({ model: 'GPT Image 2', cost: 8, outputCount: 1 }).map((stat) => stat.label))
+      .toEqual(['Model', 'Cost']);
+    expect(buildGenerationStats({ model: 'GPT Image 2', cost: 8, outputCount: null }).map((stat) => stat.label))
+      .toEqual(['Model', 'Cost']);
+  });
+});

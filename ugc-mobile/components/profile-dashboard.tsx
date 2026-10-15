@@ -14,6 +14,7 @@ import {
   Globe,
   Heart,
   ImageIcon,
+  Images,
   LockKeyhole,
   Pencil,
   Play,
@@ -47,7 +48,7 @@ import { formatUsdCents } from '@/lib/home-view-model';
 import { getGenerationKind, getGenerationLabel } from '@/lib/generation-media';
 import { haptic } from '@/lib/haptics';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
-import { immersiveViewerHref, profileMediaFeedHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
+import { formatOutputCount, immersiveViewerHref, profileMediaFeedHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
 import { MotionView, usePressMotion } from '@/lib/motion';
 import {
   DEFAULT_PROFILE_MEDIA_TAB,
@@ -1511,13 +1512,15 @@ function ProfileMediaTile({
   const isFallbackPreview = item.id.startsWith('preview-');
   const isSavedTile = item.label === 'Saved';
   const nativeZoomTile = isSavedTile && !isFallbackPreview && item.previewKind !== 'text' && isAppleZoomAvailable();
+  // The outputs badge carries a count alone; the label says it in words.
+  const outputsLabel = formatOutputCount(item.outputCount);
   // A Post tile said only "Post, <title>" -- the badge in its corner reported
   // Public or Private and the label reported neither, so the state was
   // available to sighted users alone. Both tiles now read out the state their
   // badge draws, from the one place that decides it.
   const accessibilityLabel = isSavedTile
     ? `${item.label}, ${item.title}, ${countLabel} likes`
-    : `${item.label}, ${item.title}, ${getProfileTileState(item).label}`;
+    : `${item.label}, ${item.title}, ${getProfileTileState(item).label}${outputsLabel ? `, ${outputsLabel}` : ''}`;
   // UIKit captures this view at its laid-out size. A simultaneous press scale
   // exposes the light grid inside the opening veil and shifts the zoom source.
   const motion = usePressMotion(nativeZoomTile, { scale: appTheme.motion.scale.pressed });
@@ -1804,6 +1807,35 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
       >
         <StateGlyph size={appTheme.icon.xs} color={state.color} />
       </View>
+
+      {/* The library sends a run's first file only, so a run that made
+          several says how many; the details slide lists them. A count beside
+          a glyph, not the card's "3 outputs": the words do not fit beside the
+          state badge on a 104pt tile at the 11pt floor. */}
+      {item.outputCount ? (
+        <View
+          testID="profile-tile-outputs-badge"
+          style={{
+            position: 'absolute',
+            bottom: 8,
+            right: 8,
+            minHeight: 22,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 3,
+            borderRadius: 11,
+            paddingHorizontal: 6,
+            backgroundColor: mediaColors.mediaChip,
+            borderWidth: 1,
+            borderColor: hexWithAlpha(mediaColors.onMedia, 0.24),
+          }}
+        >
+          <Images size={appTheme.icon.xs} color={mediaColors.onMedia} />
+          <Text style={{ color: mediaColors.onMedia, fontSize: 11, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
+            {item.outputCount}
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 }

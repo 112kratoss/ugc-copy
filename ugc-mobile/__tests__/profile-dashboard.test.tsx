@@ -127,6 +127,7 @@ vi.mock('lucide-react-native', () => ({
   Globe: (props: Record<string, unknown>) => React.createElement('globe-icon', props),
   Heart: (props: Record<string, unknown>) => React.createElement('heart-icon', props),
   ImageIcon: (props: Record<string, unknown>) => React.createElement('image-icon', props),
+  Images: (props: Record<string, unknown>) => React.createElement('images-icon', props),
   LockKeyhole: (props: Record<string, unknown>) => React.createElement('lock-keyhole-icon', props),
   Pencil: (props: Record<string, unknown>) => React.createElement('pencil-icon', props),
   Play: (props: Record<string, unknown>) => React.createElement('play-icon', props),
@@ -1210,6 +1211,47 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(tree!.root.findAll((node) =>
       String(node.type) === 'image' && node.props.source?.uri === 'video-without-poster.mp4'
     )).toHaveLength(0);
+  });
+
+  // The library sends a run's first file only, so the others were out of reach (audit 01-2).
+  it('marks a creation that made several files with how many, and says it in words', () => {
+    queryState.generations = [
+      {
+        id: 'takes',
+        status: 'succeeded',
+        output_url: 'takes-0.jpg',
+        preview_url: 'takes-0.preview.webp',
+        previewUrl: 'takes-0.preview.webp',
+        output_count: 4,
+        category: 'image',
+        title: 'Four takes',
+        prompt: 'A lighthouse at dusk',
+      },
+      {
+        id: 'single',
+        status: 'succeeded',
+        output_url: 'single.jpg',
+        preview_url: 'single.preview.webp',
+        previewUrl: 'single.preview.webp',
+        output_count: 1,
+        category: 'image',
+        title: 'One take',
+        prompt: 'A harbour at dawn',
+      },
+    ];
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+    });
+
+    const takes = tree!.root.findByProps({ accessibilityLabel: 'Creation, Four takes, Not posted, 4 outputs' });
+    const [badge] = findViewByTestId(takes, 'profile-tile-outputs-badge');
+    expect(badge.findAllByType('images-icon' as never)).toHaveLength(1);
+    expect(badge.findAllByType('text' as never).map((node) => node.props.children)).toEqual([4]);
+    const single = tree!.root.findByProps({ accessibilityLabel: 'Creation, One take, Not posted' });
+    expect(findViewByTestId(single, 'profile-tile-outputs-badge')).toHaveLength(0);
+    expect(findViewByTestId(tree!.root, 'profile-tile-outputs-badge')).toHaveLength(1);
   });
 
   it('renders ready text creations in the Profile grid', () => {
