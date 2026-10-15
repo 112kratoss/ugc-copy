@@ -1544,11 +1544,29 @@ export interface MobileCommerceSyncResponse {
   success: boolean;
   entitlement: 'credits' | 'marketplace_unlock' | 'post_resource_unlock';
   credits?: number | null;
+  /**
+   * The part of `credits` that can still buy creator resources (a post
+   * resource unlock answers it): welcome and referral credits cannot.
+   */
+  marketplaceSpendableCredits?: number | null;
   referralBonusCredits?: number;
   alreadyProcessed?: boolean;
   assetId?: string;
   postId?: string;
   message?: string;
+}
+
+/**
+ * The 402 a credit unlock answers (`ApiError.details`, code
+ * `INSUFFICIENT_CREDITS`). The total can cover the price and still be refused,
+ * because only `marketplaceSpendableCredits` of it can be spent.
+ */
+export interface InsufficientCreditsResponse {
+  error: string;
+  code: 'INSUFFICIENT_CREDITS';
+  creditCost: number;
+  remainingCredits: number | null;
+  marketplaceSpendableCredits: number | null;
 }
 
 export type MobilePushPlatform = 'ios' | 'android';

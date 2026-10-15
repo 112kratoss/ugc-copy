@@ -17,6 +17,8 @@ const ownerId = '22222222-2222-2222-2222-222222222222';
 
 function createBundleCreditSupabase(options: {
   credits?: number;
+  /** The welcome and referral part of `credits`, which the RPC will not spend. */
+  promotionalCredits?: number;
   bundle?: {
     id: string;
     post_id: string;
@@ -28,6 +30,9 @@ function createBundleCreditSupabase(options: {
   purchases?: Array<{ bundle_id: string; buyer_user_id: string }>;
 } = {}) {
   let credits = options.credits ?? 1000;
+  const promotionalCredits = options.promotionalCredits ?? 0;
+  // As the RPC computes it (20260712123000_invite_and_earn_referrals.sql).
+  const marketplaceCredits = () => Math.max(0, Math.min(credits, credits - promotionalCredits));
   const bundlePurchases = [...(options.purchases ?? [])];
   const bundleOrders: Array<{
     id: string;
@@ -155,6 +160,7 @@ function createBundleCreditSupabase(options: {
               data: {
                 status: 'already_owned',
                 remaining_credits: credits,
+                marketplace_spendable_credits: marketplaceCredits(),
                 post_id: bundle.post_id,
                 bundle_id: bundle.id,
                 owner_user_id: bundle.owner_user_id,
@@ -163,11 +169,15 @@ function createBundleCreditSupabase(options: {
               error: null,
             };
           }
-          if (credits < bundle.price_usd_cents) {
+          if (credits < bundle.price_usd_cents || marketplaceCredits() < bundle.price_usd_cents) {
             return {
               data: {
                 status: 'insufficient_credits',
                 remaining_credits: credits,
+                marketplace_spendable_credits: marketplaceCredits(),
+                post_id: bundle.post_id,
+                bundle_id: bundle.id,
+                owner_user_id: bundle.owner_user_id,
                 credit_cost: bundle.price_usd_cents,
               },
               error: null,
@@ -179,6 +189,7 @@ function createBundleCreditSupabase(options: {
             data: {
               status: 'completed',
               remaining_credits: credits,
+              marketplace_spendable_credits: marketplaceCredits(),
               post_id: bundle.post_id,
               bundle_id: bundle.id,
               owner_user_id: bundle.owner_user_id,
@@ -513,6 +524,112 @@ describe('credit-funded mobile unlocks', () => {
     } satisfies Partial<MobileCommerceError>);
   });
 
+  // The RPC spends only the total less promotional credits (pinned by
+  // post_resource_unlock_ledger.test.sql), so a welcome grant that covers the
+  // price on its own is refused, and the answer says what was spendable.
+  it('refuses a balance of only welcome credits with the spendable figure in the 402', async () => {
+    const fakeSupabase = createBundleCreditSupabase({ credits: 1200, promotionalCredits: 1200 });
+    const notifyPostResourceUnlockCompleted = vi.fn(async () => null);
+
+    const refusal = await unlockPostResourceBundleWithCredits({
+      adminSupabase: fakeSupabase.client,
+      userId,
+      postId: 'post-1',
+      invalidateMarketplaceResourceListCache: vi.fn(),
+      notifyPostResourceUnlockCompleted,
+    }).catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(MobileCommerceError);
+    expect(refusal).toMatchObject({
+      status: 402,
+      message: 'Insufficient credits. This unlock costs 900 credits.',
+      details: {
+        code: 'INSUFFICIENT_CREDITS',
+        creditCost: 900,
+        remainingCredits: 1200,
+        marketplaceSpendableCredits: 0,
+      },
+    });
+    expect(fakeSupabase.credits).toBe(1200);
+    expect(fakeSupabase.bundlePurchases).toEqual([]);
+    expect(notifyPostResourceUnlockCompleted).not.toHaveBeenCalled();
+  });
+
+  it('answers what stays spendable after a spend from a mixed balance', async () => {
+    const fakeSupabase = createBundleCreditSupabase({ credits: 1500, promotionalCredits: 300 });
+
+    await expect(unlockPostResourceBundleWithCredits({
+      adminSupabase: fakeSupabase.client,
+      userId,
+      postId: 'post-1',
+      invalidateMarketplaceResourceListCache: vi.fn(),
+      notifyPostResourceUnlockCompleted: vi.fn(async () => null),
+      recordPurchaseFeedEvent: vi.fn(async () => ({ status: 'recorded' as const, deliveryId: null })),
+    })).resolves.toEqual({
+      success: true,
+      entitlement: 'post_resource_unlock',
+      postId: 'post-1',
+      credits: 600,
+      marketplaceSpendableCredits: 300,
+      alreadyProcessed: false,
+    });
+  });
+
+  it('reads the promotional credits once when the RPC answer leaves the spendable figure out', async () => {
+    const rpc = vi.fn(async () => ({
+      data: {
+        status: 'already_owned',
+        remaining_credits: 500,
+        post_id: 'post-1',
+        bundle_id: 'bundle-1',
+        owner_user_id: ownerId,
+        credit_cost: 900,
+      },
+      error: null,
+    }));
+    const select = vi.fn(() => ({
+      eq: (column: string, value: string) => {
+        expect([column, value]).toEqual(['id', userId]);
+        return { maybeSingle: async () => ({ data: { credits: 500, promotional_credits: 200 }, error: null }) };
+      },
+    }));
+    const from = vi.fn(() => ({ select }));
+
+    await expect(unlockPostResourceBundleWithCredits({
+      adminSupabase: { rpc, from } as unknown as SupabaseClient,
+      userId,
+      postId: 'post-1',
+    })).resolves.toMatchObject({ credits: 500, marketplaceSpendableCredits: 300, alreadyProcessed: true });
+    expect(from).toHaveBeenCalledOnce();
+    expect(from).toHaveBeenCalledWith('profiles');
+    expect(select).toHaveBeenCalledWith('credits, promotional_credits');
+  });
+
+  it('still answers a settled unlock when the stand-in read fails, with the spendable figure unknown', async () => {
+    const rpc = vi.fn(async () => ({
+      data: {
+        status: 'already_owned',
+        remaining_credits: 500,
+        post_id: 'post-1',
+        bundle_id: 'bundle-1',
+        owner_user_id: ownerId,
+        credit_cost: 900,
+      },
+      error: null,
+    }));
+    const from = vi.fn(() => ({
+      select: () => ({
+        eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'statement timeout' } }) }),
+      }),
+    }));
+
+    await expect(unlockPostResourceBundleWithCredits({
+      adminSupabase: { rpc, from } as unknown as SupabaseClient,
+      userId,
+      postId: 'post-1',
+    })).resolves.toMatchObject({ success: true, credits: 500, marketplaceSpendableCredits: null, alreadyProcessed: true });
+  });
+
   it('rejects marketplace asset unlocks when the user does not have enough credits', async () => {
     const fakeSupabase = createMarketplaceCreditSupabase({ credits: 50 });
 
@@ -566,6 +683,7 @@ describe('credit-funded mobile unlocks', () => {
         data: {
           status: 'already_owned',
           remaining_credits: 100,
+          marketplace_spendable_credits: 100,
           post_id: 'post-1',
           bundle_id: 'bundle-1',
           owner_user_id: ownerId,
@@ -585,6 +703,7 @@ describe('credit-funded mobile unlocks', () => {
     })).resolves.toMatchObject({
       success: true,
       credits: 100,
+      marketplaceSpendableCredits: 100,
       alreadyProcessed: true,
     });
 
@@ -619,6 +738,7 @@ describe('post resource credit unlock notifications', () => {
       entitlement: 'post_resource_unlock',
       postId: 'post-1',
       credits: 100,
+      marketplaceSpendableCredits: 100,
       alreadyProcessed: false,
     });
     expect(fakeSupabase.credits).toBe(100);
@@ -666,6 +786,7 @@ describe('post resource credit unlock notifications', () => {
       entitlement: 'post_resource_unlock',
       postId: 'post-1',
       credits: 100,
+      marketplaceSpendableCredits: 100,
       alreadyProcessed: false,
     });
     expect(notifyPostResourceUnlockCompleted).toHaveBeenCalledWith(fakeSupabase.client, {

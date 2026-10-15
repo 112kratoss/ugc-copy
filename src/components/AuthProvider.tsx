@@ -22,12 +22,26 @@ type IdleWindow = Window & {
     cancelIdleCallback?: (handle: number) => void;
 };
 
+export interface CreditUpdateOptions {
+    /**
+     * How much of the new total can buy a recipe, as the server counted it
+     * (the credit unlock answers it). Left out, it follows the total.
+     */
+    marketplaceSpendableCredits?: number | null;
+}
+
 interface AuthContextValue {
     session: Session | null;
     user: User | null;
     credits: number | null;
+    /**
+     * The part of `credits` a recipe can be bought with: the total less the
+     * welcome and referral (promotional) credits, which the credit unlock will
+     * not spend. Null when unknown.
+     */
+    marketplaceSpendableCredits: number | null;
     isLoading: boolean;
-    updateCredits: (nextCredits: number | null) => void;
+    updateCredits: (nextCredits: number | null, options?: CreditUpdateOptions) => void;
     refreshSessionState: () => Promise<void>;
 }
 
@@ -35,10 +49,54 @@ const anonymousAuthContext: AuthContextValue = {
     session: null,
     user: null,
     credits: null,
+    marketplaceSpendableCredits: null,
     isLoading: false,
     updateCredits: () => undefined,
     refreshSessionState: async () => undefined,
 };
+
+interface CreditBalance {
+    credits: number | null;
+    marketplaceSpendableCredits: number | null;
+}
+
+const UNKNOWN_BALANCE: CreditBalance = { credits: null, marketplaceSpendableCredits: null };
+
+/** A profile row's balance, split by the rule the profile API and the unlock RPC apply. */
+function balanceFromProfile(
+    profile: { credits?: number | null; promotional_credits?: number | null } | null,
+): CreditBalance {
+    const credits = profile?.credits ?? null;
+    return {
+        credits,
+        marketplaceSpendableCredits: credits === null
+            ? null
+            : Math.max(0, credits - Math.max(0, profile?.promotional_credits ?? 0)),
+    };
+}
+
+/**
+ * The balance after a change. The server's own split stands when the answer
+ * carried one. Otherwise only the total is known: a spend comes off the
+ * spendable part too (generations spend promotional credits first, so this can
+ * only understate it until the next profile read), and a rise is not counted
+ * as spendable until the server says so, because a welcome or referral grant
+ * is promotional.
+ */
+function balanceAfterTotal(
+    previous: CreditBalance,
+    credits: number | null,
+    options?: CreditUpdateOptions,
+): CreditBalance {
+    if (options?.marketplaceSpendableCredits !== undefined) {
+        return { credits, marketplaceSpendableCredits: options.marketplaceSpendableCredits };
+    }
+    if (credits === null || previous.credits === null || previous.marketplaceSpendableCredits === null) {
+        return { credits, marketplaceSpendableCredits: null };
+    }
+    const spent = Math.max(0, previous.credits - credits);
+    return { credits, marketplaceSpendableCredits: Math.max(0, previous.marketplaceSpendableCredits - spent) };
+}
 
 // Public routes intentionally omit the provider when the request has no auth
 // cookie hint. Consumers still receive a complete, signed-out context while
@@ -70,18 +128,24 @@ export function AuthProvider({
     children,
     initialSession = null,
     initialCredits = null,
+    initialMarketplaceSpendableCredits = null,
     hasResolvedInitialState = false,
 }: {
     children: React.ReactNode;
     initialSession?: Session | null;
     initialCredits?: number | null;
+    initialMarketplaceSpendableCredits?: number | null;
     hasResolvedInitialState?: boolean;
 }) {
     const [clientE2EAuth] = useState(() => getClientE2EAuthState());
     const hasAuthCookieHint = useSupabaseAuthCookieHint();
     const hasHydratedAuthCookieHint = useHasHydratedSupabaseAuthCookieHint();
     const [session, setSession] = useState<Session | null>(initialSession ?? clientE2EAuth?.session ?? null);
-    const [credits, setCredits] = useState<number | null>(initialCredits ?? clientE2EAuth?.credits ?? null);
+    const [balance, setBalance] = useState<CreditBalance>(() => ({
+        credits: initialCredits ?? clientE2EAuth?.credits ?? null,
+        // The E2E identity holds no promotional credits.
+        marketplaceSpendableCredits: initialMarketplaceSpendableCredits ?? clientE2EAuth?.credits ?? null,
+    }));
     const [isLoading, setIsLoading] = useState(!hasResolvedInitialState && !clientE2EAuth);
     const witnessedAuthCookieRef = useRef(hasAuthCookieHint);
     const authEpochRef = useRef(0);
@@ -113,7 +177,7 @@ export function AuthProvider({
             deferredAuthSyncIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
             deferredAuthSyncIds.clear();
             setSession(null);
-            setCredits(null);
+            setBalance(UNKNOWN_BALANCE);
             setIsLoading(false);
         };
 
@@ -180,7 +244,7 @@ export function AuthProvider({
                 if (acceptedUserId !== candidateSession.user.id) {
                     acceptedAccessToken = null;
                     acceptedUserId = null;
-                    setCredits(null);
+                    setBalance(UNKNOWN_BALANCE);
                 }
                 if (expectedTokenEpoch === tokenEpochRef.current) {
                     setSession(candidateSession);
@@ -220,7 +284,7 @@ export function AuthProvider({
 
             const { data: profile } = await supabase
                 .from('profiles')
-                .select('credits')
+                .select('credits, promotional_credits')
                 .eq('id', verifiedUser.id)
                 .single();
 
@@ -232,7 +296,7 @@ export function AuthProvider({
                 return;
             }
 
-            setCredits(profile?.credits ?? null);
+            setBalance(balanceFromProfile(profile));
             setIsLoading(false);
         };
 
@@ -305,9 +369,13 @@ export function AuthProvider({
         }
 
         const handleCreditsUpdated = (event: Event) => {
-            const customEvent = event as CustomEvent<{ credits?: number | null }>;
+            const customEvent = event as CustomEvent<{
+                credits?: number | null;
+                marketplaceSpendableCredits?: number | null;
+            }>;
             if (customEvent.detail && 'credits' in customEvent.detail) {
-                setCredits(customEvent.detail.credits ?? null);
+                const { credits: nextCredits, marketplaceSpendableCredits } = customEvent.detail;
+                setBalance((current) => balanceAfterTotal(current, nextCredits ?? null, { marketplaceSpendableCredits }));
                 setIsLoading(false);
                 return;
             }
@@ -359,7 +427,7 @@ export function AuthProvider({
         }
         if (!nextSession?.user?.id) {
             setSession(null);
-            setCredits(null);
+            setBalance(UNKNOWN_BALANCE);
             setIsLoading(false);
             return;
         }
@@ -380,7 +448,7 @@ export function AuthProvider({
         }
         if (verificationError || !verifiedUser || verifiedUser.id !== nextSession.user.id) {
             setSession(null);
-            setCredits(null);
+            setBalance(UNKNOWN_BALANCE);
             setIsLoading(false);
             return;
         }
@@ -391,7 +459,7 @@ export function AuthProvider({
 
         const { data: profile } = await supabase
             .from('profiles')
-            .select('credits')
+            .select('credits, promotional_credits')
             .eq('id', verifiedUser.id)
             .single();
 
@@ -399,16 +467,16 @@ export function AuthProvider({
             return;
         }
 
-        setCredits(profile?.credits ?? null);
+        setBalance(balanceFromProfile(profile));
         setIsLoading(false);
     };
 
-    const updateCredits = (nextCredits: number | null) => {
-        setCredits(nextCredits);
+    const updateCredits = (nextCredits: number | null, options?: CreditUpdateOptions) => {
+        setBalance((current) => balanceAfterTotal(current, nextCredits, options));
 
         if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('credits_updated', {
-                detail: { credits: nextCredits },
+                detail: { credits: nextCredits, marketplaceSpendableCredits: options?.marketplaceSpendableCredits },
             }));
         }
     };
@@ -424,7 +492,8 @@ export function AuthProvider({
             value={{
                 session,
                 user: session?.user ?? null,
-                credits,
+                credits: balance.credits,
+                marketplaceSpendableCredits: balance.marketplaceSpendableCredits,
                 isLoading: resolvedIsLoading,
                 updateCredits,
                 refreshSessionState,

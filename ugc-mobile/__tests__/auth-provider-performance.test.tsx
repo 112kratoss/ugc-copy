@@ -17,8 +17,14 @@ const state = vi.hoisted(() => ({
   duringSignOut: vi.fn(),
   getSession: vi.fn(),
   persistAccountStateOnChange: vi.fn(),
-  profileResolve: null as null | ((profile: { credits: number }) => void),
-  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), getQueryCache: () => ({ subscribe: () => () => undefined }), removeQueries: vi.fn() },
+  profileResolve: null as null | ((profile: { credits: number; marketplaceSpendableCredits?: number | null }) => void),
+  queryClient: {
+    clear: vi.fn(),
+    fetchQuery: vi.fn(),
+    getQueryCache: () => ({ subscribe: () => () => undefined }),
+    getQueryData: vi.fn(),
+    removeQueries: vi.fn(),
+  },
   readPersistedSession: vi.fn(),
   restoreAccountState: vi.fn(),
   routerDismissTo: vi.fn(),
@@ -167,6 +173,7 @@ describe('AuthProvider startup performance', () => {
     state.readPersistedSession.mockReset().mockResolvedValue(null);
     state.deleteAccount.mockReset();
     state.queryClient.clear.mockReset();
+    state.queryClient.getQueryData.mockReset();
     state.queryClient.removeQueries.mockReset();
     state.routerDismissTo.mockReset();
     state.routerReplace.mockReset();
@@ -523,6 +530,39 @@ describe('AuthProvider startup performance', () => {
     await settle();
     expect(latest.current?.credits).toBe(26_500);
     expect(state.persistAccountStateOnChange).toHaveBeenLastCalledWith(state.queryClient, { userId: 'user-1', credits: 26_500 });
+    unmount();
+  });
+
+  // Welcome and referral credits are in the balance but the credit unlock will
+  // not spend them (02-1). The saved profile holds the last split the server
+  // gave, and the saved balance may have moved past it with a spend.
+  it('draws the spendable part of the saved balance from the saved profile, then from the read', async () => {
+    state.readPersistedSession.mockResolvedValue(session);
+    state.restoreAccountState.mockResolvedValue({ credits: 1400, savedAt: Date.now() - 60_000 });
+    state.queryClient.getQueryData.mockReturnValue({
+      id: 'user-1',
+      credits: 1500,
+      promotionalCredits: 300,
+      marketplaceSpendableCredits: 1200,
+    });
+
+    const { latest, unmount } = renderProvider();
+    await settle();
+
+    expect(state.queryClient.getQueryData).toHaveBeenCalledWith(['profile', 'user-1']);
+    expect(latest.current?.credits).toBe(1400);
+    expect(latest.current?.marketplaceSpendableCredits).toBe(1100);
+
+    await renderer.act(async () => {
+      state.sessionResolve?.({ data: { session }, error: null });
+    });
+    await settle();
+    await renderer.act(async () => {
+      state.profileResolve?.({ credits: 1400, marketplaceSpendableCredits: 1200 });
+    });
+    await settle();
+    expect(latest.current?.credits).toBe(1400);
+    expect(latest.current?.marketplaceSpendableCredits).toBe(1200);
     unmount();
   });
 

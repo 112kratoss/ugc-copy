@@ -59,13 +59,14 @@ vi.mock('@/components/useSupabaseAuthCookieHint', () => ({
 }));
 
 function AuthProbe() {
-  const { isLoading, session, credits, refreshSessionState } = useAuth();
+  const { isLoading, session, credits, marketplaceSpendableCredits, refreshSessionState } = useAuth();
 
   return (
     <div>
       <span data-testid="loading">{String(isLoading)}</span>
       <span data-testid="session">{session ? 'signed-in' : 'signed-out'}</span>
       <span data-testid="credits">{credits ?? 'none'}</span>
+      <span data-testid="spendable">{marketplaceSpendableCredits ?? 'none'}</span>
       <span data-testid="user-name">{session?.user.user_metadata.display_name ?? 'none'}</span>
       <button type="button" onClick={() => void refreshSessionState()}>Refresh auth</button>
     </div>
@@ -234,7 +235,104 @@ describe('AuthProvider', () => {
 
     await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-out'));
     expect(screen.getByTestId('credits')).toHaveTextContent('none');
+    expect(screen.getByTestId('spendable')).toHaveTextContent('none');
     expect(authProviderMocks.unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  // Welcome and referral credits are in the total but the credit unlock will
+  // not spend them (02-1), so the recipe surfaces read this figure instead.
+  describe('the part of the balance a recipe can spend', () => {
+    function CreditProbe() {
+      const { credits, marketplaceSpendableCredits, updateCredits } = useAuth();
+      return (
+        <div>
+          <span data-testid="credits">{credits ?? 'none'}</span>
+          <span data-testid="spendable">{marketplaceSpendableCredits ?? 'none'}</span>
+          <button type="button" onClick={() => updateCredits(1400)}>Spend 100</button>
+          <button type="button" onClick={() => updateCredits(1700)}>Grant 300</button>
+          <button type="button" onClick={() => updateCredits(800, { marketplaceSpendableCredits: 500 })}>
+            Unlock a recipe
+          </button>
+        </div>
+      );
+    }
+
+    it('reads the promotional credits with the balance and leaves them out', async () => {
+      authCookieState.hasHint = true;
+      authProviderMocks.single.mockResolvedValue({ data: { credits: 1200, promotional_credits: 1200 } });
+
+      render(
+        <AuthProvider>
+          <AuthProbe />
+        </AuthProvider>
+      );
+
+      await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1200'));
+      expect(screen.getByTestId('spendable')).toHaveTextContent('0');
+      expect(authProviderMocks.select).toHaveBeenCalledWith('credits, promotional_credits');
+
+      authProviderMocks.single.mockResolvedValue({ data: { credits: 1500, promotional_credits: 300 } });
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh auth' }));
+      await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1500'));
+      expect(screen.getByTestId('spendable')).toHaveTextContent('1200');
+      expect(authProviderMocks.select).toHaveBeenLastCalledWith('credits, promotional_credits');
+    });
+
+    it('keeps it in step with the total, and takes the figure an answer carries', async () => {
+      authCookieState.hasHint = true;
+      authProviderMocks.single.mockResolvedValue({ data: { credits: 1500, promotional_credits: 300 } });
+      render(
+        <AuthProvider>
+          <CreditProbe />
+        </AuthProvider>
+      );
+      await waitFor(() => expect(screen.getByTestId('spendable')).toHaveTextContent('1200'));
+
+      // A generation's spend comes off it as well.
+      fireEvent.click(screen.getByRole('button', { name: 'Spend 100' }));
+      expect(screen.getByTestId('credits')).toHaveTextContent('1400');
+      expect(screen.getByTestId('spendable')).toHaveTextContent('1100');
+
+      // A rise the server did not split (the welcome grant) is not spendable.
+      fireEvent.click(screen.getByRole('button', { name: 'Grant 300' }));
+      expect(screen.getByTestId('credits')).toHaveTextContent('1700');
+      expect(screen.getByTestId('spendable')).toHaveTextContent('1100');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Unlock a recipe' }));
+      expect(screen.getByTestId('credits')).toHaveTextContent('800');
+      expect(screen.getByTestId('spendable')).toHaveTextContent('500');
+
+      // Another reader of the balance broadcasts the same way.
+      act(() => {
+        window.dispatchEvent(new CustomEvent('credits_updated', {
+          detail: { credits: 700, marketplaceSpendableCredits: 400 },
+        }));
+      });
+      expect(screen.getByTestId('spendable')).toHaveTextContent('400');
+      act(() => {
+        window.dispatchEvent(new CustomEvent('credits_updated', { detail: { credits: 650 } }));
+      });
+      expect(screen.getByTestId('credits')).toHaveTextContent('650');
+      expect(screen.getByTestId('spendable')).toHaveTextContent('350');
+      expect(authProviderMocks.single).toHaveBeenCalledTimes(1);
+    });
+
+    it('starts from the figure the server resolved, without reading the profile again', () => {
+      render(
+        <AuthProvider
+          initialSession={authenticatedSession}
+          initialCredits={1200}
+          initialMarketplaceSpendableCredits={0}
+          hasResolvedInitialState
+        >
+          <AuthProbe />
+        </AuthProvider>
+      );
+
+      expect(screen.getByTestId('credits')).toHaveTextContent('1200');
+      expect(screen.getByTestId('spendable')).toHaveTextContent('0');
+      expect(authProviderMocks.from).not.toHaveBeenCalled();
+    });
   });
 
   it('rejects an unverified browser session without loading profile data', async () => {

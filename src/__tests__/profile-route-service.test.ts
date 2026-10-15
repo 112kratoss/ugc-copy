@@ -23,6 +23,7 @@ type ProfileRow = {
   tiktok_handle: string | null;
   location: string | null;
   credits: number | null;
+  promotional_credits?: number | null;
 };
 
 const user: ProfileRouteUser = {
@@ -45,6 +46,7 @@ function createClient({
   salesError = null as { message: string } | null,
 } = {}) {
   const rows = [...profiles];
+  const selectedColumns: string[] = [];
   const rpc = vi.fn(async (name: string) => {
     if (name === 'owner_profile_counts') return { data: countsError ? null : counts, error: countsError };
     if (name === 'get_owner_post_sales_summary') return { data: salesError ? null : sales, error: salesError };
@@ -69,7 +71,8 @@ function createClient({
     const filters: Record<string, unknown> = {};
     let excludedId: string | null = null;
     const query = {
-      select() {
+      select(columns?: string) {
+        if (columns) selectedColumns.push(columns);
         return query;
       },
       eq(column: string, value: unknown) {
@@ -131,6 +134,7 @@ function createClient({
     rpc,
     from,
     rows,
+    selectedColumns,
     upserts,
   };
 }
@@ -400,6 +404,27 @@ describe('profile route service', () => {
     });
     expect(client.rpc).toHaveBeenCalledWith('owner_profile_counts', { p_user_id: user.id });
     expect(client.rpc).toHaveBeenCalledWith('get_owner_post_sales_summary', { p_owner_id: user.id });
+  });
+
+  // The app reads its recipe balance from here: welcome and referral credits
+  // are in the total but cannot buy a recipe.
+  it('says how much of the balance can buy a recipe, from the promotional credits it reads', async () => {
+    const client = createClient({ profiles: [{ ...storedProfile(), credits: 1200, promotional_credits: 1200 }] });
+
+    const result = await getProfileForRoute({ user, client: client.client });
+
+    expect(result).toMatchObject({
+      ok: true,
+      response: { credits: 1200, promotionalCredits: 1200, marketplaceSpendableCredits: 0 },
+    });
+    expect(client.selectedColumns[0]?.split(',').map((column) => column.trim())).toEqual(
+      expect.arrayContaining(['credits', 'promotional_credits']),
+    );
+
+    client.rows[0] = { ...client.rows[0], credits: 1500, promotional_credits: 300 };
+    await expect(getProfileForRoute({ user, client: client.client })).resolves.toMatchObject({
+      response: { credits: 1500, promotionalCredits: 300, marketplaceSpendableCredits: 1200 },
+    });
   });
 
   it('leaves a total out when its read fails, and still returns the profile', async () => {

@@ -6,9 +6,11 @@ import {
   MOBILE_CLIENT_COMPATIBILITY_POLICY,
   type MobileCriticalUpdate,
 } from '@/lib/mobile-client-compatibility';
+import { MobileCommerceError, unlockPostResourceBundleWithCredits } from '@/lib/mobile-commerce';
 import { POST_RESOURCE_FILE_URL_BATCH_LIMIT } from '@/lib/post-resource-bundles';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import { createPostResourceFileReadUrlForRoute } from '@/lib/post-resource-file-url-service';
+import { sanitizeProfileRecord } from '@/lib/profile';
 import { normalizeShowcaseCategory } from '@/lib/showcase';
 import {
   parseShowcaseFeedEventBatchPayload,
@@ -31,6 +33,7 @@ import type {
   MobileCommerceSyncResponse,
   MobileCompatibilityErrorResponse,
   MobileNotificationsResponse,
+  ProfileResponse,
   PublicSearchResponse,
   ShowcaseFeedEventBatchResponse,
   ShowcaseFeedEventRequest,
@@ -233,6 +236,13 @@ describe('shared mobile API v1 contract fixture', () => {
     });
     expect(contract.endpoints.getMarketplaceResourceDetail.path).toBe('/api/marketplace/resources/:resourceId');
     expect(contract.endpoints.getPostResourceBundle.path).toBe('/api/posts/:postId/resource-bundle');
+    // A guest reads a post's recipe too; the fixture says what the operations
+    // registry says.
+    expect(contract.endpoints.getMarketplaceResourceDetail.auth)
+      .toBe(mobileApiOperationsV1.operations.getMarketplaceResourceDetail.auth);
+    expect(contract.endpoints.getPostResourceBundle.auth).toBe(mobileApiOperationsV1.fallbackRoutes
+      .find((route) => route.path === contract.endpoints.getPostResourceBundle.path)?.auth);
+    expect(contract.endpoints.getPostResourceBundle.auth).toBe('optional');
     expect(contract.endpoints.deleteAccount).toMatchObject({
       request: {
         confirmation: 'DELETE',
@@ -503,6 +513,75 @@ describe('shared mobile API v1 contract fixture', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // Welcome and referral credits count in the balance but cannot buy a recipe.
+  // The profile read says how much can, by the rule the unlock RPC applies.
+  it('answers the profile read with the spendable part of the balance', () => {
+    const profile: ProfileResponse = mobileApiContract.endpoints.getProfile.response;
+    expect(profile.marketplaceSpendableCredits).toBeLessThan(profile.credits ?? 0);
+    expect(sanitizeProfileRecord({
+      id: profile.id,
+      username: profile.username,
+      display_name: profile.displayName,
+      bio: profile.bio,
+      avatar_url: profile.avatarUrl,
+      cover_url: profile.coverUrl,
+      website_url: profile.websiteUrl,
+      twitter_handle: profile.twitterHandle,
+      instagram_handle: profile.instagramHandle,
+      tiktok_handle: profile.tiktokHandle,
+      location: profile.location,
+      credits: profile.credits,
+      promotional_credits: profile.promotionalCredits,
+    })).toMatchObject({
+      credits: profile.credits,
+      promotionalCredits: profile.promotionalCredits,
+      marketplaceSpendableCredits: profile.marketplaceSpendableCredits,
+    });
+  });
+
+  // Both answers of a credit unlock say what stays spendable, and the refusal
+  // carries the code the clients offer credits on: the answers the service
+  // builds, field for field.
+  it('answers a credit unlock and its refusal with the spendable figure the fixture pins', async () => {
+    const endpoint = mobileApiContract.endpoints.unlockBundleWithCredits;
+    const refused = endpoint.errors.insufficientCredits;
+    const unlockWith = (data: Record<string, unknown>) => unlockPostResourceBundleWithCredits({
+      adminSupabase: { rpc: vi.fn(async () => ({ data, error: null })) } as unknown as SupabaseClient,
+      userId: 'buyer-1',
+      postId: endpoint.response.postId,
+      invalidateMarketplaceResourceListCache: vi.fn(),
+      notifyPostResourceUnlockCompleted: vi.fn(async () => null),
+      recordPurchaseFeedEvent: vi.fn(async () => ({ status: 'recorded' as const, deliveryId: null })),
+    });
+
+    await expect(unlockWith({
+      status: 'completed',
+      remaining_credits: endpoint.response.credits,
+      marketplace_spendable_credits: endpoint.response.marketplaceSpendableCredits,
+      post_id: endpoint.response.postId,
+      bundle_id: 'bundle-1',
+      owner_user_id: 'creator-1',
+      credit_cost: 54,
+    })).resolves.toMatchObject({
+      entitlement: endpoint.response.entitlement,
+      postId: endpoint.response.postId,
+      credits: endpoint.response.credits,
+      marketplaceSpendableCredits: endpoint.response.marketplaceSpendableCredits,
+      alreadyProcessed: endpoint.response.alreadyProcessed,
+    });
+
+    const refusal = await unlockWith({
+      status: 'insufficient_credits',
+      remaining_credits: refused.response.remainingCredits,
+      marketplace_spendable_credits: refused.response.marketplaceSpendableCredits,
+      credit_cost: refused.response.creditCost,
+    }).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(MobileCommerceError);
+    const { status, message, details } = refusal as MobileCommerceError;
+    expect(status).toBe(refused.status);
+    expect({ error: message, ...details }).toEqual(refused.response);
   });
 });
 
