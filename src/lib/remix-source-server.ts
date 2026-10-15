@@ -4,6 +4,7 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import type { NextRequest } from 'next/server';
 
+import { isGuestUser, isOwnOrLinkedAccountId } from '@/lib/account-identity';
 import { normalizeSubmittedElementDescriptors } from '@/lib/image-elements';
 import {
   buildLegacyGenerationInputMedia,
@@ -62,6 +63,11 @@ type ResultGenerationRow = Pick<
 
 const GENERATION_SELECT =
   'id, user_id, is_public, share_input_media_for_remix, output_url, showcase_asset_path, category, creation_mode, model, prompt, title, workflow_settings';
+
+// The proxy's answer to a guest on a registered-only path, word for word: the
+// app already reads this code as "sign in to do that".
+const GUEST_REGISTRATION_REQUIRED_MESSAGE = 'Create an account to use this feature.';
+const GUEST_REGISTRATION_REQUIRED_CODE = 'REGISTRATION_REQUIRED';
 
 export class RemixSourceError extends Error {
   status: number;
@@ -239,11 +245,32 @@ export async function loadRemixSourceBundle(
     throw new RemixSourceError('Failed to load remix source', 500);
   }
 
-  if (!generation) {
+  const typedGeneration = generation as RemixSourceGenerationRow | null;
+
+  // The route admits a guest (route-identity-policy.ts) so that a guest can
+  // make one of its own creations again. Restoring anyone else's, a public
+  // post or a bought recipe alike, is remixing it, and that takes an account
+  // (POST /api/showcase/remix is registered-only). A guest is never the target
+  // of a merge, so its own id is all "own or linked" holds for it; the shared
+  // question is asked anyway. A generation that does not exist gets the same
+  // answer, so a guest cannot tell someone's private creation from none.
+  if (isGuestUser(user)) {
+    const guestOwnsGeneration = typedGeneration
+      ? await isOwnOrLinkedAccountId(adminSupabase, user.id, typedGeneration.user_id)
+      : false;
+    if (!guestOwnsGeneration) {
+      throw new RemixSourceError(
+        GUEST_REGISTRATION_REQUIRED_MESSAGE,
+        403,
+        GUEST_REGISTRATION_REQUIRED_CODE,
+      );
+    }
+  }
+
+  if (!typedGeneration) {
     throw new RemixSourceError('Remix source not found', 404);
   }
 
-  const typedGeneration = generation as RemixSourceGenerationRow;
   // A create page reaches this loader straight from its own URL, so it must
   // apply exactly the gate POST /api/showcase/remix applies, or that gate is
   // one hop from being bypassed. Owned means the caller's id or a guest

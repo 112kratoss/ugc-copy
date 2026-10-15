@@ -87,4 +87,24 @@ describe('remix source route adapter service', () => {
       code: 'REMIX_UNLOCK_REQUIRED',
     });
   });
+
+  // A guest asking for anything but its own creation gets the proxy's answer
+  // to a guest on a registered path, which the app reads as "sign in".
+  it("answers a guest's request for someone else's creation 403 REGISTRATION_REQUIRED", async () => {
+    const response = await getRemixSourceRouteResponse({
+      request: createRequest('http://localhost/api/remix-source?id=source-1&postId=post-1'),
+      dependencies: {
+        loadRemixSourceBundle: vi.fn(async () => {
+          throw new RemixSourceError('Create an account to use this feature.', 403, 'REGISTRATION_REQUIRED');
+        }),
+      },
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    await expect(response.json()).resolves.toEqual({
+      error: 'Create an account to use this feature.',
+      code: 'REGISTRATION_REQUIRED',
+    });
+  });
 });

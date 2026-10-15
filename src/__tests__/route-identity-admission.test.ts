@@ -84,6 +84,11 @@ describe('central route identity admission', () => {
     expect(routeIdentityPolicyForPathname('/api/generations/abc/restore')).toBe('guest');
     expect(routeIdentityPolicyForPathname('/api/showcase/posts/post-1/comments')).toBe('registered');
     expect(routeIdentityPolicyForPathname('/api/webhooks/kie')).toBe('service');
+    // Siblings under one template: running it is a creation tool, testing it
+    // is its author's.
+    expect(routeIdentityPolicyForPathname('/api/templates/tpl-1/runs')).toBe('guest');
+    expect(routeIdentityPolicyForPathname('/api/templates/tpl-1/test')).toBe('registered');
+    expect(routeIdentityPolicyForPathname('/api/templates/validate')).toBe('registered');
   });
 
   it('verifies the bearer token locally and asks the database exactly once', async () => {
@@ -388,17 +393,19 @@ describe('central route identity admission', () => {
   // handler takes a caller who is no one: the onboarding funnel lost its top
   // and guests' shares never reached the counts. Its report of an AI result it
   // made goes through too; the moderation adapter refuses every other target.
+  // So does its deletion of itself (product decision D5, 2026-10-15).
   it('admits a guest to the writes listed for guests, and to no other registered write', async () => {
     const guest = identityClient({ anonymous: true });
     const dependencies = { createUserClient: () => guest };
 
-    for (const pathname of [
-      '/api/onboarding/events',
-      '/api/showcase/share',
-      '/api/profile/share',
-      '/api/moderation/reports',
+    for (const [method, pathname] of [
+      ['POST', '/api/onboarding/events'],
+      ['POST', '/api/showcase/share'],
+      ['POST', '/api/profile/share'],
+      ['POST', '/api/moderation/reports'],
+      ['DELETE', '/api/account'],
     ]) {
-      await expect(guardUserFacingRouteIdentity(requestWithMethod('POST', pathname), dependencies), pathname)
+      await expect(guardUserFacingRouteIdentity(requestWithMethod(method, pathname), dependencies), `${method} ${pathname}`)
         .resolves.toBeNull();
     }
 
@@ -406,9 +413,11 @@ describe('central route identity admission', () => {
       ['POST', '/api/showcase/save'],
       ['POST', '/api/moderation/blocks/22222222-2222-4222-8222-222222222222'],
       ['PATCH', '/api/onboarding/state'],
+      ['POST', '/api/account/merge'],
       // A listed path keeps its policy for every method not listed with it.
       ['GET', '/api/onboarding/events'],
       ['DELETE', '/api/moderation/reports'],
+      ['PATCH', '/api/account'],
     ]) {
       const response = await guardUserFacingRouteIdentity(requestWithMethod(method, pathname), dependencies);
       expect(response?.status, `${method} ${pathname}`).toBe(403);
@@ -437,6 +446,9 @@ describe('central route identity admission', () => {
     expect(routeIdentityPolicyForRequest('/api/moderation/reports', 'POST')).toBe('guest');
     expect(routeIdentityPolicyForRequest('/api/onboarding/events', 'POST')).toBe('guest');
     expect(routeIdentityPolicyForRequest('/api/profile/share', 'POST')).toBe('guest');
+    expect(routeIdentityPolicyForRequest('/api/account', 'DELETE')).toBe('guest');
+    expect(routeIdentityPolicyForRequest('/api/account', 'delete')).toBe('guest');
+    expect(routeIdentityPolicyForPathname('/api/account')).toBe('registered');
     expect(routeIdentityPolicyForPathname('/api/showcase/share')).toBe('registered');
     expect(routeIdentityPolicyForRequest('/api/showcase/share', 'GET')).toBe('registered');
     expect(routeIdentityPolicyForRequest('/api/moderation/blocks', 'POST')).toBe('registered');

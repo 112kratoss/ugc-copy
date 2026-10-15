@@ -35,6 +35,9 @@ const GUEST_ROUTES = [
 
   // Identity's own state. Reads only — mutation is registered-only below.
   '/api/profile',
+  // Where the identity's balance came from and went: purchases, grants,
+  // spends and refunds. A guest buys and spends, so it reads its own record.
+  '/api/credits/history',
 
   // Every credit-funded creation tool.
   '/api/generate',
@@ -42,6 +45,10 @@ const GUEST_ROUTES = [
   '/api/generate-video',
   '/api/enhance-prompt',
   '/api/generation-models/quote',
+  // Starting a run of a published template: the run is the caller's own and
+  // its steps spend the caller's credits, like every run action after it.
+  // Authoring, testing and publishing a template stay registered below.
+  '/api/templates/[id]/runs',
   '/api/template-runs/[id]',
   '/api/template-runs/[id]/start',
   '/api/template-runs/[id]/cancel',
@@ -61,6 +68,12 @@ const GUEST_ROUTES = [
   '/api/generations/[id]/archive',
   '/api/generations/[id]/restore',
   '/api/generations/[id]/restore-media',
+  // A creation's recipe, restored into the editor to make it again. A guest is
+  // served only a generation of its own (or of an identity linked to it); the
+  // loader answers a guest's every other request 403 REGISTRATION_REQUIRED
+  // itself, so restoring someone else's post stays an account's, as remixing
+  // one is (POST /api/showcase/remix below).
+  '/api/remix-source',
   '/api/uploads/media/sign',
   '/api/uploads/finalize',
   '/api/uploads/media/read-url',
@@ -92,6 +105,8 @@ const REGISTERED_ROUTES = [
   '/api/profile/media/sign',
   '/api/profile/media/cleanup',
   '/api/profile/share',
+  // A guest's DELETE (deleting its own data) is listed in
+  // GUEST_WRITABLE_REGISTERED_ROUTES below.
   '/api/account',
   '/api/account/merge',
 
@@ -128,7 +143,6 @@ const REGISTERED_ROUTES = [
   '/api/moderation/reports',
   '/api/moderation/blocks',
   '/api/moderation/blocks/[userId]',
-  '/api/remix-source',
 
   // Marketplace, unlocks and payouts: an identified payee is a legal
   // requirement, not a product preference.
@@ -158,12 +172,13 @@ const REGISTERED_ROUTES = [
   '/api/mobile/notifications/unregister',
 
   // Authoring and sharing templates is a published artifact with an author.
+  // (Running someone's published template is a creation tool, listed with
+  // the guest routes above.)
   '/api/templates',
   '/api/templates/[id]',
   '/api/templates/[id]/publish',
   '/api/templates/[id]/disable',
   '/api/templates/[id]/test',
-  '/api/templates/[id]/runs',
   '/api/templates/validate',
   '/api/workflow-canvases/[id]/publish',
   '/api/workflow-canvases/[id]/share',
@@ -307,6 +322,12 @@ export const GUEST_READABLE_REGISTERED_ROUTES = [
  * the moderation adapter admits that one and answers every other guest report
  * 403 REGISTRATION_REQUIRED itself.
  *
+ * A guest may also delete itself (product decision D5, 2026-10-15): the
+ * account route takes a guest's token, needs no fresh sign-in from it (a guest
+ * has none to give), and removes the guest identity and what it made through
+ * the same deletion pipeline as an account's. The path stays registered, so a
+ * write added to it later is an account's from the start.
+ *
  * A request whose method and path are listed here is answered as `guest`: a
  * token that is sent must still have a live identity behind it. Every other
  * method keeps the path's policy.
@@ -320,6 +341,7 @@ export const GUEST_WRITABLE_REGISTERED_ROUTES = [
   { method: 'POST', route: '/api/showcase/share' },
   { method: 'POST', route: '/api/profile/share' },
   { method: 'POST', route: '/api/moderation/reports' },
+  { method: 'DELETE', route: '/api/account' },
 ] as const;
 
 export const ROUTE_IDENTITY_POLICY: Readonly<Record<string, RouteIdentityPolicy>> =
