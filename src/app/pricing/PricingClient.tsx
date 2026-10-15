@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Script from "next/script";
 import { ArrowLeft, ArrowRight, Check, Crown, Gift, Loader2, Sparkles, Zap, type LucideIcon } from "lucide-react";
@@ -11,7 +11,9 @@ import { PRICING_CURRENCY, PRICING_PLANS, type PricingPlanId } from "@/lib/prici
 import {
     clearRazorpayCheckoutIntentKey,
     getOrCreateRazorpayCheckoutIntentKey,
+    pollCreditBalanceAfterPayment,
     verifyRazorpayCheckoutUntilSettled,
+    type RazorpayCheckoutVerificationResult,
 } from "@/lib/razorpay-checkout-client";
 import { supabase } from "@/lib/supabase";
 import { buildSoftwareApplicationSchema, siteConfig } from "@/lib/seo";
@@ -23,9 +25,44 @@ import {
     type SupportedCurrency,
 } from "@/lib/currency";
 
+/** The live Invite & Earn terms, read on the server; null leaves the numbers out. */
+export interface PricingReferralProgram {
+    inviterPercent: number;
+    inviteeFirstPurchasePercent: number;
+}
+
 interface PricingClientProps {
     initialCountryCode?: string | null;
+    referralProgram?: PricingReferralProgram | null;
 }
+
+// What Razorpay's `payment.failed` says went wrong, when it says anything.
+function paymentFailureDescription(payload: unknown) {
+    if (!payload || typeof payload !== 'object') return null;
+    const error = (payload as { error?: unknown }).error;
+    if (!error || typeof error !== 'object') return null;
+    const description = (error as { description?: unknown }).description;
+    return typeof description === 'string' && description.trim() ? description.trim() : null;
+}
+
+/**
+ * What the page says about a checkout, under the button that started it. After
+ * the sheet reports a payment the money is taken, so from `confirming` on no
+ * state may read as a failure or invite a second payment: Razorpay's webhook
+ * settles the order even when this page cannot.
+ */
+type CheckoutStatus =
+    | { planId: PricingPlanId; kind: 'confirming' | 'settled' | 'pending' | 'paid' }
+    | { planId: PricingPlanId; kind: 'failed'; message: string };
+
+const CHECKOUT_STATUS_COPY = {
+    confirming: 'Confirming your payment…',
+    settled: 'Payment successful! Credits added to your account.',
+    pending: 'Payment received and waiting for capture. Your credits will appear automatically once Razorpay confirms it.',
+    paid: 'Your payment went through and your credits will appear in your balance shortly. You do not need to pay again.',
+} as const;
+
+const percentFormatter = new Intl.NumberFormat('en', { maximumFractionDigits: 2 });
 
 const iconByPlanId: Record<PricingPlanId, LucideIcon> = {
     starter: Sparkles,
@@ -166,9 +203,11 @@ function inferDefaultCurrency(initialCountryCode?: string | null): SupportedCurr
     return 'USD';
 }
 
-export function PricingClient({ initialCountryCode = null }: PricingClientProps) {
+export function PricingClient({ initialCountryCode = null, referralProgram = null }: PricingClientProps) {
     const [userId, setUserId] = useState<string | null>(null);
     const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
+    const [checkoutStatus, setCheckoutStatus] = useState<CheckoutStatus | null>(null);
+    const stopBalanceRefreshRef = useRef<(() => void) | null>(null);
     const [selectedCurrency, setSelectedCurrency] = useState<SupportedCurrency>(() => (
         inferCurrencyFromCountry(initialCountryCode) ?? 'INR'
     ));
@@ -218,7 +257,27 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
         fetchFx();
     }, [initialCountryCode]);
 
-    const handlePayment = async (planId: string) => {
+    useEffect(() => () => {
+        stopBalanceRefreshRef.current?.();
+        stopBalanceRefreshRef.current = null;
+    }, []);
+
+    const refreshBalanceForAMinute = () => {
+        stopBalanceRefreshRef.current?.();
+        stopBalanceRefreshRef.current = pollCreditBalanceAfterPayment();
+    };
+
+    // Read right before each verify attempt, not at the click: the buyer can
+    // spend minutes in the sheet, long enough for that token to expire.
+    const readAccessToken = async () => {
+        const { data: { session: current } } = await supabase.auth.getSession();
+        if (!current?.access_token) {
+            throw new Error('The session ended while the payment was being made.');
+        }
+        return current.access_token;
+    };
+
+    const handlePayment = async (planId: PricingPlanId) => {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session?.user) {
             router.push('/login?redirect=/pricing');
@@ -226,6 +285,8 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
         }
         const buyerId = session.user.id;
         if (buyerId !== userId) setUserId(buyerId);
+        setCheckoutStatus(null);
+        const checkoutIntentScope = `credits:${planId}`;
 
         try {
             setLoadingPlan(planId);
@@ -236,7 +297,6 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                 throw new Error("Authentication token not found. Please log in again.");
             }
 
-            const checkoutIntentScope = `credits:${planId}`;
             const clientIntentKey = getOrCreateRazorpayCheckoutIntentKey(checkoutIntentScope);
             const orderRes = await fetch('/api/razorpay/order', {
                 method: 'POST',
@@ -247,7 +307,7 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                 body: JSON.stringify({ planId, userId: buyerId, clientIntentKey }),
             });
 
-            const orderData = await orderRes.json();
+            const orderData = await orderRes.json().catch(() => ({}));
 
             if (!orderRes.ok) {
                 if (orderData.code === 'CHECKOUT_PAYLOAD_MISMATCH') {
@@ -264,10 +324,13 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                 description: `Purchase ${planId} credits`,
                 order_id: orderData.orderId,
                 handler: async function (response: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) {
+                    // The sheet has taken the money; from here on, nothing says "try again".
+                    setCheckoutStatus({ planId, kind: 'confirming' });
+                    let verification: RazorpayCheckoutVerificationResult;
                     try {
-                        const verification = await verifyRazorpayCheckoutUntilSettled({
+                        verification = await verifyRazorpayCheckoutUntilSettled({
                             url: '/api/razorpay/verify',
-                            token,
+                            token: readAccessToken,
                             body: {
                                 razorpay_payment_id: response.razorpay_payment_id,
                                 razorpay_order_id: response.razorpay_order_id,
@@ -275,58 +338,75 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                                 userId: buyerId,
                             },
                         });
-
-                        if (verification.state === 'pending') {
-                            // The payment is now bound to this provider order and
-                            // the webhook owns final settlement. Credits are
-                            // repeat-purchasable, so do not pin the next checkout
-                            // to an order that may already become paid.
-                            clearRazorpayCheckoutIntentKey(checkoutIntentScope);
-                            alert("Payment received and waiting for capture. Your credits will appear automatically once Razorpay confirms it.");
-                            // Full navigation, not router.push. AuthProvider lives in the
-                            // root layout and reads `profiles.credits` once on mount, so a
-                            // client-side push keeps it mounted and lands on the home page
-                            // still showing the pre-purchase balance — directly after an
-                            // alert saying the credits arrived. A reload remounts every
-                            // credit surface at once, which is what this path wants.
-                            // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-                            window.location.href = '/';
-                            return;
-                        }
-
-                        clearRazorpayCheckoutIntentKey(checkoutIntentScope);
-                        alert("Payment successful! Credits added to your account.");
-                        // Full navigation for the same reason as the pending branch above.
-                        // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-                        window.location.href = '/';
                     } catch (err) {
                         console.error("Verification error:", err);
-                        alert(err instanceof Error ? err.message : "An error occurred while verifying the payment.");
+                        // A dropped network, a timeout, a 5xx or an expired token
+                        // after payment: the webhook settles this order, and the
+                        // intent key would replay the paid order on the next try.
+                        clearRazorpayCheckoutIntentKey(checkoutIntentScope);
+                        setCheckoutStatus({ planId, kind: 'paid' });
+                        refreshBalanceForAMinute();
+                        return;
                     }
+
+                    // The payment is now bound to this provider order. Credits are
+                    // repeat-purchasable, so do not pin the next checkout to an
+                    // order that is (or may become) paid.
+                    clearRazorpayCheckoutIntentKey(checkoutIntentScope);
+                    if (verification.state === 'pending') {
+                        // The webhook owns final settlement.
+                        setCheckoutStatus({ planId, kind: 'pending' });
+                        refreshBalanceForAMinute();
+                        return;
+                    }
+
+                    setCheckoutStatus({ planId, kind: 'settled' });
+                    // AuthProvider and the header re-read `profiles.credits` on this.
+                    window.dispatchEvent(new Event('credits_updated'));
                 },
                 theme: {
                     color: '#ff7a59',
                 },
             };
 
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const rzp = new (window as any).Razorpay(options);
+            const Razorpay = window.Razorpay;
+            if (typeof Razorpay !== 'function') {
+                throw new Error('Checkout is still loading. Try again in a moment.');
+            }
+            const rzp = new Razorpay(options);
 
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            rzp.on('payment.failed', function (response: any) {
-                console.error("Payment failed:", response.error ? response.error.description : response);
-                alert(`Payment failed: ${response.error ? response.error.description : 'Please try again.'}`);
+            // A failed attempt took no money, and the sheet stays open for another.
+            rzp.on('payment.failed', function (failure: unknown) {
+                const description = paymentFailureDescription(failure);
+                console.error("Payment failed:", description ?? failure);
+                setCheckoutStatus({
+                    planId,
+                    kind: 'failed',
+                    message: `Payment failed: ${description ?? 'Please try again.'}`,
+                });
             });
 
             rzp.open();
 
         } catch (error: unknown) {
             console.error("Payment initiation error:", error);
-            alert(error instanceof Error ? error.message : "An error occurred while initiating payment.");
+            setCheckoutStatus({
+                planId,
+                kind: 'failed',
+                message: error instanceof Error ? error.message : "An error occurred while initiating payment.",
+            });
         } finally {
             setLoadingPlan(null);
         }
     };
+
+    const checkoutConfirming = checkoutStatus?.kind === 'confirming';
+    const inviteeBonus = referralProgram
+        ? `${percentFormatter.format(referralProgram.inviteeFirstPurchasePercent)}% bonus credits`
+        : 'bonus credits';
+    const inviterBonus = referralProgram
+        ? `${percentFormatter.format(referralProgram.inviterPercent)}% bonus credits`
+        : 'bonus credits';
 
     const canConvertCurrency =
         selectedCurrency !== 'INR' &&
@@ -430,7 +510,7 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                             <div>
                                 <p className="text-sm font-extrabold text-amber-100">Invite friends. Earn creation credits.</p>
                                 <p className="mt-1 max-w-2xl text-sm leading-6 text-zinc-300">
-                                    Your friend gets 5% bonus credits on their first verified top-up. You earn 5% bonus credits every time they top up.
+                                    Your friend gets {inviteeBonus} on their first verified top-up. You earn {inviterBonus} every time they top up.
                                 </p>
                             </div>
                         </div>
@@ -453,9 +533,9 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                                 : "border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] hover:border-[var(--ui-border-default)]"
                                 }`}
                         >
-                            {plan.popular ? (
+                            {plan.badge ? (
                                 <div className="absolute -top-4 left-1/2 -translate-x-1/2 rounded-full border border-amber-200/30 bg-amber-300 px-4 py-1.5 text-xs font-extrabold uppercase tracking-wider text-[#1a0d08] shadow-lg">
-                                    Most Popular
+                                    {plan.badge}
                                 </div>
                             ) : null}
 
@@ -499,7 +579,7 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
 
                             <button
                                 onClick={() => handlePayment(plan.id)}
-                                disabled={loadingPlan === plan.id}
+                                disabled={loadingPlan === plan.id || checkoutConfirming}
                                 className="ui-focus-ring group relative flex min-h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-full bg-[var(--ui-primary)] px-6 py-3 font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 <span className="relative z-10 flex items-center justify-center gap-2">
@@ -513,6 +593,34 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                                     )}
                                 </span>
                             </button>
+
+                            {checkoutStatus?.planId === plan.id ? (
+                                <div
+                                    role={checkoutStatus.kind === 'failed' ? 'alert' : 'status'}
+                                    className={`mt-4 flex items-start gap-2 rounded-2xl border px-4 py-3 text-sm leading-6 ${checkoutStatus.kind === 'failed'
+                                        ? 'border-rose-400/30 bg-rose-500/10 text-rose-100'
+                                        : 'border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-zinc-200'
+                                        }`}
+                                >
+                                    {checkoutStatus.kind === 'confirming' ? (
+                                        <Loader2 className="mt-1 h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                                    ) : null}
+                                    <span>
+                                        {checkoutStatus.kind === 'failed'
+                                            ? checkoutStatus.message
+                                            : CHECKOUT_STATUS_COPY[checkoutStatus.kind]}
+                                        {checkoutStatus.kind === 'settled' ? (
+                                            // The buyer now stays on this page, so the way on to spending the credits is offered here.
+                                            <>
+                                                {' '}
+                                                <Link href="/create" className="font-bold text-[var(--ui-primary)] underline-offset-2 hover:underline">
+                                                    Start creating
+                                                </Link>
+                                            </>
+                                        ) : null}
+                                    </span>
+                                </div>
+                            ) : null}
 
                             <ul className="mt-8 space-y-4">
                                 {plan.features.map((feature) => (

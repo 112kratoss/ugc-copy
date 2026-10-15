@@ -1,13 +1,17 @@
 'use client';
 
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { type CSSProperties, useEffect, useState } from 'react';
 import { ArrowRight, Gift, Loader2, Sparkles } from 'lucide-react';
 
+import { useAuth } from '@/components/AuthProvider';
 import { supabase } from '@/lib/supabase';
 
+// The server's `requires_account` (a guest) never reaches this page: the web
+// has no guest sessions and the proxy refuses a guest's token first.
 type WelcomeCreditResponse = {
-  status: 'eligible' | 'claimed' | 'already_claimed' | 'legacy_ineligible' | 'requires_account' | 'identity_already_claimed' | 'not_eligible' | 'unavailable';
+  status: 'eligible' | 'claimed' | 'already_claimed' | 'legacy_ineligible' | 'identity_already_claimed' | 'not_eligible' | 'unavailable';
   amount: number;
   credits: number;
   promotionalCredits: number;
@@ -17,6 +21,31 @@ type WelcomeCreditResponse = {
 
 const CELEBRATION_DURATION_MS = 850;
 const CONFETTI_PIECES = 14;
+
+/**
+ * /auth/continue and /auth/callback put `?referral=` on this page when a
+ * sign-up claimed an invite: "applied", or why it was refused. The app says the
+ * same on its invite screen; a web sign-up otherwise heard nothing.
+ */
+function describeReferralClaim(status: string | null) {
+  switch (status) {
+    case null:
+    case '':
+      return null;
+    case 'applied':
+      return 'Invite applied: your first verified credit-pack purchase gets the invite bonus.';
+    case 'existing_account':
+      return 'Invite not applied: invite bonuses are for new accounts only.';
+    case 'self_referral':
+      return 'Invite not applied: you cannot use your own invite link.';
+    case 'already_attributed':
+      return 'Invite not applied: this account already has an inviter.';
+    case 'visit_unavailable':
+      return 'Invite not applied: this invite link is no longer active. It may have expired or already been used.';
+    default:
+      return 'Invite not applied: this account is not eligible for this invite.';
+  }
+}
 
 function prefersReducedMotion() {
   return typeof window !== 'undefined'
@@ -40,6 +69,9 @@ async function authorizedRequest(path: string, init?: RequestInit) {
 }
 
 export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) {
+  const { updateCredits } = useAuth();
+  const searchParams = useSearchParams();
+  const referralNotice = describeReferralClaim(searchParams?.get('referral') ?? null);
   const [welcome, setWelcome] = useState<WelcomeCreditResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -116,6 +148,16 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
         body: JSON.stringify({ sourceSurface: 'web' }),
       });
       setWelcome(result);
+      if (result.status === 'claimed') {
+        // The balance right after this grant: the header and the creators
+        // showed 0 until a reload and put a top-up wall after the confetti.
+        updateCredits(result.credits);
+      }
+      if (result.status === 'already_claimed') {
+        // `credits` is the balance after the earlier grant, stale once anything
+        // was spent since, so the shell reads the balance again instead.
+        window.dispatchEvent(new Event('credits_updated'));
+      }
       if (result.status === 'claimed' || result.status === 'already_claimed') {
         celebrate(result.amount);
       }
@@ -128,7 +170,6 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
 
   const claimed = welcome?.status === 'claimed' || welcome?.status === 'already_claimed';
   const legacy = welcome?.status === 'legacy_ineligible';
-  const requiresAccount = welcome?.status === 'requires_account';
   // A sign-in identifier on this account already claimed the pack on a previous
   // (since deleted) account. Nothing was paid out here, so no celebration and
   // no headline number — both would announce credits that do not exist.
@@ -170,16 +211,19 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
               ? 'This sign-in already received the one-time welcome credits on a previous account, so they cannot be claimed again.'
               : legacy
               ? 'Your existing welcome credits are already active.'
-              : requiresAccount
-                ? 'Create an account to claim your welcome credits. Guest sessions cannot hold a welcome reward.'
-                : claimed
-                  ? 'Your creation credits are ready for your first project.'
-                  : notEligible
-                    ? 'Choose your creator name, then come back to claim your welcome credits.'
-                    : unavailable
-                      ? 'Your welcome credits are temporarily unavailable. You can start creating and claim them later.'
-                      : 'Claim creation-only credits for images, video, and motion.'}
+              : claimed
+                ? 'Your creation credits are ready for your first project.'
+                : notEligible
+                  ? 'Choose your creator name, then come back to claim your welcome credits.'
+                  : unavailable
+                    ? 'Your welcome credits are temporarily unavailable. You can start creating and claim them later.'
+                    : 'Claim creation-only credits for images, video, and motion.'}
           </p>
+          {referralNotice ? (
+            <p role="status" className="mx-auto mt-4 max-w-lg rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 py-2 text-sm font-semibold text-[var(--ui-text-secondary)]">
+              {referralNotice}
+            </p>
+          ) : null}
 
           {loading ? (
             <div className="mt-10 flex items-center justify-center gap-3 text-sm font-bold text-[var(--ui-text-muted)]">
@@ -225,14 +269,6 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
                 {claiming ? 'Claiming…' : `Claim ${welcome?.amount ?? 25} credits`}
               </button>
             ) : null}
-            {requiresAccount ? (
-              <Link
-                href={`/login?mode=signup&returnUrl=${encodeURIComponent(`/welcome-reward?next=${encodeURIComponent(nextPath)}`)}`}
-                className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 text-sm font-black text-[var(--ui-primary-on)]"
-              >
-                Create an account <ArrowRight className="h-4 w-4" aria-hidden />
-              </Link>
-            ) : null}
             {notEligible ? (
               <Link
                 href="/profile/edit"
@@ -241,7 +277,7 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
                 Finish creator profile <ArrowRight className="h-4 w-4" aria-hidden />
               </Link>
             ) : null}
-            {(welcome?.status !== 'eligible' && !requiresAccount) || error ? (
+            {welcome?.status !== 'eligible' || error ? (
               <Link href={nextPath} className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 text-sm font-black text-[var(--ui-primary-on)]">
                 Start creating <ArrowRight className="h-4 w-4" aria-hidden />
               </Link>

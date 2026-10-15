@@ -169,4 +169,26 @@ describe('InviteClient', () => {
     expect(await screen.findByDisplayValue(summary.shareUrl)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it('prints the program /api/referrals/me serves, never numbers of its own', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      ...summary,
+      program: { inviterPercent: 7, inviteeFirstPurchasePercent: 2.5, attributionWindowDays: 14 },
+    }));
+
+    render(<InviteClient />);
+    await screen.findByDisplayValue(summary.shareUrl);
+
+    const offer = screen.getByLabelText('Current referral offer');
+    expect(offer).toHaveTextContent('2.5%for your friend');
+    expect(offer).toHaveTextContent('7%for you');
+    expect(screen.getByText(/within 14 days\. Rewards are added after a purchase is verified\./)).toBeInTheDocument();
+    expect(screen.queryByText(/\b30 days/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy invite' }));
+    await waitFor(() => {
+      expect(writeTextMock).toHaveBeenCalledWith(buildReferralCopyText(summary.shareUrl, 2.5));
+    });
+    expect(writeTextMock.mock.calls[0]?.[0]).toContain('get 2.5% bonus credits on your first top-up');
+  });
 });

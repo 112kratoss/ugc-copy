@@ -1,16 +1,31 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const routerPushMock = vi.fn();
+import creditPacksContract from '../../contracts/credit-packs-v1.json';
+
+const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
+const sessionState = vi.hoisted(() => ({
+  session: null as { access_token: string; user: { id: string } } | null,
+}));
+const pageMocks = vi.hoisted(() => ({
+  headers: vi.fn(),
+  loadReferralProgramTerms: vi.fn(),
+}));
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: routerPushMock,
-  }),
+  useRouter: () => routerMock,
 }));
 
 vi.mock('next/script', () => ({
   default: () => null,
+}));
+
+vi.mock('next/headers', () => ({
+  headers: () => pageMocks.headers(),
+}));
+
+vi.mock('@/lib/referral-route-service', () => ({
+  loadReferralProgramTerms: () => pageMocks.loadReferralProgramTerms(),
 }));
 
 vi.mock('@/lib/supabase', () => ({
@@ -20,7 +35,7 @@ vi.mock('@/lib/supabase', () => ({
         data: { user: null },
       })),
       getSession: vi.fn(async () => ({
-        data: { session: null },
+        data: { session: sessionState.session },
       })),
     },
   },
@@ -40,7 +55,8 @@ describe('pricing page currency storage', () => {
   beforeEach(() => {
     vi.resetModules();
     fetchMock.mockReset();
-    routerPushMock.mockReset();
+    routerMock.push.mockReset();
+    sessionState.session = null;
     window.localStorage.clear();
     stubNavigatorLanguages(defaultNavigatorLanguages);
 
@@ -156,12 +172,340 @@ describe('pricing page currency storage', () => {
     });
   });
 
-  it('shows the referral benefit next to credit-pack pricing', async () => {
+  it('shows the referral benefit next to credit-pack pricing, in the live program terms', async () => {
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(
+      <PricingClient
+        initialCountryCode="IN"
+        referralProgram={{ inviterPercent: 7, inviteeFirstPurchasePercent: 2.5 }}
+      />
+    );
+
+    expect(screen.getByText('Invite friends. Earn creation credits.')).toBeInTheDocument();
+    expect(screen.getByText(
+      'Your friend gets 2.5% bonus credits on their first verified top-up. You earn 7% bonus credits every time they top up.'
+    )).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Invite & Earn/i })).toHaveAttribute('href', '/invite');
+  });
+
+  it('leaves the numbers out when the program terms cannot be read', async () => {
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" referralProgram={null} />);
+
+    expect(screen.getByText(
+      'Your friend gets bonus credits on their first verified top-up. You earn bonus credits every time they top up.'
+    )).toBeInTheDocument();
+    expect(screen.queryByText(/\d+(\.\d+)?% bonus/)).toBeNull();
+  });
+
+  it('prints the packs, and the featured label, the contract defines, with no HD claim', async () => {
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    const { container } = render(<PricingClient initialCountryCode="IN" />);
+
+    for (const pack of creditPacksContract.packs) {
+      expect(screen.getByRole('heading', { level: 2, name: pack.name })).toBeInTheDocument();
+      expect(screen.getByText(pack.description)).toBeInTheDocument();
+    }
+    const badges = creditPacksContract.packs.flatMap((pack) => (pack.badge ? [pack.badge] : []));
+    expect(badges).toEqual(['Most popular']);
+    expect(screen.getAllByText('Most popular')).toHaveLength(1);
+    expect(container.textContent).not.toMatch(/\bHD\b/);
+  });
+});
+
+describe('pricing page server render', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    pageMocks.headers.mockReset();
+    pageMocks.loadReferralProgramTerms.mockReset();
+  });
+
+  it('hands the client the live Invite & Earn terms read on the server', async () => {
+    const terms = { inviterPercent: 5, inviteeFirstPurchasePercent: 5, attributionWindowDays: 30 };
+    pageMocks.headers.mockResolvedValue(new Headers({ 'x-vercel-ip-country': 'IN' }));
+    pageMocks.loadReferralProgramTerms.mockResolvedValue(terms);
+
+    const { default: Pricing } = await import('@/app/pricing/page');
+    const element = await Pricing();
+
+    expect(element.props).toEqual({ initialCountryCode: 'IN', referralProgram: terms });
+  });
+
+  it('passes null, never made-up numbers, while no program can be read', async () => {
+    pageMocks.headers.mockResolvedValue(new Headers());
+    pageMocks.loadReferralProgramTerms.mockResolvedValue(null);
+
+    const { default: Pricing } = await import('@/app/pricing/page');
+    const element = await Pricing();
+
+    expect(element.props).toEqual({ initialCountryCode: null, referralProgram: null });
+  });
+});
+
+type RazorpayHandler = (response: {
+  razorpay_payment_id: string;
+  razorpay_order_id: string;
+  razorpay_signature: string;
+}) => Promise<void>;
+
+describe('pricing page checkout', () => {
+  const INTENT_STORAGE_KEY = 'magicbooklet:razorpay-checkout:credits:starter';
+  const fetchMock = vi.fn();
+  let verifyResponses: Array<() => Promise<Response>> = [];
+  let orderResponse: () => Response;
+  let sheet: { options: Record<string, unknown> | null; failed: ((failure: unknown) => void) | null; opened: number };
+  let alertSpy: ReturnType<typeof vi.spyOn>;
+
+  function json(body: unknown, status = 200) {
+    return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  }
+
+  function requestsTo(path: string) {
+    return fetchMock.mock.calls.filter(([url]) => url === path);
+  }
+
+  function bearerOf(call: unknown[] | undefined) {
+    return ((call?.[1] as RequestInit | undefined)?.headers as Record<string, string> | undefined)?.Authorization;
+  }
+
+  class RazorpayStub {
+    constructor(options: Record<string, unknown>) {
+      sheet.options = options;
+    }
+
+    on(event: string, handler: (failure: unknown) => void) {
+      if (event === 'payment.failed') sheet.failed = handler;
+    }
+
+    open() {
+      sheet.opened += 1;
+    }
+  }
+
+  async function openSheetForStarter() {
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Get 500 Credits' }));
+    await waitFor(() => {
+      expect(sheet.opened).toBe(1);
+    });
+    return sheet.options?.handler as RazorpayHandler;
+  }
+
+  const payment = {
+    razorpay_payment_id: 'pay_123',
+    razorpay_order_id: 'order_123',
+    razorpay_signature: 'signature',
+  };
+
+  beforeEach(() => {
+    vi.resetModules();
+    fetchMock.mockReset();
+    window.sessionStorage.clear();
+    sessionState.session = { access_token: 'click-token', user: { id: 'buyer-1' } };
+    sheet = { options: null, failed: null, opened: 0 };
+    verifyResponses = [];
+    orderResponse = () => json({ orderId: 'order_123', amount: 41500, currency: 'INR' });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/fx') return json({ base: 'INR', rates: { INR: 1, USD: 0.012 }, updatedAt: '2026-10-15' });
+      if (url === '/api/razorpay/order') return orderResponse();
+      if (url === '/api/razorpay/verify') {
+        const next = verifyResponses.shift();
+        if (!next) throw new Error('unexpected verify call');
+        return next();
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('Razorpay', RazorpayStub);
+    alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('confirms a settled payment inline with a token read after the sheet, and refreshes the balance', async () => {
+    let releaseVerify: (response: Response) => void = () => undefined;
+    verifyResponses.push(() => new Promise<Response>((resolve) => { releaseVerify = resolve; }));
+    const handler = await openSheetForStarter();
+    expect(bearerOf(requestsTo('/api/razorpay/order')[0])).toBe('Bearer click-token');
+    expect(window.sessionStorage.getItem(INTENT_STORAGE_KEY)).toBeTruthy();
+    const balanceEvents: Event[] = [];
+    const onCreditsUpdated = (event: Event) => balanceEvents.push(event);
+    window.addEventListener('credits_updated', onCreditsUpdated);
+
+    try {
+      // Minutes in the sheet: the session has a new token by the time it returns.
+      sessionState.session = { access_token: 'fresh-token', user: { id: 'buyer-1' } };
+      let settled: Promise<void> = Promise.resolve();
+      act(() => {
+        settled = handler(payment);
+      });
+
+      expect(await screen.findByText('Confirming your payment…')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Get 2,000 Credits' })).toBeDisabled();
+
+      await act(async () => {
+        releaseVerify(json({ success: true }));
+        await settled;
+      });
+
+      expect(screen.getByRole('status')).toHaveTextContent('Payment successful! Credits added to your account.');
+      expect(screen.getByRole('link', { name: 'Start creating' })).toHaveAttribute('href', '/create');
+      expect(bearerOf(requestsTo('/api/razorpay/verify')[0])).toBe('Bearer fresh-token');
+      expect(window.sessionStorage.getItem(INTENT_STORAGE_KEY)).toBeNull();
+      expect(balanceEvents).toHaveLength(1);
+      expect(screen.getByRole('button', { name: 'Get 2,000 Credits' })).toBeEnabled();
+      expect(alertSpy).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('credits_updated', onCreditsUpdated);
+    }
+  });
+
+  it('says a payment awaiting capture will arrive, and keeps reading the balance for a minute', async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      verifyResponses.push(async () => json({
+        success: false,
+        status: 'pending',
+        code: 'PAYMENT_PENDING',
+        retryAfterSeconds: 2,
+      }, 202));
+    }
+    const handler = await openSheetForStarter();
+    const balanceEvents: Event[] = [];
+    const onCreditsUpdated = (event: Event) => balanceEvents.push(event);
+    window.addEventListener('credits_updated', onCreditsUpdated);
+
+    try {
+      vi.useFakeTimers();
+      let settled: Promise<void> = Promise.resolve();
+      act(() => {
+        settled = handler(payment);
+      });
+      expect(screen.getByText('Confirming your payment…')).toBeInTheDocument();
+      // Four two-second waits between the five verify attempts.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(8_000);
+        await settled;
+      });
+
+      expect(requestsTo('/api/razorpay/verify')).toHaveLength(5);
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Payment received and waiting for capture. Your credits will appear automatically once Razorpay confirms it.'
+      );
+      expect(window.sessionStorage.getItem(INTENT_STORAGE_KEY)).toBeNull();
+      expect(balanceEvents).toHaveLength(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(balanceEvents).toHaveLength(7);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      const afterAMinute = balanceEvents.length;
+      expect(afterAMinute).toBeGreaterThanOrEqual(12);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(balanceEvents).toHaveLength(afterAMinute);
+      expect(alertSpy).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('credits_updated', onCreditsUpdated);
+    }
+  });
+
+  it('tells a buyer whose verify answered 401 after paying that the payment went through', async () => {
+    verifyResponses.push(async () => json({ error: 'Unauthorized' }, 401));
+    const handler = await openSheetForStarter();
+    const balanceEvents: Event[] = [];
+    const onCreditsUpdated = (event: Event) => balanceEvents.push(event);
+    window.addEventListener('credits_updated', onCreditsUpdated);
+
+    try {
+      await act(async () => {
+        await handler(payment);
+      });
+
+      const status = screen.getByRole('status');
+      expect(status).toHaveTextContent(
+        'Your payment went through and your credits will appear in your balance shortly. You do not need to pay again.'
+      );
+      expect(status).not.toHaveTextContent(/unauthorized|try again/i);
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Start creating' })).toBeNull();
+      // The next checkout must not replay this paid order.
+      expect(window.sessionStorage.getItem(INTENT_STORAGE_KEY)).toBeNull();
+      // The webhook settles it; the balance is read again until it shows.
+      expect(balanceEvents).toHaveLength(1);
+      expect(alertSpy).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('credits_updated', onCreditsUpdated);
+    }
+  });
+
+  it('says the payment went through when the session is gone by the time the sheet returns', async () => {
+    const handler = await openSheetForStarter();
+    sessionState.session = null;
+
+    await act(async () => {
+      await handler(payment);
+    });
+
+    expect(requestsTo('/api/razorpay/verify')).toHaveLength(0);
+    expect(screen.getByRole('status')).toHaveTextContent('Your payment went through');
+    expect(window.sessionStorage.getItem(INTENT_STORAGE_KEY)).toBeNull();
+  });
+
+  it('shows an order refusal inline, before any money moves', async () => {
+    orderResponse = () => json({ error: 'This checkout changed. Start it again.', code: 'CHECKOUT_PAYLOAD_MISMATCH' }, 409);
     const { PricingClient } = await import('@/app/pricing/PricingClient');
     render(<PricingClient initialCountryCode="IN" />);
 
-    expect(screen.getByText('Invite friends. Earn creation credits.')).toBeInTheDocument();
-    expect(screen.getByText(/Your friend gets 5% bonus credits/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Invite & Earn/i })).toHaveAttribute('href', '/invite');
+    fireEvent.click(screen.getByRole('button', { name: 'Get 500 Credits' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('This checkout changed. Start it again.');
+    expect(sheet.opened).toBe(0);
+    expect(window.sessionStorage.getItem(INTENT_STORAGE_KEY)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Get 500 Credits' })).toBeEnabled();
+    expect(alertSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps the intent key when the order is refused for another reason', async () => {
+    orderResponse = () => json({ error: 'Too many checkout attempts.' }, 429);
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Get 500 Credits' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Too many checkout attempts.');
+    expect(window.sessionStorage.getItem(INTENT_STORAGE_KEY)).toBeTruthy();
+  });
+
+  it('shows a failed attempt inside the sheet inline', async () => {
+    await openSheetForStarter();
+
+    act(() => {
+      sheet.failed?.({ error: { description: 'Your card was declined.' } });
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Payment failed: Your card was declined.');
+    expect(alertSpy).not.toHaveBeenCalled();
+  });
+
+  it('sends a signed-out buyer to sign in and back', async () => {
+    sessionState.session = null;
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Get 500 Credits' }));
+
+    await waitFor(() => {
+      expect(routerMock.push).toHaveBeenCalledWith('/login?redirect=/pricing');
+    });
+    expect(requestsTo('/api/razorpay/order')).toHaveLength(0);
   });
 });

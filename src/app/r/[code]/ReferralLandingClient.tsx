@@ -6,6 +6,30 @@ import { useEffect, useState } from 'react';
 
 type VisitState = 'saving' | 'ready' | 'error';
 
+/** The part of the visit answer's `program` (the `/api/referrals/me` shape) this page prints. */
+type ReferralProgram = {
+  inviteeFirstPurchasePercent: number;
+  attributionWindowDays: number;
+};
+
+const numberFormatter = new Intl.NumberFormat('en', { maximumFractionDigits: 2 });
+
+function positiveNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+// Null when the visit carries no terms (no active program, or they could not
+// be read): the page then leaves the numbers out rather than print its own.
+function readProgram(value: unknown): ReferralProgram | null {
+  if (!value || typeof value !== 'object') return null;
+  const program = value as Record<string, unknown>;
+  const inviteeFirstPurchasePercent = positiveNumber(program.inviteeFirstPurchasePercent);
+  const attributionWindowDays = positiveNumber(program.attributionWindowDays);
+  return inviteeFirstPurchasePercent !== null && attributionWindowDays !== null
+    ? { inviteeFirstPurchasePercent, attributionWindowDays }
+    : null;
+}
+
 export default function ReferralLandingClient({
   appStoreUrl,
   code,
@@ -18,7 +42,8 @@ export default function ReferralLandingClient({
   playStoreUrl: string | null;
 }) {
   const [state, setState] = useState<VisitState>('saving');
-  const [message, setMessage] = useState('Securely saving this invite for 30 days.');
+  const [error, setError] = useState<string | null>(null);
+  const [program, setProgram] = useState<ReferralProgram | null>(null);
   const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
@@ -31,20 +56,27 @@ export default function ReferralLandingClient({
       body: JSON.stringify({ code, source: 'web', next: destination }),
       signal: controller.signal,
     }).then(async (response) => {
-      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      const payload = await response.json().catch(() => null) as { error?: string; program?: unknown } | null;
       if (!response.ok) throw new Error(payload?.error || 'Could not save this invite.');
+      setProgram(readProgram(payload?.program));
       setState('ready');
-      setMessage('Invite saved. Create your new account to keep the first top-up bonus.');
-    }).catch((error: unknown) => {
-      if (error instanceof DOMException && error.name === 'AbortError') return;
+    }).catch((nextError: unknown) => {
+      if (nextError instanceof DOMException && nextError.name === 'AbortError') return;
       setState('error');
-      setMessage(error instanceof Error ? error.message : 'Could not save this invite.');
+      setError(nextError instanceof Error ? nextError.message : 'Could not save this invite.');
     });
 
     return () => controller.abort();
   }, [code, destination, retryKey]);
 
   const signupPath = `/login?mode=signup&next=${encodeURIComponent(destination)}`;
+  const message = state === 'saving'
+    ? 'Securely saving this invite.'
+    : state === 'error'
+      ? error ?? 'Could not save this invite.'
+      : program
+        ? `Invite saved for ${numberFormatter.format(program.attributionWindowDays)} days. Create your new account to keep the first top-up bonus.`
+        : 'Invite saved. Create your new account to keep the first top-up bonus.';
 
   return (
     <main className="ui-page ui-page-ambient min-h-screen px-4 py-10 sm:px-6 sm:py-16">
@@ -60,7 +92,9 @@ export default function ReferralLandingClient({
             </span>
             <p className="mt-6 text-xs font-black uppercase tracking-[0.2em] text-[var(--ui-accent-commerce)]">A Magicbooklet invite</p>
             <h1 className="mx-auto mt-3 max-w-xl text-4xl font-black tracking-tight text-[var(--ui-text-primary)] sm:text-5xl">
-              Get 5% bonus credits on your first top-up.
+              {program
+                ? `Get ${numberFormatter.format(program.inviteeFirstPurchasePercent)}% bonus credits on your first top-up.`
+                : 'Get bonus credits on your first top-up.'}
             </h1>
             <p className="mx-auto mt-5 max-w-xl text-base leading-7 text-[var(--ui-text-muted)]">
               Create images, videos, motion, audio, prompts, and workflows. The friend who invited you may also earn bonus credits.
@@ -87,7 +121,7 @@ export default function ReferralLandingClient({
                   type="button"
                   onClick={() => {
                     setState('saving');
-                    setMessage('Securely saving this invite for 30 days.');
+                    setError(null);
                     setRetryKey((value) => value + 1);
                   }}
                   className="ui-focus-ring inline-flex min-h-10 items-center gap-2 rounded-full px-3 text-sm font-extrabold text-[var(--ui-primary)] hover:bg-[var(--ui-primary-soft)]"
@@ -97,7 +131,7 @@ export default function ReferralLandingClient({
               ) : null}
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-2 sm:items-start">
               <Link
                 href={signupPath}
                 aria-disabled={state !== 'ready'}
@@ -106,9 +140,19 @@ export default function ReferralLandingClient({
               >
                 Create new account <ArrowRight className="h-4 w-4" aria-hidden />
               </Link>
-              <Link href="/login" className="ui-focus-ring inline-flex min-h-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] px-5 text-sm font-black text-[var(--ui-text-primary)] hover:bg-[var(--ui-surface-2)]">
-                I already have an account
-              </Link>
+              <div className="grid gap-1.5">
+                <Link
+                  href="/login"
+                  aria-describedby="referral-existing-account-note"
+                  className="ui-focus-ring inline-flex min-h-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] px-5 text-sm font-black text-[var(--ui-text-primary)] hover:bg-[var(--ui-surface-2)]"
+                >
+                  I already have an account
+                </Link>
+                {/* The claim refuses an existing account (`existing_account`). */}
+                <p id="referral-existing-account-note" className="text-center text-xs leading-5 text-[var(--ui-text-faint)]">
+                  New accounts only: signing in does not apply this invite.
+                </p>
+              </div>
             </div>
 
             {appStoreUrl || playStoreUrl ? (
