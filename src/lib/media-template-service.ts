@@ -39,7 +39,7 @@ const TEMPLATE_SELECT = [
   'id', 'name', 'description', 'video_url', 'thumbnail_url', 'category',
   'is_active', 'created_at', 'creator_user_id', 'slug', 'source_canvas_id',
   'input_slots', 'output_kind', 'status', 'use_count', 'active_version_id',
-  'draft_output_node_id', 'draft_catalog_revision', 'updated_at',
+  'draft_output_node_id', 'draft_catalog_revision', 'updated_at', 'moderation_disabled_at',
 ].join(', ');
 
 export type MediaTemplateRow = {
@@ -62,7 +62,16 @@ export type MediaTemplateRow = {
   draft_output_node_id: string | null;
   draft_catalog_revision: string | null;
   updated_at: string | null;
+  /** When moderation took the template down; while set it cannot be published again. */
+  moderation_disabled_at?: string | null;
 };
+
+/**
+ * The catalog contract plus the moderation hold. A held template never goes
+ * live again, so only its creator's own reads can carry a time; every other
+ * reader gets null.
+ */
+export type MediaTemplateWithHoldDto = MediaTemplateDto & { moderationDisabledAt: string | null };
 
 type CanvasRow = {
   id: string;
@@ -244,7 +253,7 @@ function rowToDto(row: MediaTemplateRow, options: {
   includeAuthoring?: boolean;
   videoUrl?: string | null;
   thumbnailUrl?: string | null;
-} = {}): MediaTemplateDto {
+} = {}): MediaTemplateWithHoldDto {
   return {
     id: row.id,
     slug: row.slug ?? row.id,
@@ -258,6 +267,9 @@ function rowToDto(row: MediaTemplateRow, options: {
     inputSlots: normalizeTemplateInputSlots(row.input_slots),
     outputKind: templateOutputKind(row.output_kind),
     status: templateStatus(row.status),
+    // `status` stays 'disabled', the value every installed client already
+    // understands; this is what tells a take-down from the creator's Disable.
+    moderationDisabledAt: row.moderation_disabled_at ?? null,
     useCount: Math.max(0, Number(row.use_count ?? 0)),
     estimatedTotalCredits: options.estimatedTotalCredits ?? null,
     createdAt: row.created_at ?? new Date(0).toISOString(),
@@ -279,7 +291,7 @@ async function attachTemplateDetails(
   // A list feeds cards, which show the poster only: signing every demo clip
   // too cost a Storage call per template for a URL nothing loaded.
   { includeDemo = true }: { includeDemo?: boolean } = {},
-): Promise<MediaTemplateDto[]> {
+): Promise<MediaTemplateWithHoldDto[]> {
   const creators = await getCreatorMap(client, rows.flatMap((row) => row.creator_user_id ? [row.creator_user_id] : []));
   const costs = await activeVersionCosts(client, rows.flatMap((row) => row.active_version_id ? [row.active_version_id] : []));
   return Promise.all(rows.map(async (row) => {
@@ -344,7 +356,10 @@ export async function listActiveMediaTemplatesPage(
   };
 }
 
-export async function listOwnedMediaTemplates(client: SupabaseClient, userId: string): Promise<MediaTemplateDto[]> {
+export async function listOwnedMediaTemplates(
+  client: SupabaseClient,
+  userId: string,
+): Promise<MediaTemplateWithHoldDto[]> {
   const { data, error } = await client.from('templates').select(TEMPLATE_SELECT)
     .eq('creator_user_id', userId).order('updated_at', { ascending: false });
   if (error) throw error;
@@ -470,6 +485,28 @@ async function loadOwnedTemplate(client: SupabaseClient, templateId: string, use
     throw new MediaTemplateError('Template not found.', 404, 'TEMPLATE_NOT_FOUND');
   }
   return row;
+}
+
+function templateTakenDownError() {
+  return new MediaTemplateError(
+    'This template was taken down by moderation and cannot be republished.',
+    409,
+    'TEMPLATE_TAKEN_DOWN',
+  );
+}
+
+/**
+ * A take-down leaves the template disabled, the state its creator's own
+ * Disable writes, and publishing re-activates a disabled template: without
+ * this the creator's next publish undid the take-down.
+ */
+function assertTemplateNotTakenDown(template: MediaTemplateRow) {
+  if (template.moderation_disabled_at) throw templateTakenDownError();
+}
+
+/** `activate_template_version` raises the refusal with this hint. */
+function isTemplateTakenDownRejection(error: unknown): boolean {
+  return isRecord(error) && error.hint === 'TEMPLATE_TAKEN_DOWN';
 }
 
 export async function updateMediaTemplate(client: SupabaseClient, userId: string, templateId: string, body: unknown) {
@@ -643,6 +680,8 @@ async function copyFixedAssets(params: {
 
 export async function publishMediaTemplate(client: SupabaseClient, userId: string, templateId: string, body: unknown) {
   const template = await loadOwnedTemplate(client, templateId, userId);
+  // Before any asset is copied; activation checks again under the row lock.
+  assertTemplateNotTakenDown(template);
   if (!template.source_canvas_id) throw new MediaTemplateError('Choose a source workflow.', 400, 'CANVAS_REQUIRED');
   const input = isRecord(body) ? body : {};
   if (input.rightsConfirmed !== true) {
@@ -739,6 +778,8 @@ export async function publishMediaTemplate(client: SupabaseClient, userId: strin
     if (isDefinitiveSupabaseMutationRejection(activationResult) && copied.copiedPaths.length) {
       await client.storage.from('template_assets').remove(copied.copiedPaths);
     }
+    // A take-down that landed while this publish was copying its assets.
+    if (isTemplateTakenDownRejection(activationError)) throw templateTakenDownError();
     if (activationError) throw activationError;
     throw new MediaTemplateError('The template version could not be activated.', 500, 'VERSION_ACTIVATION_FAILED');
   }
@@ -776,6 +817,9 @@ export async function loadCompiledDraftForTemplate(params: {
   body: unknown;
 }) {
   const template = await loadOwnedTemplate(params.client, params.templateId, params.userId);
+  // A test run is the first step of a publish, and it spends credits on a
+  // template that can no longer be published.
+  assertTemplateNotTakenDown(template);
   if (!template.source_canvas_id) throw new MediaTemplateError('Choose a source workflow.', 400, 'CANVAS_REQUIRED');
   const input = isRecord(params.body) ? params.body : {};
   const canvas = await loadOwnedCanvas(params.client, template.source_canvas_id, params.userId);

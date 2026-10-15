@@ -152,6 +152,11 @@ export type SubjectReportResolution = {
   templateStatus: string | null;
   /** True only when this decision is what disabled the template. */
   templateDisabled: boolean;
+  /**
+   * When the take-down hold was set: a template moderation took down cannot be
+   * published again, even one its creator had disabled before the decision.
+   */
+  templateModerationDisabledAt: string | null;
   resolvedReportCount?: number;
 };
 
@@ -805,6 +810,9 @@ export async function resolveSubjectReport(
     templateId: typeof result.template_id === 'string' ? result.template_id : null,
     templateStatus: typeof result.template_status === 'string' ? result.template_status : null,
     templateDisabled: result.template_disabled === true,
+    templateModerationDisabledAt: typeof result.template_moderation_disabled_at === 'string'
+      ? result.template_moderation_disabled_at
+      : null,
     resolvedReportCount: typeof result.resolved_report_count === 'number'
       ? result.resolved_report_count
       : undefined,

@@ -430,6 +430,7 @@ describe('moderation operations', () => {
       templateId: null,
       templateStatus: null,
       templateDisabled: false,
+      templateModerationDisabledAt: null,
       resolvedReportCount: 2,
       reviewedAt: '2026-07-21T04:00:00.000Z',
       reviewedBy: REVIEWER_ID,
@@ -448,6 +449,7 @@ describe('moderation operations', () => {
         template_id: TEMPLATE_ID,
         template_status: 'disabled',
         template_disabled: true,
+        template_moderation_disabled_at: '2026-10-15T04:00:00+00:00',
         resolved_report_count: 3,
         reviewed_at: '2026-10-15T04:00:00.000Z',
         reviewed_by: REVIEWER_ID,
@@ -478,9 +480,42 @@ describe('moderation operations', () => {
       templateId: TEMPLATE_ID,
       templateStatus: 'disabled',
       templateDisabled: true,
+      templateModerationDisabledAt: '2026-10-15T04:00:00+00:00',
       resolvedReportCount: 3,
       reviewedAt: '2026-10-15T04:00:00.000Z',
       reviewedBy: REVIEWER_ID,
+    });
+  });
+
+  it('reports the hold on a template its creator had already disabled', async () => {
+    const rpc = vi.fn(async () => ({
+      data: {
+        status: 'resolved',
+        report_id: REPORT_ID,
+        target_type: 'template',
+        template_id: TEMPLATE_ID,
+        template_status: 'disabled',
+        template_disabled: false,
+        template_moderation_disabled_at: '2026-10-15T05:00:00+00:00',
+        resolved_report_count: 1,
+        reviewed_at: '2026-10-15T05:00:00.000Z',
+        reviewed_by: REVIEWER_ID,
+      },
+      error: null,
+    }));
+
+    const result = await resolveSubjectReport({ rpc } as unknown as SupabaseClient, {
+      reportId: REPORT_ID,
+      reviewerId: REVIEWER_ID,
+      action: 'resolve',
+      resolutionNote: 'Unsafe demo media under policy 2.4.',
+    });
+
+    // The decision did not disable it, yet it is held: the console can say both.
+    expect(result).toMatchObject({
+      targetType: 'template',
+      templateDisabled: false,
+      templateModerationDisabledAt: '2026-10-15T05:00:00+00:00',
     });
   });
 });

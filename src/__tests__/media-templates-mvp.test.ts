@@ -1,18 +1,24 @@
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 
 import {
   getMediaTemplate,
   listActiveMediaTemplatesPage,
   listOwnedMediaTemplates,
+  loadCompiledDraftForTemplate,
   normalizeTemplateInputSlots,
   normalizeTemplateSlug,
+  publishMediaTemplate,
   resolveOwnedTemplateAssetSource,
   resolveTemplateCatalogMediaUrl,
 } from '@/lib/media-template-service';
+import { MediaTemplateError } from '@/lib/media-template-types';
 import {
+  compileTemplateGraph,
   getTemplateStepDefinitions,
   validateAndCompileTemplateGraph,
 } from '@/lib/template-graph-compiler';
@@ -375,5 +381,194 @@ describe('graph media template MVP', () => {
     expect(fs.existsSync(path.join(root, 'approval-steps/[stepId]/approve/route.ts'))).toBe(true);
     expect(fs.existsSync(path.join(root, 'frames/route.ts'))).toBe(false);
     expect(fs.existsSync(path.join(root, 'approve/route.ts'))).toBe(false);
+  });
+});
+
+describe('moderation take-down hold', () => {
+  const heldAt = '2026-10-15T09:30:00+00:00';
+  const takenDown = {
+    status: 409,
+    code: 'TEMPLATE_TAKEN_DOWN',
+    message: 'This template was taken down by moderation and cannot be republished.',
+  };
+
+  /**
+   * A creator's template with its workflow and a successful test run of it.
+   * Reads are recorded by table; Storage keeps what the publish copies.
+   */
+  function templateFixture(options: {
+    heldAt?: string | null;
+    live?: boolean;
+    activationError?: Record<string, unknown>;
+  } = {}) {
+    const userId = randomUUID();
+    const templateId = randomUUID();
+    const canvasId = randomUUID();
+    const runId = randomUUID();
+    const graph = createTemplateReadyStarterGraph();
+    const output = graph.nodes.find((node) => node.type === 'image-generate');
+    if (!output) throw new Error('Starter output is missing.');
+    const compiled = compileTemplateGraph({ graph, outputNodeId: output.id, canvasRevision: 3, catalogRevision: null });
+    const rows: Record<string, unknown> = {
+      templates: {
+        id: templateId,
+        name: 'Neon portrait',
+        description: null,
+        video_url: null,
+        thumbnail_url: null,
+        category: 'general',
+        is_active: Boolean(options.live),
+        created_at: '2026-10-01T00:00:00.000Z',
+        creator_user_id: userId,
+        slug: 'neon-portrait',
+        source_canvas_id: canvasId,
+        input_slots: [],
+        output_kind: 'image',
+        status: options.live ? 'active' : 'disabled',
+        use_count: 4,
+        active_version_id: options.live ? randomUUID() : null,
+        draft_output_node_id: output.id,
+        draft_catalog_revision: null,
+        updated_at: '2026-10-15T09:30:00.000Z',
+        moderation_disabled_at: options.heldAt ?? null,
+      },
+      workflow_canvases: { id: canvasId, user_id: userId, title: 'Neon portrait', graph, revision: 3 },
+      template_runs: {
+        id: runId,
+        template_id: templateId,
+        user_id: userId,
+        status: 'succeeded',
+        is_test: true,
+        graph_hash: compiled.graphHash,
+        source_canvas_revision: 3,
+        catalog_revision: null,
+        result_url: `generated_images/${userId}/demo.png`,
+      },
+    };
+    const reads: string[] = [];
+    const objects = new Map<string, Blob>();
+    const rpc = vi.fn(async () => (options.activationError
+      ? { data: null, error: options.activationError, status: 400 }
+      : { data: { version_id: randomUUID(), inserted: true }, error: null, status: 200 }));
+    const client = {
+      from(table: string) {
+        reads.push(table);
+        const row = rows[table] ?? null;
+        const query: Record<string, unknown> = {};
+        for (const method of ['select', 'eq', 'in', 'not', 'order', 'limit', 'or', 'update']) query[method] = () => query;
+        query.maybeSingle = async () => ({ data: row, error: null });
+        query.single = async () => ({ data: row, error: null });
+        query.then = (resolve: (value: unknown) => unknown) => (
+          Promise.resolve({ data: row ? [row] : [], error: null }).then(resolve)
+        );
+        return query;
+      },
+      rpc,
+      storage: {
+        from: (bucket: string) => ({
+          download: async () => ({ data: new Blob(['fixture-image'], { type: 'image/png' }), error: null }),
+          upload: async (key: string, blob: Blob) => {
+            objects.set(`${bucket}/${key}`, blob);
+            return { error: null };
+          },
+          remove: async (keys: string[]) => {
+            keys.forEach((key) => objects.delete(`${bucket}/${key}`));
+            return { error: null };
+          },
+          createSignedUrl: async (objectPath: string) => ({
+            data: { signedUrl: `https://signed.example.test/${objectPath}` },
+            error: null,
+          }),
+        }),
+      },
+    } as unknown as SupabaseClient;
+    const publishBody = {
+      rightsConfirmed: true,
+      expectedRevision: 3,
+      graphHash: compiled.graphHash,
+      testRunId: runId,
+      outputNodeId: output.id,
+    };
+    return { client, userId, templateId, reads, objects, rpc, publishBody };
+  }
+
+  it('refuses to publish a template moderation took down, before it reads the workflow or copies anything', async () => {
+    const fixture = templateFixture({ heldAt });
+
+    const publish = publishMediaTemplate(fixture.client, fixture.userId, fixture.templateId, fixture.publishBody);
+
+    await expect(publish).rejects.toBeInstanceOf(MediaTemplateError);
+    await expect(publish).rejects.toMatchObject(takenDown);
+    expect(fixture.reads).toEqual(['templates']);
+    expect(fixture.rpc).not.toHaveBeenCalled();
+    expect(fixture.objects.size).toBe(0);
+  });
+
+  it('answers a take-down that lands mid-publish with the same 409, and removes what the publish copied', async () => {
+    const fixture = templateFixture({
+      activationError: {
+        message: takenDown.message,
+        code: 'P0001',
+        details: null,
+        hint: 'TEMPLATE_TAKEN_DOWN',
+      },
+    });
+
+    await expect(publishMediaTemplate(fixture.client, fixture.userId, fixture.templateId, fixture.publishBody))
+      .rejects.toMatchObject(takenDown);
+    // The check before the copy let this one through: the hold arrived later.
+    expect(fixture.reads).toEqual(expect.arrayContaining(['workflow_canvases', 'template_runs']));
+    expect(fixture.rpc).toHaveBeenCalledWith('activate_template_version', expect.objectContaining({
+      p_template_id: fixture.templateId,
+      p_creator_id: fixture.userId,
+    }));
+    expect(fixture.objects.size).toBe(0);
+  });
+
+  it('passes any other activation refusal through unchanged', async () => {
+    const fixture = templateFixture({
+      activationError: { message: 'Template not found', code: 'P0001', details: null, hint: null },
+    });
+
+    const publish = publishMediaTemplate(fixture.client, fixture.userId, fixture.templateId, fixture.publishBody);
+
+    await expect(publish).rejects.not.toBeInstanceOf(MediaTemplateError);
+    await expect(publish).rejects.toMatchObject({ message: 'Template not found', code: 'P0001' });
+    expect(fixture.objects.size).toBe(0);
+  });
+
+  it('refuses a test run of a template moderation took down, and still prepares one for a template it left alone', async () => {
+    const held = templateFixture({ heldAt });
+    const disabledByItsCreator = templateFixture();
+
+    await expect(loadCompiledDraftForTemplate({
+      client: held.client,
+      templateId: held.templateId,
+      userId: held.userId,
+      body: {},
+    })).rejects.toMatchObject(takenDown);
+    expect(held.reads).toEqual(['templates']);
+
+    const draft = await loadCompiledDraftForTemplate({
+      client: disabledByItsCreator.client,
+      templateId: disabledByItsCreator.templateId,
+      userId: disabledByItsCreator.userId,
+      body: {},
+    });
+    expect(draft.template.id).toBe(disabledByItsCreator.templateId);
+    expect(disabledByItsCreator.reads).toContain('workflow_canvases');
+  });
+
+  it('tells the creator when moderation took their template down; a visitor reads no hold', async () => {
+    const held = templateFixture({ heldAt });
+    const live = templateFixture({ live: true });
+
+    await expect(getMediaTemplate(held.client, held.templateId, held.userId))
+      .resolves.toMatchObject({ status: 'disabled', moderationDisabledAt: heldAt });
+    const [owned] = await listOwnedMediaTemplates(held.client, held.userId);
+    expect(owned).toMatchObject({ status: 'disabled', moderationDisabledAt: heldAt });
+
+    await expect(getMediaTemplate(live.client, live.templateId, null))
+      .resolves.toMatchObject({ status: 'active', moderationDisabledAt: null });
   });
 });
