@@ -16,10 +16,11 @@ const OTHER_USER_ID = '40000000-0000-4000-8000-000000000004';
 const VIEWER_ID = '50000000-0000-4000-8000-000000000005';
 const SECOND_CREATOR_ID = '60000000-0000-4000-8000-000000000006';
 const THIRD_CREATOR_ID = '70000000-0000-4000-8000-000000000007';
+const GUEST_ID = '80000000-0000-4000-8000-000000000008';
 
 function createClient({
   generations = [{ id: GENERATION_ID, user_id: REPORTER_ID }],
-  profiles = [{ id: CREATOR_ID }],
+  profiles = [{ id: CREATOR_ID }] as Row[],
   userBlocks = [] as Array<{ blocker_user_id: string; blocked_user_id: string }>,
 } = {}) {
   const state = {
@@ -210,6 +211,63 @@ describe('moderation service', () => {
       body: { error: 'Generation not found.' },
     });
     expect(client.state.moderationReports).toEqual([]);
+  });
+
+  // A creation made as a guest keeps the guest's id after the guest registers
+  // (merge_guest_account_into_registered moves balances only), and the account
+  // sees it in its library through the linked id.
+  it('lets an account report AI output it made as a guest before registering', async () => {
+    const client = createClient({
+      generations: [{ id: GENERATION_ID, user_id: GUEST_ID }],
+      profiles: [{ id: CREATOR_ID }, { id: GUEST_ID, merged_into_user_id: REPORTER_ID }],
+    });
+
+    await expect(submitModerationReportForRoute({
+      adminSupabase: client.client,
+      body: {
+        targetType: 'generation',
+        targetId: GENERATION_ID,
+        reason: 'offensive_ai_output',
+        sourceSurface: 'generation-viewer',
+      },
+      reporterUserId: REPORTER_ID,
+    })).resolves.toEqual({ ok: true, body: { success: true } });
+    expect(client.state.moderationReports).toEqual([expect.objectContaining({
+      reporter_user_id: REPORTER_ID,
+      generation_id: GENERATION_ID,
+    })]);
+  });
+
+  it("files a guest's report of its own generation and tells it to register for anyone else's", async () => {
+    const body = {
+      targetType: 'generation',
+      targetId: GENERATION_ID,
+      reason: 'offensive_ai_output',
+      sourceSurface: 'generation-viewer',
+    };
+    const own = createClient({ generations: [{ id: GENERATION_ID, user_id: GUEST_ID }] });
+    await expect(submitModerationReportForRoute({
+      adminSupabase: own.client,
+      body,
+      reporterIsGuest: true,
+      reporterUserId: GUEST_ID,
+    })).resolves.toEqual({ ok: true, body: { success: true } });
+    expect(own.state.moderationReports).toEqual([expect.objectContaining({ reporter_user_id: GUEST_ID })]);
+
+    for (const generations of [[{ id: GENERATION_ID, user_id: OTHER_USER_ID }], []]) {
+      const elsewhere = createClient({ generations });
+      await expect(submitModerationReportForRoute({
+        adminSupabase: elsewhere.client,
+        body,
+        reporterIsGuest: true,
+        reporterUserId: GUEST_ID,
+      })).resolves.toEqual({
+        ok: false,
+        status: 403,
+        body: { error: 'Create an account to use this feature.', code: 'REGISTRATION_REQUIRED' },
+      });
+      expect(elsewhere.state.moderationReports).toEqual([]);
+    }
   });
 
   it('blocks idempotently, removes follows in both directions, and invalidates feeds', async () => {

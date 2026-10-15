@@ -3,6 +3,7 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
 import {
   BackendRateLimitError,
   MODERATION_REPORT_RATE_LIMIT,
@@ -55,16 +56,27 @@ export type ModerationRouteResult =
     }
   | {
       ok: false;
-      status: 400 | 404 | 429 | 500;
+      status: 400 | 403 | 404 | 429 | 500;
       body: {
         error: string;
-        code?: 'RATE_LIMITED';
+        code?: 'RATE_LIMITED' | 'REGISTRATION_REQUIRED';
         retryAfterSeconds?: number;
         limit?: number;
         resetAt?: string;
       };
       rateLimitError?: BackendRateLimitError;
     };
+
+/**
+ * What a guest is told for every report but one of a generation it made: the
+ * answer the proxy gives a guest on any registered-only write, so the app
+ * reads it the same way (an account is needed, the session is fine).
+ */
+export const GUEST_REPORT_REGISTRATION_REQUIRED = {
+  ok: false,
+  status: 403,
+  body: { error: 'Create an account to use this feature.', code: 'REGISTRATION_REQUIRED' },
+} as const satisfies ModerationRouteResult;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -127,10 +139,16 @@ async function enforceModerationRateLimit(
 export async function submitModerationReportForRoute({
   adminSupabase,
   body: rawBody,
+  reporterIsGuest = false,
   reporterUserId,
 }: {
   adminSupabase: SupabaseClient;
   body: unknown;
+  /**
+   * The route adapter lets a guest report only a generation; this decides
+   * what a guest is told for one that is not its own.
+   */
+  reporterIsGuest?: boolean;
   reporterUserId: string;
 }): Promise<ModerationRouteResult> {
   const body = normalizeReportBody(rawBody);
@@ -197,13 +215,18 @@ export async function submitModerationReportForRoute({
       .from('generations')
       .select('id, user_id')
       .eq('id', targetId)
-      .eq('user_id', reporterUserId)
       .maybeSingle();
     if (error) {
       logBackendError('failed_to_validate_reported_generation', { error: error });
       return { ok: false, status: 500, body: { error: 'Failed to validate reported generation.' } };
     }
-    if (!data) return { ok: false, status: 404, body: { error: 'Generation not found.' } };
+    // A creation made as a guest stays under the guest's id once the guest
+    // registers, so the reporter may be the account that guest was linked to.
+    if (!data || !(await isOwnOrLinkedAccountId(adminSupabase, reporterUserId, data.user_id))) {
+      return reporterIsGuest
+        ? GUEST_REPORT_REGISTRATION_REQUIRED
+        : { ok: false, status: 404, body: { error: 'Generation not found.' } };
+    }
   }
 
   const { error } = await adminSupabase.from('moderation_reports').insert({

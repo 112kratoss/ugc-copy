@@ -21,18 +21,30 @@ import {
 import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
 import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH } from '@/lib/posts-server';
 
+/** The linked-identity lookup: the guest ids merged into the caller's account. */
+function linkedProfilesQuery(linkedGuestIds: string[]) {
+  return {
+    select: vi.fn(() => ({
+      eq: vi.fn(async () => ({ data: linkedGuestIds.map((id) => ({ id })), error: null })),
+    })),
+  };
+}
+
 function createCanonicalTemplateAdminClientMock({
   generation,
   canonicalRun = true,
+  linkedGuestIds = [],
 }: {
   generation: Record<string, unknown> | null;
   canonicalRun?: boolean;
+  linkedGuestIds?: string[];
 }) {
   const runFilters: Array<{ column: string; value: unknown }> = [];
   const removeMock = vi.fn(async () => ({ data: null, error: null }));
 
   const client = {
     from(table: string) {
+      if (table === 'profiles') return linkedProfilesQuery(linkedGuestIds);
       if (table === 'posts') {
         const query = { select: () => query, eq: () => query, maybeSingle: async () => ({ data: null, error: null }) };
         return query;
@@ -88,7 +100,7 @@ function createCanonicalTemplateAdminClientMock({
 function createAdminClientMock(
   generation: Record<string, unknown> | null = null,
   loadError: { message: string; code?: string } | null = null,
-  options: { postMediaRows?: Array<Record<string, unknown>> } = {},
+  options: { postMediaRows?: Array<Record<string, unknown>>; linkedGuestIds?: string[] } = {},
 ) {
   const removeMock = vi.fn(async () => ({ data: null, error: null }));
   const downloadMock = vi.fn(async () => ({
@@ -103,6 +115,7 @@ function createAdminClientMock(
   return {
     client: {
       from(table: string) {
+        if (table === 'profiles') return linkedProfilesQuery(options.linkedGuestIds ?? []);
         if (table === 'posts' || table === 'post_resource_bundles') {
           const query = {
             eq: vi.fn(() => query),
@@ -328,6 +341,117 @@ describe('publishGenerationToShowcaseForRoute', () => {
     // 20260711154500_private_template_generations.sql.
     expect(result).toEqual({ ok: false, status: 404, body: { error: 'Generation not found' } });
     expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  // The merge moves balances only: a creation made as a guest keeps the guest's
+  // id, and Studio lists it through the linked id. The person who registered
+  // in order to share it was told "You do not own this creation".
+  describe('a creation made as a guest before registering', () => {
+    const madeAsGuest = {
+      id: 'gen-guest',
+      user_id: 'guest-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/guest-1/made-as-guest.jpg',
+      showcase_asset_path: null,
+      title: 'Made as a guest',
+      description: null,
+      prompt: 'A lighthouse at dusk',
+    };
+
+    function publishDependencies() {
+      return {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+          outputUrl: mediaGeneration.outputUrl,
+          createdLocation: null,
+        })),
+        listSourceToolsCatalog: vi.fn(async () => [
+          { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+        ]),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-guest',
+          visibility: 'public' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        ensureGenerationPostCoverMedia: vi.fn(async () => ({ outcome: 'created' as const, error: null })),
+        requestPostEmbedding: vi.fn(async () => undefined),
+      } satisfies Partial<ShowcasePublishServiceDependencies>;
+    }
+
+    it("publishes it for the account the guest was linked to, as the account's own post", async () => {
+      const adminClient = createAdminClientMock(madeAsGuest, null, { linkedGuestIds: ['guest-1'] });
+      const dependencies = publishDependencies();
+
+      const result = await publishGenerationToShowcaseForRoute({
+        adminSupabase: adminClient.client,
+        body: { generationId: 'gen-guest', visibility: 'public' },
+        userId: 'user-1',
+        dependencies,
+      });
+
+      expect(result).toMatchObject({ ok: true, body: { postId: 'post-guest', visibility: 'public' } });
+      expect(dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+        generationId: 'gen-guest',
+        ownerUserId: 'user-1',
+        post: expect.objectContaining({ user_id: 'user-1', generation_id: 'gen-guest' }),
+      }));
+      // The output is read where the guest's run stored it.
+      expect(adminClient.downloadMock).toHaveBeenCalledWith('guest-1/made-as-guest.jpg');
+    });
+
+    it("still refuses a creation of someone the account is not linked to", async () => {
+      const adminClient = createAdminClientMock(
+        { ...madeAsGuest, user_id: 'user-2', output_url: 'generated_images/user-2/theirs.jpg' },
+        null,
+        { linkedGuestIds: ['guest-1'] },
+      );
+      const dependencies = publishDependencies();
+
+      const result = await publishGenerationToShowcaseForRoute({
+        adminSupabase: adminClient.client,
+        body: { generationId: 'gen-guest', visibility: 'public' },
+        userId: 'user-1',
+        dependencies,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        status: 403,
+        body: { error: 'Unauthorized: You do not own this creation' },
+      });
+      expect(dependencies.publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+      expect(adminClient.downloadMock).not.toHaveBeenCalled();
+    });
+
+    it("publishes the canonical result of the guest's own template run", async () => {
+      const generation = { ...madeAsGuest, template_run_id: 'run-1', template_run_step_id: null };
+      const adminClient = createCanonicalTemplateAdminClientMock({ generation, linkedGuestIds: ['guest-1'] });
+      const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => ({
+        postId: 'post-guest-template',
+        visibility: 'private' as const,
+        bundleId: null,
+        bundleStatus: null,
+      }));
+
+      const result = await publishGenerationToShowcaseForRoute({
+        adminSupabase: adminClient.client,
+        body: { generationId: 'gen-guest', visibility: 'private' },
+        userId: 'user-1',
+        dependencies: { ...publishDependencies(), publishGenerationPostWithResourceBundleAtomically },
+      });
+
+      expect(result).toMatchObject({ ok: true, body: { postId: 'post-guest-template' } });
+      // The run is the guest's, as its result is.
+      expect(adminClient.runFilters).toContainEqual({ column: 'user_id', value: 'guest-1' });
+      expect(publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+        ownerUserId: 'user-1',
+        post: expect.objectContaining({ user_id: 'user-1' }),
+      }));
+    });
   });
 
   it('rejects recipe, input, reference, and paid resource sharing for canonical template results', async () => {

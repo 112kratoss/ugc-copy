@@ -5,6 +5,7 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
 import {
   ensureDurableGenerationMedia,
   type CreatedGenerationMediaLocation,
@@ -461,6 +462,11 @@ export async function publishGenerationToShowcaseForRoute({
     return { ok: false, status: 404, body: { error: 'Generation not found' } };
   }
 
+  // A creation made as a guest keeps the guest's id after the guest registers
+  // (the merge moves balances only), and Studio lists it through the linked
+  // id. The account the guest was linked to publishes it as its own.
+  const ownedByCaller = await isOwnOrLinkedAccountId(adminSupabase, userId, generation.user_id);
+
   // A template-linked generation is backend-private: only the canonical
   // deliverable of the viewer's own successful consumer run may publish, and
   // every other outcome reports plain "not found" rather than disclosing
@@ -470,16 +476,18 @@ export async function publishGenerationToShowcaseForRoute({
   let isCanonicalTemplateResult = false;
 
   if (isTemplateLinked) {
-    isCanonicalTemplateResult = generation.user_id === userId
+    // The run belongs to the identity that owns its result, which may be a
+    // guest linked to the caller.
+    isCanonicalTemplateResult = ownedByCaller
       && generation.status === 'succeeded'
-      && await hasCanonicalConsumerRun({ adminSupabase, generationId, userId });
+      && await hasCanonicalConsumerRun({ adminSupabase, generationId, userId: generation.user_id });
 
     if (!isCanonicalTemplateResult) {
       return { ok: false, status: 404, body: { error: 'Generation not found' } };
     }
   }
 
-  if (generation.user_id !== userId) {
+  if (!ownedByCaller) {
     return { ok: false, status: 403, body: { error: 'Unauthorized: You do not own this creation' } };
   }
 
@@ -759,7 +767,10 @@ export async function publishGenerationToShowcaseForRoute({
       nextShowcaseAssetPath = await createGenerationShowcaseDerivative({
         adminSupabase,
         generationId,
-        ownerUserId: userId,
+        // Where the output is read from: the folder of the identity that made
+        // it, a linked guest's included. The copy is filed under the
+        // generation, not under an owner.
+        ownerUserId: generation.user_id,
         outputUrl: generation.output_url,
         category: detectedCategory ?? 'image',
         openRemoteMedia: resolvedDependencies.openAllowlistedRemoteMedia,
@@ -818,7 +829,8 @@ export async function publishGenerationToShowcaseForRoute({
   });
   const postPayload = {
     is_nsfw: isNsfw,
-    user_id: generation.user_id,
+    // The caller's post, whichever of its identities made the creation.
+    user_id: userId,
     visibility: effectiveVisibility,
     category: detectedCategory ?? 'image',
     title: resolvedTitle,

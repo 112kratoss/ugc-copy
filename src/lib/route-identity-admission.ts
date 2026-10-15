@@ -157,12 +157,22 @@ export async function evaluateUserFacingRouteIdentity(
     // valid token for a deleted user is refused, as GoTrue would have.
     if (admission === null) return result(unauthorizedRejection());
     if (!isRecord(admission)) return result(identityUnavailableRejection());
+    // Asked before the session: a deletion revokes every session of the
+    // account before it answers, so the account's other devices hold revoked
+    // sessions. Answering those 401 told them the account was intact.
+    if (admission.state === 'deleting') {
+      return result(identityRejection(
+        409,
+        'ACCOUNT_DELETING',
+        'This account is being permanently deleted.',
+      ));
+    }
     if (admission.session_valid !== true || admission.banned === true) {
       return result(unauthorizedRejection());
     }
 
     const state = admission.state;
-    if (state !== 'active' && state !== 'merged' && state !== 'deleting') {
+    if (state !== 'active' && state !== 'merged') {
       return result(identityUnavailableRejection());
     }
 
@@ -171,14 +181,6 @@ export async function evaluateUserFacingRouteIdentity(
         409,
         'SESSION_MERGED',
         'This guest session has been linked to an account. Sign in to continue.',
-      ));
-    }
-
-    if (state === 'deleting') {
-      return result(identityRejection(
-        409,
-        'ACCOUNT_DELETING',
-        'This account is being permanently deleted.',
       ));
     }
 

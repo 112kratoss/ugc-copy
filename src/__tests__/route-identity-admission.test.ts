@@ -131,6 +131,35 @@ describe('central route identity admission', () => {
     }
   });
 
+  // A deletion revokes every session of the account before it answers, so the
+  // account's other devices arrive with revoked sessions. Answering those 401
+  // told them their session had merely ended and the account was intact.
+  it('tells a revoked session of a deleting account that the account is going', async () => {
+    const deleting = await guardUserFacingRouteIdentity(
+      authenticatedRequest('/api/generations'),
+      { createUserClient: () => identityClient({ state: 'deleting', sessionValid: false }) },
+    );
+    expect(deleting?.status).toBe(409);
+    await expect(deleting?.json()).resolves.toEqual({
+      error: 'This account is being permanently deleted.',
+      code: 'ACCOUNT_DELETING',
+    });
+
+    // Only the deletion outranks the session: a revoked session of a live
+    // account, and an account whose auth user is already gone, stay 401.
+    for (const client of [
+      identityClient({ state: 'active', sessionValid: false }),
+      identityClient({ admission: null }),
+    ]) {
+      const response = await guardUserFacingRouteIdentity(
+        authenticatedRequest('/api/generations'),
+        { createUserClient: () => client },
+      );
+      expect(response?.status).toBe(401);
+      await expect(response?.json()).resolves.toMatchObject({ code: 'UNAUTHORIZED' });
+    }
+  });
+
   it('gates an ordinary non-mobile web API request through the full proxy', async () => {
     const request = authenticatedRequest('/api/generations');
     expect(request.headers.has('x-magicbooklet-client')).toBe(false);
@@ -353,6 +382,65 @@ describe('central route identity admission', () => {
     expect(routeIdentityPolicyForRequest('/api/content-preferences', 'GET')).toBe('registered');
     expect(routeIdentityPolicyForRequest('/api/webhooks/kie', 'GET')).toBe('service');
     expect(routeIdentityPolicyForRequest('/api/not-a-route', 'GET')).toBeNull();
+  });
+
+  // An app guest's intro events and shares were refused 403 here although each
+  // handler takes a caller who is no one: the onboarding funnel lost its top
+  // and guests' shares never reached the counts. Its report of an AI result it
+  // made goes through too; the moderation adapter refuses every other target.
+  it('admits a guest to the writes listed for guests, and to no other registered write', async () => {
+    const guest = identityClient({ anonymous: true });
+    const dependencies = { createUserClient: () => guest };
+
+    for (const pathname of [
+      '/api/onboarding/events',
+      '/api/showcase/share',
+      '/api/profile/share',
+      '/api/moderation/reports',
+    ]) {
+      await expect(guardUserFacingRouteIdentity(requestWithMethod('POST', pathname), dependencies), pathname)
+        .resolves.toBeNull();
+    }
+
+    for (const [method, pathname] of [
+      ['POST', '/api/showcase/save'],
+      ['POST', '/api/moderation/blocks/22222222-2222-4222-8222-222222222222'],
+      ['PATCH', '/api/onboarding/state'],
+      // A listed path keeps its policy for every method not listed with it.
+      ['GET', '/api/onboarding/events'],
+      ['DELETE', '/api/moderation/reports'],
+    ]) {
+      const response = await guardUserFacingRouteIdentity(requestWithMethod(method, pathname), dependencies);
+      expect(response?.status, `${method} ${pathname}`).toBe(403);
+      await expect(response?.json()).resolves.toMatchObject({ code: 'REGISTRATION_REQUIRED' });
+    }
+  });
+
+  it('still asks for a live identity behind a guest token sent with a listed write', async () => {
+    const merged = await guardUserFacingRouteIdentity(
+      requestWithMethod('POST', '/api/showcase/share'),
+      { createUserClient: () => identityClient({ anonymous: true, state: 'merged' }) },
+    );
+    expect(merged?.status).toBe(409);
+    await expect(merged?.json()).resolves.toMatchObject({ code: 'SESSION_MERGED' });
+
+    const revoked = await guardUserFacingRouteIdentity(
+      requestWithMethod('POST', '/api/onboarding/events'),
+      { createUserClient: () => identityClient({ anonymous: true, sessionValid: false }) },
+    );
+    expect(revoked?.status).toBe(401);
+  });
+
+  it('answers a listed write as guest, by method, and every other request as before', () => {
+    expect(routeIdentityPolicyForRequest('/api/showcase/share', 'POST')).toBe('guest');
+    expect(routeIdentityPolicyForRequest('/api/showcase/share', 'post')).toBe('guest');
+    expect(routeIdentityPolicyForRequest('/api/moderation/reports', 'POST')).toBe('guest');
+    expect(routeIdentityPolicyForRequest('/api/onboarding/events', 'POST')).toBe('guest');
+    expect(routeIdentityPolicyForRequest('/api/profile/share', 'POST')).toBe('guest');
+    expect(routeIdentityPolicyForPathname('/api/showcase/share')).toBe('registered');
+    expect(routeIdentityPolicyForRequest('/api/showcase/share', 'GET')).toBe('registered');
+    expect(routeIdentityPolicyForRequest('/api/moderation/blocks', 'POST')).toBe('registered');
+    expect(routeIdentityPolicyForRequest('/api/onboarding/state', 'POST')).toBe('registered');
   });
 
   it('keeps tokenless public routes public and never gates service routes', async () => {
