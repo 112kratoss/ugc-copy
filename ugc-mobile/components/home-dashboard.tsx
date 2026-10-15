@@ -22,6 +22,7 @@ import { ExploreSearchOverlay } from '@/components/explore-search-overlay';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { FeedUndoNotice, type FeedUndoNoticeModel } from '@/components/feed-undo-notice';
+import { GuestMergeBanner } from '@/components/guest-merge-banner';
 import { HomeFeedCardView } from '@/components/home-feed-card';
 import { MediaZoomSurface } from '@/components/media-zoom';
 import { HomeSideMenu } from '@/components/home-side-menu';
@@ -1072,12 +1073,17 @@ export function HomeDashboard() {
         contentContainerStyle={{ paddingTop: topInset, paddingBottom: tabBarMetrics.contentBottomPadding + 24 }}
         ListHeaderComponent={(
           <View style={{ gap: 18, paddingTop: 10, paddingBottom: 6 }}>
-            <View style={{ paddingHorizontal: horizontalPadding }}>
+            <View style={{ paddingHorizontal: horizontalPadding, gap: 12 }}>
               <HomeTopBar
                 credits={credits}
                 onMenuPress={() => setMenuVisible(true)}
                 onSearchPress={() => setSearchVisible(true)}
               />
+              {/* What became of the guest credits a sign-in carried over, under
+                  the balance it changed. It showed on Pricing alone, so a
+                  restart before a visit there lost the only word that paid
+                  credits had not arrived (02-8). Draws nothing without one. */}
+              <GuestMergeBanner />
             </View>
 
             <TopSlider

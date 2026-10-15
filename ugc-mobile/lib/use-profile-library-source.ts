@@ -2,6 +2,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 
 import type { MagicbookletApiClient } from './api-client';
+import { useAuth } from './auth';
 import { selectCreationLibraryItems } from './creation-library';
 import {
   buildImmersiveGenerationItems,
@@ -51,6 +52,10 @@ type LibraryApi = Pick<MagicbookletApiClient, 'listGenerations' | 'listOwnerPost
  *
  * For Creations the owner posts are enrichment (linked-post details), loaded by
  * their own query: a failing post list cannot hide creations (audit C5).
+ *
+ * A guest's creations are its library too, keyed by its identity as the
+ * Profile grid keys them (02-1): the screens pass the registered `userId`,
+ * which a guest does not have. A guest has no posts, so it reads none.
  */
 export function useProfileLibrarySource({
   api,
@@ -69,16 +74,19 @@ export function useProfileLibrarySource({
   owner: { creatorLabel: string; creatorAvatar?: string | null; creatorId?: string | null };
   enabled?: boolean;
 }) {
-  const active = enabled && Boolean(userId) && isProfileLibrarySource(source);
+  const { isGuest, identityUserId } = useAuth();
   const creations = source === 'profile-creations';
+  const guestLibrary = !userId && creations && isGuest && Boolean(identityUserId);
+  const ownerId = guestLibrary ? identityUserId ?? undefined : userId;
+  const active = enabled && Boolean(ownerId) && isProfileLibrarySource(source);
 
   const generationsQuery = useInfiniteQuery({
-    ...profileGenerationsQueryOptions(api, userId),
+    ...profileGenerationsQueryOptions(api, ownerId),
     enabled: active && creations,
   });
   const postsQuery = useInfiniteQuery({
-    ...profileOwnerPostsQueryOptions(api, userId),
-    enabled: active,
+    ...profileOwnerPostsQueryOptions(api, ownerId),
+    enabled: active && !guestLibrary,
   });
   const primaryQuery = creations ? generationsQuery : postsQuery;
 
@@ -95,7 +103,7 @@ export function useProfileLibrarySource({
     && (creations ? generations : ownerPosts).some((item) => item.id === initialId);
 
   const selectionQuery = useQuery({
-    queryKey: ['profile-library-selection', source, userId, initialId],
+    queryKey: ['profile-library-selection', source, ownerId, initialId],
     enabled: active && Boolean(initialId) && primaryHasData && !selectedInLoaded,
     staleTime: 1000 * 60,
     retry: false,

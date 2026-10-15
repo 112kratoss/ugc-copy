@@ -35,6 +35,7 @@ import { WhatsNewModelsStrip } from '@/components/whats-new-models-strip';
 import { ensureAiDataConsent } from '@/lib/ai-data-consent';
 import { acquireActivityLock } from '@/lib/app-activity';
 import { showConfirmDialog } from '@/lib/dialog';
+import { reportGenerationOutput } from '@/lib/use-viewer-action-handlers';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { countDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaSeedanceAsset, replaceDraftMediaUrl } from '@/lib/remix-draft-recovery';
@@ -1980,7 +1981,7 @@ function IdentityCreationScreen({
     setMessage(null);
     haptic.success();
     // Profile → Creations read in the last minute would otherwise go on without the new creation.
-    void invalidateProfileCreations(queryClient, user?.id).catch(() => undefined);
+    void invalidateProfileCreations(queryClient, identityUserId).catch(() => undefined);
     // A remix link reopens its session until a run in it succeeds. The ordinary drafts stay
     // saved, as on the web, so what is on screen is still what is stored.
     if (remixScope) void clearPersistedCreationDrafts(remixScope).catch(() => undefined);
@@ -2074,7 +2075,7 @@ function IdentityCreationScreen({
       // stays dark until the app next comes back to the foreground.
       invalidateActiveGenerations(queryClient, identityUserId);
       // And Profile's Rendering strip, which a read from the last minute would leave without this run.
-      void invalidateProfileCreations(queryClient, user?.id).catch(() => undefined);
+      void invalidateProfileCreations(queryClient, identityUserId).catch(() => undefined);
       setLastPredictionId(started.predictionId);
       setLastGenerationId(started.generationId ?? null);
       if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
@@ -2434,6 +2435,12 @@ function IdentityCreationScreen({
       params: shareAfterPublish ? { generationId: lastGenerationId, shareAfterPublish: '1' } : { generationId: lastGenerationId },
     } as never);
   };
+  // The reel's report, from the result itself: the run is this identity's own,
+  // so a guest's report is taken as an account's is.
+  const reportResult = () => {
+    if (!lastGenerationId) return;
+    void reportGenerationOutput({ api, generationId: lastGenerationId, details: 'Reported from the mobile creator result.' });
+  };
 
   if (activeTool !== 'image') {
     const creatorModels = catalog ? getCatalogModels(catalog, activeTool) : [];
@@ -2696,6 +2703,7 @@ function IdentityCreationScreen({
           }}
           onPost={() => openComposerForResult(false)}
           onShare={() => openComposerForResult(true)}
+          onReport={reportResult}
           onCreateAnother={() => {
             setWorkspaceVisible(false);
             setStatus(null);
@@ -2974,6 +2982,7 @@ function IdentityCreationScreen({
           }}
           onPost={() => openComposerForResult(false)}
           onShare={() => openComposerForResult(true)}
+          onReport={reportResult}
           onCreateAnother={() => {
             setWorkspaceVisible(false);
             setStatus(null);
@@ -5483,6 +5492,7 @@ function GenerationWorkspace({
   onBack,
   onPost,
   onShare,
+  onReport,
   onCreateAnother,
 }: {
   visible: boolean;
@@ -5520,6 +5530,8 @@ function GenerationWorkspace({
   onPost: () => void;
   /** Posts the creation, then opens the share sheet on its public link. */
   onShare: () => void;
+  /** Sends the result to the safety team, after asking: open to a guest, whose own run it is. */
+  onReport: () => void;
   onCreateAnother: () => void;
 }) {
   const theme = useAppTheme();
@@ -5610,6 +5622,16 @@ function GenerationWorkspace({
                 <SecondaryButton label={withCreditCost('Generate again', retryCost)} onPress={onRetry} />
                 <SecondaryButton label="Back to creator" onPress={onCreateAnother} />
                 <SecondaryButton label="Open Alerts" onPress={onOpenAlerts} />
+                {/* Reporting an offensive result without leaving it: before this
+                    it lived only in the library reel, which a guest could not
+                    open, so a guest who generated had no way to flag one (02-2). */}
+                {generationId ? (
+                  <SecondaryButton
+                    label="Report AI output"
+                    accessibilityHint="Sends this result to the safety team"
+                    onPress={onReport}
+                  />
+                ) : null}
               </View>
             </>
           ) : pollingInterrupted ? (

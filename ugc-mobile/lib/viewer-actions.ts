@@ -467,7 +467,7 @@ export function isDestructiveViewerAction(action: string) {
  * (`lib/feed-feedback-menu.ts`), so a post's ⋮ and its ••• in the reel offer
  * the same rows. Report content stayed on your own post here until 2026-10-09.
  * A creation is its maker's to report: that is the report on what a model
- * made, not on a person.
+ * made, not on a person. `viewerId` is the identity, a guest's included.
  */
 export function getViewerSafetyActions(
   item: Pick<ImmersivePreviewItem, 'sourceType' | 'creatorId' | 'generationId'>,
@@ -477,8 +477,24 @@ export function getViewerSafetyActions(
   return [
     ...(isPost && !isOwnFeedPost(item.creatorId, viewerId) ? ['report-content'] : []),
     ...(isPost && canHideFeedCreator(item.creatorId, viewerId) ? ['report-user', 'block-user'] : []),
-    ...(item.sourceType === 'generation' && item.generationId ? ['report-ai-output'] : []),
+    ...(isViewerOwnGeneration(item, viewerId) ? ['report-ai-output'] : []),
   ];
+}
+
+/**
+ * Whether an item is a creation of the viewer's own: one from the viewer's
+ * library, whose item names no other creator. It is the one thing a guest may
+ * report (the server takes no other report from a guest), so the ••• offers a
+ * guest Report AI output on these, and only these skip the sign-in.
+ */
+export function isViewerOwnGeneration(
+  item: Pick<ImmersivePreviewItem, 'sourceType' | 'creatorId' | 'generationId'>,
+  viewerId: string | null | undefined,
+): boolean {
+  return item.sourceType === 'generation'
+    && Boolean(item.generationId)
+    && Boolean(viewerId)
+    && (!item.creatorId || item.creatorId === viewerId);
 }
 
 export function getViewerActionGroupLabel(action: string) {

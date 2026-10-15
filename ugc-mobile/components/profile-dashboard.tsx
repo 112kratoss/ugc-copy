@@ -126,7 +126,12 @@ export function ProfileDashboard({
   justPublishedPostId?: string | null;
 } = {}) {
   const theme = useAppTheme();
-  const { user, api, credits } = useAuth();
+  const { user, api, credits, creditsUpdatedAt, isGuest, identityUserId } = useAuth();
+  // A guest's own creations are its library too, keyed by its identity: the
+  // server serves a guest its creations, and Posts and Saved stay behind
+  // sign-in (02-1). For an account this is its id.
+  const creationsUserId = user?.id ?? (isGuest ? identityUserId ?? undefined : undefined);
+  const guestCreations = !user && Boolean(creationsUserId);
 
   // Profile offered no way to share or preview the public page (the web
   // /profile has both). Filed as the owner's own share, not a visitor's.
@@ -167,8 +172,8 @@ export function ProfileDashboard({
   // The card feed and the reel read these same queries, so a tile can only ever
   // open onto the pages, order and freshness the grid is showing.
   const generationsQuery = useInfiniteQuery({
-    ...profileGenerationsQueryOptions(api, user?.id),
-    enabled: Boolean(user && (activeTab === 'Creations' || backgroundMediaReady)),
+    ...profileGenerationsQueryOptions(api, creationsUserId),
+    enabled: Boolean(creationsUserId && (activeTab === 'Creations' || backgroundMediaReady)),
   });
 
   const postsQuery = useInfiniteQuery({
@@ -201,7 +206,7 @@ export function ProfileDashboard({
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
     lastLoadMorePageCountRef.current = null;
-  }, [activeTab, user?.id]);
+  }, [activeTab, creationsUserId]);
 
   useEffect(() => {
     if (user?.id && activeMediaIsFetched) {
@@ -217,13 +222,14 @@ export function ProfileDashboard({
     (library: string) => refreshProfileLibraryHead({
       api,
       queryClient,
-      userId: user?.id,
+      userId: creationsUserId,
       library: library as ProfileMediaTab,
     }),
-    [api, queryClient, user?.id]
+    [api, queryClient, creationsUserId]
   );
   useProfileMediaRevalidation({
-    enabled: isFocused && Boolean(user),
+    // A guest has only its Creations to keep fresh.
+    enabled: isFocused && (Boolean(user) || (guestCreations && activeTab === 'Creations')),
     scope: activeTab,
     hasData: Boolean(activeMediaData),
     isFetching: activeMediaIsFetching,
@@ -408,7 +414,7 @@ export function ProfileDashboard({
     }
     if (activeTab === 'Creations') {
       queryClient.setQueryData<InfiniteData<GenerationListResponse>>(
-        ['profile-generations', user?.id],
+        ['profile-generations', creationsUserId],
         truncateInfiniteDataToFirstPage
       );
       void generationsQuery.refetch().finally(() => setPullRefreshing(false));
@@ -425,7 +431,7 @@ export function ProfileDashboard({
     setActiveTab(initialTab);
   }, [initialTab]);
 
-  if (!user) {
+  if (!user && !(guestCreations && activeTab === 'Creations')) {
     return (
       <ProfileMediaList
         activeTab={activeTab}
@@ -453,6 +459,8 @@ export function ProfileDashboard({
   // starts on a `creator-xxxxxxxx` placeholder, whose page stops resolving the
   // moment a handle is claimed; until then the hero offers to claim one.
   const publicUsername = profile?.username && isClaimedProfileUsername(profile.username) ? profile.username : null;
+  // Said once the guest has something to keep, so it never names an empty grid.
+  const guestHasCreations = allCreationCards.length > 0 || renderingCreations.length > 0 || failedCreations.length > 0;
 
   return (
     <ProfileMediaList
@@ -473,7 +481,8 @@ export function ProfileDashboard({
       renderingAsOf={generationsQuery.dataUpdatedAt}
       onRenderingRunOpen={setWatchedRunId}
       failedCreations={showCreationStrips && failedCreations.length > 0 ? failedCreations : undefined}
-      header={(
+      notice={!user && guestHasCreations ? <GuestCreationsNotice /> : undefined}
+      header={user ? (
         <>
           <ProfileTitle />
           {profileQuery.error && !profile ? (
@@ -498,7 +507,12 @@ export function ProfileDashboard({
             <BalanceCard
               icon={<Crown size={appTheme.icon.default} color={theme.colors.commerce} />}
               label="Credits"
-              value={formatCreditBalance(credits ?? profile?.credits)}
+              value={formatCreditBalance(fresherCreditBalance({
+                authCredits: credits,
+                authUpdatedAt: creditsUpdatedAt,
+                profileCredits: profile?.credits,
+                profileUpdatedAt: profileQuery.dataUpdatedAt,
+              }))}
               onPress={() => router.push('/pricing' as never)}
             />
             <BalanceCard
@@ -510,6 +524,11 @@ export function ProfileDashboard({
           </View>
           <InviteAndEarnButton />
           <SellerDashboardButton />
+        </>
+      ) : (
+        <>
+          <ProfileTitle />
+          <SignedOutCard />
         </>
       )}
       horizontalPadding={horizontalPadding}
@@ -558,6 +577,7 @@ function ProfileMediaList({
   renderingCreations,
   onRenderingRunOpen,
   failedCreations,
+  notice,
   topInset,
 }: {
   activeTab: ProfileMediaTab;
@@ -588,6 +608,8 @@ function ProfileMediaList({
   /** A Rendering tile opened its run's status page. */
   onRenderingRunOpen?: (generationId: string) => void;
   failedCreations?: GenerationListItem[];
+  /** A line above the grid about the reader's own media (a guest's creations). */
+  notice?: React.ReactNode;
   topInset: number;
 }) {
   const theme = useAppTheme();
@@ -672,6 +694,7 @@ function ProfileMediaList({
                 onChange={onPostsScopeChange}
               />
             ) : null}
+            {headerExtrasReady && notice ? notice : null}
             {headerExtrasReady && renderingCreations?.length ? (
               <ProfileRenderingStrip
                 items={renderingCreations}
@@ -824,6 +847,70 @@ function SignedOutCard() {
       </Pressable>
     </View>
   );
+}
+
+/**
+ * Above a guest's creations. They belong to this device's guest identity until
+ * an account is made, and an account keeps them on every device (02-1): the
+ * offer Pricing makes a guest who buys, made where the creations are.
+ */
+function GuestCreationsNotice() {
+  const theme = useAppTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Create an account to keep these on every device"
+      accessibilityHint="Opens sign-up"
+      // Back to Profile once the account exists, where these creations then are.
+      onPress={() => router.push({ pathname: '/auth', params: { mode: 'signup', returnTo: '/profile' } } as never)}
+      style={({ pressed }) => ({
+        minHeight: 44,
+        borderRadius: 14,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.panel,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+      })}
+    >
+      <UserRound size={appTheme.icon.sm} color={theme.colors.primary} />
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <AppText variant="label">Create an account to keep these on every device</AppText>
+        <AppText variant="caption" color="muted">Until then they stay on this device.</AppText>
+      </View>
+      <ChevronRight size={appTheme.icon.sm} color={theme.colors.faint} />
+    </Pressable>
+  );
+}
+
+/**
+ * The balance the Credits card shows: the auth context's when it was set after
+ * the profile was read (a purchase, a run's charge, a refresh on resume), else
+ * the profile's, read with the page. The card preferred the auth copy however
+ * old it was, so a purchase push that opened Profile showed the balance from
+ * before the purchase over the profile it had just read (03-4).
+ */
+function fresherCreditBalance({
+  authCredits,
+  authUpdatedAt,
+  profileCredits,
+  profileUpdatedAt,
+}: {
+  authCredits: number | null;
+  /** When this run last set the auth balance, epoch ms; null when it never has. */
+  authUpdatedAt: number | null | undefined;
+  profileCredits: number | null | undefined;
+  /** The profile query's `dataUpdatedAt`: 0 before it has answered. */
+  profileUpdatedAt: number;
+}): number | null {
+  if (profileCredits === null || profileCredits === undefined) return authCredits;
+  if (authCredits === null) return profileCredits;
+  return typeof authUpdatedAt === 'number' && authUpdatedAt > profileUpdatedAt ? authCredits : profileCredits;
 }
 
 function ProfileHeroCard({
