@@ -43,7 +43,8 @@ export async function GET(request: Request) {
     // Fall through to the recoverable error screen with the safe intent intact.
   }
 
+  // A password sign-in failed here, not a link: the error page says so (audit 01-9).
   return NextResponse.redirect(
-    new URL(buildAuthCodeErrorPath(next), requestUrl.origin)
+    new URL(`${buildAuthCodeErrorPath(next)}&method=password`, requestUrl.origin)
   );
 }

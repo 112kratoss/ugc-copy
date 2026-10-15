@@ -304,7 +304,7 @@ describe('/auth/continue', () => {
     const { GET } = await import('@/app/auth/continue/route');
     const response = await GET(new Request('https://magicbooklet.com/auth/continue?next=%2Fcreate'));
 
-    expect(response.headers.get('location')).toBe('https://magicbooklet.com/auth/auth-code-error?next=%2Fcreate');
+    expect(response.headers.get('location')).toBe('https://magicbooklet.com/auth/auth-code-error?next=%2Fcreate&method=password');
     expect(mocks.after).not.toHaveBeenCalled();
   });
 
