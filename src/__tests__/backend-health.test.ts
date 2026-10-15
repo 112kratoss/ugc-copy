@@ -384,7 +384,7 @@ describe('collectBackendHealth', () => {
     });
     expect(health.reclaimPolicy).toEqual({
       abandonedReclaimConfigured: false,
-      minimumAppVersion: '0.0.5',
+      minimumAppVersion: '0.1.7',
       abandonedReclaimEffective: false,
     });
     expect(health.catalog.activeModels).toBeGreaterThan(0);
@@ -2013,7 +2013,7 @@ describe('collectBackendHealth', () => {
 
     expect(health.reclaimPolicy).toEqual({
       abandonedReclaimConfigured: true,
-      minimumAppVersion: '0.0.5',
+      minimumAppVersion: '0.1.7',
       abandonedReclaimEffective: true,
     });
   });

@@ -96,7 +96,7 @@ describe('mobile API CORS proxy', () => {
     expect(response.headers.get('Access-Control-Allow-Methods')).toContain('GET');
     expect(response.headers.get('x-magicbooklet-api-version')).toBe('1');
     expect(response.headers.get('x-magicbooklet-min-api-version')).toBe('1');
-    expect(response.headers.get('x-magicbooklet-min-app-version')).toBe('0.0.5');
+    expect(response.headers.get('x-magicbooklet-min-app-version')).toBe('0.1.7');
     expect(response.headers.get('x-magicbooklet-catalog-schema-version')).toBe('3');
   });
 
@@ -136,13 +136,13 @@ describe('mobile API CORS proxy', () => {
       headers: {
         'x-magicbooklet-client': 'mobile',
         'x-magicbooklet-api-version': '1',
-        'x-magicbooklet-app-version': '0.0.5',
+        'x-magicbooklet-app-version': '0.1.7',
         'x-magicbooklet-catalog-schema-version': '1',
       },
     }));
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('x-magicbooklet-min-app-version')).toBe('0.0.5');
+    expect(response.headers.get('x-magicbooklet-min-app-version')).toBe('0.1.7');
   });
 
   it('retires pre-0.0.5 builds that cannot verify a restored draft', async () => {
@@ -164,12 +164,13 @@ describe('mobile API CORS proxy', () => {
     });
   });
 
+  // 0.1.5 is the store build before the AI-data consent gate (decision D7, 2026-10-15).
   it('requires an update when an identified mobile client is below policy', async () => {
     const response = await proxy(new NextRequest('http://localhost/api/profile', {
       headers: {
         'x-magicbooklet-client': 'mobile',
         'x-magicbooklet-api-version': '1',
-        'x-magicbooklet-app-version': '0.0.0',
+        'x-magicbooklet-app-version': '0.1.5',
         'x-magicbooklet-catalog-schema-version': '1',
       },
     }));
@@ -180,7 +181,7 @@ describe('mobile API CORS proxy', () => {
       compatibility: {
         currentApiVersion: 1,
         minimumApiVersion: 1,
-        minimumAppVersion: '0.0.5',
+        minimumAppVersion: '0.1.7',
         supportedCatalogSchemaVersions: [1, 2, 3],
       },
     });
@@ -192,7 +193,7 @@ describe('mobile API CORS proxy', () => {
       headers: {
         'x-magicbooklet-client': 'mobile',
         'x-magicbooklet-api-version': '1',
-        'x-magicbooklet-app-version': '0.0.5',
+        'x-magicbooklet-app-version': '0.1.7',
         'x-magicbooklet-catalog-schema-version': '2',
       },
     }));

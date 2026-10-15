@@ -33,7 +33,7 @@ describe.skipIf(!configPath || !connectionString)('operations ingress through ac
 
   const diagnostic = (at = Date.now()) => ({
     sessionId: session,
-    app: { version: '0.0.5', build: '1' },
+    app: { version: '0.1.8', build: '1' },
     events: [{ at, kind: 'video', event: 'stall', surface: 'viewer', subject: 'a1b2c3d4', attempt: 0, status: 503 }],
   });
   const playback = () => ({
@@ -206,6 +206,6 @@ describe.skipIf(!configPath || !connectionString)('operations ingress through ac
     const result = await fetch(origin + '/api/app-version', { headers: { 'x-request-id': key } });
     expect(result.status).toBe(200);
     expect(result.headers.get('Cache-Control')).toContain('no-store');
-    expect(await result.json()).toMatchObject({ buildId: 'fixture-release', mobileCompatibility: { minimumApiVersion: 1, minimumAppVersion: '0.0.5' } });
+    expect(await result.json()).toMatchObject({ buildId: 'fixture-release', mobileCompatibility: { minimumApiVersion: 1, minimumAppVersion: '0.1.7' } });
   });
 });
