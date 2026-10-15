@@ -14,6 +14,8 @@ const REPORT_ID = '10000000-0000-4000-8000-000000000001';
 const POST_ID = '20000000-0000-4000-8000-000000000002';
 const REVIEWER_ID = '30000000-0000-4000-8000-000000000003';
 const COMMENT_ID = '40000000-0000-4000-8000-000000000004';
+const TEMPLATE_ID = '90000000-0000-4000-8000-000000000009';
+const TEMPLATE_CREATOR_ID = 'a0000000-0000-4000-8000-00000000000a';
 
 function queryResult(data: unknown, error: unknown = null) {
   const result = Promise.resolve({ data, error });
@@ -247,6 +249,59 @@ describe('moderation operations', () => {
     });
   });
 
+  it('hydrates reported templates with their words, page and state for an operator decision', async () => {
+    const postReports = queryResult([]);
+    const subjectReports = queryResult([{
+      id: REPORT_ID,
+      reporter_user_id: '50000000-0000-4000-8000-000000000005',
+      target_type: 'template',
+      reported_user_id: null,
+      generation_id: null,
+      comment_id: null,
+      template_id: TEMPLATE_ID,
+      reason: 'stolen_content',
+      details: null,
+      source_surface: 'template-detail',
+      status: 'open',
+      created_at: '2026-10-15T02:00:00.000Z',
+      updated_at: '2026-10-15T02:00:00.000Z',
+      reviewed_at: null,
+      reviewed_by: null,
+    }]);
+    const templates = queryResult([{
+      id: TEMPLATE_ID,
+      name: 'Neon portrait',
+      slug: 'neon-portrait',
+      description: 'Turns a selfie into a neon poster.',
+      status: 'active',
+      creator_user_id: TEMPLATE_CREATOR_ID,
+    }]);
+    const from = vi.fn((table: string) => {
+      if (table === 'post_reports') return postReports;
+      if (table === 'moderation_reports') return subjectReports;
+      if (table === 'templates') return templates;
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const snapshot = await listOpenModerationReports({ from } as unknown as SupabaseClient);
+
+    expect(subjectReports.select).toHaveBeenCalledWith(expect.stringContaining('template_id'));
+    expect(templates.in).toHaveBeenCalledWith('id', [TEMPLATE_ID]);
+    expect(snapshot.subjectReports[0]).toMatchObject({
+      targetType: 'template',
+      templateId: TEMPLATE_ID,
+      comment: null,
+      template: {
+        id: TEMPLATE_ID,
+        name: 'Neon portrait',
+        slug: 'neon-portrait',
+        description: 'Turns a selfie into a neon poster.',
+        status: 'active',
+        creatorUserId: TEMPLATE_CREATOR_ID,
+      },
+    });
+  });
+
   it('fails closed when Storage still exposes a taken-down post object', async () => {
     const rpc = vi.fn(async () => ({
       data: {
@@ -372,8 +427,59 @@ describe('moderation operations', () => {
       commentId: COMMENT_ID,
       commentStatus: 'removed_by_moderation',
       commentRemoved: true,
+      templateId: null,
+      templateStatus: null,
+      templateDisabled: false,
       resolvedReportCount: 2,
       reviewedAt: '2026-07-21T04:00:00.000Z',
+      reviewedBy: REVIEWER_ID,
+    });
+  });
+
+  it('reports a template take-down from the same atomic resolver', async () => {
+    const rpc = vi.fn(async () => ({
+      data: {
+        status: 'resolved',
+        report_id: REPORT_ID,
+        target_type: 'template',
+        comment_id: null,
+        comment_status: null,
+        comment_removed: false,
+        template_id: TEMPLATE_ID,
+        template_status: 'disabled',
+        template_disabled: true,
+        resolved_report_count: 3,
+        reviewed_at: '2026-10-15T04:00:00.000Z',
+        reviewed_by: REVIEWER_ID,
+      },
+      error: null,
+    }));
+
+    const result = await resolveSubjectReport({ rpc } as unknown as SupabaseClient, {
+      reportId: REPORT_ID,
+      reviewerId: REVIEWER_ID,
+      action: 'resolve',
+      resolutionNote: 'Stolen demo media under policy 3.1.',
+    });
+
+    expect(rpc).toHaveBeenCalledWith('resolve_subject_report_for_ops', {
+      p_report_id: REPORT_ID,
+      p_reviewer_id: REVIEWER_ID,
+      p_action: 'resolve',
+      p_resolution_note: 'Stolen demo media under policy 3.1.',
+    });
+    expect(result).toEqual({
+      status: 'resolved',
+      reportId: REPORT_ID,
+      targetType: 'template',
+      commentId: null,
+      commentStatus: null,
+      commentRemoved: false,
+      templateId: TEMPLATE_ID,
+      templateStatus: 'disabled',
+      templateDisabled: true,
+      resolvedReportCount: 3,
+      reviewedAt: '2026-10-15T04:00:00.000Z',
       reviewedBy: REVIEWER_ID,
     });
   });

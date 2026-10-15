@@ -151,7 +151,7 @@ export default async function AdminModerationHistoryPage({
 
       <section className="mt-8">
         <Text as="h2" variant="cardTitle" className="mb-3">
-          User, generation &amp; comment decisions
+          User, generation, comment &amp; template decisions
         </Text>
 
         {history.subjectReports.length === 0 ? (
@@ -170,14 +170,23 @@ export default async function AdminModerationHistoryPage({
                   </Td>
                   <Td className="border-b-0"><StatusBadge status={report.targetType} tone="neutral" /></Td>
                   <Td className="border-b-0"><StatusBadge status={report.reason} tone="warning" /></Td>
-                  <Td className="border-b-0">
+                  <Td className="border-b-0" truncateWidth={220}>
                     {report.reportedUserId ? (
                       <Link href={`/admin/users/${report.reportedUserId}`} className="font-mono text-xs underline">
                         {shortId(report.reportedUserId)}
                       </Link>
+                    ) : report.template ? (
+                      <Link
+                        href={`/templates/${report.template.slug || report.template.id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline"
+                      >
+                        {report.template.name}
+                      </Link>
                     ) : (
                       <span className="font-mono text-xs">
-                        {shortId(report.generationId ?? report.commentId)}
+                        {shortId(report.generationId ?? report.commentId ?? report.templateId)}
                       </span>
                     )}
                   </Td>

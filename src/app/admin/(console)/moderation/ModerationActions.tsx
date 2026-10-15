@@ -6,17 +6,20 @@ import { Check, ShieldOff } from 'lucide-react';
 import clsx from 'clsx';
 
 import { Text } from '@/components/DesignSystem';
+import type { SubjectReportTargetType } from '@/lib/moderation-ops';
 
 type PostAction = 'take_down' | 'dismiss';
 type SubjectAction = 'resolve' | 'dismiss';
 
 type Outcome = {
   status?: string;
+  targetType?: string;
   resolvedReportCount?: number;
   revokedMediaCount?: number;
   mediaRevocationVerified?: boolean;
   externalMediaRevocationRequired?: boolean;
   commentRemoved?: boolean;
+  templateDisabled?: boolean;
 };
 
 /**
@@ -37,6 +40,11 @@ function describeOutcome(payload: Outcome): string {
 
   if (payload.commentRemoved) {
     parts.push('The comment was soft-removed and reply counts repaired.');
+  }
+  if (payload.templateDisabled) {
+    parts.push('The template was disabled: it left the catalog and no new run can start.');
+  } else if (payload.targetType === 'template' && payload.status === 'resolved') {
+    parts.push('The template was already disabled.');
   }
   if ((payload.resolvedReportCount ?? 0) > 1) {
     parts.push(`${payload.resolvedReportCount} duplicate reports for the same target were closed too.`);
@@ -161,9 +169,18 @@ export function PostReportActions({ reportId }: { reportId: string }) {
   );
 }
 
-export function SubjectReportActions({ reportId }: { reportId: string }) {
+export function SubjectReportActions({
+  reportId,
+  targetType,
+}: {
+  reportId: string;
+  targetType?: SubjectReportTargetType;
+}) {
   const { pending, error, result, submit } = useDecision('/api/admin/moderation/subject-reports');
   const [note, setNote] = useState('');
+  // Resolving a template report is itself the take-down, so the control says
+  // so rather than asking for a manual action that does not exist.
+  const isTemplate = targetType === 'template';
 
   function run(action: SubjectAction) {
     if (!note.trim()) return;
@@ -173,7 +190,9 @@ export function SubjectReportActions({ reportId }: { reportId: string }) {
   return (
     <div className="mt-4 border-t border-[var(--ui-border-subtle)] pt-4">
       <Text variant="caption">
-        Complete any required manual safety action before resolving.
+        {isTemplate
+          ? 'Taking a template down disables it: it leaves the catalog and nobody can start it. Its creator still has it, disabled, and could publish it again.'
+          : 'Complete any required manual safety action before resolving.'}
       </Text>
 
       <label htmlFor={`subject-note-${reportId}`} className="mt-3 block">
@@ -197,7 +216,9 @@ export function SubjectReportActions({ reportId }: { reportId: string }) {
           className="ui-button ui-focus-ring bg-[rgba(255,124,139,0.14)] text-[var(--ui-accent-danger)] disabled:opacity-50"
         >
           <ShieldOff className="h-4 w-4" aria-hidden />
-          {pending === 'resolve' ? 'Resolving…' : 'Resolve'}
+          {isTemplate
+            ? (pending === 'resolve' ? 'Taking down…' : 'Take down template')
+            : (pending === 'resolve' ? 'Resolving…' : 'Resolve')}
         </button>
         <button
           type="button"

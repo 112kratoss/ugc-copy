@@ -164,4 +164,46 @@ describe('admin moderation history page', () => {
       { postOffset: 50, subjectOffset: 25 },
     );
   });
+
+  it('names a template decision and links the template it took down', async () => {
+    const templateId = '70000000-0000-4000-8000-000000000007';
+    collectAdminModerationHistoryMock.mockResolvedValue(history({
+      subjectReports: [{
+        id: '80000000-0000-4000-8000-000000000008',
+        reporterUserId: null,
+        targetType: 'template' as const,
+        reportedUserId: null,
+        generationId: null,
+        commentId: null,
+        templateId,
+        reason: 'stolen_content',
+        details: null,
+        sourceSurface: 'template-detail',
+        status: 'resolved' as const,
+        createdAt: '2026-10-15T00:00:00.000Z',
+        updatedAt: '2026-10-15T01:00:00.000Z',
+        reviewedAt: '2026-10-15T01:00:00.000Z',
+        reviewedBy: REVIEWER_ID,
+        resolutionNote: 'Stolen demo media under policy 3.1.',
+        comment: null,
+        template: {
+          id: templateId,
+          name: 'Neon portrait',
+          slug: 'neon-portrait',
+          description: null,
+          status: 'disabled',
+          creatorUserId: '90000000-0000-4000-8000-000000000009',
+        },
+      }],
+    }));
+
+    const html = visibleText(await renderPageToHtml(
+      await AdminModerationHistoryPage({ searchParams: Promise.resolve({}) }),
+    ));
+
+    expect(html).toContain('User, generation, comment &amp; template decisions');
+    expect(html).toContain('href="/templates/neon-portrait"');
+    expect(html).toContain('Neon portrait');
+    expect(html).toContain('Stolen demo media under policy 3.1.');
+  });
 });

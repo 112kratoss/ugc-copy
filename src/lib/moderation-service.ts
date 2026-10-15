@@ -31,15 +31,28 @@ const COMMENT_REPORT_REASONS = new Set([
   'unsafe_content',
   'other',
 ]);
+/**
+ * A template is reported for what it shows, so it takes the reasons a post's
+ * own content takes (`post-report-service.ts`), without the two about a recipe
+ * and its purchase: a template has neither.
+ */
+const TEMPLATE_REPORT_REASONS = new Set([
+  'spam',
+  'stolen_content',
+  'unsafe_content',
+  'other',
+]);
+const TEMPLATE_REPORT_SOURCE_SURFACE = 'template-detail';
 const REPORT_SOURCE_SURFACES = new Set([
   'showcase',
   'showcase-reel',
   'creator-profile',
   'generation-viewer',
   'comments',
+  TEMPLATE_REPORT_SOURCE_SURFACE,
 ]);
 
-export type ModerationReportTargetType = 'user' | 'generation' | 'comment';
+export type ModerationReportTargetType = 'user' | 'generation' | 'comment' | 'template';
 
 type ModerationReportBody = {
   targetType?: unknown;
@@ -56,10 +69,10 @@ export type ModerationRouteResult =
     }
   | {
       ok: false;
-      status: 400 | 403 | 404 | 429 | 500;
+      status: 400 | 403 | 404 | 409 | 429 | 500;
       body: {
         error: string;
-        code?: 'RATE_LIMITED' | 'REGISTRATION_REQUIRED';
+        code?: 'RATE_LIMITED' | 'REGISTRATION_REQUIRED' | 'ALREADY_REPORTED';
         retryAfterSeconds?: number;
         limit?: number;
         resetAt?: string;
@@ -100,6 +113,10 @@ function normalizeDetails(value: unknown) {
 
 function normalizeReportBody(value: unknown): ModerationReportBody {
   return asRecord(value) as ModerationReportBody;
+}
+
+function isUniqueViolation(error: unknown) {
+  return asRecord(error).code === '23505';
 }
 
 function rateLimitResult(error: BackendRateLimitError): ModerationRouteResult {
@@ -155,17 +172,24 @@ export async function submitModerationReportForRoute({
   const targetType = body.targetType === 'user'
     || body.targetType === 'generation'
     || body.targetType === 'comment'
+    || body.targetType === 'template'
     ? body.targetType
     : null;
   const targetId = normalizeUuid(body.targetId);
-  const sourceSurface = typeof body.sourceSurface === 'string' && REPORT_SOURCE_SURFACES.has(body.sourceSurface)
-    ? body.sourceSurface
-    : null;
+  // Both clients report a template from its page alone, so the server names
+  // that surface itself instead of holding each client to one spelling of it.
+  const sourceSurface = targetType === 'template'
+    ? TEMPLATE_REPORT_SOURCE_SURFACE
+    : typeof body.sourceSurface === 'string' && REPORT_SOURCE_SURFACES.has(body.sourceSurface)
+      ? body.sourceSurface
+      : null;
   const allowedReasons = targetType === 'user'
     ? USER_REPORT_REASONS
     : targetType === 'comment'
       ? COMMENT_REPORT_REASONS
-      : GENERATION_REPORT_REASONS;
+      : targetType === 'template'
+        ? TEMPLATE_REPORT_REASONS
+        : GENERATION_REPORT_REASONS;
   const reason = typeof body.reason === 'string' && allowedReasons.has(body.reason)
     ? body.reason
     : null;
@@ -210,6 +234,25 @@ export async function submitModerationReportForRoute({
     if (String(data.user_id) === reporterUserId) {
       return { ok: false, status: 400, body: { error: 'You cannot report your own comment.' } };
     }
+  } else if (targetType === 'template') {
+    const { data, error } = await adminSupabase
+      .from('templates')
+      .select('id, creator_user_id, status, is_active, active_version_id')
+      .eq('id', targetId)
+      .maybeSingle();
+    if (error) {
+      logBackendError('failed_to_validate_reported_template', { error: error });
+      return { ok: false, status: 500, body: { error: 'Failed to validate reported template.' } };
+    }
+    // What the public detail read shows (`getMediaTemplate`) is what can be
+    // reported: a draft, a disabled template or one with no live version
+    // answers as its page does.
+    if (!data || data.status !== 'active' || data.is_active !== true || !data.active_version_id) {
+      return { ok: false, status: 404, body: { error: 'Template not found.' } };
+    }
+    if (data.creator_user_id && String(data.creator_user_id) === reporterUserId) {
+      return { ok: false, status: 400, body: { error: 'You cannot report your own template.' } };
+    }
   } else {
     const { data, error } = await adminSupabase
       .from('generations')
@@ -235,11 +278,24 @@ export async function submitModerationReportForRoute({
     reported_user_id: targetType === 'user' ? targetId : null,
     generation_id: targetType === 'generation' ? targetId : null,
     comment_id: targetType === 'comment' ? targetId : null,
+    template_id: targetType === 'template' ? targetId : null,
     reason,
     details: normalizeDetails(body.details),
     source_surface: sourceSurface,
   });
   if (error) {
+    // The one-open-report-per-template index refused it: this person's earlier
+    // report is still waiting for a decision.
+    if (targetType === 'template' && isUniqueViolation(error)) {
+      return {
+        ok: false,
+        status: 409,
+        body: {
+          error: 'You already reported this template. Our moderation team will review it.',
+          code: 'ALREADY_REPORTED',
+        },
+      };
+    }
     logBackendError('failed_to_create_moderation_report', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to submit report.' } };
   }

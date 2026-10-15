@@ -40,7 +40,7 @@ export default async function AdminModerationPage() {
     <>
       <PageHeader
         title="Moderation"
-        description="Open reports across posts, comments, users, and generations. Every decision records your reviewer id."
+        description="Open reports across posts, comments, users, generations, and templates. Every decision records your reviewer id."
         actions={
           <Link href="/admin/moderation/history" className="ui-button ui-button-secondary ui-focus-ring">
             <History className="h-4 w-4" aria-hidden />
@@ -132,7 +132,7 @@ export default async function AdminModerationPage() {
 
       <section className="mt-8">
         <Text as="h2" variant="cardTitle" className="mb-3">
-          User, generation & comment reports ({queue.subjectReports.length})
+          User, generation, comment & template reports ({queue.subjectReports.length})
         </Text>
 
         {queue.subjectReports.length === 0 ? (
@@ -184,6 +184,44 @@ export default async function AdminModerationPage() {
                   </div>
                 ) : null}
 
+                {/*
+                  A template's offence is in what its creator wrote and showed,
+                  so its name and description sit inline and its page (the demo)
+                  is one click away, as a comment's body is.
+                */}
+                {report.template ? (
+                  <div className="mt-3 rounded-xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] px-3 py-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Text as="span" variant="caption" className="uppercase tracking-[0.08em]">
+                        Reported template
+                      </Text>
+                      <StatusBadge status={report.template.status} />
+                      <Link
+                        href={`/templates/${report.template.slug || report.template.id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs underline"
+                      >
+                        Open template
+                      </Link>
+                    </div>
+                    <Text as="p" variant="label" className="mt-1.5">{report.template.name}</Text>
+                    {report.template.description ? (
+                      <Text variant="bodySm" className="mt-1 whitespace-pre-wrap text-[var(--ui-text-secondary)]">
+                        {report.template.description}
+                      </Text>
+                    ) : null}
+                    <Text variant="caption" className="mt-1">
+                      Created by{' '}
+                      {report.template.creatorUserId ? (
+                        <Link href={`/admin/users/${report.template.creatorUserId}`} className="font-mono underline">
+                          {shortId(report.template.creatorUserId)}
+                        </Link>
+                      ) : 'a deleted account'}
+                    </Text>
+                  </div>
+                ) : null}
+
                 <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   <Field label="Report id"><span className="font-mono text-xs">{shortId(report.id)}</span></Field>
                   <Field label="Surface">{report.sourceSurface}</Field>
@@ -205,7 +243,7 @@ export default async function AdminModerationPage() {
                   <Field label="Reported at">{formatTimestamp(report.createdAt)}</Field>
                 </div>
 
-                <SubjectReportActions reportId={report.id} />
+                <SubjectReportActions reportId={report.id} targetType={report.targetType} />
               </Surface>
             ))}
           </div>

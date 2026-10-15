@@ -165,6 +165,41 @@ describe('listResolvedModerationReports', () => {
     });
   });
 
+  it('hydrates a template decision with the template it was about', async () => {
+    const templateId = '70000000-0000-4000-8000-000000000007';
+    const calls: Call[] = [];
+    const client = createClient({
+      post_reports: [],
+      moderation_reports: [{
+        ...RESOLVED_SUBJECT_REPORT,
+        target_type: 'template',
+        reported_user_id: null,
+        template_id: templateId,
+        reason: 'stolen_content',
+        status: 'resolved',
+        resolution_note: 'Stolen demo media under policy 3.1.',
+      }],
+      templates: [{
+        id: templateId,
+        name: 'Neon portrait',
+        slug: 'neon-portrait',
+        description: null,
+        status: 'disabled',
+        creator_user_id: REPORTED_USER_ID,
+      }],
+    }, {}, calls);
+
+    const history = await listResolvedModerationReports(client, { limit: 25 });
+
+    expect(calls).toContainEqual({ table: 'templates', method: 'in', args: ['id', [templateId]] });
+    expect(history.subjectReports[0]).toMatchObject({
+      targetType: 'template',
+      templateId,
+      resolutionNote: 'Stolen demo media under policy 3.1.',
+      template: { id: templateId, name: 'Neon portrait', slug: 'neon-portrait', status: 'disabled' },
+    });
+  });
+
   it('rejects a negative offset rather than letting PostgREST reinterpret it', async () => {
     const client = createClient({ post_reports: [], moderation_reports: [] });
 

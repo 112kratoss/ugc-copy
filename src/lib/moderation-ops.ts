@@ -35,13 +35,16 @@ export type PostModerationQueueItem = {
   } | null;
 };
 
+export type SubjectReportTargetType = 'user' | 'generation' | 'comment' | 'template';
+
 export type SubjectModerationQueueItem = {
   id: string;
   reporterUserId: string | null;
-  targetType: 'user' | 'generation' | 'comment';
+  targetType: SubjectReportTargetType;
   reportedUserId: string | null;
   generationId: string | null;
   commentId: string | null;
+  templateId: string | null;
   reason: string;
   details: string | null;
   sourceSurface: string;
@@ -57,6 +60,15 @@ export type SubjectModerationQueueItem = {
     authorUserId: string | null;
     body: string;
     status: string;
+  } | null;
+  /** What an operator needs to judge a template: its creator-written words, its page and its state. */
+  template: {
+    id: string;
+    name: string;
+    slug: string | null;
+    description: string | null;
+    status: string;
+    creatorUserId: string | null;
   } | null;
 };
 
@@ -132,10 +144,14 @@ export type SubjectReportResolution = {
   reportId: string;
   reviewedAt: string | null;
   reviewedBy: string | null;
-  targetType: 'user' | 'generation' | 'comment';
+  targetType: SubjectReportTargetType;
   commentId: string | null;
   commentStatus: string | null;
   commentRemoved: boolean;
+  templateId: string | null;
+  templateStatus: string | null;
+  /** True only when this decision is what disabled the template. */
+  templateDisabled: boolean;
   resolvedReportCount?: number;
 };
 
@@ -181,10 +197,11 @@ type PostMediaModerationRow = {
 type SubjectReportRow = {
   id: string;
   reporter_user_id: string | null;
-  target_type: 'user' | 'generation' | 'comment';
+  target_type: SubjectReportTargetType;
   reported_user_id: string | null;
   generation_id: string | null;
   comment_id: string | null;
+  template_id: string | null;
   reason: string;
   details: string | null;
   source_surface: string;
@@ -214,6 +231,17 @@ type CommentModerationRow = {
   body: string;
   status: string;
 };
+
+type TemplateModerationRow = {
+  id: string;
+  name: string;
+  slug: string | null;
+  description: string | null;
+  status: string;
+  creator_user_id: string | null;
+};
+
+const SUBJECT_REPORT_COLUMNS = 'id, reporter_user_id, target_type, reported_user_id, generation_id, comment_id, template_id, reason, details, source_surface, status, created_at, updated_at, reviewed_at, reviewed_by';
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -432,6 +460,25 @@ async function hydrateReportedComments(
   return new Map(((result.data ?? []) as CommentModerationRow[]).map((row) => [row.id, row]));
 }
 
+async function hydrateReportedTemplates(
+  supabase: SupabaseClient,
+  rows: Array<{ template_id?: string | null }>,
+): Promise<Map<string, TemplateModerationRow>> {
+  const templateIds = [...new Set(rows
+    .map((row) => row.template_id)
+    .filter((id): id is string => Boolean(id)))];
+  if (templateIds.length === 0) return new Map();
+
+  const result = await supabase
+    .from('templates')
+    .select('id, name, slug, description, status, creator_user_id')
+    .in('id', templateIds);
+  if (result.error) {
+    throw databaseError('Failed to hydrate reported templates', result.error);
+  }
+  return new Map(((result.data ?? []) as TemplateModerationRow[]).map((row) => [row.id, row]));
+}
+
 function toPostReportItem(
   row: PostReportRow,
   postsById: Map<string, PostRow>,
@@ -468,8 +515,11 @@ function toPostReportItem(
 function toSubjectReportItem(
   row: SubjectReportRow,
   commentsById: Map<string, CommentModerationRow>,
+  templatesById: Map<string, TemplateModerationRow>,
 ) {
   const comment = row.comment_id ? commentsById.get(row.comment_id) ?? null : null;
+  const templateId = row.template_id ?? null;
+  const template = templateId ? templatesById.get(templateId) ?? null : null;
   return {
     id: row.id,
     reporterUserId: row.reporter_user_id,
@@ -477,6 +527,7 @@ function toSubjectReportItem(
     reportedUserId: row.reported_user_id,
     generationId: row.generation_id,
     commentId: row.comment_id,
+    templateId,
     reason: row.reason,
     details: row.details,
     sourceSurface: row.source_surface,
@@ -492,6 +543,16 @@ function toSubjectReportItem(
           authorUserId: comment.user_id,
           body: comment.body,
           status: comment.status,
+        }
+      : null,
+    template: template
+      ? {
+          id: template.id,
+          name: template.name,
+          slug: template.slug,
+          description: template.description,
+          status: template.status,
+          creatorUserId: template.creator_user_id,
         }
       : null,
   };
@@ -512,7 +573,7 @@ export async function listOpenModerationReports(
       .limit(limit),
     supabase
       .from('moderation_reports')
-      .select('id, reporter_user_id, target_type, reported_user_id, generation_id, comment_id, reason, details, source_surface, status, created_at, updated_at, reviewed_at, reviewed_by')
+      .select(SUBJECT_REPORT_COLUMNS)
       .in('status', ['open', 'reviewing'])
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
@@ -528,15 +589,16 @@ export async function listOpenModerationReports(
 
   const postReportRows = (postReportResult.data ?? []) as PostReportRow[];
   const subjectReportRows = (subjectReportResult.data ?? []) as SubjectReportRow[];
-  const [postsById, commentsById] = await Promise.all([
+  const [postsById, commentsById, templatesById] = await Promise.all([
     hydrateReportedPosts(supabase, postReportRows),
     hydrateReportedComments(supabase, subjectReportRows),
+    hydrateReportedTemplates(supabase, subjectReportRows),
   ]);
 
   return {
     postReports: postReportRows.map((row) => toPostReportItem(row, postsById)),
     subjectReports: subjectReportRows.map((row) => ({
-      ...toSubjectReportItem(row, commentsById),
+      ...toSubjectReportItem(row, commentsById, templatesById),
       status: row.status as 'open' | 'reviewing',
     })),
   };
@@ -581,10 +643,7 @@ export async function listResolvedModerationReports(
     runPagedQuery<ResolvedSubjectReportRow>(
       (from, to) => supabase
         .from('moderation_reports')
-        .select(
-          'id, reporter_user_id, target_type, reported_user_id, generation_id, comment_id, reason, details, source_surface, status, created_at, updated_at, reviewed_at, reviewed_by, resolution_note',
-          { count: 'exact' },
-        )
+        .select(`${SUBJECT_REPORT_COLUMNS}, resolution_note`, { count: 'exact' })
         .in('status', RESOLVED_SUBJECT_REPORT_STATUSES)
         .order('reviewed_at', { ascending: false, nullsFirst: false })
         .order('id', { ascending: false })
@@ -595,9 +654,10 @@ export async function listResolvedModerationReports(
 
   const postReportRows = postReportPage.rows;
   const subjectReportRows = subjectReportPage.rows;
-  const [postsById, commentsById] = await Promise.all([
+  const [postsById, commentsById, templatesById] = await Promise.all([
     hydrateReportedPosts(supabase, postReportRows),
     hydrateReportedComments(supabase, subjectReportRows),
+    hydrateReportedTemplates(supabase, subjectReportRows),
   ]);
 
   return {
@@ -609,7 +669,7 @@ export async function listResolvedModerationReports(
       resolutionNote: row.resolution_note,
     })),
     subjectReports: subjectReportRows.map((row) => ({
-      ...toSubjectReportItem(row, commentsById),
+      ...toSubjectReportItem(row, commentsById, templatesById),
       status: row.status as 'resolved' | 'dismissed',
       resolutionNote: row.resolution_note,
     })),
@@ -724,7 +784,12 @@ export async function resolveSubjectReport(
   }
 
   const targetType = result.target_type;
-  if (targetType !== 'user' && targetType !== 'generation' && targetType !== 'comment') {
+  if (
+    targetType !== 'user'
+    && targetType !== 'generation'
+    && targetType !== 'comment'
+    && targetType !== 'template'
+  ) {
     throw new Error('Subject report resolver returned an invalid target type.');
   }
 
@@ -737,6 +802,9 @@ export async function resolveSubjectReport(
     commentId: typeof result.comment_id === 'string' ? result.comment_id : null,
     commentStatus: typeof result.comment_status === 'string' ? result.comment_status : null,
     commentRemoved: result.comment_removed === true,
+    templateId: typeof result.template_id === 'string' ? result.template_id : null,
+    templateStatus: typeof result.template_status === 'string' ? result.template_status : null,
+    templateDisabled: result.template_disabled === true,
     resolvedReportCount: typeof result.resolved_report_count === 'number'
       ? result.resolved_report_count
       : undefined,

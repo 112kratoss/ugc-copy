@@ -86,9 +86,9 @@ export async function postModerationReportRouteResponse({
   const reporterIsGuest = isGuestUser(reporter);
   // The proxy lets a guest's report through (GUEST_WRITABLE_REGISTERED_ROUTES)
   // for one target: a generation its own credits made, which the service
-  // checks. Posts, people and comments still take an account, and a guest is
-  // told so with the proxy's 403, never a 401 the app would read as a session
-  // that has ended.
+  // checks. Posts, people, comments and templates still take an account, and a
+  // guest is told so with the proxy's 403, never a 401 the app would read as a
+  // session that has ended.
   if (reporterIsGuest && !isGenerationReport(body)) {
     return applyPrivateNoStoreApiResponseHeaders(
       createModerationResponse(GUEST_REPORT_REGISTRATION_REQUIRED),
