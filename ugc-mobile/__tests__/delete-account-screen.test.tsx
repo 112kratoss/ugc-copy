@@ -221,6 +221,34 @@ describe('DeleteAccountScreen reauthentication', () => {
 
     expect(authState.deleteAccount.mock.calls[1]).toEqual([{ method: 'google' }]);
   });
+
+  // Decision D1: Google is a way in on both phones, so an account with a
+  // Google identity confirms its deletion with Google on either.
+  it.each(['ios', 'android'])('offers Google, and nothing it does not have, to a Google account on %s', async (os) => {
+    platformState.os = os;
+    authState.accountReauthenticationMethods = ['google'];
+    const tree = renderScreen();
+
+    await requestInitialDeletion(tree);
+
+    const secondaryLabels = byType(tree, 'secondary-button').map((node) => node.props.label);
+    expect(secondaryLabels).toContain('Continue with Google and delete');
+    expect(byType(tree, 'apple-button')).toHaveLength(0);
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Current password for account deletion' })).toHaveLength(0);
+    expect(byType(tree, 'status-block').map((node) => node.props.title)).not.toContain('Use the original sign-in device');
+
+    await renderer.act(async () => {
+      byType(tree, 'secondary-button')
+        .find((node) => node.props.label === 'Continue with Google and delete')!
+        .props.onPress();
+    });
+
+    expect(authState.deleteAccount.mock.calls).toEqual([[undefined], [{ method: 'google' }]]);
+    expect(showMessageDialog).toHaveBeenCalledWith({
+      title: 'Your account is being deleted',
+      message: 'You have been signed out.',
+    });
+  });
 });
 
 // The server answers 202 once the account is locked and signed out everywhere;
@@ -379,6 +407,32 @@ describe('DeleteAccountScreen sign-in failures', () => {
     expect(statusBlocks(tree)).toContainEqual(expect.objectContaining({
       body: 'Check it and try again. If you created the account with Google, use that button instead. Your account is still active.',
     }));
+  });
+
+  it('points at the Google button on iOS too, where the screen now draws it for such an account', async () => {
+    platformState.os = 'ios';
+    authState.accountReauthenticationMethods = ['password', 'google'];
+    const tree = renderScreen();
+
+    await failReauthentication(tree, 'password', new Error('Invalid login credentials'));
+
+    expect(statusBlocks(tree)).toContainEqual(expect.objectContaining({
+      body: 'Check it and try again. If you created the account with Google, use that button instead. Your account is still active.',
+    }));
+    expect(byType(tree, 'secondary-button').map((node) => node.props.label)).toContain('Continue with Google and delete');
+  });
+
+  it('says nothing when the person closes the Google sheet on iOS', async () => {
+    platformState.os = 'ios';
+    authState.accountReauthenticationMethods = ['google'];
+    const tree = renderScreen();
+
+    await failReauthentication(tree, 'google', Object.assign(new Error('Google sign-in was canceled.'), {
+      code: 'ERR_GOOGLE_AUTH_CANCELED',
+    }));
+
+    expect(statusBlocks(tree)).toEqual([]);
+    expect(byType(tree, 'secondary-button').map((node) => node.props.label)).toContain('Continue with Google and delete');
   });
 
   it('says offline, and never names a build setting, when the sign-in could not reach Supabase', async () => {

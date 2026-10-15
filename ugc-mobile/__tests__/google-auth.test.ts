@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const authSession = vi.hoisted(() => ({
@@ -27,7 +28,10 @@ function client() {
   };
 }
 
-describe('Google OAuth on Android', () => {
+// One flow for both phones (decision D1): the system auth session is
+// ASWebAuthenticationSession on iOS and a Custom Tab on Android, both behind
+// expo-web-browser's openAuthSessionAsync.
+describe('Google OAuth on iOS and Android', () => {
   beforeEach(() => {
     authSession.makeRedirectUri.mockReset();
     authSession.makeRedirectUri.mockReturnValue('magicbooklet://oauth/callback');
@@ -77,6 +81,25 @@ describe('Google OAuth on Android', () => {
 
     expect(isGoogleAuthCanceled(captured)).toBe(true);
     expect(supabase.auth.exchangeCodeForSession).not.toHaveBeenCalled();
+  });
+
+  it('reads a session the system closed as a cancel too', async () => {
+    // iOS answers `cancel` when the person declines the "wants to use … to sign
+    // in" prompt or closes the sheet; `dismiss` is a session closed for them.
+    const supabase = client();
+    supabase.auth.signInWithOAuth.mockResolvedValue({ data: { url: 'https://auth.test' }, error: null });
+    webBrowser.openAuthSessionAsync.mockResolvedValue({ type: 'dismiss' });
+
+    const captured = await signInWithGoogleOAuth(supabase as never).catch((error: unknown) => error);
+
+    expect(isGoogleAuthCanceled(captured)).toBe(true);
+    expect(supabase.auth.exchangeCodeForSession).not.toHaveBeenCalled();
+  });
+
+  it('asks no question of the platform it runs on', () => {
+    // The sign-in screen and account deletion offer Google on both phones, so
+    // the flow itself must not refuse either of them.
+    expect(readFileSync('lib/google-auth.ts', 'utf8')).not.toMatch(/\bPlatform\b|react-native['"]/);
   });
 
   it('surfaces provider callback errors', async () => {

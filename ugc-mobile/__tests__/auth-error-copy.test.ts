@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -7,6 +8,9 @@ import {
   OFFLINE,
   PASSWORD_TOO_SHORT,
   SESSION_ENDED_ELSEWHERE,
+  SIGN_IN_SUPPORT,
+  SIGN_IN_SUPPORT_EMAIL,
+  SIGN_IN_SUPPORT_MAIL_URL,
   describePasswordSignInError,
   describeProviderSignInError,
   signInProviderButtons,
@@ -66,8 +70,8 @@ describe('a guest sign-in that could not prepare its credits (audit 01-3)', () =
 });
 
 describe('copy names only the buttons on screen (audit 01-8)', () => {
-  it('knows which provider each platform draws', () => {
-    expect(signInProviderButtons('ios')).toEqual(['Apple']);
+  it('knows which providers each platform draws, Apple first on iOS (decision D1)', () => {
+    expect(signInProviderButtons('ios')).toEqual(['Apple', 'Google']);
     expect(signInProviderButtons('android')).toEqual(['Google']);
     expect(signInProviderButtons('web')).toEqual([]);
   });
@@ -78,6 +82,14 @@ describe('copy names only the buttons on screen (audit 01-8)', () => {
       .toBe('Check both and try again. If you created the account with Google, use that button instead.');
     expect(describePasswordSignInError(wrong, { providerButtons: ['Apple'] }).body).not.toContain('Google');
     expect(describePasswordSignInError(wrong).body).toBe('Check both and try again.');
+  });
+
+  it('names both providers on iOS and Google alone on Android, in the order they are drawn', () => {
+    const wrong = new Error('Invalid login credentials');
+    expect(describePasswordSignInError(wrong, { providerButtons: signInProviderButtons('ios') }).body)
+      .toBe('Check both and try again. If you created the account with Apple or Google, use that button instead.');
+    expect(describePasswordSignInError(wrong, { providerButtons: signInProviderButtons('android') }).body)
+      .toBe('Check both and try again. If you created the account with Google, use that button instead.');
   });
 
   it('asks about the password alone where no email is typed', () => {
@@ -101,6 +113,37 @@ describe('the password hint (audit 01-8)', () => {
     expect(MIN_PASSWORD_LENGTH).toBe(6);
     expect(validateCredentials('creator@example.com', 'abc123')).toBeNull();
     expect(validateCredentials('creator@example.com', 'abc12')).toBe(PASSWORD_TOO_SHORT);
+  });
+});
+
+// Decision D2: Magicbooklet has no mail sender, so nothing on the sign-in
+// screen may promise a mail; support is the way back in.
+describe('sign-in help without a mail sender (decision D2)', () => {
+  it('words the support line as the web does', () => {
+    expect(SIGN_IN_SUPPORT).toEqual({ prompt: 'Trouble signing in?', action: 'Email info@magicbooklet.com' });
+  });
+
+  it('opens a mail to support whose subject says what it is about', () => {
+    const url = new URL(SIGN_IN_SUPPORT_MAIL_URL);
+    expect(`${url.protocol}${url.pathname}`).toBe('mailto:info@magicbooklet.com');
+    expect(url.searchParams.get('subject')).toBe('Trouble signing in');
+  });
+
+  it('uses the address the help screen and the web give for support', () => {
+    // Read as text: the web module imports Next, and the help screen is a route.
+    const helpScreen = readFileSync('app/help.tsx', 'utf8');
+    const webSiteConfig = readFileSync('../src/lib/seo.ts', 'utf8');
+    expect(helpScreen.match(/const SUPPORT_EMAIL = ['"]([^'"]+)['"]/)?.[1]).toBe(SIGN_IN_SUPPORT_EMAIL);
+    expect(webSiteConfig.match(/supportEmail:\s*['"]([^'"]+)['"]/)?.[1]).toBe(SIGN_IN_SUPPORT_EMAIL);
+  });
+
+  it('never asks for a confirmation link that cannot have been sent', () => {
+    const notice = describePasswordSignInError(new Error('Email not confirmed'));
+    expect(notice).toEqual({
+      title: 'This email address is not confirmed',
+      body: 'Email info@magicbooklet.com and we will help you sign in.',
+    });
+    expect(`${notice.title} ${notice.body}`).not.toMatch(/link|we sent/i);
   });
 });
 

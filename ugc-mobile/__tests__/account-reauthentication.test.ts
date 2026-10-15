@@ -125,3 +125,42 @@ describe('account deletion reauthentication', () => {
     )).toEqual(['password', 'google']);
   });
 });
+
+// Decision D1: Google signs in on the iPhone too, so an account with a Google
+// identity confirms a deletion with Google on either phone.
+describe('Google reauthentication on iOS and Android alike', () => {
+  it.each(['ios', 'android'] as const)('offers Google to an account with a Google identity on %s', (platform) => {
+    expect(getAccountReauthenticationMethods(user('user-1', ['google']), platform)).toEqual(['google']);
+    expect(getAccountReauthenticationMethods(user('user-1', ['email', 'google']), platform))
+      .toEqual(['password', 'google']);
+  });
+
+  it('reads a Google identity from the account metadata when the identities list is missing', () => {
+    const fromMetadata = { ...user('user-1', ['google']), identities: undefined };
+    expect(getAccountReauthenticationMethods(fromMetadata, 'ios')).toEqual(['google']);
+  });
+
+  it('still asks for Apple alone on iOS when Google and Apple share the account', () => {
+    // The server revokes Apple's token with Apple's own code, so a Google
+    // sign-in cannot stand in for it (APPLE_REAUTH_REQUIRED).
+    const linked = user('user-1', ['google', 'apple']);
+    expect(getAccountReauthenticationMethods(linked, 'ios')).toEqual(['apple']);
+    expect(getAccountReauthenticationMethods(linked, 'android')).toEqual([]);
+  });
+
+  it.each(['ios', 'android'] as const)('runs the same Google OAuth on %s and checks it came back to the same account', async (platform) => {
+    const currentUser = user('user-1', ['google']);
+    const supabase = supabaseMock(session(currentUser));
+    const googleSignIn = vi.fn(async () => undefined);
+
+    await expect(reauthenticateAccountForDeletion({
+      currentUser,
+      googleSignIn: googleSignIn as never,
+      method: { method: 'google' },
+      platform,
+      supabase: supabase as never,
+    })).resolves.toEqual({ session: session(currentUser) });
+    expect(googleSignIn).toHaveBeenCalledWith(supabase);
+    expect(supabase.auth.getSession).toHaveBeenCalledOnce();
+  });
+});
