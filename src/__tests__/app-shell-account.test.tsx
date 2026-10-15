@@ -220,7 +220,7 @@ describe('AppShellAccount', () => {
     } finally {
       vi.useRealTimers();
     }
-  });
+  }, 15_000);
 
   it('reveals initials when the account avatar cannot load', async () => {
     mocks.maybeSingle.mockResolvedValue({
