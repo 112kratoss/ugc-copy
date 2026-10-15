@@ -24,6 +24,7 @@ import {
   getResourceSectionState,
   getUnlockPriceLabel,
   prepareUnlockedResourcesForDetails,
+  type PostDetailsSection,
 } from '@/lib/post-details-view-model';
 import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
 import { formatLockedBundleFacts, formatPostResourceBundleCountSummary } from '@/lib/post-resource-bundle-view-model';
@@ -86,8 +87,12 @@ export function PostDetailsPage({
    * place the post is named without truncation, it does not.
    */
   hostRendersPostText?: boolean;
-  /** The card's Read more opens the section containing its previewed text. */
-  initialSection?: 'story' | 'prompt';
+  /**
+   * The section the page leads with: a card's Read more opens the one holding
+   * its previewed text, and a recipe opened from search leads with the
+   * creator's resources.
+   */
+  initialSection?: PostDetailsSection;
   item: ImmersivePreviewItem;
   onActionsOpen?: () => void;
   onBack?: () => void;
@@ -220,6 +225,110 @@ export function PostDetailsPage({
     ? ''
     : details.body;
 
+  // Most posts carry no unlock. A card announcing that absence is the page
+  // telling the reader about something that is not there.
+  const resourcesCard = unlock && sectionState !== 'none' ? (
+    sectionState === 'unlocked' ? (
+      <View style={{ gap: 12 }}>
+        <ResourcesHeading
+          pills={[
+            // The creator reads their own recipe by owning it, not by
+            // having unlocked it; the web panel says so too.
+            { label: bundle?.viewerIsOwner ? 'Owner access' : 'Unlocked', accent: 'workflow' },
+            ...(prepared?.hasRemixAccess ? [{ label: 'Remix included', accent: 'primary' as ToolAccent }] : []),
+          ]}
+        />
+        {purchasedRevision ? (
+          <View style={{ gap: 8 }}>
+            <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
+              The creator has updated this unlock since you bought it. You can read either version.
+            </Text>
+            <ResourceRevisionSwitch
+              selected={shownRevision ? 'purchased' : 'latest'}
+              onSelect={(revision) => setPurchasedRevisionFor(revision === 'purchased' ? unlock.resourceId : null)}
+            />
+          </View>
+        ) : null}
+        {prepared && !prepared.isEmpty ? (
+          <PostResourceBundleContent
+            fileLoadingPath={fileLoadingPath}
+            mediaItems={shownRevision?.mediaItems ?? item.mediaItems}
+            onCopy={copyText}
+            onError={setResourceError}
+            onOpenFile={openResourceFile}
+            onOpenUrl={openResourceUrl}
+            resolveFileUrl={resolveResourceFileUrl}
+            resources={prepared.resources}
+          />
+        ) : null}
+        {resourceError ? <ErrorText message={resourceError} /> : null}
+      </View>
+    ) : (
+      <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: `${accentColor(unlockAccent, theme.colors)}55`, backgroundColor: theme.colors.surface, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
+          <View style={{ flex: 1, gap: 5 }}>
+            <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>Creator's resources</Text>
+            {lockedFacts ? (
+              <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{lockedFacts}</Text>
+            ) : null}
+            <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>{lockedSummary}</Text>
+          </View>
+          {unlockPriceLabel ? <Pill label={unlockPriceLabel} accent={unlockAccent} /> : null}
+        </View>
+        <ResourceKindRow kinds={resourceKinds} on="surface" />
+        {includesSummary ? (
+          <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{`Includes ${includesSummary}`}</Text>
+        ) : null}
+        {sectionState === 'loading' ? (
+          <ActivityIndicator color={theme.colors.primary} />
+        ) : sectionState === 'error' ? (
+          <View style={{ gap: 10 }}>
+            <ErrorText message={resourceQuery.error instanceof Error ? resourceQuery.error.message : 'Could not load these resources.'} />
+            <DetailActionButton label="Try again" icon={<FileText size={appTheme.icon.compact} color={theme.colors.text} />} onPress={() => void resourceQuery.refetch()} />
+          </View>
+        ) : (
+          <>
+            <PostResourceBundleContent
+              lockedPreview={bundle?.lockedPreview}
+              mediaItems={item.mediaItems}
+              resources={null}
+            />
+            <View style={{ gap: 10 }}>
+              {/* Free is one tap; a paid unlock asks first, and is not
+                  offered while the known balance is short of it
+                  (`useBundleUnlock`). */}
+              <DetailActionButton
+                disabled={bundleUnlock.shortfall > 0}
+                label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Get resources — Free' : unlockPriceLabel ? `Unlock for ${unlockPriceLabel}` : 'Unlock with credits'}
+                icon={<Lock size={appTheme.icon.compact} color={theme.colors.onPrimary} />}
+                loading={bundleUnlock.isPending}
+                primary
+                onPress={bundleUnlock.request}
+              />
+              {bundleUnlock.shortfallMessage ? (
+                <Text style={{ color: theme.semantic.warning.foreground, ...appTheme.type.label }}>
+                  {bundleUnlock.shortfallMessage}
+                </Text>
+              ) : null}
+              {bundleUnlock.offersCredits ? (
+                <DetailActionButton
+                  label="Get credits"
+                  icon={<Crown size={appTheme.icon.compact} color={theme.colors.text} />}
+                  onPress={bundleUnlock.goToCredits}
+                />
+              ) : null}
+              {bundleUnlock.error ? <ErrorText message={bundleUnlock.error} /> : null}
+            </View>
+          </>
+        )}
+      </View>
+    )
+  ) : null;
+  // A recipe opened from search leads with the card it was opened for, under
+  // the post's name, as the web search lands on the post's `#recipe`; any
+  // other way in keeps the card where the page closes.
+  const resourcesLead = initialSection === 'resources';
+
   return (
     <View style={{ width, height, backgroundColor: theme.colors.app }}>
       <DetailsHeader
@@ -280,6 +389,7 @@ export function PostDetailsPage({
             </Text>
           ) : null}
         </View>
+        {resourcesLead ? resourcesCard : null}
 
         {/* A creation's production facts are real information; a post's
             "0 saves · 0 remixes · Showcase" was not.
@@ -369,105 +479,7 @@ export function PostDetailsPage({
           <GenerationReferences key={`${user.id}:${item.generationId}`} generationId={item.generationId} />
         ) : null}
 
-        {/* Most posts carry no unlock. A card announcing that absence is the
-            page telling the reader about something that is not there. */}
-        {unlock && sectionState !== 'none' ? (
-          sectionState === 'unlocked' ? (
-            <View style={{ gap: 12 }}>
-              <ResourcesHeading
-                pills={[
-                  // The creator reads their own recipe by owning it, not by
-                  // having unlocked it; the web panel says so too.
-                  { label: bundle?.viewerIsOwner ? 'Owner access' : 'Unlocked', accent: 'workflow' },
-                  ...(prepared?.hasRemixAccess ? [{ label: 'Remix included', accent: 'primary' as ToolAccent }] : []),
-                ]}
-              />
-              {purchasedRevision ? (
-                <View style={{ gap: 8 }}>
-                  <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
-                    The creator has updated this unlock since you bought it. You can read either version.
-                  </Text>
-                  <ResourceRevisionSwitch
-                    selected={shownRevision ? 'purchased' : 'latest'}
-                    onSelect={(revision) => setPurchasedRevisionFor(revision === 'purchased' ? unlock.resourceId : null)}
-                  />
-                </View>
-              ) : null}
-              {prepared && !prepared.isEmpty ? (
-                <PostResourceBundleContent
-                  fileLoadingPath={fileLoadingPath}
-                  mediaItems={shownRevision?.mediaItems ?? item.mediaItems}
-                  onCopy={copyText}
-                  onError={setResourceError}
-                  onOpenFile={openResourceFile}
-                  onOpenUrl={openResourceUrl}
-                  resolveFileUrl={resolveResourceFileUrl}
-                  resources={prepared.resources}
-                />
-              ) : null}
-              {resourceError ? <ErrorText message={resourceError} /> : null}
-            </View>
-          ) : (
-            <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: `${accentColor(unlockAccent, theme.colors)}55`, backgroundColor: theme.colors.surface, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
-                <View style={{ flex: 1, gap: 5 }}>
-                  <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>Creator's resources</Text>
-                  {lockedFacts ? (
-                    <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{lockedFacts}</Text>
-                  ) : null}
-                  <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>{lockedSummary}</Text>
-                </View>
-                {unlockPriceLabel ? <Pill label={unlockPriceLabel} accent={unlockAccent} /> : null}
-              </View>
-              <ResourceKindRow kinds={resourceKinds} on="surface" />
-              {includesSummary ? (
-                <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{`Includes ${includesSummary}`}</Text>
-              ) : null}
-              {sectionState === 'loading' ? (
-                <ActivityIndicator color={theme.colors.primary} />
-              ) : sectionState === 'error' ? (
-                <View style={{ gap: 10 }}>
-                  <ErrorText message={resourceQuery.error instanceof Error ? resourceQuery.error.message : 'Could not load these resources.'} />
-                  <DetailActionButton label="Try again" icon={<FileText size={appTheme.icon.compact} color={theme.colors.text} />} onPress={() => void resourceQuery.refetch()} />
-                </View>
-              ) : (
-                <>
-                  <PostResourceBundleContent
-                    lockedPreview={bundle?.lockedPreview}
-                    mediaItems={item.mediaItems}
-                    resources={null}
-                  />
-                  <View style={{ gap: 10 }}>
-                    {/* Free is one tap; a paid unlock asks first, and is not
-                        offered while the known balance is short of it
-                        (`useBundleUnlock`). */}
-                    <DetailActionButton
-                      disabled={bundleUnlock.shortfall > 0}
-                      label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Get resources — Free' : unlockPriceLabel ? `Unlock for ${unlockPriceLabel}` : 'Unlock with credits'}
-                      icon={<Lock size={appTheme.icon.compact} color={theme.colors.onPrimary} />}
-                      loading={bundleUnlock.isPending}
-                      primary
-                      onPress={bundleUnlock.request}
-                    />
-                    {bundleUnlock.shortfallMessage ? (
-                      <Text style={{ color: theme.semantic.warning.foreground, ...appTheme.type.label }}>
-                        {bundleUnlock.shortfallMessage}
-                      </Text>
-                    ) : null}
-                    {bundleUnlock.offersCredits ? (
-                      <DetailActionButton
-                        label="Get credits"
-                        icon={<Crown size={appTheme.icon.compact} color={theme.colors.text} />}
-                        onPress={bundleUnlock.goToCredits}
-                      />
-                    ) : null}
-                    {bundleUnlock.error ? <ErrorText message={bundleUnlock.error} /> : null}
-                  </View>
-                </>
-              )}
-            </View>
-          )
-        ) : null}
+        {resourcesLead ? null : resourcesCard}
       </ScrollView>
     </View>
   );

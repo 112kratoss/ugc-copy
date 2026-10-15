@@ -11,6 +11,7 @@ import {
   getResourceSectionState,
   getUnlockPriceLabel,
   prepareUnlockedResourcesForDetails,
+  readPostDetailsSection,
 } from '@/lib/post-details-view-model';
 import type { PostResourceBundleResources, PostResourceItem } from '@/lib/types';
 
@@ -256,6 +257,20 @@ describe('details chrome labels', () => {
     expect(getDetailsTitle(showcaseItem({
       details: { ...showcaseItem().details!, generationInfo: { model: 'veo-3', createdAt: '', duration: 8, cost: null, inputMedia: null } },
     }))).toBe('Creation details');
+  });
+});
+
+describe('the section a link opens the page on', () => {
+  it('reads the sections the page has, a recipe opened from search leading with its resources', () => {
+    expect(readPostDetailsSection('story')).toBe('story');
+    expect(readPostDetailsSection('prompt')).toBe('prompt');
+    expect(readPostDetailsSection('resources')).toBe('resources');
+  });
+
+  it('opens the page as usual for anything else', () => {
+    for (const value of ['comments', 'Resources', 'recipe', '', null, undefined]) {
+      expect(readPostDetailsSection(value)).toBeUndefined();
+    }
   });
 });
 

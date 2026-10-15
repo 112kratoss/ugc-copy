@@ -738,4 +738,33 @@ describe('ExploreSearchOverlay search', () => {
 
     await act(async () => tree.unmount());
   });
+
+  // Audit 02-6: the row used to open the standalone unlock screen, which had
+  // no way to the post, its creator or Remix. It opens the reel a push for the
+  // post opens, by the post's id, on the post's Details page, resources first.
+  it("opens a recipe on its post's Details page in the reel, with the resources first", async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, {
+      recipes: [recipe('r1', { accessMode: 'paid', priceUsdCents: 900 }, 'Noor')],
+    }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'lighting');
+    await advance(300);
+
+    const opensRecipe = [{
+      pathname: '/viewer',
+      params: { source: 'showcase-feed', initialId: 'post-r1', initialPage: 'details', initialSection: 'resources' },
+    }];
+    await press(pressableLabelled(tree, 'Open recipe Recipe r1'));
+    expect(mocks.router.push.mock.calls).toEqual([opensRecipe]);
+    expect(mocks.rememberSearchQuery.mock.calls).toEqual([['lighting']]);
+
+    // The Recipes tab draws the same row.
+    await press(tab(tree, 'Recipes'));
+    await advance(300);
+    await press(pressableLabelled(tree, 'Open recipe Recipe r1'));
+    expect(mocks.router.push.mock.calls).toEqual([opensRecipe, opensRecipe]);
+    expect(JSON.stringify(mocks.router.push.mock.calls)).not.toContain('marketplace');
+
+    await act(async () => tree.unmount());
+  });
 });
