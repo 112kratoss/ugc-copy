@@ -13,6 +13,8 @@ import {
 import type MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
 import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
 import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
+import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
+import { formatPostResourcePriceLabel, getBundleAccessLabel } from '@/lib/post-resource-bundles';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 export type MarketplaceBootstrapProps = ComponentProps<typeof MarketplaceBrowser>;
@@ -64,7 +66,7 @@ function loadMarketplaceBrowser() {
 }
 
 export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
-  const { initialPage, initialFilters, sourceToolOptions } = props;
+  const { initialPage, initialFilters, shortQuery = '', sourceToolOptions } = props;
   const [InteractiveBrowser, setInteractiveBrowser] = useState<MarketplaceBrowserComponent | null>(null);
   const [isActivating, setIsActivating] = useState(false);
   const [activationError, setActivationError] = useState(false);
@@ -181,7 +183,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
               <input
                 type="search"
                 name="q"
-                defaultValue={initialFilters.q}
+                defaultValue={initialFilters.q || shortQuery}
                 onFocus={warmInteractiveBrowser}
                 onInput={warmInteractiveBrowser}
                 placeholder="Search prompts, tools, creators"
@@ -259,19 +261,33 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
         </div>
       </section>
 
-      {bootstrapItems.length === 0 ? (
-        <div className="mt-10 rounded-[30px] border border-white/8 bg-zinc-950/70 p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
-          <h2 className="text-2xl font-semibold text-white">No recipes yet</h2>
-          <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-zinc-400">
-            Recipes need a useful public post, creator profile, buyer preview, and reusable resources before they appear here.
-          </p>
-          <a
-            href="/post/new?from=marketplace&returnTo=%2Fmarketplace"
-            className="mt-6 inline-flex rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
-          >
-            Share a post
-          </a>
-        </div>
+      {/* Each state is worded as MarketplaceBrowser words it, so nothing changes
+          under the viewer when it takes over. */}
+      {shortQuery ? (
+        <BootstrapResultsMessage
+          title={`Type at least ${MARKETPLACE_SEARCH_MIN_LENGTH} characters`}
+          body="Keep typing, or clear the search to see every recipe."
+          actionLabel="Clear search"
+          actionHref={marketplaceReturnPath}
+        />
+      ) : bootstrapItems.length === 0 && !initialPage.pageInfo.hasMore ? (
+        // "No recipes yet" with a Share a post button answered a search or a
+        // filter that matched nothing, as if the storefront were empty.
+        activeFilterLabels.length > 0 ? (
+          <BootstrapResultsMessage
+            title="No recipes match"
+            body="Try another search, or clear the filters to see every recipe."
+            actionLabel="Clear filters"
+            actionHref="/marketplace"
+          />
+        ) : (
+          <BootstrapResultsMessage
+            title="No recipes yet"
+            body="Recipes need a useful public post, a creator profile, a buyer-facing preview, and reusable resources before they appear here."
+            actionLabel="Share a post"
+            actionHref="/post/new?from=marketplace&returnTo=%2Fmarketplace"
+          />
+        )
       ) : (
         <>
           <div className="mt-10 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
@@ -307,6 +323,31 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
           ) : null}
         </>
       )}
+    </div>
+  );
+}
+
+function BootstrapResultsMessage({
+  title,
+  body,
+  actionLabel,
+  actionHref,
+}: {
+  title: string;
+  body: string;
+  actionLabel: string;
+  actionHref: string;
+}) {
+  return (
+    <div className="mt-10 rounded-[30px] border border-white/8 bg-zinc-950/70 p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
+      <h2 className="text-2xl font-semibold text-white">{title}</h2>
+      <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-zinc-400">{body}</p>
+      <a
+        href={actionHref}
+        className="mt-6 inline-flex rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
+      >
+        {actionLabel}
+      </a>
     </div>
   );
 }
@@ -384,10 +425,13 @@ function BootstrapMarketplaceCard({
   asset: MarketplaceResourceListItem;
   marketplaceReturnPath: string;
 }) {
-  const accessLabel = asset.accessMode === 'free' ? 'Free recipe' : `${asset.priceQuote.formatted} recipe`;
-  const unlockLabel = asset.accessMode === 'free'
-    ? 'View free recipe'
-    : `Unlock for ${asset.priceQuote.formatted}`;
+  // The same words the interactive browser draws once it takes over: one figure
+  // on the badge, every way to pay on the pill and the button. The bare quote
+  // priced a credits-only recipe in a currency no checkout takes.
+  const isFree = asset.accessMode === 'free' || asset.priceUsdCents === 0;
+  const accessLabel = getBundleAccessLabel(asset.accessMode, asset.priceUsdCents, asset.priceQuote.formatted);
+  const priceLabel = isFree ? 'Free' : formatPostResourcePriceLabel(asset.priceUsdCents, asset.priceQuote.formatted);
+  const unlockLabel = isFree ? 'View free recipe' : `Unlock for ${priceLabel}`;
   const previewText = asset.summary || asset.previewText || (
     asset.post?.postFormat === 'text'
       ? 'Reusable resources from this note are included.'
@@ -417,7 +461,7 @@ function BootstrapMarketplaceCard({
             ) : null}
           </div>
           <span className="shrink-0 rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5 text-sm font-semibold text-amber-50">
-            {asset.priceQuote.formatted}
+            {priceLabel}
           </span>
         </div>
 

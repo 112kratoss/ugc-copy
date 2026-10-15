@@ -454,12 +454,23 @@ describe("FeedPostCard's recipe chip", () => {
     it("shows a paid recipe's price, beside Remix too", () => {
         renderCard({ asset: recipe({ accessMode: 'paid', priceUsdCents: 250 }), canRemix: true });
 
-        const chip = screen.getByRole('link', { name: '$2.50 recipe: A launch frame' });
+        const chip = screen.getByRole('link', { name: '$2.50: A launch frame' });
 
         expect(screen.getByRole('button', { name: /Remix/ })).toBeInTheDocument();
         expect(chip).toHaveAttribute('href', recipeHref);
-        expect(chip.textContent).toBe('$2.50 recipe');
+        expect(chip.textContent).toBe('$2.50');
         expect(actionRow()?.lastElementChild).toBe(chip);
+    });
+
+    // Only credits buy a recipe under the cash minimum, so the card names no
+    // cash price for it ("$0.50 recipe" before).
+    it('prices a credits-only recipe in credits', () => {
+        renderCard({ asset: recipe({ accessMode: 'paid', priceUsdCents: 50 }), canRemix: true });
+
+        const chip = screen.getByRole('link', { name: '50 credits: A launch frame' });
+
+        expect(chip.textContent).toBe('50 credits');
+        expect(document.body.textContent).not.toContain('$0.50');
     });
 
     it('draws nothing on a post with no recipe', () => {
@@ -480,7 +491,7 @@ describe("FeedPostCard's recipe chip", () => {
         const onOpenResources = vi.fn();
         const { onRecordOpen } = renderCard({ asset: recipe({ accessMode: 'paid', priceUsdCents: 250 }), canRemix: true }, { onOpenResources });
 
-        fireEvent.click(screen.getByRole('link', { name: '$2.50 recipe: A launch frame' }));
+        fireEvent.click(screen.getByRole('link', { name: '$2.50: A launch frame' }));
 
         expect(onOpenResources).toHaveBeenCalledWith('post-1');
         // The chip is heard as `resource_open` alone, on both clients: not an open.
@@ -542,12 +553,12 @@ describe("FeedPostCard's Remix behind a recipe", () => {
             { onOpenResources },
         );
 
-        const remix = screen.getByRole('link', { name: 'Unlock A launch frame to remix it, $2.50 recipe' });
+        const remix = screen.getByRole('link', { name: 'Unlock A launch frame to remix it, $2.50' });
 
         expect(remix).toHaveAttribute('href', recipeHref);
-        expect(remix.textContent).toBe('$2.50 recipe');
+        expect(remix.textContent).toBe('$2.50');
         // No second pill with the same price at the end of the row.
-        expect(screen.getAllByText('$2.50 recipe')).toHaveLength(1);
+        expect(screen.getAllByText('$2.50')).toHaveLength(1);
         expect(screen.queryByRole('button', { name: /Remix/ })).not.toBeInTheDocument();
 
         fireEvent.click(remix);
@@ -564,7 +575,7 @@ describe("FeedPostCard's Remix behind a recipe", () => {
         expect(screen.queryByRole('button', { name: /Remix/ })).not.toBeInTheDocument();
         expect(screen.queryByRole('link', { name: /to remix it/ })).not.toBeInTheDocument();
         // The recipe is still for sale, on its chip.
-        expect(screen.getByRole('link', { name: '$2.50 recipe: A launch frame' })).toHaveAttribute('href', recipeHref);
+        expect(screen.getByRole('link', { name: '$2.50: A launch frame' })).toHaveAttribute('href', recipeHref);
     });
 });
 
@@ -607,7 +618,7 @@ describe("FeedPostCard's feed telemetry", () => {
         renderCard({ ...ranked, asset: recipe });
 
         const title = screen.getByRole('link', { name: 'A launch frame' });
-        const chip = screen.getByRole('link', { name: '$2.50 recipe: A launch frame' });
+        const chip = screen.getByRole('link', { name: '$2.50: A launch frame' });
 
         expect(title).toHaveAttribute('href', buildShowcaseDetailPath('post-1', { ...DETAIL_CONTEXT, deliveryId: '9001' }));
         expect(title.getAttribute('href')).toContain('delivery=9001');

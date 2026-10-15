@@ -83,12 +83,30 @@ describe('MarketplaceSellClient', () => {
     expect(screen.getByText(/live and draft recipes/i)).toBeInTheDocument();
     expect(screen.getByText('Ready')).toBeInTheDocument();
     expect(screen.getByText(/20 visits/i)).toBeInTheDocument();
-    expect(screen.getByText(/₹1,599 recipe/i)).toBeInTheDocument();
+    expect(within(screen.getByText('Launch resources').parentElement!).getByText('₹1,599')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /share a post/i })).toHaveAttribute(
       'href',
       '/post/new?from=seller&returnTo=%2Fmarketplace%2Fsell'
     );
     expect(screen.getByRole('button', { name: /copy recipe link/i })).toBeInTheDocument();
+  });
+
+  // The listing's chip printed "$0.50 recipe" for a recipe only credits buy.
+  it('labels a credits-only listing in credits', () => {
+    render(
+      <MarketplaceSellClient
+        initialDashboard={{
+          ...dashboard,
+          bundles: [{
+            ...dashboard.bundles[0],
+            priceUsdCents: 50,
+            priceQuote: { currency: 'USD', amountSubunits: 50, formatted: '$0.50', note: null },
+          }],
+        }}
+      />
+    );
+
+    expect(within(screen.getByText('Launch resources').parentElement!).getByText('50 credits')).toBeInTheDocument();
   });
 
   it('shows the empty-state guidance when no bundles exist', () => {

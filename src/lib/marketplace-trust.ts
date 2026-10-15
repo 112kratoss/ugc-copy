@@ -1,4 +1,5 @@
 import {
+  formatPostResourceCompactPriceLabel,
   getPostResourceKinds,
   normalizePostResourceAttachments,
   normalizePostResourceItems,
@@ -81,18 +82,27 @@ export function isCreatorProfileCheckError(value: string | null | undefined): bo
   return value === CREATOR_PROFILE_CHECK_ERROR;
 }
 
+/**
+ * A recipe's access as a chip or badge says it: "Free recipe", or its price in
+ * one figure. The quote alone printed "$0.50 recipe" for a credits-only recipe,
+ * a price no checkout takes, so the price goes through the credits rule; the
+ * quote is still the cash figure, in the viewer's currency, where cash is
+ * taken.
+ */
 export function formatBundleAccessLabel({
   accessMode,
+  priceUsdCents,
   priceQuote,
 }: {
   accessMode: PersistedPostResourceBundleAccessMode;
-  priceQuote: MarketplacePriceQuote;
+  priceUsdCents: number;
+  priceQuote?: MarketplacePriceQuote | null;
 }): string {
-  if (accessMode === 'free' || priceQuote.amountSubunits === 0) {
+  if (accessMode === 'free' || (priceQuote ? priceQuote.amountSubunits === 0 : priceUsdCents === 0)) {
     return 'Free recipe';
   }
 
-  return `${priceQuote.formatted} recipe`;
+  return formatPostResourceCompactPriceLabel(priceUsdCents, priceQuote?.formatted);
 }
 
 export function assessMarketplaceListingQuality(input: MarketplaceQualityInput): MarketplaceQualityAssessment {

@@ -231,6 +231,33 @@ describe('CreatorContentTabs', () => {
     expect(screen.getByRole('link', { name: /runway/i })).toHaveAttribute('href', '/showcase?tool=runway');
   });
 
+  // The tile badge read "$0.50 recipe" for a recipe only credits buy. It gives
+  // the label Explore and the feed give the same recipe.
+  it('prices a recipe tile in one figure, and a credits-only one in credits', () => {
+    const creditsOnly: ShowcaseFeedItem = {
+      ...items[1],
+      id: 'item-4',
+      title: 'Credits Breakdown',
+      asset: {
+        ...items[1].asset!,
+        id: 'bundle-4',
+        postId: 'item-4',
+        priceUsdCents: 50,
+        priceQuote: { currency: 'INR', amountSubunits: 4200, formatted: '₹42', note: null },
+      },
+    };
+    render(
+      <CreatorContentTabs
+        initialData={{ ...initialData, items: [...items, creditsOnly] }}
+        profilePath="/creators/creator-name"
+      />
+    );
+
+    expect(screen.getByText('$9.00')).toBeInTheDocument();
+    expect(screen.getByText('50 credits')).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('₹42');
+  });
+
   it('loads and appends the next stable creator page when automatic observation is unavailable', async () => {
     vi.stubGlobal('IntersectionObserver', undefined);
     const nextItem = {

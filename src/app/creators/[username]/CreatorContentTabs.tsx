@@ -28,11 +28,10 @@ import {
   reportPostAfterConfirmation,
   toastSafetyOutcome,
 } from '@/lib/feed-safety-actions';
-import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
-import { getBundleAccessLabel } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import { getShowcaseItemMediaItems, type ShowcaseFeedItem } from '@/lib/showcase';
+import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 
 function ShowcaseReelLoadingFallback() {
   return (
@@ -75,17 +74,6 @@ function getTabFromHash(hash: string): CreatorTab {
 
 function itemDisplayText(item: ShowcaseFeedItem) {
   return item.body?.trim() || item.prompt?.trim() || item.title || 'Creator note';
-}
-
-function assetLabel(item: ShowcaseFeedItem) {
-  if (!item.asset) return null;
-  if (item.asset.priceQuote) {
-    return formatBundleAccessLabel({
-      accessMode: item.asset.accessMode,
-      priceQuote: item.asset.priceQuote,
-    }).replace(/\s+unlock$/i, ' recipe');
-  }
-  return getBundleAccessLabel(item.asset.accessMode, item.asset.priceUsdCents).replace(/\s+unlock$/i, ' recipe');
 }
 
 export function CreatorContentTabs({
@@ -567,7 +555,9 @@ function CreatorCard({
 }) {
   const mediaItems = getShowcaseItemMediaItems(item);
   const isText = item.postFormat === 'text';
-  const unlockLabel = assetLabel(item);
+  // The label Explore and the feed give the same recipe, so a credits-only one
+  // is priced in credits here too.
+  const unlockLabel = item.asset ? getAssetAccessLabel(item.asset) : null;
 
   return (
     <article className="group min-w-0 overflow-hidden rounded-[20px] border border-white/8 bg-[#111215] transition hover:border-white/18 hover:bg-[#15161a] focus-within:border-white/24">

@@ -795,15 +795,21 @@ export function formatUsdCents(amountUsdCents: number): string {
   }).format(amountUsdCents / 100);
 }
 
+/**
+ * A listed recipe as a tile, chip or badge names it: "Free recipe", or its
+ * price in one figure (`formatPostResourceCompactPriceLabel`). `cashLabel` is
+ * the viewer's quote.
+ */
 export function getBundleAccessLabel(
   accessMode: PersistedPostResourceBundleAccessMode,
-  priceUsdCents: number
+  priceUsdCents: number,
+  cashLabel?: string | null,
 ): string {
   if (accessMode === 'free' || priceUsdCents === 0) {
     return 'Free recipe';
   }
 
-  return `${formatUsdCents(priceUsdCents)} recipe`;
+  return formatPostResourceCompactPriceLabel(priceUsdCents, cashLabel);
 }
 
 /** Grouped the same on the server and in every browser, as the app writes it. */
@@ -824,6 +830,18 @@ export function formatPostResourcePriceLabel(priceUsdCents: number, cashLabel?: 
   return isPostResourceWebCashEligible(credits)
     ? `${cashLabel?.trim() || formatUsdCents(credits)} · ${creditLabel}`
     : creditLabel;
+}
+
+/**
+ * The same price with one figure, for chips and badges: "$9.00" when it can be
+ * bought with cash, "50 credits" when it is credits-only. The full label is for
+ * the buttons and price pills that have room for both ways to pay.
+ */
+export function formatPostResourceCompactPriceLabel(priceUsdCents: number, cashLabel?: string | null): string {
+  const credits = Math.max(0, Math.round(priceUsdCents));
+  return isPostResourceWebCashEligible(credits)
+    ? cashLabel?.trim() || formatUsdCents(credits)
+    : formatPostResourceCreditAmount(credits);
 }
 
 /** The file-url route signs at most this many files in one request. */

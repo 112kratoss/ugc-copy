@@ -1239,6 +1239,9 @@ describe('ShowcaseClient save actions', () => {
 
     expect(screen.getByRole('link', { name: /^unlock for 50 credits for /i })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /\$0\.50/ })).not.toBeInTheDocument();
+    // The tile's badge as well, which read "$0.50 recipe".
+    expect(screen.getByText('50 credits')).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('$0.50');
   });
 
   it('disables prefetching for community card detail and creator links', async () => {

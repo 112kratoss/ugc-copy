@@ -303,12 +303,8 @@ export default function MarketplaceSellClient({
                 {initialDashboard.bundles.map((bundle) => {
                   const accessLabel = formatBundleAccessLabel({
                     accessMode: bundle.accessMode,
-                    priceQuote: bundle.priceQuote ?? {
-                      currency: 'USD',
-                      amountSubunits: bundle.priceUsdCents,
-                      formatted: formatUsdCents(bundle.priceUsdCents),
-                      note: null,
-                    },
+                    priceUsdCents: bundle.priceUsdCents,
+                    priceQuote: bundle.priceQuote,
                   });
                   const health = getListingHealth(bundle);
                   // A post deleted after a sale stays private and archived for its

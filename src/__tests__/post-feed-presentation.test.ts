@@ -278,7 +278,7 @@ describe('post feed presentation', () => {
             const card = buildPostFeedCard(locked({ asset: paidRecipe }));
 
             expect(card.remixAccess).toBe('paid-unlock');
-            expect(card.remixLabel).toBe('$9.00 recipe');
+            expect(card.remixLabel).toBe('$9.00');
             expect(card.recipeChip).toBeNull();
         });
 
@@ -286,8 +286,14 @@ describe('post feed presentation', () => {
             expect(buildPostFeedCard(item({ asset: paidRecipe }))).toMatchObject({
                 remixAccess: 'open',
                 remixLabel: 'Remix · 8',
-                recipeChip: { label: '$9.00 recipe', tone: 'paid' },
+                recipeChip: { label: '$9.00', tone: 'paid' },
             });
+        });
+
+        it('prices a Remix sold with a credits-only recipe in credits, not in cash', () => {
+            const creditsOnly = { ...paidRecipe, priceUsdCents: 50 } as NonNullable<ShowcaseFeedItem['asset']>;
+
+            expect(buildPostFeedCard(locked({ asset: creditsOnly })).remixLabel).toBe('50 credits');
         });
 
         it('offers no Remix where an unlock would lead nowhere or include none', () => {
@@ -365,7 +371,19 @@ describe('post feed presentation', () => {
             } as NonNullable<ShowcaseFeedItem['asset']>;
 
             expect(buildPostFeedCard(item({ asset: paid, canRemix: true })).recipeChip)
-                .toEqual({ label: '\u20b9210 recipe', tone: 'paid' });
+                .toEqual({ label: '\u20b9210', tone: 'paid' });
+        });
+
+        it('prices a credits-only recipe in credits whatever its cash quote says', () => {
+            const creditsOnly = {
+                ...recipe,
+                accessMode: 'paid',
+                priceUsdCents: 50,
+                priceQuote: { formatted: '₹42', amountSubunits: 4200 },
+            } as NonNullable<ShowcaseFeedItem['asset']>;
+
+            expect(buildPostFeedCard(item({ asset: creditsOnly, canRemix: false })).recipeChip)
+                .toEqual({ label: '50 credits', tone: 'paid' });
         });
 
         it('has nothing to say about a post with no recipe', () => {

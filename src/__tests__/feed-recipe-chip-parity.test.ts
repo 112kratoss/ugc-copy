@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import contract from '../../contracts/feed-recipe-chip-v1.json';
 import { getPostFeedRecipeChip } from '../lib/post-feed-presentation';
+import { POST_RESOURCE_WEB_CASH_MIN_TOKENS } from '../lib/post-resource-commerce';
 import type { ShowcaseAssetSummary } from '../lib/showcase';
 import { FREE_RECIPE_LABEL, getAssetAccessLabel, isFreeRecipeAsset } from '../lib/showcase-asset-labels';
 
@@ -31,6 +32,41 @@ describe("a feed card's recipe chip, on the web and in the app", () => {
     const drawn = getPostFeedRecipeChip({ asset: fields ? asset(fields) : null, canRemix: remix });
 
     expect(drawn).toEqual(chip ? { tone: chip.tone, label: chip.label.web } : null);
+  });
+
+  // The web chip printed "$0.50 recipe" for a recipe only credits can buy. It
+  // names cash only where a checkout takes it, and otherwise says what the app
+  // says.
+  it('prices a recipe in cash on the web only where cash is taken', () => {
+    const paid = contract.cases.flatMap((entry) => (
+      entry.asset && entry.chip?.tone === 'paid'
+        ? [{ price: entry.asset.priceUsdCents, label: entry.chip.label }]
+        : []
+    ));
+    const creditsOnly = paid.filter(({ price }) => price < POST_RESOURCE_WEB_CASH_MIN_TOKENS);
+    const cashEligible = paid.filter(({ price }) => price >= POST_RESOURCE_WEB_CASH_MIN_TOKENS);
+
+    // Both kinds are in the contract, so neither check passes on nothing.
+    expect(creditsOnly.length).toBeGreaterThan(0);
+    expect(cashEligible.length).toBeGreaterThan(0);
+    for (const { label } of creditsOnly) {
+      expect(label.web).not.toMatch(/[$₹]/);
+      expect(label.web).toBe(label.mobile);
+    }
+    for (const { label } of cashEligible) {
+      expect(label.web).toMatch(/^\$\d/);
+    }
+  });
+
+  it("names a credits-only recipe in credits even where the viewer's quote is in rupees", () => {
+    const summary = {
+      ...asset({ accessMode: 'paid', priceUsdCents: 50 }),
+      priceQuote: { currency: 'INR', formatted: '₹42', amountSubunits: 4200, note: null },
+    } as ShowcaseAssetSummary;
+
+    expect(getAssetAccessLabel(summary)).toBe('50 credits');
+    expect(getAssetAccessLabel({ ...summary, priceUsdCents: 900, priceQuote: { ...summary.priceQuote!, formatted: '₹750' } }))
+      .toBe('₹750');
   });
 
   it('is asked the same cases by the app', () => {
