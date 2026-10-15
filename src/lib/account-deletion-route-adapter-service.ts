@@ -1,6 +1,8 @@
 import {
   IDENTITY_CHECK_UNAVAILABLE,
-  requireRegisteredUser,
+  SESSION_MERGED,
+  isGuestUser,
+  requireIdentity,
 } from '@/lib/account-identity';
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
@@ -17,6 +19,7 @@ import {
 import {
   AccountDeletionNotStartedError,
   finishInitialAccountDeletion,
+  GuestAccountLinkedError,
   markAccountDeletionStage,
   startInitialAccountDeletion,
   type InitialAccountDeletionStart,
@@ -38,6 +41,11 @@ const RECENT_AUTH_FUTURE_SKEW_MS = 60 * 1000;
 // because installed apps open their sign-in-again card on the legacy codes.
 const REAUTHENTICATION_REQUIRED = 'reauthentication_required';
 
+// The same refusal identity admission gives a linked guest's session
+// (account-identity.ts), so the app takes the one path it already has for it.
+const GUEST_SESSION_MERGED_MESSAGE =
+  'This guest session has been linked to an account. Sign in to continue.';
+
 type AccountDeletionDependencies = {
   authorizeAppleAccountDeletion?: typeof authorizeAppleAccountDeletion;
   createServiceClient?: typeof createServiceClient;
@@ -46,7 +54,7 @@ type AccountDeletionDependencies = {
   invalidateShowcaseFeedCache?: typeof invalidateShowcaseFeedCache;
   logError?: typeof logBackendRouteError;
   now?: () => Date;
-  requireRegisteredUser?: typeof requireRegisteredUser;
+  requireIdentity?: typeof requireIdentity;
   runAfterResponse?: RunAfterResponse;
 };
 
@@ -127,6 +135,20 @@ function deletionFailureResponse(request: Request, deletionScheduled: boolean) {
   );
 }
 
+/**
+ * `DELETE /api/account`: an account's permanent deletion, and since D5
+ * (2026-10-15) a guest's deletion of its own data.
+ *
+ * An account proves it is still its owner first: Apple's one-time code for an
+ * account with an Apple identity, otherwise a sign-in in the last 15 minutes.
+ * A guest has no provider identity and no password, so there is nothing it
+ * could sign in again with; its token is the whole identity, and admission has
+ * just verified it as an active guest. What a guest has to show instead is
+ * that the identity is still its own: prepare_guest_account_deletion refuses a
+ * guest linked to an account (409 SESSION_MERGED, nothing changed), because
+ * the account now acts for what the guest made. Past that check a guest goes
+ * down the account pipeline and gets the same answers.
+ */
 export async function deleteAccountRouteResponse({
   dependencies,
   request,
@@ -143,7 +165,7 @@ export async function deleteAccountRouteResponse({
     invalidateShowcaseFeedCache: dependencies?.invalidateShowcaseFeedCache ?? invalidateShowcaseFeedCache,
     logError: dependencies?.logError ?? logBackendRouteError,
     now: dependencies?.now ?? (() => new Date()),
-    requireRegisteredUser: dependencies?.requireRegisteredUser ?? requireRegisteredUser,
+    requireIdentity: dependencies?.requireIdentity ?? requireIdentity,
     runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
   };
   const userClient = resolved.createUserClient(request);
@@ -152,7 +174,10 @@ export async function deleteAccountRouteResponse({
     adminClient ??= resolved.createServiceClient();
     return adminClient;
   };
-  const identity = await resolved.requireRegisteredUser(userClient, getAdmin);
+  // An active guest or an account. A linked guest's session (409
+  // SESSION_MERGED) and an identity already being deleted (409
+  // ACCOUNT_DELETING) stop here, as they do at the proxy.
+  const identity = await resolved.requireIdentity(userClient, getAdmin);
 
   if (!identity.ok) {
     return applyPrivateNoStoreApiResponseHeaders(
@@ -164,13 +189,14 @@ export async function deleteAccountRouteResponse({
     );
   }
 
-  // `requireRegisteredUser` normally reuses the proxy's signed identity
-  // admission assertion. That assertion deliberately contains only the user
-  // fields needed by the majority of routes; it omits provider identities and
+  // `requireIdentity` normally reuses the proxy's signed identity admission
+  // assertion. That assertion deliberately contains only the user fields
+  // needed by the majority of routes; it omits provider identities and
   // `last_sign_in_at`. Account deletion needs both to choose and verify the
-  // correct reauthentication path, so perform a fresh authoritative Auth
-  // lookup for this destructive operation instead of making that assertion
-  // carry sensitive provider data for every request.
+  // correct reauthentication path (and whether there is one: a guest has
+  // none), so perform a fresh authoritative Auth lookup for this destructive
+  // operation instead of making that assertion carry sensitive provider data
+  // for every request.
   let user;
   try {
     const { data, error } = await getAuthoritativeAuthUserResult(userClient);
@@ -199,7 +225,10 @@ export async function deleteAccountRouteResponse({
     );
   }
 
-  const appleIdentity = getAppleIdentity(user);
+  // Read from the fresh Auth record, not the admission assertion: an identity
+  // linked to a provider since its token was minted is an account.
+  const guest = isGuestUser(user);
+  const appleIdentity = guest ? null : getAppleIdentity(user);
   if (appleIdentity && !deletionRequest.appleAuthorizationCode?.trim()) {
     return applyPrivateNoStoreApiResponseHeaders(
       NextResponse.json({
@@ -212,7 +241,11 @@ export async function deleteAccountRouteResponse({
     );
   }
 
-  if (!appleIdentity && !hasRecentAuthentication(user.last_sign_in_at, resolved.now())) {
+  if (
+    !guest
+    && !appleIdentity
+    && !hasRecentAuthentication(user.last_sign_in_at, resolved.now())
+  ) {
     return applyPrivateNoStoreApiResponseHeaders(
       NextResponse.json({
         error: 'Please sign in again before permanently deleting your account.',
@@ -291,8 +324,19 @@ export async function deleteAccountRouteResponse({
       accessToken: getBearerAccessToken(request),
       admin,
       userId,
+      identityKind: guest ? 'guest' : 'registered',
     });
   } catch (error) {
+    if (error instanceof GuestAccountLinkedError) {
+      // Refused before anything changed: there is no job to mark failed.
+      return applyPrivateNoStoreApiResponseHeaders(
+        NextResponse.json(
+          { error: GUEST_SESSION_MERGED_MESSAGE, code: SESSION_MERGED },
+          { status: 409 },
+        ),
+        request,
+      );
+    }
     await persistDeletionFailure(error);
     return deletionFailureResponse(request, !(error instanceof AccountDeletionNotStartedError));
   }

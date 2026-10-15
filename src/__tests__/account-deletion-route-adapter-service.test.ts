@@ -36,16 +36,22 @@ function authenticatedUser(lastSignInAt = RECENT_SIGN_IN) {
   return { id: USER_ID, last_sign_in_at: lastSignInAt };
 }
 
-async function requireRegisteredUserForRouteTest(userClient: {
-  auth: { getUser: () => Promise<{ data: { user: { id: string; last_sign_in_at?: string } | null }; error: unknown }> };
+async function requireIdentityForRouteTest(userClient: {
+  auth: {
+    getUser: () => Promise<{
+      data: { user: { id: string; last_sign_in_at?: string; is_anonymous?: boolean } | null };
+      error: unknown;
+    }>;
+  };
 }) {
   const { data: { user }, error } = await userClient.auth.getUser();
   if (error || !user) {
     return { ok: false as const, status: 401, code: 'UNAUTHORIZED' as const, error: 'Unauthorized' };
   }
+  const isGuest = user.is_anonymous === true;
   return {
     ok: true as const,
-    identity: { user, userId: user.id, kind: 'registered' as const, isGuest: false },
+    identity: { user, userId: user.id, kind: isGuest ? 'guest' as const : 'registered' as const, isGuest },
   };
 }
 
@@ -82,6 +88,8 @@ function deferredWork() {
 type DeletionClientOptions = {
   deleteUserError?: unknown;
   listError?: unknown;
+  /** Whose files the prepared manifest lists (the account by default). */
+  ownerUserIds?: string[];
   prepare?: { data: unknown; error: unknown };
   showcaseMediaPaths?: string[];
   signOutError?: unknown;
@@ -135,12 +143,12 @@ function deletionServiceClient(options: DeletionClientOptions = {}) {
     },
     rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
       calls.push(`rpc:${name}:${String(args.p_status ?? '')}`);
-      if (name === 'prepare_account_deletion') {
+      if (name === 'prepare_account_deletion' || name === 'prepare_guest_account_deletion') {
         return options.prepare ?? {
           data: {
             status: 'prepared',
             storage_manifest: {
-              owner_user_ids: [USER_ID],
+              owner_user_ids: options.ownerUserIds ?? [USER_ID],
               user_prefix_buckets: [
                 'profiles',
                 'uploads',
@@ -196,7 +204,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: (() => ({
           auth: { getUser: vi.fn(async () => ({ data: { user: null }, error: new Error('invalid') })) },
         })) as never,
@@ -214,7 +222,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'delete' }),
       dependencies: {
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: (() => ({
           auth: { getUser: vi.fn(async () => ({ data: { user: { id: 'user-1' } }, error: null })) },
         })) as never,
@@ -236,7 +244,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: recentUserClient(),
         createServiceClient: (() => deletion.client) as never,
         enforceBackendRateLimit: allowRateLimit(),
@@ -297,7 +305,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: recentUserClient(),
         createServiceClient: (() => deletion.client) as never,
         enforceBackendRateLimit: allowRateLimit(),
@@ -332,7 +340,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: recentUserClient(),
         createServiceClient: (() => deletion.client) as never,
         enforceBackendRateLimit: allowRateLimit(),
@@ -363,7 +371,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: recentUserClient(),
         createServiceClient: (() => deletion.client) as never,
         enforceBackendRateLimit: allowRateLimit(),
@@ -391,7 +399,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: recentUserClient(),
         createServiceClient: (() => deletion.client) as never,
         enforceBackendRateLimit: allowRateLimit(),
@@ -419,7 +427,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: recentUserClient(),
         createServiceClient: (() => deletion.client) as never,
         enforceBackendRateLimit: allowRateLimit(),
@@ -447,7 +455,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: recentUserClient(),
         createServiceClient: (() => ({ rpc })) as never,
         enforceBackendRateLimit: vi.fn(async () => {
@@ -471,7 +479,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: (() => ({
           auth: {
             getUser: vi.fn(async () => ({
@@ -513,7 +521,7 @@ describe('account deletion route', () => {
       }),
       dependencies: {
         authorizeAppleAccountDeletion,
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: (() => ({
           auth: {
             getUser: vi.fn(async () => ({
@@ -637,7 +645,7 @@ describe('account deletion route', () => {
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
         authorizeAppleAccountDeletion,
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: (() => ({
           auth: {
             getUser: vi.fn(async () => ({
@@ -686,7 +694,7 @@ describe('account deletion route', () => {
             true,
           );
         }),
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: (() => ({
           auth: {
             getUser: vi.fn(async () => ({
@@ -732,7 +740,7 @@ describe('account deletion route', () => {
             false,
           );
         }),
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: (() => ({
           auth: {
             getUser: vi.fn(async () => ({
@@ -769,7 +777,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: recentUserClient(),
         createServiceClient: (() => deletion.client) as never,
         enforceBackendRateLimit: allowRateLimit(),
@@ -800,7 +808,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: recentUserClient(),
         createServiceClient: (() => deletion.client) as never,
         enforceBackendRateLimit: allowRateLimit(),
@@ -829,7 +837,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
-        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
+        requireIdentity: requireIdentityForRouteTest as never,
         createUserClient: recentUserClient(),
         createServiceClient: (() => ({ auth: { admin: { deleteUser } } })) as never,
         enforceBackendRateLimit: vi.fn(async () => {
@@ -848,5 +856,226 @@ describe('account deletion route', () => {
     expect(response.status).toBe(429);
     expect(response.headers.get('retry-after')).toBe('60');
     expect(deleteUser).not.toHaveBeenCalled();
+  });
+});
+
+// D5 (2026-10-15): a guest deletes its own data through the same route.
+describe('guest self-deletion', () => {
+  const GUEST_ID = '0b5d0c3e-6f1a-4c2b-9d7e-3a1f2e4d5c6b';
+  // Months old: an account this stale would be sent to sign in again.
+  const guestUser = {
+    id: GUEST_ID,
+    is_anonymous: true,
+    last_sign_in_at: '2026-03-01T00:00:00.000Z',
+    identities: [],
+  };
+
+  function guestUserClient() {
+    return (() => ({
+      auth: { getUser: vi.fn(async () => ({ data: { user: guestUser }, error: null })) },
+    })) as never;
+  }
+
+  it('deletes a guest with no fresh sign-in, through the guest guard and then the account pipeline', async () => {
+    const deferred = deferredWork();
+    const invalidateShowcaseFeedCache = vi.fn();
+    const authorizeAppleAccountDeletion = vi.fn();
+    const deletion = deletionServiceClient({ ownerUserIds: [GUEST_ID] });
+    const response = await deleteAccountRouteResponse({
+      // The body the app sends today.
+      request: request({ confirmation: 'DELETE' }),
+      dependencies: {
+        authorizeAppleAccountDeletion,
+        requireIdentity: requireIdentityForRouteTest as never,
+        createUserClient: guestUserClient(),
+        createServiceClient: (() => deletion.client) as never,
+        enforceBackendRateLimit: allowRateLimit(),
+        invalidateShowcaseFeedCache,
+        now: () => NOW,
+        runAfterResponse: deferred.runAfterResponse,
+      },
+    });
+
+    // The same answer an account gets.
+    expect(response.status).toBe(202);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      deleted: false,
+      deletionScheduled: true,
+    });
+    expect(deletion.client.rpc).toHaveBeenCalledWith('prepare_guest_account_deletion', {
+      p_user_id: GUEST_ID,
+    });
+    expect(deletion.client.rpc).not.toHaveBeenCalledWith('prepare_account_deletion', expect.anything());
+    expect(deletion.calls).toEqual([
+      'rpc:prepare_guest_account_deletion:',
+      'rpc:mark_account_deletion_stage:storage_deleting',
+      'sign-out:global',
+    ]);
+    expect(deletion.client.auth.admin.signOut).toHaveBeenCalledWith('token', 'global');
+    expect(authorizeAppleAccountDeletion).not.toHaveBeenCalled();
+
+    await deferred.runAll();
+
+    expect(deletion.stages()).toEqual([
+      'storage_deleting',
+      'storage_deleted',
+      'auth_deleting',
+      'completed',
+    ]);
+    // Its own files, under its own id, then the guest itself.
+    expect(deletion.calls).toContain(`list:uploads:${GUEST_ID}`);
+    expect(deletion.calls).toContain(`list:generated_images:${GUEST_ID}`);
+    expect(deletion.calls).toContain(`list:generation_inputs:${GUEST_ID}`);
+    expect(deletion.client.auth.admin.deleteUser).toHaveBeenCalledTimes(1);
+    expect(deletion.client.auth.admin.deleteUser).toHaveBeenCalledWith(GUEST_ID);
+    expect(invalidateShowcaseFeedCache).toHaveBeenCalledOnce();
+  });
+
+  it('never asks a guest for Apple, even when a code arrives with the request', async () => {
+    const authorizeAppleAccountDeletion = vi.fn();
+    const deletion = deletionServiceClient({ ownerUserIds: [GUEST_ID] });
+    const response = await deleteAccountRouteResponse({
+      request: request({ confirmation: 'DELETE', appleAuthorizationCode: 'stray-code' }),
+      dependencies: {
+        authorizeAppleAccountDeletion,
+        requireIdentity: requireIdentityForRouteTest as never,
+        createUserClient: guestUserClient(),
+        createServiceClient: (() => deletion.client) as never,
+        enforceBackendRateLimit: allowRateLimit(),
+        invalidateShowcaseFeedCache: vi.fn(),
+        now: () => NOW,
+        runAfterResponse: vi.fn(),
+      },
+    });
+
+    expect(response.status).toBe(202);
+    expect(authorizeAppleAccountDeletion).not.toHaveBeenCalled();
+  });
+
+  it('still asks a guest to type DELETE', async () => {
+    const deletion = deletionServiceClient({ ownerUserIds: [GUEST_ID] });
+    const response = await deleteAccountRouteResponse({
+      request: request({ confirmation: 'delete' }),
+      dependencies: {
+        requireIdentity: requireIdentityForRouteTest as never,
+        createUserClient: guestUserClient(),
+        createServiceClient: (() => deletion.client) as never,
+        now: () => NOW,
+      },
+    });
+
+    expect(response.status).toBe(400);
+    expect(deletion.client.rpc).not.toHaveBeenCalled();
+  });
+
+  it('refuses a guest linked to an account with SESSION_MERGED and changes nothing', async () => {
+    const deferred = deferredWork();
+    const logError = vi.fn();
+    const deletion = deletionServiceClient({
+      prepare: { data: { status: 'merged' }, error: null },
+    });
+    const response = await deleteAccountRouteResponse({
+      request: request({ confirmation: 'DELETE' }),
+      dependencies: {
+        requireIdentity: requireIdentityForRouteTest as never,
+        createUserClient: guestUserClient(),
+        createServiceClient: (() => deletion.client) as never,
+        enforceBackendRateLimit: allowRateLimit(),
+        invalidateShowcaseFeedCache: vi.fn(),
+        logError,
+        now: () => NOW,
+        runAfterResponse: deferred.runAfterResponse,
+      },
+    });
+
+    // What identity admission answers a linked guest's session, so the app
+    // leaves it the way it already does.
+    expect(response.status).toBe(409);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    await expect(response.json()).resolves.toEqual({
+      error: 'This guest session has been linked to an account. Sign in to continue.',
+      code: 'SESSION_MERGED',
+    });
+    // Refused inside the guard: no stage, no sign-out, no sweep, no failed job.
+    expect(deletion.calls).toEqual(['rpc:prepare_guest_account_deletion:']);
+    expect(deletion.client.auth.admin.signOut).not.toHaveBeenCalled();
+    expect(deletion.client.auth.admin.deleteUser).not.toHaveBeenCalled();
+    expect(deferred.runAfterResponse).not.toHaveBeenCalled();
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  it('refuses a linked guest at identity admission, before any deletion work', async () => {
+    const rpc = vi.fn();
+    const maybeSingle = vi.fn(async () => ({ data: { identity_state: 'merged' }, error: null }));
+    const query = { select: vi.fn(), eq: vi.fn(), maybeSingle };
+    query.select.mockReturnValue(query);
+    query.eq.mockReturnValue(query);
+    const response = await deleteAccountRouteResponse({
+      request: request({ confirmation: 'DELETE' }),
+      dependencies: {
+        // The real admission check, reading the identity's lifecycle state.
+        createUserClient: guestUserClient(),
+        createServiceClient: (() => ({ from: vi.fn(() => query), rpc })) as never,
+        now: () => NOW,
+      },
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: 'SESSION_MERGED' });
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('tells a guest the guard no longer sees as one to try again, with nothing started', async () => {
+    const deletion = deletionServiceClient({
+      prepare: { data: { status: 'not_a_guest' }, error: null },
+    });
+    const response = await deleteAccountRouteResponse({
+      request: request({ confirmation: 'DELETE' }),
+      dependencies: {
+        requireIdentity: requireIdentityForRouteTest as never,
+        createUserClient: guestUserClient(),
+        createServiceClient: (() => deletion.client) as never,
+        enforceBackendRateLimit: allowRateLimit(),
+        logError: vi.fn(),
+        now: () => NOW,
+        runAfterResponse: vi.fn(),
+      },
+    });
+
+    // A retry is asked again from the identity it then has: an account is
+    // sent to sign in again like any other.
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Account deletion could not be completed. Please try again.',
+      code: 'ACCOUNT_DELETION_NOT_STARTED',
+      deletionScheduled: false,
+    });
+    expect(deletion.client.auth.admin.signOut).not.toHaveBeenCalled();
+  });
+
+  it('keeps an account on its own rules: the account guard, and a fresh sign-in', async () => {
+    const deletion = deletionServiceClient();
+    const response = await deleteAccountRouteResponse({
+      request: request({ confirmation: 'DELETE' }),
+      dependencies: {
+        requireIdentity: requireIdentityForRouteTest as never,
+        createUserClient: (() => ({
+          auth: {
+            getUser: vi.fn(async () => ({
+              data: { user: { ...authenticatedUser('2026-07-14T10:00:00.000Z'), is_anonymous: false } },
+              error: null,
+            })),
+          },
+        })) as never,
+        createServiceClient: (() => deletion.client) as never,
+        now: () => NOW,
+      },
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ code: 'RECENT_AUTH_REQUIRED' });
+    expect(deletion.client.rpc).not.toHaveBeenCalled();
   });
 });

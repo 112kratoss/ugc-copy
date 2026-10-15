@@ -70,10 +70,20 @@ type AccountDeletionCleanupSummary = {
   resweeps: AccountDeletionResweepSummary;
 };
 
+/**
+ * Who is being deleted. A guest (D5, 2026-10-15) is prepared through
+ * prepare_guest_account_deletion, which refuses an account and a guest linked
+ * to one before it prepares the same job; everything after the preparation is
+ * the account pipeline unchanged.
+ */
+export type AccountDeletionIdentityKind = 'guest' | 'registered';
+
 type StartInitialAccountDeletionOptions = {
   accessToken?: string;
   admin: SupabaseClient;
   userId: string;
+  /** Defaults to `registered`. */
+  identityKind?: AccountDeletionIdentityKind;
 };
 
 type FinishInitialAccountDeletionOptions = {
@@ -116,6 +126,19 @@ export class AccountDeletionNotStartedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'AccountDeletionNotStartedError';
+  }
+}
+
+/**
+ * prepare_guest_account_deletion found the guest linked to an account, or an
+ * identity linked to the guest. A linked guest is spent: the account acts for
+ * its balance and what it made, so the guest is never deleted on its own.
+ * Nothing was changed.
+ */
+export class GuestAccountLinkedError extends AccountDeletionNotStartedError {
+  constructor() {
+    super('This guest identity is linked to an account.');
+    this.name = 'GuestAccountLinkedError';
   }
 }
 
@@ -462,10 +485,19 @@ async function deleteLinkedAuthUsersGuestFirst(
   return { targetAlreadyMissing };
 }
 
-async function prepareAccountDeletion(admin: SupabaseClient, userId: string) {
-  const { data, error } = await admin.rpc('prepare_account_deletion', {
-    p_user_id: userId,
-  });
+async function prepareAccountDeletion(
+  admin: SupabaseClient,
+  userId: string,
+  identityKind: AccountDeletionIdentityKind,
+) {
+  const { data, error } = await admin.rpc(
+    identityKind === 'guest' ? 'prepare_guest_account_deletion' : 'prepare_account_deletion',
+    { p_user_id: userId },
+  );
+
+  if (!error && identityKind === 'guest' && isRecord(data) && data.status === 'merged') {
+    throw new GuestAccountLinkedError();
+  }
 
   if (
     error
@@ -474,9 +506,12 @@ async function prepareAccountDeletion(admin: SupabaseClient, userId: string) {
   ) {
     // An acknowledgement lost after a commit also lands here. The identity is
     // then already `deleting`, so a retry meets 409 ACCOUNT_DELETING rather
-    // than a second deletion, and the scheduler picks the job up.
+    // than a second deletion, and the scheduler picks the job up. The guest
+    // guard's other refusals (`not_a_guest`, `not_found`) change nothing
+    // either; a retry is asked again, from the identity it then has.
+    const refusal = isRecord(data) && typeof data.status === 'string' ? ` (${data.status})` : '';
     throw new AccountDeletionNotStartedError(
-      errorMessage(error, 'Could not prepare account deletion.'),
+      errorMessage(error, `Could not prepare account deletion${refusal}.`),
     );
   }
 
@@ -579,8 +614,9 @@ export async function startInitialAccountDeletion({
   accessToken,
   admin,
   userId,
+  identityKind = 'registered',
 }: StartInitialAccountDeletionOptions): Promise<InitialAccountDeletionStart> {
-  const preparation = await prepareAccountDeletion(admin, userId);
+  const preparation = await prepareAccountDeletion(admin, userId, identityKind);
   if (preparation.alreadyCompleted) {
     return {
       status: 'already_deleted',
@@ -721,9 +757,10 @@ export async function executeInitialAccountDeletion({
   accessToken,
   admin,
   userId,
+  identityKind,
   ...finishOptions
 }: ExecuteInitialAccountDeletionOptions): Promise<InitialAccountDeletionResult> {
-  const start = await startInitialAccountDeletion({ accessToken, admin, userId });
+  const start = await startInitialAccountDeletion({ accessToken, admin, userId, identityKind });
   if (start.status === 'already_deleted') return start.result;
   return finishInitialAccountDeletion({
     ...finishOptions,

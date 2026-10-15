@@ -13,7 +13,14 @@ const supplementary = [
   'prune_account_merge_tickets',
   'prune_upload_byte_reservations',
 ];
-const allCalls = ['prune_operational_backend_data', ...supplementary];
+// The idle-guest step (D5) runs last; with no candidates it lists and stops.
+const allCalls = ['prune_operational_backend_data', ...supplementary, 'list_idle_guest_identities'];
+
+function answer(name: string) {
+  if (name === 'prune_operational_backend_data') return { total_deleted: 12, job_runs_deleted: 12 };
+  if (name === 'list_idle_guest_identities') return [];
+  return 3;
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -29,7 +36,7 @@ describe('supplementary retention failure visibility and progress', () => {
           if (mode === 'rejection') throw error;
           return { data: null, error };
         }
-        return { data: name === 'prune_operational_backend_data' ? { total_deleted: 12, job_runs_deleted: 12 } : 3, error: null };
+        return { data: answer(name), error: null };
       });
       const summary = await pruneOperationalBackendData({ rpc } as unknown as SupabaseClient);
       expect(summary).toMatchObject({ totalDeleted: 12, jobRunsDeleted: 12, supplementaryPruneFailures: [failedFunction] });
@@ -49,7 +56,7 @@ describe('supplementary retention failure visibility and progress', () => {
   it('does not carry old failures into a successful retry', async () => {
     let fail = true;
     const rpc = vi.fn(async (name: string) => ({
-      data: name === 'prune_operational_backend_data' ? { total_deleted: 1 } : 1,
+      data: name === 'prune_operational_backend_data' ? { total_deleted: 1 } : name === 'list_idle_guest_identities' ? [] : 1,
       error: fail && name === supplementary[0] ? new Error('temporary fixture failure') : null,
     }));
     const client = { rpc } as unknown as SupabaseClient;
