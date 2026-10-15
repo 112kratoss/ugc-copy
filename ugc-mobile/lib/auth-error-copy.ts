@@ -145,15 +145,42 @@ function isGuestMergePrepareFailure(error: unknown) {
 export type SignInProvider = 'Apple' | 'Google';
 
 /**
- * The provider buttons the sign-in screen draws on `platform`: Apple on iOS,
- * Google on Android. Copy names only these, since advice to "use that button"
- * is worthless where the button is not drawn (audit 01-8).
+ * The provider buttons the sign-in screen draws on `platform`, in the order it
+ * draws them: Apple, then Google, on iOS; Google on Android (decision D1).
+ * Google is the same OAuth flow on both phones, and offering it on the iPhone
+ * is what lets an account made with Google on Android or the web be reached
+ * there at all (audit 01-1). Apple leads on iOS and is drawn no smaller than
+ * any other way in: App Review 4.8 asks for it beside a third-party sign-in,
+ * and Sign in with Apple: "Make a Sign in with Apple button no smaller than
+ * other sign-in buttons". Android gets Apple once the web has its Services ID.
+ *
+ * Copy names only these, since advice to "use that button" is worthless where
+ * the button is not drawn (audit 01-8).
  */
 export function signInProviderButtons(platform: string): SignInProvider[] {
-  if (platform === 'ios') return ['Apple'];
+  if (platform === 'ios') return ['Apple', 'Google'];
   if (platform === 'android') return ['Google'];
   return [];
 }
+
+/**
+ * Where someone who cannot sign in is sent (decision D2). Magicbooklet signs
+ * people in with Apple and Google and has no mail sender, so no password reset
+ * or confirmation mail is ever sent: the few accounts made with an email and a
+ * password before July are helped by support, by hand (the deployment
+ * runbook's "Identity Policy: OAuth Only"). The web says the same words, from
+ * `siteConfig.supportEmail`.
+ */
+export const SIGN_IN_SUPPORT_EMAIL = 'info@magicbooklet.com';
+
+/** The line that stands where "Forgot password?" used to. */
+export const SIGN_IN_SUPPORT = {
+  prompt: 'Trouble signing in?',
+  action: `Email ${SIGN_IN_SUPPORT_EMAIL}`,
+} as const;
+
+/** A draft to support whose subject already says what it is about. */
+export const SIGN_IN_SUPPORT_MAIL_URL = `mailto:${SIGN_IN_SUPPORT_EMAIL}?subject=${encodeURIComponent('Trouble signing in')}`;
 
 export type PasswordSignInCopyContext = {
   /** The provider buttons drawn beside the password field. */
@@ -184,9 +211,11 @@ export function describePasswordSignInError(
   }
 
   if (message.includes('email not confirmed')) {
+    // No confirmation mail can be sent (no mail sender), so this does not ask
+    // for a link that never came; support confirms the address by hand.
     return {
-      title: 'Confirm your email first',
-      body: 'Open the confirmation link we sent when the account was created, then sign in.',
+      title: 'This email address is not confirmed',
+      body: `Email ${SIGN_IN_SUPPORT_EMAIL} and we will help you sign in.`,
     };
   }
 

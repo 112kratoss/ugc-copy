@@ -59,6 +59,7 @@ vi.mock('@/lib/post-resource-bundles-server', () => ({
 import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-candidates';
 import { collectReferenceMediaCandidates, collectSubjectImageCandidates } from '@/lib/generation-input-media';
 import { loadRemixSourceBundle, RemixSourceError } from '@/lib/remix-source-server';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 
 const LOCKED_PROMPT = 'The prompt a buyer pays for';
 
@@ -208,6 +209,69 @@ describe('loadRemixSourceBundle access', () => {
     expect(bundle.workflowSettings).toMatchObject({
       referenceImageUrls: ['https://cdn.example/private-face.png'],
     });
+    expect(mocks.loadGenerationInputMediaMap).toHaveBeenCalled();
+  });
+});
+
+// Product decision D4 (2026-10-15): the route admits an app guest, for its
+// own creations only. Whatever else the shared gate would grant (a public
+// post's recipe, a bought one) is remixing, which takes an account, so a
+// guest's request is decided before that gate is asked anything.
+describe('loadRemixSourceBundle for an app guest', () => {
+  function asGuest() {
+    vi.mocked(getVerifiedAuthUserResult).mockResolvedValueOnce({
+      data: { user: { id: 'guest-1', is_anonymous: true } },
+      error: null,
+    } as never);
+  }
+
+  it("refuses another creator's generation in the proxy's words, before the gate is asked or anything signed", async () => {
+    asGuest();
+
+    const outcome = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' })
+      .then((bundle) => bundle, (error: unknown) => error);
+
+    expect(outcome).toBeInstanceOf(RemixSourceError);
+    expect(outcome).toMatchObject({
+      status: 403,
+      code: 'REGISTRATION_REQUIRED',
+      message: 'Create an account to use this feature.',
+    });
+    expect(JSON.stringify(outcome)).not.toContain(LOCKED_PROMPT);
+    expect(mocks.resolveRemixAccess).not.toHaveBeenCalled();
+    expect(mocks.loadGenerationInputMediaMap).not.toHaveBeenCalled();
+    expect(mocks.loadGenerationRecipeRemixInputMediaByPostId).not.toHaveBeenCalled();
+  });
+
+  it('gives a generation that does not exist the same answer, so nothing is confirmed', async () => {
+    asGuest();
+    mocks.generation = null;
+
+    await expect(loadRemixSourceBundle(request(), 'gen-1')).rejects.toMatchObject({
+      status: 403,
+      code: 'REGISTRATION_REQUIRED',
+    });
+    expect(mocks.resolveRemixAccess).not.toHaveBeenCalled();
+  });
+
+  it('hands its own generation to the shared gate, which restores it as the owner', async () => {
+    asGuest();
+    mocks.generation = { ...mocks.generation, user_id: 'guest-1', is_public: false };
+    mocks.resolveRemixAccess.mockResolvedValue({
+      allowed: true,
+      basis: 'owner',
+      post: null,
+      includeSharedInputMedia: true,
+      recipeEntitled: false,
+    });
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.generation.prompt).toBe(LOCKED_PROMPT);
+    expect(mocks.resolveRemixAccess).toHaveBeenCalledWith(expect.objectContaining({
+      viewerUserId: 'guest-1',
+      generation: expect.objectContaining({ id: 'gen-1', user_id: 'guest-1' }),
+    }));
     expect(mocks.loadGenerationInputMediaMap).toHaveBeenCalled();
   });
 });

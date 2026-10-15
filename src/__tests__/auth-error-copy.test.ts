@@ -13,7 +13,8 @@ describe('describeAuthError', () => {
     ['Failed to fetch', 'Could not reach the sign-in service. Check your connection and try again.'],
     ['Invalid login credentials', 'That email and password do not match. Check both and try again, or use Google if you signed up with it.'],
     ['Email not confirmed', 'Confirm your email first: open the confirmation link we sent when the account was created, then sign in.'],
-    ['User already registered', 'An account with this email already exists. Sign in instead, or reset the password.'],
+    // D2: no reset email can be sent, so the sentence offers none.
+    ['User already registered', 'An account with this email already exists. Sign in instead.'],
     ['For security purposes, you can only request this after 42 seconds.', 'Too many attempts. Wait a minute before trying again.'],
   ])('keeps the plain wording for "%s"', (raw, shown) => {
     expect(describeAuthError(authError(raw), FALLBACK)).toBe(shown);

@@ -11,7 +11,7 @@
         "mobileCompatibility": {
           "currentApiVersion": 1,
           "minimumApiVersion": 1,
-          "minimumAppVersion": "0.0.5",
+          "minimumAppVersion": "0.1.7",
           "supportedCatalogSchemaVersions": [
             1,
             2,
@@ -27,7 +27,7 @@
           "mobileCompatibility": {
             "currentApiVersion": 1,
             "minimumApiVersion": 1,
-            "minimumAppVersion": "0.0.5",
+            "minimumAppVersion": "0.1.7",
             "supportedCatalogSchemaVersions": [
               1,
               2,
@@ -57,7 +57,7 @@
         "compatibility": {
           "currentApiVersion": 1,
           "minimumApiVersion": 1,
-          "minimumAppVersion": "0.0.5",
+          "minimumAppVersion": "0.1.7",
           "supportedCatalogSchemaVersions": [
             1,
             2,
@@ -117,6 +117,7 @@
       "method": "DELETE",
       "path": "/api/account",
       "auth": "required",
+      "guestToken": "A guest's own token deletes the guest identity and what it made (D5) with the same request and needs no reauthentication: no recent sign-in and no appleAuthorizationCode. The answers are the ones below; a guest since linked to an account gets errors.guestLinked.",
       "cacheControl": "private, no-store",
       "request": {
         "confirmation": "DELETE",
@@ -167,6 +168,13 @@
           "response": {
             "error": "This account is being permanently deleted.",
             "code": "ACCOUNT_DELETING"
+          }
+        },
+        "guestLinked": {
+          "status": 409,
+          "response": {
+            "error": "This guest session has been linked to an account. Sign in to continue.",
+            "code": "SESSION_MERGED"
           }
         },
         "deletionNotStarted": {
@@ -2100,6 +2108,108 @@
           "code": "creator1",
           "expiresAt": "2026-11-14T10:00:00.000Z",
           "program": null
+        }
+      }
+    },
+    "getCreditHistory": {
+      "method": "GET",
+      "path": "/api/credits/history",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "query": {
+        "limit": "6"
+      },
+      "response": {
+        "entries": [
+          {
+            "id": "generation:5f0c2d7e-8a41-4b6c-9d2e-1f3a4b5c6d7e:refund",
+            "kind": "refund",
+            "amount": 120,
+            "occurredAt": "2026-10-15T09:12:30.512Z",
+            "title": "Refund: failed video",
+            "detail": null
+          },
+          {
+            "id": "generation:5f0c2d7e-8a41-4b6c-9d2e-1f3a4b5c6d7e:charge",
+            "kind": "spend",
+            "amount": -120,
+            "occurredAt": "2026-10-15T09:10:02.087Z",
+            "title": "Video generation",
+            "detail": null
+          },
+          {
+            "id": "unlock:2b7e9c41-6d3a-4e8f-a1b2-c3d4e5f6a7b8",
+            "kind": "spend",
+            "amount": -200,
+            "occurredAt": "2026-10-14T18:40:11.300Z",
+            "title": "Recipe unlocked",
+            "detail": "Neon portrait recipe"
+          },
+          {
+            "id": "referral:8e4d2c1b-3a5f-4c6d-8e7f-9a0b1c2d3e4f",
+            "kind": "grant",
+            "amount": 100,
+            "occurredAt": "2026-10-12T11:05:44.020Z",
+            "title": "Referral reward",
+            "detail": "First top-up bonus"
+          },
+          {
+            "id": "purchase:0d9c8b7a-6e5f-4a3b-9c2d-1e0f9a8b7c6d",
+            "kind": "purchase",
+            "amount": 2000,
+            "occurredAt": "2026-10-12T11:05:44.020Z",
+            "title": "Creator pack",
+            "detail": "Bought in the app"
+          },
+          {
+            "id": "grant:6c1b2a90-4d3e-4f5a-9b8c-7d6e5f4a3b2c",
+            "kind": "grant",
+            "amount": 25,
+            "occurredAt": "2026-10-10T08:00:00.123Z",
+            "title": "Welcome credits",
+            "detail": null
+          }
+        ],
+        "nextCursor": "eyJ2IjoxLCJ0IjoiMjAyNi0xMC0xMFQwODowMDowMC4xMjM0NTYrMDA6MDAiLCJpIjoiZ3JhbnQ6NmMxYjJhOTAtNGQzZS00ZjVhLTliOGMtN2Q2ZTVmNGEzYjJjIn0"
+      },
+      "responseVariants": {
+        "lastPage": {
+          "entries": [],
+          "nextCursor": null
+        }
+      },
+      "paging": {
+        "order": "newest first",
+        "limit": {
+          "default": 30,
+          "minimum": 1,
+          "maximum": 50
+        },
+        "cursor": "Opaque. Send the previous page's nextCursor back as cursor; null means there is no older page."
+      },
+      "kinds": [
+        "purchase",
+        "grant",
+        "refund",
+        "reversal",
+        "spend",
+        "adjustment"
+      ],
+      "coverage": "The caller and every guest identity linked to it. Linking a guest is not an entry: the guest's own entries say where its credits came from.",
+      "errors": {
+        "invalidCursor": {
+          "status": 400,
+          "response": {
+            "error": "This page of your credit history is no longer available. Reload it from the start.",
+            "code": "INVALID_CURSOR"
+          }
+        },
+        "invalidLimit": {
+          "status": 400,
+          "response": {
+            "error": "limit must be a whole number from 1 to 50.",
+            "code": "INVALID_LIMIT"
+          }
         }
       }
     }

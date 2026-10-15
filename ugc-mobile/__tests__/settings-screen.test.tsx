@@ -10,7 +10,9 @@ type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 
 const authState = vi.hoisted(() => ({
   api: { getContentPreferences: vi.fn() },
-  credits: 120,
+  credits: 120 as number | null,
+  deleteAccount: vi.fn(),
+  isGuest: false,
   user: { id: 'user-1', email: 'creator@example.com' } as { id: string; email: string } | null,
 }));
 
@@ -38,6 +40,7 @@ vi.mock('expo-router', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   Linking: { openURL: openUrl },
   Platform: {
     get OS() {
@@ -84,6 +87,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@/lib/pricing', () => ({
+  CREDIT_BALANCE_LOADING_LABEL: 'Balance loading…',
   formatCreditAmount: (amount: number) => String(amount),
 }));
 
@@ -99,6 +103,7 @@ vi.mock('@/lib/app-version-label', () => ({
 
 const copyToClipboard = vi.hoisted(() => vi.fn(async (_text: string, _announcement?: string) => undefined));
 const showMessageDialog = vi.hoisted(() => vi.fn());
+const showConfirmDialog = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/copy-to-clipboard', () => ({ copyToClipboard }));
 
@@ -114,7 +119,7 @@ vi.mock('@/lib/appearance', () => ({
   useAppearancePreference: () => appearance.preference,
   setAppearancePreference: appearance.set,
 }));
-vi.mock('@/lib/dialog', () => ({ showMessageDialog }));
+vi.mock('@/lib/dialog', () => ({ showConfirmDialog, showMessageDialog }));
 
 const aiDataConsent = vi.hoisted(() => ({ grantedAt: null as string | null }));
 
@@ -156,6 +161,11 @@ beforeEach(() => {
   routerPush.mockClear();
   openUrl.mockClear();
   authState.user = { id: 'user-1', email: 'creator@example.com' };
+  authState.isGuest = false;
+  authState.credits = 120;
+  authState.deleteAccount.mockReset();
+  showConfirmDialog.mockReset();
+  showMessageDialog.mockClear();
   platform.os = 'ios';
   contentPreferences.query = { data: { showMature: false }, isError: false };
   contentPreferences.options = null;
@@ -419,5 +429,236 @@ describe('settings screen — mature content', () => {
     authState.user = null;
     expect(() => rowByTitle(renderScreen(), 'Mature content')).toThrow('No settings row titled "Mature content"');
     expect(contentPreferences.options).toBeNull();
+  });
+});
+
+// D5 (C2): a guest deletes itself and what it made from Settings, behind one
+// confirmation. An account is deleted on the Delete Account screen.
+describe('settings screen — guest data (D5)', () => {
+  const ROW = 'Delete guest data';
+  const DELETED = {
+    title: 'Guest data deleted',
+    message: 'Your guest creations, uploads and credits are deleted and can’t be brought back. You’re now a new guest on this phone.',
+  };
+
+  function asGuest() {
+    authState.user = null;
+    authState.isGuest = true;
+  }
+
+  async function settle() {
+    await renderer.act(async () => {
+      for (let tick = 0; tick < 6; tick += 1) await Promise.resolve();
+    });
+  }
+
+  async function press(row: renderer.ReactTestInstance) {
+    await renderer.act(async () => {
+      (row.props.onPress as () => void)();
+    });
+    await settle();
+  }
+
+  it('offers a guest the row as a destructive action, beside the deletion policy link', () => {
+    asGuest();
+    const tree = renderScreen();
+    const row = rowByTitle(tree, ROW);
+
+    expect(row.props.accessibilityRole).toBe('button');
+    expect(row.props.accessibilityLabel).toBe('Delete guest data. Permanently delete your guest creations, uploads and credits.');
+    // It acts here, behind a confirmation: no chevron promising another screen.
+    expect(row.findAll((node) => String(node.type) === 'icon' && ['ChevronRight', 'ArrowUpRight'].includes(String(node.props.name))))
+      .toHaveLength(0);
+    const danger = tree.root.findAll((node) => String(node.type) === 'text' && node.props.variant === 'cardTitle' && node.props.color === 'danger');
+    expect(danger.map((node) => node.props.children)).toEqual([ROW]);
+    expect(() => rowByTitle(tree, 'Delete account')).toThrow('No settings row titled "Delete account"');
+    expect(rowByTitle(tree, 'Account deletion').props.accessibilityRole).toBe('link');
+  });
+
+  it('never offers it to an account, whose deletion stays on the Delete Account screen, or to a phone with no session', () => {
+    const account = renderScreen();
+    expect(() => rowByTitle(account, ROW)).toThrow(`No settings row titled "${ROW}"`);
+    renderer.act(() => { (rowByTitle(account, 'Delete account').props.onPress as () => void)(); });
+    expect(routerPush).toHaveBeenCalledWith('/delete-account');
+
+    // Keyed on the account first: whatever else is said, an account never sees it.
+    authState.isGuest = true;
+    expect(() => rowByTitle(renderScreen(), ROW)).toThrow(`No settings row titled "${ROW}"`);
+
+    authState.user = null;
+    authState.isGuest = false;
+    const noSession = renderScreen();
+    expect(() => rowByTitle(noSession, ROW)).toThrow(`No settings row titled "${ROW}"`);
+    expect(rowByTitle(noSession, 'Account deletion').props.accessibilityRole).toBe('link');
+  });
+
+  it('asks first, saying the creations and credits go for good and how to keep them, and stops at Cancel', async () => {
+    asGuest();
+    showConfirmDialog.mockResolvedValue(false);
+    await press(rowByTitle(renderScreen(), ROW));
+
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
+    expect(showConfirmDialog).toHaveBeenCalledWith({
+      title: 'Delete guest data?',
+      message: 'Your guest creations, uploads and 120 credits are deleted for good. To keep them, create an account first.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
+    expect(authState.deleteAccount).not.toHaveBeenCalled();
+    expect(showMessageDialog).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [0, 'any credits'],
+    [null, 'any credits'],
+    [1, '1 credit'],
+    [12500, '12500 credits'],
+  ])('names a balance of %s as "%s"', async (credits, words) => {
+    asGuest();
+    authState.credits = credits;
+    showConfirmDialog.mockResolvedValue(false);
+    await press(rowByTitle(renderScreen(), ROW));
+
+    expect(showConfirmDialog.mock.calls[0]?.[0]).toMatchObject({
+      message: `Your guest creations, uploads and ${words} are deleted for good. To keep them, create an account first.`,
+    });
+  });
+
+  it.each(['scheduled', 'deleted'])(
+    'deletes on confirmation, with no sign-in, and says so once the server has %s it',
+    async (outcome) => {
+      asGuest();
+      showConfirmDialog.mockResolvedValue(true);
+      authState.deleteAccount.mockResolvedValue(outcome);
+      await press(rowByTitle(renderScreen(), ROW));
+
+      expect(authState.deleteAccount).toHaveBeenCalledOnce();
+      expect(authState.deleteAccount).toHaveBeenCalledWith();
+      expect(showMessageDialog).toHaveBeenCalledOnce();
+      expect(showMessageDialog).toHaveBeenCalledWith(DELETED);
+    },
+  );
+
+  it('says when the deletion could not be confirmed, and the row is ready to try again', async () => {
+    asGuest();
+    showConfirmDialog.mockResolvedValue(true);
+    authState.deleteAccount.mockResolvedValue('unconfirmed');
+    const tree = renderScreen();
+    await press(rowByTitle(tree, ROW));
+
+    expect(showMessageDialog).toHaveBeenCalledOnce();
+    expect(showMessageDialog).toHaveBeenCalledWith({
+      title: 'Deletion not confirmed',
+      message: 'We could not confirm the deletion. Check the connection and try again.',
+    });
+    const row = rowByTitle(tree, ROW);
+    expect(row.props.disabled).toBeFalsy();
+    await press(row);
+    expect(showConfirmDialog).toHaveBeenCalledTimes(2);
+    expect(authState.deleteAccount).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [
+      'the server could not start it',
+      Object.assign(new Error('Account deletion could not be completed. Please try again.'), {
+        status: 500,
+        code: 'ACCOUNT_DELETION_NOT_STARTED',
+        details: { code: 'ACCOUNT_DELETION_NOT_STARTED', deletionScheduled: false },
+      }),
+      'The deletion did not go through. Nothing was deleted.',
+    ],
+    [
+      'a server from before guests could delete their data',
+      Object.assign(new Error('Create an account to use this feature.'), {
+        status: 403,
+        code: 'REGISTRATION_REQUIRED',
+        details: { code: 'REGISTRATION_REQUIRED' },
+      }),
+      'The deletion did not go through. Nothing was deleted.',
+    ],
+    [
+      "a platform failure with none of the server's words",
+      Object.assign(new Error('Request failed with status 502'), { status: 502, details: '<html>Bad gateway</html>' }),
+      'The deletion did not go through. Nothing was deleted.',
+    ],
+    [
+      'a refused session',
+      Object.assign(new Error('Unauthorized'), { status: 401, code: 'UNAUTHORIZED', details: { code: 'UNAUTHORIZED' } }),
+      'The deletion did not go through. Nothing was deleted.',
+    ],
+    [
+      'a rate limit',
+      Object.assign(new Error('Too many requests. Try again in 60 seconds.'), { status: 429, code: 'RATE_LIMITED', details: {} }),
+      'Too many requests. Try again in 60 seconds. Nothing was deleted.',
+    ],
+    [
+      'a request that never left the phone',
+      Object.assign(new Error('Network request failed. Please check your connection and try again.'), {
+        status: 0,
+        details: { sent: false },
+      }),
+      'Network request failed. Please check your connection and try again. Nothing was deleted.',
+    ],
+  ])('says nothing was deleted after %s, in words for people', async (_name, error, message) => {
+    asGuest();
+    showConfirmDialog.mockResolvedValue(true);
+    authState.deleteAccount.mockRejectedValue(error);
+    await press(rowByTitle(renderScreen(), ROW));
+
+    expect(showMessageDialog).toHaveBeenCalledOnce();
+    expect(showMessageDialog).toHaveBeenCalledWith({ title: 'Guest data was not deleted', message });
+  });
+
+  it("leaves a guest linked to an account meanwhile to the sign-in screen's notice", async () => {
+    asGuest();
+    showConfirmDialog.mockResolvedValue(true);
+    authState.deleteAccount.mockRejectedValue(Object.assign(
+      new Error('This guest session has been linked to an account. Sign in to continue.'),
+      { status: 409, code: 'SESSION_MERGED' },
+    ));
+    await press(rowByTitle(renderScreen(), ROW));
+
+    expect(authState.deleteAccount).toHaveBeenCalledOnce();
+    expect(showMessageDialog).not.toHaveBeenCalled();
+  });
+
+  it('takes one deletion at a time, and says one is under way', async () => {
+    asGuest();
+    let confirm: (answer: boolean) => void = () => undefined;
+    showConfirmDialog.mockImplementation(() => new Promise<boolean>((resolve) => {
+      confirm = resolve;
+    }));
+    let answer: (outcome: string) => void = () => undefined;
+    authState.deleteAccount.mockImplementation(() => new Promise((resolve) => {
+      answer = resolve;
+    }));
+    const tree = renderScreen();
+
+    // A second tap before the confirmation is drawn asks nothing more.
+    await press(rowByTitle(tree, ROW));
+    await press(rowByTitle(tree, ROW));
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
+
+    await renderer.act(async () => {
+      confirm(true);
+    });
+    await settle();
+    const busy = rowByTitle(tree, ROW);
+    expect(busy.props.accessibilityLabel).toBe('Delete guest data. Deleting guest data…');
+    expect(busy.props.accessibilityState).toEqual({ busy: true, disabled: true });
+    expect(busy.props.accessibilityLiveRegion).toBe('polite');
+    expect(busy.props.disabled).toBe(true);
+    expect(busy.findAll((node) => String(node.type) === 'activity-indicator')).toHaveLength(1);
+    await press(busy);
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
+    expect(authState.deleteAccount).toHaveBeenCalledOnce();
+
+    await renderer.act(async () => {
+      answer('scheduled');
+    });
+    await settle();
+    expect(showMessageDialog).toHaveBeenCalledWith(DELETED);
+    expect(rowByTitle(tree, ROW).props.disabled).toBeFalsy();
   });
 });

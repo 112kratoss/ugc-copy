@@ -1,7 +1,7 @@
 'use client';
 
 import type { Session, User } from '@supabase/supabase-js';
-import { ChevronDown, Gift, Loader2, LogOut, Sparkles } from 'lucide-react';
+import { ChevronDown, Gift, History, Loader2, LogOut, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
@@ -433,6 +433,17 @@ export default function AppShellAccount() {
               <span className="text-xs text-[var(--ui-text-faint)]">
                 {typeof credits === 'number' ? `${credits} credits` : 'View account'}
               </span>
+            </Link>
+            {/* Under the balance: where every credit in it came from and went. */}
+            <Link
+              href="/credits"
+              prefetch={false}
+              role="menuitem"
+              onClick={() => setAccountOpen(false)}
+              className="ui-focus-ring mt-1 flex min-h-11 items-center gap-2 rounded-2xl px-3 py-2 text-sm font-bold text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
+            >
+              <History className="h-4 w-4" aria-hidden />
+              Credit history
             </Link>
             <button
               type="button"

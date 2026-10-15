@@ -27,7 +27,12 @@ describe.skipIf(!configPath || !connectionString)('retention job durable failure
       global: { fetch: async (input, init) => {
         const path = new URL(String(input)).pathname;
         // Inject maintenance outcomes at the transport boundary; run rows and
-        // lease RPCs still reach real PostgREST. No unrelated audit data is pruned.
+        // lease RPCs still reach real PostgREST. No unrelated audit data is pruned,
+        // and no Auth user is deleted: the idle-guest list answers empty.
+        if (path === '/rest/v1/rpc/list_idle_guest_identities') {
+          calls.push('list_idle_guest_identities');
+          return new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
         if (path.startsWith('/rest/v1/rpc/prune_')) {
           const operation = path.split('/').at(-1)!;
           calls.push(operation);
@@ -59,8 +64,10 @@ describe.skipIf(!configPath || !connectionString)('retention job durable failure
           supplementaryPruneFailures: attempt === 0 ? ['prune_profile_share_events'] : [],
           profileShareEventsDeleted: attempt === 0 ? 0 : 1,
           totalDeleted: 3,
+          idleGuestCandidates: 0,
+          idleGuestsDeleted: 0,
         } });
-        expect(calls).toEqual(expect.arrayContaining(['prune_post_share_events', 'prune_profile_share_events', 'prune_abandoned_free_unlock_orders', 'prune_account_merge_tickets', 'prune_upload_byte_reservations']));
+        expect(calls).toEqual(expect.arrayContaining(['prune_post_share_events', 'prune_profile_share_events', 'prune_abandoned_free_unlock_orders', 'prune_account_merge_tickets', 'prune_upload_byte_reservations', 'list_idle_guest_identities']));
         expect((await db.query('select name from public.backend_job_locks where locked_by like $1', [`%${requestIds[attempt]}%`])).rows).toEqual([]);
       }
     } finally {

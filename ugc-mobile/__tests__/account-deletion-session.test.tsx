@@ -14,7 +14,10 @@ const state = vi.hoisted(() => ({
   clearComposerDrafts: vi.fn(),
   clearCreationDrafts: vi.fn(),
   clearGenerationAttempt: vi.fn(),
+  clearGuestMergeOutcome: vi.fn(),
   forgetGuestMergeTickets: vi.fn(),
+  readGuestMergeTickets: vi.fn(),
+  removeGuestMergeTicket: vi.fn(),
   clearHomeFeed: vi.fn(),
   clearLocalPush: vi.fn(),
   clearPersistedSession: vi.fn(),
@@ -83,11 +86,11 @@ vi.mock('../lib/feed-event-queue', () => ({
 }));
 vi.mock('../lib/guest-merge-ticket-storage', () => ({
   bindGuestMergeTicket: vi.fn(async () => undefined),
-  clearGuestMergeOutcome: vi.fn(async () => undefined),
+  clearGuestMergeOutcome: state.clearGuestMergeOutcome,
   forgetGuestMergeTicketsFor: state.forgetGuestMergeTickets,
   readGuestMergeOutcome: vi.fn(async () => null),
-  readGuestMergeTickets: vi.fn(async () => []),
-  removeGuestMergeTicket: vi.fn(async () => undefined),
+  readGuestMergeTickets: state.readGuestMergeTickets,
+  removeGuestMergeTicket: state.removeGuestMergeTicket,
   storeGuestMergeOutcome: vi.fn(async () => undefined),
   storeGuestMergeTicket: vi.fn(async () => undefined),
 }));
@@ -239,12 +242,15 @@ beforeEach(() => {
     state.clearHomeFeed,
     state.clearSearchHistory,
     state.forgetGuestMergeTickets,
+    state.clearGuestMergeOutcome,
+    state.removeGuestMergeTicket,
     state.clearCreationDrafts,
     state.clearComposerDrafts,
     state.clearGenerationAttempt,
   ]) {
     clear.mockReset().mockResolvedValue(undefined);
   }
+  state.readGuestMergeTickets.mockReset().mockResolvedValue([]);
   state.prepareGuestAccountMerge.mockReset().mockResolvedValue({ ticket: 'a'.repeat(64) });
   state.signInWithPassword.mockReset();
   state.deleteAccount.mockReset();
@@ -311,6 +317,11 @@ const neverSent = new ApiError('Network request failed. Please check your connec
   timedOut: true,
   sent: false,
 });
+// The proxy's answer to a guest's DELETE before guests could delete their data (C1).
+const registrationRequired = new ApiError('Create an account to use this feature.', 403, {
+  error: 'Create an account to use this feature.',
+  code: 'REGISTRATION_REQUIRED',
+}, undefined, 'REGISTRATION_REQUIRED');
 
 describe('what a deletion answer means for the account', () => {
   it.each([
@@ -377,8 +388,11 @@ describe('deleting the account from this phone', () => {
     expect(outcome).toBe('scheduled');
     expectSessionEndedOnce();
     // The guest tickets the account could still redeem go with it, so the next
-    // account on this phone cannot take those credits (audit 04-8).
+    // account on this phone cannot take those credits (audit 04-8), and so
+    // does what its links came to.
     expect(state.forgetGuestMergeTickets).toHaveBeenCalledWith('user-1');
+    expect(state.clearGuestMergeOutcome).toHaveBeenCalledOnce();
+    expect(state.removeGuestMergeTicket).not.toHaveBeenCalled();
     expect(state.feedTransition.commit).toHaveBeenCalledOnce();
     expect(state.feedTransition.cancel).not.toHaveBeenCalled();
     expect(latest.current?.user).toBeNull();
@@ -725,7 +739,8 @@ describe('an account being deleted while this phone is signed in to it (409 ACCO
     unmount();
   });
 
-  it('leaves a guest alone: only a registered account is ever deleted', async () => {
+  // A guest's deletion (D5) is asked for on this phone, and ends the session itself.
+  it('leaves a guest alone', async () => {
     const { latest, unmount } = await mountWith(guestSession);
 
     let ended: unknown;
@@ -820,6 +835,212 @@ describe("refusals of a deleted account's old token", () => {
     });
     await flush();
     expectSessionEndedOnce();
+    unmount();
+  });
+});
+
+// D5 (C2): a guest deletes itself and what it made, from Settings, with the
+// request an account sends and no sign-in first; the phone carries on as a
+// fresh guest on Home.
+describe("deleting a guest's data from this phone (D5)", () => {
+  function expectGuestDeletedOnce() {
+    expect(state.clearPersistedSession).toHaveBeenCalledOnce();
+    expect(state.clearHomeFeed).toHaveBeenCalledOnce();
+    expect(state.clearSearchHistory).toHaveBeenCalledOnce();
+    expect(state.queryClient.clear).toHaveBeenCalledOnce();
+    expect(state.signInAnonymously).toHaveBeenCalledOnce();
+    expect(state.dismissTo).toHaveBeenCalledOnce();
+    expect(state.dismissTo).toHaveBeenCalledWith('/');
+    expect(state.replace).not.toHaveBeenCalled();
+    // Nothing is asked of Supabase: the deletion revoked the guest's sessions.
+    expect(state.signOut).not.toHaveBeenCalled();
+    // A guest never registered this phone for push.
+    expect(state.clearLocalPush).not.toHaveBeenCalled();
+  }
+
+  it.each([
+    ['scheduled it (202)', { success: true, deleted: false, deletionScheduled: true }, 'scheduled'],
+    ['had finished it already (200)', { success: true, deleted: true, cleanupPending: false, alreadyDeleted: true }, 'deleted'],
+  ])('sends the request an account sends, with no sign-in, and ends as a deletion does once the server %s', async (_name, answer, expected) => {
+    state.deleteAccount.mockResolvedValue(answer);
+    const { latest, unmount } = await mountWith(guestSession);
+    expect(latest.current?.isGuest).toBe(true);
+    expect(latest.current?.accountReauthenticationMethods).toEqual([]);
+
+    let outcome: unknown;
+    await renderer.act(async () => {
+      outcome = await latest.current?.deleteAccount();
+    });
+    await flush();
+
+    expect(outcome).toBe(expected);
+    expect(state.deleteAccount).toHaveBeenCalledOnce();
+    expect(state.deleteAccount).toHaveBeenCalledWith('DELETE', {});
+    expect(state.signInWithPassword).not.toHaveBeenCalled();
+    expectGuestDeletedOnce();
+    // What it left in drafts on this phone goes with it.
+    for (const clear of [state.clearCreationDrafts, state.clearComposerDrafts, state.clearGenerationAttempt]) {
+      expect(clear.mock.calls).toEqual([['guest-1']]);
+    }
+    // A guest is no account: the tickets an account could redeem, and what an
+    // account's links came to, are not its to take.
+    expect(state.forgetGuestMergeTickets).not.toHaveBeenCalled();
+    expect(state.clearGuestMergeOutcome).not.toHaveBeenCalled();
+    expect(state.feedTransition.commit).toHaveBeenCalledOnce();
+    expect(latest.current?.user).toBeNull();
+    expect(latest.current?.isGuest).toBe(true);
+    expect(latest.current?.identityUserId).toBe('guest-2');
+    unmount();
+  });
+
+  it('forgets the tickets kept for that guest, and no other', async () => {
+    state.deleteAccount.mockResolvedValue({ success: true, deleted: false, deletionScheduled: true });
+    state.readGuestMergeTickets.mockResolvedValue([
+      { ticket: 'b'.repeat(64), guestUserId: 'guest-1', redeemedForUserId: null, expiresAt: null },
+      { ticket: 'c'.repeat(64), guestUserId: 'guest-0', redeemedForUserId: null, expiresAt: null },
+      { ticket: 'd'.repeat(64), guestUserId: null, redeemedForUserId: null, expiresAt: null },
+    ]);
+    const { latest, unmount } = await mountWith(guestSession);
+
+    await renderer.act(async () => {
+      await latest.current?.deleteAccount();
+    });
+    await flush();
+
+    expect(state.removeGuestMergeTicket.mock.calls).toEqual([['b'.repeat(64)]]);
+    unmount();
+  });
+
+  it('never signs in for a guest, even when a sign-in is passed', async () => {
+    state.deleteAccount.mockResolvedValue({ success: true, deleted: false, deletionScheduled: true });
+    const { latest, unmount } = await mountWith(guestSession);
+
+    await renderer.act(async () => {
+      await latest.current?.deleteAccount({ method: 'password', password: 'correct-Horse-1' });
+    });
+    await flush();
+
+    expect(state.signInWithPassword).not.toHaveBeenCalled();
+    expect(state.deleteAccount).toHaveBeenCalledWith('DELETE', {});
+    expectGuestDeletedOnce();
+    unmount();
+  });
+
+  it.each([
+    ['a server from before guests could delete their data (403)', registrationRequired],
+    ['a 500 that says nothing was started', notStarted],
+    ['a rate limit', rateLimited],
+    ['a request given up before it left the phone', neverSent],
+  ])('keeps the guest and its session after %s', async (_name, error) => {
+    state.deleteAccount.mockRejectedValue(error);
+    const { latest, unmount } = await mountWith(guestSession);
+
+    let failure: unknown;
+    await renderer.act(async () => {
+      await latest.current?.deleteAccount().catch((thrown: unknown) => {
+        failure = thrown;
+      });
+    });
+    await flush();
+
+    expect(failure).toBe(error);
+    expectSessionKept();
+    expect(state.probe).not.toHaveBeenCalled();
+    expect(state.removeGuestMergeTicket).not.toHaveBeenCalled();
+    expect(state.feedTransition.cancel).toHaveBeenCalledOnce();
+    expect(latest.current?.identityUserId).toBe('guest-1');
+    unmount();
+  });
+
+  it("asks Supabase about the guest's own token when the answer is lost, and ends it once that session is gone", async () => {
+    state.deleteAccount.mockRejectedValue(offline);
+    state.probe.mockResolvedValue('ended');
+    const { latest, unmount } = await mountWith(guestSession);
+
+    let outcome: unknown;
+    await renderer.act(async () => {
+      outcome = await latest.current?.deleteAccount();
+    });
+    await flush();
+
+    expect(state.probe).toHaveBeenCalledWith(expect.objectContaining({ accessToken: 'guest-token' }));
+    expect(outcome).toBe('scheduled');
+    expectGuestDeletedOnce();
+    unmount();
+  });
+
+  it('keeps the guest when Supabase cannot say either way', async () => {
+    state.deleteAccount.mockRejectedValue(platformFailure);
+    state.probe.mockResolvedValue('unknown');
+    const { latest, unmount } = await mountWith(guestSession);
+
+    let outcome: unknown;
+    await renderer.act(async () => {
+      outcome = await latest.current?.deleteAccount();
+    });
+    await flush();
+
+    expect(outcome).toBe('unconfirmed');
+    expectSessionKept();
+    expect(latest.current?.identityUserId).toBe('guest-1');
+    unmount();
+  });
+
+  // The fresh guest is the only identity on the phone by then.
+  it('leaves the fresh guest alone when a refusal of the deleted guest comes back late (409 ACCOUNT_DELETING)', async () => {
+    state.deleteAccount.mockResolvedValue({ success: true, deleted: false, deletionScheduled: true });
+    const { latest, unmount } = await mountWith(guestSession);
+    await renderer.act(async () => {
+      await latest.current?.deleteAccount();
+    });
+    await flush();
+    expect(latest.current?.identityUserId).toBe('guest-2');
+
+    let ended: unknown;
+    await renderer.act(async () => {
+      ended = await latest.current?.leaveDeletingAccount();
+    });
+    await flush();
+
+    expect(ended).toBe(false);
+    expectGuestDeletedOnce();
+    expect(latest.current?.identityUserId).toBe('guest-2');
+    unmount();
+  });
+
+  // The confirmation was drawn for the guest; the request carries whatever
+  // session the device holds when it leaves, and an account's must never go.
+  it('asks nothing when the phone has moved to an account since the guest confirmed', async () => {
+    const { latest, unmount } = await mountWith(guestSession);
+    const confirmedAsGuest = latest.current?.deleteAccount;
+    await renderer.act(async () => {
+      state.authCallback?.('SIGNED_IN', registeredSession);
+    });
+    await flush();
+    expect(latest.current?.user?.id).toBe('user-1');
+
+    let failure: unknown;
+    await renderer.act(async () => {
+      await confirmedAsGuest?.().catch((thrown: unknown) => {
+        failure = thrown;
+      });
+    });
+
+    expect((failure as Error).message).toBe('This phone has moved to another session.');
+    expect(state.deleteAccount).not.toHaveBeenCalled();
+    expect(state.clearPersistedSession).not.toHaveBeenCalled();
+    expect(latest.current?.user?.id).toBe('user-1');
+    unmount();
+  });
+
+  it('asks nothing of a phone with no session at all', async () => {
+    const { latest, unmount } = await mountWith(null);
+
+    await renderer.act(async () => {
+      await expect(latest.current?.deleteAccount()).rejects.toThrow('Sign in before deleting your account.');
+    });
+
+    expect(state.deleteAccount).not.toHaveBeenCalled();
     unmount();
   });
 });

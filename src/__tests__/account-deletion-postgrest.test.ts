@@ -298,6 +298,35 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
     const manifest = (await db.query('select storage_manifest from public.account_deletion_jobs where user_id=$1', [owners[0]])).rows[0].storage_manifest;
     expect(manifest.owner_user_ids.sort()).toEqual([owners[0], guest].sort());
   });
+  it('deletes a guest through the route with its own token and no fresh sign-in (D5)', async () => {
+    const client = createClient(config.API_URL, config.ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+    const signedIn = await client.auth.signInAnonymously();
+    expect(signedIn.error).toBeNull();
+    const guest = signedIn.data.user!.id; owners.push(guest);
+    expect(signedIn.data.user!.is_anonymous).toBe(true);
+    expect((await admin.storage.from('uploads').upload(guest + '/audit-fixture.png', new Blob([Uint8Array.from(png)], { type: 'image/png' }), { contentType: 'image/png' })).error).toBeNull();
+    const response = await deleteAccountRouteResponse({
+      request: new Request('http://audit.local/api/account', { method: 'DELETE', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + signedIn.data.session!.access_token }, body: JSON.stringify({ confirmation: 'DELETE' }) }),
+      dependencies: {
+        createServiceClient: () => admin,
+        createUserClient: () => client,
+        invalidateShowcaseFeedCache: () => {}, logError: () => {},
+        runAfterResponse: task => { deferred.push(task); },
+        // An hour on: an account signed in this long ago is sent to sign in again.
+        now: () => new Date(Date.now() + 60 * 60 * 1000),
+      },
+    });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ success: true, deleted: false, deletionScheduled: true });
+    expect((await db.query('select identity_state from public.profiles where id=$1', [guest])).rows[0].identity_state).toBe('deleting');
+    await settle();
+    expect(deletedAuth).toEqual([guest]);
+    expect(await authExists(guest)).toBe(false); expect(await objects(guest)).toEqual([]);
+    expect(await authExists(owners[0])).toBe(true); expect(await objects(owners[0])).toHaveLength(2);
+    // The guest's own job, sweeping its own files only (the delayed resweep reads it).
+    const manifest = (await db.query('select storage_manifest from public.account_deletion_jobs where user_id=$1', [guest])).rows[0].storage_manifest;
+    expect(manifest.owner_user_ids).toEqual([guest]);
+  });
   it('recovers target Auth failure after linked guest deletion has committed', async () => {
     const guest = await linkGuest(); fail = 'target-auth';
     await expect(initial()).rejects.toMatchObject({ status: 503 });

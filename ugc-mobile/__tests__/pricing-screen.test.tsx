@@ -47,7 +47,9 @@ vi.mock('react-native', () => ({
 
 vi.mock('lucide-react-native', () => ({
   CheckCircle2: (props: MockProps) => React.createElement('check-icon', props),
+  ChevronRight: (props: MockProps) => React.createElement('chevron-right-icon', props),
   Circle: (props: MockProps) => React.createElement('circle-icon', props),
+  History: (props: MockProps) => React.createElement('history-icon', props),
 }));
 
 vi.mock('@/components/ui', () => {
@@ -413,6 +415,39 @@ describe('refresh and restore (03-10)', () => {
 
     await press(secondaryButton(screen.tree, 'Refresh credit balance'));
     expect(harness.auth.api.restoreMobilePurchases).not.toHaveBeenCalled();
+  });
+});
+
+// D6 (finding 03-11): what added the credits and what spent them, one tap from
+// the balance, for a guest as for an account.
+describe('the credit history beside the balance', () => {
+  function historyLink(tree: renderer.ReactTestRenderer) {
+    return tree.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Credit history');
+  }
+
+  it('opens the credit history from the balance card, saying it came from here', async () => {
+    const { tree } = await renderScreen();
+    const balanceCard = tree.root.find((node) => String(node.type) === 'card');
+    const link = historyLink(tree);
+
+    // Inside the balance's own card, as a button with a target to match.
+    expect(balanceCard.findAll((node) => node === link)).toHaveLength(1);
+    expect(link.props.accessibilityRole).toBe('button');
+    expect(link.props.accessibilityHint).toBe('Lists what added credits to your balance and what spent them');
+    expect(link.findAll((node) => String(node.type) === 'chevron-right-icon')).toHaveLength(1);
+
+    await press(link);
+    expect(routerState.push).toHaveBeenCalledWith({ pathname: '/credit-history', params: { source: 'pricing' } });
+    renderer.act(() => tree.unmount());
+  });
+
+  it('offers it to a registered account too', async () => {
+    Object.assign(harness.auth, { isGuest: false, identityUserId: 'user-1' });
+    const { tree } = await renderScreen();
+
+    await press(historyLink(tree));
+    expect(routerState.push).toHaveBeenCalledWith({ pathname: '/credit-history', params: { source: 'pricing' } });
+    renderer.act(() => tree.unmount());
   });
 });
 

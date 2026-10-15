@@ -130,6 +130,27 @@ describe('AppShellAccount', () => {
     expect(screen.getByText('Earn credits')).toBeInTheDocument();
   });
 
+  it('links the account menu to the credit history, under the balance, and closes on the way', async () => {
+    render(<AppShellAccount />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open account menu for Test Creator' }));
+
+    const items = screen.getAllByRole('menuitem');
+    const creditHistory = screen.getByRole('menuitem', { name: 'Credit history' });
+    expect(creditHistory).toHaveAttribute('href', '/credits');
+    expect(items.indexOf(creditHistory)).toBe(items.indexOf(screen.getByRole('menuitem', { name: /^Profile/ })) + 1);
+
+    // jsdom cannot load another document; the menu's own click handler still runs.
+    const stayOnPage = (event: MouseEvent) => event.preventDefault();
+    document.addEventListener('click', stayOnPage);
+    try {
+      fireEvent.click(creditHistory);
+    } finally {
+      document.removeEventListener('click', stayOnPage);
+    }
+    expect(screen.queryByRole('menu', { name: 'Account' })).not.toBeInTheDocument();
+  });
+
   it('does not publish a stale or forged browser session as authenticated', async () => {
     mocks.getUser.mockResolvedValue({
       data: { user: null },

@@ -4,6 +4,7 @@ import type {
   CreatePostResponse,
   CreatorFollowAttribution,
   CreatorProfileResponse,
+  CreditHistoryResponse,
   GenerationListItem,
   GenerationListResponse,
   GenerationStartResponse,
@@ -1102,6 +1103,17 @@ export function createApiClient({
       method: 'POST',
       body: JSON.stringify({ sourceSurface: 'mobile' }),
     }),
+    /**
+     * What added credits to this identity and what took them, newest first: a
+     * guest's own, or an account's with every guest linked to it (contract C4).
+     * `cursor` is the previous page's `nextCursor`; the server takes a `limit`
+     * of 1 to 50 (30 when left out) and answers a cursor it did not write 400.
+     */
+    getCreditHistory: (params: { cursor?: string | null; limit?: number } = {}) =>
+      request<CreditHistoryResponse>(`/api/credits/history${buildQuery({
+        cursor: params.cursor,
+        limit: params.limit,
+      })}`),
     recordOnboardingEvent: async (body: OnboardingEventRequest) => {
       const installationId = await getInstallationId?.().catch(() => null);
       if (!installationId) return { success: false as const };
@@ -1556,8 +1568,11 @@ export function createApiClient({
       /**
        * Send the session, so the owner reads their own draft or disabled
        * template with its status. A registered account only: the server
-       * answers a guest's token on `/api/templates*` with 403. The answer can
-       * be the owner's, so it is never kept in the shared five-minute copy.
+       * answers a guest's token on this read, and on the other authoring
+       * routes under `/api/templates`, with 403. (Since D4 a guest's token is
+       * taken on `POST /api/templates/:id/runs`, which starts a run of a
+       * published template: `createMediaTemplateRun`.) The answer can be the
+       * owner's, so it is never kept in the shared five-minute copy.
        */
       withSession?: boolean;
     } = {}) => {

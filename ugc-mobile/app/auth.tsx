@@ -10,12 +10,15 @@ import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { BrandLockup, PrimaryButton } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import {
+  SIGN_IN_SUPPORT,
+  SIGN_IN_SUPPORT_MAIL_URL,
   authNoticeForRedirect,
   describePasswordSignInError,
   describeProviderSignInError,
   signInProviderButtons,
   validateCredentials,
   type AuthNotice,
+  type SignInProvider,
 } from '@/lib/auth-error-copy';
 import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import { isGoogleAuthCanceled } from '@/lib/google-auth';
@@ -26,15 +29,18 @@ import { trackOnboardingEvent } from '@/lib/onboarding';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
-import googleSignInAndroid from '../assets/images/google-signin-android.png';
+// Google's own "Sign in with Google" artwork (the dark pill). Its branding uses
+// the same button on iOS and Android, so one asset serves both phones.
+import googleSignInArtwork from '../assets/images/google-signin-android.png';
 
 /**
  * Sign in with Apple: "Make a Sign in with Apple button no smaller than other
  * sign-in buttons", and HIG Buttons: "Use style — not size — to visually
  * distinguish the preferred choice among multiple options … placing two buttons
  * of different sizes near each other can make the interface look confusing".
- * The third-party button therefore matches the screen's own primary button,
- * which is `PrimaryButton size="roomy"`.
+ * The third-party buttons therefore take the height of the screen's own primary
+ * button, which is `PrimaryButton size="roomy"`, and the Apple button its full
+ * width too, so on iOS it stays the largest way in beside Google's artwork.
  */
 const THIRD_PARTY_BUTTON_HEIGHT = appTheme.touch.roomy;
 /** The shared primary button is a pill, so the Apple button is given the same radius. */
@@ -78,6 +84,11 @@ export default function AuthScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isAppleSubmitting, setIsAppleSubmitting] = useState(false);
   const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false);
+  // One sign-in at a time. Each way in prepares the guest's credits for the
+  // account before it replaces the session, and on iOS two providers now sit
+  // side by side: a second tap while the first is still preparing would start
+  // a second sign-in over it. The others wait until this one has finished.
+  const isSignInInFlight = isSubmitting || isAppleSubmitting || isGoogleSubmitting;
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const isCompact = width < 390 || height < 820;
@@ -87,6 +98,8 @@ export default function AuthScreen() {
   // shape of what was typed is checked on submit instead, where it can be named.
   const canSubmit = mode === 'login'
     && isAuthConfigured
+    && !isAppleSubmitting
+    && !isGoogleSubmitting
     && email.trim().length > 0
     && password.length > 0;
   const hasCompletedAuth = useRef(false);
@@ -133,7 +146,7 @@ export default function AuthScreen() {
   }), [navigation, trackAuthEvent]);
 
   const submit = async () => {
-    if (mode !== 'login') return;
+    if (mode !== 'login' || isSignInInFlight) return;
     noteAuthStarted();
 
     const invalid = validateCredentials(email, password);
@@ -155,6 +168,7 @@ export default function AuthScreen() {
   };
 
   const signInWithNativeApple = async () => {
+    if (isSignInInFlight) return;
     noteAuthStarted();
     setIsAppleSubmitting(true);
     setNotice(null);
@@ -171,6 +185,7 @@ export default function AuthScreen() {
   };
 
   const signInWithNativeGoogle = async () => {
+    if (isSignInInFlight) return;
     noteAuthStarted();
     setIsGoogleSubmitting(true);
     setNotice(null);
@@ -229,13 +244,12 @@ export default function AuthScreen() {
             onGoogleSignIn={signInWithNativeGoogle}
             canSubmit={canSubmit}
             isSubmitting={isSubmitting}
-            isAppleSubmitting={isAppleSubmitting}
             isGoogleSubmitting={isGoogleSubmitting}
+            isSignInInFlight={isSignInInFlight}
             isAuthConfigured={isAuthConfigured}
             missingEnvKeys={missingEnvKeys}
             notice={notice}
-            showAppleSignIn={providerButtons.includes('Apple')}
-            showGoogleSignIn={providerButtons.includes('Google')}
+            providerButtons={providerButtons}
           />
         </View>
       </ScrollView>
@@ -275,14 +289,15 @@ function AuthHeader() {
 /**
  * Managing accounts: "Explain the benefits of creating an account and how to
  * sign up … Display this message in your sign-in view." One sentence carries
- * both, and names the method that is actually on screen — Managing accounts
- * again: "Refer only to authentication methods that are available in the
- * current context."
+ * both, and names the methods that are actually on screen, in the order they
+ * are drawn — Managing accounts again: "Refer only to authentication methods
+ * that are available in the current context."
  */
-function signUpSubtitle(showAppleSignIn: boolean, showGoogleSignIn: boolean) {
-  if (showAppleSignIn) return 'Start saving generations, unlocks, and profile work. New accounts are created with Apple.';
-  if (showGoogleSignIn) return 'Start saving generations, unlocks, and profile work. New accounts are created with Google.';
-  return 'Start saving generations, unlocks, and profile work. New accounts are created with Apple or Google on a mobile device.';
+function signUpSubtitle(providerButtons: readonly SignInProvider[]) {
+  const ways = providerButtons.length > 0
+    ? providerButtons.join(' or ')
+    : 'Apple or Google on a mobile device';
+  return `Start saving generations, unlocks, and profile work. New accounts are created with ${ways}.`;
 }
 
 function AuthPanel({
@@ -299,13 +314,12 @@ function AuthPanel({
   onGoogleSignIn,
   canSubmit,
   isSubmitting,
-  isAppleSubmitting,
   isGoogleSubmitting,
+  isSignInInFlight,
   isAuthConfigured,
   missingEnvKeys,
   notice,
-  showAppleSignIn,
-  showGoogleSignIn,
+  providerButtons,
 }: {
   mode: 'login' | 'signup';
   onModeChange: (mode: 'login' | 'signup') => void;
@@ -320,16 +334,20 @@ function AuthPanel({
   onGoogleSignIn: () => void;
   canSubmit: boolean;
   isSubmitting: boolean;
-  isAppleSubmitting: boolean;
   isGoogleSubmitting: boolean;
+  /** Any of the screen's ways in is under way, so the others wait. */
+  isSignInInFlight: boolean;
   isAuthConfigured: boolean;
   missingEnvKeys: string[];
   notice: AuthNotice | null;
-  showAppleSignIn: boolean;
-  showGoogleSignIn: boolean;
+  /** The providers this platform draws, in order: Apple first where it is drawn. */
+  providerButtons: readonly SignInProvider[];
 }) {
   const theme = useAppTheme();
   const passwordRef = useRef<TextInput | null>(null);
+  const showAppleSignIn = providerButtons.includes('Apple');
+  const showGoogleSignIn = providerButtons.includes('Google');
+  const providersUnavailable = !isAuthConfigured || isSignInInFlight;
 
   return (
     <View
@@ -350,7 +368,7 @@ function AuthPanel({
         <Text selectable style={{ color: theme.colors.muted, fontSize: 14, lineHeight: 21, fontWeight: '400' }}>
           {mode === 'login'
             ? 'Open your workspace and continue creating.'
-            : signUpSubtitle(showAppleSignIn, showGoogleSignIn)}
+            : signUpSubtitle(providerButtons)}
         </Text>
       </View>
 
@@ -428,19 +446,7 @@ function AuthPanel({
         </View>
       ) : null}
 
-      {mode === 'login' ? (
-        // Password accounts are created on the web, where the reset flow lives;
-        // the wrong-password notice alone pointed only at Apple or Google.
-        <Pressable
-          accessibilityRole="link"
-          accessibilityLabel="Forgot password?"
-          accessibilityHint="Opens the password reset on the Magicbooklet website"
-          onPress={() => void Linking.openURL(`${env.siteUrl}/login?recovery=1`)}
-          style={{ alignSelf: 'flex-end', minHeight: 44, justifyContent: 'center', paddingHorizontal: 4 }}
-        >
-          <Text style={{ color: theme.colors.primary, fontSize: 14, lineHeight: 20, fontWeight: '600' }}>Forgot password?</Text>
-        </Pressable>
-      ) : null}
+      {mode === 'login' ? <SignInSupportLink /> : null}
 
       {/* Inside the panel and above the action, so it survives the keyboard: the
           password field's Return key is "go", which submits with the keyboard
@@ -458,71 +464,75 @@ function AuthPanel({
         />
       ) : null}
 
-      {showAppleSignIn ? (
+      {showAppleSignIn || showGoogleSignIn ? (
         <>
           {/* The divider offers an alternative, so it only appears where there is
-              something to be an alternative to. In sign-up there is one way in. */}
+              something to be an alternative to: once, above every provider. In
+              sign-up the providers are the only ways in. */}
           {mode === 'login' ? <OrContinueWith /> : null}
-          <View
-            pointerEvents={!isAuthConfigured || isAppleSubmitting ? 'none' : 'auto'}
-            style={{ opacity: !isAuthConfigured || isAppleSubmitting ? appTheme.opacity.disabled : 1 }}
-          >
-            <AppleAuthentication.AppleAuthenticationButton
-              accessibilityLabel={mode === 'signup' ? 'Sign up with Apple' : 'Sign in with Apple'}
-              buttonType={mode === 'signup'
-                ? AppleAuthentication.AppleAuthenticationButtonType.SIGN_UP
-                : AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
-              // Apple's rule for the system button: white on a dark background,
-              // black on a light one.
-              buttonStyle={theme.scheme === 'dark'
-                ? AppleAuthentication.AppleAuthenticationButtonStyle.WHITE
-                : AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
-              cornerRadius={THIRD_PARTY_BUTTON_RADIUS}
-              onPress={onAppleSignIn}
-              style={{ width: '100%', height: THIRD_PARTY_BUTTON_HEIGHT }}
-            />
-          </View>
-        </>
-      ) : null}
+          {/* Apple first, then Google (App Review 4.8 and Sign in with Apple:
+              no smaller than any other way in). */}
+          <View style={{ gap: appTheme.spacing.gap }}>
+            {showAppleSignIn ? (
+              <View
+                pointerEvents={providersUnavailable ? 'none' : 'auto'}
+                style={{ opacity: providersUnavailable ? appTheme.opacity.disabled : 1 }}
+              >
+                <AppleAuthentication.AppleAuthenticationButton
+                  accessibilityLabel={mode === 'signup' ? 'Sign up with Apple' : 'Sign in with Apple'}
+                  buttonType={mode === 'signup'
+                    ? AppleAuthentication.AppleAuthenticationButtonType.SIGN_UP
+                    : AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                  // Apple's rule for the system button: white on a dark background,
+                  // black on a light one.
+                  buttonStyle={theme.scheme === 'dark'
+                    ? AppleAuthentication.AppleAuthenticationButtonStyle.WHITE
+                    : AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                  cornerRadius={THIRD_PARTY_BUTTON_RADIUS}
+                  onPress={onAppleSignIn}
+                  style={{ width: '100%', height: THIRD_PARTY_BUTTON_HEIGHT }}
+                />
+              </View>
+            ) : null}
 
-      {showGoogleSignIn ? (
-        <>
-          {mode === 'login' ? <OrContinueWith /> : null}
-          <Pressable
-            accessibilityRole="button"
-            // Google ships one asset, and it reads "Sign in with Google" in both
-            // modes — Google's branding covers sign-up with the same button.
-            // The spoken name therefore matches the drawn one (a name that
-            // said "Sign up…" over artwork saying "Sign in…" is a control
-            // Voice Control cannot be asked for); the mode goes in the hint.
-            accessibilityLabel="Sign in with Google"
-            accessibilityHint={mode === 'signup'
-              ? 'Creates your account with Google and returns to Magicbooklet'
-              : 'Opens Google authentication and returns to Magicbooklet'}
-            accessibilityState={{ busy: isGoogleSubmitting, disabled: !isAuthConfigured || isGoogleSubmitting }}
-            disabled={!isAuthConfigured || isGoogleSubmitting}
-            onPress={onGoogleSignIn}
-            style={({ pressed }) => ({
-              minHeight: THIRD_PARTY_BUTTON_HEIGHT,
-              alignItems: 'center',
-              justifyContent: 'center',
-              opacity: !isAuthConfigured || isGoogleSubmitting ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-            })}
-          >
-            {isGoogleSubmitting ? (
-              <ActivityIndicator color={theme.colors.text} />
-            ) : (
-              <Image
-                accessibilityIgnoresInvertColors
-                contentFit="contain"
-                source={googleSignInAndroid}
-                style={{
-                  width: THIRD_PARTY_BUTTON_HEIGHT * GOOGLE_BUTTON_ASPECT,
-                  height: THIRD_PARTY_BUTTON_HEIGHT,
-                }}
-              />
-            )}
-          </Pressable>
+            {showGoogleSignIn ? (
+              <Pressable
+                accessibilityRole="button"
+                // Google ships one asset, and it reads "Sign in with Google" in both
+                // modes — Google's branding covers sign-up with the same button.
+                // The spoken name therefore matches the drawn one (a name that
+                // said "Sign up…" over artwork saying "Sign in…" is a control
+                // Voice Control cannot be asked for); the mode goes in the hint.
+                accessibilityLabel="Sign in with Google"
+                accessibilityHint={mode === 'signup'
+                  ? 'Creates your account with Google and returns to Magicbooklet'
+                  : 'Opens Google authentication and returns to Magicbooklet'}
+                accessibilityState={{ busy: isGoogleSubmitting, disabled: providersUnavailable }}
+                disabled={providersUnavailable}
+                onPress={onGoogleSignIn}
+                style={({ pressed }) => ({
+                  minHeight: THIRD_PARTY_BUTTON_HEIGHT,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  opacity: providersUnavailable ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+                })}
+              >
+                {isGoogleSubmitting ? (
+                  <ActivityIndicator color={theme.colors.text} />
+                ) : (
+                  <Image
+                    accessibilityIgnoresInvertColors
+                    contentFit="contain"
+                    source={googleSignInArtwork}
+                    style={{
+                      width: THIRD_PARTY_BUTTON_HEIGHT * GOOGLE_BUTTON_ASPECT,
+                      height: THIRD_PARTY_BUTTON_HEIGHT,
+                    }}
+                  />
+                )}
+              </Pressable>
+            ) : null}
+          </View>
         </>
       ) : null}
 
@@ -563,6 +573,47 @@ function OrContinueWith() {
       <Text style={{ color: theme.colors.faint, fontSize: 12, fontWeight: '600' }}>or continue with</Text>
       <View style={{ flex: 1, height: 1, backgroundColor: theme.colors.border }} />
     </View>
+  );
+}
+
+/**
+ * Where "Forgot password?" stood (decision D2). There is no reset to offer:
+ * Magicbooklet has no mail sender, so the link led to a form whose mail never
+ * came (audit 01-2). The few accounts made with a password before July are
+ * helped by support instead, and so is anyone else who cannot get in. The
+ * address is written out, so it is there to copy where no mail app opens; the
+ * two halves wrap as a pair, never breaking the address across lines.
+ */
+function SignInSupportLink() {
+  const theme = useAppTheme();
+  return (
+    <Pressable
+      accessibilityRole="link"
+      accessibilityLabel={`${SIGN_IN_SUPPORT.prompt} ${SIGN_IN_SUPPORT.action}`}
+      accessibilityHint="Opens your email app"
+      onPress={() => {
+        // A phone with no mail app refuses the link; the address stays on screen.
+        Linking.openURL(SIGN_IN_SUPPORT_MAIL_URL).catch(() => undefined);
+      }}
+      style={({ pressed }) => ({
+        alignSelf: 'flex-end',
+        minHeight: MIN_HIT_TARGET_PT,
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        columnGap: appTheme.spacing.unit,
+        paddingHorizontal: appTheme.spacing.unit,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+      })}
+    >
+      <Text style={{ color: theme.colors.muted, fontSize: 14, lineHeight: 20, fontWeight: '400' }}>
+        {SIGN_IN_SUPPORT.prompt}
+      </Text>
+      <Text style={{ color: theme.colors.primary, fontSize: 14, lineHeight: 20, fontWeight: '600' }}>
+        {SIGN_IN_SUPPORT.action}
+      </Text>
+    </Pressable>
   );
 }
 

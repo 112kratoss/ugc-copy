@@ -337,6 +337,10 @@ If email/password sign-up is ever wanted:
 4. Re-run the Supabase Auth advisors and confirm no warnings remain.
 5. Give the legacy accounts above a reset path before announcing the change.
 
+## Guest Data: Self-Deletion And Idle-Guest Retention
+
+Decided 2026-10-15 (D5). A guest deletes its own data through `DELETE /api/account` with its own token and no reauthentication (a guest has no provider identity to sign in again with); `prepare_guest_account_deletion` refuses a guest linked to an account with 409 `SESSION_MERGED`, and every other guest goes down the account-deletion pipeline unchanged. Separately, the daily `operational-data-retention` run ends by deleting at most `IDLE_GUEST_RETENTION_BATCH_LIMIT` (100) idle guests, in at most 60 s and never past 270 s into the run: `list_idle_guest_identities` names anonymous users that are unlinked, hold no credits, have no purchase, creation, upload, link or deletion on record, and show no use for 90 days (creation or sign-in, a session created, updated or refreshed, a refresh token, a feed session, event or delivery, a Hide or Not interested, an onboarding event, a share), longest unused first; the job asks about each one again on its own and then deletes it with the Auth admin API, which cascades its feed preferences and telemetry. The run summary reports `idleGuestCandidates`, `idleGuestsDeleted`, `idleGuestsSkipped` (in use again at the re-check, or already gone), `idleGuestDeletionFailures`, `idleGuestBatchLimitReached` and `idleGuestTimeBudgetReached`; a failure names `list_idle_guest_identities` or `delete_idle_guest_identity` in `supplementaryPruneFailures` and logs `operational_retention_idle_guest_failed`, and three failed deletes in a row end the step for that run. The SQL function only reads, so pausing the step is a code change to `pruneOperationalBackendData`, never a grant change in production.
+
 ## Staged Upload Reclaim
 
 `uploads` is the shared staging bucket: the post composer and the generation

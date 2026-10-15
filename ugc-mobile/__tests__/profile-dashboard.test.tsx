@@ -930,7 +930,9 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(routerState.push).toHaveBeenCalledWith('/post/private-text?source=profile-posts');
   });
 
-  it('opens the Credits purchase screen from the Credits card', () => {
+  // D6 (finding 03-11): the balance opens what moved it, as the Wallet opens
+  // Your Sales; the history offers the credit packs from its own balance.
+  it('opens the credit history from the Credits card, saying the balance and where it goes', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<ProfileDashboard />);
@@ -938,13 +940,30 @@ describe('ProfileDashboard media tiles routing', () => {
 
     const creditsCard = findPressableByText(tree!.root, 'Credits');
     expect(creditsCard.props.accessibilityRole).toBe('button');
+    expect(creditsCard.props.accessibilityLabel).toBe('Credits, 100');
+    expect(creditsCard.props.accessibilityHint).toBe('Opens your credit history');
     expect(creditsCard.findAll((node) => String(node.type) === 'chevron-right-icon')).toHaveLength(1);
 
     renderer.act(() => {
       creditsCard.props.onPress();
     });
 
-    expect(routerState.push).toHaveBeenCalledWith('/pricing');
+    expect(routerState.push).toHaveBeenCalledWith('/credit-history');
+    expect(routerState.push).not.toHaveBeenCalledWith('/pricing');
+  });
+
+  it('tells a screen reader the balance is loading rather than reading the dash', () => {
+    const knownCredits = authState.credits;
+    (authState as { credits: number | null }).credits = null;
+    try {
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<ProfileDashboard />);
+      });
+      expect(findPressableByText(tree!.root, 'Credits').props.accessibilityLabel).toBe('Credits, balance loading');
+    } finally {
+      authState.credits = knownCredits;
+    }
   });
 
   it('draws a dash, never 0, while the balance is unknown', () => {

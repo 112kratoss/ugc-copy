@@ -58,6 +58,8 @@ type BundleRow = {
 };
 
 let currentUserId: string | null = 'user-1';
+// Whether the caller's session is an app guest's (an anonymous Supabase user).
+let currentUserIsAnonymous = false;
 let generationRows = new Map<string, GenerationRow>();
 let postRows = new Map<string, PostRow>();
 // Keyed by post id, the column the remix gate reads a recipe by.
@@ -398,7 +400,9 @@ vi.mock('@/lib/server-helpers', () => ({
     auth: {
       getUser: vi.fn(async () => ({
         data: {
-          user: currentUserId ? { id: currentUserId } : null,
+          user: currentUserId
+            ? { id: currentUserId, ...(currentUserIsAnonymous ? { is_anonymous: true } : {}) }
+            : null,
         },
         error: currentUserId ? null : { message: 'Unauthorized' },
       })),
@@ -419,6 +423,7 @@ describe('/api/remix-source route', () => {
     vi.resetModules();
     vi.clearAllMocks();
     currentUserId = 'user-1';
+    currentUserIsAnonymous = false;
     generationRows = new Map();
     postRows = new Map();
     bundleRows = new Map();
@@ -1022,5 +1027,103 @@ describe('/api/remix-source route', () => {
     const body = await response.json();
     expect(body).toEqual({ error: 'Unlock this post to remix it.', code: 'REMIX_UNLOCK_REQUIRED' });
     expect(JSON.stringify(body)).not.toContain('A prompt only buyers restore.');
+  });
+
+  // Product decision D4 (2026-10-15): the route admits an app guest, so that a
+  // guest can make one of its own creations again. Restoring anyone else's is
+  // remixing it, which takes an account, so a guest is told so in the proxy's
+  // own words, the answer the app already reads as "sign in to do that".
+  describe('for an app guest', () => {
+    const REGISTRATION_REQUIRED = {
+      error: 'Create an account to use this feature.',
+      code: 'REGISTRATION_REQUIRED',
+    };
+
+    beforeEach(() => {
+      currentUserId = 'guest-1';
+      currentUserIsAnonymous = true;
+    });
+
+    it('restores its own private creation with the media it was made from', async () => {
+      generationRows.set('guest-made-1', createGuestMadeGeneration());
+      inputMediaRows = [
+        {
+          id: 'input-ref-1',
+          generation_id: 'guest-made-1',
+          user_id: 'guest-1',
+          media_type: 'image',
+          role: 'reference_image',
+          label: 'Bottle',
+          storage_path: 'generation_inputs/guest-1/guest-made-1/00-reference-image.png',
+          source_generation_id: null,
+          sort_order: 0,
+          metadata: { id: 'el-1', displayName: 'Bottle', handle: '@bottle' },
+        },
+      ];
+
+      const { GET } = await import('@/app/api/remix-source/route');
+      const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=guest-made-1'));
+
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.generation).toMatchObject({ id: 'guest-made-1', prompt: 'Made before signing up.' });
+      const referenceUrl = 'https://signed.example.com/generation-inputs/guest-1/guest-made-1/00-reference-image.png';
+      expect(data.inputMedia).toEqual([expect.objectContaining({ id: 'input-ref-1', url: referenceUrl })]);
+      expect(data.inputs.image.elements).toEqual([expect.objectContaining({ url: referenceUrl })]);
+      expect(data.workflowSettings.elements).toHaveLength(1);
+      expect(data.result.url).toBe('https://signed.example.com/generated_images%2Fguest-1%2Fguest-made-1.png');
+      expect(data.restoreIssues).toEqual([]);
+    });
+
+    it.each([
+      {
+        label: "another creator's public post that anyone with an account may remix",
+        arrange: () => {
+          generationRows.set('source-1', createPublicSource({ prompt: 'Not the guest’s prompt.' }));
+          postRows.set('post-source-1', createExposedPost('source-1'));
+        },
+      },
+      {
+        label: 'a recipe on sale that an account would be asked to unlock',
+        arrange: () => {
+          generationRows.set('source-1', createPublicSource({ prompt: 'Not the guest’s prompt.' }));
+          postRows.set('post-source-1', createExposedPost('source-1'));
+          bundleRows.set('post-source-1', { id: 'bundle-1', post_id: 'post-source-1', status: 'published', allow_remix: true });
+        },
+      },
+      {
+        label: "someone else's private creation",
+        arrange: () => {
+          generationRows.set('source-1', createPublicSource({ is_public: false, prompt: 'Not the guest’s prompt.' }));
+        },
+      },
+      {
+        label: 'a creation that does not exist',
+        arrange: () => undefined,
+      },
+    ])('answers 403 REGISTRATION_REQUIRED for $label, and shows none of it', async ({ arrange }) => {
+      arrange();
+
+      const { GET } = await import('@/app/api/remix-source/route');
+      const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=source-1&postId=post-source-1'));
+
+      expect(response.status).toBe(403);
+      const body = await response.json();
+      expect(body).toEqual(REGISTRATION_REQUIRED);
+      expect(JSON.stringify(body)).not.toContain('Not the guest’s prompt.');
+      // Nothing of the creation was signed for the guest.
+      expect(resolveOwnedStoredMediaUrlMock).not.toHaveBeenCalled();
+    });
+
+    it('is rate limited before any creation is read, as an account is', async () => {
+      gateState.rateLimitAllowed = false;
+      generationRows.set('guest-made-1', createGuestMadeGeneration());
+
+      const { GET } = await import('@/app/api/remix-source/route');
+      const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=guest-made-1'));
+
+      expect(response.status).toBe(429);
+      expect((await response.json()).code).toBe('RATE_LIMITED');
+    });
   });
 });

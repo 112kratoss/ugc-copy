@@ -41,6 +41,11 @@
       "path": "/api/credits/welcome/claim",
       "auth": "required"
     },
+    "getCreditHistory": {
+      "method": "GET",
+      "path": "/api/credits/history",
+      "auth": "required"
+    },
     "recordOnboardingEvent": {
       "method": "POST",
       "path": "/api/onboarding/events",

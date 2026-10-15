@@ -33,6 +33,12 @@ export class AccountReauthenticationFailedError extends Error {
   }
 }
 
+/**
+ * The ways this device can confirm a deletion for `user`. Apple needs an iPhone
+ * or iPad (its native authorization code); the password and Google work on
+ * either phone, as Google sign-in does since decision D1, so an account with a
+ * Google identity is offered Google on iOS as well as Android.
+ */
 export function getAccountReauthenticationMethods(
   user: User | null,
   platform = Platform.OS,

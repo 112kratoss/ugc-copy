@@ -19,8 +19,12 @@ const authState = vi.hoisted(() => ({
   accountReauthenticationMethods: ['apple'] as Array<'password' | 'google' | 'apple'>,
   api: { getCreatorPayoutState: vi.fn() },
   deleteAccount: vi.fn(),
+  isGuest: false,
   user: { id: 'user-1', email: 'creator@example.com' } as { id: string; email: string } | null,
 }));
+
+// One stable router for every render.
+const routerMock = vi.hoisted(() => ({ back: vi.fn(), push: vi.fn(), replace: vi.fn() }));
 
 const payout = vi.hoisted(() => ({
   query: { data: undefined as PayoutState | undefined, isError: false, isPending: false },
@@ -49,7 +53,7 @@ vi.mock('@tanstack/react-query', () => ({
 }));
 
 vi.mock('expo-router', () => ({
-  router: { back: vi.fn() },
+  router: routerMock,
 }));
 
 vi.mock('expo-apple-authentication', () => ({
@@ -133,11 +137,81 @@ const texts = (tree: renderer.ReactTestRenderer) => byType(tree, 'text').map((no
 beforeEach(() => {
   platformState.os = 'ios';
   authState.accountReauthenticationMethods = ['apple'];
+  authState.isGuest = false;
   authState.user = { id: 'user-1', email: 'creator@example.com' };
   authState.deleteAccount.mockReset();
+  routerMock.back.mockReset();
+  routerMock.push.mockReset();
+  routerMock.replace.mockReset();
   payout.query = { data: undefined, isError: false, isPending: false };
   payout.options = null;
   showMessageDialog.mockReset();
+});
+
+// D5: `deleteAccount()` deletes a guest too, and a guest reaches this screen
+// only by the link magicbooklet://delete-account.
+describe('DeleteAccountScreen with no account signed in', () => {
+  // Each control once: a mocked component and the element it draws share their props.
+  const controls = (tree: renderer.ReactTestRenderer, props: Record<string, string>) => (
+    tree.root.findAllByProps(props, { deep: false })
+  );
+  const accountDeletionControls = (tree: renderer.ReactTestRenderer) => [
+    ...controls(tree, { accessibilityLabel: 'Type DELETE to confirm' }),
+    ...controls(tree, { label: 'Permanently delete account' }),
+    ...controls(tree, { label: 'Keep my account' }),
+  ];
+
+  it('tells a guest no account is signed in, points to Delete guest data, and offers no deletion', () => {
+    authState.user = null;
+    authState.isGuest = true;
+    const tree = renderScreen();
+
+    expect(byType(tree, 'section-title')[0].props).toMatchObject({
+      title: 'No account is signed in',
+      body: 'You’re using Magicbooklet as a guest on this phone. To delete what you made as a guest, use Delete guest data in Settings.',
+    });
+    expect(accountDeletionControls(tree)).toHaveLength(0);
+    // Nothing about the account it would delete, nor its earnings.
+    expect(texts(tree).some((line) => line.includes('What will be deleted'))).toBe(false);
+    expect(byType(tree, 'status-block')).toHaveLength(0);
+
+    renderer.act(() => {
+      tree.root.findByProps({ label: 'Open Settings' }).props.onPress();
+    });
+    expect(routerMock.replace).toHaveBeenCalledWith('/settings');
+
+    renderer.act(() => {
+      tree.root.findByProps({ label: 'Sign in to an account' }).props.onPress();
+    });
+    expect(routerMock.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/delete-account' } });
+    expect(authState.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('asks a phone with no session at all to sign in, and offers no deletion', () => {
+    authState.user = null;
+    const tree = renderScreen();
+
+    expect(byType(tree, 'section-title')[0].props).toMatchObject({
+      title: 'No account is signed in',
+      body: 'Sign in to the account you want to delete.',
+    });
+    expect(accountDeletionControls(tree)).toHaveLength(0);
+    expect(controls(tree, { label: 'Open Settings' })).toHaveLength(0);
+
+    renderer.act(() => {
+      tree.root.findByProps({ label: 'Sign in' }).props.onPress();
+    });
+    expect(routerMock.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/delete-account' } });
+    expect(authState.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('offers the account its deletion once it is signed in', () => {
+    const tree = renderScreen();
+
+    expect(byType(tree, 'section-title')[0].props.title).toBe('Delete your account');
+    expect(accountDeletionControls(tree)).toHaveLength(3);
+    expect(controls(tree, { label: 'Open Settings' })).toHaveLength(0);
+  });
 });
 
 describe('DeleteAccountScreen reauthentication', () => {
@@ -220,6 +294,34 @@ describe('DeleteAccountScreen reauthentication', () => {
     });
 
     expect(authState.deleteAccount.mock.calls[1]).toEqual([{ method: 'google' }]);
+  });
+
+  // Decision D1: Google is a way in on both phones, so an account with a
+  // Google identity confirms its deletion with Google on either.
+  it.each(['ios', 'android'])('offers Google, and nothing it does not have, to a Google account on %s', async (os) => {
+    platformState.os = os;
+    authState.accountReauthenticationMethods = ['google'];
+    const tree = renderScreen();
+
+    await requestInitialDeletion(tree);
+
+    const secondaryLabels = byType(tree, 'secondary-button').map((node) => node.props.label);
+    expect(secondaryLabels).toContain('Continue with Google and delete');
+    expect(byType(tree, 'apple-button')).toHaveLength(0);
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Current password for account deletion' })).toHaveLength(0);
+    expect(byType(tree, 'status-block').map((node) => node.props.title)).not.toContain('Use the original sign-in device');
+
+    await renderer.act(async () => {
+      byType(tree, 'secondary-button')
+        .find((node) => node.props.label === 'Continue with Google and delete')!
+        .props.onPress();
+    });
+
+    expect(authState.deleteAccount.mock.calls).toEqual([[undefined], [{ method: 'google' }]]);
+    expect(showMessageDialog).toHaveBeenCalledWith({
+      title: 'Your account is being deleted',
+      message: 'You have been signed out.',
+    });
   });
 });
 
@@ -379,6 +481,32 @@ describe('DeleteAccountScreen sign-in failures', () => {
     expect(statusBlocks(tree)).toContainEqual(expect.objectContaining({
       body: 'Check it and try again. If you created the account with Google, use that button instead. Your account is still active.',
     }));
+  });
+
+  it('points at the Google button on iOS too, where the screen now draws it for such an account', async () => {
+    platformState.os = 'ios';
+    authState.accountReauthenticationMethods = ['password', 'google'];
+    const tree = renderScreen();
+
+    await failReauthentication(tree, 'password', new Error('Invalid login credentials'));
+
+    expect(statusBlocks(tree)).toContainEqual(expect.objectContaining({
+      body: 'Check it and try again. If you created the account with Google, use that button instead. Your account is still active.',
+    }));
+    expect(byType(tree, 'secondary-button').map((node) => node.props.label)).toContain('Continue with Google and delete');
+  });
+
+  it('says nothing when the person closes the Google sheet on iOS', async () => {
+    platformState.os = 'ios';
+    authState.accountReauthenticationMethods = ['google'];
+    const tree = renderScreen();
+
+    await failReauthentication(tree, 'google', Object.assign(new Error('Google sign-in was canceled.'), {
+      code: 'ERR_GOOGLE_AUTH_CANCELED',
+    }));
+
+    expect(statusBlocks(tree)).toEqual([]);
+    expect(byType(tree, 'secondary-button').map((node) => node.props.label)).toContain('Continue with Google and delete');
   });
 
   it('says offline, and never names a build setting, when the sign-in could not reach Supabase', async () => {

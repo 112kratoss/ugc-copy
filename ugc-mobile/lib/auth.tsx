@@ -186,14 +186,16 @@ interface AuthContextValue {
   leaveDeletingAccount: () => Promise<boolean>;
   accountReauthenticationMethods: AccountReauthenticationMethod[];
   /**
-   * Deletes the account. Once the server has it, this device is signed out
-   * and left on Home as a fresh guest, and the promise says how far the server
-   * got: `scheduled` (locked and signed out everywhere, the rest under way) or
-   * `deleted` (finished before this request). `unconfirmed` when the answer was
-   * lost and Supabase could not say either way: this device stays signed in.
-   * Rejects only when the account was not touched, or when the person must
-   * sign in again first (an `AccountReauthenticationFailedError` when the
-   * sign-in this device asked for failed).
+   * Deletes the account, or for a guest the guest and what it made (D5). Once
+   * the server has it, this device is signed out and left on Home as a fresh
+   * guest, and the promise says how far the server got: `scheduled` (locked and
+   * signed out everywhere, the rest under way) or `deleted` (finished before
+   * this request). `unconfirmed` when the answer was lost and Supabase could
+   * not say either way: this device stays signed in. Rejects only when nothing
+   * was touched, or when the person must sign in again first (an
+   * `AccountReauthenticationFailedError` when the sign-in this device asked for
+   * failed). A guest is never asked to sign in again: it has nothing to sign in
+   * with, the server asks it for nothing, and a `reauthentication` is not used.
    */
   deleteAccount: (reauthentication?: AccountDeletionReauthentication) => Promise<AccountDeletionOutcome>;
   refreshProfile: () => Promise<void>;
@@ -390,7 +392,22 @@ type LocalSessionEndReason =
   | 'session-ended'
   | 'guest-merged'
   | 'account-deleted'
+  | 'guest-deleted'
   | 'reauthentication-mismatch';
+
+/**
+ * Forgets the merge tickets kept for a guest whose data was deleted (D5): the
+ * credits a ticket would carry went with the guest, and redeeming one later
+ * would only tell the next account on this phone that they could not be moved.
+ * Every other guest's ticket stays, since those credits are still there to
+ * bring to an account. Never rejects: neither call does.
+ */
+async function forgetGuestMergeTicketsOfGuest(guestUserId: string) {
+  const tickets = await readGuestMergeTickets();
+  await Promise.all(tickets
+    .filter((stored) => stored.guestUserId === guestUserId)
+    .map((stored) => removeGuestMergeTicket(stored.ticket)));
+}
 
 /** Creator pages and follow buttons, cached without the viewer in their key. */
 function isViewerlessCreatorQuery(query: { queryKey: readonly unknown[] }) {
@@ -1357,13 +1374,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await refreshProfile();
   };
 
+  // Both platforms (D1): Supabase OAuth in the system's auth session, which has
+  // nothing Android-specific about it. On iOS the sign-in screen draws it under
+  // Apple, so an account made with Google elsewhere can be reached from an iPhone.
   const runGoogleSignIn = async () => {
     if (!isSupabaseConfigured) {
       throw new Error(`Configure mobile auth first: ${missingEnvKeys.join(', ')}`);
-    }
-
-    if (Platform.OS !== 'android') {
-      throw new Error('Google sign-in is available on Android only in this app.');
     }
     endedDeletionSessionTokenRef.current = null;
 
@@ -1424,19 +1440,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   /**
    * How a session leaves this device, whichever way it ends: a sign-out, a
    * session the server refused (401), a guest merged into an account (409
-   * SESSION_MERGED), a deletion, and a deletion's sign-in that landed on
-   * another account. One list, so whatever is added for one way out is cleared
-   * by all of them: the creator caches were cleared by the sign-out alone, and
-   * after any other way out the next person on a shared phone saw the last
-   * one's Following and owner controls (audit 04-6). Where to go next is the
-   * caller's.
+   * SESSION_MERGED), a deletion (of an account, or of a guest's data), and a
+   * deletion's sign-in that landed on another account. One list, so whatever is
+   * added for one way out is cleared by all of them: the creator caches were
+   * cleared by the sign-out alone, and after any other way out the next person
+   * on a shared phone saw the last one's Following and owner controls (audit
+   * 04-6). Where to go next is the caller's.
    */
   const tearDownLocalSession = async ({ reason, endedSession }: {
     reason: LocalSessionEndReason;
     endedSession: Session | null;
   }) => {
     const endedUserId = endedSession?.user?.id ?? null;
-    const deleted = reason === 'account-deleted';
+    const accountDeleted = reason === 'account-deleted';
+    const guestDeleted = reason === 'guest-deleted';
+    // A guest's deletion ends as an account's does (D5), but for what each
+    // keeps of the guest links: see the tickets below.
+    const deleted = accountDeleted || guestDeleted;
     // Set before anything is awaited: every refusal of this session arriving
     // from here on finds it ended already.
     if (deleted) endedDeletionSessionTokenRef.current = endedSession?.access_token ?? null;
@@ -1447,7 +1467,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (isSupabaseConfigured && reason !== 'signed-out' && !deleted) {
       await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
     }
-    // What a deleted account and the guests it was made from left in drafts.
+    // What a deleted account and the guests it was made from, or a deleted
+    // guest, left in drafts.
     const draftOwners = deleted && endedUserId
       ? [endedUserId, ...(linkedGuestUserIdsRef.current.get(endedUserId) ?? [])]
       : [];
@@ -1471,9 +1492,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // The tickets a deleted account could still redeem go with it, so the next
       // account on this phone cannot take those guests' credits; so does what
       // its links came to. On any other way out a ticket is the only copy of a
-      // guest's credit secret, and stays.
-      deleted ? forgetGuestMergeTicketsFor(endedUserId) : undefined,
-      deleted ? clearGuestMergeOutcome() : undefined,
+      // guest's credit secret, and stays. A deleted guest is no account: other
+      // guests' tickets, and an account's link outcome, are not its to take.
+      accountDeleted ? forgetGuestMergeTicketsFor(endedUserId) : undefined,
+      accountDeleted ? clearGuestMergeOutcome() : undefined,
       ...draftOwners.flatMap((userId) => [
         clearCreationDraftsForUser(userId),
         clearComposerDraftsForUser(userId),
@@ -1481,7 +1503,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       ]),
     ]);
     if (deleted) {
-      // Everything cached belonged to the account.
+      // Everything cached belonged to the identity that is gone.
       queryClient.clear();
     } else {
       // Creator pages are kept without the viewer in their key, and carry
@@ -1489,11 +1511,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // would see that for up to a minute (five for the follow buttons).
       queryClient.removeQueries({ predicate: isViewerlessCreatorQuery });
     }
-    if (deleted) {
+    if (accountDeleted) {
       keptMergeOutcomeRef.current = null;
       setKeptMergeOutcome(null);
     }
     resetAuthState();
+    // The deleted guest's own tickets go once its session has left the device:
+    // a ticket mint for it still on its way then finds the session gone and
+    // keeps nothing, and one that got past that check first was queued for
+    // storage ahead of this read, which finds it.
+    if (guestDeleted && endedUserId) await forgetGuestMergeTicketsOfGuest(endedUserId);
     // Every way out drops back to a guest identity rather than to nothing, so
     // browsing and buying keep working.
     void ensureGuestSession();
@@ -1652,11 +1679,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   /**
    * How every way out of a deleted account ends: the deletion answered on this
    * phone, and a 409 ACCOUNT_DELETING from any request. The server has revoked,
-   * or is removing, every session, so nothing here asks it for anything.
+   * or is removing, every session, so nothing here asks it for anything. A
+   * guest's deletion (D5) ends the same way.
    */
   const endDeletedAccountSession = async (endedSession: Session | null) => {
-    await tearDownLocalSession({ reason: 'account-deleted', endedSession });
-    // One move, to Home: every screen above it belonged to the account.
+    await tearDownLocalSession({
+      reason: isGuestSession(endedSession) ? 'guest-deleted' : 'account-deleted',
+      endedSession,
+    });
+    // One move, to Home: every screen above it belonged to the identity.
     router.dismissTo('/');
   };
 
@@ -1667,8 +1698,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    */
   const leaveDeletingAccount = async () => {
     const deletingSession = sessionRef.current;
-    // Only a registered account is ever deleted. A deletion asked for on this
-    // phone ends the session itself, in its own words, once its answer is in.
+    // A registered account only. A guest lives on this phone alone, so its
+    // deletion (D5) was asked for here, and a refusal of the deleted guest's
+    // token that comes back late must never end the fresh guest that replaced
+    // it (a guest gone some other way ends at the 401 that follows, through
+    // recoverRejectedSession). A deletion asked for on this phone ends the
+    // session itself, in its own words, once its answer is in.
     if (
       !getRegisteredUser(deletingSession)
       || accountDeletionInFlightRef.current
@@ -1684,16 +1719,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const runAccountDeletion = async (
     reauthentication?: AccountDeletionReauthentication,
   ): Promise<AccountDeletionOutcome> => {
-    if (!registeredUser) {
+    if (!registeredUser && !isGuest) {
       throw new Error('Sign in before deleting your account.');
     }
     // Captured before reauthentication can replace the Supabase session
     // (including the mismatch path below).
     const accountSession = sessionRef.current;
+    // A guest deletes itself and what it made (D5), with the same request an
+    // account sends and no sign-in first. Only the guest the caller was drawn
+    // for: the request carries whatever session the device holds when it
+    // leaves, and an account's must never go out from a guest's confirmation.
+    if (
+      !registeredUser
+      && (!isGuestSession(accountSession) || accountSession?.user?.id !== identityUserId)
+    ) {
+      throw new Error('This phone has moved to another session.');
+    }
     const feedIdentityTransition = beginFeedIdentityTransition(accountSession);
 
     let appleAuthorizationCode: string | undefined;
-    if (reauthentication) {
+    if (reauthentication && registeredUser) {
       try {
         // Apple account deletion is verified server-side by exchanging the
         // one-time authorization code with Apple. It does not need another

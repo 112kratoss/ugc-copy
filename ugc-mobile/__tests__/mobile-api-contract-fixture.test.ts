@@ -302,6 +302,8 @@ const successCases: Array<{
     }),
   },
   { key: 'mobileCommerceRestore', call: (api) => api.restoreMobilePurchases() },
+  // The Credit History screen's page, guest or account (D6, contract C4).
+  { key: 'getCreditHistory', call: (api) => api.getCreditHistory({ limit: 6 }) },
   // The landing reads the program's terms from this answer (03-7).
   { key: 'recordReferralVisit', call: (api) => api.recordReferralVisit({ code: 'CREATOR1', source: 'mobile' }) },
   {
@@ -895,6 +897,25 @@ describe('the shared answers the pricing and invite screens read', () => {
     const visit = await clientForEndpoint('recordReferralVisit').recordReferralVisit({ code: 'CREATOR1', source: 'mobile' });
     expect(readReferralProgram(visit.program)).toEqual(endpoint.response.program);
     expect(readReferralProgram(endpoint.responseVariants.programUnavailable.program)).toBeNull();
+  });
+
+  // The Credit History screen starts over from the newest page on a 400 for an
+  // older one, rather than asking again with a cursor the server refused (D6).
+  it('surfaces a refused credit history cursor as the 400 the screen starts over on', async () => {
+    const refused = mobileApiContract.endpoints.getCreditHistory.errors.invalidCursor;
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      expect(new URL(String(input)).searchParams.get('cursor')).toBe('cursor-from-an-older-deploy');
+      return jsonResponse(refused.response, refused.status);
+    });
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const error = await api.getCreditHistory({ cursor: 'cursor-from-an-older-deploy', limit: 30 }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 400, code: 'INVALID_CURSOR', message: refused.response.error });
   });
 
   it('reports the restore example: the settled purchase and the one it skipped (03-10)', async () => {

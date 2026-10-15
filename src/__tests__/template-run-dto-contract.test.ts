@@ -182,6 +182,7 @@ describe('the post made from a run\'s result', () => {
     const unreadable = {
       select: () => unreadable,
       eq: () => unreadable,
+      in: () => unreadable,
       maybeSingle: async () => ({ data: null, error: refused }),
     };
     const client = {

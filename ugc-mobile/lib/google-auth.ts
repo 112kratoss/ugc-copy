@@ -2,6 +2,16 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 
+/**
+ * Google sign-in through Supabase OAuth (PKCE), the same on both phones: the
+ * system's own auth session shows Google's page (ASWebAuthenticationSession on
+ * iOS, a Custom Tab on Android) and hands back `magicbooklet://oauth/callback`,
+ * whose code is exchanged for the session. Nothing here asks which platform it
+ * runs on, so the sign-in screen and account deletion offer it on iOS as well
+ * as Android (decision D1). On iOS a person who declines the system's "wants to
+ * use … to sign in" prompt, or closes the sheet, is a cancel, not a failure.
+ */
+
 type GoogleAuthClient = Pick<
   SupabaseClient['auth'],
   'exchangeCodeForSession' | 'signInWithOAuth'

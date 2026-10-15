@@ -86,7 +86,7 @@ function reauthenticationFailure(
 
 export default function DeleteAccountScreen() {
   const theme = useAppTheme();
-  const { accountReauthenticationMethods, deleteAccount, user } = useAuth();
+  const { accountReauthenticationMethods, deleteAccount, isGuest, user } = useAuth();
   const [confirmation, setConfirmation] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
@@ -96,6 +96,13 @@ export default function DeleteAccountScreen() {
   // A seller's balance not yet paid out goes with the account, so the screen
   // says how much before anything is typed. It never holds the deletion up.
   const payoutQuery = useCreatorPayoutState();
+
+  // After every hook, so the hook count never changes when `user` flips.
+  // Settings sends only an account here; a guest arrives only by the link
+  // magicbooklet://delete-account. `deleteAccount()` deletes a guest too (D5),
+  // so this screen's account deletion is never offered to one: a guest's own
+  // way is Settings' "Delete guest data", which says what it deletes.
+  if (!user) return <NoAccountSignedIn isGuest={isGuest} />;
 
   const removeAccount = async (reauthentication?: AccountDeletionReauthentication) => {
     setIsDeleting(true);
@@ -261,6 +268,34 @@ export default function DeleteAccountScreen() {
         />
       ) : null}
       <SecondaryButton label="Keep my account" disabled={isDeleting} onPress={() => router.back()} />
+    </Screen>
+  );
+}
+
+/**
+ * The screen with no account signed in: a guest, or a phone whose guest
+ * session could not start. Nothing here deletes anything. Signing in comes
+ * back to this screen, which then offers the account's deletion.
+ */
+function NoAccountSignedIn({ isGuest }: { isGuest: boolean }) {
+  const signIn = () => router.push({ pathname: '/auth', params: { returnTo: '/delete-account' } } as never);
+  return (
+    <Screen>
+      <SectionTitle
+        eyebrow="Account"
+        title="No account is signed in"
+        body={isGuest
+          ? 'You’re using Magicbooklet as a guest on this phone. To delete what you made as a guest, use Delete guest data in Settings.'
+          : 'Sign in to the account you want to delete.'}
+      />
+      {isGuest ? (
+        <>
+          <PrimaryButton label="Open Settings" onPress={() => router.replace('/settings' as never)} />
+          <SecondaryButton label="Sign in to an account" onPress={signIn} />
+        </>
+      ) : (
+        <PrimaryButton label="Sign in" onPress={signIn} />
+      )}
     </Screen>
   );
 }

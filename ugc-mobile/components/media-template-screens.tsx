@@ -112,11 +112,29 @@ function isMissingRunError(error: unknown) {
   return error instanceof ApiError && error.status === 404;
 }
 
+/** The answer of a route the server keeps for accounts, to a guest's token: sign in, not an error. */
+function isRegistrationRequiredError(error: unknown) {
+  return error instanceof ApiError && error.status === 403 && error.code === 'REGISTRATION_REQUIRED';
+}
+
 type MagicbookletApi = ReturnType<typeof useAuth>['api'];
 
-/** Every resume query of an account: the catalog's (all templates) and each template page's. */
+/**
+ * Every resume query of an identity: the catalog's (all templates) and each
+ * template page's. A guest runs templates with its credits as an account does
+ * (D4), so its runs are remembered under its own identity.
+ */
 function templateRunResumeQueryKey(userId: string | null | undefined) {
   return ['template-run-resume', userId ?? null] as const;
+}
+
+/**
+ * A run as its owner read it. The identity is part of the key: a sign-out
+ * leaves a guest on the phone, and the last person's run must never be what
+ * the next one is shown while theirs is read.
+ */
+function templateRunQueryKey(identityUserId: string | null, runId: string) {
+  return ['media-template-run', identityUserId, runId] as const;
 }
 
 /** A remembered run read again: null when it is gone, or is another account's (reads are owner-only). */
@@ -207,7 +225,7 @@ function useTemplatePosterRecovery(templates: MediaTemplateSummary[]) {
 
 export function MediaTemplateCatalogScreen() {
   const theme = useAppTheme();
-  const { api, user } = useAuth();
+  const { api, identityUserId } = useAuth();
   const queryClient = useQueryClient();
   // Set by a pull, so that one read of the first page goes past the API
   // client's five-minute copy; every other read may take it.
@@ -227,12 +245,12 @@ export function MediaTemplateCatalogScreen() {
   });
   const templates = templatesQuery.data?.pages.flatMap((page) => page.templates) ?? [];
   const posters = useTemplatePosterRecovery(templates);
-  // One run per template, offered on that template's card (01-7).
+  // One run per template, offered on that template's card (01-7), a guest's too.
   const resumeQuery = useQuery({
-    queryKey: templateRunResumeQueryKey(user?.id),
-    enabled: Boolean(user?.id),
+    queryKey: templateRunResumeQueryKey(identityUserId),
+    enabled: Boolean(identityUserId),
     queryFn: () => loadResumableTemplateRuns({
-      userId: user?.id ?? '',
+      userId: identityUserId ?? '',
       readRun: (runId) => readRunForResume(api, runId),
     }),
   });
@@ -253,7 +271,7 @@ export function MediaTemplateCatalogScreen() {
         ? { pages: current.pages.slice(0, 1), pageParams: current.pageParams.slice(0, 1) }
         : current
     ));
-    void Promise.all([templatesQuery.refetch(), user ? resumeQuery.refetch() : null])
+    void Promise.all([templatesQuery.refetch(), identityUserId ? resumeQuery.refetch() : null])
       .finally(() => setPullRefreshing(false));
   };
 
@@ -502,10 +520,13 @@ async function sendTemplateReport(api: MagicbookletApi, templateId: string, reas
 }
 
 export function MediaTemplateDetailScreen({ slug }: { slug: string }) {
-  const { api, user } = useAuth();
+  const { api, user, identityUserId } = useAuth();
   const queryClient = useQueryClient();
   const [message, setMessage] = useState<string | null>(null);
   const createRunKeyRef = useRef<string | null>(null);
+  // The registered account: reads the template with its session (the server
+  // answers a guest's token on `/api/templates/[id]` with 403), and owns
+  // templates. Running one needs only an identity, a guest's included (D4).
   const userId = user?.id ?? null;
   // The viewer is part of the key: a signed-in read can be the owner's, a
   // draft with its status, which nobody else may be shown.
@@ -524,14 +545,19 @@ export function MediaTemplateDetailScreen({ slug }: { slug: string }) {
   const template = templateQuery.data?.template;
   const isOwner = Boolean(userId && template?.creatorUserId === userId);
   const resumeQuery = useQuery({
-    queryKey: [...templateRunResumeQueryKey(userId), template?.id ?? null],
-    enabled: Boolean(userId && template?.id),
+    queryKey: [...templateRunResumeQueryKey(identityUserId), template?.id ?? null],
+    enabled: Boolean(identityUserId && template?.id),
     queryFn: () => loadResumableTemplateRun({
-      userId: userId ?? '',
+      userId: identityUserId ?? '',
       templateId: template?.id ?? '',
       readRun: (runId) => readRunForResume(api, runId),
     }),
   });
+
+  const signInHere = () => {
+    router.push({ pathname: '/auth', params: { returnTo: `/templates/${encodeURIComponent(slug)}` } } as never);
+  };
+
   const createRun = useMutation({
     mutationFn: (templateId: string) => {
       createRunKeyRef.current ??= createTemplateRunIdempotencyKey();
@@ -539,10 +565,18 @@ export function MediaTemplateDetailScreen({ slug }: { slug: string }) {
     },
     onSuccess: ({ run }) => {
       createRunKeyRef.current = null;
-      if (userId) void updateResumableRun(queryClient, userId, run);
+      if (identityUserId) void updateResumableRun(queryClient, identityUserId, run);
       router.push(`/template-runs/${encodeURIComponent(run.id)}` as never);
     },
     onError: (error) => {
+      // What the server keeps for accounts (a run it will not start for a
+      // guest) asks the guest to sign in, and comes back here, as before D4.
+      // Nothing was created, so the next press is a new attempt.
+      if (isRegistrationRequiredError(error)) {
+        createRunKeyRef.current = null;
+        signInHere();
+        return;
+      }
       // It stopped being live after this page read it: read it again, so the
       // page shows where it stands instead of a start that cannot work.
       if (error instanceof ApiError && error.status === 404) void templateQuery.refetch();
@@ -552,13 +586,12 @@ export function MediaTemplateDetailScreen({ slug }: { slug: string }) {
     },
   });
 
-  const signInHere = () => {
-    router.push({ pathname: '/auth', params: { returnTo: `/templates/${encodeURIComponent(slug)}` } } as never);
-  };
-
   const useTemplate = () => {
     if (!template || template.status !== 'active') return;
-    if (!user) {
+    // A guest starts a run with its own credits, as it generates (D4). Only
+    // with no identity at all (the guest bootstrap failed) is signing in the
+    // way to get one, as in the creator.
+    if (!identityUserId) {
       signInHere();
       return;
     }
@@ -748,16 +781,18 @@ function TemplateDetailContent({
 }
 
 export function MediaTemplateRunScreen({ runId }: { runId: string }) {
-  const { api, user, identityUserId, credits, isLoading: isAuthLoading, refreshProfile } = useAuth();
+  // A guest's run is its own (D4): every run route serves a guest's token, so
+  // the screen needs an identity, not an account.
+  const { api, identityUserId, isGuest, ensureGuestMergeTicket, credits, isLoading: isAuthLoading, refreshProfile } = useAuth();
   const queryClient = useQueryClient();
   const [message, setMessage] = useState<string | null>(null);
   const [uploadingSlot, setUploadingSlot] = useState<string | null>(null);
   const [localPreviews, setLocalPreviews] = useState<Record<string, string>>({});
   const previousRunStatusRef = useRef<TemplateRun['status'] | null>(null);
-  const runQueryKey = useMemo(() => ['media-template-run', runId] as const, [runId]);
+  const runQueryKey = useMemo(() => templateRunQueryKey(identityUserId, runId), [identityUserId, runId]);
   const runQuery = useQuery({
     queryKey: runQueryKey,
-    enabled: Boolean(runId && user),
+    enabled: Boolean(runId && identityUserId),
     // Every read signs the media again; keeping the addresses already on screen
     // is what stops each poll reloading every finished step. The cache is read
     // after the response, so an action's answer that landed meanwhile is the one kept.
@@ -782,10 +817,9 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
   const shownStatus = run?.status;
   const shownIsTest = run?.isTest ?? false;
   useEffect(() => {
-    const userId = user?.id;
-    if (!userId || !shownRunId || !shownTemplateId || !shownStatus) return;
-    void updateResumableRun(queryClient, userId, { id: shownRunId, templateId: shownTemplateId, status: shownStatus, isTest: shownIsTest });
-  }, [queryClient, shownIsTest, shownRunId, shownStatus, shownTemplateId, user?.id]);
+    if (!identityUserId || !shownRunId || !shownTemplateId || !shownStatus) return;
+    void updateResumableRun(queryClient, identityUserId, { id: shownRunId, templateId: shownTemplateId, status: shownStatus, isTest: shownIsTest });
+  }, [identityUserId, queryClient, shownIsTest, shownRunId, shownStatus, shownTemplateId]);
 
   useEffect(() => {
     const nextStatus = run?.status ?? null;
@@ -796,10 +830,10 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active' && runId && user) void runQuery.refetch();
+      if (state === 'active' && runId && identityUserId) void runQuery.refetch();
     });
     return () => subscription.remove();
-  }, [runId, user?.id]);
+  }, [runId, identityUserId]);
 
   const applyRun = (response: TemplateRunResponse) => {
     queryClient.setQueryData<TemplateRunResponse>(runQueryKey, (previous) => withStableRunMedia(previous, response));
@@ -828,6 +862,10 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
       // A workflow run spends the same generation pipeline, so the create ring
       // should light for it too. Its poll is off at a count of zero.
       invalidateActiveGenerations(queryClient, identityUserId);
+      // What a guest's run makes exists only on its identity: the ticket kept
+      // from now on carries it onto the account at the next sign-in (02-7), as
+      // the creator's does. Nothing is minted when the guest already keeps one.
+      if (isGuest) void ensureGuestMergeTicket().catch(() => undefined);
     },
     onError: (error) => showRefusal(error, 'Could not start this workflow.'),
   });
@@ -880,7 +918,8 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
   if (isAuthLoading) {
     return <Screen><Stack.Screen options={{ title: 'Template Run' }} /><LoadingState label="Restoring your account" /></Screen>;
   }
-  if (!user) {
+  // No identity at all (the guest bootstrap failed): signing in is the way to one.
+  if (!identityUserId) {
     return (
       <Screen>
         <Stack.Screen options={{ title: 'Template Run' }} />
@@ -937,7 +976,7 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
               estimatedTotalCredits={run.estimatedTotalCredits ?? template?.estimatedTotalCredits ?? null}
             />
           ) : run.result ? (
-            <ResultStage run={run} api={api} userId={user.id} readRunAgain={readRunAgain} />
+            <ResultStage run={run} api={api} userId={identityUserId} readRunAgain={readRunAgain} />
           ) : (
             <RunSteps
               run={run}
@@ -1350,6 +1389,7 @@ function ResultStage({
 }: {
   run: TemplateRun;
   api: ReturnType<typeof useAuth>['api'];
+  /** The identity the run belongs to: a guest's or an account's. */
   userId: string;
   /** The run as the server has it now, or null when it could not be read. */
   readRunAgain: () => Promise<TemplateRun | null>;
@@ -1371,7 +1411,7 @@ function ResultStage({
       createRunKeyRef.current ??= createTemplateRunIdempotencyKey();
       const response = await api.createMediaTemplateRun(run.templateId, createRunKeyRef.current);
       void updateResumableRun(queryClient, userId, response.run);
-      queryClient.setQueryData(['media-template-run', response.run.id], response);
+      queryClient.setQueryData(templateRunQueryKey(userId, response.run.id), response);
       createRunKeyRef.current = null;
       router.replace(`/template-runs/${encodeURIComponent(response.run.id)}` as never);
     } catch (error) {

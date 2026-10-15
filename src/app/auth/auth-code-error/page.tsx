@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { AlertCircle, ArrowLeft, RotateCcw, WandSparkles } from 'lucide-react';
+import { AlertCircle, ArrowLeft, LogIn, RotateCcw, WandSparkles } from 'lucide-react';
 
 import {
   getPasswordRecoveryNextPath,
@@ -44,19 +44,20 @@ export default async function AuthCodeErrorPage({ searchParams }: AuthCodeErrorP
           </h1>
           <p className="mt-3 text-sm leading-6 text-[var(--ui-text-muted)]">
             {isRecovery
-              ? 'The link may have expired or already been used. Request a fresh link and we’ll bring you back to the same place afterward.'
+              ? 'The link may have expired or already been used. New reset links can’t be sent by email.'
               : isPasswordSignIn
                 ? 'Try again.'
                 : 'The sign-in link may have expired, already been used, or opened in a different browser. Try again to continue where you left off.'}
           </p>
 
           <div className="mt-7 flex flex-col gap-3 sm:flex-row">
+            {/* For a recovery link, the sign-in page's recovery notice names Google and the support address. */}
             <Link
               href={retryHref}
               className="ui-focus-ring inline-flex min-h-12 flex-1 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"
             >
-              <RotateCcw className="h-4 w-4" aria-hidden />
-              {isRecovery ? 'Request a new link' : 'Try sign in again'}
+              {isRecovery ? <LogIn className="h-4 w-4" aria-hidden /> : <RotateCcw className="h-4 w-4" aria-hidden />}
+              {isRecovery ? 'Back to sign in' : 'Try sign in again'}
             </Link>
             <Link
               href="/"

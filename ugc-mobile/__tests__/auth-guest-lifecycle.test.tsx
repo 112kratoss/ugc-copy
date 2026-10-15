@@ -21,9 +21,14 @@ const state = vi.hoisted(() => {
     // The balance each identity's profile read answers with.
     balances: {} as Record<string, number>,
     cacheListeners,
+    clearSearchHistory: vi.fn(),
+    deleteAccount: vi.fn(),
+    dismissTo: vi.fn(),
     getAccessToken: null as null | (() => Promise<string | null>),
     getSession: vi.fn(),
     mergeGuestAccount: vi.fn(),
+    // What Platform.OS reads: Google is offered on both phones (D1).
+    platform: 'web' as 'web' | 'ios' | 'android',
     prepareGuestAccountMerge: vi.fn(),
     queryClient: {
       clear: vi.fn(),
@@ -42,6 +47,7 @@ const state = vi.hoisted(() => {
     // The device keychain, as expo-secure-store holds it.
     secureStore: new Map<string, string>(),
     signInAnonymously: vi.fn(),
+    signInWithGoogleOAuth: vi.fn(),
     signInWithPassword: vi.fn(),
     signOut: vi.fn(),
     updateUser: vi.fn(),
@@ -59,7 +65,7 @@ vi.mock('expo-constants', () => ({
 // One stable object, never a fresh literal per render: an unstable router mock
 // re-runs the provider's effects forever and hangs the suite.
 vi.mock('expo-router', () => ({
-  router: { replace: state.replace, dismissTo: vi.fn() },
+  router: { replace: state.replace, dismissTo: state.dismissTo },
   usePathname: () => '/',
 }));
 
@@ -70,7 +76,11 @@ vi.mock('react-native', () => ({
       return { remove: () => state.appStateListeners.delete(listener) };
     },
   },
-  Platform: { OS: 'web' },
+  Platform: {
+    get OS() {
+      return state.platform;
+    },
+  },
 }));
 
 vi.mock('expo-secure-store', () => ({
@@ -99,6 +109,7 @@ vi.mock('../lib/api-client', () => ({
   createApiClient: (options: { getAccessToken: () => Promise<string | null> }) => {
     state.getAccessToken = options.getAccessToken;
     return {
+      deleteAccount: state.deleteAccount,
       getProfile: vi.fn(),
       mergeGuestAccount: state.mergeGuestAccount,
       prepareGuestAccountMerge: state.prepareGuestAccountMerge,
@@ -120,7 +131,7 @@ vi.mock('../lib/persisted-account-state', () => ({
   restorePersistedAccountState: vi.fn(async () => null),
 }));
 vi.mock('../lib/persisted-home-feed', () => ({ clearPersistedHomeFeed: vi.fn(async () => undefined) }));
-vi.mock('../lib/search-history', () => ({ clearSearchHistory: vi.fn(async () => undefined) }));
+vi.mock('../lib/search-history', () => ({ clearSearchHistory: state.clearSearchHistory }));
 vi.mock('../lib/creation-draft-resume', () => ({ clearCreationDraftsForUser: vi.fn(async () => undefined) }));
 vi.mock('../lib/post-composer-draft-resume', () => ({ clearComposerDraftsForUser: vi.fn(async () => undefined) }));
 vi.mock('../lib/generation-attempts', () => ({ clearGenerationAttemptForUser: vi.fn(async () => undefined) }));
@@ -128,7 +139,7 @@ vi.mock('../lib/apple-auth', () => ({
   authorizeNativeAppleAccountDeletion: vi.fn(),
   signInWithNativeApple: vi.fn(),
 }));
-vi.mock('../lib/google-auth', () => ({ signInWithGoogleOAuth: vi.fn() }));
+vi.mock('../lib/google-auth', () => ({ signInWithGoogleOAuth: state.signInWithGoogleOAuth }));
 vi.mock('../lib/referral-attribution', () => ({ claimPendingReferral: vi.fn(async () => undefined) }));
 vi.mock('../lib/notifications', () => ({
   clearLocalMobilePushRegistration: vi.fn(async () => undefined),
@@ -168,6 +179,7 @@ vi.mock('../lib/supabase', () => ({
   },
 }));
 
+import { signInWithNativeApple } from '../lib/apple-auth';
 import {
   AuthProvider,
   GUEST_BOOTSTRAP_RETRY_DELAYS_MS,
@@ -177,9 +189,12 @@ import {
 } from '../lib/auth';
 import {
   bindGuestMergeTicket,
+  readGuestMergeOutcome,
   readGuestMergeTickets,
+  storeGuestMergeOutcome,
   storeGuestMergeTicket,
 } from '../lib/guest-merge-ticket-storage';
+import { supabase } from '../lib/supabase';
 
 const OLD_GUEST_TICKET = 'a'.repeat(64);
 const GUEST_TICKET = 'b'.repeat(64);
@@ -302,6 +317,12 @@ beforeEach(() => {
   state.authCallback = null;
   state.getAccessToken = null;
   state.balances = {};
+  state.platform = 'web';
+  state.clearSearchHistory.mockReset().mockResolvedValue(undefined);
+  state.deleteAccount.mockReset();
+  state.dismissTo.mockReset();
+  state.signInWithGoogleOAuth.mockReset();
+  vi.mocked(signInWithNativeApple).mockReset();
   state.getSession.mockReset().mockResolvedValue({ data: { session: null }, error: null });
   state.queryClient.fetchQuery.mockReset().mockImplementation(async ({ queryKey }: { queryKey: readonly unknown[] }) => (
     { credits: state.balances[String(queryKey[1])] ?? 0 }
@@ -1047,5 +1068,194 @@ describe('"Set up later" on the account (audit 02-11)', () => {
     expect(isIdentityDeferredOnAccount(userWith({ creator_profile_onboarding_skipped_version: 0 }))).toBe(false);
     expect(isIdentityDeferredOnAccount(userWith({}))).toBe(false);
     expect(isIdentityDeferredOnAccount(null)).toBe(false);
+  });
+});
+
+// D1: Google was refused on iOS before anything was asked, so an account made
+// with Google on the web or on Android could not be reached from an iPhone.
+describe('Google on iPhone (D1)', () => {
+  /** A Google sign-in that comes back on `session`, the way auth-js reports the code exchange. */
+  function googleLandsOn(session: ReturnType<typeof sessionFor>) {
+    state.signInWithGoogleOAuth.mockImplementation(async () => {
+      state.authCallback?.('SIGNED_IN', session);
+    });
+  }
+
+  it.each(['ios', 'android'] as const)(
+    "signs in through Supabase's OAuth on %s, the guest's credits kept for the account first",
+    async (os) => {
+      state.platform = os;
+      googleLandsOn(accountA());
+      state.mergeGuestAccount.mockResolvedValue({ status: 'merged', creditsMoved: 120, promotionalCreditsMoved: 0, credits: 120 });
+      const { latest, unmount } = await mount(guestSession());
+
+      await renderer.act(async () => {
+        await latest.current?.signInWithGoogle();
+      });
+      await flush();
+
+      expect(state.signInWithGoogleOAuth).toHaveBeenCalledOnce();
+      expect(state.signInWithGoogleOAuth).toHaveBeenCalledWith(supabase);
+      // The ticket that carries the guest's credits is kept before the browser
+      // hands the device an account's session.
+      expect(state.prepareGuestAccountMerge).toHaveBeenCalledOnce();
+      expect(state.prepareGuestAccountMerge.mock.invocationCallOrder[0])
+        .toBeLessThan(state.signInWithGoogleOAuth.mock.invocationCallOrder[0]);
+      expect(state.mergeGuestAccount).toHaveBeenCalledWith(GUEST_TICKET);
+      expect(latest.current?.user?.id).toBe('account-a');
+      expect(latest.current?.guestMergeOutcome).toMatchObject({ status: 'merged', creditsMoved: 120 });
+      unmount();
+    },
+  );
+
+  it('keeps the guest, and its ticket, when the Google sheet is closed on an iPhone', async () => {
+    state.platform = 'ios';
+    const canceled = Object.assign(new Error('Google sign-in was canceled.'), { code: 'ERR_GOOGLE_AUTH_CANCELED' });
+    state.signInWithGoogleOAuth.mockRejectedValue(canceled);
+    const { latest, unmount } = await mount(guestSession());
+
+    let failure: unknown;
+    await renderer.act(async () => {
+      await latest.current?.signInWithGoogle().catch((thrown: unknown) => {
+        failure = thrown;
+      });
+    });
+    await flush();
+
+    expect(failure).toBe(canceled);
+    expect(latest.current?.isGuest).toBe(true);
+    expect(latest.current?.identityUserId).toBe('guest-1');
+    expect(state.mergeGuestAccount).not.toHaveBeenCalled();
+    await expect(readGuestMergeTickets()).resolves.toEqual([
+      expect.objectContaining({ ticket: GUEST_TICKET, guestUserId: 'guest-1', redeemedForUserId: null }),
+    ]);
+    unmount();
+  });
+
+  // The platform switch is live here: Apple, native to iOS, still refuses
+  // Android before anything is asked.
+  it('leaves Apple to iOS', async () => {
+    state.platform = 'android';
+    const { latest, unmount } = await mount(guestSession());
+
+    await renderer.act(async () => {
+      await expect(latest.current?.signInWithApple('login')).rejects.toThrow('Apple sign-in is available on iOS only.');
+    });
+
+    expect(signInWithNativeApple).not.toHaveBeenCalled();
+    expect(state.prepareGuestAccountMerge).not.toHaveBeenCalled();
+    unmount();
+  });
+});
+
+// D5: a guest deletes itself and what it made. The credits a ticket kept for it
+// would carry went with it; every other ticket on the phone is someone's credits.
+describe("a guest's deletion and the tickets on this phone (D5)", () => {
+  const THIRD_TICKET = 'c'.repeat(64);
+
+  /** Mounts the guest. Past mount, auth-js answers with no session, as once a deletion has cleared it. */
+  async function mountGuestToDelete() {
+    const mounted = await mount(guestSession());
+    state.getSession.mockResolvedValue({ data: { session: null }, error: null });
+    state.signInAnonymously.mockResolvedValue({
+      data: { session: sessionFor({ id: 'guest-2', is_anonymous: true }, 'guest-2-token') },
+      error: null,
+    });
+    state.deleteAccount.mockResolvedValue({ success: true, deleted: false, deletionScheduled: true });
+    return mounted;
+  }
+
+  it("forgets the tickets kept for that guest only, and what an account's links came to stays", async () => {
+    // A guest whose session ended after it bought credits, waiting for the next sign-in here.
+    await storeGuestMergeTicket({ guestUserId: 'guest-old', ticket: OLD_GUEST_TICKET, expiresAt: inDays(20) });
+    // Kept for this guest since it bought credits.
+    await storeGuestMergeTicket({ guestUserId: 'guest-1', ticket: GUEST_TICKET, expiresAt: inDays(30) });
+    // Sent for account A, its redemption not settled yet.
+    await storeGuestMergeTicket({ guestUserId: 'guest-a', ticket: THIRD_TICKET, expiresAt: inDays(30) });
+    await bindGuestMergeTicket(THIRD_TICKET, 'account-a');
+    const accountOutcome = { accountUserId: 'account-a', status: 'merged' as const, creditsMoved: 50, at: Date.now() };
+    await storeGuestMergeOutcome(accountOutcome);
+    state.balances['guest-1'] = 120;
+    const { latest, unmount } = await mountGuestToDelete();
+    expect(state.prepareGuestAccountMerge).not.toHaveBeenCalled();
+
+    let outcome: unknown;
+    await renderer.act(async () => {
+      outcome = await latest.current?.deleteAccount();
+    });
+    await flush();
+
+    expect(outcome).toBe('scheduled');
+    expect(state.deleteAccount).toHaveBeenCalledWith('DELETE', {});
+    expect(state.dismissTo).toHaveBeenCalledWith('/');
+    expect(latest.current?.identityUserId).toBe('guest-2');
+    await expect(readGuestMergeTickets()).resolves.toEqual([
+      { ticket: OLD_GUEST_TICKET, guestUserId: 'guest-old', redeemedForUserId: null, expiresAt: expect.any(String) },
+      { ticket: THIRD_TICKET, guestUserId: 'guest-a', redeemedForUserId: 'account-a', expiresAt: expect.any(String) },
+    ]);
+    await expect(readGuestMergeOutcome()).resolves.toEqual(accountOutcome);
+    unmount();
+  });
+
+  it('keeps nothing from a ticket mint for the guest that lands while its deletion is ending the session', async () => {
+    state.balances['guest-1'] = 120;
+    let mint: (value: unknown) => void = () => undefined;
+    state.prepareGuestAccountMerge.mockImplementationOnce(() => new Promise((resolve) => {
+      mint = resolve;
+    }));
+    const { latest, unmount } = await mountGuestToDelete();
+    expect(state.prepareGuestAccountMerge).toHaveBeenCalledOnce();
+    // The teardown waits on the device's stores, and the mint answers
+    // meanwhile, while the guest's session is still the one in hand.
+    let storesCleared: () => void = () => undefined;
+    state.clearSearchHistory.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      storesCleared = resolve;
+    }));
+
+    let deletion: Promise<unknown> | undefined;
+    await renderer.act(async () => {
+      deletion = latest.current?.deleteAccount();
+    });
+    await flush();
+    expect(state.clearSearchHistory).toHaveBeenCalledOnce();
+    await renderer.act(async () => {
+      mint({ ticket: GUEST_TICKET, expiresAt: inDays(30) });
+    });
+    await flush();
+    await expect(readGuestMergeTickets()).resolves.toEqual([
+      expect.objectContaining({ ticket: GUEST_TICKET, guestUserId: 'guest-1' }),
+    ]);
+
+    await renderer.act(async () => {
+      storesCleared();
+      await deletion;
+    });
+    await flush();
+
+    await expect(readGuestMergeTickets()).resolves.toEqual([]);
+    expect(latest.current?.identityUserId).toBe('guest-2');
+    unmount();
+  });
+
+  it('keeps nothing from one that lands after it', async () => {
+    state.balances['guest-1'] = 120;
+    let mint: (value: unknown) => void = () => undefined;
+    state.prepareGuestAccountMerge.mockImplementationOnce(() => new Promise((resolve) => {
+      mint = resolve;
+    }));
+    const { latest, unmount } = await mountGuestToDelete();
+
+    await renderer.act(async () => {
+      await latest.current?.deleteAccount();
+    });
+    await flush();
+    await renderer.act(async () => {
+      mint({ ticket: GUEST_TICKET, expiresAt: inDays(30) });
+    });
+    await flush();
+
+    await expect(readGuestMergeTickets()).resolves.toEqual([]);
+    expect(latest.current?.identityUserId).toBe('guest-2');
+    unmount();
   });
 });

@@ -47,7 +47,7 @@ vi.mock('expo-apple-authentication', () => ({
 vi.mock('react-native', () => ({
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   Image: (props: MockProps) => React.createElement('image', props),
-  Linking: { openURL: vi.fn() },
+  Linking: { openURL: vi.fn(async () => undefined) },
   Platform: {
     get OS() {
       return platformState.os;
@@ -160,6 +160,19 @@ describe('S2 — the sign-in buttons are the same size', () => {
     // Google's artwork ships at 216x48; distorting it is not allowed.
     expect(width / height).toBeCloseTo(216 / 48, 5);
   });
+
+  it('keeps Apple no smaller than Google where both are drawn (iOS, App Review 4.8)', () => {
+    const tree = render();
+    // Full width at the primary button's height: the artwork beside it is
+    // narrower, never taller.
+    expect(styleOf(tree, { accessibilityLabel: 'Sign in with Apple' })).toMatchObject({
+      width: '100%',
+      height: appTheme.touch.roomy,
+    });
+    expect(styleOf(tree, { accessibilityLabel: 'Sign in with Google' }).minHeight).toBe(appTheme.touch.roomy);
+    const [artwork] = hosts(tree, { accessibilityIgnoresInvertColors: true });
+    expect((artwork.props.style as { height: number }).height).toBe(appTheme.touch.roomy);
+  });
 });
 
 describe('S2 — sign-up is not dressed as a failure', () => {
@@ -173,15 +186,26 @@ describe('S2 — sign-up is not dressed as a failure', () => {
     expect(hosts(tree, { accessibilityLabel: 'Sign up with Apple' })).toHaveLength(1);
   });
 
-  it('says how to sign up in the subtitle, naming only the method on screen', () => {
+  it('says how to sign up in the subtitle, naming both methods on screen on iOS', () => {
     const tree = render();
     renderer.act(() => {
       tree.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.onPress();
     });
 
     const copy = JSON.stringify(tree.toJSON());
-    expect(copy).toContain('New accounts are created with Apple.');
-    expect(copy).not.toContain('with Google');
+    expect(copy).toContain('New accounts are created with Apple or Google.');
+  });
+
+  it('names Google alone in the subtitle on Android, where Apple is not drawn', () => {
+    platformState.os = 'android';
+    const tree = render();
+    renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.onPress();
+    });
+
+    const copy = JSON.stringify(tree.toJSON());
+    expect(copy).toContain('New accounts are created with Google.');
+    expect(copy).not.toContain('Apple');
   });
 
   it('keeps the alert for a genuine misconfiguration', () => {
@@ -200,6 +224,14 @@ describe('S2 — sign-up is not dressed as a failure', () => {
     });
     expect(JSON.stringify(tree.toJSON())).not.toContain('or continue with');
   });
+
+  it('draws the divider once above the providers, however many there are', () => {
+    for (const os of ['ios', 'android']) {
+      platformState.os = os;
+      const dividers = JSON.stringify(render().toJSON()).split('or continue with').length - 1;
+      expect(dividers, os).toBe(1);
+    }
+  });
 });
 
 describe('S2 — a failure is told in the app\'s words, where it can be seen', () => {
@@ -207,7 +239,7 @@ describe('S2 — a failure is told in the app\'s words, where it can be seen', (
     expect(describePasswordSignInError(new Error('Invalid login credentials')).title)
       .toBe('That email and password do not match');
     expect(describePasswordSignInError(new Error('Email not confirmed')).title)
-      .toBe('Confirm your email first');
+      .toBe('This email address is not confirmed');
     expect(describePasswordSignInError(new Error('AuthApiError: pgrst116 boom')))
       .toEqual(GENERIC_SIGN_IN_FAILURE);
     expect(describeProviderSignInError(new Error('nonce mismatch'), 'Apple').title)
@@ -368,5 +400,12 @@ describe('S2 — the fields say what they are', () => {
       expect(style.width).toBeGreaterThanOrEqual(MIN_HIT_TARGET_PT);
       expect(style.height).toBeGreaterThanOrEqual(MIN_HIT_TARGET_PT);
     }
+  });
+
+  it('gives the support line under the password the 44pt floor, and lets its halves wrap as a pair', () => {
+    const style = styleOf(render(), { accessibilityLabel: 'Trouble signing in? Email info@magicbooklet.com' });
+    expect(style.minHeight).toBeGreaterThanOrEqual(MIN_HIT_TARGET_PT);
+    // Two runs that wrap whole, so the address is never broken across lines.
+    expect(style).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' });
   });
 });

@@ -23,7 +23,8 @@ export function describeAuthError(error: unknown, fallback: string): string {
     return 'Confirm your email first: open the confirmation link we sent when the account was created, then sign in.';
   }
   if (message.includes('user already registered') || message.includes('already been registered')) {
-    return 'An account with this email already exists. Sign in instead, or reset the password.';
+    // No reset email can be sent (D2), so the sentence offers none.
+    return 'An account with this email already exists. Sign in instead.';
   }
   if (message.includes('too many requests') || message.includes('for security purposes') || message.includes('rate limit')) {
     return 'Too many attempts. Wait a minute before trying again.';

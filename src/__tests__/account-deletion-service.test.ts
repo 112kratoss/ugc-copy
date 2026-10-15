@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   AccountDeletionNotStartedError,
+  GuestAccountLinkedError,
   executeInitialAccountDeletion,
   hasDueAccountDeletionInitialRetries,
   parseAccountDeletionStorageManifest,
@@ -1084,6 +1085,103 @@ describe('account deletion cleanup service', () => {
     ]);
     expect(admin.storage.from).not.toHaveBeenCalled();
     expect(admin.auth.admin.deleteUser).not.toHaveBeenCalled();
+  });
+
+  it('prepares a guest through the guest guard, then starts it exactly like an account', async () => {
+    const calls: string[] = [];
+    const guestManifest = {
+      ...storageManifest,
+      owner_user_ids: [GUEST_ID],
+      showcase_media_paths: [],
+      template_asset_prefixes: [],
+    };
+    const admin = {
+      auth: {
+        admin: {
+          deleteUser: vi.fn(),
+          signOut: vi.fn(async (_token: string, scope: string) => {
+            calls.push(`sign-out:${scope}`);
+            return { data: null, error: null };
+          }),
+        },
+      },
+      rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+        calls.push(`${name}:${String(args.p_status ?? '')}`);
+        if (name === 'prepare_guest_account_deletion') {
+          return { data: { status: 'prepared', storage_manifest: guestManifest }, error: null };
+        }
+        return { data: { status: args.p_status }, error: null };
+      }),
+      storage: { from: vi.fn() },
+    };
+
+    await expect(startInitialAccountDeletion({
+      accessToken: 'token',
+      admin: admin as never,
+      userId: GUEST_ID,
+      identityKind: 'guest',
+    })).resolves.toEqual({
+      status: 'started',
+      manifest: parseAccountDeletionStorageManifest(guestManifest),
+    });
+    expect(admin.rpc).toHaveBeenCalledWith('prepare_guest_account_deletion', { p_user_id: GUEST_ID });
+    expect(calls).toEqual([
+      'prepare_guest_account_deletion:',
+      'mark_account_deletion_stage:storage_deleting',
+      'sign-out:global',
+    ]);
+    expect(admin.auth.admin.deleteUser).not.toHaveBeenCalled();
+  });
+
+  it('refuses a guest linked to an account before anything changes', async () => {
+    const signOut = vi.fn();
+    const admin = {
+      auth: { admin: { signOut } },
+      rpc: vi.fn(async () => ({ data: { status: 'merged' }, error: null })),
+    };
+
+    const start = startInitialAccountDeletion({
+      accessToken: 'token',
+      admin: admin as never,
+      userId: GUEST_ID,
+      identityKind: 'guest',
+    });
+    await expect(start).rejects.toBeInstanceOf(GuestAccountLinkedError);
+    // Still "not started" to anything that only knows the general case.
+    await expect(start).rejects.toBeInstanceOf(AccountDeletionNotStartedError);
+    expect(admin.rpc).toHaveBeenCalledTimes(1);
+    expect(signOut).not.toHaveBeenCalled();
+  });
+
+  it('reports the guest guard\'s other refusals as not started, naming them', async () => {
+    for (const status of ['not_a_guest', 'not_found', 'invalid_request']) {
+      const admin = {
+        auth: { admin: { signOut: vi.fn() } },
+        rpc: vi.fn(async () => ({ data: { status }, error: null })),
+      };
+
+      const start = startInitialAccountDeletion({
+        admin: admin as never,
+        userId: GUEST_ID,
+        identityKind: 'guest',
+      });
+      await expect(start).rejects.toBeInstanceOf(AccountDeletionNotStartedError);
+      await expect(start).rejects.not.toBeInstanceOf(GuestAccountLinkedError);
+      await expect(start).rejects.toThrow(`Could not prepare account deletion (${status}).`);
+      expect(admin.auth.admin.signOut).not.toHaveBeenCalled();
+    }
+  });
+
+  it('never sends an account through the guest guard', async () => {
+    const admin = {
+      auth: { admin: { signOut: vi.fn() } },
+      rpc: vi.fn(async () => ({ data: { status: 'merged' }, error: null })),
+    };
+
+    const start = startInitialAccountDeletion({ admin: admin as never, userId: USER_ID });
+    await expect(start).rejects.toBeInstanceOf(AccountDeletionNotStartedError);
+    await expect(start).rejects.not.toBeInstanceOf(GuestAccountLinkedError);
+    expect(admin.rpc).toHaveBeenCalledWith('prepare_account_deletion', { p_user_id: USER_ID });
   });
 
   it('reports a failed prepare as not started, before any session is revoked', async () => {

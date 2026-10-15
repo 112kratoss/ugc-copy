@@ -7,7 +7,7 @@ import {
   EyeOff,
   Loader2,
   LockKeyhole,
-  RotateCcw,
+  LogIn,
   WandSparkles,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -145,14 +145,15 @@ function ResetPasswordContent() {
             <div className="mt-6">
               <div role="alert" className="flex items-start gap-3 rounded-2xl border border-rose-300/20 bg-rose-400/10 p-4 text-sm text-rose-100">
                 <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-rose-200" aria-hidden />
-                <p>This recovery link is missing, expired, or already used. Request a fresh link to continue securely.</p>
+                <p>This recovery link is missing, expired, or already used. New reset links can’t be sent by email.</p>
               </div>
+              {/* The sign-in page's recovery notice names Google and the support address. */}
               <Link
                 href={recoveryHref}
                 className="ui-focus-ring mt-4 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"
               >
-                <RotateCcw className="h-4 w-4" aria-hidden />
-                Request a new reset link
+                <LogIn className="h-4 w-4" aria-hidden />
+                Back to sign in
               </Link>
             </div>
           ) : saved ? (

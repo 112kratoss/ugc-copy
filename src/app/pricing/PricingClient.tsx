@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Script from "next/script";
-import { ArrowLeft, ArrowRight, Check, Crown, Gift, Loader2, Sparkles, Zap, type LucideIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Crown, Gift, History, Loader2, Sparkles, Wallet, Zap, type LucideIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 
+import { Button, Surface, Text, getAccentClasses } from "@/components/DesignSystem";
 import { JsonLd } from "@/components/JsonLd";
 import { PRICING_CURRENCY, PRICING_PLANS, type PricingPlanId } from "@/lib/pricing";
 import {
@@ -63,6 +64,16 @@ const CHECKOUT_STATUS_COPY = {
 } as const;
 
 const percentFormatter = new Intl.NumberFormat('en', { maximumFractionDigits: 2 });
+// Credits are grouped in en-IN wherever they are shown, as the app and the credit history page do.
+const creditFormatter = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 });
+
+/** The signed-in buyer's balance, in the words the app's pricing card uses while it is not known. */
+function formatAvailableBalance(credits: number | null) {
+    if (credits === null) return 'Balance loading…';
+    const rounded = Math.round(credits);
+    // A refund taken back after the credits were spent can leave it below zero.
+    return `${rounded < 0 ? '−' : ''}${creditFormatter.format(Math.abs(rounded))} ${Math.abs(rounded) === 1 ? 'credit' : 'credits'}`;
+}
 
 const iconByPlanId: Record<PricingPlanId, LucideIcon> = {
     starter: Sparkles,
@@ -214,6 +225,7 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
     const [fxRates, setFxRates] = useState<Record<string, number> | null>(null);
     const [fxUpdatedAt, setFxUpdatedAt] = useState<string | null>(null);
     const [fxStatus, setFxStatus] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle');
+    const [balance, setBalance] = useState<number | null>(null);
     const router = useRouter();
 
     useEffect(() => {
@@ -223,6 +235,31 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
             if (session?.user) setUserId(session.user.id);
         });
     }, []);
+
+    useEffect(() => {
+        if (!userId) return;
+        let active = true;
+        const readBalance = () => {
+            void supabase
+                .from('profiles')
+                .select('credits')
+                .eq('id', userId)
+                .maybeSingle()
+                .then(({ data }) => {
+                    if (active && typeof data?.credits === 'number') setBalance(data.credits);
+                }, () => {
+                    // The figure stays as last read; the next `credits_updated` asks again.
+                });
+        };
+        readBalance();
+        // Every balance on a page reads itself again on this: a settled
+        // checkout, the minute of reads after a payment, the tab coming back.
+        window.addEventListener('credits_updated', readBalance);
+        return () => {
+            active = false;
+            window.removeEventListener('credits_updated', readBalance);
+        };
+    }, [userId]);
 
     useEffect(() => {
         const storedCurrency = getStoredCurrencyPreference();
@@ -497,6 +534,38 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
                         </div>
                     </div>
                 </div>
+
+                {userId ? (
+                    // The app's pricing screen opens on the balance; here it sits
+                    // beside the way to where every credit in it came from and went.
+                    <Surface
+                        variant="card"
+                        padding="md"
+                        className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between sm:px-6"
+                    >
+                        <div className="flex min-w-0 items-center gap-4">
+                            <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border ${getAccentClasses('commerce').iconWrap}`}>
+                                <Wallet className="h-5 w-5" aria-hidden />
+                            </span>
+                            <div className="min-w-0">
+                                <Text variant="caption">Available balance</Text>
+                                <Text as="p" variant="cardTitle" className="mt-0.5">
+                                    {formatAvailableBalance(balance)}
+                                </Text>
+                            </div>
+                        </div>
+                        <Button
+                            href="/credits"
+                            prefetch={false}
+                            variant="secondary"
+                            icon={History}
+                            iconPosition="start"
+                            className="shrink-0"
+                        >
+                            Credit history
+                        </Button>
+                    </Surface>
+                ) : null}
 
                 <section
                     aria-label="Invite and earn bonus credits"
