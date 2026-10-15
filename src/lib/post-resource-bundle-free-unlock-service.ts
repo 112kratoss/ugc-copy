@@ -188,6 +188,8 @@ export async function unlockFreePostResourceBundleForRoute({
     postId,
     bundleId,
     alreadyProcessed: false,
+    // A free open is not a sale: the owner's alert says so.
+    free: true,
   });
   if (runAfterResponse) {
     runAfterResponse(notify);

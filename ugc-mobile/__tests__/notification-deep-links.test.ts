@@ -83,6 +83,43 @@ describe('a workflow run link', () => {
   });
 });
 
+describe('a sale or payout alert', () => {
+  // A sale, a free open and a payout's outcome lead the seller to Your Sales,
+  // where the listing and the payout balance are; every installed build has the
+  // screen on its list.
+  const link = serverDeepLinks.sellerDashboard;
+
+  it('is Your Sales, not the Alerts screen', () => {
+    expect(link).toBe('/seller-dashboard');
+    expect(deepLinkTargetsAlertsScreen(link)).toBe(false);
+  });
+
+  it('is where a tapped sale push lands', async () => {
+    lastResponse.current = {
+      notification: {
+        request: {
+          identifier: 'push-4',
+          content: { data: { notificationId: 'notification-4', deepLink: link } },
+        },
+      },
+    };
+
+    await expect(syncLastNotificationResponse()).resolves.toBe(true);
+    expect(routerMocks.push).toHaveBeenCalledTimes(1);
+    expect(routerMocks.push).toHaveBeenCalledWith(link);
+  });
+
+  it.each([
+    '/seller-dashboard/listing-1',
+    '/seller-dashboard/..',
+    '//seller-dashboard',
+    'seller-dashboard',
+  ])('opens Your Sales and nothing else: %s is refused', (refused) => {
+    expect(navigateToNotificationDeepLink(refused)).toBe(false);
+    expect(routerMocks.push).not.toHaveBeenCalled();
+  });
+});
+
 describe('a post alert written before post alerts opened the post page', () => {
   // Saved, shared, remixed and recipe-unlocked alerts written before the server
   // linked the post page open the For You reel with the post first. The post

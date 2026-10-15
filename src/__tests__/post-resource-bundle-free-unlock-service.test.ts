@@ -303,6 +303,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       postId: 'post-1',
       bundleId: 'bundle-1',
       alreadyProcessed: false,
+      free: true,
     });
     expect(invalidateMarketplaceResourceListCache).toHaveBeenCalledTimes(1);
   });
@@ -342,6 +343,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       postId: 'post-1',
       bundleId: 'bundle-1',
       alreadyProcessed: false,
+      free: true,
     });
   });
 

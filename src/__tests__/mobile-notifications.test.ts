@@ -16,6 +16,7 @@ import {
   hasPendingMobilePushReceipts,
   normalizeMobilePushTokenPayload,
   notifyCreatorFollowed,
+  notifyCreatorPayoutResolved,
   notifyGenerationStatus,
   notifyMobilePurchasesRestored,
   notifyPostResourceUnlockCompleted,
@@ -789,6 +790,13 @@ describe('mobile notifications', () => {
       created_at: '2026-06-22T06:00:00.000Z',
       updated_at: '2026-06-22T09:00:00.000Z',
     }).updatedAt).toBe('2026-06-22T06:00:00.000Z');
+  });
+
+  it('reads a payout alert back as the kind it was written as', () => {
+    // An unknown type reads as a finished generation, which a payout is not.
+    expect(['creator_payout_paid', 'creator_payout_rejected'].map((type) => (
+      toMobileNotificationRecord({ id: 'notification-1', type, category: 'commerce' }).type
+    ))).toEqual(['creator_payout_paid', 'creator_payout_rejected']);
   });
 
   it('checks only receipts that have reached the recommended 15-minute age', async () => {
@@ -2361,7 +2369,7 @@ describe('what each alert opens and says', () => {
     } as unknown as SupabaseClient, history);
   }
 
-  it('opens the post page from a saved, shared or recipe-unlocked alert', async () => {
+  it('opens the post page from a saved, shared or recipe-unlocked alert, and Your Sales from a sale', async () => {
     // A finished remix's alert is pinned in completed-remix-notification.test.ts.
     const history = createMobileNotificationHistory();
     const client = writtenTo(history);
@@ -2379,8 +2387,117 @@ describe('what each alert opens and says', () => {
       ['post_saved', 'creator-1', '/showcase/post-1'],
       ['post_shared', 'creator-1', '/showcase/post-1'],
       ['post_resource_unlocked', 'reader-1', '/showcase/post-1'],
-      ['post_resource_unlocked', 'creator-1', '/showcase/post-1'],
+      // The seller's is a sale: it opens where the listing and the payout balance are.
+      ['post_resource_unlocked', 'creator-1', buildMobileNotificationDeepLink({ kind: 'sellerDashboard' })],
     ]);
+  });
+
+  it('tells a seller of a sale and of a free open as commerce, in words that tell the two apart', async () => {
+    const history = createMobileNotificationHistory();
+    const client = writtenTo(history);
+    const unlock = { buyerUserId: 'reader-1', ownerUserId: 'creator-1', postId: 'post-1', bundleId: 'bundle-1' };
+
+    await notifyPostResourceUnlockCompleted(client, unlock);
+    await notifyPostResourceUnlockCompleted(client, { ...unlock, buyerUserId: 'reader-2', free: true });
+
+    // Commerce follows the commerce switch and goes out at high priority; as a
+    // social alert the sale went out at default priority and the social switch
+    // silenced it.
+    const sellerAlerts = history.sent.filter((row) => row.user_id === 'creator-1');
+    expect(sellerAlerts.map(({ actor_user_id, category, title, body, deep_link, dedupe_key }) => (
+      { actor_user_id, category, title, body, deep_link, dedupe_key }
+    ))).toEqual([
+      {
+        actor_user_id: 'reader-1',
+        category: 'commerce',
+        title: 'You made a sale',
+        body: 'A creator bought the resources attached to your post.',
+        deep_link: '/seller-dashboard',
+        dedupe_key: 'post-resource-sale:post-1:reader-1',
+      },
+      {
+        actor_user_id: 'reader-2',
+        category: 'commerce',
+        title: 'Someone opened your free resources',
+        body: 'A creator opened the resources attached to your post.',
+        deep_link: '/seller-dashboard',
+        dedupe_key: 'post-resource-sale:post-1:reader-2',
+      },
+    ]);
+    // The buyer's alert is the same either way.
+    expect(history.sent.filter((row) => row.user_id !== 'creator-1').map((row) => [row.title, row.deep_link])).toEqual([
+      ['Post resources unlocked', '/showcase/post-1'],
+      ['Post resources unlocked', '/showcase/post-1'],
+    ]);
+  });
+
+  it('tells a seller their payout was sent, or not sent and why, and opens Your Sales', async () => {
+    const history = createMobileNotificationHistory();
+    const client = writtenTo(history);
+    const payout = { userId: 'creator-1', amountUsd: '$150.00' };
+
+    // A paid request's note is the bank reference: it stays off the lock screen.
+    await notifyCreatorPayoutResolved(client, { ...payout, requestId: 'request-1', status: 'paid', reason: 'UTR 4471' });
+    await notifyCreatorPayoutResolved(client, {
+      ...payout,
+      requestId: 'request-2',
+      status: 'rejected',
+      reason: ' The UPI id did not match the account name ',
+    });
+    await notifyCreatorPayoutResolved(client, {
+      ...payout,
+      requestId: 'request-3',
+      status: 'rejected',
+      reason: 'Payouts to this bank are paused (until Monday).',
+    });
+    await notifyCreatorPayoutResolved(client, { ...payout, requestId: 'request-4', status: 'rejected', reason: null });
+
+    expect(history.sent.map(({ user_id, type, category, title, body, deep_link, object_type, object_id, dedupe_key }) => (
+      { user_id, type, category, title, body, deep_link, object_type, object_id, dedupe_key }
+    ))).toEqual([
+      {
+        user_id: 'creator-1',
+        type: 'creator_payout_paid',
+        category: 'commerce',
+        title: 'Payout sent',
+        body: 'We sent $150.00 to your payout account.',
+        deep_link: '/seller-dashboard',
+        object_type: 'creator_payout_request',
+        object_id: 'request-1',
+        dedupe_key: 'creator-payout:request-1:paid',
+      },
+      expect.objectContaining({
+        type: 'creator_payout_rejected',
+        category: 'commerce',
+        title: 'Payout not sent',
+        body: 'The UPI id did not match the account name. $150.00 is back in your payout balance.',
+        deep_link: '/seller-dashboard',
+        object_id: 'request-2',
+        dedupe_key: 'creator-payout:request-2:rejected',
+      }),
+      expect.objectContaining({
+        body: 'Payouts to this bank are paused (until Monday). $150.00 is back in your payout balance.',
+      }),
+      expect.objectContaining({ body: '$150.00 is back in your payout balance.' }),
+    ]);
+  });
+
+  it('words the seller alerts for both clients', async () => {
+    // The web's Alerts prints these as written, beside the app.
+    const history = createMobileNotificationHistory();
+    const client = writtenTo(history);
+    const unlock = { buyerUserId: 'reader-1', ownerUserId: 'creator-1', postId: 'post-1', bundleId: 'bundle-1' };
+
+    await notifyPostResourceUnlockCompleted(client, unlock);
+    await notifyPostResourceUnlockCompleted(client, { ...unlock, buyerUserId: 'reader-2', free: true });
+    await notifyCreatorPayoutResolved(client, { userId: 'creator-1', requestId: 'request-1', status: 'paid', amountUsd: '$150.00', reason: null });
+    await notifyCreatorPayoutResolved(client, { userId: 'creator-1', requestId: 'request-2', status: 'rejected', amountUsd: '$150.00', reason: 'Wrong account' });
+
+    const words = history.sent
+      .filter((row) => row.user_id === 'creator-1')
+      .map((row) => `${row.title} ${row.body}`)
+      .join(' ');
+    expect(words).not.toMatch(/\bapp\b|mobile|\bweb\b|Your Sales|dashboard/i);
   });
 
   it("opens the follower's page from a New follower alert, and stays on Alerts with no handle to open", async () => {
