@@ -163,8 +163,18 @@ const authState = vi.hoisted(() => ({
     getSavedMedia: vi.fn(),
     getShowcaseFeed: vi.fn(),
     shareCreatorProfile: vi.fn(async () => ({ success: true })),
+    getCreatorPayoutState: vi.fn(),
   },
 }));
+
+type PayoutQueryState = {
+  data: undefined | { availableUsd: string };
+  isError: boolean;
+  isPending: boolean;
+};
+
+// The payout state before it answers: what every suite sees unless it says otherwise.
+const PAYOUT_PENDING: PayoutQueryState = { data: undefined, isError: false, isPending: true };
 
 const queryState = vi.hoisted(() => ({
   profileData: { id: 'user-123', username: 'luna-dreams', displayName: 'Luna Dreams', avatarUrl: 'avatar.png' } as null | {
@@ -214,6 +224,9 @@ const queryState = vi.hoisted(() => ({
   fetchNextOwnerPosts: vi.fn(() => Promise.resolve()),
   fetchNextSavedMedia: vi.fn(() => Promise.resolve()),
   setQueryData: vi.fn(),
+  // The payout state as the Wallet card last asked for it, and its answer.
+  payoutQueryOptions: null as null | { queryKey: unknown[]; enabled?: boolean; queryFn?: unknown },
+  payoutQuery: { data: undefined, isError: false, isPending: true } as PayoutQueryState,
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -228,7 +241,8 @@ vi.mock('@/components/push-offer-card', () => ({
 
 // react-query mock
 vi.mock('@tanstack/react-query', () => ({
-  useQuery: ({ queryKey }: { queryKey: string[] }) => {
+  useQuery: (options: { queryKey: unknown[]; enabled?: boolean; queryFn?: unknown }) => {
+    const { queryKey } = options;
     if (queryKey[0] === 'profile') {
       return {
         data: queryState.profileData,
@@ -236,6 +250,10 @@ vi.mock('@tanstack/react-query', () => ({
         error: queryState.profileError,
         isLoading: false,
       };
+    }
+    if (queryKey[0] === 'creator-payouts') {
+      queryState.payoutQueryOptions = options;
+      return queryState.payoutQuery;
     }
     return { data: null, isLoading: false };
   },
@@ -333,6 +351,8 @@ import { DEFAULT_PROFILE_MEDIA_TAB, PROFILE_MEDIA_TABS } from '../lib/profile-vi
 // with no open under way, as the reader does after landing on the screen.
 afterEach(() => {
   resetMediaZoomTransitions();
+  queryState.payoutQuery = PAYOUT_PENDING;
+  queryState.payoutQueryOptions = null;
 });
 
 function findPressableByText(root: renderer.ReactTestInstance, text: string) {
@@ -436,6 +456,23 @@ describe('ProfileDashboard signed out', () => {
     for (const tab of PROFILE_MEDIA_TABS) {
       expect(findPressableByText(tree!.root, tab)).toBeTruthy();
     }
+  });
+
+  // Below the cut of audit 03: the sample Post tile opened Your Sales.
+  it('opens the post composer from the sample Post tile, never Your Sales', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Posts" />);
+    });
+
+    const sample = tree!.root.find((node) => String(node.type) === 'pressable'
+      && node.props.accessibilityLabel === 'Post, Cyber Shot, Private');
+    renderer.act(() => {
+      sample.props.onPress();
+    });
+
+    expect(routerState.push).toHaveBeenCalledWith('/post/new');
+    expect(routerState.push).not.toHaveBeenCalledWith('/seller-dashboard');
   });
 
   /**
@@ -634,6 +671,79 @@ describe('ProfileDashboard Credits card', () => {
     queryState.profileData = baseProfile;
     authState.creditsUpdatedAt = null;
     expect(renderCard()).toContain('100');
+  });
+});
+
+/**
+ * 03-2: the card labelled "Wallet" drew lifetime tracked earnings, a figure a
+ * payout request never lowers, so after the first request it claimed money Your
+ * Sales no longer held. It reads the payout state, which the delete-account
+ * warning and Your Sales read too.
+ */
+describe('ProfileDashboard Wallet card', () => {
+  const baseProfile = queryState.profileData;
+
+  beforeEach(() => {
+    routerState.push.mockClear();
+    // A lifetime total on the profile that the Wallet must not draw.
+    (queryState as { profileData: unknown }).profileData = {
+      ...baseProfile,
+      sales: { earningsUsdCents: 1250, listingCount: 3, salesCount: 4 },
+    };
+  });
+
+  afterEach(() => {
+    queryState.profileData = baseProfile;
+  });
+
+  function renderWallet() {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+    const card = findPressableByText(tree.root, 'Wallet');
+    const texts = card
+      .findAll((node) => node.type === 'text' && typeof node.props.children === 'string')
+      .map((node) => node.props.children as string);
+    return { card, texts };
+  }
+
+  it("reads the signed-in account's own payout state", () => {
+    renderWallet();
+
+    expect(queryState.payoutQueryOptions).toMatchObject({ queryKey: ['creator-payouts', 'user-123'], enabled: true });
+    expect(queryState.payoutQueryOptions?.queryFn).toBe(authState.api.getCreatorPayoutState);
+  });
+
+  it('shows what can be withdrawn, never the lifetime earnings', () => {
+    queryState.payoutQuery = { data: { availableUsd: '$4.25' }, isError: false, isPending: false };
+    const { card, texts } = renderWallet();
+
+    expect(texts).toEqual(expect.arrayContaining(['$4.25', 'Available to withdraw']));
+    expect(texts).not.toContain('$12.50');
+    expect(card.props.accessibilityLabel).toBe('Wallet, $4.25 available to withdraw');
+  });
+
+  it('says the balance is unavailable when the read fails, even over a balance read before', () => {
+    queryState.payoutQuery = { data: { availableUsd: '$40.00' }, isError: true, isPending: false };
+    const { card, texts } = renderWallet();
+
+    expect(texts).toEqual(expect.arrayContaining(['–', 'Balance unavailable']));
+    expect(texts).not.toContain('$40.00');
+    expect(texts).not.toContain('Available to withdraw');
+    expect(card.props.accessibilityLabel).toBe('Wallet, balance unavailable');
+
+    // Your Sales is still a tap away.
+    renderer.act(() => { card.props.onPress(); });
+    expect(routerState.push).toHaveBeenCalledWith('/seller-dashboard');
+  });
+
+  it('draws the dash, never $0, while the payout state is on its way', () => {
+    const { card, texts } = renderWallet();
+
+    expect(texts).toEqual(expect.arrayContaining(['–', 'Available to withdraw']));
+    expect(texts.some((text) => text.startsWith('$'))).toBe(false);
+    expect(card.props.accessibilityLabel).toBe('Wallet, balance loading');
   });
 });
 
@@ -861,7 +971,7 @@ describe('ProfileDashboard media tiles routing', () => {
     }
   });
 
-  it('draws the server totals in the header and the seller total on the Wallet card', () => {
+  it('draws the server totals in the header, and keeps the lifetime earnings off the Wallet card', () => {
     const baseProfile = queryState.profileData;
     (queryState as { profileData: unknown }).profileData = {
       ...baseProfile,
@@ -879,14 +989,15 @@ describe('ProfileDashboard media tiles routing', () => {
       // Totals, not the empty libraries the mock pages in, and no plus sign.
       expect(texts).toEqual(expect.arrayContaining(['142', '19', '11']));
       expect(texts.some((text) => text.endsWith('+'))).toBe(false);
+      // The profile's `sales` total is lifetime earnings: never the Wallet's figure (audit 03-2).
       expect(findPressableByText(tree!.root, 'Wallet')
-        .findAll((node) => node.type === 'text' && node.props.children === '$12.50')).toHaveLength(1);
+        .findAll((node) => node.type === 'text' && node.props.children === '$12.50')).toHaveLength(0);
     } finally {
       queryState.profileData = baseProfile;
     }
   });
 
-  it('falls back to the paged counts without totals, and draws a dash for a Wallet total nobody sent', () => {
+  it('falls back to the paged counts without totals, and draws a dash on the Wallet card until the payout state answers', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<ProfileDashboard />);
@@ -979,7 +1090,7 @@ describe('ProfileDashboard media tiles routing', () => {
       renderer.create(<ProfileDashboard initialTab="Posts" />);
     });
 
-    // No sales summary: the Wallet reads the totals `/api/profile` carries.
+    // No sales summary: nothing on the profile reads one (the Wallet reads the payout state).
     expect(authState.api.listOwnerPosts).toHaveBeenCalledWith({
       includeArchived: true,
       pagination: 'cursor',
@@ -2089,7 +2200,7 @@ describe('ProfileDashboard public page and handle', () => {
     expect(tree.root.findByProps({ accessibilityLabel: 'Archived (4)' })).toBeTruthy();
   });
 
-  it('reads the Wallet from the profile alone, never from a Posts page', () => {
+  it('reads the Wallet from the payout state alone, never from a Posts page', () => {
     queryState.ownerPostPages = [{ posts: [], summary: { earningsUsdCents: 999, listingCount: 1, salesCount: 1 } }];
     const tree = renderDashboard('Posts');
     const wallet = findPressableByText(tree.root, 'Wallet');

@@ -44,12 +44,17 @@ export function formatCompactCount(value: number | null | undefined) {
   return String(safeValue);
 }
 
+/**
+ * Always with cents ("$5.00", never "$5"), as the web's `formatUsdCents` and the
+ * server's payout strings print them, so one amount reads the same wherever a
+ * seller meets it (audit 03-9).
+ */
 export function formatUsdCents(value: number | null | undefined) {
   const safeValue = Math.max(0, value ?? 0);
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
-    minimumFractionDigits: safeValue % 100 === 0 ? 0 : 2,
+    minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(safeValue / 100);
 }

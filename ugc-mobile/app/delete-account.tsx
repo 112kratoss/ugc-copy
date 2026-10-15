@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { router } from 'expo-router';
 import { useState } from 'react';
@@ -21,6 +20,7 @@ import { env } from '@/lib/env';
 import { isGoogleAuthCanceled } from '@/lib/google-auth';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
+import { useCreatorPayoutState } from '@/lib/use-creator-payout-state';
 
 type DeletionFailure = { tone: 'danger' | 'warning'; title: string; body: string };
 
@@ -86,7 +86,7 @@ function reauthenticationFailure(
 
 export default function DeleteAccountScreen() {
   const theme = useAppTheme();
-  const { accountReauthenticationMethods, api, deleteAccount, user } = useAuth();
+  const { accountReauthenticationMethods, deleteAccount, user } = useAuth();
   const [confirmation, setConfirmation] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
@@ -95,11 +95,7 @@ export default function DeleteAccountScreen() {
   const isConfirmed = confirmation.trim().toUpperCase() === 'DELETE';
   // A seller's balance not yet paid out goes with the account, so the screen
   // says how much before anything is typed. It never holds the deletion up.
-  const payoutQuery = useQuery({
-    queryKey: ['creator-payouts', user?.id ?? null],
-    enabled: Boolean(user),
-    queryFn: api.getCreatorPayoutState,
-  });
+  const payoutQuery = useCreatorPayoutState();
 
   const removeAccount = async (reauthentication?: AccountDeletionReauthentication) => {
     setIsDeleting(true);

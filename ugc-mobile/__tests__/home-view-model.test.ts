@@ -28,6 +28,16 @@ describe('home view model', () => {
     expect(formatUsdCents(4280)).toBe('$42.80');
   });
 
+  // 03-9: "$5" here and "$5.00" on the web for the same amount.
+  it('prints dollars with their cents, as the web does', () => {
+    expect(formatUsdCents(500)).toBe('$5.00');
+    expect(formatUsdCents(10_000)).toBe('$100.00');
+    expect(formatUsdCents(123_456)).toBe('$1,234.56');
+    expect(formatUsdCents(5)).toBe('$0.05');
+    expect(formatUsdCents(0)).toBe('$0.00');
+    expect(formatUsdCents(null)).toBe('$0.00');
+  });
+
   it('summarizes seller post earnings for the side menu wallet', () => {
     expect(getOwnerPostSalesSummary([
       {
