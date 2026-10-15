@@ -99,13 +99,22 @@ describe('refreshUnlockedBundleCaches', () => {
     expect(invalidated).toEqual(expect.arrayContaining([
       ['post-resource-bundle', 'post-123', 'asset-123'],
       ['marketplace-resource', 'asset-123'],
-      ['marketplace-resources'],
       ['viewer-unlocks'],
       ['showcase-post', 'post-123'],
     ]));
   });
 
-  it('waits for the bundle reads only, and refreshes the library and lists behind the result', async () => {
+  it('refreshes no marketplace list, since no screen in the app reads one', async () => {
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+
+    await refreshUnlockedBundleCaches(queryClient, { postId: 'post-123', resourceId: 'asset-123' });
+
+    const invalidated = invalidate.mock.calls.map(([filters]) => filters?.queryKey);
+    expect(invalidated).not.toContainEqual(['marketplace-resources']);
+  });
+
+  it('waits for the bundle reads only, and refreshes the library and the post behind the result', async () => {
     const pending = new Map<string, () => void>();
     const invalidateQueries = vi.fn(({ queryKey }: { queryKey: readonly unknown[] }) => new Promise<void>((resolve) => {
       pending.set(JSON.stringify(queryKey), resolve);
@@ -122,10 +131,10 @@ describe('refreshUnlockedBundleCaches', () => {
     pending.get(JSON.stringify(['marketplace-resource', 'asset-123']))?.();
     await refresh;
 
-    // The library, the lists and the post read were asked to refresh, and
-    // were never waited for: they are still pending here.
+    // The library and the post read were asked to refresh, and were never
+    // waited for: they are still pending here.
     expect(settled).toBe(true);
     expect(pending.has(JSON.stringify(['viewer-unlocks']))).toBe(true);
-    expect(pending.has(JSON.stringify(['marketplace-resources']))).toBe(true);
+    expect(pending.has(JSON.stringify(['showcase-post', 'post-123']))).toBe(true);
   });
 });

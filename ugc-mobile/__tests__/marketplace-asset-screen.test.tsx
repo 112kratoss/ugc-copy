@@ -14,7 +14,8 @@ const showActionSheet = vi.hoisted(() => vi.fn());
 
 const authState = vi.hoisted(() => ({
   api: { resolvePostResourceFileUrl: vi.fn() },
-  credits: 2000,
+  credits: 2000 as number | null,
+  marketplaceSpendableCredits: 2000 as number | null,
   updateCredits: vi.fn(),
   user: { id: 'user-1' } as { id: string } | null,
 }));
@@ -102,11 +103,29 @@ function renderScreen() {
   return tree;
 }
 
+const PROMOTIONAL_NOTE = "Welcome and referral credits can't be spent on creator resources.";
+
+/** A text node's words, however JSX split them into children. */
+function textOf(node: renderer.ReactTestInstance) {
+  return ([] as unknown[]).concat(node.props.children).join('');
+}
+
+function texts(tree: renderer.ReactTestRenderer) {
+  return tree.root.findAll((node) => String(node.type) === 'text').map(textOf);
+}
+
+function balanceLine(tree: renderer.ReactTestRenderer) {
+  const line = tree.root.findAll((node) => String(node.type) === 'text' && textOf(node).startsWith('Costs '))[0];
+  if (!line) throw new Error('No balance line');
+  return line;
+}
+
 beforeEach(() => {
   routerPush.mockClear();
   mutate.mockClear();
   showActionSheet.mockClear();
   authState.credits = 2000;
+  authState.marketplaceSpendableCredits = 2000;
   authState.user = { id: 'user-1' };
   queryState.data = paidDetail();
 });
@@ -130,6 +149,7 @@ describe('marketplace asset screen (HIG S18)', () => {
 
   it('offers the credits path instead of a doomed unlock when the balance is short', () => {
     authState.credits = 100;
+    authState.marketplaceSpendableCredits = 100;
     const tree = renderScreen();
 
     const buy = tree.root.findAll((node) => String(node.type) === 'primary-button')[0];
@@ -143,6 +163,47 @@ describe('marketplace asset screen (HIG S18)', () => {
     if (!getCredits) throw new Error('No Get credits button');
     renderer.act(() => { (getCredits.props.onPress as () => void)(); });
     expect(routerPush).toHaveBeenCalledWith('/pricing');
+  });
+
+  it('shows the balance the unlock can spend, and why a total that covers the price does not', () => {
+    // 1,200 credits, every one of them welcome or referral credits.
+    authState.credits = 1200;
+    authState.marketplaceSpendableCredits = 0;
+    const tree = renderScreen();
+
+    expect(textOf(balanceLine(tree))).toBe('Costs 900 credits · Balance 0');
+    expect(balanceLine(tree).props.color).toBe('warning');
+    expect(texts(tree)).toContain(`You need 900 more credits for this unlock. ${PROMOTIONAL_NOTE}`);
+    // Said once, with the shortfall.
+    expect(texts(tree).filter((text) => text.includes(PROMOTIONAL_NOTE))).toHaveLength(1);
+
+    const buy = tree.root.findAll((node) => String(node.type) === 'primary-button')[0];
+    expect(buy?.props.disabled).toBe(true);
+    const getCredits = tree.root.findAll((node) => String(node.type) === 'secondary-button'
+      && node.props.label === 'Get credits');
+    expect(getCredits).toHaveLength(1);
+  });
+
+  it('says this balance leaves out welcome and referral credits even when it covers the price', () => {
+    authState.credits = 2000;
+    authState.marketplaceSpendableCredits = 1500;
+    const tree = renderScreen();
+
+    expect(textOf(balanceLine(tree))).toBe('Costs 900 credits · Balance 1500');
+    expect(balanceLine(tree).props.color).toBe('success');
+    expect(texts(tree)).toContain(PROMOTIONAL_NOTE);
+
+    const buy = tree.root.findAll((node) => String(node.type) === 'primary-button')[0];
+    expect(buy?.props.disabled).toBe(false);
+    expect(tree.root.findAll((node) => String(node.type) === 'secondary-button'
+      && node.props.label === 'Get credits')).toHaveLength(0);
+  });
+
+  it('shows the whole balance, with no note, when every credit can be spent', () => {
+    const tree = renderScreen();
+
+    expect(textOf(balanceLine(tree))).toBe('Costs 900 credits · Balance 2000');
+    expect(texts(tree).some((text) => text.includes(PROMOTIONAL_NOTE))).toBe(false);
   });
 
   it('signs a signed-out buyer in and brings them back to this unlock', () => {
