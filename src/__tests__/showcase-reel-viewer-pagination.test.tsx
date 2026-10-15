@@ -36,14 +36,27 @@ vi.mock('next/script', () => ({
   default: ({ id }: { id?: string }) => <script data-testid={id ?? 'next-script'} />,
 }));
 
-const { mockPush, mockUpdateCredits, authState } = vi.hoisted(() => ({
+const { mockPush, mockUpdateCredits, mockVerifyCheckout, mockGetSession, authState } = vi.hoisted(() => ({
   mockPush: vi.fn(),
   mockUpdateCredits: vi.fn(),
+  mockVerifyCheckout: vi.fn(),
+  mockGetSession: vi.fn(),
   authState: {
     session: null as { access_token: string } | null,
     credits: null as number | null,
+    marketplaceSpendableCredits: null as number | null,
     user: null as { id: string } | null,
   },
+}));
+
+vi.mock('@/lib/razorpay-checkout-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/razorpay-checkout-client')>()),
+  verifyRazorpayCheckoutUntilSettled: mockVerifyCheckout,
+}));
+
+// The browser session a checkout reads its bearer from after the sheet.
+vi.mock('@/lib/supabase', () => ({
+  supabase: { auth: { getSession: mockGetSession } },
 }));
 
 vi.mock('next/navigation', () => ({
@@ -57,6 +70,7 @@ vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     session: authState.session,
     credits: authState.credits,
+    marketplaceSpendableCredits: authState.marketplaceSpendableCredits,
     user: authState.user,
     updateCredits: mockUpdateCredits,
   }),
@@ -359,9 +373,14 @@ describe('ShowcaseReelViewer pagination', () => {
   beforeEach(() => {
     mockPush.mockClear();
     mockUpdateCredits.mockClear();
+    mockVerifyCheckout.mockReset();
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'token-fresh' } } });
     authState.session = null;
     authState.credits = null;
+    authState.marketplaceSpendableCredits = null;
     authState.user = null;
+    window.sessionStorage.clear();
     vi.unstubAllGlobals();
     resetShowcaseFeedEventQueueForTests();
     resetFeedbackState();
@@ -1717,6 +1736,377 @@ describe('ShowcaseReelViewer pagination', () => {
       } finally {
         funnel.stop();
       }
+    });
+
+    // A new account holds only welcome credits: the total covers the price, the
+    // unlock would refuse it, and the reel used to offer the spend anyway.
+    it('judges the shortfall on the spendable credits alone, says why, and offers Buy credits', () => {
+      authState.session = { access_token: 'token-1' };
+      authState.credits = 1200;
+      authState.marketplaceSpendableCredits = 0;
+      stubRequests();
+      renderPaidReel();
+
+      fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+
+      expect(screen.getByText('0 credits available')).toBeInTheDocument();
+      expect(screen.getByText("Welcome and referral credits can't be spent on recipes.")).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeDisabled();
+      expect(screen.getByRole('link', { name: 'Buy credits' })).toHaveAttribute('href', '/pricing');
+    });
+
+    it('prints the spendable balance alone when all of it can buy recipes', () => {
+      authState.session = { access_token: 'token-1' };
+      authState.credits = 1200;
+      authState.marketplaceSpendableCredits = 1200;
+      stubRequests();
+      renderPaidReel();
+
+      fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+
+      expect(screen.getByText('1,200 credits available')).toBeInTheDocument();
+      expect(screen.queryByText("Welcome and referral credits can't be spent on recipes.")).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeEnabled();
+      expect(screen.queryByRole('link', { name: 'Buy credits' })).not.toBeInTheDocument();
+    });
+
+    it('claims no shortfall while the spendable figure is unknown', () => {
+      authState.session = { access_token: 'token-1' };
+      authState.credits = 120;
+      stubRequests();
+      renderPaidReel();
+
+      fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+
+      expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeEnabled();
+      expect(screen.queryByRole('link', { name: 'Buy credits' })).not.toBeInTheDocument();
+      expect(screen.queryByText(/credits available/)).not.toBeInTheDocument();
+    });
+
+    it("offers Buy credits once the unlock refuses for credits, and takes the server's balance", async () => {
+      authState.session = { access_token: 'token-1' };
+      authState.credits = 1200;
+      stubRequests({
+        '/api/posts/post-1/resource-bundle/unlock-with-credits': () => new Response(JSON.stringify({
+          error: 'Insufficient credits. This unlock costs 900 credits.',
+          code: 'INSUFFICIENT_CREDITS',
+          creditCost: 900,
+          remainingCredits: 1200,
+          marketplaceSpendableCredits: 0,
+        }), { status: 402 }),
+      });
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      try {
+        renderPaidReel();
+        fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+        expect(screen.queryByRole('link', { name: 'Buy credits' })).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Use 900 credits' }));
+
+        expect(await screen.findByText('Insufficient credits. This unlock costs 900 credits.')).toBeInTheDocument();
+        expect(mockUpdateCredits).toHaveBeenCalledWith(1200, { marketplaceSpendableCredits: 0 });
+        expect(screen.getByRole('link', { name: 'Buy credits' })).toHaveAttribute('href', '/pricing');
+      } finally {
+        confirm.mockRestore();
+      }
+    });
+
+    it('hands the spendable figure the unlock answered to the balance with the new total', async () => {
+      authState.session = { access_token: 'token-1' };
+      authState.credits = 1500;
+      authState.marketplaceSpendableCredits = 1200;
+      stubRequests({
+        '/api/posts/post-1/resource-bundle/unlock-with-credits': () => new Response(JSON.stringify({
+          success: true,
+          credits: 600,
+          marketplaceSpendableCredits: 300,
+        })),
+      });
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      try {
+        renderPaidReel();
+        fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+        fireEvent.click(screen.getByRole('button', { name: 'Use 900 credits' }));
+
+        await waitFor(() => {
+          expect(mockUpdateCredits).toHaveBeenCalledWith(600, { marketplaceSpendableCredits: 300 });
+        });
+      } finally {
+        confirm.mockRestore();
+      }
+    });
+
+    describe('after the sheet takes a cash payment', () => {
+      const payment = {
+        razorpay_payment_id: 'pay-1',
+        razorpay_order_id: 'order-1',
+        razorpay_signature: 'signature-1',
+      };
+      const PAYMENT_RECEIVED = "Payment received. Your recipe opens here once it's confirmed.";
+      const INTENT_KEY = 'magicbooklet:razorpay-checkout:post-resource:post-1';
+      const lockedRecipe = () => new Response(JSON.stringify({
+        bundle: { viewerCanAccess: false, viewerIsOwner: false, resources: null },
+      }));
+      const openRecipe = () => new Response(JSON.stringify({
+        bundle: {
+          viewerCanAccess: true,
+          viewerIsOwner: false,
+          resources: {
+            promptText: 'paid prompt',
+            notesMarkdown: null,
+            workflowShareUrl: null,
+            attachments: [],
+            allowRemix: false,
+          },
+        },
+      }));
+
+      /** The sheet takes the payment as soon as it opens. */
+      function stubSheetThatPays() {
+        vi.stubGlobal('Razorpay', class {
+          constructor(private readonly options: { handler: (response: typeof payment) => Promise<void> }) {}
+          open() { void this.options.handler(payment); }
+          on() {}
+        });
+      }
+
+      /** The reel's own access check on entry reads locked; later reads wait for `recipeOpens`. */
+      function stubCashCheckout(
+        recipeOpens: Promise<void> | null,
+        otherAnswers: Record<string, () => Response> = {},
+      ) {
+        let recipeReads = 0;
+        return stubRequests({
+          ...otherAnswers,
+          '/api/posts/post-1/resource-bundle/order': () => new Response(JSON.stringify({
+            orderId: 'order-1',
+            amount: 90000,
+            currency: 'USD',
+          })),
+          '/api/posts/post-1/resource-bundle': async () => {
+            recipeReads += 1;
+            if (recipeReads === 1 || !recipeOpens) return lockedRecipe();
+            await recipeOpens;
+            return openRecipe();
+          },
+        });
+      }
+
+      function payWithCash() {
+        renderPaidReel();
+        fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+        fireEvent.click(screen.getByRole('button', { name: /pay with cash/i }));
+      }
+
+      it('verifies with the session as it is after the sheet, and reads the settled recipe with it too', async () => {
+        authState.session = { access_token: 'token-at-click' };
+        authState.credits = 1200;
+        const fetchMock = stubCashCheckout(Promise.resolve());
+        mockVerifyCheckout.mockResolvedValueOnce({ state: 'settled', body: { success: true } });
+        stubSheetThatPays();
+
+        payWithCash();
+
+        expect(await screen.findByText('Unlocked')).toBeInTheDocument();
+        const verifyArguments = mockVerifyCheckout.mock.calls[0][0] as { body: unknown; token: () => Promise<string> };
+        expect(verifyArguments.body).toEqual(payment);
+        await expect(verifyArguments.token()).resolves.toBe('token-fresh');
+        expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle', {
+          headers: { Authorization: 'Bearer token-fresh' },
+        });
+        expect(window.sessionStorage.getItem(INTENT_KEY)).toBeNull();
+      });
+
+      it('a payment still capturing: drops the intent key, says the payment is in, holds the buttons, and opens the recipe from a re-read', async () => {
+        authState.session = { access_token: 'token-at-click' };
+        authState.credits = 5000;
+        authState.marketplaceSpendableCredits = 5000;
+        let letRecipeOpen: () => void = () => undefined;
+        const fetchMock = stubCashCheckout(new Promise<void>((resolve) => {
+          letRecipeOpen = resolve;
+        }));
+        let intentKeyDuringVerify: string | null = null;
+        mockVerifyCheckout.mockImplementationOnce(async () => {
+          intentKeyDuringVerify = window.sessionStorage.getItem(INTENT_KEY);
+          return { state: 'pending', body: { code: 'PAYMENT_PENDING' } };
+        });
+        stubSheetThatPays();
+        const funnel = listenForProductEvents();
+        try {
+          payWithCash();
+
+          expect(await screen.findByText(PAYMENT_RECEIVED)).toBeInTheDocument();
+          expect(intentKeyDuringVerify).toEqual(expect.any(String));
+          expect(window.sessionStorage.getItem(INTENT_KEY)).toBeNull();
+          expect(screen.getByRole('button', { name: /pay with cash/i })).toBeDisabled();
+          expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeDisabled();
+          await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle', {
+              headers: { Authorization: 'Bearer token-fresh' },
+            });
+          });
+
+          letRecipeOpen();
+
+          expect(await screen.findByText('Unlocked')).toBeInTheDocument();
+          expect(screen.queryByText(PAYMENT_RECEIVED)).not.toBeInTheDocument();
+          expect(funnel.heard.map(({ eventName }) => eventName)).toEqual([
+            'recipe_checkout_started',
+            'recipe_checkout_succeeded',
+          ]);
+        } finally {
+          funnel.stop();
+        }
+      });
+
+      it('a verify that fails after the sheet took the money never shows the failure or invites another payment', async () => {
+        authState.session = { access_token: 'token-at-click' };
+        authState.credits = 1200;
+        const fetchMock = stubCashCheckout(null);
+        mockVerifyCheckout.mockRejectedValueOnce(new Error('Unauthorized'));
+        stubSheetThatPays();
+        const funnel = listenForProductEvents();
+        try {
+          payWithCash();
+
+          expect(await screen.findByText(PAYMENT_RECEIVED)).toBeInTheDocument();
+          expect(screen.queryByText('Unauthorized')).not.toBeInTheDocument();
+          expect(screen.queryByText(/try again/i)).not.toBeInTheDocument();
+          expect(window.sessionStorage.getItem(INTENT_KEY)).toBeNull();
+          expect(screen.getByRole('button', { name: /pay with cash/i })).toBeDisabled();
+          expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeDisabled();
+          await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle', {
+              headers: { Authorization: 'Bearer token-fresh' },
+            });
+          });
+          expect(screen.getByText(PAYMENT_RECEIVED)).toBeInTheDocument();
+          expect(funnel.heard.map(({ eventName }) => eventName)).toEqual(['recipe_checkout_started']);
+        } finally {
+          funnel.stop();
+        }
+      });
+
+      it('opens a paid recipe on its own post only, even when the re-read lands while the reader is elsewhere', async () => {
+        authState.session = { access_token: 'token-at-click' };
+        authState.credits = 1200;
+        let letRecipeOpen: () => void = () => undefined;
+        const fetchMock = stubCashCheckout(new Promise<void>((resolve) => {
+          letRecipeOpen = resolve;
+        }), {
+          // The reader already owns the second post's recipe.
+          '/api/posts/post-2/resource-bundle': () => new Response(JSON.stringify({
+            bundle: {
+              viewerCanAccess: true,
+              viewerIsOwner: false,
+              resources: {
+                promptText: 'second prompt',
+                notesMarkdown: null,
+                workflowShareUrl: null,
+                attachments: [],
+                allowRemix: false,
+              },
+            },
+          })),
+        });
+        const secondRecipeReads = () => fetchMock.mock.calls
+          .filter(([input]) => String(input) === '/api/posts/post-2/resource-bundle').length;
+        mockVerifyCheckout.mockResolvedValueOnce({ state: 'pending', body: { code: 'PAYMENT_PENDING' } });
+        stubSheetThatPays();
+        const items = [
+          createShowcaseItem({ id: 'post-1', title: 'Paid Frame', asset: paidAsset }),
+          createShowcaseItem({
+            id: 'post-2',
+            title: 'Second Frame',
+            asset: { ...paidAsset, id: 'bundle-2', postId: 'post-2', title: 'Second pack' },
+          }),
+        ];
+        const funnel = listenForProductEvents();
+        try {
+          const { rerender } = render(<ShowcaseReelViewer {...reelProps({ items, selectedItemId: 'post-1' })} />);
+          fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+          fireEvent.click(screen.getByRole('button', { name: /pay with cash/i }));
+          expect(await screen.findByText(PAYMENT_RECEIVED)).toBeInTheDocument();
+
+          rerender(<ShowcaseReelViewer {...reelProps({ items, selectedItemId: 'post-2' })} />);
+          expect(await screen.findByText(/second prompt/)).toBeInTheDocument();
+          letRecipeOpen();
+          await waitFor(() => {
+            expect(funnel.heard.map(({ eventName }) => eventName)).toContain('recipe_checkout_succeeded');
+          });
+          await new Promise((resolve) => setTimeout(resolve, 0));
+
+          // The post on screen keeps its own recipe: nothing replaced it, so nothing read it again.
+          expect(screen.getByText(/second prompt/)).toBeInTheDocument();
+          expect(screen.queryByText(/paid prompt/)).not.toBeInTheDocument();
+          expect(secondRecipeReads()).toBe(1);
+
+          rerender(<ShowcaseReelViewer {...reelProps({ items, selectedItemId: 'post-1' })} />);
+          expect(await screen.findByText('Unlocked')).toBeInTheDocument();
+          expect(screen.queryByText(PAYMENT_RECEIVED)).not.toBeInTheDocument();
+        } finally {
+          funnel.stop();
+        }
+      });
+
+      it("holds only the bought post's buy buttons while its payment is awaited", async () => {
+        authState.session = { access_token: 'token-at-click' };
+        authState.credits = 5000;
+        authState.marketplaceSpendableCredits = 5000;
+        stubCashCheckout(null);
+        mockVerifyCheckout.mockResolvedValueOnce({ state: 'pending', body: { code: 'PAYMENT_PENDING' } });
+        stubSheetThatPays();
+        const items = [
+          createShowcaseItem({ id: 'post-1', title: 'Paid Frame', asset: paidAsset }),
+          createShowcaseItem({
+            id: 'post-2',
+            title: 'Second Frame',
+            asset: { ...paidAsset, id: 'bundle-2', postId: 'post-2', title: 'Second pack' },
+          }),
+        ];
+
+        const { rerender } = render(<ShowcaseReelViewer {...reelProps({ items, selectedItemId: 'post-1' })} />);
+        fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+        fireEvent.click(screen.getByRole('button', { name: /pay with cash/i }));
+        expect(await screen.findByText(PAYMENT_RECEIVED)).toBeInTheDocument();
+
+        // Another recipe is another purchase.
+        rerender(<ShowcaseReelViewer {...reelProps({ items, selectedItemId: 'post-2' })} />);
+        fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+        expect(screen.getByRole('button', { name: /pay with cash/i })).toBeEnabled();
+        expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeEnabled();
+        expect(screen.queryByText(PAYMENT_RECEIVED)).not.toBeInTheDocument();
+
+        // Back on the bought post, its payment is still the one being waited on.
+        rerender(<ShowcaseReelViewer {...reelProps({ items, selectedItemId: 'post-1' })} />);
+        fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+        expect(screen.getByText(PAYMENT_RECEIVED)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /pay with cash/i })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeDisabled();
+      });
+
+      it("starts no wait for a verify that answers after the reel's page has gone", async () => {
+        authState.session = { access_token: 'token-at-click' };
+        authState.credits = 1200;
+        const fetchMock = stubCashCheckout(null);
+        let failVerify: (reason: Error) => void = () => undefined;
+        mockVerifyCheckout.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+          failVerify = reject;
+        }));
+        stubSheetThatPays();
+
+        const { unmount } = renderPaidReel();
+        fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+        fireEvent.click(screen.getByRole('button', { name: /pay with cash/i }));
+        await waitFor(() => expect(mockVerifyCheckout).toHaveBeenCalledTimes(1));
+        unmount();
+        failVerify(new Error('Failed to fetch'));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(mockGetSession).not.toHaveBeenCalled();
+        // Only the reel's own access check on entry read the recipe.
+        expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/posts/post-1/resource-bundle')).toHaveLength(1);
+      });
     });
 
     it('reports a cash checkout to the funnel', async () => {

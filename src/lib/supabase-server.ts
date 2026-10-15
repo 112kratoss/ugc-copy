@@ -12,6 +12,7 @@ import {
   hasE2EAuthCookie,
   isE2EAuthBypassEnabled,
 } from '@/lib/e2e-auth';
+import { getMarketplaceSpendableCredits } from '@/lib/profile';
 import { createServiceClient } from '@/lib/server-helpers';
 
 type CookieStore = Awaited<ReturnType<typeof cookies>>;
@@ -48,6 +49,13 @@ async function createServerSupabaseClient(cookieStore?: CookieStore) {
 export interface ServerAuthState {
   session: Session | null;
   credits: number | null;
+  /**
+   * The part of `credits` a recipe can be bought with: welcome and referral
+   * credits count in the total, and the credit unlock will not spend them.
+   * The provider starts from it because a server-rendered page never reads
+   * the profile again. Null or absent when unknown.
+   */
+  marketplaceSpendableCredits?: number | null;
   /** The profile's display name, when the row was read with the session. */
   displayName?: string | null;
 }
@@ -85,6 +93,8 @@ function getE2EAuthState(cookieStore: CookieStore): ServerAuthState | null {
   return {
     session: createE2ESession(),
     credits: E2E_AUTH_CREDITS,
+    // The E2E identity holds no welcome or referral credits.
+    marketplaceSpendableCredits: E2E_AUTH_CREDITS,
   };
 }
 
@@ -156,13 +166,15 @@ export const getServerAuthState = cache(async (): Promise<ServerAuthState> => {
   const adminSupabase = createServiceClient();
   const { data: profile } = await adminSupabase
     .from('profiles')
-    .select('credits, display_name')
+    .select('credits, promotional_credits, display_name')
     .eq('id', user.id)
     .maybeSingle();
+  const credits: number | null = profile?.credits ?? null;
 
   return {
     session: createVerifiedSession(session, user),
-    credits: profile?.credits ?? null,
+    credits,
+    marketplaceSpendableCredits: getMarketplaceSpendableCredits(credits, profile?.promotional_credits),
     displayName: typeof profile?.display_name === 'string' ? profile.display_name : null,
   };
 });

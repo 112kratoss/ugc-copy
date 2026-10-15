@@ -29,11 +29,20 @@ vi.mock('@/components/AuthProvider', () => ({
   AuthProvider: ({
     children,
     hasResolvedInitialState = false,
+    initialCredits = null,
+    initialMarketplaceSpendableCredits = null,
   }: {
     children: ReactNode;
     hasResolvedInitialState?: boolean;
+    initialCredits?: number | null;
+    initialMarketplaceSpendableCredits?: number | null;
   }) => (
-    <div data-testid="auth-provider" data-resolved={String(hasResolvedInitialState)}>
+    <div
+      data-testid="auth-provider"
+      data-resolved={String(hasResolvedInitialState)}
+      data-credits={String(initialCredits)}
+      data-spendable-credits={String(initialMarketplaceSpendableCredits)}
+    >
       {children}
     </div>
   ),
@@ -71,6 +80,51 @@ describe('OptionalAuth', () => {
 
     expect(screen.getByTestId('auth-provider')).toHaveAttribute('data-resolved', 'true');
     expect(getServerAuthStateMock).toHaveBeenCalledTimes(1);
+  });
+
+  // A resolved provider never reads the profile again: without the server's
+  // figure a recipe surface would not know welcome credits cannot buy it.
+  it("starts a hinted provider from the server's spendable balance", async () => {
+    const { RequestHintedOptionalAuth } = await import('@/components/RouteAuthBoundary');
+    hasAuthHint = true;
+    getServerAuthStateMock.mockResolvedValue({
+      session: { user: { id: 'user-1' } },
+      credits: 1200,
+      marketplaceSpendableCredits: 0,
+    });
+
+    render(await RequestHintedOptionalAuth({
+      children: <span>Hinted content</span>,
+    }));
+
+    expect(screen.getByTestId('auth-provider')).toHaveAttribute('data-credits', '1200');
+    expect(screen.getByTestId('auth-provider')).toHaveAttribute('data-spendable-credits', '0');
+  });
+
+  it("starts a required provider from the server's spendable balance, and from unknown when there is none", async () => {
+    const { RequireAuth } = await import('@/components/RouteAuthBoundary');
+    getServerAuthStateMock.mockResolvedValue({
+      session: { user: { id: 'user-1' } },
+      credits: 1500,
+      marketplaceSpendableCredits: 1200,
+    });
+
+    const { unmount } = render(await RequireAuth({
+      children: <span>Signed-in content</span>,
+      returnTo: '/profile',
+    }));
+
+    expect(screen.getByTestId('auth-provider')).toHaveAttribute('data-resolved', 'true');
+    expect(screen.getByTestId('auth-provider')).toHaveAttribute('data-spendable-credits', '1200');
+    unmount();
+
+    getServerAuthStateMock.mockResolvedValue({ session: { user: { id: 'user-1' } }, credits: 1500 });
+    render(await RequireAuth({
+      children: <span>Signed-in content</span>,
+      returnTo: '/profile',
+    }));
+
+    expect(screen.getByTestId('auth-provider')).toHaveAttribute('data-spendable-credits', 'null');
   });
 
   it('keeps the generic optional boundary client-resolved for cacheable routes', async () => {

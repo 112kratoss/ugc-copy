@@ -43,9 +43,13 @@ import type { ShowcaseMediaItem } from '@/lib/showcase';
 import { getCurrentInternalPath } from '@/lib/share';
 import { trackProductEvent } from '@/lib/product-analytics';
 import {
+  RECIPE_PAYMENT_RECEIVED_MESSAGE,
   clearRazorpayCheckoutIntentKey,
   getOrCreateRazorpayCheckoutIntentKey,
+  pollBundleUntilUnlocked,
+  readCheckoutAccessToken,
   verifyRazorpayCheckoutUntilSettled,
+  type RazorpayCheckoutVerificationResult,
 } from '@/lib/razorpay-checkout-client';
 
 declare global {
@@ -58,6 +62,9 @@ declare global {
 }
 
 const RAZORPAY_CHECKOUT_SCRIPT_ID = 'post-resource-bundle-razorpay-checkout';
+
+/** The credit unlock spends neither, though both count in the balance. */
+const UNSPENDABLE_CREDITS_NOTE = "Welcome and referral credits can't be spent on recipes.";
 
 /**
  * checkout.js is fetched when a buyer presses Pay, not on every view of a
@@ -310,7 +317,7 @@ export default function PostResourceBundlePanel({
   purchasedRevision = null,
 }: PostResourceBundlePanelProps) {
   const router = useRouter();
-  const { session, credits, updateCredits } = useAuth();
+  const { session, credits, marketplaceSpendableCredits, updateCredits } = useAuth();
   const [hasAccess, setHasAccess] = useState(viewerCanAccess || viewerIsOwner);
   const [resources, setResources] = useState(initialResources);
   const [showPurchasedRevision, setShowPurchasedRevision] = useState(false);
@@ -348,6 +355,10 @@ export default function PostResourceBundlePanel({
   const [workingAction, setWorkingAction] = useState<'free' | 'razorpay' | 'credits' | 'file' | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A payment the sheet took and this page has not yet seen settle.
+  const [awaitingPaymentConfirmation, setAwaitingPaymentConfirmation] = useState(false);
+  // The credit unlock answered 402 INSUFFICIENT_CREDITS.
+  const [creditsRefused, setCreditsRefused] = useState(false);
 
   const summaryLine = useMemo(
     () => activeSummary || activePreviewText || describePostResourceKinds(activeResourceKinds),
@@ -505,8 +516,15 @@ export default function PostResourceBundlePanel({
   const accessLabel = isFree
     ? 'Get the full recipe free with one click.'
     : `Unlock the full recipe for ${accessPriceLabel}.`;
-  const formattedCreditBalance = typeof credits === 'number' ? credits.toLocaleString() : null;
-  const hasKnownInsufficientCredits = Boolean(session?.access_token && typeof credits === 'number' && credits < creditCost);
+  // Welcome and referral credits count in the balance but cannot buy a recipe,
+  // so the shortfall is judged on the spendable part alone, and only when it is
+  // known: an unknown figure claims nothing, and the server's answer decides.
+  const spendableCredits = session?.access_token && typeof marketplaceSpendableCredits === 'number'
+    ? marketplaceSpendableCredits
+    : null;
+  const holdsUnspendableCredits = spendableCredits !== null && typeof credits === 'number' && credits > spendableCredits;
+  const hasKnownInsufficientCredits = spendableCredits !== null && spendableCredits < creditCost;
+  const offersBuyCredits = hasKnownInsufficientCredits || creditsRefused;
   const isAnyActionWorking = workingAction !== null;
 
   useEffect(() => {
@@ -516,30 +534,17 @@ export default function PostResourceBundlePanel({
     setSelectedScopeMediaKey(null);
   }, [showPurchasedRevision]);
 
-  const disarmPaymentRecheck = useRef<(() => void) | null>(null);
+  const stopBundlePoll = useRef<(() => void) | null>(null);
+  // A verify can finish after the buyer has left the page; no wait starts then.
+  const unmounted = useRef(false);
   useEffect(() => {
-    const recheck = disarmPaymentRecheck;
-    return () => recheck.current?.();
+    const poll = stopBundlePoll;
+    unmounted.current = false;
+    return () => {
+      unmounted.current = true;
+      poll.current?.();
+    };
   }, []);
-
-  // The verify poll gives up while a payment can still be capturing, and
-  // nothing looked again before a reload. The buyer coming back to the tab
-  // (from their bank app, say) is the moment to look once more.
-  const recheckPendingPaymentOnFocus = (check: () => Promise<void>) => {
-    disarmPaymentRecheck.current?.();
-    const disarm = () => {
-      window.removeEventListener('focus', onFocus);
-      disarmPaymentRecheck.current = null;
-    };
-    const onFocus = () => {
-      disarm();
-      void check().catch((recheckError: unknown) => {
-        setError(recheckError instanceof Error ? recheckError.message : 'Payment verification failed.');
-      });
-    };
-    window.addEventListener('focus', onFocus);
-    disarmPaymentRecheck.current = disarm;
-  };
 
   const copyText = async (value: string, successMessage: string) => {
     try {
@@ -552,11 +557,22 @@ export default function PostResourceBundlePanel({
     }
   };
 
-  const fetchLatestBundle = async () => {
+  const applyBundleAccess = (bundle: BundleRefreshPayload) => {
+    setHasAccess(bundle.viewerCanAccess || bundle.viewerIsOwner);
+    setResources(bundle.resources);
+
+    // The page's remix button is rendered from server-computed props
+    // (canRemix), which just changed with this unlock. Re-fetch the RSC
+    // payload so it appears without a hard reload; client state set above
+    // survives a soft refresh.
+    router.refresh();
+  };
+
+  const fetchLatestBundle = async (accessToken = session?.access_token) => {
     const response = await fetch(`/api/posts/${postId}/resource-bundle`, {
-      headers: session?.access_token
+      headers: accessToken
         ? {
-            Authorization: `Bearer ${session.access_token}`,
+            Authorization: `Bearer ${accessToken}`,
           }
         : undefined,
     });
@@ -567,14 +583,45 @@ export default function PostResourceBundlePanel({
     }
 
     const bundle = data.bundle as BundleRefreshPayload;
-    setHasAccess(bundle.viewerCanAccess || bundle.viewerIsOwner);
-    setResources(bundle.resources);
+    applyBundleAccess(bundle);
+    return bundle;
+  };
 
-    // The page's remix button is rendered from server-computed props
-    // (canRemix), which just changed with this unlock. Re-fetch the RSC
-    // payload so it appears without a hard reload; client state set above
-    // survives a soft refresh.
-    router.refresh();
+  // The server's split of the balance stands over the page's own estimate.
+  const applyServerBalance = (total: unknown, spendable: unknown) => {
+    if (typeof total !== 'number') {
+      return;
+    }
+    if (typeof spendable === 'number') {
+      updateCredits(total, { marketplaceSpendableCredits: spendable });
+    } else {
+      updateCredits(total);
+    }
+  };
+
+  // The sheet took the money but this page could not see the purchase settle.
+  // Razorpay's webhook settles it, so the page says the payment is in, holds
+  // the buy buttons (another press would charge again), and reads the recipe
+  // again until it opens.
+  const awaitPaidRecipe = () => {
+    if (unmounted.current) {
+      return;
+    }
+    setError(null);
+    setFeedback(RECIPE_PAYMENT_RECEIVED_MESSAGE);
+    setAwaitingPaymentConfirmation(true);
+    stopBundlePoll.current?.();
+    stopBundlePoll.current = pollBundleUntilUnlocked<BundleRefreshPayload>({
+      postId,
+      token: readCheckoutAccessToken,
+      onUnlocked: (bundle) => {
+        stopBundlePoll.current = null;
+        setAwaitingPaymentConfirmation(false);
+        setFeedback(null);
+        applyBundleAccess(bundle);
+        trackProductEvent('recipe_checkout_succeeded', { method: 'razorpay', post_id: postId });
+      },
+    });
   };
 
   const ensureAuthenticated = () => {
@@ -683,37 +730,49 @@ export default function PostResourceBundlePanel({
           razorpay_order_id: string;
           razorpay_signature: string;
         }) => {
-          const verify = (maxAttempts?: number) => verifyRazorpayCheckoutUntilSettled({
-            url: `/api/posts/${postId}/resource-bundle/verify`,
-            token: session?.access_token ?? '',
-            body: response,
-            ...(maxAttempts ? { maxAttempts } : {}),
-          });
-          const completeCheckout = async () => {
-            clearRazorpayCheckoutIntentKey(checkoutIntentScope);
-            await fetchLatestBundle();
-            trackProductEvent('recipe_checkout_succeeded', { method: 'razorpay', post_id: postId });
-          };
-
+          // The sheet has taken the money; from here on, nothing says "try again".
+          setError(null);
+          setFeedback('Confirming your payment…');
+          setWorkingAction('razorpay');
+          let verification: RazorpayCheckoutVerificationResult;
           try {
-            const verification = await verify();
-            if (verification.state === 'pending') {
-              setFeedback('Payment received and waiting for capture. This recipe will unlock automatically once confirmed.');
-              recheckPendingPaymentOnFocus(async () => {
-                if ((await verify(1)).state === 'pending') {
-                  return;
-                }
-                setFeedback(null);
-                await completeCheckout();
-              });
-              return;
-            }
-
-            await completeCheckout();
-          } catch (verifyError) {
-            trackProductEvent('recipe_checkout_failed', { method: 'razorpay', post_id: postId });
-            setError(verifyError instanceof Error ? verifyError.message : 'Payment verification failed.');
+            verification = await verifyRazorpayCheckoutUntilSettled({
+              url: `/api/posts/${postId}/resource-bundle/verify`,
+              token: readCheckoutAccessToken,
+              body: response,
+            });
+          } catch {
+            // A dropped network, a timeout, a 5xx or an ended session after
+            // payment: the webhook settles this order, and the intent key
+            // would reopen the paid order on the next press.
+            clearRazorpayCheckoutIntentKey(checkoutIntentScope);
+            setWorkingAction(null);
+            awaitPaidRecipe();
+            return;
           }
+
+          // The payment is bound to this order now; no later checkout may reopen it.
+          clearRazorpayCheckoutIntentKey(checkoutIntentScope);
+          if (verification.state === 'settled') {
+            try {
+              // Read with the session as it is now: the one from the click can
+              // have expired in the sheet, and would read the recipe as locked.
+              const bundle = await fetchLatestBundle(await readCheckoutAccessToken());
+              if (bundle.viewerCanAccess || bundle.viewerIsOwner) {
+                setFeedback(null);
+                trackProductEvent('recipe_checkout_succeeded', { method: 'razorpay', post_id: postId });
+                return;
+              }
+            } catch {
+              // Bought, but the read did not come back: the wait below reads again.
+            } finally {
+              setWorkingAction(null);
+            }
+          } else {
+            setWorkingAction(null);
+          }
+
+          awaitPaidRecipe();
         },
         theme: {
           color: '#34d399',
@@ -766,12 +825,15 @@ export default function PostResourceBundlePanel({
       const data = await response.json();
 
       if (!response.ok || !data?.success) {
+        if (response.status === 402 && data?.code === 'INSUFFICIENT_CREDITS') {
+          // The server's count is what refused, so it replaces the page's.
+          applyServerBalance(data.remainingCredits, data.marketplaceSpendableCredits);
+          setCreditsRefused(true);
+        }
         throw new Error(data.error || 'Failed to unlock with credits.');
       }
 
-      if (typeof data.credits === 'number') {
-        updateCredits(data.credits);
-      }
+      applyServerBalance(data.credits, data.marketplaceSpendableCredits);
 
       await fetchLatestBundle();
       setFeedback(data.alreadyProcessed ? 'This recipe was already available on your account.' : 'Recipe unlocked with credits.');
@@ -1143,7 +1205,7 @@ export default function PostResourceBundlePanel({
               <button
                 type="button"
                 onClick={() => void startCheckout()}
-                disabled={isAnyActionWorking}
+                disabled={isAnyActionWorking || awaitingPaymentConfirmation}
                 className="inline-flex min-h-20 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/30 bg-emerald-300 px-4 py-3 text-center text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
               >
                 <span className="inline-flex items-center gap-2">
@@ -1157,7 +1219,7 @@ export default function PostResourceBundlePanel({
             <button
               type="button"
               onClick={() => void unlockWithCredits()}
-              disabled={isAnyActionWorking || hasKnownInsufficientCredits}
+              disabled={isAnyActionWorking || hasKnownInsufficientCredits || awaitingPaymentConfirmation}
               className="inline-flex min-h-20 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/25 bg-white/[0.04] px-4 py-3 text-center text-sm font-semibold text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-55"
             >
               <span className="inline-flex items-center gap-2">
@@ -1171,12 +1233,12 @@ export default function PostResourceBundlePanel({
           </div>
         ) : null}
 
-        {!hasAccess && !viewerIsOwner && !isFree ? (
+        {!hasAccess && !viewerIsOwner && !isFree && (!session?.access_token || spendableCredits !== null || offersBuyCredits) ? (
           <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-zinc-400">
-            <span>
-              {formattedCreditBalance ? `${formattedCreditBalance} credits available` : 'Sign in to see your credit balance'}
-            </span>
-            {hasKnownInsufficientCredits ? (
+            {!session?.access_token ? <span>Sign in to see your credit balance</span> : null}
+            {spendableCredits !== null ? <span>{`${spendableCredits.toLocaleString()} credits available`}</span> : null}
+            {holdsUnspendableCredits ? <span>{UNSPENDABLE_CREDITS_NOTE}</span> : null}
+            {offersBuyCredits ? (
               <a href="/pricing" className="font-semibold text-emerald-200 underline-offset-4 transition hover:text-emerald-100 hover:underline">
                 Buy credits
               </a>
