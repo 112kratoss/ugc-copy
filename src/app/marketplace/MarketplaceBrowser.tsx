@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowRight,
@@ -15,10 +15,12 @@ import {
 } from 'lucide-react';
 
 import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
+import { useAuth } from '@/components/AuthProvider';
 import TextPostPreviewCard from '@/components/TextPostPreviewCard';
 import {
   describePostResourceKinds,
   formatPostResourceBundleCountSummary,
+  formatPostResourcePriceLabel,
   formatUnlockCountLabel,
   getPostResourceKindLabel,
   type MarketplaceResourceFilter,
@@ -33,6 +35,7 @@ import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-se
 import { HoverVideo } from '@/components/HoverVideo';
 import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import { MARKETPLACE_COMPACT_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
+import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
 
 interface MarketplacePageInfo {
   hasMore: boolean;
@@ -55,6 +58,11 @@ interface MarketplaceBrowserProps {
     sort: MarketplaceResourceSort;
     q: string;
   };
+  /**
+   * A query under the search minimum: kept in the box and answered with the
+   * hint, never applied (`initialFilters.q` stays empty).
+   */
+  shortQuery?: string;
   sourceToolOptions: SourceToolOption[];
 }
 
@@ -77,12 +85,14 @@ const RESOURCE_LINKS: Array<{ label: string; value: MarketplaceResourceKindFilte
 export default function MarketplaceBrowser({
   initialPage,
   initialFilters,
+  shortQuery = '',
   sourceToolOptions,
 }: MarketplaceBrowserProps) {
   const router = useRouter();
+  const { session } = useAuth();
   const [items, setItems] = useState(initialPage.items);
   const [pageInfo, setPageInfo] = useState(initialPage.pageInfo);
-  const [searchInput, setSearchInput] = useState(initialFilters.q);
+  const [searchInput, setSearchInput] = useState(initialFilters.q || shortQuery);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -94,7 +104,7 @@ export default function MarketplaceBrowser({
     // Navigation supplies a new result page; discard state from the previous query.
     setItems(initialPage.items);
     setPageInfo(initialPage.pageInfo);
-    setSearchInput(initialFilters.q);
+    setSearchInput(initialFilters.q || shortQuery);
     setIsLoadingMore(false);
     setLoadError(null);
     setFiltersOpen(false);
@@ -103,7 +113,7 @@ export default function MarketplaceBrowser({
       loadMoreAbortControllerRef.current?.abort();
       loadMoreAbortControllerRef.current = null;
     };
-  }, [initialPage, initialFilters]);
+  }, [initialPage, initialFilters, shortQuery]);
 
   const activeFilterLabels = useMemo(() => [
     initialFilters.access !== 'all' ? (initialFilters.access === 'free' ? 'Free' : 'Paid') : null,
@@ -143,10 +153,14 @@ export default function MarketplaceBrowser({
         // bounds JSON parsing and DOM work on mobile.
         limit: MARKETPLACE_COMPACT_PAGE_SIZE,
       });
+      // A signed-in viewer's pages are filtered for their blocks, which the
+      // API can do only with the session; a signed-out request stays bare so
+      // the edge can keep serving its shared copy.
+      const accessToken = session?.access_token;
       const response = await fetch(`/api/marketplace/resources?${params.toString()}`, {
-        headers: {
-          Accept: 'application/json',
-        },
+        headers: accessToken
+          ? { Accept: 'application/json', Authorization: `Bearer ${accessToken}` }
+          : { Accept: 'application/json' },
         signal: controller.signal,
       });
       const payload = await response.json() as {
@@ -296,22 +310,34 @@ export default function MarketplaceBrowser({
         </div>
       </div>
 
-      {items.length === 0 ? (
-        <div className="mt-10 rounded-[30px] border border-white/8 bg-zinc-950/70 p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.35)] backdrop-blur-sm">
-          <Layers3 className="mx-auto h-10 w-10 text-zinc-500" />
-          <h2 className="mt-4 text-2xl font-semibold text-white">No recipes yet</h2>
-          <p className="mt-3 mx-auto max-w-xl text-sm leading-7 text-zinc-400">
-            Recipes need a useful public post, a creator profile, buyer-facing preview, and reusable resources before they appear here.
-          </p>
-          <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-            <Link
-              href="/post/new?from=marketplace&returnTo=%2Fmarketplace"
-              className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
-            >
-              Share a post
-            </Link>
-          </div>
-        </div>
+      {shortQuery ? (
+        <ResultsMessage
+          icon={<Search className="mx-auto h-10 w-10 text-zinc-500" />}
+          title={`Type at least ${MARKETPLACE_SEARCH_MIN_LENGTH} characters`}
+          body="Keep typing, or clear the search to see every recipe."
+          actionLabel="Clear search"
+          actionHref={marketplaceReturnPath}
+        />
+      ) : items.length === 0 && !pageInfo.hasMore ? (
+        // A page emptied by the viewer's blocks still has a next page to load,
+        // so only a list with nothing left says there is nothing.
+        activeFilterLabels.length > 0 ? (
+          <ResultsMessage
+            icon={<Filter className="mx-auto h-10 w-10 text-zinc-500" />}
+            title="No recipes match"
+            body="Try another search, or clear the filters to see every recipe."
+            actionLabel="Clear filters"
+            actionHref="/marketplace"
+          />
+        ) : (
+          <ResultsMessage
+            icon={<Layers3 className="mx-auto h-10 w-10 text-zinc-500" />}
+            title="No recipes yet"
+            body="Recipes need a useful public post, a creator profile, a buyer-facing preview, and reusable resources before they appear here."
+            actionLabel="Share a post"
+            actionHref="/post/new?from=marketplace&returnTo=%2Fmarketplace"
+          />
+        )
       ) : (
         <>
           <div className="mt-10 columns-1 gap-6 space-y-6 md:columns-2 xl:columns-3">
@@ -346,6 +372,36 @@ export default function MarketplaceBrowser({
         </>
       )}
     </>
+  );
+}
+
+function ResultsMessage({
+  icon,
+  title,
+  body,
+  actionLabel,
+  actionHref,
+}: {
+  icon: ReactNode;
+  title: string;
+  body: string;
+  actionLabel: string;
+  actionHref: string;
+}) {
+  return (
+    <div className="mt-10 rounded-[30px] border border-white/8 bg-zinc-950/70 p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.35)] backdrop-blur-sm">
+      {icon}
+      <h2 className="mt-4 text-2xl font-semibold text-white">{title}</h2>
+      <p className="mt-3 mx-auto max-w-xl text-sm leading-7 text-zinc-400">{body}</p>
+      <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+        <Link
+          href={actionHref}
+          className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
+        >
+          {actionLabel}
+        </Link>
+      </div>
+    </div>
   );
 }
 
@@ -391,13 +447,16 @@ function MarketplaceCard({
   asset: MarketplaceResourceListItem;
   marketplaceReturnPath: string;
 }) {
+  const isFree = asset.accessMode === 'free' || asset.priceUsdCents === 0;
   const accessLabel = formatBundleAccessLabel({
     accessMode: asset.accessMode,
+    priceUsdCents: asset.priceUsdCents,
     priceQuote: asset.priceQuote,
-  }).replace(/\s+unlock$/i, ' recipe');
-  const unlockCtaLabel = asset.accessMode === 'free'
-    ? 'View free recipe'
-    : `Unlock for ${asset.priceQuote.formatted}`;
+  });
+  // The pill and the button name every way to pay, as the post's panel does:
+  // the bare quote priced a credits-only recipe in a currency no checkout takes.
+  const priceLabel = isFree ? 'Free' : formatPostResourcePriceLabel(asset.priceUsdCents, asset.priceQuote.formatted);
+  const unlockCtaLabel = isFree ? 'View free recipe' : `Unlock for ${priceLabel}`;
   const updatedLabel = formatMarketplaceDate(asset.updatedAt);
   const bundleCountSummary = formatPostResourceBundleCountSummary(asset.lockedPreview);
   const buyerPreviewText = bundleCountSummary
@@ -469,8 +528,11 @@ function MarketplaceCard({
 
       <div className="p-5">
         <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">
+          {/* `min-w-0` and `truncate`, as on the bootstrap card: the price pill
+              names both ways to pay now, and a long handle beside it pushed the
+              pill out of the card. */}
+          <div className="min-w-0">
+            <div className="truncate text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">
               {asset.seller.username ? `@${asset.seller.username}` : asset.seller.name}
             </div>
             <h2 className="mt-2 text-xl font-semibold text-white">{postTitle}</h2>
@@ -483,7 +545,7 @@ function MarketplaceCard({
               that has earned an accent — everything around it stays neutral so
               the price is what the eye lands on. */}
           <div className="shrink-0 rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5 text-sm font-semibold text-amber-50">
-            {asset.priceQuote.formatted}
+            {priceLabel}
           </div>
         </div>
 

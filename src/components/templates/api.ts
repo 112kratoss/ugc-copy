@@ -137,6 +137,7 @@ export function normalizeTemplate(value: unknown): MediaTemplate {
     status: ['draft', 'active', 'disabled'].includes(stringValue(template, ['status']))
       ? stringValue(template, ['status']) as MediaTemplate['status']
       : 'active',
+    moderationDisabledAt: nullableString(template, ['moderationDisabledAt', 'moderation_disabled_at']),
     useCount: numberValue(template, ['useCount', 'use_count']) ?? 0,
     estimatedTotalCredits: numberValue(template, ['estimatedTotalCredits', 'estimated_total_credits']),
     createdAt: stringValue(template, ['createdAt', 'created_at']),

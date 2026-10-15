@@ -60,9 +60,13 @@ import { formatCompactCount } from '@/lib/post-feed-presentation';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import { trackProductEvent } from '@/lib/product-analytics';
 import {
+  RECIPE_PAYMENT_RECEIVED_MESSAGE,
   clearRazorpayCheckoutIntentKey,
   getOrCreateRazorpayCheckoutIntentKey,
+  pollBundleUntilUnlocked,
+  readCheckoutAccessToken,
   verifyRazorpayCheckoutUntilSettled,
+  type RazorpayCheckoutVerificationResult,
 } from '@/lib/razorpay-checkout-client';
 import { getCurrentInternalPath } from '@/lib/share';
 import { type ShowcaseFeedItem, type ShowcaseMediaItem, getShowcaseItemMediaItems } from '@/lib/showcase';
@@ -134,6 +138,8 @@ type ReelTransitionDirection = 'next' | 'previous' | 'neutral';
 type ReelUnlockAction = 'free' | 'cash' | 'tokens' | null;
 type ReelMediaLoadState = 'ready' | 'error';
 const QUALIFIED_REEL_VIEW_DURATION_MS = 1000;
+/** The credit unlock spends neither, though both count in the balance. */
+const UNSPENDABLE_CREDITS_NOTE = "Welcome and referral credits can't be spent on recipes.";
 
 interface ReelBundleResources {
   promptText: string | null;
@@ -271,7 +277,7 @@ export default function ShowcaseReelViewer({
   buildDetailPath,
 }: ShowcaseReelViewerProps) {
   const router = useRouter();
-  const { session, user, credits, updateCredits } = useAuth();
+  const { session, user, credits, marketplaceSpendableCredits, updateCredits } = useAuth();
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const wheelCooldownRef = useRef(0);
   const detailsScrollerRef = useRef<HTMLDivElement | null>(null);
@@ -290,6 +296,11 @@ export default function ShowcaseReelViewer({
   const [unlockWorkingAction, setUnlockWorkingAction] = useState<ReelUnlockAction>(null);
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const [unlockNotice, setUnlockNotice] = useState<string | null>(null);
+  // The post whose payment the sheet took and the reel has not yet seen settle.
+  // Kept by post, not cleared on a move: that post's buy buttons stay held.
+  const [awaitingPaymentItemId, setAwaitingPaymentItemId] = useState<string | null>(null);
+  // The post whose credit unlock answered 402 INSUFFICIENT_CREDITS.
+  const [creditsRefusedItemId, setCreditsRefusedItemId] = useState<string | null>(null);
   const [remixWorkingItemId, setRemixWorkingItemId] = useState<string | null>(null);
   const [remixError, setRemixError] = useState<string | null>(null);
   const [unlockSuccessItemId, setUnlockSuccessItemId] = useState<string | null>(null);
@@ -330,6 +341,17 @@ export default function ShowcaseReelViewer({
     selectedIndexRef.current = selectedIndex;
     sessionTokenRef.current = session?.access_token ?? null;
   }, [accessToken, feedSessionId, item, selectedIndex, session?.access_token]);
+  const stopBundlePollRef = useRef<(() => void) | null>(null);
+  // A verify can finish after the reel's page has gone; no wait starts then.
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    const poll = stopBundlePollRef;
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+      poll.current?.();
+    };
+  }, []);
   // One reel session: `open` goes to the post it opened on, and each delivery
   // reports one impression however often the reader comes back to it.
   const openSentRef = useRef(false);
@@ -404,11 +426,11 @@ export default function ShowcaseReelViewer({
     onClose();
   }, [onClose]);
 
-  const fetchBundleForItem = useCallback(async (postId: string) => {
+  const fetchBundleForItem = useCallback(async (postId: string, accessToken = session?.access_token) => {
     const response = await fetch(`/api/posts/${postId}/resource-bundle`, {
-      headers: session?.access_token
+      headers: accessToken
         ? {
-            Authorization: `Bearer ${session.access_token}`,
+            Authorization: `Bearer ${accessToken}`,
           }
         : undefined,
     });
@@ -923,7 +945,17 @@ export default function ShowcaseReelViewer({
   // Below the cash minimum a recipe is credits-only, and the server refuses a
   // cash order for it, as the post page's panel already knows.
   const offersCashCheckout = !isFreeUnlock && isPostResourceWebCashEligible(tokenCost);
-  const hasKnownInsufficientTokens = Boolean(session?.access_token && typeof credits === 'number' && credits < tokenCost);
+  // Welcome and referral credits count in the balance but cannot buy a recipe,
+  // so the shortfall is judged on the spendable part alone, and only when it is
+  // known: an unknown figure claims nothing, and the server's answer decides.
+  const spendableCredits = session?.access_token && typeof marketplaceSpendableCredits === 'number'
+    ? marketplaceSpendableCredits
+    : null;
+  const holdsUnspendableCredits = spendableCredits !== null && typeof credits === 'number' && credits > spendableCredits;
+  const hasKnownInsufficientTokens = spendableCredits !== null && spendableCredits < tokenCost;
+  const offersBuyCredits = hasKnownInsufficientTokens || creditsRefusedItemId === item.id;
+  const isAwaitingPayment = awaitingPaymentItemId === item.id;
+  const reelUnlockNotice = isAwaitingPayment && !hasReelUnlockAccess ? RECIPE_PAYMENT_RECEIVED_MESSAGE : unlockNotice;
   const includedKindLabels = resourceKinds.map(getPostResourceKindLabel);
   const bundleCountSummary = item.asset
     ? formatPostResourceBundleCountSummary(item.asset.lockedPreview ?? null)
@@ -970,13 +1002,60 @@ export default function ShowcaseReelViewer({
     return false;
   };
 
-  const finishReelUnlock = async () => {
-    const bundle = await fetchBundleForItem(item.id);
-    setUnlockSuccessItemId(item.id);
+  const applyReelUnlock = (postId: string, bundle: ReelBundleRefreshPayload) => {
+    setUnlockSuccessItemId(postId);
     setUnlockedResources(bundle.resources);
     setShowUnlockedDetails(false);
     setUnlockError(null);
     setUnlockNotice(null);
+  };
+
+  const finishReelUnlock = async () => {
+    applyReelUnlock(item.id, await fetchBundleForItem(item.id));
+  };
+
+  // The server's split of the balance stands over the page's own estimate.
+  const applyServerBalance = (total: unknown, spendable: unknown) => {
+    if (typeof total !== 'number') {
+      return;
+    }
+    if (typeof spendable === 'number') {
+      updateCredits(total, { marketplaceSpendableCredits: spendable });
+    } else {
+      updateCredits(total);
+    }
+  };
+
+  // A paid recipe opens on the post it was bought for. If the reader has moved
+  // on meanwhile, the reel's own access check opens it when they come back.
+  const showPaidRecipe = (postId: string, bundle: ReelBundleRefreshPayload) => {
+    setAwaitingPaymentItemId((current) => (current === postId ? null : current));
+    trackProductEvent('recipe_checkout_succeeded', { method: 'razorpay', post_id: postId });
+    if (feedEventItemRef.current?.id === postId) {
+      applyReelUnlock(postId, bundle);
+    }
+  };
+
+  // The sheet took the money but the reel could not see the purchase settle.
+  // Razorpay's webhook settles it, so the reel says the payment is in, holds
+  // that post's buy buttons (another press would charge again), and reads the
+  // recipe again until it opens, wherever the reader has scrolled to.
+  const awaitPaidRecipe = (postId: string) => {
+    if (unmountedRef.current) {
+      return;
+    }
+    setUnlockError(null);
+    setUnlockNotice(null);
+    setAwaitingPaymentItemId(postId);
+    stopBundlePollRef.current?.();
+    stopBundlePollRef.current = pollBundleUntilUnlocked<ReelBundleRefreshPayload>({
+      postId,
+      token: readCheckoutAccessToken,
+      onUnlocked: (bundle) => {
+        stopBundlePollRef.current = null;
+        showPaidRecipe(postId, bundle);
+      },
+    });
   };
 
   // The recipe opened, from any of its buttons: one `resource_open` per delivery.
@@ -1035,6 +1114,7 @@ export default function ShowcaseReelViewer({
     if (!item.asset || !ensureAuthenticated()) {
       return;
     }
+    const postId = item.id;
 
     try {
       trackProductEvent('recipe_checkout_started', { method: 'razorpay', post_id: item.id });
@@ -1088,27 +1168,48 @@ export default function ShowcaseReelViewer({
           razorpay_order_id: string;
           razorpay_signature: string;
         }) => {
+          // The sheet has taken the money; from here on, nothing says "try again".
+          setUnlockError(null);
+          setUnlockNotice('Confirming your payment…');
+          setUnlockWorkingAction('cash');
+          let verification: RazorpayCheckoutVerificationResult;
           try {
-            setUnlockWorkingAction('cash');
-            const verification = await verifyRazorpayCheckoutUntilSettled({
-              url: `/api/posts/${item.id}/resource-bundle/verify`,
-              token: session?.access_token ?? '',
+            verification = await verifyRazorpayCheckoutUntilSettled({
+              url: `/api/posts/${postId}/resource-bundle/verify`,
+              token: readCheckoutAccessToken,
               body: response,
             });
-            if (verification.state === 'pending') {
-              setUnlockNotice('Payment received and waiting for capture. This recipe will unlock automatically once confirmed.');
-              return;
-            }
-
+          } catch {
+            // A dropped network, a timeout, a 5xx or an ended session after
+            // payment: the webhook settles this order, and the intent key
+            // would reopen the paid order on the next press.
             clearRazorpayCheckoutIntentKey(checkoutIntentScope);
-            await finishReelUnlock();
-            trackProductEvent('recipe_checkout_succeeded', { method: 'razorpay', post_id: item.id });
-          } catch (verifyError) {
-            trackProductEvent('recipe_checkout_failed', { method: 'razorpay', post_id: item.id });
-            setUnlockError(verifyError instanceof Error ? verifyError.message : 'Payment verification failed.');
-          } finally {
+            setUnlockWorkingAction(null);
+            awaitPaidRecipe(postId);
+            return;
+          }
+
+          // The payment is bound to this order now; no later checkout may reopen it.
+          clearRazorpayCheckoutIntentKey(checkoutIntentScope);
+          if (verification.state === 'settled') {
+            try {
+              // Read with the session as it is now: the one from the click can
+              // have expired in the sheet, and would read the recipe as locked.
+              const bundle = await fetchBundleForItem(postId, await readCheckoutAccessToken());
+              if (bundle.viewerCanAccess || bundle.viewerIsOwner) {
+                showPaidRecipe(postId, bundle);
+                return;
+              }
+            } catch {
+              // Bought, but the read did not come back: the wait below reads again.
+            } finally {
+              setUnlockWorkingAction(null);
+            }
+          } else {
             setUnlockWorkingAction(null);
           }
+
+          awaitPaidRecipe(postId);
         },
         theme: {
           color: '#34d399',
@@ -1135,12 +1236,8 @@ export default function ShowcaseReelViewer({
       return;
     }
 
-    if (hasKnownInsufficientTokens) {
-      setUnlockError(`This recipe needs ${formattedCreditCost} credits.`);
-      return;
-    }
-
     // The spend cannot be undone: asked first, with the post page's words.
+    // (A known shortfall never gets here: the button is held and "Buy credits" shows.)
     const confirmed = await requestConfirmation({
       title: 'Unlock this recipe?',
       message: `${formattedCreditCost} credits will come off your balance right away.`,
@@ -1164,12 +1261,15 @@ export default function ShowcaseReelViewer({
       const data = await response.json();
 
       if (!response.ok || !data?.success) {
+        if (response.status === 402 && data?.code === 'INSUFFICIENT_CREDITS') {
+          // The server's count is what refused, so it replaces the page's.
+          applyServerBalance(data.remainingCredits, data.marketplaceSpendableCredits);
+          setCreditsRefusedItemId(item.id);
+        }
         throw new Error(data.error || 'Failed to unlock with credits.');
       }
 
-      if (typeof data.credits === 'number') {
-        updateCredits(data.credits);
-      }
+      applyServerBalance(data.credits, data.marketplaceSpendableCredits);
 
       await finishReelUnlock();
       trackProductEvent('recipe_unlock_succeeded', { method: 'credits', post_id: item.id });
@@ -1571,7 +1671,7 @@ export default function ShowcaseReelViewer({
               <button
                 type="button"
                 onClick={() => void startCashCheckout()}
-                disabled={unlockWorkingAction !== null}
+                disabled={unlockWorkingAction !== null || isAwaitingPayment}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
               >
                 {unlockWorkingAction === 'cash' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingBag className="h-4 w-4" />}
@@ -1581,18 +1681,30 @@ export default function ShowcaseReelViewer({
             <button
               type="button"
               onClick={() => void unlockWithTokens()}
-              disabled={unlockWorkingAction !== null}
+              disabled={unlockWorkingAction !== null || hasKnownInsufficientTokens || isAwaitingPayment}
               className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-55"
             >
               {unlockWorkingAction === 'tokens' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               {`Use ${formattedCreditCost} credits`}
             </button>
+            {!session?.access_token || spendableCredits !== null || offersBuyCredits ? (
+              <div className="flex flex-wrap items-center gap-3 text-xs text-emerald-50/75">
+                {!session?.access_token ? <span>Sign in to see your credit balance</span> : null}
+                {spendableCredits !== null ? <span>{`${spendableCredits.toLocaleString()} credits available`}</span> : null}
+                {holdsUnspendableCredits ? <span>{UNSPENDABLE_CREDITS_NOTE}</span> : null}
+                {offersBuyCredits ? (
+                  <Link href="/pricing" className="font-semibold text-emerald-200 transition hover:text-emerald-100">
+                    Buy credits
+                  </Link>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         )}
 
-        {unlockNotice ? (
+        {reelUnlockNotice ? (
           <div className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-50">
-            {unlockNotice}
+            {reelUnlockNotice}
           </div>
         ) : null}
 

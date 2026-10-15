@@ -10,7 +10,15 @@ import {
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 
-const { mockPush, mockRefresh, mockRouter, mockUpdateCredits, mockVerifyCheckout, authState } = vi.hoisted(() => {
+const {
+  mockPush,
+  mockRefresh,
+  mockRouter,
+  mockUpdateCredits,
+  mockVerifyCheckout,
+  mockGetSession,
+  authState,
+} = vi.hoisted(() => {
   const push = vi.fn();
   const refresh = vi.fn();
   return {
@@ -19,15 +27,22 @@ const { mockPush, mockRefresh, mockRouter, mockUpdateCredits, mockVerifyCheckout
     mockRouter: { push, refresh },
     mockUpdateCredits: vi.fn(),
     mockVerifyCheckout: vi.fn(),
+    mockGetSession: vi.fn(),
     authState: {
       session: null as { access_token: string } | null,
       credits: null as number | null,
+      marketplaceSpendableCredits: null as number | null,
     },
   };
 });
 
 vi.mock('next/navigation', () => ({
   useRouter: () => mockRouter,
+}));
+
+// The browser session a checkout reads its bearer from after the sheet.
+vi.mock('@/lib/supabase', () => ({
+  supabase: { auth: { getSession: mockGetSession } },
 }));
 
 vi.mock('@/lib/razorpay-checkout-client', async (importOriginal) => ({
@@ -45,9 +60,14 @@ vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     session: authState.session,
     credits: authState.credits,
+    marketplaceSpendableCredits: authState.marketplaceSpendableCredits,
     updateCredits: mockUpdateCredits,
   }),
 }));
+
+const PAYMENT_RECEIVED = "Payment received. Your recipe opens here once it's confirmed.";
+const UNSPENDABLE_NOTE = "Welcome and referral credits can't be spent on recipes.";
+const INTENT_KEY = 'magicbooklet:razorpay-checkout:post-resource:post-1';
 
 const promptOnlyPreview: PostResourceBundleLockedPreview = {
   resourceKinds: ['prompt'],
@@ -328,8 +348,12 @@ describe('PostResourceBundlePanel', () => {
     mockRefresh.mockClear();
     mockUpdateCredits.mockClear();
     mockVerifyCheckout.mockReset();
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'token-fresh' } } });
     authState.session = null;
     authState.credits = null;
+    authState.marketplaceSpendableCredits = null;
+    window.sessionStorage.clear();
     vi.unstubAllGlobals();
     document.getElementById('post-resource-bundle-razorpay-checkout')?.remove();
   });
@@ -911,6 +935,7 @@ describe('PostResourceBundlePanel', () => {
   it('shows a credit top-up path when the viewer has insufficient credits', () => {
     authState.session = { access_token: 'token-1' };
     authState.credits = 120;
+    authState.marketplaceSpendableCredits = 120;
 
     renderPanel({
       isFree: false,
@@ -919,8 +944,98 @@ describe('PostResourceBundlePanel', () => {
     });
 
     expect(screen.getByText(/120 credits available/i)).toBeInTheDocument();
+    expect(screen.queryByText(UNSPENDABLE_NOTE)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeDisabled();
     expect(screen.getByRole('link', { name: /buy credits/i })).toHaveAttribute('href', '/pricing');
+  });
+
+  // A new account holds only welcome credits: the total covers the price, the
+  // unlock would refuse it, and the page used to offer the spend anyway.
+  it('judges the shortfall on the spendable credits alone, and says why the total does not count', () => {
+    authState.session = { access_token: 'token-1' };
+    authState.credits = 1200;
+    authState.marketplaceSpendableCredits = 0;
+
+    renderPanel({ isFree: false, priceLabel: '₹189', priceUsdCents: 900 });
+
+    expect(screen.getByText('0 credits available')).toBeInTheDocument();
+    expect(screen.queryByText(/1,200 credits available/)).not.toBeInTheDocument();
+    expect(screen.getByText(UNSPENDABLE_NOTE)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeDisabled();
+    expect(screen.getByRole('link', { name: /buy credits/i })).toHaveAttribute('href', '/pricing');
+  });
+
+  it('prints the spendable balance and the note when only part of the balance can buy recipes', () => {
+    authState.session = { access_token: 'token-1' };
+    authState.credits = 1500;
+    authState.marketplaceSpendableCredits = 1200;
+
+    renderPanel({ isFree: false, priceLabel: '₹189', priceUsdCents: 900 });
+
+    expect(screen.getByText('1,200 credits available')).toBeInTheDocument();
+    expect(screen.getByText(UNSPENDABLE_NOTE)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeEnabled();
+    expect(screen.queryByRole('link', { name: /buy credits/i })).not.toBeInTheDocument();
+  });
+
+  it('claims no shortfall and prints no balance while the spendable figure is unknown', () => {
+    authState.session = { access_token: 'token-1' };
+    authState.credits = 120;
+    authState.marketplaceSpendableCredits = null;
+
+    renderPanel({ isFree: false, priceLabel: '₹189', priceUsdCents: 900 });
+
+    expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeEnabled();
+    expect(screen.queryByRole('link', { name: /buy credits/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/credits available/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/sign in to see your credit balance/i)).not.toBeInTheDocument();
+  });
+
+  it("offers Buy credits once the unlock refuses for credits, and takes the server's balance", async () => {
+    authState.session = { access_token: 'token-1' };
+    authState.credits = 1200;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (input.toString().endsWith('/unlock-with-credits')) {
+        return new Response(JSON.stringify({
+          error: 'Insufficient credits. This unlock costs 900 credits.',
+          code: 'INSUFFICIENT_CREDITS',
+          creditCost: 900,
+          remainingCredits: 1200,
+          marketplaceSpendableCredits: 0,
+        }), { status: 402 });
+      }
+      return new Response(JSON.stringify({ error: 'Unexpected request' }), { status: 500 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPanel({ isFree: false, priceLabel: '₹189', priceUsdCents: 900 });
+    expect(screen.queryByRole('link', { name: /buy credits/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /use 900 credits/i }));
+
+    expect(await screen.findByText('Insufficient credits. This unlock costs 900 credits.')).toBeInTheDocument();
+    expect(mockUpdateCredits).toHaveBeenCalledWith(1200, { marketplaceSpendableCredits: 0 });
+    expect(screen.getByRole('link', { name: /buy credits/i })).toHaveAttribute('href', '/pricing');
+  });
+
+  it('hands the spendable figure the unlock answered to the balance with the new total', async () => {
+    authState.session = { access_token: 'token-1' };
+    authState.credits = 1500;
+    authState.marketplaceSpendableCredits = 1200;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (input.toString().endsWith('/unlock-with-credits')) {
+        return new Response(JSON.stringify({ success: true, credits: 600, marketplaceSpendableCredits: 300 }));
+      }
+      return new Response(JSON.stringify({
+        bundle: { viewerCanAccess: true, viewerIsOwner: false, resources: null },
+      }));
+    }));
+
+    renderPanel({ isFree: false, priceLabel: '₹189', priceUsdCents: 900 });
+    fireEvent.click(screen.getByRole('button', { name: /use 900 credits/i }));
+
+    await waitFor(() => {
+      expect(mockUpdateCredits).toHaveBeenCalledWith(600, { marketplaceSpendableCredits: 300 });
+    });
   });
 
   it('keeps the Razorpay checkout route wired for paid post resources', async () => {
@@ -1243,32 +1358,170 @@ describe('PostResourceBundlePanel', () => {
       await waitFor(() => expect(opened).toHaveBeenCalledTimes(1));
     });
 
-    it('looks once more at a payment still capturing when the buyer comes back to the tab', async () => {
-      authState.session = { access_token: 'token-1' };
-      stubCheckoutFetch();
-      mockVerifyCheckout
-        .mockResolvedValueOnce({ state: 'pending', body: { code: 'PAYMENT_PENDING' } })
-        .mockResolvedValueOnce({ state: 'settled', body: { success: true } });
+    /** The sheet takes the payment as soon as it opens. */
+    function stubSheetThatPays() {
       vi.stubGlobal('Razorpay', class {
         constructor(private readonly options: { handler: (response: typeof payment) => Promise<void> }) {}
         open() { void this.options.handler(payment); }
         on() {}
       });
+    }
+
+    /** Checkout requests, with the recipe read held until `openRecipe` (or locked for good). */
+    function stubPaidCheckoutFetch({ recipeOpens }: { recipeOpens: boolean }) {
+      let openRecipe: () => void = () => undefined;
+      const recipeRead = new Promise<void>((resolve) => {
+        openRecipe = resolve;
+      });
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.endsWith('/order')) {
+          return new Response(JSON.stringify({ orderId: 'order-1', amount: 90000, currency: 'USD' }));
+        }
+        if (url.endsWith('/resource-bundle')) {
+          if (!recipeOpens) {
+            return new Response(JSON.stringify({
+              bundle: { viewerCanAccess: false, viewerIsOwner: false, resources: null },
+            }));
+          }
+          await recipeRead;
+          return new Response(JSON.stringify({
+            bundle: {
+              viewerCanAccess: true,
+              viewerIsOwner: false,
+              resources: {
+                promptText: 'captured prompt',
+                notesMarkdown: null,
+                workflowShareUrl: null,
+                attachments: [],
+                allowRemix: false,
+              },
+            },
+          }));
+        }
+        return new Response(JSON.stringify({ error: 'Unexpected request' }), { status: 500 });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      return { fetchMock, openRecipe: () => openRecipe() };
+    }
+
+    function listenForProductEvents() {
+      const heard: string[] = [];
+      const listener = (event: Event) => heard.push((event as CustomEvent<{ eventName: string }>).detail.eventName);
+      window.addEventListener('magicbooklet:product-event', listener);
+      return { heard, stop: () => window.removeEventListener('magicbooklet:product-event', listener) };
+    }
+
+    it('verifies with the session as it is after the sheet, and reads the settled recipe with it too', async () => {
+      authState.session = { access_token: 'token-at-click' };
+      const { fetchMock, openRecipe } = stubPaidCheckoutFetch({ recipeOpens: true });
+      openRecipe();
+      mockVerifyCheckout.mockResolvedValueOnce({ state: 'settled', body: { success: true } });
+      stubSheetThatPays();
       renderPanel({ isFree: false, priceLabel: '$9.00', priceUsdCents: 900 });
 
       fireEvent.click(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i }));
-      expect(await screen.findByText(/payment received and waiting for capture/i)).toBeInTheDocument();
-      expect(mockVerifyCheckout).toHaveBeenCalledTimes(1);
 
-      fireEvent.focus(window);
       expect(await screen.findByText('captured prompt')).toBeInTheDocument();
-      expect(mockVerifyCheckout).toHaveBeenCalledTimes(2);
-      expect(mockVerifyCheckout).toHaveBeenLastCalledWith(expect.objectContaining({ body: payment, maxAttempts: 1 }));
-      expect(screen.queryByText(/payment received and waiting for capture/i)).toBeNull();
+      const verifyArguments = mockVerifyCheckout.mock.calls[0][0] as { body: unknown; token: () => Promise<string> };
+      expect(verifyArguments.body).toEqual(payment);
+      await expect(verifyArguments.token()).resolves.toBe('token-fresh');
+      expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle', {
+        headers: { Authorization: 'Bearer token-fresh' },
+      });
+      expect(window.sessionStorage.getItem(INTENT_KEY)).toBeNull();
+      expect(screen.queryByText(PAYMENT_RECEIVED)).not.toBeInTheDocument();
+    });
 
-      // Once: a later return to the tab asks nothing more.
-      fireEvent.focus(window);
-      expect(mockVerifyCheckout).toHaveBeenCalledTimes(2);
+    it('a payment still capturing: drops the intent key, says the payment is in, holds the buttons, and opens the recipe from a re-read', async () => {
+      authState.session = { access_token: 'token-at-click' };
+      authState.credits = 5000;
+      authState.marketplaceSpendableCredits = 5000;
+      const { fetchMock, openRecipe } = stubPaidCheckoutFetch({ recipeOpens: true });
+      let intentKeyDuringVerify: string | null = null;
+      mockVerifyCheckout.mockImplementationOnce(async () => {
+        intentKeyDuringVerify = window.sessionStorage.getItem(INTENT_KEY);
+        return { state: 'pending', body: { code: 'PAYMENT_PENDING' } };
+      });
+      stubSheetThatPays();
+      const funnel = listenForProductEvents();
+      try {
+        renderPanel({ isFree: false, priceLabel: '$9.00', priceUsdCents: 900 });
+
+        fireEvent.click(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i }));
+
+        expect(await screen.findByText(PAYMENT_RECEIVED)).toBeInTheDocument();
+        expect(intentKeyDuringVerify).toEqual(expect.any(String));
+        expect(window.sessionStorage.getItem(INTENT_KEY)).toBeNull();
+        expect(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i })).toBeDisabled();
+        expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeDisabled();
+        // The re-read carries the session as it is now, not the one from the click.
+        await waitFor(() => {
+          expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle', {
+            headers: { Authorization: 'Bearer token-fresh' },
+          });
+        });
+
+        openRecipe();
+
+        expect(await screen.findByText('captured prompt')).toBeInTheDocument();
+        expect(screen.queryByText(PAYMENT_RECEIVED)).not.toBeInTheDocument();
+        expect(mockRefresh).toHaveBeenCalled();
+        expect(funnel.heard).toEqual(['recipe_checkout_started', 'recipe_checkout_succeeded']);
+      } finally {
+        funnel.stop();
+      }
+    });
+
+    it('a verify that fails after the sheet took the money never shows the failure or invites another payment', async () => {
+      authState.session = { access_token: 'token-at-click' };
+      const { fetchMock } = stubPaidCheckoutFetch({ recipeOpens: false });
+      mockVerifyCheckout.mockRejectedValueOnce(new Error('Unauthorized'));
+      stubSheetThatPays();
+      const funnel = listenForProductEvents();
+      try {
+        renderPanel({ isFree: false, priceLabel: '$9.00', priceUsdCents: 900 });
+
+        fireEvent.click(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i }));
+
+        expect(await screen.findByText(PAYMENT_RECEIVED)).toBeInTheDocument();
+        expect(screen.queryByText('Unauthorized')).not.toBeInTheDocument();
+        expect(screen.queryByText(/try again/i)).not.toBeInTheDocument();
+        expect(window.sessionStorage.getItem(INTENT_KEY)).toBeNull();
+        expect(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i })).toBeDisabled();
+        expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeDisabled();
+        await waitFor(() => {
+          expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle', {
+            headers: { Authorization: 'Bearer token-fresh' },
+          });
+        });
+        // A locked re-read keeps the message; nothing turns it into a failure.
+        expect(screen.getByText(PAYMENT_RECEIVED)).toBeInTheDocument();
+        expect(funnel.heard).toEqual(['recipe_checkout_started']);
+      } finally {
+        funnel.stop();
+      }
+    });
+
+    it('starts no wait for a verify that answers after the buyer has left the page', async () => {
+      authState.session = { access_token: 'token-at-click' };
+      const { fetchMock } = stubPaidCheckoutFetch({ recipeOpens: false });
+      let failVerify: (reason: Error) => void = () => undefined;
+      mockVerifyCheckout.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        failVerify = reject;
+      }));
+      stubSheetThatPays();
+      const { unmount } = renderPanel({ isFree: false, priceLabel: '$9.00', priceUsdCents: 900 });
+
+      fireEvent.click(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i }));
+      await waitFor(() => expect(mockVerifyCheckout).toHaveBeenCalledTimes(1));
+      unmount();
+      failVerify(new Error('Failed to fetch'));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(mockGetSession).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalledWith('/api/posts/post-1/resource-bundle', expect.anything());
     });
   });
 });

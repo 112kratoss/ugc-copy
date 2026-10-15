@@ -623,3 +623,94 @@ describe('the unlocked card', () => {
     expect(authState.api.resolvePostResourceFileUrl).toHaveBeenCalledWith('post-1', 'refs/look.jpg', { disposition: 'inline' });
   });
 });
+
+describe('a recipe opened from search', () => {
+  const lockedFree = () => ({
+    data: { bundle: { viewerCanAccess: false, accessMode: 'free', priceUsdCents: 0, resources: null, lockedPreview: null } },
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+  // A prompt and a story, so both sections draw; no kinds, so the card prints
+  // no "Prompt" of its own.
+  const recipePost = () => {
+    const details = showcaseItem().details!;
+    return showcaseItem({
+      details: { ...details, prompt: 'A hero in red', body: 'Shot at dusk.', unlock: { ...details.unlock!, resourceKinds: [] } },
+    });
+  };
+
+  /** Every node of the page in the order it is drawn, which is the order it is read. */
+  function drawOrder(tree: renderer.ReactTestRenderer) {
+    const nodes: renderer.ReactTestInstance[] = [];
+    const visit = (node: renderer.ReactTestInstance) => {
+      nodes.push(node);
+      for (const child of node.children) if (typeof child !== 'string') visit(child);
+    };
+    visit(tree.root);
+    return nodes;
+  }
+
+  function heading(tree: renderer.ReactTestRenderer, title: string) {
+    return tree.root.findAll((node) => String(node.type) === 'text' && node.props.children === title)[0];
+  }
+
+  function placeOf(tree: renderer.ReactTestRenderer, node: renderer.ReactTestInstance | undefined) {
+    expect(node).toBeDefined();
+    return drawOrder(tree).indexOf(node!);
+  }
+
+  beforeEach(() => {
+    authState.user = { id: 'viewer-1' };
+    queryState.current = lockedFree();
+  });
+
+  it("leads with the creator's resources, under the post's name and before its actions and sections", () => {
+    const tree = render(page({ item: recipePost(), initialSection: 'resources', onCreatorOpen: vi.fn() }));
+
+    const unlock = placeOf(tree, pressable(tree, 'Get resources — Free'));
+    expect(placeOf(tree, heading(tree, 'Minnal Murali'))).toBeLessThan(unlock);
+    expect(placeOf(tree, pressable(tree, 'Open @batman profile'))).toBeLessThan(unlock);
+    expect(unlock).toBeLessThan(placeOf(tree, pressable(tree, 'Remix')));
+    expect(unlock).toBeLessThan(placeOf(tree, pressable(tree, 'Save')));
+    expect(unlock).toBeLessThan(placeOf(tree, heading(tree, 'Prompt')));
+    expect(unlock).toBeLessThan(placeOf(tree, heading(tree, 'Story')));
+    // Moved, not drawn twice.
+    expect(textValues(tree).filter((value) => value === "Creator's resources")).toHaveLength(1);
+  });
+
+  it('keeps the card where the page closes for every other way in', () => {
+    for (const initialSection of [undefined, 'story', 'prompt'] as const) {
+      const tree = render(page({ item: recipePost(), initialSection, onCreatorOpen: vi.fn() }));
+
+      const unlock = placeOf(tree, pressable(tree, 'Get resources — Free'));
+      expect(placeOf(tree, pressable(tree, 'Save'))).toBeLessThan(unlock);
+      expect(placeOf(tree, heading(tree, 'Prompt'))).toBeLessThan(unlock);
+      expect(placeOf(tree, heading(tree, 'Story'))).toBeLessThan(unlock);
+      expect(textValues(tree).filter((value) => value === "Creator's resources")).toHaveLength(1);
+      renderer.act(() => tree.unmount());
+    }
+  });
+
+  it('leads with the unlocked card too, once the reader owns the recipe', () => {
+    queryState.current = {
+      data: {
+        bundle: {
+          viewerCanAccess: true,
+          viewerIsOwner: false,
+          lockedPreview: null,
+          resources: { promptText: null, notesMarkdown: 'Grade notes', workflowShareUrl: null, workflowSnapshot: null, attachments: [], allowRemix: false, items: [] },
+        },
+      },
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    };
+    const tree = render(page({ item: recipePost(), initialSection: 'resources' }));
+
+    const card = placeOf(tree, heading(tree, "Creator's resources"));
+    expect(card).toBeLessThan(placeOf(tree, pressable(tree, 'Save')));
+    expect(card).toBeLessThan(placeOf(tree, heading(tree, 'Prompt')));
+    expect(textValues(tree)).toContain('Unlocked');
+  });
+});

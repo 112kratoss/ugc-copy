@@ -46,7 +46,11 @@ import { HOME_WORKSPACE_ACTIVE_STATUSES } from '@/lib/home-dashboard';
 import { reportGeneration } from '@/lib/moderation-client';
 import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profile';
 import { resolveRemixTool } from '@/lib/remix-tools';
-import { formatUsdCents, getPostResourceKindLabel } from '@/lib/post-resource-bundles';
+import {
+  formatPostResourceCompactPriceLabel,
+  formatUsdCents,
+  getPostResourceKindLabel,
+} from '@/lib/post-resource-bundles';
 import UnlockLibrary from './UnlockLibrary';
 import { buildShowcaseDetailPath, supportsPublicCreationSharing } from '@/lib/share';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
@@ -1763,7 +1767,7 @@ export default function CreationsPage() {
 
     const getMonetizationBadgeLabel = (workspaceState: CreationWorkspaceCardState): string =>
         workspaceState.monetizationKind === 'paid' && workspaceState.monetizationPriceUsdCents !== null
-            ? `${formatUsdCents(workspaceState.monetizationPriceUsdCents)} recipe`
+            ? `${formatPostResourceCompactPriceLabel(workspaceState.monetizationPriceUsdCents)} recipe`
             : workspaceState.monetizationLabel;
 
     return (
@@ -2712,7 +2716,7 @@ export default function CreationsPage() {
                                                     <StudioChip tone="neutral">
                                                         {post.bundle.accessMode === 'free'
                                                             ? 'Free recipe'
-                                                            : formatUsdCents(post.bundle.priceUsdCents)}
+                                                            : formatPostResourceCompactPriceLabel(post.bundle.priceUsdCents)}
                                                     </StudioChip>
                                                     {post.bundle.resourceKinds.slice(0, 4).map((kind) => (
                                                         <StudioChip key={`${post.id}-${kind}`} tone="neutral" className="text-zinc-300">

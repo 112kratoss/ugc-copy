@@ -9,6 +9,7 @@ import {
   getApiRequestId,
   getViewerAwareApiCacheControl,
 } from '@/lib/api-cache';
+import { isMarketplaceCreatorBlockedForViewer } from '@/lib/marketplace-viewer-filter';
 import {
   getPostResourceBundleDetailByPostId,
   resolvePostIdForResourceIdentifier,
@@ -23,6 +24,7 @@ type MarketplaceResourceDetailRouteContext = {
 type MarketplaceResourceDetailRouteDependencies = {
   createUserClient?: typeof createUserClient;
   getPostResourceBundleDetailByPostId?: typeof getPostResourceBundleDetailByPostId;
+  isMarketplaceCreatorBlockedForViewer?: typeof isMarketplaceCreatorBlockedForViewer;
   logError?: typeof logBackendRouteError;
   resolvePostIdForResourceIdentifier?: typeof resolvePostIdForResourceIdentifier;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
@@ -33,6 +35,8 @@ function resolveDependencies(dependencies: MarketplaceResourceDetailRouteDepende
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     getPostResourceBundleDetailByPostId:
       dependencies?.getPostResourceBundleDetailByPostId ?? getPostResourceBundleDetailByPostId,
+    isMarketplaceCreatorBlockedForViewer:
+      dependencies?.isMarketplaceCreatorBlockedForViewer ?? isMarketplaceCreatorBlockedForViewer,
     logError: dependencies?.logError ?? logBackendRouteError,
     resolvePostIdForResourceIdentifier:
       dependencies?.resolvePostIdForResourceIdentifier ?? resolvePostIdForResourceIdentifier,
@@ -74,7 +78,12 @@ async function handleMarketplaceResourceDetailGET(
       countryCode: request.headers.get('x-vercel-ip-country'),
     });
 
-    if (!bundle) {
+    // Across a block either way the recipe is answered as missing, as the post
+    // page answers for its post.
+    if (
+      !bundle
+      || (viewerUserId && await dependencies.isMarketplaceCreatorBlockedForViewer(viewerUserId, bundle.seller.id))
+    ) {
       return NextResponse.json({ error: 'Unlock not found.' }, { status: 404 });
     }
 

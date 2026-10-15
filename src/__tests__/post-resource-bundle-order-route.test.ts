@@ -23,6 +23,7 @@ const adminClient = { from: fromMock, rpc: rpcMock };
 const createServiceClientFactory = vi.fn(() => adminClient);
 const getBundleForOrderByPostIdMock = vi.fn();
 const getPostResourceBundlePriceQuoteMock = vi.fn();
+const isPostResourceBundleBuyWithheldMock = vi.fn();
 const providerFetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 'order_bundle_123' }), {
   status: 200,
   headers: { 'Content-Type': 'application/json' },
@@ -66,6 +67,10 @@ vi.mock('@/lib/server-helpers', () => ({
 vi.mock('@/lib/post-resource-bundles-server', () => ({
   getBundleForOrderByPostId: (...args: unknown[]) => getBundleForOrderByPostIdMock(...args),
   getPostResourceBundlePriceQuote: (...args: unknown[]) => getPostResourceBundlePriceQuoteMock(...args),
+}));
+
+vi.mock('@/lib/marketplace-viewer-filter', () => ({
+  isPostResourceBundleBuyWithheld: (...args: unknown[]) => isPostResourceBundleBuyWithheldMock(...args),
 }));
 
 describe('/api/posts/[postId]/resource-bundle/order route', () => {
@@ -145,6 +150,8 @@ describe('/api/posts/[postId]/resource-bundle/order route', () => {
       title: 'Launch Hook Pack',
       price_usd_cents: 700,
     });
+    isPostResourceBundleBuyWithheldMock.mockReset();
+    isPostResourceBundleBuyWithheldMock.mockResolvedValue(false);
     getPostResourceBundlePriceQuoteMock.mockClear();
     getPostResourceBundlePriceQuoteMock.mockResolvedValue({
       amountSubunits: 58100,
@@ -300,6 +307,49 @@ describe('/api/posts/[postId]/resource-bundle/order route', () => {
       p_expected_revision_id: 'revision-1',
       p_expected_content_fingerprint: 'fingerprint-1',
     });
+  });
+
+  // A blocked pair, or a bundle the detail read withholds from this buyer, is
+  // answered as a missing unlock: no provider order, so no payment and no sale.
+  it('refuses a withheld paid order as not found before any quote or provider order', async () => {
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: { id: 'buyer-1' } },
+          error: null,
+        })),
+      },
+    });
+    isPostResourceBundleBuyWithheldMock.mockResolvedValueOnce(true);
+
+    const { POST } = await import('@/app/api/posts/[postId]/resource-bundle/order/route');
+    const response = await POST(
+      new Request('http://localhost/api/posts/post-1/resource-bundle/order', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-vercel-ip-country': 'IN',
+          'x-request-id': 'bundle-order-withheld-1',
+        },
+        body: JSON.stringify({
+          locale: 'en-IN',
+          clientIntentKey: 'intent-bundle-withheld-123456',
+        }),
+      }) as never,
+      { params: Promise.resolve({ postId: 'post-1' }) }
+    );
+
+    expect(response.status).toBe(404);
+    expectPrivateNoStoreTraceHeaders(response, 'bundle-order-withheld-1');
+    await expect(response.json()).resolves.toEqual({ error: 'Unlock not found.' });
+    expect(isPostResourceBundleBuyWithheldMock).toHaveBeenCalledWith({
+      adminSupabase: adminClient,
+      buyerUserId: 'buyer-1',
+      postId: 'post-1',
+    });
+    expect(rpcMock.mock.calls.map(([name]) => name)).toEqual(['check_backend_rate_limit']);
+    expect(getPostResourceBundlePriceQuoteMock).not.toHaveBeenCalled();
+    expect(providerFetchMock).not.toHaveBeenCalled();
   });
 
   it('returns 504 when Razorpay order creation times out before recording a bundle order', async () => {

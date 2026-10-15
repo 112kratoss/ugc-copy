@@ -1239,6 +1239,9 @@ describe('ShowcaseClient save actions', () => {
 
     expect(screen.getByRole('link', { name: /^unlock for 50 credits for /i })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /\$0\.50/ })).not.toBeInTheDocument();
+    // The tile's badge as well, which read "$0.50 recipe".
+    expect(screen.getByText('50 credits')).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('$0.50');
   });
 
   it('disables prefetching for community card detail and creator links', async () => {
@@ -1572,8 +1575,8 @@ describe('ShowcaseClient save actions', () => {
 
     fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
     const reel = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
-    fireEvent.click(await within(reel).findByRole('button', { name: 'Show comments on Campaign Frame (0)' }, { timeout: 3000 }));
-    expect(await within(reel).findByRole('button', { name: 'Hide comments on Campaign Frame (3)' }, { timeout: 3000 })).toBeInTheDocument();
+    fireEvent.click(await within(reel).findByRole('button', { name: 'Show comments on Campaign Frame (0)' }));
+    expect(await within(reel).findByRole('button', { name: 'Hide comments on Campaign Frame (3)' })).toBeInTheDocument();
 
     fireEvent.click(within(reel).getByRole('button', { name: 'Explore' }));
     await waitFor(() => {
@@ -1583,7 +1586,9 @@ describe('ShowcaseClient save actions', () => {
     fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
     const reopened = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
     expect(await within(reopened).findByRole('button', { name: 'Show comments on Campaign Frame (3)' })).toBeInTheDocument();
-  });
+    // Opens the reel twice and a comment thread once: 5,016 ms at the start of a PR run's web
+    // suite on a GitHub runner (#459), about 360 ms here, as on main before it. Room as #457 gave.
+  }, 15_000);
 
   it('automatically loads the next showcase page when the feed sentinel enters view', async () => {
     const firstItem = createShowcaseItem({ id: 'post-1', title: 'Campaign Frame', generationId: 'gen-1' });

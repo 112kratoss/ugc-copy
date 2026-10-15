@@ -16,6 +16,7 @@ const createServiceClientFactory = vi.hoisted(() => vi.fn(() => adminClient));
 const getBundleForOrderByPostIdMock = vi.hoisted(() => vi.fn());
 const notifyPostResourceUnlockCompletedMock = vi.hoisted(() => vi.fn());
 const unlockPostResourceBundleWithCreditsMock = vi.hoisted(() => vi.fn());
+const isPostResourceBundleBuyWithheldMock = vi.hoisted(() => vi.fn());
 const afterMock = vi.hoisted(() => vi.fn());
 
 class MockMobileCommerceError extends Error {
@@ -40,6 +41,10 @@ vi.mock('@/lib/server-helpers', () => ({
 
 vi.mock('@/lib/post-resource-bundles-server', () => ({
   getBundleForOrderByPostId: (...args: unknown[]) => getBundleForOrderByPostIdMock(...args),
+}));
+
+vi.mock('@/lib/marketplace-viewer-filter', () => ({
+  isPostResourceBundleBuyWithheld: (...args: unknown[]) => isPostResourceBundleBuyWithheldMock(...args),
 }));
 
 vi.mock('@/lib/mobile-notifications', () => ({
@@ -73,6 +78,8 @@ describe('/api/posts/[postId]/resource-bundle unlock routes', () => {
       error: null,
     });
     getBundleForOrderByPostIdMock.mockClear();
+    isPostResourceBundleBuyWithheldMock.mockReset();
+    isPostResourceBundleBuyWithheldMock.mockResolvedValue(false);
     notifyPostResourceUnlockCompletedMock.mockClear();
     afterMock.mockReset();
     unlockPostResourceBundleWithCreditsMock.mockClear();
@@ -239,6 +246,81 @@ describe('/api/posts/[postId]/resource-bundle unlock routes', () => {
     expect(afterMock).toHaveBeenCalledTimes(1);
     expect(afterMock).toHaveBeenCalledWith(notify);
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  // A blocked pair, or a bundle the detail read withholds from this buyer, is
+  // answered as a missing unlock by both buy routes: no spend, no grant, no push.
+  it('refuses a withheld free unlock as not found, before the unlock or its notifications', async () => {
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: { id: 'buyer-1' } },
+          error: null,
+        })),
+      },
+    });
+    getBundleForOrderByPostIdMock.mockResolvedValueOnce({
+      id: 'bundle-1',
+      post_id: 'post-1',
+      owner_user_id: 'owner-1',
+      access_mode: 'free',
+      status: 'published',
+      price_usd_cents: 0,
+    });
+    isPostResourceBundleBuyWithheldMock.mockResolvedValueOnce(true);
+
+    const { POST } = await import('@/app/api/posts/[postId]/resource-bundle/unlock-free/route');
+    const response = await POST(
+      new Request('http://localhost/api/posts/post-1/resource-bundle/unlock-free', {
+        method: 'POST',
+        headers: { 'x-request-id': 'post-free-withheld-1' },
+      }) as never,
+      { params: Promise.resolve({ postId: 'post-1' }) }
+    );
+
+    expect(response.status).toBe(404);
+    expectPrivateNoStoreTraceHeaders(response, 'post-free-withheld-1');
+    await expect(response.json()).resolves.toEqual({ error: 'Unlock not found.' });
+    expect(isPostResourceBundleBuyWithheldMock).toHaveBeenCalledWith({
+      adminSupabase: adminClient,
+      buyerUserId: 'buyer-1',
+      postId: 'post-1',
+    });
+    expect(rpcMock).not.toHaveBeenCalledWith('unlock_free_post_resource_bundle', expect.anything());
+    expect(notifyPostResourceUnlockCompletedMock).not.toHaveBeenCalled();
+    expect(afterMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a withheld credit unlock as not found, with nothing spent or notified', async () => {
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: { id: 'buyer-1' } },
+          error: null,
+        })),
+      },
+    });
+    isPostResourceBundleBuyWithheldMock.mockResolvedValueOnce(true);
+
+    const { POST } = await import('@/app/api/posts/[postId]/resource-bundle/unlock-with-credits/route');
+    const response = await POST(
+      new Request('http://localhost/api/posts/post-1/resource-bundle/unlock-with-credits', {
+        method: 'POST',
+        headers: { 'x-request-id': 'post-credit-withheld-1' },
+      }) as never,
+      { params: Promise.resolve({ postId: 'post-1' }) }
+    );
+
+    expect(response.status).toBe(404);
+    expectPrivateNoStoreTraceHeaders(response, 'post-credit-withheld-1');
+    await expect(response.json()).resolves.toEqual({ error: 'Post unlock not found.' });
+    expect(isPostResourceBundleBuyWithheldMock).toHaveBeenCalledWith({
+      adminSupabase: adminClient,
+      buyerUserId: 'buyer-1',
+      postId: 'post-1',
+    });
+    expect(unlockPostResourceBundleWithCreditsMock).not.toHaveBeenCalled();
+    expect(afterMock).not.toHaveBeenCalled();
   });
 
   it('does not create an admin client before paid unlock verification authentication succeeds', async () => {

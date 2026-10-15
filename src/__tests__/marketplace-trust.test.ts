@@ -25,18 +25,43 @@ describe('marketplace trust helpers', () => {
   it('formats access labels from localized price quotes', () => {
     expect(formatBundleAccessLabel({
       accessMode: 'free',
+      priceUsdCents: 0,
       priceQuote: { currency: 'USD', amountSubunits: 0, formatted: '$0.00', note: null },
     })).toBe('Free recipe');
 
     expect(formatBundleAccessLabel({
       accessMode: 'paid',
+      priceUsdCents: 225,
       priceQuote: { currency: 'INR', amountSubunits: 18900, formatted: '₹189', note: 'Charged in INR for buyers in India.' },
-    })).toBe('₹189 recipe');
+    })).toBe('₹189');
 
     expect(formatBundleAccessLabel({
       accessMode: 'paid',
+      priceUsdCents: 200,
       priceQuote: { currency: 'USD', amountSubunits: 200, formatted: '$2.00', note: null },
-    })).toBe('$2.00 recipe');
+    })).toBe('$2.00');
+  });
+
+  // Below the cash minimum only credits buy a recipe, so its quote (in any
+  // currency) is a price no checkout would take.
+  it('prices a credits-only recipe in credits, never in its cash quote', () => {
+    expect(formatBundleAccessLabel({
+      accessMode: 'paid',
+      priceUsdCents: 50,
+      priceQuote: { currency: 'USD', amountSubunits: 50, formatted: '$0.50', note: null },
+    })).toBe('50 credits');
+
+    expect(formatBundleAccessLabel({
+      accessMode: 'paid',
+      priceUsdCents: 90,
+      priceQuote: { currency: 'INR', amountSubunits: 7600, formatted: '₹76', note: 'Charged in INR for buyers in India.' },
+    })).toBe('90 credits');
+  });
+
+  it('falls back to the USD figure without a quote, and decides free by the credit price', () => {
+    expect(formatBundleAccessLabel({ accessMode: 'paid', priceUsdCents: 900 })).toBe('$9.00');
+    expect(formatBundleAccessLabel({ accessMode: 'paid', priceUsdCents: 40, priceQuote: null })).toBe('40 credits');
+    expect(formatBundleAccessLabel({ accessMode: 'paid', priceUsdCents: 0 })).toBe('Free recipe');
   });
 
   it('rejects placeholder and test-like listings', () => {

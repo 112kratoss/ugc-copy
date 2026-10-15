@@ -323,6 +323,21 @@ export function toEditableCreatorProfile(profile: ProfileApiResponse): EditableC
   };
 }
 
+/**
+ * The part of a balance that can buy a creator's recipe. The credit unlock
+ * (`unlock_post_resource_bundle_with_credits`) spends only the total less the
+ * promotional credits it holds (the welcome grant, referral rewards), so a
+ * balance that covers a price can still be refused. Null when the total is
+ * unknown.
+ */
+export function getMarketplaceSpendableCredits(
+  totalCredits: number | null,
+  promotionalCredits: number | null | undefined,
+): number | null {
+  if (totalCredits === null) return null;
+  return Math.max(0, totalCredits - Math.max(0, promotionalCredits ?? 0));
+}
+
 export function sanitizeProfileRecord(record: {
   id: string;
   username: string | null;
@@ -356,9 +371,7 @@ export function sanitizeProfileRecord(record: {
     location: record.location,
     credits: totalCredits,
     promotionalCredits,
-    marketplaceSpendableCredits: totalCredits === null
-      ? null
-      : Math.max(0, totalCredits - promotionalCredits),
+    marketplaceSpendableCredits: getMarketplaceSpendableCredits(totalCredits, promotionalCredits),
   };
 }
 

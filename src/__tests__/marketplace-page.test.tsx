@@ -5,6 +5,8 @@ import MarketplacePage, { revalidate } from '@/app/marketplace/page';
 
 const getMarketplaceResourceListMock = vi.fn();
 const headersMock = vi.fn();
+const getServerAuthStateMock = vi.fn();
+const filterMarketplaceItemsForViewerMock = vi.fn();
 const sourceToolCatalog = vi.hoisted(() => [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
   { slug: 'runway', label: 'Runway', models: [], supportedMediaKinds: ['image', 'video'] },
@@ -14,10 +16,10 @@ vi.mock('next/headers', () => ({
   headers: () => headersMock(),
 }));
 
+const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
+
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: vi.fn(),
-  }),
+  useRouter: () => routerMock,
 }));
 
 vi.mock('@/lib/post-resource-bundles-server', () => ({
@@ -28,16 +30,32 @@ vi.mock('@/lib/source-tools-server', () => ({
   listSourceToolsCatalog: () => Promise.resolve(sourceToolCatalog),
 }));
 
+vi.mock('@/lib/supabase-server', () => ({
+  getServerAuthState: () => getServerAuthStateMock(),
+}));
+
+vi.mock('@/lib/marketplace-viewer-filter', () => ({
+  filterMarketplaceItemsForViewer: (...args: unknown[]) => filterMarketplaceItemsForViewerMock(...args),
+}));
+
+function requestHeaders(country: string | null) {
+  return { get: vi.fn((name: string) => (name === 'x-vercel-ip-country' ? country : null)) };
+}
+
 describe('MarketplacePage', () => {
   beforeEach(() => {
     headersMock.mockReset();
     getMarketplaceResourceListMock.mockReset();
+    getServerAuthStateMock.mockReset();
+    getServerAuthStateMock.mockResolvedValue({ session: null, credits: null });
+    filterMarketplaceItemsForViewerMock.mockReset();
+    filterMarketplaceItemsForViewerMock.mockImplementation(async (items: unknown[]) => items);
   });
 
-  it('renders as a cacheable anonymous marketplace page without reading request headers', async () => {
-    headersMock.mockImplementation(() => {
-      throw new Error('headers should not be read for the public marketplace page');
-    });
+  // The first page was quoted in USD for everyone while "Load more" and the
+  // post a card opens were quoted in the visitor's currency.
+  it("quotes the first page in the visitor's country, as every later page is", async () => {
+    headersMock.mockResolvedValue(requestHeaders('IN'));
     getMarketplaceResourceListMock.mockResolvedValue({
       items: [],
     });
@@ -49,15 +67,84 @@ describe('MarketplacePage', () => {
     });
 
     expect(revalidate).toBe(60);
-    expect(headersMock).not.toHaveBeenCalled();
     expect(getMarketplaceResourceListMock).toHaveBeenCalledWith(expect.objectContaining({
-      countryCode: null,
+      countryCode: 'IN',
       limit: 3,
       offset: 0,
     }));
     expect(screen.getByRole('heading', {
       name: /buy the reusable parts behind community posts/i,
     })).toBeInTheDocument();
+  });
+
+  // The storefront was the one list that kept showing a creator the viewer
+  // blocked, or who blocked them; each card then opened a 404.
+  it("takes a signed-in viewer's blocked creators off the first page, and no one's for a visitor", async () => {
+    headersMock.mockResolvedValue(requestHeaders(null));
+    getMarketplaceResourceListMock.mockResolvedValue({
+      items: [
+        createMarketplaceResourceItem({ id: 'bundle-kept', title: 'Kept recipe', post: null }),
+        createMarketplaceResourceItem({
+          id: 'bundle-blocked',
+          postId: 'post-blocked',
+          title: 'Blocked recipe',
+          post: null,
+          seller: { id: 'creator-blocked', username: 'blocked', name: 'Blocked', avatar: null },
+        }),
+      ],
+      pageInfo: { hasMore: true, nextOffset: 3, offset: 0, limit: 3 },
+    });
+    filterMarketplaceItemsForViewerMock.mockImplementation(async (
+      items: Array<{ seller: { id: string } }>,
+      viewerUserId: string | null,
+    ) => (viewerUserId ? items.filter((item) => item.seller.id !== 'creator-blocked') : items));
+    getServerAuthStateMock.mockResolvedValue({ session: { user: { id: 'viewer-1' } }, credits: 10 });
+
+    let unmount!: () => void;
+    await act(async () => {
+      ({ unmount } = render(MarketplacePage({
+        searchParams: Promise.resolve({}),
+      })));
+    });
+
+    expect(filterMarketplaceItemsForViewerMock).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: 'bundle-kept' }), expect.objectContaining({ id: 'bundle-blocked' })],
+      'viewer-1',
+    );
+    expect(await screen.findByText('Kept recipe')).toBeInTheDocument();
+    expect(screen.queryByText('Blocked recipe')).not.toBeInTheDocument();
+    // The next page still starts where the unfiltered one ended.
+    expect(screen.getByRole('button', { name: /load more recipes/i })).toBeInTheDocument();
+    unmount();
+
+    getServerAuthStateMock.mockResolvedValue({ session: null, credits: null });
+    await act(async () => {
+      render(MarketplacePage({
+        searchParams: Promise.resolve({}),
+      }));
+    });
+
+    expect(filterMarketplaceItemsForViewerMock).toHaveBeenLastCalledWith(expect.any(Array), null);
+    expect(await screen.findByText('Blocked recipe')).toBeInTheDocument();
+  });
+
+  // A one- or two-character query was dropped without a word: every recipe
+  // was listed and the search box emptied.
+  it('answers a query under three characters with the hint, keeps it in the box, and lists nothing', async () => {
+    headersMock.mockResolvedValue(requestHeaders(null));
+
+    await act(async () => {
+      render(MarketplacePage({
+        searchParams: Promise.resolve({ q: 'ai', access: 'paid' }),
+      }));
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Type at least 3 characters' })).toBeInTheDocument();
+    expect(screen.getByRole('searchbox', { name: /search marketplace recipes/i })).toHaveValue('ai');
+    // Clearing the search keeps the other filters.
+    expect(screen.getByRole('link', { name: 'Clear search' })).toHaveAttribute('href', '/marketplace?access=paid&sort=recent');
+    expect(getMarketplaceResourceListMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('heading', { name: 'No recipes yet' })).not.toBeInTheDocument();
   });
 
   it('builds a valid recent sort link and keeps both empty-state entry points visible', async () => {

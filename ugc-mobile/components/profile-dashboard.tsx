@@ -44,7 +44,6 @@ import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { isClaimedProfileUsername } from '@/lib/edit-profile-form';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
-import { formatUsdCents } from '@/lib/home-view-model';
 import { getGenerationKind, getGenerationLabel } from '@/lib/generation-media';
 import { haptic } from '@/lib/haptics';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
@@ -63,6 +62,7 @@ import {
   getProfileInitials,
   getProfileName,
   getProfileStats,
+  getWalletCardContent,
   ownProfileShareUrl,
   ownerPostToProfileMediaCard,
   savedShowcaseToProfileMediaCards,
@@ -87,10 +87,11 @@ import {
   truncateInfiniteDataToFirstPage,
 } from '@/lib/profile-media-query';
 import { useProfileMediaRevalidation } from '@/lib/use-profile-media-revalidation';
+import { useCreatorPayoutState } from '@/lib/use-creator-payout-state';
 import { flattenShowcaseFeedPages } from '@/lib/showcase-feed-query';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
-import { UNKNOWN_AMOUNT_LABEL, formatCreditBalance } from '@/lib/pricing';
+import { formatCreditBalance } from '@/lib/pricing';
 import { SHOWCASE_PLAYBACK_VIEWABILITY } from '@/lib/showcase-feed-events';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
 import { hexWithAlpha } from '@/lib/eased-fade';
@@ -168,6 +169,7 @@ export function ProfileDashboard({
     queryFn: api.getProfile,
     staleTime: 1000 * 60 * 5,
   });
+  const payoutQuery = useCreatorPayoutState();
 
   // The card feed and the reel read these same queries, so a tile can only ever
   // open onto the pages, order and freshness the grid is showing.
@@ -292,8 +294,7 @@ export function ProfileDashboard({
   const archivedPostCards = useMemo(() => allPostCards.filter((card) => card.isArchived), [allPostCards]);
   const postCards = postsScope === 'archived' ? archivedPostCards : activePostCards;
   const profile = profileQuery.data;
-  // The seller total the server puts on the profile; unknown until it answers.
-  const earningsUsdCents = profile?.sales?.earningsUsdCents ?? null;
+  const wallet = getWalletCardContent(payoutQuery);
   const displayName = getProfileName(profile, user?.email);
   const handle = getProfileHandle(profile, user?.email);
   const initials = getProfileInitials(profile, user?.email);
@@ -518,7 +519,9 @@ export function ProfileDashboard({
             <BalanceCard
               icon={<Wallet size={appTheme.icon.default} color={theme.colors.primary} />}
               label="Wallet"
-              value={earningsUsdCents === null ? UNKNOWN_AMOUNT_LABEL : formatUsdCents(earningsUsdCents)}
+              value={wallet.value}
+              caption={wallet.caption}
+              accessibilityLabel={wallet.accessibilityLabel}
               onPress={() => router.push('/seller-dashboard' as never)}
             />
           </View>
@@ -1117,18 +1120,23 @@ function BalanceCard({
   icon,
   label,
   value,
+  caption,
+  accessibilityLabel = label,
   onPress,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
+  /** What the figure is, when the label alone does not say. */
+  caption?: string;
+  accessibilityLabel?: string;
   onPress: () => void;
 }) {
   const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel}
       onPress={onPress}
       style={({ pressed }) => ({
         flex: 1,
@@ -1142,6 +1150,8 @@ function BalanceCard({
         alignItems: 'center',
         gap: 10,
         paddingHorizontal: 12,
+        // Room above and below once a caption makes the text taller than the card.
+        paddingVertical: 10,
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
@@ -1151,6 +1161,12 @@ function BalanceCard({
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
         <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.74} style={{ color: theme.colors.text, fontSize: 17, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{value}</Text>
+        {/* Two lines in a half-width card on most phones, and free to wrap
+            further at larger text sizes rather than be cut off. Part of a
+            button, so not selectable text. */}
+        {caption ? (
+          <AppText variant="caption" color="muted" selectable={false}>{caption}</AppText>
+        ) : null}
       </View>
       <ChevronRight size={16} color={theme.colors.faint} />
     </Pressable>

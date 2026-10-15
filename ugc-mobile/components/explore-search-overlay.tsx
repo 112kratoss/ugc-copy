@@ -266,7 +266,15 @@ function RecipeRow({ recipe, onOpen }: { recipe: RecipeSearchResult; onOpen: () 
       accessibilityLabel={`Open recipe ${recipe.title}`}
       onPress={() => {
         onOpen();
-        router.push({ pathname: '/marketplace/[assetId]', params: { assetId: recipe.id, postId: recipe.postId } });
+        // A recipe is read and bought on its post, as on the web, whose search
+        // opens the post at `#recipe`: in the reel, with the params the post's
+        // own link opens it with (`app/post/[id].tsx`), on its Details page
+        // with the resources card first. The standalone unlock screen had no
+        // way to the post, its creator or Remix.
+        router.push({
+          pathname: '/viewer',
+          params: { source: 'showcase-feed', initialId: recipe.postId, initialPage: 'details', initialSection: 'resources' },
+        });
       }}
       style={({ pressed }) => ({
         minHeight: 104,

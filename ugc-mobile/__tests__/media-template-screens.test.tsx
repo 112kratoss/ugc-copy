@@ -13,6 +13,7 @@ const routerState = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
 
 const authState = vi.hoisted(() => ({
   api: {
+    listMediaTemplates: vi.fn(),
     getTemplateRun: vi.fn(),
     getMediaTemplate: vi.fn(),
     startTemplateRun: vi.fn(),
@@ -20,16 +21,28 @@ const authState = vi.hoisted(() => ({
     approveTemplateRunStep: vi.fn(),
     cancelTemplateRun: vi.fn(),
     createMediaTemplateRun: vi.fn(),
+    reportTemplate: vi.fn(),
     shareShowcasePost: vi.fn(),
   },
-  user: { id: 'user-1' },
+  user: { id: 'user-1' } as { id: string } | null,
   identityUserId: 'user-1',
   credits: 500,
   isLoading: false,
   refreshProfile: vi.fn(async () => undefined),
 }));
 
-const dialogState = vi.hoisted(() => ({ showConfirmDialog: vi.fn() }));
+const dialogState = vi.hoisted(() => ({ showConfirmDialog: vi.fn(), showErrorDialog: vi.fn(), showMessageDialog: vi.fn() }));
+
+// The sheet the Report row opens; a case presses one of its rows itself.
+const actionSheetState = vi.hoisted(() => ({ showActionSheet: vi.fn() }));
+
+// What the stored resume slots answer, and what the screens tell them.
+const resumeState = vi.hoisted(() => ({
+  forgetTemplateRun: vi.fn(async () => false),
+  loadResumableTemplateRun: vi.fn(async () => null as unknown),
+  loadResumableTemplateRuns: vi.fn(async () => ({}) as Record<string, unknown>),
+  rememberTemplateRun: vi.fn(async () => false),
+}));
 
 const nativeState = vi.hoisted(() => ({
   Linking: { canOpenURL: vi.fn(), openURL: vi.fn() },
@@ -70,14 +83,39 @@ vi.mock('lucide-react-native', () => {
   };
 });
 
+type FlatListProps = MockProps & {
+  data: unknown[];
+  renderItem: (info: { item: unknown; index: number }) => React.ReactNode;
+  keyExtractor: (item: unknown, index: number) => string;
+  ListHeaderComponent?: React.ReactNode;
+  ListEmptyComponent?: React.ReactNode;
+  ListFooterComponent?: React.ReactNode;
+};
+
 vi.mock('react-native', () => ({
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   AppState: { addEventListener: () => ({ remove: () => undefined }) },
+  // Every item is drawn, each in a cell under the key the list gives it, so a
+  // card that the real list would remount shows up here as a new instance.
+  FlatList: ({ data, renderItem, keyExtractor, ListHeaderComponent, ListEmptyComponent, ListFooterComponent, ...props }: FlatListProps) => React.createElement(
+    'flat-list',
+    props,
+    ListHeaderComponent ?? null,
+    ...(data.length
+      ? data.map((item, index) => React.createElement('list-cell', { key: keyExtractor(item, index), cellKey: keyExtractor(item, index) }, renderItem({ item, index })))
+      : [ListEmptyComponent ?? null]),
+    ListFooterComponent ?? null,
+  ),
   Linking: nativeState.Linking,
   Platform: nativeState.Platform,
   Pressable: ({ children, ...props }: MockProps) => React.createElement('pressable', props, children),
+  RefreshControl: (props: MockProps) => React.createElement('refresh-control', props),
   Share: nativeState.Share,
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
+}));
+
+vi.mock('@/components/feed-pagination-footer', () => ({
+  FeedLoadMoreErrorFooter: (props: MockProps) => React.createElement('load-more-error', props),
 }));
 
 vi.mock('@/components/media-preview', () => {
@@ -97,6 +135,7 @@ vi.mock('@/components/media-preview', () => {
 vi.mock('@/components/ui', () => ({
   AppText: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   Card: ({ children, ...props }: MockProps) => React.createElement('card', props, children),
+  CreatorAvatar: (props: MockProps) => React.createElement('creator-avatar', props),
   IconButton: (props: MockProps) => React.createElement('icon-button', props),
   Kicker: ({ children, ...props }: MockProps) => React.createElement('kicker', props, children),
   Pill: (props: MockProps) => React.createElement('pill', props),
@@ -116,20 +155,21 @@ vi.mock('@/lib/api-client', () => ({
   },
 }));
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
+vi.mock('@/lib/action-sheet', () => actionSheetState);
 vi.mock('@/lib/dialog', () => dialogState);
 vi.mock('@/lib/env', () => ({
   env: { apiBaseUrl: 'https://app.test', siteUrl: 'https://magicbooklet.com', supabaseUrl: 'https://project.supabase.co' },
 }));
 vi.mock('@/lib/media', () => ({ pickMedia: vi.fn(), uploadTemplateRunInput: vi.fn() }));
-vi.mock('@/lib/template-run-resume', () => ({
-  clearActiveTemplateRun: vi.fn(async () => undefined),
-  loadActiveTemplateRunId: vi.fn(async () => null),
-  rememberActiveTemplateRun: vi.fn(async () => undefined),
-}));
+vi.mock('@/lib/template-run-resume', () => resumeState);
 
-import { MediaTemplateRunScreen } from '../components/media-template-screens';
+import { MediaTemplateCatalogScreen, MediaTemplateDetailScreen, MediaTemplateRunScreen } from '../components/media-template-screens';
 import { ApiError } from '../lib/api-client';
-import { normalizeMediaTemplateDetailResponse, normalizeTemplateRunResponse } from '../lib/media-templates';
+import {
+  normalizeMediaTemplateDetailResponse,
+  normalizeMediaTemplateListResponse,
+  normalizeTemplateRunResponse,
+} from '../lib/media-templates';
 import type { TemplateRunResponse } from '../lib/types';
 
 const TEMPLATE_ID = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
@@ -264,6 +304,14 @@ beforeEach(() => {
   routerState.push.mockClear();
   routerState.replace.mockClear();
   dialogState.showConfirmDialog.mockReset().mockResolvedValue(true);
+  dialogState.showErrorDialog.mockReset();
+  dialogState.showMessageDialog.mockReset();
+  actionSheetState.showActionSheet.mockReset();
+  authState.user = { id: 'user-1' };
+  resumeState.forgetTemplateRun.mockReset().mockResolvedValue(false);
+  resumeState.loadResumableTemplateRun.mockReset().mockResolvedValue(null);
+  resumeState.loadResumableTemplateRuns.mockReset().mockResolvedValue({});
+  resumeState.rememberTemplateRun.mockReset().mockResolvedValue(false);
   nativeState.Linking.canOpenURL.mockReset().mockResolvedValue(true);
   nativeState.Linking.openURL.mockReset().mockResolvedValue(true);
   nativeState.Share.share.mockReset().mockResolvedValue({ action: 'sharedAction' });
@@ -622,5 +670,425 @@ describe('starting (below the cut)', () => {
 
     expect(authState.api.startTemplateRun).toHaveBeenCalledWith('run-1');
     expect(slot()?.props.disabled).toBe(true);
+  });
+});
+
+describe('the catalog (01-5)', () => {
+  /** A poster as the list signs it: the stored file under its version, a new token on every read. */
+  const poster = (id: string, nonce: string) => signedUrl(`template_assets/${id}/version-1/poster.webp`, 24 * 60 * MINUTE_MS, nonce);
+  const storedPoster = (id: string) => `https://project.supabase.co/storage/v1/object/sign/template_assets/${id}/version-1/poster.webp`;
+  const template = (id: string, nonce: string) => ({ id, slug: `slug-${id}`, name: `Template ${id}`, outputKind: 'video', inputSlots: [], thumbnailUrl: poster(id, nonce) });
+  const page = (nonce: string, ids: string[], nextCursor: string | null = null) => normalizeMediaTemplateListResponse({
+    templates: ids.map((id) => template(id, nonce)),
+    nextCursor,
+  });
+
+  async function mountCatalog() {
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => {
+      tree = renderer.create(
+        <QueryClientProvider client={client}>
+          <MediaTemplateCatalogScreen />
+        </QueryClientProvider>,
+      );
+    });
+    mounted.push(tree);
+    await flush();
+    return tree;
+  }
+
+  const list = (tree: renderer.ReactTestRenderer) => hosts(tree, 'flat-list')[0];
+  const cardKeys = (tree: renderer.ReactTestRenderer) => hosts(tree, 'list-cell').map((cell) => cell.props.cellKey as string);
+  const posters = (tree: renderer.ReactTestRenderer) => hosts(tree, 'image');
+
+  async function reachEnd(tree: renderer.ReactTestRenderer) {
+    await renderer.act(async () => { (list(tree).props.onEndReached as () => void)(); });
+    await flush();
+  }
+
+  it('keeps every card and its poster when a read signs the posters again', async () => {
+    const first = page('first', ['a', 'b']);
+    const second = page('second', ['a', 'b']);
+    authState.api.listMediaTemplates.mockResolvedValueOnce(first).mockResolvedValue(second);
+    const tree = await mountCatalog();
+    const before = posters(tree);
+    expect(cardKeys(tree)).toEqual(['a', 'b']);
+    expect(before.map((image) => image.props.source)).toEqual([
+      { uri: first.templates[0].thumbnailUrl, cacheKey: storedPoster('a') },
+      { uri: first.templates[1].thumbnailUrl, cacheKey: storedPoster('b') },
+    ]);
+
+    // What the foreground refetch and a remount both do.
+    await renderer.act(async () => { await client.refetchQueries({ queryKey: ['media-templates'] }); });
+    await flush();
+
+    expect(authState.api.listMediaTemplates).toHaveBeenCalledTimes(2);
+    expect(second.templates[0].thumbnailUrl).not.toBe(first.templates[0].thumbnailUrl);
+    const after = posters(tree);
+    expect(cardKeys(tree)).toEqual(['a', 'b']);
+    // The same images, given the new links under the keys they already had.
+    expect(after[0]).toBe(before[0]);
+    expect(after[1]).toBe(before[1]);
+    expect(after.map((image) => image.props.source)).toEqual([
+      { uri: second.templates[0].thumbnailUrl, cacheKey: storedPoster('a') },
+      { uri: second.templates[1].thumbnailUrl, cacheKey: storedPoster('b') },
+    ]);
+  });
+
+  it('loads the next page as the list nears its end, and asks no more after the last', async () => {
+    authState.api.listMediaTemplates.mockResolvedValueOnce(page('first', ['a'], 'cursor-2')).mockResolvedValueOnce(page('first', ['b']));
+    const tree = await mountCatalog();
+    expect(authState.api.listMediaTemplates).toHaveBeenCalledWith(undefined, { fresh: false });
+
+    await reachEnd(tree);
+
+    expect(authState.api.listMediaTemplates).toHaveBeenLastCalledWith({ cursor: 'cursor-2' });
+    expect(cardKeys(tree)).toEqual(['a', 'b']);
+
+    await reachEnd(tree);
+    expect(authState.api.listMediaTemplates).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for Retry after a page fails, rather than failing again at the end of the list', async () => {
+    authState.api.listMediaTemplates
+      .mockResolvedValueOnce(page('first', ['a'], 'cursor-2'))
+      .mockRejectedValueOnce(new ApiError('Network request failed.', 0))
+      .mockResolvedValueOnce(page('first', ['b']));
+    const tree = await mountCatalog();
+
+    await reachEnd(tree);
+    expect(hosts(tree, 'load-more-error')).toHaveLength(1);
+    await reachEnd(tree);
+    expect(authState.api.listMediaTemplates).toHaveBeenCalledTimes(2);
+
+    await renderer.act(async () => { (hosts(tree, 'load-more-error')[0].props.onRetry as () => void)(); });
+    await flush();
+
+    expect(authState.api.listMediaTemplates).toHaveBeenCalledTimes(3);
+    expect(authState.api.listMediaTemplates).toHaveBeenLastCalledWith({ cursor: 'cursor-2' });
+    expect(cardKeys(tree)).toEqual(['a', 'b']);
+    expect(hosts(tree, 'load-more-error')).toHaveLength(0);
+  });
+
+  it('pulls the first page past the client’s copy, and lets the later pages go', async () => {
+    authState.api.listMediaTemplates
+      .mockResolvedValueOnce(page('first', ['a'], 'cursor-2'))
+      .mockResolvedValueOnce(page('first', ['b']))
+      .mockResolvedValueOnce(page('second', ['c', 'a'], 'cursor-3'));
+    const tree = await mountCatalog();
+    await reachEnd(tree);
+    expect(cardKeys(tree)).toEqual(['a', 'b']);
+
+    await renderer.act(async () => { (list(tree).props.refreshControl.props.onRefresh as () => void)(); });
+    await flush();
+
+    expect(authState.api.listMediaTemplates).toHaveBeenCalledTimes(3);
+    expect(authState.api.listMediaTemplates).toHaveBeenLastCalledWith(undefined, { fresh: true });
+    expect(cardKeys(tree)).toEqual(['c', 'a']);
+    expect(list(tree).props.refreshControl.props.refreshing).toBe(false);
+  });
+
+  it('reads again only the templates whose posters failed, and remounts only those', async () => {
+    const shown = page('first', ['a', 'b']);
+    authState.api.listMediaTemplates.mockResolvedValue(shown);
+    const renewed = normalizeMediaTemplateDetailResponse({ template: template('a', 'renewed') });
+    authState.api.getMediaTemplate.mockResolvedValue(renewed);
+    const tree = await mountCatalog();
+    const [posterA, posterB] = posters(tree);
+
+    await renderer.act(async () => { (posterA.props.onError as () => void)(); });
+    await flush();
+
+    expect(texts(tree)).toContain('Some previews could not load. You can still open a template.');
+    expect(posters(tree)).toEqual([posterB]);
+
+    await press(button(tree, 'Reload previews'));
+
+    expect(authState.api.getMediaTemplate).toHaveBeenCalledTimes(1);
+    expect(authState.api.getMediaTemplate).toHaveBeenCalledWith('a', { fresh: true });
+    expect(authState.api.listMediaTemplates).toHaveBeenCalledTimes(1);
+    const [renewedA, stillB] = posters(tree);
+    expect(renewedA.props.source).toEqual({ uri: renewed.template.thumbnailUrl, cacheKey: storedPoster('a') });
+    expect(stillB).toBe(posterB);
+    expect(texts(tree)).not.toContain('Some previews could not load. You can still open a template.');
+  });
+
+  it('tries a failed poster again by itself when a read brings it a new link', async () => {
+    const first = page('first', ['a']);
+    const second = page('second', ['a']);
+    authState.api.listMediaTemplates.mockResolvedValueOnce(first).mockResolvedValue(second);
+    const tree = await mountCatalog();
+
+    await renderer.act(async () => { (posters(tree)[0].props.onError as () => void)(); });
+    await flush();
+    expect(posters(tree)).toHaveLength(0);
+
+    await renderer.act(async () => { await client.refetchQueries({ queryKey: ['media-templates'] }); });
+    await flush();
+
+    expect(posters(tree).map((image) => image.props.source.uri)).toEqual([second.templates[0].thumbnailUrl]);
+    expect(texts(tree)).not.toContain('Some previews could not load. You can still open a template.');
+  });
+
+  it('offers Resume on the card of a template whose run is still going, and opens that run (01-7)', async () => {
+    authState.api.listMediaTemplates.mockResolvedValue(page('first', ['a', 'b']));
+    const going = runResponse({ id: 'run-a', templateId: 'a', status: 'awaiting_approval' }).run;
+    resumeState.loadResumableTemplateRuns.mockResolvedValue({ a: going });
+    const tree = await mountCatalog();
+
+    const [cardA, cardB] = hosts(tree, 'list-cell');
+    const resumeA = cardA.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Resume your run of Template a');
+    expect(resumeA).toHaveLength(1);
+    expect(cardB.findAll((node) => String(node.type) === 'pressable' && String(node.props.accessibilityLabel).startsWith('Resume'))).toHaveLength(0);
+    expect(texts(tree)).toEqual(expect.arrayContaining(['Resume', 'Review the next step']));
+
+    await press(resumeA[0]);
+    expect(routerState.push).toHaveBeenCalledWith('/template-runs/run-a');
+  });
+
+  it('reads each remembered run as its owner, and takes a run that is not there as gone', async () => {
+    authState.api.listMediaTemplates.mockResolvedValue(page('first', ['a']));
+    await mountCatalog();
+    const [{ userId, readRun }] = resumeState.loadResumableTemplateRuns.mock.calls[0] as unknown as [{ userId: string; readRun: (runId: string) => Promise<unknown> }];
+    expect(userId).toBe('user-1');
+
+    authState.api.getTemplateRun.mockRejectedValueOnce(new ApiError('Template run not found.', 404, undefined, undefined, 'RUN_NOT_FOUND'));
+    await expect(readRun('gone')).resolves.toBeNull();
+    // Unread is not gone: the slot is kept for the next look.
+    authState.api.getTemplateRun.mockRejectedValueOnce(new ApiError('Network request failed.', 0));
+    await expect(readRun('offline')).rejects.toThrow('Network request failed.');
+  });
+
+  it('asks no stored runs of a signed-out reader', async () => {
+    authState.user = null;
+    authState.api.listMediaTemplates.mockResolvedValue(page('first', ['a']));
+    await mountCatalog();
+    expect(resumeState.loadResumableTemplateRuns).not.toHaveBeenCalled();
+  });
+});
+
+describe('a run remembered for its template (01-7)', () => {
+  it('remembers the run when its status changes, and not at each poll', async () => {
+    answerReads(
+      runResponse({ status: 'processing', steps: [openingStep('first'), videoStep('processing')] }),
+      runResponse({ status: 'processing', steps: [openingStep('second'), videoStep('processing')] }),
+      runResponse({ status: 'awaiting_approval', steps: [reviewStep('third'), videoStep('queued')] }),
+    );
+    resumeState.rememberTemplateRun.mockResolvedValue(true);
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    await mount();
+
+    expect(resumeState.rememberTemplateRun).toHaveBeenCalledTimes(1);
+    expect(resumeState.rememberTemplateRun).toHaveBeenCalledWith('user-1', { id: 'run-1', templateId: TEMPLATE_ID, status: 'processing', isTest: false });
+    // The template's card and page read their Resume again.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['template-run-resume', 'user-1'] });
+
+    await poll();
+    expect(authState.api.getTemplateRun).toHaveBeenCalledTimes(2);
+    expect(resumeState.rememberTemplateRun).toHaveBeenCalledTimes(1);
+
+    await poll();
+    expect(resumeState.rememberTemplateRun).toHaveBeenCalledTimes(2);
+    expect(resumeState.rememberTemplateRun).toHaveBeenLastCalledWith('user-1', expect.objectContaining({ status: 'awaiting_approval' }));
+  });
+
+  it('forgets a run once it has ended', async () => {
+    answerReads(runResponse({ status: 'cancelled', steps: [openingStep('first'), videoStep('cancelled')] }));
+    await mount();
+
+    expect(resumeState.forgetTemplateRun).toHaveBeenCalledWith('user-1', 'run-1');
+    expect(resumeState.rememberTemplateRun).not.toHaveBeenCalled();
+  });
+
+  it('says where to come back to it', async () => {
+    answerReads(runResponse({ status: 'processing', steps: [openingStep('first'), videoStep('processing')] }));
+    const tree = await mount();
+
+    expect(texts(tree)).toContain('This run keeps working if you leave. Resume it from this template’s page at any time.');
+  });
+});
+
+describe('a template’s page (01-3, 01-7, 01-9, 01-10)', () => {
+  const detail = (overrides: Record<string, unknown> = {}) => normalizeMediaTemplateDetailResponse({
+    template: {
+      id: TEMPLATE_ID,
+      slug: 'car-reveal',
+      name: 'Car reveal',
+      outputKind: 'video',
+      status: 'active',
+      inputSlots: [],
+      useCount: 1,
+      creatorUserId: 'creator-1',
+      creator: { id: 'creator-1', username: 'maya', displayName: 'Maya', avatarUrl: 'https://cdn.example.com/maya.webp' },
+      ...overrides,
+    },
+  });
+  const ownDetail = (status: 'active' | 'draft' | 'disabled') => detail({
+    status,
+    creatorUserId: 'user-1',
+    creator: { id: 'user-1', username: 'me', displayName: 'Me', avatarUrl: null },
+  });
+
+  async function mountDetail() {
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => {
+      tree = renderer.create(
+        <QueryClientProvider client={client}>
+          <MediaTemplateDetailScreen slug="car-reveal" />
+        </QueryClientProvider>,
+      );
+    });
+    mounted.push(tree);
+    await flush();
+    return tree;
+  }
+
+  type Sheet = { title: string; actions: Array<{ label: string; onPress: () => void }> };
+  const sheet = () => actionSheetState.showActionSheet.mock.calls[0][0] as Sheet;
+
+  it('reads the template with the session when signed in, so its owner sees it, and without one otherwise', async () => {
+    authState.api.getMediaTemplate.mockResolvedValue(detail());
+    await mountDetail();
+    expect(authState.api.getMediaTemplate).toHaveBeenCalledWith('car-reveal', { withSession: true });
+
+    authState.user = null;
+    authState.api.getMediaTemplate.mockClear();
+    await mountDetail();
+    expect(authState.api.getMediaTemplate).toHaveBeenCalledWith('car-reveal', { withSession: false });
+  });
+
+  it('shows the creator’s picture, opens their page, and says “1 use”', async () => {
+    authState.api.getMediaTemplate.mockResolvedValue(detail());
+    const tree = await mountDetail();
+
+    expect(hosts(tree, 'creator-avatar').map((node) => node.props)).toEqual([
+      expect.objectContaining({ uri: 'https://cdn.example.com/maya.webp', name: 'Maya' }),
+    ]);
+    expect(texts(tree)).toContain('· 1 use');
+
+    await press(hosts(tree, 'pressable').find((node) => node.props.accessibilityLabel === 'Created by Maya')!);
+    expect(routerState.push).toHaveBeenCalledWith('/creators/maya');
+  });
+
+  it.each([
+    ['draft', 'Draft template'],
+    ['disabled', 'Template disabled'],
+  ] as const)('shows its creator a %s template with its status and no start', async (status, title) => {
+    authState.api.getMediaTemplate.mockResolvedValue(ownDetail(status));
+    const tree = await mountDetail();
+
+    expect(statusBlocks(tree).map((block) => block.title)).toContain(title);
+    expect(labels(tree)).not.toContain('Use this template');
+    // Nor a report of their own template, which the server refuses.
+    expect(labels(tree)).not.toContain('Report template');
+  });
+
+  it('tells its creator a taken-down template cannot be published again', async () => {
+    const held = ownDetail('disabled');
+    authState.api.getMediaTemplate.mockResolvedValue({
+      ...held,
+      template: { ...held.template, moderationDisabledAt: '2026-10-15T12:00:00.000Z' },
+    });
+    const tree = await mountDetail();
+
+    const block = statusBlocks(tree).find((candidate) => candidate.title === 'Template taken down');
+    expect(block?.body).toContain("can't be published again");
+    expect(statusBlocks(tree).map((candidate) => candidate.title)).not.toContain('Template disabled');
+    expect(labels(tree)).not.toContain('Use this template');
+  });
+
+  it('says why when its creator’s start is refused as not live, and reads the template again', async () => {
+    authState.api.getMediaTemplate.mockResolvedValueOnce(ownDetail('active')).mockResolvedValueOnce(ownDetail('disabled'));
+    authState.api.createMediaTemplateRun.mockRejectedValue(new ApiError('Template not found.', 404, undefined, undefined, 'TEMPLATE_NOT_ACTIVE'));
+    const tree = await mountDetail();
+
+    await press(button(tree, 'Use this template'));
+
+    expect(statusBlocks(tree).find((block) => block.title === 'Could not start')?.body)
+      .toBe('This template isn’t live, so a run can’t start. Publish it from the workflow canvas on the web first.');
+    expect(authState.api.getMediaTemplate).toHaveBeenCalledTimes(2);
+    expect(statusBlocks(tree).map((block) => block.title)).toContain('Template disabled');
+    expect(labels(tree)).not.toContain('Use this template');
+  });
+
+  it('offers nothing to try again for a template that is not there, and Try again for a read that failed', async () => {
+    authState.api.getMediaTemplate.mockRejectedValue(new ApiError('Template not found.', 404, undefined, undefined, 'TEMPLATE_NOT_FOUND'));
+    const gone = await mountDetail();
+    expect(statusBlocks(gone)).toEqual([expect.objectContaining({ title: 'Template unavailable', body: 'Template not found.' })]);
+    expect(labels(gone)).not.toContain('Try again');
+
+    client.clear();
+    authState.api.getMediaTemplate.mockReset().mockRejectedValue(new ApiError('Network request failed.', 0));
+    const offline = await mountDetail();
+    expect(labels(offline)).toContain('Try again');
+  });
+
+  it('offers Resume for the template’s run that is still going', async () => {
+    authState.api.getMediaTemplate.mockResolvedValue(detail());
+    const going = runResponse({ id: 'run-7', status: 'processing' }).run;
+    resumeState.loadResumableTemplateRun.mockResolvedValue(going);
+    const tree = await mountDetail();
+
+    expect(resumeState.loadResumableTemplateRun).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', templateId: TEMPLATE_ID }));
+    await press(hosts(tree, 'pressable').find((node) => node.props.accessibilityLabel === 'Resume your run of Car reveal')!);
+    expect(routerState.push).toHaveBeenCalledWith('/template-runs/run-7');
+    expect(labels(tree)).toContain('Use this template');
+  });
+
+  it('remembers a run it starts for its template, then opens it', async () => {
+    authState.api.getMediaTemplate.mockResolvedValue(detail());
+    authState.api.createMediaTemplateRun.mockResolvedValue(runResponse({ id: 'run-new', status: 'collecting_inputs' }));
+    const tree = await mountDetail();
+
+    await press(button(tree, 'Use this template'));
+
+    expect(resumeState.rememberTemplateRun).toHaveBeenCalledWith('user-1', expect.objectContaining({ id: 'run-new', templateId: TEMPLATE_ID, status: 'collecting_inputs' }));
+    expect(routerState.push).toHaveBeenCalledWith('/template-runs/run-new');
+  });
+
+  it('reports the template for the reason chosen, and says the report was received', async () => {
+    authState.api.getMediaTemplate.mockResolvedValue(detail());
+    authState.api.reportTemplate.mockResolvedValue({ success: true });
+    const tree = await mountDetail();
+
+    await press(button(tree, 'Report template'));
+
+    expect(sheet().title).toBe('Why are you reporting this?');
+    expect(sheet().actions.map((action) => action.label)).toEqual(['Spam', 'Stolen content', 'Unsafe content', 'Something else']);
+    await renderer.act(async () => { sheet().actions[2].onPress(); });
+    await flush();
+
+    expect(authState.api.reportTemplate).toHaveBeenCalledWith(TEMPLATE_ID, { reason: 'unsafe_content', details: 'Reported from the mobile template page.' });
+    expect(dialogState.showMessageDialog).toHaveBeenCalledWith({
+      title: 'Report received',
+      message: 'Thank you. Our moderation team will review this template.',
+    });
+  });
+
+  it('says a second report is already with the team, not that it failed', async () => {
+    authState.api.getMediaTemplate.mockResolvedValue(detail());
+    authState.api.reportTemplate.mockRejectedValue(new ApiError('You already reported this template. Our moderation team will review it.', 409, undefined, undefined, 'ALREADY_REPORTED'));
+    const tree = await mountDetail();
+
+    await press(button(tree, 'Report template'));
+    await renderer.act(async () => { sheet().actions[0].onPress(); });
+    await flush();
+
+    expect(dialogState.showMessageDialog).toHaveBeenCalledWith({
+      title: 'Already reported',
+      message: 'You already reported this template. Our moderation team will review it.',
+    });
+    expect(dialogState.showErrorDialog).not.toHaveBeenCalled();
+  });
+
+  it('sends a reader who is not signed in to sign in, and back to the template, before a report', async () => {
+    authState.user = null;
+    authState.api.getMediaTemplate.mockResolvedValue(detail());
+    const tree = await mountDetail();
+
+    await press(button(tree, 'Report template'));
+
+    expect(actionSheetState.showActionSheet).not.toHaveBeenCalled();
+    expect(routerState.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/templates/car-reveal' } });
   });
 });

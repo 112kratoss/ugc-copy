@@ -45,8 +45,8 @@ import {
 } from '@/lib/feed-safety-actions';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';
-import { formatUsdCents, getBundleAccessLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
-import type { OwnerProfileSales, OwnerProfileStats } from '@/lib/profile';
+import { getBundleAccessLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
+import type { OwnerProfileStats } from '@/lib/profile';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import type {
@@ -137,6 +137,11 @@ interface GenerationPageInfo {
   nextCursor: string | null;
 }
 
+/** The payout balance the Wallet card shows: what the seller can withdraw now. */
+export interface OwnerWalletBalance {
+  availableUsd: string;
+}
+
 interface OwnerProfileMediaHubProps {
   creator: ShowcaseCreator;
   profile?: {
@@ -149,8 +154,11 @@ interface OwnerProfileMediaHubProps {
    * draws them; null when the count could not be read, which draws "—".
    */
   stats?: OwnerProfileStats | null;
-  /** The seller totals (`get_owner_post_sales_summary`); null on a read failure. */
-  sales?: OwnerProfileSales | null;
+  /**
+   * The payout state's available balance, as `GET /api/creator/payouts` reads
+   * it; null when it could not be read, which draws "Balance unavailable".
+   */
+  walletBalance?: OwnerWalletBalance | null;
   publicProfilePath?: string | null;
   publicProfileDisplayName?: string;
 }
@@ -380,7 +388,7 @@ export default function OwnerProfileMediaHub({
   creator,
   profile = { bio: '', coverUrl: null, credits: null },
   stats = null,
-  sales = null,
+  walletBalance = null,
   publicProfilePath = null,
   publicProfileDisplayName = '',
 }: OwnerProfileMediaHubProps) {
@@ -903,7 +911,8 @@ export default function OwnerProfileMediaHub({
         </Link>
         <Link href="/marketplace/sell" className="ui-focus-ring group flex min-h-28 items-center gap-3 rounded-[24px] border border-white/8 bg-[var(--ui-surface-1)] p-4 transition hover:-translate-y-0.5 hover:border-[rgba(255,122,89,0.24)] hover:bg-[var(--ui-surface-2)]">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]"><WalletCards className="h-5 w-5" aria-hidden /></span>
-          <span className="min-w-0"><span className="block text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Wallet</span><span className="mt-1 block truncate text-lg font-extrabold text-white">{sales ? formatUsdCents(sales.earningsUsdCents) : '—'}</span></span>
+          {/* Lifetime earnings here read as money in hand, and stayed whole after a payout request took the balance to $0.00. */}
+          <span className="min-w-0"><span className="block text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Wallet</span><span className="mt-1 block truncate text-lg font-extrabold text-white">{walletBalance ? walletBalance.availableUsd : '—'}</span><span className="mt-0.5 block truncate text-xs text-zinc-500">{walletBalance ? 'Available to withdraw' : 'Balance unavailable'}</span></span>
           <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-zinc-600 transition group-hover:translate-x-0.5 group-hover:text-zinc-300" aria-hidden />
         </Link>
         <Link href="/invite" className="ui-focus-ring group col-span-2 flex min-h-24 items-center gap-3 rounded-[24px] border border-amber-300/15 bg-[linear-gradient(135deg,rgba(245,158,11,0.08),rgba(24,24,27,0.86))] p-4 transition hover:-translate-y-0.5 hover:border-amber-300/25 lg:col-span-1">

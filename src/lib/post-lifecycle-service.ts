@@ -32,15 +32,34 @@ export type PostLifecycleResult =
   }
   | {
     ok: false;
-    status: 404 | 500;
+    status: 404 | 409 | 500;
     body: {
       error: string;
+      code?: typeof POST_DELETED_CODE;
     };
   }
   | {
     ok: false;
     rateLimitError: BackendRateLimitError;
   };
+
+export const POST_DELETED_CODE = 'POST_DELETED' as const;
+
+/**
+ * A post deleted while it had buyers is tombstoned (private + archived) and
+ * kept only so they keep what they paid for. Restoring it would put it back on
+ * show and editing it would rewrite it, so both answer this instead.
+ */
+export function createPostDeletedRefusal() {
+  return {
+    ok: false as const,
+    status: 409 as const,
+    body: {
+      error: 'This post was deleted. Buyers keep their copy.',
+      code: POST_DELETED_CODE,
+    },
+  };
+}
 
 async function enforcePostLifecycleRateLimit(adminSupabase: SupabaseClient, ownerUserId: string) {
   try {
@@ -124,6 +143,39 @@ export async function archiveOwnerPostForRoute({
   };
 }
 
+// Only read when the restore matched nothing: tells a deleted post from one
+// that is missing, not the caller's, or not archived.
+async function explainUnrestoredPost(
+  adminSupabase: SupabaseClient,
+  ownerUserId: string,
+  postId: string,
+): Promise<PostLifecycleResult> {
+  const { data, error } = await adminSupabase
+    .from('posts')
+    .select('tombstoned_at')
+    .eq('id', postId)
+    .eq('user_id', ownerUserId)
+    .maybeSingle();
+
+  if (error) {
+    return {
+      ok: false,
+      status: 500,
+      body: { error: 'Failed to restore post.' },
+    };
+  }
+
+  if ((data as { tombstoned_at?: string | null } | null)?.tombstoned_at) {
+    return createPostDeletedRefusal();
+  }
+
+  return {
+    ok: false,
+    status: 404,
+    body: { error: 'Post not found.' },
+  };
+}
+
 export async function restoreOwnerPostForRoute({
   adminSupabase,
   ownerUserId,
@@ -146,6 +198,8 @@ export async function restoreOwnerPostForRoute({
     };
   }
 
+  // The tombstone guard sits in the update itself, so a delete committing while
+  // this request waits can never be undone by it.
   const { data, error } = await adminSupabase
     .from('posts')
     .update({
@@ -155,6 +209,7 @@ export async function restoreOwnerPostForRoute({
     .eq('id', postId)
     .eq('user_id', ownerUserId)
     .not('archived_at', 'is', null)
+    .is('tombstoned_at', null)
     .select('id, generation_id, visibility, showcase_asset_path')
     .maybeSingle();
   const post = data as RestoredPostRow | null;
@@ -168,11 +223,7 @@ export async function restoreOwnerPostForRoute({
   }
 
   if (!post) {
-    return {
-      ok: false,
-      status: 404,
-      body: { error: 'Post not found.' },
-    };
+    return explainUnrestoredPost(adminSupabase, ownerUserId, postId);
   }
 
   invalidateShowcaseFeedCache();

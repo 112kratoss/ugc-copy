@@ -13,6 +13,7 @@ import {
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { isPostResourceBundleBuyWithheld } from '@/lib/marketplace-viewer-filter';
 import {
   MobileCommerceError,
   unlockMarketplaceAssetWithCredits,
@@ -35,6 +36,7 @@ type CreditUnlockRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
+  isPostResourceBundleBuyWithheld?: typeof isPostResourceBundleBuyWithheld;
   logError?: typeof logBackendRouteError;
   runAfterResponse?: RunAfterResponse;
   unlockMarketplaceAssetWithCredits?: typeof unlockMarketplaceAssetWithCredits;
@@ -132,7 +134,9 @@ async function handleCreditUnlockPOST(
     }));
   } catch (error) {
     if (error instanceof MobileCommerceError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
+      // A refusal the buyer can act on (the 402's price and spendable balance)
+      // carries its fields beside the message.
+      return NextResponse.json({ ...error.details, error: error.message }, { status: error.status });
     }
 
     dependencies.logError(config.failureLogMessage, error);
@@ -182,21 +186,30 @@ export async function postResourceBundleCreditUnlockRouteResponse({
 }) {
   const resolvedDependencies = resolveDependencies(dependencies);
   const unlockPostResourceBundle = dependencies?.unlockPostResourceBundleWithCredits ?? unlockPostResourceBundleWithCredits;
+  const isBuyWithheld = dependencies?.isPostResourceBundleBuyWithheld ?? isPostResourceBundleBuyWithheld;
   return applyPrivateNoStoreApiResponseHeaders(
     await handleCreditUnlockPOST(request, {
       failureLogMessage: 'Post resource credit unlock failed:',
       getResourceId: () => context.params,
       rateLimitFailureLogMessage: 'Post resource credit unlock rate limit check failed:',
-      unlock: ({ adminSupabase, resourceId, userId }) => (
-        unlockPostResourceBundle({
+      unlock: async ({ adminSupabase, resourceId, userId }) => {
+        // The spend RPC checks only the bundle's status. What the detail read
+        // would not show this buyer, or a creator either of them has blocked,
+        // is answered as the RPC answers a missing unlock: nothing is spent
+        // and nobody is notified.
+        if (await isBuyWithheld({ adminSupabase, buyerUserId: userId, postId: resourceId })) {
+          throw new MobileCommerceError('Post unlock not found.', 404);
+        }
+
+        return unlockPostResourceBundle({
           adminSupabase,
           postId: resourceId,
           userId,
           // The buyer is waiting on this answer, so the pushes go out behind
           // it rather than in front.
           runAfterResponse: resolvedDependencies.runAfterResponse,
-        })
-      ),
+        });
+      },
     }, resolvedDependencies),
     request,
   );

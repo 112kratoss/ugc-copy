@@ -1117,3 +1117,90 @@ describe("a reel opened on a creator's page", () => {
     expect(routerState.back).not.toHaveBeenCalled();
   });
 });
+
+describe('a recipe opened from search', () => {
+  // The route the search row pushes (`components/explore-search-overlay.tsx`).
+  const SEARCH_ROUTE = { source: 'showcase-feed', initialPage: 'details', initialSection: 'resources' };
+  // A post read on its own: its recipe rides on it, and no feed delivered it.
+  const recipePost = (): ShowcaseFeedItem => ({
+    ...feedItem('post-recipe', luna, 'unused'),
+    recommendation: undefined,
+    asset: {
+      id: 'bundle-1',
+      postId: 'post-recipe',
+      title: 'Dusk grade',
+      accessMode: 'paid',
+      priceUsdCents: 900,
+      previewText: '',
+      allowRemix: false,
+      resourceKinds: ['prompt'],
+    },
+  });
+
+  /** The props the reel draws an item's slide with, from the list's own `renderItem`. */
+  function slideProps(tree: renderer.ReactTestRenderer, id: string) {
+    const list = tree.root.findByType('flat-list' as never).props as {
+      data: ImmersivePreviewItem[];
+      renderItem: (info: { item: ImmersivePreviewItem; index: number }) => React.ReactElement<{ initialSection?: string; pageKey?: string }>;
+    };
+    const index = list.data.findIndex((item) => item.id === id);
+    expect(index).toBeGreaterThan(-1);
+    return list.renderItem({ item: list.data[index]!, index }).props;
+  }
+
+  beforeEach(() => {
+    authState.api.getShowcasePost.mockResolvedValue({ success: true, item: recipePost() });
+    authState.api.getShowcaseFeed.mockResolvedValue({
+      items: [feedItem('post-a', maya, 'delivery-a')],
+      feedSessionId: 'session-1',
+      algorithmVersion: 'for-you-rules-v4',
+      nextCursor: null,
+      pageInfo: { hasMore: false, nextOffset: null },
+    });
+  });
+
+  it("opens the post on its Details page with the resources first, and only that post's", async () => {
+    const tree = await renderReel('post-recipe', SEARCH_ROUTE);
+
+    expect(authState.api.getShowcasePost).toHaveBeenCalledWith('post-recipe');
+    expect(reelIds(tree)).toEqual(['post-recipe', 'post-a']);
+    expect(activeId()).toBe('post-recipe');
+    expect(activeItem().details?.unlock).toMatchObject({ resourceId: 'bundle-1', postId: 'post-recipe' });
+    expect(slideProps(tree, 'post-recipe')).toMatchObject({ initialSection: 'resources', pageKey: 'details' });
+    expect(slideProps(tree, 'post-a').initialSection).toBeUndefined();
+  });
+
+  // "Sign in to unlock" comes back through `dismissTo`, which swaps this
+  // route's params for the return path's: the post, with no page or section.
+  it("keeps the resources first through a guest's sign-in from the card", async () => {
+    authState.user = null;
+    authState.identityUserId = 'guest-1';
+    const tree = await renderReel('post-recipe', SEARCH_ROUTE);
+    expect(slideProps(tree, 'post-recipe')).toMatchObject({ initialSection: 'resources', pageKey: 'details' });
+
+    authState.user = { id: 'viewer-1', email: 'viewer@example.com' };
+    authState.identityUserId = 'viewer-1';
+    routerState.params = { source: 'showcase-feed', initialId: 'post-recipe' };
+    act(() => {
+      tree.update(
+        <QueryClientProvider client={queryClient}>
+          <ImmersivePreviewViewerScreen />
+        </QueryClientProvider>
+      );
+    });
+    await settle();
+
+    expect(activeId()).toBe('post-recipe');
+    expect(slideProps(tree, 'post-recipe')).toMatchObject({ initialSection: 'resources', pageKey: 'details' });
+  });
+
+  it('takes a section only with the Details page, and only one the page has', async () => {
+    const withoutPage = await renderReel('post-recipe', { source: 'showcase-feed', initialSection: 'resources' });
+    expect(slideProps(withoutPage, 'post-recipe').initialSection).toBeUndefined();
+    expect(slideProps(withoutPage, 'post-recipe').pageKey).not.toBe('details');
+
+    const unknown = await renderReel('post-recipe', { source: 'showcase-feed', initialPage: 'details', initialSection: 'comments' });
+    expect(slideProps(unknown, 'post-recipe')).toMatchObject({ pageKey: 'details' });
+    expect(slideProps(unknown, 'post-recipe').initialSection).toBeUndefined();
+  });
+});

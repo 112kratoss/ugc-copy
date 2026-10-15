@@ -1,5 +1,4 @@
 import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
-import { getBundleAccessLabel } from '@/lib/post-resource-bundles';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 /**
@@ -22,17 +21,15 @@ export function isFreeRecipeAsset(asset: NonNullable<ShowcaseFeedItem['asset']>)
 }
 
 /**
- * How a post's attached resource bundle is labelled wherever a post is listed.
- * Shared by the Showcase grid and the feed so the two never drift on wording
- * like "Free recipe" vs "Free unlock".
+ * How a post's attached resource bundle is labelled wherever a post is listed:
+ * "Free recipe", "$9.00" (the viewer's quote, where cash is taken) or "50
+ * credits". Shared by the Showcase grid, the feed and the creator page so they
+ * never drift on wording like "Free recipe" vs "Free unlock".
  */
 export function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
-    if (asset.priceQuote) {
-        return formatBundleAccessLabel({
-            accessMode: asset.accessMode,
-            priceQuote: asset.priceQuote,
-        }).replace(/\s+unlock$/i, ' recipe');
-    }
-
-    return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+unlock$/i, ' recipe');
+    return formatBundleAccessLabel({
+        accessMode: asset.accessMode,
+        priceUsdCents: asset.priceUsdCents,
+        priceQuote: asset.priceQuote,
+    });
 }

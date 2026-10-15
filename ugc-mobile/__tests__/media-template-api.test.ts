@@ -59,4 +59,62 @@ describe('mobile media template API', () => {
     expect((calls[4][1].headers as Headers).get('Idempotency-Key')).toBe('approve-key');
     for (const [, init] of calls) expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
   });
+
+  it('reads a template with the session only when asked, and keeps that answer for no one', async () => {
+    const getAccessToken = vi.fn(async () => 'token-1');
+    const fetcher = vi.fn(async () => jsonResponse({
+      template: { id: 'template-1', slug: 'rider', name: 'Rider', status: 'draft', inputSlots: [], outputKind: 'image' },
+    }));
+    const api = createApiClient({ baseUrl: 'https://magicbooklet.test', getAccessToken, fetcher: fetcher as unknown as typeof fetch });
+
+    await expect(api.getMediaTemplate('rider', { withSession: true })).resolves.toMatchObject({ template: { status: 'draft' } });
+    await api.getMediaTemplate('rider', { withSession: true });
+    // The owner's read goes to the server each time, with the token…
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    // …and a public read after it is not answered with the owner's copy.
+    await api.getMediaTemplate('rider');
+    expect(fetcher).toHaveBeenCalledTimes(3);
+
+    const calls = fetcher.mock.calls as unknown as Array<[RequestInfo | URL, RequestInit]>;
+    expect(calls.map(([, init]) => (init.headers as Headers).get('Authorization'))).toEqual(['Bearer token-1', 'Bearer token-1', null]);
+  });
+
+  it('reads the catalog and a template past the five-minute copy when asked, and keeps the new answer', async () => {
+    let reads = 0;
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      reads += 1;
+      const item = { id: 'template-1', slug: 'rider', name: `Rider ${reads}`, inputSlots: [], outputKind: 'image' };
+      return jsonResponse(String(input).endsWith('/api/templates') ? { templates: [item] } : { template: item });
+    });
+    const api = createApiClient({ baseUrl: 'https://magicbooklet.test', getAccessToken: async () => null, fetcher: fetcher as unknown as typeof fetch });
+
+    await api.listMediaTemplates();
+    await expect(api.listMediaTemplates()).resolves.toMatchObject({ templates: [{ name: 'Rider 1' }] });
+    await expect(api.listMediaTemplates(undefined, { fresh: true })).resolves.toMatchObject({ templates: [{ name: 'Rider 2' }] });
+    await expect(api.listMediaTemplates()).resolves.toMatchObject({ templates: [{ name: 'Rider 2' }] });
+
+    await api.getMediaTemplate('rider');
+    await expect(api.getMediaTemplate('rider', { fresh: true })).resolves.toMatchObject({ template: { name: 'Rider 4' } });
+    await expect(api.getMediaTemplate('rider')).resolves.toMatchObject({ template: { name: 'Rider 4' } });
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+
+  it('reports a template by its id and reason, and leaves the surface to the server (01-3)', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ success: true }));
+    const api = createApiClient({ baseUrl: 'https://magicbooklet.test', getAccessToken: async () => 'token-1', fetcher: fetcher as unknown as typeof fetch });
+
+    await api.reportTemplate('9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d', { reason: 'stolen_content', details: 'Reported from the mobile template page.' });
+
+    const [[url, init]] = fetcher.mock.calls as unknown as Array<[RequestInfo | URL, RequestInit]>;
+    expect(String(url)).toBe('https://magicbooklet.test/api/moderation/reports');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({
+      targetType: 'template',
+      targetId: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d',
+      reason: 'stolen_content',
+      details: 'Reported from the mobile template page.',
+    });
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+  });
 });
+

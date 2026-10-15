@@ -16,6 +16,7 @@ import {
   type PublicSearchType,
   type RecipeSearchResult,
 } from '@/lib/public-search';
+import { formatPostResourceCompactPriceLabel } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 import { supabase } from '@/lib/supabase';
@@ -132,7 +133,11 @@ function RecipeSearchCard({ recipe, returnTo }: { recipe: RecipeSearchResult; re
         <span className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-400">{recipe.summary || recipe.previewText}</span>
         <span className="mt-3 flex items-center justify-between gap-3 text-xs">
           <span className="truncate text-zinc-500">{recipe.seller.name}</span>
-          <span className="shrink-0 font-semibold text-emerald-300">{recipe.accessMode === 'free' ? 'Free' : recipe.priceQuote.formatted}</span>
+          <span className="shrink-0 font-semibold text-emerald-300">
+            {recipe.accessMode === 'free'
+              ? 'Free'
+              : formatPostResourceCompactPriceLabel(recipe.priceUsdCents, recipe.priceQuote.formatted)}
+          </span>
         </span>
       </span>
     </Link>

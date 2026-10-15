@@ -38,6 +38,11 @@ export function resolveWebNotificationPath(deepLink: string | null | undefined) 
       return canvasId ? `/create-workflow?canvas=${encodeURIComponent(canvasId)}` : null;
     }
 
+    if (url.pathname === '/seller-dashboard') {
+      // The app's Your Sales, where a sale or a payout's alert leads. The web's
+      // seller page, with the listings and the payouts, is here.
+      return '/marketplace/sell';
+    }
     if (!url.pathname.startsWith('/')) return null;
     return `${url.pathname}${url.search}${url.hash}`;
   } catch {

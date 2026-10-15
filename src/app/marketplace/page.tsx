@@ -1,8 +1,10 @@
+import { headers } from 'next/headers';
 import Link from 'next/link';
 import { ArrowRight, ShoppingBag } from 'lucide-react';
 import { Suspense, use } from 'react';
 
 import MarketplaceBootstrap from '@/app/marketplace/MarketplaceBootstrap';
+import { filterMarketplaceItemsForViewer } from '@/lib/marketplace-viewer-filter';
 import {
   getMarketplaceResourceList,
 } from '@/lib/post-resource-bundles-server';
@@ -18,6 +20,7 @@ import {
   isValidMarketplaceSearchQuery,
   normalizeMarketplaceSearchQuery,
 } from '@/lib/marketplace-search-policy';
+import { getServerAuthState } from '@/lib/supabase-server';
 
 interface MarketplacePageProps {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -41,22 +44,31 @@ async function loadMarketplacePageData(searchParams: MarketplacePageProps['searc
   const tool = slugifySourceTool(getParam(resolvedSearchParams.tool)) ?? '';
   const requestedQuery = normalizeMarketplaceSearchQuery(getParam(resolvedSearchParams.q));
   const q = isValidMarketplaceSearchQuery(requestedQuery) ? requestedQuery : '';
-  const [assetPage, sourceToolOptions] = await Promise.all([
-    getMarketplaceResourceList({
-    filter,
-    resource,
-    tool,
-    q,
-    sort,
-    limit: MARKETPLACE_INITIAL_PAGE_SIZE,
-    offset: 0,
-    countryCode: null,
+  // A query under the minimum is answered with the hint rather than read as no
+  // query at all, which listed every recipe and emptied the search box.
+  const shortQuery = requestedQuery && !q ? requestedQuery : '';
+  const headerStore = await headers();
+  const [assetPage, auth, sourceToolOptions] = await Promise.all([
+    shortQuery ? null : getMarketplaceResourceList({
+      filter,
+      resource,
+      tool,
+      q,
+      sort,
+      limit: MARKETPLACE_INITIAL_PAGE_SIZE,
+      offset: 0,
+      // Quoted for the visitor's country like every later page and the post a
+      // card opens: a buyer in India read dollars on these cards, rupees after.
+      countryCode: headerStore.get('x-vercel-ip-country'),
     }),
+    getServerAuthState(),
     listSourceToolsCatalog(),
   ]);
   const initialPage = {
-    items: assetPage.items ?? [],
-    pageInfo: assetPage.pageInfo ?? {
+    // The page is read once for everyone, so a signed-in viewer's blocks (either
+    // way) are taken out here, as the list API does for every later page.
+    items: await filterMarketplaceItemsForViewer(assetPage?.items ?? [], auth.session?.user?.id ?? null),
+    pageInfo: assetPage?.pageInfo ?? {
       hasMore: false,
       nextOffset: null,
       offset: 0,
@@ -73,6 +85,7 @@ async function loadMarketplacePageData(searchParams: MarketplacePageProps['searc
       sort,
       q,
     },
+    shortQuery,
     sourceToolOptions,
   };
 }
@@ -109,12 +122,13 @@ function MarketplaceResults({
 }: {
   data: ReturnType<typeof loadMarketplacePageData>;
 }) {
-  const { initialPage, initialFilters, sourceToolOptions } = use(data);
+  const { initialPage, initialFilters, shortQuery, sourceToolOptions } = use(data);
 
   return (
     <MarketplaceBootstrap
       initialPage={initialPage}
       initialFilters={initialFilters}
+      shortQuery={shortQuery}
       sourceToolOptions={sourceToolOptions}
     />
   );

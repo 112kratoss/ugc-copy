@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -73,6 +73,118 @@ describe('MarketplaceBootstrap', () => {
     expect(markup).toContain('Load more recipes');
     expect(markup).not.toContain('Interactive marketplace browser');
     expect(browserModuleLoaded).not.toHaveBeenCalled();
+  });
+
+  // The cards printed the bare quote: "$0.50 recipe" and "Unlock for $0.50" for
+  // a recipe only credits buy, "$0.00" on a free one. The badge names one
+  // figure; the pill and the button every way to pay, as the post's panel does.
+  it('prices each card the way its post does, a credits-only one in credits alone', () => {
+    const page = createPage(3, false);
+    page.items[0] = {
+      ...page.items[0],
+      accessMode: 'paid',
+      priceUsdCents: 900,
+      priceQuote: { currency: 'INR', amountSubunits: 75000, formatted: '₹750', note: null },
+    };
+    page.items[1] = {
+      ...page.items[1],
+      accessMode: 'paid',
+      priceUsdCents: 50,
+      priceQuote: { currency: 'USD', amountSubunits: 50, formatted: '$0.50', note: null },
+    };
+
+    render(
+      <MarketplaceBootstrap
+        initialPage={page}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+      />
+    );
+
+    const cashCard = screen.getByRole('link', { name: 'Unlock for ₹750 · 900 credits: Unlock 1' });
+    expect(within(cashCard).getByText('₹750')).toBeInTheDocument();
+    expect(within(cashCard).getByText('₹750 · 900 credits')).toBeInTheDocument();
+    expect(within(cashCard).getByText('Unlock for ₹750 · 900 credits')).toBeInTheDocument();
+
+    const creditsCard = screen.getByRole('link', { name: 'Unlock for 50 credits: Unlock 2' });
+    expect(within(creditsCard).getAllByText('50 credits')).toHaveLength(2);
+    expect(creditsCard).not.toHaveTextContent('$0.50');
+
+    const freeCard = screen.getByRole('link', { name: 'View free recipe: Unlock 3' });
+    expect(within(freeCard).getByText('Free recipe')).toBeInTheDocument();
+    expect(within(freeCard).getByText('Free')).toBeInTheDocument();
+    expect(freeCard).not.toHaveTextContent('$0.00');
+  });
+
+  // A search or filter that matched nothing said "No recipes yet" and offered
+  // Share a post, as if the storefront were empty.
+  it('says no recipes match, and offers to clear the filters, when a search finds nothing', () => {
+    render(
+      <MarketplaceBootstrap
+        initialPage={createPage(0, false)}
+        initialFilters={{ ...INITIAL_FILTERS, access: 'paid', q: 'product demo' }}
+        sourceToolOptions={[]}
+      />
+    );
+
+    expect(screen.getByRole('heading', { name: 'No recipes match' })).toBeInTheDocument();
+    const clearLinks = screen.getAllByRole('link', { name: 'Clear filters' });
+    expect(clearLinks.length).toBeGreaterThan(0);
+    for (const link of clearLinks) {
+      expect(link).toHaveAttribute('href', '/marketplace');
+    }
+    expect(screen.queryByRole('heading', { name: 'No recipes yet' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Share a post' })).not.toBeInTheDocument();
+  });
+
+  it('still says no recipes yet when only the order was changed', () => {
+    render(
+      <MarketplaceBootstrap
+        initialPage={createPage(0, false)}
+        initialFilters={{ ...INITIAL_FILTERS, sort: 'top-sales' }}
+        sourceToolOptions={[]}
+      />
+    );
+
+    expect(screen.getByRole('heading', { name: 'No recipes yet' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Share a post' })).toHaveAttribute(
+      'href',
+      '/post/new?from=marketplace&returnTo=%2Fmarketplace'
+    );
+  });
+
+  it('answers a query under three characters with the hint and keeps it in the box', () => {
+    render(
+      <MarketplaceBootstrap
+        initialPage={createPage(0, false)}
+        initialFilters={{ ...INITIAL_FILTERS, resource: 'prompt' }}
+        shortQuery="ai"
+        sourceToolOptions={[]}
+      />
+    );
+
+    expect(screen.getByRole('heading', { name: 'Type at least 3 characters' })).toBeInTheDocument();
+    expect(screen.getByRole('searchbox', { name: /search marketplace recipes/i })).toHaveValue('ai');
+    expect(screen.getByRole('link', { name: 'Clear search' })).toHaveAttribute(
+      'href',
+      '/marketplace?resource=prompt&sort=recent'
+    );
+    expect(screen.queryByRole('heading', { name: 'No recipes match' })).not.toBeInTheDocument();
+  });
+
+  // The page leaves out the recipes of creators a signed-in viewer blocks;
+  // a first page left empty by that still has more to load.
+  it('offers the next page, not an empty state, when every first-page card was taken out', () => {
+    render(
+      <MarketplaceBootstrap
+        initialPage={{ items: [], pageInfo: { hasMore: true, nextOffset: 3, offset: 0, limit: 3 } }}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+      />
+    );
+
+    expect(screen.queryByRole('heading', { name: 'No recipes yet' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /load more recipes/i })).toBeInTheDocument();
   });
 
   it('resizes an original image when no generated preview is available', () => {

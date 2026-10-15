@@ -897,6 +897,100 @@ describe('the balance (audit 03-4)', () => {
   });
 });
 
+// Welcome and referral credits are in the balance, but the credit unlock will
+// not spend them (02-1): the recipe screens read this figure, not the total.
+describe('the part of the balance that can buy creator resources', () => {
+  const profileRead = (data: unknown, type = 'success'): CacheEvent => ({
+    type: 'updated',
+    action: { type },
+    query: { queryKey: ['profile', 'account-a'], state: { data, dataUpdatedAt: Date.now() } },
+  });
+
+  it('settles with the balance from any profile read, and moves with updateCredits', async () => {
+    state.queryClient.fetchQuery.mockImplementation(async () => (
+      { credits: 1200, promotionalCredits: 1200, marketplaceSpendableCredits: 0 }
+    ));
+    const { latest, unmount } = await mount(accountA());
+    expect(latest.current?.credits).toBe(1200);
+    expect(latest.current?.marketplaceSpendableCredits).toBe(0);
+
+    emitCacheEvent(profileRead({ credits: 1500, promotionalCredits: 300, marketplaceSpendableCredits: 1200 }));
+    expect(latest.current?.marketplaceSpendableCredits).toBe(1200);
+
+    // A generation's spend: only the total is known, and the database took it
+    // from the promotional credits first, so the spendable part stands.
+    renderer.act(() => latest.current?.updateCredits(1400));
+    expect(latest.current?.credits).toBe(1400);
+    expect(latest.current?.marketplaceSpendableCredits).toBe(1200);
+
+    // The welcome grant: a rise the server did not split is not spendable.
+    renderer.act(() => latest.current?.updateCredits(1700));
+    expect(latest.current?.credits).toBe(1700);
+    expect(latest.current?.marketplaceSpendableCredits).toBe(1200);
+
+    // A spend that takes the total below the spendable part lowers it.
+    renderer.act(() => latest.current?.updateCredits(900));
+    expect(latest.current?.credits).toBe(900);
+    expect(latest.current?.marketplaceSpendableCredits).toBe(900);
+
+    // A recipe unlock answers the figure itself.
+    renderer.act(() => latest.current?.updateCredits(800, { marketplaceSpendableCredits: 200 }));
+    expect(latest.current?.credits).toBe(800);
+    expect(latest.current?.marketplaceSpendableCredits).toBe(200);
+
+    // A total moved past an unknown split leaves it unknown.
+    emitCacheEvent(profileRead(undefined, 'fetch'));
+    emitCacheEvent(profileRead({ credits: 900 }));
+    expect(latest.current?.credits).toBe(900);
+    expect(latest.current?.marketplaceSpendableCredits).toBeNull();
+    renderer.act(() => latest.current?.updateCredits(850));
+    expect(latest.current?.marketplaceSpendableCredits).toBeNull();
+    unmount();
+  });
+
+  it("counts a linked guest's purchased credits as spendable, never its promotional ones", async () => {
+    await storeGuestMergeTicket({ guestUserId: 'guest-1', ticket: GUEST_TICKET, expiresAt: inDays(30) });
+    state.queryClient.fetchQuery.mockImplementation(async () => (
+      { credits: 100, promotionalCredits: 40, marketplaceSpendableCredits: 60 }
+    ));
+    let finishMerge: (value: unknown) => void = () => undefined;
+    state.mergeGuestAccount.mockImplementation(() => new Promise((resolve) => {
+      finishMerge = resolve;
+    }));
+
+    const { latest, unmount } = await mount(accountA());
+    expect(state.mergeGuestAccount).toHaveBeenCalledWith(GUEST_TICKET);
+    expect(latest.current?.marketplaceSpendableCredits).toBe(60);
+
+    await renderer.act(async () => {
+      finishMerge({ status: 'merged', creditsMoved: 250, promotionalCreditsMoved: 50, credits: 350 });
+    });
+    await flush();
+    expect(latest.current?.credits).toBe(350);
+    expect(latest.current?.marketplaceSpendableCredits).toBe(260);
+    unmount();
+  });
+
+  it('forgets it with the balance when the account changes', async () => {
+    state.queryClient.fetchQuery.mockImplementation(async ({ queryKey }: { queryKey: readonly unknown[] }) => (
+      queryKey[1] === 'account-a'
+        ? { credits: 500, marketplaceSpendableCredits: 500 }
+        : new Promise(() => undefined)
+    ));
+    const { latest, unmount } = await mount(accountA());
+    expect(latest.current?.marketplaceSpendableCredits).toBe(500);
+
+    await renderer.act(async () => {
+      state.authCallback?.('SIGNED_IN', accountB());
+    });
+    await flush();
+    expect(latest.current?.user?.id).toBe('account-b');
+    expect(latest.current?.credits).toBeNull();
+    expect(latest.current?.marketplaceSpendableCredits).toBeNull();
+    unmount();
+  });
+});
+
 describe('"Set up later" on the account (audit 02-11)', () => {
   it("writes the web's key and version for an account", async () => {
     const { latest, unmount } = await mount(accountA());

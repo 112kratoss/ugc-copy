@@ -11,6 +11,7 @@ import {
 } from '@/lib/backend-rate-limit';
 import { notifyPostResourceUnlockCompleted as defaultNotifyPostResourceUnlockCompleted } from '@/lib/mobile-notifications';
 import { invalidateMarketplaceResourceListCache as defaultInvalidateMarketplaceResourceListCache } from '@/lib/marketplace-resource-list-cache';
+import { isPostResourceBundleBuyWithheld as defaultIsPostResourceBundleBuyWithheld } from '@/lib/marketplace-viewer-filter';
 import {
   getBundleForOrderByPostId as defaultGetBundleForOrderByPostId,
 } from '@/lib/post-resource-bundles-server';
@@ -72,6 +73,7 @@ export async function unlockFreePostResourceBundleForRoute({
   postId,
   buyerUserId,
   getBundleForOrderByPostId = defaultGetBundleForOrderByPostId as GetBundleForOrderByPostId,
+  isPostResourceBundleBuyWithheld = defaultIsPostResourceBundleBuyWithheld,
   notifyPostResourceUnlockCompleted = defaultNotifyPostResourceUnlockCompleted,
   invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
   createId = randomUUID,
@@ -81,6 +83,7 @@ export async function unlockFreePostResourceBundleForRoute({
   postId: string;
   buyerUserId: string;
   getBundleForOrderByPostId?: GetBundleForOrderByPostId;
+  isPostResourceBundleBuyWithheld?: typeof defaultIsPostResourceBundleBuyWithheld;
   notifyPostResourceUnlockCompleted?: NotifyPostResourceUnlockCompleted;
   invalidateMarketplaceResourceListCache?: () => void;
   createId?: () => string;
@@ -112,6 +115,20 @@ export async function unlockFreePostResourceBundleForRoute({
 
   if (bundle.owner_user_id === buyerUserId) {
     return { ok: true, body: { success: true, alreadyPurchased: true } };
+  }
+
+  // The unlock RPC checks only the bundle's status. What the detail read would
+  // not show this buyer, or a creator either of them has blocked, is answered
+  // as a missing unlock, before the price is told and with nobody notified.
+  let withheld: boolean;
+  try {
+    withheld = await isPostResourceBundleBuyWithheld({ adminSupabase, buyerUserId, postId });
+  } catch (error) {
+    logBackendError('failed_to_check_free_unlock_buyer_access', { error });
+    return { ok: false, status: 500, body: { error: 'Failed to get the free recipe.' } };
+  }
+  if (withheld) {
+    return { ok: false, status: 404, body: { error: 'Unlock not found.' } };
   }
 
   if (bundle.access_mode !== 'free' || bundle.price_usd_cents !== 0) {
@@ -171,6 +188,8 @@ export async function unlockFreePostResourceBundleForRoute({
     postId,
     bundleId,
     alreadyProcessed: false,
+    // A free open is not a sale: the owner's alert says so.
+    free: true,
   });
   if (runAfterResponse) {
     runAfterResponse(notify);

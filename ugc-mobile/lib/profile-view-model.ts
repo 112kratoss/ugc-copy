@@ -156,7 +156,10 @@ export const FALLBACK_PROFILE_MEDIA: ProfileMediaCard[] = [
     viewerSource: 'profile-posts',
     sourceId: 'preview-cyber-shot',
     artVariant: 'city',
-    href: '/seller-dashboard',
+    // The composer, where a post is made, as the Saved and Creation samples
+    // open where theirs are found and made; it sends a signed-out visitor to
+    // sign in and back. It opened Your Sales, a seller's money screen.
+    href: '/post/new',
   },
 ];
 
@@ -252,6 +255,45 @@ export function getOwnerPostScopeCounts(
   return {
     active: typeof posts === 'number' && Number.isFinite(posts) ? posts : loaded.active,
     archived: typeof archivedPosts === 'number' && Number.isFinite(archivedPosts) ? archivedPosts : loaded.archived,
+  };
+}
+
+/** Under the Wallet card's figure: the payout balance, not the lifetime earnings Your Sales tracks. */
+export const WALLET_AVAILABLE_CAPTION = 'Available to withdraw';
+/** Under the Wallet card's dash when the payout state could not be read. */
+export const WALLET_UNAVAILABLE_CAPTION = 'Balance unavailable';
+
+/**
+ * What the profile's Wallet card says. It showed lifetime tracked earnings, a
+ * figure a payout request never lowers, so after the first request it claimed
+ * money that was no longer there (audit 03-2); it now shows the payout state's
+ * withdrawable balance. A failed read wins over a balance still cached from an
+ * earlier one, which is the overstatement this card was fixed for. Until the
+ * first answer the figure is the dash. The spoken label says what is drawn.
+ */
+export function getWalletCardContent(payout: {
+  data: { availableUsd: string } | null | undefined;
+  isError: boolean;
+}) {
+  if (payout.isError) {
+    return {
+      value: UNKNOWN_AMOUNT_LABEL,
+      caption: WALLET_UNAVAILABLE_CAPTION,
+      accessibilityLabel: 'Wallet, balance unavailable',
+    };
+  }
+  const availableUsd = payout.data?.availableUsd;
+  if (!availableUsd) {
+    return {
+      value: UNKNOWN_AMOUNT_LABEL,
+      caption: WALLET_AVAILABLE_CAPTION,
+      accessibilityLabel: 'Wallet, balance loading',
+    };
+  }
+  return {
+    value: availableUsd,
+    caption: WALLET_AVAILABLE_CAPTION,
+    accessibilityLabel: `Wallet, ${availableUsd} available to withdraw`,
   };
 }
 

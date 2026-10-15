@@ -127,4 +127,99 @@ describe('listOwnerPostsForRoute', () => {
       },
     });
   });
+
+  // 03-7: the seller dashboard asks the server for listings instead of paging
+  // through every post to find the ones with a recipe.
+  it.each(['1', 'true'])('asks for listings only on listingsOnly=%s, with paging and the summary unchanged', async (value) => {
+    const loadOwnerPosts = vi.fn(async () => [{ id: 'post-1' }, { id: 'post-2' }]) satisfies LoadOwnerPosts;
+    const loadOwnerPostSalesSummary = vi.fn(async () => ({
+      earningsUsdCents: 1_530,
+      listingCount: 2,
+      salesCount: 2,
+    })) satisfies LoadOwnerPostSalesSummary;
+
+    const result = await listOwnerPostsForRoute({
+      userId: 'user-1',
+      searchParams: new URLSearchParams({
+        scope: 'owner',
+        listingsOnly: value,
+        includeArchived: 'true',
+        includeSummary: 'true',
+        limit: '1',
+      }),
+      loadOwnerPosts,
+      loadOwnerPostSalesSummary,
+    });
+
+    expect(loadOwnerPosts).toHaveBeenCalledWith('user-1', {
+      includeArchived: true,
+      limit: 2,
+      offset: 0,
+      visibility: 'all',
+      listingsOnly: true,
+    });
+    expect(result).toEqual({
+      ok: true,
+      posts: [{ id: 'post-1' }],
+      pageInfo: {
+        hasMore: true,
+        limit: 1,
+        nextOffset: 1,
+        offset: 0,
+      },
+      summary: {
+        earningsUsdCents: 1_530,
+        listingCount: 2,
+        salesCount: 2,
+      },
+    });
+  });
+
+  it.each([null, '0', 'false', 'yes'])('lists every post when listingsOnly is %s', async (value) => {
+    const loadOwnerPosts = vi.fn(async () => []) satisfies LoadOwnerPosts;
+    const searchParams = new URLSearchParams({ scope: 'owner' });
+    if (value !== null) searchParams.set('listingsOnly', value);
+
+    await listOwnerPostsForRoute({ userId: 'user-1', searchParams, loadOwnerPosts });
+
+    expect(loadOwnerPosts).toHaveBeenCalledWith('user-1', {
+      includeArchived: false,
+      limit: 49,
+      offset: 0,
+      visibility: 'all',
+    });
+  });
+
+  it('keeps a listings cursor to the listings it paged', async () => {
+    const boundary = { id: '00000000-0000-0000-0000-000000000002', createdAt: '2026-09-20T12:00:00.123456+00:00' };
+    const loadOwnerPosts = vi.fn(async () => [
+      { ...boundary },
+      { ...boundary, id: '00000000-0000-0000-0000-000000000003' },
+    ]) satisfies LoadOwnerPosts;
+    const listings = { scope: 'owner', listingsOnly: '1', limit: '1' };
+
+    const first = await listOwnerPostsForRoute({
+      userId: 'user-1',
+      searchParams: new URLSearchParams({ ...listings, pagination: 'cursor' }),
+      loadOwnerPosts,
+    });
+    if (!first.ok || !first.pageInfo.nextCursor) throw new Error('expected a next cursor');
+    const cursor = first.pageInfo.nextCursor;
+
+    await expect(listOwnerPostsForRoute({
+      userId: 'user-1',
+      searchParams: new URLSearchParams({ scope: 'owner', cursor, limit: '1' }),
+      loadOwnerPosts,
+    })).resolves.toMatchObject({ ok: false, status: 400 });
+    await listOwnerPostsForRoute({
+      userId: 'user-1',
+      searchParams: new URLSearchParams({ ...listings, cursor }),
+      loadOwnerPosts,
+    });
+
+    expect(loadOwnerPosts).toHaveBeenLastCalledWith('user-1', expect.objectContaining({
+      after: boundary,
+      listingsOnly: true,
+    }));
+  });
 });

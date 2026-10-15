@@ -54,7 +54,6 @@ export type ShowcasePostFormat = 'text' | 'media' | 'mixed';
 export type ShowcaseMediaKind = 'image' | 'video';
 export type ShowcaseAssetType = 'workflow' | 'prompt_pack' | 'guide';
 type ShowcaseResourceAccessMode = 'free' | 'paid';
-export const GENERATION_RECIPE_ASSET_ID_PREFIX = 'generation-recipe:';
 
 export interface ShowcaseCreator {
     id: string | null;

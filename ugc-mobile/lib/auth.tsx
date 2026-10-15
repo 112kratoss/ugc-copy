@@ -91,6 +91,7 @@ import {
   normalizeSupabaseAuthError,
 } from './supabase-auth-recovery';
 import { probeSupabaseSession } from './supabase-session-probe';
+import type { ProfileResponse } from './types';
 
 export type AuthMode = 'login' | 'signup';
 export type {
@@ -145,6 +146,12 @@ interface AuthContextValue {
   markIdentityDeferredOnAccount: () => Promise<void>;
   credits: number | null;
   /**
+   * The part of `credits` that can buy creator resources: the credit unlock
+   * spends only the total less the promotional (welcome and referral) credits.
+   * Restored and settled with `credits`; null when unknown.
+   */
+  marketplaceSpendableCredits: number | null;
+  /**
    * When `credits` was last set from the server (a profile read, a link) or by
    * a spend or purchase this app made, in epoch ms; null until then.
    */
@@ -190,7 +197,61 @@ interface AuthContextValue {
    */
   deleteAccount: (reauthentication?: AccountDeletionReauthentication) => Promise<AccountDeletionOutcome>;
   refreshProfile: () => Promise<void>;
-  updateCredits: (credits: number | null) => void;
+  updateCredits: (credits: number | null, options?: CreditUpdateOptions) => void;
+}
+
+export interface CreditUpdateOptions {
+  /**
+   * How much of the new total can buy creator resources, as the server counted
+   * it (the credit unlock answers it). Left out, it follows the total.
+   */
+  marketplaceSpendableCredits?: number | null;
+}
+
+/** The balance and the part of it the credit unlock will spend, which move together. */
+interface CreditBalance {
+  credits: number | null;
+  marketplaceSpendableCredits: number | null;
+}
+
+const UNKNOWN_CREDIT_BALANCE: CreditBalance = { credits: null, marketplaceSpendableCredits: null };
+
+function creditBalanceFromProfile(
+  profile: Pick<ProfileResponse, 'marketplaceSpendableCredits'> & { credits?: number | null },
+): CreditBalance {
+  const credits = profile.credits ?? null;
+  return {
+    credits,
+    marketplaceSpendableCredits: credits !== null && typeof profile.marketplaceSpendableCredits === 'number'
+      ? profile.marketplaceSpendableCredits
+      : null,
+  };
+}
+
+/**
+ * The balance after a change only the total is known for. The spendable part
+ * carries over from the last split the server gave. A spend leaves it alone
+ * until the total falls below it: a generation or an enhancement draws the
+ * promotional credits first (`reserve_generation_promotional_credits`,
+ * `reserve_creation_credits`), and a recipe unlock answers with its own split,
+ * so taking a spend off the spendable part understated it and blocked real
+ * purchases until the next profile read. A rise counts as promotional, as the
+ * welcome grant and referral rewards are, except for a `spendableRise` the
+ * caller knows of.
+ */
+function creditBalanceAfterTotal(
+  previous: CreditBalance,
+  credits: number | null,
+  spendableRise = 0,
+): CreditBalance {
+  if (credits === null || previous.credits === null || previous.marketplaceSpendableCredits === null) {
+    return { credits, marketplaceSpendableCredits: null };
+  }
+  const change = credits - previous.credits;
+  const spendable = change < 0
+    ? Math.min(previous.marketplaceSpendableCredits, credits)
+    : previous.marketplaceSpendableCredits + Math.min(change, spendableRise);
+  return { credits, marketplaceSpendableCredits: Math.max(0, spendable) };
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -370,7 +431,8 @@ async function unregisterPushBeforeSignOut(api: MagicbookletApiClient) {
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
-  const [credits, setCredits] = useState<number | null>(null);
+  const [creditBalance, setCreditBalance] = useState<CreditBalance>(UNKNOWN_CREDIT_BALANCE);
+  const { credits, marketplaceSpendableCredits } = creditBalance;
   const [creditsUpdatedAt, setCreditsUpdatedAt] = useState<number | null>(null);
   // The balance on screen, for the foreground handler (see the resume effect).
   const creditsRef = useRef<number | null>(null);
@@ -441,7 +503,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!restored) return;
         // The server, or a spend, answered first: what it said stands.
         if (authStateVersionRef.current !== version || creditsSettledVersionRef.current === version) return;
-        setCredits(restored.credits);
+        // The saved profile, back in the cache now, holds the last split the
+        // server gave; the saved balance may have moved past it since.
+        const savedProfile = queryClient.getQueryData<ProfileResponse>(['profile', userId]);
+        setCreditBalance(creditBalanceAfterTotal(
+          savedProfile ? creditBalanceFromProfile(savedProfile) : UNKNOWN_CREDIT_BALANCE,
+          restored.credits,
+        ));
       });
   }, [queryClient]);
 
@@ -456,7 +524,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     sessionRef.current = nextSession;
     setSession(nextSession);
     if (userChanged || !nextUserId) {
-      setCredits(null);
+      setCreditBalance(UNKNOWN_CREDIT_BALANCE);
       setCreditsUpdatedAt(null);
     }
     if (nextSession) {
@@ -654,7 +722,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           && creditsMovedHereRef.current === movesAtStart
         ) {
           creditsSettledVersionRef.current = version;
-          setCredits(profile.credits ?? null);
+          setCreditBalance(creditBalanceFromProfile(profile));
           setCreditsUpdatedAt(Date.now());
         }
       })
@@ -851,10 +919,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // A balance this app moved itself, after a generation or a purchase. It is as
   // settled as a server answer, and the saved copy must not overwrite it either.
-  const updateCredits = useCallback((nextCredits: number | null) => {
+  const updateCredits = useCallback((nextCredits: number | null, options?: CreditUpdateOptions) => {
     creditsSettledVersionRef.current = authStateVersionRef.current;
     creditsMovedHereRef.current += 1;
-    setCredits(nextCredits);
+    const reportedSpendable = options?.marketplaceSpendableCredits;
+    setCreditBalance((current) => (
+      reportedSpendable === undefined
+        ? creditBalanceAfterTotal(current, nextCredits)
+        : { credits: nextCredits, marketplaceSpendableCredits: reportedSpendable }
+    ));
     setCreditsUpdatedAt(Date.now());
   }, []);
 
@@ -881,10 +954,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       if (event.action.type !== 'success' || event.action.manual) return;
       if (sessionUserIdRef.current !== identityUserId || creditsMovedHereRef.current !== movesAtReadStart) return;
-      const profile = event.query.state.data as { credits?: number | null } | undefined;
+      const profile = event.query.state.data as Pick<ProfileResponse, 'credits' | 'marketplaceSpendableCredits'> | undefined;
       if (!profile) return;
       creditsSettledVersionRef.current = authStateVersionRef.current;
-      setCredits(profile.credits ?? null);
+      setCreditBalance(creditBalanceFromProfile(profile));
       setCreditsUpdatedAt(event.query.state.dataUpdatedAt || Date.now());
     });
   }, [identityUserId, queryClient]);
@@ -1084,7 +1157,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (typeof result.credits === 'number' && sessionUserIdRef.current === accountUserId) {
           creditsSettledVersionRef.current = authStateVersionRef.current;
           creditsMovedHereRef.current += 1;
-          setCredits(result.credits);
+          const mergedCredits = result.credits;
+          // The guest's purchased credits are spendable here; its promotional
+          // ones are not.
+          const spendableMoved = Math.max(0, result.creditsMoved - result.promotionalCreditsMoved);
+          setCreditBalance((current) => creditBalanceAfterTotal(current, mergedCredits, spendableMoved));
           setCreditsUpdatedAt(Date.now());
         }
       } catch (error) {
@@ -1704,6 +1781,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         ensureGuestMergeTicket,
         markIdentityDeferredOnAccount,
         credits,
+        marketplaceSpendableCredits,
         creditsUpdatedAt,
         isLoading,
         isAuthConfigured: isSupabaseConfigured,

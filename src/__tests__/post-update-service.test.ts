@@ -240,6 +240,60 @@ describe('updateOwnerPostForRoute', () => {
     expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
   });
 
+  // 03-4: deleting a post that has buyers tombstones it (private + archived)
+  // and keeps it only for them; both dashboards still offered its editor.
+  it('refuses to edit a post its owner deleted while it had buyers', async () => {
+    const { client } = createSupabaseMock({
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'private',
+        title: 'Deleted recipe post',
+        description: null,
+        prompt: null,
+        body: 'Kept for the people who bought it.',
+        category: 'text',
+        post_format: 'text',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'manual',
+        archived_at: '2026-07-02T00:00:00.000Z',
+        tombstoned_at: '2026-07-02T00:00:00.000Z',
+        showcase_asset_path: null,
+        output_url: null,
+        review_status: 'visible',
+      },
+      bundle: { id: 'bundle-1', access_mode: 'paid', status: 'draft', sales_count: 3 },
+    });
+    const dependencies = {
+      listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+      updatePostWithResourceBundleAtomically: vi.fn(),
+      replacePostSourceTools: vi.fn(),
+      replacePostMediaItems: vi.fn(),
+      createPostMediaPreview: vi.fn(),
+    } satisfies PostUpdateDependencies;
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: { visibility: 'public', title: 'Brought back' },
+      dependencies,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      body: { error: 'This post was deleted. Buyers keep their copy.', code: 'POST_DELETED' },
+    });
+    expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    expect(dependencies.replacePostSourceTools).not.toHaveBeenCalled();
+    expect(dependencies.replacePostMediaItems).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
   it('updates private posts with draft unlock bundles without marketplace quality gating', async () => {
     const { client, rpcCalls } = createSupabaseMock();
     const dependencies = {

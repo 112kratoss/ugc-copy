@@ -60,3 +60,26 @@ describe('an alert that moved the balance, landing while the app is in front', (
     expect(effect.indexOf("['mobile-notifications', user?.id]")).toBeLessThan(refresh);
   });
 });
+
+describe('an alert landing while a seller has the app in front', () => {
+  // A sale's push refreshed only the alerts; Your Sales and the payout balance
+  // kept their old figures until the seller pulled them again (audit 03-6).
+  it('refreshes Your Sales and the payout balance for every alert, whatever its type', () => {
+    const effect = receivedEffect();
+    const refresh = effect.indexOf(REFRESH_LINE);
+    const sales = effect.indexOf("void queryClient.invalidateQueries({ queryKey: ['seller-dashboard-posts'] });");
+    const payouts = effect.indexOf('void queryClient.invalidateQueries({ queryKey: [CREATOR_PAYOUTS_QUERY_KEY] });');
+
+    expect(sales).toBeGreaterThan(-1);
+    expect(payouts).toBeGreaterThan(-1);
+    // Ahead of the typed balance refresh, so no alert type gates them.
+    expect(sales).toBeLessThan(refresh);
+    expect(payouts).toBeLessThan(refresh);
+    expect(rootLayout).toContain("import { CREATOR_PAYOUTS_QUERY_KEY } from '@/lib/use-creator-payout-state';");
+  });
+
+  it('invalidates the key Your Sales reads its listings under', () => {
+    const dashboard = readFileSync(path.resolve(__dirname, '..', 'app/seller-dashboard.tsx'), 'utf8');
+    expect(dashboard).toContain("queryKey: ['seller-dashboard-posts', user?.id],");
+  });
+});

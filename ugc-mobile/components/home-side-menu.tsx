@@ -64,7 +64,10 @@ interface HomeSideMenuProps {
   profile: ProfileResponse | null | undefined;
   /** Null until the balance is known; never drawn as 0, which reads as an empty balance. */
   credits: number | null;
-  /** Null until the profile has answered; drawn as a dash, never as $0. */
+  /**
+   * Lifetime tracked earnings, the figure Your Sales calls by that name. Null
+   * until the profile has answered; drawn as a dash, never as $0.
+   */
   totalSalesUsdCents: number | null;
   onSignOut: () => Promise<void>;
 }
@@ -371,7 +374,7 @@ export function HomeSideMenu({
             </Pressable>
 
             <View
-              accessibilityLabel={totalSalesUsdCents === null ? 'Total sales loading' : `Total sales ${formatUsdCents(totalSalesUsdCents)}`}
+              accessibilityLabel={totalSalesUsdCents === null ? 'Tracked earnings loading' : `Tracked earnings ${formatUsdCents(totalSalesUsdCents)}`}
               style={{
                 minHeight: 72,
                 borderRadius: 20,
@@ -387,7 +390,7 @@ export function HomeSideMenu({
                   <Wallet size={21} color={theme.colors.success} />
                 </View>
                 <View style={{ gap: 1, minWidth: 0, flex: 1 }}>
-                  <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6 }}>Total sales</Text>
+                  <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6 }}>Tracked earnings</Text>
                   <Text style={{ color: totalSalesUsdCents === null ? theme.colors.muted : theme.colors.text, fontSize: 22, lineHeight: 28, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
                     {totalSalesUsdCents === null ? UNKNOWN_AMOUNT_LABEL : formatUsdCents(totalSalesUsdCents)}
                   </Text>

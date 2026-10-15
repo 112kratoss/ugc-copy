@@ -32,10 +32,21 @@ const authState = vi.hoisted(() => ({
     unlockBundleWithCredits: vi.fn(),
   },
   credits: 5000 as number | null,
+  marketplaceSpendableCredits: 5000 as number | null,
   updateCredits: vi.fn(),
 }));
 
 const dialogState = vi.hoisted(() => ({ showConfirmDialog: vi.fn() }));
+
+const PROMOTIONAL_SHORTFALL = "You need 900 more credits for this unlock. Welcome and referral credits can't be spent on creator resources.";
+
+/** What the auth context does with a balance it is handed (`updateCredits` in lib/auth.tsx). */
+function applyCredits(credits: number | null, options?: { marketplaceSpendableCredits?: number | null }) {
+  authState.credits = credits;
+  if (options?.marketplaceSpendableCredits !== undefined) {
+    authState.marketplaceSpendableCredits = options.marketplaceSpendableCredits;
+  }
+}
 
 vi.mock('expo-haptics', () => hapticsState);
 
@@ -195,7 +206,9 @@ describe('UnlockRemixPrompt', () => {
   beforeEach(() => {
     authState.user = { id: 'user-123', email: 'creator@example.com' };
     authState.credits = 5000;
-    authState.updateCredits.mockClear();
+    authState.marketplaceSpendableCredits = 5000;
+    authState.updateCredits.mockReset();
+    authState.updateCredits.mockImplementation(applyCredits);
     authState.api.unlockFreeBundle.mockReset();
     authState.api.unlockBundleWithCredits.mockReset();
     dialogState.showConfirmDialog.mockReset();
@@ -224,7 +237,6 @@ describe('UnlockRemixPrompt', () => {
     expect(authState.updateCredits).toHaveBeenCalledWith(4100);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['post-resource-bundle', 'post-123', 'asset-123'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['marketplace-resource', 'asset-123'] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['marketplace-resources'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['viewer-unlocks'] });
     // Patched in place rather than refetched under the buyer.
     expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['showcase-feed'] });
@@ -250,6 +262,7 @@ describe('UnlockRemixPrompt', () => {
 
   it('holds the spend and offers credits when the balance is short', () => {
     authState.credits = 100;
+    authState.marketplaceSpendableCredits = 100;
     const { onClose, tree } = renderPrompt();
 
     const cta = findPressableByAccessibilityLabel(tree.root, 'Unlock for 900 credits');
@@ -263,6 +276,45 @@ describe('UnlockRemixPrompt', () => {
     // The sheet steps aside first: it is a Modal over the screen pricing opens on.
     expect(onClose).toHaveBeenCalled();
     expect(routerState.push).toHaveBeenCalledWith('/pricing');
+  });
+
+  it('says why a total that covers the price cannot buy it', () => {
+    // 1,200 credits, every one of them welcome or referral credits.
+    authState.credits = 1200;
+    authState.marketplaceSpendableCredits = 0;
+    const { tree } = renderPrompt();
+
+    expect(findPressableByAccessibilityLabel(tree.root, 'Unlock for 900 credits').props.disabled).toBe(true);
+    const texts = tree.root.findAll((node) => String(node.type) === 'text').map((node) => node.props.children);
+    expect(texts).toContain(PROMOTIONAL_SHORTFALL);
+    expect(findPressableByAccessibilityLabel(tree.root, 'Get credits')).toBeDefined();
+  });
+
+  it("says the server's shortfall when it refuses a post whose price the feed did not carry", async () => {
+    // The sheet held 1,200 as spendable and no price, so it asked.
+    authState.credits = 1200;
+    authState.marketplaceSpendableCredits = 1200;
+    dialogState.showConfirmDialog.mockResolvedValue(true);
+    const refusal = 'Insufficient credits. This unlock costs 900 credits.';
+    authState.api.unlockBundleWithCredits.mockRejectedValue(Object.assign(new Error(refusal), {
+      status: 402,
+      code: 'INSUFFICIENT_CREDITS',
+      details: { error: refusal, code: 'INSUFFICIENT_CREDITS', creditCost: 900, remainingCredits: 1200, marketplaceSpendableCredits: 0 },
+    }));
+    const { onUnlocked, tree } = renderPrompt({ item: lockedRemixItem({ resource: undefined }) });
+
+    renderer.act(() => {
+      findPressableByAccessibilityLabel(tree.root, 'Unlock for 900 credits').props.onPress();
+    });
+    await flush();
+
+    expect(authState.updateCredits).toHaveBeenCalledWith(1200, { marketplaceSpendableCredits: 0 });
+    const texts = tree.root.findAll((node) => String(node.type) === 'text').map((node) => node.props.children);
+    expect(texts).toContain(PROMOTIONAL_SHORTFALL);
+    expect(texts).not.toContain(refusal);
+    expect(findPressableByAccessibilityLabel(tree.root, 'Unlock for 900 credits').props.disabled).toBe(true);
+    expect(findPressableByAccessibilityLabel(tree.root, 'Get credits')).toBeDefined();
+    expect(onUnlocked).not.toHaveBeenCalled();
   });
 
   it('takes a free unlock without asking', async () => {

@@ -28,6 +28,7 @@ export async function RequireAuth({
     <AuthProvider
       initialSession={auth.session}
       initialCredits={auth.credits}
+      initialMarketplaceSpendableCredits={auth.marketplaceSpendableCredits ?? null}
       hasResolvedInitialState
     >
       {children}
@@ -60,10 +61,13 @@ export async function RequestHintedOptionalAuth({
   }
 
   const auth = await getServerAuthState();
+  // A resolved provider never reads the profile again, so the recipe
+  // surfaces' spendable balance has to start from the server's figure.
   return (
     <AuthProvider
       initialSession={auth.session}
       initialCredits={auth.credits}
+      initialMarketplaceSpendableCredits={auth.marketplaceSpendableCredits ?? null}
       hasResolvedInitialState
     >
       {children}

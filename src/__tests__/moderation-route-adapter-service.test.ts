@@ -162,10 +162,11 @@ describe('moderation route adapter service', () => {
     });
   });
 
-  it("answers a guest's report of a person or a comment with the proxy's 403, before any work", async () => {
+  it("answers a guest's report of a person, a comment or a template with the proxy's 403, before any work", async () => {
     for (const body of [
       { targetType: 'user', targetId: OTHER_USER_ID, reason: 'harassment', sourceSurface: 'creator-profile' },
       { targetType: 'comment', targetId: OTHER_USER_ID, reason: 'spam', sourceSurface: 'comments' },
+      { targetType: 'template', targetId: OTHER_USER_ID, reason: 'unsafe_content' },
       {},
     ]) {
       const createServiceClient = vi.fn();

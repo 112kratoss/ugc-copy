@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createMediaTemplate,
+  updateMediaTemplate,
   type MediaTemplateRow,
 } from '@/lib/media-template-service';
 
@@ -151,8 +152,17 @@ function createClient(initialTemplate: MediaTemplateRow | null = null) {
     return query;
   };
 
+  const storage = {
+    from: () => ({
+      createSignedUrl: async (objectPath: string) => ({
+        data: { signedUrl: `https://signed.example.test/${objectPath}` },
+        error: null,
+      }),
+    }),
+  };
+
   return {
-    client: { from } as unknown as SupabaseClient,
+    client: { from, storage } as unknown as SupabaseClient,
     get insertAttempts() {
       return insertAttempts;
     },
@@ -206,5 +216,107 @@ describe('createMediaTemplate idempotency', () => {
       name: 'Second request',
       draft_output_node_id: 'output-2',
     });
+  });
+});
+
+describe('template thumbnails', () => {
+  const refusal = {
+    status: 400,
+    code: 'INVALID_TEMPLATE',
+    message: 'Thumbnails must be uploaded template assets.',
+    fieldErrors: { thumbnailUrl: 'Thumbnails must be uploaded template assets.' },
+  };
+  const liveTemplate = () => templateRow({
+    status: 'active',
+    is_active: true,
+    active_version_id: 'version-1',
+    output_kind: 'image',
+    thumbnail_url: `template_assets/${templateId}/version-1/demo/output.png`,
+  });
+
+  it('refuses an outside image on a live template and keeps its poster', async () => {
+    const database = createClient(liveTemplate());
+
+    await expect(updateMediaTemplate(database.client, userId, templateId, {
+      thumbnailUrl: 'https://cdn.example.com/swapped-poster.png',
+    })).rejects.toMatchObject(refusal);
+    expect(database.storedTemplate?.thumbnail_url).toBe(`template_assets/${templateId}/version-1/demo/output.png`);
+  });
+
+  it.each([
+    ['another template\'s asset', 'template_assets/40000000-0000-4000-8000-000000000004/version-1/demo/output.png'],
+    ['a path that climbs out of this template', `template_assets/${templateId}/../40000000-0000-4000-8000-000000000004/poster.png`],
+    ['the creator\'s own upload outside template assets', `generated_images/${userId}/poster.png`],
+    ['a value that is not text', 42],
+  ])('refuses %s', async (_label, thumbnailUrl) => {
+    const database = createClient(liveTemplate());
+
+    await expect(updateMediaTemplate(database.client, userId, templateId, { thumbnailUrl }))
+      .rejects.toMatchObject(refusal);
+    expect(database.storedTemplate?.thumbnail_url).toBe(`template_assets/${templateId}/version-1/demo/output.png`);
+  });
+
+  it('takes one of the template\'s own stored assets, or null to clear it', async () => {
+    const database = createClient(liveTemplate());
+    const poster = `template_assets/${templateId}/version-1/demo/poster.webp`;
+
+    const updated = await updateMediaTemplate(database.client, userId, templateId, { thumbnailUrl: poster });
+    expect(database.storedTemplate?.thumbnail_url).toBe(poster);
+    expect(updated.thumbnailUrl).toBe(`https://signed.example.test/${templateId}/version-1/demo/poster.webp`);
+
+    await updateMediaTemplate(database.client, userId, templateId, { thumbnailUrl: null });
+    expect(database.storedTemplate?.thumbnail_url).toBeNull();
+  });
+
+  it('refuses any image on a template being created, before anything is written', async () => {
+    const database = createClient();
+
+    await expect(createMediaTemplate(database.client, userId, {
+      sourceCanvasId: canvasId,
+      name: 'Fresh template',
+      thumbnailUrl: 'https://cdn.example.com/poster.png',
+    })).rejects.toMatchObject(refusal);
+    expect(database.insertAttempts).toBe(0);
+  });
+});
+
+describe('template slugs', () => {
+  it.each([
+    ['live', { status: 'active', is_active: true, active_version_id: 'version-1' }],
+    ['disabled', { status: 'disabled', is_active: false, active_version_id: 'version-1' }],
+  ] as const)('keeps the address of a %s template when it is renamed', async (_label, state) => {
+    const database = createClient(templateRow(state));
+
+    const updated = await updateMediaTemplate(database.client, userId, templateId, { name: 'A new name' });
+
+    expect(updated).toMatchObject({ name: 'A new name', slug: 'original-draft' });
+    expect(database.storedTemplate).toMatchObject({ name: 'A new name', slug: 'original-draft' });
+  });
+
+  it('moves a draft to the slug of its new name', async () => {
+    const database = createClient(templateRow());
+
+    await updateMediaTemplate(database.client, userId, templateId, { name: 'Renamed draft' });
+
+    expect(database.storedTemplate?.slug).toBe('renamed-draft');
+  });
+
+  it.each(['New', 'Mine', 'Create', 'Edit', 'Run', 'Runs'])(
+    'never gives a draft named %s the path the web keeps for itself',
+    async (name) => {
+      const database = createClient(templateRow());
+
+      await updateMediaTemplate(database.client, userId, templateId, { name });
+
+      expect(database.storedTemplate?.slug).toBe(`${name.toLowerCase()}-2`);
+    },
+  );
+
+  it('moves a draft off a reserved slug it was given before, on its next save', async () => {
+    const database = createClient(templateRow({ name: 'New', slug: 'new' }));
+
+    await updateMediaTemplate(database.client, userId, templateId, { name: 'New' });
+
+    expect(database.storedTemplate?.slug).toBe('new-2');
   });
 });

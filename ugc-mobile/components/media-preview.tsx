@@ -1,7 +1,7 @@
 import { rememberDecodedImageAspectRatio } from '@/lib/decoded-image-aspect-ratio';
 import { Image, type ImageProps } from 'expo-image';
 import { RecoverableVideoPreview } from '@/components/recoverable-video-preview';
-import { ImageOff } from 'lucide-react-native';
+import { ImageOff, Play } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, Text, View } from 'react-native';
 
@@ -31,6 +31,7 @@ export function MediaPreview({
   letterbox = false,
   playerHeld = false,
   resolveRetryUrl,
+  poster,
 }: {
   url: string | null | undefined;
   kind?: 'image' | 'video' | null;
@@ -53,12 +54,20 @@ export function MediaPreview({
   playerHeld?: boolean;
   /** A fresh link for a video whose own has stopped working. */
   resolveRetryUrl?: () => Promise<string>;
+  /**
+   * A clip's still, drawn in its frame until Play is pressed; the player is
+   * built then, and starts at once. A page opened on a clip often never plays
+   * it, and a player built as the page opens downloads the clip either way.
+   * `cacheKey` lets a picture a list already downloaded be drawn from disk.
+   */
+  poster?: { url: string; cacheKey?: string | null } | null;
 }) {
   const theme = useAppTheme();
   const { requestKey } = useMediaSource(url || '');
   const sourceKey = `${url}|${requestKey}`;
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
+  const [playRequested, setPlayRequested] = useState(false);
   const imageFailed = failedUrl === sourceKey;
 
   if (!url) {
@@ -66,8 +75,21 @@ export function MediaPreview({
   }
 
   if (kind === 'video') {
+    if (poster && !playRequested) {
+      return <VideoPoster poster={poster} height={height} radius={radius} letterbox={letterbox} onPlay={() => setPlayRequested(true)} />;
+    }
     if (playerHeld) return <View style={videoFrame(height, radius)} />;
-    return <VideoPreview url={url} height={height} radius={radius} nativeControls={nativeControls} resolveRetryUrl={resolveRetryUrl} />;
+    return (
+      <VideoPreview
+        url={url}
+        height={height}
+        radius={radius}
+        nativeControls={nativeControls}
+        resolveRetryUrl={resolveRetryUrl}
+        // The press on the poster was the request to play.
+        autoPlay={playRequested}
+      />
+    );
   }
 
   if (imageFailed) {
@@ -512,6 +534,68 @@ function MediaFallback({
   );
 }
 
+const PLAY_CONTROL_SIZE = 64;
+
+/** A clip's still in the clip's own frame, the whole frame its Play button. */
+function VideoPoster({
+  poster,
+  height,
+  radius,
+  letterbox,
+  onPlay,
+}: {
+  poster: { url: string; cacheKey?: string | null };
+  height?: number;
+  radius: number;
+  letterbox: boolean;
+  onPlay: () => void;
+}) {
+  const { source } = useMediaSource(poster.url);
+  // Tied to the link, so a new link for the still is tried again.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Play video"
+      onPress={onPlay}
+      style={({ pressed }) => ({
+        ...videoFrame(height, radius),
+        overflow: 'hidden',
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+      })}
+    >
+      {/* Without its still the frame is the clip's black, and Play still plays. */}
+      {failedUrl === poster.url ? null : (
+        <Image
+          source={{ ...source, cacheKey: poster.cacheKey || poster.url }}
+          contentFit={letterbox ? 'contain' : 'cover'}
+          cachePolicy="memory-disk"
+          // The same synchronous swap on Android as StableMediaImage, for the same reason.
+          transition={Platform.OS === 'android' ? 0 : 120}
+          onError={() => setFailedUrl(poster.url)}
+          pointerEvents="none"
+          style={{ position: 'absolute', inset: 0 }}
+        />
+      )}
+      <View
+        style={{
+          width: PLAY_CONTROL_SIZE,
+          height: PLAY_CONTROL_SIZE,
+          borderRadius: PLAY_CONTROL_SIZE / 2,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: mediaColors.mediaChip,
+        }}
+      >
+        {/* A triangle's visual centre sits left of its box. */}
+        <Play size={appTheme.icon.feature} color={mediaColors.onMedia} fill={mediaColors.onMedia} style={{ marginLeft: 2 }} />
+      </View>
+    </Pressable>
+  );
+}
+
 /** The box a clip plays in, and what stands in for it while its player is held. */
 function videoFrame(height: number | undefined, radius: number) {
   return {
@@ -531,12 +615,14 @@ function VideoPreview({
   radius,
   nativeControls,
   resolveRetryUrl,
+  autoPlay = false,
 }: {
   url: string;
   height?: number;
   radius: number;
   nativeControls: boolean;
   resolveRetryUrl?: () => Promise<string>;
+  autoPlay?: boolean;
 }) {
   // A clip on black in both schemes, so what the player draws over it (its
   // loading spinner, its failure notice) takes the dark palette, as in the
@@ -547,6 +633,7 @@ function VideoPreview({
         url={url}
         nativeControls={nativeControls}
         resolveRetryUrl={resolveRetryUrl}
+        autoPlay={autoPlay}
         style={videoFrame(height, radius)}
       />
     </ThemeScope>

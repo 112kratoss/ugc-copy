@@ -70,8 +70,9 @@ export function applyBundleUnlockToPostResponse(
  * way a save reaches them (`use-showcase-save-mutation.ts`). Refetching them
  * instead held the button on its spinner through every loaded page of every
  * mounted feed, one invalidation after another, and re-ranked For You under
- * the buyer. The rest (the marketplace lists, the buyer's library, the post's
- * own read) refresh behind the result.
+ * the buyer. The rest (the buyer's library, the post's own read) refresh
+ * behind the result. The app has no marketplace list to refresh: recipes are
+ * browsed as posts, which the patches above reach.
  */
 export async function refreshUnlockedBundleCaches(queryClient: UnlockCacheClient, unlock: UnlockedBundleRef) {
   queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
@@ -99,7 +100,7 @@ export async function refreshUnlockedBundleCaches(queryClient: UnlockCacheClient
     (current) => applyBundleUnlockToPostResponse(current, unlock.postId)
   );
 
-  for (const queryKey of [['marketplace-resources'], ['viewer-unlocks'], ['showcase-post', unlock.postId]]) {
+  for (const queryKey of [['viewer-unlocks'], ['showcase-post', unlock.postId]]) {
     void Promise.resolve(queryClient.invalidateQueries({ queryKey })).catch(() => undefined);
   }
 

@@ -39,6 +39,7 @@ describe('the links the server writes into notifications', () => {
       showcasePost: buildMobileNotificationDeepLink({ kind: 'showcasePost', postId: 'post-1' }),
       marketplaceResource: buildMobileNotificationDeepLink({ kind: 'marketplaceResource', resourceId: 'resource-1' }),
       creatorProfile: buildMobileNotificationDeepLink({ kind: 'creatorProfile', username: 'batman' }),
+      sellerDashboard: buildMobileNotificationDeepLink({ kind: 'sellerDashboard' }),
       notifications: buildMobileNotificationDeepLink({ kind: 'notifications' }),
     }).toEqual({
       generation: deepLinks.generation,
@@ -47,6 +48,7 @@ describe('the links the server writes into notifications', () => {
       showcasePost: deepLinks.showcasePost,
       marketplaceResource: deepLinks.marketplaceResource,
       creatorProfile: deepLinks.creatorProfile,
+      sellerDashboard: deepLinks.sellerDashboard,
       notifications: deepLinks.notifications,
     });
   });
@@ -87,12 +89,16 @@ describe('the links the server writes into notifications', () => {
       showcasePost: '/showcase/post-1',
       marketplaceResource: '/marketplace/resource-1',
       creatorProfile: '/creators/batman',
+      sellerDashboard: '/marketplace/sell',
       notifications: null,
       profile: '/profile',
       invite: '/invite',
     });
     // A run has its own page on the web, so its link needs no translation.
     expect(fs.existsSync(path.resolve('src/app/template-runs/[runId]/page.tsx'))).toBe(true);
+    // The web has no /seller-dashboard: its seller page, with the payouts, is here.
+    expect(fs.existsSync(path.resolve('src/app/seller-dashboard'))).toBe(false);
+    expect(fs.existsSync(path.resolve('src/app/marketplace/sell/page.tsx'))).toBe(true);
   });
 
   it('sends a workflow run to the canvas on the web and to Alerts in the app', () => {

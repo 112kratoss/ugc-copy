@@ -429,5 +429,37 @@ describe('SearchClient', () => {
       expect(card).toHaveTextContent('Luna Studio');
       expect(card).toHaveTextContent('Free');
     });
+
+    // The row printed the cash quote, which priced a credits-only recipe in a
+    // currency no checkout takes.
+    it('prices a paid recipe in one figure, and a credits-only one in credits', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(searchResponse({
+        type: 'recipes',
+        recipes: {
+          items: [
+            {
+              ...recipe('recipe-1', 'Moonlit lighting', 'Luna Studio'),
+              accessMode: 'paid',
+              priceUsdCents: 900,
+              priceQuote: { formatted: '₹750', currency: 'INR', amountSubunits: 75000 },
+            },
+            {
+              ...recipe('recipe-2', 'Moonlit grade', 'Luna Studio'),
+              accessMode: 'paid',
+              priceUsdCents: 50,
+              priceQuote: { formatted: '₹42', currency: 'INR', amountSubunits: 4200 },
+            },
+          ],
+          nextCursor: null,
+        },
+      })));
+      render(<SearchClient initialQuery="moonlit" initialType="recipes" />);
+      await settle();
+
+      expect(screen.getByRole('link', { name: /Moonlit lighting/ })).toHaveTextContent('₹750');
+      const creditsOnly = screen.getByRole('link', { name: /Moonlit grade/ });
+      expect(creditsOnly).toHaveTextContent('50 credits');
+      expect(creditsOnly).not.toHaveTextContent('₹42');
+    });
   });
 });

@@ -7,8 +7,30 @@ import { ArrowLeft, Loader2, LogIn, Play, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/components/AuthProvider';
 import { Button, StatusCallout, Surface, Text } from '@/components/DesignSystem';
 
-import { createClientIdempotencyKey, createTemplateRun } from './api';
+import { createClientIdempotencyKey, createTemplateRun, TemplateApiError } from './api';
 import { TemplatePageShell } from './TemplatePrimitives';
+
+type StartFailure = {
+  message: string;
+  /**
+   * The template is the caller's own draft or disabled one. Its page says so
+   * and offers the canvas (by the template's id, which this refusal does not
+   * carry), so that is where this one leads.
+   */
+  notActive: boolean;
+  /** A 404 answers the same on every retry, so Try again is not offered. */
+  retryable: boolean;
+};
+
+function toStartFailure(reason: unknown): StartFailure {
+  const apiError = reason instanceof TemplateApiError ? reason : null;
+  const notActive = apiError?.code === 'TEMPLATE_NOT_ACTIVE';
+  return {
+    message: reason instanceof Error ? reason.message : 'Could not start this template.',
+    notActive,
+    retryable: !notActive && apiError?.status !== 404,
+  };
+}
 
 export default function CreateTemplateRunClient({ slug }: { slug: string }) {
   const router = useRouter();
@@ -16,7 +38,7 @@ export default function CreateTemplateRunClient({ slug }: { slug: string }) {
   const [idempotencyKey] = useState(() => createClientIdempotencyKey('template-run'));
   const [retryNonce, setRetryNonce] = useState(0);
   const [templateName, setTemplateName] = useState('your template');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<StartFailure | null>(null);
 
   useEffect(() => {
     if (isAuthLoading || !session?.access_token) return;
@@ -30,7 +52,7 @@ export default function CreateTemplateRunClient({ slug }: { slug: string }) {
         router.replace(`/template-runs/${run.id}`);
       })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : 'Could not start this template.');
+        if (active) setError(toStartFailure(reason));
       });
 
     return () => {
@@ -59,21 +81,36 @@ export default function CreateTemplateRunClient({ slug }: { slug: string }) {
         <Surface variant="panel" padding="lg" className="w-full text-center">
           {error ? (
             <>
-              <StatusCallout tone="danger" title="Could not start template" body={error} />
+              {error.notActive ? (
+                <StatusCallout
+                  tone="warning"
+                  title="This template isn't live"
+                  body="It is a draft or disabled, so a run can't start. Its page says which."
+                />
+              ) : (
+                <StatusCallout tone="danger" title="Could not start template" body={error.message} />
+              )}
               <div className="mt-5 flex flex-wrap justify-center gap-3">
-                <Button href={`/templates/${slug}`} variant="ghost" icon={ArrowLeft} iconPosition="start">
-                  Back
-                </Button>
                 <Button
-                  variant="primary"
-                  icon={RefreshCw}
-                  onClick={() => {
-                    setError(null);
-                    setRetryNonce((value) => value + 1);
-                  }}
+                  href={`/templates/${slug}`}
+                  variant={error.notActive ? 'primary' : 'ghost'}
+                  icon={ArrowLeft}
+                  iconPosition="start"
                 >
-                  Try again
+                  {error.notActive ? 'Back to template' : 'Back'}
                 </Button>
+                {error.retryable ? (
+                  <Button
+                    variant="primary"
+                    icon={RefreshCw}
+                    onClick={() => {
+                      setError(null);
+                      setRetryNonce((value) => value + 1);
+                    }}
+                  >
+                    Try again
+                  </Button>
+                ) : null}
               </div>
             </>
           ) : (

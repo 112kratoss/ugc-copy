@@ -25,6 +25,7 @@ import {
   updatePostWithResourceBundleAtomically,
 } from '@/lib/post-resource-bundles-server';
 import { isOwnerPostTitleFallback } from '@/lib/owner-post-title-fallback';
+import { createPostDeletedRefusal } from '@/lib/post-lifecycle-service';
 import { PostSourceToolsWriteError, replacePostSourceTools } from '@/lib/post-source-tools-server';
 import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH, isMissingPostResourceBundlesSchemaError } from '@/lib/posts-server';
 import {
@@ -137,6 +138,7 @@ type MutablePostRow = {
   source_tool_slug: string | null;
   source_kind: RawShowcaseSourceKind;
   archived_at: string | null;
+  tombstoned_at?: string | null;
   showcase_asset_path: string | null;
   output_url: string | null;
   review_status: 'visible' | 'flagged' | 'hidden' | null;
@@ -460,7 +462,7 @@ async function loadOwnedPost(
   const { data, error } = await adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, visibility, title, description, prompt, body, category, post_format, source_tool, source_tool_slug, source_kind, archived_at, showcase_asset_path, output_url, review_status, is_nsfw',
+      'id, user_id, generation_id, visibility, title, description, prompt, body, category, post_format, source_tool, source_tool_slug, source_kind, archived_at, tombstoned_at, showcase_asset_path, output_url, review_status, is_nsfw',
     )
     .eq('id', postId)
     .eq('user_id', ownerUserId)
@@ -1124,6 +1126,9 @@ export async function updateOwnerPostForRoute({
     const post = await loadOwnedPost(adminSupabase, postId, ownerUserId);
     if (!post) {
       return { ok: false, status: 404, body: { error: 'Post not found.' } };
+    }
+    if (post.tombstoned_at) {
+      return createPostDeletedRefusal();
     }
     if (post.review_status && post.review_status !== 'visible') {
       return {

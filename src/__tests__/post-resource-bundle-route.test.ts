@@ -2,9 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
 
 const getPostResourceBundleDetailByPostIdMock = vi.hoisted(() => vi.fn());
+const isMarketplaceCreatorBlockedForViewerMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/post-resource-bundles-server', () => ({
   getPostResourceBundleDetailByPostId: getPostResourceBundleDetailByPostIdMock,
+}));
+
+vi.mock('@/lib/marketplace-viewer-filter', () => ({
+  isMarketplaceCreatorBlockedForViewer: isMarketplaceCreatorBlockedForViewerMock,
 }));
 
 vi.mock('@/lib/server-helpers', () => ({
@@ -32,6 +37,8 @@ describe('/api/posts/[postId]/resource-bundle route', () => {
   beforeEach(() => {
     vi.resetModules();
     getPostResourceBundleDetailByPostIdMock.mockReset();
+    isMarketplaceCreatorBlockedForViewerMock.mockReset();
+    isMarketplaceCreatorBlockedForViewerMock.mockResolvedValue(false);
   });
 
   it('serves bundle detail with viewer and country context and private headers', async () => {
@@ -41,6 +48,7 @@ describe('/api/posts/[postId]/resource-bundle route', () => {
       accessMode: 'paid',
       resources: null,
       viewerCanAccess: false,
+      seller: { id: 'creator-1' },
     });
 
     const { GET } = await import('@/app/api/posts/[postId]/resource-bundle/route');
@@ -57,6 +65,24 @@ describe('/api/posts/[postId]/resource-bundle route', () => {
       viewerUserId: 'user-1',
       countryCode: 'IN',
     });
+  });
+
+  it('returns 404 across a block either way, as the post page does', async () => {
+    getPostResourceBundleDetailByPostIdMock.mockResolvedValue({
+      id: 'bundle-1',
+      postId: 'post-1',
+      seller: { id: 'creator-1' },
+    });
+    isMarketplaceCreatorBlockedForViewerMock.mockResolvedValue(true);
+
+    const { GET } = await import('@/app/api/posts/[postId]/resource-bundle/route');
+    const response = await GET(getRequest('resource-bundle-get-blocked'), {
+      params: Promise.resolve({ postId: 'post-1' }),
+    });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: 'Resource bundle not found.' });
+    expect(isMarketplaceCreatorBlockedForViewerMock).toHaveBeenCalledWith('user-1', 'creator-1');
   });
 
   it('returns 404 when the bundle is absent or not visible to the viewer', async () => {

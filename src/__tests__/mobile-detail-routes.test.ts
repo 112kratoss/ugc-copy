@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server';
 const getShowcaseFeedItemByIdMock = vi.fn();
 const resolvePostIdForResourceIdentifierMock = vi.fn();
 const getPostResourceBundleDetailByPostIdMock = vi.fn();
+const isMarketplaceCreatorBlockedForViewerMock = vi.fn();
 const getUserMock = vi.fn();
 
 vi.mock('@/lib/backend-rate-limit', async (importOriginal) => ({
@@ -22,6 +23,11 @@ vi.mock('@/lib/post-resource-bundles-server', () => ({
     getPostResourceBundleDetailByPostIdMock(postId, options),
 }));
 
+vi.mock('@/lib/marketplace-viewer-filter', () => ({
+  isMarketplaceCreatorBlockedForViewer: (viewerUserId: string, creatorUserId: string) =>
+    isMarketplaceCreatorBlockedForViewerMock(viewerUserId, creatorUserId),
+}));
+
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: () => ({
     auth: {
@@ -38,6 +44,8 @@ describe('mobile detail API routes', () => {
     getShowcaseFeedItemByIdMock.mockReset();
     resolvePostIdForResourceIdentifierMock.mockReset();
     getPostResourceBundleDetailByPostIdMock.mockReset();
+    isMarketplaceCreatorBlockedForViewerMock.mockReset();
+    isMarketplaceCreatorBlockedForViewerMock.mockResolvedValue(false);
     getUserMock.mockReset();
     getUserMock.mockResolvedValue({
       data: {
@@ -113,6 +121,7 @@ describe('mobile detail API routes', () => {
     getPostResourceBundleDetailByPostIdMock.mockResolvedValue({
       id: 'bundle-1',
       postId: 'post-1',
+      seller: { id: 'creator-1' },
     });
 
     const { GET } = await import('@/app/api/marketplace/resources/[resourceId]/route');
@@ -139,6 +148,7 @@ describe('mobile detail API routes', () => {
       viewerUserId: 'user-1',
       countryCode: null,
     });
+    expect(isMarketplaceCreatorBlockedForViewerMock).toHaveBeenCalledWith('user-1', 'creator-1');
   });
 
   it('marks anonymous marketplace resource detail as short-lived shared cacheable', async () => {

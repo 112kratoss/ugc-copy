@@ -24,12 +24,20 @@ type UpdateCall = {
   selectColumns: string | null;
 };
 
+type ReadCall = {
+  table: string;
+  columns: string;
+  filters: Array<[string, ...unknown[]]>;
+};
+
 function createClient({
   allowed = true,
   postResult = {
     data: { id: 'post-1', generation_id: 'generation-1' },
     error: null,
   } as QueryResult,
+  // What a plain read of the post finds; restore asks only after matching nothing.
+  postReadResult = { data: null, error: null } as QueryResult,
 } = {}) {
   const rpc = vi.fn(async () => ({
     data: {
@@ -42,7 +50,23 @@ function createClient({
     error: null,
   }));
   const updateCalls: UpdateCall[] = [];
+  const readCalls: ReadCall[] = [];
   const from = vi.fn((table: string) => ({
+    select(columns: string) {
+      const call: ReadCall = { table, columns, filters: [] };
+      readCalls.push(call);
+      const query = {
+        eq(column: string, value: unknown) {
+          call.filters.push(['eq', column, value]);
+          return query;
+        },
+        async maybeSingle() {
+          return table === 'posts' ? postReadResult : { data: null, error: null };
+        },
+      };
+
+      return query;
+    },
     update(values: Record<string, unknown>) {
       const call: UpdateCall = {
         table,
@@ -86,6 +110,7 @@ function createClient({
   return {
     client: { rpc, from } as unknown as SupabaseClient,
     from,
+    readCalls,
     rpc,
     updateCalls,
   };
@@ -203,10 +228,59 @@ describe('restoreOwnerPostForRoute', () => {
         ['eq', 'id', 'post-1'],
         ['eq', 'user_id', 'user-1'],
         ['not', 'archived_at', 'is', null],
+        ['is', 'tombstoned_at', null],
       ],
       selectColumns: 'id, generation_id, visibility, showcase_asset_path',
     }]);
+    expect(client.readCalls).toEqual([]);
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+  });
+
+  // 03-4: a post deleted while it had buyers is tombstoned (private and
+  // archived). Restore used to clear archived_at on it like on any archive,
+  // putting a deleted post back on show.
+  it('refuses to restore a post its owner deleted while it had buyers', async () => {
+    const client = createClient({
+      postResult: { data: null, error: null },
+      postReadResult: { data: { tombstoned_at: '2026-07-02T00:00:00.000Z' }, error: null },
+    });
+
+    await expect(restoreOwnerPostForRoute({
+      adminSupabase: client.client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+    })).resolves.toEqual({
+      ok: false,
+      status: 409,
+      body: { error: 'This post was deleted. Buyers keep their copy.', code: 'POST_DELETED' },
+    });
+    expect(client.updateCalls[0]?.filters).toContainEqual(['is', 'tombstoned_at', null]);
+    expect(client.readCalls).toEqual([{
+      table: 'posts',
+      columns: 'tombstoned_at',
+      filters: [
+        ['eq', 'id', 'post-1'],
+        ['eq', 'user_id', 'user-1'],
+      ],
+    }]);
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  it('fails stably when it cannot tell why nothing was restored', async () => {
+    const client = createClient({
+      postResult: { data: null, error: null },
+      postReadResult: { data: null, error: new Error('database outage') },
+    });
+
+    await expect(restoreOwnerPostForRoute({
+      adminSupabase: client.client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+    })).resolves.toEqual({
+      ok: false,
+      status: 500,
+      body: { error: 'Failed to restore post.' },
+    });
   });
 
   // The generation's exposure used to be written here after the restore had

@@ -20,6 +20,7 @@ import {
 } from '@/lib/provider-fetch';
 import { isProductionDeployment } from '@/lib/backend-environment';
 import { PRICING_PLAN_MAP, PRICING_PLANS, type PricingPlan, type PricingPlanId } from '@/lib/pricing';
+import { getMarketplaceSpendableCredits } from '@/lib/profile';
 import type {
   ReferralRewardNotification,
   ReferralRewardSettlement,
@@ -59,6 +60,8 @@ export interface MobileCommerceSyncResult {
   success: true;
   entitlement: MobilePurchaseEntitlement['type'];
   credits?: number | null;
+  /** The part of `credits` a recipe can still be bought with (a post resource unlock answers it). */
+  marketplaceSpendableCredits?: number | null;
   alreadyProcessed?: boolean;
   assetId?: string;
   postId?: string;
@@ -82,6 +85,12 @@ export class MobileCommerceError extends Error {
      * apart refusals sharing one message.
      */
     public settlementStatus: string | null = null,
+    /**
+     * Fields the route answers beside `error`, for a refusal a client acts on:
+     * the credit unlock's 402 carries the price and the balance it refused, so
+     * the buyer can be shown what is missing and offered credits.
+     */
+    public details: Record<string, unknown> | null = null,
   ) {
     super(message);
     this.name = 'MobileCommerceError';
@@ -434,6 +443,36 @@ export async function verifyMobilePurchase({
     transactionId: verifiedTransactionId,
     raw: purchase,
   };
+}
+
+/**
+ * The spendable part of the buyer's balance, for a credit unlock's answer. The
+ * RPC reports it; one read of the profile stands in when it does not. The
+ * unlock is settled either way, so a read that fails answers null (unknown)
+ * rather than failing a purchase that went through.
+ */
+async function resolveMarketplaceSpendableCredits(
+  adminSupabase: SupabaseClient,
+  userId: string,
+  reported: unknown,
+  remainingCredits: number | null,
+): Promise<number | null> {
+  if (typeof reported === 'number') return reported;
+
+  const { data, error } = await adminSupabase
+    .from('profiles')
+    .select('credits, promotional_credits')
+    .eq('id', userId)
+    .maybeSingle();
+  if (error || !isRecord(data)) {
+    logBackendWarning('post_resource_unlock_spendable_credits_unavailable', { error });
+    return null;
+  }
+
+  return getMarketplaceSpendableCredits(
+    remainingCredits ?? (typeof data.credits === 'number' ? data.credits : null),
+    typeof data.promotional_credits === 'number' ? data.promotional_credits : null,
+  );
 }
 
 async function getProfileCredits(adminSupabase: SupabaseClient, userId: string) {
@@ -1132,7 +1171,25 @@ export async function unlockPostResourceBundleWithCredits({
   }
 
   if (status === 'insufficient_credits') {
-    throw new MobileCommerceError(`Insufficient credits. This unlock costs ${creditCost} credits.`, 402);
+    // Welcome and referral credits count in the total but cannot buy a recipe,
+    // so a total that covers the price can still be refused here; the body
+    // says what was spendable.
+    throw new MobileCommerceError(
+      `Insufficient credits. This unlock costs ${creditCost} credits.`,
+      402,
+      status,
+      {
+        code: 'INSUFFICIENT_CREDITS',
+        creditCost,
+        remainingCredits,
+        marketplaceSpendableCredits: await resolveMarketplaceSpendableCredits(
+          adminSupabase,
+          userId,
+          data.marketplace_spendable_credits,
+          remainingCredits,
+        ),
+      },
+    );
   }
 
   const alreadyProcessed = status === 'already_owned';
@@ -1165,6 +1222,12 @@ export async function unlockPostResourceBundleWithCredits({
     entitlement: 'post_resource_unlock',
     postId,
     credits: remainingCredits,
+    marketplaceSpendableCredits: await resolveMarketplaceSpendableCredits(
+      adminSupabase,
+      userId,
+      data.marketplace_spendable_credits,
+      remainingCredits,
+    ),
     alreadyProcessed,
   };
 }

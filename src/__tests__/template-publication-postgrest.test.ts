@@ -5,7 +5,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTemplateReadyStarterGraph } from '@/lib/workflow-canvas';
 import { compileTemplateGraph } from '@/lib/template-graph-compiler';
-import { createMediaTemplatesRouteHandlers, createOwnedMediaTemplatesRouteHandlers, createMediaTemplateDetailRouteHandlers, createMediaTemplatePublishRouteHandlers, createMediaTemplateDisableRouteHandlers, createMediaTemplateValidationRouteHandlers } from '@/lib/media-template-route-adapter-service';
+import { createMediaTemplatesRouteHandlers, createMediaTemplateDetailRouteHandlers, createMediaTemplatePublishRouteHandlers, createMediaTemplateDisableRouteHandlers, createMediaTemplateValidationRouteHandlers } from '@/lib/media-template-route-adapter-service';
 
 vi.hoisted(() => { vi.stubEnv('GENERATION_MODEL_CATALOG_SOURCE', 'code'); });
 const configPath = process.env.AUDIT_STORAGE_CONFIG;
@@ -23,7 +23,7 @@ describe.skipIf(!configPath || !connectionString)('template publication with act
   let activationBarrier: (() => Promise<void>) | null;
   const collection = createMediaTemplatesRouteHandlers(), detail = createMediaTemplateDetailRouteHandlers();
   const publisher = createMediaTemplatePublishRouteHandlers(), disable = createMediaTemplateDisableRouteHandlers();
-  const mine = createOwnedMediaTemplatesRouteHandlers(), validation = createMediaTemplateValidationRouteHandlers();
+  const validation = createMediaTemplateValidationRouteHandlers();
   const context = () => ({ params: Promise.resolve({ id: templateId }) });
   const request = (method: string, body?: unknown, actor: number | null = 0, url = '/api/templates') => new Request('http://127.0.0.1' + url, {
     method, headers: { 'Content-Type': 'application/json', ...(actor === null ? {} : { Authorization: `Bearer ${tokens[actor]}` }) },
@@ -121,7 +121,6 @@ describe.skipIf(!configPath || !connectionString)('template publication with act
   });
 
   it('keeps drafts private and reuses the owned canvas draft across create/update', async () => {
-    expect((await json(await mine.GET(request('GET')))).templates.map((entry: { id: string }) => entry.id)).toEqual([templateId]);
     expect((await json(await collection.GET(request('GET', undefined, 0, '/api/templates?mine=1')))).templates.map((entry: { id: string }) => entry.id)).toEqual([templateId]);
     await json(await detail.GET(request('GET', undefined, 1), context()), 404); await json(await detail.GET(request('GET', undefined, null), context()), 404);
     const updated = await json(await detail.PATCH(request('PATCH', { name: 'Edited '+canvasId }), context())); expect(updated.template.name).toBe('Edited '+canvasId);
@@ -138,7 +137,7 @@ describe.skipIf(!configPath || !connectionString)('template publication with act
   });
 
   it('rejects unsigned authoring and publication handlers before side effects', async () => {
-    const responses = [await collection.POST(request('POST', {}, null)), await mine.GET(request('GET', undefined, null)), await detail.PATCH(request('PATCH', {}, null), context()), await publish(publishBody(), null), await disable.POST(request('POST', {}, null), context()), await validation.POST(request('POST', {}, null))];
+    const responses = [await collection.POST(request('POST', {}, null)), await collection.GET(request('GET', undefined, null, '/api/templates?mine=1')), await detail.PATCH(request('PATCH', {}, null), context()), await publish(publishBody(), null), await disable.POST(request('POST', {}, null), context()), await validation.POST(request('POST', {}, null))];
     for (const response of responses) await json(response, 401);
     expect(await versions()).toEqual([]); expect(await objects()).toEqual([]);
   });

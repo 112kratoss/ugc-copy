@@ -14,7 +14,12 @@ import { resourceKindLabel } from '@/lib/post-resource-bundle-view-model';
 import { CREDIT_BALANCE_LOADING_LABEL, FREE_RECIPE_LABEL, formatCreditAmount } from '@/lib/pricing';
 import { appTheme, type ToolAccent } from '@/lib/theme';
 import type { MarketplaceResource, PostResourceKind } from '@/lib/types';
-import { useBundleUnlock } from '@/lib/use-bundle-unlock';
+import {
+  getUnlockSpendableCredits,
+  holdsPromotionalCredits,
+  PROMOTIONAL_CREDITS_NOTE,
+  useBundleUnlock,
+} from '@/lib/use-bundle-unlock';
 import { formatUnlockPrice } from '@/lib/unlock-library-view-model';
 
 function resourceLabel(kinds?: PostResourceKind[]) {
@@ -34,7 +39,7 @@ export default function MarketplaceAssetScreen() {
   const { assetId, postId } = useLocalSearchParams<{ assetId: string; postId?: string }>();
   const resourceId = Array.isArray(assetId) ? assetId[0] : assetId;
   const fallbackPostId = Array.isArray(postId) ? postId[0] : postId;
-  const { user, api, credits } = useAuth();
+  const { user, api, credits, marketplaceSpendableCredits } = useAuth();
   const [fileLoadingPath, setFileLoadingPath] = useState<string | null>(null);
   const [resourceError, setResourceError] = useState<string | null>(null);
 
@@ -47,10 +52,14 @@ export default function MarketplaceAssetScreen() {
   const detail = detailQuery.data;
   const resources = detail?.resources;
   const unlockPrice = detail?.priceUsdCents ?? 0;
+  // The balance this screen shows is what the unlock can spend: the total the
+  // rest of the app shows also holds welcome and referral credits, which a
+  // recipe cannot be bought with.
+  const spendableCredits = getUnlockSpendableCredits(credits, marketplaceSpendableCredits);
   // An unknown balance is not an empty one. Until the profile request answers
   // there is no shortfall to report, and the unlock itself is checked against
   // the real balance on the server.
-  const balanceKnown = credits !== null;
+  const balanceKnown = spendableCredits !== null;
   // Where sign-in comes back to; a bare /auth landed the buyer on Home.
   const unlockPath = `/marketplace/${encodeURIComponent(String(assetId))}${postId ? `?postId=${encodeURIComponent(String(postId))}` : ''}`;
   // A paid unlock asks first, in the words every unlock now uses; free stays
@@ -211,10 +220,15 @@ export default function MarketplaceAssetScreen() {
                     Paid mobile unlocks use your Magicbooklet credit balance instead of a separate store checkout.
                   </AppText>
                   <AppText variant="label" color={!balanceKnown ? 'muted' : bundleUnlock.shortfall > 0 ? 'warning' : 'success'}>
-                    Costs {formatUnlockPrice(unlockPrice)} · {balanceKnown ? `Balance ${formatCreditAmount(credits)}` : CREDIT_BALANCE_LOADING_LABEL}
+                    Costs {formatUnlockPrice(unlockPrice)} · {balanceKnown ? `Balance ${formatCreditAmount(spendableCredits)}` : CREDIT_BALANCE_LOADING_LABEL}
                   </AppText>
+                  {/* The note rides with a shortfall (`formatBundleUnlockShortfall`);
+                      with none it stands alone, since this balance is still
+                      below the total the app shows elsewhere. */}
                   {bundleUnlock.shortfallMessage ? (
                     <AppText variant="bodySm" color="muted">{bundleUnlock.shortfallMessage}</AppText>
+                  ) : holdsPromotionalCredits(credits, marketplaceSpendableCredits) ? (
+                    <AppText variant="bodySm" color="muted">{PROMOTIONAL_CREDITS_NOTE}</AppText>
                   ) : null}
                 </View>
                 <PrimaryButton

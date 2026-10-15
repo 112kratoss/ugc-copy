@@ -1,15 +1,24 @@
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 
 import {
+  getMediaTemplate,
+  listActiveMediaTemplatesPage,
+  listOwnedMediaTemplates,
+  loadCompiledDraftForTemplate,
   normalizeTemplateInputSlots,
   normalizeTemplateSlug,
+  publishMediaTemplate,
   resolveOwnedTemplateAssetSource,
   resolveTemplateCatalogMediaUrl,
 } from '@/lib/media-template-service';
+import { MediaTemplateError } from '@/lib/media-template-types';
 import {
+  compileTemplateGraph,
   getTemplateStepDefinitions,
   validateAndCompileTemplateGraph,
 } from '@/lib/template-graph-compiler';
@@ -217,6 +226,8 @@ describe('graph media template MVP', () => {
       'template_assets/template-1/version-2/private.mp4',
       'template_assets/template-1/version-1/%252fprivate.mp4',
       'generated_images/creator-2/private.png',
+      // An outside URL saved before writes were limited to template assets.
+      'https://cdn.example.com/swapped-poster.png',
     ]) {
       from.mockClear();
       createSignedUrl.mockClear();
@@ -224,6 +235,103 @@ describe('graph media template MVP', () => {
       expect(from).not.toHaveBeenCalled();
       expect(createSignedUrl).not.toHaveBeenCalled();
     }
+  });
+
+  it('still signs the creator\'s own stored media, as a storage path and never as a link', async () => {
+    const createSignedUrl = vi.fn(async (objectPath: string) => ({
+      data: { signedUrl: `https://signed.example.test/${objectPath}` },
+      error: null,
+    }));
+    const from = vi.fn(() => ({ createSignedUrl }));
+    const client = { storage: { from } } as never;
+
+    await expect(resolveTemplateCatalogMediaUrl(client, 'generated_images/creator-1/poster.png', {
+      creatorUserId: 'creator-1',
+      templateId: 'template-1',
+      activeVersionId: 'version-1',
+    })).resolves.toBe('https://signed.example.test/creator-1/poster.png');
+    expect(from).toHaveBeenCalledWith('generated_images');
+  });
+
+  describe('catalog media signing', () => {
+    const DAY_IN_SECONDS = 24 * 60 * 60;
+    const demo = 'template-1/version-1/demo/playback.mp4';
+    const poster = 'template-1/version-1/demo/poster.webp';
+    const liveVideoTemplate = {
+      id: 'template-1',
+      slug: 'product-reveal',
+      name: 'Product reveal',
+      description: null,
+      category: 'general',
+      is_active: true,
+      created_at: '2026-10-01T00:00:00.000Z',
+      creator_user_id: 'creator-1',
+      source_canvas_id: 'canvas-1',
+      input_slots: [],
+      output_kind: 'video',
+      status: 'active',
+      use_count: 3,
+      active_version_id: 'version-1',
+      draft_output_node_id: null,
+      draft_catalog_revision: null,
+      updated_at: '2026-10-01T00:00:00.000Z',
+      video_url: `template_assets/${demo}`,
+      thumbnail_url: `template_assets/${poster}`,
+    };
+
+    /** Every template read answers the one row; profiles and versions answer none. */
+    function catalogClient() {
+      const createSignedUrl = vi.fn(async (objectPath: string, expiresIn: number) => ({
+        data: { signedUrl: `https://signed.example.test/${objectPath}?expires=${expiresIn}` },
+        error: null,
+      }));
+      const from = (table: string) => {
+        const data = table === 'templates' ? [liveVideoTemplate] : [];
+        const query: Record<string, unknown> = {};
+        for (const method of ['select', 'eq', 'not', 'order', 'limit', 'or', 'in']) query[method] = () => query;
+        query.maybeSingle = async () => ({ data: data[0] ?? null, error: null });
+        query.then = (resolve: (value: unknown) => unknown) => Promise.resolve({ data, error: null }).then(resolve);
+        return query;
+      };
+      return { client: { from, storage: { from: () => ({ createSignedUrl }) } } as never, createSignedUrl };
+    }
+
+    it('lists posters only, signed for a day', async () => {
+      const { client, createSignedUrl } = catalogClient();
+
+      const page = await listActiveMediaTemplatesPage(client);
+
+      expect(page.templates[0]).toMatchObject({
+        videoUrl: null,
+        thumbnailUrl: `https://signed.example.test/${poster}?expires=${DAY_IN_SECONDS}`,
+      });
+      expect(createSignedUrl.mock.calls).toEqual([[poster, DAY_IN_SECONDS]]);
+    });
+
+    it('lists the creator\'s own templates the same way', async () => {
+      const { client, createSignedUrl } = catalogClient();
+
+      const [template] = await listOwnedMediaTemplates(client, 'creator-1');
+
+      expect(template).toMatchObject({ videoUrl: null, authoring: { activeVersionId: 'version-1' } });
+      expect(createSignedUrl.mock.calls).toEqual([[poster, DAY_IN_SECONDS]]);
+    });
+
+    it('signs the demo and its poster for a day on the template page', async () => {
+      const { client, createSignedUrl } = catalogClient();
+
+      const template = await getMediaTemplate(client, 'product-reveal', null);
+
+      expect(template).toMatchObject({
+        videoUrl: `https://signed.example.test/${demo}?expires=${DAY_IN_SECONDS}`,
+        thumbnailUrl: `https://signed.example.test/${poster}?expires=${DAY_IN_SECONDS}`,
+      });
+      expect(createSignedUrl).toHaveBeenCalledTimes(2);
+      expect(createSignedUrl.mock.calls).toEqual(expect.arrayContaining([
+        [demo, DAY_IN_SECONDS],
+        [poster, DAY_IN_SECONDS],
+      ]));
+    });
   });
 
   it('ships immutable versions, atomic activation, private inputs, and private template generations', () => {
@@ -273,5 +381,194 @@ describe('graph media template MVP', () => {
     expect(fs.existsSync(path.join(root, 'approval-steps/[stepId]/approve/route.ts'))).toBe(true);
     expect(fs.existsSync(path.join(root, 'frames/route.ts'))).toBe(false);
     expect(fs.existsSync(path.join(root, 'approve/route.ts'))).toBe(false);
+  });
+});
+
+describe('moderation take-down hold', () => {
+  const heldAt = '2026-10-15T09:30:00+00:00';
+  const takenDown = {
+    status: 409,
+    code: 'TEMPLATE_TAKEN_DOWN',
+    message: 'This template was taken down by moderation and cannot be republished.',
+  };
+
+  /**
+   * A creator's template with its workflow and a successful test run of it.
+   * Reads are recorded by table; Storage keeps what the publish copies.
+   */
+  function templateFixture(options: {
+    heldAt?: string | null;
+    live?: boolean;
+    activationError?: Record<string, unknown>;
+  } = {}) {
+    const userId = randomUUID();
+    const templateId = randomUUID();
+    const canvasId = randomUUID();
+    const runId = randomUUID();
+    const graph = createTemplateReadyStarterGraph();
+    const output = graph.nodes.find((node) => node.type === 'image-generate');
+    if (!output) throw new Error('Starter output is missing.');
+    const compiled = compileTemplateGraph({ graph, outputNodeId: output.id, canvasRevision: 3, catalogRevision: null });
+    const rows: Record<string, unknown> = {
+      templates: {
+        id: templateId,
+        name: 'Neon portrait',
+        description: null,
+        video_url: null,
+        thumbnail_url: null,
+        category: 'general',
+        is_active: Boolean(options.live),
+        created_at: '2026-10-01T00:00:00.000Z',
+        creator_user_id: userId,
+        slug: 'neon-portrait',
+        source_canvas_id: canvasId,
+        input_slots: [],
+        output_kind: 'image',
+        status: options.live ? 'active' : 'disabled',
+        use_count: 4,
+        active_version_id: options.live ? randomUUID() : null,
+        draft_output_node_id: output.id,
+        draft_catalog_revision: null,
+        updated_at: '2026-10-15T09:30:00.000Z',
+        moderation_disabled_at: options.heldAt ?? null,
+      },
+      workflow_canvases: { id: canvasId, user_id: userId, title: 'Neon portrait', graph, revision: 3 },
+      template_runs: {
+        id: runId,
+        template_id: templateId,
+        user_id: userId,
+        status: 'succeeded',
+        is_test: true,
+        graph_hash: compiled.graphHash,
+        source_canvas_revision: 3,
+        catalog_revision: null,
+        result_url: `generated_images/${userId}/demo.png`,
+      },
+    };
+    const reads: string[] = [];
+    const objects = new Map<string, Blob>();
+    const rpc = vi.fn(async () => (options.activationError
+      ? { data: null, error: options.activationError, status: 400 }
+      : { data: { version_id: randomUUID(), inserted: true }, error: null, status: 200 }));
+    const client = {
+      from(table: string) {
+        reads.push(table);
+        const row = rows[table] ?? null;
+        const query: Record<string, unknown> = {};
+        for (const method of ['select', 'eq', 'in', 'not', 'order', 'limit', 'or', 'update']) query[method] = () => query;
+        query.maybeSingle = async () => ({ data: row, error: null });
+        query.single = async () => ({ data: row, error: null });
+        query.then = (resolve: (value: unknown) => unknown) => (
+          Promise.resolve({ data: row ? [row] : [], error: null }).then(resolve)
+        );
+        return query;
+      },
+      rpc,
+      storage: {
+        from: (bucket: string) => ({
+          download: async () => ({ data: new Blob(['fixture-image'], { type: 'image/png' }), error: null }),
+          upload: async (key: string, blob: Blob) => {
+            objects.set(`${bucket}/${key}`, blob);
+            return { error: null };
+          },
+          remove: async (keys: string[]) => {
+            keys.forEach((key) => objects.delete(`${bucket}/${key}`));
+            return { error: null };
+          },
+          createSignedUrl: async (objectPath: string) => ({
+            data: { signedUrl: `https://signed.example.test/${objectPath}` },
+            error: null,
+          }),
+        }),
+      },
+    } as unknown as SupabaseClient;
+    const publishBody = {
+      rightsConfirmed: true,
+      expectedRevision: 3,
+      graphHash: compiled.graphHash,
+      testRunId: runId,
+      outputNodeId: output.id,
+    };
+    return { client, userId, templateId, reads, objects, rpc, publishBody };
+  }
+
+  it('refuses to publish a template moderation took down, before it reads the workflow or copies anything', async () => {
+    const fixture = templateFixture({ heldAt });
+
+    const publish = publishMediaTemplate(fixture.client, fixture.userId, fixture.templateId, fixture.publishBody);
+
+    await expect(publish).rejects.toBeInstanceOf(MediaTemplateError);
+    await expect(publish).rejects.toMatchObject(takenDown);
+    expect(fixture.reads).toEqual(['templates']);
+    expect(fixture.rpc).not.toHaveBeenCalled();
+    expect(fixture.objects.size).toBe(0);
+  });
+
+  it('answers a take-down that lands mid-publish with the same 409, and removes what the publish copied', async () => {
+    const fixture = templateFixture({
+      activationError: {
+        message: takenDown.message,
+        code: 'P0001',
+        details: null,
+        hint: 'TEMPLATE_TAKEN_DOWN',
+      },
+    });
+
+    await expect(publishMediaTemplate(fixture.client, fixture.userId, fixture.templateId, fixture.publishBody))
+      .rejects.toMatchObject(takenDown);
+    // The check before the copy let this one through: the hold arrived later.
+    expect(fixture.reads).toEqual(expect.arrayContaining(['workflow_canvases', 'template_runs']));
+    expect(fixture.rpc).toHaveBeenCalledWith('activate_template_version', expect.objectContaining({
+      p_template_id: fixture.templateId,
+      p_creator_id: fixture.userId,
+    }));
+    expect(fixture.objects.size).toBe(0);
+  });
+
+  it('passes any other activation refusal through unchanged', async () => {
+    const fixture = templateFixture({
+      activationError: { message: 'Template not found', code: 'P0001', details: null, hint: null },
+    });
+
+    const publish = publishMediaTemplate(fixture.client, fixture.userId, fixture.templateId, fixture.publishBody);
+
+    await expect(publish).rejects.not.toBeInstanceOf(MediaTemplateError);
+    await expect(publish).rejects.toMatchObject({ message: 'Template not found', code: 'P0001' });
+    expect(fixture.objects.size).toBe(0);
+  });
+
+  it('refuses a test run of a template moderation took down, and still prepares one for a template it left alone', async () => {
+    const held = templateFixture({ heldAt });
+    const disabledByItsCreator = templateFixture();
+
+    await expect(loadCompiledDraftForTemplate({
+      client: held.client,
+      templateId: held.templateId,
+      userId: held.userId,
+      body: {},
+    })).rejects.toMatchObject(takenDown);
+    expect(held.reads).toEqual(['templates']);
+
+    const draft = await loadCompiledDraftForTemplate({
+      client: disabledByItsCreator.client,
+      templateId: disabledByItsCreator.templateId,
+      userId: disabledByItsCreator.userId,
+      body: {},
+    });
+    expect(draft.template.id).toBe(disabledByItsCreator.templateId);
+    expect(disabledByItsCreator.reads).toContain('workflow_canvases');
+  });
+
+  it('tells the creator when moderation took their template down; a visitor reads no hold', async () => {
+    const held = templateFixture({ heldAt });
+    const live = templateFixture({ live: true });
+
+    await expect(getMediaTemplate(held.client, held.templateId, held.userId))
+      .resolves.toMatchObject({ status: 'disabled', moderationDisabledAt: heldAt });
+    const [owned] = await listOwnedMediaTemplates(held.client, held.userId);
+    expect(owned).toMatchObject({ status: 'disabled', moderationDisabledAt: heldAt });
+
+    await expect(getMediaTemplate(live.client, live.templateId, null))
+      .resolves.toMatchObject({ status: 'active', moderationDisabledAt: null });
   });
 });

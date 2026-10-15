@@ -6,6 +6,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { runPagedQuery } from '@/lib/admin-paged-query';
 import { decryptCreatorPayoutDetails } from '@/lib/creator-payout-details-crypto';
 import { formatTokenSubunitsAsUsd } from '@/lib/creator-payouts';
+import { notifyCreatorPayoutResolved } from '@/lib/mobile-notifications';
 
 export interface OpenCreatorPayoutRequest {
   id: string;
@@ -220,6 +221,42 @@ function readPayoutDetails(row: PayoutQueueRow): string {
     + ']';
 }
 
+/**
+ * Tells the creator what the operator decided. The resolution's answer names
+ * no one, so the request is read for whose it is and for its note as stored,
+ * which a rejection's alert carries. A request whose account was deleted has
+ * no one to tell. Never throws: the payout is settled whatever becomes of the
+ * notification.
+ */
+async function notifyCreatorOfPayoutOutcome(
+  adminSupabase: SupabaseClient,
+  requestId: string,
+  status: 'paid' | 'rejected',
+  amountTokenSubunits: number,
+) {
+  try {
+    const { data, error } = await adminSupabase
+      .from('creator_payout_requests')
+      .select('user_id, resolution_note')
+      .eq('id', requestId)
+      .maybeSingle();
+    if (error) throw error;
+
+    const request = data as { user_id?: unknown; resolution_note?: unknown } | null;
+    if (typeof request?.user_id !== 'string') return;
+
+    await notifyCreatorPayoutResolved(adminSupabase, {
+      userId: request.user_id,
+      requestId,
+      status,
+      amountUsd: formatTokenSubunitsAsUsd(amountTokenSubunits),
+      reason: typeof request.resolution_note === 'string' ? request.resolution_note : null,
+    });
+  } catch (error) {
+    logBackendError('creator_payout_notification_failed', { requestId, error });
+  }
+}
+
 export type ResolveCreatorPayoutResult =
   | { ok: true; status: 'paid' | 'rejected'; amountTokenSubunits: number }
   | {
@@ -260,12 +297,11 @@ export async function resolveCreatorPayoutRequest({
 
   switch (result.status) {
     case 'paid':
-    case 'rejected':
-      return {
-        ok: true,
-        status: result.status,
-        amountTokenSubunits: Number(result.amount_token_subunits ?? 0),
-      };
+    case 'rejected': {
+      const amountTokenSubunits = Number(result.amount_token_subunits ?? 0);
+      await notifyCreatorOfPayoutOutcome(adminSupabase, requestId, result.status, amountTokenSubunits);
+      return { ok: true, status: result.status, amountTokenSubunits };
+    }
     case 'not_found':
       return { ok: false, code: 'NOT_FOUND', error: 'That payout request no longer exists.' };
     case 'already_resolved':

@@ -66,9 +66,11 @@ vi.mock('lucide-react-native', () => {
 vi.mock('react-native', () => ({
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   AppState: { addEventListener: () => ({ remove: () => undefined }) },
+  FlatList: (props: MockProps) => React.createElement('flat-list', props),
   Linking: { canOpenURL: vi.fn(), openURL: vi.fn() },
   Platform: { OS: 'ios' },
   Pressable: ({ children, ...props }: MockProps) => React.createElement('pressable', props, children),
+  RefreshControl: (props: MockProps) => React.createElement('refresh-control', props),
   Share: { share: vi.fn(), sharedAction: 'sharedAction' },
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
 }));
@@ -86,6 +88,7 @@ vi.mock('@/components/recoverable-video-preview', () => ({
 vi.mock('@/components/ui', () => ({
   AppText: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   Card: ({ children, ...props }: MockProps) => React.createElement('card', props, children),
+  CreatorAvatar: (props: MockProps) => React.createElement('creator-avatar', props),
   IconButton: (props: MockProps) => React.createElement('icon-button', props),
   Kicker: ({ children, ...props }: MockProps) => React.createElement('kicker', props, children),
   Pill: (props: MockProps) => React.createElement('pill', props),
@@ -99,12 +102,14 @@ vi.mock('@/components/ui', () => ({
 vi.mock('@/lib/ai-data-consent', () => ({ withAiDataConsent: vi.fn() }));
 vi.mock('@/lib/api-client', () => ({ ApiError: class ApiError extends Error {} }));
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
-vi.mock('@/lib/dialog', () => ({ showConfirmDialog: vi.fn() }));
+vi.mock('@/lib/action-sheet', () => ({ showActionSheet: vi.fn() }));
+vi.mock('@/lib/dialog', () => ({ showConfirmDialog: vi.fn(), showErrorDialog: vi.fn(), showMessageDialog: vi.fn() }));
 vi.mock('@/lib/media', () => ({ pickMedia: vi.fn(), uploadTemplateRunInput: vi.fn() }));
 vi.mock('@/lib/template-run-resume', () => ({
-  clearActiveTemplateRun: vi.fn(async () => undefined),
-  loadActiveTemplateRunId: vi.fn(async () => null),
-  rememberActiveTemplateRun: vi.fn(async () => undefined),
+  forgetTemplateRun: vi.fn(async () => false),
+  loadResumableTemplateRun: vi.fn(async () => null),
+  loadResumableTemplateRuns: vi.fn(async () => ({})),
+  rememberTemplateRun: vi.fn(async () => false),
 }));
 
 import { MediaTemplateDetailScreen, MediaTemplateRunScreen } from '../components/media-template-screens';
@@ -159,6 +164,8 @@ describe('template previews', () => {
     const [poster, ...noMorePosters] = previewsOf(<MediaTemplateDetailScreen slug="car-reveal" />);
 
     expect(clip).toMatchObject({ url: 'https://cdn.example.com/demo.mp4', kind: 'video', height: 430, letterbox: true });
+    // The clip's frame shows the poster until it is played, as the web's does (01-9).
+    expect(clip.poster).toEqual({ url: 'https://cdn.example.com/poster.webp', cacheKey: 'https://cdn.example.com/poster.webp' });
     expect(poster).toMatchObject({ url: 'https://cdn.example.com/poster.webp', kind: 'image', height: 430, letterbox: true });
     // The same frame down to its corners: neither sets a radius of its own.
     expect(clip.radius).toBe(poster.radius);
@@ -176,7 +183,9 @@ describe('template previews', () => {
     const [poster] = previewsOf(<MediaTemplateDetailScreen slug="car-reveal" />);
 
     await expect((clip.resolveRetryUrl as () => Promise<string>)()).resolves.toBe('https://cdn.example.com/demo-renewed.mp4');
-    expect(getMediaTemplate).toHaveBeenCalledWith(TEMPLATE_ID);
+    // Past the client's copy, which may hold the very link that failed; with
+    // the session, as the page itself was read.
+    expect(getMediaTemplate).toHaveBeenCalledWith(TEMPLATE_ID, { withSession: true, fresh: true });
     expect(poster.resolveRetryUrl).toBeUndefined();
     authState.api = {};
   });

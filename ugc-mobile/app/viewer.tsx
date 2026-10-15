@@ -151,6 +151,7 @@ import {
   type PostLifecyclePost,
 } from '@/lib/post-lifecycle';
 import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
+import { readPostDetailsSection, type PostDetailsSection } from '@/lib/post-details-view-model';
 import { flattenProfileOwnerPostPages, profileOwnerPostsQueryOptions } from '@/lib/profile-media-query';
 import { isProfileLibrarySource, useProfileLibrarySource } from '@/lib/use-profile-library-source';
 import { removeFromCachedCreatorGrid, updateCachedCreatorGridPost, useCreatorReelSource } from '@/lib/use-creator-reel-source';
@@ -244,9 +245,14 @@ function ImmersivePreviewViewer() {
   const routeAlgorithmVersion = normalizeParam(params.algorithmVersion) || null;
   const requestedCommentsPostId = normalizeParam(params.comments) || null;
   const initialPage = normalizeParam(params.initialPage) === 'details' ? 'details' : undefined;
-  const initialSectionParam = normalizeParam(params.initialSection);
-  const initialSection = initialPage && (initialSectionParam === 'story' || initialSectionParam === 'prompt')
-    ? initialSectionParam : undefined;
+  // The section the Details page of the opened post leads with, kept from the
+  // first render: sign-in comes back here through `dismissTo`, which replaces
+  // this route's params with the return path's, and the page would reorder
+  // under the reader — the resources card they signed in from moving down.
+  const [openedSection] = useState(() => {
+    const section = initialPage ? readPostDetailsSection(normalizeParam(params.initialSection)) : undefined;
+    return section ? { itemId: initialId, section } : null;
+  });
   const requestedReplyToId = normalizeParam(params.replyTo) || null;
   // `user` is the registered account (saves, follows, owner actions). The feed
   // lanes are keyed by `identityUserId`, a guest's included, as Home and Explore
@@ -1508,7 +1514,7 @@ function ImmersivePreviewViewer() {
             chromeHidden={actionsOpenItemId === item.id}
             height={height}
             item={item}
-            initialSection={item.id === initialId ? initialSection : undefined}
+            initialSection={item.id === openedSection?.itemId ? openedSection.section : undefined}
             onActionsOpen={() => setActionsOpenItemId(item.id)}
             onComments={item.canComment ? () => {
               setCommentsReplyToId(null);
@@ -1864,7 +1870,7 @@ function ImmersiveSlide({
   onHorizontalScrollToggle,
 }: {
   active: boolean;
-  initialSection?: 'story' | 'prompt';
+  initialSection?: PostDetailsSection;
   prepareVideo: boolean;
   activeSlideRef: MutableRefObject<ImmersiveSlideHandle | null>;
   /**
@@ -2342,7 +2348,7 @@ function MediaSlidePage({
   width,
 }: {
   active: boolean;
-  initialSection?: 'story' | 'prompt';
+  initialSection?: PostDetailsSection;
   /** The reader is on this slide, overlays included -- see ActiveVideo's rewind. */
   slideActive: boolean;
   /** This page is the one on screen: it marks where the zoom's close shrinks out of (iOS 18). */

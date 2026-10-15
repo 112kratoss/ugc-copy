@@ -14,6 +14,7 @@ const { authState, router, showActionSheet, showConfirmDialog } = vi.hoisted(() 
       unlockFreeBundle: vi.fn(),
     },
     credits: 2000 as number | null,
+    marketplaceSpendableCredits: 2000 as number | null,
     updateCredits: vi.fn(),
     user: { id: 'buyer-1' } as { id: string } | null,
   },
@@ -33,16 +34,53 @@ import {
   describePaidUnlockConfirmation,
   formatBundleUnlockShortfall,
   getBundleUnlockShortfall,
+  getUnlockSpendableCredits,
+  holdsPromotionalCredits,
   isInsufficientCreditsError,
+  readInsufficientCreditsRefusal,
   useBundleUnlock,
   type BundleUnlockTarget,
 } from '@/lib/use-bundle-unlock';
 
 type HookOptions = Parameters<typeof useBundleUnlock>[0];
 type HookResult = ReturnType<typeof useBundleUnlock>;
+type SheetRequest = { actions: Array<{ label: string; onPress: () => void }> };
 
 const paid: BundleUnlockTarget = { postId: 'post-1', resourceId: 'asset-1', accessMode: 'paid', priceUsdCents: 900 };
 const free: BundleUnlockTarget = { postId: 'post-1', resourceId: 'asset-1', accessMode: 'free', priceUsdCents: 0 };
+
+const PROMOTIONAL_SHORTFALL = "You need 900 more credits for this unlock. Welcome and referral credits can't be spent on creator resources.";
+
+/**
+ * The credit unlock's 402 as the API client throws it: an `ApiError` whose
+ * `code` and `details` are the body's (`mobile-api-contract-fixture.test.ts`
+ * pins that hand-over).
+ */
+function insufficientCreditsError(
+  figures: { creditCost?: number; remainingCredits?: number | null; marketplaceSpendableCredits?: number | null } = {},
+) {
+  const body = {
+    code: 'INSUFFICIENT_CREDITS',
+    creditCost: 900,
+    remainingCredits: 1200,
+    marketplaceSpendableCredits: 0,
+    ...figures,
+  };
+  const message = `Insufficient credits. This unlock costs ${body.creditCost} credits.`;
+  return Object.assign(new Error(message), {
+    status: 402,
+    code: 'INSUFFICIENT_CREDITS',
+    details: { error: message, ...body },
+  });
+}
+
+/** What the auth context does with a balance it is handed (`updateCredits` in lib/auth.tsx). */
+function applyCredits(credits: number | null, options?: { marketplaceSpendableCredits?: number | null }) {
+  authState.credits = credits;
+  if (options?.marketplaceSpendableCredits !== undefined) {
+    authState.marketplaceSpendableCredits = options.marketplaceSpendableCredits;
+  }
+}
 
 function Harness({ options, onRender }: { options: HookOptions; onRender: (result: HookResult) => void }) {
   onRender(useBundleUnlock(options));
@@ -79,7 +117,9 @@ beforeEach(() => {
   authState.api.unlockBundleWithCredits.mockReset();
   authState.api.unlockFreeBundle.mockReset();
   authState.credits = 2000;
-  authState.updateCredits.mockClear();
+  authState.marketplaceSpendableCredits = 2000;
+  authState.updateCredits.mockReset();
+  authState.updateCredits.mockImplementation(applyCredits);
   authState.user = { id: 'buyer-1' };
   router.push.mockClear();
   showActionSheet.mockClear();
@@ -100,6 +140,45 @@ describe('bundle unlock rules', () => {
     expect(formatBundleUnlockShortfall(0)).toBeNull();
   });
 
+  it('counts what the unlock can spend: the spendable part, or the total while that is all the app knows', () => {
+    expect(getUnlockSpendableCredits(1200, 0)).toBe(0);
+    expect(getUnlockSpendableCredits(1500, 1200)).toBe(1200);
+    expect(getUnlockSpendableCredits(1200, null)).toBe(1200);
+    expect(getUnlockSpendableCredits(1200, undefined)).toBe(1200);
+    expect(getUnlockSpendableCredits(null, null)).toBeNull();
+  });
+
+  it('knows when the total holds welcome and referral credits', () => {
+    expect(holdsPromotionalCredits(1200, 0)).toBe(true);
+    expect(holdsPromotionalCredits(1500, 1200)).toBe(true);
+    expect(holdsPromotionalCredits(1200, 1200)).toBe(false);
+    expect(holdsPromotionalCredits(1200, null)).toBe(false);
+    expect(holdsPromotionalCredits(null, 0)).toBe(false);
+  });
+
+  it('says why the total does not count, in the decided words, only beside a shortfall', () => {
+    expect(formatBundleUnlockShortfall(900, { promotionalCredits: true })).toBe(PROMOTIONAL_SHORTFALL);
+    expect(formatBundleUnlockShortfall(0, { promotionalCredits: true })).toBeNull();
+  });
+
+  it("reads what the server counted when it refused for want of credits", () => {
+    expect(readInsufficientCreditsRefusal(insufficientCreditsError())).toEqual({
+      creditCost: 900,
+      remainingCredits: 1200,
+      marketplaceSpendableCredits: 0,
+    });
+    expect(readInsufficientCreditsRefusal(insufficientCreditsError({ marketplaceSpendableCredits: null })))
+      .toMatchObject({ marketplaceSpendableCredits: null });
+    // A refusal that sent no figures, and every other failure, have nothing to read.
+    expect(readInsufficientCreditsRefusal(Object.assign(new Error('Insufficient credits.'), { status: 402 }))).toBeNull();
+    expect(readInsufficientCreditsRefusal(Object.assign(new Error('Slow down.'), {
+      status: 429,
+      code: 'RATE_LIMITED',
+      details: { error: 'Slow down.', code: 'RATE_LIMITED', creditCost: 900 },
+    }))).toBeNull();
+    expect(readInsufficientCreditsRefusal(new Error('offline'))).toBeNull();
+  });
+
   it('asks in the marketplace words, and never with an empty price', () => {
     expect(describePaidUnlockConfirmation('900 credits')).toEqual({
       title: 'Unlock this resource?',
@@ -109,8 +188,10 @@ describe('bundle unlock rules', () => {
     expect(describePaidUnlockConfirmation(null).confirmLabel).toBe('Unlock with credits');
   });
 
-  it("recognises the server's refusal for want of credits", () => {
+  it("recognises the server's refusal for want of credits, by its status or its code", () => {
     expect(isInsufficientCreditsError({ status: 402 })).toBe(true);
+    expect(isInsufficientCreditsError({ code: 'INSUFFICIENT_CREDITS' })).toBe(true);
+    expect(isInsufficientCreditsError(insufficientCreditsError())).toBe(true);
     expect(isInsufficientCreditsError({ status: 403 })).toBe(false);
     expect(isInsufficientCreditsError(new Error('offline'))).toBe(false);
   });
@@ -175,6 +256,7 @@ describe('useBundleUnlock', () => {
 
   it('offers credits instead of a doomed spend when the known balance is short', () => {
     authState.credits = 100;
+    authState.marketplaceSpendableCredits = 100;
     const onLeave = vi.fn();
     const { state } = renderHook({ target: paid, onLeave });
 
@@ -193,6 +275,7 @@ describe('useBundleUnlock', () => {
 
   it('offers credits when the server refuses for want of them', async () => {
     authState.credits = null;
+    authState.marketplaceSpendableCredits = null;
     authState.api.unlockBundleWithCredits.mockRejectedValue(Object.assign(
       new Error('Insufficient credits. This unlock costs 900 credits.'),
       { status: 402 },
@@ -203,6 +286,135 @@ describe('useBundleUnlock', () => {
     renderer.act(() => (showActionSheet.mock.calls[0]?.[0] as { actions: Array<{ onPress: () => void }> }).actions[0]!.onPress());
     await settle();
 
+    expect(state.current!.error).toBe('Insufficient credits. This unlock costs 900 credits.');
+    expect(state.current!.offersCredits).toBe(true);
+  });
+
+  it('holds the spend when only welcome and referral credits would pay, though the total covers the price', () => {
+    authState.credits = 1200;
+    authState.marketplaceSpendableCredits = 0;
+    const { state } = renderHook({ target: paid });
+
+    expect(state.current!.shortfall).toBe(900);
+    expect(state.current!.shortfallMessage).toBe(PROMOTIONAL_SHORTFALL);
+    expect(state.current!.offersCredits).toBe(true);
+
+    renderer.act(() => state.current!.request());
+    expect(showActionSheet).not.toHaveBeenCalled();
+    expect(authState.api.unlockBundleWithCredits).not.toHaveBeenCalled();
+  });
+
+  it('asks as before when the spendable part covers the price, whatever else the total holds', () => {
+    authState.credits = 1500;
+    authState.marketplaceSpendableCredits = 1200;
+    const { state } = renderHook({ target: paid });
+
+    expect(state.current!.shortfall).toBe(0);
+    expect(state.current!.shortfallMessage).toBeNull();
+    expect(state.current!.offersCredits).toBe(false);
+    renderer.act(() => state.current!.request());
+    expect(showActionSheet).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts against the total while the spendable part is unknown', () => {
+    authState.credits = 100;
+    authState.marketplaceSpendableCredits = null;
+    const { state } = renderHook({ target: paid });
+
+    expect(state.current!.shortfall).toBe(800);
+    expect(state.current!.shortfallMessage).toBe('You need 800 more credits for this unlock.');
+  });
+
+  it('applies the spendable figure the unlock answers with', async () => {
+    authState.api.unlockBundleWithCredits.mockResolvedValue({
+      success: true,
+      entitlement: 'post_resource_unlock',
+      credits: 1100,
+      marketplaceSpendableCredits: 500,
+    });
+    const { state } = renderHook({ target: paid });
+
+    renderer.act(() => state.current!.request());
+    renderer.act(() => (showActionSheet.mock.calls[0]?.[0] as SheetRequest).actions[0]!.onPress());
+    await settle();
+
+    expect(authState.updateCredits).toHaveBeenCalledWith(1100, { marketplaceSpendableCredits: 500 });
+  });
+
+  it("takes the server's count when it refuses, and says its shortfall instead of the refusal", async () => {
+    // The app held all 1,200 as spendable; the server counted none of them.
+    authState.credits = 1200;
+    authState.marketplaceSpendableCredits = 1200;
+    authState.api.unlockBundleWithCredits.mockRejectedValue(insufficientCreditsError());
+    const { state, update } = renderHook({ target: paid });
+
+    renderer.act(() => state.current!.request());
+    renderer.act(() => (showActionSheet.mock.calls[0]?.[0] as SheetRequest).actions[0]!.onPress());
+    await settle();
+
+    expect(authState.updateCredits).toHaveBeenCalledWith(1200, { marketplaceSpendableCredits: 0 });
+    expect(state.current!.error).toBeNull();
+    expect(state.current!.shortfall).toBe(900);
+    expect(state.current!.shortfallMessage).toBe(PROMOTIONAL_SHORTFALL);
+    expect(state.current!.offersCredits).toBe(true);
+
+    // Credits bought since: nothing of the refusal is left standing.
+    applyCredits(2200, { marketplaceSpendableCredits: 1000 });
+    update({ target: paid });
+    expect(state.current!.shortfall).toBe(0);
+    expect(state.current!.shortfallMessage).toBeNull();
+    expect(state.current!.error).toBeNull();
+    expect(state.current!.offersCredits).toBe(false);
+  });
+
+  it('prices the shortfall from the refusal when the host had no price to give', async () => {
+    authState.credits = 1200;
+    authState.marketplaceSpendableCredits = 1200;
+    authState.api.unlockBundleWithCredits.mockRejectedValue(insufficientCreditsError());
+    showConfirmDialog.mockResolvedValue(true);
+    const unpriced: BundleUnlockTarget = { ...paid, priceUsdCents: null, priceLabel: '900 credits' };
+    const { state } = renderHook({ target: unpriced, confirmWith: 'dialog' });
+
+    expect(state.current!.shortfall).toBe(0);
+    renderer.act(() => state.current!.request());
+    await settle();
+
+    expect(state.current!.shortfall).toBe(900);
+    expect(state.current!.shortfallMessage).toBe(PROMOTIONAL_SHORTFALL);
+    expect(state.current!.error).toBeNull();
+  });
+
+  it("keeps the server's words when its figures do not account for the refusal", async () => {
+    // The price rose to 1,200 under a screen that still shows 900.
+    authState.credits = 1000;
+    authState.marketplaceSpendableCredits = 1000;
+    authState.api.unlockBundleWithCredits.mockRejectedValue(insufficientCreditsError({
+      creditCost: 1200,
+      remainingCredits: 1000,
+      marketplaceSpendableCredits: 1000,
+    }));
+    const { state } = renderHook({ target: paid });
+
+    renderer.act(() => state.current!.request());
+    renderer.act(() => (showActionSheet.mock.calls[0]?.[0] as SheetRequest).actions[0]!.onPress());
+    await settle();
+
+    expect(state.current!.shortfall).toBe(0);
+    expect(state.current!.error).toBe('Insufficient credits. This unlock costs 1200 credits.');
+    expect(state.current!.offersCredits).toBe(true);
+  });
+
+  it('leaves the balance alone when the refusal could not say what was spendable', async () => {
+    authState.credits = 1200;
+    authState.marketplaceSpendableCredits = 1200;
+    authState.api.unlockBundleWithCredits.mockRejectedValue(insufficientCreditsError({ marketplaceSpendableCredits: null }));
+    const { state } = renderHook({ target: paid });
+
+    renderer.act(() => state.current!.request());
+    renderer.act(() => (showActionSheet.mock.calls[0]?.[0] as SheetRequest).actions[0]!.onPress());
+    await settle();
+
+    expect(authState.updateCredits).not.toHaveBeenCalled();
     expect(state.current!.error).toBe('Insufficient credits. This unlock costs 900 credits.');
     expect(state.current!.offersCredits).toBe(true);
   });

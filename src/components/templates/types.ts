@@ -32,6 +32,8 @@ export type MediaTemplate = {
   inputSlots: TemplateInputSlot[];
   outputKind: TemplateMediaKind;
   status: TemplateStatus;
+  /** Set when moderation took the template down; it stays disabled and cannot be republished. */
+  moderationDisabledAt: string | null;
   useCount: number;
   estimatedTotalCredits: number | null;
   createdAt: string;

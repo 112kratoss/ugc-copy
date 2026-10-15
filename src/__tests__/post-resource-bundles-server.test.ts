@@ -53,6 +53,11 @@ let bundlePresenceError: unknown;
 let postRow: Record<string, unknown> | null;
 let purchasedRevisionRow: Record<string, unknown> | null;
 let purchasedMediaRows: Record<string, unknown>[];
+// The seller dashboard's reads: paid orders, deletion audits, buyer profiles.
+let orderRows: Record<string, unknown>[];
+let deletionAuditRows: Record<string, unknown>[];
+let buyerProfileRows: Array<{ id: string; username: string | null; display_name: string | null; avatar_url: string | null }>;
+let profileReadError: unknown;
 
 // Calls through, so a test can see whether the bundle read asked posts itself.
 vi.mock('@/lib/nsfw-content-server', async (importOriginal) => {
@@ -96,6 +101,7 @@ vi.mock('@/lib/server-helpers', () => ({
     from(table: string) {
       if (table === 'post_resource_bundles') {
         let checksPresence = false;
+        let readsOwnerBundles = false;
         const query = {
           select() {
             return query;
@@ -104,7 +110,11 @@ vi.mock('@/lib/server-helpers', () => ({
             checksPresence = true;
             return query;
           },
-          eq() {
+          eq(column?: string) {
+            if (column === 'owner_user_id') readsOwnerBundles = true;
+            return query;
+          },
+          order() {
             return query;
           },
           async maybeSingle() {
@@ -114,6 +124,10 @@ vi.mock('@/lib/server-helpers', () => ({
             };
           },
           then(resolve: (value: { data: unknown[] | null; error: unknown }) => void) {
+            if (readsOwnerBundles) {
+              resolve({ data: bundleRow ? [bundleRow] : [], error: null });
+              return;
+            }
             resolve({
               data: checksPresence && bundleRow ? [{ post_id: bundleRow.post_id }] : [],
               error: checksPresence ? bundlePresenceError : null,
@@ -158,20 +172,32 @@ vi.mock('@/lib/server-helpers', () => ({
         return {
           select() {
             return {
-              async in() {
+              async in(_column: string, ids: string[]) {
+                if (profileReadError) return { data: null, error: profileReadError };
                 return {
                   data: [{
                     id: 'owner-1',
                     username: 'creator',
                     display_name: 'Creator',
                     avatar_url: null,
-                  }],
+                  }, ...buyerProfileRows].filter((row) => ids.includes(row.id)),
                   error: null,
                 };
               },
             };
           },
         };
+      }
+
+      if (table === 'post_resource_bundle_orders' || table === 'post_deletion_audits') {
+        const rows = table === 'post_resource_bundle_orders' ? orderRows : deletionAuditRows;
+        const query = {
+          select() { return query; },
+          in() { return query; },
+          eq() { return query; },
+          async order() { return { data: rows, error: null }; },
+        };
+        return query;
       }
 
       if (table === 'posts') {
@@ -425,6 +451,10 @@ describe('post resource bundle server access', () => {
       duration_seconds: null,
       sort_order: 0,
     }];
+    orderRows = [];
+    deletionAuditRows = [];
+    buyerProfileRows = [];
+    profileReadError = null;
   });
 
   it('keeps a published free recipe gated until the viewer adds it', async () => {
@@ -1092,6 +1122,95 @@ describe('post resource bundle server access', () => {
       const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'buyer-1' });
 
       expect(detail).toBeNull();
+    });
+  });
+
+  describe('the seller dashboard', () => {
+    const paidOrder = (id: string, buyerUserId: string) => ({
+      id,
+      bundle_id: 'bundle-1',
+      buyer_user_id: buyerUserId,
+      legacy_order_id: null,
+      amount_subunits: 900,
+      currency: 'USD',
+      created_at: '2026-07-03T00:00:00.000Z',
+    });
+
+    // 03-10: the dashboard is serialised into the seller's page, and a buyer
+    // with no handle used to be labelled with their raw account id.
+    it('labels each buyer by handle or name and never sends a buyer id', async () => {
+      const anonymousBuyerId = '6f1c2a4e-1111-4222-8333-444455556666';
+      orderRows = [
+        paidOrder('order-1', 'buyer-with-handle'),
+        paidOrder('order-2', 'buyer-with-name'),
+        paidOrder('order-3', anonymousBuyerId),
+      ];
+      buyerProfileRows = [
+        { id: 'buyer-with-handle', username: 'maya', display_name: 'Maya R', avatar_url: null },
+        { id: 'buyer-with-name', username: null, display_name: 'Sam Buyer', avatar_url: null },
+        { id: anonymousBuyerId, username: null, display_name: '   ', avatar_url: null },
+      ];
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.sales.map((sale) => sale.buyerLabel)).toEqual(['@maya', 'Sam Buyer', 'A buyer']);
+      for (const sale of dashboard.sales) expect(sale).not.toHaveProperty('buyerUserId');
+      const serialized = JSON.stringify(dashboard);
+      for (const buyerId of ['buyer-with-handle', 'buyer-with-name', anonymousBuyerId]) {
+        expect(serialized).not.toContain(buyerId);
+      }
+    });
+
+    it('calls every buyer "A buyer" when the buyer profiles cannot be read', async () => {
+      const anonymousBuyerId = '6f1c2a4e-1111-4222-8333-444455556666';
+      orderRows = [paidOrder('order-1', anonymousBuyerId)];
+      profileReadError = new Error('profiles unavailable');
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.sales.map((sale) => sale.buyerLabel)).toEqual(['A buyer']);
+      expect(JSON.stringify(dashboard)).not.toContain(anonymousBuyerId);
+      consoleError.mockRestore();
+    });
+
+    // 03-4: deleting a post with buyers tombstones it and its bundle stays,
+    // so the same post was listed once as a bundle and again as deleted.
+    it('lists a post deleted with buyers once, as its tombstoned bundle', async () => {
+      postRow = {
+        ...(postRow as Record<string, unknown>),
+        visibility: 'private',
+        archived_at: '2026-07-02T00:00:00.000Z',
+        tombstoned_at: '2026-07-02T00:00:00.000Z',
+      };
+      const deletionAudit = (id: string, postId: string | null) => ({
+        id,
+        post_id: postId,
+        title: 'Deleted post',
+        visibility: 'public',
+        source_kind: 'magicbooklet',
+        bundle_access_mode: 'paid',
+        bundle_status: 'published',
+        bundle_price_usd_cents: 900,
+        bundle_resource_kinds: ['prompt'],
+        sales_count: 2,
+        earnings_usd_cents: 1530,
+        had_paid_orders: true,
+        deleted_at: '2026-07-02T00:00:00.000Z',
+      });
+      deletionAuditRows = [
+        deletionAudit('audit-tombstoned', 'post-1'),
+        deletionAudit('audit-removed', 'post-removed'),
+        deletionAudit('audit-legacy', null),
+      ];
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.bundles.map((bundle) => [bundle.postId, bundle.post?.tombstoned])).toEqual([['post-1', true]]);
+      expect(dashboard.deletedSnapshots.map((snapshot) => snapshot.id)).toEqual(['audit-removed', 'audit-legacy']);
     });
   });
 

@@ -453,7 +453,7 @@ describe('verifyPostResourceBundlePaymentForRoute', () => {
 
 describe('alerts for a recipe bought on the web', () => {
   // The real alerts, written to notification history: what a purchase made in
-  // the app writes, "Post resources unlocked" and "Someone unlocked your post".
+  // the app writes, "Post resources unlocked" and "You made a sale".
   const purchaseAlerts = [
     expect.objectContaining({
       user_id: 'buyer-1',
@@ -466,8 +466,8 @@ describe('alerts for a recipe bought on the web', () => {
       user_id: 'owner-1',
       actor_user_id: 'buyer-1',
       type: 'post_resource_unlocked',
-      category: 'social',
-      deep_link: '/showcase/post-1',
+      category: 'commerce',
+      deep_link: '/seller-dashboard',
       dedupe_key: 'post-resource-sale:post-1:buyer-1',
     }),
   ];

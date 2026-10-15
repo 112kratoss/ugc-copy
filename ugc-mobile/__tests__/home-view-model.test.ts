@@ -5,7 +5,6 @@ import {
   formatCompactCount,
   formatRelativeTime,
   formatUsdCents,
-  getOwnerPostSalesSummary,
 } from '../lib/home-view-model';
 
 describe('home view model', () => {
@@ -28,37 +27,13 @@ describe('home view model', () => {
     expect(formatUsdCents(4280)).toBe('$42.80');
   });
 
-  it('summarizes seller post earnings for the side menu wallet', () => {
-    expect(getOwnerPostSalesSummary([
-      {
-        id: 'post-1',
-        title: 'Portal pack',
-        createdAt: '2026-05-13T10:00:00.000Z',
-        visibility: 'public',
-        mediaUrl: null,
-        mediaKind: 'image',
-        commentCount: 0,
-        bundle: {
-          id: 'bundle-1',
-          accessMode: 'paid',
-          status: 'published',
-          priceUsdCents: 1200,
-          salesCount: 2,
-          earningsUsdCents: 2400,
-          resourceKinds: ['prompt'],
-        },
-      },
-      {
-        id: 'post-2',
-        title: 'Free notes',
-        createdAt: '2026-05-13T11:00:00.000Z',
-        visibility: 'public',
-        mediaUrl: null,
-        mediaKind: null,
-        commentCount: 0,
-        bundle: null,
-      },
-    ])).toEqual({ salesCount: 2, earningsUsdCents: 2400 });
+  // 03-9: "$5" here and "$5.00" on the web for the same amount.
+  it('prints dollars with their cents, as the web does', () => {
+    expect(formatUsdCents(500)).toBe('$5.00');
+    expect(formatUsdCents(10_000)).toBe('$100.00');
+    expect(formatUsdCents(123_456)).toBe('$1,234.56');
+    expect(formatUsdCents(5)).toBe('$0.05');
+    expect(formatUsdCents(0)).toBe('$0.00');
+    expect(formatUsdCents(null)).toBe('$0.00');
   });
-
 });

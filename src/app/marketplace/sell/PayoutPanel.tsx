@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { BadgeCheck, CircleAlert, Loader2, Wallet } from 'lucide-react';
+import { BadgeCheck, CircleAlert, Loader2, RefreshCw, Wallet } from 'lucide-react';
 
 import { supabase } from '@/lib/supabase';
 
@@ -25,10 +25,21 @@ type PayoutState = {
 };
 
 const PAYOUT_METHODS = [
-  { value: 'upi', label: 'UPI' },
-  { value: 'bank_transfer', label: 'Bank transfer' },
-  { value: 'paypal', label: 'PayPal' },
+  { value: 'upi', label: 'UPI', placeholder: 'your-name@bank' },
+  { value: 'bank_transfer', label: 'Bank transfer', placeholder: 'Account name and last 4 digits, plus a contact' },
+  { value: 'paypal', label: 'PayPal', placeholder: 'Your PayPal email' },
 ] as const;
+
+type PayoutMethod = (typeof PAYOUT_METHODS)[number]['value'];
+
+// The server refuses details past this length (creator-payouts.ts) with a
+// message that does not say the text was too long.
+const PAYOUT_DETAILS_MAX_LENGTH = 500;
+
+// The server keeps the method's id ("bank_transfer"); the seller reads its name.
+function formatPayoutMethod(value: string): string {
+  return PAYOUT_METHODS.find((option) => option.value === value)?.label ?? value.replace(/_/g, ' ');
+}
 
 function formatDate(value: string): string {
   const parsed = new Date(value);
@@ -40,11 +51,18 @@ function formatDate(value: string): string {
 export default function PayoutPanel() {
   const [state, setState] = useState<PayoutState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [method, setMethod] = useState<string>('upi');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [method, setMethod] = useState<PayoutMethod>('upi');
   const [details, setDetails] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // A request the server accepted whose follow-up read failed. The balance on
+  // screen is the one from before the request, so the form stays away (a
+  // second click would only meet the one-open-request 409) until a read shows
+  // the pending payout.
+  const [needsRefresh, setNeedsRefresh] = useState(false);
 
   const authHeaders = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -77,13 +95,32 @@ export default function PayoutPanel() {
       }
     })();
     return () => { cancelled = true; };
-  }, [load]);
+  }, [load, loadAttempt]);
+
+  const retryLoad = () => {
+    setError(null);
+    setIsLoading(true);
+    setLoadAttempt((attempt) => attempt + 1);
+  };
+
+  const refreshAfterRequest = async () => {
+    setIsRefreshing(true);
+    try {
+      setState(await load());
+      setNeedsRefresh(false);
+    } catch {
+      setNeedsRefresh(true);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   const submit = async () => {
     setIsSubmitting(true);
     setError(null);
     setNotice(null);
 
+    let requested = false;
     try {
       const headers = await authHeaders();
       const response = await fetch('/api/creator/payouts', {
@@ -91,21 +128,25 @@ export default function PayoutPanel() {
         headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({ payoutMethod: method, payoutDetails: details.trim() }),
       });
-      const data = await response.json();
 
-      if (!response.ok) {
+      if (response.ok) {
+        requested = true;
+      } else {
+        const data = await response.json().catch(() => null) as { error?: unknown } | null;
         setError(typeof data?.error === 'string' ? data.error : 'Failed to request a payout.');
-        return;
       }
-
-      setNotice('Payout requested. We will settle it and update this page.');
-      setDetails('');
-      setState(await load());
     } catch {
       setError('Failed to request a payout.');
-    } finally {
-      setIsSubmitting(false);
     }
+
+    if (requested) {
+      // The request stands whatever the read after it says: a failed read asks
+      // for a refresh and never reads as a failed request.
+      setNotice('Payout requested. We will settle it and update this page.');
+      setDetails('');
+      await refreshAfterRequest();
+    }
+    setIsSubmitting(false);
   };
 
   if (isLoading) {
@@ -119,11 +160,24 @@ export default function PayoutPanel() {
 
   if (!state) {
     return (
-      <div className="rounded-2xl border border-red-400/20 bg-red-500/5 px-4 py-4 text-sm text-red-200">
-        {error ?? 'Failed to load your payout balance.'}
+      <div
+        role="alert"
+        className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-400/20 bg-red-500/5 px-4 py-4 text-sm text-red-200"
+      >
+        <span>{error ?? 'Failed to load your payout balance.'}</span>
+        <button
+          type="button"
+          onClick={retryLoad}
+          className="inline-flex items-center gap-2 rounded-full border border-red-300/25 bg-red-500/10 px-3.5 py-1.5 text-xs font-semibold text-red-100 transition hover:bg-red-500/20"
+        >
+          <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+          Retry
+        </button>
       </div>
     );
   }
+
+  const selectedMethod = PAYOUT_METHODS.find((option) => option.value === method) ?? PAYOUT_METHODS[0];
 
   return (
     <section className="rounded-3xl border border-white/8 bg-zinc-900/40 p-5">
@@ -146,11 +200,11 @@ export default function PayoutPanel() {
             {state.pendingRequest.amountUsd} payout in progress
           </div>
           <p className="mt-1 text-xs text-emerald-200/80">
-            Requested {formatDate(state.pendingRequest.requestedAt)} via {state.pendingRequest.payoutMethod}.
+            Requested {formatDate(state.pendingRequest.requestedAt)} via {formatPayoutMethod(state.pendingRequest.payoutMethod)}.
             We will update this once it is sent.
           </p>
         </div>
-      ) : state.canRequest ? (
+      ) : needsRefresh ? null : state.canRequest ? (
         <div className="mt-4 space-y-3">
           <div className="flex flex-wrap gap-2">
             {PAYOUT_METHODS.map((option) => (
@@ -175,13 +229,14 @@ export default function PayoutPanel() {
               type="text"
               value={details}
               onChange={(event) => setDetails(event.target.value)}
-              placeholder={method === 'upi' ? 'your-name@bank' : 'Account name and last 4 digits, plus a contact'}
+              maxLength={PAYOUT_DETAILS_MAX_LENGTH}
+              placeholder={selectedMethod.placeholder}
               className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm text-white outline-none focus:border-emerald-300/40"
             />
           </label>
           <p className="text-[11px] leading-4 text-zinc-500">
-            Never paste a full account number here. Send a UPI id, or the account name with the last
-            four digits and a contact we can reach you on.
+            Never paste a full account number here. Send a UPI id, your PayPal email, or the account
+            name with the last four digits and a contact we can reach you on.
           </p>
 
           <button
@@ -209,10 +264,23 @@ export default function PayoutPanel() {
       ) : null}
 
       {notice ? (
-        <p className="mt-3 flex items-start gap-2 text-xs text-emerald-300">
-          <BadgeCheck className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
-          {notice}
-        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-emerald-300">
+          <p className="flex items-start gap-2">
+            <BadgeCheck className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+            {notice}
+          </p>
+          {needsRefresh ? (
+            <button
+              type="button"
+              onClick={() => void refreshAfterRequest()}
+              disabled={isRefreshing}
+              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/25 bg-emerald-300/5 px-3 py-1 font-semibold text-emerald-200 transition hover:bg-emerald-300/10 disabled:opacity-50"
+            >
+              {isRefreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <RefreshCw className="h-3.5 w-3.5" aria-hidden />}
+              Refresh to see the update
+            </button>
+          ) : null}
+        </div>
       ) : null}
 
       {state.history.length > 0 ? (

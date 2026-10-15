@@ -139,8 +139,54 @@ describe('getServerAuthState', () => {
         },
       },
       credits: 42,
+      marketplaceSpendableCredits: 42,
     });
     expect(mocks.profileQuery.eq).toHaveBeenCalledWith('id', 'verified-user');
+  });
+
+  // A server-rendered page's provider never reads the profile again, so a
+  // recipe's shortfall is judged on this figure until something re-reads it.
+  it('leaves welcome and referral credits out of the spendable balance, read with the same row', async () => {
+    mocks.getSession.mockResolvedValue({
+      data: { session: cookieSessionThatRefusesToBeRead() },
+      error: null,
+    });
+    mocks.getClaims.mockResolvedValue({
+      data: { claims: { sub: 'verified-user', aud: 'authenticated' } },
+      error: null,
+    });
+    const { getServerAuthState } = await import('@/lib/supabase-server');
+
+    mocks.profileQuery.maybeSingle.mockResolvedValueOnce({
+      data: { credits: 1200, promotional_credits: 1200, display_name: 'Maya' },
+      error: null,
+    });
+    await expect(getServerAuthState()).resolves.toMatchObject({
+      credits: 1200,
+      marketplaceSpendableCredits: 0,
+      displayName: 'Maya',
+    });
+
+    mocks.profileQuery.maybeSingle.mockResolvedValueOnce({
+      data: { credits: 1500, promotional_credits: 300, display_name: null },
+      error: null,
+    });
+    await expect(getServerAuthState()).resolves.toMatchObject({
+      credits: 1500,
+      marketplaceSpendableCredits: 1200,
+    });
+
+    // No row: both figures are unknown, never a zero balance.
+    mocks.profileQuery.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
+    await expect(getServerAuthState()).resolves.toMatchObject({
+      credits: null,
+      marketplaceSpendableCredits: null,
+    });
+
+    expect(mocks.profileQuery.select).toHaveBeenCalledTimes(3);
+    for (const [columns] of mocks.profileQuery.select.mock.calls) {
+      expect(columns).toBe('credits, promotional_credits, display_name');
+    }
   });
 
   it('does not call the auth server on the read path', async () => {
@@ -234,6 +280,7 @@ describe('getServerAuthState', () => {
     await expect(getServerAuthState()).resolves.toEqual({
       session: e2eSession,
       credits: 2000,
+      marketplaceSpendableCredits: 2000,
     });
     expect(mocks.createServerClient).not.toHaveBeenCalled();
     expect(mocks.createServiceClient).not.toHaveBeenCalled();

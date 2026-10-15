@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPostResourceBundleLockedPreview,
   formatPostResourceBundleCountSummary,
+  formatPostResourceCompactPriceLabel,
   formatPostResourceCreditAmount,
   formatPostResourceDownloadName,
   formatPostResourceItemCountSummary,
   formatPostResourcePriceLabel,
+  getBundleAccessLabel,
   normalizePostResourceItems,
   normalizePostResourceSections,
   resolvePostRemixCapability,
@@ -546,6 +548,22 @@ describe('recipe price labels', () => {
     // Below 100 credits there is no cash checkout, so no cash figure either.
     expect(formatPostResourcePriceLabel(50, '$0.50')).toBe('50 credits');
     expect(formatPostResourcePriceLabel(99)).toBe('99 credits');
+  });
+
+  it('gives chips and badges one figure, never a cash one for a credits-only recipe', () => {
+    expect(formatPostResourceCompactPriceLabel(900, '$9.00')).toBe('$9.00');
+    expect(formatPostResourceCompactPriceLabel(1500, '₹1,250.00')).toBe('₹1,250.00');
+    expect(formatPostResourceCompactPriceLabel(100)).toBe('$1.00');
+    expect(formatPostResourceCompactPriceLabel(50, '$0.50')).toBe('50 credits');
+    expect(formatPostResourceCompactPriceLabel(90, '₹76')).toBe('90 credits');
+  });
+
+  it('labels a listed recipe free, or by its one-figure price', () => {
+    expect(getBundleAccessLabel('free', 500)).toBe('Free recipe');
+    expect(getBundleAccessLabel('paid', 0)).toBe('Free recipe');
+    expect(getBundleAccessLabel('paid', 900)).toBe('$9.00');
+    expect(getBundleAccessLabel('paid', 900, '₹750')).toBe('₹750');
+    expect(getBundleAccessLabel('paid', 50, '$0.50')).toBe('50 credits');
   });
 
   it('groups thousands the same way everywhere and counts one credit as one', () => {

@@ -106,17 +106,59 @@ const sourceToolRows = vi.hoisted(() => ({
   ],
 }));
 const createServiceClientMock = vi.hoisted(() => vi.fn());
+// Recipes attached to posts, as `post_resource_bundles` rows.
+const bundleRows = vi.hoisted(() => ({ value: [] as Array<Record<string, unknown>> }));
+// The owner's profile, which the listing check reads for the seller identity.
+const sellerProfile = vi.hoisted(() => ({
+  value: null as Record<string, unknown> | null,
+  error: null as unknown,
+}));
+// Production lists bundles through the compact summary RPC; without it the
+// service falls back to selecting the bundle rows.
+const compactSummaryRpc = vi.hoisted(() => ({ enabled: false }));
+const initialPostRows = postRows.value.slice();
+
+function pickColumns(row: Record<string, unknown>, selectedColumns: string) {
+  const columns = selectedColumns.split(',').map((column) => column.trim()).filter(Boolean);
+  return Object.fromEntries(columns.filter((column) => column in row).map((column) => [column, row[column]]));
+}
 
 function createQuery(table: string) {
   const filters = new Map<string, unknown>();
+  const nullColumns: string[] = [];
+  const notNullColumns: string[] = [];
   let inFilter: { column: string; values: string[] } | null = null;
+  let selectedColumns = '';
+  let rangeBounds: [number, number] | null = null;
+
+  // The owner list query: equality and null filters, the inner-joined bundle
+  // a listings-only read embeds, newest first, then the requested range.
+  const listPosts = () => {
+    const postIdsWithBundles = new Set(bundleRows.value.map((row) => row.post_id));
+    const rows = (postRows.value as Array<Record<string, unknown>>)
+      .filter((post) => [...filters].every(([column, value]) => post[column] === value))
+      .filter((post) => nullColumns.every((column) => post[column] == null))
+      .filter((post) => notNullColumns.every((column) => post[column] != null))
+      .filter((post) => !selectedColumns.includes('post_resource_bundles!inner') || postIdsWithBundles.has(post.id))
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)) || String(b.id).localeCompare(String(a.id)));
+    return rangeBounds ? rows.slice(rangeBounds[0], rangeBounds[1] + 1) : rows;
+  };
 
   const query = {
-    select() {
+    select(columns?: string) {
+      selectedColumns = columns ?? '';
       return query;
     },
     eq(column: string, value: unknown) {
       filters.set(column, value);
+      return query;
+    },
+    is(column: string) {
+      nullColumns.push(column);
+      return query;
+    },
+    not(column: string) {
+      notNullColumns.push(column);
       return query;
     },
     in(column: string, values: string[]) {
@@ -126,7 +168,17 @@ function createQuery(table: string) {
     order() {
       return query;
     },
+    range(from: number, to: number) {
+      rangeBounds = [from, to];
+      return query;
+    },
     async maybeSingle() {
+      if (table === 'profiles') {
+        return sellerProfile.error
+          ? { data: null, error: sellerProfile.error }
+          : { data: sellerProfile.value, error: null };
+      }
+
       if (table !== 'posts') {
         return { data: null, error: null };
       }
@@ -140,8 +192,16 @@ function createQuery(table: string) {
       return { data: row ?? null, error: null };
     },
     then(resolve: (value: { data: unknown[]; error: null }) => void) {
+      if (table === 'posts') {
+        resolve({ data: listPosts(), error: null });
+        return;
+      }
+
       if (table === 'post_resource_bundles') {
-        resolve({ data: [], error: null });
+        const rows = bundleRows.value
+          .filter((row) => !inFilter || (inFilter.column === 'post_id' && inFilter.values.includes(row.post_id as string)))
+          .map((row) => pickColumns(row, selectedColumns));
+        resolve({ data: rows, error: null });
         return;
       }
 
@@ -173,6 +233,27 @@ vi.mock('@/lib/server-helpers', () => ({
 
     return {
       from: (table: string) => createQuery(table),
+      // Like the SQL: summary columns and the computed kinds, none of the text
+      // the listing check grades and no retired_at.
+      ...(compactSummaryRpc.enabled
+        ? {
+            rpc: async (name: string, args: { p_post_ids: string[] }) => {
+              if (name !== 'get_owner_post_bundle_summaries') {
+                return { data: null, error: { code: 'PGRST202', message: `Could not find ${name}` } };
+              }
+
+              return {
+                data: bundleRows.value
+                  .filter((row) => args.p_post_ids.includes(row.post_id as string))
+                  .map((row) => ({
+                    ...pickColumns(row, 'id, post_id, access_mode, status, price_usd_cents, sales_count, earnings_usd_cents'),
+                    resource_kinds: row.prompt_text ? ['prompt'] : [],
+                  })),
+                error: null,
+              };
+            },
+          }
+        : {}),
       storage: {
         from: () => ({
           getPublicUrl: (path: string) => ({
@@ -189,7 +270,10 @@ vi.mock('@/lib/server-helpers', () => ({
   )),
 }));
 
-vi.mock('@/lib/post-resource-bundles-server', () => ({
+vi.mock('@/lib/post-resource-bundles-server', async (importOriginal) => ({
+  // The real check, so the owner list grades a listing exactly as the web sell page does.
+  assessOwnerListingQuality: (await importOriginal<typeof import('@/lib/post-resource-bundles-server')>())
+    .assessOwnerListingQuality,
   getPostResourceBundleDetailByPostId: vi.fn(async () => null),
 }));
 
@@ -197,6 +281,11 @@ describe('owner posts', () => {
   beforeEach(() => {
     vi.resetModules();
     createServiceClientMock.mockReset();
+    postRows.value = initialPostRows.slice();
+    bundleRows.value = [];
+    sellerProfile.value = { username: 'maya-creates', display_name: 'Maya R', avatar_url: null };
+    sellerProfile.error = null;
+    compactSummaryRpc.enabled = false;
   });
 
   it('loads structured source tools for edit prefill', async () => {
@@ -262,5 +351,188 @@ describe('owner posts', () => {
 
     expect(post?.id).toBe('post-1');
     expect(createServiceClientMock).toHaveBeenCalledTimes(1);
+  });
+
+  // 03-3 / 03-7: the app found listings by paging every own post and filtering
+  // on the client, and drew "Published · Public" for listings buyers cannot
+  // see: the owner list carried no moderation state, no listing check, no
+  // retirement and no tombstone.
+  describe('listings for the seller dashboard', () => {
+    const listingPost = (id: string, createdAt: string, overrides: Record<string, unknown> = {}) => ({
+      id,
+      user_id: 'user-1',
+      generation_id: null,
+      visibility: 'public',
+      archived_at: null,
+      archived_by_user_id: null,
+      tombstoned_at: null,
+      review_status: 'visible',
+      output_url: null,
+      showcase_asset_path: null,
+      prompt: null,
+      title: 'Golden hour portrait recipe',
+      description: '',
+      body: 'Warm portraits lit by the last hour of sun.',
+      category: 'image',
+      post_format: 'media',
+      source_kind: 'external',
+      source_tool: null,
+      source_tool_slug: null,
+      comment_count: 0,
+      created_at: createdAt,
+      updated_at: createdAt,
+      ...overrides,
+    });
+    const recipe = (postId: string, overrides: Record<string, unknown> = {}) => ({
+      id: `bundle-${postId}`,
+      post_id: postId,
+      access_mode: 'paid',
+      status: 'published',
+      price_usd_cents: 900,
+      sales_count: 2,
+      earnings_usd_cents: 1530,
+      title: 'Golden hour portrait',
+      summary: 'Prompt and lighting notes for warm portraits.',
+      preview_text: '',
+      prompt_text: 'A warm golden hour portrait with soft rim light.',
+      notes_markdown: null,
+      workflow_share_url: null,
+      workflow_snapshot: null,
+      attachments: [],
+      resource_sections: [],
+      resource_items: [],
+      allow_remix: false,
+      retired_at: null,
+      ...overrides,
+    });
+    const deletedAt = '2026-07-03T00:00:00.000Z';
+
+    beforeEach(() => {
+      postRows.value = [
+        ...initialPostRows,
+        listingPost('listing-ready', '2026-07-01T00:00:00.000Z'),
+        listingPost('listing-flagged', '2026-07-02T00:00:00.000Z', { review_status: 'flagged' }),
+        listingPost('listing-deleted', deletedAt, {
+          visibility: 'private',
+          archived_at: deletedAt,
+          archived_by_user_id: 'user-1',
+          tombstoned_at: deletedAt,
+        }),
+        listingPost('plain-post', '2026-07-04T00:00:00.000Z'),
+      ] as unknown as typeof postRows.value;
+      bundleRows.value = [
+        recipe('listing-ready'),
+        recipe('listing-flagged'),
+        recipe('listing-deleted', { status: 'draft', retired_at: deletedAt }),
+      ];
+    });
+
+    it('pages through posts with a recipe only, newest first', async () => {
+      const { getOwnerPostList } = await import('@/lib/owner-posts');
+      const everything = { includeArchived: true, visibility: 'all' as const };
+
+      const listings = await getOwnerPostList('user-1', { ...everything, listingsOnly: true });
+      const secondPage = await getOwnerPostList('user-1', { ...everything, listingsOnly: true, limit: 2, offset: 1 });
+      const allPosts = await getOwnerPostList('user-1', everything);
+
+      expect(listings.map((post) => post.id)).toEqual(['listing-deleted', 'listing-flagged', 'listing-ready']);
+      expect(secondPage.map((post) => post.id)).toEqual(['listing-flagged', 'listing-ready']);
+      expect(allPosts.map((post) => post.id)).toEqual([
+        'plain-post',
+        'listing-deleted',
+        'listing-flagged',
+        'listing-ready',
+        'post-3',
+        'post-2',
+        'post-1',
+      ]);
+    });
+
+    it.each([
+      ['the compact summary RPC', true],
+      ['the bundle select fallback', false],
+    ])('carries moderation, the listing check, retirement and the tombstone through %s', async (_label, rpcEnabled) => {
+      compactSummaryRpc.enabled = rpcEnabled;
+      const { getOwnerPostList } = await import('@/lib/owner-posts');
+
+      const listings = await getOwnerPostList('user-1', { includeArchived: true, visibility: 'all', listingsOnly: true });
+      const byId = new Map(listings.map((post) => [post.id, post]));
+
+      expect(byId.get('listing-ready')).toMatchObject({
+        tombstonedAt: null,
+        bundle: {
+          resourceKinds: ['prompt'],
+          reviewStatus: 'visible',
+          quality: { eligible: true, message: null },
+          retiredAt: null,
+        },
+      });
+      expect(byId.get('listing-flagged')?.bundle).toMatchObject({
+        reviewStatus: 'flagged',
+        quality: {
+          eligible: false,
+          message: 'Publish a visible public post before listing this recipe in the marketplace.',
+        },
+      });
+      expect(byId.get('listing-deleted')).toMatchObject({
+        tombstonedAt: deletedAt,
+        bundle: { status: 'draft', retiredAt: deletedAt, quality: { eligible: false } },
+      });
+    });
+
+    it('grades with the web sell page\'s display title and seller identity', async () => {
+      // An untitled recipe shows as "Recipe" on the dashboard and passes there;
+      // a generated handle is the identity issue it names.
+      bundleRows.value = [recipe('listing-ready', { title: '  ' })];
+      const { getOwnerPostList } = await import('@/lib/owner-posts');
+
+      const [titled] = await getOwnerPostList('user-1', { listingsOnly: true });
+      sellerProfile.value = { username: 'creator-1a2b3c4d', display_name: null, avatar_url: null };
+      const [unclaimed] = await getOwnerPostList('user-1', { listingsOnly: true });
+
+      expect(titled.bundle?.quality).toEqual({ eligible: true, message: null });
+      expect(unclaimed.bundle?.quality).toEqual({
+        eligible: false,
+        message: 'Choose a custom handle and add your display name before publishing a recipe.',
+      });
+    });
+
+    it('reports the check unknown, not failed, when the seller profile cannot be read', async () => {
+      sellerProfile.error = new Error('profiles unavailable');
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { getOwnerPostList } = await import('@/lib/owner-posts');
+
+      const listings = await getOwnerPostList('user-1', { includeArchived: true, listingsOnly: true });
+
+      expect(listings.map((post) => post.bundle?.quality)).toEqual([null, null, null]);
+      expect(listings.map((post) => post.bundle?.reviewStatus)).toEqual(['visible', 'flagged', 'visible']);
+      consoleError.mockRestore();
+    });
+
+    it('serves listingsOnly=1 on the owner posts route with paging and fields intact', async () => {
+      compactSummaryRpc.enabled = true;
+      const { listOwnerPostsForRoute } = await import('@/lib/owner-post-list-route-service');
+
+      const result = await listOwnerPostsForRoute({
+        userId: 'user-1',
+        searchParams: new URLSearchParams({
+          scope: 'owner',
+          listingsOnly: '1',
+          includeArchived: 'true',
+          visibility: 'all',
+          limit: '2',
+        }),
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        pageInfo: { hasMore: true, limit: 2, nextOffset: 2, offset: 0 },
+      });
+      if (!result.ok) return;
+      expect(result.posts).toMatchObject([
+        { id: 'listing-deleted', tombstonedAt: deletedAt, bundle: { retiredAt: deletedAt } },
+        { id: 'listing-flagged', bundle: { reviewStatus: 'flagged', quality: { eligible: false } } },
+      ]);
+    });
   });
 });

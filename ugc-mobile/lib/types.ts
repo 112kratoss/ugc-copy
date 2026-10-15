@@ -403,6 +403,8 @@ export interface MediaTemplateSummary {
   creator: MediaTemplateCreator | null;
   inputSlots: MediaTemplateInputSlot[];
   outputKind: 'image' | 'video';
+  /** Set when moderation took the template down; it stays disabled and cannot be republished. */
+  moderationDisabledAt: string | null;
   status: 'draft' | 'active' | 'disabled';
   estimatedTotalCredits: number | null;
   useCount: number;
@@ -1471,6 +1473,9 @@ export interface MarketplaceResourceDetailResponse {
   bundle: MarketplaceResourceDetail;
 }
 
+/** A post's moderation state: anything but 'visible' keeps its recipe off the marketplace. */
+export type OwnerPostReviewStatus = 'visible' | 'flagged' | 'hidden';
+
 export interface OwnerPostBundleSummary {
   id: string;
   accessMode: 'free' | 'paid';
@@ -1479,6 +1484,15 @@ export interface OwnerPostBundleSummary {
   salesCount: number;
   earningsUsdCents: number;
   resourceKinds: PostResourceKind[];
+  /** The post's moderation state, as the web sell page reads it. */
+  reviewStatus?: OwnerPostReviewStatus | null;
+  /**
+   * The marketplace's listing check and its first issue, graded by the server
+   * as the web sell page grades it; null when it could not be graded.
+   */
+  quality?: { eligible: boolean; message: string | null } | null;
+  /** Set once the creator removed the recipe after it had buyers; it is no longer sold. */
+  retiredAt?: string | null;
 }
 
 export interface OwnerPostListItem {
@@ -1506,6 +1520,11 @@ export interface OwnerPostListItem {
   ownerPath?: string;
   bundle: OwnerPostBundleSummary | null;
   archivedAt?: string | null;
+  /**
+   * Set when the owner deleted the post while it had buyers: it is kept for
+   * them, and the server refuses to edit or restore it (409 POST_DELETED).
+   */
+  tombstonedAt?: string | null;
   generationId?: string | null;
   sourceTool?: string | null;
   sourceToolSlug?: string | null;
@@ -1544,11 +1563,29 @@ export interface MobileCommerceSyncResponse {
   success: boolean;
   entitlement: 'credits' | 'marketplace_unlock' | 'post_resource_unlock';
   credits?: number | null;
+  /**
+   * The part of `credits` that can still buy creator resources (a post
+   * resource unlock answers it): welcome and referral credits cannot.
+   */
+  marketplaceSpendableCredits?: number | null;
   referralBonusCredits?: number;
   alreadyProcessed?: boolean;
   assetId?: string;
   postId?: string;
   message?: string;
+}
+
+/**
+ * The 402 a credit unlock answers (`ApiError.details`, code
+ * `INSUFFICIENT_CREDITS`). The total can cover the price and still be refused,
+ * because only `marketplaceSpendableCredits` of it can be spent.
+ */
+export interface InsufficientCreditsResponse {
+  error: string;
+  code: 'INSUFFICIENT_CREDITS';
+  creditCost: number;
+  remainingCredits: number | null;
+  marketplaceSpendableCredits: number | null;
 }
 
 export type MobilePushPlatform = 'ios' | 'android';
@@ -1561,6 +1598,8 @@ export type MobileNotificationType =
   | 'credits_purchased'
   | 'referral_reward_earned'
   | 'referral_reward_reversed'
+  | 'creator_payout_paid'
+  | 'creator_payout_rejected'
   | 'purchases_restored'
   | 'marketplace_unlocked'
   | 'post_resource_unlocked'

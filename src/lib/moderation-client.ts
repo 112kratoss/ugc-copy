@@ -2,9 +2,9 @@
  * The safety actions the web offers, as the app sends them
  * (`ugc-mobile/components/home-dashboard.tsx`, `creator-profile-screen.tsx`,
  * `lib/use-viewer-action-handlers.ts`): report a post, report its creator,
- * block its creator, report what a model made for you. All of them need a
- * registered account; the server answers 401 to a guest or a signed-out
- * request.
+ * block its creator, report what a model made for you, report a template. All
+ * of them need a registered account; the server answers 401 to a guest or a
+ * signed-out request.
  */
 
 export class ModerationRequestError extends Error {
@@ -164,6 +164,39 @@ export function reportGeneration({
     reason: 'offensive_ai_output',
     sourceSurface: 'generation-viewer',
     details: 'Reported from the web Studio.',
+  });
+}
+
+/**
+ * Why a template is reported. It is reported for what its page shows, so it
+ * takes the reasons a post's own content takes, less the two about a recipe
+ * and its purchase: a template has neither.
+ */
+export type TemplateReportReason = 'spam' | 'stolen_content' | 'unsafe_content' | 'other';
+
+/**
+ * A template goes to the moderation team, whose take-down disables it. A
+ * template is reported from its page alone, so the server names that surface
+ * itself. A second report while the first is still open answers 409.
+ */
+export function reportTemplate({
+  templateId,
+  accessToken,
+  reason,
+  details,
+}: {
+  templateId: string;
+  accessToken: string;
+  reason: TemplateReportReason;
+  /** The reporter's own words for the review team, sent only when there are some. */
+  details?: string | null;
+}) {
+  const note = details?.trim();
+  return postModerationRequest('/api/moderation/reports', accessToken, {
+    targetType: 'template',
+    targetId: templateId,
+    reason,
+    ...(note ? { details: note } : {}),
   });
 }
 

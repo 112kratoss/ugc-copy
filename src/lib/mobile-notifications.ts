@@ -21,6 +21,8 @@ export type MobileNotificationType =
   | 'purchases_restored'
   | 'marketplace_unlocked'
   | 'post_resource_unlocked'
+  | 'creator_payout_paid'
+  | 'creator_payout_rejected'
   | 'creator_followed'
   | 'post_saved'
   | 'post_remixed'
@@ -200,6 +202,8 @@ function asNotificationType(value: unknown): MobileNotificationType {
     type === 'purchases_restored' ||
     type === 'marketplace_unlocked' ||
     type === 'post_resource_unlocked' ||
+    type === 'creator_payout_paid' ||
+    type === 'creator_payout_rejected' ||
     type === 'creator_followed' ||
     type === 'post_saved' ||
     type === 'post_remixed' ||
@@ -408,6 +412,7 @@ export function buildMobileNotificationDeepLink(target:
   | { kind: 'showcasePost'; postId: string }
   | { kind: 'marketplaceResource'; resourceId: string }
   | { kind: 'creatorProfile'; username: string }
+  | { kind: 'sellerDashboard' }
   | { kind: 'notifications' }
 ) {
   if (target.kind === 'generation') {
@@ -439,6 +444,12 @@ export function buildMobileNotificationDeepLink(target:
 
   if (target.kind === 'creatorProfile') {
     return `/creators/${encodeURIComponent(target.username)}`;
+  }
+
+  if (target.kind === 'sellerDashboard') {
+    // The app's Your Sales, where the listings and the payout balance are. The
+    // web's seller page is /marketplace/sell (`resolveWebNotificationPath`).
+    return '/seller-dashboard';
   }
 
   return '/studio';
@@ -1939,6 +1950,15 @@ export async function notifyMarketplaceUnlockCompleted(
   });
 }
 
+/**
+ * Tells the buyer their resources are open, and the seller about the sale.
+ *
+ * The seller's alert is commerce, as a sale is: filed as social it went out at
+ * default priority and the social switch silenced it. It opens Your Sales,
+ * where the listing and the payout balance are. `free` says the buyer paid
+ * nothing, so the seller hears of an open rather than a sale; every other
+ * unlock (credits, a store purchase, a Razorpay checkout) is a sale.
+ */
 export async function notifyPostResourceUnlockCompleted(
   adminSupabase: SupabaseClient,
   params: {
@@ -1946,6 +1966,7 @@ export async function notifyPostResourceUnlockCompleted(
     ownerUserId: string;
     postId: string;
     bundleId?: string | null;
+    free?: boolean;
     alreadyProcessed?: boolean;
   }
 ) {
@@ -1969,13 +1990,60 @@ export async function notifyPostResourceUnlockCompleted(
     userId: params.ownerUserId,
     actorUserId: params.buyerUserId,
     type: 'post_resource_unlocked',
-    category: 'social',
-    title: 'Someone unlocked your post',
-    body: 'A creator opened the resources attached to your post.',
-    deepLink: buildMobileNotificationDeepLink({ kind: 'showcasePost', postId: params.postId }),
+    category: 'commerce',
+    title: params.free ? 'Someone opened your free resources' : 'You made a sale',
+    body: params.free
+      ? 'A creator opened the resources attached to your post.'
+      : 'A creator bought the resources attached to your post.',
+    deepLink: buildMobileNotificationDeepLink({ kind: 'sellerDashboard' }),
     objectType: 'post',
     objectId: params.postId,
     dedupeKey: `post-resource-sale:${params.postId}:${params.buyerUserId}`,
+  });
+}
+
+/** An operator's note closed as a sentence, so the line written after it reads as its own. */
+function asSentence(text: string) {
+  return /[.!?…]['"’”)\]]*$/u.test(text) ? text : `${text}.`;
+}
+
+/**
+ * Tells a seller what became of their payout request once an operator settled
+ * it. A paid request's money has left the platform. A rejected one's is back
+ * in the payout balance, so the seller can ask again once they know why: a
+ * rejection must carry a reason the seller can read, and until now only the
+ * web's payout history showed it. Both open Your Sales, where the balance is.
+ * Never throws: the payout is settled whatever becomes of the notification.
+ */
+export async function notifyCreatorPayoutResolved(
+  adminSupabase: SupabaseClient,
+  params: {
+    userId: string;
+    requestId: string;
+    status: 'paid' | 'rejected';
+    /** The request's amount as the payout panel prints it ("$150.00"). */
+    amountUsd: string;
+    /** The operator's note, as stored; a rejection always has one. */
+    reason: string | null;
+  },
+) {
+  const paid = params.status === 'paid';
+  const reason = params.reason?.trim();
+  const balanceLine = `${params.amountUsd} is back in your payout balance.`;
+
+  return createMobileNotificationSafely({
+    adminSupabase,
+    userId: params.userId,
+    type: paid ? 'creator_payout_paid' : 'creator_payout_rejected',
+    category: 'commerce',
+    title: paid ? 'Payout sent' : 'Payout not sent',
+    body: paid
+      ? `We sent ${params.amountUsd} to your payout account.`
+      : (reason ? `${asSentence(reason)} ${balanceLine}` : balanceLine),
+    deepLink: buildMobileNotificationDeepLink({ kind: 'sellerDashboard' }),
+    objectType: 'creator_payout_request',
+    objectId: params.requestId,
+    dedupeKey: `creator-payout:${params.requestId}:${params.status}`,
   });
 }
 

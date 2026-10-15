@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
 import { mediaItemAspectRatio } from '../lib/media-zoom-transition';
 import {
+  FALLBACK_PROFILE_MEDIA,
   OWN_PROFILE_SHARE_SOURCE,
   generationToProfileMediaCard,
   getOwnerPostScopeCounts,
   getProfileStats,
+  getWalletCardContent,
   UNKNOWN_PROFILE_STAT_VALUE,
   ownProfileShareUrl,
   ownerPostToProfileMediaCard,
@@ -513,6 +515,48 @@ describe('the Posts scope counts', () => {
   it('counts the loaded tiles without totals', () => {
     expect(getOwnerPostScopeCounts(null, { active: 2, archived: 1 })).toEqual({ active: 2, archived: 1 });
     expect(getOwnerPostScopeCounts(undefined, { active: 0, archived: 0 })).toEqual({ active: 0, archived: 0 });
+  });
+});
+
+describe('the signed-out sample tiles', () => {
+  it('open where each kind of item is found or made, and the Post sample never opens Your Sales', () => {
+    expect(FALLBACK_PROFILE_MEDIA.map(({ label, href }) => [label, href])).toEqual([
+      ['Saved', '/showcase'],
+      ['Creation', '/(tabs)/creator'],
+      ['Post', '/post/new'],
+    ]);
+  });
+});
+
+// 03-2: the Wallet card draws the payout state's withdrawable balance, not the
+// lifetime earnings a payout request never lowers.
+describe('the Wallet card', () => {
+  it('shows the balance that can be withdrawn, and says so', () => {
+    expect(getWalletCardContent({ data: { availableUsd: '$4.25' }, isError: false })).toEqual({
+      value: '$4.25',
+      caption: 'Available to withdraw',
+      accessibilityLabel: 'Wallet, $4.25 available to withdraw',
+    });
+  });
+
+  it('draws the unknown dash until the payout state answers', () => {
+    for (const data of [undefined, null]) {
+      expect(getWalletCardContent({ data, isError: false })).toEqual({
+        value: UNKNOWN_PROFILE_STAT_VALUE,
+        caption: 'Available to withdraw',
+        accessibilityLabel: 'Wallet, balance loading',
+      });
+    }
+  });
+
+  it('says the balance is unavailable when the read fails, over any balance read before it', () => {
+    const unavailable = {
+      value: UNKNOWN_PROFILE_STAT_VALUE,
+      caption: 'Balance unavailable',
+      accessibilityLabel: 'Wallet, balance unavailable',
+    };
+    expect(getWalletCardContent({ data: undefined, isError: true })).toEqual(unavailable);
+    expect(getWalletCardContent({ data: { availableUsd: '$40.00' }, isError: true })).toEqual(unavailable);
   });
 });
 

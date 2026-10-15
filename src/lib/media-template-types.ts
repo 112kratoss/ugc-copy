@@ -26,6 +26,7 @@ export type MediaTemplateDto = {
   name: string;
   description: string | null;
   category: string;
+  /** The demo clip. Lists leave it null: their cards show the poster only. */
   videoUrl: string | null;
   thumbnailUrl: string | null;
   creatorUserId: string | null;
@@ -33,6 +34,8 @@ export type MediaTemplateDto = {
   inputSlots: TemplateInputSlot[];
   outputKind: TemplateMediaKind | null;
   status: MediaTemplateStatus;
+  /** Set when moderation took the template down: it stays disabled and cannot be republished. */
+  moderationDisabledAt: string | null;
   useCount: number;
   estimatedTotalCredits: number | null;
   createdAt: string;

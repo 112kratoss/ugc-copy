@@ -250,6 +250,19 @@ export function prepareUnlockedResourcesForDetails(
   return { resources: prepared, hasRemixAccess, isEmpty };
 }
 
+/**
+ * The section a link asks the Details page to lead with: a card's Read more
+ * opens the part holding the text it previewed, and a recipe found in search
+ * opens on the creator's resources, as the web search opens the post at
+ * `#recipe`.
+ */
+export type PostDetailsSection = 'story' | 'prompt' | 'resources';
+
+/** A route param read as a section; anything the page has no section for opens it as usual. */
+export function readPostDetailsSection(value: string | null | undefined): PostDetailsSection | undefined {
+  return value === 'story' || value === 'prompt' || value === 'resources' ? value : undefined;
+}
+
 export function getDetailsBackLabel(item: Pick<ImmersivePreviewItem, 'previewKind'>) {
   if (item.previewKind === 'audio') return 'Back to audio';
   return item.previewKind === 'text' ? 'Back to post' : 'Back to media';

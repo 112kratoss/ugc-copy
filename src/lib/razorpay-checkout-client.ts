@@ -55,6 +55,22 @@ function paymentErrorMessage(body: Record<string, unknown>) {
     : 'Payment verification failed.';
 }
 
+/**
+ * The bearer for a verify attempt, or for a read after a payment, taken from the
+ * browser's session at that moment. The buyer can spend minutes in the sheet,
+ * long enough for the token held at the click to expire. The client is loaded
+ * on first use, as the auth provider loads it, so a page that never takes a
+ * payment never fetches it.
+ */
+export async function readCheckoutAccessToken(): Promise<string> {
+  const { supabase } = await import('@/lib/supabase');
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) {
+    throw new Error('The session ended while the payment was being made.');
+  }
+  return session.access_token;
+}
+
 export async function verifyRazorpayCheckoutUntilSettled({
   body,
   fetcher = fetch,
@@ -143,4 +159,104 @@ export function pollCreditBalanceAfterPayment({
     window.clearInterval(intervalId);
     window.clearTimeout(timeoutId);
   };
+}
+
+/**
+ * What a recipe checkout says once the sheet has taken the money and the page
+ * could not see the purchase settle: never a failure, never "try again".
+ */
+export const RECIPE_PAYMENT_RECEIVED_MESSAGE = "Payment received. Your recipe opens here once it's confirmed.";
+
+/** The part of a post's recipe read that says whether this viewer has it. */
+export interface RecipeBundleAccess {
+  viewerCanAccess: boolean;
+  viewerIsOwner: boolean;
+}
+
+const BUNDLE_REFRESH_WINDOW_MS = 60_000;
+const BUNDLE_REFRESH_INTERVAL_MS = 5_000;
+
+/**
+ * Reads a post's recipe now and every few seconds for a minute, each read with
+ * the session's token as it is then, and hands the first read that shows it
+ * unlocked to `onUnlocked`. A recipe payment this page could not see settle (a
+ * verify that failed after the sheet took the money, or one still capturing)
+ * is settled by Razorpay's webhook, which can land after the verify stopped
+ * asking. A capture can outlast the minute, so the tab's next focus (the buyer
+ * back from their bank app, say) reads once more. Reads never overlap, and one
+ * that fails is simply the next one's turn. Returns the function that stops it.
+ */
+export function pollBundleUntilUnlocked<TBundle extends RecipeBundleAccess>({
+  fetcher = fetch,
+  intervalMs = BUNDLE_REFRESH_INTERVAL_MS,
+  onUnlocked,
+  postId,
+  token,
+  windowMs = BUNDLE_REFRESH_WINDOW_MS,
+}: {
+  fetcher?: typeof fetch;
+  intervalMs?: number;
+  onUnlocked: (bundle: TBundle) => void;
+  postId: string;
+  token: () => Promise<string>;
+  windowMs?: number;
+}): () => void {
+  let stopped = false;
+  let timeoutId: number | null = null;
+  let readsLeft = 1 + Math.max(0, Math.floor(windowMs / intervalMs));
+
+  const readUnlockedBundle = async (): Promise<TBundle | null> => {
+    try {
+      const response = await fetcher(`/api/posts/${postId}/resource-bundle`, {
+        headers: { Authorization: `Bearer ${await token()}` },
+      });
+      const parsed: unknown = await response.json().catch(() => null);
+      const bundle = isRecord(parsed) && isRecord(parsed.bundle) ? parsed.bundle : null;
+      return response.ok && bundle && (bundle.viewerCanAccess === true || bundle.viewerIsOwner === true)
+        ? bundle as unknown as TBundle
+        : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const stop = () => {
+    stopped = true;
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+    window.removeEventListener('focus', readOnFocus);
+  };
+
+  const read = async (scheduleNext: boolean) => {
+    const bundle = await readUnlockedBundle();
+    if (stopped) {
+      return;
+    }
+    if (bundle) {
+      stop();
+      onUnlocked(bundle);
+      return;
+    }
+    if (!scheduleNext) {
+      return;
+    }
+    readsLeft -= 1;
+    if (readsLeft > 0) {
+      timeoutId = window.setTimeout(() => {
+        timeoutId = null;
+        void read(true);
+      }, intervalMs);
+    } else {
+      window.addEventListener('focus', readOnFocus, { once: true });
+    }
+  };
+
+  function readOnFocus() {
+    void read(false);
+  }
+
+  void read(true);
+  return stop;
 }

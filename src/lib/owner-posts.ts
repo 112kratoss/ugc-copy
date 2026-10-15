@@ -1,5 +1,6 @@
 import { mediaLibraryBoundaryFilter, type MediaLibraryBoundary } from '@/lib/media-library-cursor';
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import {
   getPostResourceKinds,
@@ -11,12 +12,16 @@ import {
   type PostResourceBundleStatus,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
-import { getPostResourceBundleDetailByPostId } from '@/lib/post-resource-bundles-server';
+import {
+  assessOwnerListingQuality,
+  getPostResourceBundleDetailByPostId,
+} from '@/lib/post-resource-bundles-server';
 import {
   deriveTitleFromBody,
   getPostMediaKind,
   isMissingPostResourceBundlesSchemaError,
   isMissingPostResourceItemsColumnError,
+  isMissingPostResourceRetirementColumnError,
   isMissingPostSourceToolSlugColumnError,
   isMissingPostTextColumnsError,
   normalizeLegacyPostFormat,
@@ -46,6 +51,8 @@ import {
   type ShowcaseVisibility,
 } from '@/lib/showcase';
 
+type OwnerPostReviewStatus = 'visible' | 'flagged' | 'hidden';
+
 type OwnerPostRow = PostMediaRow & {
   id: string;
   user_id: string;
@@ -54,6 +61,8 @@ type OwnerPostRow = PostMediaRow & {
   is_nsfw?: boolean;
   archived_at: string | null;
   archived_by_user_id: string | null;
+  tombstoned_at: string | null;
+  review_status: OwnerPostReviewStatus | null;
   prompt: string | null;
   title: string | null;
   description: string | null;
@@ -68,7 +77,10 @@ type OwnerPostRow = PostMediaRow & {
   updated_at: string;
 };
 
-type LegacyOwnerPostRow = Omit<OwnerPostRow, 'body' | 'post_format' | 'archived_at' | 'archived_by_user_id' | 'updated_at'>;
+type LegacyOwnerPostRow = Omit<
+  OwnerPostRow,
+  'body' | 'post_format' | 'archived_at' | 'archived_by_user_id' | 'tombstoned_at' | 'review_status' | 'updated_at'
+>;
 
 type BundleSummaryRow = {
   id: string;
@@ -87,6 +99,18 @@ type BundleSummaryRow = {
   resource_items?: unknown;
   allow_remix?: boolean;
   resource_kinds?: PostResourceKind[] | null;
+  title?: string | null;
+  summary?: string | null;
+  preview_text?: string | null;
+  retired_at?: string | null;
+};
+
+type BundleListingFieldsRow = Pick<BundleSummaryRow, 'post_id' | 'title' | 'summary' | 'preview_text' | 'retired_at'>;
+
+type OwnerSellerProfile = {
+  username: string | null;
+  display_name: string | null;
+  avatar_url: string | null;
 };
 
 type PostSourceToolRow = {
@@ -106,6 +130,12 @@ interface OwnerPostBundleSummary {
   salesCount: number;
   earningsUsdCents: number;
   resourceKinds: PostResourceKind[];
+  /** The post's moderation state: anything but 'visible' keeps the recipe off the marketplace. */
+  reviewStatus: OwnerPostReviewStatus | null;
+  /** The web sell page's listing check and its first issue; null when its inputs could not be read. */
+  quality: { eligible: boolean; message: string | null } | null;
+  /** Set once the creator removed the recipe after it had buyers; it can no longer be sold. */
+  retiredAt: string | null;
 }
 
 export interface OwnerPostListItem {
@@ -114,6 +144,11 @@ export interface OwnerPostListItem {
   visibility: ShowcaseVisibility;
   isNsfw?: boolean;
   archivedAt: string | null;
+  /**
+   * Set when the owner deleted the post while it had buyers: it is kept for
+   * them, and restore and edit answer 409 POST_DELETED.
+   */
+  tombstonedAt?: string | null;
   mediaUrl: string | null;
   mediaKind: ShowcaseMediaKind | null;
   mediaItems: PostMediaSummary[];
@@ -184,6 +219,10 @@ function normalizeBundleResources(row: BundleSummaryRow): PostResourceBundleReso
   };
 }
 
+// Inner-joining the bundle keeps only listings (posts with a recipe) in the
+// query itself, so a page of listings is a whole page and offsets stay true.
+const LISTINGS_ONLY_EMBED = ', post_resource_bundles!inner(id)';
+
 async function fetchOwnerPostRows(
   adminSupabase: ServiceClient,
   userId: string,
@@ -193,13 +232,16 @@ async function fetchOwnerPostRows(
     offset?: number;
     after?: MediaLibraryBoundary;
     visibility: OwnerPostVisibilityFilter;
+    listingsOnly?: boolean;
   }
 ): Promise<OwnerPostRow[]> {
-  const { includeArchived, limit, offset = 0, visibility, after } = options;
+  const { includeArchived, limit, offset = 0, visibility, after, listingsOnly = false } = options;
+  const listingsEmbed = listingsOnly ? LISTINGS_ONLY_EMBED : '';
   let query = adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, is_nsfw, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, comment_count, created_at, updated_at'
+      'id, user_id, generation_id, is_nsfw, visibility, archived_at, archived_by_user_id, tombstoned_at, review_status, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, comment_count, created_at, updated_at'
+        + listingsEmbed
     )
     .eq('user_id', userId)
     .order('created_at', { ascending: false })
@@ -224,7 +266,8 @@ async function fetchOwnerPostRows(
     const withoutSourceToolSlugQuery = adminSupabase
       .from('posts')
       .select(
-        'id, user_id, generation_id, is_nsfw, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, comment_count, created_at, updated_at'
+        'id, user_id, generation_id, is_nsfw, visibility, archived_at, archived_by_user_id, tombstoned_at, review_status, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, comment_count, created_at, updated_at'
+          + listingsEmbed
       )
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
@@ -248,7 +291,7 @@ async function fetchOwnerPostRows(
       throw withoutSourceToolSlugResult.error;
     }
 
-    return ((withoutSourceToolSlugResult.data ?? []) as Array<Omit<OwnerPostRow, 'source_tool_slug'>>).map((row) => ({
+    return ((withoutSourceToolSlugResult.data ?? []) as unknown as Array<Omit<OwnerPostRow, 'source_tool_slug'>>).map((row) => ({
       ...row,
       source_tool_slug: null,
     }));
@@ -259,6 +302,7 @@ async function fetchOwnerPostRows(
       .from('posts')
       .select(
         'id, user_id, generation_id, is_nsfw, visibility, output_url, showcase_asset_path, prompt, title, description, category, source_kind, source_tool, comment_count, created_at'
+          + listingsEmbed
       )
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
@@ -286,6 +330,8 @@ async function fetchOwnerPostRows(
       source_tool_slug: null,
       archived_at: null,
       archived_by_user_id: null,
+      tombstoned_at: null,
+      review_status: null,
       updated_at: row.created_at,
     }));
   }
@@ -294,7 +340,7 @@ async function fetchOwnerPostRows(
     throw result.error;
   }
 
-  return (result.data ?? []) as OwnerPostRow[];
+  return (result.data ?? []) as unknown as OwnerPostRow[];
 }
 
 async function fetchOwnerPostRow(
@@ -305,7 +351,7 @@ async function fetchOwnerPostRow(
   const result = await adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, is_nsfw, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, comment_count, created_at, updated_at'
+      'id, user_id, generation_id, is_nsfw, visibility, archived_at, archived_by_user_id, tombstoned_at, review_status, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, comment_count, created_at, updated_at'
     )
     .eq('id', postId)
     .eq('user_id', userId)
@@ -315,7 +361,7 @@ async function fetchOwnerPostRow(
     const withoutSourceToolSlugResult = await adminSupabase
       .from('posts')
       .select(
-        'id, user_id, generation_id, is_nsfw, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, comment_count, created_at, updated_at'
+        'id, user_id, generation_id, is_nsfw, visibility, archived_at, archived_by_user_id, tombstoned_at, review_status, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, comment_count, created_at, updated_at'
       )
       .eq('id', postId)
       .eq('user_id', userId)
@@ -359,6 +405,8 @@ async function fetchOwnerPostRow(
       source_tool_slug: null,
       archived_at: null,
       archived_by_user_id: null,
+      tombstoned_at: null,
+      review_status: null,
       updated_at: row.created_at,
     };
   }
@@ -370,18 +418,55 @@ async function fetchOwnerPostRow(
   return (result.data as OwnerPostRow | null) ?? null;
 }
 
+// What the listing check grades a bundle on, beside the summary columns.
+const BUNDLE_LISTING_COLUMNS = 'title, summary, preview_text';
+
+// The compact summary RPC predates the listing check: the text it grades and
+// `retired_at` are read beside it, a few short columns per bundle.
+async function loadBundleListingFields(adminSupabase: ServiceClient, postIds: string[]) {
+  const loadFields = (selectColumns: string) =>
+    adminSupabase
+      .from('post_resource_bundles')
+      .select(selectColumns)
+      .in('post_id', postIds);
+
+  let { data, error } = await loadFields(`post_id, ${BUNDLE_LISTING_COLUMNS}, retired_at`);
+  // A database that predates the bundle-revisions migration has no retired_at.
+  if (isMissingPostResourceRetirementColumnError(error)) {
+    ({ data, error } = await loadFields(`post_id, ${BUNDLE_LISTING_COLUMNS}`));
+  }
+
+  if (error) {
+    if (isMissingPostResourceBundlesSchemaError(error)) {
+      return new Map<string, BundleListingFieldsRow>();
+    }
+
+    throw error;
+  }
+
+  return new Map(
+    ((data ?? []) as unknown as BundleListingFieldsRow[]).map((row) => [row.post_id, row])
+  );
+}
+
 async function loadBundleMap(adminSupabase: ServiceClient, postIds: string[]) {
   if (postIds.length === 0) {
     return new Map<string, BundleSummaryRow>();
   }
 
   if (typeof (adminSupabase as unknown as { rpc?: unknown }).rpc === 'function') {
-    const compactResult = await adminSupabase.rpc('get_owner_post_bundle_summaries', {
-      p_post_ids: postIds,
-    });
+    const [compactResult, listingFields] = await Promise.all([
+      adminSupabase.rpc('get_owner_post_bundle_summaries', {
+        p_post_ids: postIds,
+      }),
+      loadBundleListingFields(adminSupabase, postIds),
+    ]);
     if (!compactResult.error) {
       return new Map(
-        ((compactResult.data ?? []) as unknown as BundleSummaryRow[]).map((row) => [row.post_id, row])
+        ((compactResult.data ?? []) as unknown as BundleSummaryRow[]).map((row) => [
+          row.post_id,
+          { ...listingFields.get(row.post_id), ...row },
+        ])
       );
     }
 
@@ -395,16 +480,19 @@ async function loadBundleMap(adminSupabase: ServiceClient, postIds: string[]) {
   }
 
   const selectWithItems =
-    'id, post_id, access_mode, status, price_usd_cents, sales_count, earnings_usd_cents, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, resource_sections, resource_items, allow_remix';
+    `id, post_id, access_mode, status, price_usd_cents, sales_count, earnings_usd_cents, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, resource_sections, resource_items, allow_remix, ${BUNDLE_LISTING_COLUMNS}`;
   const selectLegacy =
-    'id, post_id, access_mode, status, price_usd_cents, sales_count, earnings_usd_cents, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix';
+    `id, post_id, access_mode, status, price_usd_cents, sales_count, earnings_usd_cents, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, ${BUNDLE_LISTING_COLUMNS}`;
   const loadBundles = (selectColumns: string) =>
     adminSupabase
       .from('post_resource_bundles')
       .select(selectColumns)
       .in('post_id', postIds);
 
-  let { data, error } = await loadBundles(selectWithItems);
+  let { data, error } = await loadBundles(`${selectWithItems}, retired_at`);
+  if (isMissingPostResourceRetirementColumnError(error)) {
+    ({ data, error } = await loadBundles(selectWithItems));
+  }
   if (isMissingPostResourceItemsColumnError(error)) {
     ({ data, error } = await loadBundles(selectLegacy));
   }
@@ -469,13 +557,79 @@ async function loadSourceToolsMap(adminSupabase: ServiceClient, postIds: string[
   return sourceToolsMap;
 }
 
+// The seller half of the listing check; null when the read fails, so the check
+// reads as unknown instead of blaming a handle it never saw.
+async function loadOwnerSellerProfile(
+  adminSupabase: ServiceClient,
+  userId: string
+): Promise<OwnerSellerProfile | null> {
+  const { data, error } = await adminSupabase
+    .from('profiles')
+    .select('username, display_name, avatar_url')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error) {
+    logBackendError('owner_post_seller_profile_load_failed', { error });
+    return null;
+  }
+
+  const profile = data as Partial<OwnerSellerProfile> | null;
+  return {
+    username: profile?.username ?? null,
+    display_name: profile?.display_name ?? null,
+    avatar_url: profile?.avatar_url ?? null,
+  };
+}
+
+function toOwnerListingQuality(
+  row: OwnerPostRow,
+  bundleRow: BundleSummaryRow,
+  resourceKinds: PostResourceKind[],
+  post: { title: string; mediaUrl: string | null; mediaKind: ShowcaseMediaKind | null },
+  sellerProfile: OwnerSellerProfile | null
+): OwnerPostBundleSummary['quality'] {
+  if (!sellerProfile || typeof bundleRow.title !== 'string') {
+    return null;
+  }
+
+  const assessment = assessOwnerListingQuality({
+    ownerUserId: row.user_id,
+    ownerProfile: sellerProfile,
+    bundle: {
+      title: bundleRow.title,
+      summary: bundleRow.summary,
+      previewText: bundleRow.preview_text,
+      accessMode: bundleRow.access_mode,
+      priceUsdCents: bundleRow.price_usd_cents,
+      resourceKinds,
+    },
+    post: {
+      title: post.title,
+      body: row.body,
+      postFormat: row.post_format,
+      visibility: row.visibility,
+      archivedAt: row.archived_at,
+      reviewStatus: row.review_status,
+      mediaUrl: post.mediaUrl,
+      mediaKind: post.mediaKind,
+    },
+  });
+
+  return {
+    eligible: assessment.eligible,
+    message: assessment.issues[0]?.message ?? null,
+  };
+}
+
 async function toOwnerPostListItem(
   adminSupabase: ServiceClient,
   row: OwnerPostRow,
   bundleMap: Map<string, BundleSummaryRow>,
   sourceToolsMap: Map<string, SourceToolSelection[]>,
   mediaItemsMap: Map<string, PostMediaSummary[]>,
-  generationPreviewMap: Map<string, GenerationPreviewInfo>
+  generationPreviewMap: Map<string, GenerationPreviewInfo>,
+  sellerProfile: OwnerSellerProfile | null
 ) {
   const rawMediaItems = mediaItemsMap.get(row.id) ?? await buildLegacyPostMediaItems({
     supabase: adminSupabase,
@@ -499,6 +653,11 @@ async function toOwnerPostListItem(
   const normalizedBundleResources = bundleRow && !bundleRow.resource_kinds
     ? normalizeBundleResources(bundleRow)
     : null;
+  const resourceKinds = bundleRow?.resource_kinds ?? getPostResourceKinds(normalizedBundleResources);
+  const title =
+    row.title?.trim() ||
+    deriveTitleFromBody(row.body) ||
+    getOwnerPostTitleFallback(row.post_format);
 
   return {
     id: row.id,
@@ -506,13 +665,11 @@ async function toOwnerPostListItem(
     visibility: row.visibility,
     isNsfw: row.is_nsfw === true,
     archivedAt: row.archived_at,
+    tombstonedAt: row.tombstoned_at ?? null,
     mediaUrl,
     mediaKind,
     mediaItems,
-    title:
-      row.title?.trim() ||
-      deriveTitleFromBody(row.body) ||
-      getOwnerPostTitleFallback(row.post_format),
+    title,
     // Editors must hydrate from this, never from `title`: PATCHing the display
     // fallback back turns it into a stored title the marketplace placeholder
     // gate rejects, leaving the post unsavable.
@@ -542,7 +699,10 @@ async function toOwnerPostListItem(
           priceUsdCents: bundleRow.price_usd_cents,
           salesCount: bundleRow.sales_count,
           earningsUsdCents: bundleRow.earnings_usd_cents,
-          resourceKinds: bundleRow.resource_kinds ?? getPostResourceKinds(normalizedBundleResources),
+          resourceKinds,
+          reviewStatus: row.review_status ?? null,
+          quality: toOwnerListingQuality(row, bundleRow, resourceKinds, { title, mediaUrl, mediaKind }, sellerProfile),
+          retiredAt: bundleRow.retired_at ?? null,
         }
       : null,
   } satisfies OwnerPostListItem;
@@ -556,6 +716,8 @@ export async function getOwnerPostList(
     offset?: number;
     after?: MediaLibraryBoundary;
     visibility?: OwnerPostVisibilityFilter;
+    /** Only posts with a recipe: the seller dashboard's listings. */
+    listingsOnly?: boolean;
   }
 ): Promise<OwnerPostListItem[]> {
   const includeArchived = options?.includeArchived ?? false;
@@ -567,14 +729,20 @@ export async function getOwnerPostList(
     offset: options?.offset,
     after: options?.after,
     visibility,
+    listingsOnly: options?.listingsOnly === true,
   });
   const postIds = rows.map((row) => row.id);
   // Signed only for the covers that will actually be grafted onto, without
   // moving the generation read off the parallel path — see
   // `loadGenerationPreviewInfoMap`.
   const mediaItemsPromise = loadPostMediaItemsMap(adminSupabase, postIds);
-  const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap] = await Promise.all([
-    loadBundleMap(adminSupabase, postIds),
+  const bundleMapPromise = loadBundleMap(adminSupabase, postIds);
+  // Only a page with a recipe on it asks for the seller's identity.
+  const sellerProfilePromise = bundleMapPromise.then((bundles) => (
+    bundles.size > 0 ? loadOwnerSellerProfile(adminSupabase, userId) : null
+  ));
+  const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap, sellerProfile] = await Promise.all([
+    bundleMapPromise,
     loadSourceToolsMap(adminSupabase, postIds),
     mediaItemsPromise,
     loadGenerationPreviewInfoMap(
@@ -588,6 +756,7 @@ export async function getOwnerPostList(
         )),
       },
     ),
+    sellerProfilePromise,
   ]);
   const filteredRows = rows.filter((row) => {
     if (visibility === 'archived') {
@@ -602,7 +771,7 @@ export async function getOwnerPostList(
   });
 
   return Promise.all(filteredRows.map((row) =>
-    toOwnerPostListItem(adminSupabase, row, bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap)
+    toOwnerPostListItem(adminSupabase, row, bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap, sellerProfile)
   ));
 }
 
@@ -620,8 +789,12 @@ export async function getOwnerPostDetail(
   }
 
   const mediaItemsPromise = loadPostMediaItemsMap(adminSupabase, [row.id]);
-  const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap] = await Promise.all([
-    loadBundleMap(adminSupabase, [row.id]),
+  const bundleMapPromise = loadBundleMap(adminSupabase, [row.id]);
+  const sellerProfilePromise = bundleMapPromise.then((bundles) => (
+    bundles.size > 0 ? loadOwnerSellerProfile(adminSupabase, userId) : null
+  ));
+  const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap, sellerProfile] = await Promise.all([
+    bundleMapPromise,
     loadSourceToolsMap(adminSupabase, [row.id]),
     mediaItemsPromise,
     loadGenerationPreviewInfoMap(
@@ -633,8 +806,17 @@ export async function getOwnerPostDetail(
         )),
       },
     ),
+    sellerProfilePromise,
   ]);
-  const listItem = await toOwnerPostListItem(adminSupabase, row, bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap);
+  const listItem = await toOwnerPostListItem(
+    adminSupabase,
+    row,
+    bundleMap,
+    sourceToolsMap,
+    mediaItemsMap,
+    generationPreviewMap,
+    sellerProfile,
+  );
   const bundleDetail = await getPostResourceBundleDetailByPostId(postId, {
     viewerUserId: userId,
     countryCode: options?.countryCode ?? null,

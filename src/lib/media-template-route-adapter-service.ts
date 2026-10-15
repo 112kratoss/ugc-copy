@@ -18,6 +18,7 @@ import {
   getMediaTemplate,
   listActiveMediaTemplatesPage,
   listOwnedMediaTemplates,
+  loadMediaTemplateRow,
   publishMediaTemplate,
   updateMediaTemplate,
   validateMediaTemplateGraph,
@@ -129,17 +130,6 @@ export function createMediaTemplatesRouteHandlers() {
   };
 }
 
-export function createOwnedMediaTemplatesRouteHandlers() {
-  return {
-    GET: (request: Request) => respond(request, async () => {
-      const auth = await getTemplateApiAuth(request);
-      return {
-        body: { templates: await listOwnedMediaTemplates(auth.adminClient, auth.userId!) },
-      };
-    }),
-  };
-}
-
 export function createMediaTemplateValidationRouteHandlers() {
   return {
     POST: (request: Request) => respond(request, async () => {
@@ -201,20 +191,45 @@ export function createMediaTemplatePublishRouteHandlers() {
   };
 }
 
+/**
+ * Starting a run of a template that is not live answers everyone "Template
+ * not found.". Its creator also gets TEMPLATE_NOT_ACTIVE, so a page opened on
+ * their own draft or disabled template can say why instead of offering a
+ * retry that cannot work. Nobody else learns that a hidden template exists.
+ */
+async function explainOwnTemplateRefusal(
+  client: SupabaseClient,
+  identifier: string,
+  userId: string,
+  error: unknown,
+): Promise<unknown> {
+  if (!(error instanceof MediaTemplateError) || error.code !== 'TEMPLATE_NOT_FOUND') return error;
+  // This read only explains the refusal; when it fails, the refusal stands.
+  const row = await loadMediaTemplateRow(client, identifier).catch(() => null);
+  const isLive = row?.status === 'active' && row.is_active === true && Boolean(row.active_version_id);
+  return row && row.creator_user_id === userId && !isLive
+    ? new MediaTemplateError(error.message, 404, 'TEMPLATE_NOT_ACTIVE')
+    : error;
+}
+
 export function createMediaTemplateRunsRouteHandlers({ isTest = false } = {}) {
   return {
     POST: (request: Request, context: IdContext) => respond(request, async () => {
       const { id } = await context.params;
       const auth = await mutationAuth(request);
-      const run = await createTemplateRun({
-        client: auth.adminClient,
-        templateId: id,
-        userId: auth.userId!,
-        isTest,
-        body: await readOptionalBody(request),
-        idempotencyKey: request.headers.get('idempotency-key'),
-      });
-      return { body: { run }, status: 201 };
+      try {
+        const run = await createTemplateRun({
+          client: auth.adminClient,
+          templateId: id,
+          userId: auth.userId!,
+          isTest,
+          body: await readOptionalBody(request),
+          idempotencyKey: request.headers.get('idempotency-key'),
+        });
+        return { body: { run }, status: 201 };
+      } catch (error) {
+        throw isTest ? error : await explainOwnTemplateRefusal(auth.adminClient, id, auth.userId!, error);
+      }
     }),
   };
 }

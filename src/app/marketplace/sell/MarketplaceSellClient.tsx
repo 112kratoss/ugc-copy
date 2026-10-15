@@ -1,13 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import { ArrowRight, Copy, ExternalLink, Layers3, Wallet } from 'lucide-react';
 
 import { formatBundleAccessLabel, type MarketplaceQualityAssessment } from '@/lib/marketplace-trust';
 import {
-  formatUsdCents,
+  formatPostResourcePriceLabel,
   formatUnlockCountLabel,
+  formatUsdCents,
+  getBundleAccessLabel,
   getPostResourceKindLabel,
   type MarketplacePriceQuote,
 } from '@/lib/post-resource-bundles';
@@ -35,6 +37,8 @@ interface SellerBundle {
     title: string;
     visibility: string;
     archivedAt: string | null;
+    /** The seller deleted the post after a sale; buyers keep the recipe. */
+    tombstoned?: boolean;
     reviewStatus?: 'visible' | 'flagged' | 'hidden';
     saveCount?: number;
     remixCount?: number;
@@ -79,6 +83,37 @@ interface MarketplaceSellClientProps {
   initialDashboard: SellerDashboardPayload;
 }
 
+const subscribeToHydration = () => () => undefined;
+const getHydratedSnapshot = () => true;
+const getServerHydratedSnapshot = () => false;
+
+// The page is rendered on the server, in UTC and the server's locale, and
+// hydrated in the seller's zone and locale; a time formatted for the browser
+// there did not match the server's text. The server and the first client pass
+// print the same fixed form, and the hydrated page redraws it locally.
+const SERVER_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+  timeZone: 'UTC',
+});
+
+function formatSellerTimestamp(value: string, hydrated: boolean): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  return hydrated
+    ? date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+    : `${SERVER_TIMESTAMP_FORMATTER.format(date)} UTC`;
+}
+
+// A fixed locale for the same reason: the default one is the server's on the
+// server and the seller's in the browser.
+function formatSaleAmount(amountSubunits: number, currency: SellerSale['currency']): string {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amountSubunits / 100);
+}
+
 function getListingHealth(bundle: SellerBundle): { label: 'Ready' | 'Needs work' | 'Draft' } {
   if (bundle.status !== 'published') {
     return { label: 'Draft' };
@@ -98,7 +133,16 @@ export default function MarketplaceSellClient({
   const deletedSnapshots = initialDashboard.deletedSnapshots ?? [];
   const [datePreset, setDatePreset] = useState<'7d' | '30d' | 'all'>('30d');
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    getHydratedSnapshot,
+    getServerHydratedSnapshot
+  );
   const sellerReturnPath = '/marketplace/sell';
+  // An edit comes back here (`returnTo`); `from` names this page, as this
+  // page's "Share a post" links do.
+  const buildEditPostHref = (postId: string, hash = '') =>
+    `/post/${postId}/edit?from=seller&returnTo=${encodeURIComponent(sellerReturnPath)}${hash}`;
   const dashboardGeneratedAt = initialDashboard.generatedAt
     ? new Date(initialDashboard.generatedAt).getTime()
     : initialDashboard.sales.reduce((latest, sale) => Math.max(latest, new Date(sale.createdAt).getTime()), 0);
@@ -261,14 +305,13 @@ export default function MarketplaceSellClient({
                 {initialDashboard.bundles.map((bundle) => {
                   const accessLabel = formatBundleAccessLabel({
                     accessMode: bundle.accessMode,
-                    priceQuote: bundle.priceQuote ?? {
-                      currency: 'USD',
-                      amountSubunits: bundle.priceUsdCents,
-                      formatted: formatUsdCents(bundle.priceUsdCents),
-                      note: null,
-                    },
+                    priceUsdCents: bundle.priceUsdCents,
+                    priceQuote: bundle.priceQuote,
                   });
                   const health = getListingHealth(bundle);
+                  // A post deleted after a sale stays private and archived for its
+                  // buyers: it is not a listing to republish, edit or restore.
+                  const isDeletedPost = bundle.post?.tombstoned === true;
 
                   return (
                   <div
@@ -283,28 +326,34 @@ export default function MarketplaceSellClient({
                         <div className="mt-2 text-lg font-semibold text-white">{bundle.title}</div>
                       </div>
                       <div className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1 text-sm font-semibold text-emerald-50">
-                        {bundle.accessMode === 'free' ? 'Free' : bundle.priceQuote?.formatted ?? formatUsdCents(bundle.priceUsdCents)}
+                        {bundle.accessMode === 'free' ? 'Free' : formatPostResourcePriceLabel(bundle.priceUsdCents, bundle.priceQuote?.formatted)}
                       </div>
                     </div>
                     <p className="mt-3 line-clamp-3 text-sm leading-6 text-zinc-300">
                       {bundle.summary || bundle.previewText || 'Reusable value attached to this post.'}
                     </p>
                     <div className="mt-4 flex flex-wrap gap-2">
-                      <div className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${
-                        health.label === 'Ready'
-                          ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-50'
-                          : health.label === 'Needs work'
-                            ? 'border-rose-400/20 bg-rose-500/10 text-rose-50'
-                          : 'border-amber-400/20 bg-amber-500/10 text-amber-50'
-                      }`}>
-                        {health.label}
-                      </div>
-                      {bundle.post?.visibility ? (
+                      {isDeletedPost ? (
+                        <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
+                          Deleted · buyers keep access
+                        </div>
+                      ) : (
+                        <div className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${
+                          health.label === 'Ready'
+                            ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-50'
+                            : health.label === 'Needs work'
+                              ? 'border-rose-400/20 bg-rose-500/10 text-rose-50'
+                            : 'border-amber-400/20 bg-amber-500/10 text-amber-50'
+                        }`}>
+                          {health.label}
+                        </div>
+                      )}
+                      {bundle.post?.visibility && !isDeletedPost ? (
                         <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
                           {bundle.post.archivedAt ? 'Archived post' : `${bundle.post.visibility} post`}
                         </div>
                       ) : null}
-                      {bundle.post?.reviewStatus && bundle.post.reviewStatus !== 'visible' ? (
+                      {!isDeletedPost && bundle.post?.reviewStatus && bundle.post.reviewStatus !== 'visible' ? (
                         <div className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${
                           bundle.post.reviewStatus === 'hidden'
                             ? 'border-rose-400/20 bg-rose-500/10 text-rose-50'
@@ -323,10 +372,15 @@ export default function MarketplaceSellClient({
                       ))}
                     </div>
                     <div className="mt-4 flex items-center justify-between text-xs text-zinc-500">
-                      <span>{formatUnlockCountLabel(bundle.accessMode, bundle.salesCount)}</span>
+                      <span>
+                        {formatUnlockCountLabel(bundle.accessMode, bundle.salesCount)}
+                        {bundle.accessMode === 'paid' || bundle.earningsUsdCents > 0
+                          ? ` · ${formatUsdCents(bundle.earningsUsdCents)} tracked earnings`
+                          : ''}
+                      </span>
                       <span>{bundle.post?.title || 'Post attached'}</span>
                     </div>
-                    {bundle.quality && !bundle.quality.eligible ? (
+                    {!isDeletedPost && bundle.quality && !bundle.quality.eligible ? (
                       <div className="mt-4 rounded-2xl border border-rose-400/20 bg-rose-500/10 p-3 text-sm leading-6 text-rose-50">
                         {bundle.quality.issues[0]?.message ?? 'Improve this listing before it appears in the marketplace.'}
                       </div>
@@ -338,7 +392,11 @@ export default function MarketplaceSellClient({
                     </div>
 
                     <div className="mt-5 flex flex-wrap gap-2">
-                      {bundle.post && !bundle.post.archivedAt && bundle.post.reviewStatus !== 'hidden' && (bundle.post.visibility === 'public' || bundle.post.visibility === 'unlisted') ? (
+                      {isDeletedPost ? (
+                        <p className="text-xs leading-5 text-zinc-500">
+                          This post was deleted. Buyers keep their copy.
+                        </p>
+                      ) : bundle.post && !bundle.post.archivedAt && bundle.post.reviewStatus !== 'hidden' && (bundle.post.visibility === 'public' || bundle.post.visibility === 'unlisted') ? (
                         <>
                           <Link
                             href={buildShowcaseDetailPath(bundle.postId, {
@@ -373,14 +431,14 @@ export default function MarketplaceSellClient({
                       ) : (
                         <>
                           <Link
-                            href={`/post/${bundle.postId}/edit`}
+                            href={buildEditPostHref(bundle.postId)}
                             className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                           >
                             <ExternalLink className="h-4 w-4" />
                             Open editor
                           </Link>
                           <Link
-                            href={`/post/${bundle.postId}/edit#recipe`}
+                            href={buildEditPostHref(bundle.postId, '#recipe')}
                             className="inline-flex items-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-50 transition hover:border-emerald-400/35 hover:bg-emerald-500/15"
                           >
                             <ArrowRight className="h-4 w-4" />
@@ -425,10 +483,10 @@ export default function MarketplaceSellClient({
                     <div key={sale.id} className="rounded-[22px] border border-white/8 bg-black/30 p-4">
                       <div className="text-sm font-medium text-white">{sale.bundleTitle}</div>
                       <div className="mt-1 text-xs text-zinc-500">
-                        {sale.buyerLabel} · {new Date(sale.createdAt).toLocaleString()}
+                        {sale.buyerLabel} · <time dateTime={sale.createdAt}>{formatSellerTimestamp(sale.createdAt, hydrated)}</time>
                       </div>
                       <div className="mt-2 text-sm text-zinc-300">
-                        {sale.currency} {(sale.amountSubunits / 100).toLocaleString()} unlocked
+                        {formatSaleAmount(sale.amountSubunits, sale.currency)} unlocked
                       </div>
                     </div>
                   ))
@@ -448,7 +506,7 @@ export default function MarketplaceSellClient({
                     <div>
                       <div className="text-lg font-semibold text-white">{snapshot.title}</div>
                       <div className="mt-2 text-xs uppercase tracking-[0.18em] text-zinc-500">
-                        Deleted {new Date(snapshot.deletedAt).toLocaleString()}
+                        Deleted <time dateTime={snapshot.deletedAt}>{formatSellerTimestamp(snapshot.deletedAt, hydrated)}</time>
                       </div>
                     </div>
                     <div className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
@@ -458,9 +516,7 @@ export default function MarketplaceSellClient({
                   <div className="mt-4 flex flex-wrap gap-2">
                     {snapshot.bundleAccessMode ? (
                       <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
-                        {snapshot.bundleAccessMode === 'free'
-                          ? 'Free recipe'
-                          : formatUsdCents(snapshot.bundlePriceUsdCents ?? 0)}
+                        {getBundleAccessLabel(snapshot.bundleAccessMode, snapshot.bundlePriceUsdCents ?? 0)}
                       </div>
                     ) : null}
                     {(snapshot.resourceKinds ?? []).map((kind) => (

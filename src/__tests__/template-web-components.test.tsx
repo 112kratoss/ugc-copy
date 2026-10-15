@@ -37,6 +37,7 @@ const template: MediaTemplate = {
   ],
   outputKind: 'video',
   status: 'active',
+  moderationDisabledAt: null,
   useCount: 23,
   estimatedTotalCredits: 14,
   createdAt: '2026-07-11T00:00:00.000Z',
@@ -53,6 +54,12 @@ describe('template web primitives', () => {
     expect(screen.getByText('23 uses')).toBeInTheDocument();
     expect(screen.getByText('14 credits')).toBeInTheDocument();
     expect(screen.getByRole('link')).toHaveAttribute('href', '/templates/rider-transformation');
+  });
+
+  it('says "1 use" for a template used once', () => {
+    render(<TemplateCard template={{ ...template, useCount: 1 }} />);
+
+    expect(screen.getByText('1 use')).toBeInTheDocument();
   });
 
   it('accepts the media kind declared by a dynamic input slot', () => {
