@@ -16,7 +16,9 @@
  * /signup, the guest's anonymous sign-up. None of them spends a refresh token,
  * so cutting one short fails only that attempt, with a retryable error, and
  * leaves any stored session as it was. Without it a stalled sign-in, or the
- * guest bootstrap Pricing waits on, never ended.
+ * guest bootstrap Pricing waits on, never ended. updateUser (PUT /user: the
+ * "Set up later" record, the name Apple shares at the first sign-in) holds the
+ * same lock and spends no refresh token either, so it gets the deadline too.
  *
  * A token refresh gets the deadline only while a sign-out is running. Outside
  * one, cutting a slow refresh short makes auth-js retry with a refresh token
@@ -26,7 +28,7 @@
  */
 
 type FetchInput = RequestInfo | URL;
-type AuthRequestKind = 'logout' | 'refresh' | 'sign-in';
+type AuthRequestKind = 'logout' | 'refresh' | 'sign-in' | 'user-update';
 
 export const SUPABASE_AUTH_REQUEST_DEADLINE_MS = 10_000;
 
@@ -45,7 +47,7 @@ export function createSupabaseAuthFetch({
     (fetcher ?? globalThis.fetch)(input, init);
 
   const authFetch = (input: FetchInput, init?: RequestInit): Promise<Response> => {
-    const kind = authRequestKind(input);
+    const kind = authRequestKind(input, init);
     if (!kind) return send(input, init);
 
     const controller = new AbortController();
@@ -100,7 +102,7 @@ export function createSupabaseAuthFetch({
 
 const SIGN_IN_GRANT_TYPES = new Set(['password', 'id_token', 'pkce']);
 
-function authRequestKind(input: FetchInput): AuthRequestKind | null {
+function authRequestKind(input: FetchInput, init?: RequestInit): AuthRequestKind | null {
   let url: URL;
   try {
     url = new URL(requestUrl(input));
@@ -109,12 +111,18 @@ function authRequestKind(input: FetchInput): AuthRequestKind | null {
   }
   if (url.pathname.endsWith('/auth/v1/logout')) return 'logout';
   if (url.pathname.endsWith('/auth/v1/signup')) return 'sign-in';
+  if (url.pathname.endsWith('/auth/v1/user') && requestMethod(input, init) === 'PUT') return 'user-update';
   if (url.pathname.endsWith('/auth/v1/token')) {
     const grantType = url.searchParams.get('grant_type');
     if (grantType === 'refresh_token') return 'refresh';
     if (grantType !== null && SIGN_IN_GRANT_TYPES.has(grantType)) return 'sign-in';
   }
   return null;
+}
+
+function requestMethod(input: FetchInput, init?: RequestInit): string {
+  const method = init?.method ?? (typeof input === 'object' && 'method' in input ? input.method : undefined);
+  return (method ?? 'GET').toUpperCase();
 }
 
 function requestUrl(input: FetchInput): string {

@@ -59,6 +59,7 @@ import {
   getRemixSourceThumbnailUrl,
   getViewerShareIntent,
   getViewerShareSourceSurface,
+  isViewerOwnGeneration,
 } from '@/lib/viewer-actions';
 import {
   changePostVisibility,
@@ -124,7 +125,11 @@ export function ProfileMediaFeedScreen() {
   const requestedReplyToId = normalizeParam(params.replyTo).trim() || null;
   const libraryName = source === 'profile-creations' ? 'Creations' : 'Posts';
   const noun = source === 'profile-creations' ? 'creation' : 'post';
-  const { api, user } = useAuth();
+  const { api, user, isGuest, identityUserId } = useAuth();
+  // Whose library this feed revalidates and changes: a guest's Creations are
+  // its own, keyed by its identity as the Profile grid keys them (02-1). A
+  // guest has no posts.
+  const libraryOwnerId = user?.id ?? (isGuest && libraryName === 'Creations' ? identityUserId ?? undefined : undefined);
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
   const { width } = useWindowDimensions();
@@ -214,11 +219,11 @@ export function ProfileMediaFeedScreen() {
 
   // Coming back to the feed revalidates the library it shares with the grid.
   const refreshLibraryHead = useCallback(
-    () => refreshProfileLibraryHead({ api, queryClient, userId: user?.id, library: libraryName }),
-    [api, libraryName, queryClient, user?.id]
+    () => refreshProfileLibraryHead({ api, queryClient, userId: libraryOwnerId, library: libraryName }),
+    [api, libraryName, libraryOwnerId, queryClient]
   );
   useProfileMediaRevalidation({
-    enabled: isFocused && Boolean(user),
+    enabled: isFocused && Boolean(libraryOwnerId),
     scope: libraryName,
     hasData: library.hasData,
     isFetching: libraryIsFetching,
@@ -355,7 +360,9 @@ export function ProfileMediaFeedScreen() {
   }, [api]);
 
   const recreateItem = useCallback((item: ImmersivePreviewItem) => {
-    if (!user) {
+    // A guest can generate, so its own creation opens in the creator, as the
+    // reel opens it; anything else asks a guest to sign in first.
+    if (!user && !(isGuest && isViewerOwnGeneration(item, identityUserId))) {
       router.push({ pathname: '/auth', params: { returnTo: authReturnTo } } as never);
       return;
     }
@@ -367,7 +374,7 @@ export function ProfileMediaFeedScreen() {
         thumbnailUrl: getRemixSourceThumbnailUrl(item) },
     });
     router.push((href ?? `/create/${item.recreateTool}`) as never);
-  }, [authReturnTo, user]);
+  }, [authReturnTo, identityUserId, isGuest, user]);
 
   const applyPostVisibility = useCallback(async (
     post: PostLifecyclePost,
@@ -392,7 +399,13 @@ export function ProfileMediaFeedScreen() {
    * on the card and the same control in the sheet run one code path.
    */
   const runCardAction = useCallback((action: string, item: ImmersivePreviewItem) => {
-    if (!user) {
+    // A guest's own creation is its to restore (the server takes a guest's
+    // restore, as the ••• already sends it) and to recreate; every other card
+    // action is an account's.
+    const guestOwnCreationAction = isGuest
+      && (action === 'restore' || action === 'recreate')
+      && isViewerOwnGeneration(item, identityUserId);
+    if (!user && !guestOwnCreationAction) {
       router.push({ pathname: '/auth', params: { returnTo: authReturnTo } } as never);
       return;
     }
@@ -429,7 +442,7 @@ export function ProfileMediaFeedScreen() {
       case 'restore':
         // An archived creation's card offers its way back where Share was.
         if (item.sourceType === 'generation') {
-          void changeGenerationArchive({ api, queryClient, userId: user.id, item, archive: false });
+          void changeGenerationArchive({ api, queryClient, userId: libraryOwnerId, item, archive: false });
         }
         return;
       case 'save':
@@ -457,7 +470,7 @@ export function ProfileMediaFeedScreen() {
       default:
         return;
     }
-  }, [api, applyPostVisibility, authReturnTo, openItem, queryClient, recreateItem, shareItem, user]);
+  }, [api, applyPostVisibility, authReturnTo, identityUserId, isGuest, libraryOwnerId, openItem, queryClient, recreateItem, shareItem, user]);
 
   if (library.isLoading || selection === 'loading') {
     return (

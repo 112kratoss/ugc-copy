@@ -127,6 +127,18 @@ describe('LoginPage onboarding redirects', () => {
     expect(mocks.refresh).toHaveBeenCalled();
   });
 
+  // A visitor already signed in is sent on through /auth/continue, flagged so
+  // that it is not counted as a new sign-in there.
+  it('sends a visitor who is already signed in on, flagged as no new sign-in', async () => {
+    mocks.searchParams = new URLSearchParams('returnUrl=/create');
+    mocks.getSession.mockResolvedValue({ data: { session: { access_token: 'token' } } });
+    renderLogin();
+
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith('/auth/continue?next=%2Fcreate&signedIn=1'));
+    expect(mocks.refresh).toHaveBeenCalled();
+    expect(mocks.signInWithPassword).not.toHaveBeenCalled();
+  });
+
   it('sends password recovery back through the authenticated reset page', async () => {
     renderLogin();
 

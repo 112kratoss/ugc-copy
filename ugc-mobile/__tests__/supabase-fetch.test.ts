@@ -156,6 +156,24 @@ describe('Supabase sign-ins on a stalled network', () => {
     expect(storage.items.get(STORAGE_KEY)).toBe(session);
     expect(await settlesWithin(client.auth.getSession(), 200)).toBe(true);
   });
+
+  // The account's "Set up later" record and the name Apple shares are written
+  // through updateUser, which waits in the same lock.
+  it('ends an updateUser with a retryable error, keeps the stored session and frees the lock', async () => {
+    const session = storedSession();
+    const storage = memoryStorage({ [STORAGE_KEY]: session });
+    const { fetch: authFetch } = createSupabaseAuthFetch({
+      fetcher: stalledFetch() as unknown as typeof fetch,
+      deadlineMs: 50,
+    });
+    const client = clientWith(authFetch, storage);
+
+    const { error } = await client.auth.updateUser({ data: { creator_profile_onboarding_skipped_version: 1 } });
+
+    expect(isAuthRetryableFetchError(error)).toBe(true);
+    expect(storage.items.get(STORAGE_KEY)).toBe(session);
+    expect(await settlesWithin(client.auth.getSession(), 200)).toBe(true);
+  });
 });
 
 describe('createSupabaseAuthFetch', () => {
@@ -254,22 +272,41 @@ describe('createSupabaseAuthFetch', () => {
     expect(signIn.outcome).toBe('aborted');
   });
 
+  it('aborts an updateUser (PUT /user) that outlives the deadline, with no sign-out running', async () => {
+    const fetcher = stalledFetch();
+    const { fetch: authFetch } = createSupabaseAuthFetch({
+      fetcher: fetcher as unknown as typeof fetch,
+      deadlineMs: 1000,
+    });
+    const body = '{"data":{"creator_profile_onboarding_skipped_version":1}}';
+
+    const update = track(authFetch(USER_URL, { method: 'PUT', body }));
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(update.outcome).toBe('pending');
+    expect(fetcher.mock.calls[0][1]).toMatchObject({ method: 'PUT', body });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(update.outcome).toBe('aborted');
+  });
+
   it('passes every other request through with the caller\'s own arguments', async () => {
     const fetcher = vi.fn(async () => new Response(null, { status: 200 }));
     const { fetch: authFetch, duringSignOut } = createSupabaseAuthFetch({
       fetcher: fetcher as unknown as typeof fetch,
       deadlineMs: 1000,
     });
+    // A read of the user is not an update: it keeps the caller's arguments.
+    const read = { method: 'GET' };
     const init = { method: 'PUT', body: '{}' };
 
     await duringSignOut(async () => {
-      await authFetch(USER_URL, init);
+      await authFetch(USER_URL, read);
       await authFetch(`${SUPABASE_URL}/rest/v1/profiles?select=id`, init);
     });
 
     expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(fetcher.mock.calls[0]).toEqual([USER_URL, init]);
-    expect((fetcher.mock.calls[0] as unknown[])[1]).toBe(init);
+    expect(fetcher.mock.calls[0]).toEqual([USER_URL, read]);
+    expect((fetcher.mock.calls[0] as unknown[])[1]).toBe(read);
     expect((fetcher.mock.calls[1] as unknown[])[1]).toBe(init);
   });
 

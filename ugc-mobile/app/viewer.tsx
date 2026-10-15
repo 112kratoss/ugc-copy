@@ -142,7 +142,7 @@ import { useNavigationBarSurface } from '@/lib/system-bars';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
-import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE, canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRemixSourceThumbnailUrl, getViewerShareIntent, getViewerShareSourceSurface } from '@/lib/viewer-actions';
+import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE, canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRemixSourceThumbnailUrl, getViewerShareIntent, getViewerShareSourceSurface, isViewerOwnGeneration } from '@/lib/viewer-actions';
 import {
   changePostVisibility,
   pickPostVisibility,
@@ -941,7 +941,9 @@ function ImmersivePreviewViewer() {
   };
 
   const recreateItem = async (item: ImmersivePreviewItem) => {
-    if (!user) {
+    // A guest can generate, so its own creation opens in the creator as an
+    // account's does; anything else asks a guest to sign in first.
+    if (!user && !isViewerOwnGeneration(item, identityUserId)) {
       // Send them back to this exact item, so signing in does not cost them
       // their place in the reel and a second hunt for the post.
       router.push({ pathname: '/auth', params: { returnTo: returnPathFor(item) } } as never);

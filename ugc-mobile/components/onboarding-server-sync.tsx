@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect } from 'react';
 
-import { useAuth } from '@/lib/auth';
+import { isIdentityDeferredOnAccount, useAuth } from '@/lib/auth';
 import { useOnboarding } from '@/lib/onboarding';
 import type { OnboardingStateResponse } from '@/lib/types';
 
@@ -23,7 +23,7 @@ import type { OnboardingStateResponse } from '@/lib/types';
  */
 export function OnboardingServerSync() {
   const { api, user } = useAuth();
-  const { isHydrated, reconcileFromServer } = useOnboarding();
+  const { isHydrated, reconcileFromServer, state, update } = useOnboarding();
 
   const { data } = useQuery<OnboardingStateResponse>({
     queryKey: ['onboarding-state', user?.id],
@@ -44,6 +44,17 @@ export function OnboardingServerSync() {
       completedAt: data.state.completedAt,
     });
   }, [data, isHydrated, reconcileFromServer]);
+
+  // The account's "Set up later" (chosen on the web or on another device) is
+  // kept in this install's own record as well (02-11). Written once, since the
+  // record stops it, and only after hydration, so it never lands on the
+  // default state.
+  const deferredOnAccount = isIdentityDeferredOnAccount(user);
+  const deferredOnInstall = Boolean(state.identityDeferredAt);
+  useEffect(() => {
+    if (!isHydrated || !deferredOnAccount || deferredOnInstall) return;
+    void update({ identityDeferredAt: new Date().toISOString() });
+  }, [deferredOnAccount, deferredOnInstall, isHydrated, update]);
 
   return null;
 }

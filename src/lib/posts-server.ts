@@ -4,7 +4,9 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
 import { createServiceClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
+import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
 import {
   buildPostResourceBundleLockedPreview,
   getPostResourceKinds,
@@ -273,6 +275,27 @@ function resolveShowcaseAssetUrl(
   return postMediaReadUrl(adminSupabase, showcaseAssetPath);
 }
 
+/**
+ * The folder a post's own file may be signed from: the post owner's, or that of
+ * a guest identity linked to the owner. A creation made as a guest before
+ * registering is published as the account (02-4), but a private post of it
+ * keeps the generation's file, which stays in the guest's folder; checked
+ * against the post owner alone, that post showed its owner no media. Public and
+ * unlisted posts read their showcase copy before this is asked. Anyone else's
+ * folder stays refused: the owner id returned is then the post owner's own.
+ */
+async function storedMediaOwnerId(
+  adminSupabase: SupabaseClient,
+  outputUrl: string,
+  postOwnerId: string
+): Promise<string> {
+  const pathOwnerId = getCanonicalStoredMediaLocation(outputUrl)?.filePath.split('/')[0];
+  if (!pathOwnerId || pathOwnerId === postOwnerId) return postOwnerId;
+  return await isOwnOrLinkedAccountId(adminSupabase, postOwnerId, pathOwnerId)
+    ? pathOwnerId
+    : postOwnerId;
+}
+
 export async function resolvePostMediaUrl(
   adminSupabase: SupabaseClient,
   row: PostMediaRow
@@ -286,7 +309,11 @@ export async function resolvePostMediaUrl(
   }
 
   if (row.user_id) {
-    return resolveOwnedStoredMediaUrl(adminSupabase, row.output_url, row.user_id);
+    return resolveOwnedStoredMediaUrl(
+      adminSupabase,
+      row.output_url,
+      await storedMediaOwnerId(adminSupabase, row.output_url, row.user_id),
+    );
   }
 
   // Some legacy provider-backed posts have no durable owner. Preserve only a

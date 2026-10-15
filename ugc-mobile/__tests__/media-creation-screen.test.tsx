@@ -35,6 +35,8 @@ const authState = vi.hoisted(() => ({
   credits: 999,
   updateCredits: vi.fn(),
   refreshProfile: vi.fn(async () => undefined),
+  // Never rejects, and mints nothing while the guest already keeps a ticket (lib/auth.tsx).
+  ensureGuestMergeTicket: vi.fn(async () => undefined),
   api: {
     enhancePrompt: vi.fn(),
     // Every new run starts here, as in the app (catalog schema 3); the per-kind starts
@@ -536,6 +538,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     resetCreatorSessionForTests();
     authState.updateCredits.mockClear();
     authState.refreshProfile.mockClear();
+    authState.ensureGuestMergeTicket.mockClear();
     authState.credits = 999;
     authState.user = { id: 'user-123', email: 'creator@example.com' };
     authState.identityUserId = 'user-123';
@@ -5435,6 +5438,50 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await settle();
         expect(creationsMarked()).toEqual([guestLibrary, guestLibrary]);
         invalidate.mockRestore();
+      });
+
+      // 02-7: a guest's creation exists only on its identity, so from its first success the
+      // device keeps a merge ticket that carries it to the account at the next sign-in.
+      describe('the merge ticket a guest keeps', () => {
+        const runToTheEnd = async (outcome: Record<string, unknown>) => {
+          authState.api.startGeneration.mockResolvedValue(started('pred-ticket'));
+          let finish: (status: unknown) => void = () => undefined;
+          authState.api.getImageGeneration.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+          const tree = await open(<MediaCreationScreen initialTool="image" />);
+          await typePrompt(tree, 'A bottle on linen');
+          await pressGenerate(tree);
+          // Nothing is asked while the run is still rendering.
+          expect(authState.ensureGuestMergeTicket).not.toHaveBeenCalled();
+          await renderer.act(async () => { finish(outcome); });
+          await settle();
+          return tree;
+        };
+        const asGuest = () => {
+          authState.user = null;
+          authState.isGuest = true;
+          authState.identityUserId = 'guest-1';
+        };
+
+        it('is asked for once when a guest’s run succeeds', async () => {
+          asGuest();
+          await runToTheEnd({ status: 'succeeded', output: 'https://cdn.example.com/out.png' });
+
+          expect(authState.ensureGuestMergeTicket).toHaveBeenCalledTimes(1);
+        });
+
+        it('is not asked for after a guest’s run fails', async () => {
+          asGuest();
+          const tree = await runToTheEnd({ status: 'failed', error: 'The image provider timed out.' });
+
+          expect(text(tree)).toContain('The image provider timed out.');
+          expect(authState.ensureGuestMergeTicket).not.toHaveBeenCalled();
+        });
+
+        it('is not asked for when an account’s run succeeds', async () => {
+          await runToTheEnd({ status: 'succeeded', output: 'https://cdn.example.com/out.png' });
+
+          expect(authState.ensureGuestMergeTicket).not.toHaveBeenCalled();
+        });
       });
     });
 

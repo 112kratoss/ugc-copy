@@ -36,7 +36,11 @@ export async function GET(request: Request) {
       if (referral.clearCookie) {
         clearReferralVisitCookie(response, requestUrl.protocol === 'https:');
       }
-      await recordWebAuthSucceeded({ next, origin: requestUrl.origin, supabase, userId: data.user.id });
+      // /login sends a visitor who was already signed in through here as well
+      // (`signedIn=1`): sent on the same way, but not counted as a sign-in.
+      if (requestUrl.searchParams.get('signedIn') !== '1') {
+        await recordWebAuthSucceeded({ next, origin: requestUrl.origin, supabase, userId: data.user.id });
+      }
       return response;
     }
   } catch {

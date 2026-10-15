@@ -380,25 +380,6 @@ export function clearReferralVisitCookie(response: NextResponse, secure = true) 
   });
 }
 
-export async function finalizePendingReferralForAuth(request: Request, userId: string) {
-  const visitToken = readReferralVisitCookie(request.headers.get('cookie'));
-  if (!visitToken) return false;
-
-  try {
-    const outcome = await claimReferralForUser({
-      adminSupabase: createServiceClient(),
-      userId,
-      visitToken,
-    });
-    return outcome.clearCookie;
-  } catch (error) {
-    // Authentication and onboarding must remain available if referral
-    // attribution is temporarily unavailable. The cookie remains for retry.
-    logBackendError('post_auth_referral_finalization_deferred', { error: error });
-    return false;
-  }
-}
-
 export async function claimReferralResponse(request: Request) {
   const userId = await authenticatedUserId(request);
   if (!userId) return referralErrorResponse(request, 'Unauthorized', 401);

@@ -32,9 +32,16 @@ const authState = vi.hoisted(() => ({
     shareShowcasePost: vi.fn((_postId: string, _options: { sourceSurface: string }) => Promise.resolve()),
   },
   user: { id: 'owner-1', email: 'owner@example.com' } as { id: string; email: string } | null,
+  isGuest: false,
+  identityUserId: 'owner-1' as string | null,
 }));
 
 const libraryState = vi.hoisted(() => ({ items: [] as unknown[], selection: 'none' as string }));
+
+// What the feed last asked of the focus and foreground revalidation.
+const revalidationState = vi.hoisted(() => ({
+  options: null as null | { enabled: boolean; scope: string; refresh: () => Promise<unknown> | unknown },
+}));
 
 type CardActions = {
   onShare: () => void;
@@ -173,11 +180,16 @@ vi.mock('@/lib/use-profile-library-source', () => ({
     selection: libraryState.selection,
   }),
 }));
-vi.mock('@/lib/use-profile-media-revalidation', () => ({ useProfileMediaRevalidation: () => undefined }));
+vi.mock('@/lib/use-profile-media-revalidation', () => ({
+  useProfileMediaRevalidation: (options: NonNullable<typeof revalidationState.options>) => {
+    revalidationState.options = options;
+  },
+}));
 vi.mock('@/lib/use-viewer-action-handlers', () => ({ changeGenerationArchive: vi.fn() }));
 vi.mock('@/lib/viewer-media-cache', () => ({ applyPostVisibilityToCaches: vi.fn() }));
 
 import { ProfileMediaFeedScreen } from '@/components/profile-media-feed';
+import { refreshProfileLibraryHead } from '@/lib/profile-library-head';
 import { changeGenerationArchive } from '@/lib/use-viewer-action-handlers';
 
 /** One of the owner's public posts, as the Posts library lists it. */
@@ -210,6 +222,9 @@ beforeEach(() => {
   libraryState.items = [publicPost];
   libraryState.selection = 'none';
   authState.user = { id: 'owner-1', email: 'owner@example.com' };
+  authState.isGuest = false;
+  authState.identityUserId = 'owner-1';
+  revalidationState.options = null;
   feedState.callbacksFor = null;
   feedState.cards.clear();
   feedState.commentsSheet = null;
@@ -461,5 +476,91 @@ describe('signing in from the card feed', () => {
 
     expect(feedState.commentsSheet).toBeNull();
     expect(routerState.setParams).not.toHaveBeenCalled();
+  });
+});
+
+// 02-1: a guest's Creations are its own library, so its card feed revalidates
+// that library under the guest's identity, and its own creation is its to
+// restore and to recreate. What an account does still asks it to sign in.
+describe("a guest's card feed", () => {
+  const FEED = '/profile-media-feed?source=profile-creations&initialId=gen-1';
+  const asGuest = () => {
+    authState.user = null;
+    authState.isGuest = true;
+    authState.identityUserId = 'guest-1';
+  };
+
+  it('revalidates its Creations under its identity', async () => {
+    asGuest();
+    routerState.params = { source: 'profile-creations', initialId: 'gen-1' };
+    libraryState.items = [creation('gen-1')];
+    renderFeed();
+
+    expect(revalidationState.options).toMatchObject({ enabled: true, scope: 'Creations' });
+    await act(async () => { await revalidationState.options!.refresh(); });
+    expect(refreshProfileLibraryHead).toHaveBeenCalledWith(expect.objectContaining({ userId: 'guest-1', library: 'Creations' }));
+  });
+
+  it('revalidates no Posts library, which a guest does not have', () => {
+    asGuest();
+    routerState.params = { source: 'profile-posts' };
+    renderFeed();
+
+    expect(revalidationState.options).toMatchObject({ enabled: false, scope: 'Posts' });
+  });
+
+  it('restores its own archived creation without signing in', () => {
+    asGuest();
+    const archived = creation('gen-archived', {
+      archivedAt: '2026-10-01T00:00:00.000Z',
+      availableActions: ['restore', 'delete-creation', 'view-details'],
+    });
+    routerState.params = { source: 'profile-creations', scope: 'archived' };
+    libraryState.items = [archived];
+    renderFeed();
+
+    act(() => { feedState.cards.get('gen-archived')!.onAction('restore'); });
+
+    expect(routerState.push).not.toHaveBeenCalled();
+    expect(changeGenerationArchive).toHaveBeenCalledWith({
+      api: authState.api,
+      queryClient: expect.anything(),
+      userId: 'guest-1',
+      item: archived,
+      archive: false,
+    });
+  });
+
+  it('recreates its own creation in the creator, as the reel does', () => {
+    asGuest();
+    routerState.params = { source: 'profile-creations', initialId: 'gen-1' };
+    libraryState.items = [creation('gen-1')];
+    renderFeed();
+
+    act(() => { feedState.cards.get('gen-1')!.onAction('recreate'); });
+
+    expect(routerState.push).toHaveBeenCalledTimes(1);
+    expect(String(routerState.push.mock.calls[0][0])).toMatch(/^\/create\/image\?remix=gen-1&/);
+  });
+
+  it('is still asked to sign in to publish', () => {
+    asGuest();
+    routerState.params = { source: 'profile-creations', initialId: 'gen-1' };
+    libraryState.items = [creation('gen-1')];
+    renderFeed();
+
+    act(() => { feedState.cards.get('gen-1')!.onAction('publish'); });
+
+    expect(routerState.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: FEED } });
+  });
+
+  it('keeps an account’s revalidation under the account', async () => {
+    routerState.params = { source: 'profile-creations', initialId: 'gen-1' };
+    libraryState.items = [creation('gen-1')];
+    renderFeed();
+
+    expect(revalidationState.options).toMatchObject({ enabled: true });
+    await act(async () => { await revalidationState.options!.refresh(); });
+    expect(refreshProfileLibraryHead).toHaveBeenCalledWith(expect.objectContaining({ userId: 'owner-1', library: 'Creations' }));
   });
 });

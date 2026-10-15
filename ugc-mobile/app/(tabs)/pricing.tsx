@@ -246,10 +246,12 @@ export default function PricingScreen() {
     ));
   };
 
+  // The guest bootstrap is retried while the app runs (on a timer, and at once
+  // on a return to the app), so there is nothing for the person to redo.
   const sessionStartingNotice: PricingNotice = {
     tone: 'neutral',
     title: 'Purchase status',
-    body: 'Your session is still starting. Try again in a moment.',
+    body: 'Your session is still starting. The app keeps trying, and this screen updates by itself once it is ready.',
   };
 
   // A guest that has paid holds value on an identity only this device can
@@ -444,7 +446,7 @@ export default function PricingScreen() {
         // sign-ins off). Buy and Refresh are disabled, so say why on screen.
         <StatusBlock
           title="Your session is still starting"
-          body="Credit packs unlock once your account identity is ready. Check your connection, then reopen this screen in a moment."
+          body="Credit packs unlock once your session is ready. The app keeps trying in the background, and this screen updates by itself."
         />
       ) : purchaseGate.showRegistrationOffer ? (
         // Offered, never required. This is the shape guideline 5.1.1(v) asks

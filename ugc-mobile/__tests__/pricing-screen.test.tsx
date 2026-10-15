@@ -415,3 +415,33 @@ describe('refresh and restore (03-10)', () => {
     expect(harness.auth.api.restoreMobilePurchases).not.toHaveBeenCalled();
   });
 });
+
+// 02-6: a guest bootstrap that failed is tried again while the app runs, so a
+// device with no identity yet is told the screen updates by itself, where it
+// was asked to check its connection and reopen the screen.
+describe('a device whose session is still starting (02-6)', () => {
+  const STARTING = {
+    tone: undefined,
+    title: 'Your session is still starting',
+    body: 'Credit packs unlock once your session is ready. The app keeps trying in the background, and this screen updates by itself.',
+  };
+
+  it('says the app keeps trying, and unlocks the packs by itself once the identity lands', async () => {
+    harness.auth.identityUserId = null;
+    const screen = await renderScreen();
+
+    expect(notices(screen.tree)).toContainEqual(STARTING);
+    expect(notices(screen.tree).some((notice) => String(notice.body).includes('reopen'))).toBe(false);
+    expect(buyButton(screen.tree).props.disabled).toBe(true);
+    expect(harness.iap.configureIapForUser).not.toHaveBeenCalled();
+
+    harness.auth.identityUserId = 'guest-1';
+    await renderer.act(async () => { screen.update(<PricingScreen />); });
+    await flush();
+
+    expect(notices(screen.tree)).not.toContainEqual(STARTING);
+    expect(harness.iap.configureIapForUser).toHaveBeenCalledWith('guest-1', 'android');
+    expect(buyButton(screen.tree).props.disabled).toBe(false);
+    renderer.act(() => screen.tree.unmount());
+  });
+});

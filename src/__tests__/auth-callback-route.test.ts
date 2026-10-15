@@ -298,6 +298,27 @@ describe('/auth/continue', () => {
     });
   });
 
+  // /login sends a visitor who is already signed in through here (`signedIn=1`):
+  // the same claim and destination, but no new sign-in to count.
+  it('sends an already signed-in visitor on as before and counts no sign-in', async () => {
+    const { GET } = await import('@/app/auth/continue/route');
+    const response = await GET(withVisitCookie(
+      'https://magicbooklet.com/auth/continue?next=%2Fcreate&signedIn=1'
+    ));
+
+    expect(mocks.resolveServerPostAuthPath).toHaveBeenCalledWith(
+      expect.objectContaining({ auth: expect.any(Object) }),
+      'user-1',
+      '/create',
+      { skipProfileOnboarding: false }
+    );
+    expect(nestedWelcomeRewardUrl(response).searchParams.get('referral')).toBe('applied');
+    expect(mocks.clearReferralVisitCookie).toHaveBeenCalledWith(response, true);
+    expect(mocks.getSession).not.toHaveBeenCalled();
+    expect(mocks.after).not.toHaveBeenCalled();
+    expect(mocks.postOnboardingEventRouteResponse).not.toHaveBeenCalled();
+  });
+
   it('records nothing when the session cannot be verified', async () => {
     mocks.getUser.mockResolvedValue({ data: { user: null }, error: new Error('expired') });
 

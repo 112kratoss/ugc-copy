@@ -757,7 +757,7 @@ function IdentityCreationScreen({
   // `user` still gates remix restore, which pulls another creator's source
   // media out of the community feed. Generating and enhancing key off
   // `identityUserId` so a guest can spend the credits they just bought.
-  const { user, identityUserId, isGuest, session, api, credits, updateCredits, refreshProfile } = useAuth();
+  const { user, identityUserId, isGuest, session, api, credits, updateCredits, refreshProfile, ensureGuestMergeTicket } = useAuth();
   const queryClient = useQueryClient();
   const [activeTool, setActiveTool] = useState<CreatorToolId>(isTool(initialTool) ? initialTool : 'image');
   const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => ({
@@ -1980,6 +1980,10 @@ function IdentityCreationScreen({
 
     setMessage(null);
     haptic.success();
+    // A guest's creation exists only on its identity: the ticket kept from now on carries it
+    // onto the account at the next sign-in, even if this guest session ends first (02-7).
+    // Nothing is minted when the guest already keeps one.
+    if (isGuest) void ensureGuestMergeTicket().catch(() => undefined);
     // Profile → Creations read in the last minute would otherwise go on without the new creation.
     void invalidateProfileCreations(queryClient, identityUserId).catch(() => undefined);
     // A remix link reopens its session until a run in it succeeds. The ordinary drafts stay

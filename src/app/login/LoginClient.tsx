@@ -81,7 +81,9 @@ export default function LoginClient({
                 return;
             }
 
-            router.replace(buildAuthContinuePath(redirectTo));
+            // The flag tells /auth/continue this visit is no new sign-in, so
+            // it is not counted as auth_succeeded.
+            router.replace(`${buildAuthContinuePath(redirectTo)}&signedIn=1`);
             router.refresh();
         });
 
