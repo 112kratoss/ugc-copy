@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { useSyncExternalStore } from 'react';
+import { useRef, useState, useSyncExternalStore } from 'react';
 import { router } from 'expo-router';
 import { ArrowUpRight, Ban, Bell, ChevronRight, CircleHelp, CreditCard, EyeOff, FileText, Gift, ShieldCheck, Sparkles, Trash2, UserRound } from 'lucide-react-native';
-import { Linking, Platform, Pressable, View } from 'react-native';
+import { ActivityIndicator, Linking, Platform, Pressable, View } from 'react-native';
 
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
 import { AutoplaySetting } from '@/components/autoplay-setting';
@@ -18,7 +18,7 @@ import {
 } from '@/lib/appearance';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { formatSupportDetails, readCreatorSession, subscribeCreatorSession } from '@/lib/creator-session-diagnostics';
-import { showMessageDialog } from '@/lib/dialog';
+import { showConfirmDialog, showMessageDialog, type ConfirmDialogRequest, type MessageDialogRequest } from '@/lib/dialog';
 import {
   formatMediaDiagnosticsReport,
   readMediaDiagnostics,
@@ -27,14 +27,14 @@ import {
 import { haptic } from '@/lib/haptics';
 import { canRevealNsfwInApp } from '@/lib/nsfw-reveal-policy';
 import { CREDIT_BALANCE_LOADING_LABEL, formatCreditAmount } from '@/lib/pricing';
-import { useAuth } from '@/lib/auth';
+import { useAuth, type AccountDeletionOutcome } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
 export default function SettingsScreen() {
   const theme = useAppTheme();
-  const { user, credits } = useAuth();
+  const { user, isGuest, credits } = useAuth();
   const aiDataConsent = useAiDataConsent();
   const versionLabel = formatAppVersionLabel(readAppVersionParts());
   // For support: the OTA runtime and channel, and how the last draft this launch
@@ -161,13 +161,17 @@ export default function SettingsScreen() {
           onPress={() => router.push('/delete-account' as never)}
         />
       ) : (
-        <SettingsCard
-          icon={<Trash2 size={appTheme.icon.feature} color={theme.colors.danger} />}
-          title="Account deletion"
-          body="See how to request deletion of an existing Magicbooklet account."
-          external
-          onPress={() => void Linking.openURL(`${env.siteUrl}/delete-account`)}
-        />
+        <>
+          {/* A guest only (D5): an account is deleted on its own screen. */}
+          {isGuest ? <GuestDataDeletionCard /> : null}
+          <SettingsCard
+            icon={<Trash2 size={appTheme.icon.feature} color={theme.colors.danger} />}
+            title="Account deletion"
+            body="See how to request deletion of an existing Magicbooklet account."
+            external
+            onPress={() => void Linking.openURL(`${env.siteUrl}/delete-account`)}
+          />
+        </>
       )}
 
       {supportDetails ? (
@@ -208,6 +212,130 @@ async function copyMediaDiagnostics(versionLabel: string) {
       ? `${summary.total} media events this session: ${summary.stalls} stalled, ${summary.failures} failed, ${summary.recoveries} recovered.`
       : 'No media problems recorded this session.',
   });
+}
+
+/** Asked before a guest's data goes: what goes with it, and how to keep it (D5). */
+function guestDataDeletionConfirmation(credits: number | null): ConfirmDialogRequest {
+  const guestCredits = credits !== null && credits > 0
+    ? `${formatCreditAmount(credits)} ${credits === 1 ? 'credit' : 'credits'}`
+    : 'any credits';
+  return {
+    title: 'Delete guest data?',
+    message: `Your guest creations, uploads and ${guestCredits} are deleted for good. To keep them, create an account first.`,
+    confirmLabel: 'Delete',
+    destructive: true,
+  };
+}
+
+/** Said once the deletion has the guest, and the phone is a new guest on Home. */
+const GUEST_DATA_DELETED: MessageDialogRequest = {
+  title: 'Guest data deleted',
+  message: 'Your guest creations, uploads and credits are deleted and can’t be brought back. You’re now a new guest on this phone.',
+};
+
+/**
+ * The answer was lost and Supabase could not say whether the deletion started:
+ * the guest is still on this phone, and a retry settles it. The account
+ * screen's and the web's sentence.
+ */
+const GUEST_DATA_DELETION_UNCONFIRMED: MessageDialogRequest = {
+  title: 'Deletion not confirmed',
+  message: 'We could not confirm the deletion. Check the connection and try again.',
+};
+
+/**
+ * Why nothing was deleted, in words written for people: the server's own
+ * sentence when it sent one for this. A refused session's is "Unauthorized", a
+ * failure answered by the platform carries only its status, the server's "could
+ * not start" names an account, and a server from before guests could delete
+ * their data answers "Create an account to use this feature."
+ */
+function guestDataNotDeletedReason(error: unknown) {
+  const { status, details, code } = (typeof error === 'object' && error !== null ? error : {}) as {
+    status?: unknown;
+    details?: unknown;
+    code?: unknown;
+  };
+  const answeredWithoutJson = typeof status === 'number' && status >= 500
+    && (typeof details !== 'object' || details === null);
+  if (
+    status === 401
+    || answeredWithoutJson
+    || code === 'ACCOUNT_DELETION_NOT_STARTED'
+    || code === 'REGISTRATION_REQUIRED'
+  ) {
+    return 'The deletion did not go through.';
+  }
+  return error instanceof Error && error.message.trim() ? error.message : 'The deletion did not go through.';
+}
+
+/** What a guest deletion that did not go through says; nothing for a merged guest. */
+function guestDataNotDeletedNotice(error: unknown): MessageDialogRequest | null {
+  // A guest linked to an account meanwhile is on its way to the sign-in
+  // screen, whose notice says why (409 SESSION_MERGED).
+  if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'SESSION_MERGED') {
+    return null;
+  }
+  return {
+    title: 'Guest data was not deleted',
+    message: `${guestDataNotDeletedReason(error)} Nothing was deleted.`,
+  };
+}
+
+/**
+ * Deletes the guest and says what came of it: the notice to show, if any. Kept
+ * out of the component, whose handler React Compiler would otherwise skip for
+ * the branches inside this try.
+ */
+async function deleteGuestDataFor(deleteAccount: () => Promise<AccountDeletionOutcome>) {
+  try {
+    // No sign-in first: a guest has none to repeat.
+    const outcome = await deleteAccount();
+    return outcome === 'unconfirmed' ? GUEST_DATA_DELETION_UNCONFIRMED : GUEST_DATA_DELETED;
+  } catch (error) {
+    return guestDataNotDeletedNotice(error);
+  }
+}
+
+/**
+ * The guest's own way to delete itself and what it made (D5): its creations,
+ * uploads and credits, on the server, behind one confirmation. Drawn for a
+ * guest only. The deletion ends the session as an account's does, and the
+ * phone carries on as a fresh guest on Home, where the notice is said.
+ */
+function GuestDataDeletionCard() {
+  const theme = useAppTheme();
+  const { credits, deleteAccount } = useAuth();
+  const [deleting, setDeleting] = useState(false);
+  // From the first tap until the answer: a second tap before the confirmation
+  // is drawn, or while the request is out, starts nothing.
+  const busyRef = useRef(false);
+
+  const deleteGuestData = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    if (!(await showConfirmDialog(guestDataDeletionConfirmation(credits)))) {
+      busyRef.current = false;
+      return;
+    }
+    setDeleting(true);
+    const notice = await deleteGuestDataFor(() => deleteAccount());
+    busyRef.current = false;
+    setDeleting(false);
+    if (notice) showMessageDialog(notice);
+  };
+
+  return (
+    <SettingsCard
+      icon={<Trash2 size={appTheme.icon.feature} color={theme.colors.danger} />}
+      title="Delete guest data"
+      body={deleting ? 'Deleting guest data…' : 'Permanently delete your guest creations, uploads and credits.'}
+      destructive
+      action
+      busy={deleting}
+      onPress={() => void deleteGuestData()}
+    />
+  );
 }
 
 /**
@@ -333,6 +461,8 @@ function SettingsCard({
   body,
   onPress,
   external,
+  action,
+  busy,
   destructive,
 }: {
   icon: React.ReactNode;
@@ -341,15 +471,25 @@ function SettingsCard({
   onPress: () => void;
   /** Leaves the app: link semantics and a trailing arrow instead of the drill-down chevron. */
   external?: boolean;
+  /**
+   * Does something here, behind a confirmation, rather than opening a screen:
+   * no drill-down chevron, which promises another page (HIG disclosure).
+   */
+  action?: boolean;
+  /** The action is under way: the row says so, shows activity, and takes no tap. */
+  busy?: boolean;
   destructive?: boolean;
 }) {
   const theme = useAppTheme();
-  const Trailing = external ? ArrowUpRight : ChevronRight;
+  const Trailing = external ? ArrowUpRight : action ? null : ChevronRight;
   return (
     <Pressable
       accessibilityRole={external ? 'link' : 'button'}
       accessibilityLabel={`${title}. ${body}`}
       accessibilityHint={external ? 'Opens in your browser.' : undefined}
+      accessibilityState={busy ? { busy: true, disabled: true } : undefined}
+      accessibilityLiveRegion={busy ? 'polite' : undefined}
+      disabled={busy}
       onPress={onPress}
       style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
@@ -361,7 +501,11 @@ function SettingsCard({
           <AppText variant="cardTitle" color={destructive ? 'danger' : undefined}>{title}</AppText>
           <AppText variant="bodySm" color="muted">{body}</AppText>
         </View>
-        <Trailing size={appTheme.icon.default} color={theme.colors.faint} />
+        {busy ? (
+          <ActivityIndicator color={theme.colors.muted} />
+        ) : Trailing ? (
+          <Trailing size={appTheme.icon.default} color={theme.colors.faint} />
+        ) : null}
       </Card>
     </Pressable>
   );
