@@ -6,8 +6,10 @@ import { ArrowRight, Copy, ExternalLink, Layers3, Wallet } from 'lucide-react';
 
 import { formatBundleAccessLabel, type MarketplaceQualityAssessment } from '@/lib/marketplace-trust';
 import {
-  formatUsdCents,
+  formatPostResourcePriceLabel,
   formatUnlockCountLabel,
+  formatUsdCents,
+  getBundleAccessLabel,
   getPostResourceKindLabel,
   type MarketplacePriceQuote,
 } from '@/lib/post-resource-bundles';
@@ -324,7 +326,7 @@ export default function MarketplaceSellClient({
                         <div className="mt-2 text-lg font-semibold text-white">{bundle.title}</div>
                       </div>
                       <div className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1 text-sm font-semibold text-emerald-50">
-                        {bundle.accessMode === 'free' ? 'Free' : bundle.priceQuote?.formatted ?? formatUsdCents(bundle.priceUsdCents)}
+                        {bundle.accessMode === 'free' ? 'Free' : formatPostResourcePriceLabel(bundle.priceUsdCents, bundle.priceQuote?.formatted)}
                       </div>
                     </div>
                     <p className="mt-3 line-clamp-3 text-sm leading-6 text-zinc-300">
@@ -514,9 +516,7 @@ export default function MarketplaceSellClient({
                   <div className="mt-4 flex flex-wrap gap-2">
                     {snapshot.bundleAccessMode ? (
                       <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
-                        {snapshot.bundleAccessMode === 'free'
-                          ? 'Free recipe'
-                          : formatUsdCents(snapshot.bundlePriceUsdCents ?? 0)}
+                        {getBundleAccessLabel(snapshot.bundleAccessMode, snapshot.bundlePriceUsdCents ?? 0)}
                       </div>
                     ) : null}
                     {(snapshot.resourceKinds ?? []).map((kind) => (

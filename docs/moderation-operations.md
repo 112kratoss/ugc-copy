@@ -92,6 +92,26 @@ comment. It is idempotent when the comment or report was already resolved.
 Dismiss a non-violating comment report with `dismiss-subject`; dismissal leaves
 the comment untouched and closes only the selected report.
 
+## Template reports
+
+A viewer can report a published template from its page on the web and in the
+app (`targetType: 'template'`; reasons `spam`, `stolen_content`,
+`unsafe_content`, `other`). The queue shows the template's name, description,
+status and creator; review the demo at `/templates/<slug>`.
+
+After confirming a violation, resolve the report with `resolve-subject` (the
+console's button reads "Take down template"). For a template target the
+resolver, in one transaction, disables the template (`status='disabled'`,
+`is_active=false`, as the creator's own Disable does) so it leaves the catalog,
+its page answers not found and no new run starts; records the reviewer, the
+review time and the note; and resolves every open duplicate report for that
+template. It is idempotent when the template or report was already resolved.
+Runs already started finish from their snapshot. The catalog's cached page can
+show the card for up to five minutes, as after the creator's own Disable.
+
+Dismiss a non-violating template report with `dismiss-subject`; dismissal leaves
+the template live and closes only the selected report.
+
 ## User and generation reports
 
 For a user or generation report, first complete the required manual safety action. Then record the outcome:

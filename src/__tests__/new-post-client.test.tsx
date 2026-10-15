@@ -2581,6 +2581,44 @@ describe('NewPostClient', () => {
     expect(priceInput).not.toBeDisabled();
   });
 
+  it('keeps the seller dashboard as the way back when a listing is edited from it', () => {
+    // The dashboard's edit links carry from=seller and returnTo; edit mode used
+    // to label that link "Back to studio" while it returned to /marketplace/sell.
+    searchParamsState.value = new URLSearchParams({
+      from: 'seller',
+      returnTo: '/marketplace/sell',
+    });
+
+    render(
+      <NewPostClient
+        initialPost={{
+          id: 'post-edit-seller-1',
+          generationId: null,
+          title: 'Listed recipe',
+          description: '',
+          prompt: '',
+          body: 'A listed post.',
+          visibility: 'public',
+          category: 'text',
+          postFormat: 'text',
+          sourceKind: 'manual',
+          sourceTool: null,
+          mediaUrl: null,
+          mediaKind: null,
+          archivedAt: null,
+          resourceBundle: {
+            accessMode: 'none',
+          },
+          hasPaidOrders: false,
+        }}
+      />
+    );
+
+    const backLink = screen.getByRole('link', { name: /back to seller dashboard/i });
+    expect(backLink).toHaveAttribute('href', '/marketplace/sell');
+    expect(screen.queryByRole('link', { name: /back to studio/i })).not.toBeInTheDocument();
+  });
+
   it('shows only Publish public and Save private buttons for new posts without an Unlisted option', () => {
     render(<NewPostClient />);
 

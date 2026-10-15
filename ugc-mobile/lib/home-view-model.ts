@@ -59,15 +59,6 @@ export function formatUsdCents(value: number | null | undefined) {
   }).format(safeValue / 100);
 }
 
-export function getOwnerPostSalesSummary(posts: OwnerPostListItem[] | null | undefined) {
-  return (posts ?? []).reduce(
-    (summary, item) => ({
-      salesCount: summary.salesCount + (item.bundle?.salesCount ?? 0),
-      earningsUsdCents: summary.earningsUsdCents + (item.bundle?.earningsUsdCents ?? 0),
-    }),
-    { salesCount: 0, earningsUsdCents: 0 }
-  );
-}
 
 export function formatRelativeTime(value: string | null | undefined, now = new Date()) {
   if (!value) return 'Just now';

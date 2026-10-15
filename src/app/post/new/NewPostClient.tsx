@@ -2434,28 +2434,31 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       ? 'View post'
       : 'Open editor';
   const isEditingUnlisted = isEditMode && displayVisibility === 'unlisted';
-  const fallbackBackHref = isEditMode || entrySurface === 'creations'
-    ? '/creations?view=posts'
-    : entrySurface === 'profile'
-      ? '/profile?tab=posts'
-      : entrySurface === 'marketplace'
-        ? '/marketplace'
-        : entrySurface === 'seller'
-          ? '/marketplace/sell'
-          : entrySurface === 'home'
-            ? '/'
+  // Where the editor was opened from wins; edit mode's own default is Studio.
+  // The seller dashboard's edit links carry `from=seller`, and used to read
+  // "Back to studio" over a link that returned to /marketplace/sell.
+  const fallbackBackHref = entrySurface === 'profile'
+    ? '/profile?tab=posts'
+    : entrySurface === 'marketplace'
+      ? '/marketplace'
+      : entrySurface === 'seller'
+        ? '/marketplace/sell'
+        : entrySurface === 'home'
+          ? '/'
+          : isEditMode || entrySurface === 'creations'
+            ? '/creations?view=posts'
             : '/showcase';
   const backHref = getSafeInternalReturnPath(searchParams.get('returnTo'), fallbackBackHref);
-  const backLabel = isEditMode || entrySurface === 'creations'
-    ? 'Back to studio'
-    : entrySurface === 'profile'
-      ? 'Back to profile'
-      : entrySurface === 'marketplace'
-        ? 'Back to marketplace'
-        : entrySurface === 'seller'
-          ? 'Back to seller dashboard'
-          : entrySurface === 'home'
-            ? 'Back to home'
+  const backLabel = entrySurface === 'profile'
+    ? 'Back to profile'
+    : entrySurface === 'marketplace'
+      ? 'Back to marketplace'
+      : entrySurface === 'seller'
+        ? 'Back to seller dashboard'
+        : entrySurface === 'home'
+          ? 'Back to home'
+          : isEditMode || entrySurface === 'creations'
+            ? 'Back to studio'
             : 'Back to Explore';
 
   return (
