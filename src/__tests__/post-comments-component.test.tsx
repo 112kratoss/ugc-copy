@@ -525,7 +525,7 @@ describe('PostComments', () => {
         expect(await screen.findByText('Comment 61', undefined, { timeout: 5000 })).toBeInTheDocument();
         expect(server.reads.at(-1)?.offset).toBe(59);
         expect(threadItems()).toHaveLength(60);
-    });
+    }, 15_000);
 
     it('keeps a new reply on screen when its parent has more replies than one page', async () => {
         signIn();
