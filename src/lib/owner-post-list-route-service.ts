@@ -17,6 +17,7 @@ export type LoadOwnerPosts = (
     offset?: number;
     after?: MediaLibraryBoundary;
     visibility: OwnerPostVisibilityFilter;
+    listingsOnly?: boolean;
   }
 ) => Promise<OwnerPostListItem[] | unknown[]>;
 
@@ -77,10 +78,14 @@ export async function listOwnerPostsForRoute({
 
   const visibility = normalizeOwnerPostVisibilityFilter(searchParams.get('visibility'));
   const includeArchived = searchParams.get('includeArchived') === 'true' || visibility === 'archived';
+  // The seller dashboard's listings: only posts with a recipe, paged by the
+  // database instead of a client walking every post to find them.
+  const listingsOnlyParam = searchParams.get('listingsOnly');
+  const listingsOnly = listingsOnlyParam === '1' || listingsOnlyParam === 'true';
   const limit = Math.max(1, parseBoundedInteger(searchParams.get('limit'), 48, 100));
   const offset = parseBoundedInteger(searchParams.get('offset'), 0, 1_000_000);
   const cursorMode = searchParams.get('pagination') === 'cursor' || searchParams.has('cursor');
-  const cursorScope = `owner:${userId}:${visibility}:${includeArchived}`;
+  const cursorScope = `owner:${userId}:${visibility}:${includeArchived}${listingsOnly ? ':listings' : ''}`;
   const cursor = searchParams.get('cursor');
   const after = cursor ? decodeMediaLibraryCursor(cursor, cursorScope) : undefined;
   if ((cursor !== null && !after) || (cursorMode && offset !== 0)) {
@@ -94,6 +99,7 @@ export async function listOwnerPostsForRoute({
       offset,
       visibility,
       ...(after ? { after } : {}),
+      ...(listingsOnly ? { listingsOnly } : {}),
     }),
     includeSummary ? loadOwnerPostSalesSummary(userId) : Promise.resolve(null),
   ]);

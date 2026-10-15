@@ -52,6 +52,7 @@ import {
   getMarketplaceQualityError,
   getPublicPostQualityError,
   type MarketplaceQualityAssessment,
+  type MarketplaceQualityInput,
 } from '@/lib/marketplace-trust';
 import type {
   MarketplaceCheckoutCurrency,
@@ -369,7 +370,6 @@ export interface SellerPostResourceBundleDashboard {
     id: string;
     bundleId: string;
     bundleTitle: string;
-    buyerUserId: string;
     buyerLabel: string;
     amountSubunits: number;
     currency: MarketplaceCheckoutCurrency;
@@ -2289,6 +2289,41 @@ export async function getPostResourceBundleDetailByPostId(
   };
 }
 
+/**
+ * The seller dashboard's listing check, for an owner read that holds the post
+ * row itself (the owner post list behind the app's Your Sales). It grades with
+ * the display title and seller summary the dashboard builds, so the app and the
+ * web sell page give one listing the same verdict.
+ */
+export function assessOwnerListingQuality(input: {
+  ownerUserId: string;
+  ownerProfile: { username: string | null; display_name: string | null; avatar_url: string | null } | null;
+  bundle: {
+    title: string | null | undefined;
+    summary: string | null | undefined;
+    previewText: string | null | undefined;
+    accessMode: PersistedPostResourceBundleAccessMode;
+    priceUsdCents: number;
+    resourceKinds: PostResourceKind[];
+  };
+  post: MarketplaceQualityInput['post'];
+}): MarketplaceQualityAssessment {
+  const profilesMap = new Map<string, ProfileRow>(
+    input.ownerProfile ? [[input.ownerUserId, { id: input.ownerUserId, ...input.ownerProfile }]] : [],
+  );
+
+  return assessMarketplaceListingQuality({
+    title: normalizeBundleDisplayTitle(input.bundle.title),
+    summary: input.bundle.summary,
+    previewText: input.bundle.previewText,
+    accessMode: input.bundle.accessMode,
+    priceUsdCents: input.bundle.priceUsdCents,
+    resourceKinds: input.bundle.resourceKinds,
+    post: input.post,
+    seller: toSellerSummary(input.ownerUserId, profilesMap),
+  });
+}
+
 export async function getSellerPostResourceBundleDashboard(
   userId: string,
   options?: {
@@ -2362,19 +2397,17 @@ export async function getSellerPostResourceBundleDashboard(
     const buyerProfiles = await loadProfileMap(orders.map((row) => row.buyer_user_id));
     sales = orders.map((row) => {
       const buyerProfile = buyerProfiles.get(row.buyer_user_id);
+      // This payload is serialised into the seller's page, so a buyer is a
+      // handle or a name and never their account id: one with neither, or every
+      // buyer when the profile read fails, is "A buyer".
       const buyerLabel = buyerProfile?.username
         ? `@${buyerProfile.username}`
-        : getCreatorDisplayName({
-            displayName: buyerProfile?.display_name ?? null,
-            username: buyerProfile?.username ?? null,
-            email: row.buyer_user_id,
-          });
+        : buyerProfile?.display_name?.trim() || 'A buyer';
 
       return {
         id: row.id,
         bundleId: row.bundle_id,
         bundleTitle: bundleIdToTitle.get(row.bundle_id) ?? 'Recipe',
-        buyerUserId: row.buyer_user_id,
         buyerLabel,
         amountSubunits: row.amount_subunits,
         currency: row.currency,
@@ -2385,7 +2418,7 @@ export async function getSellerPostResourceBundleDashboard(
 
   const { data: deletedAuditData, error: deletedAuditError } = await adminSupabase
     .from('post_deletion_audits')
-    .select('id, title, visibility, source_kind, bundle_access_mode, bundle_status, bundle_price_usd_cents, bundle_resource_kinds, sales_count, earnings_usd_cents, had_paid_orders, deleted_at')
+    .select('id, post_id, title, visibility, source_kind, bundle_access_mode, bundle_status, bundle_price_usd_cents, bundle_resource_kinds, sales_count, earnings_usd_cents, had_paid_orders, deleted_at')
     .eq('owner_user_id', userId)
     .order('deleted_at', { ascending: false });
 
@@ -2394,8 +2427,13 @@ export async function getSellerPostResourceBundleDashboard(
     throw deletedAuditError;
   }
 
+  // A post deleted while it had buyers is tombstoned, not removed, so its
+  // bundle is still one of `bundles` (where `post.tombstoned` labels it); its
+  // deletion audit would list the same post a second time.
+  const listedPostIds = new Set(rows.map((row) => row.post_id));
   const deletedSnapshots = ((deletedAuditData ?? []) as Array<{
     id: string;
+    post_id: string | null;
     title: string;
     visibility: ShowcaseVisibility;
     source_kind: RawShowcaseSourceKind;
@@ -2407,7 +2445,7 @@ export async function getSellerPostResourceBundleDashboard(
     earnings_usd_cents: number;
     had_paid_orders: boolean;
     deleted_at: string;
-  }>).map((row) => ({
+  }>).filter((row) => !row.post_id || !listedPostIds.has(row.post_id)).map((row) => ({
     id: row.id,
     title: row.title,
     visibility: row.visibility,
