@@ -561,9 +561,13 @@ function TextPostContent({
       }}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
+        {/* Labelled in both states: Android never clears a label that goes
+            back to undefined, so "Open …" would outlive the link. */}
         <Pressable
           accessibilityRole={item.creatorUsername ? 'button' : undefined}
-          accessibilityLabel={item.creatorUsername ? `Open ${content.handle}` : undefined}
+          accessibilityLabel={item.creatorUsername
+            ? `Open ${content.handle}`
+            : [content.handle, content.timeLabel].filter(Boolean).join(' · ')}
           disabled={!item.creatorUsername}
           onPress={onCreatorOpen}
           hitSlop={verticalHitSlop(CREATOR_ROW_HEIGHT)}

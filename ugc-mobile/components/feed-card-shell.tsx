@@ -177,9 +177,11 @@ export function FeedCardShell({
           paddingTop: appTheme.spacing.gap,
         }}
       >
+        {/* Labelled in both states: Android never clears a label that goes
+            back to undefined, so "Open …" would outlive the link. */}
         <Pressable
           accessibilityRole={onCreatorPress ? 'button' : undefined}
-          accessibilityLabel={onCreatorPress ? `Open ${creatorLabel}` : undefined}
+          accessibilityLabel={onCreatorPress ? `Open ${creatorLabel}` : `${creatorLabel} · ${timeLabel}`}
           disabled={!onCreatorPress}
           onPress={onCreatorPress}
           hitSlop={verticalHitSlop(CREATOR_ROW_HEIGHT)}

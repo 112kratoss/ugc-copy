@@ -4625,11 +4625,12 @@ function MediaGalleryCard({
   return (
     <View
       accessibilityRole={canDrag ? 'adjustable' : 'image'}
-      accessibilityLabel={`${label}, ${index + 1} of ${totalItems}`}
+      // The name, with the position as the value, both in every state: on
+      // Android a value that goes back to undefined clears the whole
+      // description, name and all, and a position in both was read twice.
+      accessibilityLabel={label}
       accessibilityHint="Opens a full preview of this media"
-      accessibilityValue={isDragging
-        ? { text: describeDropTarget(drag.to, totalItems) }
-        : canDrag ? { text: `${index + 1} of ${totalItems}` } : undefined}
+      accessibilityValue={{ text: isDragging ? describeDropTarget(drag.to, totalItems) : `${index + 1} of ${totalItems}` }}
       // The pointer path opens the preview on tap; this is the same action for
       // a screen reader, which never produces those raw touch events.
       onAccessibilityTap={() => onPreviewMedia(index)}
