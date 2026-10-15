@@ -13,6 +13,7 @@ import type {
   TemplateRunStatus,
   TemplateRunStep,
 } from './types';
+import { preserveStableSignedUrl } from './template-run-stable-media';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -135,6 +136,104 @@ export function normalizeMediaTemplateDetailResponse(value: unknown): MediaTempl
     updatedAt: nullableString(rawTemplate, ['updatedAt', 'updated_at']),
   };
   return { success: response.success !== false, template };
+}
+
+/**
+ * A detail read that replaces the one on screen, keeping the demo's and the
+ * poster's addresses while they point at the same files and have five minutes
+ * left: every read signs both again, and the player and the image are keyed
+ * on the address, so a refetch taken as it came restarted the clip.
+ */
+export function withStableTemplateMedia<Template extends Pick<MediaTemplateSummary, 'id' | 'videoUrl' | 'thumbnailUrl'>>(
+  previous: Template | undefined,
+  next: Template,
+  nowMs = Date.now(),
+  storageBaseUrl?: string,
+): Template {
+  if (!previous || previous.id !== next.id) return next;
+  return {
+    ...next,
+    videoUrl: preserveStableSignedUrl(previous.videoUrl, next.videoUrl, nowMs, storageBaseUrl),
+    thumbnailUrl: preserveStableSignedUrl(previous.thumbnailUrl, next.thumbnailUrl, nowMs, storageBaseUrl),
+  };
+}
+
+/**
+ * The post-content reasons a template can be reported for: the reasons a post
+ * is reported for, less the two about a recipe, which a template does not have.
+ */
+export const TEMPLATE_REPORT_REASONS = [
+  { label: 'Spam', value: 'spam' },
+  { label: 'Stolen content', value: 'stolen_content' },
+  { label: 'Unsafe content', value: 'unsafe_content' },
+  { label: 'Something else', value: 'other' },
+] as const;
+
+export type TemplateReportReason = (typeof TEMPLATE_REPORT_REASONS)[number]['value'];
+
+/** "1 use", "1,240 uses": the web's words on its card and detail. */
+export function formatTemplateUseCount(count: number) {
+  const uses = Math.max(0, Math.trunc(count));
+  return `${uses.toLocaleString('en-US')} ${uses === 1 ? 'use' : 'uses'}`;
+}
+
+const SIGNED_STORAGE_PATH = '/storage/v1/object/sign/';
+
+/**
+ * The key a template's poster is cached under. Every read of the catalog signs
+ * each poster again, so keyed on its address a picture was downloaded again
+ * after each read; a signed Storage address without its query names the
+ * stored file instead. A new version's poster is a new file (each is stored
+ * under its version), so it still gets a key of its own.
+ */
+export function templatePosterCacheKey(url: string | null | undefined): string | null {
+  if (!url) return null;
+  if (!url.includes(SIGNED_STORAGE_PATH)) return url;
+  const end = url.search(/[?#]/);
+  return end === -1 ? url : url.slice(0, end);
+}
+
+/**
+ * Fresh poster links for the templates whose posters failed, read again four
+ * at a time as the web does (`useTemplatePosterRecovery`). A template that
+ * cannot be read is left out, and its card tries the link it already has.
+ */
+export async function renewTemplatePosters(
+  templateIds: string[],
+  readTemplate: (templateId: string) => Promise<Pick<MediaTemplateSummary, 'id' | 'thumbnailUrl'>>,
+  concurrency = 4,
+): Promise<Map<string, string | null>> {
+  const queue = [...new Set(templateIds)];
+  const renewed = new Map<string, string | null>();
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+    while (queue.length) {
+      const templateId = queue.shift()!;
+      try {
+        const template = await readTemplate(templateId);
+        if (template.id === templateId) renewed.set(templateId, template.thumbnailUrl);
+      } catch {
+        // Its card retries the link it had.
+      }
+    }
+  }));
+  return renewed;
+}
+
+/** The loaded catalog pages with the renewed poster links in place; every other field as the list read it. */
+export function withRenewedTemplatePosters<Data extends { pages: MediaTemplateListResponse[] }>(
+  data: Data | undefined,
+  renewed: Map<string, string | null>,
+): Data | undefined {
+  if (!data || renewed.size === 0) return data;
+  return {
+    ...data,
+    pages: data.pages.map((page) => ({
+      ...page,
+      templates: page.templates.map((template) => (
+        renewed.has(template.id) ? { ...template, thumbnailUrl: renewed.get(template.id) ?? null } : template
+      )),
+    })),
+  };
 }
 
 function normalizeRunStatus(value: unknown): TemplateRunStatus {
@@ -459,10 +558,6 @@ export function templateRunProgress(run: Pick<TemplateRun, 'status' | 'steps'>) 
   const complete = (run.status === 'collecting_inputs' ? 0 : 1)
     + run.steps.filter(isTemplateRunStepSuccessful).length;
   return { complete, total };
-}
-
-export function totalTemplateEstimate(template: Pick<MediaTemplateSummary, 'estimatedTotalCredits'>) {
-  return template.estimatedTotalCredits;
 }
 
 export function canAffordTemplateCredits(balance: number | null, estimate: number | null) {

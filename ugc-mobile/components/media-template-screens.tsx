@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, Stack } from 'expo-router';
@@ -6,7 +6,6 @@ import {
   ArrowRight,
   Check,
   CircleDollarSign,
-  CircleUserRound,
   Download,
   Image as ImageIcon,
   ImageOff,
@@ -19,12 +18,14 @@ import {
   VideoOff,
 } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, Linking, Platform, Pressable, Share, View } from 'react-native';
+import { ActivityIndicator, AppState, FlatList, Linking, Platform, Pressable, RefreshControl, Share, View } from 'react-native';
 
+import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { MediaPreview } from '@/components/media-preview';
 import {
   AppText,
   Card,
+  CreatorAvatar,
   IconButton,
   Kicker,
   Pill,
@@ -34,16 +35,19 @@ import {
   SectionHeader,
   StatusBlock,
 } from '@/components/ui';
-import { showConfirmDialog } from '@/lib/dialog';
+import { showActionSheet } from '@/lib/action-sheet';
+import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { withAiDataConsent } from '@/lib/ai-data-consent';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
+import { haptic } from '@/lib/haptics';
 import {
   hasAllTemplateInputs,
   canAffordTemplateCredits,
   canPublishTemplateRunResult,
   canRetryTemplateRunStep,
   createTemplateRunIdempotencyKey,
+  formatTemplateUseCount,
   isSafeTemplateResultUrl,
   isTemplateRunPolling,
   isTemplateRunStepFailed,
@@ -51,6 +55,8 @@ import {
   isTemplateRunStepSuccessful,
   isTemplateRunTerminal,
   prioritizeTemplateRunSteps,
+  renewTemplatePosters,
+  templatePosterCacheKey,
   templateRunActionErrorMessage,
   templateRunLinkedPost,
   templateRunStepNeedsNewRun,
@@ -61,13 +67,17 @@ import {
   templateRunStepStatusLabel,
   templateRunProgress,
   templateRunStageLabel,
-  totalTemplateEstimate,
+  TEMPLATE_REPORT_REASONS,
+  type TemplateReportReason,
+  withRenewedTemplatePosters,
+  withStableTemplateMedia,
 } from '@/lib/media-templates';
 import { pickMedia, uploadTemplateRunInput } from '@/lib/media';
 import {
-  clearActiveTemplateRun,
-  loadActiveTemplateRunId,
-  rememberActiveTemplateRun,
+  forgetTemplateRun,
+  loadResumableTemplateRun,
+  loadResumableTemplateRuns,
+  rememberTemplateRun,
 } from '@/lib/template-run-resume';
 import { env } from '@/lib/env';
 import { isSignedMediaUrlExpiring, preserveStableTemplateRunMedia } from '@/lib/template-run-stable-media';
@@ -79,7 +89,9 @@ import { useAppTheme } from '@/lib/theme-context';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
 import type {
   MediaTemplateDetail,
+  MediaTemplateDetailResponse,
   MediaTemplateInputSlot,
+  MediaTemplateListResponse,
   MediaTemplateSummary,
   TemplateRun,
   TemplateRunResponse,
@@ -100,6 +112,38 @@ function isMissingRunError(error: unknown) {
   return error instanceof ApiError && error.status === 404;
 }
 
+type MagicbookletApi = ReturnType<typeof useAuth>['api'];
+
+/** Every resume query of an account: the catalog's (all templates) and each template page's. */
+function templateRunResumeQueryKey(userId: string | null | undefined) {
+  return ['template-run-resume', userId ?? null] as const;
+}
+
+/** A remembered run read again: null when it is gone, or is another account's (reads are owner-only). */
+async function readRunForResume(api: MagicbookletApi, runId: string) {
+  try {
+    return (await api.getTemplateRun(runId)).run;
+  } catch (error) {
+    if (isMissingRunError(error)) return null;
+    throw error;
+  }
+}
+
+/**
+ * Remember a run for its template's Resume, or forget it once it has ended,
+ * and refresh the cards and pages that offer it when that changed.
+ */
+async function updateResumableRun(
+  queryClient: QueryClient,
+  userId: string,
+  run: Pick<TemplateRun, 'id' | 'templateId' | 'status' | 'isTest'>,
+) {
+  const changed = isTemplateRunTerminal(run.status)
+    ? await forgetTemplateRun(userId, run.id)
+    : await rememberTemplateRun(userId, run);
+  if (changed) await queryClient.invalidateQueries({ queryKey: templateRunResumeQueryKey(userId) });
+}
+
 function creatorName(template: Pick<MediaTemplateSummary, 'creator'>) {
   return template.creator?.displayName || template.creator?.username || 'Magicbooklet creator';
 }
@@ -117,201 +161,376 @@ function inputSummary(template: Pick<MediaTemplateSummary, 'inputSlots'>) {
   ].filter(Boolean).join(' + ') || 'No uploads';
 }
 
+const MEDIA_TEMPLATES_QUERY_KEY = ['media-templates'] as const;
+
+type MediaTemplatePages = InfiniteData<MediaTemplateListResponse, string | null>;
+
+/**
+ * The web's poster recovery (`useTemplatePosterRecovery`): a failed poster is
+ * kept with the link that failed, so a list read that brings a new link tries
+ * it at once, and Reload previews reads again only the templates whose posters
+ * failed, then remounts just those cards.
+ */
+function useTemplatePosterRecovery(templates: MediaTemplateSummary[]) {
+  const { api } = useAuth();
+  const queryClient = useQueryClient();
+  const [failedUrls, setFailedUrls] = useState<Record<string, string>>({});
+  const [attempts, setAttempts] = useState<Record<string, number>>({});
+  const [reloading, setReloading] = useState(false);
+  const failedIds = templates
+    .filter((template) => template.thumbnailUrl !== null && failedUrls[template.id] === template.thumbnailUrl)
+    .map((template) => template.id);
+
+  const onPosterError = (templateId: string, url: string) => {
+    setFailedUrls((current) => (current[templateId] === url ? current : { ...current, [templateId]: url }));
+  };
+
+  const reloadPreviews = async () => {
+    if (reloading || failedIds.length === 0) return;
+    const retried = failedIds;
+    setReloading(true);
+    const renewed = await renewTemplatePosters(retried, async (templateId) => (
+      (await api.getMediaTemplate(templateId, { fresh: true })).template
+    ));
+    queryClient.setQueryData<MediaTemplatePages>(MEDIA_TEMPLATES_QUERY_KEY, (current) => withRenewedTemplatePosters(current, renewed));
+    setFailedUrls((current) => Object.fromEntries(Object.entries(current).filter(([templateId]) => !retried.includes(templateId))));
+    // Remounted even when the link came back the same, so the picture is asked for again.
+    setAttempts((current) => ({
+      ...current,
+      ...Object.fromEntries(retried.map((templateId) => [templateId, (current[templateId] ?? 0) + 1])),
+    }));
+    setReloading(false);
+  };
+
+  return { failedUrls, failedIds, attempts, reloading, onPosterError, reloadPreviews };
+}
+
 export function MediaTemplateCatalogScreen() {
   const theme = useAppTheme();
   const { api, user } = useAuth();
+  const queryClient = useQueryClient();
+  // Set by a pull, so that one read of the first page goes past the API
+  // client's five-minute copy; every other read may take it.
+  const freshFirstPageRef = useRef(false);
   // Paged like the web catalog: the server stops at 48, and one request
   // could never show template 49 or later.
   const templatesQuery = useInfiniteQuery({
-    queryKey: ['media-templates'],
+    queryKey: MEDIA_TEMPLATES_QUERY_KEY,
     initialPageParam: null as string | null,
-    queryFn: ({ pageParam }) => api.listMediaTemplates(pageParam ? { cursor: pageParam } : undefined),
+    queryFn: ({ pageParam }) => {
+      if (pageParam) return api.listMediaTemplates({ cursor: pageParam });
+      const fresh = freshFirstPageRef.current;
+      freshFirstPageRef.current = false;
+      return api.listMediaTemplates(undefined, { fresh });
+    },
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
   const templates = templatesQuery.data?.pages.flatMap((page) => page.templates) ?? [];
-  const [failedPreviewAt, setFailedPreviewAt] = useState<number | null>(null);
-  const hasFailedPreview = failedPreviewAt === templatesQuery.dataUpdatedAt;
-  const activeRunQuery = useQuery({
-    queryKey: ['active-media-template-run', user?.id],
+  const posters = useTemplatePosterRecovery(templates);
+  // One run per template, offered on that template's card (01-7).
+  const resumeQuery = useQuery({
+    queryKey: templateRunResumeQueryKey(user?.id),
     enabled: Boolean(user?.id),
-    queryFn: async () => {
-      const userId = user?.id;
-      if (!userId) return null;
-      const runId = await loadActiveTemplateRunId(userId);
-      if (!runId) return null;
-      try {
-        const { run } = await api.getTemplateRun(runId);
-        if (isTemplateRunTerminal(run.status)) {
-          await clearActiveTemplateRun(userId, run.id);
-          return null;
-        }
-        return run;
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 404) {
-          await clearActiveTemplateRun(userId, runId);
-          return null;
-        }
-        throw error;
-      }
-    },
+    queryFn: () => loadResumableTemplateRuns({
+      userId: user?.id ?? '',
+      readRun: (runId) => readRunForResume(api, runId),
+    }),
   });
-  const activeRun = activeRunQuery.data;
+  const resumableRuns = resumeQuery.data;
 
-  return (
-    <Screen>
-      <Stack.Screen options={{ title: 'Templates' }} />
+  // Bound to the reader's own pull, never to a background refetch: on iOS a
+  // `refreshing` that flips without a drag shifts the list down and can leave
+  // it there (the note in components/home-dashboard.tsx).
+  const [pullRefreshing, setPullRefreshing] = useState(false);
+  const refreshCatalog = () => {
+    haptic.light();
+    setPullRefreshing(true);
+    freshFirstPageRef.current = true;
+    // Back to the first page, then read it again: kept, every later page the
+    // reader had loaded would be read again as well.
+    queryClient.setQueryData<MediaTemplatePages>(MEDIA_TEMPLATES_QUERY_KEY, (current) => (
+      current && current.pages.length > 1
+        ? { pages: current.pages.slice(0, 1), pageParams: current.pageParams.slice(0, 1) }
+        : current
+    ));
+    void Promise.all([templatesQuery.refetch(), user ? resumeQuery.refetch() : null])
+      .finally(() => setPullRefreshing(false));
+  };
+
+  const loadMoreTemplates = () => {
+    // A page that failed waits for its Retry: reaching the end again would fail the same way.
+    if (!templatesQuery.hasNextPage || templatesQuery.isFetchingNextPage || templatesQuery.isFetchNextPageError) return;
+    void templatesQuery.fetchNextPage();
+  };
+
+  const header = (
+    <View style={{ gap: appTheme.spacing.section, paddingBottom: appTheme.spacing.section }}>
       <SectionHeader
         eyebrow="Create faster"
         title="Workflow templates"
         body="Choose a format, add its required media, and review each generated step on the way to your result."
       />
-
-      {hasFailedPreview ? (
+      {posters.failedIds.length > 0 ? (
         <View style={{ gap: 12 }}>
           <AppText variant="bodySm" color="muted">Some previews could not load. You can still open a template.</AppText>
           <SecondaryButton
-            label={templatesQuery.isFetching ? 'Reloading previews…' : 'Reload previews'}
-            disabled={templatesQuery.isFetching}
-            onPress={() => void templatesQuery.refetch()}
+            label={posters.reloading ? 'Reloading previews…' : 'Reload previews'}
+            disabled={posters.reloading}
+            onPress={() => void posters.reloadPreviews()}
           />
         </View>
       ) : null}
-      {activeRun ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Resume ${activeRun.templateTitle}`}
-          accessibilityHint="Returns to your unfinished template creation"
-          onPress={() => router.push(`/template-runs/${encodeURIComponent(activeRun.id)}` as never)}
-          style={({ pressed }) => ({
-            minHeight: 82,
-            borderRadius: appTheme.radii.xl,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderColor: `${theme.colors.primary}66`,
-            backgroundColor: theme.colors.surfaceInset,
-            padding: 15,
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 12,
-            opacity: pressed ? appTheme.opacity.pressed : 1,
-          })}
-        >
-          <View style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.pressed }}>
-            <RefreshCw size={20} color={theme.colors.primary} />
-          </View>
-          <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-            <AppText variant="label">Resume creation</AppText>
-            <AppText variant="caption" color="muted" numberOfLines={1}>
-              {templateRunStageLabel(activeRun)} · {activeRun.templateTitle}
-            </AppText>
-          </View>
-          <ArrowRight size={20} color={theme.colors.primary} />
-        </Pressable>
-      ) : null}
+    </View>
+  );
 
-      {templatesQuery.isLoading ? (
-        <LoadingState label="Loading templates" />
-      ) : templatesQuery.isError && templates.length === 0 ? (
-        <View style={{ gap: 12 }}>
-          <StatusBlock title="Templates are unavailable" body={errorMessage(templatesQuery.error, 'Check your connection and try again.')} tone="danger" />
-          <SecondaryButton label="Try again" onPress={() => void templatesQuery.refetch()} />
-        </View>
-      ) : templates.length === 0 ? (
-        <StatusBlock title="No templates yet" body="Published creator templates will appear here." tone="neutral" />
-      ) : (
-        <View style={{ gap: 22 }}>
-          {templates.map((template) => (
-            <TemplatePoster
-              key={template.id}
-              template={template}
-              previewAttempt={templatesQuery.dataUpdatedAt}
-              onPreviewError={() => setFailedPreviewAt(templatesQuery.dataUpdatedAt)}
-            />
-          ))}
-          {templatesQuery.hasNextPage ? (
-            <SecondaryButton
-              label={templatesQuery.isFetchingNextPage ? 'Loading more templates…' : templatesQuery.isFetchNextPageError ? 'Try again' : 'Load more templates'}
-              disabled={templatesQuery.isFetchingNextPage}
-              onPress={() => void templatesQuery.fetchNextPage()}
-            />
-          ) : null}
-        </View>
-      )}
-    </Screen>
+  const emptyState = templatesQuery.isLoading ? (
+    <LoadingState label="Loading templates" />
+  ) : templatesQuery.isError ? (
+    <View style={{ gap: 12 }}>
+      <StatusBlock title="Templates are unavailable" body={errorMessage(templatesQuery.error, 'Check your connection and try again.')} tone="danger" />
+      <SecondaryButton label="Try again" onPress={() => void templatesQuery.refetch()} />
+    </View>
+  ) : (
+    <StatusBlock title="No templates yet" body="Published creator templates will appear here." tone="neutral" />
+  );
+
+  const footer = templatesQuery.isFetchingNextPage ? (
+    <View style={{ minHeight: 72, alignItems: 'center', justifyContent: 'center' }}>
+      <ActivityIndicator accessibilityLabel="Loading more templates" color={theme.colors.primary} />
+    </View>
+  ) : templatesQuery.isFetchNextPageError ? (
+    <FeedLoadMoreErrorFooter onRetry={() => void templatesQuery.fetchNextPage()} />
+  ) : null;
+
+  return (
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+      <Stack.Screen options={{ title: 'Templates' }} />
+      {/* A list, so only the cards near the screen are mounted: as a scroll
+          view every loaded template was, 48 posters on opening and 48 more
+          with each page (01-5). */}
+      <FlatList
+        data={templates}
+        keyExtractor={(template) => template.id}
+        extraData={[posters, resumableRuns]}
+        renderItem={({ item }) => (
+          <TemplateCard
+            template={item}
+            posterAttempt={posters.attempts[item.id] ?? 0}
+            posterFailed={item.thumbnailUrl !== null && posters.failedUrls[item.id] === item.thumbnailUrl}
+            onPosterError={posters.onPosterError}
+            resumableRun={resumableRuns?.[item.id] ?? null}
+          />
+        )}
+        ItemSeparatorComponent={TemplateCardGap}
+        ListHeaderComponent={header}
+        ListEmptyComponent={emptyState}
+        ListFooterComponent={footer}
+        onEndReached={loadMoreTemplates}
+        onEndReachedThreshold={1}
+        initialNumToRender={4}
+        maxToRenderPerBatch={4}
+        windowSize={7}
+        refreshControl={(
+          <RefreshControl
+            refreshing={pullRefreshing}
+            onRefresh={refreshCatalog}
+            tintColor={theme.colors.faint}
+            colors={[theme.colors.primary]}
+            progressBackgroundColor={theme.colors.panelSoft}
+          />
+        )}
+        contentInsetAdjustmentBehavior="automatic"
+        showsVerticalScrollIndicator={false}
+        style={{ flex: 1, backgroundColor: theme.colors.background }}
+        contentContainerStyle={{
+          paddingHorizontal: appTheme.spacing.screen,
+          paddingTop: appTheme.spacing.screen,
+          paddingBottom: 36,
+        }}
+      />
+    </View>
   );
 }
 
-function TemplatePoster({ template, previewAttempt, onPreviewError }: {
+function TemplateCardGap() {
+  return <View style={{ height: 22 }} />;
+}
+
+function TemplateCard({ template, posterAttempt, posterFailed, onPosterError, resumableRun }: {
   template: MediaTemplateSummary;
-  previewAttempt: number;
-  onPreviewError: () => void;
+  posterAttempt: number;
+  posterFailed: boolean;
+  onPosterError: (templateId: string, url: string) => void;
+  resumableRun: TemplateRun | null;
 }) {
+  const theme = useAppTheme();
+  return (
+    <View style={{ gap: 11 }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${template.name}. Use template by ${creatorName(template)}`}
+        accessibilityHint="Opens template details"
+        onPress={() => router.push(`/templates/${encodeURIComponent(template.slug)}` as never)}
+        style={({ pressed }) => ({ gap: 11, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+      >
+        <View style={{ minHeight: 280, aspectRatio: 4 / 5, overflow: 'hidden', borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceInset }}>
+          <TemplatePosterImage template={template} attempt={posterAttempt} failed={posterFailed} onError={onPosterError} />
+          <LinearGradient
+            colors={[hexWithAlpha(mediaColors.mediaGround, 0.03), hexWithAlpha(mediaColors.mediaGround, 0.18), hexWithAlpha(mediaColors.mediaGround, 0.94)]}
+            locations={[0.35, 0.58, 1]}
+            style={{ position: 'absolute', inset: 0, justifyContent: 'flex-end', padding: 18, gap: 6 }}
+          >
+            {/* On the gradient's black foot, so the dark palette in both schemes. */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+              <View style={{ width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(mediaColors.onMedia, 0.14) }}>
+                <Play size={16} fill={themes.dark.colors.text} color={themes.dark.colors.text} />
+              </View>
+              <Kicker color={themes.dark.colors.primary}>{template.outputKind} template</Kicker>
+            </View>
+            <AppText variant="sectionTitle" color={themes.dark.colors.text} numberOfLines={2}>{template.name}</AppText>
+            <AppText variant="caption" color={themes.dark.colors.textSecondary} numberOfLines={1}>by {creatorName(template)}</AppText>
+          </LinearGradient>
+        </View>
+        {/* What the web's card says under its poster: category, uses and description (01-9). */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <Kicker style={{ flex: 1 }}>{template.category}</Kicker>
+          {template.useCount > 0 ? <AppText variant="caption" color="muted">{formatTemplateUseCount(template.useCount)}</AppText> : null}
+        </View>
+        {template.description ? (
+          <AppText variant="bodySm" color="textSecondary" numberOfLines={2}>{template.description}</AppText>
+        ) : null}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <AppText variant="bodySm" color="muted" style={{ flex: 1 }}>
+            {inputSummary(template)}
+            {template.estimatedTotalCredits === null ? '' : ` · about ${template.estimatedTotalCredits} credits`}
+          </AppText>
+          <ArrowRight size={20} color={theme.colors.primary} />
+        </View>
+      </Pressable>
+      {/* Beside the card, not inside it: a button within a button is out of
+          VoiceOver's reach, and the card itself opens the template. */}
+      {resumableRun ? <ResumeRunCard run={resumableRun} templateName={template.name} /> : null}
+    </View>
+  );
+}
+
+/** The template's remembered run, still going: its card and its page both offer it (01-7). */
+function ResumeRunCard({ run, templateName }: { run: TemplateRun; templateName: string }) {
   const theme = useAppTheme();
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${template.name}. Use template by ${creatorName(template)}`}
-      accessibilityHint="Opens template details"
-      onPress={() => router.push(`/templates/${encodeURIComponent(template.slug)}` as never)}
-      style={({ pressed }) => ({ gap: 11, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+      accessibilityLabel={`Resume your run of ${templateName}`}
+      accessibilityHint="Returns to your unfinished creation"
+      onPress={() => router.push(`/template-runs/${encodeURIComponent(run.id)}` as never)}
+      style={({ pressed }) => ({
+        minHeight: 64,
+        borderRadius: appTheme.radii.xl,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: hexWithAlpha(theme.colors.primary, 0.4),
+        backgroundColor: theme.colors.surfaceInset,
+        paddingHorizontal: 15,
+        paddingVertical: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+      })}
     >
-      <View style={{ minHeight: 280, aspectRatio: 4 / 5, overflow: 'hidden', borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceInset }}>
-        <TemplatePosterImage key={`${template.thumbnailUrl}:${previewAttempt}`} template={template} onError={onPreviewError} />
-        <LinearGradient
-          colors={[hexWithAlpha(mediaColors.mediaGround, 0.03), hexWithAlpha(mediaColors.mediaGround, 0.18), hexWithAlpha(mediaColors.mediaGround, 0.94)]}
-          locations={[0.35, 0.58, 1]}
-          style={{ position: 'absolute', inset: 0, justifyContent: 'flex-end', padding: 18, gap: 6 }}
-        >
-          {/* On the gradient's black foot, so the dark palette in both schemes. */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
-            <View style={{ width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(mediaColors.onMedia, 0.14) }}>
-              <Play size={16} fill={themes.dark.colors.text} color={themes.dark.colors.text} />
-            </View>
-            <Kicker color={themes.dark.colors.primary}>{template.outputKind} template</Kicker>
-          </View>
-          <AppText variant="sectionTitle" color={themes.dark.colors.text} numberOfLines={2}>{template.name}</AppText>
-          <AppText variant="caption" color={themes.dark.colors.textSecondary} numberOfLines={1}>by {creatorName(template)}</AppText>
-        </LinearGradient>
+      <View style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.pressed }}>
+        <RefreshCw size={appTheme.icon.default} color={theme.colors.primary} />
       </View>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <AppText variant="bodySm" color="muted" style={{ flex: 1 }}>
-          {inputSummary(template)}
-          {template.estimatedTotalCredits === null ? '' : ` · about ${template.estimatedTotalCredits} credits`}
-        </AppText>
-        <ArrowRight size={20} color={theme.colors.primary} />
+      <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+        <AppText variant="label">Resume</AppText>
+        <AppText variant="caption" color="muted" numberOfLines={1}>{templateRunStageLabel(run)}</AppText>
       </View>
+      <ArrowRight size={appTheme.icon.default} color={theme.colors.primary} />
     </Pressable>
   );
 }
 
-function TemplatePosterImage({ template, onError }: { template: MediaTemplateSummary; onError: () => void }) {
+function TemplatePosterImage({ template, attempt, failed, onError }: {
+  template: MediaTemplateSummary;
+  attempt: number;
+  failed: boolean;
+  onError: (templateId: string, url: string) => void;
+}) {
   const theme = useAppTheme();
-  const [failed, setFailed] = useState(false);
   const OutputIcon = template.outputKind === 'video' ? Video : ImageIcon;
+  const posterUrl = template.thumbnailUrl;
+  const cacheKey = templatePosterCacheKey(posterUrl);
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
       <OutputIcon size={appTheme.icon.hero} color={theme.colors.faint} />
-      {template.thumbnailUrl && !failed ? (
+      {posterUrl && cacheKey && !failed ? (
         <Image
-          source={{ uri: template.thumbnailUrl }}
+          // Keyed on the stored file: a read that signs the poster again keeps
+          // this image, and only Reload previews remounts one that failed.
+          key={`${cacheKey}:${attempt}`}
+          source={{ uri: posterUrl, cacheKey }}
+          cachePolicy="memory-disk"
           contentFit="cover"
           transition={160}
           style={{ position: 'absolute', inset: 0 }}
-          onError={() => { setFailed(true); onError(); }}
+          onError={() => onError(template.id, posterUrl)}
         />
       ) : null}
     </View>
   );
 }
 
+/** Sends a template to the moderation team with the reason chosen in the sheet (01-3). */
+async function sendTemplateReport(api: MagicbookletApi, templateId: string, reason: TemplateReportReason) {
+  try {
+    await api.reportTemplate(templateId, { reason, details: 'Reported from the mobile template page.' });
+  } catch (error) {
+    // This person's earlier report is still waiting for a decision: not a failure.
+    if (error instanceof ApiError && error.code === 'ALREADY_REPORTED') {
+      showMessageDialog({ title: 'Already reported', message: error.message });
+      return;
+    }
+    haptic.error();
+    showErrorDialog('Could not report template', error);
+    return;
+  }
+  haptic.success();
+  showMessageDialog({
+    title: 'Report received',
+    message: 'Thank you. Our moderation team will review this template.',
+  });
+}
+
 export function MediaTemplateDetailScreen({ slug }: { slug: string }) {
   const { api, user } = useAuth();
+  const queryClient = useQueryClient();
   const [message, setMessage] = useState<string | null>(null);
   const createRunKeyRef = useRef<string | null>(null);
+  const userId = user?.id ?? null;
+  // The viewer is part of the key: a signed-in read can be the owner's, a
+  // draft with its status, which nobody else may be shown.
+  const templateQueryKey = ['media-template', slug, userId] as const;
   const templateQuery = useQuery({
-    queryKey: ['media-template', slug],
+    queryKey: templateQueryKey,
     enabled: Boolean(slug),
-    queryFn: () => api.getMediaTemplate(slug),
+    queryFn: async () => {
+      // With the session when signed in, so the owner reads their own draft
+      // or disabled template with its status (01-10).
+      const response = await api.getMediaTemplate(slug, { withSession: Boolean(userId) });
+      const shown = queryClient.getQueryData<MediaTemplateDetailResponse>(templateQueryKey)?.template;
+      return { ...response, template: withStableTemplateMedia(shown, response.template) };
+    },
+  });
+  const template = templateQuery.data?.template;
+  const isOwner = Boolean(userId && template?.creatorUserId === userId);
+  const resumeQuery = useQuery({
+    queryKey: [...templateRunResumeQueryKey(userId), template?.id ?? null],
+    enabled: Boolean(userId && template?.id),
+    queryFn: () => loadResumableTemplateRun({
+      userId: userId ?? '',
+      templateId: template?.id ?? '',
+      readRun: (runId) => readRunForResume(api, runId),
+    }),
   });
   const createRun = useMutation({
     mutationFn: (templateId: string) => {
@@ -320,22 +539,52 @@ export function MediaTemplateDetailScreen({ slug }: { slug: string }) {
     },
     onSuccess: ({ run }) => {
       createRunKeyRef.current = null;
-      if (user?.id) void rememberActiveTemplateRun(user.id, run.id);
+      if (userId) void updateResumableRun(queryClient, userId, run);
       router.push(`/template-runs/${encodeURIComponent(run.id)}` as never);
     },
-    onError: (error) => setMessage(errorMessage(error, 'Could not start this template.')),
+    onError: (error) => {
+      // It stopped being live after this page read it: read it again, so the
+      // page shows where it stands instead of a start that cannot work.
+      if (error instanceof ApiError && error.status === 404) void templateQuery.refetch();
+      setMessage(error instanceof ApiError && error.code === 'TEMPLATE_NOT_ACTIVE'
+        ? 'This template isn’t live, so a run can’t start. Publish it from the workflow canvas on the web first.'
+        : errorMessage(error, 'Could not start this template.'));
+    },
   });
-  const template = templateQuery.data?.template;
+
+  const signInHere = () => {
+    router.push({ pathname: '/auth', params: { returnTo: `/templates/${encodeURIComponent(slug)}` } } as never);
+  };
 
   const useTemplate = () => {
-    if (!template) return;
+    if (!template || template.status !== 'active') return;
     if (!user) {
-      router.push({ pathname: '/auth', params: { returnTo: `/templates/${encodeURIComponent(slug)}` } } as never);
+      signInHere();
       return;
     }
     setMessage(null);
     createRun.mutate(template.id);
   };
+
+  const reportTemplate = () => {
+    if (!template) return;
+    // A report needs a registered account: the server refuses a guest's.
+    if (!user) {
+      signInHere();
+      return;
+    }
+    const templateId = template.id;
+    showActionSheet({
+      title: 'Why are you reporting this?',
+      message: 'Choose the closest reason so the moderation team can review it correctly.',
+      actions: TEMPLATE_REPORT_REASONS.map((reason) => ({
+        label: reason.label,
+        onPress: () => void sendTemplateReport(api, templateId, reason.value),
+      })),
+    });
+  };
+
+  const templateGone = templateQuery.error instanceof ApiError && templateQuery.error.status === 404;
 
   return (
     <Screen>
@@ -345,16 +594,57 @@ export function MediaTemplateDetailScreen({ slug }: { slug: string }) {
       ) : templateQuery.isError || !template ? (
         <View style={{ gap: 12 }}>
           <StatusBlock title="Template unavailable" body={errorMessage(templateQuery.error, 'This template may have been removed.')} tone="danger" />
-          <SecondaryButton label="Try again" onPress={() => void templateQuery.refetch()} />
+          {/* A template that is not there reads the same way on every try (01-10). */}
+          {templateGone ? null : <SecondaryButton label="Try again" onPress={() => void templateQuery.refetch()} />}
         </View>
       ) : (
-        <TemplateDetailContent template={template} resolveVideoRetry={async () => {
-          const fresh = await api.getMediaTemplate(template.id);
-          if (fresh.template.id !== template.id || !fresh.template.videoUrl) throw new Error('Demo unavailable');
-          return fresh.template.videoUrl;
-        }} message={message} starting={createRun.isPending} onUse={useTemplate} />
+        <TemplateDetailContent
+          template={template}
+          resolveVideoRetry={async () => {
+            const fresh = await api.getMediaTemplate(template.id, { withSession: Boolean(userId), fresh: true });
+            if (fresh.template.id !== template.id || !fresh.template.videoUrl) throw new Error('Demo unavailable');
+            return fresh.template.videoUrl;
+          }}
+          message={message}
+          starting={createRun.isPending}
+          resumableRun={resumeQuery.data ?? null}
+          onUse={useTemplate}
+          // Not on the creator's own template: the server refuses that report.
+          onReport={isOwner ? undefined : reportTemplate}
+        />
       )}
     </Screen>
+  );
+}
+
+/** What the creator is told about their own template that is not live. */
+function ownTemplateStatus(status: 'draft' | 'disabled') {
+  return status === 'draft'
+    ? { title: 'Draft template', body: 'Only you can see it. Publish it from the workflow canvas on the web to let others use it.' }
+    : { title: 'Template disabled', body: 'Only you can see it. Publish it again from the workflow canvas on the web to make it available.' };
+}
+
+/** The creator's picture and name, a link to their profile, where they can be reported or blocked (01-3, 01-9). */
+function TemplateCreatorByline({ template }: { template: MediaTemplateSummary }) {
+  const name = creatorName(template);
+  const username = template.creator?.username;
+  const byline = (
+    <>
+      <CreatorAvatar uri={template.creator?.avatarUrl ?? null} name={name} size={28} />
+      <AppText variant="bodySm" color="muted" numberOfLines={1} style={{ flexShrink: 1 }}>by {name}</AppText>
+    </>
+  );
+  if (!username) return <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 }}>{byline}</View>;
+  return (
+    <Pressable
+      accessibilityRole="link"
+      accessibilityLabel={`Created by ${name}`}
+      accessibilityHint="Opens their profile"
+      onPress={() => router.push(`/creators/${encodeURIComponent(username)}` as never)}
+      style={({ pressed }) => ({ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+    >
+      {byline}
+    </Pressable>
   );
 }
 
@@ -363,31 +653,45 @@ function TemplateDetailContent({
   resolveVideoRetry,
   message,
   starting,
+  resumableRun,
   onUse,
+  onReport,
 }: {
   template: MediaTemplateDetail;
   resolveVideoRetry: () => Promise<string>;
   message: string | null;
   starting: boolean;
+  resumableRun: TemplateRun | null;
   onUse: () => void;
+  onReport?: () => void;
 }) {
   const theme = useAppTheme();
+  const posterCacheKey = templatePosterCacheKey(template.thumbnailUrl);
   return (
     <>
       <View style={{ gap: 8 }}>
         <Kicker color={theme.colors.primary}>{template.category}</Kicker>
         <AppText variant="pageTitle">{template.name}</AppText>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <CircleUserRound size={appTheme.icon.sm} color={theme.colors.muted} />
-          <AppText variant="bodySm" color="muted">by {creatorName(template)}</AppText>
-          {template.useCount > 0 ? <AppText variant="caption" color="faint">· {template.useCount} uses</AppText> : null}
+          <TemplateCreatorByline template={template} />
+          {template.useCount > 0 ? <AppText variant="caption" color="faint">· {formatTemplateUseCount(template.useCount)}</AppText> : null}
         </View>
       </View>
 
       {/* The demo clip, or the poster of a template without one, in the same
-          frame: whole, and centred on black bands. */}
+          frame: whole, and centred on black bands. A clip shows its poster
+          until it is played, as the web's does (01-9). */}
       {template.videoUrl
-        ? <MediaPreview url={template.videoUrl} kind="video" height={430} letterbox resolveRetryUrl={resolveVideoRetry} />
+        ? (
+          <MediaPreview
+            url={template.videoUrl}
+            kind="video"
+            height={430}
+            letterbox
+            resolveRetryUrl={resolveVideoRetry}
+            poster={template.thumbnailUrl && posterCacheKey ? { url: template.thumbnailUrl, cacheKey: posterCacheKey } : null}
+          />
+        )
         : <MediaPreview url={template.thumbnailUrl} kind="image" height={430} letterbox />}
       {template.description ? <AppText variant="body" color="textSecondary">{template.description}</AppText> : null}
 
@@ -418,13 +722,24 @@ function TemplateDetailContent({
           </View>
           <View style={{ alignItems: 'flex-end', gap: 4 }}>
             <CircleDollarSign size={20} color={theme.colors.primary} />
-            <AppText variant="label">{creditLabel(totalTemplateEstimate(template))}</AppText>
+            <AppText variant="label">{creditLabel(template.estimatedTotalCredits)}</AppText>
           </View>
         </View>
       </Card>
 
+      {/* Only its creator reads a template that is not live: it says so, and
+          offers no start, which the server would refuse (01-10). */}
+      {template.status === 'active' ? null : <StatusBlock {...ownTemplateStatus(template.status)} tone="neutral" />}
       {message ? <StatusBlock title="Could not start" body={message} tone="danger" /> : null}
-      <PrimaryButton label="Use this template" loading={starting} onPress={onUse} />
+      {resumableRun ? <ResumeRunCard run={resumableRun} templateName={template.name} /> : null}
+      {template.status === 'active' ? <PrimaryButton label="Use this template" loading={starting} onPress={onUse} /> : null}
+      {onReport ? (
+        <SecondaryButton
+          label="Report template"
+          accessibilityHint="Sends this template to the moderation team"
+          onPress={onReport}
+        />
+      ) : null}
     </>
   );
 }
@@ -457,11 +772,17 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
   });
   const template = templateQuery.data?.template;
 
+  // Only when the run's own facts change, not at each poll: every poll brings
+  // a new copy of the same run.
+  const shownRunId = run?.id;
+  const shownTemplateId = run?.templateId;
+  const shownStatus = run?.status;
+  const shownIsTest = run?.isTest ?? false;
   useEffect(() => {
-    if (!user?.id || !run) return;
-    if (isTemplateRunTerminal(run.status)) void clearActiveTemplateRun(user.id, run.id);
-    else void rememberActiveTemplateRun(user.id, run.id);
-  }, [run, user?.id]);
+    const userId = user?.id;
+    if (!userId || !shownRunId || !shownTemplateId || !shownStatus) return;
+    void updateResumableRun(queryClient, userId, { id: shownRunId, templateId: shownTemplateId, status: shownStatus, isTest: shownIsTest });
+  }, [queryClient, shownIsTest, shownRunId, shownStatus, shownTemplateId, user?.id]);
 
   useEffect(() => {
     const nextStatus = run?.status ?? null;
@@ -881,7 +1202,7 @@ function RunSteps({
       ))}
       {isTemplateRunPolling(run.status) ? (
         <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>
-          This run keeps working if you leave. Resume it from Templates at any time.
+          This run keeps working if you leave. Resume it from this template’s page at any time.
         </AppText>
       ) : null}
     </View>
@@ -1046,7 +1367,7 @@ function ResultStage({
     try {
       createRunKeyRef.current ??= createTemplateRunIdempotencyKey();
       const response = await api.createMediaTemplateRun(run.templateId, createRunKeyRef.current);
-      await rememberActiveTemplateRun(userId, response.run.id);
+      void updateResumableRun(queryClient, userId, response.run);
       queryClient.setQueryData(['media-template-run', response.run.id], response);
       createRunKeyRef.current = null;
       router.replace(`/template-runs/${encodeURIComponent(response.run.id)}` as never);

@@ -6,7 +6,12 @@ import { ApiError, POST_RESOURCE_FILE_URL_BATCH_LIMIT, createApiClient, type Mag
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
 import { buildImmersiveGenerationItems, buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
 import { buildShowcaseFeedEventRequest } from '../lib/showcase-feed-events';
-import type { ShowcaseFeedEventRequest, ShowcaseFeedEventType, UndoFeedFeedbackRequest } from '../lib/types';
+import type {
+  InsufficientCreditsResponse,
+  ShowcaseFeedEventRequest,
+  ShowcaseFeedEventType,
+  UndoFeedFeedbackRequest,
+} from '../lib/types';
 import { getShowcaseViewerImageUrl } from '../lib/showcase-media';
 import { isAmbiguousGenerationStartFailure } from '../lib/generation-attempts';
 import { describeRestoreOutcome, restoreLandedPurchase } from '../lib/pricing-view-model';
@@ -414,6 +419,10 @@ const extendedOperationCases: Array<{
       sourceSurface: 'generation-viewer',
     }),
   },
+  {
+    key: 'reportTemplate',
+    call: (api) => api.reportTemplate('template-1', { reason: 'unsafe_content' }),
+  },
   { key: 'listBlockedUsers', call: (api) => api.listBlockedUsers() },
   { key: 'blockUser', call: (api) => api.blockUser('creator-1') },
   { key: 'unblockUser', call: (api) => api.unblockUser('creator-1') },
@@ -559,6 +568,33 @@ describe('mobile shared API v1 contract fixture', () => {
       code: 'MOBILE_UPDATE_REQUIRED',
       details: endpoint.response,
     });
+  });
+
+  // A total that covers the price can still be refused: welcome and referral
+  // credits cannot buy creator resources. The refusal reaches the caller with
+  // its code and the figure that could be spent.
+  it('surfaces the credit unlock refusal with its code and the spendable figure', async () => {
+    const endpoint = mobileApiContract.endpoints.unlockBundleWithCredits;
+    const refused = endpoint.errors.insufficientCredits;
+    const body: InsufficientCreditsResponse = {
+      ...refused.response,
+      code: 'INSUFFICIENT_CREDITS',
+    };
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: vi.fn(async () => jsonResponse(refused.response, refused.status)) as unknown as typeof fetch,
+    });
+
+    const error = await api.unlockBundleWithCredits('post-1').catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      status: 402,
+      code: 'INSUFFICIENT_CREDITS',
+      message: body.error,
+      details: body,
+    });
+    expect((error as ApiError).details).toMatchObject({ remainingCredits: 1200, marketplaceSpendableCredits: 0 });
   });
 
   it("signs a bundle's files in the shared batch shapes, within the shared limit", async () => {

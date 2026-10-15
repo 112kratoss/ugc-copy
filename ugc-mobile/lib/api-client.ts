@@ -92,6 +92,7 @@ import {
   normalizeMediaTemplateDetailResponse,
   normalizeMediaTemplateListResponse,
   normalizeTemplateRunResponse,
+  type TemplateReportReason,
 } from './media-templates';
 import type { MediaDiagnosticsReport } from './media-diagnostics';
 import type { SeedanceAssetKind } from './model-catalog/seedance-assets';
@@ -597,6 +598,11 @@ function normalizeGenerationMediaUrls(root: string, item: GenerationListItem): G
       })),
   };
 }
+
+type MediaTemplateReadOptions = {
+  /** Read past the five-minute copy kept for public reads, and keep the new answer in its place. */
+  fresh?: boolean;
+};
 
 function normalizeTemplateListMediaUrls(root: string, response: MediaTemplateListResponse): MediaTemplateListResponse {
   return {
@@ -1338,6 +1344,19 @@ export function createApiClient({
         ...body,
       }),
     }),
+    reportTemplate: (
+      templateId: string,
+      body: { reason: TemplateReportReason; details?: string }
+    ) => request<{ success: true }>('/api/moderation/reports', {
+      method: 'POST',
+      // No surface: a template is reported from its page alone, and the
+      // server files it as that.
+      body: JSON.stringify({
+        targetType: 'template',
+        targetId: templateId,
+        ...body,
+      }),
+    }),
     listBlockedUsers: () =>
       request<{ success: true; blockedUsers: BlockedUser[]; hasMore: boolean }>('/api/moderation/blocks'),
     blockUser: (userId: string) =>
@@ -1509,18 +1528,30 @@ export function createApiClient({
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    listMediaTemplates: async (params?: Record<string, QueryValue>) => {
-      const response = await request<unknown>(`/api/templates${buildQuery(params)}`, {}, {
+    listMediaTemplates: async (params?: Record<string, QueryValue>, options: MediaTemplateReadOptions = {}) => {
+      const path = `/api/templates${buildQuery(params)}`;
+      // A pull to refresh asks the server again, and the answer replaces the copy kept here.
+      if (options.fresh) responseCache.delete(`${root}${path}`);
+      const response = await request<unknown>(path, {}, {
         auth: false,
         cacheTtlMs: CONTENT_CACHE_TTL_MS,
       });
       return normalizeTemplateListMediaUrls(root, normalizeMediaTemplateListResponse(response));
     },
-    getMediaTemplate: async (slug: string) => {
-      const response = await request<unknown>(`/api/templates/${encodeURIComponent(slug)}`, {}, {
-        auth: false,
-        cacheTtlMs: CONTENT_CACHE_TTL_MS,
-      });
+    getMediaTemplate: async (slug: string, options: MediaTemplateReadOptions & {
+      /**
+       * Send the session, so the owner reads their own draft or disabled
+       * template with its status. A registered account only: the server
+       * answers a guest's token on `/api/templates*` with 403. The answer can
+       * be the owner's, so it is never kept in the shared five-minute copy.
+       */
+      withSession?: boolean;
+    } = {}) => {
+      const path = `/api/templates/${encodeURIComponent(slug)}`;
+      if (options.fresh) responseCache.delete(`${root}${path}`);
+      const response = await request<unknown>(path, {}, options.withSession
+        ? { auth: true }
+        : { auth: false, cacheTtlMs: CONTENT_CACHE_TTL_MS });
       const normalized = normalizeMediaTemplateDetailResponse(response);
       const listNormalized = normalizeTemplateListMediaUrls(root, {
         success: normalized.success,

@@ -8,6 +8,7 @@ import {
   canPublishTemplateRunResult,
   canRetryTemplateRunStep,
   createTemplateRunIdempotencyKey,
+  formatTemplateUseCount,
   hasAllTemplateInputs,
   isSafeTemplateResultUrl,
   isTemplateRunPolling,
@@ -17,6 +18,9 @@ import {
   normalizeMediaTemplateListResponse,
   normalizeTemplateRunResponse,
   prioritizeTemplateRunSteps,
+  renewTemplatePosters,
+  TEMPLATE_REPORT_REASONS,
+  templatePosterCacheKey,
   templateRunActionErrorMessage,
   templateRunLinkedPost,
   templateRunStepNeedsNewRun,
@@ -27,7 +31,8 @@ import {
   templateRunStepPlaceholderLabel,
   templateRunStepPlaceholderMark,
   templateRunStepStatusLabel,
-  totalTemplateEstimate,
+  withRenewedTemplatePosters,
+  withStableTemplateMedia,
 } from '../lib/media-templates';
 import type { TemplateRunFailureCode, TemplateRunStatus, TemplateRunStep } from '../lib/types';
 
@@ -69,7 +74,6 @@ describe('media template view model', () => {
         { key: 'motion', kind: 'video', required: true },
       ],
     });
-    expect(totalTemplateEstimate(list.templates[0])).toBe(12);
     expect(detail.template.createdAt).toBe('2026-07-11T00:00:00.000Z');
     expect(detail.template).not.toHaveProperty('graph');
     expect(detail.template).not.toHaveProperty('prompt');
@@ -503,5 +507,94 @@ describe('media template view model', () => {
     expect(response.run.inputSlots[0]).toMatchObject({ kind: 'image', required: true });
     expect(response.run.steps[0]).toMatchObject({ id: 'legacy-generation', status: 'failed', estimatedRetryCredits: 2 });
     expect(response.run.errorMessage).toBe('The final frame was rejected.');
+  });
+});
+
+describe('catalog posters (01-5)', () => {
+  const stored = 'https://project.supabase.co/storage/v1/object/sign/template_assets/template-1/version-2/poster.webp';
+
+  it('caches a signed poster under its stored file, and any other link as it is', () => {
+    expect(templatePosterCacheKey(`${stored}?token=first`)).toBe(stored);
+    expect(templatePosterCacheKey(`${stored}?token=second`)).toBe(stored);
+    // A new version's poster is a new file, so a new key.
+    expect(templatePosterCacheKey(stored.replace('version-2', 'version-3') + '?token=third')).not.toBe(stored);
+    // Only a signed Storage link has a token to drop; another link's query may be the picture.
+    expect(templatePosterCacheKey('https://cdn.example.com/poster.webp?width=720')).toBe('https://cdn.example.com/poster.webp?width=720');
+    expect(templatePosterCacheKey(null)).toBeNull();
+  });
+
+  it('reads the failed templates again four at a time, and leaves out one that cannot be read', async () => {
+    let inFlight = 0;
+    let mostInFlight = 0;
+    const read = async (id: string) => {
+      inFlight += 1;
+      mostInFlight = Math.max(mostInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      inFlight -= 1;
+      if (id === 'gone') throw new Error('Template not found.');
+      return { id, thumbnailUrl: `${stored}?token=${id}` };
+    };
+
+    const renewed = await renewTemplatePosters(['a', 'b', 'gone', 'c', 'd', 'e', 'a'], read);
+
+    expect(mostInFlight).toBe(4);
+    expect([...renewed.keys()].sort()).toEqual(['a', 'b', 'c', 'd', 'e']);
+    expect(renewed.get('c')).toBe(`${stored}?token=c`);
+  });
+
+  it('puts renewed links into the loaded pages and leaves every other field as the list read it', () => {
+    const pages = {
+      pages: [
+        normalizeMediaTemplateListResponse({ templates: [{ id: 'a', name: 'A', thumbnailUrl: 'old-a' }, { id: 'b', name: 'B', thumbnailUrl: 'old-b' }], nextCursor: 'next' }),
+        normalizeMediaTemplateListResponse({ templates: [{ id: 'c', name: 'C', thumbnailUrl: 'old-c' }] }),
+      ],
+      pageParams: [null, 'next'],
+    };
+
+    const updated = withRenewedTemplatePosters(pages, new Map([['b', 'new-b'], ['c', null]]));
+
+    expect(updated?.pages.map((page) => page.templates.map((template) => template.thumbnailUrl))).toEqual([['old-a', 'new-b'], [null]]);
+    expect(updated?.pages[0].nextCursor).toBe('next');
+    expect(updated?.pageParams).toEqual([null, 'next']);
+    expect(withRenewedTemplatePosters(pages, new Map())).toBe(pages);
+  });
+});
+
+describe('a template’s page (01-3, 01-9)', () => {
+  const STORAGE = 'https://project.supabase.co';
+  const NOW = Date.parse('2026-10-15T12:00:00.000Z');
+  /** A Storage link signed the way Supabase signs one, `exp` in seconds inside the token. */
+  const signed = (path: string, expiresInMs: number, nonce: string) => {
+    const claims = Buffer.from(JSON.stringify({ url: path, exp: Math.floor((NOW + expiresInMs) / 1000), nonce })).toString('base64url');
+    return `${STORAGE}/storage/v1/object/sign/${path}?token=head.${claims}.signature`;
+  };
+  const HOUR = 60 * 60 * 1000;
+  const template = (videoUrl: string | null, thumbnailUrl: string | null, id = 'template-1') => ({ id, videoUrl, thumbnailUrl });
+
+  it('says “1 use” and “N uses”, as the web does', () => {
+    expect(formatTemplateUseCount(1)).toBe('1 use');
+    expect(formatTemplateUseCount(0)).toBe('0 uses');
+    expect(formatTemplateUseCount(1240)).toBe('1,240 uses');
+  });
+
+  it('keeps the demo’s and the poster’s links on screen across a read that signs them again', () => {
+    const shown = template(signed('template_assets/t/v/demo.mp4', 24 * HOUR, 'a'), signed('template_assets/t/v/poster.webp', 24 * HOUR, 'a'));
+    const reread = template(signed('template_assets/t/v/demo.mp4', 24 * HOUR, 'b'), signed('template_assets/t/v/poster.webp', 24 * HOUR, 'b'));
+
+    expect(withStableTemplateMedia(shown, reread, NOW, STORAGE)).toEqual(shown);
+  });
+
+  it('takes the new link for a new file, a link about to stop working, or another template', () => {
+    const shown = template(signed('template_assets/t/v1/demo.mp4', 24 * HOUR, 'a'), signed('template_assets/t/v1/poster.webp', 4 * 60 * 1000, 'a'));
+    const reread = template(signed('template_assets/t/v2/demo.mp4', 24 * HOUR, 'b'), signed('template_assets/t/v1/poster.webp', 24 * HOUR, 'b'));
+
+    expect(withStableTemplateMedia(shown, reread, NOW, STORAGE)).toEqual(reread);
+    expect(withStableTemplateMedia(shown, { ...shown, id: 'template-2' }, NOW, STORAGE).id).toBe('template-2');
+    expect(withStableTemplateMedia(undefined, reread, NOW, STORAGE)).toBe(reread);
+    expect(withStableTemplateMedia(shown, template(null, null), NOW, STORAGE)).toEqual(template(null, null));
+  });
+
+  it('offers the reasons the server takes for a template: a post’s, less the two about a recipe', () => {
+    expect(TEMPLATE_REPORT_REASONS.map((reason) => reason.value)).toEqual(['spam', 'stolen_content', 'unsafe_content', 'other']);
   });
 });

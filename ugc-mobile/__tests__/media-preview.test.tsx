@@ -61,6 +61,7 @@ vi.mock('expo-video', () => ({
 
 vi.mock('lucide-react-native', () => ({
   ImageOff: (props: MockProps) => React.createElement('image-off', props),
+  Play: (props: MockProps) => React.createElement('play', props),
 }));
 
 import { MediaPreview, StableMediaImage } from '../components/media-preview';
@@ -782,6 +783,71 @@ describe('StableMediaImage silent retries after a stall', () => {
     renderer.act(() => tree.update(<StableMediaImage url="https://cdn/stuck.webp" cacheKey="stuck" watchdog={false} />));
     advance(MEDIA_AUTO_RETRY_MAX_DELAY_MS * 2);
     expect(loadingImages(tree)).toHaveLength(0);
+    renderer.act(() => tree.unmount());
+  });
+});
+
+// The web's demo shows its poster until it is played (`RecoverableMediaVideo`);
+// the app's clip was a player from the start, black until its first frame
+// (01-9). The still is drawn until Play is pressed, as the unlock cover does.
+describe('a clip with a poster (01-9)', () => {
+  const POSTER = { url: 'https://cdn.example.com/poster.webp?token=first', cacheKey: 'https://cdn.example.com/poster.webp' };
+  const mount = (element: React.ReactElement) => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(element); });
+    return tree;
+  };
+  const players = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => String(node.type) === 'video-preview');
+  const playButton = (tree: renderer.ReactTestRenderer) => tree.root
+    .find((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Play video');
+
+  it('draws the poster in the clip’s frame, builds no player, and plays at once when pressed', () => {
+    const tree = mount(<MediaPreview url="https://cdn.example.com/demo.mp4" kind="video" height={430} letterbox poster={POSTER} />);
+
+    expect(players(tree)).toHaveLength(0);
+    const [still] = tree.root.findAllByType('image');
+    expect(still.props.source).toMatchObject({ uri: POSTER.url, cacheKey: POSTER.cacheKey });
+    expect(still.props.contentFit).toBe('contain');
+    expect(playButton(tree).props.style({ pressed: false })).toMatchObject({
+      width: '100%',
+      height: 430,
+      backgroundColor: mediaColors.mediaGround,
+    });
+
+    renderer.act(() => { (playButton(tree).props.onPress as () => void)(); });
+
+    expect(players(tree).map((node) => node.props)).toEqual([
+      expect.objectContaining({ url: 'https://cdn.example.com/demo.mp4', autoPlay: true, nativeControls: true }),
+    ]);
+    expect(tree.root.findAllByType('image')).toHaveLength(0);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('keeps Play on the clip’s black when the poster cannot load', () => {
+    const tree = mount(<MediaPreview url="https://cdn.example.com/demo.mp4" kind="video" height={430} letterbox poster={POSTER} />);
+
+    renderer.act(() => { (tree.root.findAllByType('image')[0].props.onError as () => void)(); });
+
+    expect(tree.root.findAllByType('image')).toHaveLength(0);
+    expect(players(tree)).toHaveLength(0);
+    renderer.act(() => { (playButton(tree).props.onPress as () => void)(); });
+    expect(players(tree)).toHaveLength(1);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('builds the player at once, and never plays it by itself, for a clip without a poster', () => {
+    const tree = mount(<MediaPreview url="https://cdn.example.com/demo.mp4" kind="video" height={430} letterbox />);
+
+    expect(players(tree).map((node) => node.props)).toEqual([expect.objectContaining({ autoPlay: false })]);
+    expect(tree.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Play video')).toHaveLength(0);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('draws a picture as it always did: a poster is a clip’s', () => {
+    const tree = mount(<MediaPreview url="https://cdn.example.com/still.webp" kind="image" height={430} letterbox poster={POSTER} />);
+
+    expect(tree.root.findAllByType('image').map((node) => node.props.source.uri)).toEqual(['https://cdn.example.com/still.webp']);
+    expect(tree.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Play video')).toHaveLength(0);
     renderer.act(() => tree.unmount());
   });
 });
