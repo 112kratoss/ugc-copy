@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import TemplateCatalogClient from '@/components/templates/TemplateCatalogClient';
@@ -93,14 +93,57 @@ describe('TemplateCatalogClient initial data', () => {
     expect(mocks.listTemplates).not.toHaveBeenCalled();
   });
 
-  it('uses the public API as a resilience fallback when no bootstrap was provided', async () => {
-    mocks.listTemplates.mockResolvedValue([template({ name: 'Client Fallback Template' })]);
+  it('falls back to the public first page, cursor kept, when no bootstrap was provided', async () => {
+    mocks.listTemplatePage
+      .mockResolvedValueOnce({ templates: [template({ name: 'Client Fallback Template' })], nextCursor: 'cursor-2' })
+      .mockResolvedValueOnce({ templates: [template({ id: 'template-2', name: 'Second Page' })], nextCursor: null });
 
     render(<TemplateCatalogClient />);
 
     expect(screen.getByLabelText('Loading templates')).toBeInTheDocument();
     expect(await screen.findByText('Client Fallback Template')).toBeInTheDocument();
-    expect(mocks.listTemplates).toHaveBeenCalledWith({ token: undefined, mine: false });
+    expect(mocks.listTemplates).not.toHaveBeenCalled();
+    // No token: the public read is the same for everyone.
+    expect(mocks.listTemplatePage).toHaveBeenNthCalledWith(1, undefined);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more templates' }));
+    expect(await screen.findByText('Second Page')).toBeInTheDocument();
+    expect(mocks.listTemplatePage).toHaveBeenNthCalledWith(2, { cursor: 'cursor-2', limit: 48 });
+  });
+
+  it('reads the fallback once for a visitor whose session arrives after the first render', async () => {
+    mocks.listTemplatePage.mockResolvedValue({ templates: [template({ name: 'Client Fallback Template' })], nextCursor: null });
+    mocks.useAuth.mockReturnValue({ session: null, isLoading: true });
+
+    const { rerender } = render(<TemplateCatalogClient />);
+    mocks.useAuth.mockReturnValue({
+      session: { access_token: 'viewer-token', user: { id: 'viewer-1' } },
+      isLoading: false,
+    });
+    rerender(<TemplateCatalogClient />);
+
+    expect(await screen.findByText('Client Fallback Template')).toBeInTheDocument();
+    await act(async () => Promise.resolve());
+    expect(mocks.listTemplatePage).toHaveBeenCalledTimes(1);
+    expect(mocks.listTemplatePage).toHaveBeenCalledWith(undefined);
+  });
+
+  it('says a failed Load more failed under "No matching templates" too, and offers Try again', async () => {
+    mocks.listTemplatePage
+      .mockRejectedValueOnce(new Error('Could not reach the catalog.'))
+      .mockResolvedValueOnce({ templates: [template({ id: 'template-2', name: 'Zebra Reveal' })], nextCursor: null });
+    render(<TemplateCatalogClient initialTemplates={[template()]} initialNextCursor="cursor-2" />);
+
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'zebra' } });
+    expect(screen.getByText('No matching templates')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more templates' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not reach the catalog.');
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText('Zebra Reveal')).toBeInTheDocument();
+    expect(mocks.listTemplatePage).toHaveBeenLastCalledWith({ cursor: 'cursor-2', limit: 48 });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('keeps owner mode authenticated and API-backed even if initial data is passed', async () => {

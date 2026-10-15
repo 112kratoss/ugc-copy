@@ -1,11 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
   ArrowRight,
   Check,
   CircleDollarSign,
+  Flag,
   Image as ImageIcon,
   LayoutTemplate,
   Loader2,
@@ -28,9 +31,148 @@ import {
 } from '@/components/DesignSystem';
 
 import RecoverableMediaVideo from '@/components/RecoverableMediaVideo';
+import { ModerationRequestError, reportTemplate, type TemplateReportReason } from '@/lib/moderation-client';
 import { getTemplate } from './api';
 import { getTemplateCreatorLabel, TemplatePageShell } from './TemplatePrimitives';
-import type { MediaTemplate } from './types';
+import type { MediaTemplate, TemplateStatus } from './types';
+
+/**
+ * The creator's own template that is not live. The server shows it to them
+ * alone and refuses to start a run of it, so the page says which state it is
+ * in and offers the canvas where "Use this template" stood: that button led to
+ * "Could not start template — Template not found." and a Try again that
+ * repeated it.
+ */
+const NOT_LIVE_STATUS: Record<Exclude<TemplateStatus, 'active'>, { label: string; title: string; body: string }> = {
+  draft: {
+    label: 'Draft',
+    title: 'This template is a draft',
+    body: 'Only you can see it. Test it and publish it from the workflow canvas before anyone can use it.',
+  },
+  // Its creator, a catalog release that dropped its model, or a moderation
+  // take-down can disable it, so the line names no way back.
+  disabled: {
+    label: 'Disabled',
+    title: 'This template is disabled',
+    body: 'Only you can see it, and no one can start it.',
+  },
+};
+
+/** A post's own report reasons less the two about a recipe: a template has no price. */
+const TEMPLATE_REPORT_REASONS: ReadonlyArray<{ value: TemplateReportReason; label: string }> = [
+  { value: 'spam', label: 'Spam' },
+  { value: 'stolen_content', label: 'Stolen content' },
+  { value: 'unsafe_content', label: 'Unsafe content' },
+  { value: 'other', label: 'Other' },
+];
+
+/**
+ * Report template, laid out and sent as a post page's report row is
+ * (`ReportPostButton`): a reason, optional context, then the moderation
+ * queue. Signing in is asked for at Submit and comes back to this page.
+ */
+function ReportTemplateRow({
+  templateId,
+  slug,
+  accessToken,
+}: {
+  templateId: string;
+  slug: string;
+  accessToken: string | null;
+}) {
+  const router = useRouter();
+  const [isOpen, setIsOpen] = useState(false);
+  // No reason until the viewer picks one, as on a post.
+  const [reason, setReason] = useState<TemplateReportReason | ''>('');
+  const [details, setDetails] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const finish = (message: string) => {
+    setFeedback(message);
+    setIsOpen(false);
+    setReason('');
+    setDetails('');
+  };
+
+  const submitReport = async () => {
+    if (!reason) return;
+    if (!accessToken) {
+      router.push(`/login?returnUrl=${encodeURIComponent(`/templates/${slug}`)}`);
+      return;
+    }
+    setIsSubmitting(true);
+    setFeedback(null);
+    setError(null);
+    try {
+      await reportTemplate({ templateId, accessToken, reason, details });
+      finish('Report submitted for review.');
+    } catch (reportError) {
+      if (reportError instanceof ModerationRequestError && reportError.status === 409) {
+        // Their earlier report is still open: what they asked for is done.
+        finish('You already reported this template. Our moderation team will review it.');
+      } else {
+        setError(reportError instanceof Error && reportError.message
+          ? `Could not report this template. ${reportError.message}`
+          : 'Could not report this template.');
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="mt-5 border-t border-white/8 pt-4">
+      <button
+        type="button"
+        onClick={() => setIsOpen((current) => !current)}
+        aria-expanded={isOpen}
+        className="inline-flex min-h-11 items-center gap-2 text-sm font-medium text-zinc-400 transition hover:text-white"
+      >
+        <Flag className="h-4 w-4" aria-hidden />
+        Report template
+      </button>
+
+      {isOpen ? (
+        <div className="mt-4 space-y-3">
+          <select
+            aria-label="Report reason"
+            value={reason}
+            onChange={(event) => setReason(event.target.value as TemplateReportReason)}
+            className="w-full rounded-2xl border border-white/10 bg-zinc-950 px-4 py-3 text-sm text-white outline-none"
+          >
+            <option value="" disabled>Choose a reason</option>
+            {TEMPLATE_REPORT_REASONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+          <textarea
+            aria-label="Report details"
+            value={details}
+            onChange={(event) => setDetails(event.target.value)}
+            rows={3}
+            maxLength={1000}
+            placeholder="Optional context for the review team."
+            className="w-full rounded-2xl border border-white/10 bg-zinc-950 px-4 py-3 text-sm text-white outline-none"
+          />
+          <button
+            type="button"
+            onClick={() => void submitReport()}
+            disabled={isSubmitting || !reason}
+            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08] disabled:opacity-60"
+          >
+            {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+            Submit report
+          </button>
+        </div>
+      ) : null}
+
+      {feedback ? <p role="status" className="mt-3 text-sm text-emerald-200">{feedback}</p> : null}
+      {error ? <p role="alert" className="mt-3 text-sm text-rose-200">{error}</p> : null}
+    </div>
+  );
+}
 
 export default function TemplateDetailClient({ slug }: { slug: string }) {
   const { session, isLoading: isAuthLoading } = useAuth();
@@ -74,14 +216,33 @@ export default function TemplateDetailClient({ slug }: { slug: string }) {
   }
 
   const creatorLabel = getTemplateCreatorLabel(template);
+  const creatorUsername = template.creator?.username ?? null;
   const isOwner = session?.user?.id === template.creatorUserId;
+  const notLiveStatus = template.status === 'active' ? null : NOT_LIVE_STATUS[template.status];
   const OutputIcon = template.outputKind === 'video' ? Video : ImageIcon;
+  const creatorIdentity = (
+    <>
+      {template.creator?.avatarUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={template.creator.avatarUrl} alt="" className="h-10 w-10 rounded-full border border-white/10 object-cover" />
+      ) : (
+        <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.05] text-zinc-300">
+          <UserRound className="h-4 w-4" aria-hidden />
+        </div>
+      )}
+      <div>
+        <div className="text-xs font-semibold text-zinc-500">Created by</div>
+        <div className="text-sm font-bold text-white">{creatorLabel}</div>
+      </div>
+    </>
+  );
 
   return (
     <TemplatePageShell>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <Button href="/templates" variant="ghost" icon={ArrowLeft} iconPosition="start">Browse templates</Button>
-        {isOwner ? (
+        {/* A template that is not live offers the canvas where its start button stood instead. */}
+        {isOwner && !notLiveStatus ? (
           <Button href={`/templates/${template.id}/edit`} variant="secondary" icon={Pencil}>Open in workflow canvas</Button>
         ) : null}
       </div>
@@ -109,6 +270,7 @@ export default function TemplateDetailClient({ slug }: { slug: string }) {
 
           <div className="p-6 sm:p-8">
             <div className="flex flex-wrap items-center gap-2">
+              {notLiveStatus ? <Pill accent="amber">{notLiveStatus.label}</Pill> : null}
               <Pill accent={template.outputKind} icon={Sparkles}>{template.category || 'Creative'}</Pill>
               <Pill accent="neutral" icon={OutputIcon}>{template.outputKind} output</Pill>
               <Pill accent="neutral">{template.inputSlots.filter((slot) => slot.required).length} required input{template.inputSlots.filter((slot) => slot.required).length === 1 ? '' : 's'}</Pill>
@@ -119,22 +281,29 @@ export default function TemplateDetailClient({ slug }: { slug: string }) {
             </Text>
 
             <div className="mt-6 flex items-center gap-3 border-t border-white/8 pt-5">
-              {template.creator?.avatarUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={template.creator.avatarUrl} alt="" className="h-10 w-10 rounded-full border border-white/10 object-cover" />
+              {/* The creator's page is where the viewer can see their other work, and report or block them. */}
+              {creatorUsername ? (
+                <Link
+                  href={`/creators/${encodeURIComponent(creatorUsername)}`}
+                  className="ui-focus-ring flex min-w-0 items-center gap-3 rounded-2xl transition-opacity hover:opacity-90"
+                >
+                  {creatorIdentity}
+                </Link>
               ) : (
-                <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.05] text-zinc-300">
-                  <UserRound className="h-4 w-4" aria-hidden />
-                </div>
+                <div className="flex min-w-0 items-center gap-3">{creatorIdentity}</div>
               )}
-              <div>
-                <div className="text-xs font-semibold text-zinc-500">Created by</div>
-                <div className="text-sm font-bold text-white">{creatorLabel}</div>
-              </div>
               <div className="ml-auto text-sm font-semibold text-zinc-400">
                 {template.useCount.toLocaleString()} {template.useCount === 1 ? 'use' : 'uses'}
               </div>
             </div>
+            {/* The server refuses a creator's report of their own template. */}
+            {isOwner ? null : (
+              <ReportTemplateRow
+                templateId={template.id}
+                slug={template.slug || template.id}
+                accessToken={session?.access_token ?? null}
+              />
+            )}
           </div>
         </Surface>
 
@@ -174,10 +343,28 @@ export default function TemplateDetailClient({ slug }: { slug: string }) {
               </span>
             </div>
 
-            <Button href={`/templates/${template.slug || template.id}/create`} variant="accent" accent={template.outputKind} icon={ArrowRight} className="mt-5 w-full">
-              Use this template
-            </Button>
-            <Text variant="caption" className="mt-3 text-center">You stay in control at every approval step.</Text>
+            {notLiveStatus ? (
+              <>
+                <StatusCallout
+                  tone="warning"
+                  title={notLiveStatus.title}
+                  body={isOwner ? notLiveStatus.body : 'It cannot be started right now.'}
+                  className="mt-5"
+                />
+                {isOwner ? (
+                  <Button href={`/templates/${template.id}/edit`} variant="secondary" icon={Pencil} className="mt-5 w-full">
+                    Open in workflow canvas
+                  </Button>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <Button href={`/templates/${template.slug || template.id}/create`} variant="accent" accent={template.outputKind} icon={ArrowRight} className="mt-5 w-full">
+                  Use this template
+                </Button>
+                <Text variant="caption" className="mt-3 text-center">You stay in control at every approval step.</Text>
+              </>
+            )}
           </Surface>
 
           <Surface variant="soft" padding="lg">

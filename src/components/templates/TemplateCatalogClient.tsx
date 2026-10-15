@@ -36,6 +36,32 @@ function CatalogSkeleton() {
   );
 }
 
+/**
+ * Load more, with a failed attempt's message above a button that then says
+ * Try again. Under the grid and under "No matching templates" alike: the
+ * second place showed neither, so a failure there looked like nothing.
+ */
+function LoadMoreTemplates({
+  className,
+  error,
+  isLoading,
+  onLoadMore,
+}: {
+  className: string;
+  error: string | null;
+  isLoading: boolean;
+  onLoadMore: () => void;
+}) {
+  return (
+    <div className={`${className} flex flex-col items-center gap-3`}>
+      {error ? <div role="alert"><Text variant="bodySm">{error}</Text></div> : null}
+      <Button variant="secondary" onClick={onLoadMore} disabled={isLoading}>
+        {isLoading ? 'Loading…' : error ? 'Try again' : 'Load more templates'}
+      </Button>
+    </div>
+  );
+}
+
 export default function TemplateCatalogClient({
   mode = 'public',
   initialTemplates,
@@ -59,15 +85,27 @@ export default function TemplateCatalogClient({
   // Apart from the first-load error, which replaces the grid.
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const posterRecovery = useTemplatePosterRecovery(setTemplates, session?.access_token);
+  // Only the owner's list waits for and carries the session. The public read
+  // took both too, so a signed-in visitor's catalog was fetched again once the
+  // session arrived.
+  const ownerToken = mode === 'owner' ? session?.access_token : undefined;
+  const isWaitingForOwnerSession = mode === 'owner' && isAuthLoading;
 
   useEffect(() => {
-    if (hasInitialPublicTemplates) return;
-    if (mode === 'owner' && isAuthLoading) return;
+    if (hasInitialPublicTemplates || isWaitingForOwnerSession) return;
 
     let active = true;
-    void listTemplates({ token: session?.access_token, mine: mode === 'owner' })
-      .then((nextTemplates) => {
-        if (active) setTemplates(nextTemplates);
+    // The public fallback reads a page, cursor included: a catalog the server
+    // could not render stopped at its first 48 with no Load more.
+    const load: Promise<{ templates: MediaTemplate[]; nextCursor: string | null }> = mode === 'owner'
+      ? listTemplates({ token: ownerToken, mine: true })
+        .then((owned) => ({ templates: owned, nextCursor: null }))
+      : listTemplatePage();
+    void load
+      .then((page) => {
+        if (!active) return;
+        setTemplates(page.templates);
+        setNextCursor(page.nextCursor);
       })
       .catch((reason: unknown) => {
         if (active) setError(reason instanceof Error ? reason.message : 'Could not load templates.');
@@ -79,7 +117,7 @@ export default function TemplateCatalogClient({
     return () => {
       active = false;
     };
-  }, [hasInitialPublicTemplates, isAuthLoading, mode, session?.access_token]);
+  }, [hasInitialPublicTemplates, isWaitingForOwnerSession, mode, ownerToken]);
 
   const filteredTemplates = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -206,12 +244,12 @@ export default function TemplateCatalogClient({
               ))}
             </div>
             {!isOwnerMode && nextCursor ? (
-              <div className="mt-8 flex flex-col items-center gap-3">
-                {loadMoreError ? <div role="alert"><Text variant="bodySm">{loadMoreError}</Text></div> : null}
-                <Button variant="secondary" onClick={loadMore} disabled={isLoadingMore}>
-                  {isLoadingMore ? 'Loading…' : loadMoreError ? 'Try again' : 'Load more templates'}
-                </Button>
-              </div>
+              <LoadMoreTemplates
+                className="mt-8"
+                error={loadMoreError}
+                isLoading={isLoadingMore}
+                onLoadMore={() => void loadMore()}
+              />
             ) : null}
           </>
         ) : null}
@@ -233,9 +271,12 @@ export default function TemplateCatalogClient({
                   : 'Try another search or media filter.'}
             </Text>
             {!isOwnerMode && templates.length > 0 && nextCursor ? (
-              <Button variant="secondary" onClick={loadMore} disabled={isLoadingMore} className="mt-6">
-                {isLoadingMore ? 'Loading…' : 'Load more templates'}
-              </Button>
+              <LoadMoreTemplates
+                className="mt-6"
+                error={loadMoreError}
+                isLoading={isLoadingMore}
+                onLoadMore={() => void loadMore()}
+              />
             ) : null}
             {isOwnerMode && templates.length === 0 ? (
               <Button href="/templates/new" variant="primary" icon={Plus} className="mt-6">

@@ -55,6 +55,12 @@ describe('template web primitives', () => {
     expect(screen.getByRole('link')).toHaveAttribute('href', '/templates/rider-transformation');
   });
 
+  it('says "1 use" for a template used once', () => {
+    render(<TemplateCard template={{ ...template, useCount: 1 }} />);
+
+    expect(screen.getByText('1 use')).toBeInTheDocument();
+  });
+
   it('accepts the media kind declared by a dynamic input slot', () => {
     const onChange = vi.fn();
     render(
