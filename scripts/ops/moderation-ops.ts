@@ -26,8 +26,9 @@ Notes:
   - Apply all pending Supabase migrations before using mutation commands.
   - reviewer-id must identify the staff member's real auth.users row.
   - Resolving a comment report atomically removes the comment and resolves duplicate reports.
-  - Resolving a template report disables the template (it leaves the catalog, its page answers
-    not found, no new run starts) and resolves duplicate reports; the template's name, slug and
+  - Resolving a template report takes the template down (it leaves the catalog, its page answers
+    not found, no new run starts) and holds it: the creator cannot publish it again until the
+    hold is cleared by SQL. Duplicate reports are resolved too; the template's name, slug and
     status are in the list table.
   - Resolve a user/generation report only after completing the required manual safety action.
 `.trim();

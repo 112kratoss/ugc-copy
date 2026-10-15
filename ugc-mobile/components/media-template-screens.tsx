@@ -617,8 +617,11 @@ export function MediaTemplateDetailScreen({ slug }: { slug: string }) {
   );
 }
 
-/** What the creator is told about their own template that is not live. */
-function ownTemplateStatus(status: 'draft' | 'disabled') {
+/** What the creator is told about their own template that is not live. A take-down, unlike their own Disable, has no way back. */
+function ownTemplateStatus(status: 'draft' | 'disabled', moderationDisabledAt: string | null) {
+  if (moderationDisabledAt) {
+    return { title: 'Template taken down', body: "Moderation removed it from the catalog. Only you can see it, and it can't be published again." };
+  }
   return status === 'draft'
     ? { title: 'Draft template', body: 'Only you can see it. Publish it from the workflow canvas on the web to let others use it.' }
     : { title: 'Template disabled', body: 'Only you can see it. Publish it again from the workflow canvas on the web to make it available.' };
@@ -729,7 +732,7 @@ function TemplateDetailContent({
 
       {/* Only its creator reads a template that is not live: it says so, and
           offers no start, which the server would refuse (01-10). */}
-      {template.status === 'active' ? null : <StatusBlock {...ownTemplateStatus(template.status)} tone="neutral" />}
+      {template.status === 'active' ? null : <StatusBlock {...ownTemplateStatus(template.status, template.moderationDisabledAt)} tone="neutral" />}
       {message ? <StatusBlock title="Could not start" body={message} tone="danger" /> : null}
       {resumableRun ? <ResumeRunCard run={resumableRun} templateName={template.name} /> : null}
       {template.status === 'active' ? <PrimaryButton label="Use this template" loading={starting} onPress={onUse} /> : null}

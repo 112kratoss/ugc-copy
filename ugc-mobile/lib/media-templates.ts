@@ -115,6 +115,7 @@ export function normalizeMediaTemplate(value: unknown): MediaTemplateSummary {
     inputSlots: normalizeInputSlots(firstValue(template, ['inputSlots', 'input_slots'])),
     outputKind: mediaKind(firstValue(template, ['outputKind', 'output_kind']), 'video'),
     status: rawStatus === 'draft' || rawStatus === 'disabled' ? rawStatus : 'active',
+    moderationDisabledAt: nullableString(template, ['moderationDisabledAt', 'moderation_disabled_at']),
     estimatedTotalCredits: numberValue(template, ['estimatedTotalCredits', 'estimated_total_credits']),
     useCount: numberValue(template, ['useCount', 'use_count']) ?? 0,
   };

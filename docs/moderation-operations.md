@@ -107,7 +107,12 @@ its page answers not found and no new run starts; records the reviewer, the
 review time and the note; and resolves every open duplicate report for that
 template. It is idempotent when the template or report was already resolved.
 Runs already started finish from their snapshot. The catalog's cached page can
-show the card for up to five minutes, as after the creator's own Disable.
+show the card for up to five minutes, as after the creator's own Disable. The
+take-down also sets `templates.moderation_disabled_at`, a hold: the creator's
+publish and test runs answer 409 `TEMPLATE_TAKEN_DOWN`, and their page reads
+"Taken down". No product path lifts it; a deliberate reversal clears that column
+by SQL (`update public.templates set moderation_disabled_at = null where id = …`),
+after which the creator can publish again.
 
 Dismiss a non-violating template report with `dismiss-subject`; dismissal leaves
 the template live and closes only the selected report.

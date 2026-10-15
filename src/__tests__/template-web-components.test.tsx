@@ -37,6 +37,7 @@ const template: MediaTemplate = {
   ],
   outputKind: 'video',
   status: 'active',
+  moderationDisabledAt: null,
   useCount: 23,
   estimatedTotalCredits: 14,
   createdAt: '2026-07-11T00:00:00.000Z',

@@ -403,6 +403,8 @@ export interface MediaTemplateSummary {
   creator: MediaTemplateCreator | null;
   inputSlots: MediaTemplateInputSlot[];
   outputKind: 'image' | 'video';
+  /** Set when moderation took the template down; it stays disabled and cannot be republished. */
+  moderationDisabledAt: string | null;
   status: 'draft' | 'active' | 'disabled';
   estimatedTotalCredits: number | null;
   useCount: number;
@@ -1596,6 +1598,8 @@ export type MobileNotificationType =
   | 'credits_purchased'
   | 'referral_reward_earned'
   | 'referral_reward_reversed'
+  | 'creator_payout_paid'
+  | 'creator_payout_rejected'
   | 'purchases_restored'
   | 'marketplace_unlocked'
   | 'post_resource_unlocked'

@@ -42,9 +42,9 @@ function describeOutcome(payload: Outcome): string {
     parts.push('The comment was soft-removed and reply counts repaired.');
   }
   if (payload.templateDisabled) {
-    parts.push('The template was disabled: it left the catalog and no new run can start.');
+    parts.push('The template was taken down: it left the catalog, no new run can start, and its creator cannot publish it again.');
   } else if (payload.targetType === 'template' && payload.status === 'resolved') {
-    parts.push('The template was already disabled.');
+    parts.push('The template was already taken down and stays held.');
   }
   if ((payload.resolvedReportCount ?? 0) > 1) {
     parts.push(`${payload.resolvedReportCount} duplicate reports for the same target were closed too.`);
@@ -191,7 +191,7 @@ export function SubjectReportActions({
     <div className="mt-4 border-t border-[var(--ui-border-subtle)] pt-4">
       <Text variant="caption">
         {isTemplate
-          ? 'Taking a template down disables it: it leaves the catalog and nobody can start it. Its creator still has it, disabled, and could publish it again.'
+          ? 'Taking a template down holds it: it leaves the catalog, nobody can start it, and its creator keeps it disabled but cannot publish it again.'
           : 'Complete any required manual safety action before resolving.'}
       </Text>
 

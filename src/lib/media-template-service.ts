@@ -71,7 +71,8 @@ export type MediaTemplateRow = {
  * live again, so only its creator's own reads can carry a time; every other
  * reader gets null.
  */
-export type MediaTemplateWithHoldDto = MediaTemplateDto & { moderationDisabledAt: string | null };
+/** The hold now lives on the DTO itself; the name stays for the callers that read it. */
+export type MediaTemplateWithHoldDto = MediaTemplateDto;
 
 type CanvasRow = {
   id: string;

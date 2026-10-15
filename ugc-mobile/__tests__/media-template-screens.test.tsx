@@ -983,6 +983,20 @@ describe('a template’s page (01-3, 01-7, 01-9, 01-10)', () => {
     expect(labels(tree)).not.toContain('Report template');
   });
 
+  it('tells its creator a taken-down template cannot be published again', async () => {
+    const held = ownDetail('disabled');
+    authState.api.getMediaTemplate.mockResolvedValue({
+      ...held,
+      template: { ...held.template, moderationDisabledAt: '2026-10-15T12:00:00.000Z' },
+    });
+    const tree = await mountDetail();
+
+    const block = statusBlocks(tree).find((candidate) => candidate.title === 'Template taken down');
+    expect(block?.body).toContain("can't be published again");
+    expect(statusBlocks(tree).map((candidate) => candidate.title)).not.toContain('Template disabled');
+    expect(labels(tree)).not.toContain('Use this template');
+  });
+
   it('says why when its creator’s start is refused as not live, and reads the template again', async () => {
     authState.api.getMediaTemplate.mockResolvedValueOnce(ownDetail('active')).mockResolvedValueOnce(ownDetail('disabled'));
     authState.api.createMediaTemplateRun.mockRejectedValue(new ApiError('Template not found.', 404, undefined, undefined, 'TEMPLATE_NOT_ACTIVE'));

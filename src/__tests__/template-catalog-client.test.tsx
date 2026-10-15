@@ -44,6 +44,7 @@ function template(overrides: Partial<MediaTemplate> = {}): MediaTemplate {
     inputSlots: [{ key: 'image', kind: 'image', label: 'Image', required: true }],
     outputKind: 'video',
     status: 'active',
+    moderationDisabledAt: null,
     useCount: 3,
     estimatedTotalCredits: 5,
     createdAt: '2026-07-16T00:00:00.000Z',

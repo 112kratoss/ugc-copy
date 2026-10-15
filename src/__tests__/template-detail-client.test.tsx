@@ -47,6 +47,7 @@ function template(overrides: Partial<MediaTemplate> = {}): MediaTemplate {
     inputSlots: [{ key: 'product', kind: 'image', label: 'Product photo', required: true }],
     outputKind: 'video',
     status: 'active',
+    moderationDisabledAt: null,
     useCount: 1,
     estimatedTotalCredits: 12,
     createdAt: '2026-07-16T00:00:00.000Z',
@@ -110,6 +111,19 @@ describe('TemplateDetailClient', () => {
       expect(canvasLinks).toHaveLength(1);
       expect(canvasLinks[0]).toHaveAttribute('href', `/templates/${TEMPLATE_ID}/edit`);
       expect(mocks.getTemplate).toHaveBeenCalledWith('product-reveal', 'creator-1-token');
+    });
+
+    it('tells the creator a taken-down template cannot be published again', async () => {
+      signIn('creator-1');
+      mocks.getTemplate.mockResolvedValue(template({ status: 'disabled', moderationDisabledAt: '2026-10-15T12:00:00.000Z' }));
+
+      render(<TemplateDetailClient slug="product-reveal" />);
+
+      expect(await screen.findByText('This template was taken down')).toBeInTheDocument();
+      expect(screen.getByText('Taken down')).toBeInTheDocument();
+      expect(screen.getByText(/can't be published again/)).toBeInTheDocument();
+      expect(screen.queryByText('This template is disabled')).not.toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: 'Use this template' })).not.toBeInTheDocument();
     });
 
     it('offers a live template\'s start to its creator, with the canvas in the header and no report row', async () => {

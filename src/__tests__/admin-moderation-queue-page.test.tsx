@@ -165,7 +165,7 @@ describe('admin moderation queue page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Take down template' }));
 
     expect(await screen.findByRole('status')).toHaveTextContent(
-      'Report resolved. The template was disabled: it left the catalog and no new run can start. '
+      'Report resolved. The template was taken down: it left the catalog, no new run can start, and its creator cannot publish it again. '
       + '2 duplicate reports for the same target were closed too.',
     );
     expect(fetchMock).toHaveBeenCalledWith('/api/admin/moderation/subject-reports', {
@@ -192,6 +192,6 @@ describe('admin moderation queue page', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take down template' }));
 
-    expect(await screen.findByRole('status')).toHaveTextContent('Report resolved. The template was already disabled.');
+    expect(await screen.findByRole('status')).toHaveTextContent('Report resolved. The template was already taken down and stays held.');
   });
 });

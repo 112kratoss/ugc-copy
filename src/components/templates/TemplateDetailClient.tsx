@@ -58,6 +58,13 @@ const NOT_LIVE_STATUS: Record<Exclude<TemplateStatus, 'active'>, { label: string
   },
 };
 
+/** A moderation take-down holds the template: unlike the creator's own Disable, there is no way back. */
+const TAKEN_DOWN_STATUS = {
+  label: 'Taken down',
+  title: 'This template was taken down',
+  body: "Moderation removed it from the catalog. Only you can see it, and it can't be published again.",
+};
+
 /** A post's own report reasons less the two about a recipe: a template has no price. */
 const TEMPLATE_REPORT_REASONS: ReadonlyArray<{ value: TemplateReportReason; label: string }> = [
   { value: 'spam', label: 'Spam' },
@@ -218,7 +225,11 @@ export default function TemplateDetailClient({ slug }: { slug: string }) {
   const creatorLabel = getTemplateCreatorLabel(template);
   const creatorUsername = template.creator?.username ?? null;
   const isOwner = session?.user?.id === template.creatorUserId;
-  const notLiveStatus = template.status === 'active' ? null : NOT_LIVE_STATUS[template.status];
+  const notLiveStatus = template.status === 'active'
+    ? null
+    : template.moderationDisabledAt
+      ? TAKEN_DOWN_STATUS
+      : NOT_LIVE_STATUS[template.status];
   const OutputIcon = template.outputKind === 'video' ? Video : ImageIcon;
   const creatorIdentity = (
     <>
