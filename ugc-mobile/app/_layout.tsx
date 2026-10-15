@@ -60,6 +60,7 @@ import { hydrateAppearancePreference, useResolvedColorScheme } from '@/lib/appea
 import { useNavigationBarSurface } from '@/lib/system-bars';
 import { appTheme, mediaColors, themes, type AppTheme } from '@/lib/theme';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
+import type { MobileNotificationType } from '@/lib/types';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -462,8 +463,10 @@ function OtaUpdateCoordinator() {
   // Applies a downloaded OTA update when the policy allows, and owns the one
   // case that is allowed to say so out loud. Everything routine happens with no
   // UI at all — see lib/app-update-policy for why, and lib/app-activity for
-  // what stops a reload landing in the middle of someone's work.
-  const { applyNow, criticalPromptVisible, dismissPrompt } = useOtaUpdateGate();
+  // what stops a reload landing in the middle of someone's work. The API client
+  // asks the server whether a downloaded update is critical.
+  const { api } = useAuth();
+  const { applyNow, criticalPromptVisible, dismissPrompt } = useOtaUpdateGate(api);
 
   return (
     <CriticalUpdateSheet
@@ -604,6 +607,20 @@ function AccountDeletingCoordinator() {
   return null;
 }
 
+/**
+ * Alerts that say the balance moved on the server, so the one on screen is
+ * read again the moment one lands: a failed run's refund, a purchase settled
+ * away from this screen (a store webhook, the web's checkout), purchases
+ * restored, a referral reward earned or taken back (audit 03-4).
+ */
+const BALANCE_CHANGING_ALERTS: ReadonlySet<string> = new Set<MobileNotificationType>([
+  'generation_failed',
+  'credits_purchased',
+  'purchases_restored',
+  'referral_reward_earned',
+  'referral_reward_reversed',
+]);
+
 function NotificationResponseCoordinator() {
   const { api, user, refreshProfile } = useAuth();
   const queryClient = useQueryClient();
@@ -624,8 +641,9 @@ function NotificationResponseCoordinator() {
     void queryClient.invalidateQueries({ queryKey: ['mobile-notifications', user?.id] });
     // A run that failed with no creator watching it was refunded on the server,
     // and the balance on screen still holds its cost — the creators would refuse
-    // Generate on it and point at Pricing.
-    if (type === 'generation_failed') void refreshProfile().catch(() => undefined);
+    // Generate on it and point at Pricing. A purchase or a reward settled while
+    // the app was in front left the old balance up just the same.
+    if (type && BALANCE_CHANGING_ALERTS.has(type)) void refreshProfile().catch(() => undefined);
   }), [queryClient, refreshProfile, user?.id]);
 
   return null;

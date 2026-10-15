@@ -432,7 +432,12 @@ export function EditProfileScreen() {
     return (
       <EditProfileShell header={header} scrollBottomPadding={scrollBottomPadding} horizontalPadding={horizontalPadding}>
         <StatusBlock title="Sign in required" body="Sign in to update your Magicbooklet profile." />
-        <PrimaryButton label="Sign in" accent="primary" onPress={() => router.replace('/auth' as never)} />
+        {/* Signing in comes back to this form, not Home (audit 01-12). */}
+        <PrimaryButton
+          label="Sign in"
+          accent="primary"
+          onPress={() => router.replace({ pathname: '/auth', params: { returnTo: '/edit-profile' } } as never)}
+        />
       </EditProfileShell>
     );
   }

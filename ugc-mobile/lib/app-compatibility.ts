@@ -14,3 +14,26 @@ export function isAppVersionBelowMinimum(current: string, minimum: string) {
   }
   return false;
 }
+
+/** What a fresh read of the server's version floor says about this build. */
+export type AppVersionFloorCheck = 'met' | 'below' | 'failed';
+
+/**
+ * Reads the server's version floor again and compares this build with it, for
+ * the update screen's Check again (audit 04-10). `failed` when no usable
+ * answer came back: nothing is known then, so the caller neither lets the
+ * person through nor tells them they are still out of date.
+ */
+export async function checkAppVersionFloor(
+  api: { getAppVersion: () => Promise<{ mobileCompatibility: { minimumAppVersion: string } }> },
+  currentVersion: string,
+): Promise<AppVersionFloorCheck> {
+  let minimumAppVersion: string;
+  try {
+    minimumAppVersion = (await api.getAppVersion()).mobileCompatibility.minimumAppVersion;
+  } catch {
+    return 'failed';
+  }
+  if (typeof minimumAppVersion !== 'string') return 'failed';
+  return isAppVersionBelowMinimum(currentVersion, minimumAppVersion) ? 'below' : 'met';
+}

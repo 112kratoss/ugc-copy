@@ -12,7 +12,7 @@ import type { ProfileResponse } from '../lib/types';
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
 const harness = vi.hoisted(() => ({
-  user: { id: 'user-1', email: 'luna@example.com' },
+  user: { id: 'user-1', email: 'luna@example.com' } as { id: string; email: string } | null,
   api: {
     getProfile: vi.fn(),
     validateProfile: vi.fn(),
@@ -179,6 +179,8 @@ beforeEach(() => {
     assets: [{ uri: 'file:///picked.jpg', fileName: 'picked.jpg', mimeType: 'image/jpeg', fileSize: 1024 }],
   });
   harness.router.back.mockClear();
+  harness.router.replace.mockClear();
+  harness.user = { id: 'user-1', email: 'luna@example.com' };
 });
 
 describe('Edit profile: links and location', () => {
@@ -362,5 +364,18 @@ describe('Edit profile: picking photos', () => {
       aspect: [1, 1],
       quality: 0.9,
     });
+  });
+});
+
+// Signing in from a signed-out Edit profile ended on Home (audit 01-12).
+describe('Edit profile: signed out', () => {
+  it('signs in back to this form', async () => {
+    harness.user = null;
+    const tree = await renderScreen(newClient(storedProfile()));
+    const signIn = tree.root.find((node) => String(node.type) === 'primary-button' && node.props.label === 'Sign in');
+
+    await renderer.act(async () => { (signIn.props.onPress as () => void)(); });
+
+    expect(harness.router.replace).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/edit-profile' } });
   });
 });

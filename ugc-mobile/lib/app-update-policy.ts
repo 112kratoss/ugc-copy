@@ -45,8 +45,9 @@ export type UpdateDecisionContext = {
    */
   isUpdatePending: boolean;
   /**
-   * The publisher marked this update critical, via `extra.critical` in the
-   * update manifest. Routine updates are false.
+   * This update is flagged critical: the server lists it (`criticalUpdate` on
+   * `/api/app-version`) or its manifest carries `extra.critical`. Routine
+   * updates are false.
    */
   isCritical: boolean;
   /**
