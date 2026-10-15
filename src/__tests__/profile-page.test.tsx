@@ -34,6 +34,13 @@ const rpcMock = vi.hoisted(() => vi.fn(async (name: string) => {
   }
   return rpcAnswers[name];
 }));
+// What the two payout reads answer (`getCreatorPayoutState`, as
+// `GET /api/creator/payouts` reads them); an `error` stands for a failed read.
+const payoutAnswers = vi.hoisted(() => ({
+  wallet: { data: null, error: null } as { data: unknown; error: unknown },
+  requests: { data: [], error: null } as { data: unknown; error: unknown },
+}));
+const tablesRead = vi.hoisted(() => [] as string[]);
 
 const getServerAuthStateMock = vi.fn(async () => ({
   session: {
@@ -60,6 +67,15 @@ vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({
     rpc: rpcMock,
     from(table: string) {
+      tablesRead.push(table);
+      if (table === 'creator_resource_wallets') {
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => payoutAnswers.wallet }) }) };
+      }
+      if (table === 'creator_payout_requests') {
+        return {
+          select: () => ({ eq: () => ({ order: () => ({ limit: async () => payoutAnswers.requests }) }) }),
+        };
+      }
       if (table !== 'profiles') {
         throw new Error(`Unexpected table: ${table}`);
       }
@@ -131,19 +147,19 @@ vi.mock('@/app/profile/OwnerProfileMediaHub', () => ({
     creator,
     publicProfilePath,
     stats,
-    sales,
+    walletBalance,
   }: {
     creator: { name: string; username: string | null };
     publicProfilePath?: string | null;
     stats?: unknown;
-    sales?: unknown;
+    walletBalance?: unknown;
   }) => (
     <div
       data-testid="owner-profile-media-hub"
       data-creator-name={creator.name}
       data-username={creator.username ?? ''}
       data-stats={JSON.stringify(stats ?? null)}
-      data-sales={JSON.stringify(sales ?? null)}
+      data-wallet={JSON.stringify(walletBalance ?? null)}
     >
       Profile media hub
       {publicProfilePath ? <a href={publicProfilePath}>View public profile</a> : null}
@@ -159,6 +175,9 @@ describe('ProfilePage', () => {
     rpcMock.mockClear();
     rpcAnswers.owner_profile_counts = { data: { creations: 0, posts: 0, archivedPosts: 0, saved: 0 }, error: null };
     rpcAnswers.get_owner_post_sales_summary = { data: { earningsUsdCents: 0, listingCount: 0, salesCount: 0 }, error: null };
+    payoutAnswers.wallet = { data: null, error: null };
+    payoutAnswers.requests = { data: [], error: null };
+    tablesRead.length = 0;
   });
 
   afterEach(() => {
@@ -195,8 +214,10 @@ describe('ProfilePage', () => {
   });
 
   // The web /profile ran neither count RPC: its header printed the lengths of
-  // the pages loaded so far, and its Wallet no amount.
-  it("hands the hub the server's library totals and seller earnings", async () => {
+  // the pages loaded so far, and its Wallet no amount. The Wallet then printed
+  // lifetime earnings, which a payout request never lowered; it prints the
+  // payout balance the seller dashboard offers to withdraw.
+  it("hands the hub the server's library totals and the withdrawable balance", async () => {
     profileState = {
       id: 'a1b2c3d4-1111-2222-3333-444455556666',
       username: 'persisted-name',
@@ -212,15 +233,85 @@ describe('ProfilePage', () => {
       credits: 10,
     };
     rpcAnswers.owner_profile_counts = { data: { creations: 200, posts: 31, archivedPosts: 4, saved: 7 }, error: null };
-    rpcAnswers.get_owner_post_sales_summary = { data: { earningsUsdCents: 4250, listingCount: 2, salesCount: 5 }, error: null };
+    // $42.50 left to withdraw out of a larger lifetime total.
+    rpcAnswers.get_owner_post_sales_summary = { data: { earningsUsdCents: 19_250, listingCount: 2, salesCount: 5 }, error: null };
+    payoutAnswers.wallet = {
+      data: {
+        available_token_subunits: 425_000,
+        held_token_subunits: 0,
+        lifetime_earned_token_subunits: 1_925_000,
+        lifetime_paid_out_token_subunits: 1_500_000,
+      },
+      error: null,
+    };
 
     render(await ProfilePage({}));
 
     const hub = screen.getByTestId('owner-profile-media-hub');
     expect(JSON.parse(hub.getAttribute('data-stats') ?? 'null')).toEqual({ creations: 200, posts: 31, archivedPosts: 4, saved: 7 });
-    expect(JSON.parse(hub.getAttribute('data-sales') ?? 'null')).toEqual({ earningsUsdCents: 4250, listingCount: 2, salesCount: 5 });
+    expect(JSON.parse(hub.getAttribute('data-wallet') ?? 'null')).toEqual({ availableUsd: '$42.50' });
     expect(rpcMock).toHaveBeenCalledWith('owner_profile_counts', { p_user_id: 'a1b2c3d4-1111-2222-3333-444455556666' });
-    expect(rpcMock).toHaveBeenCalledWith('get_owner_post_sales_summary', { p_owner_id: 'a1b2c3d4-1111-2222-3333-444455556666' });
+    expect(tablesRead).toEqual(expect.arrayContaining(['creator_resource_wallets', 'creator_payout_requests']));
+  });
+
+  it('still draws the profile when the payout balance cannot be read, with the Wallet unavailable', async () => {
+    profileState = {
+      id: 'a1b2c3d4-1111-2222-3333-444455556666',
+      username: 'persisted-name',
+      display_name: 'Creator Name',
+      bio: null,
+      avatar_url: null,
+      cover_url: null,
+      website_url: null,
+      twitter_handle: null,
+      instagram_handle: null,
+      tiktok_handle: null,
+      location: null,
+      credits: 10,
+    };
+    payoutAnswers.wallet = { data: null, error: { message: 'statement timeout' } };
+
+    render(await ProfilePage({}));
+
+    const hub = screen.getByTestId('owner-profile-media-hub');
+    expect(hub).toHaveAttribute('data-wallet', 'null');
+    expect(JSON.parse(hub.getAttribute('data-stats') ?? 'null')).toEqual({ creations: 0, posts: 0, archivedPosts: 0, saved: 0 });
+  });
+
+  // `GET /api/creator/payouts` is for registered accounts; the page reads the
+  // balance for the same callers.
+  it("does not read a guest's payout balance", async () => {
+    const guest = {
+      session: {
+        user: {
+          id: 'a1b2c3d4-1111-2222-3333-444455556666',
+          is_anonymous: true,
+          user_metadata: {},
+        },
+      },
+      credits: 0,
+    };
+    getServerAuthStateMock.mockResolvedValueOnce(guest as never).mockResolvedValueOnce(guest as never);
+    profileState = {
+      id: 'a1b2c3d4-1111-2222-3333-444455556666',
+      username: 'persisted-name',
+      display_name: 'Creator Name',
+      bio: null,
+      avatar_url: null,
+      cover_url: null,
+      website_url: null,
+      twitter_handle: null,
+      instagram_handle: null,
+      tiktok_handle: null,
+      location: null,
+      credits: 0,
+    };
+
+    render(await ProfilePage({}));
+
+    expect(screen.getByTestId('owner-profile-media-hub')).toHaveAttribute('data-wallet', 'null');
+    expect(tablesRead).not.toContain('creator_resource_wallets');
+    expect(tablesRead).not.toContain('creator_payout_requests');
   });
 
   it('still draws the profile when a count fails, with that total left unknown', async () => {
@@ -244,7 +335,7 @@ describe('ProfilePage', () => {
 
     const hub = screen.getByTestId('owner-profile-media-hub');
     expect(hub).toHaveAttribute('data-stats', 'null');
-    expect(JSON.parse(hub.getAttribute('data-sales') ?? 'null')).toEqual({ earningsUsdCents: 0, listingCount: 0, salesCount: 0 });
+    expect(JSON.parse(hub.getAttribute('data-wallet') ?? 'null')).toEqual({ availableUsd: '$0.00' });
   });
 
   it('sends a signed-out visitor to sign in and back to this same address', async () => {

@@ -2,8 +2,12 @@ import { BadgeCheck, CheckCircle2, Sparkles } from 'lucide-react';
 
 import DeferredCreatorProfileCard from './DeferredCreatorProfileCard';
 import { loadOwnerProfile } from './load-owner-profile';
-import OwnerProfileMediaHub from './OwnerProfileMediaHub';
+import OwnerProfileMediaHub, { type OwnerWalletBalance } from './OwnerProfileMediaHub';
+import { isGuestUser } from '@/lib/account-identity';
+import { getCreatorPayoutState } from '@/lib/creator-payouts';
 import { getSafeProfileNextPath } from '@/lib/profile';
+import { createServiceClient } from '@/lib/server-helpers';
+import { getServerAuthState } from '@/lib/supabase-server';
 
 interface ProfilePageProps {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -26,21 +30,48 @@ function buildProfileReturnPath(params: Record<string, string | string[] | undef
   return search ? `/profile?${search}` : '/profile';
 }
 
+// The Wallet card says what can be withdrawn: the payout balance the seller
+// dashboard reads from `GET /api/creator/payouts`, read here the same way and
+// for the same callers (registered accounts). A failed read leaves the card
+// "Balance unavailable"; it never fails the page.
+async function loadWalletBalance(): Promise<OwnerWalletBalance | null> {
+  const { session } = await getServerAuthState();
+  const user = session?.user;
+  if (!user || isGuestUser(user)) {
+    return null;
+  }
+
+  try {
+    const { availableUsd } = await getCreatorPayoutState({
+      adminSupabase: createServiceClient(),
+      userId: user.id,
+    });
+    return { availableUsd };
+  } catch {
+    return null;
+  }
+}
+
 export default async function ProfilePage({ searchParams }: ProfilePageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const requestedNextPath = getParam(resolvedSearchParams.next);
   const nextPath = getSafeProfileNextPath(requestedNextPath);
   const profileReturnPath = buildProfileReturnPath(resolvedSearchParams);
-  const {
-    initialProfile,
-    loadError,
-    readiness,
-    publicProfileUsername,
-    publicProfilePath,
-    publicProfileDisplayName,
-    stats,
-    sales,
-  } = await loadOwnerProfile(profileReturnPath, { includeTotals: true });
+  const [
+    {
+      initialProfile,
+      loadError,
+      readiness,
+      publicProfileUsername,
+      publicProfilePath,
+      publicProfileDisplayName,
+      stats,
+    },
+    walletBalance,
+  ] = await Promise.all([
+    loadOwnerProfile(profileReturnPath, { includeTotals: true }),
+    loadWalletBalance(),
+  ]);
   const isFirstRunProfile = !readiness.publicPublishReady;
   const setupSteps = [
     {
@@ -135,7 +166,7 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
               credits: initialProfile.credits,
             }}
             stats={stats}
-            sales={sales}
+            walletBalance={walletBalance}
             publicProfilePath={publicProfilePath}
             publicProfileDisplayName={publicProfileDisplayName}
           />

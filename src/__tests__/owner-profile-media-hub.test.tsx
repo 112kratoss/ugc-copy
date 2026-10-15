@@ -281,12 +281,12 @@ describe('OwnerProfileMediaHub', () => {
     // The header and the tab chips printed the lengths of the pages loaded so
     // far, 24 a page, and the Wallet said "Open"; the app and the web Studio
     // print the server's totals.
-    it("prints the server's totals before any page loads, and the earnings in the Wallet", async () => {
+    it("prints the server's totals before any page loads, and the withdrawable balance in the Wallet", async () => {
       render(
         <OwnerProfileMediaHub
           creator={owner}
           stats={{ creations: 200, posts: 31, archivedPosts: 4, saved: 7 }}
-          sales={{ earningsUsdCents: 123456, listingCount: 3, salesCount: 9 }}
+          walletBalance={{ availableUsd: '$1,234.56' }}
         />
       );
 
@@ -296,19 +296,23 @@ describe('OwnerProfileMediaHub', () => {
       expect(screen.getByRole('tab', { name: 'Posts 31' })).toBeInTheDocument();
       expect(screen.getByRole('tab', { name: 'Saved 7' })).toBeInTheDocument();
       expect(screen.getByRole('tab', { name: 'Creations 200' })).toBeInTheDocument();
-      expect(screen.getByRole('link', { name: /wallet/i })).toHaveTextContent('$1,234.56');
+      const wallet = screen.getByRole('link', { name: /wallet/i });
+      expect(wallet).toHaveTextContent('$1,234.56');
+      expect(wallet).toHaveTextContent('Available to withdraw');
 
       // Two posts load; the number stays the one the server counted.
       await screen.findByRole('button', { name: /open public post/i });
       expect(statFor('Posts')).toBe('31');
     });
 
-    it('draws — for a count the server could not read, never the loaded pages, and $0.00 for no earnings', async () => {
+    // The Wallet printed lifetime earnings, which stayed whole after a payout
+    // request moved the balance to $0.00; it prints what can be withdrawn.
+    it('draws — for a count the server could not read, never the loaded pages, and $0.00 for an empty balance', async () => {
       render(
         <OwnerProfileMediaHub
           creator={owner}
           stats={null}
-          sales={{ earningsUsdCents: 0, listingCount: 0, salesCount: 0 }}
+          walletBalance={{ availableUsd: '$0.00' }}
         />
       );
 
@@ -319,12 +323,17 @@ describe('OwnerProfileMediaHub', () => {
       // A count it does not have is not read out as one.
       expect(screen.getByRole('tab', { name: 'Posts' })).toBeInTheDocument();
       expect(screen.getByRole('link', { name: /wallet/i })).toHaveTextContent('$0.00');
+      expect(screen.getByRole('link', { name: /wallet/i })).toHaveTextContent('Available to withdraw');
     });
 
-    it('draws — in the Wallet when the seller totals could not be read', async () => {
-      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} sales={null} />);
+    it('draws — and "Balance unavailable" in the Wallet when the payout balance could not be read', async () => {
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} walletBalance={null} />);
 
-      expect(screen.getByRole('link', { name: /wallet/i })).toHaveTextContent('—');
+      const wallet = screen.getByRole('link', { name: /wallet/i });
+      expect(wallet).toHaveTextContent('—');
+      expect(wallet).toHaveTextContent('Balance unavailable');
+      expect(wallet).not.toHaveTextContent('Available to withdraw');
+      expect(wallet).toHaveAttribute('href', '/marketplace/sell');
       await screen.findByRole('button', { name: /open public post/i });
     });
 
