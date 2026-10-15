@@ -1,7 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -20,8 +19,11 @@ import {
 } from 'lucide-react';
 
 import { useAuth } from '@/components/AuthProvider';
+import { requestConfirmation } from '@/components/feedback-state';
 import TemplateRunMedia from './TemplateRunMedia';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
+import { buildShowcaseDetailPath } from '@/lib/share';
+import { isSignedMediaUrlExpiring, preserveStableTemplateRunMedia } from '@/lib/template-run-stable-media';
 import { finalizeSignedUpload } from '@/lib/upload-finalize-client';
 import {
   Button,
@@ -34,6 +36,7 @@ import {
 } from '@/components/DesignSystem';
 
 import {
+  TemplateApiError,
   approveTemplateRunStep,
   cancelTemplateRun,
   createClientIdempotencyKey,
@@ -55,16 +58,19 @@ import type {
   TemplateInputSlot,
   TemplateMediaKind,
   TemplateRun,
+  TemplateRunLinkedPost,
   TemplateRunStep,
 } from './types';
 import {
   isRunTerminal,
   isStepAwaitingApproval,
   isStepFailed,
+  isStepStalled,
   shouldPollTemplateRun,
 } from './types';
 
 const POLL_INTERVAL_MS = 3_000;
+const DOWNLOAD_RENEWAL_TIMEOUT_MS = 30_000;
 const MAX_TEMPLATE_IMAGE_BYTES = 30 * 1024 * 1024;
 const MAX_TEMPLATE_VIDEO_BYTES = 100 * 1024 * 1024;
 const MIN_TEMPLATE_IMAGE_DIMENSION = 256;
@@ -117,10 +123,44 @@ async function validateTemplateInputFile(file: File, kind: TemplateMediaKind): P
   }
 }
 
-function getSafeReturnTo(value: string | null): string | null {
-  if (!value || !value.startsWith('/') || value.startsWith('//')) return null;
-  if (value.startsWith('/templates/') || value.startsWith('/create-workflow')) return value;
-  return null;
+type RunFailure = { message: string; code?: string | null; status?: number | null };
+
+type PostedResult = { path: string; visibility: TemplateRunLinkedPost['visibility'] };
+
+function toRunFailure(reason: unknown, fallback: string): RunFailure {
+  if (reason instanceof TemplateApiError) return { message: reason.message, code: reason.code, status: reason.status };
+  return { message: reason instanceof Error ? reason.message : fallback };
+}
+
+/** Every read of the run goes through this, so a re-signed address does not reload media already on screen. */
+function withStableMedia(nextRun: TemplateRun) {
+  return (current: TemplateRun | null) => preserveStableTemplateRunMedia(current, nextRun);
+}
+
+/** A post others can open is opened as itself; a private one in the owner's editor. */
+function toPostedResult(post: TemplateRunLinkedPost): PostedResult {
+  return {
+    path: post.visibility === 'private' ? `/post/${post.id}/edit` : buildShowcaseDetailPath(post.id),
+    visibility: post.visibility,
+  };
+}
+
+function readFileExtension(url: string): string | null {
+  try {
+    return new URL(url, 'https://magicbooklet.invalid').pathname.match(/\.([a-z0-9]{2,5})$/i)?.[1].toLowerCase() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** `<template name>-<kind>.<ext>`, the extension read from the stored file. */
+export function getTemplateRunDownloadName(templateName: string, kind: TemplateMediaKind, url: string): string {
+  const name = templateName.trim().toLowerCase()
+    .replace(/[\\/:*?"<>|]+/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || 'template';
+  return `${name}-${kind}.${readFileExtension(url) ?? (kind === 'video' ? 'mp4' : 'jpg')}`;
 }
 
 function getRunStatusCopy(run: TemplateRun): { title: string; body: string } {
@@ -152,7 +192,26 @@ function getRunStatusCopy(run: TemplateRun): { title: string; body: string } {
   }
 }
 
-export function getTemplateRunErrorCopy(message: string): { title: string; body: string } {
+// Refusals that mean the step moved on without this page, from another tab or the app.
+const STEP_ALREADY_HANDLED_CODES = new Set([
+  'STALE_STEP_ATTEMPT',
+  'APPROVAL_ALREADY_HANDLED',
+  'APPROVAL_NOT_READY',
+  'STEP_NOT_RETRYABLE',
+]);
+
+export function getTemplateRunErrorCopy(message: string, code: string | null = null): { title: string; body: string } {
+  // The page reads the run again after a refusal, so these say where the run
+  // stands; trying the same action again would be refused the same way.
+  if (code === 'RUN_TERMINAL') {
+    return { title: 'We could not complete that action', body: 'This run has ended. Start a new run to try the template again.' };
+  }
+  if (code === 'STEP_NOT_FOUND') {
+    return { title: 'We could not complete that action', body: 'That step is no longer part of this run.' };
+  }
+  if ((code !== null && STEP_ALREADY_HANDLED_CODES.has(code)) || /already handled/i.test(message)) {
+    return { title: 'We could not complete that action', body: 'This step was already handled. The run has been refreshed.' };
+  }
   const normalized = message.toLowerCase();
   if (
     (normalized.includes('insufficient') && normalized.includes('credit'))
@@ -195,8 +254,8 @@ function BusyRun() {
 }
 
 export default function TemplateRunClient({ runId }: { runId: string }) {
-  const searchParams = useSearchParams();
   const { session, credits, isLoading: isAuthLoading, refreshSessionState } = useAuth();
+  const accessToken = session?.access_token ?? null;
   const [run, setRun] = useState<TemplateRun | null>(null);
   const [template, setTemplate] = useState<MediaTemplate | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -204,7 +263,8 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
     type: 'uploading' | 'starting' | 'retrying' | 'approving' | 'cancelling';
     stepId?: string;
   } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<RunFailure | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [inputFiles, setInputFiles] = useState<Record<string, File | null>>({});
   const [previewUrls, setPreviewUrls] = useState<Record<string, string | null>>({});
   const [inputErrors, setInputErrors] = useState<Record<string, string | null>>({});
@@ -214,17 +274,16 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
   const [isPublishOpen, setIsPublishOpen] = useState(false);
   // "Publish & share": the modal shares the new public post once it exists.
   const [shareAfterPublish, setShareAfterPublish] = useState(false);
-  const [publishedPost, setPublishedPost] = useState<{
-    path: string;
-    visibility: 'public' | 'unlisted' | 'private';
-  } | null>(null);
+  const [publishedPost, setPublishedPost] = useState<PostedResult | null>(null);
   const previewUrlsRef = useRef(previewUrls);
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const downloadRenewalRef = useRef<AbortController | null>(null);
   const errorRef = useRef<HTMLDivElement | null>(null);
   const inputValidationSequenceRef = useRef<Record<string, number>>({});
-  const returnTo = getSafeReturnTo(searchParams.get('returnTo'));
-  const isTestView = searchParams.get('test') === '1';
   const isBusy = busyAction !== null;
+  // A post made in this visit, else the one the run says its result already has.
+  const linkedPost = run?.result?.linkedPost ?? null;
+  const postedResult = publishedPost ?? (linkedPost ? toPostedResult(linkedPost) : null);
 
   useEffect(() => { previewUrlsRef.current = previewUrls; }, [previewUrls]);
   useEffect(() => {
@@ -235,19 +294,20 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
       if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
     });
     if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
+    downloadRenewalRef.current?.abort();
   }, []);
 
   useEffect(() => {
-    if (isAuthLoading || !session?.access_token) return;
+    if (isAuthLoading || !accessToken) return;
     let active = true;
-    void getTemplateRun(runId, session.access_token)
-      .then((nextRun) => { if (active) setRun(nextRun); })
+    void getTemplateRun(runId, accessToken)
+      .then((nextRun) => { if (active) setRun(withStableMedia(nextRun)); })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error ? reason.message : 'Could not load this run.');
+        if (active) setError(toRunFailure(reason, 'Could not load this run.'));
       })
       .finally(() => { if (active) setIsLoading(false); });
     return () => { active = false; };
-  }, [isAuthLoading, runId, session?.access_token]);
+  }, [accessToken, isAuthLoading, loadAttempt, runId]);
 
   useEffect(() => {
     if (!run?.templateId || !session?.access_token || template?.id === run.templateId) return;
@@ -260,25 +320,42 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
 
   const shouldPoll = Boolean(run && shouldPollTemplateRun(run));
   useEffect(() => {
-    if (!shouldPoll || !session?.access_token) return;
+    if (!shouldPoll || !accessToken) return;
+    const token = accessToken;
     let active = true;
-    const poll = async () => {
+    let reading = false;
+    function schedule(delayMs: number) {
+      pollTimeoutRef.current = setTimeout(() => { void poll(); }, delayMs);
+    }
+    async function poll() {
+      pollTimeoutRef.current = null;
+      // A hidden tab reads nothing until it is shown again.
+      if (document.visibilityState === 'hidden') return;
+      reading = true;
       try {
-        const nextRun = await getTemplateRun(runId, session.access_token);
+        const nextRun = await getTemplateRun(runId, token);
         if (!active) return;
-        setRun(nextRun);
-        if (shouldPollTemplateRun(nextRun)) pollTimeoutRef.current = setTimeout(poll, POLL_INTERVAL_MS);
+        setRun(withStableMedia(nextRun));
+        if (shouldPollTemplateRun(nextRun)) schedule(POLL_INTERVAL_MS);
         else void refreshSessionState();
       } catch {
-        if (active) pollTimeoutRef.current = setTimeout(poll, POLL_INTERVAL_MS * 2);
+        if (active) schedule(POLL_INTERVAL_MS * 2);
+      } finally {
+        reading = false;
       }
+    }
+    const resume = () => {
+      if (active && document.visibilityState === 'visible' && !reading && !pollTimeoutRef.current) void poll();
     };
-    pollTimeoutRef.current = setTimeout(poll, POLL_INTERVAL_MS);
+    document.addEventListener('visibilitychange', resume);
+    schedule(POLL_INTERVAL_MS);
     return () => {
       active = false;
+      document.removeEventListener('visibilitychange', resume);
       if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
     };
-  }, [refreshSessionState, runId, session?.access_token, shouldPoll]);
+  }, [accessToken, refreshSessionState, runId, shouldPoll]);
 
   const replaceInputFile = async (slot: TemplateInputSlot, file: File | null) => {
     const sequence = (inputValidationSequenceRef.current[slot.key] ?? 0) + 1;
@@ -313,20 +390,27 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
     setPreviewUrls((current) => ({ ...current, [slot.key]: URL.createObjectURL(file) }));
   };
 
+  // A refused action usually means the run moved on without this page (an
+  // approval from the app, a cancel in another tab). Reading it again shows
+  // where it stands instead of the same button that will be refused again.
   const setMutationFailure = (reason: unknown, fallback: string) => {
-    setError(reason instanceof Error ? reason.message : fallback);
+    setError(toRunFailure(reason, fallback));
     setBusyAction(null);
+    if (!accessToken) return;
+    void getTemplateRun(runId, accessToken)
+      .then((nextRun) => setRun(withStableMedia(nextRun)))
+      .catch(() => { /* The page keeps the run it last read. */ });
   };
 
   const handleUploadAndStart = async () => {
     if (!run || !session?.access_token) return;
     if (Object.values(validatingInputs).some(Boolean)) {
-      setError('Wait for the selected files to finish checking before starting.');
+      setError({ message: 'Wait for the selected files to finish checking before starting.' });
       return;
     }
     const missingSlot = run.inputSlots.find((slot) => slot.required && !run.inputs[slot.key] && !inputFiles[slot.key]);
     if (missingSlot) {
-      setError(`Add ${missingSlot.label.toLowerCase()} before starting.`);
+      setError({ message: `Add ${missingSlot.label.toLowerCase()} before starting.` });
       return;
     }
 
@@ -356,7 +440,7 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
           token: session.access_token,
           inputs: uploadedInputs,
         });
-        setRun(finalizedRun);
+        setRun(withStableMedia(finalizedRun));
         const uploadedKeys = new Set(uploadedInputs.map((input) => input.slotKey));
         filesToUpload.forEach((slot) => {
           const previewUrl = previewUrls[slot.key];
@@ -375,7 +459,7 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
         session.access_token,
         createClientIdempotencyKey(`template-run:${run.id}:start`)
       );
-      setRun(nextRun);
+      setRun(withStableMedia(nextRun));
       setBusyAction(null);
       void refreshSessionState();
     } catch (reason) {
@@ -394,7 +478,7 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
         token: session.access_token,
         idempotencyKey: createClientIdempotencyKey(`template-run:${run.id}:step:${step.id}:retry`),
       });
-      setRun(nextRun);
+      setRun(withStableMedia(nextRun));
       setBusyAction(null);
       void refreshSessionState();
     } catch (reason) {
@@ -413,7 +497,7 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
         token: session.access_token,
         idempotencyKey: createClientIdempotencyKey(`template-run:${run.id}:approval:${step.id}`),
       });
-      setRun(nextRun);
+      setRun(withStableMedia(nextRun));
       setBusyAction(null);
       void refreshSessionState();
     } catch (reason) {
@@ -422,23 +506,70 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
   };
 
   const handleCancel = async () => {
-    if (!run || !session?.access_token || !window.confirm('Cancel this run? Completed steps will remain in your creation history.')) return;
+    if (!run || !accessToken) return;
+    const runToCancel = run.id;
+    const token = accessToken;
+    const confirmed = await requestConfirmation({
+      title: 'Cancel this run?',
+      message: 'Finished steps stay in your library. A step that is already generating keeps its credits.',
+      confirmLabel: 'Cancel run',
+      cancelLabel: 'Keep creating',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
     setBusyAction({ type: 'cancelling' });
     setError(null);
     try {
-      setRun(await cancelTemplateRun(run.id, session.access_token));
+      const nextRun = await cancelTemplateRun(runToCancel, token);
+      setRun(withStableMedia(nextRun));
       setBusyAction(null);
+      // Cancelling settles the run's generations, which can return credits.
+      void refreshSessionState();
     } catch (reason) {
       setMutationFailure(reason, 'Could not cancel this run.');
     }
   };
 
-  // Only a public Explore post is shared. The private result used to be
+  // The result's address is signed for an hour and read once, so a page left
+  // open can hold one that is about to stop working. That one is renewed
+  // first, in a tab reserved during the click so a popup blocker lets it open.
+  const handleDownload = (event: MouseEvent<HTMLAnchorElement>, href: string, kind: TemplateMediaKind) => {
+    if (!accessToken || !isSignedMediaUrlExpiring(href)) return;
+    event.preventDefault();
+    if (downloadRenewalRef.current) return;
+    const tab = window.open('about:blank', '_blank');
+    if (!tab) {
+      setShareFeedback('Allow pop-ups to download this file, then try again.');
+      return;
+    }
+    tab.opener = null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DOWNLOAD_RENEWAL_TIMEOUT_MS);
+    downloadRenewalRef.current = controller;
+    setShareFeedback(null);
+    void getTemplateRun(runId, accessToken, controller.signal)
+      .then((nextRun) => {
+        setRun(withStableMedia(nextRun));
+        const url = nextRun.result?.kind === kind ? nextRun.result.url : null;
+        if (!url) throw new Error('Result unavailable');
+        if (!tab.closed) tab.location.replace(url);
+      })
+      .catch(() => {
+        tab.close();
+        setShareFeedback('Could not prepare the download. Try again.');
+      })
+      .finally(() => {
+        clearTimeout(timer);
+        downloadRenewalRef.current = null;
+      });
+  };
+
+  // Only a post others can open is shared. The private result used to be
   // shared as its signed storage address, which dies within the hour and has
   // no landing page; the app dropped that in August.
   const handleShare = async () => {
-    if (!run?.result?.url || publishedPost?.visibility !== 'public') return;
-    const shareUrl = new URL(publishedPost.path, window.location.origin).toString();
+    if (!run?.result?.url || !postedResult || postedResult.visibility === 'private') return;
+    const shareUrl = new URL(postedResult.path, window.location.origin).toString();
     try {
       if (navigator.share) {
         await navigator.share({ title: template?.name || run.templateTitle, url: shareUrl });
@@ -487,19 +618,32 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
     return (
       <TemplatePageShell>
         <Button href="/templates" variant="ghost" icon={ArrowLeft} iconPosition="start">Back to templates</Button>
-        <StatusCallout tone="danger" title="Run unavailable" body={error || 'This run could not be found.'} className="mt-6" />
+        <StatusCallout tone="danger" title="Run unavailable" body={error?.message || 'This run could not be found.'} className="mt-6" />
+        {/* A run that is not this person's, or not there, reads the same however often it is asked for. */}
+        {error && error.status !== 404 ? (
+          <Button
+            variant="primary"
+            icon={RotateCcw}
+            onClick={() => {
+              setError(null);
+              setIsLoading(true);
+              setLoadAttempt((attempt) => attempt + 1);
+            }}
+            className="mt-4"
+          >
+            Retry
+          </Button>
+        ) : null}
       </TemplatePageShell>
     );
   }
 
   const statusCopy = getRunStatusCopy(run);
   const result = run.result;
-  const isTestRun = isTestView || run.isTest;
+  const isTestRun = run.isTest;
   const templateHref = template ? `/templates/${template.slug || template.id}` : '/templates';
   const createAnotherHref = `/templates/${template?.slug || run.templateId}/create`;
-  const testReturnHref = returnTo
-    ? `${returnTo}${returnTo.includes('?') ? '&' : '?'}testRunId=${encodeURIComponent(run.id)}`
-    : `/create-workflow?template=${encodeURIComponent(run.templateId)}&testRunId=${encodeURIComponent(run.id)}`;
+  const testReturnHref = `/create-workflow?template=${encodeURIComponent(run.templateId)}&testRunId=${encodeURIComponent(run.id)}`;
   const backHref = isTestRun ? testReturnHref : templateHref;
   const estimatedTotalCredits = run.estimatedTotalCredits ?? template?.estimatedTotalCredits ?? null;
   const creditShortfall = credits !== null && estimatedTotalCredits !== null
@@ -508,12 +652,15 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
   const missingRequiredSlots = run.inputSlots.filter(
     (slot) => slot.required && !run.inputs[slot.key] && !inputFiles[slot.key]
   );
-  const errorCopy = error ? getTemplateRunErrorCopy(error) : null;
-  const attentionSteps = run.steps.filter((step) => isStepFailed(step) || isStepAwaitingApproval(step));
+  const errorCopy = error ? getTemplateRunErrorCopy(error.message, error.code ?? null) : null;
+  const attentionSteps = run.steps.filter((step) => (
+    isStepFailed(step) || isStepAwaitingApproval(step) || isStepStalled(run.status, step)
+  ));
   const orderedSteps = attentionSteps.length > 0
     ? [...attentionSteps, ...run.steps.filter((step) => !attentionSteps.includes(step))]
     : run.steps;
   const runEnded = isRunTerminal(run.status);
+  const downloadUrl = result && resolvedDownload?.outputUrl === result.url ? resolvedDownload.url : result?.url ?? null;
 
   return (
     <TemplatePageShell>
@@ -788,17 +935,23 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
               <Button href={testReturnHref} variant="primary" icon={ArrowRight} className="mt-6 w-full">Back to workflow canvas</Button>
             ) : (
               <>
-                {publishedPost ? (
+                {postedResult ? (
                   <div className="mt-6">
                     <StatusCallout
                       tone="success"
-                      title={publishedPost.visibility === 'public' ? 'Published to Explore' : 'Saved as a private post'}
-                      body={publishedPost.visibility === 'public'
+                      title={postedResult.visibility === 'public'
+                        ? 'Published to Explore'
+                        : postedResult.visibility === 'unlisted'
+                          ? 'Saved as an unlisted post'
+                          : 'Saved as a private post'}
+                      body={postedResult.visibility === 'public'
                         ? 'Your final template result is now visible in Explore.'
-                        : 'Only you can open this post until you publish it publicly.'}
+                        : postedResult.visibility === 'unlisted'
+                          ? 'Anyone with the link can open it. It does not appear in Explore.'
+                          : 'Only you can open this post until you publish it publicly.'}
                     />
-                    <Button href={publishedPost.path} variant="primary" icon={ArrowRight} className="mt-3 w-full">
-                      {publishedPost.visibility === 'public' ? 'View in Explore' : 'Open private post'}
+                    <Button href={postedResult.path} variant="primary" icon={ArrowRight} className="mt-3 w-full">
+                      {postedResult.visibility === 'private' ? 'Open private post' : 'View post'}
                     </Button>
                   </div>
                 ) : result.generationId ? (
@@ -811,15 +964,28 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
                     Publish to Explore
                   </Button>
                 ) : null}
-                <a href={resolvedDownload?.outputUrl === result.url ? resolvedDownload.url : result.url} download className={`${publishedPost ? 'mt-3' : result.generationId ? 'mt-3' : 'mt-6'} ui-button ui-button-secondary ui-focus-ring w-full`}>
+                <a
+                  href={downloadUrl ?? result.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  download={getTemplateRunDownloadName(template?.name || run.templateTitle, result.kind, result.url)}
+                  onClick={(event) => handleDownload(event, downloadUrl ?? result.url, result.kind)}
+                  onAuxClick={(event) => {
+                    if (event.button === 1) handleDownload(event, downloadUrl ?? result.url, result.kind);
+                  }}
+                  className={`${postedResult || result.generationId ? 'mt-3' : 'mt-6'} ui-button ui-button-secondary ui-focus-ring w-full`}
+                >
                   <Download className="h-4 w-4" aria-hidden />
                   Download {result.kind}
                 </a>
-                {publishedPost?.visibility === 'public' ? (
-                  <Button variant="secondary" icon={Share2} onClick={handleShare} className="mt-3 w-full">
-                    Share Explore post
-                  </Button>
-                ) : result.generationId && !isTestRun ? (
+                {/* A posted result is never published again: that would overwrite the post's caption and visibility. */}
+                {postedResult ? (
+                  postedResult.visibility !== 'private' ? (
+                    <Button variant="secondary" icon={Share2} onClick={handleShare} className="mt-3 w-full">
+                      Share Explore post
+                    </Button>
+                  ) : null
+                ) : result.generationId ? (
                   <Button
                     variant="secondary"
                     icon={Share2}
@@ -887,9 +1053,9 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
             const stablePath = payload.showcasePath
               ?? payload.ownerPath
               ?? (payload.postId
-                ? visibility === 'public'
-                  ? `/showcase/${payload.postId}`
-                  : `/post/${payload.postId}/edit`
+                ? visibility === 'private'
+                  ? `/post/${payload.postId}/edit`
+                  : `/showcase/${payload.postId}`
                 : null);
             if (stablePath) {
               setPublishedPost({ path: stablePath, visibility });

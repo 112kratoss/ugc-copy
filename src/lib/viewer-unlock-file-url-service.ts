@@ -10,6 +10,7 @@ import {
 import { logBackendError } from '@/lib/backend-logger';
 import {
   POST_RESOURCE_FILE_URL_BATCH_LIMIT,
+  formatPostResourceDownloadName,
   type PostResourceFileDisposition,
   type PostResourceSignedFileUrl,
 } from '@/lib/post-resource-bundles';
@@ -112,6 +113,30 @@ export function resolvePostResourceStorageLocation(
   return filePath ? { bucket: RESOURCE_FILES_BUCKET, filePath } : null;
 }
 
+/**
+ * The name a download saves under, as on the post's own route
+ * (`post-resource-file-url-service.ts`): the attachment's label or the item's
+ * title with its content type's extension, so one file saves under one name
+ * on both routes. The current version is asked before the purchased one.
+ */
+function resolveDownloadName(detail: ViewerUnlockDetail, storagePath: string): string {
+  for (const resources of [detail.currentResources, detail.purchasedRevision.resources]) {
+    if (!resources) continue;
+    const attachment = resources.attachments.find(
+      (item) => item.kind === 'file' && item.storagePath === storagePath,
+    ) ?? null;
+    const resourceItem = resources.items?.find((item) => item.storagePath === storagePath) ?? null;
+    if (attachment || resourceItem) {
+      return formatPostResourceDownloadName(
+        attachment?.label ?? resourceItem?.title,
+        attachment?.contentType ?? resourceItem?.contentType,
+      );
+    }
+  }
+
+  return formatPostResourceDownloadName(null, null);
+}
+
 function resolveRetainedStorageLocation(
   revisionId: string,
   bucket: unknown,
@@ -131,6 +156,7 @@ async function signUnlockFile({
   adminSupabase,
   detail,
   disposition,
+  downloadName,
   expiresAt,
   source,
   storagePath,
@@ -138,6 +164,7 @@ async function signUnlockFile({
   adminSupabase: ViewerUnlockFileUrlClient;
   detail: ViewerUnlockDetail;
   disposition: PostResourceFileDisposition;
+  downloadName: string;
   expiresAt: string;
   source: StorageLocation;
   storagePath: string;
@@ -178,7 +205,7 @@ async function signUnlockFile({
     .createSignedUrl(
       storageLocation.filePath,
       SIGNED_READ_EXPIRES_IN_SECONDS,
-      disposition === 'attachment' ? { download: storagePath.split('/').pop() || 'Resource file' } : {},
+      disposition === 'attachment' ? { download: downloadName } : {},
     );
 
   if (error || !data?.signedUrl) {
@@ -232,7 +259,7 @@ export async function createViewerUnlockFileUrl({
       const source = unlockPaths.has(storagePath)
         ? resolvePostResourceStorageLocation(storagePath, ownerUserId)
         : null;
-      return source ? [{ storagePath, source }] : [];
+      return source ? [{ storagePath, source, downloadName: resolveDownloadName(detail, storagePath) }] : [];
     })
     : [];
   if (signableFiles.length === 0) {
@@ -252,12 +279,13 @@ export async function createViewerUnlockFileUrl({
 
   // Taken before signing, so the stated expiry is never later than the URL's own.
   const expiresAt = new Date(Date.now() + SIGNED_READ_EXPIRES_IN_SECONDS * 1000).toISOString();
-  const outcomes = await Promise.all(signableFiles.map(async ({ source, storagePath }): Promise<SignedFileOutcome> => {
+  const outcomes = await Promise.all(signableFiles.map(async ({ downloadName, source, storagePath }): Promise<SignedFileOutcome> => {
     try {
       return await signUnlockFile({
         adminSupabase,
         detail,
         disposition: request.disposition,
+        downloadName,
         expiresAt,
         source,
         storagePath,

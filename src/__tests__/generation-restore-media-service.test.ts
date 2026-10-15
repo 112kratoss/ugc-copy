@@ -31,7 +31,12 @@ function makeMaybeSingleQuery<T>(
   return query;
 }
 
-function makeUpdateQuery(onEq?: (column: string, filterValue: unknown) => void) {
+type UpdateResult = { data: { id: string } | null; error: null };
+
+function makeUpdateQuery(
+  onEq?: (column: string, filterValue: unknown) => void,
+  result: UpdateResult = { data: { id: 'updated-row' }, error: null },
+) {
   const query = {
     eq(column: string, filterValue: unknown) {
       onEq?.(column, filterValue);
@@ -47,10 +52,10 @@ function makeUpdateQuery(onEq?: (column: string, filterValue: unknown) => void) 
       return query;
     },
     async maybeSingle() {
-      return { data: { id: 'updated-row' }, error: null };
+      return result;
     },
-    then(resolve: (result: { data: { id: string }; error: null }) => void) {
-      resolve({ data: { id: 'updated-row' }, error: null });
+    then(resolve: (value: UpdateResult) => void) {
+      resolve(result);
     },
   };
   return query;
@@ -59,6 +64,9 @@ function makeUpdateQuery(onEq?: (column: string, filterValue: unknown) => void) 
 function createAdminClientMock(options: {
   generationUserId?: string;
   linkedGuestIds?: string[];
+  sourceUnavailableAt?: string | null;
+  // The post left private between the check and the write.
+  linkedPostUpdateMatchesNoRow?: boolean;
 } = {}) {
   const generationUserId = options.generationUserId ?? 'user-1';
   const generation = {
@@ -70,6 +78,7 @@ function createAdminClientMock(options: {
     output_url: 'https://provider.example.com/missing.jpg',
     showcase_asset_path: null,
     is_public: false,
+    source_unavailable_at: options.sourceUnavailableAt ?? null,
   };
   const linkedPost = {
     id: 'post-1',
@@ -118,9 +127,12 @@ function createAdminClientMock(options: {
           },
           update(payload: Record<string, unknown>) {
             postUpdates.push(payload);
-            return makeUpdateQuery((column, value) => {
-              ownerFilters.push({ column, operation: 'update', table: 'posts', value });
-            });
+            return makeUpdateQuery(
+              (column, value) => {
+                ownerFilters.push({ column, operation: 'update', table: 'posts', value });
+              },
+              options.linkedPostUpdateMatchesNoRow ? { data: null, error: null } : undefined,
+            );
           },
         };
       }
@@ -189,7 +201,70 @@ function createAdminClientMock(options: {
   };
 }
 
+function makeRestoreDependencies() {
+  return {
+    isCompatibleGenerationMediaType: vi.fn(() => true),
+    persistGenerationMediaBlob: vi.fn(async () => ({
+      outputUrl: 'generated_images/user-1/restored-gen-1.png',
+      createdLocation: {
+        bucket: 'generated_images' as const,
+        filePath: 'user-1/restored-gen-1.png',
+      },
+    })),
+  } satisfies Partial<GenerationRestoreMediaDependencies>;
+}
+
+const restoreBody = {
+  storagePath: 'uploads/user-1/replacement.png',
+  originalName: 'replacement.png',
+  contentType: 'image/png',
+};
+
 describe('restoreGenerationMediaForRoute', () => {
+  it('clears the lost-source flag with the new file, since the owner list withholds every address while it is set', async () => {
+    const admin = createAdminClientMock({ sourceUnavailableAt: '2026-09-08T06:15:00.000Z' });
+
+    await expect(restoreGenerationMediaForRoute({
+      adminSupabase: admin.client,
+      body: restoreBody,
+      generationId: 'gen-1',
+      userId: 'user-1',
+      dependencies: makeRestoreDependencies(),
+    })).resolves.toMatchObject({ ok: true });
+
+    expect(admin.generationUpdates).toHaveLength(1);
+    expect(admin.generationUpdates[0]).toMatchObject({
+      output_url: 'generated_images/user-1/restored-gen-1.png',
+    });
+    expect(admin.generationUpdates[0]).toHaveProperty('source_unavailable_at', null);
+  });
+
+  it('puts the lost-source flag back with the old address when the linked post update is refused', async () => {
+    const admin = createAdminClientMock({
+      sourceUnavailableAt: '2026-09-08T06:15:00.000Z',
+      linkedPostUpdateMatchesNoRow: true,
+    });
+
+    await expect(restoreGenerationMediaForRoute({
+      adminSupabase: admin.client,
+      body: restoreBody,
+      generationId: 'gen-1',
+      userId: 'user-1',
+      dependencies: makeRestoreDependencies(),
+    })).resolves.toMatchObject({ ok: false, status: 500 });
+
+    expect(admin.generationUpdates).toHaveLength(2);
+    expect(admin.generationUpdates[0]).toHaveProperty('source_unavailable_at', null);
+    expect(admin.generationUpdates[1]).toMatchObject({
+      output_url: 'https://provider.example.com/missing.jpg',
+      source_unavailable_at: '2026-09-08T06:15:00.000Z',
+    });
+    expect(admin.storageRemoveCalls).toContainEqual({
+      bucket: 'generated_images',
+      paths: ['user-1/restored-gen-1.png'],
+    });
+  });
+
   it('restores a private generation and linked private post from an owner upload', async () => {
     const admin = createAdminClientMock();
     const dependencies = {

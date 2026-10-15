@@ -41,6 +41,8 @@ export const VIEWER_ACTION_SYMBOLS: Readonly<Record<string, string>> = {
   archive: 'archivebox',
   restore: 'tray.and.arrow.up',
   'delete-post': 'trash',
+  'delete-creation': 'trash',
+  'open-run': 'arrow.up.right.square',
   'edit-post': 'pencil',
   'change-visibility': 'eye',
   'view-linked': 'arrow.up.right.square',

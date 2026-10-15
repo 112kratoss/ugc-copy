@@ -67,7 +67,9 @@ vi.mock('react-native', () => ({
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   AppState: { addEventListener: () => ({ remove: () => undefined }) },
   Linking: { canOpenURL: vi.fn(), openURL: vi.fn() },
+  Platform: { OS: 'ios' },
   Pressable: ({ children, ...props }: MockProps) => React.createElement('pressable', props, children),
+  Share: { share: vi.fn(), sharedAction: 'sharedAction' },
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
 }));
 
@@ -84,6 +86,7 @@ vi.mock('@/components/recoverable-video-preview', () => ({
 vi.mock('@/components/ui', () => ({
   AppText: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   Card: ({ children, ...props }: MockProps) => React.createElement('card', props, children),
+  IconButton: (props: MockProps) => React.createElement('icon-button', props),
   Kicker: ({ children, ...props }: MockProps) => React.createElement('kicker', props, children),
   Pill: (props: MockProps) => React.createElement('pill', props),
   PrimaryButton: (props: MockProps) => React.createElement('primary-button', props),

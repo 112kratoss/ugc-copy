@@ -14,9 +14,13 @@ import {
   getSaveHeartIconProps,
   getSaveHeartTapAnimationSpec,
   getThemedSaveHeartIconProps,
+  getDeleteCreationConfirmation,
+  getProfileFeedCardSlots,
+  getRemixSourceThumbnailUrl,
   getViewerActionGroupLabel,
   getViewerActionLabel,
   getViewerActionSlots,
+  getViewerItemActionLabel,
   getViewerSafetyActions,
   getViewerShareIntent,
   getViewerShareSourceSurface,
@@ -518,5 +522,99 @@ describe('viewer share intent', () => {
       railItem({ sourceType: 'generation', sharePath: null, generationId: null }),
       'https://magicbooklet.com'
     )).toEqual({ kind: 'unavailable' });
+  });
+});
+
+describe("a profile card's action row", () => {
+  it('is the rail less Details, which a tap on the card already opens', () => {
+    const item = railItem({ canShare: false, availableActions: ['publish', 'recreate', 'archive', 'delete-creation', 'view-details'] });
+
+    expect(getProfileFeedCardSlots(item).map((slot) => slot.id)).toEqual(['publish', 'create']);
+  });
+
+  // Share used to be an archived card's only inline action, and it opened the
+  // composer for a creation that was archived (audit 01-6).
+  it('offers Restore where an archived creation had nothing left to do', () => {
+    const slots = getProfileFeedCardSlots(railItem({
+      archivedAt: '2026-01-01T00:00:00.000Z',
+      canShare: false,
+      availableActions: ['restore', 'delete-creation', 'view-details'],
+    }));
+
+    expect(slots).toEqual([{ id: 'restore', action: 'restore', label: 'Restore', a11yLabel: 'Restore this creation', tone: 'success' }]);
+  });
+
+  it('offers no Restore to a creation moderation removed, nor to an archived post, which keeps its Share', () => {
+    expect(getProfileFeedCardSlots(railItem({
+      archivedAt: '2026-01-01T00:00:00.000Z',
+      moderationRemoved: true,
+      canShare: false,
+      availableActions: ['delete-creation', 'view-details'],
+    }))).toEqual([]);
+    expect(getProfileFeedCardSlots(railItem({
+      sourceType: 'owner-post',
+      archivedAt: '2026-01-01T00:00:00.000Z',
+      sharePath: '/showcase/post-1',
+      availableActions: ['restore', 'delete-post', 'share', 'view-details'],
+    })).map((slot) => slot.id)).toEqual(['share']);
+  });
+
+  it('leaves the reel rail as it was: Restore stays in its •••', () => {
+    const archived = railItem({
+      archivedAt: '2026-01-01T00:00:00.000Z',
+      canShare: false,
+      availableActions: ['restore', 'delete-creation', 'view-details'],
+    });
+
+    expect(getViewerActionSlots(archived).map((slot) => slot.id)).toEqual(['details']);
+  });
+});
+
+describe('the creation rows this pass adds', () => {
+  it('names Delete creation and Open run, and files Delete with the library rows, in red', () => {
+    expect(getViewerActionLabel('delete-creation', 'generation')).toBe('Delete creation');
+    expect(getViewerActionLabel('open-run', 'generation')).toBe('Open run');
+    expect(isDestructiveViewerAction('delete-creation')).toBe(true);
+    expect(isDestructiveViewerAction('open-run')).toBe(false);
+    expect(getViewerActionGroupLabel('delete-creation')).toBe('Library');
+  });
+
+  it("calls a failed run's Recreate Try again, as the web's Failed card does, and nobody else's", () => {
+    expect(getViewerItemActionLabel('recreate', railItem({ runStatus: 'failed' }))).toBe('Try again');
+    expect(getViewerItemActionLabel('recreate', railItem({ runStatus: 'succeeded' }))).toBe('Recreate');
+    expect(getViewerItemActionLabel('recreate', railItem({ sourceType: 'showcase', runStatus: 'failed' }))).toBe('Remix');
+  });
+
+  it('asks before a delete, and says what becomes of a post made from the creation', () => {
+    expect(getDeleteCreationConfirmation({ linkedPostId: null })).toEqual({
+      title: 'Delete this creation?',
+      message: 'This can’t be undone.',
+      confirmLabel: 'Delete',
+    });
+    expect(getDeleteCreationConfirmation({ linkedPostId: 'post-1' }).message)
+      .toBe('This can’t be undone. Its post stays up, but remixes based on this creation may stop working.');
+  });
+});
+
+describe("a remix source's thumbnail", () => {
+  const cover = (mediaKind: 'image' | 'video', previewUrl: string | null) => ({
+    id: 'cover', url: `https://cdn.test/original.${mediaKind === 'video' ? 'mp4' : 'png'}`, mediaKind,
+    previewUrl, contentType: null, originalName: null, width: null, height: null, durationSeconds: null, sortOrder: 0,
+  });
+
+  // It was the full-size original, drawn 40pt across (audit 01, below the cut).
+  it('is the poster, for a picture and for a video', () => {
+    expect(getRemixSourceThumbnailUrl(railItem({ mediaItems: [cover('image', 'https://cdn.test/poster.webp')] })))
+      .toBe('https://cdn.test/poster.webp');
+    expect(getRemixSourceThumbnailUrl(railItem({ mediaKind: 'video', mediaItems: [cover('video', 'https://cdn.test/frame.webp')] })))
+      .toBe('https://cdn.test/frame.webp');
+  });
+
+  it('is never a video file', () => {
+    expect(getRemixSourceThumbnailUrl(railItem({
+      mediaKind: 'video',
+      mediaUrl: 'https://cdn.test/original.mp4',
+      mediaItems: [cover('video', null)],
+    }))).toBeNull();
   });
 });

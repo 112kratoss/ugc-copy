@@ -8,8 +8,6 @@ const redirectMock = vi.hoisted(() => vi.fn((target: string) => {
 }));
 const getServerAuthStateMock = vi.hoisted(() => vi.fn());
 const getViewerUnlockDetailMock = vi.hoisted(() => vi.fn());
-const isUserRelationshipBlockedMock = vi.hoisted(() => vi.fn<(input: unknown) => Promise<boolean>>());
-const logBackendErrorMock = vi.hoisted(() => vi.fn());
 const unlockDetailProps = vi.hoisted(() => vi.fn());
 
 vi.mock('next/navigation', () => ({
@@ -24,16 +22,8 @@ vi.mock('@/lib/viewer-unlock-detail', () => ({
   getViewerUnlockDetail: (input: unknown) => getViewerUnlockDetailMock(input),
 }));
 
-vi.mock('@/lib/moderation-service', () => ({
-  isUserRelationshipBlocked: (input: unknown) => isUserRelationshipBlockedMock(input),
-}));
-
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({ service: true }),
-}));
-
-vi.mock('@/lib/backend-logger', () => ({
-  logBackendError: (...args: unknown[]) => logBackendErrorMock(...args),
 }));
 
 vi.mock('@/app/unlocks/[postId]/UnlockDetail', () => ({
@@ -43,9 +33,15 @@ vi.mock('@/app/unlocks/[postId]/UnlockDetail', () => ({
   },
 }));
 
-const publicPostDetail = {
-  unlockId: 'unlock-1',
+const UNLOCK_ID = '11111111-1111-4111-8111-111111111111';
+
+// `postReachable` is the server's word on whether the post page would open for
+// this buyer: public or unlisted, live, and no block either way.
+const reachablePostDetail = {
+  unlockId: UNLOCK_ID,
   creatorUserId: 'creator-1',
+  isNsfw: false,
+  postReachable: true,
   post: {
     id: 'post-1',
     visibility: 'public',
@@ -54,70 +50,90 @@ const publicPostDetail = {
   },
 };
 
+function openUnlock(unlockId = UNLOCK_ID) {
+  return UnlockDetailPage({ params: Promise.resolve({ postId: unlockId }) });
+}
+
 describe('UnlockDetailPage', () => {
   beforeEach(() => {
     redirectMock.mockClear();
     getViewerUnlockDetailMock.mockReset();
-    isUserRelationshipBlockedMock.mockReset();
-    logBackendErrorMock.mockClear();
     unlockDetailProps.mockClear();
     getServerAuthStateMock.mockResolvedValue({ session: { user: { id: 'buyer-1' } } });
-    getViewerUnlockDetailMock.mockResolvedValue(publicPostDetail);
+    getViewerUnlockDetailMock.mockResolvedValue(reachablePostDetail);
   });
 
-  it('sends a buyer of a publicly readable post to the post page', async () => {
-    isUserRelationshipBlockedMock.mockResolvedValueOnce(false);
+  it('sends a buyer on to the post page when it would open for them, with the way back to their library', async () => {
+    await expect(openUnlock())
+      .rejects.toThrow('NEXT_REDIRECT:/showcase/post-1?from=library&returnTo=%2Fcreations%3Fview%3Dunlocks#recipe');
 
-    await expect(UnlockDetailPage({ params: Promise.resolve({ postId: 'unlock-1' }) }))
-      .rejects.toThrow('NEXT_REDIRECT:/showcase/post-1');
-
-    expect(isUserRelationshipBlockedMock).toHaveBeenCalledWith({
+    expect(getViewerUnlockDetailMock).toHaveBeenCalledWith({
       adminSupabase: { service: true },
-      firstUserId: 'buyer-1',
-      secondUserId: 'creator-1',
+      unlockId: UNLOCK_ID,
+      viewerUserId: 'buyer-1',
     });
     expect(unlockDetailProps).not.toHaveBeenCalled();
   });
 
-  it('keeps the unlock page across a block, where the post page would answer not-found', async () => {
-    isUserRelationshipBlockedMock.mockResolvedValueOnce(true);
+  it('keeps the unlock page when the post is out of reach, as across a block, where the post page would answer not-found', async () => {
+    const blockedDetail = { ...reachablePostDetail, postReachable: false };
+    getViewerUnlockDetailMock.mockResolvedValueOnce(blockedDetail);
 
-    render(await UnlockDetailPage({ params: Promise.resolve({ postId: 'unlock-1' }) }));
+    render(await openUnlock());
 
     expect(redirectMock).not.toHaveBeenCalled();
-    expect(unlockDetailProps).toHaveBeenCalledWith({ detail: publicPostDetail });
+    expect(unlockDetailProps).toHaveBeenCalledWith({ detail: blockedDetail });
   });
 
-  it('treats a block it could not check as a block and shows the unlock page', async () => {
-    isUserRelationshipBlockedMock.mockRejectedValueOnce(new Error('connection reset'));
+  it('keeps a mature purchase on the unlock page even when its post is reachable', async () => {
+    // The post page's gate asks for the mature-content preference, which a
+    // buyer need not have; the purchase is their entitlement.
+    const matureDetail = { ...reachablePostDetail, isNsfw: true };
+    getViewerUnlockDetailMock.mockResolvedValueOnce(matureDetail);
 
-    render(await UnlockDetailPage({ params: Promise.resolve({ postId: 'unlock-1' }) }));
+    render(await openUnlock());
 
     expect(redirectMock).not.toHaveBeenCalled();
-    expect(logBackendErrorMock).toHaveBeenCalledWith(
-      'failed_to_verify_block_state_for_unlock_page',
-      { error: expect.any(Error) },
+    expect(unlockDetailProps).toHaveBeenCalledWith({ detail: matureDetail });
+  });
+
+  it('keeps the unlock page for a deleted post', async () => {
+    const tombstonedDetail = {
+      ...reachablePostDetail,
+      postReachable: false,
+      post: { ...reachablePostDetail.post, tombstoned: true },
+    };
+    getViewerUnlockDetailMock.mockResolvedValueOnce(tombstonedDetail);
+
+    render(await openUnlock());
+
+    expect(redirectMock).not.toHaveBeenCalled();
+    expect(unlockDetailProps).toHaveBeenCalledWith({ detail: tombstonedDetail });
+  });
+
+  it('sends an unlock this buyer does not hold back to the library', async () => {
+    getViewerUnlockDetailMock.mockResolvedValueOnce(null);
+
+    await expect(openUnlock()).rejects.toThrow('NEXT_REDIRECT:/creations?view=unlocks');
+    expect(unlockDetailProps).not.toHaveBeenCalled();
+  });
+
+  it('sends a malformed unlock id back to the library, not to an error page, without asking the database', async () => {
+    // The real loader: the service client stub has no rpc, so a database call
+    // would throw instead of redirecting.
+    const { getViewerUnlockDetail } = await vi.importActual<typeof import('@/lib/viewer-unlock-detail')>(
+      '@/lib/viewer-unlock-detail',
     );
-    expect(unlockDetailProps).toHaveBeenCalledWith({ detail: publicPostDetail });
-  });
+    getViewerUnlockDetailMock.mockImplementationOnce(getViewerUnlockDetail);
 
-  it('asks no block question when the post is not publicly readable', async () => {
-    getViewerUnlockDetailMock.mockResolvedValueOnce({
-      ...publicPostDetail,
-      post: { ...publicPostDetail.post, tombstoned: true },
-    });
-
-    render(await UnlockDetailPage({ params: Promise.resolve({ postId: 'unlock-1' }) }));
-
-    expect(isUserRelationshipBlockedMock).not.toHaveBeenCalled();
-    expect(redirectMock).not.toHaveBeenCalled();
-    expect(unlockDetailProps).toHaveBeenCalled();
+    await expect(openUnlock('not-an-unlock')).rejects.toThrow('NEXT_REDIRECT:/creations?view=unlocks');
+    expect(unlockDetailProps).not.toHaveBeenCalled();
   });
 
   it('sends a signed-out visitor to sign in', async () => {
     getServerAuthStateMock.mockResolvedValueOnce({ session: null });
 
-    await expect(UnlockDetailPage({ params: Promise.resolve({ postId: 'unlock-1' }) }))
+    await expect(openUnlock('unlock-1'))
       .rejects.toThrow('NEXT_REDIRECT:/login?returnUrl=/unlocks/unlock-1');
     expect(getViewerUnlockDetailMock).not.toHaveBeenCalled();
   });

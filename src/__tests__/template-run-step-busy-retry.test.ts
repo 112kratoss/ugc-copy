@@ -9,7 +9,7 @@ import {
 } from '@/__tests__/fixtures/template-run-database';
 import { setBackendLogSink } from '@/lib/backend-logger';
 import { startImageGeneration, type TemplateGenerationContext } from '@/lib/generation-services';
-import { retryTemplateRunStep, syncTemplateRun } from '@/lib/template-run-service';
+import { getTemplateRun, retryTemplateRunStep, syncTemplateRun } from '@/lib/template-run-service';
 
 // The provider key and the callback settings are read when the generation
 // modules load.
@@ -79,6 +79,8 @@ vi.mock('@/lib/workflow-runner', () => ({
 }));
 
 const BUSY_MESSAGE = 'The generation provider is busy right now. Please retry this step shortly.';
+// No retry is offered while the worker is still trying, so the note does not ask for one.
+const WAITING_MESSAGE = 'The provider is busy. We\'ll keep trying for up to 30 minutes.';
 const STARTING_CREDITS = 100;
 const MINUTE = 60_000;
 
@@ -216,9 +218,9 @@ describe('template run steps the provider turns away as busy', () => {
 
     const run = await tick(database);
 
-    expect(shownImageSteps(run).map((step) => [step.status, step.failureCode, step.errorMessage])).toEqual([
-      ['queued', 'provider_busy', BUSY_MESSAGE],
-      ['queued', 'provider_busy', BUSY_MESSAGE],
+    expect(shownImageSteps(run).map((step) => [step.status, step.failureCode, step.errorMessage, step.canRetry])).toEqual([
+      ['queued', 'provider_busy', WAITING_MESSAGE, false],
+      ['queued', 'provider_busy', WAITING_MESSAGE, false],
     ]);
     expect(run.errorMessage).toBeNull();
   });
@@ -278,8 +280,9 @@ describe('template run steps the provider turns away as busy', () => {
       [[0, 'queued', null]],
       [[0, 'queued', null]],
     ]);
-    expect(shownImageSteps(waiting).map((step) => step.failureCode)).toEqual([
-      'provider_unavailable', 'provider_unavailable',
+    expect(shownImageSteps(waiting).map((step) => [step.failureCode, step.errorMessage])).toEqual([
+      ['provider_unavailable', WAITING_MESSAGE],
+      ['provider_unavailable', WAITING_MESSAGE],
     ]);
 
     database.conditions.startUnavailable = false;
@@ -386,7 +389,7 @@ describe('template run steps the provider turns away as busy', () => {
 
     // The refused step can be retried by hand; the other one is tried again as usual.
     expect(shownImageSteps(run).map((step) => [step.status, step.errorMessage, step.canRetry])).toEqual(
-      expect.arrayContaining([['failed', BUSY_MESSAGE, true], ['queued', BUSY_MESSAGE, false]]),
+      expect.arrayContaining([['failed', BUSY_MESSAGE, true], ['queued', WAITING_MESSAGE, false]]),
     );
     expect(run.status).toBe('needs_attention');
     expect(database.credits()).toBe(STARTING_CREDITS);
@@ -468,6 +471,63 @@ describe('the steps after a template run step that fails at start', () => {
     ]);
     expect(finished.status).toBe('awaiting_approval');
   });
+
+  it('are offered no retry while they wait, and a retry of one is refused', async () => {
+    const database = connect(createTemplateRunDatabase({ credits: STARTING_CREDITS }));
+    providerRefuses();
+    const refused = await tick(database);
+
+    expect(laterSteps(refused).map((step) => [step.kind, step.status, step.canRetry])).toEqual([
+      ['approval', 'queued', false],
+      ['approval', 'queued', false],
+      ['generation', 'queued', false],
+    ]);
+    const video = laterSteps(refused).find((step) => step.kind === 'generation')!;
+    await expect(retryTemplateRunStep({
+      adminClient: database.client, runId: TEMPLATE_RUN_ID, stepId: video.id, userId: TEMPLATE_RUN_USER_ID,
+    })).rejects.toMatchObject({ status: 409, code: 'STEP_NOT_RETRYABLE' });
+    expect(database.run.status).toBe('needs_attention');
+  });
+});
+
+describe('a template run step retried by hand whose run could not be set going again', () => {
+  const retry = (database: TemplateRunDatabase, stepId: string) => retryTemplateRunStep({
+    adminClient: database.client, runId: TEMPLATE_RUN_ID, stepId, userId: TEMPLATE_RUN_USER_ID,
+  });
+
+  // The worker moves a run in neither status: it waits on the person.
+  it.each(['needs_attention', 'awaiting_approval'] as const)(
+    'is set going from the attempt a fresh read of a run that is %s shows',
+    async (status) => {
+      const database = connect(createTemplateRunDatabase({ credits: STARTING_CREDITS }));
+      providerRefuses();
+      const [first] = shownImageSteps(await tick(database));
+      // The next attempt is written, and the write that sets the run going is lost.
+      database.conditions.writeRefused = (table, values) => table === 'template_runs' && values.status === 'queued';
+      await expect(retry(database, first.id)).rejects.toMatchObject({ code: '57014' });
+      database.conditions.writeRefused = null;
+      database.run.status = status;
+
+      // A client that reads the run again has only the attempt that is in line.
+      const reread = await getTemplateRun({ adminClient: database.client, runId: TEMPLATE_RUN_ID, userId: TEMPLATE_RUN_USER_ID });
+      const [waiting] = shownImageSteps(reread);
+      expect(reread.status).toBe(status);
+      expect([waiting.id === first.id, waiting.status, waiting.canRetry]).toEqual([false, 'queued', true]);
+
+      const resumed = await retry(database, waiting.id);
+
+      expect(resumed.status).toBe('queued');
+      expect(database.run).toMatchObject({ status: 'queued', error_message: null });
+      // Nothing new was put in line: the attempt that was waiting is the one started.
+      providerHasRoom();
+      await tick(database);
+      expect(providerCalls()).toBe(1);
+      expect(database.imageAttempts()[0].map((step) => [step.attempt, step.status])).toEqual([
+        [0, 'failed'],
+        [1, 'processing'],
+      ]);
+    },
+  );
 });
 
 describe('a template run step the provider keeps turning away as busy', () => {

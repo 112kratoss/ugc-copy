@@ -15,7 +15,7 @@ const detail = {
       workflowSnapshot: null,
       attachments: [],
       allowRemix: false,
-      items: [{ storagePath: 'uploads/creator-1/source.psd' }],
+      items: [{ storagePath: 'uploads/creator-1/source.psd', title: 'Layered source' }],
     },
   },
 };
@@ -121,7 +121,7 @@ describe('viewer unlock file URLs', () => {
     expect(createSignedUrl).toHaveBeenCalledWith(
       `retained/${detail.purchasedRevision.revisionId}/source.psd`,
       600,
-      { download: 'source.psd' },
+      { download: 'Layered source' },
     );
   });
 
@@ -183,7 +183,11 @@ describe('viewer unlock file URLs', () => {
       creatorUserId: 'creator-1',
       currentResources: {
         attachments: [],
-        items: livePaths.map((storagePath) => ({ storagePath })),
+        items: [
+          { storagePath: livePaths[0], title: 'Reference 1', contentType: 'image/png' },
+          { storagePath: livePaths[1], title: 'Reference 2', contentType: 'video/mp4' },
+          { storagePath: livePaths[2], title: 'Voice', contentType: 'audio/mpeg' },
+        ],
       },
       purchasedRevision: {
         revisionId: detail.purchasedRevision.revisionId,
@@ -296,7 +300,7 @@ describe('viewer unlock file URLs', () => {
         ok: true,
         body: { success: true, signedUrl: 'https://signed.example.test/creator-1/resources/voice.mp3' },
       });
-      expect(client.createSignedUrl).toHaveBeenLastCalledWith('creator-1/resources/voice.mp3', 600, { download: 'voice.mp3' });
+      expect(client.createSignedUrl).toHaveBeenLastCalledWith('creator-1/resources/voice.mp3', 600, { download: 'Voice.mp3' });
 
       await sign(client.admin, { storagePath: livePaths[2], disposition: 'inline' });
       expect(client.createSignedUrl).toHaveBeenLastCalledWith('creator-1/resources/voice.mp3', 600, {});
@@ -385,6 +389,37 @@ describe('viewer unlock file URLs', () => {
         { storagePath: 'uploads/creator-1/lost.psd' },
         vi.fn(async () => detachedDetail as never),
       )).resolves.toEqual({ ok: false, status: 404, body: { error: 'Retained resource file not found.' } });
+    });
+
+    it('names a download as the post route does, from the current version or the purchased one', async () => {
+      const client = createAdmin();
+      const namedDetail = {
+        ...liveDetail,
+        currentResources: {
+          ...liveDetail.currentResources,
+          attachments: [{
+            kind: 'file',
+            label: 'Workflow',
+            storagePath: 'creator-1/resources/flow.json',
+            contentType: 'application/json',
+          }],
+        },
+        purchasedRevision: {
+          ...liveDetail.purchasedRevision,
+          resources: {
+            attachments: [],
+            items: [{ storagePath: 'creator-1/resources/old-notes.md', title: 'Notes they paid for', contentType: 'text/markdown' }],
+          },
+        },
+      };
+      const download = (storagePath: string) => sign(client.admin, { storagePath }, vi.fn(async () => namedDetail as never));
+
+      await download(livePaths[0]);
+      expect(client.createSignedUrl).toHaveBeenLastCalledWith('creator-1/gen-1/00-reference-image.png', 600, { download: 'Reference 1.png' });
+      await download('creator-1/resources/flow.json');
+      expect(client.createSignedUrl).toHaveBeenLastCalledWith('creator-1/resources/flow.json', 600, { download: 'Workflow.json' });
+      await download('creator-1/resources/old-notes.md');
+      expect(client.createSignedUrl).toHaveBeenLastCalledWith('creator-1/resources/old-notes.md', 600, { download: 'Notes they paid for.md' });
     });
 
     it('counts a denied batch once and signs nothing', async () => {

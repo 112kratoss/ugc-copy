@@ -1108,6 +1108,13 @@ export function createApiClient({
       request(`/api/generations/${generationId}/archive`, { method: 'POST' }),
     restoreGeneration: (generationId: string) =>
       request(`/api/generations/${generationId}/restore`, { method: 'POST' }),
+    // Deletes the row outright. A post made from it stays (`linkedPostRetained`),
+    // and the files it shows are left in place.
+    deleteGeneration: (generationId: string) =>
+      request<{ success: true; deleted: true; linkedPostRetained: boolean; message: string }>(
+        `/api/generations/${encodeURIComponent(generationId)}`,
+        { method: 'DELETE' }
+      ),
     startImageGeneration: (body: ImageGenerationRequest, idempotencyKey?: string) =>
       request<GenerationStartResponse>('/api/generate-image', generationStartInit(body, 'image', idempotencyKey), GENERATION_START_REQUEST_OPTIONS),
     getImageGeneration: (predictionId: string) =>

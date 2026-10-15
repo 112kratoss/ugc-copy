@@ -142,7 +142,7 @@ import { useNavigationBarSurface } from '@/lib/system-bars';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
-import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE, canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getViewerShareIntent, getViewerShareSourceSurface } from '@/lib/viewer-actions';
+import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE, canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRemixSourceThumbnailUrl, getViewerShareIntent, getViewerShareSourceSurface } from '@/lib/viewer-actions';
 import {
   changePostVisibility,
   pickPostVisibility,
@@ -948,7 +948,7 @@ function ImmersivePreviewViewer() {
       return;
     }
 
-    const context = { postId: item.showcasePostId, title: item.title, creatorLabel: item.creatorLabel, thumbnailUrl: item.mediaKind === 'image' ? item.mediaUrl : null };
+    const context = { postId: item.showcasePostId, title: item.title, creatorLabel: item.creatorLabel, thumbnailUrl: getRemixSourceThumbnailUrl(item) };
     const openCreateTool = () => {
       const fallbackHref = getNativeRemixCreateHref({
         generationId: item.sourceType !== 'showcase' ? item.generationId : null,
@@ -1242,6 +1242,17 @@ function ImmersivePreviewViewer() {
     requestAnimationFrame(creatorBacked && creatorReel.creatorId === creatorId ? leaveToExplore : leaveViewer);
   };
 
+  // A creation deleted from its ••• leaves the reel as a blocked creator's
+  // posts do: the reader moves on to the next item, or out of a reel with
+  // nothing left. The handler takes it out of the caches the reel reads.
+  const takeOutDeletedCreation = (generationId: string) => {
+    const isDeleted = (candidate: ImmersivePreviewItem) => candidate.id === generationId;
+    const next = pickViewerItemAfterRemoval(items, activeIndex, isDeleted);
+    if (next) setSavedPosition(initialViewerPosition(next));
+    setSessionItems((current) => ({ ...current, ordered: current.ordered.filter((entry) => !isDeleted(entry)) }));
+    if (!next) requestAnimationFrame(leaveViewer);
+  };
+
   if (selectionMissing && !savedPosition) {
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset}>
@@ -1333,6 +1344,10 @@ function ImmersivePreviewViewer() {
     },
     onDeleted: () => {
       setActionsOpenItemId(null);
+      if (item.sourceType === 'generation') {
+        takeOutDeletedCreation(item.id);
+        return;
+      }
       router.replace({
         pathname: '/(tabs)/profile',
         params: { tab: 'posts' },
@@ -3033,7 +3048,7 @@ function StatusSlide({ item, width, height }: { item: ImmersivePreviewItem; widt
         <Text numberOfLines={3} style={{ color: '#fff', fontSize: 25, lineHeight: 31, fontWeight: '800' }}>
           {title}
         </Text>
-        <Text numberOfLines={6} style={{ color: theme.colors.textSecondary, fontSize: 16, lineHeight: 23 }}>
+        <Text numberOfLines={10} style={{ color: theme.colors.textSecondary, fontSize: 16, lineHeight: 23 }}>
           {body}
         </Text>
       </View>

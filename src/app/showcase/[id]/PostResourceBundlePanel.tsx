@@ -9,6 +9,7 @@ import {
   Copy,
   Download,
   ExternalLink,
+  EyeOff,
   Loader2,
   Play,
   ShoppingCart,
@@ -96,6 +97,12 @@ interface PostResourceBundlePanelProps {
   mediaItems?: ShowcaseMediaItem[];
   /** Buyer-library screens resolve files by purchase UUID, including after detachment. */
   fileUrlEndpoint?: string;
+  /**
+   * The post is marked mature: the outputs' stills and every resource preview
+   * stay covered until the viewer presses Show, once for the whole panel. The
+   * press is the consent, so it asks the server nothing.
+   */
+  coverMedia?: boolean;
   title: string;
   /** The post page passes true when the bundle title just repeats the post title. */
   suppressTitle?: boolean;
@@ -264,10 +271,28 @@ function isMediaScope(scope: PostResourceItemScope | null | undefined): boolean 
   return scope?.kind === 'media' && scope.mediaKeys.length > 0;
 }
 
+function MatureMediaPlate({ onShow }: { onShow: () => void }) {
+  return (
+    <div className="mb-3 flex min-h-32 max-w-sm flex-col items-center justify-center gap-2 rounded-xl border border-white/10 bg-zinc-950 px-4 py-5 text-center">
+      <EyeOff aria-hidden="true" className="h-5 w-5 text-zinc-500" />
+      <p className="text-sm font-semibold text-zinc-200">Mature content</p>
+      <button
+        type="button"
+        aria-label="Show mature content"
+        onClick={onShow}
+        className="ui-focus-ring inline-flex min-h-10 items-center rounded-full border border-white/15 bg-white/[0.06] px-4 text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.12]"
+      >
+        Show
+      </button>
+    </div>
+  );
+}
+
 export default function PostResourceBundlePanel({
   postId,
   mediaItems = [],
   fileUrlEndpoint,
+  coverMedia = false,
   title,
   suppressTitle = false,
   summary,
@@ -290,6 +315,8 @@ export default function PostResourceBundlePanel({
   const [resources, setResources] = useState(initialResources);
   const [showPurchasedRevision, setShowPurchasedRevision] = useState(false);
   const [selectedScopeMediaKey, setSelectedScopeMediaKey] = useState<string | null>(null);
+  const [matureMediaShown, setMatureMediaShown] = useState(false);
+  const mediaCovered = coverMedia && !matureMediaShown;
   // The buyer sees the creator's latest by default -- honest improvements reach
   // them for free -- but never loses the version they paid for.
   const showingPurchasedRevision = Boolean(showPurchasedRevision && purchasedRevision);
@@ -405,9 +432,30 @@ export default function PostResourceBundlePanel({
   const publicCardPreviews = selectedScopeMediaKey
     ? allPublicCardPreviews.filter((card) => scopeMatchesMediaKey(card.scope, selectedScopeMediaKey))
     : allPublicCardPreviews;
+  // The chips' stills are this panel's only pictures of the outputs, and a
+  // recipe of prompts alone has no preview plate to press, so the row offers
+  // its own Show.
+  const chipStillsCovered = mediaCovered
+    && selectableMedia.some((item) => item.previewUrl && item.mediaKind === 'image');
   const mediaScopeFilter = showMediaScopeFilter ? (
     <div>
-      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Resources for</div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Resources for</div>
+        {chipStillsCovered ? (
+          <div className="flex items-center gap-2 text-xs text-zinc-400">
+            <EyeOff aria-hidden="true" className="h-3.5 w-3.5 text-zinc-500" />
+            Mature content
+            <button
+              type="button"
+              aria-label="Show mature content"
+              onClick={() => setMatureMediaShown(true)}
+              className="ui-focus-ring inline-flex min-h-8 items-center rounded-full border border-white/15 bg-white/[0.06] px-3 text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.12]"
+            >
+              Show
+            </button>
+          </div>
+        ) : null}
+      </div>
       <div className="mt-2 flex flex-wrap gap-2">
         <button
           type="button"
@@ -438,7 +486,7 @@ export default function PostResourceBundlePanel({
               }`}
             >
               <span className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-full bg-black">
-                {item.previewUrl && item.mediaKind === 'image' ? (
+                {item.previewUrl && item.mediaKind === 'image' && !mediaCovered ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={item.previewUrl} alt="" className="h-full w-full object-cover" />
                 ) : (
@@ -869,23 +917,22 @@ export default function PostResourceBundlePanel({
   };
 
   const renderResourceItemMediaPreview = (item: PostResourceItem) => {
-    if (!item.contentType) return null;
-    if (item.storagePath && item.contentType.startsWith('image/')) {
-      return <ResourceMediaPreview key={`${postId}:${item.storagePath}`} mediaType="image" label={item.title}
-        resolveUrl={signal => signPreviewUrl(item.storagePath!, signal)} className="mb-3 max-w-full" />;
-    }
+    const { contentType, storagePath } = item;
+    const mediaType = contentType?.startsWith('image/') ? 'image'
+      : contentType?.startsWith('video/') ? 'video'
+      : contentType?.startsWith('audio/') ? 'audio'
+      : null;
+    if (!storagePath || !mediaType) return null;
+    // Not mounted while covered: ResourceMediaPreview signs and loads its file as it mounts.
+    if (mediaCovered) return <MatureMediaPlate onShow={() => setMatureMediaShown(true)} />;
 
-    if (item.storagePath && (item.contentType.startsWith('video/') || item.contentType.startsWith('audio/'))) {
-      return <ResourceMediaPreview
-        key={`${postId}:${item.storagePath}`}
-        mediaType={item.contentType.startsWith('audio/') ? 'audio' : 'video'}
-        label={item.title}
-        resolveUrl={signal => signPreviewUrl(item.storagePath!, signal)}
-        className="mb-3 max-w-full"
-      />;
-    }
-
-    return null;
+    return <ResourceMediaPreview
+      key={`${postId}:${storagePath}`}
+      mediaType={mediaType}
+      label={item.title}
+      resolveUrl={signal => signPreviewUrl(storagePath, signal)}
+      className="mb-3 max-w-full"
+    />;
   };
 
   // One renderer for every unlocked item, sectioned or not: media preview,

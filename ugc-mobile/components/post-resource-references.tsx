@@ -1,14 +1,20 @@
 import { ExternalLink, FileText, ImageIcon } from 'lucide-react-native';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
+import { MatureCover, MatureMediaCovered } from '@/components/mature-cover';
 import { MediaLightbox, type LightboxMediaItem } from '@/components/media-lightbox';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { PostResourceItem } from '@/lib/types';
 
 type PostResourceReferencesProps = {
+  /**
+   * A mature purchase's pictures stay under the plate until the screen's own
+   * Show; left out, the screen's `MatureMediaCovered` decides.
+   */
+  coverMedia?: boolean;
   items: PostResourceItem[] | undefined;
   onError?: (message: string) => void;
   onOpenUrl: (url: string) => Promise<void>;
@@ -16,12 +22,15 @@ type PostResourceReferencesProps = {
 };
 
 export function PostResourceReferences({
+  coverMedia,
   items,
   onError,
   onOpenUrl,
   resolveFileUrl,
 }: PostResourceReferencesProps) {
   const theme = useAppTheme();
+  const coveredByScreen = useContext(MatureMediaCovered);
+  const covered = coverMedia ?? coveredByScreen;
   const referenceItems = useMemo(
     () => getReferenceResourceItems(items),
     [items]
@@ -47,6 +56,9 @@ export function PostResourceReferences({
   }, []);
 
   useEffect(() => {
+    // Nothing under the plate loads, its links included: they are signed when
+    // it goes, so the thumbnails draw from fresh ones.
+    if (covered) return;
     const storagePaths = referenceItems
       .map((item) => item.storagePath)
       .filter((storagePath): storagePath is string => Boolean(storagePath));
@@ -56,16 +68,18 @@ export function PostResourceReferences({
 
       requestedPaths.current.add(storagePath);
       setLoadingPaths((current) => ({ ...current, [storagePath]: true }));
+      // Kept even when it lands while this subtree's effects are cleaned up
+      // (a hidden <Activity>, Fast Refresh): the path stays requested, so the
+      // re-run never asks again, and a dropped link was a spinner for good.
+      // After an unmount the update does nothing.
       void resolveFileUrl(storagePath)
         .then((url) => {
-          if (!mounted.current) return;
           setFileUrls((current) => ({ ...current, [storagePath]: current[storagePath] ?? url }));
         })
         .catch(() => {
           requestedPaths.current.delete(storagePath);
         })
         .finally(() => {
-          if (!mounted.current) return;
           setLoadingPaths((current) => {
             const next = { ...current };
             delete next[storagePath];
@@ -73,7 +87,7 @@ export function PostResourceReferences({
           });
         });
     }
-  }, [referenceItems, resolveFileUrl]);
+  }, [covered, referenceItems, resolveFileUrl]);
 
   // Everything the app can show itself: storage-backed images and videos
   // whose signed URL has arrived. External links stay links, and audio has
@@ -103,7 +117,9 @@ export function PostResourceReferences({
     try {
       setOpeningPath(storagePath ?? null);
       setOpenError(null);
-      if (storagePath && referenceMediaKind(item)) {
+      // The app draws none of a covered purchase's media, so a covered picture
+      // or clip opens like any other file, in the browser.
+      if (storagePath && referenceMediaKind(item) && !covered) {
         // Preview links expire. An explicit open must renew access through the
         // resource endpoint instead of replaying the URL cached at mount.
         const url = await resolveFileUrl(storagePath);
@@ -163,6 +179,7 @@ export function PostResourceReferences({
           return (
             <Pressable
               accessibilityLabel={`Open reference ${item.title}`}
+              accessibilityHint={covered && referenceMediaKind(item) ? 'Mature content. Opens in your browser.' : undefined}
               accessibilityRole={isOpenable ? 'button' : undefined}
               disabled={!isOpenable}
               key={referenceKey(item, index)}
@@ -179,7 +196,9 @@ export function PostResourceReferences({
               })}
             >
               <View style={{ height: 166, backgroundColor: theme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center' }}>
-                {isImage && signedUrl && !previewFailed ? (
+                {covered && isImage && storagePath ? (
+                  <MatureCover variant="tile" />
+                ) : isImage && signedUrl && !previewFailed ? (
                   <FeedMediaFrame
                     kind="image"
                     onImageError={() => {

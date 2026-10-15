@@ -70,12 +70,20 @@ export type TemplateRunStep = {
   estimatedRetryCredits: number | null;
 };
 
+/** The owner's post of a run's result. An archived post reads `private`. */
+export type TemplateRunLinkedPost = {
+  id: string;
+  visibility: 'public' | 'unlisted' | 'private';
+};
+
 export type TemplateRunResult = {
   renditionUrl?: string | null;
   previewUrl?: string | null;
   generationId: string;
   kind: TemplateMediaKind;
   url: string;
+  /** Left out by responses from before the post was sent; `null` when nothing was posted. */
+  linkedPost?: TemplateRunLinkedPost | null;
 };
 
 export type TemplateRun = {
@@ -121,6 +129,19 @@ export function isStepFailed(step: TemplateRunStep): boolean {
 export function isStepCutShort(runStatus: TemplateRunStatus | undefined, step: TemplateRunStep): boolean {
   if (runStatus === undefined || !isRunTerminal(runStatus) || isStepSuccessful(step)) return false;
   return !['failed', 'error'].includes(step.status.toLowerCase());
+}
+
+/**
+ * The attempt a retry by hand left queued when the write that sets its run
+ * going again was lost. Nothing starts it: the run waits on the person, and
+ * retrying this attempt is what sets the run going. The server marks only
+ * such a queued step `canRetry`.
+ */
+export function isStepStalled(runStatus: TemplateRunStatus | undefined, step: TemplateRunStep): boolean {
+  return step.kind === 'generation'
+    && step.canRetry
+    && step.status.toLowerCase() === 'queued'
+    && (runStatus === 'needs_attention' || runStatus === 'awaiting_approval');
 }
 
 export function isStepAwaitingApproval(step: TemplateRunStep): boolean {

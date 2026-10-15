@@ -138,4 +138,83 @@ describe('resolveCreationWorkspaceCardState', () => {
     expect(state.monetizationLabel).toBe('Recipe draft');
     expect(state.secondaryAction.href).toBe('/post/post-draft/edit');
   });
+
+  // Studio loads the newest page of posts only. A creation whose post is older
+  // than that page used to read "No recipe" with an "Add recipe" button even
+  // when the post sold one; the creations list now sends the bundle beside the
+  // linked post.
+  describe('a linked post older than the loaded posts', () => {
+    const olderLinkedGeneration = {
+      ...baseGeneration,
+      linked_post_id: 'post-old',
+      linked_post_title: 'Older paid post',
+      linked_post_visibility: 'public',
+      linked_post_archived_at: null,
+    } as const;
+
+    it('reads a paid published recipe from the list and offers to manage it', () => {
+      const state = resolveCreationWorkspaceCardState({
+        ...olderLinkedGeneration,
+        linked_post_bundle: { accessMode: 'paid', status: 'published', priceUsdCents: 2400 },
+      }, []);
+
+      expect(state.state).toBe('published_paid_bundle');
+      expect(state.monetizationKind).toBe('paid');
+      expect(state.monetizationLabel).toBe('Paid recipe');
+      expect(state.monetizationPriceUsdCents).toBe(2400);
+      expect(state.primaryAction).toEqual({
+        type: 'manage-paywall',
+        label: 'Manage recipe',
+        href: '/post/post-old/edit?resourceMode=paid&focus=price&from=creations#recipe',
+      });
+    });
+
+    it('reads a free recipe and a draft the way a loaded post reads them', () => {
+      const free = resolveCreationWorkspaceCardState({
+        ...olderLinkedGeneration,
+        linked_post_bundle: { accessMode: 'free', status: 'published', priceUsdCents: 0 },
+      }, []);
+      expect(free.monetizationLabel).toBe('Free recipe');
+      expect(free.primaryAction.href).toBe('/post/post-old/edit?resourceMode=free&focus=price&from=creations#recipe');
+
+      const draft = resolveCreationWorkspaceCardState({
+        ...olderLinkedGeneration,
+        linked_post_bundle: { accessMode: 'paid', status: 'draft', priceUsdCents: 900 },
+      }, []);
+      expect(draft.state).toBe('published_bundle_draft');
+      expect(draft.monetizationLabel).toBe('Recipe draft');
+      expect(draft.primaryAction.label).toBe('Manage recipe');
+    });
+
+    it('offers Add recipe only when the list says the post has none', () => {
+      for (const linkedPostBundle of [null, undefined]) {
+        const state = resolveCreationWorkspaceCardState({
+          ...olderLinkedGeneration,
+          linked_post_bundle: linkedPostBundle,
+        }, []);
+        expect(state.state).toBe('published_no_bundle');
+        expect(state.monetizationLabel).toBe('No recipe');
+        expect(state.primaryAction.label).toBe('Add recipe');
+      }
+    });
+
+    it('lets a loaded post answer for itself', () => {
+      const state = resolveCreationWorkspaceCardState({
+        ...olderLinkedGeneration,
+        linked_post_bundle: { accessMode: 'paid', status: 'published', priceUsdCents: 2400 },
+      }, [{
+        id: 'post-old',
+        generationId: 'gen-1',
+        visibility: 'public',
+        archivedAt: null,
+        title: 'Older paid post',
+        publicPath: '/showcase/post-old',
+        ownerPath: '/post/post-old/edit',
+        canShare: true,
+        bundle: { accessMode: 'free', status: 'published', priceUsdCents: 0 },
+      }]);
+
+      expect(state.monetizationKind).toBe('free');
+    });
+  });
 });

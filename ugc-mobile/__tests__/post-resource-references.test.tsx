@@ -36,6 +36,15 @@ vi.mock('@/components/media-lightbox', () => ({
   MediaLightbox: (props: MockProps) => React.createElement('media-lightbox', props),
 }));
 
+vi.mock('@/components/mature-cover', async () => {
+  const { createContext, createElement } = await import('react');
+  return {
+    MatureCover: (props: MockProps) => createElement('mature-cover', props),
+    MatureMediaCovered: createContext(false),
+  };
+});
+
+import { MatureMediaCovered } from '@/components/mature-cover';
 import { PostResourceReferences } from '../components/post-resource-references';
 import { createPostResourceFileUrlResolver } from '../lib/api-client';
 
@@ -370,6 +379,30 @@ describe('PostResourceReferences', () => {
     renderer.act(() => tree?.unmount());
   });
 
+  it('keeps a preview link that arrives while every effect runs again', async () => {
+    // A hidden <Activity> shown again runs every effect with its state kept, as
+    // Fast Refresh does. The path stays requested, so a link dropped while
+    // hidden was never asked for again and the tile kept its spinner.
+    let finish: (url: string) => void = () => undefined;
+    const resolveFileUrl = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+    const references = (mode: 'visible' | 'hidden') => (
+      <React.Activity mode={mode}>
+        <PostResourceReferences items={[referenceImage]} onOpenUrl={vi.fn()} resolveFileUrl={resolveFileUrl} />
+      </React.Activity>
+    );
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => { tree = renderer.create(references('visible')); });
+    await renderer.act(async () => { tree!.update(references('hidden')); });
+    await renderer.act(async () => { finish('https://cdn.example.com/alisa.jpg'); });
+    await renderer.act(async () => { tree!.update(references('visible')); });
+
+    expect(tree!.root.findAll((node) => String(node.type) === 'feed-media-frame').map((node) => node.props.url))
+      .toEqual(['https://cdn.example.com/alisa.jpg']);
+    expect(tree!.root.findAll((node) => String(node.type) === 'activity-indicator')).toHaveLength(0);
+    expect(resolveFileUrl).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree?.unmount());
+  });
+
   it('renders nothing when structured reference items are unavailable', () => {
     let tree: renderer.ReactTestRenderer | undefined;
 
@@ -384,5 +417,130 @@ describe('PostResourceReferences', () => {
     });
 
     expect(tree!.toJSON()).toBeNull();
+  });
+});
+
+describe('PostResourceReferences in a mature purchase', () => {
+  const videoReference: PostResourceItem = {
+    ...referenceImage,
+    id: 'video-reference',
+    type: 'reference_video',
+    title: 'Camera movement',
+    storagePath: 'references/camera.mp4',
+    contentType: 'video/mp4',
+    sortOrder: 1,
+  };
+  const byType = (tree: renderer.ReactTestRenderer, type: string) => tree.root.findAll((node) => String(node.type) === type);
+
+  it('draws the plate over a reference picture, and signs nothing under it, until the screen shows it', async () => {
+    const resolveFileUrl = vi.fn(async (path: string) => `https://cdn.example.com/${path}`);
+    const references = (coverMedia: boolean) => (
+      <PostResourceReferences coverMedia={coverMedia} items={[referenceImage, videoReference]} onOpenUrl={vi.fn()} resolveFileUrl={resolveFileUrl} />
+    );
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(references(true));
+    });
+
+    expect(byType(tree!, 'feed-media-frame')).toHaveLength(0);
+    const [plate] = byType(tree!, 'mature-cover');
+    // The screen's own Show lifts it, so the plate offers none.
+    expect(plate?.props).toEqual({ variant: 'tile' });
+    expect(byType(tree!, 'mature-cover')).toHaveLength(1);
+    expect(resolveFileUrl).not.toHaveBeenCalled();
+    expect(tree!.root.findByType('media-lightbox' as never).props.items).toEqual([]);
+
+    await renderer.act(async () => {
+      tree!.update(references(false));
+    });
+
+    expect(byType(tree!, 'mature-cover')).toHaveLength(0);
+    expect(byType(tree!, 'feed-media-frame').map((node) => node.props.url)).toEqual(['https://cdn.example.com/references/alisa.jpg']);
+    expect(resolveFileUrl).toHaveBeenCalledWith('references/alisa.jpg');
+    renderer.act(() => tree?.unmount());
+  });
+
+  it('opens a covered picture or clip in the browser, never on the in-app stage', async () => {
+    const onOpenUrl = vi.fn(async () => undefined);
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(
+        <PostResourceReferences
+          coverMedia
+          items={[referenceImage, videoReference]}
+          onOpenUrl={onOpenUrl}
+          resolveFileUrl={async (path) => `https://cdn.example.com/${path}`}
+        />
+      );
+    });
+
+    const picture = tree!.root.findByProps({ accessibilityLabel: 'Open reference @alisa' });
+    expect(picture.props.accessibilityHint).toBe('Mature content. Opens in your browser.');
+    await renderer.act(async () => { await picture.props.onPress(); });
+    await renderer.act(async () => {
+      await tree!.root.findByProps({ accessibilityLabel: 'Open reference Camera movement' }).props.onPress();
+    });
+
+    expect(onOpenUrl.mock.calls).toEqual([
+      ['https://cdn.example.com/references/alisa.jpg'],
+      ['https://cdn.example.com/references/camera.mp4'],
+    ]);
+    expect(tree!.root.findByType('media-lightbox' as never).props.activeIndex).toBeNull();
+    // The clip has no thumbnail to cover, so it keeps its own icon and label.
+    expect(tree!.root.findByProps({ children: 'Open video' })).toBeTruthy();
+    expect(byType(tree!, 'mature-cover')).toHaveLength(1);
+  });
+
+  it('keeps the plate, and then the picture, when every effect runs again', async () => {
+    // A hidden <Activity> shown again runs every effect of its subtree with its
+    // state kept, as Fast Refresh does after an edit.
+    const resolveFileUrl = vi.fn(async () => 'https://cdn.example.com/alisa.jpg');
+    const references = (coverMedia: boolean, mode: 'visible' | 'hidden' = 'visible') => (
+      <React.Activity mode={mode}>
+        <PostResourceReferences coverMedia={coverMedia} items={[referenceImage]} onOpenUrl={vi.fn()} resolveFileUrl={resolveFileUrl} />
+      </React.Activity>
+    );
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => { tree = renderer.create(references(true)); });
+    await renderer.act(async () => { tree!.update(references(true, 'hidden')); });
+    await renderer.act(async () => { tree!.update(references(true)); });
+
+    expect(byType(tree!, 'mature-cover')).toHaveLength(1);
+    expect(resolveFileUrl).not.toHaveBeenCalled();
+
+    await renderer.act(async () => { tree!.update(references(false)); });
+    await renderer.act(async () => { tree!.update(references(false, 'hidden')); });
+    await renderer.act(async () => { tree!.update(references(false)); });
+
+    expect(byType(tree!, 'feed-media-frame').map((node) => node.props.url)).toEqual(['https://cdn.example.com/alisa.jpg']);
+    expect(resolveFileUrl).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree?.unmount());
+  });
+
+  it('takes the cover from the screen when the prop is left out', async () => {
+    const resolveFileUrl = vi.fn(async () => 'https://cdn.example.com/alisa.jpg');
+    const references = (covered: boolean) => (
+      <MatureMediaCovered.Provider value={covered}>
+        <PostResourceReferences items={[referenceImage]} onOpenUrl={vi.fn()} resolveFileUrl={resolveFileUrl} />
+      </MatureMediaCovered.Provider>
+    );
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(references(true));
+    });
+
+    expect(byType(tree!, 'mature-cover')).toHaveLength(1);
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Open reference @alisa' }).props.accessibilityHint)
+      .toBe('Mature content. Opens in your browser.');
+    expect(resolveFileUrl).not.toHaveBeenCalled();
+
+    await renderer.act(async () => {
+      tree!.update(references(false));
+    });
+
+    expect(byType(tree!, 'mature-cover')).toHaveLength(0);
+    expect(byType(tree!, 'feed-media-frame').map((node) => node.props.url)).toEqual(['https://cdn.example.com/alisa.jpg']);
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Open reference @alisa' }).props.accessibilityHint).toBeUndefined();
+    renderer.act(() => tree?.unmount());
   });
 });

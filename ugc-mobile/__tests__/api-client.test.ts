@@ -1529,6 +1529,30 @@ describe('mobile api client caching', () => {
     expect((init.headers as Headers).get('Content-Type')).toBeNull();
   });
 
+  // A deleted creation is gone from the server, not archived: the web
+  // Studio's Delete, which the app did not have (audit 01-1).
+  it('deletes a creation by its id, with no body', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      success: true,
+      deleted: true,
+      linkedPostRetained: true,
+      message: 'The creation was deleted from your workspace.',
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await expect(api.deleteGeneration('gen/1')).resolves.toMatchObject({ deleted: true, linkedPostRetained: true });
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/generations/gen%2F1');
+    expect(init.method).toBe('DELETE');
+    expect(init.body).toBeUndefined();
+  });
+
   it('sends force delete for owner posts when requested', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       success: true,

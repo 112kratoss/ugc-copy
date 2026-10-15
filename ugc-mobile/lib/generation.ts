@@ -43,6 +43,7 @@ export async function pollGenerationStatus(
     signal?: AbortSignal;
     random?: () => number;
     waitUntilReady?: (signal?: AbortSignal) => Promise<void>;
+    isGuest?: boolean;
   } = {}
 ) {
   const intervalMs = options.intervalMs ?? 15_000;
@@ -64,7 +65,20 @@ export async function pollGenerationStatus(
     );
   }
 
-  throw new Error('Generation is still processing. Check Alerts in a few minutes.');
+  throw new Error(generationStillProcessingMessage(options.isGuest === true));
+}
+
+/**
+ * What the creator says when it stops watching a run that is still going. Only a
+ * registered account gets the push and an Alerts list; a guest gets no push and
+ * finds Alerts behind a sign-in, so "Check Alerts" sent them to a wall. The
+ * creator reopened on this device picks the run back up, which is where a guest
+ * can see how it ended.
+ */
+export function generationStillProcessingMessage(isGuest: boolean) {
+  return isGuest
+    ? 'Generation is still processing. Sign in to get an alert when it’s done. Until then, come back to this screen.'
+    : 'Generation is still processing. Check Alerts in a few minutes.';
 }
 
 export function getPollDelayMs(

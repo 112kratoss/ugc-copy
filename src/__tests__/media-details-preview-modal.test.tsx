@@ -1,5 +1,5 @@
 import type { HTMLAttributes, ReactNode } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import MediaDetailsPreviewModal from '@/components/MediaDetailsPreviewModal';
@@ -207,5 +207,49 @@ describe('MediaDetailsPreviewModal', () => {
 
     expect(screen.getByRole('button', { name: /close full media preview/i })).toBeInTheDocument();
     expect(screen.getAllByAltText('Additional output 2')).toHaveLength(2);
+  });
+
+  // A failed run's alert opens Studio on that run, which has no media; the
+  // modal used to render nothing at all for it.
+  it('explains a run with nothing to play in place of the media', async () => {
+    render(
+      <MediaDetailsPreviewModal
+        isOpen
+        onClose={() => undefined}
+        mediaType="video"
+        src={null}
+        alt="Neon street"
+        title="Neon street"
+        prompt="A slow push-in on a neon street."
+        statusNote={{
+          label: 'Failed',
+          tone: 'danger',
+          message: 'This model would not accept the reference image.',
+          detail: '40 credits returned',
+        }}
+      />
+    );
+
+    const dialog = await screen.findByRole('dialog', { name: 'Neon street' });
+    expect(within(dialog).getByText('Failed')).toBeInTheDocument();
+    expect(within(dialog).getByText('This model would not accept the reference image.')).toBeInTheDocument();
+    expect(within(dialog).getByText('40 credits returned')).toBeInTheDocument();
+    expect(within(dialog).getByText('A slow push-in on a neon street.')).toBeInTheDocument();
+    expect(document.querySelector('video')).toBeNull();
+  });
+
+  it('still renders nothing for a missing source with no note to show', () => {
+    render(
+      <MediaDetailsPreviewModal
+        isOpen
+        onClose={() => undefined}
+        mediaType="image"
+        src={null}
+        alt="Nothing"
+        title="Nothing"
+      />
+    );
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

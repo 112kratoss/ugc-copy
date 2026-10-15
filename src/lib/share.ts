@@ -44,7 +44,11 @@ export type GenerationShareSourceSurface = (typeof SHARE_SOURCE_SURFACES)[number
 export type ProfileShareSourceSurface = (typeof PROFILE_SHARE_SOURCE_SURFACES)[number];
 export type GenerationShareChannel = (typeof SHARE_CHANNELS)[number];
 export type GenerationShareEventType = 'share_click' | 'share_visit';
-type ShowcaseReturnSource = 'community' | 'unlocks' | 'creator' | 'seller' | 'studio' | 'profile' | 'home' | 'search';
+/**
+ * `unlocks` is the marketplace, whose links carry it; `library` is the buyer's
+ * own unlock library in Studio.
+ */
+type ShowcaseReturnSource = 'community' | 'unlocks' | 'library' | 'creator' | 'seller' | 'studio' | 'profile' | 'home' | 'search';
 
 export interface ShowcaseDetailPathOptions {
   from?: ShowcaseReturnSource | string | null;
@@ -63,6 +67,7 @@ export interface ShowcaseReturnContext {
 const SHOWCASE_RETURN_SOURCES: ShowcaseReturnSource[] = [
   'community',
   'unlocks',
+  'library',
   'creator',
   'seller',
   'studio',
@@ -74,6 +79,7 @@ const SHOWCASE_RETURN_SOURCES: ShowcaseReturnSource[] = [
 const SHOWCASE_RETURN_LABELS: Record<ShowcaseReturnSource, string> = {
   community: 'Back to Community',
   unlocks: 'Back to Marketplace',
+  library: 'Back to your unlocks',
   creator: 'Back to Creator Portfolio',
   seller: 'Back to Seller Dashboard',
   studio: 'Back to My Studio',
@@ -85,6 +91,7 @@ const SHOWCASE_RETURN_LABELS: Record<ShowcaseReturnSource, string> = {
 const SHOWCASE_RETURN_FALLBACKS: Record<ShowcaseReturnSource, string> = {
   community: '/showcase',
   unlocks: '/marketplace',
+  library: '/creations?view=unlocks',
   creator: '/showcase',
   seller: '/marketplace/sell',
   studio: '/creations?view=posts',

@@ -2072,6 +2072,12 @@ export async function getPostResourceBundleDetailByPostId(
     adminSupabase?: SupabaseClient;
     /** The post's `is_nsfw`, when the caller has just read its row; read here otherwise. */
     isNsfw?: boolean;
+    /**
+     * The caller is opening the viewer's own purchase (the buyer library). A
+     * purchase is the entitlement, so its buyer skips the NSFW reveal gate;
+     * the purchase lookup below still decides, never this flag alone.
+     */
+    entitledPurchase?: boolean;
   }
 ): Promise<PostResourceBundleDetail | null> {
   const {
@@ -2079,6 +2085,7 @@ export async function getPostResourceBundleDetailByPostId(
     countryCode = null,
     adminSupabase = createServiceClient(),
     isNsfw,
+    entitledPurchase = false,
   } = options ?? {};
   const selectBundle = (selectColumns: string) =>
     adminSupabase
@@ -2108,7 +2115,9 @@ export async function getPostResourceBundleDetailByPostId(
     return null;
   }
 
-  if (row.owner_user_id !== viewerUserId && (isNsfw ?? (await loadNsfwPostIds(adminSupabase, [postId])).has(postId)) && !await hasNsfwReveal(adminSupabase, postId, viewerUserId)) return null;
+  const nsfwGated = row.owner_user_id !== viewerUserId
+    && (isNsfw ?? (await loadNsfwPostIds(adminSupabase, [postId])).has(postId));
+  if (nsfwGated && !entitledPurchase && !await hasNsfwReveal(adminSupabase, postId, viewerUserId)) return null;
 
   // Entitlement is resolved before the publish gate, because a delisted or
   // retired bundle must still open for the people who bought it -- that is the
@@ -2129,6 +2138,12 @@ export async function getPostResourceBundleDetailByPostId(
       viewerHasPurchased = Boolean(purchaseData);
       viewerPurchaseId = (purchaseData as { id?: string } | null)?.id ?? null;
     }
+  }
+
+  // Whatever show_mature or the reveal say, a buyer reads what they bought;
+  // anyone else still needs a reveal.
+  if (nsfwGated && entitledPurchase && !viewerHasPurchased && !await hasNsfwReveal(adminSupabase, postId, viewerUserId)) {
+    return null;
   }
 
   if (
@@ -2155,7 +2170,7 @@ export async function getPostResourceBundleDetailByPostId(
     viewerIsOwner ? 'owner' : 'public',
     false,
     postScope,
-    true, // The owner/reveal check above already authorized this single post.
+    true, // The owner, reveal or purchase check above already authorized this single post.
   );
   if (!hydrated || (!viewerIsOwner && !hydrated.post)) {
     return null;

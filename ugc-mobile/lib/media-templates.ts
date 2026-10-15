@@ -8,6 +8,7 @@ import type {
   TemplateRun,
   TemplateRunInput,
   TemplateRunResponse,
+  TemplateRunResult,
   TemplateRunFailureCode,
   TemplateRunStatus,
   TemplateRunStep,
@@ -221,6 +222,21 @@ function normalizeSteps(run: UnknownRecord): TemplateRunStep[] {
   ].filter((step): step is TemplateRunStep => Boolean(step));
 }
 
+/** The post a run's result was published as. The server reads an archived post as private: no link to it would open. */
+export interface TemplateRunLinkedPost {
+  id: string;
+  visibility: 'public' | 'unlisted' | 'private';
+}
+
+function normalizeLinkedPost(value: unknown): TemplateRunLinkedPost | null {
+  const post = asRecord(value);
+  const id = nullableString(post, ['id']);
+  if (!id) return null;
+  // Read as private when unknown, so nothing is ever published over a post that exists.
+  const visibility = post.visibility === 'public' || post.visibility === 'unlisted' ? post.visibility : 'private';
+  return { id, visibility };
+}
+
 export function normalizeTemplateRunResponse(value: unknown): TemplateRunResponse {
   const response = asRecord(value);
   const run = asRecord(response.run ?? response.data ?? value);
@@ -259,6 +275,7 @@ export function normalizeTemplateRunResponse(value: unknown): TemplateRunRespons
       url: resultUrl,
       ...(result.renditionUrl !== undefined ? { renditionUrl: nullableString(result, ['renditionUrl']) } : {}),
       ...(result.previewUrl !== undefined ? { previewUrl: nullableString(result, ['previewUrl']) } : {}),
+      ...(result.linkedPost !== undefined ? { linkedPost: normalizeLinkedPost(result.linkedPost) } : {}),
     } : null,
     estimatedTotalCredits: numberValue(run, ['estimatedTotalCredits', 'estimated_total_credits']),
     estimatedRemainingCredits: numberValue(run, ['estimatedRemainingCredits', 'estimated_remaining_credits'])
@@ -270,6 +287,15 @@ export function normalizeTemplateRunResponse(value: unknown): TemplateRunRespons
     updatedAt: nullableString(run, ['updatedAt', 'updated_at']),
   };
   return { success: response.success !== false, run: normalizedRun };
+}
+
+/**
+ * The post a run's result was published as, or null. The shared run type in
+ * `types.ts` has no field for it, so it is read back from the result the
+ * normalizer above wrote it on.
+ */
+export function templateRunLinkedPost(result: TemplateRunResult | null | undefined): TemplateRunLinkedPost | null {
+  return result && 'linkedPost' in result ? normalizeLinkedPost(result.linkedPost) : null;
 }
 
 export function hasAllTemplateInputs(run: TemplateRun) {
@@ -301,11 +327,24 @@ export function templateRunStepNeedsReplacementInput(step: TemplateRunStep) {
   return isTemplateRunStepFailed(step) && step.failureCode === 'invalid_input_media';
 }
 
+/**
+ * The attempt a retry by hand left queued when the write that sets its run
+ * going again was lost. Nothing starts it: the run waits on the person, and
+ * retrying this attempt is what sets the run going. The server marks only such
+ * a queued step `canRetry`. The web reads it the same way (`isStepStalled`).
+ */
+export function isTemplateRunStepStalled(runStatus: TemplateRunStatus, step: TemplateRunStep) {
+  return step.kind === 'generation'
+    && step.canRetry
+    && step.status.toLowerCase() === 'queued'
+    && (runStatus === 'needs_attention' || runStatus === 'awaiting_approval');
+}
+
 export function canRetryTemplateRunStep(status: TemplateRunStatus, step: TemplateRunStep) {
   return !isTemplateRunTerminal(status)
     && step.canRetry
     && !templateRunStepNeedsReplacementInput(step)
-    && (isTemplateRunStepAwaitingApproval(step) || isTemplateRunStepFailed(step));
+    && (isTemplateRunStepAwaitingApproval(step) || isTemplateRunStepFailed(step) || isTemplateRunStepStalled(status, step));
 }
 
 /**
@@ -330,7 +369,7 @@ export function templateRunStepOutcome(runStatus: TemplateRunStatus, step: Templ
     return ['failed', 'error'].includes(step.status.toLowerCase()) ? 'failed' : 'not_finished';
   }
   if (isTemplateRunStepAwaitingApproval(step)) return 'review';
-  if (isTemplateRunStepFailed(step)) return 'needs_attention';
+  if (isTemplateRunStepFailed(step) || isTemplateRunStepStalled(runStatus, step)) return 'needs_attention';
   return 'in_progress';
 }
 
@@ -366,8 +405,9 @@ export function templateRunStepPlaceholderLabel(runStatus: TemplateRunStatus, st
       return 'No output';
     case 'needs_attention':
       if (templateRunStepNeedsReplacementInput(step)) return 'This upload needs to be replaced';
-      // Asked before the cause: both lines below go with a Retry button.
+      // Asked before the cause: every line below goes with a Retry button.
       if (templateRunStepNeedsNewRun(runStatus, step)) return 'This step cannot be retried';
+      if (isTemplateRunStepStalled(runStatus, step)) return 'This step did not start';
       if (step.failureCode === 'service_misconfigured') return 'Service setup must be completed first';
       return 'This step can be retried';
     default:
@@ -389,9 +429,9 @@ export function templateRunStepPlaceholderMark(runStatus: TemplateRunStatus, ste
   }
 }
 
-export function prioritizeTemplateRunSteps(steps: TemplateRunStep[]) {
+export function prioritizeTemplateRunSteps(steps: TemplateRunStep[], runStatus: TemplateRunStatus) {
   const priority = (step: TemplateRunStep) => {
-    if (isTemplateRunStepFailed(step) || isTemplateRunStepAwaitingApproval(step)) return 0;
+    if (isTemplateRunStepFailed(step) || isTemplateRunStepAwaitingApproval(step) || isTemplateRunStepStalled(runStatus, step)) return 0;
     if (!isTemplateRunStepSuccessful(step)) return 1;
     return 2;
   };
@@ -434,7 +474,32 @@ export function canPublishTemplateRunResult(
 ) {
   return run.status === 'succeeded'
     && !run.isTest
-    && Boolean(run.result?.generationId?.trim());
+    && Boolean(run.result?.generationId?.trim())
+    // Publishing again would write over the post already made from this result.
+    && !templateRunLinkedPost(run.result);
+}
+
+// Refusals that mean the step moved on without this screen: on the web, or before a read.
+const STEP_ALREADY_HANDLED_CODES = new Set([
+  'STALE_STEP_ATTEMPT',
+  'APPROVAL_ALREADY_HANDLED',
+  'APPROVAL_NOT_READY',
+  'STEP_NOT_RETRYABLE',
+]);
+
+/**
+ * What a refused action says. The screen reads the run again after a refusal,
+ * so these say where the run stands: trying the same action again would be
+ * refused the same way. The web picks the same words (`getTemplateRunErrorCopy`).
+ */
+export function templateRunActionErrorMessage(message: string, code?: string | null): string {
+  if (code === 'RUN_TERMINAL') return 'This run has ended. Start a new run to try the template again.';
+  if (code === 'STEP_NOT_FOUND') return 'That step is no longer part of this run.';
+  // The checkpoint retry sends codes of its own with "…already handled. Refresh the run before retrying."
+  if ((code && STEP_ALREADY_HANDLED_CODES.has(code)) || /already handled/i.test(message)) {
+    return 'This step was already handled. The run has been refreshed.';
+  }
+  return message;
 }
 
 export function isSafeTemplateResultUrl(value: string | null | undefined) {

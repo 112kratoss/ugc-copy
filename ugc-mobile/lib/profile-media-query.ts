@@ -2,9 +2,7 @@ import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 
 import type { MagicbookletApiClient } from './api-client';
 import { getCreationAvailability } from './creation-library';
-import { getGenerationKind } from './generation-media';
 import type {
-  CreatorToolId,
   GenerationListItem,
   GenerationListResponse,
   OwnerPostListItem,
@@ -192,10 +190,14 @@ export function selectRenderingCreations<T extends GenerationListItem>(items: T[
   return items.filter((item) => !item.archived_at && getCreationAvailability(item) === 'rendering');
 }
 
-/** The creator a rendering run reopens, or null for a kind the app cannot create (sound, text). */
-export function renderingCreationTool(item: Pick<GenerationListItem, 'category' | 'creationMode'>): CreatorToolId | null {
-  const kind = getGenerationKind(item);
-  return kind === 'image' || kind === 'video' || kind === 'motion' ? kind : null;
+/**
+ * The runs on the Creations "Failed" strip: failed and not archived, in the
+ * library's order. Not library members either, so a run that failed while it
+ * sat on the Rendering strip used to leave it for nowhere, reachable only from
+ * its alert; the web Studio lists them under Failed.
+ */
+export function selectFailedCreations<T extends GenerationListItem>(items: T[]): T[] {
+  return items.filter((item) => !item.archived_at && item.status === 'failed');
 }
 
 export function formatRenderingStartedLabel(createdAt: string | null | undefined, now: number) {

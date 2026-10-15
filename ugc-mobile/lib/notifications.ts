@@ -72,13 +72,24 @@ Notifications.setNotificationHandler({
   handleNotification: async () => resolveForegroundPresentation({ alertsScreenFocused }),
 });
 
+/** What the app reads off an alert that lands while it is in front. */
+export type ReceivedMobileNotification = {
+  /** The server's notification type (`generation_failed`, …), or null when the payload names none. */
+  type: string | null;
+};
+
 /**
  * Suppressing the banner only stays honest if the app shows the alert itself.
  * Nothing listened for an arrival before this, so the tab badge learned about
- * one on its next poll — up to a minute later.
+ * one on its next poll — up to a minute later. The type travels with it because
+ * some alerts say more than "the list changed": a failed run's alert means its
+ * credits were returned on the server.
  */
-export function subscribeToNotificationsReceived(onReceived: () => void) {
-  const subscription = Notifications.addNotificationReceivedListener(() => onReceived());
+export function subscribeToNotificationsReceived(onReceived: (notification: ReceivedMobileNotification) => void) {
+  const subscription = Notifications.addNotificationReceivedListener((notification) => {
+    const type = notification?.request?.content?.data?.type;
+    onReceived({ type: typeof type === 'string' && type.trim() ? type.trim() : null });
+  });
   return () => subscription.remove();
 }
 

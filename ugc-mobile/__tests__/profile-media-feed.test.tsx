@@ -33,13 +33,18 @@ const authState = vi.hoisted(() => ({
   user: { id: 'owner-1', email: 'owner@example.com' },
 }));
 
-const libraryState = vi.hoisted(() => ({ items: [] as unknown[] }));
+const libraryState = vi.hoisted(() => ({ items: [] as unknown[], selection: 'none' as string }));
+
+type CardActions = { onShare: () => void; onDeleted?: (id: string) => void; onRecreate: () => void };
 
 const feedState = vi.hoisted(() => ({
-  callbacksFor: null as null | ((item: unknown) => { onShare: () => void }),
+  callbacksFor: null as null | ((item: unknown) => CardActions),
+  // What each drawn card was handed, by card id.
+  cards: new Map<string, { onAction: (action: string) => void }>(),
 }));
 
 const nothing = vi.hoisted(() => () => null);
+const passThrough = vi.hoisted(() => ({ children }: { children?: unknown }) => children ?? null);
 
 vi.mock('expo-router', () => ({
   router: routerState,
@@ -53,7 +58,11 @@ vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ getQueryData: vi.fn(), invalidateQueries: vi.fn(), setQueryData: vi.fn() }),
 }));
 
-vi.mock('@shopify/flash-list', () => ({ FlashList: nothing }));
+vi.mock('@shopify/flash-list', () => ({
+  FlashList: ({ data, renderItem }: { data?: Array<{ id: string }>; renderItem: (info: { item: unknown; index: number }) => unknown }) => (
+    data?.map((item, index) => renderItem({ item, index })) ?? null
+  ),
+}));
 
 vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 24, bottom: 24, left: 0, right: 0 }),
@@ -77,23 +86,31 @@ vi.mock('react-native', () => ({
   StyleSheet: { create: (styles: unknown) => styles },
   Text: nothing,
   useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
-  View: nothing,
+  View: passThrough,
 }));
 
 vi.mock('lucide-react-native', () => ({ RefreshCw: nothing }));
 
 vi.mock('@/components/viewer-actions-menu', () => ({
-  ViewerActionsMenuProvider: ({ callbacksFor }: { callbacksFor: (item: unknown) => { onShare: () => void } }) => {
+  ViewerActionsMenuProvider: ({ callbacksFor, children }: { callbacksFor: (item: unknown) => CardActions; children?: unknown }) => {
     feedState.callbacksFor = callbacksFor;
-    return null;
+    return children ?? null;
   },
 }));
 vi.mock('@/components/comments-sheet', () => ({ CommentsSheet: nothing }));
 vi.mock('@/components/feed-pagination-footer', () => ({ FeedLoadMoreErrorFooter: nothing }));
-vi.mock('@/components/media-zoom', () => ({ MediaZoomSurface: nothing }));
-vi.mock('@/components/zoom-veil', () => ({ ZoomVeilScope: nothing }));
-vi.mock('@/components/profile-feed-card', () => ({ ProfileFeedCardView: nothing }));
-vi.mock('@/components/ui', () => ({ SecondaryButton: nothing, StatusBlock: nothing }));
+vi.mock('@/components/media-zoom', () => ({ MediaZoomSurface: passThrough }));
+vi.mock('@/components/zoom-veil', () => ({ ZoomVeilScope: passThrough }));
+vi.mock('@/components/profile-feed-card', () => ({
+  ProfileFeedCardView: ({ card, onAction }: { card: { id: string }; onAction: (action: string) => void }) => {
+    feedState.cards.set(card.id, { onAction });
+    return null;
+  },
+}));
+vi.mock('@/components/ui', () => ({
+  SecondaryButton: nothing,
+  StatusBlock: (props: { title: string }) => React.createElement('status-block', props),
+}));
 vi.mock('@/components/viewer-action-sheet', () => ({ ViewerActionSheet: nothing }));
 
 vi.mock('@/lib/audio-creation-native-player', () => ({ audioCreationPlayback: { pause: vi.fn() } }));
@@ -137,13 +154,15 @@ vi.mock('@/lib/use-profile-library-source', () => ({
     refetch: vi.fn(),
     retryEnrichment: vi.fn(),
     retrySelection: vi.fn(),
-    selection: 'none',
+    selection: libraryState.selection,
   }),
 }));
 vi.mock('@/lib/use-profile-media-revalidation', () => ({ useProfileMediaRevalidation: () => undefined }));
+vi.mock('@/lib/use-viewer-action-handlers', () => ({ changeGenerationArchive: vi.fn() }));
 vi.mock('@/lib/viewer-media-cache', () => ({ applyPostVisibilityToCaches: vi.fn() }));
 
 import { ProfileMediaFeedScreen } from '@/components/profile-media-feed';
+import { changeGenerationArchive } from '@/lib/use-viewer-action-handlers';
 
 /** One of the owner's public posts, as the Posts library lists it. */
 const publicPost = {
@@ -171,8 +190,11 @@ function renderFeed() {
 beforeEach(() => {
   vi.clearAllMocks();
   platformState.os = 'ios';
+  routerState.params = { source: 'profile-posts' };
   libraryState.items = [publicPost];
+  libraryState.selection = 'none';
   feedState.callbacksFor = null;
+  feedState.cards.clear();
 });
 
 afterEach(() => {
@@ -214,5 +236,118 @@ describe("the profile feed's Share", () => {
     });
 
     expect(authState.api.shareShowcasePost).not.toHaveBeenCalled();
+  });
+});
+
+/** One of the owner's creations, as the Creations library lists it. */
+function creation(id: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    source: 'profile-creations',
+    sourceType: 'generation',
+    title: `Creation ${id}`,
+    creatorLabel: '@owner',
+    canShare: false,
+    sharePath: null,
+    showcasePostId: null,
+    ownerPostId: null,
+    generationId: id,
+    recreateTool: 'image',
+    recreatePrompt: 'A product still',
+    mediaKind: 'image',
+    mediaUrl: `https://cdn.example.com/${id}.png`,
+    mediaItems: [],
+    availableActions: ['publish', 'recreate', 'archive', 'delete-creation', 'download', 'view-details'],
+    ...overrides,
+  } as unknown as ImmersivePreviewItem;
+}
+
+function rerenderFeed() {
+  act(() => {
+    trees.at(-1)!.update(<ProfileMediaFeedScreen />);
+  });
+}
+
+const statusTitles = () => trees.at(-1)!.root.findAll((node) => String(node.type) === 'status-block')
+  .map((node) => node.props.title);
+
+describe("an archived creation's card", () => {
+  // Its only inline action was Share, which opened the composer for a creation
+  // that was archived (audit 01-6).
+  it('restores through the same path as the •••', () => {
+    const archived = creation('gen-archived', {
+      archivedAt: '2026-10-01T00:00:00.000Z',
+      availableActions: ['restore', 'delete-creation', 'view-details'],
+    });
+    routerState.params = { source: 'profile-creations', scope: 'archived' };
+    libraryState.items = [archived];
+    renderFeed();
+
+    act(() => { feedState.cards.get('gen-archived')!.onAction('restore'); });
+
+    expect(changeGenerationArchive).toHaveBeenCalledWith({
+      api: authState.api,
+      queryClient: expect.anything(),
+      userId: 'owner-1',
+      item: archived,
+      archive: false,
+    });
+  });
+});
+
+describe('a creation deleted from the feed', () => {
+  it('keeps the rest of the feed when it was the card the feed was opened on', () => {
+    routerState.params = { source: 'profile-creations', initialId: 'gen-1' };
+    libraryState.items = [creation('gen-1'), creation('gen-2')];
+    libraryState.selection = 'found';
+    renderFeed();
+
+    act(() => { feedState.callbacksFor!(libraryState.items[0]).onDeleted?.('gen-1'); });
+    // The library no longer holds it, and its own lookup would call it missing.
+    libraryState.items = [creation('gen-2')];
+    libraryState.selection = 'missing';
+    rerenderFeed();
+
+    expect(statusTitles()).toEqual([]);
+    expect(feedState.cards.has('gen-2')).toBe(true);
+    expect(routerState.back).not.toHaveBeenCalled();
+  });
+
+  it('leaves the feed when it was the last card', () => {
+    routerState.params = { source: 'profile-creations', initialId: 'gen-1' };
+    libraryState.items = [creation('gen-1')];
+    libraryState.selection = 'found';
+    renderFeed();
+
+    act(() => { feedState.callbacksFor!(libraryState.items[0]).onDeleted?.('gen-1'); });
+
+    expect(routerState.back).toHaveBeenCalledTimes(1);
+  });
+
+  it('still says a card it was opened on is missing when the reader did not delete it here', () => {
+    routerState.params = { source: 'profile-creations', initialId: 'gen-gone' };
+    libraryState.items = [creation('gen-2')];
+    libraryState.selection = 'missing';
+    renderFeed();
+
+    expect(statusTitles()).toEqual(["This creation isn't available"]);
+  });
+});
+
+describe("a creation's Recreate", () => {
+  // The creator drew the full-size original 40pt across (audit 01, below the cut).
+  it("hands the creator the media's poster for its thumbnail", () => {
+    const item = creation('gen-1', {
+      mediaItems: [{ id: 'gen-1:output', url: 'https://cdn.example.com/gen-1.png', mediaKind: 'image', previewUrl: 'https://cdn.example.com/gen-1.poster.webp' }],
+    });
+    routerState.params = { source: 'profile-creations' };
+    libraryState.items = [item];
+    renderFeed();
+
+    act(() => { feedState.callbacksFor!(item).onRecreate(); });
+
+    const href = String(routerState.push.mock.calls.at(-1)?.[0]);
+    expect(new URL(href, 'https://magicbooklet.local').searchParams.get('sourceThumbnail'))
+      .toBe('https://cdn.example.com/gen-1.poster.webp');
   });
 });

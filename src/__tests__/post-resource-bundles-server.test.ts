@@ -69,6 +69,8 @@ vi.mock('@/lib/server-helpers', () => ({
         const isBuyer = args.p_buyer_user_id === 'buyer-1';
         return { data: isBuyer && purchasedRevisionRow ? [purchasedRevisionRow] : [], error: null };
       }
+      // Nobody in these fixtures has revealed an NSFW post.
+      if (name === 'has_nsfw_reveal') return { data: false, error: null };
 
       throw new Error(`Unexpected rpc: ${name}`);
     },
@@ -1042,6 +1044,42 @@ describe('post resource bundle server access', () => {
       const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'stranger-1' });
 
       expect(detail).toBeNull();
+    });
+
+    it('opens an NSFW post\'s bundle to its buyer without a reveal when the buyer library asks', async () => {
+      viewerHasPurchased = true;
+
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const detail = await getPostResourceBundleDetailByPostId('post-1', {
+        viewerUserId: 'buyer-1',
+        isNsfw: true,
+        entitledPurchase: true,
+      });
+
+      expect(detail?.viewerCanAccess).toBe(true);
+      expect(detail?.resources?.promptText).toBe('Public prompt text');
+      expect(detail?.post?.id).toBe('post-1');
+    });
+
+    it('keeps the reveal gate for that buyer everywhere else', async () => {
+      viewerHasPurchased = true;
+
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      await expect(getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'buyer-1', isNsfw: true }))
+        .resolves.toBeNull();
+    });
+
+    it('never opens an NSFW bundle on the buyer-library flag alone', async () => {
+      viewerHasPurchased = false;
+
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      await expect(getPostResourceBundleDetailByPostId('post-1', {
+        viewerUserId: 'stranger-1',
+        isNsfw: true,
+        entitledPurchase: true,
+      })).resolves.toBeNull();
     });
 
     it('retracts a buyer\'s access when moderation hides the post', async () => {

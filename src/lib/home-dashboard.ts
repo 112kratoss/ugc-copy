@@ -8,9 +8,10 @@ import type { GenerationModelDescriptor } from '@/lib/generation-model-catalog';
  */
 
 /**
- * Statuses that count as "in flight" on the workspace card. Includes
- * `pending` (a start that has not reached the provider yet) — Studio's own
- * buckets ignore it, but a dashboard promising live context must not.
+ * Statuses that count as "in flight". Includes `pending` (a start that has
+ * not reached the provider yet). The Home workspace card and Studio's
+ * Processing section both read this list, so a held start shows as running
+ * in both rather than in one.
  */
 export const HOME_WORKSPACE_ACTIVE_STATUSES = ['processing', 'waiting', 'pending'] as const;
 

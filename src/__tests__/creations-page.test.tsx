@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import CreationsPage from '@/app/creations/page';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { resetFeedbackState } from '@/components/feedback-state';
@@ -97,6 +98,44 @@ const flushPromises = async () => {
   for (let index = 0; index < 12; index += 1) {
     await Promise.resolve();
   }
+};
+
+/** The shared contract's failed, refunded video (`listGenerations`, `failed-video-1`). */
+const failedVideoFixture = mobileApiContract.endpoints.listGenerations.response.generations
+  .find((generation) => generation.id === 'failed-video-1') as Record<string, unknown>;
+
+/**
+ * Answers the posts and profile reads the page always makes, and hands every
+ * other request to `handle`; one it returns null for is unexpected.
+ */
+const stubStudioFetch = (
+  handle: (url: string, init?: RequestInit) => Promise<Response> | null,
+) => {
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const handled = handle(url, init);
+    if (handled) {
+      return handled;
+    }
+    if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
+      return Promise.resolve(jsonResponse({ posts: [] }));
+    }
+    if (url === '/api/profile') {
+      return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+    }
+    return Promise.reject(new Error(`Unexpected request: ${url}`));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+};
+
+const firstPageReads = (fetchMock: ReturnType<typeof stubStudioFetch>) =>
+  fetchMock.mock.calls.filter(([input]) => String(input) === GENERATIONS_PAGE_URL).length;
+
+const chooseCardAction = async (title: string, action: string) => {
+  fireEvent.click(await screen.findByRole('button', { name: `More actions for ${title}` }));
+  const menu = await screen.findByRole('menu', { name: `More actions for ${title}` });
+  fireEvent.click(within(menu).getByRole('menuitem', { name: action }));
 };
 
 describe('CreationsPage', () => {
@@ -1202,6 +1241,7 @@ describe('CreationsPage', () => {
       'Recreate',
       'Archive creation',
       'Delete creation',
+      'Report AI output',
     ]);
     fireEvent.keyDown(creationMenu, { key: 'Escape' });
     unmount();
@@ -1495,5 +1535,425 @@ describe('CreationsPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /restore preview/i }));
 
     expect(acceptWhenOpened).toBe('video/*');
+  });
+
+  // The first-page refresh after a delete kept every previous row the fresh
+  // page lacked whenever fewer came back than were on screen, so the deleted
+  // card moved to the end of the grid, was written back into the session
+  // snapshot, and a second Delete answered 404 "Creation not found.".
+  it('drops a deleted creation from the grid, the session snapshot and the refresh after it', async () => {
+    let library = Array.from({ length: 10 }, (_, index) => makeGeneration({
+      id: `gen-${index + 1}`,
+      title: `Creation ${index + 1}`,
+      created_at: new Date(Date.UTC(2026, 5, 20 - index)).toISOString(),
+    }));
+    const fetchMock = stubStudioFetch((url, init) => {
+      if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: library,
+          pagination: { limit: 36, hasMore: false, nextCursor: null },
+        }));
+      }
+      if (url.startsWith('/api/generations/') && init?.method === 'DELETE') {
+        const generationId = url.slice('/api/generations/'.length);
+        if (!library.some((generation) => generation.id === generationId)) {
+          return Promise.resolve(jsonResponse({ error: 'Creation not found.' }, { status: 404 }));
+        }
+        library = library.filter((generation) => generation.id !== generationId);
+        return Promise.resolve(jsonResponse({ success: true, deleted: true }));
+      }
+      return null;
+    });
+
+    render(<><CreationsPage /><FeedbackViewport /></>);
+
+    await screen.findByTestId('creation-card-gen-4');
+    await chooseCardAction('Creation 4', 'Delete creation');
+    const dialog = await screen.findByRole('alertdialog', { name: 'Delete this creation?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      expect(firstPageReads(fetchMock)).toBe(2);
+    });
+    await act(flushPromises);
+
+    expect(screen.queryByTestId('creation-card-gen-4')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId(/^creation-card-/)).toHaveLength(9);
+    const snapshot = JSON.parse(
+      window.sessionStorage.getItem('magicbooklet:creations-cache:v1:user-1') ?? '{}',
+    ) as { generations?: Array<{ id: string }> };
+    expect(snapshot.generations?.map((generation) => generation.id)).toEqual(
+      library.map((generation) => generation.id),
+    );
+    // Nothing is left to delete a second time, so no 404 can come of it.
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE')).toHaveLength(1);
+    expect(screen.queryByText('Creation not found.')).not.toBeInTheDocument();
+  });
+
+  it('takes a deleted creation off the grid and out of the snapshot even when the refresh after it fails', async () => {
+    let pageReads = 0;
+    stubStudioFetch((url, init) => {
+      if (url === GENERATIONS_PAGE_URL) {
+        pageReads += 1;
+        return pageReads === 1
+          ? Promise.resolve(jsonResponse({
+            generations: [
+              makeGeneration({ id: 'gen-keep', title: 'Keep me' }),
+              makeGeneration({ id: 'gen-drop', title: 'Drop me', created_at: '2026-05-31T10:00:00.000Z' }),
+            ],
+          }))
+          : Promise.resolve(jsonResponse({ error: 'Unavailable' }, { status: 503 }));
+      }
+      if (url === '/api/generations/gen-drop' && init?.method === 'DELETE') {
+        return Promise.resolve(jsonResponse({ success: true, deleted: true }));
+      }
+      return null;
+    });
+
+    render(<><CreationsPage /><FeedbackViewport /></>);
+
+    await chooseCardAction('Drop me', 'Delete creation');
+    fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Delete this creation?' }))
+      .getByRole('button', { name: 'Delete' }));
+
+    expect(await screen.findByText('Could not load your creations. Check your connection and try again.')).toBeInTheDocument();
+    expect(screen.queryByTestId('creation-card-gen-drop')).not.toBeInTheDocument();
+    expect(screen.getByTestId('creation-card-gen-keep')).toBeInTheDocument();
+    const snapshot = JSON.parse(
+      window.sessionStorage.getItem('magicbooklet:creations-cache:v1:user-1') ?? '{}',
+    ) as { generations?: Array<{ id: string }> };
+    expect(snapshot.generations?.map((generation) => generation.id)).toEqual(['gen-keep']);
+  });
+
+  it('keeps the loaded pages, and Load more goes on after them, when the first page is refreshed', async () => {
+    let firstPage = [
+      makeGeneration({ id: 'gen-new-1', title: 'Newest creation', created_at: '2026-06-03T10:00:00.000Z' }),
+      makeGeneration({ id: 'gen-new-2', title: 'Newer creation', created_at: '2026-06-02T10:00:00.000Z' }),
+    ];
+    const fetchMock = stubStudioFetch((url, init) => {
+      if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: firstPage,
+          pagination: { limit: 36, hasMore: true, nextCursor: '36' },
+        }));
+      }
+      if (url === NEXT_GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: [makeGeneration({ id: 'gen-old-1', title: 'Older creation', created_at: '2026-05-01T10:00:00.000Z' })],
+          pagination: { limit: 36, hasMore: true, nextCursor: '72' },
+        }));
+      }
+      if (url === `${GENERATIONS_PAGE_URL}&cursor=72`) {
+        return Promise.resolve(jsonResponse({
+          generations: [makeGeneration({ id: 'gen-old-2', title: 'Oldest creation', created_at: '2026-04-01T10:00:00.000Z' })],
+          pagination: { limit: 36, hasMore: false, nextCursor: null },
+        }));
+      }
+      if (url === '/api/generations/gen-new-2/archive' && init?.method === 'POST') {
+        // Meanwhile the newest one was deleted on another device.
+        firstPage = [makeGeneration({
+          id: 'gen-new-2',
+          title: 'Newer creation',
+          created_at: '2026-06-02T10:00:00.000Z',
+          archived_at: '2026-06-04T10:00:00.000Z',
+        })];
+        return Promise.resolve(jsonResponse({ success: true }));
+      }
+      return null;
+    });
+
+    render(<><CreationsPage /><FeedbackViewport /></>);
+
+    expect(await screen.findByText('Newest creation')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /load more creations/i }));
+    expect(await screen.findByText('Older creation')).toBeInTheDocument();
+
+    // Archiving refreshes the first page while the second is on screen.
+    await chooseCardAction('Newer creation', 'Archive creation');
+    fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Archive this creation?' }))
+      .getByRole('button', { name: 'Archive' }));
+    await waitFor(() => {
+      expect(firstPageReads(fetchMock)).toBe(2);
+    });
+    await act(flushPromises);
+
+    // Missing from inside the fresh page's range: deleted. Older than it: pushed down, kept.
+    expect(screen.queryByText('Newest creation')).not.toBeInTheDocument();
+    expect(screen.getByText('Older creation')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /load more creations/i }));
+    expect(await screen.findByText('Oldest creation')).toBeInTheDocument();
+    // The refresh did not rewind Load more onto the page already on screen.
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === NEXT_GENERATIONS_PAGE_URL)).toHaveLength(1);
+  });
+
+  it('says a refunded failure gave its credits back and why it failed, and keeps the cost of one that did not', async () => {
+    stubStudioFetch((url) => (url === GENERATIONS_PAGE_URL
+      ? Promise.resolve(jsonResponse({
+        generations: [
+          failedVideoFixture,
+          { ...failedVideoFixture, id: 'failed-kept', title: 'Kept its cost', refunded: false, error_message: null },
+          { ...failedVideoFixture, id: 'failed-one', title: 'One credit back', cost: 1 },
+        ],
+      }))
+      : null));
+
+    render(<CreationsPage />);
+
+    const refunded = await screen.findByTestId('failed-card-failed-video-1');
+    expect(within(refunded).getByText('40 credits returned')).toBeInTheDocument();
+    expect(within(refunded).getByText(String(failedVideoFixture.error_message))).toBeInTheDocument();
+    expect(within(refunded).queryByText('Credits')).not.toBeInTheDocument();
+
+    const kept = screen.getByTestId('failed-card-failed-kept');
+    expect(within(kept).getByText('Credits')).toBeInTheDocument();
+    expect(within(kept).getByText('40')).toBeInTheDocument();
+    expect(within(kept).queryByText(/returned/)).not.toBeInTheDocument();
+
+    expect(within(screen.getByTestId('failed-card-failed-one')).getByText('1 credit returned')).toBeInTheDocument();
+  });
+
+  // Moderation archives what it takes down, and Restore then answers 404
+  // "Creation not found." for it.
+  it('names a creation moderation took down and offers no Restore for it', async () => {
+    stubStudioFetch((url) => (url === GENERATIONS_PAGE_URL
+      ? Promise.resolve(jsonResponse({
+        generations: [
+          makeGeneration({
+            id: 'gen-removed',
+            title: 'Taken down',
+            archived_at: '2026-06-02T10:00:00.000Z',
+            moderation_removed_at: '2026-06-02T10:00:00.000Z',
+          }),
+          makeGeneration({ id: 'gen-archived', title: 'Put away', archived_at: '2026-06-02T10:00:00.000Z' }),
+        ],
+      }))
+      : null));
+
+    render(<CreationsPage />);
+
+    const removed = await screen.findByTestId('archived-card-gen-removed');
+    expect(within(removed).getByText('Removed by moderation')).toBeInTheDocument();
+    expect(within(removed).queryByRole('button', { name: 'Restore' })).not.toBeInTheDocument();
+    fireEvent.click(within(removed).getByRole('button', { name: 'More actions for Taken down' }));
+    const menu = await screen.findByRole('menu', { name: 'More actions for Taken down' });
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Delete creation']);
+
+    const archived = screen.getByTestId('archived-card-gen-archived');
+    expect(within(archived).getByText('Archived')).toBeInTheDocument();
+    expect(within(archived).getByRole('button', { name: 'Restore' })).toBeInTheDocument();
+  });
+
+  // A failed run's alert opened `?generation=`, and the modal rendered nothing
+  // for a run with no media; the run's card sat below the whole Completed
+  // grid, and a first page that arrived after it dropped it.
+  it('explains the failed run an alert opened, keeps it through the first page, and rings and scrolls to its card', async () => {
+    navigationState.searchParams = new URLSearchParams('generation=failed-video-1');
+    const scrollIntoView = vi.fn();
+    const ownScrollIntoView = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView');
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, writable: true, value: scrollIntoView });
+    const requestedRun = { ...failedVideoFixture, title: 'Neon street', input_media: [], paywallPrefill: null };
+    let releaseFirstPage: () => void = () => undefined;
+    const firstPageReady = new Promise<void>((resolve) => {
+      releaseFirstPage = resolve;
+    });
+    stubStudioFetch((url) => {
+      if (url === GENERATIONS_PAGE_URL) {
+        // Lands after the run's own read, and does not carry the older run.
+        return firstPageReady.then(() => jsonResponse({
+          generations: [makeGeneration({ id: 'gen-newer', title: 'Newer creation', created_at: '2026-10-14T09:00:00.000Z' })],
+        }));
+      }
+      if (url === generationDetailUrl('failed-video-1')) {
+        return Promise.resolve(jsonResponse({ generations: [requestedRun] }));
+      }
+      return null;
+    });
+
+    try {
+      render(<CreationsPage />);
+
+      const dialog = await screen.findByRole('dialog', { name: 'Neon street' });
+      expect(within(dialog).getByText('Failed')).toBeInTheDocument();
+      expect(within(dialog).getByText(String(failedVideoFixture.error_message))).toBeInTheDocument();
+      expect(within(dialog).getByText('40 credits returned')).toBeInTheDocument();
+      // What its card offers, never Publish.
+      expect(within(dialog).queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument();
+      expect(within(dialog).getByRole('link', { name: 'Try again' })).toHaveAttribute('href', '/create-video?remix=failed-video-1');
+
+      await act(async () => {
+        releaseFirstPage();
+        await flushPromises();
+      });
+      expect(await screen.findByText('Newer creation')).toBeInTheDocument();
+
+      const card = screen.getByTestId('failed-card-failed-video-1');
+      expect(card).toHaveAttribute('data-highlighted', 'true');
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toBe(card);
+    } finally {
+      if (ownScrollIntoView) {
+        Object.defineProperty(Element.prototype, 'scrollIntoView', ownScrollIntoView);
+      } else {
+        delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      }
+    }
+  });
+
+  // A signed URL lives for an hour, and a tab left open past it turned every
+  // tile into "Preview unavailable", whose Restore overwrites the creation.
+  it('loads an expired tile once more through the media route before it offers Restore', async () => {
+    const expiredUrl = makeSignedStorageUrl(Math.floor(Date.now() / 1000) - 60, 'expired');
+    stubStudioFetch((url) => (url === GENERATIONS_PAGE_URL
+      ? Promise.resolve(jsonResponse({ generations: [makeGeneration({ output_url: expiredUrl })] }))
+      : null));
+
+    render(<CreationsPage />);
+
+    const image = await screen.findByAltText('Generated image');
+    expect(image).toHaveAttribute('src', expiredUrl);
+    fireEvent.error(image);
+
+    expect(screen.getByAltText('Generated image')).toHaveAttribute(
+      'src',
+      '/api/media?bucket=generated_images&path=user%2Foutput.jpg',
+    );
+    expect(screen.queryByRole('button', { name: /restore preview/i })).not.toBeInTheDocument();
+
+    fireEvent.error(screen.getByAltText('Generated image'));
+    expect(await screen.findByRole('button', { name: /restore preview/i })).toBeInTheDocument();
+  });
+
+  // Storage is another origin, where browsers ignore `download` and only open a tab.
+  it('downloads a stored creation through the media route as an attachment, and a remote one from its own address', async () => {
+    const storedUrl = makeSignedStorageUrl(Math.floor(Date.now() / 1000) + 3600, 'fresh');
+    stubStudioFetch((url) => (url === GENERATIONS_PAGE_URL
+      ? Promise.resolve(jsonResponse({
+        generations: [
+          makeGeneration({ id: 'gen-stored', title: 'Stored creation', output_url: storedUrl }),
+          makeGeneration({
+            id: 'gen-remote',
+            title: 'Remote creation',
+            output_url: 'https://cdn.example.com/remote.png',
+            created_at: '2026-05-31T10:00:00.000Z',
+          }),
+        ],
+      }))
+      : null));
+
+    render(<CreationsPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'More actions for Stored creation' }));
+    const storedMenu = await screen.findByRole('menu', { name: 'More actions for Stored creation' });
+    const storedDownload = within(storedMenu).getByRole('menuitem', { name: 'Download creation' });
+    expect(storedDownload).toHaveAttribute(
+      'href',
+      '/api/media?bucket=generated_images&path=user%2Foutput.jpg&download=1&filename=creation_gen-stored.jpg',
+    );
+    expect(storedDownload).toHaveAttribute('target', '_blank');
+    expect(storedDownload).toHaveAttribute('download', 'creation_gen-stored.jpg');
+    fireEvent.keyDown(storedMenu, { key: 'Escape' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Remote creation' }));
+    const remoteMenu = await screen.findByRole('menu', { name: 'More actions for Remote creation' });
+    expect(within(remoteMenu).getByRole('menuitem', { name: 'Download creation' }))
+      .toHaveAttribute('href', 'https://cdn.example.com/remote.png');
+  });
+
+  it("files a creation's AI output with the safety team the way the app does", async () => {
+    const fetchMock = stubStudioFetch((url) => {
+      if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({ generations: [makeGeneration({ title: 'Odd output' })] }));
+      }
+      if (url === '/api/moderation/reports') {
+        return Promise.resolve(jsonResponse({ success: true }));
+      }
+      return null;
+    });
+
+    render(<><CreationsPage /><FeedbackViewport /></>);
+
+    await chooseCardAction('Odd output', 'Report AI output');
+    const dialog = await screen.findByRole('alertdialog', { name: 'Report offensive AI output?' });
+    expect(dialog).toHaveTextContent(
+      'Send this generated result to the safety team so the model and provider output can be reviewed.',
+    );
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Report AI output' }));
+
+    expect(await screen.findByText('The generated output was sent to the safety team.')).toBeInTheDocument();
+    const reportCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/moderation/reports');
+    expect(reportCall?.[1]).toMatchObject({
+      method: 'POST',
+      headers: expect.objectContaining({ Authorization: 'Bearer layout-session-token' }),
+    });
+    expect(JSON.parse(String(reportCall?.[1]?.body))).toEqual({
+      targetType: 'generation',
+      targetId: 'gen-image',
+      reason: 'offensive_ai_output',
+      sourceSurface: 'generation-viewer',
+      details: 'Reported from the web Studio.',
+    });
+  });
+
+  it('sends a signed-out visitor to sign in with the view and the run they were on', async () => {
+    navigationState.searchParams = new URLSearchParams('view=posts&generation=gen-1');
+    const signedInSession = authState.session;
+    authState.session = null as unknown as typeof authState.session;
+
+    try {
+      render(<CreationsPage />);
+
+      await waitFor(() => {
+        expect(navigationState.push).toHaveBeenCalledWith(
+          `/login?returnUrl=${encodeURIComponent('/creations?view=posts&generation=gen-1')}`,
+        );
+      });
+      expect(navigationState.push).not.toHaveBeenCalledWith('/login');
+    } finally {
+      authState.session = signedInSession;
+    }
+  });
+
+  // A cancelled or failed run keeps its finished steps in the library; only a
+  // succeeded run's result may publish.
+  it('marks the finished steps of an ended template run and offers no Publish for them', async () => {
+    const templateOutput = (id: string, runStatus: string, templateTitle: string) => makeGeneration({
+      id,
+      title: null,
+      prompt: null,
+      origin: 'template',
+      template: { runId: `run-${id}`, templateId: 'template-1', templateTitle, runStatus },
+    });
+    stubStudioFetch((url) => (url === GENERATIONS_PAGE_URL
+      ? Promise.resolve(jsonResponse({
+        generations: [
+          templateOutput('gen-cancelled-step', 'cancelled', 'Ghost rider'),
+          templateOutput('gen-failed-step', 'failed', 'Neon cut'),
+          templateOutput('gen-result', 'succeeded', 'Product spin'),
+        ],
+      }))
+      : null));
+
+    render(<CreationsPage />);
+
+    const cancelled = await screen.findByTestId('creation-card-gen-cancelled-step');
+    expect(within(cancelled).getByText('From template · run cancelled')).toBeInTheDocument();
+    expect(within(cancelled).getByRole('link', { name: 'Open run' })).toHaveAttribute(
+      'href',
+      '/template-runs/run-gen-cancelled-step',
+    );
+    expect(within(cancelled).queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument();
+
+    const failed = screen.getByTestId('creation-card-gen-failed-step');
+    expect(within(failed).getByText('From template · run failed')).toBeInTheDocument();
+    expect(within(failed).queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument();
+
+    const result = screen.getByTestId('creation-card-gen-result');
+    expect(within(result).getByText('From template')).toBeInTheDocument();
+    expect(within(result).getByRole('button', { name: 'Publish' })).toBeInTheDocument();
+    // A template's output is not filed as the creator's own model output.
+    fireEvent.click(within(result).getByRole('button', { name: 'More actions for Product spin' }));
+    const menu = await screen.findByRole('menu', { name: 'More actions for Product spin' });
+    expect(within(menu).queryByRole('menuitem', { name: 'Report AI output' })).not.toBeInTheDocument();
   });
 });

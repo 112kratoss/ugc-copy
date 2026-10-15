@@ -312,9 +312,9 @@ export function MagicTabBar({
       >
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Open create menu"
+          accessibilityLabel={createControlLabel(runningGenerations)}
           accessibilityHint="Choose whether to create media or publish a post"
-          accessibilityState={{ expanded: createMenuVisible }}
+          accessibilityState={{ expanded: createMenuVisible, busy: runningGenerations > 0 }}
           onPress={() => {
             haptic.medium();
             setCreateMenuVisible(true);
@@ -346,6 +346,9 @@ export function MagicTabBar({
             Create
           </Text>
         </Pressable>
+        {/* Beside the disc, outside the bar's material: the ring comes and goes
+            with the count, and the material is never remounted for it. */}
+        <GenerationRing size={centerSize} running={runningGenerations > 0} />
       </AnimatedView>
       </>}
     </View>
@@ -506,12 +509,25 @@ function useAndroidDockPop(reducedMotion: boolean) {
 }
 
 /**
+ * The create control's label on both platforms. The ring is the only thing
+ * carrying the in-flight state visually, so the label carries it too rather
+ * than leaving a spinning arc unexplained.
+ */
+function createControlLabel(runningGenerations: number) {
+  return runningGenerations > 0
+    ? `Open create menu, ${runningGenerations} ${runningGenerations === 1 ? 'creation' : 'creations'} in progress`
+    : 'Open create menu';
+}
+
+/**
  * An indeterminate ring around the create control while runs are in flight.
  *
- * Indeterminate on purpose. `lib/generation-wait.ts` makes the case at length:
- * the provider reports no progress, only `waiting` then `processing`, so a
- * determinate arc would be inventing a number. What is true is that something
- * is working, and a sweeping arc says exactly that and nothing more.
+ * Indeterminate on purpose. The ring stands for every run at once, counted from
+ * the status list, which carries no timing; the provider reports no progress,
+ * only `waiting` then `processing`. A run's own estimate is shown where that one
+ * run is watched, in the creator's wait (`lib/generation-wait.ts`). What is true
+ * here is that something is working, and a sweeping arc says exactly that and
+ * nothing more.
  *
  * HIG *Progress indicators*: "When it's not possible to know the duration,
  * display an indeterminate progress indicator."
@@ -719,11 +735,7 @@ function AndroidNavigationDock({
     >
       <Pressable
         accessibilityRole="button"
-        // The ring is the only thing carrying this state visually, so the label
-        // carries it too rather than leaving a spinning arc unexplained.
-        accessibilityLabel={runningGenerations > 0
-          ? `Open create menu, ${runningGenerations} ${runningGenerations === 1 ? 'creation' : 'creations'} in progress`
-          : 'Open create menu'}
+        accessibilityLabel={createControlLabel(runningGenerations)}
         accessibilityHint="Choose whether to create media or publish a post"
         accessibilityState={{ expanded: menuVisible, busy: runningGenerations > 0 }}
         onPress={onCreate}

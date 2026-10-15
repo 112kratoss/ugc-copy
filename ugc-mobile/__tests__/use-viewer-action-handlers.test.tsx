@@ -15,7 +15,15 @@ const mocks = vi.hoisted(() => ({
   showMessageDialog: vi.fn(),
   auth: {
     user: { id: 'viewer-1' } as { id: string } | null,
-    api: { reportPost: vi.fn(), reportUser: vi.fn(), blockUser: vi.fn(), saveShowcasePost: vi.fn() },
+    api: {
+      reportPost: vi.fn(),
+      reportUser: vi.fn(),
+      blockUser: vi.fn(),
+      saveShowcasePost: vi.fn(),
+      archiveGeneration: vi.fn(),
+      restoreGeneration: vi.fn(),
+      deleteGeneration: vi.fn(),
+    },
   },
   queryClient: { setQueryData: vi.fn(), setQueriesData: vi.fn(), invalidateQueries: vi.fn() },
 }));
@@ -35,11 +43,15 @@ vi.mock('@/lib/dialog', () => ({
   showMessageDialog: mocks.showMessageDialog,
 }));
 vi.mock('@/lib/haptics', () => ({ haptic: { error: vi.fn(), light: vi.fn(), select: vi.fn(), success: vi.fn() } }));
-vi.mock('@/lib/viewer-media-cache', () => ({ refreshViewerMediaCaches: vi.fn(async () => undefined) }));
+vi.mock('@/lib/viewer-media-cache', () => ({
+  applyGenerationArchiveToCaches: vi.fn(async () => undefined),
+  refreshViewerMediaCaches: vi.fn(async () => undefined),
+  removeGenerationFromCaches: vi.fn(),
+}));
 
 import { haptic } from '@/lib/haptics';
 import type { CreatorProfileResponse } from '@/lib/types';
-import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
+import { applyGenerationArchiveToCaches, refreshViewerMediaCaches, removeGenerationFromCaches } from '@/lib/viewer-media-cache';
 import { useViewerActionHandlers, type ViewerActionCallbacks } from '@/lib/use-viewer-action-handlers';
 
 function postItem(overrides: Partial<ImmersivePreviewItem> = {}): ImmersivePreviewItem {
@@ -403,5 +415,148 @@ describe('a signed-out reader', () => {
     mountHandlers(postItem()).handleAction('block-user');
 
     expect(mocks.router.push).toHaveBeenCalledWith('/auth');
+  });
+});
+
+/** One of the owner's creations, as the Creations library lists it. */
+function creationItem(overrides: Partial<ImmersivePreviewItem> = {}): ImmersivePreviewItem {
+  return postItem({
+    id: 'gen-1',
+    source: 'profile-creations',
+    sourceType: 'generation',
+    creatorId: null,
+    showcasePostId: null,
+    generationId: 'gen-1',
+    availability: 'available',
+    availableActions: ['publish', 'recreate', 'archive', 'delete-creation', 'download', 'view-details'],
+    ...overrides,
+  });
+}
+
+describe('Delete creation', () => {
+  it('asks first, in red, and says nothing of a post when there is none', async () => {
+    mocks.showConfirmDialog.mockResolvedValue(false);
+    mountHandlers(creationItem()).handleAction('delete-creation');
+
+    await vi.waitFor(() => expect(mocks.showConfirmDialog).toHaveBeenCalledWith({
+      title: 'Delete this creation?',
+      message: 'This can’t be undone.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    }));
+    await Promise.resolve();
+    expect(mocks.auth.api.deleteGeneration).not.toHaveBeenCalled();
+    expect(removeGenerationFromCaches).not.toHaveBeenCalled();
+  });
+
+  it("says what becomes of the creation's post", async () => {
+    mocks.showConfirmDialog.mockResolvedValue(false);
+    mountHandlers(creationItem({ linkedPostId: 'post-9' })).handleAction('delete-creation');
+
+    await vi.waitFor(() => expect(mocks.showConfirmDialog).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'This can’t be undone. Its post stays up, but remixes based on this creation may stop working.',
+    })));
+  });
+
+  it('deletes it, tells the screen, then takes it out of every cache and the count', async () => {
+    mocks.showConfirmDialog.mockResolvedValue(true);
+    mocks.auth.api.deleteGeneration.mockResolvedValueOnce({ success: true, deleted: true, linkedPostRetained: false, message: '' });
+    const onDeleted = vi.fn();
+    const onSourceRefresh = vi.fn();
+    mountHandlers(creationItem(), { onDeleted, onSourceRefresh }).handleAction('delete-creation');
+
+    await vi.waitFor(() => expect(mocks.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['profile', 'viewer-1'] }));
+    expect(mocks.auth.api.deleteGeneration).toHaveBeenCalledWith('gen-1');
+    expect(onDeleted).toHaveBeenCalledWith('gen-1');
+    expect(removeGenerationFromCaches).toHaveBeenCalledWith(mocks.queryClient, 'viewer-1', 'gen-1');
+    expect(onDeleted.mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(removeGenerationFromCaches).mock.invocationCallOrder[0]);
+    expect(haptic.success).toHaveBeenCalledTimes(1);
+    // The library's total moves by the one creation it counted.
+    expect(mocks.queryClient.setQueryData).toHaveBeenCalledWith(['profile', 'viewer-1'], expect.any(Function));
+    // Nothing is read again, and no library is cut to its first page.
+    expect(refreshViewerMediaCaches).not.toHaveBeenCalled();
+    expect(onSourceRefresh).not.toHaveBeenCalled();
+  });
+
+  it('leaves the count alone for a run the library never counted', async () => {
+    mocks.showConfirmDialog.mockResolvedValue(true);
+    mocks.auth.api.deleteGeneration.mockResolvedValueOnce({ success: true, deleted: true, linkedPostRetained: false, message: '' });
+    mountHandlers(creationItem({ availability: 'failed', availableActions: ['recreate', 'archive', 'delete-creation', 'view-details'] }))
+      .handleAction('delete-creation');
+
+    await vi.waitFor(() => expect(removeGenerationFromCaches).toHaveBeenCalledTimes(1));
+    expect(mocks.queryClient.setQueryData).not.toHaveBeenCalled();
+  });
+
+  it("keeps everything as it was and says the server's reason when the delete is refused", async () => {
+    mocks.showConfirmDialog.mockResolvedValue(true);
+    const refused = new Error('Creation not found.');
+    mocks.auth.api.deleteGeneration.mockRejectedValueOnce(refused);
+    const onDeleted = vi.fn();
+    mountHandlers(creationItem(), { onDeleted }).handleAction('delete-creation');
+
+    await vi.waitFor(() => expect(mocks.showErrorDialog).toHaveBeenCalledWith('Could not delete creation', refused));
+    expect(haptic.error).toHaveBeenCalledTimes(1);
+    expect(onDeleted).not.toHaveBeenCalled();
+    expect(removeGenerationFromCaches).not.toHaveBeenCalled();
+  });
+});
+
+describe('Archive and Restore of a creation', () => {
+  it('writes the change into the loaded pages instead of cutting every library and reading the feeds again', async () => {
+    mocks.showConfirmDialog.mockResolvedValue(true);
+    mocks.auth.api.archiveGeneration.mockResolvedValueOnce({ success: true });
+    const onSourceRefresh = vi.fn();
+    mountHandlers(creationItem(), { onSourceRefresh }).handleAction('archive');
+
+    await vi.waitFor(() => expect(applyGenerationArchiveToCaches).toHaveBeenCalledTimes(1));
+    expect(mocks.auth.api.archiveGeneration).toHaveBeenCalledWith('gen-1');
+    expect(applyGenerationArchiveToCaches).toHaveBeenCalledWith({
+      api: mocks.auth.api,
+      queryClient: mocks.queryClient,
+      userId: 'viewer-1',
+      generationId: 'gen-1',
+      archivedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    });
+    expect(refreshViewerMediaCaches).not.toHaveBeenCalled();
+    expect(onSourceRefresh).not.toHaveBeenCalled();
+  });
+
+  it('restores with no archive date', async () => {
+    mocks.showConfirmDialog.mockResolvedValue(true);
+    mocks.auth.api.restoreGeneration.mockResolvedValueOnce({ success: true });
+    mountHandlers(creationItem({ archivedAt: '2026-10-01T00:00:00.000Z', availableActions: ['restore', 'delete-creation', 'view-details'] }))
+      .handleAction('restore');
+
+    await vi.waitFor(() => expect(applyGenerationArchiveToCaches).toHaveBeenCalledWith(expect.objectContaining({
+      generationId: 'gen-1',
+      archivedAt: null,
+    })));
+    expect(mocks.auth.api.restoreGeneration).toHaveBeenCalledWith('gen-1');
+  });
+
+  // The app said "Could not update media / Please try again." to a refusal
+  // the server explains (below the cut, audit 01).
+  it("says the server's reason when it refuses", async () => {
+    mocks.showConfirmDialog.mockResolvedValue(true);
+    const refused = new Error('Creation not found.');
+    mocks.auth.api.restoreGeneration.mockRejectedValueOnce(refused);
+    mountHandlers(creationItem({ archivedAt: '2026-10-01T00:00:00.000Z' })).handleAction('restore');
+
+    await vi.waitFor(() => expect(mocks.showErrorDialog).toHaveBeenCalledWith('Could not restore creation', refused));
+    expect(applyGenerationArchiveToCaches).not.toHaveBeenCalled();
+    expect(mocks.showMessageDialog).not.toHaveBeenCalled();
+  });
+});
+
+describe("a template output's Open run", () => {
+  it('opens the run that made it', () => {
+    mountHandlers(creationItem({
+      templateRun: { runId: 'run 7', endedAs: 'cancelled' },
+      availableActions: ['open-run', 'download', 'view-details'],
+    })).handleAction('open-run');
+
+    expect(mocks.router.push).toHaveBeenCalledWith('/template-runs/run%207');
   });
 });

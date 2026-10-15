@@ -57,6 +57,30 @@ describe('viewer unlock detail routes', () => {
     await expect(response.json()).resolves.toEqual({ error: 'Unlock not found.' });
   });
 
+  it('answers a malformed id with the same 404 on both routes, before loading anything', async () => {
+    const getViewerUnlockDetail = vi.fn();
+    const createViewerUnlockFileUrl = vi.fn();
+    const dependencies = {
+      createUserClient: authenticatedClient,
+      createServiceClient: (() => ({})) as never,
+      getViewerUnlockDetail: getViewerUnlockDetail as never,
+      createViewerUnlockFileUrl: createViewerUnlockFileUrl as never,
+    };
+    const context = () => ({ params: Promise.resolve({ unlockId: 'not-a-purchase-id' }) });
+
+    const detail = await getViewerUnlockDetailRouteResponse({ request: request(), context: context(), dependencies });
+    const fileUrl = await postViewerUnlockFileUrlRouteResponse({
+      request: request('POST', { storagePath: 'buyer/path.pdf' }),
+      context: context(),
+      dependencies,
+    });
+
+    expect(detail.status).toBe(404);
+    expect(fileUrl.status).toBe(404);
+    expect(getViewerUnlockDetail).not.toHaveBeenCalled();
+    expect(createViewerUnlockFileUrl).not.toHaveBeenCalled();
+  });
+
   it('passes only the buyer-scoped file request to the retained file resolver', async () => {
     const createViewerUnlockFileUrl = vi.fn(async () => ({
       ok: true as const,

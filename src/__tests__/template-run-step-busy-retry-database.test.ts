@@ -94,6 +94,7 @@ const connectionString = process.env.SUPABASE_TEST_DB_URL;
 const crashWorker = process.env.TEMPLATE_AUDIT_WORKER === 'true';
 const STARTING_CREDITS = 500;
 const BUSY_MESSAGE = 'The generation provider is busy right now. Please retry this step shortly.';
+const WAITING_MESSAGE = 'The provider is busy. We\'ll keep trying for up to 30 minutes.';
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 /** Functions that return rows and are read as a table. Every other one returns a single value. */
 const ROW_FUNCTIONS = new Set(['claim_template_run_jobs']);
@@ -911,6 +912,36 @@ describe.skipIf(!connectionString || crashWorker)('template run step starts the 
     expect(await generations()).toHaveLength(2);
   });
 
+  it.each([false, true])('cancel puts the finished images in the library unless the run is a test (test: %s)', async isTest => {
+    await admin.query('update public.template_runs set is_test=$2 where id=$1', [runId, isTest]);
+    await finishImagesAndAwaitApproval();
+    expect((await generations()).map(row => row.studio_visible)).toEqual([false, false]);
+
+    expect((await cancelTemplateRun(client, runId, userId)).status).toBe('cancelled');
+
+    expect((await generations()).map(row => [row.status, row.studio_visible])).toEqual([
+      ['succeeded', !isTest],
+      ['succeeded', !isTest],
+    ]);
+  });
+
+  it('a run the worker gave up on puts its finished images in the library', async () => {
+    await admin.query('update public.template_runs set is_test=false where id=$1', [runId]);
+    await finishImagesAndAwaitApproval();
+    // The pass that put the checkpoints up for review failed before it wrote the run's progress.
+    await admin.query("update public.template_runs set status='processing' where id=$1", [runId]);
+
+    expect(await abandonTemplateRun({
+      client, runId, userId, idleBefore: new Date(Date.now() + 60_000).toISOString(),
+    })).toBe(true);
+
+    expect((await admin.query('select status from public.template_runs where id=$1', [runId])).rows[0].status).toBe('failed');
+    expect((await generations()).map(row => [row.status, row.studio_visible])).toEqual([
+      ['succeeded', true],
+      ['succeeded', true],
+    ]);
+  });
+
   it('duplicate retry of a checkpoint creates only one next generation attempt and one next gate', async () => {
     const { gates, spent } = await finishImagesAndAwaitApproval();
     const args = { adminClient: client, runId, stepId: gates[0].id, userId };
@@ -963,6 +994,34 @@ describe.skipIf(!connectionString || crashWorker)('template run step starts the 
     await tick();
     expect(providerCalls()).toBe(0);
     expect(await generations()).toHaveLength(3);
+    expect((await admin.query('select count(*)::int as count from public.template_run_steps where run_id=$1 and attempt=1', [runId])).rows[0].count).toBe(1);
+  });
+
+  it('recovers a generation retry that could not resume its run from the attempt a fresh read shows', async () => {
+    providerRefuses();
+    const [step] = shownImageSteps(await tick());
+    const refusingRunWrites = databaseClient(worker, [], async table => {
+      if (table === 'template_runs') throw new Error('fixture run resume unavailable');
+    });
+    await expect(retryTemplateRunStep({ runId, stepId: step.id, userId, adminClient: refusingRunWrites }))
+      .rejects.toMatchObject({ message: 'fixture run resume unavailable' });
+
+    // A client that reads the run again has only the attempt that is in line.
+    const reread = await getTemplateRun({ adminClient: client, runId, userId });
+    const [waiting] = shownImageSteps(reread);
+    expect(reread.status).toBe('needs_attention');
+    expect([waiting.id === step.id, waiting.status, waiting.canRetry]).toEqual([false, 'queued', true]);
+
+    providerHasRoom();
+    expect((await retryTemplateRunStep({ runId, stepId: waiting.id, userId, adminClient: client })).status).toBe('queued');
+    await tick();
+    expect(providerCalls()).toBe(1);
+    const rows = await generations();
+    expect(rows).toHaveLength(3);
+    expect(await credits()).toBe(STARTING_CREDITS - rows.find(row => !row.refunded)!.cost);
+    // Once its attempt has started, the step is refused and nothing more is put in line.
+    await expect(retryTemplateRunStep({ runId, stepId: waiting.id, userId, adminClient: client }))
+      .rejects.toMatchObject({ status: 409, code: 'STEP_NOT_RETRYABLE' });
     expect((await admin.query('select count(*)::int as count from public.template_run_steps where run_id=$1 and attempt=1', [runId])).rows[0].count).toBe(1);
   });
 
@@ -1156,8 +1215,8 @@ describe.skipIf(!connectionString || crashWorker)('template run step starts the 
 
     expect(waiting.status).toBe('queued');
     expect(shownImageSteps(waiting).map((step) => [step.status, step.failureCode, step.errorMessage])).toEqual([
-      ['queued', 'provider_busy', BUSY_MESSAGE],
-      ['queued', 'provider_busy', BUSY_MESSAGE],
+      ['queued', 'provider_busy', WAITING_MESSAGE],
+      ['queued', 'provider_busy', WAITING_MESSAGE],
     ]);
     // The refused attempt keeps its refunded generation and is over; the step
     // waits as a new row that has none.

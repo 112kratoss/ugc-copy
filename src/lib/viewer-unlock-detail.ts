@@ -3,6 +3,8 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError } from '@/lib/backend-logger';
+import { isUserRelationshipBlocked } from '@/lib/moderation-service';
+import { loadNsfwPostIds } from '@/lib/nsfw-content-server';
 import {
   getPostResourceBundleDetailByPostId,
   type PostResourceBundleDetail,
@@ -20,6 +22,18 @@ import {
 } from '@/lib/post-resource-bundles';
 import { normalizeWorkflowGraph, serializeWorkflowGraph } from '@/lib/workflow-canvas';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
+import {
+  loadViewerUnlockPayments,
+  unreadViewerUnlockPayment,
+  type ViewerUnlockPayment,
+} from '@/lib/viewer-unlocks';
+
+const VIEWER_UNLOCK_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** An unlock is addressed by its purchase UUID; anything else names none. */
+export function isViewerUnlockId(value: string): boolean {
+  return VIEWER_UNLOCK_ID_PATTERN.test(value);
+}
 
 type UnlockProjectionRow = {
   purchase_id: string;
@@ -71,7 +85,7 @@ export interface ViewerUnlockRevision {
   mediaItems: ShowcaseMediaItem[];
 }
 
-export interface ViewerUnlockDetail {
+export interface ViewerUnlockDetail extends ViewerUnlockPayment {
   unlockId: string;
   bundleId: string | null;
   postId: string | null;
@@ -91,10 +105,19 @@ export interface ViewerUnlockDetail {
   currentResources: PostResourceBundleResources | null;
   purchasedRevision: ViewerUnlockRevision;
   hasNewerRevision: boolean;
+  /** No bundle or post is left (the creator deleted their account); files come from retained copies. */
   detached: boolean;
   retired: boolean;
   tombstoned: boolean;
   postVisibility: string | null;
+  /** The post is marked NSFW: clients cover its media until the viewer reveals it in place. */
+  isNsfw: boolean;
+  /**
+   * The post page would open for this viewer: public or unlisted, not
+   * archived, not deleted, and no block either way.
+   */
+  postReachable: boolean;
+  /** `mediaPreviewUrl` is the first media item's preview, the cover clients draw. */
   post: PostResourceBundleDetail['post'] | null;
   /** Full proof-media order and stable keys power per-output resource scopes. */
   mediaItems: ShowcaseMediaItem[];
@@ -135,6 +158,42 @@ function normalizeRevisionResources(
   });
 
   return baseResources;
+}
+
+/**
+ * The post page answers not-found for a private, archived or deleted post and
+ * across a block in either direction. A block that cannot be checked counts as
+ * one, as on the web's unlock page.
+ */
+async function isPostReachable(
+  adminSupabase: SupabaseClient,
+  viewerUserId: string,
+  liveDetail: PostResourceBundleDetail | null,
+): Promise<boolean> {
+  const post = liveDetail?.post;
+  if (
+    !liveDetail
+    || !post
+    || (post.visibility !== 'public' && post.visibility !== 'unlisted')
+    || post.archivedAt
+    || post.tombstoned
+  ) {
+    return false;
+  }
+
+  const creatorUserId = liveDetail.seller.id;
+  if (!creatorUserId || creatorUserId === viewerUserId) return true;
+
+  try {
+    return !await isUserRelationshipBlocked({
+      adminSupabase,
+      firstUserId: viewerUserId,
+      secondUserId: creatorUserId,
+    });
+  } catch (error) {
+    logBackendError('viewer_unlock_block_state_load_failed', { error });
+    return false;
+  }
 }
 
 async function loadPurchasedRevision(
@@ -196,6 +255,10 @@ export async function getViewerUnlockDetail({
   viewerUserId: string;
   countryCode?: string | null;
 }): Promise<ViewerUnlockDetail | null> {
+  // The projection throws on a malformed id; such an id names no unlock, so it
+  // answers as another buyer's purchase does.
+  if (!isViewerUnlockId(unlockId)) return null;
+
   const { data, error } = await adminSupabase.rpc('get_viewer_post_resource_unlock', {
     p_purchase_id: unlockId,
     p_buyer_user_id: viewerUserId,
@@ -209,8 +272,14 @@ export async function getViewerUnlockDetail({
   const [projection] = (data ?? []) as UnlockProjectionRow[];
   if (!projection) return null;
 
-  const purchasedRevision = await loadPurchasedRevision(adminSupabase, projection.revision_id);
+  const [purchasedRevision, nsfwPostIds, payments] = await Promise.all([
+    loadPurchasedRevision(adminSupabase, projection.revision_id),
+    // Throws on failure: a content warning must never silently drop.
+    loadNsfwPostIds(adminSupabase, projection.post_id ? [projection.post_id] : []),
+    loadViewerUnlockPayments(adminSupabase, [projection.purchase_id]),
+  ]);
   if (!purchasedRevision) return null;
+  const isNsfw = Boolean(projection.post_id && nsfwPostIds.has(projection.post_id));
 
   let liveDetail: PostResourceBundleDetail | null = null;
   if (projection.post_id && projection.bundle_id) {
@@ -218,33 +287,44 @@ export async function getViewerUnlockDetail({
       adminSupabase,
       viewerUserId,
       countryCode,
+      isNsfw,
+      // The buyer's own purchase: an NSFW label covers its media on the
+      // clients, it never locks the buyer out of what they paid for.
+      entitledPurchase: true,
     });
   }
 
   const currentResources = liveDetail?.resources ?? null;
-  const detached = !projection.bundle_id || !projection.post_id || !liveDetail;
+  // Only a missing bundle or post detaches a purchase. A live read that comes
+  // back empty anyway falls back to the purchased version below, whose files
+  // still live where the creator keeps them.
+  const detached = !projection.bundle_id || !projection.post_id;
   const title = liveDetail?.title ?? purchasedRevision.title;
   const summary = liveDetail?.summary ?? purchasedRevision.summary;
   const previewText = liveDetail?.previewText ?? purchasedRevision.previewText;
   const resourcesForKinds = currentResources ?? purchasedRevision.resources;
-  const currentMediaItems = projection.post_id
-    ? await loadPostMediaItemsMap(adminSupabase, [projection.post_id])
-      .then((itemsByPost) => itemsByPost.get(projection.post_id ?? '') ?? [])
-      .catch((mediaError) => {
-        logBackendError('viewer_unlock_proof_media_load_failed', { error: mediaError });
-        return [];
-      })
-    : [];
-  const purchasedMediaItems = await loadPurchasedProofMedia({
-    adminSupabase,
-    purchaseId: projection.purchase_id,
-    resources: purchasedRevision.resources,
-    includeStoredUrls: !detached,
-  });
+  const [currentMediaItems, purchasedMediaItems, postReachable] = await Promise.all([
+    projection.post_id
+      ? loadPostMediaItemsMap(adminSupabase, [projection.post_id])
+        .then((itemsByPost) => itemsByPost.get(projection.post_id ?? '') ?? [])
+        .catch((mediaError) => {
+          logBackendError('viewer_unlock_proof_media_load_failed', { error: mediaError });
+          return [];
+        })
+      : [],
+    loadPurchasedProofMedia({
+      adminSupabase,
+      purchaseId: projection.purchase_id,
+      resources: purchasedRevision.resources,
+      includeStoredUrls: !detached,
+    }),
+    isPostReachable(adminSupabase, viewerUserId, liveDetail),
+  ]);
   purchasedRevision.mediaItems = purchasedMediaItems;
   // An empty latest gallery is a valid edit, not a signal to borrow the old
-  // revision's outputs. Only detached purchases (which have no live resource
-  // version at all) fall back to the immutable purchase snapshot.
+  // revision's outputs. Only a purchase without a live resource version
+  // (detached, or a live read that came back empty) falls back to the
+  // immutable purchase snapshot.
   const mediaItems = currentResources ? currentMediaItems : purchasedMediaItems;
 
   return {
@@ -274,7 +354,12 @@ export async function getViewerUnlockDetail({
     retired: Boolean(projection.bundle_retired || liveDetail?.retiredAt),
     tombstoned: Boolean(projection.post_tombstoned || liveDetail?.tombstoned),
     postVisibility: projection.post_visibility,
-    post: liveDetail?.post ?? null,
+    isNsfw,
+    postReachable,
+    ...(payments.get(projection.purchase_id) ?? unreadViewerUnlockPayment(projection.purchase_price_usd_cents ?? 0)),
+    post: liveDetail?.post
+      ? { ...liveDetail.post, mediaPreviewUrl: mediaItems[0]?.previewUrl ?? null }
+      : null,
     mediaItems,
   };
 }

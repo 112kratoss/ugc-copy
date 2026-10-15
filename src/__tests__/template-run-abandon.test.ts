@@ -161,10 +161,54 @@ describe('ending a template run the worker could not carry on with', () => {
       [fifth.id, 'cancelled', NOT_FINISHED],
     ]);
     expect(first.output_url).toBe('generations/user-1/first.png');
-    // Ending the run moves no credits and touches no generation.
+    // Ending the run moves no credits and settles no generation.
     expect(database.credits()).toBe(100);
     expect(database.generations.map((generation) => generation.status)).toEqual(['succeeded', 'failed', 'processing']);
     expect(database.run).toMatchObject({ status: 'failed', error_message: TEMPLATE_RUN_ABANDONED_MESSAGE });
+  });
+
+  describe('what the person keeps', () => {
+    const hidden = { studio_visible: false };
+    const finished = { status: 'succeeded', output_url: 'generated_images/user-1/first.png', actual_cost: 9, completed_at: NOW };
+    const inLibrary = () => database.generations.map((generation) => [generation.id, generation.studio_visible]);
+
+    it('puts the output of every step that finished in the library, and no other', async () => {
+      database.run.status = 'processing';
+      const [first, second] = database.steps;
+      // Finished while no pass could record it.
+      started(first.id as string, { ...hidden, ...finished });
+      // Still with the provider.
+      started(second.id as string, hidden);
+
+      expect(await abandon()).toBe(true);
+
+      expect(inLibrary()).toEqual([['gen-1', true], ['gen-2', false]]);
+      expect(logged('template_run_abandon_cleanup_failed')).toEqual([]);
+    });
+
+    it('leaves the outputs of a creator\'s test run out of the library', async () => {
+      Object.assign(database.run, { status: 'processing', is_test: true });
+      started(database.steps[0].id as string, { ...hidden, ...finished });
+
+      expect(await abandon()).toBe(true);
+
+      expect(inLibrary()).toEqual([['gen-1', false]]);
+    });
+
+    it('still ends the run, tidies it and tells the person when the library cannot be told', async () => {
+      database.run.status = 'processing';
+      started(database.steps[0].id as string, { ...hidden, ...finished });
+      database.conditions.writeRefused = (table, values) => table === 'generations' && values.studio_visible === true;
+
+      expect(await abandon()).toBe(true);
+
+      expect(inLibrary()).toEqual([['gen-1', false]]);
+      expect(database.run).toMatchObject({ status: 'failed', input_storage_paths: {}, inputs_deleted_at: NOW });
+      expect(logged('template_run_abandon_cleanup_failed')).toEqual([
+        expect.objectContaining({ level: 'error', runId: TEMPLATE_RUN_ID, errorMessage: REFUSED_WRITE }),
+      ]);
+      expect(history.sent).toHaveLength(1);
+    });
   });
 
   it('ends a run whose stored graph cannot be read, which no pass of the worker gets past', async () => {

@@ -39,7 +39,10 @@ const platformState = vi.hoisted(() => ({ os: 'ios' as 'ios' | 'android' }));
 const authState = vi.hoisted(() => ({
   api: {
     blockUser: vi.fn(),
+    deleteGeneration: vi.fn(),
     getCreatorProfile: vi.fn(),
+    listGenerations: vi.fn(),
+    listOwnerPosts: vi.fn(async () => ({ success: true, posts: [], pageInfo: { hasMore: false, nextOffset: null } })),
     getProfile: vi.fn(() => new Promise<never>(() => undefined)),
     getShowcaseFeed: vi.fn(),
     getShowcasePost: vi.fn(),
@@ -824,6 +827,72 @@ describe('Undo after Not interested or Hide in the reel', () => {
     expect(laneIds(laneKey)).toEqual(['post-d']);
     expect(undoNoticeProps(tree).notice).toBeNull();
     expect(routerState.back).not.toHaveBeenCalled();
+  });
+});
+
+describe('Delete creation from the reel', () => {
+  const creation = (id: string) => ({
+    id,
+    output_url: `https://cdn.example.com/${id}.png`,
+    status: 'succeeded',
+    created_at: '2026-10-01T10:00:00.000Z',
+    model: 'image-model',
+    category: 'image',
+    title: `Creation ${id}`,
+    prompt: 'A product still',
+  });
+
+  /** A reel a creation's alert opens: the recent library window, around that creation. */
+  async function renderCreationsReel(initialId: string, generations: Array<ReturnType<typeof creation>>) {
+    authState.api.listGenerations.mockResolvedValue({ generations });
+    routerState.params = { source: 'studio-creations', initialId };
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(
+        <QueryClientProvider client={queryClient}>
+          <ImmersivePreviewViewerScreen />
+        </QueryClientProvider>
+      );
+    });
+    trees.push(tree);
+    await settle();
+    return tree;
+  }
+
+  async function deleteActive() {
+    dialogs.confirm.mockResolvedValue(true);
+    authState.api.deleteGeneration.mockResolvedValue({ success: true, deleted: true, linkedPostRetained: false, message: '' });
+    const actions = actionsFor(activeItem());
+    expect(actions.actions).toContain('delete-creation');
+    await act(async () => {
+      actions.handleAction('delete-creation');
+    });
+    await settle();
+  }
+
+  // As a blocked creator's posts do: the reader moves on, the reel stays.
+  it('moves on to the next creation and takes the deleted one out', async () => {
+    const tree = await renderCreationsReel('gen-b', [creation('gen-a'), creation('gen-b'), creation('gen-c')]);
+    expect(activeId()).toBe('gen-b');
+
+    await deleteActive();
+
+    expect(authState.api.deleteGeneration).toHaveBeenCalledWith('gen-b');
+    expect(activeId()).toBe('gen-c');
+    expect(reelIds(tree)).toEqual(['gen-a', 'gen-c']);
+    expect(haptic.success).toHaveBeenCalledTimes(1);
+    expect(routerState.back).not.toHaveBeenCalled();
+    // A deleted creation used to send the reader to Profile's Posts.
+    expect(routerState.replace).not.toHaveBeenCalled();
+  });
+
+  it('leaves the reel when the creation was all it held', async () => {
+    await renderCreationsReel('gen-b', [creation('gen-b')]);
+
+    await deleteActive();
+
+    expect(routerState.back).toHaveBeenCalledTimes(1);
+    expect(routerState.replace).not.toHaveBeenCalled();
   });
 });
 

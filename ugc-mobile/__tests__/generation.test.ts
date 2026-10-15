@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { getGenerationOutput, getGenerationOutputs, getPollDelayMs, isGenerationFinished, pollGenerationStatus } from '../lib/generation';
+import {
+  generationStillProcessingMessage,
+  getGenerationOutput,
+  getGenerationOutputs,
+  getPollDelayMs,
+  isGenerationFinished,
+  pollGenerationStatus,
+} from '../lib/generation';
 
 describe('generation polling helpers', () => {
   afterEach(() => {
@@ -75,5 +82,31 @@ describe('generation polling helpers', () => {
 
     await expect(resultPromise).resolves.toEqual(status);
     expect(waitUntilReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('points a registered account at Alerts when it stops watching a run that is still going', async () => {
+    vi.useFakeTimers();
+    const getStatus = vi.fn(async () => ({ status: 'processing' }));
+
+    const resultPromise = pollGenerationStatus(getStatus, { intervalMs: 1000, timeoutMs: 2500, random: () => 0 });
+    const settled = expect(resultPromise).rejects.toThrow('Generation is still processing. Check Alerts in a few minutes.');
+    await vi.advanceTimersByTimeAsync(3000);
+
+    await settled;
+  });
+
+  it('tells a guest, who gets no push and finds Alerts behind a sign-in, to sign in or come back', async () => {
+    vi.useFakeTimers();
+    const getStatus = vi.fn(async () => ({ status: 'waiting' }));
+
+    const resultPromise = pollGenerationStatus(getStatus, { intervalMs: 1000, timeoutMs: 2500, random: () => 0, isGuest: true });
+    const settled = expect(resultPromise).rejects.toThrow(
+      'Generation is still processing. Sign in to get an alert when it’s done. Until then, come back to this screen.',
+    );
+    await vi.advanceTimersByTimeAsync(3000);
+
+    await settled;
+    expect(generationStillProcessingMessage(true)).not.toContain('Check Alerts');
+    expect(generationStillProcessingMessage(false)).toContain('Check Alerts');
   });
 });

@@ -127,7 +127,14 @@ import {
 } from '@/lib/reference-mentions';
 import { formatCreditAmount } from '@/lib/pricing';
 import { withCreditCost, formatCreditCost } from '@/lib/generation-action-label';
-import { generationWaitDetail, generationWaitPhase, generationWaitTitle } from '@/lib/generation-wait';
+import {
+  generationWaitCountdownLabel,
+  generationWaitDetail,
+  generationWaitPhase,
+  generationWaitProgressPercent,
+  generationWaitTitle,
+  readGenerationWaitTiming,
+} from '@/lib/generation-wait';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentColor, appTheme, mediaColors, type ToolAccent } from '@/lib/theme';
@@ -749,7 +756,7 @@ function IdentityCreationScreen({
   // `user` still gates remix restore, which pulls another creator's source
   // media out of the community feed. Generating and enhancing key off
   // `identityUserId` so a guest can spend the credits they just bought.
-  const { user, identityUserId, session, api, credits, updateCredits, refreshProfile } = useAuth();
+  const { user, identityUserId, isGuest, session, api, credits, updateCredits, refreshProfile } = useAuth();
   const queryClient = useQueryClient();
   const [activeTool, setActiveTool] = useState<CreatorToolId>(isTool(initialTool) ? initialTool : 'image');
   const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => ({
@@ -1943,7 +1950,7 @@ function IdentityCreationScreen({
       : tool === 'video'
         ? api.getVideoGeneration(predictionId)
         : api.getMotionGeneration(predictionId),
-    { onTick: setStatus, signal: controller.signal, waitUntilReady: waitUntilAppActive },
+    { onTick: setStatus, signal: controller.signal, waitUntilReady: waitUntilAppActive, isGuest },
   );
 
   // Cleared only for the run it names: a start from another creator screen keeps its own.
@@ -5536,6 +5543,12 @@ function GenerationWorkspace({
   const waitPhase = generationWaitPhase(status?.status);
   const waitTitle = generationWaitTitle(waitPhase, medium);
   const waitDetail = generationWaitDetail(waitPhase, elapsedSeconds);
+  // The time as the clock last read it: the tick that moves the elapsed line
+  // moves the estimate too, and render never asks for the time itself.
+  const waitNowMs = startedAt !== null && elapsedSeconds !== null ? startedAt + elapsedSeconds * 1000 : null;
+  const waitTiming = readGenerationWaitTiming(status?.timing);
+  const waitCountdown = generationWaitCountdownLabel(waitTiming, waitNowMs);
+  const waitPercent = generationWaitProgressPercent(waitTiming, waitNowMs);
   return (
     <Modal visible={visible} animationType={reducedMotion ? 'none' : 'slide'} presentationStyle="fullScreen" onRequestClose={onMinimize}>
       <View testID="generation-workspace" accessibilityViewIsModal style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -5656,11 +5669,25 @@ function GenerationWorkspace({
                   <Sparkles size={38} color={theme.colors.primary} />
                 </View>
                 <Text style={{ color: theme.colors.text, fontSize: 21, fontWeight: '800' }}>{waitTitle}</Text>
-                <ActivityIndicator color={theme.colors.primary} size="large" />
-                {/* The one thing on screen that changes while nothing else does.
-                    Progress indicators: a vague status "seldom adds value", and
-                    knowing how long it has run is what lets someone decide
-                    whether to keep waiting when the provider reports no progress. */}
+                {waitCountdown !== null && waitPercent !== null ? (
+                  // Progress indicators: switch from indeterminate to determinate
+                  // once the duration can be told. The server's estimate for this
+                  // model and these settings is that duration; a run without one
+                  // keeps the spinner.
+                  <View testID="generation-wait-estimate" style={{ alignSelf: 'stretch', paddingHorizontal: 40, gap: 10 }}>
+                    <View style={{ height: 6, borderRadius: 3, overflow: 'hidden', backgroundColor: theme.colors.borderStrong }}>
+                      <View testID="generation-wait-bar" style={{ width: `${waitPercent}%`, height: '100%', borderRadius: 3, backgroundColor: theme.colors.primary }} />
+                    </View>
+                    <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800', textAlign: 'center', fontVariant: ['tabular-nums'] }}>{waitCountdown}</Text>
+                  </View>
+                ) : (
+                  <ActivityIndicator color={theme.colors.primary} size="large" />
+                )}
+                {/* Under the spinner or the bar alike: how long it has run is
+                    true whatever an estimate says. Progress indicators: a vague
+                    status "seldom adds value", and knowing how long it has run
+                    is what lets someone decide whether to keep waiting when the
+                    provider reports no progress. */}
                 <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.muted, fontSize: 12, textAlign: 'center', paddingHorizontal: 40, lineHeight: 18 }}>{waitDetail}</Text>
                 <Text style={{ color: theme.colors.faint, fontSize: 12, textAlign: 'center', paddingHorizontal: 40 }}>You can minimize this view. Generation will continue in the background.</Text>
               </View>

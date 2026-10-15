@@ -8,11 +8,13 @@ import {
   AtSign,
   AudioLines,
   ChevronRight,
+  CircleAlert,
   Crown,
   Gift,
   Globe,
   Heart,
   ImageIcon,
+  Images,
   LockKeyhole,
   Pencil,
   Play,
@@ -36,6 +38,7 @@ import { Reveal } from '@/components/reveal';
 import { ProfileGridSkeleton } from '@/components/skeleton';
 import { TopScrim } from '@/components/top-scrim';
 import { AppText, IconButton, SecondaryButton, StatusBlock } from '@/components/ui';
+import { loadActiveGenerationRecord } from '@/lib/active-generation-record';
 import { useAppForeground } from '@/lib/app-foreground';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
@@ -45,7 +48,7 @@ import { formatUsdCents } from '@/lib/home-view-model';
 import { getGenerationKind, getGenerationLabel } from '@/lib/generation-media';
 import { haptic } from '@/lib/haptics';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
-import { immersiveViewerHref, profileMediaFeedHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
+import { formatOutputCount, immersiveViewerHref, profileMediaFeedHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
 import { MotionView, usePressMotion } from '@/lib/motion';
 import {
   DEFAULT_PROFILE_MEDIA_TAB,
@@ -79,7 +82,7 @@ import {
   profileGenerationsQueryOptions,
   profileOwnerPostsQueryOptions,
   profileSavedMediaQueryOptions,
-  renderingCreationTool,
+  selectFailedCreations,
   selectRenderingCreations,
   truncateInfiniteDataToFirstPage,
 } from '@/lib/profile-media-query';
@@ -94,6 +97,7 @@ import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type {
+  CreatorToolId,
   GenerationListItem,
   GenerationListResponse,
   OwnerPostsResponse,
@@ -244,18 +248,32 @@ export function ProfileDashboard({
     () => selectRenderingCreations(flattenProfileGenerationPages(generationsQuery.data?.pages)),
     [generationsQuery.data]
   );
-  const showRenderingStrip = activeTab === 'Creations' && creationsScope === 'active' && renderingCreations.length > 0;
+  const failedCreations = useMemo(
+    () => selectFailedCreations(flattenProfileGenerationPages(generationsQuery.data?.pages)),
+    [generationsQuery.data]
+  );
+  const showCreationStrips = activeTab === 'Creations' && creationsScope === 'active';
+  const showRenderingStrip = showCreationStrips && renderingCreations.length > 0;
+  // The run a Rendering tile opened. Its status page in the reel reads this
+  // library, and Profile, under the reel and out of focus, keeps reading the
+  // first page while the run renders, so that page turns into the run's media,
+  // or its failure, while the reader watches it there.
+  const [watchedRunId, setWatchedRunId] = useState<string | null>(null);
+  useEffect(() => {
+    if (isFocused) setWatchedRunId(null);
+  }, [isFocused]);
+  const watchingRun = watchedRunId !== null && renderingCreations.some((item) => item.id === watchedRunId);
   const appForeground = useAppForeground(showRenderingStrip);
   // While the strip shows a run, the first page is read again every 15 s and
   // merged, as every refresh here is, so a finished run leaves the strip for the
   // grid without a pull. A plain refetch would request every page loaded.
   useEffect(() => {
-    if (!showRenderingStrip || !isFocused || !appForeground) return;
+    if (!showRenderingStrip || !(isFocused || watchingRun) || !appForeground) return;
     const timer = setInterval(() => {
       void refreshMediaHead('Creations').catch(() => undefined);
     }, PROFILE_RENDERING_REFRESH_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [appForeground, isFocused, refreshMediaHead, showRenderingStrip]);
+  }, [appForeground, isFocused, refreshMediaHead, showRenderingStrip, watchingRun]);
   const ownerPosts = useMemo(
     () => flattenProfileOwnerPostPages(postsQuery.data?.pages),
     [postsQuery.data]
@@ -453,6 +471,8 @@ export function ProfileDashboard({
       // Times on the strip are as of the page they were read from, which the
       // 15 s refresh renews; a clock read during render would be kept by memo.
       renderingAsOf={generationsQuery.dataUpdatedAt}
+      onRenderingRunOpen={setWatchedRunId}
+      failedCreations={showCreationStrips && failedCreations.length > 0 ? failedCreations : undefined}
       header={(
         <>
           <ProfileTitle />
@@ -536,6 +556,8 @@ function ProfileMediaList({
   onPostsScopeChange,
   renderingAsOf = 0,
   renderingCreations,
+  onRenderingRunOpen,
+  failedCreations,
   topInset,
 }: {
   activeTab: ProfileMediaTab;
@@ -563,6 +585,9 @@ function ProfileMediaList({
   onPostsScopeChange?: (scope: ProfilePostsScope) => void;
   renderingAsOf?: number;
   renderingCreations?: GenerationListItem[];
+  /** A Rendering tile opened its run's status page. */
+  onRenderingRunOpen?: (generationId: string) => void;
+  failedCreations?: GenerationListItem[];
   topInset: number;
 }) {
   const theme = useAppTheme();
@@ -648,7 +673,15 @@ function ProfileMediaList({
               />
             ) : null}
             {headerExtrasReady && renderingCreations?.length ? (
-              <ProfileRenderingStrip items={renderingCreations} asOf={renderingAsOf} tileWidth={cardWidth} />
+              <ProfileRenderingStrip
+                items={renderingCreations}
+                asOf={renderingAsOf}
+                tileWidth={cardWidth}
+                onOpenRun={onRenderingRunOpen}
+              />
+            ) : null}
+            {headerExtrasReady && failedCreations?.length ? (
+              <ProfileFailedStrip items={failedCreations} tileWidth={cardWidth} />
             ) : null}
             {pushOfferPostId ? (
               <PushOfferCard key={`post:${pushOfferPostId}`} moment="post" occasion={`post:${pushOfferPostId}`} />
@@ -776,7 +809,8 @@ function SignedOutCard() {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Sign in"
-        onPress={() => router.push('/auth')}
+        // Back to Profile once signed in: without it sign-in ends on Home.
+        onPress={() => router.push({ pathname: '/auth', params: { returnTo: '/profile' } } as never)}
         style={({ pressed }) => ({
           minHeight: 50,
           borderRadius: 18,
@@ -1138,7 +1172,36 @@ function ProfileMediaHeader({
  * the library rule, under which a run with nothing to play is not a member, so
  * these get a row of their own; Home's "render in progress" opens onto it.
  */
-function ProfileRenderingStrip({ items, asOf, tileWidth }: { items: GenerationListItem[]; asOf: number; tileWidth: number }) {
+function ProfileRenderingStrip({
+  items,
+  asOf,
+  tileWidth,
+  onOpenRun,
+}: {
+  items: GenerationListItem[];
+  asOf: number;
+  tileWidth: number;
+  onOpenRun?: (generationId: string) => void;
+}) {
+  const { identityUserId } = useAuth();
+  // The run this device started and is still watching for, which its creator
+  // picks up again with live progress (`lib/active-generation-record.ts`).
+  const [resumable, setResumable] = useState<{ generationId: string | null; tool: CreatorToolId } | null>(null);
+  const runIds = items.map((item) => item.id).join(',');
+  useEffect(() => {
+    if (!identityUserId) return;
+    let active = true;
+    void loadActiveGenerationRecord(identityUserId).then(
+      (record) => {
+        if (active) setResumable(record);
+      },
+      () => undefined,
+    );
+    return () => {
+      active = false;
+    };
+  }, [identityUserId, runIds]);
+
   return (
     <View style={{ gap: appTheme.spacing.compact }}>
       <AppText variant="label" color="muted" accessibilityRole="header">
@@ -1146,7 +1209,14 @@ function ProfileRenderingStrip({ items, asOf, tileWidth }: { items: GenerationLi
       </AppText>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: PROFILE_GALLERY_GAP }}>
         {items.map((item) => (
-          <ProfileRenderingTile key={item.id} item={item} asOf={asOf} width={tileWidth} />
+          <ProfileRenderingTile
+            key={item.id}
+            item={item}
+            asOf={asOf}
+            width={tileWidth}
+            resumeTool={resumable?.generationId === item.id ? resumable.tool : null}
+            onOpen={onOpenRun}
+          />
         ))}
       </View>
     </View>
@@ -1154,51 +1224,126 @@ function ProfileRenderingStrip({ items, asOf, tileWidth }: { items: GenerationLi
 }
 
 /**
- * One rendering run. A tap opens its creator, which picks the run up from the
- * record it keeps; a kind the app cannot create (sound, text) only reports.
+ * One rendering run. A tap opens its status page in the reel, which follows the
+ * run to its end. The creator picks a run up only from the record this device
+ * keeps, so it is offered as Resume for that run alone: for any other run (one
+ * started on the web, a second one, an older one) it opened blank, with Generate
+ * ready to charge for another (audit 02-8).
  */
-function ProfileRenderingTile({ item, asOf, width }: { item: GenerationListItem; asOf: number; width: number }) {
+function ProfileRenderingTile({
+  item,
+  asOf,
+  width,
+  resumeTool,
+  onOpen,
+}: {
+  item: GenerationListItem;
+  asOf: number;
+  width: number;
+  resumeTool: CreatorToolId | null;
+  onOpen?: (generationId: string) => void;
+}) {
   const theme = useAppTheme();
   const label = getGenerationLabel(getGenerationKind(item), item.audioKind);
   const started = formatRenderingStartedLabel(item.created_at, asOf);
-  const tool = renderingCreationTool(item);
   const spokenLabel = `${label}, rendering, ${started.toLowerCase()}`;
-  const tileStyle = {
-    width,
-    minHeight: 84,
-    borderRadius: 16,
-    borderCurve: 'continuous' as const,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.panel,
-    padding: 10,
-    gap: 6,
-  };
-  const content = (
-    <>
-      <ActivityIndicator color={theme.colors.primary} size="small" style={{ alignSelf: 'flex-start' }} />
-      <AppText variant="label" numberOfLines={1}>{label}</AppText>
-      <AppText variant="caption" color="muted" numberOfLines={2}>{started}</AppText>
-    </>
-  );
 
-  if (!tool) {
-    return (
-      <View accessible accessibilityLabel={spokenLabel} style={tileStyle}>
-        {content}
+  return (
+    <View
+      style={{
+        width,
+        borderRadius: 16,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.panel,
+        overflow: 'hidden',
+      }}
+    >
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={spokenLabel}
+        accessibilityHint="Opens the run's status"
+        onPress={() => {
+          onOpen?.(item.id);
+          router.push(immersiveViewerHref({ source: 'profile-creations', initialId: item.id }) as never);
+        }}
+        style={({ pressed }) => ({ minHeight: 84, padding: 10, gap: 6, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+      >
+        <ActivityIndicator color={theme.colors.primary} size="small" style={{ alignSelf: 'flex-start' }} />
+        <AppText variant="label" numberOfLines={1}>{label}</AppText>
+        <AppText variant="caption" color="muted" numberOfLines={2}>{started}</AppText>
+      </Pressable>
+      {resumeTool ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Resume in the ${resumeTool} creator`}
+          onPress={() => router.push(`/create/${resumeTool}` as never)}
+          style={({ pressed }) => ({
+            minHeight: 44,
+            justifyContent: 'center',
+            paddingHorizontal: 10,
+            borderTopWidth: 1,
+            borderTopColor: theme.colors.border,
+            opacity: pressed ? appTheme.opacity.pressed : 1,
+          })}
+        >
+          <AppText variant="label" color="primary" numberOfLines={1}>Resume</AppText>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * Failed runs, under the Rendering strip: the web Studio's Failed section. They
+ * are not library members either, so a run that failed while Profile showed it
+ * left the Rendering strip for nowhere, findable again only through its alert
+ * (audit 01-9). A tile opens the run's status page, where its alert lands too:
+ * what came back, why it failed, and Try again, Archive and Delete.
+ */
+function ProfileFailedStrip({ items, tileWidth }: { items: GenerationListItem[]; tileWidth: number }) {
+  return (
+    <View style={{ gap: appTheme.spacing.compact }}>
+      <AppText variant="label" color="muted" accessibilityRole="header">
+        {`Failed (${items.length})`}
+      </AppText>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: PROFILE_GALLERY_GAP }}>
+        {items.map((item) => (
+          <ProfileFailedTile key={item.id} item={item} width={tileWidth} />
+        ))}
       </View>
-    );
-  }
+    </View>
+  );
+}
+
+function ProfileFailedTile({ item, width }: { item: GenerationListItem; width: number }) {
+  const theme = useAppTheme();
+  const label = getGenerationLabel(getGenerationKind(item), item.audioKind);
+  const title = item.title || item.prompt || 'Untitled creation';
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={spokenLabel}
-      accessibilityHint={`Opens the ${tool} creator`}
-      onPress={() => router.push(`/create/${tool}` as never)}
-      style={({ pressed }) => ({ ...tileStyle, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+      accessibilityLabel={`${label}, failed, ${title}`}
+      accessibilityHint="Opens what happened to the run"
+      onPress={() => router.push(immersiveViewerHref({ source: 'studio-creations', initialId: item.id }) as never)}
+      style={({ pressed }) => ({
+        width,
+        minHeight: 84,
+        borderRadius: 16,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.panel,
+        padding: 10,
+        gap: 6,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+      })}
     >
-      {content}
+      <CircleAlert size={appTheme.icon.sm} color={theme.colors.danger} />
+      <AppText variant="label" color="danger" numberOfLines={1}>Failed</AppText>
+      <AppText variant="caption" color="muted" numberOfLines={2}>{title}</AppText>
     </Pressable>
   );
 }
@@ -1367,13 +1512,15 @@ function ProfileMediaTile({
   const isFallbackPreview = item.id.startsWith('preview-');
   const isSavedTile = item.label === 'Saved';
   const nativeZoomTile = isSavedTile && !isFallbackPreview && item.previewKind !== 'text' && isAppleZoomAvailable();
+  // The outputs badge carries a count alone; the label says it in words.
+  const outputsLabel = formatOutputCount(item.outputCount);
   // A Post tile said only "Post, <title>" -- the badge in its corner reported
   // Public or Private and the label reported neither, so the state was
   // available to sighted users alone. Both tiles now read out the state their
   // badge draws, from the one place that decides it.
   const accessibilityLabel = isSavedTile
     ? `${item.label}, ${item.title}, ${countLabel} likes`
-    : `${item.label}, ${item.title}, ${getProfileTileState(item).label}`;
+    : `${item.label}, ${item.title}, ${getProfileTileState(item).label}${outputsLabel ? `, ${outputsLabel}` : ''}`;
   // UIKit captures this view at its laid-out size. A simultaneous press scale
   // exposes the light grid inside the opening veil and shifts the zoom source.
   const motion = usePressMotion(nativeZoomTile, { scale: appTheme.motion.scale.pressed });
@@ -1571,6 +1718,13 @@ export function getProfileTileState(item: ProfileMediaCard): {
   glyph: 'globe' | 'lock' | 'sparkles' | 'audio';
 } {
   if (item.label === 'Creation') {
+    if (item.moderationRemoved) {
+      return { label: 'Removed by moderation', color: themes.dark.colors.danger, glyph: 'lock' };
+    }
+    // A step of a template run that did not succeed can never be posted.
+    if (item.templateNote) {
+      return { label: item.templateNote, color: themes.dark.colors.amber, glyph: 'sparkles' };
+    }
     // Audio cannot be posted, so its tile reports what it is where the others
     // report whether they reached a post.
     if (item.previewKind === 'audio') {
@@ -1653,6 +1807,35 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
       >
         <StateGlyph size={appTheme.icon.xs} color={state.color} />
       </View>
+
+      {/* The library sends a run's first file only, so a run that made
+          several says how many; the details slide lists them. A count beside
+          a glyph, not the card's "3 outputs": the words do not fit beside the
+          state badge on a 104pt tile at the 11pt floor. */}
+      {item.outputCount ? (
+        <View
+          testID="profile-tile-outputs-badge"
+          style={{
+            position: 'absolute',
+            bottom: 8,
+            right: 8,
+            minHeight: 22,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 3,
+            borderRadius: 11,
+            paddingHorizontal: 6,
+            backgroundColor: mediaColors.mediaChip,
+            borderWidth: 1,
+            borderColor: hexWithAlpha(mediaColors.onMedia, 0.24),
+          }}
+        >
+          <Images size={appTheme.icon.xs} color={mediaColors.onMedia} />
+          <Text style={{ color: mediaColors.onMedia, fontSize: 11, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
+            {item.outputCount}
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 }

@@ -262,7 +262,14 @@ export interface GenerationListItem {
     runId: string;
     templateId: string;
     templateTitle: string | null;
+    /**
+     * How the run that made it ended. A finished step of a cancelled or failed
+     * run is listed too; only a succeeded run's result can be posted.
+     */
+    runStatus?: 'succeeded' | 'cancelled' | 'failed';
   } | null;
+  /** How many files the run made; the list carries the first one's addresses only. */
+  output_count?: number;
   creationMode?: 'motion' | null;
   /**
    * Set on an audio creation: which kind of sound it is. A string, not the
@@ -274,7 +281,12 @@ export interface GenerationListItem {
   created_at: string;
   completed_at?: string | null;
   duration?: number | null;
+  /** What the run was charged. A refunded run keeps it, so `refunded` says whether it came back. */
   cost?: number | null;
+  /** The run failed and its settlement returned `cost`. */
+  refunded?: boolean;
+  /** Why a failed run failed, in the server's public words; null on any other status. */
+  error_message?: string | null;
   model: string;
   category: string | null;
   title?: string | null;
@@ -285,7 +297,18 @@ export interface GenerationListItem {
   linked_post_title?: string | null;
   linked_post_visibility?: string | null;
   linked_post_archived_at?: string | null;
+  /** The recipe the linked post sells, read with the page, for posts older than the first page of owner posts. */
+  linked_post_bundle?: {
+    accessMode: 'free' | 'paid';
+    status: 'draft' | 'published';
+    priceUsdCents: number;
+  } | null;
   archived_at?: string | null;
+  /**
+   * Set when moderation removed the creation. Such a row is archived as well,
+   * and the server refuses to restore it.
+   */
+  moderation_removed_at?: string | null;
   /** Set when the output's only source is gone; the API withholds every address. */
   source_unavailable_at?: string | null;
 }
@@ -1568,11 +1591,23 @@ export interface MobileNotificationPreferences {
 }
 
 /**
+ * What a purchase cost, from the purchase row and its order reference. Mirrors
+ * ViewerUnlockPayment on the web side.
+ */
+export interface ViewerUnlockPayment {
+  paidWith: 'credits' | 'cash' | 'free';
+  /** Credits spent (credits), minor units such as paise or cents (cash), null (free). */
+  paidAmountSubunits: number | null;
+  /** 'INR' or 'USD' for cash; null for credits and free. */
+  paidCurrency: string | null;
+}
+
+/**
  * An item in the buyer's unlock library. Mirrors ViewerUnlockItem on the web
  * side; `retired` and `tombstoned` mean the creator removed the unlock or the
  * whole post, which the buyer keeps regardless.
  */
-export interface ViewerUnlockItem {
+export interface ViewerUnlockItem extends ViewerUnlockPayment {
   unlockId: string;
   bundleId: string | null;
   postId: string | null;
@@ -1585,12 +1620,20 @@ export interface ViewerUnlockItem {
   hasNewerRevision: boolean;
   retired: boolean;
   tombstoned: boolean;
+  /** No bundle or post is left (the creator deleted their account); only the purchased version remains. */
+  detached: boolean;
+  /** The post is marked NSFW: its thumbnail stays covered until the buyer asks to see it. */
+  isNsfw: boolean;
   post: {
     title: string;
     category: string;
     postFormat: string;
+    /** The full original, a video's MP4 included; a thumbnail draws `previewUrl`. */
     mediaUrl: string | null;
     mediaKind: string | null;
+    /** A small still (a video's poster), often a relative `/api/media` link. */
+    previewUrl: string | null;
+    previewThumbhash: string | null;
   } | null;
   creator: {
     username: string | null;
@@ -1624,7 +1667,7 @@ export interface ViewerUnlockRevision {
   mediaItems: ShowcaseMediaItem[];
 }
 
-export interface ViewerUnlockDetail {
+export interface ViewerUnlockDetail extends ViewerUnlockPayment {
   unlockId: string;
   bundleId: string | null;
   postId: string | null;
@@ -1645,7 +1688,12 @@ export interface ViewerUnlockDetail {
   retired: boolean;
   tombstoned: boolean;
   postVisibility: string | null;
-  post: MarketplaceResource['post'] | null;
+  /** The post is marked NSFW: its cover stays covered until the buyer asks to see it. */
+  isNsfw: boolean;
+  /** The post page would open for this buyer: public or unlisted, live, and no block either way. */
+  postReachable: boolean;
+  /** `mediaPreviewUrl` is the first media item's still, the cover the detail draws. */
+  post: (NonNullable<MarketplaceResource['post']> & { mediaPreviewUrl: string | null }) | null;
   mediaItems: ShowcaseMediaItem[];
 }
 

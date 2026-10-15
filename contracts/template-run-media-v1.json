@@ -31,7 +31,8 @@
         "kind": "video",
         "url": "/original.mp4",
         "renditionUrl": "/playback.mp4",
-        "previewUrl": "/poster.webp"
+        "previewUrl": "/poster.webp",
+        "linkedPost": null
       },
       "estimatedTotalCredits": 1,
       "estimatedRemainingCredits": 0,

@@ -25,7 +25,7 @@ import { ProfileFeedCardView } from '@/components/profile-feed-card';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { ViewerActionsMenuProvider } from '@/components/viewer-actions-menu';
-import type { ViewerActionCallbacks } from '@/lib/use-viewer-action-handlers';
+import { changeGenerationArchive, type ViewerActionCallbacks } from '@/lib/use-viewer-action-handlers';
 import { audioCreationPlayback } from '@/lib/audio-creation-native-player';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
@@ -54,7 +54,12 @@ import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { BackGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
-import { getNativeRemixCreateHref, getViewerShareIntent, getViewerShareSourceSurface } from '@/lib/viewer-actions';
+import {
+  getNativeRemixCreateHref,
+  getRemixSourceThumbnailUrl,
+  getViewerShareIntent,
+  getViewerShareSourceSurface,
+} from '@/lib/viewer-actions';
 import {
   changePostVisibility,
   pickPostVisibility,
@@ -105,6 +110,9 @@ export function ProfileMediaFeedScreen() {
   const bottomInset = resolvedBottomInset(insets.bottom);
   const listRef = useRef<FlashListRef<ProfileFeedCard>>(null);
   const [actionsOpenItemId, setActionsOpenItemId] = useState<string | null>(null);
+  // The reader deleted the card the feed was opened on. The cards around it
+  // stay; the lookup that would call the opened item missing is not asked.
+  const [openedItemDeleted, setOpenedItemDeleted] = useState(false);
   const [commentsOpenItemId, setCommentsOpenItemId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
@@ -157,8 +165,8 @@ export function ProfileMediaFeedScreen() {
     isFetchNextPageError,
     items,
     pageCount,
-    selection,
   } = library;
+  const selection = openedItemDeleted ? 'found' : library.selection;
   const cards = useMemo(() => buildProfileFeedCards(items), [items]);
   const activeItem = useMemo(
     () => items.find((item) => item.id === actionsOpenItemId) ?? null,
@@ -321,7 +329,7 @@ export function ProfileMediaFeedScreen() {
       recreateTool: item.recreateTool,
       prompt: item.recreatePrompt,
       context: { postId: item.showcasePostId, title: item.title, creatorLabel: item.creatorLabel,
-        thumbnailUrl: item.mediaKind === 'image' ? item.mediaUrl : null },
+        thumbnailUrl: getRemixSourceThumbnailUrl(item) },
     });
     router.push((href ?? `/create/${item.recreateTool}`) as never);
   }, [user]);
@@ -383,6 +391,12 @@ export function ProfileMediaFeedScreen() {
       case 'unlock-remix':
         recreateItem(item);
         return;
+      case 'restore':
+        // An archived creation's card offers its way back where Share was.
+        if (item.sourceType === 'generation') {
+          void changeGenerationArchive({ api, queryClient, userId: user.id, item, archive: false });
+        }
+        return;
       case 'save':
       case 'unsave':
         return;
@@ -408,7 +422,7 @@ export function ProfileMediaFeedScreen() {
       default:
         return;
     }
-  }, [api, applyPostVisibility, openItem, recreateItem, shareItem, user]);
+  }, [api, applyPostVisibility, openItem, queryClient, recreateItem, shareItem, user]);
 
   if (library.isLoading || selection === 'loading') {
     return (
@@ -485,7 +499,13 @@ export function ProfileMediaFeedScreen() {
     },
     onRecreate: () => recreateItem(item),
     onShare: () => void shareItem(item),
-    onDeleted: () => setActionsOpenItemId(null),
+    onDeleted: () => {
+      setActionsOpenItemId(null);
+      if (item.sourceType !== 'generation') return;
+      if (item.id === initialId) setOpenedItemDeleted(true);
+      // The last card gone leaves nothing to manage here.
+      if (cards.every((card) => card.id === item.id)) leaveFeed();
+    },
     onSourceRefresh: () => void library.refetch(),
   });
 

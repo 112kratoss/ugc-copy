@@ -20,6 +20,7 @@ import {
   Trash2,
   UserRoundX,
   Wand2,
+  Workflow,
   type LucideIcon,
 } from 'lucide-react-native';
 import { Modal, ScrollView, Text, View } from 'react-native';
@@ -188,6 +189,8 @@ const VIEWER_ACTION_ICONS: Record<string, LucideIcon> = {
   'report-user': ShieldAlert,
   'block-user': Ban,
   'report-ai-output': ShieldAlert,
+  'delete-creation': Trash2,
+  'open-run': Workflow,
 };
 
 function getViewerActionIcon(action: string) {
@@ -243,6 +246,10 @@ function getViewerActionDescription(action: string, item: ImmersivePreviewItem) 
       return `Hide ${item.creatorLabel}’s content and prevent future follows between you.`;
     case 'report-ai-output':
       return 'Send this generated result to the safety team for review.';
+    case 'delete-creation':
+      return 'Permanently remove this creation and its media.';
+    case 'open-run':
+      return 'Open the template run that made this.';
     default:
       return 'Choose this action for the current media.';
   }

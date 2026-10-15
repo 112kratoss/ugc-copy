@@ -11,7 +11,7 @@ import {
   getNextProfileOwnerPostsOffset,
   getNextProfileSavedMediaOffset,
   invalidateProfileCreations,
-  renderingCreationTool,
+  selectFailedCreations,
   selectRenderingCreations,
   truncateInfiniteDataToFirstPage,
 } from '../lib/profile-media-query';
@@ -165,17 +165,6 @@ describe('the Rendering strip', () => {
     expect(selectRenderingCreations(items).map((item) => item.id)).toEqual(['queued', 'waiting', 'working']);
   });
 
-  it('reopens the creator for the run kind, motion before its video category', () => {
-    expect(renderingCreationTool({ category: 'video' })).toBe('video');
-    expect(renderingCreationTool({ category: 'ugc-ad' })).toBe('video');
-    expect(renderingCreationTool({ category: 'image' })).toBe('image');
-    expect(renderingCreationTool({ category: 'video', creationMode: 'motion' })).toBe('motion');
-    expect(renderingCreationTool({ category: 'motion' })).toBe('motion');
-    // The app creates no sound or text, so those runs open nothing.
-    expect(renderingCreationTool({ category: 'audio' })).toBeNull();
-    expect(renderingCreationTool({ category: 'text' })).toBeNull();
-  });
-
   it('says how long ago a run started', () => {
     const startedAt = '2026-10-13T10:00:00Z';
     const at = (minutes: number) => Date.parse(startedAt) + minutes * 60_000;
@@ -192,6 +181,23 @@ describe('the Rendering strip', () => {
 
   it('refreshes every 15 seconds', () => {
     expect(PROFILE_RENDERING_REFRESH_INTERVAL_MS).toBe(15_000);
+  });
+});
+
+describe('the Failed strip', () => {
+  // `isCreationLibraryMember` keeps failed runs out of the grid; the strip is
+  // where they are listed instead (audit 01-9).
+  it('takes every failed run that is not archived, in the library order, and nothing else', () => {
+    const items = [
+      run('lost', { status: 'failed' }),
+      run('working', { status: 'processing' }),
+      run('done', { status: 'succeeded', output_url: 'done.mp4' }),
+      run('tidied', { status: 'failed', archived_at: '2026-10-13T10:05:00Z' }),
+      run('later', { status: 'failed', category: 'image' }),
+      run('queued', { status: 'pending' }),
+    ];
+
+    expect(selectFailedCreations(items).map((item) => item.id)).toEqual(['lost', 'later']);
   });
 });
 

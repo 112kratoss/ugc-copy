@@ -18,9 +18,21 @@ vi.mock('expo-router', () => ({
   router: routerState,
 }));
 
+// Profile is out of focus while a screen it opened (the reel) is in front.
+const navigationState = vi.hoisted(() => ({ focused: true }));
+
 vi.mock('@react-navigation/native', () => ({
-  useIsFocused: () => true,
+  useIsFocused: () => navigationState.focused,
   useScrollToTop: vi.fn(),
+}));
+
+// The run this device started and is still watching for, if any.
+const activeRunState = vi.hoisted(() => ({
+  record: null as null | { generationId: string | null; tool: 'image' | 'video' | 'motion' },
+}));
+
+vi.mock('@/lib/active-generation-record', () => ({
+  loadActiveGenerationRecord: vi.fn(async () => activeRunState.record),
 }));
 
 // react-native mock
@@ -109,11 +121,13 @@ vi.mock('react-native-safe-area-context', () => ({
 vi.mock('lucide-react-native', () => ({
   AtSign: (props: Record<string, unknown>) => React.createElement('at-sign-icon', props),
   ChevronRight: (props: Record<string, unknown>) => React.createElement('chevron-right-icon', props),
+  CircleAlert: (props: Record<string, unknown>) => React.createElement('circle-alert-icon', props),
   Crown: (props: Record<string, unknown>) => React.createElement('crown-icon', props),
   Gift: (props: Record<string, unknown>) => React.createElement('gift-icon', props),
   Globe: (props: Record<string, unknown>) => React.createElement('globe-icon', props),
   Heart: (props: Record<string, unknown>) => React.createElement('heart-icon', props),
   ImageIcon: (props: Record<string, unknown>) => React.createElement('image-icon', props),
+  Images: (props: Record<string, unknown>) => React.createElement('images-icon', props),
   LockKeyhole: (props: Record<string, unknown>) => React.createElement('lock-keyhole-icon', props),
   Pencil: (props: Record<string, unknown>) => React.createElement('pencil-icon', props),
   Play: (props: Record<string, unknown>) => React.createElement('play-icon', props),
@@ -136,6 +150,7 @@ vi.mock('@/components/media-preview', () => ({
 const authState = vi.hoisted(() => ({
   // Nullable: the signed-out suite below clears it.
   user: { id: 'user-123', email: 'user@example.com' } as null | { id: string; email: string },
+  identityUserId: 'user-123' as string | null,
   credits: 100,
   api: {
     getProfile: vi.fn(),
@@ -349,6 +364,18 @@ describe('ProfileDashboard signed out', () => {
 
     expect(findPressableByText(tree!.root, 'Sign in')).toBeTruthy();
     expect(tree!.root.findAllByProps({ accessibilityLabel: 'Edit profile' })).toHaveLength(0);
+  });
+
+  // Sign-in used to end on Home, away from the profile it was asked from (audit 01-12).
+  it('comes back to Profile once signed in', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+
+    renderer.act(() => { findPressableByText(tree!.root, 'Sign in').props.onPress(); });
+
+    expect(routerState.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/profile' } });
   });
 
   it('still titles and announces the page', () => {
@@ -1186,6 +1213,47 @@ describe('ProfileDashboard media tiles routing', () => {
     )).toHaveLength(0);
   });
 
+  // The library sends a run's first file only, so the others were out of reach (audit 01-2).
+  it('marks a creation that made several files with how many, and says it in words', () => {
+    queryState.generations = [
+      {
+        id: 'takes',
+        status: 'succeeded',
+        output_url: 'takes-0.jpg',
+        preview_url: 'takes-0.preview.webp',
+        previewUrl: 'takes-0.preview.webp',
+        output_count: 4,
+        category: 'image',
+        title: 'Four takes',
+        prompt: 'A lighthouse at dusk',
+      },
+      {
+        id: 'single',
+        status: 'succeeded',
+        output_url: 'single.jpg',
+        preview_url: 'single.preview.webp',
+        previewUrl: 'single.preview.webp',
+        output_count: 1,
+        category: 'image',
+        title: 'One take',
+        prompt: 'A harbour at dawn',
+      },
+    ];
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+    });
+
+    const takes = tree!.root.findByProps({ accessibilityLabel: 'Creation, Four takes, Not posted, 4 outputs' });
+    const [badge] = findViewByTestId(takes, 'profile-tile-outputs-badge');
+    expect(badge.findAllByType('images-icon' as never)).toHaveLength(1);
+    expect(badge.findAllByType('text' as never).map((node) => node.props.children)).toEqual([4]);
+    const single = tree!.root.findByProps({ accessibilityLabel: 'Creation, One take, Not posted' });
+    expect(findViewByTestId(single, 'profile-tile-outputs-badge')).toHaveLength(0);
+    expect(findViewByTestId(tree!.root, 'profile-tile-outputs-badge')).toHaveLength(1);
+  });
+
   it('renders ready text creations in the Profile grid', () => {
     queryState.generations = [
       {
@@ -1502,6 +1570,8 @@ describe('ProfileDashboard media tiles routing', () => {
 
     afterEach(() => {
       queryState.generationsDataUpdatedAt = 0;
+      navigationState.focused = true;
+      activeRunState.record = null;
       vi.useRealTimers();
     });
 
@@ -1526,18 +1596,85 @@ describe('ProfileDashboard media tiles routing', () => {
       expect(tree.root.findAllByProps({ accessibilityLabel: 'Creation, Motion run, Not posted' })).toHaveLength(0);
     });
 
-    it('opens the creator that resumes the run, and leaves a kind the app cannot create as a report', () => {
+    const tile = (tree: renderer.ReactTestRenderer, label: string) => tree.root.findAll((node) => (
+      String(node.type) === 'pressable' && node.props.accessibilityLabel === label
+    ));
+    const resumeControls = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => (
+      String(node.type) === 'pressable'
+      && typeof node.props.accessibilityLabel === 'string'
+      && node.props.accessibilityLabel.startsWith('Resume in the')
+    ));
+
+    // The creator resumes a run only from the record this device keeps, so a
+    // tile for any other run opened a blank creator ready to charge again (02-8).
+    it("opens each run's status page in the reel, whatever its kind", () => {
       const tree = renderDashboard();
-      const tile = (label: string) => tree.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === label);
 
-      renderer.act(() => { tile('Video, rendering, started 3 min ago')[0].props.onPress(); });
-      renderer.act(() => { tile('Motion, rendering, started just now')[0].props.onPress(); });
+      renderer.act(() => { tile(tree, 'Video, rendering, started 3 min ago')[0].props.onPress(); });
+      renderer.act(() => { tile(tree, 'Voiceover, rendering, started 2 h ago')[0].props.onPress(); });
 
-      expect(routerState.push).toHaveBeenCalledWith('/create/video');
-      expect(routerState.push).toHaveBeenCalledWith('/create/motion');
-      expect(tile('Voiceover, rendering, started 2 h ago')).toHaveLength(0);
-      expect(tree.root.findAll((node) => String(node.type) === 'view'
-        && node.props.accessibilityLabel === 'Voiceover, rendering, started 2 h ago')).toHaveLength(1);
+      expect(routerState.push.mock.calls).toEqual([
+        [{ pathname: '/viewer', params: { source: 'profile-creations', initialId: 'video-run' } }],
+        [{ pathname: '/viewer', params: { source: 'profile-creations', initialId: 'sound-run' } }],
+      ]);
+    });
+
+    it('offers Resume in the creator only for the run this device started', async () => {
+      activeRunState.record = { generationId: 'video-run', tool: 'video' };
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => {
+        tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+      });
+
+      expect(resumeControls(tree).map((node) => node.props.accessibilityLabel)).toEqual(['Resume in the video creator']);
+      renderer.act(() => { resumeControls(tree)[0].props.onPress(); });
+      expect(routerState.push).toHaveBeenLastCalledWith('/create/video');
+
+      // A record of a run the server no longer lists as rendering offers nothing.
+      activeRunState.record = { generationId: 'finished-elsewhere', tool: 'image' };
+      let other!: renderer.ReactTestRenderer;
+      await renderer.act(async () => {
+        other = renderer.create(<ProfileDashboard initialTab="Creations" />);
+      });
+      expect(resumeControls(other)).toHaveLength(0);
+    });
+
+    // The reel reads this library: Profile, under it, keeps the run's status
+    // page following the run to its end.
+    it('keeps reading the first page under the reel while the run it opened renders, and only then', () => {
+      vi.useFakeTimers();
+      const tree = renderDashboard();
+      renderer.act(() => { tile(tree, 'Video, rendering, started 3 min ago')[0].props.onPress(); });
+      navigationState.focused = false;
+      renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+      const before = listCalls();
+
+      renderer.act(() => { vi.advanceTimersByTime(15_000); });
+      expect(listCalls()).toBe(before + 1);
+      expect(authState.api.listGenerations).toHaveBeenLastCalledWith(true, { limit: 24 });
+
+      // The run finished: nothing on the strip is being watched any more.
+      queryState.generations = renderingRuns().map((run) => (
+        run.id === 'video-run' ? { ...run, status: 'succeeded', output_url: 'video-run.mp4' } : run
+      ));
+      renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+      const settled = listCalls();
+      renderer.act(() => { vi.advanceTimersByTime(30_000); });
+      expect(listCalls()).toBe(settled);
+      renderer.act(() => { tree.unmount(); });
+    });
+
+    it('reads nothing while out of focus when no tile was opened', () => {
+      vi.useFakeTimers();
+      const tree = renderDashboard();
+      navigationState.focused = false;
+      renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+      const before = listCalls();
+
+      renderer.act(() => { vi.advanceTimersByTime(30_000); });
+
+      expect(listCalls()).toBe(before);
+      renderer.act(() => { tree.unmount(); });
     });
 
     it('is absent from the Archived scope, from the other tabs, and when nothing is rendering', () => {
@@ -1588,6 +1725,73 @@ describe('ProfileDashboard media tiles routing', () => {
         idle.unmount();
         posts.unmount();
       });
+    });
+  });
+
+  // A failed run is not a library member, so it left the Rendering strip for
+  // nowhere and could be found again only through its alert (audit 01-9).
+  describe('the Failed strip', () => {
+    const runs = () => [
+      { id: 'ready-image', status: 'succeeded', output_url: 'ready.jpg', preview_url: 'ready.webp', category: 'image', title: 'Ready image', created_at: '2026-10-13T09:00:00Z' },
+      { id: 'failed-video', status: 'failed', output_url: null, category: 'video', title: null, prompt: 'A slow push-in', created_at: '2026-10-13T08:00:00Z' },
+      { id: 'failed-image', status: 'failed', output_url: null, category: 'image', title: 'Poster try', created_at: '2026-10-13T07:00:00Z' },
+      { id: 'tidied', status: 'failed', output_url: null, category: 'image', title: 'Archived failure', created_at: '2026-10-13T06:00:00Z', archived_at: '2026-10-13T06:30:00Z' },
+      { id: 'running', status: 'processing', output_url: null, category: 'video', title: 'Still going', created_at: '2026-10-13T09:30:00Z' },
+    ];
+    const renderDashboard = (initialTab: 'Creations' | 'Posts' = 'Creations') => {
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<ProfileDashboard initialTab={initialTab} />);
+      });
+      return tree!;
+    };
+    const failedTiles = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => (
+      String(node.type) === 'pressable'
+      && typeof node.props.accessibilityLabel === 'string'
+      && node.props.accessibilityLabel.includes(', failed, ')
+    ));
+
+    beforeEach(() => {
+      queryState.generations = runs();
+    });
+
+    it('lists every failed run that is not archived under the Rendering strip, with its title', () => {
+      const tree = renderDashboard();
+
+      expect(tree.root.findAllByProps({ children: 'Failed (2)' }).length).toBeGreaterThan(0);
+      expect(failedTiles(tree).map((node) => node.props.accessibilityLabel)).toEqual([
+        'Video, failed, A slow push-in',
+        'Image, failed, Poster try',
+      ]);
+      // The grid's rule is unchanged: none of them is a grid tile.
+      expect(tree.root.findAllByProps({ accessibilityLabel: 'Creation, Poster try, Not posted' })).toHaveLength(0);
+      expect(tree.root.findByProps({ accessibilityLabel: 'Creation, Ready image, Not posted' })).toBeTruthy();
+      // The strips keep their order: Rendering, then Failed.
+      const headers = tree.root.findAll((node) => typeof node.props.children === 'string'
+        && /^(Rendering|Failed) \(/.test(node.props.children) && String(node.type) === 'text');
+      expect(headers.map((node) => node.props.children)).toEqual(['Rendering (1)', 'Failed (2)']);
+    });
+
+    it("opens a failed run's status page, where its alert lands: Try again, Archive and Delete are there", () => {
+      const tree = renderDashboard();
+
+      renderer.act(() => { failedTiles(tree)[0].props.onPress(); });
+
+      expect(routerState.push).toHaveBeenCalledWith({
+        pathname: '/viewer',
+        params: { source: 'studio-creations', initialId: 'failed-video' },
+      });
+    });
+
+    it('is absent from the Archived scope, from the other tabs, and when nothing failed', () => {
+      const tree = renderDashboard();
+      renderer.act(() => { findPressableByText(tree.root, 'Archived (0)').props.onPress(); });
+      expect(failedTiles(tree)).toHaveLength(0);
+
+      expect(failedTiles(renderDashboard('Posts'))).toHaveLength(0);
+
+      queryState.generations = runs().filter((run) => run.status !== 'failed');
+      expect(failedTiles(renderDashboard())).toHaveLength(0);
     });
   });
 });

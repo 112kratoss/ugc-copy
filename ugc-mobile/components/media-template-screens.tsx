@@ -19,12 +19,13 @@ import {
   VideoOff,
 } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, Linking, Pressable, View } from 'react-native';
+import { ActivityIndicator, AppState, Linking, Platform, Pressable, Share, View } from 'react-native';
 
 import { MediaPreview } from '@/components/media-preview';
 import {
   AppText,
   Card,
+  IconButton,
   Kicker,
   Pill,
   PrimaryButton,
@@ -46,9 +47,12 @@ import {
   isSafeTemplateResultUrl,
   isTemplateRunPolling,
   isTemplateRunStepFailed,
+  isTemplateRunStepStalled,
   isTemplateRunStepSuccessful,
   isTemplateRunTerminal,
   prioritizeTemplateRunSteps,
+  templateRunActionErrorMessage,
+  templateRunLinkedPost,
   templateRunStepNeedsNewRun,
   templateRunStepNeedsReplacementInput,
   templateRunStepOutcome,
@@ -65,6 +69,9 @@ import {
   loadActiveTemplateRunId,
   rememberActiveTemplateRun,
 } from '@/lib/template-run-resume';
+import { env } from '@/lib/env';
+import { isSignedMediaUrlExpiring, preserveStableTemplateRunMedia } from '@/lib/template-run-stable-media';
+import { buildShareUrl } from '@/lib/viewer-actions';
 import { CREDIT_BALANCE_LOADING_LABEL, formatCreditAmount } from '@/lib/pricing';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme, mediaColors, themes } from '@/lib/theme';
@@ -81,6 +88,16 @@ import type {
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message.trim() ? error.message : fallback;
+}
+
+/** A read of the run that replaces the one on screen, keeping the media addresses it already shows. */
+function withStableRunMedia(previous: TemplateRunResponse | undefined, next: TemplateRunResponse): TemplateRunResponse {
+  return { ...next, run: preserveStableTemplateRunMedia(previous?.run, next.run) };
+}
+
+// A run that is not there, or is another account's, reads the same way on every try.
+function isMissingRunError(error: unknown) {
+  return error instanceof ApiError && error.status === 404;
 }
 
 function creatorName(template: Pick<MediaTemplateSummary, 'creator'>) {
@@ -423,7 +440,13 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
   const runQuery = useQuery({
     queryKey: runQueryKey,
     enabled: Boolean(runId && user),
-    queryFn: () => api.getTemplateRun(runId),
+    // Every read signs the media again; keeping the addresses already on screen
+    // is what stops each poll reloading every finished step. The cache is read
+    // after the response, so an action's answer that landed meanwhile is the one kept.
+    queryFn: async () => {
+      const response = await api.getTemplateRun(runId);
+      return withStableRunMedia(queryClient.getQueryData<TemplateRunResponse>(runQueryKey), response);
+    },
     refetchInterval: (query) => isTemplateRunPolling(query.state.data?.run.status ?? 'needs_attention') ? 2500 : false,
   });
   const run = runQuery.data?.run;
@@ -455,8 +478,22 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
   }, [runId, user?.id]);
 
   const applyRun = (response: TemplateRunResponse) => {
-    queryClient.setQueryData(runQueryKey, response);
+    queryClient.setQueryData<TemplateRunResponse>(runQueryKey, (previous) => withStableRunMedia(previous, response));
     setMessage(null);
+  };
+
+  // A run can move on without this screen (approved on the web, ended by the
+  // worker), and nothing polls one that waits on the person: it is read again,
+  // so the button that was refused is not left there to fail the same way.
+  const showRefusal = (error: unknown, fallback: string) => {
+    void runQuery.refetch();
+    setMessage(templateRunActionErrorMessage(errorMessage(error, fallback), error instanceof ApiError ? error.code : null));
+  };
+
+  /** The run as the server has it now, or null when it could not be read. */
+  const readRunAgain = async () => {
+    const refreshed = await runQuery.refetch();
+    return refreshed.isError ? null : refreshed.data?.run ?? null;
   };
 
   const startMutation = useMutation({
@@ -468,22 +505,23 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
       // should light for it too. Its poll is off at a count of zero.
       invalidateActiveGenerations(queryClient, identityUserId);
     },
-    onError: (error) => setMessage(errorMessage(error, 'Could not start this workflow.')),
+    onError: (error) => showRefusal(error, 'Could not start this workflow.'),
   });
   const retryMutation = useMutation({
     mutationFn: (stepId: string) => api.retryTemplateRunStep(runId, stepId),
     onSuccess: (response) => { applyRun(response); void refreshProfile(); },
-    onError: (error) => setMessage(errorMessage(error, 'Could not retry this step.')),
+    onError: (error) => showRefusal(error, 'Could not retry this step.'),
   });
   const approvalMutation = useMutation({
     mutationFn: (stepId: string) => api.approveTemplateRunStep(runId, stepId),
     onSuccess: (response) => { applyRun(response); void refreshProfile(); },
-    onError: (error) => setMessage(errorMessage(error, 'Could not approve this step.')),
+    onError: (error) => showRefusal(error, 'Could not approve this step.'),
   });
   const cancelMutation = useMutation({
     mutationFn: () => api.cancelTemplateRun(runId),
-    onSuccess: applyRun,
-    onError: (error) => setMessage(errorMessage(error, 'Could not cancel this creation.')),
+    // Cancelling settles what finished, which can move the balance.
+    onSuccess: (response) => { applyRun(response); void refreshProfile(); },
+    onError: (error) => showRefusal(error, 'Could not cancel this creation.'),
   });
 
   const uploadSlot = async (slot: MediaTemplateInputSlot) => {
@@ -509,7 +547,7 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
         delete next[slot.key];
         return next;
       });
-      setMessage(errorMessage(error, `Could not upload ${slot.label}.`));
+      showRefusal(error, `Could not upload ${slot.label}.`);
     } finally {
       setUploadingSlot(null);
     }
@@ -528,6 +566,10 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
     );
   }
 
+  // A creator's test run is finished on the web canvas: a consumer run of its
+  // template is not the revision it tests, and a draft template has none.
+  const restartTemplateId = run && !run.isTest ? template?.slug ?? run.templateId : null;
+
   return (
     <Screen>
       {/* The template's own name is unbounded catalog text; Toolbars caps a view
@@ -536,14 +578,28 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
       <Stack.Screen options={{ title: 'Template Run' }} />
       {runQuery.isLoading ? (
         <LoadingState label="Restoring your creation" />
-      ) : runQuery.isError || !run ? (
+      ) : !run ? (
+        // Only with no run to show: a refresh that fails leaves the run on screen.
         <View style={{ gap: 12 }}>
           <StatusBlock title="Could not restore this creation" body={errorMessage(runQuery.error, 'Check your connection and try again.')} tone="danger" />
-          <SecondaryButton label="Try again" onPress={() => void runQuery.refetch()} />
+          {isMissingRunError(runQuery.error) ? null : <SecondaryButton label="Try again" onPress={() => void runQuery.refetch()} />}
         </View>
       ) : (
         <>
-          <RunHeader run={run} template={template} />
+          <RunHeader
+            run={run}
+            template={template}
+            refreshing={runQuery.isFetching}
+            // A polled run reads itself every few seconds.
+            onRefresh={isTemplateRunPolling(run.status) ? undefined : () => void runQuery.refetch()}
+          />
+          {runQuery.isError ? (
+            <View accessibilityLiveRegion="polite" style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <AppText variant="caption" color="muted" style={{ flex: 1 }}>Couldn’t refresh. Showing the last update.</AppText>
+              <SecondaryButton label="Try again" disabled={runQuery.isFetching} onPress={() => void runQuery.refetch()} />
+            </View>
+          ) : null}
+          {run.isTest ? <StatusBlock title="Creator test — finish it on the web canvas" tone="info" /> : null}
           {run.status === 'collecting_inputs' ? (
             <InputStage
               run={run}
@@ -557,7 +613,7 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
               estimatedTotalCredits={run.estimatedTotalCredits ?? template?.estimatedTotalCredits ?? null}
             />
           ) : run.result ? (
-            <ResultStage run={run} api={api} userId={user.id} />
+            <ResultStage run={run} api={api} userId={user.id} readRunAgain={readRunAgain} />
           ) : (
             <RunSteps
               run={run}
@@ -565,7 +621,7 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
               busy={retryMutation.isPending || approvalMutation.isPending}
               retryingStepId={retryMutation.isPending ? retryMutation.variables ?? null : null}
               approvingStepId={approvalMutation.isPending ? approvalMutation.variables ?? null : null}
-              restartTemplateId={template?.slug ?? run.templateId}
+              restartTemplateId={restartTemplateId}
               onRetry={(stepId) => void withAiDataConsent(() => retryMutation.mutate(stepId))}
               onApprove={(stepId) => void withAiDataConsent(() => approvalMutation.mutate(stepId))}
             />
@@ -574,19 +630,23 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
           {run.status === 'failed' && !run.result ? (
             <View style={{ gap: 10 }}>
               <StatusBlock title="Creation failed" body={run.errorMessage ?? 'This run has ended. Start again from the template when you’re ready.'} tone="danger" />
-              <SecondaryButton
-                label="Start a new run"
-                onPress={() => router.push(`/templates/${encodeURIComponent(template?.slug ?? run.templateId)}` as never)}
-              />
+              {restartTemplateId ? (
+                <SecondaryButton
+                  label="Start a new run"
+                  onPress={() => router.push(`/templates/${encodeURIComponent(restartTemplateId)}` as never)}
+                />
+              ) : null}
             </View>
           ) : null}
           {run.status === 'cancelled' && !run.result ? (
             <View style={{ gap: 10 }}>
               <StatusBlock title="Creation cancelled" body="This run is closed. Start again from the template when you’re ready." tone="neutral" />
-              <SecondaryButton
-                label="Return to template"
-                onPress={() => router.push(`/templates/${encodeURIComponent(template?.slug ?? run.templateId)}` as never)}
-              />
+              {restartTemplateId ? (
+                <SecondaryButton
+                  label="Return to template"
+                  onPress={() => router.push(`/templates/${encodeURIComponent(restartTemplateId)}` as never)}
+                />
+              ) : null}
             </View>
           ) : null}
           {message ? <StatusBlock title="Action needed" body={message} tone="danger" /> : null}
@@ -597,7 +657,7 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
               onPress={() => {
                 void showConfirmDialog({
                   title: 'Cancel this creation?',
-                  message: 'Completed steps remain in your creation history.',
+                  message: 'Finished steps stay in your library. A step that is already generating keeps its credits.',
                   // The control that opened this is itself named Cancel, so a
                   // Cancel meaning *stay* would reverse itself (ledger DV8).
                   cancelLabel: 'Keep creating',
@@ -615,17 +675,30 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
   );
 }
 
-function RunHeader({ run, template }: { run: TemplateRun; template?: MediaTemplateSummary }) {
+function RunHeader({
+  run,
+  template,
+  refreshing,
+  onRefresh,
+}: {
+  run: TemplateRun;
+  template?: MediaTemplateSummary;
+  refreshing: boolean;
+  onRefresh?: () => void;
+}) {
   const theme = useAppTheme();
   const progress = templateRunProgress(run);
-  const activeLabel = prioritizeTemplateRunSteps(run.steps)
+  const activeLabel = prioritizeTemplateRunSteps(run.steps, run.status)
     .find((step) => !isTemplateRunStepSuccessful(step))?.label;
   return (
     <View style={{ gap: 14 }}>
-      <View style={{ gap: 5 }}>
-        <Kicker color={theme.colors.primary}>{progress.complete} of {progress.total} complete</Kicker>
-        <AppText variant="pageTitle">{templateRunStageLabel(run)}</AppText>
-        <AppText variant="bodySm" color="muted">{activeLabel ?? template?.name ?? run.templateTitle}</AppText>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+        <View style={{ flex: 1, gap: 5 }}>
+          <Kicker color={theme.colors.primary}>{progress.complete} of {progress.total} complete</Kicker>
+          <AppText variant="pageTitle">{templateRunStageLabel(run)}</AppText>
+          <AppText variant="bodySm" color="muted">{activeLabel ?? template?.name ?? run.templateTitle}</AppText>
+        </View>
+        {onRefresh ? <IconButton icon={RefreshCw} label="Refresh" disabled={refreshing} onPress={onRefresh} /> : null}
       </View>
       <View
         accessibilityRole="progressbar"
@@ -690,7 +763,8 @@ function InputStage({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`${uploaded ? 'Replace' : 'Upload'} ${slot.label}`}
-              disabled={uploadingSlot !== null}
+              // A run's inputs are fixed once Start is sent; a pick then is refused.
+              disabled={uploadingSlot !== null || starting}
               onPress={() => onUpload(slot)}
               style={({ pressed }) => ({
                 minHeight: 210,
@@ -763,7 +837,8 @@ function RunSteps({
   busy: boolean;
   retryingStepId: string | null;
   approvingStepId: string | null;
-  restartTemplateId: string;
+  /** Where a run that cannot go on is started again; null when it is not started from the app. */
+  restartTemplateId: string | null;
   onRetry: (stepId: string) => void;
   onApprove: (stepId: string) => void;
 }) {
@@ -778,14 +853,16 @@ function RunSteps({
           body={run.errorMessage ?? 'Return to the template and start again.'}
           tone="danger"
         />
-        <SecondaryButton
-          label="Return to template"
-          onPress={() => router.push(`/templates/${encodeURIComponent(restartTemplateId)}` as never)}
-        />
+        {restartTemplateId ? (
+          <SecondaryButton
+            label="Return to template"
+            onPress={() => router.push(`/templates/${encodeURIComponent(restartTemplateId)}` as never)}
+          />
+        ) : null}
       </View>
     );
   }
-  const orderedSteps = prioritizeTemplateRunSteps(run.steps);
+  const orderedSteps = prioritizeTemplateRunSteps(run.steps, run.status);
   return (
     <View style={{ gap: 22 }}>
       {orderedSteps.map((step) => (
@@ -827,7 +904,7 @@ function RunStepCard({
   disabled: boolean;
   retrying: boolean;
   approving: boolean;
-  restartTemplateId: string;
+  restartTemplateId: string | null;
   runStatus: TemplateRun['status'];
   onRetry: () => void;
   onApprove: () => void;
@@ -841,6 +918,8 @@ function RunStepCard({
   const awaitingApproval = outcome === 'review';
   const needsReplacementInput = templateRunStepNeedsReplacementInput(step);
   const canRetry = canRetryTemplateRunStep(runStatus, step);
+  // A retry that never started: nothing but this step's Retry sets the run going.
+  const stalled = isTemplateRunStepStalled(runStatus, step);
   // Its advice is to retry, which only a failed step that can be retried can follow.
   const serviceMisconfigured = outcome === 'needs_attention' && canRetry && step.failureCode === 'service_misconfigured';
   // The step failed for good while its run can still continue: the card's one way on is the template.
@@ -873,7 +952,7 @@ function RunStepCard({
       if (retry) onRetry();
     });
   };
-  const statusAccent = successful ? 'workflow' : awaitingApproval || (failed && !notFinished) ? 'amber' : undefined;
+  const statusAccent = successful ? 'workflow' : awaitingApproval || (failed && !notFinished) || stalled ? 'amber' : undefined;
   const NotFinishedIcon = step.mediaKind === 'video' ? VideoOff : ImageOff;
 
   return (
@@ -898,6 +977,7 @@ function RunStepCard({
         </View>
       )}
       {step.errorMessage ? <AppText variant="caption" color={notFinished ? 'muted' : 'danger'}>{step.errorMessage}</AppText> : null}
+      {stalled ? <AppText variant="caption" color="muted">Retry it to continue. Earlier completed steps are safe.</AppText> : null}
       {needsReplacementInput ? (
         <StatusBlock
           title="A new upload is required"
@@ -928,7 +1008,7 @@ function RunStepCard({
           onPress={confirmRetry}
         />
       ) : null}
-      {needsReplacementInput || needsNewRun ? (
+      {restartTemplateId && (needsReplacementInput || needsNewRun) ? (
         <SecondaryButton
           label={needsReplacementInput ? 'Start with new inputs' : 'Return to template'}
           onPress={() => router.push(`/templates/${encodeURIComponent(restartTemplateId)}` as never)}
@@ -942,10 +1022,13 @@ function ResultStage({
   run,
   api,
   userId,
+  readRunAgain,
 }: {
   run: TemplateRun;
   api: ReturnType<typeof useAuth>['api'];
   userId: string;
+  /** The run as the server has it now, or null when it could not be read. */
+  readRunAgain: () => Promise<TemplateRun | null>;
 }) {
   const theme = useAppTheme();
   const queryClient = useQueryClient();
@@ -953,6 +1036,7 @@ function ResultStage({
   const [message, setMessage] = useState<string | null>(null);
   const createRunKeyRef = useRef<string | null>(null);
   const result = run.result;
+  const linkedPost = templateRunLinkedPost(result);
   const canPublish = canPublishTemplateRunResult(run);
   const safeResultUrl = isSafeTemplateResultUrl(result?.url) ? result?.url ?? null : null;
 
@@ -974,14 +1058,21 @@ function ResultStage({
   };
 
   const openOriginal = async () => {
-    if (!safeResultUrl) {
+    let url = safeResultUrl;
+    // Each link is signed for an hour at the read that brought it, and this
+    // screen can stay open under another one for longer than that.
+    if (url && isSignedMediaUrlExpiring(url)) {
+      const renewedUrl = (await readRunAgain())?.result?.url;
+      url = renewedUrl && isSafeTemplateResultUrl(renewedUrl) ? renewedUrl : null;
+    }
+    if (!url) {
       setMessage('The full-quality file link is unavailable. Refresh this creation and try again.');
       return;
     }
     try {
-      const supported = await Linking.canOpenURL(safeResultUrl);
+      const supported = await Linking.canOpenURL(url);
       if (!supported) throw new Error('Unsupported result URL.');
-      await Linking.openURL(safeResultUrl);
+      await Linking.openURL(url);
     } catch {
       setMessage('Could not open the full-quality file. Refresh this creation and try again.');
     }
@@ -997,6 +1088,18 @@ function ResultStage({
         ...(options.shareAfterPublish ? { shareAfterPublish: '1' } : {}),
       },
     } as never);
+  };
+
+  // The post's own page is what is shared, never the file.
+  const shareLinkedPost = async () => {
+    if (!linkedPost) return;
+    const title = run.templateTitle;
+    const url = buildShareUrl(env.siteUrl, `/showcase/${encodeURIComponent(linkedPost.id)}`, 'my-creations');
+    // A dismissed share sheet is not an error worth surfacing.
+    const shared = await Share.share({ title, message: `${title}\n${url}`, url }).catch(() => null);
+    // Android's share intent cannot report a dismissal (it answers "shared" either way), so only iOS counts a share.
+    if (Platform.OS !== 'ios' || shared?.action !== Share.sharedAction) return;
+    await api.shareShowcasePost(linkedPost.id, { sourceSurface: 'my-creations' }).catch(() => null);
   };
 
   if (!result) return null;
@@ -1017,26 +1120,34 @@ function ResultStage({
         />
       ) : null}
       {message ? <StatusBlock title="Could not continue" body={message} tone="danger" /> : null}
-      {canPublish ? (
-        <PrimaryButton label="Publish to Explore" onPress={() => publishResult()} />
+      {linkedPost ? (
+        <>
+          {/* Already posted, so never published again: that would write over the post. */}
+          <PrimaryButton
+            label={linkedPost.visibility === 'private' ? 'Open post' : 'View post'}
+            onPress={() => router.push(`/post/${encodeURIComponent(linkedPost.id)}` as never)}
+          />
+          {linkedPost.visibility === 'private' ? null : <SecondaryButton label="Share" onPress={() => void shareLinkedPost()} />}
+          <SecondaryButton label={`Open full-quality ${result.kind}`} disabled={!safeResultUrl} onPress={() => void openOriginal()} />
+        </>
+      ) : canPublish ? (
+        <>
+          <PrimaryButton label="Publish to Explore" onPress={() => publishResult()} />
+          <SecondaryButton label={`Open full-quality ${result.kind}`} disabled={!safeResultUrl} onPress={() => void openOriginal()} />
+          {/* Sharing used to send the raw storage URL, which reaches non-users with
+              no landing page, no attribution, no remix path, and unmetered egress.
+              Publishing first is what turns a share into a product surface — so the
+              control only exists when there is something publishable. */}
+          <SecondaryButton label="Publish & share" onPress={() => publishResult({ shareAfterPublish: true })} />
+        </>
       ) : (
         <PrimaryButton label={`Open full-quality ${result.kind}`} disabled={!safeResultUrl} onPress={() => void openOriginal()} />
       )}
-      {canPublish ? (
-        <SecondaryButton label={`Open full-quality ${result.kind}`} disabled={!safeResultUrl} onPress={() => void openOriginal()} />
-      ) : null}
-      {/* Sharing used to send the raw storage URL, which reaches non-users with
-          no landing page, no attribution, no remix path, and unmetered egress.
-          Publishing first is what turns a share into a product surface — so the
-          control only exists when there is something publishable. */}
-      {canPublish ? (
-        <SecondaryButton label="Publish & share" onPress={() => publishResult({ shareAfterPublish: true })} />
-      ) : null}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
         <Download size={appTheme.icon.xs} color={theme.colors.muted} />
         <AppText variant="caption" color="muted">The original full-quality file opens outside the app.</AppText>
       </View>
-      <SecondaryButton label={startingAnother ? 'Starting…' : 'Create another version'} disabled={startingAnother} onPress={() => void createAnother()} />
+      {run.isTest ? null : <SecondaryButton label={startingAnother ? 'Starting…' : 'Create another version'} disabled={startingAnother} onPress={() => void createAnother()} />}
     </View>
   );
 }

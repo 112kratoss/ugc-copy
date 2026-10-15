@@ -74,6 +74,7 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/action-sheet', () => ({ showActionSheet }));
 
 vi.mock('@/components/generation-references', () => ({
+  GenerationOutputs: (props: MockProps) => React.createElement('generation-outputs', props),
   GenerationReferences: (props: MockProps) => React.createElement('generation-references', props),
 }));
 
@@ -198,6 +199,32 @@ describe('PostDetailsPage', () => {
     renderer.act(() => tree.update(page({ item: showcaseItem({ generationId: 'someone-elses-generation' }) })));
     expect(tree.root.findAllByType('generation-references' as never)).toHaveLength(0);
   });
+  // The library sends a run's first file only; the details slide lists them all (audit 01-2).
+  it('lists the outputs of a run that made several under its facts, on the active slide only', () => {
+    const creation = (outputCount: number | null) => showcaseItem({
+      sourceType: 'generation',
+      generationId: 'owner-generation',
+      details: {
+        ...showcaseItem().details!,
+        unlock: null,
+        generationInfo: { model: 'Nano Banana 2', createdAt: '', duration: null, cost: 8, outputCount, inputMedia: null },
+      },
+    });
+    const tree = render(page({ item: creation(3) }));
+    expect(tree.root.findByType('generation-outputs' as never).props).toMatchObject({ generationId: 'owner-generation', count: 3 });
+    const values = textValues(tree);
+    expect(values.slice(values.indexOf('Outputs'), values.indexOf('Outputs') + 2)).toEqual(['Outputs', '3']);
+    const order = tree.root.findAll((node) => ['generation-outputs', 'generation-references'].includes(String(node.type)))
+      .map((node) => String(node.type));
+    expect(order).toEqual(['generation-outputs', 'generation-references']);
+
+    renderer.act(() => tree.update(page({ item: creation(3), active: false })));
+    expect(tree.root.findAllByType('generation-outputs' as never)).toHaveLength(0);
+    renderer.act(() => tree.update(page({ item: creation(null) })));
+    expect(tree.root.findAllByType('generation-outputs' as never)).toHaveLength(0);
+    expect(textValues(tree)).not.toContain('Outputs');
+  });
+
   beforeEach(() => {
     bundleContentProps.mockClear();
     queryState.current = { data: undefined, isError: false, error: null, refetch: vi.fn() };

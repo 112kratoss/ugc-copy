@@ -160,4 +160,89 @@ describe('cancelling a template run', () => {
     await cancel();
     expect(database.run).toMatchObject({ input_storage_paths: {}, inputs_deleted_at: NOW });
   });
+
+  describe('what the person keeps', () => {
+    /** A generation of the run, hidden from the library as every template generation starts. */
+    function generation(step: Record<string, unknown>, values: Record<string, unknown>) {
+      const id = `gen-${database.generations.length + 1}`;
+      database.generations.push({
+        id,
+        user_id: TEMPLATE_RUN_USER_ID,
+        status: 'processing',
+        prediction_id: `task-${id}`,
+        output_url: null,
+        error_message: null,
+        cost: step.estimated_credits,
+        actual_cost: null,
+        template_run_id: TEMPLATE_RUN_ID,
+        template_run_step_id: step.id,
+        studio_visible: false,
+        created_at: NOW,
+        completed_at: null,
+        ...values,
+      });
+      Object.assign(step, { status: 'processing', generation_id: id, started_at: NOW });
+      return id;
+    }
+    const finished = (id: string) => ({ status: 'succeeded', output_url: `generated_images/${TEMPLATE_RUN_USER_ID}/${id}.png`, completed_at: NOW });
+    const inLibrary = () => database.generations.map((row) => [row.id, row.studio_visible]);
+
+    it('puts the output of every step that finished in the library, and no other', async () => {
+      const [first, second] = database.steps;
+      generation(first, finished('gen-1'));
+      Object.assign(first, { status: 'succeeded', output_url: database.generations[0].output_url, finished_at: NOW });
+      // The second image was turned down and refunded once, and its retry is still with the provider.
+      generation(second, { status: 'failed', refunded: true, completed_at: NOW });
+      Object.assign(second, { status: 'failed', finished_at: NOW });
+      const retried = { ...second, id: 'step-6', attempt: 1, generation_id: null, finished_at: null };
+      database.steps.push(retried);
+      generation(retried, {});
+      database.run.status = 'processing';
+
+      await cancel();
+
+      expect(inLibrary()).toEqual([['gen-1', true], ['gen-2', false], ['gen-3', false]]);
+      expect(logs).toEqual([]);
+    });
+
+    it('records a generation that finished before a pass of the worker did, and keeps it', async () => {
+      const [first] = database.steps;
+      generation(first, finished('gen-1'));
+      database.run.status = 'processing';
+
+      await cancel();
+
+      // It is not shown as cut short with its credits spent: it finished.
+      expect(stepStates()[0]).toEqual([first.id, 'succeeded', null]);
+      expect(first.output_url).toBe(`generated_images/${TEMPLATE_RUN_USER_ID}/gen-1.png`);
+      expect(inLibrary()).toEqual([['gen-1', true]]);
+    });
+
+    it('leaves the outputs of a creator\'s test run out of the library', async () => {
+      const [first] = database.steps;
+      generation(first, finished('gen-1'));
+      Object.assign(first, { status: 'succeeded', output_url: database.generations[0].output_url, finished_at: NOW });
+      database.run.is_test = true;
+
+      await cancel();
+
+      expect(inLibrary()).toEqual([['gen-1', false]]);
+    });
+
+    it('still cancels the run and logs it when the library cannot be told', async () => {
+      const [first] = database.steps;
+      generation(first, finished('gen-1'));
+      Object.assign(first, { status: 'succeeded', output_url: database.generations[0].output_url, finished_at: NOW });
+      database.conditions.writeRefused = (table, values) => table === 'generations' && values.studio_visible === true;
+
+      const shown = await cancel();
+
+      expect(shown.status).toBe('cancelled');
+      expect(inLibrary()).toEqual([['gen-1', false]]);
+      expect(logged('template_run_cancel_cleanup_failed')).toEqual([
+        expect.objectContaining({ level: 'error', runId: TEMPLATE_RUN_ID, errorMessage: REFUSED.message }),
+      ]);
+      expect(database.run).toMatchObject({ input_storage_paths: {}, inputs_deleted_at: NOW });
+    });
+  });
 });

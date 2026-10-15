@@ -605,7 +605,7 @@ function AccountDeletingCoordinator() {
 }
 
 function NotificationResponseCoordinator() {
-  const { api, user } = useAuth();
+  const { api, user, refreshProfile } = useAuth();
   const queryClient = useQueryClient();
 
   // Once for the app, not again for each account: subscribing reads the push
@@ -619,10 +619,14 @@ function NotificationResponseCoordinator() {
   // banner (HIG Notifications asks for "discoverable but not distracting"), so
   // the app has to be the one that shows it: the tab badge and the Alerts list
   // refresh the moment it lands rather than on the badge's next poll.
-  useEffect(() => subscribeToNotificationsReceived(() => {
+  useEffect(() => subscribeToNotificationsReceived(({ type }) => {
     void queryClient.invalidateQueries({ queryKey: notificationBadgeQueryKey(user?.id) });
     void queryClient.invalidateQueries({ queryKey: ['mobile-notifications', user?.id] });
-  }), [queryClient, user?.id]);
+    // A run that failed with no creator watching it was refunded on the server,
+    // and the balance on screen still holds its cost — the creators would refuse
+    // Generate on it and point at Pricing.
+    if (type === 'generation_failed') void refreshProfile().catch(() => undefined);
+  }), [queryClient, refreshProfile, user?.id]);
 
   return null;
 }

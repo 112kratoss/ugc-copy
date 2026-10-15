@@ -1,7 +1,18 @@
-import { act, render, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import GenerationNotifications from '@/components/GenerationNotifications';
+
+vi.mock('framer-motion', async () => {
+  const React = await import('react');
+  return {
+    motion: new Proxy({}, {
+      get: (_target, tag: string) => ({ children, ...props }: React.HTMLAttributes<HTMLElement>) =>
+        React.createElement(tag, props, children),
+    }),
+    AnimatePresence: ({ children }: { children: React.ReactNode }) => React.createElement(React.Fragment, null, children),
+  };
+});
 
 const getSessionMock = vi.fn();
 const onAuthStateChangeMock = vi.fn();
@@ -119,5 +130,72 @@ describe('GenerationNotifications', () => {
       expect(fetch).toHaveBeenCalledTimes(1);
     });
     expect(setTimeoutSpy.mock.calls.some(([, delay]) => delay === 30000)).toBe(false);
+  });
+
+  describe('a tracked run that ends', () => {
+    const statusRecord = (status: string) => ({
+      id: 'gen-status-1',
+      status,
+      created_at: '2026-03-24T11:00:00.000Z',
+      completed_at: status === 'succeeded' || status === 'failed' ? '2026-03-24T11:01:00.000Z' : null,
+      category: 'image',
+      model: 'nano-banana-2',
+    });
+
+    /** The first sync sees `from`, the next scheduled poll sees `to`. */
+    const pollThrough = async (from: string, to: string) => {
+      vi.mocked(fetch)
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ generations: [statusRecord(from)] }) } as Response)
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ generations: [statusRecord(to)] }) } as Response);
+      const setTimeoutSpy = vi.spyOn(window, 'setTimeout');
+      render(<GenerationNotifications />);
+
+      await waitFor(() => {
+        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 30000);
+      });
+      const scheduledPoll = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 30000)?.[0];
+      await act(async () => {
+        (scheduledPoll as () => void)();
+      });
+      await waitFor(() => {
+        expect(fetch).toHaveBeenCalledTimes(2);
+      });
+    };
+
+    const creditsUpdated = vi.fn<(event: Event) => void>();
+    beforeEach(() => {
+      creditsUpdated.mockClear();
+      window.addEventListener('credits_updated', creditsUpdated);
+    });
+    afterEach(() => {
+      window.removeEventListener('credits_updated', creditsUpdated);
+    });
+
+    // A held start the reaper fails leaves `pending` for `failed` directly; it
+    // used to end with no toast and with the debited balance still on screen.
+    it('announces a failure from pending, asks for the balance again, and links to that run', async () => {
+      await pollThrough('pending', 'failed');
+
+      expect(await screen.findByText(/failed$/i)).toBeInTheDocument();
+      expect(creditsUpdated).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('link', { name: 'View Studio' })).toHaveAttribute(
+        'href',
+        '/creations?generation=gen-status-1',
+      );
+    });
+
+    it('announces a success from pending without touching the balance', async () => {
+      await pollThrough('pending', 'succeeded');
+
+      expect(await screen.findByText(/ready$/i)).toBeInTheDocument();
+      expect(creditsUpdated).not.toHaveBeenCalled();
+    });
+
+    it('asks for the balance again when a processing run fails', async () => {
+      await pollThrough('processing', 'failed');
+
+      expect(await screen.findByText(/failed$/i)).toBeInTheDocument();
+      expect(creditsUpdated).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -12,10 +12,13 @@ import {
   isSafeTemplateResultUrl,
   isTemplateRunPolling,
   isTemplateRunStepAwaitingApproval,
+  isTemplateRunStepStalled,
   normalizeMediaTemplateDetailResponse,
   normalizeMediaTemplateListResponse,
   normalizeTemplateRunResponse,
   prioritizeTemplateRunSteps,
+  templateRunActionErrorMessage,
+  templateRunLinkedPost,
   templateRunStepNeedsNewRun,
   templateRunStepNeedsReplacementInput,
   templateRunProgress,
@@ -143,6 +146,65 @@ describe('media template view model', () => {
     expect(canPublishTemplateRunResult(legacy)).toBe(false);
   });
 
+  describe('the post a result was published as', () => {
+    const succeeded = (result: Record<string, unknown>) => normalizeTemplateRunResponse({
+      run: {
+        id: 'run-posted',
+        templateId: 'template-1',
+        status: 'succeeded',
+        inputSlots: [],
+        inputs: {},
+        steps: [],
+        result: { generationId: 'gen-posted', kind: 'video', url: 'https://cdn.example.com/result.mp4', ...result },
+        isTest: false,
+      },
+    }).run;
+
+    it('reads it from the result, and never offers to publish over it', () => {
+      for (const visibility of ['public', 'unlisted', 'private'] as const) {
+        const run = succeeded({ linkedPost: { id: 'post-1', visibility } });
+        expect(templateRunLinkedPost(run.result)).toEqual({ id: 'post-1', visibility });
+        expect(canPublishTemplateRunResult(run)).toBe(false);
+      }
+    });
+
+    it('offers Publish for a result with no post, from a read that names none or an older one that leaves it out', () => {
+      const none = succeeded({ linkedPost: null });
+      const older = succeeded({});
+
+      expect(templateRunLinkedPost(none.result)).toBeNull();
+      expect(canPublishTemplateRunResult(none)).toBe(true);
+      expect(older.result).not.toHaveProperty('linkedPost');
+      expect(templateRunLinkedPost(older.result)).toBeNull();
+      expect(canPublishTemplateRunResult(older)).toBe(true);
+      expect(templateRunLinkedPost(null)).toBeNull();
+    });
+
+    it('reads a visibility it does not know as private, and a post without an id as none', () => {
+      expect(templateRunLinkedPost(succeeded({ linkedPost: { id: 'post-1', visibility: 'followers' } }).result))
+        .toEqual({ id: 'post-1', visibility: 'private' });
+      expect(templateRunLinkedPost(succeeded({ linkedPost: { visibility: 'public' } }).result)).toBeNull();
+    });
+  });
+
+  it('says where the run stands after a refused action, by its code', () => {
+    expect(templateRunActionErrorMessage('This run has ended. Start a new run to try the template again.', 'RUN_TERMINAL'))
+      .toBe('This run has ended. Start a new run to try the template again.');
+    expect(templateRunActionErrorMessage('Template run step not found.', 'STEP_NOT_FOUND'))
+      .toBe('That step is no longer part of this run.');
+    for (const code of ['STALE_STEP_ATTEMPT', 'APPROVAL_ALREADY_HANDLED', 'APPROVAL_NOT_READY', 'STEP_NOT_RETRYABLE']) {
+      expect(templateRunActionErrorMessage('This checkpoint is not waiting for approval.', code), code)
+        .toBe('This step was already handled. The run has been refreshed.');
+    }
+    // The checkpoint retry's own codes come with this message.
+    expect(templateRunActionErrorMessage('This checkpoint was already handled. Refresh the run before retrying.', 'RETRY_ALREADY_STARTED'))
+      .toBe('This step was already handled. The run has been refreshed.');
+    // Anything else keeps the server's words.
+    expect(templateRunActionErrorMessage('Insufficient credits.', 'INSUFFICIENT_CREDITS')).toBe('Insufficient credits.');
+    expect(templateRunActionErrorMessage('Network request failed. Please check your connection and try again.', null))
+      .toBe('Network request failed. Please check your connection and try again.');
+  });
+
   it('gates known credit shortfalls and accepts only safe result links', () => {
     expect(canAffordTemplateCredits(7, 8)).toBe(false);
     expect(canAffordTemplateCredits(8, 8)).toBe(true);
@@ -169,7 +231,7 @@ describe('media template view model', () => {
       },
     }).run;
 
-    expect(prioritizeTemplateRunSteps(run.steps).map((step) => step.id)).toEqual(['failed', 'queued', 'complete']);
+    expect(prioritizeTemplateRunSteps(run.steps, run.status).map((step) => step.id)).toEqual(['failed', 'queued', 'complete']);
     expect(run.steps[2].failureCode).toBe('invalid_input_media');
     expect(templateRunStepNeedsReplacementInput(run.steps[2])).toBe(true);
     expect(canRetryTemplateRunStep('needs_attention', run.steps[2])).toBe(false);
@@ -249,7 +311,7 @@ describe('media template view model', () => {
 
       expect(screen).toContain('templateRunStepStatusLabel(runStatus, step)');
       expect(screen).toContain('templateRunStepPlaceholderLabel(runStatus, step)');
-      for (const wording of ['Needs attention', 'Not finished', 'This step can be retried', 'This step cannot be retried', 'Waiting for output', 'No output']) {
+      for (const wording of ['Needs attention', 'Not finished', 'This step can be retried', 'This step cannot be retried', 'This step did not start', 'Waiting for output', 'No output']) {
         expect(screen, wording).not.toContain(wording);
       }
       // The mark over those words and the way out of a step that cannot go on
@@ -259,7 +321,7 @@ describe('media template view model', () => {
       expect(screen).toContain('templateRunStepNeedsNewRun(runStatus, step)');
       // The retry mark is drawn for that answer, and the way out is a button on the card.
       expect(screen).toContain("mark === 'retry' ? <RefreshCw");
-      expect(screen).toMatch(/needsNewRun \? \(\s*<SecondaryButton/);
+      expect(screen).toMatch(/needsNewRun\) \? \(\s*<SecondaryButton/);
       // Whether a step can be approved is the outcome's answer too: asking the
       // step alone would offer it on a run that has ended.
       expect(screen).toContain("outcome === 'review'");
@@ -367,6 +429,53 @@ describe('media template view model', () => {
       }
       // The sweep reached the steps this is about.
       expect(stuck).toBeGreaterThan(0);
+    });
+  });
+
+  describe('a retry that never started', () => {
+    // What a fresh read shows after a retry by hand whose run was never set going
+    // again: the new attempt, queued, which the server marks canRetry.
+    const stranded = step({ id: 'video-attempt-2', mediaKind: 'video', label: 'Final video', status: 'queued', canRetry: true, estimatedRetryCredits: 30 });
+
+    it.each(['needs_attention', 'awaiting_approval'] as const)('can be retried, and says so, in a %s run', (runStatus) => {
+      expect(isTemplateRunStepStalled(runStatus, stranded)).toBe(true);
+      expect(templateRunStepOutcome(runStatus, stranded)).toBe('needs_attention');
+      expect(templateRunStepStatusLabel(runStatus, stranded)).toBe('Needs attention');
+      expect(templateRunStepPlaceholderLabel(runStatus, stranded)).toBe('This step did not start');
+      expect(templateRunStepPlaceholderMark(runStatus, stranded)).toBe('retry');
+      expect(canRetryTemplateRunStep(runStatus, stranded)).toBe(true);
+      expect(templateRunStepNeedsNewRun(runStatus, stranded)).toBe(false);
+    });
+
+    it('comes first, as the one step that can move the run on', () => {
+      const steps = [
+        step({ id: 'opening', status: 'succeeded' }),
+        step({ id: 'review', kind: 'approval', status: 'queued' }),
+        stranded,
+      ];
+      expect(prioritizeTemplateRunSteps(steps, 'needs_attention').map((value) => value.id)).toEqual(['video-attempt-2', 'review', 'opening']);
+    });
+
+    it('leaves every other queued step waiting', () => {
+      // The worker's busy wait carries its own note and no retry; a step behind
+      // a review was never tried; a review is not a generation; a polled run starts its own steps.
+      const waiting = [
+        ['needs_attention', { ...stranded, canRetry: false }],
+        ['awaiting_approval', { ...stranded, canRetry: false }],
+        ['needs_attention', { ...stranded, kind: 'approval' as const }],
+        ['processing', stranded],
+        ['queued', stranded],
+      ] as const;
+      for (const [runStatus, value] of waiting) {
+        const context = JSON.stringify({ runStatus, kind: value.kind, canRetry: value.canRetry });
+        expect(isTemplateRunStepStalled(runStatus, value), context).toBe(false);
+        expect(templateRunStepOutcome(runStatus, value), context).toBe('in_progress');
+        expect(canRetryTemplateRunStep(runStatus, value), context).toBe(false);
+      }
+      // A run that has ended starts nothing again.
+      expect(isTemplateRunStepStalled('cancelled', stranded)).toBe(false);
+      expect(templateRunStepOutcome('cancelled', stranded)).toBe('not_finished');
+      expect(canRetryTemplateRunStep('cancelled', stranded)).toBe(false);
     });
   });
 

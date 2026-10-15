@@ -134,7 +134,12 @@ describe('notifiers sent behind an answer', () => {
         await expect(notify(unavailable)).resolves.toBeNull();
       });
 
-      expect(logged).toEqual(['failed_to_create_mobile_notification']);
+      // A failed creation's push first reads the settled row for the credits it
+      // gave back; with the database down that read is logged and the push is
+      // still attempted without the sentence.
+      expect(logged).toEqual(_action === 'a generation that failed'
+        ? ['generation_notification_refund_unread', 'failed_to_create_mobile_notification']
+        : ['failed_to_create_mobile_notification']);
     },
   );
 

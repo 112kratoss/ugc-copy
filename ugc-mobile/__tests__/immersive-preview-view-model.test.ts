@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
   buildImmersiveGenerationItems,
+  formatOutputCount,
+  getGenerationOutputCount,
   getImmersiveStatusSlide,
   buildImmersiveOwnerPostItems,
   buildImmersiveShowcaseItems,
@@ -14,8 +17,8 @@ import {
   showcaseFeedItemOpenHref,
   textPostViewerHref,
 } from '../lib/immersive-preview-view-model';
-import { getDetailsPrimaryAction } from '../lib/post-details-view-model';
-import { getViewerActionSlots } from '../lib/viewer-actions';
+import { buildGenerationStats, getDetailsPrimaryAction } from '../lib/post-details-view-model';
+import { getViewerActionSlots, getViewerStateChip } from '../lib/viewer-actions';
 import { getShowcasePlaybackUrl } from '../lib/showcase-media';
 import type { GenerationListItem, OwnerPostListItem, ShowcaseFeedItem } from '../lib/types';
 
@@ -469,7 +472,8 @@ describe('immersive preview view model', () => {
       saveLabel: 'Saved',
       isSaved: true,
       canSave: false,
-      canShare: true,
+      // Shared as its post, and it has none yet: Publish is the way to a link.
+      canShare: false,
       sharePath: null,
       recreateTool: 'motion',
       recreatePrompt: 'Animate the subject',
@@ -744,7 +748,7 @@ describe('immersive preview view model', () => {
       const [item] = buildImmersiveGenerationItems('profile-creations', [
         generation({ id: 'unposted-gen', linked_post_id: null, archived_at: null }),
       ], { creatorLabel: '@batman' });
-      expect(item.availableActions).toEqual(['publish', 'recreate', 'archive', 'share', 'download', 'view-details']);
+      expect(item.availableActions).toEqual(['publish', 'recreate', 'archive', 'delete-creation', 'download', 'view-details']);
       expect(item.disabledActions).toEqual({});
     });
 
@@ -755,7 +759,7 @@ describe('immersive preview view model', () => {
 
       // Nothing came back from the model, so there is nothing to publish or
       // share -- only the prompt, and another attempt at it.
-      expect(item.availableActions).toEqual(['recreate', 'archive', 'view-details']);
+      expect(item.availableActions).toEqual(['recreate', 'archive', 'delete-creation', 'view-details']);
       // The rail reads canShare directly, and sharing an unposted creation
       // means publishing it first.
       expect(item.canShare).toBe(false);
@@ -792,7 +796,7 @@ describe('immersive preview view model', () => {
           },
         }),
       ]);
-      expect(item.availableActions).toEqual(['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'archive', 'share', 'download', 'view-details']);
+      expect(item.availableActions).toEqual(['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'archive', 'delete-creation', 'share', 'download', 'view-details']);
       expect(item.linkedPostBundle).toMatchObject({ id: 'bundle-1', accessMode: 'paid' });
       expect(item.linkedPostVisibility).toBe('public');
       expect(item.disabledActions).toEqual({});
@@ -811,7 +815,10 @@ describe('immersive preview view model', () => {
         }),
       ]);
 
-      expect(item.availableActions).toEqual(['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'archive', 'share', 'download', 'view-details']);
+      // A private post has no link to send: Share is not offered until it is public or unlisted.
+      expect(item.availableActions).toEqual(['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'archive', 'delete-creation', 'download', 'view-details']);
+      expect(item.canShare).toBe(false);
+      expect(item.sharePath).toBeNull();
       expect(item.linkedPostBundle).toBeNull();
       expect(item.linkedPostVisibility).toBe('private');
     });
@@ -831,7 +838,7 @@ describe('immersive preview view model', () => {
         }),
       ]);
 
-      expect(item.availableActions).toEqual(['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'archive', 'share', 'download', 'view-details']);
+      expect(item.availableActions).toEqual(['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'archive', 'delete-creation', 'share', 'download', 'view-details']);
       expect(item.linkedPostVisibility).toBe('unlisted');
       expect(item.linkedPostPath).toBe('/showcase/post-unlisted');
     });
@@ -884,7 +891,8 @@ describe('immersive preview view model', () => {
       const [item] = buildImmersiveGenerationItems('profile-creations', [
         generation({ id: 'archived-gen', archived_at: '2026-06-10T00:00:00Z' }),
       ], { creatorLabel: '@batman' });
-      expect(item.availableActions).toEqual(['restore', 'view-details']);
+      expect(item.availableActions).toEqual(['restore', 'delete-creation', 'view-details']);
+      expect(item.canShare).toBe(false);
       expect(item.disabledActions).toEqual({
         publish: 'This creation is archived',
         recreate: 'This creation is archived',
@@ -892,5 +900,196 @@ describe('immersive preview view model', () => {
         share: 'This creation is archived',
       });
     });
+  });
+});
+
+/** An example the shared contract documents for `GET /api/generations`. */
+function contractGeneration(id: string): GenerationListItem {
+  const example = mobileApiContract.endpoints.listGenerations.response.generations.find((item) => item.id === id);
+  if (!example) throw new Error(`No ${id} in the listGenerations fixture`);
+  return example as unknown as GenerationListItem;
+}
+
+const owner = { creatorLabel: '@batman' };
+
+describe('a failed run says what came back and why', () => {
+  // The row keeps its cost after settlement returns it, so "Cost: 40 credits"
+  // read as a charge for a run that cost nothing (audit 02-1).
+  it('leads its status page with the credits returned, then the reason, for the contract example', () => {
+    const [item] = buildImmersiveGenerationItems('studio-creations', [contractGeneration('failed-video-1')], owner);
+
+    expect(getImmersiveStatusSlide(item)).toEqual({
+      title: 'This render failed',
+      body: '40 credits returned. This model would not accept the reference image because it looks like a photo of a real person. Try a reference image without a recognisable face, or generate this with a different video model.',
+    });
+  });
+
+  it('says one credit in the singular', () => {
+    const [item] = buildImmersiveGenerationItems('studio-creations', [
+      generation({ status: 'failed', output_url: null, cost: 1, refunded: true, error_message: null }),
+    ], owner);
+
+    expect(getImmersiveStatusSlide(item).body).toMatch(/^1 credit returned\. No image came back from the model/);
+  });
+
+  it('shows no cost on the details slide for a refunded run, and what came back instead', () => {
+    const [item] = buildImmersiveGenerationItems('studio-creations', [contractGeneration('failed-video-1')], owner);
+
+    const stats = buildGenerationStats(item.details?.generationInfo);
+    expect(stats.find((stat) => stat.label === 'Cost')).toBeUndefined();
+    expect(stats).toContainEqual({ label: 'Returned', value: '40 credits' });
+    expect(item.details?.generationInfo).toMatchObject({ refunded: true, failureReason: expect.stringMatching(/^This model would not accept/) });
+  });
+
+  it('keeps the cost of a failed run that was not refunded, and still gives its reason', () => {
+    const [item] = buildImmersiveGenerationItems('studio-creations', [
+      generation({ status: 'failed', output_url: null, cost: 40, refunded: false, error_message: 'The provider timed out.' }),
+    ], owner);
+
+    expect(buildGenerationStats(item.details?.generationInfo)).toContainEqual({ label: 'Cost', value: '40 credits' });
+    expect(getImmersiveStatusSlide(item).body).toBe('The provider timed out.');
+  });
+
+  it('calls its Recreate "Try again" on the details page', () => {
+    const [item] = buildImmersiveGenerationItems('studio-creations', [contractGeneration('failed-video-1')], owner);
+
+    expect(getDetailsPrimaryAction(item, { canAccess: false })).toEqual({ label: 'Try again' });
+    expect(getViewerActionSlots(item).find((slot) => slot.id === 'create')?.label).toBe('Try again');
+  });
+});
+
+describe('a run still in flight', () => {
+  it('says it is rendering while it waits for the provider, not that it has no file', () => {
+    const [item] = buildImmersiveGenerationItems('profile-creations', [
+      generation({ id: 'queued', status: 'pending', output_url: null }),
+    ], owner);
+
+    expect(getImmersiveStatusSlide(item).title).toBe('Still rendering');
+  });
+
+  // Its credits are held until the run settles, and only the row can settle it.
+  it('is not offered Delete until it has settled', () => {
+    const [item] = buildImmersiveGenerationItems('profile-creations', [
+      generation({ id: 'running', status: 'processing', output_url: null }),
+    ], owner);
+
+    expect(item.availableActions).not.toContain('delete-creation');
+  });
+});
+
+describe('a creation moderation removed', () => {
+  const removed = () => buildImmersiveGenerationItems('profile-creations', [
+    generation({
+      id: 'removed',
+      archived_at: '2026-10-01T00:00:00.000Z',
+      moderation_removed_at: '2026-10-01T00:00:00.000Z',
+    }),
+  ], owner)[0];
+
+  // Restore refuses it with "Creation not found." (audit 01-5).
+  it('offers Delete and no Restore', () => {
+    expect(removed().availableActions).toEqual(['delete-creation', 'view-details']);
+  });
+
+  it('draws none of its media, and its status page and chip say why', () => {
+    const item = removed();
+
+    expect(item.mediaItems).toEqual([]);
+    expect(item.mediaUrl).toBeNull();
+    expect(getImmersiveStatusSlide(item).title).toBe('Removed by moderation');
+    expect(getViewerStateChip(item)).toEqual({ label: 'Removed by moderation', tone: 'danger' });
+  });
+});
+
+describe("a template's output", () => {
+  const template = (runStatus: 'succeeded' | 'cancelled' | 'failed', overrides: Partial<GenerationListItem> = {}) => (
+    buildImmersiveGenerationItems('profile-creations', [
+      generation({
+        id: `template-${runStatus}`,
+        origin: 'template',
+        prompt: null,
+        title: null,
+        template: { runId: 'run-7', templateId: 'template-1', templateTitle: 'Product reveal', runStatus },
+        ...overrides,
+      }),
+    ], owner)[0]
+  );
+
+  // The server refuses to recreate, archive or delete it (audit 01-3).
+  it('offers Open run, and never Recreate, Archive or Delete', () => {
+    expect(template('succeeded').availableActions).toEqual(['publish', 'open-run', 'download', 'view-details']);
+    expect(template('succeeded').templateRun).toEqual({ runId: 'run-7', endedAs: null });
+  });
+
+  it('is named by its template, or "Template result" without one', () => {
+    expect(template('succeeded').title).toBe('Product reveal');
+    expect(template('succeeded', {
+      template: { runId: 'run-7', templateId: 'template-1', templateTitle: null, runStatus: 'succeeded' },
+    }).title).toBe('Template result');
+  });
+
+  // Only a succeeded run's result can be posted.
+  it('notes the end of a run that did not succeed, and offers no Publish for its steps', () => {
+    const cancelled = template('cancelled');
+    const failed = template('failed');
+
+    expect(cancelled.availableActions).toEqual(['open-run', 'download', 'view-details']);
+    expect(failed.availableActions).toEqual(['open-run', 'download', 'view-details']);
+    expect(getViewerStateChip(cancelled)).toEqual({ label: 'From template · run cancelled', tone: 'warning' });
+    expect(getViewerStateChip(failed)).toEqual({ label: 'From template · run failed', tone: 'warning' });
+    expect(cancelled.displayText).toBe('A finished step of a template run that was cancelled. Open the run to see every step.');
+  });
+});
+
+describe('Share on a creation', () => {
+  const linked = (visibility: string, overrides: Partial<GenerationListItem> = {}) => (
+    buildImmersiveGenerationItems('profile-creations', [
+      generation({ id: 'linked', linked_post_id: 'post-9', linked_post_visibility: visibility, ...overrides }),
+    ], owner)[0]
+  );
+
+  // It always opened the composer, which then sent a posted creation to its
+  // post: two hops and no share sheet (audit 01-6).
+  it('shares the link of a public or unlisted post', () => {
+    expect(linked('public')).toMatchObject({ canShare: true, sharePath: '/showcase/post-9' });
+    expect(linked('unlisted')).toMatchObject({ canShare: true, sharePath: '/showcase/post-9' });
+  });
+
+  it('offers nothing to share for a private post, an archived post, or an archived creation', () => {
+    expect(linked('private')).toMatchObject({ canShare: false, sharePath: null });
+    expect(linked('public', { linked_post_archived_at: '2026-10-01T00:00:00.000Z' })).toMatchObject({ canShare: false, sharePath: null });
+    expect(linked('public', { archived_at: '2026-10-01T00:00:00.000Z' }).canShare).toBe(false);
+  });
+});
+
+describe('a run that made several files', () => {
+  // The library is read with `detail=summary`, which sends the count and the
+  // first output only: the others were unreachable in the app (audit 01-2).
+  it('carries the count onto its details, which state it, and keeps one slide', () => {
+    const [item] = buildImmersiveGenerationItems('profile-creations', [generation({ output_count: 4 })], owner);
+
+    expect(item.details?.generationInfo?.outputCount).toBe(4);
+    expect(buildGenerationStats(item.details?.generationInfo)).toContainEqual({ label: 'Outputs', value: '4' });
+    expect(item.mediaItems).toHaveLength(1);
+  });
+
+  it('says nothing of a run of one, or of files that cannot be opened', () => {
+    const [single] = buildImmersiveGenerationItems('profile-creations', [generation({ output_count: 1 })], owner);
+
+    expect(single.details?.generationInfo?.outputCount).toBeNull();
+    expect(buildGenerationStats(single.details?.generationInfo).map((stat) => stat.label)).not.toContain('Outputs');
+    expect(getGenerationOutputCount({})).toBeNull();
+    expect(getGenerationOutputCount({ output_count: 3, moderation_removed_at: '2026-10-01T00:00:00.000Z' })).toBeNull();
+    expect(getGenerationOutputCount({ output_count: 3, source_unavailable_at: '2026-10-01T00:00:00.000Z' })).toBeNull();
+  });
+
+  it('counts a full record by its addresses when it carries no count', () => {
+    expect(getGenerationOutputCount({ output_urls: ['https://cdn.example.com/a.png', 'https://cdn.example.com/b.png'] })).toBe(2);
+  });
+
+  it('words the count the way the web Studio does', () => {
+    expect(formatOutputCount(3)).toBe('3 outputs');
+    expect(formatOutputCount(1)).toBeNull();
+    expect(formatOutputCount(null)).toBeNull();
   });
 });
