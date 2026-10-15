@@ -3,6 +3,7 @@ import { useQuery, type QueryClient } from '@tanstack/react-query';
 import { useAuth } from './auth';
 import { useOnboarding } from './onboarding';
 import {
+  isIdentityDeferredInMetadata,
   resolveOnboardingDestination,
   type OnboardingDestination,
 } from './onboarding-destination';
@@ -91,5 +92,6 @@ export function useOnboardingDestination(): OnboardingDestination {
     hasUser: Boolean(user),
     welcome: welcomeQuery.data ?? null,
     local: state,
+    identityDeferredOnAccount: isIdentityDeferredInMetadata(user?.user_metadata),
   });
 }

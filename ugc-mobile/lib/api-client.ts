@@ -408,6 +408,32 @@ export type AccountDeletionResponse = {
   cleanupPending?: boolean;
 };
 
+/**
+ * A purchase the restore left alone instead of failing the whole restore:
+ * `transaction_conflict` means the store transaction is already on file for
+ * another account, product or store.
+ */
+export type SkippedMobileCreditPurchase = {
+  transactionId: string;
+  productId: string;
+  reason: 'transaction_conflict';
+};
+
+/**
+ * `POST /api/mobile/commerce/restore`. The counts, the balance and `skipped`
+ * are absent from a server older than the restore that skips a conflict.
+ */
+export type MobileCommerceRestoreResponse = {
+  success: boolean;
+  /** The balance after the restore. */
+  credits?: number | null;
+  /** Credit purchases this restore settled for the first time. */
+  restoredCreditPurchases?: number;
+  alreadyProcessedCreditPurchases?: number;
+  skipped?: SkippedMobileCreditPurchase[];
+  entitlements: MobileCommerceSyncResponse[];
+};
+
 export type CreatorPayoutRequestSummary = {
   id: string;
   amountTokenSubunits: number;
@@ -1643,7 +1669,7 @@ export function createApiClient({
         body: JSON.stringify(body),
       }),
     restoreMobilePurchases: () =>
-      request<{ success: boolean; entitlements: MobileCommerceSyncResponse[] }>('/api/mobile/commerce/restore', {
+      request<MobileCommerceRestoreResponse>('/api/mobile/commerce/restore', {
         method: 'POST',
       }),
     registerMobilePushToken: (body: MobilePushTokenRegistration) =>

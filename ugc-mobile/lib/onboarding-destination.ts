@@ -17,6 +17,26 @@ export interface OnboardingDestinationInput {
   hasUser: boolean;
   welcome: Pick<WelcomeCreditResponse, 'status' | 'identityComplete'> | null;
   local: Pick<InstallOnboardingState, 'identityDeferredAt' | 'status'>;
+  /**
+   * "Set up later" on record for the account (`isIdentityDeferredInMetadata`),
+   * chosen on the web or on another device. It defers the identity step as the
+   * install's own `identityDeferredAt` does.
+   */
+  identityDeferredOnAccount?: boolean;
+}
+
+/** The web's key for "Set up later" (src/lib/auth-onboarding.ts); the app's identity step writes it too. */
+const IDENTITY_DEFERRED_METADATA_KEY = 'creator_profile_onboarding_skipped_version';
+
+/**
+ * Whether the account's `user_metadata` says "Set up later", read as the web
+ * reads it (`hasSkippedProfileOnboarding`). A creator who chose it on the web
+ * was otherwise shown "Finish your creator setup" on the phone.
+ */
+export function isIdentityDeferredInMetadata(metadata: unknown): boolean {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return false;
+  const version = (metadata as Record<string, unknown>)[IDENTITY_DEFERRED_METADATA_KEY];
+  return typeof version === 'number' && version >= 1;
 }
 
 /**
@@ -43,12 +63,13 @@ export function resolveOnboardingDestination({
   hasUser,
   welcome,
   local,
+  identityDeferredOnAccount = false,
 }: OnboardingDestinationInput): OnboardingDestination {
   // A guest who stepped out of the intro ("Explore as guest") or finished it
   // is not asked again on every visit; Settings still opens the flow.
   if (!hasUser) return local.status === 'skipped' || local.status === 'completed' ? 'none' : 'intro';
   if (!welcome) return 'pending';
-  if (!welcome.identityComplete && !local.identityDeferredAt) return 'identity';
+  if (!welcome.identityComplete && !local.identityDeferredAt && !identityDeferredOnAccount) return 'identity';
   if (welcome.status === 'eligible') return 'reward';
   return 'none';
 }

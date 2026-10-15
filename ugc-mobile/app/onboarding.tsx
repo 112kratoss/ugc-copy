@@ -23,7 +23,7 @@ import { isNetworkRequestFailedError } from '@/lib/supabase-auth-recovery';
 import { useAuth } from '@/lib/auth';
 import { useReducedMotion } from '@/lib/motion';
 import { trackOnboardingEvent, useOnboarding } from '@/lib/onboarding';
-import { resolveOnboardingDestination } from '@/lib/onboarding-destination';
+import { isIdentityDeferredInMetadata, resolveOnboardingDestination } from '@/lib/onboarding-destination';
 import { appTheme } from '@/lib/theme';
 import { useNavigationBarSurface } from '@/lib/system-bars';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
@@ -80,6 +80,27 @@ function isClaimedIdentity(profile: ProfileResponse | null) {
     && Boolean(profile?.displayName?.trim());
 }
 
+/**
+ * The answers after the identity step that leave nothing to claim yet still
+ * need saying. The web's welcome page explains both; the app used to go
+ * straight on to the creator without a word.
+ */
+function welcomeStatusNotice(status: WelcomeCreditResponse['status'] | undefined) {
+  if (status === 'identity_already_claimed') {
+    return {
+      title: 'Welcome credits already claimed',
+      body: 'This sign-in already received the one-time welcome credits on a previous account.',
+    };
+  }
+  if (status === 'unavailable') {
+    return {
+      title: 'Welcome credits are unavailable right now',
+      body: 'Your welcome credits are temporarily unavailable. You can continue and claim them from Home.',
+    };
+  }
+  return null;
+}
+
 function authDisplayName(metadata: Record<string, unknown> | undefined) {
   const candidate = metadata?.full_name ?? metadata?.name;
   return typeof candidate === 'string' ? candidate.trim() : '';
@@ -103,7 +124,7 @@ export default function OnboardingScreen() {
 
 function OnboardingFlow() {
   const theme = useAppTheme();
-  const { api, user, refreshProfile, updateCredits } = useAuth();
+  const { api, user, refreshProfile, updateCredits, markIdentityDeferredOnAccount } = useAuth();
   const { state, update, skip, complete } = useOnboarding();
   const queryClient = useQueryClient();
   const identityDeferredAt = state.identityDeferredAt;
@@ -171,6 +192,7 @@ function OnboardingFlow() {
         hasUser: true,
         welcome: nextWelcome,
         local: { identityDeferredAt, status: state.status },
+        identityDeferredOnAccount: isIdentityDeferredInMetadata(user.user_metadata),
       });
       if (destination === 'none') {
         // Nothing outstanding. Reaching here means a deep link or a stale card,
@@ -224,7 +246,8 @@ function OnboardingFlow() {
   }, [api, goal, stage, step]);
 
   useEffect(() => {
-    if (stage !== 'reward' || rewardViewedTracked.current) return;
+    // A stage that only explains why nothing can be claimed is not a reward view.
+    if (stage !== 'reward' || rewardViewedTracked.current || welcomeStatusNotice(welcome?.status)) return;
     rewardViewedTracked.current = true;
     setAnimatedCredits(welcome?.status === 'eligible' ? 0 : welcome?.amount ?? 25);
     void trackOnboardingEvent(api, 'reward_viewed', { goal, step: 'reward' });
@@ -270,9 +293,15 @@ function OnboardingFlow() {
    * later. Settings still opens the flow whenever they want it.
    */
   const leaveForNow = async (fromStep: string) => {
-    await (fromStep === 'identity'
-      ? update({ status: 'skipped', identityDeferredAt: new Date().toISOString() })
-      : skip());
+    if (fromStep === 'identity') {
+      await update({ status: 'skipped', identityDeferredAt: new Date().toISOString() });
+      // The account's own record, the one the web keeps too, so "later" holds
+      // on the web and on the next device as well. Not awaited: the install's
+      // record above already holds it here, and leaving must not wait on auth.
+      void markIdentityDeferredOnAccount().catch(() => undefined);
+    } else {
+      await skip();
+    }
     void trackOnboardingEvent(api, 'skipped', { goal, step: fromStep });
     router.replace('/(tabs)' as never);
   };
@@ -328,11 +357,12 @@ function OnboardingFlow() {
       await update({ goal });
       await api.updateOnboardingState({ goal }).catch(() => undefined);
       void trackOnboardingEvent(api, 'username_saved', { goal, step: 'identity' });
-      // The reward stage is for people who can actually claim. Anyone else —
-      // most often an account that predates the grant program — has now
+      // The reward stage is for people who can actually claim, and for the two
+      // answers that need a word first (it shows no figure for them). Anyone
+      // else — most often an account that predates the grant program — has now
       // finished everything the flow can offer, so end it rather than show a
       // welcome-credits figure they will never receive.
-      if (nextWelcome.status === 'eligible') {
+      if (nextWelcome.status === 'eligible' || welcomeStatusNotice(nextWelcome.status)) {
         setStage('reward');
       } else {
         await startCreating();
@@ -384,20 +414,22 @@ function OnboardingFlow() {
       const result = await api.claimWelcomeCredits();
       adoptWelcome(result);
       if (result.status === 'claimed' || result.status === 'already_claimed') {
-        updateCredits(result.credits);
+        if (result.status === 'claimed') {
+          updateCredits(result.credits);
+        } else {
+          // Claimed earlier, perhaps on the web: `credits` is the balance right
+          // after that grant, not the balance now.
+          void refreshProfile().catch(() => undefined);
+        }
         await celebrateCredits(result.amount);
         void trackOnboardingEvent(api, 'reward_claimed', { goal, step: 'reward' });
-      } else {
-        setMessage(result.status === 'unavailable'
-          ? 'Your welcome credits are temporarily unavailable. You can continue and claim them from Home.'
-          : result.status === 'requires_account'
-            ? 'Create an account to claim your welcome credits.'
-            // The one-time pack was already claimed by a previous (since
-            // deleted) account using this sign-in. Nothing was added, so this
-            // branch must never reach celebrateCredits/updateCredits.
-            : result.status === 'identity_already_claimed'
-              ? 'This sign-in already received the one-time welcome credits on a previous account.'
-              : 'Finish your creator name before claiming this reward.');
+      } else if (!welcomeStatusNotice(result.status)) {
+        // `unavailable` and `identity_already_claimed` are said by the card
+        // itself (and the latter must never reach celebrateCredits or
+        // updateCredits: nothing was added).
+        setMessage(result.status === 'requires_account'
+          ? 'Create an account to claim your welcome credits.'
+          : 'Finish your creator name before claiming this reward.');
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not claim credits.');
@@ -422,6 +454,7 @@ function OnboardingFlow() {
 
   const claimReady = welcome?.status === 'eligible';
   const claimed = welcome?.status === 'claimed' || welcome?.status === 'already_claimed';
+  const statusNotice = welcomeStatusNotice(welcome?.status);
   // The figure is only meaningful to someone who is about to receive it or just
   // did. For everyone else `amount` falls back to the program default, which is
   // how an account holding 26,831 credits was shown a headline "25".
@@ -583,12 +616,16 @@ function OnboardingFlow() {
                         a guest was told to "unlock" by creating an account. */}
                     <Kicker color="primary">Welcome credits</Kicker>
                     <AppText heading variant="pageTitle" style={{ textAlign: 'center' }}>
-                      {claimed ? 'Your welcome credits are ready' : 'Claim your welcome credits'}
+                      {statusNotice
+                        ? statusNotice.title
+                        : claimed ? 'Your welcome credits are ready' : 'Claim your welcome credits'}
                     </AppText>
                     <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>
-                      {claimed
-                        ? 'Your creation credits are ready for your first project.'
-                        : 'Claim creation-only credits for images, video, and motion.'}
+                      {statusNotice
+                        ? statusNotice.body
+                        : claimed
+                          ? 'Your creation credits are ready for your first project.'
+                          : 'Claim creation-only credits for images, video, and motion.'}
                     </AppText>
                   </View>
                   {showAmount ? (
@@ -597,7 +634,9 @@ function OnboardingFlow() {
                       <AppText variant="label" color="textSecondary">creation credits</AppText>
                     </View>
                   ) : null}
-                  <AppText variant="caption" color="faint" style={{ textAlign: 'center' }}>Welcome credits are for creating. They can’t unlock creators’ resources.</AppText>
+                  {statusNotice ? null : (
+                    <AppText variant="caption" color="faint" style={{ textAlign: 'center' }}>Welcome credits are for creating. They can’t unlock creators’ resources.</AppText>
+                  )}
                 </Card>
               </Animated.View>
               {message ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center' }}>{message}</Text> : null}

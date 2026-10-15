@@ -9,6 +9,15 @@ import { buildShowcaseFeedEventRequest } from '../lib/showcase-feed-events';
 import type { ShowcaseFeedEventRequest, ShowcaseFeedEventType, UndoFeedFeedbackRequest } from '../lib/types';
 import { getShowcaseViewerImageUrl } from '../lib/showcase-media';
 import { isAmbiguousGenerationStartFailure } from '../lib/generation-attempts';
+import { describeRestoreOutcome, restoreLandedPurchase } from '../lib/pricing-view-model';
+import { readReferralProgram } from '../lib/referral-attribution';
+
+// referral-attribution keeps its invite in the keychain; only its reader runs here.
+vi.mock('expo-secure-store', () => ({
+  getItemAsync: vi.fn(async () => null),
+  setItemAsync: vi.fn(async () => undefined),
+  deleteItemAsync: vi.fn(async () => undefined),
+}));
 
 type ContractEndpointKey = keyof typeof mobileApiContract.endpoints;
 type ContractEndpoint = {
@@ -287,6 +296,8 @@ const successCases: Array<{
     }),
   },
   { key: 'mobileCommerceRestore', call: (api) => api.restoreMobilePurchases() },
+  // The landing reads the program's terms from this answer (03-7).
+  { key: 'recordReferralVisit', call: (api) => api.recordReferralVisit({ code: 'CREATOR1', source: 'mobile' }) },
   {
     key: 'registerMobilePushToken',
     call: (api) => api.registerMobilePushToken({
@@ -357,7 +368,6 @@ const extendedOperationCases: Array<{
   },
   { key: 'getReferralOverview', call: (api) => api.getReferralOverview() },
   { key: 'createReferralLink', call: (api) => api.createReferralLink() },
-  { key: 'recordReferralVisit', call: (api) => api.recordReferralVisit({ code: 'CREATOR1', source: 'mobile' }) },
   { key: 'claimReferral', call: (api) => api.claimReferral({ code: 'CREATOR1' }) },
   {
     key: 'reportMediaDiagnostics',
@@ -837,4 +847,30 @@ it.each(mobileApiContract.profileRequestTooLarge.operations)('preserves %s reque
     status: failure.status, message: failure.response.error, details: failure.response,
   });
   expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+describe('the shared answers the pricing and invite screens read', () => {
+  it("reads the program's terms from the visit answer, and none while no program runs (03-7)", async () => {
+    const endpoint = contract.endpoints.recordReferralVisit as unknown as ContractEndpoint & {
+      response: { program: unknown };
+      responseVariants: { programUnavailable: { program: unknown } };
+    };
+    const visit = await clientForEndpoint('recordReferralVisit').recordReferralVisit({ code: 'CREATOR1', source: 'mobile' });
+    expect(readReferralProgram(visit.program)).toEqual(endpoint.response.program);
+    expect(readReferralProgram(endpoint.responseVariants.programUnavailable.program)).toBeNull();
+  });
+
+  it('reports the restore example: the settled purchase and the one it skipped (03-10)', async () => {
+    const restore = await clientForEndpoint('mobileCommerceRestore').restoreMobilePurchases();
+    expect(restore.skipped).toEqual([
+      { transactionId: 'GPA.3301-2207-4419-55021', productId: 'magicbooklet.credits.starter', reason: 'transaction_conflict' },
+    ]);
+    expect(restoreLandedPurchase(restore, 0)).toBe(true);
+    expect(describeRestoreOutcome(restore)).toEqual({
+      tone: 'success',
+      title: 'Purchases restored',
+      body: '1 purchase was added to your balance. 1 purchase (Starter) is already on file for another '
+        + 'Magicbooklet account, so it was not added here.',
+    });
+  });
 });

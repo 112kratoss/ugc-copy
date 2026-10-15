@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { CheckCircle2, Circle } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -26,14 +26,24 @@ import {
   purchasePackage,
   resolveCreditEntitlement,
 } from '@/lib/iap';
+import { isPaymentPendingPurchase } from '@/lib/iap-purchase';
 import {
+  CHARGED_PURCHASE_LANDED_NOTICE,
+  CHARGED_PURCHASE_NOT_LANDED_NOTICE,
   DEFAULT_MOBILE_PRICING_PLAN_ID,
+  PAYMENT_PENDING_NOTICE,
+  describeBalanceRefresh,
+  describeRestoreOutcome,
   formatPricingDisplayPrice,
   getPricingPlanCarouselOffset,
   getPricingPlanIdForCarouselOffset,
   getPurchaseButtonLabel,
+  purchaseSyncedNotice,
   resolvePurchaseGate,
   resolveSelectedPricingPlan,
+  restoreFailedNotice,
+  restoreLandedPurchase,
+  type PricingNotice,
 } from '@/lib/pricing-view-model';
 import { CREDIT_BALANCE_LOADING_LABEL, MOBILE_PRICING_PLANS, formatCreditAmount, type MobilePricingPlan, type PricingPlanId } from '@/lib/pricing';
 import { appTheme } from '@/lib/theme';
@@ -84,7 +94,7 @@ function PricingPlanCard({
           <AppText selectable={false} variant="label" color={selected ? 'commerce' : 'muted'}>
             {plan.name}
           </AppText>
-          {plan.popular ? <Pill label="Popular" accent="commerce" style={{ minHeight: 28, paddingVertical: 4 }} /> : null}
+          {plan.badge ? <Pill label={plan.badge} accent="commerce" style={{ minHeight: 28, paddingVertical: 4 }} /> : null}
         </View>
         <SelectionIcon
           color={selected ? theme.colors.commerce : theme.colors.faint}
@@ -120,7 +130,8 @@ export default function PricingScreen() {
   // holds a real backend identity, and credits are a server-side balance on it,
   // so everything here — store configuration, purchase, restore — keys off the
   // identity. `isGuest` only decides whether to offer registration.
-  const { isGuest, identityUserId, api, credits, refreshProfile } = useAuth();
+  const { isGuest, identityUserId, api, credits, refreshProfile, ensureGuestMergeTicket } = useAuth();
+  const queryClient = useQueryClient();
   const [isConfigured, setIsConfigured] = useState(false);
   const [paymentsAllowed, setPaymentsAllowed] = useState(true);
   const [busyProductId, setBusyProductId] = useState<string | null>(null);
@@ -133,8 +144,7 @@ export default function PricingScreen() {
     if (!busyProductId) return;
     return acquireActivityLock('purchase');
   }, [busyProductId]);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [noticeTone, setNoticeTone] = useState<'success' | 'danger' | 'neutral'>('neutral');
+  const [notice, setNotice] = useState<PricingNotice | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<PricingPlanId>(DEFAULT_MOBILE_PRICING_PLAN_ID);
   const carouselRef = useRef<ScrollView>(null);
   const { width: screenWidth } = useWindowDimensions();
@@ -203,10 +213,7 @@ export default function PricingScreen() {
 
   const selectedPlan = resolveSelectedPricingPlan(selectedPlanId);
   const selectedNativePackage = packagesByProductId.get(selectedPlan.productId);
-  const selectedPrice = formatPricingDisplayPrice(
-    selectedPlan,
-    selectedNativePackage?.product.priceString
-  );
+  const selectedPrice = formatPricingDisplayPrice(selectedNativePackage?.product.priceString);
   const purchaseBusy = busyProductId === selectedPlan.productId;
   // The 5.1.1(v) rule, asserted in pricing-view-model.test.ts: purchase depends
   // on having a backend identity, not on being registered.
@@ -239,26 +246,43 @@ export default function PricingScreen() {
     ));
   };
 
+  const sessionStartingNotice: PricingNotice = {
+    tone: 'neutral',
+    title: 'Purchase status',
+    body: 'Your session is still starting. Try again in a moment.',
+  };
+
+  // A guest that has paid holds value on an identity only this device can
+  // prove. The merge ticket is what carries it to an account registered later,
+  // even if this guest session ends first.
+  const keepGuestValue = () => {
+    if (isGuest) void ensureGuestMergeTicket().catch(() => undefined);
+  };
+
   const buyCredits = async (productId: string) => {
     // No sign-in gate. App Review rejected 0.0.5 (28) under guideline 5.1.1(v)
     // for exactly the bounce that used to be here. A guest already holds a
     // backend identity, so there is nothing to ask for before taking payment.
     if (!identityUserId) {
-      setNotice('Your session is still starting. Try again in a moment.');
-      setNoticeTone('neutral');
+      setNotice(sessionStartingNotice);
       return;
     }
 
     const nativePackage = packagesByProductId.get(productId);
     if (!nativePackage) {
-      setNotice('Native purchase configuration is not ready for this product yet.');
-      setNoticeTone('danger');
+      setNotice({
+        tone: 'danger',
+        title: 'Purchase not completed',
+        body: 'Native purchase configuration is not ready for this product yet.',
+      });
       return;
     }
 
     setBusyProductId(productId);
     setNotice(null);
-    setNoticeTone('neutral');
+    // Read before the store sheet opens: a restore after a charge counts the
+    // purchase as landed when the balance it reports has moved past this.
+    const balanceBeforePurchase = credits;
     // Once the store returns, the money has moved. Nothing after that point may
     // tell the buyer their purchase failed.
     let charged = false;
@@ -275,7 +299,12 @@ export default function PricingScreen() {
       }
 
       const purchase = await purchasePackage(nativePackage, os);
+      // Set before anything reads the result: a result without a transaction
+      // id is still a payment the store has taken.
       charged = true;
+      if (!purchase.transactionId) {
+        throw new Error('Purchase transaction is missing a store identifier.');
+      }
 
       await api.syncMobilePurchase({
         provider: purchase.provider,
@@ -284,63 +313,90 @@ export default function PricingScreen() {
         entitlement,
       });
       await refreshProfile();
-      setNotice(`${formatCreditAmount(entitlement.credits)} credits are synced to your account.`);
-      setNoticeTone('success');
+      setNotice(purchaseSyncedNotice(entitlement.credits));
     } catch (error) {
       if (isUserCancelledPurchase(error)) {
         setNotice(null);
-        setNoticeTone('neutral');
       } else if (charged) {
-        await recoverChargedPurchase();
+        await recoverChargedPurchase(balanceBeforePurchase);
+      } else if (isPaymentPendingPurchase(error)) {
+        setNotice(PAYMENT_PENDING_NOTICE);
       } else {
-        setNotice(error instanceof Error ? error.message : 'Purchase could not be completed.');
-        setNoticeTone('danger');
+        setNotice({
+          tone: 'danger',
+          title: 'Purchase not completed',
+          body: error instanceof Error ? error.message : 'Purchase could not be completed.',
+        });
       }
     } finally {
       setBusyProductId(null);
     }
+    if (charged) keepGuestValue();
   };
 
   /**
    * The store charged the buyer but crediting the account did not land. Retry
-   * through the restore path, which re-reads the receipt from the store, and
-   * failing that say plainly that the payment succeeded — never that it failed.
+   * through the restore path, which re-reads the purchase from the store, and
+   * say it went through only when the restore settled it or the balance moved;
+   * otherwise say plainly that the payment succeeded and the credits are on
+   * their way — never that it failed.
    */
-  const recoverChargedPurchase = async () => {
+  const recoverChargedPurchase = async (balanceBeforePurchase: number | null) => {
     try {
-      await api.restoreMobilePurchases();
+      const restore = await api.restoreMobilePurchases();
       await refreshProfile();
-      setNotice('Your purchase went through and your credits are now up to date.');
-      setNoticeTone('success');
+      setNotice(restoreLandedPurchase(restore, balanceBeforePurchase)
+        ? CHARGED_PURCHASE_LANDED_NOTICE
+        : CHARGED_PURCHASE_NOT_LANDED_NOTICE);
     } catch {
-      setNotice(
-        'Your payment went through. Your credits have not landed yet — reopen this screen '
-        + 'or tap Refresh credit balance in a moment and they will appear. You have not been charged twice.'
-      );
-      setNoticeTone('neutral');
+      setNotice(CHARGED_PURCHASE_NOT_LANDED_NOTICE);
     }
   };
 
   const storeLabel = os === 'ios' ? 'App Store' : os === 'android' ? 'Play Store' : 'Native only';
 
+  /**
+   * A plain re-read of the balance. It used to run a full store restore, which
+   * is rate limited, could fail the whole refresh on one conflicting purchase
+   * and could send a "Purchase history refreshed" alert on every press.
+   */
   const refreshBalance = async () => {
     if (!identityUserId) {
-      setNotice('Your session is still starting. Try again in a moment.');
-      setNoticeTone('neutral');
+      setNotice(sessionStartingNotice);
+      return;
+    }
+
+    setBusyProductId('refresh');
+    setNotice(null);
+    const pressedAt = Date.now();
+    try {
+      await refreshProfile();
+    } catch {
+      // Read from the profile query below like any other answer.
+    } finally {
+      setBusyProductId(null);
+    }
+    // refreshProfile() keeps its errors to itself; the profile query it
+    // refreshes is where its answer lands.
+    setNotice(describeBalanceRefresh(queryClient.getQueryState(['profile', identityUserId]), pressedAt));
+  };
+
+  /** Asks the store, through the server, for purchases that never reached the balance. */
+  const restorePurchases = async () => {
+    if (!identityUserId) {
+      setNotice(sessionStartingNotice);
       return;
     }
 
     setBusyProductId('restore');
     setNotice(null);
-    setNoticeTone('neutral');
     try {
-      await api.restoreMobilePurchases();
+      const restore = await api.restoreMobilePurchases();
       await refreshProfile();
-      setNotice('Your credit balance was refreshed from your Magicbooklet purchase history.');
-      setNoticeTone('success');
+      setNotice(describeRestoreOutcome(restore));
+      if ((restore.restoredCreditPurchases ?? 0) > 0) keepGuestValue();
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Credit balance refresh failed.');
-      setNoticeTone('danger');
+      setNotice(restoreFailedNotice(error));
     } finally {
       setBusyProductId(null);
     }
@@ -420,7 +476,7 @@ export default function PricingScreen() {
           <SecondaryButton label="Retry credit packs" onPress={() => void packageQuery.refetch()} />
         </View>
       ) : null}
-      {notice ? <StatusBlock tone={noticeTone} title={noticeTone === 'success' ? 'Purchase updated' : noticeTone === 'danger' ? 'Purchase not completed' : 'Purchase status'} body={notice} /> : null}
+      {notice ? <StatusBlock tone={notice.tone} title={notice.title} body={notice.body} /> : null}
       {selectedPackageUnavailable ? (
         <StatusBlock
           title="This credit pack is not available"
@@ -461,10 +517,7 @@ export default function PricingScreen() {
               <PricingPlanCard
                 key={plan.id}
                 plan={plan}
-                price={formatPricingDisplayPrice(
-                  plan,
-                  packagesByProductId.get(plan.productId)?.product.priceString
-                )}
+                price={formatPricingDisplayPrice(packagesByProductId.get(plan.productId)?.product.priceString)}
                 selected={plan.id === selectedPlanId}
                 width={carouselCardWidth}
                 onPress={() => selectPlan(plan.id)}
@@ -495,10 +548,16 @@ export default function PricingScreen() {
         />
         </>) : null}
         <SecondaryButton
-          label={busyProductId === 'restore' ? 'Refreshing…' : 'Refresh credit balance'}
+          label={busyProductId === 'refresh' ? 'Refreshing…' : 'Refresh credit balance'}
           onPress={() => void refreshBalance()}
           disabled={!identityUserId || busyProductId !== null}
-          accessibilityHint="Checks your Magicbooklet account for previously credited purchases without opening the App Store restore flow"
+          accessibilityHint="Reads your Magicbooklet credit balance again"
+        />
+        <SecondaryButton
+          label={busyProductId === 'restore' ? 'Restoring…' : 'Restore purchases'}
+          onPress={() => void restorePurchases()}
+          disabled={!identityUserId || busyProductId !== null}
+          accessibilityHint={`Checks your ${storeLabel} purchases for credits that have not reached your balance`}
         />
       </View>
     </Screen>

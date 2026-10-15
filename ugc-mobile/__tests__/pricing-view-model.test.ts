@@ -1,13 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CHARGED_PURCHASE_LANDED_NOTICE,
+  CHARGED_PURCHASE_NOT_LANDED_NOTICE,
   DEFAULT_MOBILE_PRICING_PLAN_ID,
+  PAYMENT_PENDING_NOTICE,
+  describeBalanceRefresh,
+  describeRestoreOutcome,
+  describeSkippedPurchases,
   formatPricingDisplayPrice,
   getPricingPlanCarouselOffset,
   getPricingPlanIdForCarouselOffset,
   getPurchaseButtonLabel,
+  purchaseSyncedNotice,
   resolvePurchaseGate,
   resolveSelectedPricingPlan,
+  restoreFailedNotice,
+  restoreLandedPurchase,
 } from '../lib/pricing-view-model';
 
 describe('mobile pricing selection', () => {
@@ -21,10 +30,9 @@ describe('mobile pricing selection', () => {
   });
 
   it('prefers a native store price and does not steer to web pricing otherwise', () => {
-    const plan = resolveSelectedPricingPlan('creator');
-
-    expect(formatPricingDisplayPrice(plan, '₹1,799')).toBe('₹1,799');
-    expect(formatPricingDisplayPrice(plan, null)).toBe('Store price unavailable');
+    expect(formatPricingDisplayPrice('₹1,799')).toBe('₹1,799');
+    expect(formatPricingDisplayPrice(' ')).toBe('Store price unavailable');
+    expect(formatPricingDisplayPrice(null)).toBe('Store price unavailable');
   });
 
   it('builds concise purchase button states', () => {
@@ -118,5 +126,132 @@ describe('device payment restrictions (HIG In-app purchase)', () => {
 
     expect(gate.canPurchase).toBe(true);
     expect(gate.blockedReason).toBeNull();
+  });
+});
+
+describe('what a purchase is called once the store has answered (03-3)', () => {
+  it('calls a purchase the store is holding for approval pending, not failed', () => {
+    expect(PAYMENT_PENDING_NOTICE).toEqual({
+      tone: 'neutral',
+      title: 'Purchase status',
+      body: 'Payment pending — credits arrive when the store approves it.',
+    });
+  });
+
+  it('names the credits the contract grants once a purchase is synced', () => {
+    expect(purchaseSyncedNotice(2000)).toEqual({
+      tone: 'success',
+      title: 'Purchase updated',
+      body: '2,000 credits are synced to your account.',
+    });
+  });
+
+  it('claims a charged purchase landed only when the restore settled one or the balance moved', () => {
+    expect(restoreLandedPurchase({ restoredCreditPurchases: 1, credits: 500 }, 500)).toBe(true);
+    // The store's webhook credited it first: the restore finds it processed,
+    // and the balance is past the one read before the purchase.
+    expect(restoreLandedPurchase({ restoredCreditPurchases: 0, credits: 2500 }, 500)).toBe(true);
+    expect(restoreLandedPurchase({ restoredCreditPurchases: 0, credits: 500 }, 500)).toBe(false);
+    // An unknown starting balance cannot show a move.
+    expect(restoreLandedPurchase({ restoredCreditPurchases: 0, credits: 2500 }, null)).toBe(false);
+    // An older server sends neither field.
+    expect(restoreLandedPurchase({}, 500)).toBe(false);
+  });
+
+  it('says the payment went through either way, and never that it failed', () => {
+    expect(CHARGED_PURCHASE_LANDED_NOTICE.tone).toBe('success');
+    expect(CHARGED_PURCHASE_NOT_LANDED_NOTICE.tone).toBe('neutral');
+    expect(CHARGED_PURCHASE_NOT_LANDED_NOTICE.body).toContain('Your payment went through.');
+    expect(CHARGED_PURCHASE_NOT_LANDED_NOTICE.body).toContain('You have not been charged twice.');
+    // Reopening the screen re-reads nothing; the two buttons do.
+    expect(CHARGED_PURCHASE_NOT_LANDED_NOTICE.body).not.toContain('reopen');
+    expect(CHARGED_PURCHASE_NOT_LANDED_NOTICE.body).toContain('Refresh credit balance');
+    expect(CHARGED_PURCHASE_NOT_LANDED_NOTICE.body).toContain('Restore purchases');
+  });
+});
+
+describe('restore purchases (03-10)', () => {
+  const conflict = (productId: string, transactionId = `tx-${productId}`) => ({
+    transactionId,
+    productId,
+    reason: 'transaction_conflict' as const,
+  });
+
+  it('reports what the restore added', () => {
+    expect(describeRestoreOutcome({ restoredCreditPurchases: 1, skipped: [] })).toEqual({
+      tone: 'success',
+      title: 'Purchases restored',
+      body: '1 purchase was added to your balance.',
+    });
+    expect(describeRestoreOutcome({ restoredCreditPurchases: 2 }).body).toBe('2 purchases were added to your balance.');
+  });
+
+  it('says plainly when there was nothing to add', () => {
+    expect(describeRestoreOutcome({ restoredCreditPurchases: 0, skipped: [] })).toEqual({
+      tone: 'neutral',
+      title: 'Nothing new to restore',
+      body: 'Every purchase on this account is already in your balance.',
+    });
+  });
+
+  it('names a conflicting purchase it skipped rather than failing the whole restore', () => {
+    expect(describeSkippedPurchases([conflict('magicbooklet.credits.starter')]))
+      .toBe('1 purchase (Starter) is already on file for another Magicbooklet account, so it was not added here.');
+    expect(describeRestoreOutcome({
+      restoredCreditPurchases: 0,
+      skipped: [conflict('magicbooklet.credits.starter')],
+    })).toEqual({
+      tone: 'neutral',
+      title: 'Nothing new to restore',
+      body: '1 purchase (Starter) is already on file for another Magicbooklet account, so it was not added here.',
+    });
+    expect(describeRestoreOutcome({
+      restoredCreditPurchases: 1,
+      skipped: [
+        conflict('magicbooklet.credits.creator', 'tx-1'),
+        conflict('magicbooklet.credits.creator', 'tx-2'),
+        conflict('magicbooklet.credits.unknown'),
+      ],
+    }).body).toBe('1 purchase was added to your balance. 3 purchases (Creator) are already on file for another '
+      + 'Magicbooklet account, so they were not added here.');
+    expect(describeSkippedPurchases([conflict('magicbooklet.credits.unknown')]))
+      .toBe('1 purchase is already on file for another Magicbooklet account, so it was not added here.');
+    expect(describeSkippedPurchases(undefined)).toBeNull();
+    expect(describeSkippedPurchases([])).toBeNull();
+  });
+
+  it('says a restore that did not finish in its own words', () => {
+    expect(restoreFailedNotice(new Error('Too many requests.'))).toEqual({
+      tone: 'danger',
+      title: 'Restore did not finish',
+      body: 'Too many requests.',
+    });
+    expect(restoreFailedNotice('offline').body).toBe('Check your connection, then try again.');
+  });
+});
+
+describe('refresh credit balance (03-10)', () => {
+  const pressedAt = 1_000;
+
+  it('reports a balance read since the press', () => {
+    expect(describeBalanceRefresh({ status: 'success', dataUpdatedAt: 1_200, errorUpdatedAt: 0 }, pressedAt)).toEqual({
+      tone: 'neutral',
+      title: 'Balance refreshed',
+      body: 'If a purchase has not appeared yet, tap Restore purchases.',
+    });
+  });
+
+  it('reports a read that failed since the press', () => {
+    expect(describeBalanceRefresh({ status: 'error', dataUpdatedAt: 500, errorUpdatedAt: 1_200 }, pressedAt)).toEqual({
+      tone: 'danger',
+      title: 'Could not refresh your balance',
+      body: 'Check your connection, then try again.',
+    });
+  });
+
+  it('says nothing it cannot know', () => {
+    expect(describeBalanceRefresh(undefined, pressedAt)).toBeNull();
+    expect(describeBalanceRefresh({ status: 'success', dataUpdatedAt: 500, errorUpdatedAt: 0 }, pressedAt)).toBeNull();
+    expect(describeBalanceRefresh({ status: 'error', dataUpdatedAt: 500, errorUpdatedAt: 600 }, pressedAt)).toBeNull();
   });
 });
