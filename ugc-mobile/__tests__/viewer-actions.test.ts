@@ -26,6 +26,7 @@ import {
   getViewerShareSourceSurface,
   getViewerStateChip,
   isDestructiveViewerAction,
+  isViewerOwnGeneration,
   SAVE_HEART_COLOR,
 } from '../lib/viewer-actions';
 import { contrastRatio } from '../lib/color-contrast';
@@ -231,10 +232,30 @@ describe('immersive viewer actions', () => {
     expect(getViewerSafetyActions({ sourceType: 'showcase', creatorId: 'me', generationId: 'gen-1' }, 'me')).toEqual([]);
   });
 
+  // 02-2: a guest's own creation is the one thing the server takes a guest's
+  // report about, so the row is offered for it and for nothing else.
+  it("offers a guest the report on its own creation, and on no one else's", () => {
+    const creation = { sourceType: 'generation', creatorId: undefined, generationId: 'gen-1' } as const;
+
+    expect(getViewerSafetyActions(creation, 'guest-1')).toEqual(['report-ai-output']);
+    expect(isViewerOwnGeneration(creation, 'guest-1')).toBe(true);
+    // Its item names another creator: not the viewer's own.
+    expect(getViewerSafetyActions({ ...creation, creatorId: 'maya' }, 'guest-1')).toEqual([]);
+    expect(isViewerOwnGeneration({ ...creation, creatorId: 'maya' }, 'guest-1')).toBe(false);
+    expect(isViewerOwnGeneration({ ...creation, creatorId: 'guest-1' }, 'guest-1')).toBe(true);
+    // No identity at all, or no generation to report.
+    expect(isViewerOwnGeneration(creation, undefined)).toBe(false);
+    expect(isViewerOwnGeneration({ ...creation, generationId: null }, 'guest-1')).toBe(false);
+    // A post's creation is its creator's, never a viewer's library item.
+    expect(isViewerOwnGeneration({ sourceType: 'showcase', creatorId: 'maya', generationId: 'gen-1' }, 'guest-1')).toBe(false);
+  });
+
   it('is the list the menu and its sheet are built from', () => {
     const source = readFileSync(path.resolve(__dirname, '../lib/use-viewer-action-handlers.ts'), 'utf8');
 
-    expect(source).toContain('    ...getViewerSafetyActions(item, user?.id),\n  ];');
+    // The viewer is the identity, a guest's included: a guest's own creations
+    // are its library (02-1).
+    expect(source).toContain('    ...getViewerSafetyActions(item, viewerId),\n  ];');
     // Nothing beside it adds a Safety row of its own.
     expect(source).not.toMatch(/\? \['(report-content|report-user|block-user|report-ai-output)'/);
   });

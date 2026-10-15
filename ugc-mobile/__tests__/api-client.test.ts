@@ -234,6 +234,100 @@ describe('mobile api client caching', () => {
     expect(isRequestTimeoutError(new Error('Request timed out after 5ms'))).toBe(false);
   });
 
+  it('gives up at its deadline on a request still waiting for its session token, and leaves the wait running', async () => {
+    vi.useFakeTimers();
+    // A token refresh stalled on the network: only its own end settles it.
+    let finishRefresh: (token: string) => void = () => undefined;
+    const refresh = new Promise<string>((resolve) => {
+      finishRefresh = resolve;
+    });
+    const fetcher = vi.fn(async () => jsonResponse({ credits: 10 }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: () => refresh,
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    try {
+      let outcome: unknown = 'pending';
+      void api.getProfile().then((value) => {
+        outcome = value;
+      }, (error: unknown) => {
+        outcome = error;
+      });
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(outcome).toBe('pending');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(outcome).toBeInstanceOf(ApiError);
+      expect(outcome).toMatchObject({ status: 0, details: { timedOut: true, sent: false } });
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+
+      // Nothing was cancelled: once the refresh ends, the next request carries its token.
+      finishRefresh('fresh-token');
+      await expect(api.getProfile()).resolves.toEqual({ credits: 10 });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      const [, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+      expect((init.headers as Headers).get('Authorization')).toBe('Bearer fresh-token');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never reads a deletion still waiting for its session token as sent', async () => {
+    vi.useFakeTimers();
+    let failRefresh: (error: Error) => void = () => undefined;
+    const refresh = new Promise<string>((_resolve, reject) => {
+      failRefresh = reject;
+    });
+    const fetcher = vi.fn(async () => jsonResponse({ status: 'scheduled' }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: () => refresh,
+      fetcher: fetcher as unknown as typeof fetch,
+      requestTimeoutMs: 100,
+    });
+    try {
+      let outcome: unknown = 'pending';
+      void api.deleteAccount('DELETE').catch((error: unknown) => {
+        outcome = error;
+      });
+
+      await vi.advanceTimersByTimeAsync(ACCOUNT_DELETION_TIMEOUT_MS - 1);
+      expect(outcome).toBe('pending');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(outcome).toMatchObject({ name: 'ApiError', status: 0, details: { timedOut: true, sent: false } });
+      expect(fetcher).not.toHaveBeenCalled();
+      // A deadline met after sending means "the server may have acted"; this one never left.
+      expect(isRequestTimeoutError(outcome)).toBe(false);
+
+      // The wait failing afterwards changes nothing, and is not an unhandled rejection.
+      failRefresh(new Error('refresh failed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetcher).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ends a request at once when its caller cancels it during the token wait', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({}));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: () => new Promise<string>(() => undefined),
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    const caller = new AbortController();
+
+    const quote = api.quoteGenerationModel({} as never, caller.signal).catch((error: unknown) => error);
+    caller.abort();
+    const error = await quote;
+
+    expect(error).toMatchObject({ name: 'ApiError', status: 0, details: { sent: false } });
+    expect((error as ApiError).details).not.toHaveProperty('timedOut');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it('sends a request id with backend calls', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ credits: 10 }));
     const api = createApiClient({

@@ -1,11 +1,15 @@
 import * as SecureStore from 'expo-secure-store';
 
 import type { MagicbookletApiClient } from './api-client';
-import type { ReferralClaimResponse } from './types';
+import type { ReferralClaimResponse, ReferralProgramSummary } from './types';
 
 const PENDING_REFERRAL_STORAGE_KEY = 'magicbooklet.referral.pending.v1';
 const RECENT_REFERRAL_CLAIM_STORAGE_KEY = 'magicbooklet.referral.recentClaim.v1';
-const DEFAULT_ATTRIBUTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+// How long this device keeps a code the server has not verified yet. Such a
+// code has no expiry of its own; once a visit is recorded, the visit's
+// `expiresAt` (the program's attribution window) is the only limit, so a
+// program with a longer window is not cut short here.
+const UNVERIFIED_REFERRAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const RECENT_CLAIM_WINDOW_MS = 15 * 60 * 1000;
 const REFERRAL_CODE_PATTERN = /^[A-Za-z0-9_-]{3,64}$/;
 
@@ -14,12 +18,21 @@ export interface PendingReferral {
   capturedAt: string;
   visitToken?: string;
   expiresAt?: string;
+  /**
+   * The terms the server sent with the recorded visit, the program the visit
+   * is bound to. Kept so the landing can name them on a later launch, when the
+   * visit is not recorded again. Null or absent until then, or from an older
+   * server.
+   */
+  program?: ReferralProgramSummary | null;
 }
 
 export interface RecentReferralClaim {
   code: string;
   claimedAt: string;
   response: ReferralClaimResponse;
+  /** The terms of the invite the claim used, for the landing's "Invite applied". */
+  program?: ReferralProgramSummary | null;
 }
 
 type ReferralStorage = {
@@ -48,6 +61,42 @@ function referralCodeFromUrl(value: string) {
   }
 }
 
+function isPositiveNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+/**
+ * The program's terms when all three are usable, else null. The server prints
+ * a missing value as 0, which no screen should repeat as "0%".
+ */
+export function readReferralProgram(value: unknown): ReferralProgramSummary | null {
+  if (!value || typeof value !== 'object') return null;
+  const program = value as Partial<ReferralProgramSummary>;
+  return isPositiveNumber(program.inviterPercent)
+    && isPositiveNumber(program.inviteeFirstPurchasePercent)
+    && isPositiveNumber(program.attributionWindowDays)
+    ? {
+      inviterPercent: program.inviterPercent,
+      inviteeFirstPurchasePercent: program.inviteeFirstPurchasePercent,
+      attributionWindowDays: program.attributionWindowDays,
+    }
+    : null;
+}
+
+/** "7%", or null while the percent is not known. */
+export function formatReferralPercent(percent: number | null | undefined) {
+  return isPositiveNumber(percent) ? `${Math.round(percent * 100) / 100}%` : null;
+}
+
+/**
+ * "7% bonus credits", or "bonus credits" while the terms are unknown: the
+ * screens print the server's numbers or none, never numbers of their own.
+ */
+export function bonusCreditsPhrase(percent: number | null | undefined) {
+  const label = formatReferralPercent(percent);
+  return label ? `${label} bonus credits` : 'bonus credits';
+}
+
 export function normalizeReferralCode(value: string | null | undefined) {
   const candidate = value?.trim();
   if (!candidate) return null;
@@ -68,8 +117,8 @@ function isPendingReferral(value: unknown): value is PendingReferral {
 
 function isExpired(pending: PendingReferral, now: number) {
   const capturedAt = Date.parse(pending.capturedAt);
-  if (!Number.isFinite(capturedAt) || capturedAt + DEFAULT_ATTRIBUTION_WINDOW_MS <= now) return true;
-  if (!pending.expiresAt) return false;
+  if (!Number.isFinite(capturedAt)) return true;
+  if (!pending.expiresAt) return capturedAt + UNVERIFIED_REFERRAL_RETENTION_MS <= now;
   const expiresAt = Date.parse(pending.expiresAt);
   return !Number.isFinite(expiresAt) || expiresAt <= now;
 }
@@ -87,7 +136,7 @@ export async function getPendingReferral(
       await storage.removeItem(PENDING_REFERRAL_STORAGE_KEY);
       return null;
     }
-    return pending;
+    return { ...pending, program: readReferralProgram(pending.program) };
   } catch {
     await storage.removeItem(PENDING_REFERRAL_STORAGE_KEY);
     return null;
@@ -98,11 +147,12 @@ export async function clearPendingReferral(storage: ReferralStorage = defaultSto
   await storage.removeItem(PENDING_REFERRAL_STORAGE_KEY);
 }
 
-export async function getRecentReferralClaim(
+/** The claim recorded for this code in the last few minutes, with the terms it used. */
+export async function getRecentReferralClaimRecord(
   code: string,
   storage: ReferralStorage = defaultStorage,
   now = Date.now()
-): Promise<ReferralClaimResponse | null> {
+): Promise<RecentReferralClaim | null> {
   const serialized = await storage.getItem(RECENT_REFERRAL_CLAIM_STORAGE_KEY);
   if (!serialized) return null;
 
@@ -112,17 +162,31 @@ export async function getRecentReferralClaim(
     if (
       recent.code !== code
       || !recent.response?.success
+      || typeof recent.claimedAt !== 'string'
       || !Number.isFinite(claimedAt)
       || claimedAt + RECENT_CLAIM_WINDOW_MS <= now
     ) {
       await storage.removeItem(RECENT_REFERRAL_CLAIM_STORAGE_KEY);
       return null;
     }
-    return recent.response;
+    return {
+      code,
+      claimedAt: recent.claimedAt,
+      response: recent.response,
+      program: readReferralProgram(recent.program),
+    };
   } catch {
     await storage.removeItem(RECENT_REFERRAL_CLAIM_STORAGE_KEY);
     return null;
   }
+}
+
+export async function getRecentReferralClaim(
+  code: string,
+  storage: ReferralStorage = defaultStorage,
+  now = Date.now()
+): Promise<ReferralClaimResponse | null> {
+  return (await getRecentReferralClaimRecord(code, storage, now))?.response ?? null;
 }
 
 export async function capturePendingReferral(
@@ -171,6 +235,7 @@ export async function capturePendingReferral(
     code: visit.code,
     visitToken: visit.visitToken,
     expiresAt: visit.expiresAt,
+    program: readReferralProgram(visit.program),
   };
   await storage.setItem(PENDING_REFERRAL_STORAGE_KEY, JSON.stringify(recorded));
 
@@ -216,6 +281,7 @@ export async function claimPendingReferral(
         code: pending.code,
         claimedAt: new Date(options.now ?? Date.now()).toISOString(),
         response,
+        program: pending.program ?? null,
       };
       await storage.setItem(RECENT_REFERRAL_CLAIM_STORAGE_KEY, JSON.stringify(recentClaim));
       await clearPendingReferral(storage);

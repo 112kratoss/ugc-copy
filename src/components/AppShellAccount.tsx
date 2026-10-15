@@ -1,17 +1,19 @@
 'use client';
 
 import type { Session, User } from '@supabase/supabase-js';
-import { ChevronDown, Gift, LogOut, Sparkles } from 'lucide-react';
+import { ChevronDown, Gift, Loader2, LogOut, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
+import { isSessionRefusal } from '@/lib/auth-error-copy';
 import {
   getAuthAvatarUrl,
   getCreatorDisplayName,
   getUserInitials,
 } from '@/lib/profile';
 import { supabase } from '@/lib/supabase';
+import { removeSupabaseAuthCookies } from '@/lib/supabase-auth-cookie';
 
 import AppShellAccountFallback from './AppShellAccountFallback';
 import { OptimizedPreviewImage } from './OptimizedPreviewImage';
@@ -25,6 +27,10 @@ type ProfileSummary = {
 
 /** Sign-out waits this long at most for the creators' storage to clear. */
 const SIGN_OUT_CLEAR_WAIT_MS = 3000;
+/** A session check Supabase could not answer is asked once more after this. */
+const SESSION_RECHECK_DELAY_MS = 2000;
+/** Coming back to the tab re-reads the balance at most this often. */
+const CREDITS_RECHECK_INTERVAL_MS = 30_000;
 
 /**
  * The creators keep this account's staged files and text drafts in the
@@ -32,7 +38,7 @@ const SIGN_OUT_CLEAR_WAIT_MS = 3000;
  * demand so the storage library stays out of the account menu's chunk, and
  * bounded so storage that never answers cannot hold the sign-out.
  */
-async function clearCreatorDataForSignOut(userId: string) {
+export async function clearCreatorDataForSignOut(userId: string) {
   const clearing = import('@/lib/persisted-media')
     .then(({ clearPersistedCreatorData }) => clearPersistedCreatorData(userId))
     .catch(() => {
@@ -89,9 +95,11 @@ export default function AppShellAccount() {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<ProfileSummary | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const creditIdentityRef = useRef<{ userId: string } | null>(null);
   const credits = profile?.credits;
+  const signedInUserId = session?.user?.id ?? null;
   const displayName = getCreatorDisplayName({
     displayName: profile?.display_name ?? null,
     email: session?.user?.email ?? null,
@@ -122,7 +130,7 @@ export default function AppShellAccount() {
       }
     }
 
-    async function loadProfile(nextSession: Session | null) {
+    async function loadProfile(nextSession: Session | null, isRecheck = false) {
       const sequence = ++authSequence;
       if (!nextSession?.user?.id) {
         clearAccountState();
@@ -131,12 +139,15 @@ export default function AppShellAccount() {
 
       let verifiedUser: User | null = null;
       let verificationFailed = false;
+      let verificationError: unknown = null;
       try {
         const { data, error } = await supabase.auth.getUser(nextSession.access_token);
         verifiedUser = data.user;
         verificationFailed = Boolean(error);
-      } catch {
+        verificationError = error;
+      } catch (error) {
         verificationFailed = true;
+        verificationError = error;
       } finally {
         pendingAccessTokens.delete(nextSession.access_token);
         const queuedUserUpdate = queuedUserUpdates.get(nextSession.access_token);
@@ -153,6 +164,30 @@ export default function AppShellAccount() {
       }
 
       if (!mounted || sequence !== authSequence) {
+        return;
+      }
+
+      if (verificationFailed && !isSessionRefusal(verificationError)) {
+        // Supabase Auth could not answer (offline, a 5xx, a rate limit), which
+        // says nothing about the session: the header keeps it, without the
+        // profile until a check succeeds, and asks once more.
+        if (acceptedUserId !== nextSession.user.id) {
+          acceptedAccessToken = null;
+          acceptedUserId = null;
+          setProfile(null);
+        }
+        publishAppShellAuthentication(true);
+        setSession(nextSession);
+        if (!isRecheck) {
+          const timeoutId = window.setTimeout(() => {
+            deferredAuthSyncIds.delete(timeoutId);
+            // A newer auth event checks the current session itself.
+            if (mounted && sequence === authSequence) {
+              void loadProfile(nextSession, true);
+            }
+          }, SESSION_RECHECK_DELAY_MS);
+          deferredAuthSyncIds.add(timeoutId);
+        }
         return;
       }
 
@@ -286,19 +321,50 @@ export default function AppShellAccount() {
     };
   }, [session?.user?.id]);
 
+  useEffect(() => {
+    if (!signedInUserId) return;
+    // The balance can change while the tab is hidden: a purchase settled in
+    // the app or by Razorpay's webhook after the checkout reloaded, a referral
+    // reward. The header is on every page of a signed-in visitor, so coming
+    // back asks every reader of the balance to read it again.
+    let lastRecheckAt = Date.now();
+    function handleVisibilityChange() {
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (now - lastRecheckAt < CREDITS_RECHECK_INTERVAL_MS) return;
+      lastRecheckAt = now;
+      window.dispatchEvent(new Event('credits_updated'));
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [signedInUserId]);
+
   const handleSignOut = async () => {
+    if (isSigningOut) return;
+    setIsSigningOut(true);
     const userId = session?.user?.id;
     if (userId) {
       await clearCreatorDataForSignOut(userId);
     }
     // This browser only. The default (global) also ends the account's session
-    // on the person's phone, which then has every request refused.
-    await supabase.auth.signOut({ scope: 'local' });
+    // on the person's phone, which then has every request refused. The logout
+    // call gives up after 10 s (src/lib/supabase.ts).
+    const { error } = await supabase.auth.signOut({ scope: 'local' })
+      .catch((thrown: unknown) => ({ error: thrown }));
+    if (error) {
+      // auth-js keeps the session when the logout call fails, and /login sends
+      // a browser holding one straight back: on a shared computer the person
+      // would walk away signed in.
+      removeSupabaseAuthCookies();
+    }
     creditIdentityRef.current = null;
     publishAppShellAuthentication(false);
     setSession(null);
     setProfile(null);
     setAccountOpen(false);
+    setIsSigningOut(false);
     router.push('/login');
   };
 
@@ -371,11 +437,17 @@ export default function AppShellAccount() {
             <button
               type="button"
               role="menuitem"
-              onClick={handleSignOut}
-              className="ui-focus-ring mt-1 flex min-h-11 w-full items-center gap-2 rounded-2xl px-3 py-2 text-left text-sm font-bold text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
+              onClick={() => void handleSignOut()}
+              disabled={isSigningOut}
+              aria-busy={isSigningOut || undefined}
+              className="ui-focus-ring mt-1 flex min-h-11 w-full items-center gap-2 rounded-2xl px-3 py-2 text-left text-sm font-bold text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)] disabled:cursor-wait disabled:opacity-70"
             >
-              <LogOut className="h-4 w-4" />
-              Sign out
+              {isSigningOut ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              ) : (
+                <LogOut className="h-4 w-4" />
+              )}
+              {isSigningOut ? 'Signing out…' : 'Sign out'}
             </button>
           </div>
         ) : null}

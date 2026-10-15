@@ -151,7 +151,11 @@ const authState = vi.hoisted(() => ({
   // Nullable: the signed-out suite below clears it.
   user: { id: 'user-123', email: 'user@example.com' } as null | { id: string; email: string },
   identityUserId: 'user-123' as string | null,
-  credits: 100,
+  // A guest holds an identity and no account: `user` stays null for it.
+  isGuest: false,
+  credits: 100 as number | null,
+  // When this run last set `credits` (epoch ms); null when it never has.
+  creditsUpdatedAt: null as number | null,
   api: {
     getProfile: vi.fn(),
     listGenerations: vi.fn(),
@@ -170,6 +174,10 @@ const queryState = vi.hoisted(() => ({
     avatarUrl: string;
   },
   profileError: null as Error | null,
+  // React Query's `dataUpdatedAt` for the profile: when it last answered.
+  profileDataUpdatedAt: 0,
+  // The Creations query as the screen last asked for it.
+  generationsQuery: null as null | { queryKey: unknown[]; enabled: boolean },
   generations: [] as Array<Record<string, unknown>>,
   ownerPosts: [] as Array<Record<string, unknown>>,
   savedItems: [] as Array<Record<string, unknown>>,
@@ -224,6 +232,7 @@ vi.mock('@tanstack/react-query', () => ({
     if (queryKey[0] === 'profile') {
       return {
         data: queryState.profileData,
+        dataUpdatedAt: queryState.profileDataUpdatedAt,
         error: queryState.profileError,
         isLoading: false,
       };
@@ -238,6 +247,7 @@ vi.mock('@tanstack/react-query', () => ({
     initialPageParam?: unknown;
   }) => {
     if (queryKey[0] === 'profile-generations') {
+      queryState.generationsQuery = { queryKey, enabled };
       if (enabled) {
         queryFn?.({
           pageParam: queryState.generationsPageParam === undefined
@@ -354,6 +364,28 @@ describe('ProfileDashboard signed out', () => {
 
   afterEach(() => {
     authState.user = { id: 'user-123', email: 'user@example.com' };
+    authState.identityUserId = 'user-123';
+    authState.isGuest = false;
+  });
+
+  // 02-1: only a guest's own creations open up; a device that holds no
+  // identity at all (the guest session never started) still has nothing to show.
+  it('keeps every tab behind sign-in on a device with no identity, and reads nothing', () => {
+    authState.identityUserId = null;
+    authState.isGuest = false;
+    authState.api.listGenerations.mockClear();
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+    });
+
+    expect(queryState.generationsQuery).toMatchObject({ enabled: false });
+    expect(authState.api.listGenerations).not.toHaveBeenCalled();
+    // The wall's one placeholder tile, under the sign-in card, and no offer.
+    expect(tree!.root.findAll((node) => String(node.type) === 'pressable'
+      && node.props.accessibilityLabel === 'Creation, Crystal Portal, Not posted')).toHaveLength(1);
+    expect(findPressableByText(tree!.root, 'Sign in')).toBeTruthy();
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Create an account to keep these on every device' })).toHaveLength(0);
   });
 
   it('offers a sign-in card instead of a hero card', () => {
@@ -423,6 +455,185 @@ describe('ProfileDashboard signed out', () => {
       accessibilityLabel: 'Saved, Saved Island, 0 likes',
     })).toBeTruthy();
     expect(tree!.root.findAllByProps({ children: 'Sign in to view saved media' })).toHaveLength(0);
+  });
+});
+
+/**
+ * 02-1: a guest's creations were walled ("Sign in to view your creations")
+ * although the server serves a guest its library, so a guest lost sight of
+ * what it paid for the moment it left the result. Home's render count opens
+ * this tab, and the Rendering strip on it.
+ */
+describe('ProfileDashboard for a guest', () => {
+  const guestCreation = {
+    id: 'guest-gen-1',
+    status: 'succeeded',
+    output_url: 'guest.png',
+    preview_url: 'guest.preview.webp',
+    previewUrl: 'guest.preview.webp',
+    category: 'image',
+    title: 'Guest shot',
+    prompt: 'Prompt',
+  };
+
+  beforeEach(() => {
+    routerState.push.mockClear();
+    authState.api.listGenerations.mockClear();
+    authState.api.listOwnerPosts.mockClear();
+    authState.api.getSavedMedia.mockClear();
+    authState.user = null;
+    authState.isGuest = true;
+    authState.identityUserId = 'guest-1';
+    queryState.generationsQuery = null;
+    queryState.generationPages = null;
+    queryState.generations = [guestCreation];
+  });
+
+  afterEach(() => {
+    authState.user = { id: 'user-123', email: 'user@example.com' };
+    authState.isGuest = false;
+    authState.identityUserId = 'user-123';
+    queryState.generations = [];
+  });
+
+  function renderProfile(props: React.ComponentProps<typeof ProfileDashboard> = {}) {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard {...props} />);
+    });
+    return tree!;
+  }
+
+  it('lists its own creations under its identity, below the sign-in card', () => {
+    const tree = renderProfile();
+
+    expect(queryState.generationsQuery).toEqual({ queryKey: ['profile-generations', 'guest-1'], enabled: true });
+    expect(authState.api.listGenerations).toHaveBeenCalledWith(true, { limit: 24 });
+    expect(tree.root.findAll((node) => String(node.type) === 'pressable'
+      && node.props.accessibilityLabel === 'Creation, Guest shot, Not posted')).toHaveLength(1);
+    // The wall's placeholder is gone; the account's own parts stay out.
+    expect(tree.root.findAll((node) => node.props.accessibilityLabel === 'Creation, Crystal Portal, Not posted')).toHaveLength(0);
+    expect(findPressableByText(tree.root, 'Sign in')).toBeTruthy();
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Edit profile' })).toHaveLength(0);
+    expect(authState.api.listOwnerPosts).not.toHaveBeenCalled();
+    expect(authState.api.getSavedMedia).not.toHaveBeenCalled();
+  });
+
+  it('opens a creation in the card feed of its library', () => {
+    const tree = renderProfile();
+
+    const tile = tree.root.find((node) => String(node.type) === 'pressable'
+      && node.props.accessibilityLabel === 'Creation, Guest shot, Not posted');
+    renderer.act(() => {
+      tile.props.onPress();
+    });
+
+    expect(routerState.push).toHaveBeenCalledWith({
+      pathname: '/profile-media-feed',
+      params: { source: 'profile-creations', initialId: 'guest-gen-1' },
+    });
+  });
+
+  it('offers an account above the grid, opening sign-up and coming back to Profile', () => {
+    const tree = renderProfile();
+
+    const offer = tree.root.find((node) => String(node.type) === 'pressable'
+      && node.props.accessibilityLabel === 'Create an account to keep these on every device');
+    expect(offer.props.accessibilityHint).toBe('Opens sign-up');
+    renderer.act(() => {
+      offer.props.onPress();
+    });
+
+    expect(routerState.push).toHaveBeenCalledWith({ pathname: '/auth', params: { mode: 'signup', returnTo: '/profile' } });
+  });
+
+  it('says nothing about keeping creations it does not have', () => {
+    queryState.generations = [];
+    const tree = renderProfile();
+
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Create an account to keep these on every device' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ children: 'No creations yet' }).length).toBeGreaterThan(0);
+  });
+
+  it('shows the runs still rendering, where Home’s render count lands', () => {
+    queryState.generations = [{
+      id: 'guest-run',
+      status: 'processing',
+      category: 'image',
+      created_at: '2026-10-15T07:00:00.000Z',
+      title: 'Guest run',
+      prompt: 'Prompt',
+    }];
+    const tree = renderProfile({ initialTab: 'Creations' });
+
+    expect(tree.root.findAllByProps({ children: 'Rendering (1)' }).length).toBeGreaterThan(0);
+  });
+
+  it('keeps Posts and Saved behind sign-in, and reads neither', () => {
+    for (const tab of ['Posts', 'Saved'] as const) {
+      const tree = renderProfile({ initialTab: tab });
+      expect(tree.root.findAllByProps({ accessibilityLabel: 'Create an account to keep these on every device' })).toHaveLength(0);
+      expect(tree.root.findAll((node) => String(node.type) === 'pressable'
+        && node.props.accessibilityLabel === 'Creation, Guest shot, Not posted')).toHaveLength(0);
+      expect(findPressableByText(tree.root, 'Sign in')).toBeTruthy();
+    }
+    expect(authState.api.listOwnerPosts).not.toHaveBeenCalled();
+    expect(authState.api.getSavedMedia).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 03-4: the card preferred the auth context's balance however old it was, so
+ * a purchase push that opened Profile showed the balance from before the
+ * purchase over the profile it had just read.
+ */
+describe('ProfileDashboard Credits card', () => {
+  const creditsValue = (root: renderer.ReactTestInstance) => findPressableByText(root, 'Credits')
+    .findAll((node) => node.type === 'text' && typeof node.props.children === 'string')
+    .map((node) => node.props.children as string);
+
+  const baseProfile = queryState.profileData;
+
+  beforeEach(() => {
+    queryState.profileData = { ...baseProfile!, credits: 40 } as typeof queryState.profileData;
+    queryState.profileDataUpdatedAt = 1_000;
+    authState.credits = 100;
+  });
+
+  afterEach(() => {
+    queryState.profileData = baseProfile;
+    queryState.profileDataUpdatedAt = 0;
+    authState.credits = 100;
+    authState.creditsUpdatedAt = null;
+  });
+
+  function renderCard() {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+    return creditsValue(tree!.root);
+  }
+
+  it('shows the balance the app set after the profile was read', () => {
+    authState.creditsUpdatedAt = 2_000;
+    expect(renderCard()).toContain('100');
+  });
+
+  it('shows the profile’s balance when the profile was read after it', () => {
+    authState.creditsUpdatedAt = 500;
+    expect(renderCard()).toContain('40');
+  });
+
+  it('shows the profile’s balance when this run never set one', () => {
+    authState.creditsUpdatedAt = null;
+    expect(renderCard()).toContain('40');
+  });
+
+  it('shows the app’s balance while the profile carries none', () => {
+    queryState.profileData = baseProfile;
+    authState.creditsUpdatedAt = null;
+    expect(renderCard()).toContain('100');
   });
 });
 

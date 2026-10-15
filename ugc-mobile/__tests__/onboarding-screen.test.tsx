@@ -17,14 +17,16 @@ const harness = vi.hoisted(() => ({
     updateOnboardingState: vi.fn(),
     validateProfile: vi.fn(),
     updateProfile: vi.fn(),
+    claimWelcomeCredits: vi.fn(),
   },
   user: {
     id: 'creator-1',
     email: 'sarath@example.com',
-    user_metadata: { full_name: 'Sarath' },
+    user_metadata: { full_name: 'Sarath' } as Record<string, unknown>,
   },
   refreshProfile: vi.fn(),
   updateCredits: vi.fn(),
+  markIdentityDeferredOnAccount: vi.fn(),
   localUpdates: [] as Array<Record<string, unknown>>,
 }));
 
@@ -75,6 +77,7 @@ vi.mock('@/lib/auth', () => ({
     user: harness.user,
     refreshProfile: harness.refreshProfile,
     updateCredits: harness.updateCredits,
+    markIdentityDeferredOnAccount: harness.markIdentityDeferredOnAccount,
   }),
 }));
 
@@ -285,5 +288,243 @@ describe('claiming a creator name', () => {
     expect(harness.api.updateProfile).toHaveBeenCalledWith({ username: 'sarath-makes', displayName: 'Sarath' });
 
     act(() => tree?.unmount());
+  });
+});
+
+function findButton(tree: renderer.ReactTestRenderer, type: 'primary-button' | 'secondary-button', label: string) {
+  return tree.root.find((node) => String(node.type) === type && node.props.label === label);
+}
+
+function rendered(tree: renderer.ReactTestRenderer | undefined) {
+  return JSON.stringify(tree?.toJSON());
+}
+
+async function saveHandle(tree: renderer.ReactTestRenderer) {
+  const handle = tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === 'Unique handle');
+  await act(async () => { handle.props.onChangeText('sarath-makes'); });
+  await act(async () => {
+    findButton(tree, 'primary-button', 'Save creator name').props.onPress();
+    await settle();
+  });
+}
+
+describe('what the welcome answer after the identity step says (03-6)', () => {
+  beforeEach(() => {
+    harness.api.getProfile.mockReset().mockResolvedValue(profile);
+    harness.api.updateOnboardingState.mockReset().mockResolvedValue(undefined);
+    harness.api.validateProfile.mockReset().mockResolvedValue({ ok: true });
+    harness.api.updateProfile.mockReset().mockImplementation(async (body: Record<string, unknown>) => ({ ...profile, ...body }));
+    harness.refreshProfile.mockReset().mockResolvedValue(undefined);
+    harness.localUpdates.length = 0;
+    vi.mocked(router.replace).mockClear();
+  });
+
+  it.each([
+    ['identity_already_claimed', 'Welcome credits already claimed', 'This sign-in already received the one-time welcome credits on a previous account.'],
+    ['unavailable', 'Welcome credits are unavailable right now', 'Your welcome credits are temporarily unavailable. You can continue and claim them from Home.'],
+  ])('says %s before it opens the creator', async (status, title, line) => {
+    harness.api.getWelcomeCredits.mockReset()
+      .mockResolvedValueOnce(welcome)
+      .mockResolvedValue({ ...welcome, status, identityComplete: true });
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+
+    await saveHandle(tree!);
+
+    // Said, and the creator not opened yet: the person reads it first.
+    expect(rendered(tree)).toContain(title);
+    expect(rendered(tree)).toContain(line);
+    expect(router.replace).not.toHaveBeenCalled();
+    // No figure and no claim for credits that will not come.
+    expect(tree!.root.findAll((node) => String(node.type) === 'primary-button' && String(node.props.label).startsWith('Claim'))).toHaveLength(0);
+
+    await act(async () => {
+      findButton(tree!, 'primary-button', 'Start creating').props.onPress();
+      await settle();
+    });
+    expect(router.replace).toHaveBeenCalledWith({
+      pathname: '/(tabs)/creator',
+      params: { tool: 'image', guided: '1' },
+    });
+
+    act(() => tree?.unmount());
+  });
+
+  it('still goes straight on for an account the program never covered', async () => {
+    harness.api.getWelcomeCredits.mockReset()
+      .mockResolvedValueOnce(welcome)
+      .mockResolvedValue({ ...welcome, status: 'legacy_ineligible', identityComplete: true });
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+
+    await saveHandle(tree!);
+
+    expect(router.replace).toHaveBeenCalledWith({
+      pathname: '/(tabs)/creator',
+      params: { tool: 'image', guided: '1' },
+    });
+
+    act(() => tree?.unmount());
+  });
+});
+
+describe('claiming the welcome credits (03-9)', () => {
+  const eligible = { ...welcome, status: 'eligible', identityComplete: true };
+
+  beforeEach(() => {
+    harness.api.getProfile.mockReset().mockResolvedValue({ ...profile, username: 'sarath-makes' });
+    harness.api.getWelcomeCredits.mockReset().mockResolvedValue(eligible);
+    harness.api.updateOnboardingState.mockReset().mockResolvedValue(undefined);
+    harness.api.claimWelcomeCredits.mockReset();
+    harness.refreshProfile.mockReset().mockResolvedValue(undefined);
+    harness.updateCredits.mockReset();
+    harness.localUpdates.length = 0;
+  });
+
+  async function claim(result: Record<string, unknown>) {
+    harness.api.claimWelcomeCredits.mockResolvedValue(result);
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+    await act(async () => {
+      findButton(tree!, 'primary-button', 'Claim 25 credits').props.onPress();
+      await settle();
+    });
+    return tree!;
+  }
+
+  it('takes the balance from a claim made just now', async () => {
+    const tree = await claim({ ...eligible, status: 'claimed', credits: 25, claimedAt: '2026-10-15T07:00:00.000Z' });
+
+    expect(harness.updateCredits).toHaveBeenCalledWith(25);
+    expect(harness.refreshProfile).not.toHaveBeenCalled();
+    act(() => tree.unmount());
+  });
+
+  it('re-reads the balance for a claim made earlier instead of trusting its stale figure', async () => {
+    // Claimed on the web last week; 25 was the balance right after that grant.
+    const tree = await claim({ ...eligible, status: 'already_claimed', credits: 25, claimedAt: '2026-10-08T07:00:00.000Z' });
+
+    expect(harness.refreshProfile).toHaveBeenCalledTimes(1);
+    expect(harness.updateCredits).not.toHaveBeenCalled();
+    act(() => tree.unmount());
+  });
+
+  it('adds nothing for a sign-in that was paid out on a previous account', async () => {
+    const tree = await claim({ ...eligible, status: 'identity_already_claimed' });
+
+    expect(harness.updateCredits).not.toHaveBeenCalled();
+    expect(rendered(tree)).toContain('Welcome credits already claimed');
+    act(() => tree.unmount());
+  });
+});
+
+describe('choosing a name later (02-11)', () => {
+  beforeEach(() => {
+    harness.api.getProfile.mockReset().mockResolvedValue(profile);
+    harness.api.getWelcomeCredits.mockReset().mockResolvedValue(welcome);
+    harness.api.updateOnboardingState.mockReset().mockResolvedValue(undefined);
+    harness.markIdentityDeferredOnAccount.mockReset().mockResolvedValue(undefined);
+    harness.localUpdates.length = 0;
+    vi.mocked(router.replace).mockClear();
+  });
+
+  it('records the deferral on the account as well as on this install', async () => {
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+
+    await act(async () => {
+      findButton(tree!, 'secondary-button', 'Choose a name later').props.onPress();
+      await settle();
+    });
+
+    expect(harness.markIdentityDeferredOnAccount).toHaveBeenCalledTimes(1);
+    expect(harness.localUpdates).toContainEqual(expect.objectContaining({
+      status: 'skipped',
+      identityDeferredAt: expect.any(String),
+    }));
+    expect(router.replace).toHaveBeenCalledWith('/(tabs)');
+
+    act(() => tree?.unmount());
+  });
+
+  it('leaves even when the account write fails', async () => {
+    harness.markIdentityDeferredOnAccount.mockRejectedValue(new Error('Network request failed'));
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+
+    await act(async () => {
+      findButton(tree!, 'secondary-button', 'Choose a name later').props.onPress();
+      await settle();
+    });
+
+    expect(router.replace).toHaveBeenCalledWith('/(tabs)');
+    act(() => tree?.unmount());
+  });
+
+  it('does not write it for the other ways out', async () => {
+    harness.api.getProfile.mockReset().mockRejectedValue(new Error('Server error'));
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+
+    await act(async () => {
+      findButton(tree!, 'secondary-button', 'Skip for now').props.onPress();
+      await settle();
+    });
+
+    expect(router.replace).toHaveBeenCalledWith('/(tabs)');
+    expect(harness.markIdentityDeferredOnAccount).not.toHaveBeenCalled();
+    act(() => tree?.unmount());
+  });
+});
+
+describe('a deferral made on the web (02-11)', () => {
+  beforeEach(() => {
+    harness.api.getProfile.mockReset().mockResolvedValue(profile);
+    harness.api.getWelcomeCredits.mockReset().mockResolvedValue(welcome);
+    harness.api.updateOnboardingState.mockReset().mockResolvedValue(undefined);
+    harness.localUpdates.length = 0;
+    vi.mocked(router.replace).mockClear();
+  });
+
+  it('is not asked for a handle again on the phone', async () => {
+    harness.user.user_metadata = { full_name: 'Sarath', creator_profile_onboarding_skipped_version: 1 };
+    try {
+      const queryClient = new QueryClient();
+      let tree: renderer.ReactTestRenderer | undefined;
+      await act(async () => {
+        tree = renderScreen(queryClient);
+        await settle();
+      });
+
+      expect(router.replace).toHaveBeenCalledWith('/(tabs)');
+      expect(JSON.stringify(tree?.toJSON())).not.toContain('Claim your creator name');
+      act(() => tree?.unmount());
+    } finally {
+      harness.user.user_metadata = { full_name: 'Sarath' };
+    }
   });
 });

@@ -1096,3 +1096,145 @@ describe('post resource bundle server access', () => {
   });
 
 });
+
+// 02-4: a creation made as a guest before registering is published as the
+// account, but its references keep the guest's id and sit in the guest's
+// folder. "Include generation references" packaged none of them.
+describe('generation references packaged for a publish', () => {
+  type ReferenceRow = {
+    id: string;
+    generation_id: string;
+    user_id: string;
+    media_type: 'image';
+    role: string;
+    label: string | null;
+    storage_path: string;
+    source_generation_id: null;
+    sort_order: number;
+    metadata: null;
+  };
+
+  const reference = (id: string, userId: string, storagePath: string, sortOrder = 0): ReferenceRow => ({
+    id,
+    generation_id: 'gen-1',
+    user_id: userId,
+    media_type: 'image',
+    role: 'reference',
+    label: `Reference ${id}`,
+    storage_path: storagePath,
+    source_generation_id: null,
+    sort_order: sortOrder,
+    metadata: null,
+  });
+
+  /** A service client holding these rows, with `linkedGuestIds` merged into `user-1`. */
+  function referenceClient(rows: ReferenceRow[], linkedGuestIds: string[]) {
+    const linkedLookups: string[] = [];
+    const downloads: string[] = [];
+    const uploads: string[] = [];
+    const client = {
+      from(table: string) {
+        if (table === 'profiles') {
+          return {
+            select: () => ({
+              eq: async (column: string, value: string) => {
+                linkedLookups.push(`${column}=${value}`);
+                return {
+                  data: column === 'merged_into_user_id' && value === 'user-1' ? linkedGuestIds.map((id) => ({ id })) : [],
+                  error: null,
+                };
+              },
+            }),
+          };
+        }
+        if (table === 'generation_input_media') {
+          let generationId: unknown = null;
+          const query = {
+            select: () => query,
+            eq: (column: string, value: unknown) => {
+              if (column === 'generation_id') generationId = value;
+              return query;
+            },
+            order: async () => ({ data: rows.filter((row) => row.generation_id === generationId), error: null }),
+          };
+          return query;
+        }
+        throw new Error(`Unexpected table access: ${table}`);
+      },
+      storage: {
+        from: (bucket: string) => ({
+          download: async (filePath: string) => {
+            downloads.push(`${bucket}/${filePath}`);
+            return { data: new Blob(['image'], { type: 'image/png' }), error: null };
+          },
+          upload: async (filePath: string) => {
+            uploads.push(`${bucket}/${filePath}`);
+            return { error: null };
+          },
+        }),
+      },
+    };
+    return { client: client as never, linkedLookups, downloads, uploads };
+  }
+
+  it('reads a linked guest’s references from its folder and copies them under the account', async () => {
+    const { buildGenerationReferenceResourceItems } = await import('@/lib/post-resource-bundles-server');
+    const source = referenceClient(
+      [reference('ref-1', 'guest-1', 'generation_inputs/guest-1/gen-1/hero.png')],
+      ['guest-1'],
+    );
+
+    const items = await buildGenerationReferenceResourceItems({
+      supabase: source.client,
+      ownerUserId: 'user-1',
+      generationId: 'gen-1',
+    });
+
+    expect(source.linkedLookups).toEqual(['merged_into_user_id=user-1']);
+    expect(source.downloads).toEqual(['generation_inputs/guest-1/gen-1/hero.png']);
+    expect(items).toHaveLength(1);
+    expect(items[0].storagePath).toMatch(/^user-1\/generation-references\/gen-1\//);
+    expect(source.uploads).toEqual([`post_resource_files/${items[0].storagePath}`]);
+  });
+
+  it('copies nothing from a folder outside the account and its linked guests', async () => {
+    const { buildGenerationReferenceResourceItems } = await import('@/lib/post-resource-bundles-server');
+    const source = referenceClient(
+      [
+        // A row of the linked guest that names someone else's file.
+        reference('ref-1', 'guest-1', 'generation_inputs/stranger-1/gen-1/hero.png'),
+        // A row of an identity not linked to the account.
+        reference('ref-2', 'stranger-1', 'generation_inputs/stranger-1/gen-1/other.png', 1),
+      ],
+      ['guest-1'],
+    );
+
+    const items = await buildGenerationReferenceResourceItems({
+      supabase: source.client,
+      ownerUserId: 'user-1',
+      generationId: 'gen-1',
+    });
+
+    expect(items).toEqual([]);
+    expect(source.downloads).toEqual([]);
+    expect(source.uploads).toEqual([]);
+  });
+
+  it('packages the account’s own references without asking who is linked to it', async () => {
+    const { buildGenerationReferenceResourceItems } = await import('@/lib/post-resource-bundles-server');
+    const source = referenceClient(
+      [reference('ref-1', 'user-1', 'generation_inputs/user-1/gen-1/hero.png')],
+      ['guest-1'],
+    );
+
+    const items = await buildGenerationReferenceResourceItems({
+      supabase: source.client,
+      ownerUserId: 'user-1',
+      generationId: 'gen-1',
+    });
+
+    expect(source.linkedLookups).toEqual([]);
+    expect(source.downloads).toEqual(['generation_inputs/user-1/gen-1/hero.png']);
+    expect(items).toHaveLength(1);
+  });
+});

@@ -29,6 +29,18 @@ const payout = vi.hoisted(() => ({
 
 const showMessageDialog = vi.hoisted(() => vi.fn());
 
+const platformState = vi.hoisted(() => ({ os: 'ios' }));
+
+// The provider's own class, as the screen imports it from the mocked module.
+const ReauthenticationFailed = vi.hoisted(() => class AccountReauthenticationFailedError extends Error {
+  constructor(
+    readonly method: 'password' | 'google' | 'apple',
+    readonly failure: unknown,
+  ) {
+    super(failure instanceof Error ? failure.message : 'Sign-in verification failed.');
+  }
+});
+
 vi.mock('@tanstack/react-query', () => ({
   useQuery: (options: { queryKey: unknown; enabled: boolean; queryFn: unknown }) => {
     payout.options = options;
@@ -48,8 +60,19 @@ vi.mock('expo-apple-authentication', () => ({
 
 vi.mock('react-native', () => ({
   Alert: { alert: vi.fn() },
-  Platform: { OS: 'ios' },
+  Platform: {
+    get OS() {
+      return platformState.os;
+    },
+  },
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
+}));
+
+vi.mock('@/lib/apple-auth', () => ({
+  isAppleAuthCanceled: (error: unknown) => (error as { code?: unknown } | null)?.code === 'ERR_REQUEST_CANCELED',
+}));
+vi.mock('@/lib/google-auth', () => ({
+  isGoogleAuthCanceled: (error: unknown) => (error as { code?: unknown } | null)?.code === 'ERR_GOOGLE_AUTH_CANCELED',
 }));
 
 vi.mock('@/components/ui', () => ({
@@ -69,6 +92,7 @@ vi.mock('@/lib/auth', () => ({
     title: 'Your account is being deleted',
     message: 'You have been signed out.',
   },
+  AccountReauthenticationFailedError: ReauthenticationFailed,
   isAccountReauthenticationRequired: (error: unknown) => Boolean(
     error
     && typeof error === 'object'
@@ -107,6 +131,7 @@ const byType = (tree: renderer.ReactTestRenderer, type: string) => tree.root.fin
 const texts = (tree: renderer.ReactTestRenderer) => byType(tree, 'text').map((node) => [node.props.children].flat().join(''));
 
 beforeEach(() => {
+  platformState.os = 'ios';
   authState.accountReauthenticationMethods = ['apple'];
   authState.user = { id: 'user-1', email: 'creator@example.com' };
   authState.deleteAccount.mockReset();
@@ -234,7 +259,15 @@ describe('DeleteAccountScreen answers', () => {
   it('says "not deleted", and offers the button again, only for an answer that left the account untouched', async () => {
     authState.deleteAccount.mockRejectedValue(Object.assign(
       new Error('Account deletion could not be completed. Please try again.'),
-      { status: 500, code: 'ACCOUNT_DELETION_NOT_STARTED' },
+      {
+        status: 500,
+        code: 'ACCOUNT_DELETION_NOT_STARTED',
+        details: {
+          error: 'Account deletion could not be completed. Please try again.',
+          code: 'ACCOUNT_DELETION_NOT_STARTED',
+          deletionScheduled: false,
+        },
+      },
     ));
     const tree = renderScreen();
 
@@ -246,6 +279,149 @@ describe('DeleteAccountScreen answers', () => {
     );
     expect(showMessageDialog).not.toHaveBeenCalled();
     expect(tree.root.findByProps({ label: 'Permanently delete account' }).props).toMatchObject({ loading: false });
+  });
+});
+
+// Audit 04-3: a lost answer that Supabase could not settle either way.
+describe('DeleteAccountScreen when the deletion cannot be confirmed', () => {
+  it('says so, in the web\'s words, without claiming the account survived, and offers the button again', async () => {
+    authState.deleteAccount.mockResolvedValue('unconfirmed');
+    const tree = renderScreen();
+
+    await requestInitialDeletion(tree);
+
+    const status = tree.root.findByProps({ title: 'Deletion not confirmed' });
+    expect(status.props).toMatchObject({
+      tone: 'warning',
+      body: 'We could not confirm the deletion. Check the connection and try again.',
+    });
+    expect(JSON.stringify(tree.toJSON())).not.toContain('still active');
+    expect(showMessageDialog).not.toHaveBeenCalled();
+    expect(tree.root.findByProps({ label: 'Permanently delete account' }).props).toMatchObject({ loading: false });
+  });
+
+  it('names no server text for a refused session that Supabase says is still alive', async () => {
+    authState.deleteAccount.mockRejectedValue(Object.assign(new Error('Unauthorized'), {
+      status: 401,
+      details: { error: 'Unauthorized', code: 'UNAUTHORIZED' },
+    }));
+    const tree = renderScreen();
+
+    await requestInitialDeletion(tree);
+
+    expect(tree.root.findByProps({ title: 'Account was not deleted' }).props.body).toBe(
+      'The deletion did not go through. Your account is still active. You can retry below.',
+    );
+  });
+
+  it('names no bare status for a platform failure with no JSON', async () => {
+    authState.deleteAccount.mockRejectedValue(Object.assign(new Error('Request failed with status 502'), {
+      status: 502,
+      details: '<html>Bad Gateway</html>',
+    }));
+    const tree = renderScreen();
+
+    await requestInitialDeletion(tree);
+
+    expect(tree.root.findByProps({ title: 'Account was not deleted' }).props.body).not.toContain('status 502');
+  });
+});
+
+// Audit 01-7 / 01-8: the sign-in that confirms the deletion fails in the
+// sign-in screen's words, naming only the ways in this screen draws.
+describe('DeleteAccountScreen sign-in failures', () => {
+  async function failReauthentication(
+    tree: renderer.ReactTestRenderer,
+    method: 'password' | 'google' | 'apple',
+    failure: unknown,
+  ) {
+    authState.deleteAccount.mockReset();
+    authState.deleteAccount
+      .mockRejectedValueOnce(Object.assign(new Error('Sign in again.'), { code: 'RECENT_AUTH_REQUIRED' }))
+      .mockRejectedValueOnce(new ReauthenticationFailed(method, failure));
+    await requestInitialDeletion(tree);
+    await renderer.act(async () => {
+      if (method === 'password') {
+        tree.root.findByProps({ accessibilityLabel: 'Current password for account deletion' })
+          .props.onChangeText('wrong-Horse-1');
+      }
+    });
+    await renderer.act(async () => {
+      if (method === 'password') tree.root.findByProps({ label: 'Verify password and delete' }).props.onPress();
+      if (method === 'google') tree.root.findByProps({ label: 'Continue with Google and delete' }).props.onPress();
+      if (method === 'apple') tree.root.findByProps({ accessibilityLabel: 'Continue with Apple and delete' }).props.onPress();
+    });
+  }
+
+  const statusBlocks = (tree: renderer.ReactTestRenderer) => byType(tree, 'status-block').map((node) => node.props);
+
+  it('says a wrong password in words, never Supabase\'s "Invalid login credentials"', async () => {
+    authState.accountReauthenticationMethods = ['password'];
+    const tree = renderScreen();
+
+    await failReauthentication(tree, 'password', new Error('Invalid login credentials'));
+
+    expect(statusBlocks(tree)).toContainEqual(expect.objectContaining({
+      tone: 'danger',
+      title: 'That password does not match this account',
+      body: 'Check it and try again. Your account is still active.',
+    }));
+    expect(JSON.stringify(tree.toJSON())).not.toContain('Invalid login credentials');
+  });
+
+  it('points at the Google button on Android only when the account has one', async () => {
+    platformState.os = 'android';
+    authState.accountReauthenticationMethods = ['password', 'google'];
+    const tree = renderScreen();
+
+    await failReauthentication(tree, 'password', new Error('Invalid login credentials'));
+
+    expect(statusBlocks(tree)).toContainEqual(expect.objectContaining({
+      body: 'Check it and try again. If you created the account with Google, use that button instead. Your account is still active.',
+    }));
+  });
+
+  it('says offline, and never names a build setting, when the sign-in could not reach Supabase', async () => {
+    authState.accountReauthenticationMethods = ['password'];
+    const tree = renderScreen();
+
+    // What the provider throws once it has normalised a network failure.
+    await failReauthentication(tree, 'password', Object.assign(
+      new Error('Could not reach Supabase auth. Check your connection and EXPO_PUBLIC_SUPABASE_URL.'),
+      { code: 'network', cause: 'Network request failed' },
+    ));
+
+    expect(statusBlocks(tree)).toContainEqual(expect.objectContaining({ title: 'You appear to be offline' }));
+    expect(JSON.stringify(tree.toJSON())).not.toContain('EXPO_PUBLIC');
+  });
+
+  it('offers the password after a failed Google sign-in only for an account that has one', async () => {
+    authState.accountReauthenticationMethods = ['google'];
+    const googleOnly = renderScreen();
+    await failReauthentication(googleOnly, 'google', new Error('access_denied'));
+    expect(statusBlocks(googleOnly)).toContainEqual(expect.objectContaining({
+      title: 'Could not finish with Google',
+      body: 'Try again. Your account is still active.',
+    }));
+
+    authState.accountReauthenticationMethods = ['password', 'google'];
+    const withPassword = renderScreen();
+    await failReauthentication(withPassword, 'google', new Error('access_denied'));
+    expect(statusBlocks(withPassword)).toContainEqual(expect.objectContaining({
+      body: 'Try again, or sign in with your email and password. Your account is still active.',
+    }));
+  });
+
+  it('says nothing when the person cancels the Apple sheet', async () => {
+    authState.accountReauthenticationMethods = ['apple'];
+    const tree = renderScreen();
+
+    await failReauthentication(tree, 'apple', Object.assign(new Error('The operation couldn’t be completed.'), {
+      code: 'ERR_REQUEST_CANCELED',
+    }));
+
+    expect(statusBlocks(tree)).toEqual([]);
+    expect(tree.root.findByProps({ accessibilityLabel: 'Continue with Apple and delete' })).toBeTruthy();
   });
 });
 

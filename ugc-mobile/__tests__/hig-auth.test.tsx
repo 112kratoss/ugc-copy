@@ -34,6 +34,7 @@ const authState = vi.hoisted(() => ({
 vi.mock('expo-router', () => ({
   router: { canGoBack: vi.fn(() => false), back: vi.fn(), dismissTo: vi.fn(), replace: vi.fn() },
   useLocalSearchParams: () => ({}),
+  useNavigation: () => ({ addListener: () => () => undefined }),
   Link: (props: MockProps) => React.createElement('link', props),
 }));
 
@@ -82,6 +83,7 @@ vi.mock('lucide-react-native', () => ({
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
 vi.mock('@/lib/apple-auth', () => ({ isAppleAuthCanceled: () => false }));
 vi.mock('@/lib/google-auth', () => ({ isGoogleAuthCanceled: () => false }));
+vi.mock('@/lib/onboarding', () => ({ trackOnboardingEvent: vi.fn(async () => undefined) }));
 
 import AuthScreen from '../app/auth';
 

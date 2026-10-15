@@ -63,6 +63,8 @@ interface ActionFeedback {
 
 const idleAction: ActionFeedback = { target: null, status: 'idle', message: '' };
 const numberFormatter = new Intl.NumberFormat('en', { maximumFractionDigits: 0 });
+// The program is stored in basis points: a fractional percent prints as it is, never rounded up.
+const percentFormatter = new Intl.NumberFormat('en', { maximumFractionDigits: 2 });
 
 function toNonNegativeNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
@@ -126,7 +128,7 @@ function normalizeReferralSummary(value: unknown): ReferralProgramSummary {
 }
 
 export function buildReferralShareText(inviteePercent: number) {
-  return `Create with me on magicbooklet and get ${numberFormatter.format(inviteePercent)}% bonus credits on your first top-up.\n\n${REFERRAL_DISCLOSURE}`;
+  return `Create with me on magicbooklet and get ${percentFormatter.format(inviteePercent)}% bonus credits on your first top-up.\n\n${REFERRAL_DISCLOSURE}`;
 }
 
 export function buildReferralCopyText(shareUrl: string, inviteePercent: number) {
@@ -399,14 +401,14 @@ export default function InviteClient() {
               <div className="grid grid-cols-2 gap-3" aria-label="Current referral offer">
                 <div className="rounded-3xl border border-white/10 bg-black/20 p-4 sm:p-5">
                   <div className="text-3xl font-extrabold tracking-tight text-white">
-                    {numberFormatter.format(summary.program.inviteeFirstPurchasePercent)}%
+                    {percentFormatter.format(summary.program.inviteeFirstPurchasePercent)}%
                   </div>
                   <p className="mt-2 text-sm font-bold text-zinc-200">for your friend</p>
                   <p className="mt-1 text-xs leading-5 text-zinc-400">On their first verified credit top-up</p>
                 </div>
                 <div className="rounded-3xl border border-amber-300/20 bg-amber-400/10 p-4 sm:p-5">
                   <div className="text-3xl font-extrabold tracking-tight text-amber-200">
-                    {numberFormatter.format(summary.program.inviterPercent)}%
+                    {percentFormatter.format(summary.program.inviterPercent)}%
                   </div>
                   <p className="mt-2 text-sm font-bold text-amber-100">for you</p>
                   <p className="mt-1 text-xs leading-5 text-amber-100/65">On every verified credit top-up</p>

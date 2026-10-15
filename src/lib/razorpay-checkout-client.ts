@@ -69,17 +69,23 @@ export async function verifyRazorpayCheckoutUntilSettled({
   fetcher?: typeof fetch;
   maxAttempts?: number;
   sleep?: (delayMs: number) => Promise<void>;
-  token: string;
+  /**
+   * The bearer, or a reader called before every attempt. The sheet can stay
+   * open for minutes, so a token read at the click may have expired by the time
+   * the payment comes back to be verified.
+   */
+  token: string | (() => Promise<string>);
   url: string;
 }): Promise<RazorpayCheckoutVerificationResult> {
   const boundedAttempts = Math.max(1, Math.min(8, Math.floor(maxAttempts)));
 
   for (let attempt = 0; attempt < boundedAttempts; attempt += 1) {
+    const bearer = typeof token === 'function' ? await token() : token;
     const response = await fetcher(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${bearer}`,
       },
       body: JSON.stringify(body),
     });
@@ -113,5 +119,28 @@ export async function verifyRazorpayCheckoutUntilSettled({
       code: 'PAYMENT_PENDING',
       message: 'Payment is waiting to be captured.',
     },
+  };
+}
+
+const CREDIT_REFRESH_WINDOW_MS = 60_000;
+const CREDIT_REFRESH_INTERVAL_MS = 5_000;
+
+/**
+ * Has every balance on the page read itself again (`credits_updated`) now and
+ * every few seconds for a minute. A payment this page could not see settled is
+ * settled by Razorpay's webhook, which can land after the page stopped asking.
+ * Returns the function that stops it early.
+ */
+export function pollCreditBalanceAfterPayment({
+  intervalMs = CREDIT_REFRESH_INTERVAL_MS,
+  windowMs = CREDIT_REFRESH_WINDOW_MS,
+}: { intervalMs?: number; windowMs?: number } = {}): () => void {
+  const refresh = () => window.dispatchEvent(new Event('credits_updated'));
+  refresh();
+  const intervalId = window.setInterval(refresh, intervalMs);
+  const timeoutId = window.setTimeout(() => window.clearInterval(intervalId), windowMs);
+  return () => {
+    window.clearInterval(intervalId);
+    window.clearTimeout(timeoutId);
   };
 }

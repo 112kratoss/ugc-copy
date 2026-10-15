@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server';
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
 import {
+  GUEST_REPORT_REGISTRATION_REQUIRED,
   listUserBlocksForRoute,
   setUserBlockForRoute,
   submitModerationReportForRoute,
@@ -32,17 +33,30 @@ function resolveDependencies(dependencies: ModerationRouteDependencies | undefin
   };
 }
 
-async function getAuthenticatedUserId(
+async function getAuthenticatedUser(
   request: Request,
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
   const supabase = dependencies.createUserClient(request);
   const { data: { user }, error } = await getVerifiedAuthUserResult(supabase);
+  return error || !user ? null : user;
+}
+
+async function getAuthenticatedUserId(
+  request: Request,
+  dependencies: ReturnType<typeof resolveDependencies>,
+) {
+  const user = await getAuthenticatedUser(request, dependencies);
   // Guests hold a valid JWT but are not registered. Before anonymous
   // sessions existed these two were the same thing, so this check read
   // `!user` alone; it now has to say which it means. Registered-only per
   // route-identity-policy.ts.
-  return error || !user || isGuestUser(user) ? null : user.id;
+  return !user || isGuestUser(user) ? null : user.id;
+}
+
+function isGenerationReport(body: unknown) {
+  return typeof body === 'object' && body !== null
+    && (body as { targetType?: unknown }).targetType === 'generation';
 }
 
 function createModerationResponse(result: ModerationRouteResult) {
@@ -60,8 +74,8 @@ export async function postModerationReportRouteResponse({
   request: Request;
 }) {
   const resolved = resolveDependencies(dependencies);
-  const reporterUserId = await getAuthenticatedUserId(request, resolved);
-  if (!reporterUserId) {
+  const reporter = await getAuthenticatedUser(request, resolved);
+  if (!reporter) {
     return applyPrivateNoStoreApiResponseHeaders(
       NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
       request,
@@ -69,10 +83,24 @@ export async function postModerationReportRouteResponse({
   }
 
   const body = await request.json().catch(() => null);
+  const reporterIsGuest = isGuestUser(reporter);
+  // The proxy lets a guest's report through (GUEST_WRITABLE_REGISTERED_ROUTES)
+  // for one target: a generation its own credits made, which the service
+  // checks. Posts, people and comments still take an account, and a guest is
+  // told so with the proxy's 403, never a 401 the app would read as a session
+  // that has ended.
+  if (reporterIsGuest && !isGenerationReport(body)) {
+    return applyPrivateNoStoreApiResponseHeaders(
+      createModerationResponse(GUEST_REPORT_REGISTRATION_REQUIRED),
+      request,
+    );
+  }
+
   const response = createModerationResponse(await resolved.submitModerationReportForRoute({
     adminSupabase: resolved.createServiceClient(),
     body,
-    reporterUserId,
+    reporterIsGuest,
+    reporterUserId: reporter.id,
   }));
   return applyPrivateNoStoreApiResponseHeaders(response, request);
 }

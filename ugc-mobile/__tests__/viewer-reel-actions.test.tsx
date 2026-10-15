@@ -575,6 +575,61 @@ describe("a guest's reel", () => {
   });
 });
 
+// A guest can generate, so the reel's Recreate opens a guest's own creation in
+// the creator, as it does an account's; anyone else's post still asks the guest
+// to sign in first.
+describe("the reel's Recreate for a guest", () => {
+  const creation = (id: string) => ({
+    id,
+    output_url: `https://cdn.example.com/${id}.png`,
+    status: 'succeeded',
+    created_at: '2026-10-01T10:00:00.000Z',
+    model: 'image-model',
+    category: 'image',
+    title: `Creation ${id}`,
+    prompt: 'A product still',
+  });
+  const recreateActive = () => act(async () => {
+    (screenState.callbacksFor!(activeItem()).onRecreate as () => void)();
+  });
+
+  beforeEach(() => {
+    authState.user = null;
+    authState.identityUserId = 'guest-1';
+  });
+
+  it('opens its own creation in the creator, with no sign-in first', async () => {
+    authState.api.listGenerations.mockResolvedValue({ generations: [creation('gen-a'), creation('gen-b')] });
+    await renderReel('gen-b', { source: 'studio-creations' });
+    expect(activeId()).toBe('gen-b');
+
+    await recreateActive();
+
+    expect(routerState.push).toHaveBeenCalledTimes(1);
+    expect(routerState.push.mock.calls[0][0]).toMatch(/^\/create\/image\?remix=gen-b&prompt=A\+product\+still&/);
+  });
+
+  it('asks it to sign in before recreating a post from the feed', async () => {
+    seedLane('guest-1', lanePosts());
+    await renderReel('post-b');
+
+    await recreateActive();
+
+    expect(routerState.push).toHaveBeenCalledTimes(1);
+    expect(routerState.push.mock.calls[0][0]).toMatchObject({ pathname: '/auth', params: { returnTo: expect.any(String) } });
+  });
+
+  it('asks a device with no identity at all to sign in, even for a creation', async () => {
+    authState.identityUserId = null;
+    authState.api.listGenerations.mockResolvedValue({ generations: [creation('gen-b')] });
+    await renderReel('gen-b', { source: 'studio-creations' });
+
+    await recreateActive();
+
+    expect(routerState.push.mock.calls[0][0]).toMatchObject({ pathname: '/auth' });
+  });
+});
+
 // Product decision D7 (2026-10-14): Undo is a preference delete, offered for
 // five seconds, and the post returns to the index it left.
 describe('Undo after Not interested or Hide in the reel', () => {

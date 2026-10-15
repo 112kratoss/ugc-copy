@@ -14,6 +14,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
 
+import { describeAuthError } from '@/lib/auth-error-copy';
 import { getSafeAuthNextPath } from '@/lib/auth-onboarding';
 import {
   getPasswordRequirements,
@@ -23,6 +24,8 @@ import { supabase } from '@/lib/supabase';
 
 type RecoveryState = 'checking' | 'ready' | 'missing';
 type ResetErrorField = 'password' | 'confirmPassword' | null;
+
+const UPDATE_FAILED_COPY = 'Could not update your password. Check your connection and try again.';
 
 export default function ResetPasswordPage() {
   return (
@@ -94,7 +97,7 @@ function ResetPasswordContent() {
     try {
       const { error: updateError } = await supabase.auth.updateUser({ password });
       if (updateError) {
-        setError(updateError.message);
+        setError(describeAuthError(updateError, UPDATE_FAILED_COPY));
         passwordRef.current?.focus();
         return;
       }
@@ -105,9 +108,7 @@ function ResetPasswordContent() {
         router.refresh();
       }, 900);
     } catch (updateError) {
-      setError(updateError instanceof Error
-        ? updateError.message
-        : 'Could not update your password. Check your connection and try again.');
+      setError(describeAuthError(updateError, UPDATE_FAILED_COPY));
       passwordRef.current?.focus();
     } finally {
       setIsSaving(false);

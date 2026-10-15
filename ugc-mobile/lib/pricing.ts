@@ -4,38 +4,42 @@ export interface MobilePricingPlan {
   id: PricingPlanId;
   name: string;
   credits: number;
-  webPriceInr: number;
+  /** The App Store and Google Play product that sells this pack (the contract's `mobileProductId`). */
   productId: string;
-  popular: boolean;
+  /** The label of the pack both clients feature, or null. */
+  badge: string | null;
   description: string;
 }
 
+/**
+ * The packs as contracts/credit-packs-v1.json defines them, copied because
+ * Metro cannot load a file from outside the app; credit-packs-contract.test.ts
+ * holds this list equal to the contract. The server grants the credits written
+ * there, so the count the success notice names is the count the buyer gets.
+ */
 export const MOBILE_PRICING_PLANS: MobilePricingPlan[] = [
   {
     id: 'starter',
     name: 'Starter',
     credits: 500,
-    webPriceInr: 415,
     productId: 'magicbooklet.credits.starter',
-    popular: false,
+    badge: null,
     description: 'Enough to try image, video, and motion.',
   },
   {
     id: 'creator',
     name: 'Creator',
     credits: 2000,
-    webPriceInr: 1660,
     productId: 'magicbooklet.credits.creator',
-    popular: true,
+    badge: 'Most popular',
     description: 'Best value for active creators.',
   },
   {
     id: 'pro',
     name: 'Pro',
     credits: 10000,
-    webPriceInr: 8300,
     productId: 'magicbooklet.credits.pro',
-    popular: false,
+    badge: null,
     description: 'For pro creators and small teams producing daily.',
   },
 ];

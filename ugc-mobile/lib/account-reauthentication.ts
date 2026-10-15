@@ -17,6 +17,22 @@ export class AccountReauthenticationAccountMismatchError extends Error {
   }
 }
 
+/**
+ * The sign-in that confirms a deletion failed on this device, before the server
+ * was asked to delete anything. Carries the method and what it failed with, so
+ * the deletion screen can say it in the sign-in screen's words rather than
+ * Supabase's or a developer's (audit 01-7).
+ */
+export class AccountReauthenticationFailedError extends Error {
+  constructor(
+    readonly method: AccountReauthenticationMethod,
+    readonly failure: unknown,
+  ) {
+    super(failure instanceof Error ? failure.message : 'Sign-in verification failed.');
+    this.name = 'AccountReauthenticationFailedError';
+  }
+}
+
 export function getAccountReauthenticationMethods(
   user: User | null,
   platform = Platform.OS,

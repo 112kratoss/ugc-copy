@@ -81,7 +81,9 @@ export default function LoginClient({
                 return;
             }
 
-            router.replace(buildAuthContinuePath(redirectTo));
+            // The flag tells /auth/continue this visit is no new sign-in, so
+            // it is not counted as auth_succeeded.
+            router.replace(`${buildAuthContinuePath(redirectTo)}&signedIn=1`);
             router.refresh();
         });
 
@@ -146,7 +148,10 @@ export default function LoginClient({
                 return;
             }
         } catch (err: unknown) {
-            setError(describeAuthError(err, 'Could not sign in. Try again.'));
+            setError(describeAuthError(
+                err,
+                isLogin ? 'Could not sign in. Try again.' : 'Could not create the account. Try again.',
+            ));
         } finally {
             setLoading(false);
         }
@@ -465,6 +470,7 @@ export default function LoginClient({
                                 type="button"
                                 onClick={() => void handleSocialLogin()}
                                 disabled={loading}
+                                aria-describedby="google-agreement"
                                 className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-2)] disabled:opacity-50"
                             >
                                 <svg className="w-5 h-5" viewBox="0 0 24 24" aria-hidden="true">
@@ -487,6 +493,16 @@ export default function LoginClient({
                                 </svg>
                                 Continue with Google
                             </button>
+                            {/* Google creates an account from either tab, so the agreement sits under it in both; the app shows it in both modes too. */}
+                            <p id="google-agreement" className="mt-3 text-center text-xs leading-5 text-[var(--ui-text-muted)]">
+                                By continuing you agree to the{' '}
+                                <Link href="/terms" prefetch={false} className="font-bold text-[var(--ui-text-secondary)] underline underline-offset-2 hover:text-[var(--ui-text-primary)]">Terms</Link>
+                                {' '}and the{' '}
+                                <Link href="/privacy" prefetch={false} className="font-bold text-[var(--ui-text-secondary)] underline underline-offset-2 hover:text-[var(--ui-text-primary)]">Privacy Policy</Link>
+                                . Prompts and media you generate are processed by the AI providers{' '}
+                                <Link href="/privacy#ai-processing" prefetch={false} className="font-bold text-[var(--ui-text-secondary)] underline underline-offset-2 hover:text-[var(--ui-text-primary)]">listed in the policy</Link>
+                                .
+                            </p>
                         </div>
                     </div>
                 </div>

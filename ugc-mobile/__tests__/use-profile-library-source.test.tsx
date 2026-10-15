@@ -3,7 +3,17 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// The identity behind the screen: an account unless a case makes it a guest.
+const authState = vi.hoisted(() => ({
+  isGuest: false,
+  identityUserId: 'user-1' as string | null,
+}));
+
+vi.mock('../lib/auth', () => ({
+  useAuth: () => authState,
+}));
 
 import { useProfileLibrarySource } from '../lib/use-profile-library-source';
 import type { GenerationListItem, GenerationListResponse, OwnerPostListItem, OwnerPostsResponse } from '../lib/types';
@@ -59,12 +69,13 @@ function stubApi(overrides: Partial<Record<'listGenerations' | 'listOwnerPosts' 
   } as unknown as LibraryProps['api'] & Record<'listGenerations' | 'listOwnerPosts' | 'getOwnerPost', ReturnType<typeof vi.fn>>;
 }
 
-async function renderLibrary(props: Omit<LibraryProps, 'owner' | 'userId'>) {
+/** `userId` is the registered account the screen passes; null for a guest, which has none. */
+async function renderLibrary(props: Omit<LibraryProps, 'owner' | 'userId'>, userId: string | null = 'user-1') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const latest: { current: LibraryResult | null } = { current: null };
 
   function Probe() {
-    latest.current = useProfileLibrarySource({ ...props, owner, userId: 'user-1' });
+    latest.current = useProfileLibrarySource({ ...props, owner, userId: userId ?? undefined });
     return null;
   }
 
@@ -73,6 +84,7 @@ async function renderLibrary(props: Omit<LibraryProps, 'owner' | 'userId'>) {
   });
 
   return {
+    client,
     latest,
     async until(predicate: (result: LibraryResult) => boolean) {
       for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -90,6 +102,11 @@ async function renderLibrary(props: Omit<LibraryProps, 'owner' | 'userId'>) {
 }
 
 describe('useProfileLibrarySource', () => {
+  beforeEach(() => {
+    authState.isGuest = false;
+    authState.identityUserId = 'user-1';
+  });
+
   it('reports an initial read failure and can retry the primary library', async () => {
     const api = stubApi({ listGenerations: vi.fn()
       .mockRejectedValueOnce(new Error('Network unavailable'))
@@ -208,5 +225,57 @@ describe('useProfileLibrarySource', () => {
 
     expect(ready.items.map((item) => item.id)).toEqual(['archived-one', 'archived-two']);
     expect(api.listGenerations).not.toHaveBeenCalled();
+  });
+
+  // 02-1: a guest's creations are its library, under its identity, which the
+  // Profile grid keys them by; a guest holds no account and reads no posts.
+  describe('for a guest', () => {
+    beforeEach(() => {
+      authState.isGuest = true;
+      authState.identityUserId = 'guest-1';
+    });
+
+    it("reads a guest's own creations under its identity, and no posts", async () => {
+      const api = stubApi({
+        listGenerations: vi.fn(async () => generationPage([generation('newest'), generation('tapped')], null)),
+      });
+
+      const library = await renderLibrary({ api, source: 'profile-creations', initialId: 'tapped' }, null);
+      const ready = await library.until((result) => result.selection === 'found');
+
+      expect(ready.items.map((item) => item.id)).toEqual(['newest', 'tapped']);
+      expect(api.listGenerations).toHaveBeenCalledWith(true, { cursor: undefined, limit: 24 });
+      expect(library.client.getQueryData(['profile-generations', 'guest-1'])).toBeDefined();
+      // The posts are an account's: none asked for, so none can fail.
+      expect(api.listOwnerPosts).not.toHaveBeenCalled();
+      expect(ready.enrichmentFailed).toBe(false);
+    });
+
+    it('opens no posts library for a guest', async () => {
+      const api = stubApi();
+
+      const library = await renderLibrary({ api, source: 'profile-posts', initialId: 'post-1' }, null);
+      await renderer.act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(library.latest.current!.items).toEqual([]);
+      expect(api.listOwnerPosts).not.toHaveBeenCalled();
+      expect(api.getOwnerPost).not.toHaveBeenCalled();
+    });
+
+    it('reads nothing on a device with no identity at all', async () => {
+      authState.isGuest = false;
+      authState.identityUserId = null;
+      const api = stubApi();
+
+      const library = await renderLibrary({ api, source: 'profile-creations', initialId: 'tapped' }, null);
+      await renderer.act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(library.latest.current!.items).toEqual([]);
+      expect(api.listGenerations).not.toHaveBeenCalled();
+    });
   });
 });

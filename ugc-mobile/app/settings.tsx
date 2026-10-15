@@ -58,7 +58,8 @@ export default function SettingsScreen() {
         icon={<UserRound size={appTheme.icon.feature} color={theme.colors.primary} />}
         title="Profile"
         body={user?.email ?? 'Sign in to connect your creator profile.'}
-        onPress={() => router.push(user ? '/profile' as never : '/auth' as never)}
+        // Signing in comes back to Settings, not Home (audit 01-12).
+        onPress={() => router.push(user ? '/profile' as never : { pathname: '/auth', params: { returnTo: '/settings' } } as never)}
       />
 
       <SettingsCard

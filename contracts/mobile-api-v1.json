@@ -11,11 +11,37 @@
         "mobileCompatibility": {
           "currentApiVersion": 1,
           "minimumApiVersion": 1,
-          "minimumAppVersion": "0.0.1",
+          "minimumAppVersion": "0.0.5",
           "supportedCatalogSchemaVersions": [
-            1
+            1,
+            2,
+            3
           ],
           "unversionedClientsUseApiVersion": 1
+        },
+        "criticalUpdate": null
+      },
+      "responseVariants": {
+        "criticalUpdate": {
+          "buildId": "build-123",
+          "mobileCompatibility": {
+            "currentApiVersion": 1,
+            "minimumApiVersion": 1,
+            "minimumAppVersion": "0.0.5",
+            "supportedCatalogSchemaVersions": [
+              1,
+              2,
+              3
+            ],
+            "unversionedClientsUseApiVersion": 1
+          },
+          "criticalUpdate": {
+            "runtimeVersions": [
+              "02b8fe85566eac2e3f61a8ed82fa350c3ee03865",
+              "4babc8b439ba5309615abbbe59baf79a23014d6c"
+            ],
+            "publishedAfter": "2026-10-15T07:40:00.000Z"
+          }
         }
       }
     },
@@ -31,9 +57,11 @@
         "compatibility": {
           "currentApiVersion": 1,
           "minimumApiVersion": 1,
-          "minimumAppVersion": "0.0.1",
+          "minimumAppVersion": "0.0.5",
           "supportedCatalogSchemaVersions": [
-            1
+            1,
+            2,
+            3
           ],
           "unversionedClientsUseApiVersion": 1
         }
@@ -1835,6 +1863,16 @@
       "cacheControl": "private, no-store",
       "response": {
         "success": true,
+        "credits": 120,
+        "restoredCreditPurchases": 1,
+        "alreadyProcessedCreditPurchases": 0,
+        "skipped": [
+          {
+            "transactionId": "GPA.3301-2207-4419-55021",
+            "productId": "magicbooklet.credits.starter",
+            "reason": "transaction_conflict"
+          }
+        ],
         "entitlements": [
           {
             "success": true,
@@ -1966,6 +2004,36 @@
       "headers": {
         "Vary": "Authorization, Cookie",
         "Location": "https://project.supabase.co/storage/v1/object/sign/post_media/private-posts/b9100000-0000-4000-8000-000000000001/photo.jpg?token=short-lived"
+      }
+    },
+    "recordReferralVisit": {
+      "method": "POST",
+      "path": "/api/referrals/visit",
+      "auth": "none",
+      "cacheControl": "private, no-store",
+      "request": {
+        "code": "CREATOR1",
+        "source": "mobile"
+      },
+      "response": {
+        "success": true,
+        "visitToken": "123e4567-e89b-42d3-a456-426614174000",
+        "code": "creator1",
+        "expiresAt": "2026-11-14T10:00:00.000Z",
+        "program": {
+          "inviterPercent": 5,
+          "inviteeFirstPurchasePercent": 5,
+          "attributionWindowDays": 30
+        }
+      },
+      "responseVariants": {
+        "programUnavailable": {
+          "success": true,
+          "visitToken": "123e4567-e89b-42d3-a456-426614174000",
+          "code": "creator1",
+          "expiresAt": "2026-11-14T10:00:00.000Z",
+          "program": null
+        }
       }
     }
   },

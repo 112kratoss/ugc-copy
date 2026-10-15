@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "description": "The credit packs both clients sell and the server grants. src/lib/pricing.ts builds the web pricing list and the server's plan map from this file, so a Razorpay order and a store purchase settle the credits and amount written here; ugc-mobile/lib/pricing.ts keeps a copy that a mobile test holds equal to it, because Metro cannot load a file from outside the app. priceInr is the web's charge in rupees and the mobile ledger's nominal amount, and it must match the store catalog seeded in supabase/migrations/20260714113000_harden_mobile_purchase_authority.sql. badge is the label of the pack both clients feature, or null.",
+  "packs": [
+    {
+      "id": "starter",
+      "name": "Starter",
+      "credits": 500,
+      "description": "Enough to try image, video, and motion.",
+      "badge": null,
+      "priceInr": 415,
+      "mobileProductId": "magicbooklet.credits.starter"
+    },
+    {
+      "id": "creator",
+      "name": "Creator",
+      "credits": 2000,
+      "description": "Best value for active creators.",
+      "badge": "Most popular",
+      "priceInr": 1660,
+      "mobileProductId": "magicbooklet.credits.creator"
+    },
+    {
+      "id": "pro",
+      "name": "Pro",
+      "credits": 10000,
+      "description": "For pro creators and small teams producing daily.",
+      "badge": null,
+      "priceInr": 8300,
+      "mobileProductId": "magicbooklet.credits.pro"
+    }
+  ]
+}

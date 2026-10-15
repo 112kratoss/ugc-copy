@@ -6,13 +6,16 @@ import { View } from 'react-native';
 import { AppText, Card, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import {
+  bonusCreditsPhrase,
   capturePendingReferral,
   claimPendingReferral,
+  formatReferralPercent,
   getPendingReferral,
-  getRecentReferralClaim,
+  getRecentReferralClaimRecord,
   normalizeReferralCode,
 } from '@/lib/referral-attribution';
 import { useAppTheme } from '@/lib/theme-context';
+import type { ReferralProgramSummary } from '@/lib/types';
 
 type InviteState =
   | { status: 'loading' }
@@ -30,6 +33,9 @@ export default function ReferralLandingScreen() {
   const rawNext = Array.isArray(params.next) ? params.next[0] : params.next;
   const destination = normalizeMobileReferralDestination(rawNext);
   const [state, setState] = useState<InviteState>({ status: 'loading' });
+  // The terms the server sent with this invite's visit; null until known, and
+  // the copy then names no numbers rather than numbers of its own.
+  const [program, setProgram] = useState<ReferralProgramSummary | null>(null);
   const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
@@ -43,17 +49,19 @@ export default function ReferralLandingScreen() {
 
       setState({ status: 'loading' });
       try {
-        const recentClaim = await getRecentReferralClaim(code);
+        const recentClaim = await getRecentReferralClaimRecord(code);
         if (cancelled) return;
         if (recentClaim) {
-          setState(recentClaim.claimed
+          setProgram(recentClaim.program ?? null);
+          setState(recentClaim.response.claimed
             ? { status: 'claimed', code }
-            : { status: 'ineligible', code, reason: recentClaim.reason });
+            : { status: 'ineligible', code, reason: recentClaim.response.reason });
           return;
         }
 
         const captured = await capturePendingReferral(api, code, { next: rawNext });
         if (cancelled) return;
+        setProgram(captured.pending.program ?? null);
 
         if (isAuthLoading) return;
         if (!user) {
@@ -72,6 +80,7 @@ export default function ReferralLandingScreen() {
         if (cancelled) return;
         const pending = await getPendingReferral().catch(() => null);
         if (cancelled) return;
+        if (pending?.code === code) setProgram(pending.program ?? null);
         setState({
           status: 'error',
           code,
@@ -91,13 +100,15 @@ export default function ReferralLandingScreen() {
   const returnTo = code
     ? `/r/${encodeURIComponent(code)}${rawNext ? `?next=${encodeURIComponent(rawNext)}` : ''}`
     : '/invite';
+  const inviteePercent = formatReferralPercent(program?.inviteeFirstPurchasePercent);
+  const firstTopUpBonus = inviteePercent ? `${inviteePercent} first top-up bonus` : 'first top-up bonus';
 
   return (
     <Screen>
       <SectionTitle
         eyebrow="Magicbooklet invite"
         title="Your creative bonus is waiting."
-        body="New users get 5% bonus credits on their first verified credit-pack purchase."
+        body={`New users get ${bonusCreditsPhrase(program?.inviteeFirstPurchasePercent)} on their first verified credit-pack purchase.`}
       />
 
       <Card accent="commerce" padding="lg">
@@ -105,7 +116,9 @@ export default function ReferralLandingScreen() {
           <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.commerce}1f` }}>
             <Gift size={34} color={theme.colors.commerce} />
           </View>
-          <AppText variant="sectionTitle" style={{ textAlign: 'center' }}>5% first top-up bonus</AppText>
+          <AppText variant="sectionTitle" style={{ textAlign: 'center' }}>
+            {inviteePercent ? firstTopUpBonus : 'First top-up bonus'}
+          </AppText>
           {/* What the app itself creates: audio and workflows exist only in
               the web's workflow builder. */}
           <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>
@@ -141,7 +154,7 @@ export default function ReferralLandingScreen() {
 
       {state.status === 'claimed' ? (
         <>
-          <StatusBlock tone="success" title="Invite applied" body="Your 5% first top-up bonus will be added to your first verified credit-pack purchase." />
+          <StatusBlock tone="success" title="Invite applied" body={`Your ${firstTopUpBonus} will be added to your first verified credit-pack purchase.`} />
           <PrimaryButton label="Continue to Magicbooklet" onPress={() => router.replace(destination as never)} />
           <SecondaryButton label="View Invite & Earn" onPress={() => router.replace('/invite' as never)} />
         </>
@@ -175,7 +188,12 @@ export default function ReferralLandingScreen() {
       ) : null}
 
       <Card variant="soft">
-        <Rule icon={<Link2 size={19} color={theme.colors.info} />} text="The first eligible invite opened within 30 days is used." />
+        <Rule
+          icon={<Link2 size={19} color={theme.colors.info} />}
+          text={program
+            ? `The first eligible invite opened within ${program.attributionWindowDays} days is used.`
+            : 'The first eligible invite you open is used.'}
+        />
         <Rule icon={<UserPlus size={19} color={theme.colors.primary} />} text="The bonus is available to new Magicbooklet accounts only." />
         <Rule icon={<CheckCircle2 size={19} color={theme.colors.success} />} text="Rewards are issued after payment verification." />
         <Rule icon={<ShieldCheck size={19} color={theme.colors.warning} />} text="Self-referrals, refunded purchases, and abuse do not qualify." />

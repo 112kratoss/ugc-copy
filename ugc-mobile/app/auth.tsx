@@ -1,4 +1,4 @@
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, useNavigation } from 'expo-router';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
 import { Image } from 'expo-image';
@@ -13,14 +13,16 @@ import {
   authNoticeForRedirect,
   describePasswordSignInError,
   describeProviderSignInError,
+  signInProviderButtons,
   validateCredentials,
   type AuthNotice,
 } from '@/lib/auth-error-copy';
 import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import { isGoogleAuthCanceled } from '@/lib/google-auth';
-import { completeAuthScreen, leaveAuthScreen } from '@/lib/auth-navigation';
+import { completeAuthScreen, leaveAuthScreen, normalizeAuthReturnTo } from '@/lib/auth-navigation';
 import { env } from '@/lib/env';
 import { MIN_HIT_TARGET_PT } from '@/lib/hit-target';
+import { trackOnboardingEvent } from '@/lib/onboarding';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -40,6 +42,16 @@ const THIRD_PARTY_BUTTON_RADIUS = THIRD_PARTY_BUTTON_HEIGHT / 2;
 /** Google's asset is 216×48; scaled on its own aspect so it is not distorted. */
 const GOOGLE_BUTTON_ASPECT = 216 / 48;
 
+/**
+ * Where a sign-in begun here was headed, as the `step` of its analytics events
+ * (audit 01-11): the return route's path, without a query that can carry what
+ * someone searched for, and within the 64 characters the events route takes.
+ */
+function authAnalyticsStep(returnTo: string | string[] | undefined) {
+  const destination = normalizeAuthReturnTo(returnTo) ?? '/(tabs)';
+  return (destination.split(/[?#]/, 1)[0] || '/(tabs)').slice(0, 64);
+}
+
 export default function AuthScreen() {
   const theme = useAppTheme();
   const { returnTo, mode: requestedMode, notice: requestedNotice } = useLocalSearchParams<{
@@ -47,7 +59,10 @@ export default function AuthScreen() {
     mode?: string | string[];
     notice?: string | string[];
   }>();
-  const { user, signInWithPassword, signInWithApple, signInWithGoogle, isAuthConfigured, missingEnvKeys } = useAuth();
+  const { api, user, signInWithPassword, signInWithApple, signInWithGoogle, isAuthConfigured, missingEnvKeys } = useAuth();
+  const navigation = useNavigation();
+  // The buttons this platform draws, and so the only ones the copy may name.
+  const providerButtons = signInProviderButtons(Platform.OS);
   const initialMode = (Array.isArray(requestedMode) ? requestedMode[0] : requestedMode) === 'signup'
     ? 'signup'
     : 'login';
@@ -75,6 +90,21 @@ export default function AuthScreen() {
     && email.trim().length > 0
     && password.length > 0;
   const hasCompletedAuth = useRef(false);
+  const hasStartedAuth = useRef(false);
+  const hasCanceledAuth = useRef(false);
+  const analyticsStep = authAnalyticsStep(returnTo);
+
+  // Fire-and-forget: a sign-in never waits on its own measurement.
+  const trackAuthEvent = useCallback((eventName: 'auth_started' | 'auth_succeeded' | 'auth_canceled') => {
+    void trackOnboardingEvent(api, eventName, { step: analyticsStep });
+  }, [analyticsStep, api]);
+
+  // Once a visit, at the first attempt by any of the screen's ways in.
+  const noteAuthStarted = () => {
+    if (hasStartedAuth.current) return;
+    hasStartedAuth.current = true;
+    trackAuthEvent('auth_started');
+  };
 
   const finishAuth = useCallback(() => {
     if (hasCompletedAuth.current) {
@@ -82,8 +112,11 @@ export default function AuthScreen() {
     }
 
     hasCompletedAuth.current = true;
+    // A sign-in made here. Opened by someone signed in already, the screen
+    // only steps aside, and nothing was signed in.
+    if (hasStartedAuth.current) trackAuthEvent('auth_succeeded');
     completeAuthScreen(router, returnTo);
-  }, [returnTo]);
+  }, [returnTo, trackAuthEvent]);
 
   useEffect(() => {
     if (user) {
@@ -91,8 +124,17 @@ export default function AuthScreen() {
     }
   }, [finishAuth, user]);
 
+  // Left without signing in: the Close button, a swipe down, Android's back.
+  // A sign-in's own exit is marked completed before it leaves.
+  useEffect(() => navigation.addListener('beforeRemove', () => {
+    if (hasCompletedAuth.current || hasCanceledAuth.current) return;
+    hasCanceledAuth.current = true;
+    trackAuthEvent('auth_canceled');
+  }), [navigation, trackAuthEvent]);
+
   const submit = async () => {
     if (mode !== 'login') return;
+    noteAuthStarted();
 
     const invalid = validateCredentials(email, password);
     if (invalid) {
@@ -106,13 +148,14 @@ export default function AuthScreen() {
       await signInWithPassword(email.trim(), password);
       finishAuth();
     } catch (nextError) {
-      setNotice(describePasswordSignInError(nextError));
+      setNotice(describePasswordSignInError(nextError, { providerButtons }));
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const signInWithNativeApple = async () => {
+    noteAuthStarted();
     setIsAppleSubmitting(true);
     setNotice(null);
     try {
@@ -128,6 +171,7 @@ export default function AuthScreen() {
   };
 
   const signInWithNativeGoogle = async () => {
+    noteAuthStarted();
     setIsGoogleSubmitting(true);
     setNotice(null);
     try {
@@ -190,8 +234,8 @@ export default function AuthScreen() {
             isAuthConfigured={isAuthConfigured}
             missingEnvKeys={missingEnvKeys}
             notice={notice}
-            showAppleSignIn={Platform.OS === 'ios'}
-            showGoogleSignIn={Platform.OS === 'android'}
+            showAppleSignIn={providerButtons.includes('Apple')}
+            showGoogleSignIn={providerButtons.includes('Google')}
           />
         </View>
       </ScrollView>

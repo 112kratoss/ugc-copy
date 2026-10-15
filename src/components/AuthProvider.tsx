@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 
+import { isSessionRefusal } from '@/lib/auth-error-copy';
 import {
     getClientE2EAuthState,
 } from '@/lib/e2e-auth';
@@ -12,6 +13,9 @@ import {
 } from '@/components/useSupabaseAuthCookieHint';
 
 type BrowserSupabaseClient = typeof import('@/lib/supabase')['supabase'];
+
+/** A session check Supabase could not answer is asked once more after this. */
+const SESSION_RECHECK_DELAY_MS = 2000;
 
 type IdleWindow = Window & {
     requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
@@ -117,6 +121,7 @@ export function AuthProvider({
             candidateSession: Session | null,
             expectedAuthEpoch: number,
             expectedTokenEpoch: number,
+            isRecheck = false,
         ) => {
             const sequence = ++authSequence;
             const supabase = await getBrowserSupabase();
@@ -136,12 +141,15 @@ export function AuthProvider({
 
             let verifiedUser: User | null = null;
             let verificationFailed = false;
+            let verificationError: unknown = null;
             try {
                 const { data, error } = await supabase.auth.getUser(candidateSession.access_token);
                 verifiedUser = data.user;
                 verificationFailed = Boolean(error);
-            } catch {
+                verificationError = error;
+            } catch (error) {
                 verificationFailed = true;
+                verificationError = error;
             } finally {
                 pendingAccessTokens.delete(candidateSession.access_token);
                 const queuedUserUpdate = queuedUserUpdates.get(candidateSession.access_token);
@@ -162,6 +170,33 @@ export function AuthProvider({
                 || sequence !== authSequence
                 || expectedAuthEpoch !== authEpochRef.current
             ) {
+                return;
+            }
+
+            if (verificationFailed && !isSessionRefusal(verificationError)) {
+                // Supabase Auth could not answer (offline, a 5xx, a rate limit),
+                // which says nothing about the session (audit 01-10): it stays,
+                // unverified, and is checked once more. Only a refusal ends it.
+                if (acceptedUserId !== candidateSession.user.id) {
+                    acceptedAccessToken = null;
+                    acceptedUserId = null;
+                    setCredits(null);
+                }
+                if (expectedTokenEpoch === tokenEpochRef.current) {
+                    setSession(candidateSession);
+                }
+                if (isRecheck) {
+                    setIsLoading(false);
+                    return;
+                }
+                const timeoutId = window.setTimeout(() => {
+                    deferredAuthSyncIds.delete(timeoutId);
+                    // A newer auth event or re-read checks the current session itself.
+                    if (isActive && expectedAuthEpoch === authEpochRef.current) {
+                        void syncSessionState(candidateSession, expectedAuthEpoch, expectedTokenEpoch, true);
+                    }
+                }, SESSION_RECHECK_DELAY_MS);
+                deferredAuthSyncIds.add(timeoutId);
                 return;
             }
 
@@ -332,6 +367,15 @@ export function AuthProvider({
         const { data: { user: verifiedUser }, error: verificationError } =
             await supabase.auth.getUser(nextSession.access_token);
         if (expectedAuthEpoch !== authEpochRef.current) {
+            return;
+        }
+        if (verificationError && !isSessionRefusal(verificationError)) {
+            // Supabase Auth could not answer: the session stays, unverified,
+            // and the next auth event or balance re-read checks it again.
+            if (expectedTokenEpoch === tokenEpochRef.current) {
+                setSession(nextSession);
+            }
+            setIsLoading(false);
             return;
         }
         if (verificationError || !verifiedUser || verifiedUser.id !== nextSession.user.id) {

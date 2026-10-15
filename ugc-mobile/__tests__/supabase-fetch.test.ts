@@ -7,7 +7,11 @@ const SUPABASE_URL = 'https://project-ref.supabase.co';
 const STORAGE_KEY = 'sb-project-ref-auth-token';
 const LOGOUT_URL = `${SUPABASE_URL}/auth/v1/logout?scope=local`;
 const REFRESH_URL = `${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`;
-const SIGN_IN_URL = `${SUPABASE_URL}/auth/v1/token?grant_type=password`;
+const PASSWORD_URL = `${SUPABASE_URL}/auth/v1/token?grant_type=password`;
+const ID_TOKEN_URL = `${SUPABASE_URL}/auth/v1/token?grant_type=id_token`;
+const PKCE_URL = `${SUPABASE_URL}/auth/v1/token?grant_type=pkce`;
+const SIGN_UP_URL = `${SUPABASE_URL}/auth/v1/signup`;
+const USER_URL = `${SUPABASE_URL}/auth/v1/user`;
 
 function memoryStorage(initial: Record<string, string> = {}) {
   const items = new Map(Object.entries(initial));
@@ -114,6 +118,64 @@ describe('Supabase auth requests during sign-out', () => {
   });
 });
 
+type SignIn = (client: ReturnType<typeof clientWith>) => Promise<{ error: unknown }>;
+
+const stalledSignIns: [string, SignIn][] = [
+  ['a password sign-in', (client) => client.auth.signInWithPassword({ email: 'person@example.com', password: 'Secret-pass-1' })],
+  ['an Apple id_token sign-in', (client) => client.auth.signInWithIdToken({ provider: 'apple', token: 'apple-id-token', nonce: 'raw-nonce' })],
+  // auth-js runs the exchange inside its lock.
+  ['a Google PKCE exchange', (client) => client.auth.exchangeCodeForSession('auth-code')],
+  ['a guest\'s anonymous sign-up', (client) => client.auth.signInAnonymously()],
+];
+
+describe('Supabase sign-ins on a stalled network', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each(stalledSignIns)('ends %s with a retryable error, keeps the stored session and frees the lock', async (_name, signIn) => {
+    // A guest signing in still holds its own session, which a failed attempt must leave alone.
+    const session = storedSession();
+    const storage = memoryStorage({
+      [STORAGE_KEY]: session,
+      [`${STORAGE_KEY}-code-verifier`]: 'code-verifier',
+    });
+    const { fetch: authFetch } = createSupabaseAuthFetch({
+      fetcher: stalledFetch() as unknown as typeof fetch,
+      deadlineMs: 50,
+    });
+    const client = clientWith(authFetch, storage);
+
+    const { error } = await signIn(client);
+
+    expect(isAuthRetryableFetchError(error)).toBe(true);
+    expect(storage.items.get(STORAGE_KEY)).toBe(session);
+    expect(await settlesWithin(client.auth.getSession(), 200)).toBe(true);
+  });
+
+  // The account's "Set up later" record and the name Apple shares are written
+  // through updateUser, which waits in the same lock.
+  it('ends an updateUser with a retryable error, keeps the stored session and frees the lock', async () => {
+    const session = storedSession();
+    const storage = memoryStorage({ [STORAGE_KEY]: session });
+    const { fetch: authFetch } = createSupabaseAuthFetch({
+      fetcher: stalledFetch() as unknown as typeof fetch,
+      deadlineMs: 50,
+    });
+    const client = clientWith(authFetch, storage);
+
+    const { error } = await client.auth.updateUser({ data: { creator_profile_onboarding_skipped_version: 1 } });
+
+    expect(isAuthRetryableFetchError(error)).toBe(true);
+    expect(storage.items.get(STORAGE_KEY)).toBe(session);
+    expect(await settlesWithin(client.auth.getSession(), 200)).toBe(true);
+  });
+});
+
 describe('createSupabaseAuthFetch', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -188,22 +250,63 @@ describe('createSupabaseAuthFetch', () => {
     expect(afterwards.outcome).toBe('pending');
   });
 
-  it('passes sign-in and every other request through with the caller\'s own arguments', async () => {
+  it.each([
+    ['a password sign-in', PASSWORD_URL],
+    ['an Apple id_token sign-in', ID_TOKEN_URL],
+    ['a Google PKCE exchange', PKCE_URL],
+    ['an anonymous sign-up', SIGN_UP_URL],
+  ])('aborts %s that outlives the deadline, with no sign-out running', async (_name, url) => {
+    const fetcher = stalledFetch();
+    const { fetch: authFetch } = createSupabaseAuthFetch({
+      fetcher: fetcher as unknown as typeof fetch,
+      deadlineMs: 1000,
+    });
+    const body = '{"email":"person@example.com"}';
+
+    const signIn = track(authFetch(url, { method: 'POST', body }));
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(signIn.outcome).toBe('pending');
+    expect(fetcher.mock.calls[0][1]).toMatchObject({ method: 'POST', body });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signIn.outcome).toBe('aborted');
+  });
+
+  it('aborts an updateUser (PUT /user) that outlives the deadline, with no sign-out running', async () => {
+    const fetcher = stalledFetch();
+    const { fetch: authFetch } = createSupabaseAuthFetch({
+      fetcher: fetcher as unknown as typeof fetch,
+      deadlineMs: 1000,
+    });
+    const body = '{"data":{"creator_profile_onboarding_skipped_version":1}}';
+
+    const update = track(authFetch(USER_URL, { method: 'PUT', body }));
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(update.outcome).toBe('pending');
+    expect(fetcher.mock.calls[0][1]).toMatchObject({ method: 'PUT', body });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(update.outcome).toBe('aborted');
+  });
+
+  it('passes every other request through with the caller\'s own arguments', async () => {
     const fetcher = vi.fn(async () => new Response(null, { status: 200 }));
     const { fetch: authFetch, duringSignOut } = createSupabaseAuthFetch({
       fetcher: fetcher as unknown as typeof fetch,
       deadlineMs: 1000,
     });
-    const init = { method: 'POST', body: '{}' };
+    // A read of the user is not an update: it keeps the caller's arguments.
+    const read = { method: 'GET' };
+    const init = { method: 'PUT', body: '{}' };
 
     await duringSignOut(async () => {
-      await authFetch(SIGN_IN_URL, init);
+      await authFetch(USER_URL, read);
       await authFetch(`${SUPABASE_URL}/rest/v1/profiles?select=id`, init);
     });
 
     expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(fetcher.mock.calls[0]).toEqual([SIGN_IN_URL, init]);
-    expect((fetcher.mock.calls[0] as unknown[])[1]).toBe(init);
+    expect(fetcher.mock.calls[0]).toEqual([USER_URL, read]);
+    expect((fetcher.mock.calls[0] as unknown[])[1]).toBe(read);
     expect((fetcher.mock.calls[1] as unknown[])[1]).toBe(init);
   });
 

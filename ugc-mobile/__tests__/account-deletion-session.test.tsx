@@ -11,7 +11,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   authCallback: null as null | ((event: string, session: unknown) => void),
-  clearGuestMergeTicket: vi.fn(),
+  clearComposerDrafts: vi.fn(),
+  clearCreationDrafts: vi.fn(),
+  clearGenerationAttempt: vi.fn(),
+  forgetGuestMergeTickets: vi.fn(),
   clearHomeFeed: vi.fn(),
   clearLocalPush: vi.fn(),
   clearPersistedSession: vi.fn(),
@@ -20,12 +23,14 @@ const state = vi.hoisted(() => ({
   dismissTo: vi.fn(),
   feedTransition: { cancel: vi.fn(), commit: vi.fn() },
   getSession: vi.fn(),
+  prepareGuestAccountMerge: vi.fn(),
   probe: vi.fn(),
-  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), removeQueries: vi.fn() },
+  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), getQueryCache: () => ({ subscribe: () => () => undefined }), removeQueries: vi.fn() },
   refreshSession: vi.fn(),
   replace: vi.fn(),
   sessionResolve: null as null | ((result: unknown) => void),
   signInAnonymously: vi.fn(),
+  signInWithPassword: vi.fn(),
   signOut: vi.fn(),
 }));
 
@@ -41,6 +46,7 @@ vi.mock('expo-constants', () => ({
 // re-runs the provider's effects forever and hangs the suite.
 vi.mock('expo-router', () => ({
   router: { replace: state.replace, dismissTo: state.dismissTo },
+  usePathname: () => '/settings',
 }));
 
 vi.mock('react-native', () => ({
@@ -61,7 +67,11 @@ vi.mock('../lib/env', () => ({
 // decided on them. Only the client that sends the request is a stand-in.
 vi.mock('../lib/api-client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/api-client')>()),
-  createApiClient: () => ({ deleteAccount: state.deleteAccount, getProfile: vi.fn() }),
+  createApiClient: () => ({
+    deleteAccount: state.deleteAccount,
+    getProfile: vi.fn(),
+    prepareGuestAccountMerge: state.prepareGuestAccountMerge,
+  }),
 }));
 
 vi.mock('../lib/feed-installation-id', () => ({ getFeedInstallationId: vi.fn() }));
@@ -72,9 +82,14 @@ vi.mock('../lib/feed-event-queue', () => ({
   restoreShowcaseFeedEvents: vi.fn(async () => undefined),
 }));
 vi.mock('../lib/guest-merge-ticket-storage', () => ({
-  readGuestMergeTicket: vi.fn(async () => null),
+  bindGuestMergeTicket: vi.fn(async () => undefined),
+  clearGuestMergeOutcome: vi.fn(async () => undefined),
+  forgetGuestMergeTicketsFor: state.forgetGuestMergeTickets,
+  readGuestMergeOutcome: vi.fn(async () => null),
+  readGuestMergeTickets: vi.fn(async () => []),
+  removeGuestMergeTicket: vi.fn(async () => undefined),
+  storeGuestMergeOutcome: vi.fn(async () => undefined),
   storeGuestMergeTicket: vi.fn(async () => undefined),
-  clearGuestMergeTicket: state.clearGuestMergeTicket,
 }));
 vi.mock('../lib/persisted-account-state', () => ({
   clearPersistedAccountState: vi.fn(async () => undefined),
@@ -82,6 +97,9 @@ vi.mock('../lib/persisted-account-state', () => ({
   restorePersistedAccountState: vi.fn(async () => null),
 }));
 vi.mock('../lib/persisted-home-feed', () => ({ clearPersistedHomeFeed: state.clearHomeFeed }));
+vi.mock('../lib/creation-draft-resume', () => ({ clearCreationDraftsForUser: state.clearCreationDrafts }));
+vi.mock('../lib/post-composer-draft-resume', () => ({ clearComposerDraftsForUser: state.clearComposerDrafts }));
+vi.mock('../lib/generation-attempts', () => ({ clearGenerationAttemptForUser: state.clearGenerationAttempt }));
 vi.mock('../lib/search-history', () => ({ clearSearchHistory: state.clearSearchHistory }));
 vi.mock('../lib/apple-auth', () => ({
   authorizeNativeAppleAccountDeletion: vi.fn(),
@@ -100,6 +118,7 @@ vi.mock('../lib/supabase-auth-recovery', () => ({
   isNetworkRequestFailedError: () => false,
   isRetryableRefreshError: () => false,
   isSessionEndedRefreshError: () => true,
+  normalizeSupabaseAuthError: (error: unknown) => error,
   supabaseNetworkFailureMessage: () => 'Network unavailable',
 }));
 vi.mock('../lib/supabase-session-probe', () => ({ probeSupabaseSession: state.probe }));
@@ -118,7 +137,7 @@ vi.mock('../lib/supabase', () => ({
       },
       refreshSession: state.refreshSession,
       signInAnonymously: state.signInAnonymously,
-      signInWithPassword: vi.fn(),
+      signInWithPassword: state.signInWithPassword,
       signOut: state.signOut,
       startAutoRefresh: vi.fn(async () => undefined),
       stopAutoRefresh: vi.fn(async () => undefined),
@@ -126,11 +145,16 @@ vi.mock('../lib/supabase', () => ({
   },
 }));
 
+import {
+  AccountReauthenticationAccountMismatchError,
+  AccountReauthenticationFailedError,
+} from '../lib/account-reauthentication';
 import { ApiError } from '../lib/api-client';
 import {
   AuthProvider,
   isAccountDeletionUnderway,
   isAccountReauthenticationRequired,
+  isAmbiguousAccountDeletionAnswer,
   useAuth,
 } from '../lib/auth';
 
@@ -209,9 +233,20 @@ beforeEach(() => {
   state.queryClient.fetchQuery.mockReset().mockResolvedValue({ credits: 0 });
   state.queryClient.clear.mockReset();
   state.queryClient.removeQueries.mockReset();
-  for (const clear of [state.clearPersistedSession, state.clearLocalPush, state.clearHomeFeed, state.clearSearchHistory, state.clearGuestMergeTicket]) {
+  for (const clear of [
+    state.clearPersistedSession,
+    state.clearLocalPush,
+    state.clearHomeFeed,
+    state.clearSearchHistory,
+    state.forgetGuestMergeTickets,
+    state.clearCreationDrafts,
+    state.clearComposerDrafts,
+    state.clearGenerationAttempt,
+  ]) {
     clear.mockReset().mockResolvedValue(undefined);
   }
+  state.prepareGuestAccountMerge.mockReset().mockResolvedValue({ ticket: 'a'.repeat(64) });
+  state.signInWithPassword.mockReset();
   state.deleteAccount.mockReset();
   state.dismissTo.mockReset();
   state.replace.mockReset();
@@ -263,15 +298,40 @@ const identityUnavailable = new ApiError('Identity verification is temporarily u
   code: 'IDENTITY_CHECK_UNAVAILABLE',
 }, undefined, 'IDENTITY_CHECK_UNAVAILABLE');
 const rateLimited = new ApiError('Too many requests.', 429, { error: 'Too many requests.' });
+const sessionRefused = new ApiError('Unauthorized', 401, {
+  error: 'Unauthorized',
+  code: 'UNAUTHORIZED',
+}, undefined, 'UNAUTHORIZED');
+const gatewayTimeout = new ApiError('Request failed with status 504', 504, '<html>Gateway Timeout</html>');
+// Given up on while it waited for its session token (api-client, WP2): it
+// never left the phone.
+const neverSent = new ApiError('Network request failed. Please check your connection and try again.', 0, {
+  url: 'https://api.example.com/api/account',
+  cause: 'Request timed out after 120000ms before it was sent',
+  timedOut: true,
+  sent: false,
+});
 
 describe('what a deletion answer means for the account', () => {
   it.each([
     ['a 409 ACCOUNT_DELETING', accountDeleting],
     ['a 500 that says the deletion is scheduled', retryScheduled],
-    ['a platform 500 with no JSON', platformFailure],
     ['a request this app stopped waiting for', timedOut],
   ])('treats %s as a deletion under way', (_name, error) => {
     expect(isAccountDeletionUnderway(error)).toBe(true);
+    expect(isAmbiguousAccountDeletionAnswer(error)).toBe(false);
+  });
+
+  // Audit 04-3: each can follow a deletion that started, or one that never
+  // reached the server, so Supabase is asked about the session instead.
+  it.each([
+    ['a platform 500 with no JSON', platformFailure],
+    ['a gateway timeout with no JSON', gatewayTimeout],
+    ['a connection lost on the way', offline],
+    ['a refused session (401)', sessionRefused],
+  ])('cannot tell from %s alone', (_name, error) => {
+    expect(isAccountDeletionUnderway(error)).toBe(false);
+    expect(isAmbiguousAccountDeletionAnswer(error)).toBe(true);
   });
 
   it.each([
@@ -279,10 +339,11 @@ describe('what a deletion answer means for the account', () => {
     ['a refusal until the person signs in again', recentSignInRequired],
     ['an identity check that was unavailable', identityUnavailable],
     ['a rate limit', rateLimited],
-    ['a request that never got out', offline],
+    ['a request given up before it left the phone', neverSent],
     ['an error that is not an API answer', new Error('Keychain unavailable')],
   ])('treats %s as not deleted', (_name, error) => {
     expect(isAccountDeletionUnderway(error)).toBe(false);
+    expect(isAmbiguousAccountDeletionAnswer(error)).toBe(false);
   });
 
   it('opens the sign-in-again card on the reason the server gives, and on the legacy codes', () => {
@@ -315,6 +376,9 @@ describe('deleting the account from this phone', () => {
 
     expect(outcome).toBe('scheduled');
     expectSessionEndedOnce();
+    // The guest tickets the account could still redeem go with it, so the next
+    // account on this phone cannot take those credits (audit 04-8).
+    expect(state.forgetGuestMergeTickets).toHaveBeenCalledWith('user-1');
     expect(state.feedTransition.commit).toHaveBeenCalledOnce();
     expect(state.feedTransition.cancel).not.toHaveBeenCalled();
     expect(latest.current?.user).toBeNull();
@@ -340,7 +404,6 @@ describe('deleting the account from this phone', () => {
   it.each([
     ['409 ACCOUNT_DELETING', accountDeleting],
     ['a 500 that says the deletion is scheduled', retryScheduled],
-    ['a platform 500', platformFailure],
     ['no answer within the deadline', timedOut],
   ])('ends the session the same way after %s, which never meant "not deleted"', async (_name, error) => {
     state.deleteAccount.mockRejectedValue(error);
@@ -354,6 +417,7 @@ describe('deleting the account from this phone', () => {
 
     expect(outcome).toBe('scheduled');
     expectSessionEndedOnce();
+    expect(state.probe).not.toHaveBeenCalled();
     unmount();
   });
 
@@ -361,7 +425,7 @@ describe('deleting the account from this phone', () => {
     ['a 500 that says nothing was started', notStarted],
     ['a refusal until the person signs in again', recentSignInRequired],
     ['an identity check that was unavailable', identityUnavailable],
-    ['a request that never got out', offline],
+    ['a request given up before it left the phone', neverSent],
   ])('keeps the account and the session after %s', async (_name, error) => {
     state.deleteAccount.mockRejectedValue(error);
     const { latest, unmount } = await mountWith(registeredSession);
@@ -376,8 +440,254 @@ describe('deleting the account from this phone', () => {
 
     expect(failure).toBe(error);
     expectSessionKept();
+    expect(state.probe).not.toHaveBeenCalled();
     expect(state.feedTransition.cancel).toHaveBeenCalledOnce();
     expect(latest.current?.user?.id).toBe('user-1');
+    unmount();
+  });
+});
+
+// Audit 04-3: a lost answer is told from a refusal by asking Supabase about the
+// session the request carried. The deletion revokes every session as it
+// starts, so a session that is gone means it started.
+describe('an answer that cannot say whether the deletion started', () => {
+  it.each([
+    ['a lost connection', offline],
+    ['a refused session', sessionRefused],
+    ['a platform 500 with no JSON', platformFailure],
+  ])('asks Supabase about the token the request carried after %s', async (_name, error) => {
+    state.deleteAccount.mockRejectedValue(error);
+    state.probe.mockResolvedValue('alive');
+    const { latest, unmount } = await mountWith(registeredSession);
+
+    await renderer.act(async () => {
+      await latest.current?.deleteAccount().catch(() => undefined);
+    });
+
+    expect(state.probe).toHaveBeenCalledOnce();
+    expect(state.probe).toHaveBeenCalledWith({
+      supabaseUrl: 'https://project.supabase.example',
+      publishableKey: 'publishable-key',
+      accessToken: 'deleting-token',
+    });
+    unmount();
+  });
+
+  it('reads a lost connection as a deletion under way when the session is gone', async () => {
+    state.deleteAccount.mockRejectedValue(offline);
+    state.probe.mockResolvedValue('ended');
+    const { latest, unmount } = await mountWith(registeredSession);
+
+    let outcome: unknown;
+    await renderer.act(async () => {
+      outcome = await latest.current?.deleteAccount();
+    });
+    await flush();
+
+    expect(outcome).toBe('scheduled');
+    expectSessionEndedOnce();
+    expect(latest.current?.user).toBeNull();
+    unmount();
+  });
+
+  it('says "not deleted" after a 401 when the session is still alive', async () => {
+    state.deleteAccount.mockRejectedValue(sessionRefused);
+    state.probe.mockResolvedValue('alive');
+    const { latest, unmount } = await mountWith(registeredSession);
+
+    let failure: unknown;
+    await renderer.act(async () => {
+      await latest.current?.deleteAccount().catch((thrown: unknown) => {
+        failure = thrown;
+      });
+    });
+    await flush();
+
+    expect(failure).toBe(sessionRefused);
+    expectSessionKept();
+    expect(state.feedTransition.cancel).toHaveBeenCalledOnce();
+    expect(latest.current?.user?.id).toBe('user-1');
+    unmount();
+  });
+
+  it.each([
+    ['no clean answer', 'unknown'],
+    ['a refusal that names no ended session', 'refused'],
+  ])('cannot confirm either way when Supabase gives %s, and keeps the session', async (_name, verdict) => {
+    state.deleteAccount.mockRejectedValue(platformFailure);
+    state.probe.mockResolvedValue(verdict);
+    const { latest, unmount } = await mountWith(registeredSession);
+
+    let outcome: unknown;
+    await renderer.act(async () => {
+      outcome = await latest.current?.deleteAccount();
+    });
+    await flush();
+
+    expect(outcome).toBe('unconfirmed');
+    expectSessionKept();
+    expect(state.feedTransition.cancel).toHaveBeenCalledOnce();
+    expect(latest.current?.user?.id).toBe('user-1');
+    unmount();
+  });
+});
+
+describe('the sign-in that confirms a deletion', () => {
+  it('fails as a reauthentication failure naming its method, before anything is asked of the server', async () => {
+    const refused = Object.assign(new Error('Invalid login credentials'), { status: 400 });
+    state.signInWithPassword.mockResolvedValue({ data: { session: null, user: null }, error: refused });
+    const { latest, unmount } = await mountWith(registeredSession);
+
+    let failure: unknown;
+    await renderer.act(async () => {
+      await latest.current?.deleteAccount({ method: 'password', password: 'wrong-Horse-1' }).catch((thrown: unknown) => {
+        failure = thrown;
+      });
+    });
+
+    expect(failure).toBeInstanceOf(AccountReauthenticationFailedError);
+    expect((failure as AccountReauthenticationFailedError).method).toBe('password');
+    expect((failure as AccountReauthenticationFailedError).failure).toBe(refused);
+    expect(state.deleteAccount).not.toHaveBeenCalled();
+    expectSessionKept();
+    expect(state.feedTransition.cancel).toHaveBeenCalledOnce();
+    unmount();
+  });
+
+  // Audit 04-6: the mismatch path left the device with no session at all
+  // until the next launch, and kept the creator caches.
+  it('drops back to a fresh guest, with the teardown every way out shares, when it lands on another account', async () => {
+    const otherSession = sessionFor({ id: 'user-2', email: 'someone@example.com' }, 'other-token');
+    state.signInWithPassword.mockImplementation(async () => {
+      state.authCallback?.('SIGNED_IN', otherSession);
+      return { data: { session: otherSession, user: otherSession.user }, error: null };
+    });
+    const { latest, unmount } = await mountWith(registeredSession);
+    // What the reauthentication reads back: the account the sign-in landed on.
+    state.getSession.mockResolvedValueOnce({ data: { session: otherSession }, error: null });
+
+    let failure: unknown;
+    await renderer.act(async () => {
+      await latest.current?.deleteAccount({ method: 'password', password: 'correct-Horse-1' }).catch((thrown: unknown) => {
+        failure = thrown;
+      });
+    });
+    await flush();
+
+    expect(failure).toBeInstanceOf(AccountReauthenticationAccountMismatchError);
+    expect(state.deleteAccount).not.toHaveBeenCalled();
+    expect(state.signOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(state.clearPersistedSession).toHaveBeenCalledOnce();
+    expect(state.clearHomeFeed).toHaveBeenCalledOnce();
+    expect(state.clearSearchHistory).toHaveBeenCalledOnce();
+    // The account it started from had registered this phone for push.
+    expect(state.clearLocalPush).toHaveBeenCalledOnce();
+    expect(state.queryClient.removeQueries).toHaveBeenCalledOnce();
+    const [{ predicate }] = state.queryClient.removeQueries.mock.calls[0] as [{
+      predicate: (query: { queryKey: readonly unknown[] }) => boolean;
+    }];
+    expect(predicate({ queryKey: ['creator-profile', 'infinite', 'luna'] })).toBe(true);
+    expect(predicate({ queryKey: ['creator-follow-state', 'creator-7'] })).toBe(true);
+    expect(state.signInAnonymously).toHaveBeenCalledOnce();
+    expect(latest.current?.user).toBeNull();
+    expect(latest.current?.identityUserId).toBe('guest-2');
+    expect(state.replace).toHaveBeenCalledWith('/auth');
+    unmount();
+  });
+});
+
+// Audit 04-2: the guard was keyed by the user id and never cleared, so signing
+// in again to the account before the server had removed it left every screen
+// failing with "being permanently deleted" for up to an hour.
+describe('signing in again to an account that is being deleted', () => {
+  it('ends the fresh session at its next 409, and says why, rather than ignoring it', async () => {
+    state.deleteAccount.mockResolvedValue({ success: true, deleted: false, deletionScheduled: true });
+    const { latest, unmount } = await mountWith(registeredSession);
+    await renderer.act(async () => {
+      await latest.current?.deleteAccount();
+    });
+    await flush();
+    expect(latest.current?.identityUserId).toBe('guest-2');
+
+    const freshSession = sessionFor({ id: 'user-1', email: 'creator@example.com' }, 'fresh-sign-in-token');
+    state.signInWithPassword.mockImplementation(async () => {
+      state.authCallback?.('SIGNED_IN', freshSession);
+      return { data: { session: freshSession, user: freshSession.user }, error: null };
+    });
+    await renderer.act(async () => {
+      await latest.current?.signInWithPassword('creator@example.com', 'correct-Horse-1');
+    });
+    await flush();
+    expect(latest.current?.user?.id).toBe('user-1');
+
+    let ended: unknown;
+    await renderer.act(async () => {
+      ended = await latest.current?.leaveDeletingAccount();
+    });
+    await flush();
+
+    // True is what has the layout show ACCOUNT_DELETION_SCHEDULED_NOTICE.
+    expect(ended).toBe(true);
+    expect(latest.current?.user).toBeNull();
+    expect(state.clearPersistedSession).toHaveBeenCalledTimes(2);
+    expect(state.dismissTo).toHaveBeenCalledTimes(2);
+    unmount();
+  });
+});
+
+// Audit 04-7: the deletion promises the account's private creations and
+// uploaded media go, and copies of its prompts and staged media stayed here.
+describe("what a deleted account left in drafts on this phone", () => {
+  it('goes with it, and so does what the guest it was made from left', async () => {
+    const accountSession = sessionFor({ id: 'user-1', email: 'creator@example.com' }, 'deleting-token');
+    state.signInWithPassword.mockImplementation(async () => {
+      state.authCallback?.('SIGNED_IN', accountSession);
+      return { data: { session: accountSession, user: accountSession.user }, error: null };
+    });
+    state.deleteAccount.mockResolvedValue({ success: true, deleted: false, deletionScheduled: true });
+    const { latest, unmount } = await mountWith(guestSession);
+    await renderer.act(async () => {
+      await latest.current?.signInWithPassword('creator@example.com', 'correct-Horse-1');
+    });
+    await flush();
+
+    await renderer.act(async () => {
+      await latest.current?.deleteAccount();
+    });
+    await flush();
+
+    for (const clear of [state.clearCreationDrafts, state.clearComposerDrafts, state.clearGenerationAttempt]) {
+      expect(clear.mock.calls).toEqual([['user-1'], ['guest-1']]);
+    }
+    unmount();
+  });
+
+  it('goes when another device deleted the account (409 ACCOUNT_DELETING)', async () => {
+    const { latest, unmount } = await mountWith(registeredSession);
+
+    await renderer.act(async () => {
+      await latest.current?.leaveDeletingAccount();
+    });
+    await flush();
+
+    for (const clear of [state.clearCreationDrafts, state.clearComposerDrafts, state.clearGenerationAttempt]) {
+      expect(clear.mock.calls).toEqual([['user-1']]);
+    }
+    unmount();
+  });
+
+  it('stays when the answer left the account untouched', async () => {
+    state.deleteAccount.mockRejectedValue(notStarted);
+    const { latest, unmount } = await mountWith(registeredSession);
+
+    await renderer.act(async () => {
+      await latest.current?.deleteAccount().catch(() => undefined);
+    });
+    await flush();
+
+    expect(state.clearCreationDrafts).not.toHaveBeenCalled();
+    expect(state.clearComposerDrafts).not.toHaveBeenCalled();
+    expect(state.clearGenerationAttempt).not.toHaveBeenCalled();
     unmount();
   });
 });

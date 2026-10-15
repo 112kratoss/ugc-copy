@@ -35,6 +35,8 @@ const authState = vi.hoisted(() => ({
   credits: 999,
   updateCredits: vi.fn(),
   refreshProfile: vi.fn(async () => undefined),
+  // Never rejects, and mints nothing while the guest already keeps a ticket (lib/auth.tsx).
+  ensureGuestMergeTicket: vi.fn(async () => undefined),
   api: {
     enhancePrompt: vi.fn(),
     // Every new run starts here, as in the app (catalog schema 3); the per-kind starts
@@ -51,6 +53,7 @@ const authState = vi.hoisted(() => ({
     createMediaReadUrl: vi.fn(),
     createSeedanceAsset: vi.fn(),
     getSeedanceAsset: vi.fn(),
+    reportGeneration: vi.fn(),
   },
 }));
 
@@ -535,6 +538,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     resetCreatorSessionForTests();
     authState.updateCredits.mockClear();
     authState.refreshProfile.mockClear();
+    authState.ensureGuestMergeTicket.mockClear();
     authState.credits = 999;
     authState.user = { id: 'user-123', email: 'creator@example.com' };
     authState.identityUserId = 'user-123';
@@ -552,6 +556,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     authState.api.createMediaReadUrl.mockReset();
     authState.api.createSeedanceAsset.mockReset();
     authState.api.getSeedanceAsset.mockReset();
+    authState.api.reportGeneration.mockReset();
     authState.api.quoteGenerationModel.mockResolvedValue({
       modelId: 'nano-banana-2',
       catalogRevision: 'test-catalog-rev',
@@ -3525,6 +3530,77 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     vi.useRealTimers();
   });
 
+  // 02-2: Report AI output lived only in the library reel, which a guest could
+  // not open, so a guest who generated had no way to flag what came back. The
+  // result offers it to everyone; the server takes a guest's report of its own run.
+  it.each([
+    ['an account', { user: { id: 'user-123', email: 'creator@example.com' }, isGuest: false, identityUserId: 'user-123' }],
+    ['a guest', { user: null, isGuest: true, identityUserId: 'guest-1' }],
+  ] as const)('reports the result from the result card for %s, after asking', async (_who, identity) => {
+    vi.useFakeTimers();
+    Object.assign(authState, identity);
+    authState.api.reportGeneration.mockResolvedValue({ success: true });
+    authState.api.startGeneration.mockResolvedValue({
+      success: true,
+      predictionId: 'prediction-report',
+      generationId: 'gen-report',
+      status: 'processing',
+      remainingCredits: 980,
+    });
+    authState.api.getImageGeneration.mockResolvedValue({
+      status: 'succeeded',
+      output: 'https://cdn.example.com/output.png',
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+    });
+    renderer.act(() => {
+      tree!.root.findAll((node) => String(node.type) === 'textinput')[0].props.onChangeText('A product shot on linen.');
+    });
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Generate · 8 credits').props.onPress();
+    });
+
+    const report = findPressableByText(tree!.root, 'Report AI output');
+    expect(report.props.accessibilityHint).toBe('Sends this result to the safety team');
+    await renderer.act(async () => {
+      report.props.onPress();
+    });
+
+    // Asked first, in red, and nothing filed until the answer.
+    const [title, , buttons] = nativeAlertState.alert.mock.calls.at(-1) as [
+      string,
+      string,
+      Array<{ text: string; style?: string; onPress?: () => void }>,
+    ];
+    expect(title).toBe('Report offensive AI output?');
+    expect(authState.api.reportGeneration).not.toHaveBeenCalled();
+    const confirm = buttons.find((button) => button.text === 'Report AI output');
+    expect(confirm?.style).toBe('destructive');
+    await renderer.act(async () => {
+      confirm?.onPress?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(authState.api.reportGeneration).toHaveBeenCalledWith('gen-report', {
+      reason: 'offensive_ai_output',
+      sourceSurface: 'generation-viewer',
+      details: 'Reported from the mobile creator result.',
+    });
+    expect(nativeAlertState.alert).toHaveBeenLastCalledWith(
+      'Report received',
+      'Thank you. The generated output was sent to the safety team.',
+    );
+    // Filed where the result is: a guest is not sent to sign in first.
+    expect(routerState.push).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
   describe('notifications offer', () => {
     const OFFER_TITLE = 'Get a notification when it’s ready';
 
@@ -5339,6 +5415,73 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(routerState.push).toHaveBeenCalledWith({ pathname: '/post/new', params: { generationId: 'gen-pred-share', shareAfterPublish: '1' } });
         expect(tree.root.findAllByProps({ testID: 'generation-workspace' })).toHaveLength(0);
         invalidate.mockRestore();
+      });
+
+      // 02-1: a guest's Creations are its library, keyed by its identity, so a
+      // guest's run marks that library stale, at its start and at its end.
+      it('marks a guest’s creations stale under its identity, at the start and the end', async () => {
+        authState.user = null;
+        authState.isGuest = true;
+        authState.identityUserId = 'guest-1';
+        const invalidate = vi.spyOn(testQueryClient, 'invalidateQueries');
+        const creationsMarked = () => invalidate.mock.calls.filter(([filters]) => (filters as { queryKey?: unknown[] } | undefined)?.queryKey?.[0] === 'profile-generations');
+        authState.api.startGeneration.mockResolvedValue(started('pred-guest'));
+        let finish: (status: unknown) => void = () => undefined;
+        authState.api.getImageGeneration.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+        await pressGenerate(tree);
+
+        const guestLibrary = [{ queryKey: ['profile-generations', 'guest-1'], refetchType: 'none' }];
+        expect(creationsMarked()).toEqual([guestLibrary]);
+        await renderer.act(async () => { finish({ status: 'succeeded', output: 'https://cdn.example.com/out.png' }); });
+        await settle();
+        expect(creationsMarked()).toEqual([guestLibrary, guestLibrary]);
+        invalidate.mockRestore();
+      });
+
+      // 02-7: a guest's creation exists only on its identity, so from its first success the
+      // device keeps a merge ticket that carries it to the account at the next sign-in.
+      describe('the merge ticket a guest keeps', () => {
+        const runToTheEnd = async (outcome: Record<string, unknown>) => {
+          authState.api.startGeneration.mockResolvedValue(started('pred-ticket'));
+          let finish: (status: unknown) => void = () => undefined;
+          authState.api.getImageGeneration.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+          const tree = await open(<MediaCreationScreen initialTool="image" />);
+          await typePrompt(tree, 'A bottle on linen');
+          await pressGenerate(tree);
+          // Nothing is asked while the run is still rendering.
+          expect(authState.ensureGuestMergeTicket).not.toHaveBeenCalled();
+          await renderer.act(async () => { finish(outcome); });
+          await settle();
+          return tree;
+        };
+        const asGuest = () => {
+          authState.user = null;
+          authState.isGuest = true;
+          authState.identityUserId = 'guest-1';
+        };
+
+        it('is asked for once when a guest’s run succeeds', async () => {
+          asGuest();
+          await runToTheEnd({ status: 'succeeded', output: 'https://cdn.example.com/out.png' });
+
+          expect(authState.ensureGuestMergeTicket).toHaveBeenCalledTimes(1);
+        });
+
+        it('is not asked for after a guest’s run fails', async () => {
+          asGuest();
+          const tree = await runToTheEnd({ status: 'failed', error: 'The image provider timed out.' });
+
+          expect(text(tree)).toContain('The image provider timed out.');
+          expect(authState.ensureGuestMergeTicket).not.toHaveBeenCalled();
+        });
+
+        it('is not asked for when an account’s run succeeds', async () => {
+          await runToTheEnd({ status: 'succeeded', output: 'https://cdn.example.com/out.png' });
+
+          expect(authState.ensureGuestMergeTicket).not.toHaveBeenCalled();
+        });
       });
     });
 

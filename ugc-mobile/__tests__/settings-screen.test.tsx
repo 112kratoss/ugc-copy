@@ -290,6 +290,18 @@ describe('settings screen (HIG S16)', () => {
     expect(allowed.props.accessibilityLabel).toContain('Allowed on this phone. Your prompts and media go to AI services when you create.');
   });
 
+  // Signing in from the Profile row ended on Home (audit 01-12).
+  it('opens the profile for an account, and signs a visitor in back to Settings', () => {
+    const signedIn = rowByTitle(renderScreen(), 'Profile');
+    renderer.act(() => { (signedIn.props.onPress as () => void)(); });
+    expect(routerPush).toHaveBeenLastCalledWith('/profile');
+
+    authState.user = null;
+    const visitor = rowByTitle(renderScreen(), 'Profile');
+    renderer.act(() => { (visitor.props.onPress as () => void)(); });
+    expect(routerPush).toHaveBeenLastCalledWith({ pathname: '/auth', params: { returnTo: '/settings' } });
+  });
+
   // The one place a block can be taken back: a blocked creator is left out of everywhere else.
   it('opens the list of blocked users for a signed-in account, and offers none to a signed-out visitor', () => {
     const blocked = rowByTitle(renderScreen(), 'Blocked users');

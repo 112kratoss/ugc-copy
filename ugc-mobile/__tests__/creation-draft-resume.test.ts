@@ -4,6 +4,8 @@ const storage = vi.hoisted(() => ({
   getItem: vi.fn(),
   setItem: vi.fn(),
   removeItem: vi.fn(),
+  getAllKeys: vi.fn(),
+  multiRemove: vi.fn(),
 }));
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
@@ -12,6 +14,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 
 import {
   CREATION_DRAFT_FORMAT,
+  clearCreationDraftsForUser,
   clearPersistedCreationDrafts,
   creationDraftStorageKey,
   loadOrdinaryCreationDrafts,
@@ -30,6 +33,8 @@ function useMemoryStorage(initial: Record<string, string> = {}) {
   storage.getItem.mockImplementation(async (key: string) => memory.get(key) ?? null);
   storage.setItem.mockImplementation(async (key: string, value: string) => { memory.set(key, value); });
   storage.removeItem.mockImplementation(async (key: string) => { memory.delete(key); });
+  storage.getAllKeys.mockImplementation(async () => [...memory.keys()]);
+  storage.multiRemove.mockImplementation(async (keys: string[]) => { for (const key of keys) memory.delete(key); });
   return memory;
 }
 
@@ -233,5 +238,40 @@ describe('creation draft resume', () => {
 
     expect(earlierScopes).not.toContain(scope);
     expect(await loadPersistedCreationDrafts(scope)).toBeNull();
+  });
+});
+
+describe('what a deleted account left in Create drafts (audit 04-7)', () => {
+  const remixSource = { generationId: 'generation', postId: 'post' };
+
+  it("removes every draft of that identity, remixes from earlier scopes included, and nobody else's", async () => {
+    const memory = useMemoryStorage({
+      [creationDraftStorageKey(ordinaryDraftScope('user-1'))]: '{}',
+      [creationDraftStorageKey(remixDraftScope('user-1', remixSource)!)]: '{}',
+      // A remix session saved before scopes were versioned.
+      [creationDraftStorageKey(JSON.stringify(['remix', 'user-1', 'post', '']))]: '{}',
+      [creationDraftStorageKey(ordinaryDraftScope('user-2'))]: '{}',
+      [creationDraftStorageKey(remixDraftScope('user-2', remixSource)!)]: '{}',
+      [PHONE_WIDE_KEY]: '{}',
+    });
+
+    await clearCreationDraftsForUser('user-1');
+
+    expect([...memory.keys()].sort()).toEqual([
+      PHONE_WIDE_KEY,
+      creationDraftStorageKey(ordinaryDraftScope('user-2')),
+      creationDraftStorageKey(remixDraftScope('user-2', remixSource)!),
+    ].sort());
+  });
+
+  it('never fails the deletion over the drafts', async () => {
+    useMemoryStorage({ [creationDraftStorageKey(ordinaryDraftScope('user-1'))]: '{}' });
+    storage.getAllKeys.mockRejectedValueOnce(new Error('storage closed'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(clearCreationDraftsForUser('user-1')).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });

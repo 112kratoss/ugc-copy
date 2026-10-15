@@ -20,13 +20,16 @@ import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { formatCreditAmount } from '@/lib/pricing';
-import { normalizeReferralCode } from '@/lib/referral-attribution';
+import {
+  bonusCreditsPhrase,
+  formatReferralPercent,
+  normalizeReferralCode,
+  readReferralProgram,
+} from '@/lib/referral-attribution';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ReferralReward, ReferralStats } from '@/lib/types';
 
-const DEFAULT_INVITER_PERCENT = 5;
-const DEFAULT_INVITEE_PERCENT = 5;
 const REFERRAL_DISCLOSURE = 'Referral link — I may earn bonus credits if you top up.';
 
 export default function InviteScreen() {
@@ -47,9 +50,15 @@ export default function InviteScreen() {
 
   if (!user) return <SignedOutInvite />;
 
-  const program = overviewQuery.data?.program;
-  const inviterPercent = program?.inviterPercent ?? DEFAULT_INVITER_PERCENT;
-  const inviteePercent = program?.inviteeFirstPurchasePercent ?? DEFAULT_INVITEE_PERCENT;
+  // The server's terms, or none: while they load, or if they cannot be read,
+  // the copy names no numbers rather than numbers of its own.
+  const program = readReferralProgram(overviewQuery.data?.program);
+  const inviterBonus = bonusCreditsPhrase(program?.inviterPercent);
+  const inviteeBonus = bonusCreditsPhrase(program?.inviteeFirstPurchasePercent);
+  const inviterPercentLabel = formatReferralPercent(program?.inviterPercent);
+  const inviteMessage = (url: string) => (
+    `Try Magicbooklet and get ${inviteeBonus} on your first top-up. ${REFERRAL_DISCLOSURE}\n${url}`
+  );
 
   const ensureShareUrl = async () => {
     if (shareUrl) return shareUrl;
@@ -65,7 +74,7 @@ export default function InviteScreen() {
       const url = await ensureShareUrl();
       const result = await Share.share({
         title: 'Invite & Earn with Magicbooklet',
-        message: `Try Magicbooklet and get ${inviteePercent}% bonus credits on your first top-up. ${REFERRAL_DISCLOSURE}\n${url}`,
+        message: inviteMessage(url),
         url,
       });
       // Android's share intent cannot report a dismissal — it answers
@@ -92,10 +101,7 @@ export default function InviteScreen() {
     try {
       const url = await ensureShareUrl();
       const message = 'Invite message, referral disclosure, and link copied.';
-      await copyToClipboard(
-        `Try Magicbooklet and get ${inviteePercent}% bonus credits on your first top-up. ${REFERRAL_DISCLOSURE}\n${url}`,
-        message
-      );
+      await copyToClipboard(inviteMessage(url), message);
       setNotice({ tone: 'success', title: 'Link copied', body: message });
     } catch (error) {
       setNotice({
@@ -113,7 +119,7 @@ export default function InviteScreen() {
       <SectionTitle
         eyebrow="Invite & Earn"
         title="Create more, together."
-        body={`Friends get ${inviteePercent}% bonus credits on their first top-up. You earn ${inviterPercent}% bonus credits whenever they top up.`}
+        body={`Friends get ${inviteeBonus} on their first top-up. You earn ${inviterBonus} whenever they top up.`}
       />
 
       <Card accent="commerce" padding="lg">
@@ -123,7 +129,7 @@ export default function InviteScreen() {
           </View>
           <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
             <Kicker color="commerce">Share the magic</Kicker>
-            <AppText variant="sectionTitle">Earn {inviterPercent}% in credits</AppText>
+            <AppText variant="sectionTitle">{inviterPercentLabel ? `Earn ${inviterPercentLabel} in credits` : 'Earn bonus credits'}</AppText>
             <AppText variant="bodySm" color="muted">On every verified credit-pack purchase by friends you refer.</AppText>
           </View>
         </View>
@@ -163,9 +169,14 @@ export default function InviteScreen() {
 
       <Card variant="soft">
         <AppText variant="cardTitle">How rewards work</AppText>
-        <RuleRow icon={<UserPlus size={appTheme.icon.compact} color={theme.colors.info} />} text={`A new friend joins within ${program?.attributionWindowDays ?? 30} days of opening your link.`} />
-        <RuleRow icon={<ShoppingBag size={appTheme.icon.compact} color={theme.colors.commerce} />} text={`They receive ${inviteePercent}% bonus credits on their first verified credit-pack purchase.`} />
-        <RuleRow icon={<CheckCircle2 size={appTheme.icon.compact} color={theme.colors.success} />} text={`You receive ${inviterPercent}% bonus credits on each verified credit-pack purchase they make.`} />
+        <RuleRow
+          icon={<UserPlus size={appTheme.icon.compact} color={theme.colors.info} />}
+          text={program
+            ? `A new friend joins within ${program.attributionWindowDays} days of opening your link.`
+            : 'A new friend joins after opening your link.'}
+        />
+        <RuleRow icon={<ShoppingBag size={appTheme.icon.compact} color={theme.colors.commerce} />} text={`They receive ${inviteeBonus} on their first verified credit-pack purchase.`} />
+        <RuleRow icon={<CheckCircle2 size={appTheme.icon.compact} color={theme.colors.success} />} text={`You receive ${inviterBonus} on each verified credit-pack purchase they make.`} />
         <RuleRow icon={<RotateCcw size={appTheme.icon.compact} color={theme.colors.warning} />} text="Refunded or disputed purchases reverse the matching bonus credits." />
         <AppText variant="caption" color="faint">Bonus credits are for creation tools, have no cash value, and cannot unlock marketplace resources.</AppText>
       </Card>
@@ -201,8 +212,10 @@ function SignedOutInvite() {
             <Gift size={32} color={theme.colors.commerce} />
           </View>
           <AppText variant="sectionTitle" style={{ textAlign: 'center' }}>Friends create better together</AppText>
+          {/* Signed out there is no account to read the program's terms for, so
+              no numbers here: the invite link's own landing names them. */}
           <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>
-            New users can receive 5% bonus credits on their first top-up. Inviters earn 5% when referred friends top up.
+            New users can receive bonus credits on their first top-up. Inviters earn bonus credits when referred friends top up.
           </AppText>
         </View>
         <PrimaryButton

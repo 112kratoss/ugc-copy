@@ -31,6 +31,8 @@ import {
 } from '@/lib/mobile-notifications';
 import { EXTERNAL_API_REQUEST_TIMEOUT_MS } from '@/lib/provider-fetch';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
+
 const userId = '11111111-1111-1111-1111-111111111111';
 
 afterEach(() => {
@@ -172,6 +174,11 @@ function createCreditSupabase(options: {
           if (!plan) return { data: { status: 'product_not_found' }, error: null };
           const externalOrderId = String(args.p_external_order_id);
           let transaction = transactions.find((item) => item.razorpay_order_id === externalOrderId);
+          // As the RPC does: a store transaction on file for another account
+          // can never settle for this one.
+          if (transaction && transaction.user_id !== String(args.p_user_id)) {
+            return { data: { status: 'transaction_conflict' }, error: null };
+          }
           if (transaction?.status === 'refunded') {
             return { data: { status: 'revoked' }, error: null };
           }
@@ -1212,6 +1219,7 @@ describe('mobile commerce helpers', () => {
       credits: 1100,
       restoredCreditPurchases: 1,
       alreadyProcessedCreditPurchases: 1,
+      skipped: [],
       entitlements: expect.arrayContaining([
         expect.objectContaining({ entitlement: 'credits', alreadyProcessed: false }),
         expect.objectContaining({ entitlement: 'credits', alreadyProcessed: true }),
@@ -1947,7 +1955,9 @@ describe('mobile purchase notifications', () => {
     ]);
   });
 
-  it('defers only the refresh notice when a restore finds nothing new to settle', async () => {
+  // 03-10: every press of Refresh used to add a "Purchase history refreshed"
+  // alert, though it settled nothing.
+  it('sends no refresh notice when a restore finds nothing new to settle', async () => {
     const fakeSupabase = createCreditSupabase({
       credits: 600,
       transactions: [{
@@ -1978,12 +1988,115 @@ describe('mobile purchase notifications', () => {
       credits: 600,
       restoredCreditPurchases: 0,
       alreadyProcessedCreditPurchases: 1,
+      skipped: [],
     });
-    expect(history.started).toEqual([]);
+    expect(deferred).toEqual([]);
 
     history.release();
-    await Promise.all(deferred.map((task) => task()));
-    expect(history.sent.map((notification) => notification.type)).toEqual(['purchases_restored']);
+    expect(history.started).toEqual([]);
+    expect(history.sent).toEqual([]);
+  });
+
+  // 03-10: a store transaction already on file for another account (a guest's
+  // purchase RevenueCat moved to this one, say) failed the whole restore with
+  // "Mobile purchase does not match the server-issued intent.", so nothing else
+  // the person had bought could settle either.
+  it('reports a purchase on file for another account and settles the rest of the restore', async () => {
+    const otherAccountId = '33333333-3333-3333-3333-333333333333';
+    const fakeSupabase = createCreditSupabase({
+      credits: 100,
+      transactions: [{
+        id: 'txn-other-account',
+        user_id: otherAccountId,
+        razorpay_order_id: buildMobileExternalOrderId('app_store', '1000000123456701'),
+        credits: 500,
+        status: 'success',
+      }],
+    });
+    const history = createMobileNotificationHistory();
+    const logged: BackendLogRecord[] = [];
+    const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+
+    let restored: Awaited<ReturnType<typeof restoreMobileEntitlements>>;
+    try {
+      restored = await restoreMobileEntitlements(
+        withMobileNotificationHistory(fakeSupabase.client, history),
+        userId,
+        {
+          fetcher: revenueCatCreditPurchases(['1000000123456701', '1000000123456702']),
+          revenueCatApiKey: 'rc-secret',
+        },
+      );
+    } finally {
+      restoreLogSink();
+    }
+
+    expect(restored).toMatchObject({
+      success: true,
+      credits: 600,
+      restoredCreditPurchases: 1,
+      alreadyProcessedCreditPurchases: 0,
+      skipped: [{
+        transactionId: '1000000123456701',
+        productId: 'magicbooklet.credits.starter',
+        reason: 'transaction_conflict',
+      }],
+    });
+    // The answer the app reads has the fields the shared fixture shows it.
+    const example = mobileApiContract.endpoints.mobileCommerceRestore.response;
+    expect(Object.keys(restored).sort()).toEqual(Object.keys(example).sort());
+    expect(Object.keys(restored.skipped[0]).sort()).toEqual(Object.keys(example.skipped[0]).sort());
+
+    // Only the second purchase settled, for this account; the other account's
+    // row is as it was.
+    expect(fakeSupabase.transactions.map((row) => [row.user_id, row.razorpay_order_id])).toEqual([
+      [otherAccountId, buildMobileExternalOrderId('app_store', '1000000123456701')],
+      [userId, buildMobileExternalOrderId('app_store', '1000000123456702')],
+    ]);
+    expect(history.sent.map((notification) => notification.type)).toEqual(['credits_purchased', 'purchases_restored']);
+    // Operators still see the conflict, without the person's ids in the log.
+    expect(logged.filter((record) => record.msg === 'mobile_restore_purchase_skipped')).toEqual([
+      expect.objectContaining({
+        level: 'warn',
+        reason: 'transaction_conflict',
+        productId: 'magicbooklet.credits.starter',
+        provider: 'app_store',
+      }),
+    ]);
+    expect(JSON.stringify(logged)).not.toContain('1000000123456701');
+  });
+
+  it('announces nothing when the only purchase a restore finds is on file for another account', async () => {
+    const fakeSupabase = createCreditSupabase({
+      credits: 100,
+      transactions: [{
+        id: 'txn-other-account',
+        user_id: '33333333-3333-3333-3333-333333333333',
+        razorpay_order_id: buildMobileExternalOrderId('app_store', '1000000123456701'),
+        credits: 500,
+        status: 'success',
+      }],
+    });
+    const history = createMobileNotificationHistory();
+    const deferred: Array<() => Promise<unknown>> = [];
+
+    await expect(restoreMobileEntitlements(
+      withMobileNotificationHistory(fakeSupabase.client, history),
+      userId,
+      {
+        fetcher: revenueCatCreditPurchases(['1000000123456701']),
+        revenueCatApiKey: 'rc-secret',
+        runAfterResponse: (task) => { deferred.push(task); },
+      },
+    )).resolves.toMatchObject({
+      success: true,
+      credits: 100,
+      restoredCreditPurchases: 0,
+      alreadyProcessedCreditPurchases: 0,
+      skipped: [expect.objectContaining({ transactionId: '1000000123456701', reason: 'transaction_conflict' })],
+    });
+    expect(deferred).toEqual([]);
+    expect(history.sent).toEqual([]);
   });
 
   it('still tells the buyer about a purchase the restore settled when a later purchase fails it', async () => {

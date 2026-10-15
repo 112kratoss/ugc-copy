@@ -81,6 +81,7 @@ import {
 } from '@/lib/generation-input-media';
 import { slugifySourceTool } from '@/lib/source-tools';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
+import { resolveLinkedAccountIds } from '@/lib/account-identity';
 import { loadPostMediaItemsMap, type PostMediaPersistInput } from '@/lib/post-media';
 import { loadPurchasedProofMedia } from '@/lib/purchased-proof-media';
 import {
@@ -598,6 +599,15 @@ export function buildFreeGenerationReferenceBundle(referenceItems: PostResourceI
   };
 }
 
+/**
+ * Copies a creation's saved references into the publisher's resource files.
+ *
+ * The copies are written under the publisher (`ownerUserId`); each reference is
+ * read under its own row's owner, which must be the publisher or a guest linked
+ * to it. A creation made as a guest before registering is published as the
+ * account (02-4), but its references keep the guest's id and sit in the guest's
+ * folder, so read under the publisher alone it packaged none of them.
+ */
 export async function buildGenerationReferenceResourceItems(params: {
   supabase: SupabaseClient;
   ownerUserId: string;
@@ -607,7 +617,6 @@ export async function buildGenerationReferenceResourceItems(params: {
     .from('generation_input_media')
     .select('id, generation_id, user_id, media_type, role, label, storage_path, source_generation_id, sort_order, metadata')
     .eq('generation_id', params.generationId)
-    .eq('user_id', params.ownerUserId)
     .order('sort_order', { ascending: true });
 
   if (error) {
@@ -617,9 +626,15 @@ export async function buildGenerationReferenceResourceItems(params: {
 
   const rows = (data ?? []) as GenerationInputMediaRow[];
   const items: PostResourceItem[] = [];
+  // The linked guests are asked for only when a row is not the publisher's own.
+  const sourceOwnerIds = rows.some((row) => row.user_id !== params.ownerUserId)
+    ? await resolveLinkedAccountIds(params.supabase, params.ownerUserId)
+    : [params.ownerUserId];
 
   for (const [index, row] of rows.entries()) {
-    const sourceLocation = getUserOwnedStoredMediaLocation(row.storage_path, params.ownerUserId);
+    const sourceLocation = sourceOwnerIds.includes(row.user_id)
+      ? getUserOwnedStoredMediaLocation(row.storage_path, row.user_id)
+      : null;
     if (!sourceLocation) {
       continue;
     }

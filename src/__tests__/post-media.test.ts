@@ -37,6 +37,49 @@ describe('post media summaries', () => {
     }
   });
 
+  // 02-4: a creation made as a guest before registering is published as the
+  // account, but a private post of it keeps the generation's file, which stays
+  // in the guest's folder.
+  it('signs a file kept in the folder of a guest linked to the post owner, and no one else’s', async () => {
+    const createSignedUrl = vi.fn(async (filePath: string) => ({
+      data: { signedUrl: `https://signed.example.test/${filePath}` },
+      error: null,
+    }));
+    // Asked for the guests merged into the post owner: guest-1 is one.
+    const linkedLookup = vi.fn<(column: string, ownerId: string) => Promise<{ data: Array<{ id: string }>; error: null }>>(
+      async () => ({ data: [{ id: 'guest-1' }], error: null }),
+    );
+    const supabase = {
+      from: vi.fn(() => ({ select: () => ({ eq: linkedLookup }) })),
+      storage: { from: vi.fn(() => ({ createSignedUrl })) },
+    };
+    const privatePost = (outputUrl: string) => resolvePostMediaUrl(supabase as never, {
+      showcase_asset_path: null,
+      output_url: outputUrl,
+      user_id: 'owner-1',
+    });
+
+    await expect(privatePost('generated_images/guest-1/made-as-guest.png'))
+      .resolves.toBe('https://signed.example.test/guest-1/made-as-guest.png');
+    expect(supabase.from).toHaveBeenCalledWith('profiles');
+    expect(linkedLookup).toHaveBeenCalledWith('merged_into_user_id', 'owner-1');
+
+    for (const outputUrl of [
+      'generated_images/stranger-1/private.png',
+      'generated_images/guest-1%252fstranger-1/private.png',
+    ]) {
+      createSignedUrl.mockClear();
+      await expect(privatePost(outputUrl)).resolves.toBeNull();
+      expect(createSignedUrl).not.toHaveBeenCalled();
+    }
+
+    // The owner's own file needs no lookup.
+    supabase.from.mockClear();
+    await expect(privatePost('generated_images/owner-1/own.png'))
+      .resolves.toBe('https://signed.example.test/owner-1/own.png');
+    expect(supabase.from).not.toHaveBeenCalled();
+  });
+
   it('keeps HTTPS provider media but rejects ownerless storage references', async () => {
     const supabase = { storage: { from: vi.fn() } };
 
@@ -76,7 +119,10 @@ describe('post media summaries', () => {
     };
     const createSignedUrl = vi.fn();
     const supabase = {
-      from: () => query,
+      // Asked whether the foreign folder belongs to a guest linked to the post owner: it does not.
+      from: (table: string) => (table === 'profiles'
+        ? { select: () => ({ eq: async () => ({ data: [], error: null }) }) }
+        : query),
       storage: { from: vi.fn(() => ({ createSignedUrl })) },
     };
 

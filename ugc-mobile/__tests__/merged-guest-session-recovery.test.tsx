@@ -8,13 +8,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   authCallback: null as null | ((event: string, session: unknown) => void),
-  clearGuestMergeTicket: vi.fn(),
+  forgetGuestMergeTickets: vi.fn(),
   clearPersistedSession: vi.fn(),
   getSession: vi.fn(),
-  queryClient: { clear: vi.fn(), fetchQuery: vi.fn() },
+  pathname: '/',
+  prepareGuestAccountMerge: vi.fn(),
+  removeGuestMergeTicket: vi.fn(),
+  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), getQueryCache: () => ({ subscribe: () => () => undefined }), removeQueries: vi.fn() },
   replace: vi.fn(),
   sessionResolve: null as null | ((result: unknown) => void),
   signInAnonymously: vi.fn(),
+  signInWithPassword: vi.fn(),
   signOut: vi.fn(),
   unregisterPush: vi.fn(),
 }));
@@ -31,6 +35,7 @@ vi.mock('expo-constants', () => ({
 // re-runs the provider's effects forever and hangs the suite.
 vi.mock('expo-router', () => ({
   router: { replace: state.replace },
+  usePathname: () => state.pathname,
 }));
 
 vi.mock('react-native', () => ({
@@ -45,7 +50,7 @@ vi.mock('../lib/env', () => ({
 
 vi.mock('../lib/api-client', () => ({
   ApiError: class ApiError extends Error {},
-  createApiClient: () => ({ getProfile: vi.fn() }),
+  createApiClient: () => ({ getProfile: vi.fn(), prepareGuestAccountMerge: state.prepareGuestAccountMerge }),
 }));
 
 vi.mock('../lib/feed-installation-id', () => ({ getFeedInstallationId: vi.fn() }));
@@ -59,9 +64,14 @@ vi.mock('../lib/feed-event-queue', () => ({
   restoreShowcaseFeedEvents: vi.fn(async () => undefined),
 }));
 vi.mock('../lib/guest-merge-ticket-storage', () => ({
-  readGuestMergeTicket: vi.fn(async () => null),
+  bindGuestMergeTicket: vi.fn(async () => undefined),
+  clearGuestMergeOutcome: vi.fn(async () => undefined),
+  forgetGuestMergeTicketsFor: state.forgetGuestMergeTickets,
+  readGuestMergeOutcome: vi.fn(async () => null),
+  readGuestMergeTickets: vi.fn(async () => []),
+  removeGuestMergeTicket: state.removeGuestMergeTicket,
+  storeGuestMergeOutcome: vi.fn(async () => undefined),
   storeGuestMergeTicket: vi.fn(async () => undefined),
-  clearGuestMergeTicket: state.clearGuestMergeTicket,
 }));
 vi.mock('../lib/generation-model-catalog', () => ({ GENERATION_MODEL_CATALOG_SCHEMA_VERSION: 1 }));
 vi.mock('../lib/persisted-account-state', () => ({
@@ -82,6 +92,7 @@ vi.mock('../lib/supabase-auth-recovery', () => ({
   isInvalidRefreshTokenError: () => false,
   isNetworkRequestFailedError: () => false,
   isRetryableRefreshError: () => false,
+  normalizeSupabaseAuthError: (error: unknown) => error,
   supabaseNetworkFailureMessage: () => 'Network unavailable',
 }));
 vi.mock('../lib/supabase', () => ({
@@ -97,13 +108,14 @@ vi.mock('../lib/supabase', () => ({
         return { data: { subscription: { unsubscribe: vi.fn() } } };
       },
       signInAnonymously: state.signInAnonymously,
-      signInWithPassword: vi.fn(),
+      signInWithPassword: state.signInWithPassword,
       signUp: vi.fn(),
       signOut: state.signOut,
     },
   },
 }));
 
+import { GUEST_MERGE_PREPARE_ERROR_CODE } from '../lib/auth-error-copy';
 import { AuthProvider, useAuth } from '../lib/auth';
 
 function sessionFor(user: Record<string, unknown>) {
@@ -152,8 +164,13 @@ describe('abandoning a guest session the server has merged', () => {
     }));
     state.queryClient.fetchQuery.mockReset().mockResolvedValue({ credits: 0 });
     state.queryClient.clear.mockReset();
+    state.queryClient.removeQueries.mockReset();
+    state.pathname = '/';
+    state.prepareGuestAccountMerge.mockReset();
+    state.signInWithPassword.mockReset();
     state.clearPersistedSession.mockReset().mockResolvedValue(undefined);
-    state.clearGuestMergeTicket.mockReset().mockResolvedValue(undefined);
+    state.forgetGuestMergeTickets.mockReset().mockResolvedValue(undefined);
+    state.removeGuestMergeTicket.mockReset().mockResolvedValue(undefined);
     state.replace.mockReset();
     state.signOut.mockReset().mockResolvedValue({ error: null });
     state.signInAnonymously.mockReset().mockResolvedValue({
@@ -174,7 +191,45 @@ describe('abandoning a guest session the server has merged', () => {
     // to the registered account this guest was folded into.
     expect(state.signOut).toHaveBeenCalledWith({ scope: 'local' });
     expect(state.clearPersistedSession).toHaveBeenCalledOnce();
-    expect(state.replace).toHaveBeenCalledWith('/auth?notice=session-merged');
+    expect(state.replace).toHaveBeenCalledWith({
+      pathname: '/auth',
+      params: { notice: 'session-merged', returnTo: '/' },
+    });
+
+    unmount();
+  });
+
+  // Audit 01-12: signed in, the person comes back to the page they were on.
+  it('carries the route the guest was on to the sign-in screen', async () => {
+    state.pathname = '/creators/luna';
+    const { latest, unmount } = await mountWith(guestSession);
+
+    await renderer.act(async () => {
+      await latest.current?.abandonMergedGuestSession();
+    });
+
+    expect(state.replace).toHaveBeenCalledWith({
+      pathname: '/auth',
+      params: { notice: 'session-merged', returnTo: '/creators/luna' },
+    });
+
+    unmount();
+  });
+
+  // Audit 04-6: the one teardown every way out shares.
+  it('forgets the creator pages and follow states, which carry who was signed in', async () => {
+    const { latest, unmount } = await mountWith(guestSession);
+
+    await renderer.act(async () => {
+      await latest.current?.abandonMergedGuestSession();
+    });
+
+    expect(state.queryClient.removeQueries).toHaveBeenCalledOnce();
+    const [{ predicate }] = state.queryClient.removeQueries.mock.calls[0] as [{
+      predicate: (query: { queryKey: readonly unknown[] }) => boolean;
+    }];
+    expect(predicate({ queryKey: ['creator-profile', 'infinite', 'luna'] })).toBe(true);
+    expect(predicate({ queryKey: ['creator-follow-state', 'creator-7'] })).toBe(true);
 
     unmount();
   });
@@ -186,7 +241,8 @@ describe('abandoning a guest session the server has merged', () => {
       await latest.current?.abandonMergedGuestSession();
     });
 
-    expect(state.clearGuestMergeTicket).not.toHaveBeenCalled();
+    expect(state.forgetGuestMergeTickets).not.toHaveBeenCalled();
+    expect(state.removeGuestMergeTicket).not.toHaveBeenCalled();
 
     unmount();
   });
@@ -237,6 +293,39 @@ describe('abandoning a guest session the server has merged', () => {
     expect(state.clearPersistedSession).not.toHaveBeenCalled();
     expect(state.replace).not.toHaveBeenCalled();
 
+    unmount();
+  });
+});
+
+describe("a guest's sign-in that cannot prepare its credits for the account", () => {
+  beforeEach(() => {
+    state.authCallback = null;
+    state.sessionResolve = null;
+    state.getSession.mockReset().mockImplementation(() => new Promise((resolve) => {
+      state.sessionResolve = resolve;
+    }));
+    state.queryClient.fetchQuery.mockReset().mockResolvedValue({ credits: 0 });
+    state.prepareGuestAccountMerge.mockReset().mockRejectedValue(new Error('Network request failed'));
+    state.signInWithPassword.mockReset().mockResolvedValue({ error: null });
+  });
+
+  // Audit 01-3: the sign-in screen maps the code to its own notice, which
+  // tells a guest who bought credits that they are still on this device.
+  it('stops before the sign-in, with an error the sign-in screen can name', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { latest, unmount } = await mountWith(guestSession);
+
+    let failure: unknown;
+    await renderer.act(async () => {
+      await latest.current?.signInWithPassword('creator@example.com', 'correct-Horse-1').catch((error: unknown) => {
+        failure = error;
+      });
+    });
+
+    expect((failure as { code?: unknown }).code).toBe(GUEST_MERGE_PREPARE_ERROR_CODE);
+    expect(state.signInWithPassword).not.toHaveBeenCalled();
+    expect(latest.current?.mergeState).toBe('failed');
+    warn.mockRestore();
     unmount();
   });
 });

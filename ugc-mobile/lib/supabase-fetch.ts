@@ -1,27 +1,34 @@
 /**
- * Deadlines for the Supabase auth requests a sign-out waits on.
+ * Deadlines for the Supabase auth requests a sign-out or a sign-in waits on.
  *
- * auth-js runs sign-out, session reads and token refreshes one at a time
- * behind an internal lock, and React Native's Android HTTP client has no
- * timeout of its own. A logout or refresh that stalls therefore holds that
- * lock indefinitely: the side menu sits on "Signing out…", and every later
- * getSession() queues behind it, including the guest bootstrap after
- * sign-out and the access token for each API call. Aborting the request is
- * what frees the lock. auth-js reports the abort as a retryable fetch error,
- * keeps the session and returns. A timer raced against the sign-out would
- * unblock the menu but leave the lock held.
+ * auth-js runs sign-out, session reads, token refreshes and the PKCE exchange
+ * one at a time behind an internal lock, and React Native's Android HTTP
+ * client has no timeout of its own. A logout or refresh that stalls therefore
+ * holds that lock indefinitely: the side menu sits on "Signing out…", and
+ * every later getSession() queues behind it, including the guest bootstrap
+ * after sign-out and the access token for each API call. Aborting the request
+ * is what frees the lock. auth-js reports the abort as a retryable fetch
+ * error, keeps the session and returns. A timer raced against the sign-out
+ * would unblock the menu but leave the lock held.
  *
- * A logout always gets the deadline; only sign-out paths call it. A token
- * refresh gets it only while a sign-out is running. Outside one, cutting a
- * slow refresh short makes auth-js retry with a refresh token the server may
- * already have rotated, and a retry that lands after Supabase's reuse window
- * is rejected and signs the person out. During a sign-out that is the goal
- * anyway. Everything else, including sign-in on the same /token path, passes
- * through untouched.
+ * A logout always gets the deadline; only sign-out paths call it. So does a
+ * sign-in: the password, id_token (Apple) and PKCE (Google) grants, and
+ * /signup, the guest's anonymous sign-up. None of them spends a refresh token,
+ * so cutting one short fails only that attempt, with a retryable error, and
+ * leaves any stored session as it was. Without it a stalled sign-in, or the
+ * guest bootstrap Pricing waits on, never ended. updateUser (PUT /user: the
+ * "Set up later" record, the name Apple shares at the first sign-in) holds the
+ * same lock and spends no refresh token either, so it gets the deadline too.
+ *
+ * A token refresh gets the deadline only while a sign-out is running. Outside
+ * one, cutting a slow refresh short makes auth-js retry with a refresh token
+ * the server may already have rotated, and a retry that lands after Supabase's
+ * reuse window is rejected and signs the person out. During a sign-out that is
+ * the goal anyway. Everything else passes through untouched.
  */
 
 type FetchInput = RequestInfo | URL;
-type AuthRequestKind = 'logout' | 'refresh';
+type AuthRequestKind = 'logout' | 'refresh' | 'sign-in' | 'user-update';
 
 export const SUPABASE_AUTH_REQUEST_DEADLINE_MS = 10_000;
 
@@ -40,7 +47,7 @@ export function createSupabaseAuthFetch({
     (fetcher ?? globalThis.fetch)(input, init);
 
   const authFetch = (input: FetchInput, init?: RequestInit): Promise<Response> => {
-    const kind = authRequestKind(input);
+    const kind = authRequestKind(input, init);
     if (!kind) return send(input, init);
 
     const controller = new AbortController();
@@ -59,10 +66,10 @@ export function createSupabaseAuthFetch({
         controller.abort(new Error(`Supabase auth request timed out after ${deadlineMs}ms`));
       }, deadlineMs);
     };
-    if (kind === 'logout' || signOutsInProgress > 0) {
-      arm();
-    } else {
+    if (kind === 'refresh' && signOutsInProgress === 0) {
       unarmedRefreshes.add(arm);
+    } else {
+      arm();
     }
 
     // Stand down once the response head arrives, not after the body. auth-js
@@ -93,7 +100,9 @@ export function createSupabaseAuthFetch({
   return { fetch: authFetch, duringSignOut };
 }
 
-function authRequestKind(input: FetchInput): AuthRequestKind | null {
+const SIGN_IN_GRANT_TYPES = new Set(['password', 'id_token', 'pkce']);
+
+function authRequestKind(input: FetchInput, init?: RequestInit): AuthRequestKind | null {
   let url: URL;
   try {
     url = new URL(requestUrl(input));
@@ -101,10 +110,19 @@ function authRequestKind(input: FetchInput): AuthRequestKind | null {
     return null;
   }
   if (url.pathname.endsWith('/auth/v1/logout')) return 'logout';
-  if (url.pathname.endsWith('/auth/v1/token') && url.searchParams.get('grant_type') === 'refresh_token') {
-    return 'refresh';
+  if (url.pathname.endsWith('/auth/v1/signup')) return 'sign-in';
+  if (url.pathname.endsWith('/auth/v1/user') && requestMethod(input, init) === 'PUT') return 'user-update';
+  if (url.pathname.endsWith('/auth/v1/token')) {
+    const grantType = url.searchParams.get('grant_type');
+    if (grantType === 'refresh_token') return 'refresh';
+    if (grantType !== null && SIGN_IN_GRANT_TYPES.has(grantType)) return 'sign-in';
   }
   return null;
+}
+
+function requestMethod(input: FetchInput, init?: RequestInit): string {
+  const method = init?.method ?? (typeof input === 'object' && 'method' in input ? input.method : undefined);
+  return (method ?? 'GET').toUpperCase();
 }
 
 function requestUrl(input: FetchInput): string {

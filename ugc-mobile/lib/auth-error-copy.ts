@@ -27,7 +27,7 @@ export const GENERIC_SIGN_IN_FAILURE: AuthNotice = {
   body: 'Something went wrong on our side. Try again in a moment.',
 };
 
-const OFFLINE: AuthNotice = {
+export const OFFLINE: AuthNotice = {
   title: 'You appear to be offline',
   body: 'Check your connection, then try again.',
 };
@@ -48,17 +48,34 @@ export const GUEST_SESSION_MERGED: AuthNotice = {
 
 /**
  * Shown when this device arrives at sign-in because the server refused its
- * session: it ended somewhere else, most often when the account signed out on
- * another device.
+ * session: it ended somewhere else.
  *
- * Informational, like GUEST_SESSION_MERGED. Nothing failed here and nothing on
- * the account was lost. It names the usual cause without claiming to be sure of
- * it, since a removed session or a password change end it the same way, and
- * points at the one action that resolves it.
+ * Informational, like GUEST_SESSION_MERGED. It names no cause and promises
+ * nothing about the account: a sign-out elsewhere, a password change and a
+ * deletion started on another device all end the session the same way, and
+ * telling someone whose account is being erased that nothing is wrong would be
+ * the one false thing this notice could say (audit 04-1).
  */
 export const SESSION_ENDED_ELSEWHERE: AuthNotice = {
   title: 'You were signed out',
-  body: 'Your session on this device ended, usually because the account signed out somewhere else. Sign in again to pick up where you left off.',
+  body: 'Your session on this device ended. Sign in again to continue.',
+  tone: 'info',
+};
+
+/**
+ * The `code` on the error a guest's sign-in throws when the ticket that carries
+ * its credits to the account could not be prepared. The sign-in stops before
+ * it replaces the guest session, so nothing has been lost.
+ */
+export const GUEST_MERGE_PREPARE_ERROR_CODE = 'guest_merge_prepare';
+
+/**
+ * Informational: nothing on the device failed for good, and the one sentence
+ * that matters to a guest who bought credits is that they are still here.
+ */
+export const GUEST_MERGE_PREPARE_FAILED: AuthNotice = {
+  title: 'Sign-in paused',
+  body: 'We could not prepare your guest credits for transfer, so we stopped before switching accounts. Your credits are safe on this device. Check your connection and try again.',
   tone: 'info',
 };
 
@@ -85,7 +102,7 @@ export const INVALID_EMAIL: AuthNotice = {
 
 export const PASSWORD_TOO_SHORT: AuthNotice = {
   title: 'Password is too short',
-  body: 'Passwords are at least 6 characters.',
+  body: 'Passwords are at least 8 characters with a number, a symbol, upper and lower case.',
 };
 
 /**
@@ -96,6 +113,12 @@ export const PASSWORD_TOO_SHORT: AuthNotice = {
  */
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
+/**
+ * The hint names the current policy (8 characters, four kinds), but the check
+ * stays at the old floor of 6: Supabase applies the policy when a password is
+ * set, not at sign-in, so a legacy account made under the old floor still signs
+ * in, and the phone must not stop it before the server has seen its password.
+ */
 export const MIN_PASSWORD_LENGTH = 6;
 
 export function isPlausibleEmail(value: string) {
@@ -113,16 +136,51 @@ function messageOf(error: unknown) {
   return (error instanceof Error ? error.message : String(error ?? '')).toLowerCase();
 }
 
-export function describePasswordSignInError(error: unknown): AuthNotice {
+function isGuestMergePrepareFailure(error: unknown) {
+  return typeof error === 'object'
+    && error !== null
+    && (error as { code?: unknown }).code === GUEST_MERGE_PREPARE_ERROR_CODE;
+}
+
+export type SignInProvider = 'Apple' | 'Google';
+
+/**
+ * The provider buttons the sign-in screen draws on `platform`: Apple on iOS,
+ * Google on Android. Copy names only these, since advice to "use that button"
+ * is worthless where the button is not drawn (audit 01-8).
+ */
+export function signInProviderButtons(platform: string): SignInProvider[] {
+  if (platform === 'ios') return ['Apple'];
+  if (platform === 'android') return ['Google'];
+  return [];
+}
+
+export type PasswordSignInCopyContext = {
+  /** The provider buttons drawn beside the password field. */
+  providerButtons?: readonly SignInProvider[];
+  /**
+   * False where only the password is typed, as on the deletion screen, which
+   * checks the account's own address.
+   */
+  asksForEmail?: boolean;
+};
+
+export function describePasswordSignInError(
+  error: unknown,
+  { providerButtons = [], asksForEmail = true }: PasswordSignInCopyContext = {},
+): AuthNotice {
+  if (isGuestMergePrepareFailure(error)) return GUEST_MERGE_PREPARE_FAILED;
   if (isNetworkRequestFailedError(error)) return OFFLINE;
 
   const message = messageOf(error);
 
   if (message.includes('invalid login credentials') || message.includes('invalid_credentials')) {
-    return {
-      title: 'That email and password do not match',
-      body: 'Check both and try again. If you created the account with Apple or Google, use that button instead.',
-    };
+    const otherWay = providerButtons.length > 0
+      ? ` If you created the account with ${providerButtons.join(' or ')}, use that button instead.`
+      : '';
+    return asksForEmail
+      ? { title: 'That email and password do not match', body: `Check both and try again.${otherWay}` }
+      : { title: 'That password does not match this account', body: `Check it and try again.${otherWay}` };
   }
 
   if (message.includes('email not confirmed')) {
@@ -145,12 +203,22 @@ export function describePasswordSignInError(error: unknown): AuthNotice {
 /**
  * `provider` is the name the button already uses, so the recovery sentence
  * points at a control the person can see rather than at "the provider".
+ *
+ * The password is offered only for an account known to have one
+ * (`passwordAvailable`). Accounts have been made with Apple or Google alone
+ * since July, so on the sign-in screen, where the account is not known yet,
+ * that advice would be wrong for nearly everyone (audit 01-8).
  */
-export function describeProviderSignInError(error: unknown, provider: 'Apple' | 'Google'): AuthNotice {
+export function describeProviderSignInError(
+  error: unknown,
+  provider: SignInProvider,
+  { passwordAvailable = false }: { passwordAvailable?: boolean } = {},
+): AuthNotice {
+  if (isGuestMergePrepareFailure(error)) return GUEST_MERGE_PREPARE_FAILED;
   if (isNetworkRequestFailedError(error)) return OFFLINE;
 
   return {
     title: `Could not finish with ${provider}`,
-    body: 'Try again, or sign in with your email and password.',
+    body: passwordAvailable ? 'Try again, or sign in with your email and password.' : 'Try again.',
   };
 }

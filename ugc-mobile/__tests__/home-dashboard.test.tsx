@@ -192,6 +192,12 @@ vi.mock('@/components/feed-feedback-sheet', () => ({
   FeedFeedbackSheet: (props: MockProps) => React.createElement('feed-feedback-sheet', props),
 }));
 
+// What the banner says is its own suite's (it draws nothing without an outcome);
+// here only where Home puts it.
+vi.mock('@/components/guest-merge-banner', () => ({
+  GuestMergeBanner: () => React.createElement('guest-merge-banner'),
+}));
+
 vi.mock('@/components/feed-pagination-footer', () => ({
   FeedEndFooter: (props: MockProps) => React.createElement('feed-end-footer', props),
   FeedLoadMoreErrorFooter: (props: MockProps) => React.createElement('feed-load-more-error-footer', props),
@@ -266,8 +272,11 @@ vi.mock('@/lib/use-showcase-save-mutation', () => ({
   useShowcaseSaveMutation: () => ({ toggleSave: vi.fn() }),
 }));
 
+// The viewer's runs in flight, which the workspace slide counts.
+const activeGenerationState = vi.hoisted(() => ({ count: 0 }));
+
 vi.mock('@/lib/use-active-generations', () => ({
-  useActiveGenerationCount: () => 0,
+  useActiveGenerationCount: () => activeGenerationState.count,
 }));
 
 vi.mock('@/lib/app-foreground', () => ({
@@ -535,6 +544,7 @@ describe('Home screen', () => {
     navState.focused = true;
     authState.user = { id: 'viewer-1' };
     authState.identityUserId = 'viewer-1';
+    activeGenerationState.count = 0;
     queryState.pages = [];
     queryState.dataUpdatedAt = 1;
     // Back to each double's own answer after a test that changed it.
@@ -1023,6 +1033,57 @@ describe('Home screen', () => {
     settleWindow();
     expect(store.snapshot()).toEqual({ activeIds: ['a'], preparedIds: [] });
 
+    renderer.act(() => tree.unmount());
+  });
+
+  // 02-8: the merge outcome showed on Pricing alone, so a restart before a
+  // visit there lost the only word that paid guest credits had not arrived.
+  it.each([
+    ['an account', { id: 'viewer-1' }, 'viewer-1'],
+    ['a guest', null, 'guest-1'],
+  ] as const)('draws the guest merge banner at the top of Home for %s, under the top bar', (_who, user, identityUserId) => {
+    authState.user = user;
+    authState.identityUserId = identityUserId;
+    const { tree } = renderHome();
+    const header = renderHeader(tree);
+
+    const banners = header.root.findAll((node) => String(node.type) === 'guest-merge-banner');
+    expect(banners).toHaveLength(1);
+    // In the top bar's own block, right after the bar: the first thing under the balance.
+    let block = banners[0].parent;
+    while (block && String(block.type) !== 'view') block = block.parent;
+    const [bar, ...rest] = block!.children as renderer.ReactTestInstance[];
+    expect(bar.findAll((node) => node.props.accessibilityLabel === 'Search creators, posts, and recipes').length).toBeGreaterThan(0);
+    expect(rest).toHaveLength(1);
+    expect(rest[0].findAll((node) => String(node.type) === 'guest-merge-banner')).toHaveLength(1);
+
+    renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
+  // 02-1: a guest's count used to open a Creations tab that only said "Sign in
+  // to view your creations"; it now opens the guest's own creations.
+  it("opens a guest's Creations from the workspace slide's render count", () => {
+    authState.user = null;
+    authState.identityUserId = 'guest-1';
+    activeGenerationState.count = 2;
+    const { tree } = renderHome();
+    const header = renderHeader(tree);
+
+    const rail = header.root.find((node) => String(node.type) === 'flash-list' && node.props.horizontal === true);
+    const workspace = (rail.props.data as Array<{ slide: { kind: string } }>).findIndex((item) => item.slide.kind === 'workspace');
+    expect(workspace).toBeGreaterThanOrEqual(0);
+    let slide: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      slide = renderer.create(rail.props.renderItem({ item: rail.props.data[workspace], index: workspace }) as React.ReactElement);
+    });
+    expect(slide!.root.findAllByProps({ children: '2 renders in progress' }).length).toBeGreaterThan(0);
+    press(slide!, 'Open your creations');
+
+    expect(routerState.push).toHaveBeenCalledWith({ pathname: '/profile', params: { tab: 'Creations' } });
+
+    renderer.act(() => slide!.unmount());
+    renderer.act(() => header.unmount());
     renderer.act(() => tree.unmount());
   });
 });

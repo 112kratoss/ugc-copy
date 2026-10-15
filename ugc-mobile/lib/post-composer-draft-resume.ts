@@ -82,6 +82,30 @@ export async function clearPersistedPostComposerDraft(storageId: string) {
   }
 }
 
+/**
+ * Removes every composer draft one account kept, new posts and edits alike,
+ * for an account that is deleted (audit 04-7). Entries are keyed
+ * `<userId>:<target>`, and the drafts of anyone else on the phone stay. Never
+ * rejects: a deletion must not fail over a draft.
+ */
+export async function clearComposerDraftsForUser(userId: string) {
+  try {
+    const raw = await AsyncStorage.getItem(POST_COMPOSER_DRAFT_STORAGE_KEY);
+    if (!raw) return;
+    const entries = JSON.parse(raw) as PersistedPostComposerDraftMap;
+    const owned = Object.keys(entries).filter((storageId) => storageId.startsWith(`${userId}:`));
+    if (owned.length === 0) return;
+    for (const storageId of owned) delete entries[storageId];
+    if (Object.keys(entries).length === 0) {
+      await AsyncStorage.removeItem(POST_COMPOSER_DRAFT_STORAGE_KEY);
+      return;
+    }
+    await AsyncStorage.setItem(POST_COMPOSER_DRAFT_STORAGE_KEY, JSON.stringify(entries));
+  } catch (error) {
+    console.warn('Could not clear the post drafts of an account that left', error);
+  }
+}
+
 export function isPostComposerDraftMeaningful(draft: PostComposerDraft) {
   const hasAttribution = draft.madeWithRows.some((row) => (
     Boolean(row.modelLabel.trim())

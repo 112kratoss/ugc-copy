@@ -104,6 +104,22 @@ export async function clearPendingGenerationAttempt(
 }
 
 /**
+ * Forgets an account's unconfirmed generation, request body and all, when the
+ * account is deleted (audit 04-7). Unlike {@link clearPendingGenerationAttempt},
+ * never rejects: a deletion must not fail over a saved request.
+ */
+export async function clearGenerationAttemptForUser(
+  userId: string,
+  { storage = AsyncStorage }: { storage?: AttemptStorage } = {},
+) {
+  try {
+    await clearPendingGenerationAttempt(userId, { storage });
+  } catch (error) {
+    console.warn('Could not clear the saved generation of an account that left', error);
+  }
+}
+
+/**
  * The codes a start route answers a refusal with, whatever its status: the server
  * started nothing, or settled what it started and returned the credits, so replaying
  * the key cannot find a run. `submission_pending` is a public code too, and is not

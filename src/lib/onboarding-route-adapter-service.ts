@@ -213,6 +213,7 @@ async function loadWelcomeCreditStatus(
     // next step is "create an account" and the status has to say so. Kept behind
     // the program-enabled branch so a disabled program still reads `unavailable`
     // for everyone.
+    // The proxy refuses a guest's token here first; this serves direct calls (tests).
     status = 'requires_account';
   } else if (new Date(user.created_at).getTime() < new Date(typedProgram.activated_at).getTime()) {
     status = 'legacy_ineligible';
@@ -411,6 +412,7 @@ export async function postWelcomeCreditsClaimRouteResponse({
     // free and unlimited — any credit it can claim is a faucet. The RPC refuses
     // this too (20260811120000); rejecting here keeps a scripted attempt off the
     // rate limiter and the service-role client entirely.
+    // The proxy refuses a guest's token here first; this serves direct calls (tests).
     if (user.is_anonymous === true) {
       return privateJson(
         request,

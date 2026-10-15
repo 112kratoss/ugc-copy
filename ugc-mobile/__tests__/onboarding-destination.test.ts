@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isIdentityDeferredInMetadata,
   isOnboardingActionable,
   resolveOnboardingDestination,
 } from '../lib/onboarding-destination';
@@ -59,6 +60,34 @@ describe('resolving the onboarding destination', () => {
       welcome: { status: 'not_eligible', identityComplete: false },
       local: { identityDeferredAt: '2026-08-28T07:00:00.000Z', status: 'not_started' as const },
     })).toBe('none');
+  });
+
+  it('honours "set up later" chosen for the account on the web or another device (02-11)', () => {
+    // The web keeps the choice in user_metadata; the phone used to show
+    // "Finish your creator setup" to a creator who had chosen it there.
+    expect(resolveOnboardingDestination({
+      hasUser: true,
+      welcome: { status: 'not_eligible', identityComplete: false },
+      local: noDeferral,
+      identityDeferredOnAccount: true,
+    })).toBe('none');
+    // It defers the handle only: a claimable pack is still offered.
+    expect(resolveOnboardingDestination({
+      hasUser: true,
+      welcome: { status: 'eligible', identityComplete: true },
+      local: noDeferral,
+      identityDeferredOnAccount: true,
+    })).toBe('reward');
+  });
+
+  it("reads the account's record the way the web does", () => {
+    expect(isIdentityDeferredInMetadata({ creator_profile_onboarding_skipped_version: 1 })).toBe(true);
+    expect(isIdentityDeferredInMetadata({ creator_profile_onboarding_skipped_version: 2 })).toBe(true);
+    expect(isIdentityDeferredInMetadata({ creator_profile_onboarding_skipped_version: '1' })).toBe(false);
+    expect(isIdentityDeferredInMetadata({ creator_profile_onboarding_skipped_version: 0 })).toBe(false);
+    expect(isIdentityDeferredInMetadata({})).toBe(false);
+    expect(isIdentityDeferredInMetadata(null)).toBe(false);
+    expect(isIdentityDeferredInMetadata([1])).toBe(false);
   });
 
   it('offers the pack only while it is claimable', () => {

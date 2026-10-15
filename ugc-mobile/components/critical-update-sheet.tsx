@@ -14,8 +14,9 @@ import { useAppTheme } from '@/lib/theme-context';
  * Routine updates are silent by design — a copy fix should simply be correct
  * the next time the app opens, and announcing it invites people to go looking
  * for a change they would not otherwise notice. This sheet is reserved for an
- * update published with `extra.critical`, meaning something is actively hurting
- * users and waiting for their next cold start is too slow.
+ * update flagged critical — by the server's `criticalUpdate` or the manifest's
+ * `extra.critical` — meaning something is actively hurting users and waiting
+ * for their next cold start is too slow.
  *
  * It cannot appear mid-work: the activity lock vetoes the decision before this
  * ever renders (lib/app-update-policy). So by the time someone sees it they are
@@ -76,9 +77,11 @@ export function CriticalUpdateSheet({
             </Text>
             {/* Says what restarting costs, because that is the only thing the
                 person actually needs to decide. No version number, no changelog
-                — neither helps them answer the question being asked. */}
+                — neither helps them answer the question being asked. A reload
+                starts the app over and nothing restores the screen they were
+                on, so it says Home (audit 04-9). */}
             <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
-              Restarting takes a moment and you will come back to where you are now.
+              Restarting takes a moment, and the app opens on Home.
             </Text>
           </View>
           <View

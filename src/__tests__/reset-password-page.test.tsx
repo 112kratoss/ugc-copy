@@ -115,8 +115,41 @@ describe('ResetPasswordPage', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /update password/i }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/network unavailable/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not update your password. Check your connection and try again.',
+    );
+    expect(screen.queryByText(/network unavailable/i)).toBeNull();
     expect(passwordInput).toHaveFocus();
     expect(screen.getByRole('button', { name: /update password/i })).toBeEnabled();
+  });
+
+  // Audit 01-9: the page printed Supabase's message as it came.
+  it.each([
+    [
+      'New password should be different from the old password.',
+      'Choose a password different from your current one.',
+    ],
+    [
+      'Password update requires reauthentication.',
+      'Could not update your password. Check your connection and try again.',
+    ],
+    [
+      'Failed to fetch',
+      'Could not reach the sign-in service. Check your connection and try again.',
+    ],
+  ])('says "%s" in the site\'s words', async (raw, shown) => {
+    mocks.updateUser.mockResolvedValue({ error: Object.assign(new Error(raw), { name: 'AuthApiError', status: 422 }) });
+    render(<ResetPasswordPage />);
+
+    const passwordInput = await screen.findByLabelText(/new password/i);
+    fireEvent.change(passwordInput, { target: { value: 'Strong-password1!' } });
+    fireEvent.change(screen.getByLabelText(/confirm password/i), {
+      target: { value: 'Strong-password1!' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /update password/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(shown);
+    if (raw !== shown) expect(screen.queryByText(raw)).toBeNull();
+    expect(mocks.replace).not.toHaveBeenCalled();
   });
 });

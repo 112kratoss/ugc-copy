@@ -15,9 +15,13 @@ const mocks = vi.hoisted(() => ({
   showMessageDialog: vi.fn(),
   auth: {
     user: { id: 'viewer-1' } as { id: string } | null,
+    // A guest holds an identity and no account: `user` stays null for it.
+    isGuest: false,
+    identityUserId: 'viewer-1' as string | null,
     api: {
       reportPost: vi.fn(),
       reportUser: vi.fn(),
+      reportGeneration: vi.fn(),
       blockUser: vi.fn(),
       saveShowcasePost: vi.fn(),
       archiveGeneration: vi.fn(),
@@ -142,6 +146,8 @@ function pickReason(label: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.auth.user = { id: 'viewer-1' };
+  mocks.auth.isGuest = false;
+  mocks.auth.identityUserId = 'viewer-1';
 });
 
 afterEach(() => {
@@ -558,5 +564,139 @@ describe("a template output's Open run", () => {
     })).handleAction('open-run');
 
     expect(mocks.router.push).toHaveBeenCalledWith('/template-runs/run%207');
+  });
+});
+
+/** A guest, as `useAuth` reports one: an identity, and no account. */
+function asGuest(identityUserId = 'guest-1') {
+  mocks.auth.user = null;
+  mocks.auth.isGuest = true;
+  mocks.auth.identityUserId = identityUserId;
+}
+
+// 02-9: `/api/showcase/save` is an account's. The post page's ⋮ Save sent a
+// guest's save straight to the server, which refused it, and the guest read
+// "Could not update media".
+describe('Save from the menu, without an account', () => {
+  it('asks a guest to sign in, back to the screen the item is on, and saves nothing', () => {
+    asGuest();
+    const onSave = vi.fn();
+    const handlers = mountHandlers(postItem(), { onSave, authReturnTo: '/post/post-1' });
+
+    handlers.handleAction('save');
+    handlers.handleAction('unsave');
+
+    const signIn = { pathname: '/auth', params: { returnTo: '/post/post-1' } };
+    expect(mocks.router.push.mock.calls).toEqual([[signIn], [signIn]]);
+    expect(onSave).not.toHaveBeenCalled();
+    expect(mocks.auth.api.saveShowcasePost).not.toHaveBeenCalled();
+    expect(refreshViewerMediaCaches).not.toHaveBeenCalled();
+  });
+
+  it('asks a reader with no identity at all the same, where the screen has no Save of its own', () => {
+    mocks.auth.user = null;
+    mocks.auth.identityUserId = null;
+    mountHandlers(postItem()).handleAction('save');
+
+    expect(mocks.router.push).toHaveBeenCalledWith('/auth');
+    expect(mocks.auth.api.saveShowcasePost).not.toHaveBeenCalled();
+  });
+});
+
+describe('Report AI output', () => {
+  it("files an account's report after asking, and says it was received", async () => {
+    mocks.showConfirmDialog.mockResolvedValue(true);
+    mocks.auth.api.reportGeneration.mockResolvedValueOnce({ success: true });
+    mountHandlers(creationItem()).handleAction('report-ai-output');
+
+    await vi.waitFor(() => expect(mocks.showMessageDialog).toHaveBeenCalledWith({
+      title: 'Report received',
+      message: 'Thank you. The generated output was sent to the safety team.',
+    }));
+    expect(mocks.showConfirmDialog).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Report offensive AI output?',
+      confirmLabel: 'Report AI output',
+      destructive: true,
+    }));
+    expect(mocks.auth.api.reportGeneration).toHaveBeenCalledWith('gen-1', {
+      reason: 'offensive_ai_output',
+      sourceSurface: 'generation-viewer',
+      details: 'Reported from the mobile generated-media viewer.',
+    });
+    expect(haptic.success).toHaveBeenCalledTimes(1);
+    expect(mocks.router.push).not.toHaveBeenCalled();
+  });
+
+  // 02-2: the server takes a guest's report of its own generation, and no other.
+  it('lets a guest report its own creation without an account, and offers it the row', async () => {
+    asGuest();
+    mocks.showConfirmDialog.mockResolvedValue(true);
+    mocks.auth.api.reportGeneration.mockResolvedValueOnce({ success: true });
+    const handlers = mountHandlers(creationItem());
+
+    expect(handlers.actions).toContain('report-ai-output');
+    handlers.handleAction('report-ai-output');
+
+    await vi.waitFor(() => expect(mocks.auth.api.reportGeneration).toHaveBeenCalledWith('gen-1', {
+      reason: 'offensive_ai_output',
+      sourceSurface: 'generation-viewer',
+      details: 'Reported from the mobile generated-media viewer.',
+    }));
+    expect(mocks.router.push).not.toHaveBeenCalled();
+    expect(haptic.success).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends a guest to sign in for a generation that is not its own', () => {
+    asGuest();
+    // A post carries the id of the creation behind it, which is its creator's.
+    mountHandlers(postItem({ generationId: 'gen-9' }), { authReturnTo: '/post/post-1' })
+      .handleAction('report-ai-output');
+    // A creation whose item names someone else as its creator.
+    const other = mountHandlers(creationItem({ creatorId: 'creator-1' }));
+    expect(other.actions).not.toContain('report-ai-output');
+    other.handleAction('report-ai-output');
+
+    expect(mocks.router.push.mock.calls).toEqual([
+      [{ pathname: '/auth', params: { returnTo: '/post/post-1' } }],
+      ['/auth'],
+    ]);
+    expect(mocks.showConfirmDialog).not.toHaveBeenCalled();
+    expect(mocks.auth.api.reportGeneration).not.toHaveBeenCalled();
+  });
+
+  it('files nothing when the reader backs out of the confirmation', async () => {
+    asGuest();
+    mocks.showConfirmDialog.mockResolvedValue(false);
+    mountHandlers(creationItem()).handleAction('report-ai-output');
+
+    await vi.waitFor(() => expect(mocks.showConfirmDialog).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(mocks.auth.api.reportGeneration).not.toHaveBeenCalled();
+    expect(mocks.showMessageDialog).not.toHaveBeenCalled();
+  });
+
+  it("says the server's reason when it refuses the report", async () => {
+    mocks.showConfirmDialog.mockResolvedValue(true);
+    const refused = new Error('Create an account to use this feature.');
+    mocks.auth.api.reportGeneration.mockRejectedValueOnce(refused);
+    mountHandlers(creationItem()).handleAction('report-ai-output');
+
+    await vi.waitFor(() => expect(mocks.showErrorDialog).toHaveBeenCalledWith('Could not report AI output', refused));
+    expect(haptic.error).toHaveBeenCalledTimes(1);
+    expect(mocks.showMessageDialog).not.toHaveBeenCalled();
+  });
+});
+
+// 02-1: a guest's creations are its library, keyed by its identity, so what
+// it does to one of them reaches the pages its Profile grid shows.
+describe("a guest's own creations", () => {
+  it('leave the library its identity keys when deleted', async () => {
+    asGuest('guest-1');
+    mocks.showConfirmDialog.mockResolvedValue(true);
+    mocks.auth.api.deleteGeneration.mockResolvedValueOnce({ success: true, deleted: true, linkedPostRetained: false, message: '' });
+    mountHandlers(creationItem()).handleAction('delete-creation');
+
+    await vi.waitFor(() => expect(removeGenerationFromCaches).toHaveBeenCalledWith(mocks.queryClient, 'guest-1', 'gen-1'));
+    expect(mocks.router.push).not.toHaveBeenCalled();
   });
 });

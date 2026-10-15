@@ -23,7 +23,7 @@ import {
 import type { OwnerPostsResponse } from '@/lib/types';
 import { adjustProfileStats, invalidateProfileStats } from '@/lib/profile-stats';
 import { creatorFollowStateQueryKey } from '@/lib/use-creator-follow';
-import { getDeleteCreationConfirmation, getViewerSafetyActions } from '@/lib/viewer-actions';
+import { getDeleteCreationConfirmation, getViewerSafetyActions, isViewerOwnGeneration } from '@/lib/viewer-actions';
 import {
   applyGenerationArchiveToCaches,
   refreshViewerMediaCaches,
@@ -134,6 +134,47 @@ export async function changeGenerationArchive({
   return 'done';
 }
 
+/**
+ * Report a generated result to the safety team: asked first, then filed. The
+ * reel's ••• and the creator's result card both come through here, so a report
+ * from either reaches moderation the same way. `details` says where it was
+ * filed from; the server knows both places as the generation viewer.
+ */
+export async function reportGenerationOutput({
+  api,
+  generationId,
+  details,
+}: {
+  api: Pick<MagicbookletApiClient, 'reportGeneration'>;
+  generationId: string;
+  details: string;
+}): Promise<'reported' | 'cancelled' | 'failed'> {
+  const confirmed = await showConfirmDialog({
+    title: 'Report offensive AI output?',
+    message: 'Send this generated result to the safety team so the model and provider output can be reviewed.',
+    confirmLabel: 'Report AI output',
+    destructive: true,
+  });
+  if (!confirmed) return 'cancelled';
+  try {
+    await api.reportGeneration(generationId, {
+      reason: 'offensive_ai_output',
+      sourceSurface: 'generation-viewer',
+      details,
+    });
+  } catch (error) {
+    haptic.error();
+    showErrorDialog('Could not report AI output', error);
+    return 'failed';
+  }
+  haptic.success();
+  showMessageDialog({
+    title: 'Report received',
+    message: 'Thank you. The generated output was sent to the safety team.',
+  });
+  return 'reported';
+}
+
 export function useViewerActionHandlers({
   item,
   onClose,
@@ -151,17 +192,20 @@ export function useViewerActionHandlers({
   onSourceRefresh,
   authReturnTo,
 }: ViewerActionCallbacks & { item: ImmersivePreviewItem; onClose?: () => void }) {
-  const { api, user } = useAuth();
+  const { api, user, isGuest, identityUserId } = useAuth();
+  // Whose library and caches these are: a guest's own creations are its
+  // library too (02-1), keyed by its identity, as an account's are by its id.
+  const viewerId = user?.id ?? (isGuest ? identityUserId ?? undefined : undefined);
   const queryClient = useQueryClient();
   const actions = [
     ...item.availableActions,
     ...(onNotInterested ? ['not-interested'] : []),
     ...(onHideCreator ? ['hide-creator'] : []),
-    ...getViewerSafetyActions(item, user?.id),
+    ...getViewerSafetyActions(item, viewerId),
   ];
 
   const refreshMedia = async () => {
-    await refreshViewerMediaCaches(queryClient, user?.id);
+    await refreshViewerMediaCaches(queryClient, viewerId);
     onSourceRefresh();
   };
 
@@ -180,7 +224,7 @@ export function useViewerActionHandlers({
         ? { ...data, ownerPosts: data.ownerPosts.filter((post) => post.id !== postId) }
         : data;
 
-    queryClient.setQueryData<InfiniteData<OwnerPostsResponse>>(['profile-owner-posts', user?.id], removeFromOwnerPostPages);
+    queryClient.setQueryData<InfiniteData<OwnerPostsResponse>>(['profile-owner-posts', viewerId], removeFromOwnerPostPages);
     queryClient.setQueriesData<ImmersiveSourceData>({ queryKey: ['immersive-preview-source'] }, removeFromSource);
   };
 
@@ -196,7 +240,7 @@ export function useViewerActionHandlers({
     const outcome = await runDeletePost({ api, post: lifecyclePost });
     if (outcome !== 'done') return;
     removeDeletedPostFromCaches(item.id);
-    adjustProfileStats(queryClient, user?.id, item.archivedAt ? { archivedPosts: -1 } : { posts: -1 });
+    adjustProfileStats(queryClient, viewerId, item.archivedAt ? { archivedPosts: -1 } : { posts: -1 });
     await refreshMedia();
     onDeleted?.(item.id);
   };
@@ -215,9 +259,9 @@ export function useViewerActionHandlers({
     }
     haptic.success();
     onDeleted?.(item.id);
-    removeGenerationFromCaches(queryClient, user?.id, item.id);
-    if (countsAsCreation(item)) adjustProfileStats(queryClient, user?.id, { creations: -1 });
-    await invalidateProfileStats(queryClient, user?.id);
+    removeGenerationFromCaches(queryClient, viewerId, item.id);
+    if (countsAsCreation(item)) adjustProfileStats(queryClient, viewerId, { creations: -1 });
+    await invalidateProfileStats(queryClient, viewerId);
   };
 
   const updateVisibility = async (post: PostLifecyclePost, visibility: 'public' | 'unlisted' | 'private') => {
@@ -237,6 +281,10 @@ export function useViewerActionHandlers({
     };
 
     if (action === 'save' || action === 'unsave') {
+      // Saving is an account's (the server refuses a guest's save), so a guest
+      // is asked to sign in here, as Report asks, rather than sent to a refusal
+      // that read "Could not update media" (02-9).
+      if (!requireSignedIn()) return;
       if (onSave) {
         onSave(item);
         return;
@@ -263,24 +311,24 @@ export function useViewerActionHandlers({
       if (item.sourceType === 'owner-post') {
         void runArchivePost({ api, post: lifecyclePost }).then(async (outcome) => {
           if (outcome !== 'done') return;
-          adjustProfileStats(queryClient, user?.id, { posts: -1, archivedPosts: 1 });
+          adjustProfileStats(queryClient, viewerId, { posts: -1, archivedPosts: 1 });
           await refreshMedia();
         });
         return;
       }
-      void changeGenerationArchive({ api, queryClient, userId: user?.id, item, archive: true });
+      void changeGenerationArchive({ api, queryClient, userId: viewerId, item, archive: true });
       return;
     }
     if (action === 'restore') {
       if (item.sourceType === 'owner-post') {
         void runRestorePost({ api, post: lifecyclePost }).then(async (outcome) => {
           if (outcome !== 'done') return;
-          adjustProfileStats(queryClient, user?.id, { posts: 1, archivedPosts: -1 });
+          adjustProfileStats(queryClient, viewerId, { posts: 1, archivedPosts: -1 });
           await refreshMedia();
         });
         return;
       }
-      void changeGenerationArchive({ api, queryClient, userId: user?.id, item, archive: false });
+      void changeGenerationArchive({ api, queryClient, userId: viewerId, item, archive: false });
       return;
     }
     if (action === 'delete-post') {
@@ -470,36 +518,20 @@ export function useViewerActionHandlers({
         haptic.success();
         void AccessibilityInfo.announceForAccessibility(`${item.creatorLabel} blocked.`);
         await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] }),
-          invalidateProfileStats(queryClient, user?.id),
+          queryClient.invalidateQueries({ queryKey: ['profile-saved-media', viewerId] }),
+          invalidateProfileStats(queryClient, viewerId),
         ]);
       });
       return;
     }
     if (action === 'report-ai-output' && item.generationId) {
-      if (!requireSignedIn()) return;
-      void showConfirmDialog({
-        title: 'Report offensive AI output?',
-        message: 'Send this generated result to the safety team so the model and provider output can be reviewed.',
-        confirmLabel: 'Report AI output',
-        destructive: true,
-      }).then(async (confirmed) => {
-        if (!confirmed) return;
-        try {
-          await api.reportGeneration(item.generationId!, {
-            reason: 'offensive_ai_output',
-            sourceSurface: 'generation-viewer',
-            details: 'Reported from the mobile generated-media viewer.',
-          });
-          haptic.success();
-          showMessageDialog({
-            title: 'Report received',
-            message: 'Thank you. The generated output was sent to the safety team.',
-          });
-        } catch (error) {
-          haptic.error();
-          showErrorDialog('Could not report AI output', error);
-        }
+      // A guest may report what its own runs made, the one report the server
+      // takes from a guest (02-2); anything else still asks for an account.
+      if (!(isGuest && isViewerOwnGeneration(item, viewerId)) && !requireSignedIn()) return;
+      void reportGenerationOutput({
+        api,
+        generationId: item.generationId,
+        details: 'Reported from the mobile generated-media viewer.',
       });
       return;
     }

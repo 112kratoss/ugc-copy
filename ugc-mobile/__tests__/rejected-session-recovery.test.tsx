@@ -12,8 +12,10 @@ const state = vi.hoisted(() => ({
   clearLocalPush: vi.fn(),
   clearPersistedSession: vi.fn(),
   getSession: vi.fn(),
+  // What expo-router reports as the route on screen.
+  pathname: '/',
   probe: vi.fn(),
-  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), removeQueries: vi.fn() },
+  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), getQueryCache: () => ({ subscribe: () => () => undefined }), removeQueries: vi.fn() },
   refreshSession: vi.fn(),
   replace: vi.fn(),
   sessionResolve: null as null | ((result: unknown) => void),
@@ -34,6 +36,7 @@ vi.mock('expo-constants', () => ({
 // re-runs the provider's effects forever and hangs the suite.
 vi.mock('expo-router', () => ({
   router: { replace: state.replace },
+  usePathname: () => state.pathname,
 }));
 
 vi.mock('react-native', () => ({
@@ -66,9 +69,14 @@ vi.mock('../lib/feed-event-queue', () => ({
   restoreShowcaseFeedEvents: vi.fn(async () => undefined),
 }));
 vi.mock('../lib/guest-merge-ticket-storage', () => ({
-  readGuestMergeTicket: vi.fn(async () => null),
+  bindGuestMergeTicket: vi.fn(async () => undefined),
+  clearGuestMergeOutcome: vi.fn(async () => undefined),
+  forgetGuestMergeTicketsFor: vi.fn(async () => undefined),
+  readGuestMergeOutcome: vi.fn(async () => null),
+  readGuestMergeTickets: vi.fn(async () => []),
+  removeGuestMergeTicket: vi.fn(async () => undefined),
+  storeGuestMergeOutcome: vi.fn(async () => undefined),
   storeGuestMergeTicket: vi.fn(async () => undefined),
-  clearGuestMergeTicket: vi.fn(async () => undefined),
 }));
 vi.mock('../lib/generation-model-catalog', () => ({ GENERATION_MODEL_CATALOG_SCHEMA_VERSION: 1 }));
 vi.mock('../lib/persisted-account-state', () => ({
@@ -111,6 +119,13 @@ vi.mock('../lib/supabase', () => ({
 }));
 
 import { AuthProvider, useAuth } from '../lib/auth';
+
+/** Where a refused registered session is sent: the sign-in screen, with why and where it was. */
+function signedOutNotice(returnTo: string) {
+  return { pathname: '/auth', params: { notice: 'signed-out', returnTo } };
+}
+
+type RemoveQueriesFilter = { predicate: (query: { queryKey: readonly unknown[] }) => boolean };
 
 function sessionFor(user: Record<string, unknown>, accessToken = 'access-token') {
   return {
@@ -179,6 +194,8 @@ describe('recovering from a session ended elsewhere', () => {
     }));
     state.queryClient.fetchQuery.mockReset().mockResolvedValue({ credits: 0 });
     state.queryClient.clear.mockReset();
+    state.queryClient.removeQueries.mockReset();
+    state.pathname = '/';
     state.clearPersistedSession.mockReset().mockResolvedValue(undefined);
     state.clearLocalPush.mockReset().mockResolvedValue(undefined);
     state.probe.mockReset();
@@ -272,7 +289,8 @@ describe('recovering from a session ended elsewhere', () => {
     expect(state.signOut).toHaveBeenCalledWith({ scope: 'local' });
     expect(state.clearPersistedSession).toHaveBeenCalledOnce();
     expect(state.clearLocalPush).toHaveBeenCalledOnce();
-    expect(state.replace).toHaveBeenCalledWith('/auth?notice=signed-out');
+    // It was on Home ('/'), and comes back there.
+    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/'));
     expect(latest.current?.user).toBeNull();
     // Public browsing keeps working on a fresh guest while they decide.
     expect(state.signInAnonymously).toHaveBeenCalled();
@@ -346,7 +364,52 @@ describe('recovering from a session ended elsewhere', () => {
     await recover(latest);
 
     expect(state.clearPersistedSession).toHaveBeenCalledOnce();
-    expect(state.replace).toHaveBeenCalledWith('/auth?notice=signed-out');
+    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/'));
+
+    unmount();
+  });
+
+  // The same teardown as a sign-out (audit 04-6): creator pages and follow
+  // buttons are cached without the viewer in their key, and the guest that
+  // follows saw the last account's Following state and owner controls.
+  it('forgets the creator pages and follow states, and starts a guest, as a sign-out does', async () => {
+    const { latest, unmount } = await mountWith(registeredSession);
+    state.probe.mockResolvedValue('ended');
+
+    await recover(latest);
+
+    expect(state.queryClient.removeQueries).toHaveBeenCalledOnce();
+    const [{ predicate }] = state.queryClient.removeQueries.mock.calls[0] as [RemoveQueriesFilter];
+    expect(predicate({ queryKey: ['creator-profile', 'infinite', 'luna'] })).toBe(true);
+    expect(predicate({ queryKey: ['creator-follow-state', 'creator-7'] })).toBe(true);
+    expect(predicate({ queryKey: ['profile', 'user-1'] })).toBe(false);
+    expect(state.signInAnonymously).toHaveBeenCalledOnce();
+    expect(latest.current?.identityUserId).toBe('guest-2');
+
+    unmount();
+  });
+
+  // Audit 01-12: signed in again, the person is back where they were.
+  it('sends the person back, once signed in again, to the route they were on', async () => {
+    state.pathname = '/post/post-9';
+    const { latest, unmount } = await mountWith(registeredSession);
+    state.probe.mockResolvedValue('ended');
+
+    await recover(latest);
+
+    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/post/post-9'));
+
+    unmount();
+  });
+
+  it('falls back to Home when the route on screen is the sign-in screen itself', async () => {
+    state.pathname = '/auth';
+    const { latest, unmount } = await mountWith(registeredSession);
+    state.probe.mockResolvedValue('ended');
+
+    await recover(latest);
+
+    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/(tabs)'));
 
     unmount();
   });

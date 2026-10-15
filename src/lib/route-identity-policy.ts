@@ -281,6 +281,37 @@ export const GUEST_READABLE_REGISTERED_ROUTES = [
   '/api/showcase/posts/[postId]/comments',
 ] as const;
 
+/**
+ * Registered-only paths whose listed write a guest may make.
+ *
+ * The share counters and the onboarding events were written for a caller who
+ * may be no one: a signed-out web visitor's share is counted, and the intro
+ * logs a device before it has an account. A guest's app sends its token with
+ * every request, so asking the path's question of those writes refused the
+ * app guest what a visitor with no token is served: its shares never reached
+ * the counts, and every intro event after the guest session started was
+ * dropped, which left the onboarding funnel without its top.
+ *
+ * A guest's report is narrower. A guest may flag a generation its own credits
+ * made (the store asks for in-app reporting of AI output, and a guest creates);
+ * the moderation adapter admits that one and answers every other guest report
+ * 403 REGISTRATION_REQUIRED itself.
+ *
+ * A request whose method and path are listed here is answered as `guest`: a
+ * token that is sent must still have a live identity behind it. Every other
+ * method keeps the path's policy.
+ *
+ * List a write only when its handler takes a guest as its caller, and never
+ * answers one 401: the app reads a 401 as a session that has ended.
+ * `route-identity-policy.test.ts` sends each listed write as a guest.
+ */
+export const GUEST_WRITABLE_REGISTERED_ROUTES = [
+  { method: 'POST', route: '/api/onboarding/events' },
+  { method: 'POST', route: '/api/showcase/share' },
+  { method: 'POST', route: '/api/profile/share' },
+  { method: 'POST', route: '/api/moderation/reports' },
+] as const;
+
 export const ROUTE_IDENTITY_POLICY: Readonly<Record<string, RouteIdentityPolicy>> =
   Object.freeze({
     ...Object.fromEntries(GUEST_ROUTES.map((route) => [route, 'guest' as const])),
@@ -317,14 +348,19 @@ export function routeIdentityPolicyForPathname(pathname: string): RouteIdentityP
 
 /**
  * The policy one request is admitted under: its path's own, except the read of
- * a path in `GUEST_READABLE_REGISTERED_ROUTES`. Admission asks this, not the
- * path alone.
+ * a path in `GUEST_READABLE_REGISTERED_ROUTES` and a write listed in
+ * `GUEST_WRITABLE_REGISTERED_ROUTES`. Admission asks this, not the path alone.
  */
 export function routeIdentityPolicyForRequest(pathname: string, method: string): RouteIdentityPolicy | null {
   const policy = routeIdentityPolicyForPathname(pathname);
   if (policy !== 'registered') return policy;
 
   const verb = method.toUpperCase();
+  if (GUEST_WRITABLE_REGISTERED_ROUTES.some((write) => (
+    write.method === verb && routeSegmentsMatch(write.route, pathname)
+  ))) {
+    return 'guest';
+  }
   if (verb !== 'GET' && verb !== 'HEAD') return policy;
 
   return GUEST_READABLE_REGISTERED_ROUTES.some((template) => routeSegmentsMatch(template, pathname))

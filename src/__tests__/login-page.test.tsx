@@ -127,6 +127,18 @@ describe('LoginPage onboarding redirects', () => {
     expect(mocks.refresh).toHaveBeenCalled();
   });
 
+  // A visitor already signed in is sent on through /auth/continue, flagged so
+  // that it is not counted as a new sign-in there.
+  it('sends a visitor who is already signed in on, flagged as no new sign-in', async () => {
+    mocks.searchParams = new URLSearchParams('returnUrl=/create');
+    mocks.getSession.mockResolvedValue({ data: { session: { access_token: 'token' } } });
+    renderLogin();
+
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith('/auth/continue?next=%2Fcreate&signedIn=1'));
+    expect(mocks.refresh).toHaveBeenCalled();
+    expect(mocks.signInWithPassword).not.toHaveBeenCalled();
+  });
+
   it('sends password recovery back through the authenticated reset page', async () => {
     renderLogin();
 
@@ -203,23 +215,69 @@ describe('LoginPage onboarding redirects', () => {
     expect(redirectTo.searchParams.get('next')).toBe('/create');
   });
 
-  // Web sign-up had no agreement line, and never said where prompts go.
-  it('puts the terms and the AI-processing sentence under the sign-up button', () => {
-    renderLogin();
-    expect(screen.queryByText(/By continuing you agree to the/)).toBeNull();
+  const AGREEMENT = 'By continuing you agree to the Terms and the Privacy Policy. Prompts and media you generate are processed by the AI providers listed in the policy.';
 
-    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
-
-    const agreement = screen.getByText(/By continuing you agree to the/);
-    expect(agreement).toHaveTextContent(
-      'By continuing you agree to the Terms and the Privacy Policy. Prompts and media you generate are processed by the AI providers listed in the policy.',
-    );
+  function expectAgreementLinks(agreement: HTMLElement) {
+    expect(agreement).toHaveTextContent(AGREEMENT);
     expect(within(agreement).getByRole('link', { name: 'Terms' })).toHaveAttribute('href', '/terms');
     expect(within(agreement).getByRole('link', { name: 'Privacy Policy' })).toHaveAttribute('href', '/privacy');
     expect(within(agreement).getByRole('link', { name: 'listed in the policy' })).toHaveAttribute('href', '/privacy#ai-processing');
-    expect(screen.getByRole('button', { name: /^create account$/i })).toHaveAccessibleDescription(
-      expect.stringContaining('By continuing you agree to the Terms and the Privacy Policy.'),
-    );
+  }
+
+  // Web sign-up had no agreement line, and never said where prompts go.
+  it('puts the terms and the AI-processing sentence under the sign-up button', () => {
+    renderLogin();
+    expect(screen.queryByRole('button', { name: /^create account$/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
+
+    const [signUpAgreement] = screen.getAllByText(/By continuing you agree to the/);
+    expect(signUpAgreement).toHaveAttribute('id', 'signup-agreement');
+    expectAgreementLinks(signUpAgreement);
+    expect(screen.getByRole('button', { name: /^create account$/i })).toHaveAccessibleDescription(AGREEMENT);
+  });
+
+  // Audit 01-6: Google creates accounts from the Sign-in tab too, where no
+  // agreement line was shown, so most new web accounts never saw one.
+  it('puts the terms and the AI-processing sentence under the Google button in both tabs', () => {
+    renderLogin();
+
+    const signInAgreements = screen.getAllByText(/By continuing you agree to the/);
+    expect(signInAgreements).toHaveLength(1);
+    expectAgreementLinks(signInAgreements[0]);
+    expect(screen.getByRole('button', { name: /continue with google/i })).toHaveAccessibleDescription(AGREEMENT);
+
+    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
+
+    const signUpAgreements = screen.getAllByText(/By continuing you agree to the/);
+    expect(signUpAgreements).toHaveLength(2);
+    expectAgreementLinks(signUpAgreements[1]);
+    expect(screen.getByRole('button', { name: /continue with google/i })).toHaveAccessibleDescription(AGREEMENT);
+  });
+
+  // Audit 01-9: the sign-up hook's refusal names Apple, which the web lacks,
+  // and anything unrecognised printed Supabase's own text.
+  it('words a refused email sign-up for this site and never prints Supabase text', async () => {
+    renderLogin();
+    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
+    fillAuthForm();
+    mocks.signUp.mockResolvedValueOnce({
+      data: { session: null },
+      error: new Error('Email sign-up is temporarily unavailable. Continue with Google or Apple.'),
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^create account$/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Email sign-up is temporarily unavailable. Continue with Google.');
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/apple/i);
+
+    mocks.signUp.mockResolvedValueOnce({
+      data: { session: null },
+      error: new Error('Error sending confirmation email'),
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^create account$/i }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not create the account. Try again.'));
+    expect(screen.queryByText(/confirmation email/i)).toBeNull();
   });
 
   it('does not advertise Apple while the provider is unavailable', () => {

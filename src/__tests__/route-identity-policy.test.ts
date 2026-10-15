@@ -1,10 +1,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { describe, expect, it, vi } from 'vitest';
 
 import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
-import { GUEST_READABLE_REGISTERED_ROUTES, ROUTE_IDENTITY_POLICY, routeIdentityPolicy } from '@/lib/route-identity-policy';
+import { postModerationReportRouteResponse } from '@/lib/moderation-route-adapter-service';
+import { postOnboardingEventRouteResponse } from '@/lib/onboarding-route-adapter-service';
+import { postProfileShareRouteResponse } from '@/lib/profile-share-route-adapter-service';
+import {
+  GUEST_READABLE_REGISTERED_ROUTES,
+  GUEST_WRITABLE_REGISTERED_ROUTES,
+  ROUTE_IDENTITY_POLICY,
+  routeIdentityPolicy,
+} from '@/lib/route-identity-policy';
+import { postShowcaseShareRouteResponse } from '@/lib/showcase-share-route-adapter-service';
 
 function listApiRoutes(dir: string, base = ''): string[] {
   const routes: string[] = [];
@@ -20,6 +30,136 @@ function listApiRoutes(dir: string, base = ''): string[] {
 }
 
 const routes = listApiRoutes(path.resolve(process.cwd(), 'src/app/api')).sort();
+
+const GUEST_ID = '0a0a0a0a-0000-4000-8000-00000000000a';
+
+type Caller = { id: string; is_anonymous: true } | null;
+
+function callerClient(caller: Caller) {
+  return () => ({
+    auth: { getUser: vi.fn(async () => ({ data: { user: caller }, error: null })) },
+  }) as unknown as SupabaseClient;
+}
+
+function postJson(route: string, body: Record<string, unknown>) {
+  return new Request(`http://localhost${route}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+const allowedRateLimit = {
+  data: { allowed: true, limit: 300, remaining: 299, retryAfterSeconds: 0, resetAt: '2026-10-15T06:10:00.000Z' },
+  error: null,
+};
+
+function rateLimitedServiceClient() {
+  return { rpc: vi.fn(async () => allowedRateLimit) } as unknown as SupabaseClient;
+}
+
+/**
+ * Each write in GUEST_WRITABLE_REGISTERED_ROUTES, sent through the handler its
+ * route hands the request to. `recordedFor` is the identity the write was
+ * recorded under (undefined when nothing was recorded).
+ */
+const GUEST_WRITES: Record<string, {
+  handler: string;
+  /** Whether the handler also serves a request that carries no token at all. */
+  servesNoToken: boolean;
+  send: (caller: Caller) => Promise<{ status: number; recordedFor: string | null | undefined }>;
+}> = {
+  'POST /api/onboarding/events': {
+    handler: 'postOnboardingEventRouteResponse',
+    servesNoToken: true,
+    async send(caller) {
+      const rows: Array<Record<string, unknown>> = [];
+      const admin = {
+        rpc: vi.fn(async () => allowedRateLimit),
+        from: vi.fn(() => ({
+          upsert: vi.fn(async (row: Record<string, unknown>) => {
+            rows.push(row);
+            return { error: null };
+          }),
+        })),
+      } as unknown as SupabaseClient;
+      const response = await postOnboardingEventRouteResponse({
+        request: postJson('/api/onboarding/events', {
+          clientEventId: '3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b',
+          installationId: `fid_${'a'.repeat(64)}`,
+          eventName: 'started',
+          platform: 'android',
+        }),
+        dependencies: { createServiceClient: () => admin, createUserClient: callerClient(caller) },
+      });
+      return { status: response.status, recordedFor: rows[0]?.user_id as string | null | undefined };
+    },
+  },
+  'POST /api/showcase/share': {
+    handler: 'postShowcaseShareRouteResponse',
+    servesNoToken: true,
+    async send(caller) {
+      let recordedFor: string | null | undefined;
+      const response = await postShowcaseShareRouteResponse({
+        request: postJson('/api/showcase/share', { postId: 'post-1', sourceSurface: 'showcase', channel: 'copy-link' }),
+        dependencies: {
+          createServiceClient: rateLimitedServiceClient,
+          createUserClient: callerClient(caller),
+          runAfterResponse: vi.fn(),
+          shareShowcasePostForRoute: vi.fn(async ({ actorUserId }: { actorUserId: string | null }) => {
+            recordedFor = actorUserId;
+            return { ok: true as const, body: { success: true as const } };
+          }),
+        },
+      });
+      return { status: response.status, recordedFor };
+    },
+  },
+  'POST /api/profile/share': {
+    handler: 'postProfileShareRouteResponse',
+    servesNoToken: true,
+    async send(caller) {
+      let recordedFor: string | null | undefined;
+      const response = await postProfileShareRouteResponse({
+        request: postJson('/api/profile/share', { username: 'nova', sourceSurface: 'creator-profile', channel: 'copy-link' }),
+        dependencies: {
+          createServiceClient: rateLimitedServiceClient,
+          createUserClient: callerClient(caller),
+          shareCreatorProfileForRoute: vi.fn(async ({ actorUserId }: { actorUserId: string | null }) => {
+            recordedFor = actorUserId;
+            return { ok: true as const, body: { success: true as const } };
+          }),
+        },
+      });
+      return { status: response.status, recordedFor };
+    },
+  },
+  'POST /api/moderation/reports': {
+    handler: 'postModerationReportRouteResponse',
+    // A report is filed by someone who owns the generation it flags.
+    servesNoToken: false,
+    async send(caller) {
+      let recordedFor: string | null | undefined;
+      const response = await postModerationReportRouteResponse({
+        request: postJson('/api/moderation/reports', {
+          targetType: 'generation',
+          targetId: '3c3c3c3c-0000-4000-8000-00000000000c',
+          reason: 'offensive_ai_output',
+          sourceSurface: 'generation-viewer',
+        }),
+        dependencies: {
+          createServiceClient: vi.fn(),
+          createUserClient: callerClient(caller),
+          submitModerationReportForRoute: vi.fn(async ({ reporterUserId }: { reporterUserId: string }) => {
+            recordedFor = reporterUserId;
+            return { ok: true as const, body: { success: true as const } };
+          }),
+        },
+      });
+      return { status: response.status, recordedFor };
+    },
+  },
+};
 
 describe('route identity policy', () => {
   it('finds the API surface it is meant to be covering', () => {
@@ -110,6 +250,41 @@ describe('route identity policy', () => {
     expect(read).not.toContain('requireViewerUserId');
     expect(write).toContain('await requireViewerUserId(request, dependencies)');
     expect(remove).toContain('await requireViewerUserId(request, dependencies)');
+  });
+
+  // A write listed there reaches its route with a guest's token. That is only
+  // right for a registered path whose route takes that method.
+  it('lists as guest-writable, by method, registered paths whose route takes that method', () => {
+    expect(GUEST_WRITABLE_REGISTERED_ROUTES.map(({ method, route }) => `${method} ${route}`)).toEqual([
+      'POST /api/onboarding/events',
+      'POST /api/showcase/share',
+      'POST /api/profile/share',
+      'POST /api/moderation/reports',
+    ]);
+
+    for (const { method, route } of GUEST_WRITABLE_REGISTERED_ROUTES) {
+      expect(routeIdentityPolicy(route), route).toBe('registered');
+      const source = fs.readFileSync(path.resolve(process.cwd(), `src/app${route}/route.ts`), 'utf8');
+      expect(source, route).toMatch(new RegExp(`export (?:async )?function ${method}\\b`));
+      expect(source, route).toContain(GUEST_WRITES[`${method} ${route}`]?.handler ?? 'no handler listed');
+    }
+  });
+
+  // The proxy admits these writes on the handler's word that it takes a
+  // guest. A handler that answered one 401 would read in the app as a session
+  // that has ended, and the guest would be signed out over a share.
+  it('has every guest-writable handler take a guest as its caller', async () => {
+    expect(Object.keys(GUEST_WRITES).sort()).toEqual(
+      GUEST_WRITABLE_REGISTERED_ROUTES.map(({ method, route }) => `${method} ${route}`).sort(),
+    );
+
+    for (const [write, { send, servesNoToken }] of Object.entries(GUEST_WRITES)) {
+      await expect(send({ id: GUEST_ID, is_anonymous: true }), write)
+        .resolves.toEqual({ status: 200, recordedFor: GUEST_ID });
+      await expect(send(null), write).resolves.toEqual(servesNoToken
+        ? { status: 200, recordedFor: null }
+        : { status: 401, recordedFor: undefined });
+    }
   });
 
   it('covers every route the mobile app actually calls', () => {

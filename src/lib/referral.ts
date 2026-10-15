@@ -116,6 +116,67 @@ export function readReferralVisitCookie(cookieHeader: string | null): string | n
   return null;
 }
 
+/** The query parameter that carries a sign-up's invite claim to the welcome-reward page. */
+export const REFERRAL_CLAIM_STATUS_PARAM = 'referral';
+
+const REFERRAL_PATH_BASE = 'https://magicbooklet.local';
+const WELCOME_REWARD_PATH = '/welcome-reward';
+const PROFILE_SETUP_PATH = '/profile';
+const REFERRAL_CLAIM_REASON_PATTERN = /^[a-z_]{1,64}$/;
+
+/**
+ * What a post-auth redirect tells the new account about the invite it opened:
+ * "applied", or the reason `claim_referral_visit` refused it
+ * (`existing_account`, `self_referral`, `already_attributed`,
+ * `visit_unavailable`). Null while the claim has not concluded: a profile that
+ * is not there yet keeps the cookie for the next sign-in, so there is nothing
+ * to say.
+ */
+export function referralClaimStatus(outcome: {
+  claimed: boolean;
+  clearCookie: boolean;
+  reason?: string;
+}): string | null {
+  if (outcome.claimed) return 'applied';
+  if (!outcome.clearCookie) return null;
+  return outcome.reason && REFERRAL_CLAIM_REASON_PATTERN.test(outcome.reason)
+    ? outcome.reason
+    : 'not_applied';
+}
+
+/**
+ * Puts the claim status on the welcome-reward page a post-auth destination
+ * leads to, the one page that greets a new account. A new account sets up its
+ * profile first, so that page is usually the `next` of `/profile`; any other
+ * destination drops the status rather than carry it somewhere that cannot
+ * show it.
+ */
+export function withReferralClaimStatus(destination: string, status: string | null): string {
+  if (!status) return destination;
+
+  try {
+    const url = new URL(destination, REFERRAL_PATH_BASE);
+    if (url.origin !== REFERRAL_PATH_BASE) return destination;
+    if (url.pathname === WELCOME_REWARD_PATH) {
+      url.searchParams.set(REFERRAL_CLAIM_STATUS_PARAM, status);
+      return `${url.pathname}${url.search}${url.hash}`;
+    }
+    if (url.pathname !== PROFILE_SETUP_PATH) return destination;
+
+    const nested = url.searchParams.get('next');
+    if (!nested || !nested.startsWith('/') || nested.startsWith('//')) return destination;
+    const nestedUrl = new URL(nested, REFERRAL_PATH_BASE);
+    if (nestedUrl.origin !== REFERRAL_PATH_BASE || nestedUrl.pathname !== WELCOME_REWARD_PATH) {
+      return destination;
+    }
+    nestedUrl.searchParams.set(REFERRAL_CLAIM_STATUS_PARAM, status);
+    url.searchParams.set('next', `${nestedUrl.pathname}${nestedUrl.search}`);
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return destination;
+  }
+}
+
 let hasWarnedAboutAttributionSecretFallback = false;
 
 /**

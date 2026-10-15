@@ -23,6 +23,60 @@ export const MOBILE_CLIENT_COMPATIBILITY_POLICY = {
   unversionedClientsUseApiVersion: 1,
 } as const;
 
+/**
+ * The server's critical-update lever, served on `/api/app-version`. An OTA
+ * published for one of `runtimeVersions` at or after `publishedAfter` is
+ * critical: the app offers the restart as soon as it has downloaded it, instead
+ * of waiting for the next cold start or a long absence. The app sends neither
+ * its platform nor its runtime, so the list names every binary the fix was
+ * published to (Android and iOS run different runtimes) and each app looks for
+ * its own.
+ */
+export type MobileCriticalUpdate = {
+  runtimeVersions: string[];
+  publishedAfter: string;
+};
+
+export type MobileCriticalUpdateEnvironment = {
+  MOBILE_CRITICAL_UPDATE_RUNTIME?: string;
+  MOBILE_CRITICAL_UPDATE_AFTER?: string;
+};
+
+// A runtime version as expo-updates reports it: the fingerprint hash under the
+// app's fingerprint policy (ugc-mobile/ota-targets.json), a version string
+// under any other. Commas separate the entries; a space inside one is a paste
+// error.
+const RUNTIME_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
+// A time without an offset would be read in the server's own time zone.
+const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * Both variables or nothing: a missing or malformed value serves `null`, which
+ * leaves every update routine rather than flagging the wrong ones. The runtime
+ * variable is a comma-separated list: empty entries are dropped, one malformed
+ * entry voids the list, and a list left empty is missing.
+ */
+export function readMobileCriticalUpdate(
+  environment: MobileCriticalUpdateEnvironment,
+): MobileCriticalUpdate | null {
+  const runtimeVersions = (environment.MOBILE_CRITICAL_UPDATE_RUNTIME ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '');
+  const publishedAfter = environment.MOBILE_CRITICAL_UPDATE_AFTER?.trim() ?? '';
+  if (
+    runtimeVersions.length === 0
+    || !runtimeVersions.every((runtimeVersion) => RUNTIME_VERSION_PATTERN.test(runtimeVersion))
+    || !ISO_INSTANT_PATTERN.test(publishedAfter)
+  ) {
+    return null;
+  }
+
+  const publishedAfterMs = Date.parse(publishedAfter);
+  if (!Number.isFinite(publishedAfterMs)) return null;
+  return { runtimeVersions, publishedAfter: new Date(publishedAfterMs).toISOString() };
+}
+
 export type MobileCompatibilityErrorCode =
   | 'MOBILE_UPDATE_REQUIRED'
   | 'MOBILE_SERVER_UPDATE_REQUIRED';

@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import WelcomeRewardClient from '@/app/welcome-reward/WelcomeRewardClient';
 
 const getSessionMock = vi.fn();
+const authState = vi.hoisted(() => ({ updateCredits: vi.fn() }));
+const searchState = vi.hoisted(() => ({ search: '' }));
 
 vi.mock('@/lib/supabase', () => ({
   supabase: {
@@ -11,6 +13,14 @@ vi.mock('@/lib/supabase', () => ({
       getSession: () => getSessionMock(),
     },
   },
+}));
+
+vi.mock('@/components/AuthProvider', () => ({
+  useAuth: () => authState,
+}));
+
+vi.mock('next/navigation', () => ({
+  useSearchParams: () => new URLSearchParams(searchState.search),
 }));
 
 type WelcomeBody = {
@@ -61,6 +71,8 @@ describe('WelcomeRewardClient', () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    authState.updateCredits.mockReset();
+    searchState.search = '';
     getSessionMock.mockResolvedValue({ data: { session: { access_token: 'token' } } });
   });
 
@@ -117,10 +129,101 @@ describe('WelcomeRewardClient', () => {
     expect(container.querySelectorAll('.welcome-reward-confetti')).toHaveLength(0);
   });
 
-  it('sends a guest to registration instead of an unreachable claim', async () => {
-    // `requires_account` is the status a guest gets. The old `not_eligible`
-    // rendering offered no route forward at all, because the copy asked for a
-    // creator name that PATCH /api/profile refuses to set for anonymous users.
+  it('hands the balance the claim returned to the shell, so the creators stop reading 0', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
+    vi.stubGlobal('fetch', vi.fn(async (_input: unknown, init?: RequestInit) => new Response(
+      JSON.stringify(init?.method === 'POST'
+        ? welcomeBody({ status: 'claimed', amount: 25, credits: 25, claimedAt: '2026-10-15T00:00:00.000Z' })
+        : welcomeBody()),
+      { status: 200 },
+    )));
+
+    render(<WelcomeRewardClient nextPath="/create" />);
+    fireEvent.click(await screen.findByRole('button', { name: /claim 25 credits/i }));
+
+    // AuthProvider's updateCredits sets the balance and dispatches
+    // `credits_updated` with it; the header's own listener reads it there.
+    await waitFor(() => {
+      expect(authState.updateCredits).toHaveBeenCalledWith(25);
+    });
+    expect(authState.updateCredits).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the balance again when the claim says it was already claimed', async () => {
+    // `credits` is the balance right after the earlier grant, stale once any of
+    // it was spent (on the app, say), so it must not be set as the balance.
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
+    vi.stubGlobal('fetch', vi.fn(async (_input: unknown, init?: RequestInit) => new Response(
+      JSON.stringify(init?.method === 'POST'
+        ? welcomeBody({ status: 'already_claimed', amount: 25, credits: 25, claimedAt: '2026-10-01T00:00:00.000Z' })
+        : welcomeBody()),
+      { status: 200 },
+    )));
+    const balanceEvents: Event[] = [];
+    const onCreditsUpdated = (event: Event) => balanceEvents.push(event);
+    window.addEventListener('credits_updated', onCreditsUpdated);
+
+    try {
+      render(<WelcomeRewardClient nextPath="/create" />);
+      fireEvent.click(await screen.findByRole('button', { name: /claim 25 credits/i }));
+
+      await waitFor(() => {
+        expect(balanceEvents).toHaveLength(1);
+      });
+      expect((balanceEvents[0] as CustomEvent).detail ?? null).toBeNull();
+      expect(authState.updateCredits).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('credits_updated', onCreditsUpdated);
+    }
+  });
+
+  it('leaves the balance alone when nothing was claimed', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_input: unknown, init?: RequestInit) => new Response(
+      JSON.stringify(init?.method === 'POST'
+        ? welcomeBody({ status: 'identity_already_claimed', credits: 0 })
+        : welcomeBody()),
+      { status: 200 },
+    )));
+
+    render(<WelcomeRewardClient nextPath="/create" />);
+    fireEvent.click(await screen.findByRole('button', { name: /claim 25 credits/i }));
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Welcome credits already claimed' })).toBeTruthy();
+    expect(authState.updateCredits).not.toHaveBeenCalled();
+  });
+
+  it('says what happened to the invite a sign-up claimed', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(welcomeBody()), { status: 200 })));
+    const cases: Array<[string, RegExp]> = [
+      ['next=%2Fcreate&referral=applied', /^Invite applied: your first verified credit-pack purchase gets the invite bonus\.$/],
+      ['next=%2Fcreate&referral=existing_account', /invite bonuses are for new accounts only/i],
+      ['next=%2Fcreate&referral=self_referral', /cannot use your own invite link/i],
+      ['next=%2Fcreate&referral=already_attributed', /already has an inviter/i],
+      ['next=%2Fcreate&referral=visit_unavailable', /no longer active/i],
+      ['next=%2Fcreate&referral=not_applied', /not eligible for this invite/i],
+    ];
+    for (const [search, line] of cases) {
+      searchState.search = search;
+      const { unmount } = render(<WelcomeRewardClient nextPath="/create" />);
+      await screen.findByRole('button', { name: /claim 25 credits/i });
+      expect(screen.getByRole('status').textContent).toMatch(line);
+      unmount();
+    }
+  });
+
+  it('says nothing about invites when no claim ran', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(welcomeBody()), { status: 200 })));
+
+    render(<WelcomeRewardClient nextPath="/create" />);
+    await screen.findByRole('button', { name: /claim 25 credits/i });
+
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByText(/invite/i)).toBeNull();
+  });
+
+  it('offers no registration route, which no web account can need', async () => {
+    // A guest is the only caller the server answers `requires_account`, and the
+    // web has no guest sessions; the proxy refuses a guest's token first.
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
       JSON.stringify(welcomeBody({ status: 'requires_account', identityComplete: false })),
       { status: 200 },
@@ -128,10 +231,10 @@ describe('WelcomeRewardClient', () => {
 
     render(<WelcomeRewardClient nextPath="/create" />);
 
-    const signUp = await screen.findByRole('link', { name: /create an account/i });
-    expect(signUp.getAttribute('href')).toContain('mode=signup');
+    expect(await screen.findByRole('link', { name: /start creating/i })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /create an account/i })).toBeNull();
+    expect(screen.queryByText(/guest sessions/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /claim/i })).toBeNull();
-    expect(screen.getByText(/guest sessions cannot hold a welcome reward/i)).toBeTruthy();
   });
 
   it('calls the grant "welcome credits", never the paid Creator pack', async () => {
@@ -142,7 +245,6 @@ describe('WelcomeRewardClient', () => {
       [welcomeBody(), 'Claim your welcome credits'],
       [welcomeBody({ status: 'claimed', credits: 25, promotionalCredits: 25, claimedAt: '2026-08-25T00:00:00.000Z' }), 'Your welcome credits are ready'],
       [welcomeBody({ status: 'legacy_ineligible', credits: 25 }), 'Your welcome credits are ready'],
-      [welcomeBody({ status: 'requires_account', identityComplete: false }), 'Claim your welcome credits'],
       [welcomeBody({ status: 'identity_already_claimed' }), 'Welcome credits already claimed'],
     ];
     for (const [body, heading] of cases) {

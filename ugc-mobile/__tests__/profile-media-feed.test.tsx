@@ -20,6 +20,7 @@ const routerState = vi.hoisted(() => ({
   canGoBack: vi.fn(() => true),
   push: vi.fn(),
   replace: vi.fn(),
+  setParams: vi.fn(),
 }));
 
 const platformState = vi.hoisted(() => ({ os: 'ios' as 'ios' | 'android' }));
@@ -30,17 +31,34 @@ const authState = vi.hoisted(() => ({
     getProfile: vi.fn(),
     shareShowcasePost: vi.fn((_postId: string, _options: { sourceSurface: string }) => Promise.resolve()),
   },
-  user: { id: 'owner-1', email: 'owner@example.com' },
+  user: { id: 'owner-1', email: 'owner@example.com' } as { id: string; email: string } | null,
+  isGuest: false,
+  identityUserId: 'owner-1' as string | null,
 }));
 
 const libraryState = vi.hoisted(() => ({ items: [] as unknown[], selection: 'none' as string }));
 
-type CardActions = { onShare: () => void; onDeleted?: (id: string) => void; onRecreate: () => void };
+// What the feed last asked of the focus and foreground revalidation.
+const revalidationState = vi.hoisted(() => ({
+  options: null as null | { enabled: boolean; scope: string; refresh: () => Promise<unknown> | unknown },
+}));
+
+type CardActions = {
+  onShare: () => void;
+  onDeleted?: (id: string) => void;
+  onRecreate: () => void;
+  onComments?: () => void;
+  authReturnTo?: string;
+};
+
+type CommentsSheetProps = { postId: string; visible: boolean; authReturnTo?: string; initialReplyToId?: string | null; onClose: () => void };
 
 const feedState = vi.hoisted(() => ({
   callbacksFor: null as null | ((item: unknown) => CardActions),
   // What each drawn card was handed, by card id.
   cards: new Map<string, { onAction: (action: string) => void }>(),
+  // What the comments sheet was last handed, while it is drawn.
+  commentsSheet: null as null | CommentsSheetProps,
 }));
 
 const nothing = vi.hoisted(() => () => null);
@@ -97,7 +115,12 @@ vi.mock('@/components/viewer-actions-menu', () => ({
     return children ?? null;
   },
 }));
-vi.mock('@/components/comments-sheet', () => ({ CommentsSheet: nothing }));
+vi.mock('@/components/comments-sheet', () => ({
+  CommentsSheet: (props: CommentsSheetProps) => {
+    feedState.commentsSheet = props;
+    return null;
+  },
+}));
 vi.mock('@/components/feed-pagination-footer', () => ({ FeedLoadMoreErrorFooter: nothing }));
 vi.mock('@/components/media-zoom', () => ({ MediaZoomSurface: passThrough }));
 vi.mock('@/components/zoom-veil', () => ({ ZoomVeilScope: passThrough }));
@@ -157,11 +180,16 @@ vi.mock('@/lib/use-profile-library-source', () => ({
     selection: libraryState.selection,
   }),
 }));
-vi.mock('@/lib/use-profile-media-revalidation', () => ({ useProfileMediaRevalidation: () => undefined }));
+vi.mock('@/lib/use-profile-media-revalidation', () => ({
+  useProfileMediaRevalidation: (options: NonNullable<typeof revalidationState.options>) => {
+    revalidationState.options = options;
+  },
+}));
 vi.mock('@/lib/use-viewer-action-handlers', () => ({ changeGenerationArchive: vi.fn() }));
 vi.mock('@/lib/viewer-media-cache', () => ({ applyPostVisibilityToCaches: vi.fn() }));
 
 import { ProfileMediaFeedScreen } from '@/components/profile-media-feed';
+import { refreshProfileLibraryHead } from '@/lib/profile-library-head';
 import { changeGenerationArchive } from '@/lib/use-viewer-action-handlers';
 
 /** One of the owner's public posts, as the Posts library lists it. */
@@ -193,8 +221,13 @@ beforeEach(() => {
   routerState.params = { source: 'profile-posts' };
   libraryState.items = [publicPost];
   libraryState.selection = 'none';
+  authState.user = { id: 'owner-1', email: 'owner@example.com' };
+  authState.isGuest = false;
+  authState.identityUserId = 'owner-1';
+  revalidationState.options = null;
   feedState.callbacksFor = null;
   feedState.cards.clear();
+  feedState.commentsSheet = null;
 });
 
 afterEach(() => {
@@ -349,5 +382,185 @@ describe("a creation's Recreate", () => {
     const href = String(routerState.push.mock.calls.at(-1)?.[0]);
     expect(new URL(href, 'https://magicbooklet.local').searchParams.get('sourceThumbnail'))
       .toBe('https://cdn.example.com/gen-1.poster.webp');
+  });
+});
+
+// Every card action that asks for an account ended on Home after signing in
+// (audit 01-12): Recreate, Publish and visibility, the ••• and comments now come
+// back to this feed, on the same library, card and scope.
+describe('signing in from the card feed', () => {
+  const FEED = '/profile-media-feed?source=profile-creations&initialId=gen-1';
+
+  it('comes back to the feed from Recreate', () => {
+    authState.user = null;
+    routerState.params = { source: 'profile-creations', initialId: 'gen-1' };
+    libraryState.items = [creation('gen-1')];
+    renderFeed();
+
+    act(() => { feedState.callbacksFor!(libraryState.items[0]).onRecreate(); });
+
+    expect(routerState.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: FEED } });
+  });
+
+  it('comes back to the feed from a card’s Publish', () => {
+    authState.user = null;
+    routerState.params = { source: 'profile-creations', initialId: 'gen-1' };
+    libraryState.items = [creation('gen-1')];
+    renderFeed();
+
+    act(() => { feedState.cards.get('gen-1')!.onAction('publish'); });
+
+    expect(routerState.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: FEED } });
+  });
+
+  it('hands the ••• the feed to come back to, archived scope included', () => {
+    routerState.params = { source: 'profile-posts', initialId: 'post-1', scope: 'archived' };
+    renderFeed();
+
+    expect(feedState.callbacksFor!(publicPost).authReturnTo)
+      .toBe('/profile-media-feed?source=profile-posts&initialId=post-1&scope=archived');
+  });
+
+  it('hands the comments sheet the feed to come back to', () => {
+    const commentable = { ...publicPost, canComment: true, commentCount: 3 } as ImmersivePreviewItem;
+    routerState.params = { source: 'profile-posts', initialId: 'post-1' };
+    libraryState.items = [commentable];
+    renderFeed();
+
+    act(() => { feedState.callbacksFor!(commentable).onComments?.(); });
+
+    expect(feedState.commentsSheet).toMatchObject({
+      postId: 'post-1',
+      visible: true,
+      authReturnTo: '/profile-media-feed?source=profile-posts&initialId=post-1',
+    });
+  });
+
+  it('opens the thread again, on its reply, when sign-in comes back with it', () => {
+    const commentable = { ...publicPost, canComment: true, commentCount: 3 } as ImmersivePreviewItem;
+    routerState.params = { source: 'profile-posts', initialId: 'post-1', comments: 'post-1', replyTo: 'comment-9' };
+    libraryState.items = [commentable];
+    renderFeed();
+
+    expect(feedState.commentsSheet).toMatchObject({ postId: 'post-1', visible: true, initialReplyToId: 'comment-9' });
+    expect(routerState.setParams).toHaveBeenCalledWith({ comments: undefined, replyTo: undefined });
+
+    // Closing it forgets the reply, so the next opening starts a new comment.
+    act(() => { feedState.commentsSheet!.onClose(); });
+    routerState.params = { source: 'profile-posts', initialId: 'post-1' };
+    act(() => { feedState.callbacksFor!(commentable).onComments?.(); });
+    expect(feedState.commentsSheet).toMatchObject({ visible: true, initialReplyToId: null });
+  });
+
+  // Fast Refresh, or an <Activity> shown again, runs every effect once more over kept state.
+  it('keeps the reopened thread when every effect runs again', () => {
+    const commentable = { ...publicPost, canComment: true, commentCount: 3 } as ImmersivePreviewItem;
+    routerState.params = { source: 'profile-posts', initialId: 'post-1', comments: 'post-1' };
+    libraryState.items = [commentable];
+    const inActivity = (mode: 'visible' | 'hidden') => (
+      <React.Activity mode={mode}><ProfileMediaFeedScreen /></React.Activity>
+    );
+    act(() => { trees.push(renderer.create(inActivity('visible'))); });
+    expect(feedState.commentsSheet).toMatchObject({ postId: 'post-1', visible: true });
+
+    act(() => { trees.at(-1)!.update(inActivity('hidden')); });
+    act(() => { trees.at(-1)!.update(inActivity('visible')); });
+
+    expect(feedState.commentsSheet).toMatchObject({ postId: 'post-1', visible: true, initialReplyToId: null });
+  });
+
+  it('leaves a thread the feed does not hold alone', () => {
+    routerState.params = { source: 'profile-posts', initialId: 'post-1', comments: 'post-elsewhere' };
+    libraryState.items = [{ ...publicPost, canComment: true } as ImmersivePreviewItem];
+    renderFeed();
+
+    expect(feedState.commentsSheet).toBeNull();
+    expect(routerState.setParams).not.toHaveBeenCalled();
+  });
+});
+
+// 02-1: a guest's Creations are its own library, so its card feed revalidates
+// that library under the guest's identity, and its own creation is its to
+// restore and to recreate. What an account does still asks it to sign in.
+describe("a guest's card feed", () => {
+  const FEED = '/profile-media-feed?source=profile-creations&initialId=gen-1';
+  const asGuest = () => {
+    authState.user = null;
+    authState.isGuest = true;
+    authState.identityUserId = 'guest-1';
+  };
+
+  it('revalidates its Creations under its identity', async () => {
+    asGuest();
+    routerState.params = { source: 'profile-creations', initialId: 'gen-1' };
+    libraryState.items = [creation('gen-1')];
+    renderFeed();
+
+    expect(revalidationState.options).toMatchObject({ enabled: true, scope: 'Creations' });
+    await act(async () => { await revalidationState.options!.refresh(); });
+    expect(refreshProfileLibraryHead).toHaveBeenCalledWith(expect.objectContaining({ userId: 'guest-1', library: 'Creations' }));
+  });
+
+  it('revalidates no Posts library, which a guest does not have', () => {
+    asGuest();
+    routerState.params = { source: 'profile-posts' };
+    renderFeed();
+
+    expect(revalidationState.options).toMatchObject({ enabled: false, scope: 'Posts' });
+  });
+
+  it('restores its own archived creation without signing in', () => {
+    asGuest();
+    const archived = creation('gen-archived', {
+      archivedAt: '2026-10-01T00:00:00.000Z',
+      availableActions: ['restore', 'delete-creation', 'view-details'],
+    });
+    routerState.params = { source: 'profile-creations', scope: 'archived' };
+    libraryState.items = [archived];
+    renderFeed();
+
+    act(() => { feedState.cards.get('gen-archived')!.onAction('restore'); });
+
+    expect(routerState.push).not.toHaveBeenCalled();
+    expect(changeGenerationArchive).toHaveBeenCalledWith({
+      api: authState.api,
+      queryClient: expect.anything(),
+      userId: 'guest-1',
+      item: archived,
+      archive: false,
+    });
+  });
+
+  it('recreates its own creation in the creator, as the reel does', () => {
+    asGuest();
+    routerState.params = { source: 'profile-creations', initialId: 'gen-1' };
+    libraryState.items = [creation('gen-1')];
+    renderFeed();
+
+    act(() => { feedState.cards.get('gen-1')!.onAction('recreate'); });
+
+    expect(routerState.push).toHaveBeenCalledTimes(1);
+    expect(String(routerState.push.mock.calls[0][0])).toMatch(/^\/create\/image\?remix=gen-1&/);
+  });
+
+  it('is still asked to sign in to publish', () => {
+    asGuest();
+    routerState.params = { source: 'profile-creations', initialId: 'gen-1' };
+    libraryState.items = [creation('gen-1')];
+    renderFeed();
+
+    act(() => { feedState.cards.get('gen-1')!.onAction('publish'); });
+
+    expect(routerState.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: FEED } });
+  });
+
+  it('keeps an account’s revalidation under the account', async () => {
+    routerState.params = { source: 'profile-creations', initialId: 'gen-1' };
+    libraryState.items = [creation('gen-1')];
+    renderFeed();
+
+    expect(revalidationState.options).toMatchObject({ enabled: true });
+    await act(async () => { await revalidationState.options!.refresh(); });
+    expect(refreshProfileLibraryHead).toHaveBeenCalledWith(expect.objectContaining({ userId: 'owner-1', library: 'Creations' }));
   });
 });

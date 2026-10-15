@@ -6,6 +6,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 
 import { ApiError } from '../lib/api-client';
 import {
+  clearGenerationAttemptForUser,
   clearPendingGenerationAttempt,
   generationStartRefusalCode,
   isAmbiguousGenerationStartFailure,
@@ -158,5 +159,29 @@ describe('pending generation attempt storage', () => {
     await clearPendingGenerationAttempt('user-1', { storage });
 
     expect([...storage.values.keys()]).toEqual([pendingGenerationAttemptStorageKey('user-2')]);
+  });
+});
+
+describe('clearGenerationAttemptForUser (audit 04-7)', () => {
+  it("forgets the account's saved generation and nobody else's", async () => {
+    const storage = memoryStorage({
+      [pendingGenerationAttemptStorageKey('user-1')]: JSON.stringify(attempt()),
+      [pendingGenerationAttemptStorageKey('user-2')]: JSON.stringify(attempt({ identityUserId: 'user-2' })),
+    });
+
+    await clearGenerationAttemptForUser('user-1', { storage });
+
+    expect([...storage.values.keys()]).toEqual([pendingGenerationAttemptStorageKey('user-2')]);
+  });
+
+  it('never fails the deletion over the saved request', async () => {
+    const storage = memoryStorage();
+    storage.removeItem.mockRejectedValueOnce(new Error('storage closed'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(clearGenerationAttemptForUser('user-1', { storage })).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });

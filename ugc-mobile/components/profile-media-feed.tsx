@@ -59,6 +59,7 @@ import {
   getRemixSourceThumbnailUrl,
   getViewerShareIntent,
   getViewerShareSourceSurface,
+  isViewerOwnGeneration,
 } from '@/lib/viewer-actions';
 import {
   changePostVisibility,
@@ -77,7 +78,27 @@ type ProfileMediaFeedParams = {
   source?: string | string[];
   initialId?: string | string[];
   scope?: string | string[];
+  /** Set by sign-in from a card's comments: the thread to open again, and the reply it was for. */
+  comments?: string | string[];
+  replyTo?: string | string[];
 };
+
+/**
+ * This feed as it was opened — library, card and scope — for sign-in to come
+ * back to (audit 01-12). Sign-in pops back to the feed underneath with these
+ * same params, so it stands as the reader left it; before, every card action
+ * that asked for an account ended on Home.
+ */
+function profileMediaFeedReturnPath(source: string, initialId: string, scope: 'active' | 'archived') {
+  const params = [
+    ['source', source],
+    ...(initialId ? [['initialId', initialId]] : []),
+    ...(scope === 'archived' ? [['scope', 'archived']] : []),
+  ];
+  return `/profile-media-feed?${params
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&')}`;
+}
 
 /** How often a landing checks its budget and retries after layout has advanced. */
 const LANDING_TICK_MS = 250;
@@ -99,9 +120,16 @@ export function ProfileMediaFeedScreen() {
   const source = normalizeViewerSource(params.source);
   const initialId = normalizeParam(params.initialId);
   const postsScope = normalizeParam(params.scope) === 'archived' ? 'archived' : 'active';
+  const authReturnTo = profileMediaFeedReturnPath(source, initialId, postsScope);
+  const requestedCommentsPostId = normalizeParam(params.comments).trim() || null;
+  const requestedReplyToId = normalizeParam(params.replyTo).trim() || null;
   const libraryName = source === 'profile-creations' ? 'Creations' : 'Posts';
   const noun = source === 'profile-creations' ? 'creation' : 'post';
-  const { api, user } = useAuth();
+  const { api, user, isGuest, identityUserId } = useAuth();
+  // Whose library this feed revalidates and changes: a guest's Creations are
+  // its own, keyed by its identity as the Profile grid keys them (02-1). A
+  // guest has no posts.
+  const libraryOwnerId = user?.id ?? (isGuest && libraryName === 'Creations' ? identityUserId ?? undefined : undefined);
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
   const { width } = useWindowDimensions();
@@ -114,6 +142,7 @@ export function ProfileMediaFeedScreen() {
   // stay; the lookup that would call the opened item missing is not asked.
   const [openedItemDeleted, setOpenedItemDeleted] = useState(false);
   const [commentsOpenItemId, setCommentsOpenItemId] = useState<string | null>(null);
+  const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
   // An audio creation scrolled right off the screen has no control left to stop
@@ -177,13 +206,24 @@ export function ProfileMediaFeedScreen() {
     [items, commentsOpenItemId]
   );
 
+  // Back from signing in to comment: the route names the thread, so it opens
+  // again on the reply it was for, as Home and the reel do.
+  useEffect(() => {
+    if (!requestedCommentsPostId) return;
+    const target = items.find((item) => item.canComment && item.showcasePostId === requestedCommentsPostId);
+    if (!target) return;
+    setCommentsReplyToId(requestedReplyToId);
+    setCommentsOpenItemId(target.id);
+    router.setParams({ comments: undefined, replyTo: undefined } as never);
+  }, [items, requestedCommentsPostId, requestedReplyToId]);
+
   // Coming back to the feed revalidates the library it shares with the grid.
   const refreshLibraryHead = useCallback(
-    () => refreshProfileLibraryHead({ api, queryClient, userId: user?.id, library: libraryName }),
-    [api, libraryName, queryClient, user?.id]
+    () => refreshProfileLibraryHead({ api, queryClient, userId: libraryOwnerId, library: libraryName }),
+    [api, libraryName, libraryOwnerId, queryClient]
   );
   useProfileMediaRevalidation({
-    enabled: isFocused && Boolean(user),
+    enabled: isFocused && Boolean(libraryOwnerId),
     scope: libraryName,
     hasData: library.hasData,
     isFetching: libraryIsFetching,
@@ -320,8 +360,10 @@ export function ProfileMediaFeedScreen() {
   }, [api]);
 
   const recreateItem = useCallback((item: ImmersivePreviewItem) => {
-    if (!user) {
-      router.push('/auth');
+    // A guest can generate, so its own creation opens in the creator, as the
+    // reel opens it; anything else asks a guest to sign in first.
+    if (!user && !(isGuest && isViewerOwnGeneration(item, identityUserId))) {
+      router.push({ pathname: '/auth', params: { returnTo: authReturnTo } } as never);
       return;
     }
     const href = getNativeRemixCreateHref({
@@ -332,7 +374,7 @@ export function ProfileMediaFeedScreen() {
         thumbnailUrl: getRemixSourceThumbnailUrl(item) },
     });
     router.push((href ?? `/create/${item.recreateTool}`) as never);
-  }, [user]);
+  }, [authReturnTo, identityUserId, isGuest, user]);
 
   const applyPostVisibility = useCallback(async (
     post: PostLifecyclePost,
@@ -357,8 +399,14 @@ export function ProfileMediaFeedScreen() {
    * on the card and the same control in the sheet run one code path.
    */
   const runCardAction = useCallback((action: string, item: ImmersivePreviewItem) => {
-    if (!user) {
-      router.push('/auth');
+    // A guest's own creation is its to restore (the server takes a guest's
+    // restore, as the ••• already sends it) and to recreate; every other card
+    // action is an account's.
+    const guestOwnCreationAction = isGuest
+      && (action === 'restore' || action === 'recreate')
+      && isViewerOwnGeneration(item, identityUserId);
+    if (!user && !guestOwnCreationAction) {
+      router.push({ pathname: '/auth', params: { returnTo: authReturnTo } } as never);
       return;
     }
 
@@ -394,7 +442,7 @@ export function ProfileMediaFeedScreen() {
       case 'restore':
         // An archived creation's card offers its way back where Share was.
         if (item.sourceType === 'generation') {
-          void changeGenerationArchive({ api, queryClient, userId: user.id, item, archive: false });
+          void changeGenerationArchive({ api, queryClient, userId: libraryOwnerId, item, archive: false });
         }
         return;
       case 'save':
@@ -422,7 +470,7 @@ export function ProfileMediaFeedScreen() {
       default:
         return;
     }
-  }, [api, applyPostVisibility, openItem, queryClient, recreateItem, shareItem, user]);
+  }, [api, applyPostVisibility, authReturnTo, identityUserId, isGuest, libraryOwnerId, openItem, queryClient, recreateItem, shareItem, user]);
 
   if (library.isLoading || selection === 'loading') {
     return (
@@ -507,6 +555,7 @@ export function ProfileMediaFeedScreen() {
       if (cards.every((card) => card.id === item.id)) leaveFeed();
     },
     onSourceRefresh: () => void library.refetch(),
+    authReturnTo,
   });
 
   return (
@@ -627,10 +676,15 @@ export function ProfileMediaFeedScreen() {
       {commentsItem?.canComment && commentsItem.showcasePostId ? (
         <CommentsSheet
           key={commentsItem.showcasePostId}
+          authReturnTo={authReturnTo}
           postId={commentsItem.showcasePostId}
           postCreatorId={commentsItem.creatorId ?? null}
           commentCount={commentsItem.commentCount}
-          onClose={() => setCommentsOpenItemId(null)}
+          initialReplyToId={commentsReplyToId}
+          onClose={() => {
+            setCommentsReplyToId(null);
+            setCommentsOpenItemId(null);
+          }}
           visible={commentsOpenItemId === commentsItem.id}
         />
       ) : null}

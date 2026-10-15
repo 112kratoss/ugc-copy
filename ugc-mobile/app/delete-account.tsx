@@ -6,16 +6,83 @@ import { Platform, View } from 'react-native';
 
 import { AppText, AppTextInput, Card, PrimaryButton, SecondaryButton, SectionTitle, StatusBlock, Screen, WebLinkButton } from '@/components/ui';
 import type { CreatorPayoutStateResponse } from '@/lib/api-client';
+import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import {
   ACCOUNT_DELETION_SCHEDULED_NOTICE,
+  AccountReauthenticationFailedError,
   isAccountReauthenticationRequired,
   useAuth,
   type AccountDeletionReauthentication,
+  type AccountReauthenticationMethod,
 } from '@/lib/auth';
+import { describePasswordSignInError, describeProviderSignInError, type SignInProvider } from '@/lib/auth-error-copy';
 import { showMessageDialog } from '@/lib/dialog';
 import { env } from '@/lib/env';
+import { isGoogleAuthCanceled } from '@/lib/google-auth';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
+
+type DeletionFailure = { tone: 'danger' | 'warning'; title: string; body: string };
+
+/**
+ * The answer to the deletion was lost and Supabase could not say whether it
+ * started (audit 04-3). The web's own sentence, so both say the same thing.
+ * This phone is still signed in, and a retry settles it either way.
+ */
+const DELETION_UNCONFIRMED: DeletionFailure = {
+  tone: 'warning',
+  title: 'Deletion not confirmed',
+  body: 'We could not confirm the deletion. Check the connection and try again.',
+};
+
+function notDeleted(reason: string): DeletionFailure {
+  return {
+    tone: 'danger',
+    title: 'Account was not deleted',
+    body: `${reason} Your account is still active. You can retry below.`,
+  };
+}
+
+/**
+ * Why the account was not deleted, in words written for people: the server's
+ * own sentence when it sent one. A refused session's is "Unauthorized", and a
+ * failure answered by the platform carries only its status.
+ */
+function notDeletedReason(error: unknown) {
+  const { status, details } = (typeof error === 'object' && error !== null ? error : {}) as {
+    status?: unknown;
+    details?: unknown;
+  };
+  const answeredWithoutJson = typeof status === 'number' && status >= 500
+    && (typeof details !== 'object' || details === null);
+  if (status === 401 || answeredWithoutJson) return 'The deletion did not go through.';
+  return error instanceof Error ? error.message : 'Account deletion could not be completed.';
+}
+
+/**
+ * A failed sign-in, in the sign-in screen's words rather than Supabase's or a
+ * developer's (audit 01-7), naming only the ways in this screen draws. Nothing
+ * for a sign-in the person canceled.
+ */
+function reauthenticationFailure(
+  error: AccountReauthenticationFailedError,
+  methods: AccountReauthenticationMethod[],
+): DeletionFailure | null {
+  const { method, failure } = error;
+  if ((method === 'apple' && isAppleAuthCanceled(failure)) || (method === 'google' && isGoogleAuthCanceled(failure))) {
+    return null;
+  }
+  const providerButtons = methods.flatMap((drawn): SignInProvider[] => {
+    if (drawn === 'google') return ['Google'];
+    return drawn === 'apple' && Platform.OS === 'ios' ? ['Apple'] : [];
+  });
+  const notice = method === 'password'
+    ? describePasswordSignInError(failure, { providerButtons, asksForEmail: false })
+    : describeProviderSignInError(failure, method === 'apple' ? 'Apple' : 'Google', {
+      passwordAvailable: methods.includes('password'),
+    });
+  return { tone: 'danger', title: notice.title, body: `${notice.body} Your account is still active.` };
+}
 
 export default function DeleteAccountScreen() {
   const theme = useAppTheme();
@@ -24,7 +91,7 @@ export default function DeleteAccountScreen() {
   const [currentPassword, setCurrentPassword] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
   const [needsReauthentication, setNeedsReauthentication] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<DeletionFailure | null>(null);
   const isConfirmed = confirmation.trim().toUpperCase() === 'DELETE';
   // A seller's balance not yet paid out goes with the account, so the screen
   // says how much before anything is typed. It never holds the deletion up.
@@ -36,9 +103,15 @@ export default function DeleteAccountScreen() {
 
   const removeAccount = async (reauthentication?: AccountDeletionReauthentication) => {
     setIsDeleting(true);
-    setError(null);
+    setFailure(null);
     try {
       const outcome = await deleteAccount(reauthentication);
+      if (outcome === 'unconfirmed') {
+        // Still signed in here, so the screen stays and the retry is offered.
+        setFailure(DELETION_UNCONFIRMED);
+        setIsDeleting(false);
+        return;
+      }
       // Managing accounts: notify when deletion is finished. The phone is
       // already on Home as a guest, so the notice is not left over a screen
       // whose account no longer exists.
@@ -49,17 +122,22 @@ export default function DeleteAccountScreen() {
         }
         : ACCOUNT_DELETION_SCHEDULED_NOTICE);
     } catch (nextError) {
+      if (nextError instanceof AccountReauthenticationFailedError) {
+        setFailure(reauthenticationFailure(nextError, accountReauthenticationMethods));
+        setIsDeleting(false);
+        return;
+      }
       if (isAccountReauthenticationRequired(nextError)) {
         setNeedsReauthentication(true);
         if (reauthentication) {
-          setError(nextError instanceof Error
+          setFailure(notDeleted(nextError instanceof Error
             ? nextError.message
-            : 'Apple verification did not complete. Continue with Apple again and retry.');
+            : 'Apple verification did not complete. Continue with Apple again and retry.'));
         }
         setIsDeleting(false);
         return;
       }
-      setError(nextError instanceof Error ? nextError.message : 'Account deletion could not be completed.');
+      setFailure(notDeleted(notDeletedReason(nextError)));
       setIsDeleting(false);
     }
   };
@@ -92,13 +170,7 @@ export default function DeleteAccountScreen() {
         <WebLinkButton href={`${env.siteUrl}/delete-account`} label="Read the full deletion policy" />
       </Card>
 
-      {error ? (
-        <StatusBlock
-          tone="danger"
-          title="Account was not deleted"
-          body={`${error} Your account is still active. You can retry below.`}
-        />
-      ) : null}
+      {failure ? <StatusBlock tone={failure.tone} title={failure.title} body={failure.body} /> : null}
 
       {needsReauthentication ? (
         <Card style={{ gap: appTheme.spacing.gap }}>
