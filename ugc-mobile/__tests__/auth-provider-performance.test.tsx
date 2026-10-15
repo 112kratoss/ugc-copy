@@ -40,6 +40,7 @@ vi.mock('expo-constants', () => ({
 
 vi.mock('expo-router', () => ({
   router: { dismissTo: state.routerDismissTo, replace: state.routerReplace },
+  usePathname: () => '/',
 }));
 
 vi.mock('react-native', () => ({
@@ -99,8 +100,12 @@ vi.mock('../lib/supabase-auth-recovery', () => ({
   isInvalidRefreshTokenError: () => false,
   isNetworkRequestFailedError: () => false,
   isRetryableRefreshError: (error: unknown) => (error as { name?: string } | null)?.name === 'AuthRetryableFetchError',
+  normalizeSupabaseAuthError: (error: unknown) => error,
   supabaseNetworkFailureMessage: () => 'Network unavailable',
 }));
+vi.mock('../lib/creation-draft-resume', () => ({ clearCreationDraftsForUser: vi.fn(async () => undefined) }));
+vi.mock('../lib/post-composer-draft-resume', () => ({ clearComposerDraftsForUser: vi.fn(async () => undefined) }));
+vi.mock('../lib/generation-attempts', () => ({ clearGenerationAttemptForUser: vi.fn(async () => undefined) }));
 vi.mock('../lib/supabase', () => ({
   clearPersistedSupabaseAuthSession: state.clearPersistedSession,
   duringSignOut: state.duringSignOut,
@@ -590,12 +595,18 @@ describe('AuthProvider startup performance', () => {
       await latest.current?.signOut();
     });
 
-    expect(state.queryClient.removeQueries.mock.calls).toEqual([
-      [{ queryKey: ['creator-profile'] }],
-      [{ queryKey: ['creator-follow-state'] }],
-    ]);
+    // One removal, by the first key part, so every handle's grid and every
+    // creator's follow state goes, and nothing else.
+    expect(state.queryClient.removeQueries).toHaveBeenCalledOnce();
+    const [{ predicate }] = state.queryClient.removeQueries.mock.calls[0] as [{
+      predicate: (query: { queryKey: readonly unknown[] }) => boolean;
+    }];
+    expect(predicate({ queryKey: ['creator-profile', 'infinite', 'luna'] })).toBe(true);
+    expect(predicate({ queryKey: ['creator-follow-state', 'creator-7'] })).toBe(true);
+    expect(predicate({ queryKey: ['profile', 'user-1'] })).toBe(false);
+    expect(predicate({ queryKey: ['showcase-feed', 'for-you'] })).toBe(false);
     // Gone before the sign-in screen, or a creator page, can draw them again.
-    expect(state.queryClient.removeQueries.mock.invocationCallOrder[1])
+    expect(state.queryClient.removeQueries.mock.invocationCallOrder[0])
       .toBeLessThan(state.routerReplace.mock.invocationCallOrder[0]);
     unmount();
   });

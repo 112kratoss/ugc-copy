@@ -15,6 +15,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 import {
+  clearComposerDraftsForUser,
   clearPersistedPostComposerDraft,
   getPostComposerDraftStorageId,
   isPostComposerDraftMeaningful,
@@ -58,5 +59,43 @@ describe('post composer draft recovery', () => {
       ...getDefaultPostComposerDraft(),
       title: 'Started post',
     })).toBe(true);
+  });
+});
+
+describe('what a deleted account left in post drafts (audit 04-7)', () => {
+  const STORE_KEY = 'magicbooklet.post.drafts.v1';
+
+  beforeEach(() => {
+    storageState.values.clear();
+  });
+
+  it("removes that account's drafts, new posts and edits alike, and keeps everyone else's", async () => {
+    storageState.values.set(STORE_KEY, JSON.stringify({
+      'user-1:new': { draft: {}, savedAt: 1 },
+      'user-1:edit:post-1': { draft: {}, savedAt: 1 },
+      'user-2:new': { draft: {}, savedAt: 1 },
+    }));
+
+    await clearComposerDraftsForUser('user-1');
+
+    expect(Object.keys(JSON.parse(storageState.values.get(STORE_KEY)!))).toEqual(['user-2:new']);
+  });
+
+  it('removes the store once nothing is left in it', async () => {
+    storageState.values.set(STORE_KEY, JSON.stringify({ 'user-1:new': { draft: {}, savedAt: 1 } }));
+
+    await clearComposerDraftsForUser('user-1');
+
+    expect(storageState.values.has(STORE_KEY)).toBe(false);
+  });
+
+  it('never fails the deletion over the drafts', async () => {
+    storageState.values.set(STORE_KEY, 'not json');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(clearComposerDraftsForUser('user-1')).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });

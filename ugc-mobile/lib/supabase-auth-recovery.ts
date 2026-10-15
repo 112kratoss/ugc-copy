@@ -58,8 +58,46 @@ export function parsePersistedSupabaseSession(stored: string | null): Session | 
   return value as Session;
 }
 
+/** The `code` an auth failure carries once normalised, when the request never got an answer. */
+export const NETWORK_AUTH_ERROR_CODE = 'network';
+
+/**
+ * Whether an auth or API call failed on the connection rather than being
+ * refused. Recognises the raw React Native failure, the normalised error
+ * {@link normalizeSupabaseAuthError} returns for it, and auth-js's own wrapper
+ * for a request that never completed: status 0, offline or aborted at the 10 s
+ * sign-in deadline, which arrives on a device as "Aborted" because React
+ * Native's fetch drops the abort's reason. Its 502-504 wrappers are server
+ * failures and stay out.
+ */
 export function isNetworkRequestFailedError(error: unknown) {
+  if (typeof error === 'object' && error !== null) {
+    const { code, name, status } = error as { code?: unknown; name?: unknown; status?: unknown };
+    if (code === NETWORK_AUTH_ERROR_CODE) return true;
+    if (name === 'AuthRetryableFetchError' && status === 0) return true;
+  }
   return getErrorMessage(error).includes('Network request failed');
+}
+
+/**
+ * The error a sign-in throws onwards. A connection failure becomes the
+ * developer-facing sentence that names the setting to check, and keeps what it
+ * was (`code: 'network'`, the original text in `cause`) so the screens can still
+ * tell the person they are offline.
+ */
+export function normalizeSupabaseAuthError(error: unknown, supabaseUrl: string): Error {
+  if (isNetworkRequestFailedError(error)) {
+    return Object.assign(new Error(supabaseNetworkFailureMessage(supabaseUrl)), {
+      code: NETWORK_AUTH_ERROR_CODE,
+      cause: getErrorMessage(error),
+    });
+  }
+
+  if (error instanceof Error) {
+    return error;
+  }
+
+  return new Error('Authentication failed.');
 }
 
 export function supabaseNetworkFailureMessage(root: string) {

@@ -173,3 +173,46 @@ export async function persistCreationDrafts(drafts: Omit<PersistedCreationDrafts
 export async function clearPersistedCreationDrafts(scope: string) {
   await AsyncStorage.removeItem(creationDraftStorageKey(scope));
 }
+
+/**
+ * The identity a draft scope belongs to: the second entry of an ordinary
+ * scope, and of a remix scope from before versions (`['remix', id, …]`), the
+ * third of a versioned remix scope (`['remix', version, id, …]`).
+ */
+function draftScopeIdentity(scope: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(scope);
+    if (!Array.isArray(parsed)) return null;
+    const identity = parsed[0] === 'create'
+      ? parsed[1]
+      : parsed[0] === 'remix' ? (typeof parsed[1] === 'number' ? parsed[2] : parsed[1]) : null;
+    return typeof identity === 'string' ? identity : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Removes every draft one identity kept: its Create draft and its remix
+ * sessions, those of earlier scope versions included, which nothing else ever
+ * clears (remix drafts never expire). For an account that is deleted, whose
+ * prompts and references must not stay on the phone (audit 04-7). Never
+ * rejects: a deletion must not fail over a draft.
+ */
+export async function clearCreationDraftsForUser(userId: string) {
+  const prefix = `${CREATION_DRAFT_STORAGE_KEY}:`;
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const owned = keys.filter((key) => {
+      if (!key.startsWith(prefix)) return false;
+      try {
+        return draftScopeIdentity(decodeURIComponent(key.slice(prefix.length))) === userId;
+      } catch {
+        return false;
+      }
+    });
+    if (owned.length > 0) await AsyncStorage.multiRemove(owned);
+  } catch (error) {
+    console.warn('Could not clear the Create drafts of an account that left', error);
+  }
+}

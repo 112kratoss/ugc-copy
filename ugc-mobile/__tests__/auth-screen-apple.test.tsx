@@ -15,8 +15,29 @@ const platformState = vi.hoisted(() => ({
   os: 'ios',
 }));
 
+/** The screen's exits (Close, a swipe down, Android's back) arrive as beforeRemove. */
+const navigationState = vi.hoisted(() => {
+  const state = {
+    listeners: [] as Array<() => void>,
+    addListener: (_event: string, listener: () => void) => {
+      state.listeners.push(listener);
+      return () => {
+        state.listeners = state.listeners.filter((entry) => entry !== listener);
+      };
+    },
+  };
+  return state;
+});
+
+const paramsState = vi.hoisted(() => ({ params: {} as Record<string, string> }));
+
+const analytics = vi.hoisted(() => ({
+  trackOnboardingEvent: vi.fn(async (_api: unknown, _eventName: string, _options?: { step?: string | null }) => undefined),
+}));
+
 const authState = vi.hoisted(() => ({
   user: null as { id: string } | null,
+  api: {},
   signInWithPassword: vi.fn(),
   signUpWithPassword: vi.fn(),
   signInWithApple: vi.fn(),
@@ -35,7 +56,8 @@ vi.mock('expo-router', () => ({
     dismissTo: vi.fn(),
     replace: vi.fn(),
   },
-  useLocalSearchParams: () => ({}),
+  useLocalSearchParams: () => paramsState.params,
+  useNavigation: () => ({ addListener: navigationState.addListener }),
 }));
 
 vi.mock('expo-apple-authentication', () => ({
@@ -105,6 +127,8 @@ vi.mock('@/lib/apple-auth', () => ({
 vi.mock('@/lib/google-auth', () => ({
   isGoogleAuthCanceled: () => false,
 }));
+
+vi.mock('@/lib/onboarding', () => analytics);
 
 import AuthScreen from '../app/auth';
 import { ThemeScope } from '../lib/theme-context';
@@ -282,5 +306,124 @@ describe('AuthScreen Apple sign-in', () => {
     });
 
     expect(tree!.root.findAllByProps({ accessibilityLabel: 'Sign in with Google' })).toHaveLength(0);
+  });
+});
+
+describe('AuthScreen sign-in analytics (audit 01-11)', () => {
+  beforeEach(() => {
+    platformState.os = 'ios';
+    authState.user = null;
+    paramsState.params = {};
+    navigationState.listeners = [];
+    analytics.trackOnboardingEvent.mockClear();
+    authState.signInWithApple.mockReset();
+    authState.signInWithApple.mockResolvedValue(undefined);
+  });
+
+  function mount() {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<AuthScreen />);
+    });
+    return tree!;
+  }
+
+  const recorded = () => analytics.trackOnboardingEvent.mock.calls.map(([, eventName, options]) => [eventName, options?.step]);
+
+  /** The person leaves the screen: Close, a swipe down, Android's back. */
+  const leave = () => {
+    renderer.act(() => {
+      navigationState.listeners.forEach((listener) => listener());
+    });
+  };
+
+  it('records a sign-in from its first attempt to its success, with the route it was headed for', async () => {
+    paramsState.params = { returnTo: '/creator/sam?tab=posts' };
+    const tree = mount();
+    expect(recorded()).toEqual([]);
+
+    await renderer.act(async () => {
+      tree.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
+    });
+
+    expect(recorded()).toEqual([['auth_started', '/creator/sam'], ['auth_succeeded', '/creator/sam']]);
+    expect(analytics.trackOnboardingEvent).toHaveBeenCalledWith(authState.api, 'auth_started', { step: '/creator/sam' });
+
+    // The screen's own exit after a success is not a cancel.
+    leave();
+    expect(recorded()).toHaveLength(2);
+  });
+
+  it('counts one start per visit, however many attempts it takes', async () => {
+    authState.signInWithApple.mockRejectedValueOnce(new Error('nonce mismatch'));
+    const tree = mount();
+
+    await renderer.act(async () => {
+      tree.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
+    });
+    await renderer.act(async () => {
+      tree.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
+    });
+
+    expect(recorded()).toEqual([['auth_started', '/(tabs)'], ['auth_succeeded', '/(tabs)']]);
+  });
+
+  it('records a visit left without signing in as canceled, once', async () => {
+    authState.signInWithApple.mockRejectedValue(new Error('nonce mismatch'));
+    const tree = mount();
+
+    await renderer.act(async () => {
+      tree.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
+    });
+    leave();
+    leave();
+
+    expect(recorded()).toEqual([['auth_started', '/(tabs)'], ['auth_canceled', '/(tabs)']]);
+  });
+
+  it('records nothing for a screen opened by someone signed in already', () => {
+    authState.user = { id: 'user-1' };
+    mount();
+    leave();
+
+    expect(recorded()).toEqual([]);
+  });
+});
+
+describe('AuthScreen copy names only the buttons it draws (audit 01-8)', () => {
+  beforeEach(() => {
+    authState.user = null;
+    paramsState.params = {};
+    navigationState.listeners = [];
+    authState.signInWithPassword.mockReset();
+    authState.signInWithPassword.mockRejectedValue(new Error('Invalid login credentials'));
+  });
+
+  async function wrongPasswordNotice(os: string) {
+    platformState.os = os;
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<AuthScreen />);
+    });
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Email' }).props.onChangeText('creator@example.com');
+      tree!.root.findByProps({ accessibilityLabel: 'Password' }).props.onChangeText('wrong-password');
+    });
+    await renderer.act(async () => {
+      tree!.root.findByProps({ label: 'Sign in' }).props.onPress();
+    });
+    return tree!.root.findAll((node) => typeof node.props.body === 'string')[0]?.props.body as string;
+  }
+
+  it('points a wrong password at Google on Android, and never at Apple', async () => {
+    const body = await wrongPasswordNotice('android');
+    expect(body).toContain('created the account with Google');
+    expect(body).not.toContain('Apple');
+  });
+
+  it('points a wrong password at Apple on iOS, and never at Google', async () => {
+    const body = await wrongPasswordNotice('ios');
+    expect(body).toContain('created the account with Apple');
+    expect(body).not.toContain('Google');
   });
 });
