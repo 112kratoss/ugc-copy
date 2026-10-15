@@ -1,7 +1,13 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { getAppVersionRouteResponse } from '@/lib/app-version-route-adapter-service';
+import { getCreditHistoryRouteResponse } from '@/lib/credit-history-route-adapter-service';
+import {
+  CREDIT_HISTORY_DEFAULT_LIMIT,
+  CREDIT_HISTORY_KINDS,
+  CREDIT_HISTORY_MAX_LIMIT,
+} from '@/lib/credit-history-service';
 import {
   MOBILE_CLIENT_COMPATIBILITY_POLICY,
   type MobileCriticalUpdate,
@@ -173,6 +179,7 @@ const expectedEndpointKeys = [
   'updateMobileNotificationPreferences',
   'readPostMedia',
   'recordReferralVisit',
+  'getCreditHistory',
 ] as const;
 
 describe('shared mobile API v1 contract fixture', () => {
@@ -614,5 +621,101 @@ describe('shared mobile API v1 contract fixture', () => {
  it('keeps uploaded-media redirects optional-auth and uncacheable', () => {
   expect(mobileApiContract.endpoints.readPostMedia).toMatchObject({
     path: '/api/media', auth: 'optional', status: 302, cacheControl: 'private, no-store',
+  });
+});
+
+// Credit history (contract C4 of the 2026-10-15 decisions run): the route turns
+// the database's rows into the fixture's page, cursor included, and answers its
+// two refusals in the fixture's words.
+describe('credit history contract', () => {
+  const endpoint = mobileApiContract.endpoints.getCreditHistory;
+
+  function creditHistoryRoute(rows: unknown[]) {
+    const rpc = vi.fn(async () => ({ data: rows, error: null }));
+    const answer = (query: string) => getCreditHistoryRouteResponse({
+      request: new Request(`http://localhost${endpoint.path}?${query}`),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({ rpc }) as unknown as SupabaseClient),
+        createUserClient: vi.fn(() => ({}) as unknown as SupabaseClient),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0, resetAt: '2026-10-15T10:00:00.000Z',
+        })),
+        requireIdentity: vi.fn(async () => ({
+          ok: true as const,
+          identity: { user: { id: 'account-1' } as User, userId: 'account-1', kind: 'registered' as const, isGuest: false },
+        })),
+        resolveLinkedAccountIds: vi.fn(async () => ['account-1', 'guest-1']),
+      },
+    });
+    return { rpc, answer };
+  }
+
+  it('answers a page in the shape the fixture pins', async () => {
+    const { entries } = endpoint.response;
+    // The rows behind the page carry the database's microseconds; the last one's
+    // are the ones the fixture's cursor holds. One more row says a page follows.
+    const rows = entries.map((entry, index) => ({
+      entry_id: entry.id,
+      kind: entry.kind,
+      amount: entry.amount,
+      occurred_at: index === entries.length - 1
+        ? '2026-10-10T08:00:00.123456+00:00'
+        : entry.occurredAt.replace('Z', '987+00:00'),
+      title: entry.title,
+      detail: entry.detail,
+    }));
+    rows.push({
+      entry_id: 'purchase:3a2b1c0d-9e8f-4a7b-8c6d-5e4f3a2b1c0d',
+      kind: 'purchase',
+      amount: 500,
+      occurred_at: '2026-10-01T08:00:00+00:00',
+      title: 'Starter pack',
+      detail: 'Bought on the web',
+    });
+    const { rpc, answer } = creditHistoryRoute(rows);
+
+    const response = await answer(new URLSearchParams(endpoint.query).toString());
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
+    await expect(response.json()).resolves.toEqual(endpoint.response);
+    expect(rpc).toHaveBeenCalledWith('list_credit_history', {
+      p_user_ids: ['account-1', 'guest-1'],
+      p_before_occurred_at: null,
+      p_before_id: null,
+      p_limit: Number(endpoint.query.limit) + 1,
+    });
+    expect(endpoint.kinds).toEqual([...CREDIT_HISTORY_KINDS]);
+    expect(endpoint.paging.limit).toEqual({
+      default: CREDIT_HISTORY_DEFAULT_LIMIT,
+      minimum: 1,
+      maximum: CREDIT_HISTORY_MAX_LIMIT,
+    });
+  });
+
+  it('reads the next page from the fixture cursor and ends on an empty one', async () => {
+    const { rpc, answer } = creditHistoryRoute([]);
+
+    const response = await answer(`cursor=${endpoint.response.nextCursor}`);
+
+    await expect(response.json()).resolves.toEqual(endpoint.responseVariants.lastPage);
+    expect(rpc).toHaveBeenCalledWith('list_credit_history', expect.objectContaining({
+      p_before_occurred_at: '2026-10-10T08:00:00.123456+00:00',
+      p_before_id: endpoint.response.entries.at(-1)?.id,
+    }));
+  });
+
+  it('refuses a cursor it did not write and a limit that is not a number, in the fixture words', async () => {
+    const { rpc, answer } = creditHistoryRoute([]);
+
+    const badCursor = await answer('cursor=not-a-cursor');
+    expect(badCursor.status).toBe(endpoint.errors.invalidCursor.status);
+    await expect(badCursor.json()).resolves.toEqual(endpoint.errors.invalidCursor.response);
+
+    const badLimit = await answer('limit=ten');
+    expect(badLimit.status).toBe(endpoint.errors.invalidLimit.status);
+    await expect(badLimit.json()).resolves.toEqual(endpoint.errors.invalidLimit.response);
+
+    expect(rpc).not.toHaveBeenCalled();
   });
 });
