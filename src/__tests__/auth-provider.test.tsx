@@ -288,15 +288,16 @@ describe('AuthProvider', () => {
       );
       await waitFor(() => expect(screen.getByTestId('spendable')).toHaveTextContent('1200'));
 
-      // A generation's spend comes off it as well.
+      // A generation's spend: the database took it from the promotional
+      // credits first, so the spendable part stands.
       fireEvent.click(screen.getByRole('button', { name: 'Spend 100' }));
       expect(screen.getByTestId('credits')).toHaveTextContent('1400');
-      expect(screen.getByTestId('spendable')).toHaveTextContent('1100');
+      expect(screen.getByTestId('spendable')).toHaveTextContent('1200');
 
       // A rise the server did not split (the welcome grant) is not spendable.
       fireEvent.click(screen.getByRole('button', { name: 'Grant 300' }));
       expect(screen.getByTestId('credits')).toHaveTextContent('1700');
-      expect(screen.getByTestId('spendable')).toHaveTextContent('1100');
+      expect(screen.getByTestId('spendable')).toHaveTextContent('1200');
 
       fireEvent.click(screen.getByRole('button', { name: 'Unlock a recipe' }));
       expect(screen.getByTestId('credits')).toHaveTextContent('800');
@@ -313,7 +314,12 @@ describe('AuthProvider', () => {
         window.dispatchEvent(new CustomEvent('credits_updated', { detail: { credits: 650 } }));
       });
       expect(screen.getByTestId('credits')).toHaveTextContent('650');
-      expect(screen.getByTestId('spendable')).toHaveTextContent('350');
+      expect(screen.getByTestId('spendable')).toHaveTextContent('400');
+      // A spend that takes the total below the spendable part lowers it.
+      act(() => {
+        window.dispatchEvent(new CustomEvent('credits_updated', { detail: { credits: 300 } }));
+      });
+      expect(screen.getByTestId('spendable')).toHaveTextContent('300');
       expect(authProviderMocks.single).toHaveBeenCalledTimes(1);
     });
 

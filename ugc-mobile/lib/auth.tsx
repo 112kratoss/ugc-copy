@@ -229,11 +229,13 @@ function creditBalanceFromProfile(
 }
 
 /**
- * The balance after a change only the total is known for. The gap between the
- * total and its spendable part (the promotional credits) carries over from the
- * last split the server gave: a spend comes off the spendable part (a
- * generation spends promotional credits first, so this can only understate it
- * until the next profile read), and a rise counts as promotional, as the
+ * The balance after a change only the total is known for. The spendable part
+ * carries over from the last split the server gave. A spend leaves it alone
+ * until the total falls below it: a generation or an enhancement draws the
+ * promotional credits first (`reserve_generation_promotional_credits`,
+ * `reserve_creation_credits`), and a recipe unlock answers with its own split,
+ * so taking a spend off the spendable part understated it and blocked real
+ * purchases until the next profile read. A rise counts as promotional, as the
  * welcome grant and referral rewards are, except for a `spendableRise` the
  * caller knows of.
  */
@@ -246,7 +248,9 @@ function creditBalanceAfterTotal(
     return { credits, marketplaceSpendableCredits: null };
   }
   const change = credits - previous.credits;
-  const spendable = previous.marketplaceSpendableCredits + (change < 0 ? change : Math.min(change, spendableRise));
+  const spendable = change < 0
+    ? Math.min(previous.marketplaceSpendableCredits, credits)
+    : previous.marketplaceSpendableCredits + Math.min(change, spendableRise);
   return { credits, marketplaceSpendableCredits: Math.max(0, spendable) };
 }
 

@@ -917,15 +917,21 @@ describe('the part of the balance that can buy creator resources', () => {
     emitCacheEvent(profileRead({ credits: 1500, promotionalCredits: 300, marketplaceSpendableCredits: 1200 }));
     expect(latest.current?.marketplaceSpendableCredits).toBe(1200);
 
-    // A generation's spend: only the total is known, and the spend comes off.
+    // A generation's spend: only the total is known, and the database took it
+    // from the promotional credits first, so the spendable part stands.
     renderer.act(() => latest.current?.updateCredits(1400));
     expect(latest.current?.credits).toBe(1400);
-    expect(latest.current?.marketplaceSpendableCredits).toBe(1100);
+    expect(latest.current?.marketplaceSpendableCredits).toBe(1200);
 
     // The welcome grant: a rise the server did not split is not spendable.
     renderer.act(() => latest.current?.updateCredits(1700));
     expect(latest.current?.credits).toBe(1700);
-    expect(latest.current?.marketplaceSpendableCredits).toBe(1100);
+    expect(latest.current?.marketplaceSpendableCredits).toBe(1200);
+
+    // A spend that takes the total below the spendable part lowers it.
+    renderer.act(() => latest.current?.updateCredits(900));
+    expect(latest.current?.credits).toBe(900);
+    expect(latest.current?.marketplaceSpendableCredits).toBe(900);
 
     // A recipe unlock answers the figure itself.
     renderer.act(() => latest.current?.updateCredits(800, { marketplaceSpendableCredits: 200 }));

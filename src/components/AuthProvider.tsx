@@ -77,11 +77,13 @@ function balanceFromProfile(
 
 /**
  * The balance after a change. The server's own split stands when the answer
- * carried one. Otherwise only the total is known: a spend comes off the
- * spendable part too (generations spend promotional credits first, so this can
- * only understate it until the next profile read), and a rise is not counted
- * as spendable until the server says so, because a welcome or referral grant
- * is promotional.
+ * carried one. Otherwise only the total is known: a spend leaves the spendable
+ * part alone until the total falls below it (a generation or an enhancement
+ * draws the promotional credits first, and a recipe unlock answers with its own
+ * split, so taking a spend off the spendable part understated it and blocked
+ * real purchases until the next profile read), and a rise is not counted as
+ * spendable until the server says so, because a welcome or referral grant is
+ * promotional.
  */
 function balanceAfterTotal(
     previous: CreditBalance,
@@ -94,8 +96,7 @@ function balanceAfterTotal(
     if (credits === null || previous.credits === null || previous.marketplaceSpendableCredits === null) {
         return { credits, marketplaceSpendableCredits: null };
     }
-    const spent = Math.max(0, previous.credits - credits);
-    return { credits, marketplaceSpendableCredits: Math.max(0, previous.marketplaceSpendableCredits - spent) };
+    return { credits, marketplaceSpendableCredits: Math.max(0, Math.min(previous.marketplaceSpendableCredits, credits)) };
 }
 
 // Public routes intentionally omit the provider when the request has no auth
