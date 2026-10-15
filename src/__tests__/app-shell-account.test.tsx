@@ -193,12 +193,18 @@ describe('AppShellAccount', () => {
 
   // Audit 03-4: a purchase or a reward that lands while the tab is hidden.
   it('re-reads the balance when the tab comes back after half a minute, and not more often', async () => {
+    const addDocumentListener = vi.spyOn(document, 'addEventListener');
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       const start = new Date('2026-10-15T08:00:00.000Z').getTime();
       vi.setSystemTime(start);
       render(<AppShellAccount />);
       expect(await screen.findByText('1295 credits')).toBeInTheDocument();
+      // The balance can be on screen before the effect that listens for the tab
+      // has run: effects run after the paint. On main's slower runner the clock
+      // was moved first, the listener started its 30 s at +29 s, and the re-read
+      // due at +31 s never came. The clock moves only once the listener is armed.
+      await waitFor(() => expect(addDocumentListener).toHaveBeenCalledWith('visibilitychange', expect.any(Function)));
       expect(mocks.maybeSingle).toHaveBeenCalledTimes(1);
       mocks.maybeSingle.mockResolvedValue({ data: { credits: 2000 } });
       const comeBack = () => act(() => {
@@ -219,6 +225,7 @@ describe('AppShellAccount', () => {
       expect(mocks.maybeSingle).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
+      addDocumentListener.mockRestore();
     }
   }, 15_000);
 
