@@ -150,8 +150,10 @@ function UnlockRow({ item }: { item: ViewerUnlockItem }) {
       accessibilityRole="button"
       accessibilityLabel={`${item.title}, by ${item.creator.displayName}.${item.isNsfw ? ' Mature content.' : ''} ${paid}.`}
       // The plate's Show sits inside this row's button, where a screen reader
-      // cannot reach it on its own.
-      accessibilityActions={canShowMature ? [{ name: 'showMature', label: 'Show mature content' }] : undefined}
+      // cannot reach it on its own. Once shown the list is empty, not
+      // undefined: Android keeps the actions a view had when the prop goes
+      // back to undefined, and would go on offering a Show that does nothing.
+      accessibilityActions={canShowMature ? [{ name: 'showMature', label: 'Show mature content' }] : []}
       onAccessibilityAction={canShowMature ? (event) => {
         if (event.nativeEvent.actionName === 'showMature') setMatureShown(true);
       } : undefined}

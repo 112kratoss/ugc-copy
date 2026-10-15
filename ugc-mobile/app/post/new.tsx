@@ -4634,10 +4634,13 @@ function MediaGalleryCard({
       // The pointer path opens the preview on tap; this is the same action for
       // a screen reader, which never produces those raw touch events.
       onAccessibilityTap={() => onPreviewMedia(index)}
+      // An empty list, never undefined: Android keeps the actions a view had
+      // when the prop goes back to undefined, so the only card left kept
+      // offering Move left and Move right, which then did nothing.
       accessibilityActions={canDrag ? [
         { name: 'decrement', label: 'Move left' },
         { name: 'increment', label: 'Move right' },
-      ] : undefined}
+      ] : []}
       onAccessibilityAction={canDrag ? (event) => {
         if (event.nativeEvent.actionName === 'decrement' && index > 0) {
           onReorderMedia(item.id, index - 1);
