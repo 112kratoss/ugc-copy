@@ -354,7 +354,7 @@ describe('listViewerUnlocks', () => {
 
       const page = await listViewerUnlocks({ adminSupabase: client, viewerUserId: 'buyer-1' });
 
-      // The buyer may read it (the purchase is the entitlement, 20261014092058);
+      // The buyer may read it (the purchase is the entitlement, 20261015013717);
       // the flag is what tells the client to draw the plate over it.
       expect(page.items[0].isNsfw).toBe(true);
       expect(page.items[0].post).toMatchObject({

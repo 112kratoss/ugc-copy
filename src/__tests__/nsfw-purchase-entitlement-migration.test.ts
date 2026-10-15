@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 
-const sql = readFileSync('supabase/migrations/20261014092058_nsfw_purchase_entitlement.sql', 'utf8');
+const sql = readFileSync('supabase/migrations/20261015013717_nsfw_purchase_entitlement.sql', 'utf8');
 
 it('lets a buyer past the mature gate for the post they unlocked, and no one else', () => {
   // The purchase clause sits beside the owner and reveal clauses of the 2026-09-29 gate.

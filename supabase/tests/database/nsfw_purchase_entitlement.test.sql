@@ -1,6 +1,6 @@
 -- A buyer reads the media of a mature post they unlocked without a reveal and
 -- without the mature-content preference; a stranger still cannot, and a
--- retracted purchase grants nothing (20261014092058).
+-- retracted purchase grants nothing (20261015013717).
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path=public,extensions;

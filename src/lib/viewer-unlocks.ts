@@ -347,7 +347,7 @@ export async function listViewerUnlocks({
     const detached = isDetached(row);
     const isNsfw = Boolean(row.post_id && nsfwPostIds.has(row.post_id));
     // An NSFW row keeps its cover: the buyer may read it (the purchase is the
-    // entitlement, 20261014092058) and the client covers the tile until a tap.
+    // entitlement, 20261015013717) and the client covers the tile until a tap.
     const cover = row.post_id && !detached
       ? snapshotCovers.get(row.purchase_id) ?? liveCovers.get(row.post_id) ?? null
       : null;
