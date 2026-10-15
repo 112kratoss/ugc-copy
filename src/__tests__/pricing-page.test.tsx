@@ -11,6 +11,11 @@ const pageMocks = vi.hoisted(() => ({
   headers: vi.fn(),
   loadReferralProgramTerms: vi.fn(),
 }));
+/** The signed-in buyer's `profiles` row, read for the balance beside the credit history link. */
+const profileState = vi.hoisted(() => ({
+  credits: 1295 as number | null,
+  reads: [] as Array<{ table: string; columns: string; column: string; value: unknown }>,
+}));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
@@ -38,6 +43,16 @@ vi.mock('@/lib/supabase', () => ({
         data: { session: sessionState.session },
       })),
     },
+    from: (table: string) => ({
+      select: (columns: string) => ({
+        eq: (column: string, value: unknown) => ({
+          maybeSingle: async () => {
+            profileState.reads.push({ table, columns, column, value });
+            return { data: profileState.credits === null ? null : { credits: profileState.credits }, error: null };
+          },
+        }),
+      }),
+    }),
   },
 }));
 
@@ -210,6 +225,78 @@ describe('pricing page currency storage', () => {
     expect(badges).toEqual(['Most popular']);
     expect(screen.getAllByText('Most popular')).toHaveLength(1);
     expect(container.textContent).not.toMatch(/\bHD\b/);
+  });
+});
+
+describe('pricing page balance and credit history link', () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    vi.resetModules();
+    sessionState.session = { access_token: 'buyer-token', user: { id: 'buyer-1' } };
+    profileState.credits = 1295;
+    profileState.reads = [];
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(async () => new Response(
+      JSON.stringify({ base: 'INR', rates: { INR: 1, USD: 0.012 }, updatedAt: '2026-10-15' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows a signed-in buyer's balance beside the way to the credit history", async () => {
+    profileState.credits = 150000;
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" />);
+
+    expect(await screen.findByText('1,50,000 credits')).toBeInTheDocument();
+    expect(screen.getByText('Available balance')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Credit history' })).toHaveAttribute('href', '/credits');
+    expect(profileState.reads).toEqual([{ table: 'profiles', columns: 'credits', column: 'id', value: 'buyer-1' }]);
+  });
+
+  it('reads the balance again whenever the page is told it moved', async () => {
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" />);
+    // The first read is made by the effect that also starts listening.
+    expect(await screen.findByText('1,295 credits')).toBeInTheDocument();
+
+    profileState.credits = 1795;
+    await act(async () => {
+      window.dispatchEvent(new Event('credits_updated'));
+    });
+
+    expect(await screen.findByText('1,795 credits')).toBeInTheDocument();
+    expect(profileState.reads).toHaveLength(2);
+  });
+
+  it("says the balance is loading, in the app's words and never as 0, while it is not known", async () => {
+    profileState.credits = null;
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" />);
+
+    expect(await screen.findByRole('link', { name: 'Credit history' })).toBeInTheDocument();
+    expect(screen.getByText('Balance loading…')).toBeInTheDocument();
+    expect(screen.queryByText(/^0 credits$/)).toBeNull();
+  });
+
+  it('shows neither to a signed-out visitor', async () => {
+    sessionState.session = null;
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="IN" />);
+
+    await screen.findByLabelText('Currency');
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText('Available balance')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Credit history' })).toBeNull();
+    expect(profileState.reads).toEqual([]);
   });
 });
 

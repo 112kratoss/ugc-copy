@@ -37,6 +37,7 @@ describe('app shell navigation', () => {
   it('gives public search its own Explore entry and title', () => {
     expect(getActiveAppNavItem('/search')?.id).toBe('search');
     expect(getAppShellTitle('/search')).toBe('Search');
+    expect(getAppShellTitle('/credits')).toBe('Credit history');
     // A query string never reaches usePathname, but the bare path must not be
     // claimed by any neighbouring section.
     expect(getActiveAppNavItem('/showcase')?.id).toBe('showcase');
