@@ -33,6 +33,7 @@ import {
 } from '@/components/ui';
 import { WhatsNewModelsStrip } from '@/components/whats-new-models-strip';
 import { ensureAiDataConsent } from '@/lib/ai-data-consent';
+import { ApiError } from '@/lib/api-client';
 import { acquireActivityLock } from '@/lib/app-activity';
 import { showConfirmDialog } from '@/lib/dialog';
 import { reportGenerationOutput } from '@/lib/use-viewer-action-handlers';
@@ -700,6 +701,14 @@ function createMobileGenerationIdempotencyKey(prefix: CreatorToolId) {
   return `${prefix}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
 }
 
+/** What the remix banner says when only an account can read the source. */
+const REMIX_RESTORE_SIGN_IN_MESSAGE = 'Sign in to restore remix source media.';
+
+/** The answer of a route the server keeps for accounts, to a guest's token. */
+function isRegistrationRequiredError(error: unknown) {
+  return error instanceof ApiError && error.status === 403 && error.code === 'REGISTRATION_REQUIRED';
+}
+
 type MediaCreationScreenProps = {
   initialTool?: CreatorToolId;
   insideTab?: boolean;
@@ -754,10 +763,12 @@ function IdentityCreationScreen({
   const theme = useAppTheme();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  // `user` still gates remix restore, which pulls another creator's source
-  // media out of the community feed. Generating and enhancing key off
-  // `identityUserId` so a guest can spend the credits they just bought.
-  const { user, identityUserId, isGuest, session, api, credits, updateCredits, refreshProfile, ensureGuestMergeTicket } = useAuth();
+  // Generating and enhancing key off `identityUserId` so a guest can spend the
+  // credits they just bought. So does the remix restore: the server serves a
+  // guest the source of its own or a linked creation, and keeps another
+  // creator's for accounts (403 REGISTRATION_REQUIRED), which the restore
+  // answers with its sign-in line (D4).
+  const { identityUserId, isGuest, session, api, credits, updateCredits, refreshProfile, ensureGuestMergeTicket } = useAuth();
   const queryClient = useQueryClient();
   const [activeTool, setActiveTool] = useState<CreatorToolId>(isTool(initialTool) ? initialTool : 'image');
   const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => ({
@@ -1343,8 +1354,10 @@ function IdentityCreationScreen({
   useEffect(() => {
     const generationId = remixSource?.generationId?.trim();
     if (!generationId || !catalog || !draftsHydrated || resumedRemixRef.current || remixHydrationKeyRef.current === generationId) return;
-    if (!user) {
-      setRemixRestoreWarning('Sign in to restore remix source media.');
+    // No identity to read the source as: the guest bootstrap failed, or the
+    // session is not back yet. Signing in is then the way to get one.
+    if (!identityUserId) {
+      setRemixRestoreWarning(REMIX_RESTORE_SIGN_IN_MESSAGE);
       return;
     }
 
@@ -1413,6 +1426,13 @@ function IdentityCreationScreen({
       .catch((error) => {
         if (isCancelled) return;
         remixHydrationKeyRef.current = null;
+        // Another creator's source, read as a guest: the server keeps it for
+        // accounts. Not a failed restore, so Generate stays free for what the
+        // editor holds, as it always was for a guest.
+        if (isRegistrationRequiredError(error)) {
+          setRemixRestoreWarning(REMIX_RESTORE_SIGN_IN_MESSAGE);
+          return;
+        }
         recordCreatorSession({
           tool: targetTool,
           outcome: 'restore_failed',
@@ -1443,7 +1463,7 @@ function IdentityCreationScreen({
       // is back, and marked resolved, before this cleanup runs.
       setIsRestoringRemix(false);
     };
-  }, [api, catalog, loadCatalogDetails, draftsHydrated, initialTool, remixSource?.generationId, remixSource?.postId, remixRetry, user]);
+  }, [api, catalog, loadCatalogDetails, draftsHydrated, initialTool, remixSource?.generationId, remixSource?.postId, remixRetry, identityUserId]);
 
   const updatePrompt = (prompt: string) => {
     if (activeTool === 'image') setImageDraft((draft) => ({ ...draft, prompt }));

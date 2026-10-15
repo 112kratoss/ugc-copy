@@ -24,11 +24,16 @@ const authState = vi.hoisted(() => ({
     reportTemplate: vi.fn(),
     shareShowcasePost: vi.fn(),
   },
+  // A guest holds an identity and no account: `user` null, `identityUserId` its
+  // own (lib/auth.tsx). Templates run on the identity (D4).
   user: { id: 'user-1' } as { id: string } | null,
-  identityUserId: 'user-1',
+  identityUserId: 'user-1' as string | null,
+  isGuest: false,
   credits: 500,
   isLoading: false,
   refreshProfile: vi.fn(async () => undefined),
+  // Never rejects, and mints nothing while the guest already keeps a ticket (lib/auth.tsx).
+  ensureGuestMergeTicket: vi.fn(async () => undefined),
 }));
 
 const dialogState = vi.hoisted(() => ({ showConfirmDialog: vi.fn(), showErrorDialog: vi.fn(), showMessageDialog: vi.fn() }));
@@ -174,7 +179,8 @@ import type { TemplateRunResponse } from '../lib/types';
 
 const TEMPLATE_ID = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 const MINUTE_MS = 60_000;
-const RUN_KEY = ['media-template-run', 'run-1'] as const;
+/** The run as the identity on the phone read it: a sign-out leaves another identity, a guest. */
+const runKey = () => ['media-template-run', authState.identityUserId, 'run-1'] as const;
 
 /** A Storage address signed the way Supabase signs one: `exp` in seconds, inside the token. */
 function signedUrl(path: string, expiresInMs: number, nonce: string) {
@@ -260,7 +266,7 @@ async function mount() {
 
 /** What the run's poll does: the query's own read, as its interval would start it. */
 async function poll() {
-  await renderer.act(async () => { await client.refetchQueries({ queryKey: RUN_KEY }); });
+  await renderer.act(async () => { await client.refetchQueries({ queryKey: runKey() }); });
   await flush();
 }
 
@@ -308,6 +314,9 @@ beforeEach(() => {
   dialogState.showMessageDialog.mockReset();
   actionSheetState.showActionSheet.mockReset();
   authState.user = { id: 'user-1' };
+  authState.identityUserId = 'user-1';
+  authState.isGuest = false;
+  authState.ensureGuestMergeTicket.mockClear();
   resumeState.forgetTemplateRun.mockReset().mockResolvedValue(false);
   resumeState.loadResumableTemplateRun.mockReset().mockResolvedValue(null);
   resumeState.loadResumableTemplateRuns.mockReset().mockResolvedValue({});
@@ -673,6 +682,85 @@ describe('starting (below the cut)', () => {
   });
 });
 
+describe('a guest’s run (D4)', () => {
+  const collecting = () => runResponse({
+    status: 'collecting_inputs',
+    inputSlots: [{ key: 'subject', kind: 'image', label: 'Your subject', required: true }],
+    inputs: { subject: { previewUrl: 'https://cdn.example.com/subject.png' } },
+  });
+
+  beforeEach(() => {
+    authState.user = null;
+    authState.identityUserId = 'guest-1';
+    authState.isGuest = true;
+  });
+
+  it('opens the guest’s own run, read with its own session, and remembers it under the guest', async () => {
+    answerReads(collecting());
+    const tree = await mount();
+
+    expect(authState.api.getTemplateRun).toHaveBeenCalledWith('run-1');
+    expect(statusBlocks(tree).map((block) => block.title)).not.toContain('Sign in to continue');
+    expect(labels(tree)).toContain('Start workflow');
+    expect(resumeState.rememberTemplateRun).toHaveBeenCalledWith('guest-1', expect.objectContaining({ id: 'run-1', status: 'collecting_inputs' }));
+  });
+
+  it.each([
+    ['a guest', true, 1],
+    ['an account', false, 0],
+  ] as const)('keeps a merge ticket for what the run makes once %s starts it (guest: %s)', async (_who, isGuest, tickets) => {
+    if (!isGuest) {
+      authState.user = { id: 'user-1' };
+      authState.identityUserId = 'user-1';
+    }
+    authState.isGuest = isGuest;
+    answerReads(collecting());
+    authState.api.startTemplateRun.mockResolvedValue(runResponse({ status: 'queued' }));
+    const tree = await mount();
+
+    await press(button(tree, 'Start workflow'));
+
+    expect(authState.api.startTemplateRun).toHaveBeenCalledWith('run-1');
+    expect(authState.ensureGuestMergeTicket).toHaveBeenCalledTimes(tickets);
+  });
+
+  it('asks a reader with no identity at all to sign in, and back to this run, and reads nothing', async () => {
+    authState.identityUserId = null;
+    authState.isGuest = false;
+    answerReads(collecting());
+    const tree = await mount();
+
+    expect(authState.api.getTemplateRun).not.toHaveBeenCalled();
+    expect(statusBlocks(tree).map((block) => block.title)).toEqual(['Sign in to continue']);
+    await press(button(tree, 'Sign in'));
+    expect(routerState.replace).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/template-runs/run-1' } });
+  });
+
+  it('never shows the last identity’s run to the next one on the phone', async () => {
+    // An account's run on screen; signing out leaves a guest, which may not read it.
+    authState.user = { id: 'user-1' };
+    authState.identityUserId = 'user-1';
+    authState.isGuest = false;
+    answerReads(
+      runResponse({ status: 'awaiting_approval', steps: [reviewStep('first'), videoStep('queued')] }),
+      new ApiError('Template run not found.', 404, undefined, undefined, 'RUN_NOT_FOUND'),
+    );
+    const tree = await mount();
+    expect(hosts(tree, 'media-preview')).toHaveLength(1);
+
+    authState.user = null;
+    authState.identityUserId = 'guest-1';
+    authState.isGuest = true;
+    await renderer.act(async () => { tree.update(screen()); });
+    await flush();
+
+    expect(authState.api.getTemplateRun).toHaveBeenCalledTimes(2);
+    expect(hosts(tree, 'media-preview')).toHaveLength(0);
+    expect(labels(tree)).not.toContain('Approve & continue');
+    expect(statusBlocks(tree)).toEqual([expect.objectContaining({ title: 'Could not restore this creation', body: 'Template run not found.' })]);
+  });
+});
+
 describe('the catalog (01-5)', () => {
   /** A poster as the list signs it: the stored file under its version, a new token on every read. */
   const poster = (id: string, nonce: string) => signedUrl(`template_assets/${id}/version-1/poster.webp`, 24 * 60 * MINUTE_MS, nonce);
@@ -859,8 +947,23 @@ describe('the catalog (01-5)', () => {
     await expect(readRun('offline')).rejects.toThrow('Network request failed.');
   });
 
-  it('asks no stored runs of a signed-out reader', async () => {
+  it('offers a guest the runs it keeps on this phone, read as the guest (D4)', async () => {
     authState.user = null;
+    authState.identityUserId = 'guest-1';
+    authState.isGuest = true;
+    authState.api.listMediaTemplates.mockResolvedValue(page('first', ['a']));
+    const going = runResponse({ id: 'run-a', templateId: 'a', status: 'processing' }).run;
+    resumeState.loadResumableTemplateRuns.mockResolvedValue({ a: going });
+    const tree = await mountCatalog();
+
+    expect(resumeState.loadResumableTemplateRuns).toHaveBeenCalledWith(expect.objectContaining({ userId: 'guest-1' }));
+    await press(hosts(tree, 'pressable').find((node) => node.props.accessibilityLabel === 'Resume your run of Template a')!);
+    expect(routerState.push).toHaveBeenCalledWith('/template-runs/run-a');
+  });
+
+  it('asks no stored runs of a reader with no identity at all', async () => {
+    authState.user = null;
+    authState.identityUserId = null;
     authState.api.listMediaTemplates.mockResolvedValue(page('first', ['a']));
     await mountCatalog();
     expect(resumeState.loadResumableTemplateRuns).not.toHaveBeenCalled();
@@ -1081,8 +1184,10 @@ describe('a template’s page (01-3, 01-7, 01-9, 01-10)', () => {
     expect(dialogState.showErrorDialog).not.toHaveBeenCalled();
   });
 
-  it('sends a reader who is not signed in to sign in, and back to the template, before a report', async () => {
+  it('sends a guest to sign in, and back to the template, before a report (D3: reports stay with accounts)', async () => {
     authState.user = null;
+    authState.identityUserId = 'guest-1';
+    authState.isGuest = true;
     authState.api.getMediaTemplate.mockResolvedValue(detail());
     const tree = await mountDetail();
 
@@ -1090,5 +1195,66 @@ describe('a template’s page (01-3, 01-7, 01-9, 01-10)', () => {
 
     expect(actionSheetState.showActionSheet).not.toHaveBeenCalled();
     expect(routerState.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/templates/car-reveal' } });
+  });
+
+  describe('for a guest (D4)', () => {
+    const SIGN_IN_HERE = { pathname: '/auth', params: { returnTo: '/templates/car-reveal' } };
+
+    beforeEach(() => {
+      authState.user = null;
+      authState.identityUserId = 'guest-1';
+      authState.isGuest = true;
+    });
+
+    it('starts a run on the guest’s own identity, remembers it there, and opens its page', async () => {
+      authState.api.getMediaTemplate.mockResolvedValue(detail());
+      authState.api.createMediaTemplateRun.mockResolvedValue(runResponse({ id: 'run-new', status: 'collecting_inputs' }));
+      const tree = await mountDetail();
+      // The public read: a guest's token on `/api/templates/[id]` is answered 403.
+      expect(authState.api.getMediaTemplate).toHaveBeenCalledWith('car-reveal', { withSession: false });
+
+      await press(button(tree, 'Use this template'));
+
+      expect(authState.api.createMediaTemplateRun).toHaveBeenCalledWith(TEMPLATE_ID, expect.any(String));
+      expect(resumeState.rememberTemplateRun).toHaveBeenCalledWith('guest-1', expect.objectContaining({ id: 'run-new', templateId: TEMPLATE_ID, status: 'collecting_inputs' }));
+      expect(routerState.push).toHaveBeenCalledTimes(1);
+      expect(routerState.push).toHaveBeenCalledWith('/template-runs/run-new');
+    });
+
+    it('offers the guest its own run of the template to resume', async () => {
+      authState.api.getMediaTemplate.mockResolvedValue(detail());
+      resumeState.loadResumableTemplateRun.mockResolvedValue(runResponse({ id: 'run-7', status: 'processing' }).run);
+      const tree = await mountDetail();
+
+      expect(resumeState.loadResumableTemplateRun).toHaveBeenCalledWith(expect.objectContaining({ userId: 'guest-1', templateId: TEMPLATE_ID }));
+      await press(hosts(tree, 'pressable').find((node) => node.props.accessibilityLabel === 'Resume your run of Car reveal')!);
+      expect(routerState.push).toHaveBeenCalledWith('/template-runs/run-7');
+    });
+
+    it('still asks the guest to sign in, and back to the template, for a run the server keeps for accounts', async () => {
+      authState.api.getMediaTemplate.mockResolvedValue(detail());
+      authState.api.createMediaTemplateRun.mockRejectedValue(new ApiError('Create an account to use this feature.', 403, undefined, undefined, 'REGISTRATION_REQUIRED'));
+      const tree = await mountDetail();
+
+      await press(button(tree, 'Use this template'));
+
+      expect(authState.api.createMediaTemplateRun).toHaveBeenCalledTimes(1);
+      expect(routerState.push).toHaveBeenCalledWith(SIGN_IN_HERE);
+      // A way on, not a failure to start.
+      expect(statusBlocks(tree).map((block) => block.title)).not.toContain('Could not start');
+      expect(resumeState.rememberTemplateRun).not.toHaveBeenCalled();
+    });
+
+    it('sends a reader with no identity at all to sign in before a start, and asks the server nothing', async () => {
+      authState.identityUserId = null;
+      authState.isGuest = false;
+      authState.api.getMediaTemplate.mockResolvedValue(detail());
+      const tree = await mountDetail();
+
+      await press(button(tree, 'Use this template'));
+
+      expect(authState.api.createMediaTemplateRun).not.toHaveBeenCalled();
+      expect(routerState.push).toHaveBeenCalledWith(SIGN_IN_HERE);
+    });
   });
 });

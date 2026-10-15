@@ -273,6 +273,7 @@ import { creationDraftStorageKey, ordinaryDraftScope, remixDraftScope } from '..
 import { activeGenerationRecordStorageKey } from '../lib/active-generation-record';
 import type { ModelCatalogKind, ModelCatalogSummary } from '../lib/model-catalog/protocol';
 import { PrimaryButton, SecondaryButton } from '../components/ui';
+import { ApiError } from '../lib/api-client';
 import whatsNewContract from '../../contracts/whats-new-models-v1.json';
 
 const referenceModeIs = (value: 'frames' | 'elements') => [{ source: 'setting' as const, key: 'referenceMode', operator: 'equals' as const, value }];
@@ -1617,6 +1618,77 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(collectText(tree.root)).not.toContain(RESTORING);
       expect(promptOf(tree)).toBe('A scene of my own');
       expect(generate(tree).props.disabled).toBe(false);
+    });
+  });
+
+  // D4: a guest restores the source of its own or a linked creation; the server keeps
+  // another creator's for accounts and answers a guest 403 REGISTRATION_REQUIRED.
+  describe('a remix restore for a guest (D4)', () => {
+    const SIGN_IN_LINE = 'Sign in to restore remix source media.';
+    const RESTORING = 'Restoring the original prompt, settings, and references…';
+    const source = { generation: { id: 'gen-1', title: 'Source', prompt: 'Restored prompt', category: 'image', model: 'nano-banana-2' }, result: null, inputs: { image: { elements: [] } }, workflowSettings: { model: 'nano-banana-2' }, restoreIssues: [] };
+    const accountsOnly = () => new ApiError(
+      'Create an account to use this feature.',
+      403,
+      { error: 'Create an account to use this feature.', code: 'REGISTRATION_REQUIRED' },
+      undefined,
+      'REGISTRATION_REQUIRED',
+    );
+    const editor = () => <MediaCreationScreen initialTool="image" remixSource={{ generationId: 'gen-1', postId: 'post-1' }} />;
+    // Past the quote's delay and the autosave's, and past every storage read a load makes.
+    const settle = () => renderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+    const promptOf = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value;
+    const generate = (tree: renderer.ReactTestRenderer) => findPressableByLabelPrefix(tree.root, 'Generate ·');
+
+    beforeEach(() => {
+      authState.user = null;
+      authState.identityUserId = 'guest-1';
+      authState.isGuest = true;
+    });
+
+    it('restores the source of the guest’s own creation', async () => {
+      authState.api.getRemixSourceBundle.mockResolvedValue(source);
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(editor()); });
+      await settle();
+
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledWith('gen-1', { postId: 'post-1' });
+      expect(promptOf(tree)).toBe('Restored prompt');
+      expect(collectText(tree.root)).not.toContain(SIGN_IN_LINE);
+      expect(collectText(tree.root)).not.toContain(RESTORING);
+      expect(generate(tree).props.disabled).toBe(false);
+    });
+
+    it('says to sign in for another creator’s source, and leaves Generate to what the editor holds', async () => {
+      authState.api.getRemixSourceBundle.mockRejectedValue(accountsOnly());
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(editor()); });
+      await settle();
+      renderer.act(() => {
+        tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('A scene of my own');
+      });
+      await settle();
+
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+      const text = collectText(tree.root);
+      expect(text).toContain(SIGN_IN_LINE);
+      expect(text).not.toContain('Create an account to use this feature.');
+      expect(text).not.toContain(RESTORING);
+      // Who may read the source, not a failed restore: Generate is not held for it.
+      expect(promptOf(tree)).toBe('A scene of my own');
+      expect(generate(tree).props.disabled).toBe(false);
+      expect(readCreatorSession()?.outcome).not.toBe('restore_failed');
+    });
+
+    it('reads nothing, and says to sign in, with no identity at all', async () => {
+      authState.identityUserId = null;
+      authState.isGuest = false;
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(editor()); });
+      await settle();
+
+      expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+      expect(collectText(tree.root)).toContain(SIGN_IN_LINE);
     });
   });
 
