@@ -117,6 +117,7 @@
       "method": "DELETE",
       "path": "/api/account",
       "auth": "required",
+      "guestToken": "A guest's own token deletes the guest identity and what it made (D5) with the same request and needs no reauthentication: no recent sign-in and no appleAuthorizationCode. The answers are the ones below; a guest since linked to an account gets errors.guestLinked.",
       "cacheControl": "private, no-store",
       "request": {
         "confirmation": "DELETE",
@@ -167,6 +168,13 @@
           "response": {
             "error": "This account is being permanently deleted.",
             "code": "ACCOUNT_DELETING"
+          }
+        },
+        "guestLinked": {
+          "status": 409,
+          "response": {
+            "error": "This guest session has been linked to an account. Sign in to continue.",
+            "code": "SESSION_MERGED"
           }
         },
         "deletionNotStarted": {

@@ -1568,8 +1568,11 @@ export function createApiClient({
       /**
        * Send the session, so the owner reads their own draft or disabled
        * template with its status. A registered account only: the server
-       * answers a guest's token on `/api/templates*` with 403. The answer can
-       * be the owner's, so it is never kept in the shared five-minute copy.
+       * answers a guest's token on this read, and on the other authoring
+       * routes under `/api/templates`, with 403. (Since D4 a guest's token is
+       * taken on `POST /api/templates/:id/runs`, which starts a run of a
+       * published template: `createMediaTemplateRun`.) The answer can be the
+       * owner's, so it is never kept in the shared five-minute copy.
        */
       withSession?: boolean;
     } = {}) => {

@@ -241,6 +241,7 @@ Failed and processing states say what happens next.
 - **Blocked users** (`/profile/blocked`, a quiet row under the profile's shortcuts): whom you have blocked, newest first, each with Unblock. It is the one way to take a block back, because a blocked creator is left out of every place that would show them. Unblock asks first, and the row leaves at the answer, not at the server's reply: a refusal draws it again in its place and says why in a toast, and a success says so and lets Explore draw them again. A list that cannot be read says so and never reads as empty.
 - **Public profiles** (`/creators/[username]`): Follow (Edit Profile on your own), Share profile, and for anyone but the creator a ⋯ with Report user and Block user, as on the app's creator screen. Their answers are toasts, and a block leaves for Explore.
 - **Pricing** (`/pricing`): Razorpay credit packs.
+- **Credit history** (`/credits`, `noindex`, from the account menu and the balance on Pricing): every credit in and out, newest first, with signed amounts and Load more, in the words of the app's Credit History screen. A signed-out visitor goes to `/login?returnUrl=/credits`.
 - **Invite & Earn** (`/invite`).
 - **The operator console** (`/admin`): it lives in the same app under its own shell, `AdminShell`. It uses `Surface` and `Text` like everything else; see `AGENTS.md` for its auth model.
 

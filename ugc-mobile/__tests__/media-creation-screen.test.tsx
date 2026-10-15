@@ -1690,6 +1690,43 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
       expect(collectText(tree.root)).toContain(SIGN_IN_LINE);
     });
+
+    // A retry would get the same answer: signing in is the way on, back to this remix.
+    it.each([
+      ['another creator’s source', () => { authState.api.getRemixSourceBundle.mockRejectedValue(accountsOnly()); }],
+      ['no identity at all', () => { authState.identityUserId = null; authState.isGuest = false; }],
+    ])('offers Sign in under the sign-in line for %s, in place of a retry', async (_label, arrange) => {
+      arrange();
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(editor()); });
+      await settle();
+      expect(collectText(tree.root)).toContain(SIGN_IN_LINE);
+      expect(() => findPressableByText(tree.root, 'Retry restore')).toThrow();
+      const reads = authState.api.getRemixSourceBundle.mock.calls.length;
+
+      await renderer.act(async () => { findPressableByText(tree.root, 'Sign in').props.onPress(); });
+
+      expect(routerState.push).toHaveBeenCalledTimes(1);
+      expect(routerState.push).toHaveBeenCalledWith({
+        pathname: '/auth',
+        params: { returnTo: '/create/image?remix=gen-1&remixPost=post-1' },
+      });
+      // Nothing is read again until the identity changes.
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(reads);
+      // The other way on stays: the creator's own inputs.
+      expect(findPressableByText(tree.root, 'Use available inputs')).toBeTruthy();
+    });
+
+    it('offers a retry, and no sign-in, for a restore that failed', async () => {
+      authState.api.getRemixSourceBundle.mockRejectedValue(new Error('The source could not be read.'));
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(editor()); });
+      await settle();
+
+      expect(collectText(tree.root)).toContain('The source could not be read.');
+      expect(findPressableByText(tree.root, 'Retry restore')).toBeTruthy();
+      expect(() => findPressableByText(tree.root, 'Sign in')).toThrow();
+    });
   });
 
   // The catalog reaches the screen after it mounts, so a restore usually starts in the same commit

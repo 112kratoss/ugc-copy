@@ -7,6 +7,7 @@ import path from 'node:path';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { canUserCreateDurableUpload } from '@/lib/account-deletion-guard';
+import { resolveLinkedAccountIds } from '@/lib/account-identity';
 import { CatalogError } from '@/lib/generation-model-catalog';
 import {
 } from '@/lib/generation-services';
@@ -87,6 +88,10 @@ const TEMPLATE_CANCELLED_MID_GENERATION_MESSAGE =
   'This step was already generating when the run was cancelled, so its credits stay spent.';
 // What a person is told who approves or retries a step of a run that has ended.
 const TEMPLATE_RUN_ENDED_MESSAGE = 'This run has ended. Start a new run to try the template again.';
+// What an account is told that starts, uploads to, approves or retries a run
+// it started as a guest before signing in (see `RunAccess`).
+const TEMPLATE_RUN_FROM_LINKED_GUEST_MESSAGE =
+  'Runs started before you signed in can only be viewed or cancelled. Start a new run to try the template again.';
 // What the person reads on a run the worker could not carry on with.
 export const TEMPLATE_RUN_ABANDONED_MESSAGE =
   'This run stopped because of a problem on our side and could not be resumed. Start a new run to try again.';
@@ -319,12 +324,48 @@ function isStrandedRetryAttempt(run: Pick<TemplateRunRow, 'status'>, step: Templ
     && (run.status === 'needs_attention' || run.status === 'awaiting_approval');
 }
 
-async function loadOwnedRun(client: SupabaseClient, runId: string, userId: string): Promise<TemplateRunRow> {
+/**
+ * Who a run is loaded for. A run is its owner's: the identity that started
+ * it, a guest's included (D4). A guest's run keeps the guest's id after the
+ * guest signs in, as everything a guest made does (the link moves balances
+ * only), so `ownerOrLinked` also admits the account the guest was linked to:
+ * it reads the run and may cancel it, as it reads, archives and deletes the
+ * guest's other creations. Starting, uploading, approving and retrying stay
+ * the owner's: each sets paid work going that is charged to the run's owner,
+ * whose credits the link moved to the account, and its uploads are kept
+ * under the owner's id. Such an account is told why rather than "not found".
+ */
+type RunAccess = 'owner' | 'ownerOrLinked';
+
+async function loadOwnedRun(
+  client: SupabaseClient,
+  runId: string,
+  userId: string,
+  access: RunAccess = 'owner',
+): Promise<TemplateRunRow> {
   const { data, error } = await client.from('template_runs').select(RUN_SELECT)
     .eq('id', runId).eq('user_id', userId).maybeSingle();
   if (error) throw error;
-  if (!data) throw new MediaTemplateError('Template run not found.', 404, 'RUN_NOT_FOUND');
-  return data as unknown as TemplateRunRow;
+  if (data) return data as unknown as TemplateRunRow;
+  const linkedRun = await loadLinkedGuestRun(client, runId, userId);
+  if (!linkedRun) throw new MediaTemplateError('Template run not found.', 404, 'RUN_NOT_FOUND');
+  if (access === 'ownerOrLinked') return linkedRun;
+  throw new MediaTemplateError(TEMPLATE_RUN_FROM_LINKED_GUEST_MESSAGE, 409, 'RUN_FROM_LINKED_GUEST');
+}
+
+/**
+ * The run when its owner is a guest identity since linked to this account,
+ * otherwise null. Asked only after the caller's own read missed, so a run of
+ * one's own costs no lookup. A failed lookup of the linked ids reads as none
+ * (`resolveLinkedAccountIds`), which leaves the run someone else's.
+ */
+async function loadLinkedGuestRun(client: SupabaseClient, runId: string, userId: string) {
+  const linkedIds = (await resolveLinkedAccountIds(client, userId)).filter((id) => id !== userId);
+  if (!linkedIds.length) return null;
+  const { data, error } = await client.from('template_runs').select(RUN_SELECT)
+    .eq('id', runId).in('user_id', linkedIds).maybeSingle();
+  if (error) throw error;
+  return data as unknown as TemplateRunRow | null;
 }
 
 async function loadRunSteps(client: SupabaseClient, runId: string): Promise<TemplateRunStepRow[]> {
@@ -351,8 +392,13 @@ async function loadStepGeneration(client: SupabaseClient, stepId: string) {
   return data as StepGeneration | null;
 }
 
-async function loadRunState(client: SupabaseClient, runId: string, userId: string): Promise<RunState> {
-  const run = await loadOwnedRun(client, runId, userId);
+async function loadRunState(
+  client: SupabaseClient,
+  runId: string,
+  userId: string,
+  access: RunAccess = 'owner',
+): Promise<RunState> {
+  const run = await loadOwnedRun(client, runId, userId, access);
   const [steps, generations] = await Promise.all([
     loadRunSteps(client, run.id),
     loadRunGenerations(client, run.id),
@@ -367,17 +413,19 @@ async function loadRunState(client: SupabaseClient, runId: string, userId: strin
 }
 
 /**
- * The post the owner made from a run's result. A post deleted after it sold
- * is kept as a tombstone for its buyers and counts as gone. A failed read
- * leaves the run without it rather than failing the whole run read.
+ * The post the owner made from a run's result. A guest cannot post, so the
+ * post made from a guest's run is the account's the guest was linked to,
+ * which `ownerIds` names when that account is the reader. A post deleted
+ * after it sold is kept as a tombstone for its buyers and counts as gone. A
+ * failed read leaves the run without it rather than failing the whole run read.
  */
 async function loadLinkedResultPost(
   client: SupabaseClient,
-  ownerId: string,
+  ownerIds: string[],
   generationId: string,
 ): Promise<TemplateRunLinkedPostDto | null> {
   const { data, error } = await client.from('posts').select('id, visibility, archived_at, tombstoned_at')
-    .eq('generation_id', generationId).eq('user_id', ownerId).maybeSingle();
+    .eq('generation_id', generationId).in('user_id', ownerIds).maybeSingle();
   if (error) {
     logBackendError('template_run_linked_post_unavailable', { generationId, error });
     return null;
@@ -401,7 +449,12 @@ function generationCredits(generations: Iterable<GenerationRow>): number {
   return credits;
 }
 
-async function toRunDto(client: SupabaseClient, state: RunState): Promise<TemplateRunDto> {
+/** `readerUserId` is who the run is read for: its owner, or an account its guest owner was linked to. */
+async function toRunDto(
+  client: SupabaseClient,
+  state: RunState,
+  readerUserId: string = state.run.user_id,
+): Promise<TemplateRunDto> {
   const inputSlots = asInputSlots(state.run.input_manifest);
   const storedInputs = asStoragePaths(state.run.input_storage_paths);
   const publicInputs = Object.fromEntries(inputSlots.flatMap((slot) => storedInputs[slot.key]
@@ -421,7 +474,9 @@ async function toRunDto(client: SupabaseClient, state: RunState): Promise<Templa
         { url: state.run.result_url, generationId: resultGenerationId, kind: state.run.output_kind },
       ],
     }),
-    resultGenerationId ? loadLinkedResultPost(client, state.run.user_id, resultGenerationId) : null,
+    resultGenerationId
+      ? loadLinkedResultPost(client, Array.from(new Set([state.run.user_id, readerUserId])), resultGenerationId)
+      : null,
   ]);
   const steps = orderedLatestSteps.map((step, index) => ({
     id: step.id,
@@ -1605,7 +1660,8 @@ export async function startTemplateRun(params: {
 }
 
 /** Pure owned read. Template execution belongs to the leased worker; a GET
- * must never poll providers, start paid nodes, or become required for progress. */
+ * must never poll providers, start paid nodes, or become required for progress.
+ * A guest's run stays readable by the account the guest was linked to. */
 export async function getTemplateRun(params: {
   adminClient: SupabaseClient;
   runId: string;
@@ -1613,7 +1669,8 @@ export async function getTemplateRun(params: {
 }): Promise<TemplateRunDto> {
   return toRunDto(
     params.adminClient,
-    await loadRunState(params.adminClient, params.runId, params.userId),
+    await loadRunState(params.adminClient, params.runId, params.userId, 'ownerOrLinked'),
+    params.userId,
   );
 }
 
@@ -1819,8 +1876,13 @@ export async function retryTemplateRunStep(params: {
   return toRunDto(params.adminClient, next);
 }
 
+/**
+ * Cancelling sets nothing going and spends nothing, so the account a guest
+ * was linked to may cancel the guest's run as well as read it (`RunAccess`);
+ * the run stays the guest's.
+ */
 export async function cancelTemplateRun(client: SupabaseClient, runId: string, userId: string): Promise<TemplateRunDto> {
-  let state = await loadRunState(client, runId, userId);
+  let state = await loadRunState(client, runId, userId, 'ownerOrLinked');
   if (!TERMINAL_RUN_STATUSES.has(state.run.status)) {
     // Settle provider work that already finished before deciding what the
     // cancel interrupts: a completed generation should read succeeded with its
@@ -1844,7 +1906,7 @@ export async function cancelTemplateRun(client: SupabaseClient, runId: string, u
       } catch (error) {
         logBackendError('failed_to_synchronize_template_generations', { error: error });
       }
-      state = await loadRunState(client, runId, userId);
+      state = await loadRunState(client, runId, userId, 'ownerOrLinked');
     }
     // A generation can finish before a pass of the worker records it on its
     // step, so this runs whether or not one was still active.
@@ -1856,7 +1918,7 @@ export async function cancelTemplateRun(client: SupabaseClient, runId: string, u
       status: 'cancelled',
       completed_at: now,
       error_message: null,
-    }).eq('id', state.run.id).eq('user_id', userId);
+    }).eq('id', state.run.id).eq('user_id', state.run.user_id);
     if (cancelError) throw cancelError;
     // From here the run is cancelled whatever becomes of its steps, so a
     // write the database refuses is logged and the person is still answered.
@@ -1876,8 +1938,8 @@ export async function cancelTemplateRun(client: SupabaseClient, runId: string, u
     const keepError = await keepFinishedStepOutputs(client, state.run);
     if (keepError) logBackendError('template_run_cancel_cleanup_failed', { runId, error: keepError });
   }
-  const cancelledState = await loadRunState(client, runId, userId);
-  return toRunDto(client, await cleanupTemplateRunInputs(client, cancelledState));
+  const cancelledState = await loadRunState(client, runId, userId, 'ownerOrLinked');
+  return toRunDto(client, await cleanupTemplateRunInputs(client, cancelledState), userId);
 }
 
 /**

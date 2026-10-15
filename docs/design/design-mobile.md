@@ -344,7 +344,7 @@ Home's menu button opens a drawer (`components/home-side-menu.tsx`) with Templat
 These screens push over the tabs:
 - `create/[tool]`, `post/new`, `post/[id]`, `viewer` (the reel);
 - `creators/[username]`, `showcase/[id]`;
-- `edit-profile`, `settings`, `blocked-users`, `help`, `invite`, `unlocks`, `unlock/[unlockId]`;
+- `edit-profile`, `settings`, `blocked-users`, `help`, `invite`, `unlocks`, `unlock/[unlockId]`, `credit-history`;
 - `marketplace/[assetId]`, `seller-dashboard`;
 - `templates`, `templates/[slug]`, `template-runs/[runId]`;
 - `profile-media-feed`, `delete-account`.
@@ -562,12 +562,15 @@ Create is a prompt-first single page for Image, Video and Motion, not a wizard.
 
 Buying and restoring show loading, success and error states.
 
+**Credit History** (`app/credit-history.tsx`, from the balance card's Credit history row and from Profile's Credits card) lists every credit in and out, newest first, for a guest and an account alike: signed amounts, rows that are not buttons, load more, pull to refresh, and the words of the web's `/credits`.
+
 ### Settings
 
 `app/settings.tsx`.
 
 - Appearance is a segmented control with radio semantics (System, Light, Dark), and the change lands in the same frame.
 - Below it come the account rows (profile, credits, invite, alerts), help, the legal pages, and account deletion.
+- A guest gets **Delete guest data** in the account deletion row's place: red, with no chevron because it acts in place, and a confirmation first that says the guest's creations, uploads and credits go for good and that creating an account first keeps them. The phone then starts again as a fresh guest on Home. An account's deletion stays on `app/delete-account.tsx`, which tells a guest who reaches it by link that no account is signed in and points here.
 - **Blocked users** (`app/blocked-users.tsx`, under Privacy, for a signed-in account): whom you have blocked, newest first, each with Unblock. It is the one way to take a block back, because a blocked creator is left out of every feed, search and profile that would show them. Unblock asks first (`showConfirmDialog`), and the row leaves at the answer, not at the server's reply: a button that waits on the network reads as a tap that did not land. Rows being unblocked are left out of the list, not taken off it, so a refusal draws the row again in its place whatever else is on its way; on success the feeds a block emptied are read afresh, and a list cut at its limit is read again for the blocks before the ones shown. A list that cannot be read says so and never reads as empty. Its words live in `lib/blocked-users-view-model.ts`; the web has the same list at `/profile/blocked`.
 
 ### Onboarding

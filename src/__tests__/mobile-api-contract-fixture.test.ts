@@ -77,6 +77,7 @@ type MobileApiContractFixture = {
         appleReauthenticationRequired: { status: 403; response: { code: string; reason: 'reauthentication_required'; reauthenticate: true } };
         appleVerificationUnavailable: { status: 503; response: { code: string } };
         accountDeleting: { status: 409; response: { code: 'ACCOUNT_DELETING' } };
+        guestLinked: { status: 409; response: { code: 'SESSION_MERGED' } };
         deletionNotStarted: { status: 500; response: { code: string; deletionScheduled: false } };
         deletionRetryScheduled: { status: 500; response: { code: string; deletionScheduled: true } };
       };
@@ -278,6 +279,15 @@ describe('shared mobile API v1 contract fixture', () => {
           response: { code: 'APPLE_REVOCATION_UNAVAILABLE' },
         },
         accountDeleting: { status: 409, response: { code: 'ACCOUNT_DELETING' } },
+        // D5: a guest deletes itself with its own token; one already linked to
+        // an account is refused as identity admission refuses its session.
+        guestLinked: {
+          status: 409,
+          response: {
+            error: 'This guest session has been linked to an account. Sign in to continue.',
+            code: 'SESSION_MERGED',
+          },
+        },
         deletionNotStarted: { status: 500, response: { code: 'ACCOUNT_DELETION_NOT_STARTED', deletionScheduled: false } },
         deletionRetryScheduled: { status: 500, response: { code: 'ACCOUNT_DELETION_RETRY_SCHEDULED', deletionScheduled: true } },
       },

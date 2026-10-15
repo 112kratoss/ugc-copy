@@ -2466,6 +2466,23 @@ function IdentityCreationScreen({
     void reportGenerationOutput({ api, generationId: lastGenerationId, details: 'Reported from the mobile creator result.' });
   };
 
+  // Both layouts draw it. Under the sign-in line (another creator's source,
+  // read as a guest, or no identity at all) a retry gets the same answer, so
+  // the way on is signing in, which comes back to this remix.
+  const remixRestoreBanner = remixRestoreWarning ? (
+    <View style={{ gap: 8 }}>
+      <SlimCreatorBanner label="Remix source" body={remixRestoreWarning} />
+      <View style={{ flexDirection: 'row', gap: 12 }}>
+        {remixRestoreWarning === REMIX_RESTORE_SIGN_IN_MESSAGE ? (
+          <SecondaryButton label="Sign in" onPress={openAuthForCurrentDraft} />
+        ) : (
+          <SecondaryButton label="Retry restore" onPress={() => { remixHydrationKeyRef.current = null; setRemixRetry((value) => value + 1); }} />
+        )}
+        <SecondaryButton label="Use available inputs" onPress={() => { remixResolvedRef.current = true; setRemixRestoreFailed(false); setRemixRestoreWarning(null); }} />
+      </View>
+    </View>
+  ) : null;
+
   if (activeTool !== 'image') {
     const creatorModels = catalog ? getCatalogModels(catalog, activeTool) : [];
     const selectedCreatorModel = currentCatalogModel?.kind === activeTool
@@ -2549,15 +2566,7 @@ function IdentityCreationScreen({
               loading
             />
           ) : null}
-          {remixRestoreWarning ? (
-            <View style={{ gap: 8 }}>
-              <SlimCreatorBanner label="Remix source" body={remixRestoreWarning} />
-              <View style={{ flexDirection: 'row', gap: 12 }}>
-                <SecondaryButton label="Retry restore" onPress={() => { remixHydrationKeyRef.current = null; setRemixRetry((value) => value + 1); }} />
-                <SecondaryButton label="Use available inputs" onPress={() => { remixResolvedRef.current = true; setRemixRestoreFailed(false); setRemixRestoreWarning(null); }} />
-              </View>
-            </View>
-          ) : null}
+          {remixRestoreBanner}
           {draftLoadError ? <View style={{ gap: 8 }}><SlimCreatorBanner label="Draft unavailable" body="Your saved draft could not be read. Retry to continue without overwriting it." /><SecondaryButton label="Retry loading draft" onPress={() => setDraftLoadAttempt((value) => value + 1)} /></View> : null}
           {draftSaveError ? <View style={{ gap: 8 }}><SlimCreatorBanner label="Draft not saved" body={draftSaveError} /><SecondaryButton label="Retry saving draft" onPress={() => { void saveLatestDraft().then(() => setDraftSaveError(null), () => undefined); }} /></View> : null}
           {referenceNotice ? (
@@ -2835,15 +2844,7 @@ function IdentityCreationScreen({
               loading
             />
           ) : null}
-          {remixRestoreWarning ? (
-            <View style={{ gap: 8 }}>
-              <SlimCreatorBanner label="Remix source" body={remixRestoreWarning} />
-              <View style={{ flexDirection: 'row', gap: 12 }}>
-                <SecondaryButton label="Retry restore" onPress={() => { remixHydrationKeyRef.current = null; setRemixRetry((value) => value + 1); }} />
-                <SecondaryButton label="Use available inputs" onPress={() => { remixResolvedRef.current = true; setRemixRestoreFailed(false); setRemixRestoreWarning(null); }} />
-              </View>
-            </View>
-          ) : null}
+          {remixRestoreBanner}
           {draftLoadError ? <View style={{ gap: 8 }}><SlimCreatorBanner label="Draft unavailable" body="Your saved draft could not be read. Retry to continue without overwriting it." /><SecondaryButton label="Retry loading draft" onPress={() => setDraftLoadAttempt((value) => value + 1)} /></View> : null}
           {draftSaveError ? <View style={{ gap: 8 }}><SlimCreatorBanner label="Draft not saved" body={draftSaveError} /><SecondaryButton label="Retry saving draft" onPress={() => { void saveLatestDraft().then(() => setDraftSaveError(null), () => undefined); }} /></View> : null}
           {referenceNotice ? (

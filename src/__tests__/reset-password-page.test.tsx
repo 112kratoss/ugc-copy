@@ -46,15 +46,20 @@ describe('ResetPasswordPage', () => {
     vi.restoreAllMocks();
   });
 
-  it('offers a fresh recovery link when the session is missing or expired', async () => {
+  // D2: no reset email can be sent any more, so an expired link leads back to
+  // sign-in, whose recovery notice names Google and the support address.
+  it('sends a missing or expired link back to sign in without promising a new one', async () => {
     mocks.getSession.mockResolvedValue({ data: { session: null }, error: null });
     render(<ResetPasswordPage />);
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/missing, expired, or already used/i);
-    expect(screen.getByRole('link', { name: /request a new reset link/i })).toHaveAttribute(
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This recovery link is missing, expired, or already used. New reset links can’t be sent by email.'
+    );
+    expect(screen.getByRole('link', { name: 'Back to sign in' })).toHaveAttribute(
       'href',
       '/login?returnUrl=%2Fcreate&recovery=1'
     );
+    expect(screen.queryByText(/request a (fresh|new)/i)).toBeNull();
     expect(screen.queryByLabelText(/new password/i)).not.toBeInTheDocument();
   });
 

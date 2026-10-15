@@ -39,16 +39,23 @@ describe('AuthCodeErrorPage', () => {
     expect(screen.getByText(/The sign-in link may have expired/)).toBeInTheDocument();
   });
 
-  it('unwraps the final destination when requesting a replacement recovery link', async () => {
+  // D2: no reset email can be sent any more, so a dead recovery link leads back
+  // to sign-in (its recovery notice names Google and the support address).
+  it('sends a dead recovery link back to sign in, unwrapping the final destination', async () => {
     render(await AuthCodeErrorPage({
       searchParams: Promise.resolve({
         next: '/auth/reset-password?next=%2Fcreate%2Fimage',
       }),
     }));
 
-    expect(screen.getByRole('link', { name: /request a new link/i })).toHaveAttribute(
+    expect(screen.getByRole('heading', { name: 'This recovery link is no longer valid' })).toBeInTheDocument();
+    expect(screen.getByText(
+      'The link may have expired or already been used. New reset links can’t be sent by email.'
+    )).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to sign in' })).toHaveAttribute(
       'href',
       '/login?returnUrl=%2Fcreate%2Fimage&recovery=1'
     );
+    expect(screen.queryByText(/request a (fresh|new)/i)).toBeNull();
   });
 });
