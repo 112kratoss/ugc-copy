@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { isPostResourceBundleBuyWithheld } from '@/lib/marketplace-viewer-filter';
 import {
   createPostResourceBundleOrderForRoute as createPostResourceBundleOrderForRouteImpl,
 } from '@/lib/post-resource-bundle-order-service';
+import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import { ExternalServiceTimeoutError } from '@/lib/provider-fetch';
 
 type CreateBundleOrderInput = Parameters<typeof createPostResourceBundleOrderForRouteImpl>[0];
@@ -15,6 +17,9 @@ function createPostResourceBundleOrderForRoute(
 ) {
   const originalReadBody = input.readBody;
   return createPostResourceBundleOrderForRouteImpl({
+    // Unless a test says otherwise, the bundle is on the buyer's side of every
+    // gate the detail read and the blocks put up.
+    isPostResourceBundleBuyWithheld: vi.fn(async () => false),
     ...input,
     readBody: async () => ({
       clientIntentKey: 'intent-post-resource-123456',
@@ -22,6 +27,17 @@ function createPostResourceBundleOrderForRoute(
     }),
     fetchRazorpayOrderByReceipt: vi.fn(async () => null),
   });
+}
+
+// The real buy gate over a detail read that shows (or withholds) the bundle and
+// a block check that finds (or does not find) one between buyer and creator.
+function buyGate({ readShowsBundle = true, blocked = false } = {}) {
+  return ((input) => isPostResourceBundleBuyWithheld(input, {
+    getPostResourceBundleDetailByPostId: vi.fn(async () => (readShowsBundle
+      ? { id: 'bundle-1', seller: { id: 'owner-1' }, viewerIsOwner: false } as unknown as PostResourceBundleDetail
+      : null)),
+    isUserRelationshipBlocked: vi.fn(async () => blocked),
+  })) as typeof isPostResourceBundleBuyWithheld;
 }
 
 type BundleForOrder = {
@@ -219,6 +235,90 @@ describe('createPostResourceBundleOrderForRoute', () => {
     expect(admin.tableReads).toEqual([]);
     expect(getBundleForOrderByPostId).not.toHaveBeenCalled();
     expect(getPostResourceBundlePriceQuote).not.toHaveBeenCalled();
+    expect(createRazorpayOrder).not.toHaveBeenCalled();
+  });
+
+  // The quote and order RPCs check only the bundle's status, so a direct call
+  // could pay for what the read refuses (2026-10-15 marketplace comparison,
+  // finding 02-3). No provider order means no payment and no sale to notify.
+  it.each([
+    ['the buyer and the creator block each other', { blocked: true }],
+    ['the detail read withholds the bundle (a take-down, an unrevealed mature post)', { readShowsBundle: false }],
+  ])('answers not found when %s, before any quote or provider order', async (_reason, gate) => {
+    const admin = createAdminSupabaseMock();
+    const getPostResourceBundlePriceQuote = vi.fn();
+    const createRazorpayOrder = vi.fn();
+
+    const result = await createPostResourceBundleOrderForRoute({
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      countryHeader: 'IN',
+      readBody: vi.fn(async () => ({ locale: 'en-IN' })),
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      getPostResourceBundlePriceQuote,
+      createRazorpayOrder,
+      isPostResourceBundleBuyWithheld: buyGate(gate),
+    });
+
+    expect(result).toEqual({ ok: false, status: 404, body: { error: 'Unlock not found.' } });
+    expect(admin.rpcCalls.map((call) => call.fn)).toEqual(['check_backend_rate_limit']);
+    expect(admin.tableReads).toEqual([]);
+    expect(getPostResourceBundlePriceQuote).not.toHaveBeenCalled();
+    expect(createRazorpayOrder).not.toHaveBeenCalled();
+  });
+
+  it('asks the gate about this buyer and post, and never about the owner', async () => {
+    const isWithheld = vi.fn(async () => false);
+    const routeInput = {
+      postId: 'post-1',
+      countryHeader: 'US',
+      readBody: vi.fn(async () => ({})),
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      getPostResourceBundlePriceQuote: vi.fn(async () => ({
+        amountSubunits: 700,
+        currency: 'USD' as const,
+        formatted: '$7.00',
+        note: null,
+      })),
+      createRazorpayOrder: vi.fn(async () => ({ id: 'order_gate' })),
+      isPostResourceBundleBuyWithheld: isWithheld,
+    };
+
+    const buyer = createAdminSupabaseMock();
+    await createPostResourceBundleOrderForRoute({ ...routeInput, adminSupabase: buyer.client, buyerUserId: 'buyer-1' });
+    expect(isWithheld).toHaveBeenCalledWith({ adminSupabase: buyer.client, buyerUserId: 'buyer-1', postId: 'post-1' });
+
+    isWithheld.mockClear();
+    const owner = createAdminSupabaseMock();
+    await expect(createPostResourceBundleOrderForRoute({
+      ...routeInput,
+      adminSupabase: owner.client,
+      buyerUserId: 'owner-1',
+    })).resolves.toEqual({ ok: false, status: 400, body: { error: 'You already own this unlock.' } });
+    expect(isWithheld).not.toHaveBeenCalled();
+  });
+
+  it('opens no checkout when the gate cannot be checked', async () => {
+    const admin = createAdminSupabaseMock();
+    const createRazorpayOrder = vi.fn();
+
+    const result = await createPostResourceBundleOrderForRoute({
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      countryHeader: 'US',
+      readBody: vi.fn(async () => ({})),
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      getPostResourceBundlePriceQuote: vi.fn(),
+      createRazorpayOrder,
+      isPostResourceBundleBuyWithheld: vi.fn(async () => {
+        throw new Error('user_blocks unavailable');
+      }),
+    });
+
+    expect(result).toEqual({ ok: false, status: 500, body: { error: 'Failed to prepare a secure checkout quote.' } });
+    expect(admin.rpcCalls.map((call) => call.fn)).toEqual(['check_backend_rate_limit']);
     expect(createRazorpayOrder).not.toHaveBeenCalled();
   });
 

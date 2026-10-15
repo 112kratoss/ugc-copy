@@ -7,6 +7,7 @@ import {
   getPostResourceBundleRouteResponse,
 } from '@/lib/post-resource-bundle-route-adapter-service';
 import * as bundleRouteAdapter from '@/lib/post-resource-bundle-route-adapter-service';
+import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 
 function createUserClient(userId: string | null = 'user-1') {
   return {
@@ -23,6 +24,15 @@ function createContext(postId = 'post-1') {
   return {
     params: Promise.resolve({ postId }),
   };
+}
+
+function bundleDetail() {
+  return {
+    id: 'bundle-1',
+    postId: 'post-1',
+    seller: { id: 'creator-1' },
+    viewerIsOwner: false,
+  } as unknown as PostResourceBundleDetail;
 }
 
 describe('post resource bundle route adapter service', () => {
@@ -60,7 +70,65 @@ describe('post resource bundle route adapter service', () => {
       postId: 'post-1',
       viewerUserId: 'viewer-1',
       countryCode: 'IN',
+      getDetailByPostId: expect.any(Function),
     });
+  });
+
+  // The post page answers 404 across a block; this read, the app's Details
+  // card and the unlock screen's fallback, still served the recipe (finding 02-3).
+  it('answers not found when the viewer and the creator block each other', async () => {
+    const getPostResourceBundleDetailByPostId = vi.fn(async () => bundleDetail());
+    const isMarketplaceCreatorBlockedForViewer = vi.fn(async () => true);
+
+    const response = await getPostResourceBundleRouteResponse({
+      request: new Request('http://localhost/api/posts/post-1/resource-bundle', {
+        headers: { 'x-request-id': 'resource-bundle-blocked-1', 'x-vercel-ip-country': 'IN' },
+      }),
+      context: createContext(),
+      dependencies: {
+        createUserClient: () => createUserClient('viewer-1'),
+        getPostResourceBundleDetailByPostId,
+        isMarketplaceCreatorBlockedForViewer,
+      },
+    });
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    await expect(response.json()).resolves.toEqual({ error: 'Resource bundle not found.' });
+    expect(getPostResourceBundleDetailByPostId).toHaveBeenCalledWith('post-1', {
+      viewerUserId: 'viewer-1',
+      countryCode: 'IN',
+    });
+    expect(isMarketplaceCreatorBlockedForViewer).toHaveBeenCalledWith('viewer-1', 'creator-1');
+  });
+
+  it('serves the bundle when no block stands, and asks a signed-out caller about none', async () => {
+    const isMarketplaceCreatorBlockedForViewer = vi.fn(async () => false);
+
+    const signedIn = await getPostResourceBundleRouteResponse({
+      request: new Request('http://localhost/api/posts/post-1/resource-bundle'),
+      context: createContext(),
+      dependencies: {
+        createUserClient: () => createUserClient('viewer-1'),
+        getPostResourceBundleDetailByPostId: vi.fn(async () => bundleDetail()),
+        isMarketplaceCreatorBlockedForViewer,
+      },
+    });
+    expect(signedIn.status).toBe(200);
+    await expect(signedIn.json()).resolves.toMatchObject({ success: true, bundle: { id: 'bundle-1' } });
+    expect(isMarketplaceCreatorBlockedForViewer).toHaveBeenCalledTimes(1);
+
+    const signedOut = await getPostResourceBundleRouteResponse({
+      request: new Request('http://localhost/api/posts/post-1/resource-bundle'),
+      context: createContext(),
+      dependencies: {
+        createUserClient: () => createUserClient(null),
+        getPostResourceBundleDetailByPostId: vi.fn(async () => bundleDetail()),
+        isMarketplaceCreatorBlockedForViewer,
+      },
+    });
+    expect(signedOut.status).toBe(200);
+    expect(isMarketplaceCreatorBlockedForViewer).toHaveBeenCalledTimes(1);
   });
 
   it('serves anonymous viewers without a session', async () => {

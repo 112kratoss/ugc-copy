@@ -236,6 +236,11 @@
       "path": "/api/moderation/reports",
       "auth": "required"
     },
+    "reportTemplate": {
+      "method": "POST",
+      "path": "/api/moderation/reports",
+      "auth": "required"
+    },
     "listBlockedUsers": {
       "method": "GET",
       "path": "/api/moderation/blocks",
@@ -445,7 +450,7 @@
     "getMarketplaceResourceDetail": {
       "method": "GET",
       "path": "/api/marketplace/resources/:resourceId",
-      "auth": "required"
+      "auth": "optional"
     },
     "unlockFreeBundle": {
       "method": "POST",
@@ -609,7 +614,7 @@
     {
       "method": "GET",
       "path": "/api/posts/:postId/resource-bundle",
-      "auth": "required"
+      "auth": "optional"
     }
   ]
 }

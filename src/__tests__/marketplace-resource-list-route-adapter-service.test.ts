@@ -1,14 +1,54 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
 
 import { getMarketplaceResourceListRouteResponse } from '@/lib/marketplace-resource-list-route-adapter-service';
+import { filterMarketplaceItemsForViewer } from '@/lib/marketplace-viewer-filter';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 function createRequest(search = '', headers: Record<string, string> = {}) {
   return new Request(`http://localhost/api/marketplace/resources${search}`, {
     headers,
   });
+}
+
+function createUserClient(userId: string | null) {
+  return {
+    auth: {
+      getUser: vi.fn(async () => ({
+        data: { user: userId ? { id: userId } : null },
+        error: null,
+      })),
+    },
+  } as unknown as SupabaseClient;
+}
+
+function listItem(id: string, sellerId: string) {
+  return { id, seller: { id: sellerId } } as unknown as MarketplaceResourceListItem;
+}
+
+function storefrontPage() {
+  return {
+    items: [
+      listItem('resource-1', 'creator-1'),
+      listItem('resource-2', 'creator-blocked'),
+      listItem('resource-3', 'creator-2'),
+    ],
+    pageInfo: { hasMore: true, limit: 3, nextOffset: 3, offset: 0 },
+  };
+}
+
+// The real filter, over a block set in which the viewer and `creator-blocked`
+// block each other.
+function filterWithBlocks(loadBlockedCreatorIds = vi.fn(async () => new Set(['creator-blocked']))) {
+  return {
+    loadBlockedCreatorIds,
+    filter: ((items, viewerUserId) => filterMarketplaceItemsForViewer(items, viewerUserId, {
+      createServiceClient: () => ({ service: 'admin' }) as unknown as SupabaseClient,
+      loadBlockedCreatorIds,
+    })) as typeof filterMarketplaceItemsForViewer,
+  };
 }
 
 describe('marketplace resource list route adapter service', () => {
@@ -40,7 +80,7 @@ describe('marketplace resource list route adapter service', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('Cache-Control')).toBe('public, s-maxage=60, stale-while-revalidate=300');
-    expect(response.headers.get('Vary')).toBe('x-vercel-ip-country');
+    expect(response.headers.get('Vary')).toBe('Authorization, x-vercel-ip-country');
     expect(response.headers.get('x-request-id')).toBe('resources-list-adapter-1');
     await expect(response.json()).resolves.toMatchObject({
       items: [{ id: 'resource-1' }],
@@ -56,6 +96,58 @@ describe('marketplace resource list route adapter service', () => {
       limit: 48,
       countryCode: 'IN',
     });
+  });
+
+  // Blocking promises the person disappears; the storefront was the one list
+  // that kept them (2026-10-15 marketplace comparison, finding 02-3).
+  it("drops a blocked creator's recipes for a signed-in viewer and keeps the page private", async () => {
+    const createUserClientMock = vi.fn(() => createUserClient('viewer-1'));
+    const { filter, loadBlockedCreatorIds } = filterWithBlocks();
+
+    const response = await getMarketplaceResourceListRouteResponse({
+      request: createRequest('', {
+        Authorization: 'Bearer viewer-token',
+        'x-request-id': 'resources-list-viewer-1',
+      }),
+      dependencies: {
+        createUserClient: createUserClientMock,
+        filterMarketplaceItemsForViewer: filter,
+        getMarketplaceResourceList: vi.fn(async () => storefrontPage()),
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('Vary')).toBe('Authorization, x-vercel-ip-country');
+    const body = await response.json() as { items: MarketplaceResourceListItem[]; pageInfo: unknown };
+    expect(body.items.map((item) => item.id)).toEqual(['resource-1', 'resource-3']);
+    // The next page still starts after the three the cache returned.
+    expect(body.pageInfo).toEqual({ hasMore: true, limit: 3, nextOffset: 3, offset: 0 });
+    expect(loadBlockedCreatorIds).toHaveBeenCalledWith(expect.objectContaining({
+      creatorIds: ['creator-1', 'creator-blocked', 'creator-2'],
+      viewerUserId: 'viewer-1',
+    }));
+  });
+
+  it('drops nothing for a signed-out caller and reads no identity', async () => {
+    const createUserClientMock = vi.fn();
+    const { filter, loadBlockedCreatorIds } = filterWithBlocks();
+
+    const response = await getMarketplaceResourceListRouteResponse({
+      request: createRequest('', { 'x-request-id': 'resources-list-anon-2' }),
+      dependencies: {
+        createUserClient: createUserClientMock,
+        filterMarketplaceItemsForViewer: filter,
+        getMarketplaceResourceList: vi.fn(async () => storefrontPage()),
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('public, s-maxage=60, stale-while-revalidate=300');
+    const body = await response.json() as { items: MarketplaceResourceListItem[] };
+    expect(body.items.map((item) => item.id)).toEqual(['resource-1', 'resource-2', 'resource-3']);
+    expect(createUserClientMock).not.toHaveBeenCalled();
+    expect(loadBlockedCreatorIds).not.toHaveBeenCalled();
   });
 
   it('returns the public-safe marketplace error response when loading resources fails', async () => {

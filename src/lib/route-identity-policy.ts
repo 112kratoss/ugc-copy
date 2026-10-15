@@ -266,6 +266,14 @@ const SERVICE_ROUTES = [
  * asking the path's question of that read refused a guest what a signed-out
  * visitor is served: every guest saw "Comments are unavailable" on every post.
  *
+ * A post's recipe read is the other. Its handler serves a visitor with no token
+ * the locked preview the post page shows, and the app's unlock screen falls
+ * back to it when the marketplace detail answers 404, so a guest's token turned
+ * that "Unlock unavailable" into a 403 the screen reads as a lost connection.
+ * Buying, verifying and opening files live on paths of their own, each
+ * registered; the path itself stays registered so that a write added to it
+ * later is an account's from the start.
+ *
  * A GET or HEAD of a path listed here is answered as `public`: a token that is
  * sent must still have a live identity behind it, and need not be a registered
  * one. Every other method keeps the path's policy, so a guest's write is still
@@ -275,10 +283,12 @@ const SERVICE_ROUTES = [
  *
  * List a path only when its GET handler serves a request with no Authorization
  * header at all. `route-identity-policy.test.ts` holds each entry to a
- * registered path with a read and a write.
+ * registered path with a read, sends that read as a guest, and keeps every
+ * write of it refused to one.
  */
 export const GUEST_READABLE_REGISTERED_ROUTES = [
   '/api/showcase/posts/[postId]/comments',
+  '/api/posts/[postId]/resource-bundle',
 ] as const;
 
 /**

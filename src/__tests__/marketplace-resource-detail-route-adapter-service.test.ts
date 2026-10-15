@@ -32,6 +32,7 @@ function createUserClient(userId: string | null = 'viewer-1') {
 describe('marketplace resource detail route adapter service', () => {
   it('serves anonymous marketplace resource detail with shared cache headers', async () => {
     const createUserClientMock = vi.fn();
+    const isMarketplaceCreatorBlockedForViewer = vi.fn();
     const getPostResourceBundleDetailByPostId = vi.fn(async () => ({
       id: 'bundle-1',
       postId: 'post-1',
@@ -47,6 +48,7 @@ describe('marketplace resource detail route adapter service', () => {
       dependencies: {
         createUserClient: createUserClientMock,
         getPostResourceBundleDetailByPostId,
+        isMarketplaceCreatorBlockedForViewer,
         resolvePostIdForResourceIdentifier: vi.fn(async () => 'post-1'),
         withProviderFetchRequestId,
       },
@@ -61,6 +63,8 @@ describe('marketplace resource detail route adapter service', () => {
       bundle: { id: 'bundle-1' },
     });
     expect(createUserClientMock).not.toHaveBeenCalled();
+    // A signed-out caller has no blocks to ask about.
+    expect(isMarketplaceCreatorBlockedForViewer).not.toHaveBeenCalled();
     expect(withProviderFetchRequestId).toHaveBeenCalledWith('resource-detail-anon-1', expect.any(Function));
     expect(getPostResourceBundleDetailByPostId).toHaveBeenCalledWith('post-1', {
       viewerUserId: null,
@@ -72,7 +76,9 @@ describe('marketplace resource detail route adapter service', () => {
     const getPostResourceBundleDetailByPostId = vi.fn(async () => ({
       id: 'bundle-1',
       postId: 'post-1',
+      seller: { id: 'creator-1' },
     } as unknown as PostResourceBundleDetail));
+    const isMarketplaceCreatorBlockedForViewer = vi.fn(async () => false);
 
     const response = await getMarketplaceResourceDetailRouteResponse({
       request: createRequest({
@@ -83,6 +89,7 @@ describe('marketplace resource detail route adapter service', () => {
       dependencies: {
         createUserClient: () => createUserClient('viewer-1'),
         getPostResourceBundleDetailByPostId,
+        isMarketplaceCreatorBlockedForViewer,
         resolvePostIdForResourceIdentifier: vi.fn(async () => 'post-1'),
       },
     });
@@ -95,6 +102,35 @@ describe('marketplace resource detail route adapter service', () => {
       viewerUserId: 'viewer-1',
       countryCode: null,
     });
+    expect(isMarketplaceCreatorBlockedForViewer).toHaveBeenCalledWith('viewer-1', 'creator-1');
+  });
+
+  // The storefront card of a creator on either side of a block opened a 404
+  // post page while this read still served the recipe (finding 02-3).
+  it('answers not found when the viewer and the creator block each other', async () => {
+    const isMarketplaceCreatorBlockedForViewer = vi.fn(async () => true);
+
+    const response = await getMarketplaceResourceDetailRouteResponse({
+      request: createRequest({
+        Authorization: 'Bearer private-token',
+        'x-request-id': 'resource-detail-blocked-1',
+      }),
+      context: createContext(),
+      dependencies: {
+        createUserClient: () => createUserClient('viewer-1'),
+        getPostResourceBundleDetailByPostId: vi.fn(async () => ({
+          id: 'bundle-1',
+          postId: 'post-1',
+          seller: { id: 'creator-1' },
+        } as unknown as PostResourceBundleDetail)),
+        isMarketplaceCreatorBlockedForViewer,
+        resolvePostIdForResourceIdentifier: vi.fn(async () => 'post-1'),
+      },
+    });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: 'Unlock not found.' });
+    expect(isMarketplaceCreatorBlockedForViewer).toHaveBeenCalledWith('viewer-1', 'creator-1');
   });
 
   it('returns 404 for unknown resource identifiers before loading bundle detail', async () => {

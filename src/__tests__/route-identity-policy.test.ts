@@ -2,17 +2,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { NextRequest } from 'next/server';
 import { describe, expect, it, vi } from 'vitest';
 
 import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
 import { postModerationReportRouteResponse } from '@/lib/moderation-route-adapter-service';
 import { postOnboardingEventRouteResponse } from '@/lib/onboarding-route-adapter-service';
+import { getPostResourceBundleRouteResponse } from '@/lib/post-resource-bundle-route-adapter-service';
+import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import { postProfileShareRouteResponse } from '@/lib/profile-share-route-adapter-service';
+import { guardUserFacingRouteIdentity } from '@/lib/route-identity-admission';
 import {
   GUEST_READABLE_REGISTERED_ROUTES,
   GUEST_WRITABLE_REGISTERED_ROUTES,
   ROUTE_IDENTITY_POLICY,
   routeIdentityPolicy,
+  routeIdentityPolicyForRequest,
 } from '@/lib/route-identity-policy';
 import { postShowcaseShareRouteResponse } from '@/lib/showcase-share-route-adapter-service';
 
@@ -56,6 +61,31 @@ const allowedRateLimit = {
 
 function rateLimitedServiceClient() {
   return { rpc: vi.fn(async () => allowedRateLimit) } as unknown as SupabaseClient;
+}
+
+/** What the proxy's identity check reads for an active guest's token. */
+function guestIdentityClient() {
+  return {
+    auth: {
+      getClaims: vi.fn(async () => ({
+        data: {
+          claims: { sub: GUEST_ID, aud: 'authenticated', role: 'authenticated', is_anonymous: true },
+        },
+        error: null,
+      })),
+    },
+    rpc: vi.fn(async () => ({
+      data: { state: 'active', created_at: '2026-10-15T00:00:00+00:00', banned: false, session_valid: true },
+      error: null,
+    })),
+  };
+}
+
+function bearerRequest(method: string, pathname: string) {
+  return new NextRequest(`https://magicbooklet.test${pathname}`, {
+    method,
+    headers: { Authorization: 'Bearer guest-token' },
+  });
 }
 
 /**
@@ -227,16 +257,85 @@ describe('route identity policy', () => {
   });
 
   // A read listed there is admitted for a guest's token. That is only right for
-  // a path that is registered for its writes and whose GET needs no one.
-  it('lists as guest-readable only registered paths that have a read and a write', () => {
-    expect([...GUEST_READABLE_REGISTERED_ROUTES]).toEqual(['/api/showcase/posts/[postId]/comments']);
+  // a registered path whose GET needs no one: its writes, today's or one added
+  // later, keep the path's answer.
+  it('lists as guest-readable only registered paths with a read, whose writes stay an account\'s', () => {
+    expect([...GUEST_READABLE_REGISTERED_ROUTES]).toEqual([
+      '/api/showcase/posts/[postId]/comments',
+      '/api/posts/[postId]/resource-bundle',
+    ]);
 
     for (const route of GUEST_READABLE_REGISTERED_ROUTES) {
       expect(routeIdentityPolicy(route), route).toBe('registered');
       const source = fs.readFileSync(path.resolve(process.cwd(), `src/app${route}/route.ts`), 'utf8');
-      expect(source, route).toMatch(/export (?:async function|const) GET\b/);
-      expect(source, route).toMatch(/export (?:async function|const) (?:POST|PUT|PATCH|DELETE)\b/);
+      expect(source, route).toMatch(/export (?:async function GET\b|const GET\b|const \{[^}]*\bGET\b[^}]*\})/);
+      const concrete = route.replace(/\[[A-Za-z0-9_]+\]/g, 'id-1');
+      for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+        expect(routeIdentityPolicyForRequest(concrete, method), `${method} ${route}`).toBe('registered');
+      }
     }
+    // The comments path is registered for a write it has today.
+    const comments = fs.readFileSync(
+      path.resolve(process.cwd(), 'src/app/api/showcase/posts/[postId]/comments/route.ts'),
+      'utf8',
+    );
+    expect(comments).toMatch(/export (?:async function|const) (?:POST|PUT|PATCH|DELETE)\b/);
+  });
+
+  // The app's unlock screen falls back to this read when the marketplace detail
+  // answers 404, and a guest's app sends its token with it. Asking the path's
+  // question turned "Unlock unavailable" into a 403 the screen read as a lost
+  // connection (2026-10-15 marketplace comparison, finding 02-9).
+  it("admits a guest's read of a post's recipe, and still refuses a guest every buy under it", async () => {
+    const dependencies = {
+      createUserClient: () => guestIdentityClient(),
+      signIdentityAdmission: vi.fn(async () => 'admission-assertion'),
+    };
+
+    await expect(guardUserFacingRouteIdentity(bearerRequest('GET', '/api/posts/post-1/resource-bundle'), dependencies))
+      .resolves.toBeNull();
+    await expect(guardUserFacingRouteIdentity(bearerRequest('HEAD', '/api/posts/post-1/resource-bundle'), dependencies))
+      .resolves.toBeNull();
+
+    for (const pathname of [
+      '/api/posts/post-1/resource-bundle/unlock-free',
+      '/api/posts/post-1/resource-bundle/unlock-with-credits',
+      '/api/posts/post-1/resource-bundle/order',
+      '/api/posts/post-1/resource-bundle/verify',
+      '/api/posts/post-1/resource-bundle/file-url',
+    ]) {
+      const response = await guardUserFacingRouteIdentity(bearerRequest('POST', pathname), dependencies);
+      expect(response?.status, pathname).toBe(403);
+      await expect(response?.json()).resolves.toMatchObject({ code: 'REGISTRATION_REQUIRED' });
+    }
+  });
+
+  // The proxy admits that read on the route's word that it asks for no one.
+  it('keeps the recipe read open to a request with no token', async () => {
+    const getPostResourceBundleDetailByPostId = vi.fn(async () => ({
+      id: 'bundle-1',
+      postId: 'post-1',
+      seller: { id: 'creator-1' },
+      viewerIsOwner: false,
+      resources: null,
+    } as unknown as PostResourceBundleDetail));
+    const noSession = {
+      auth: { getUser: vi.fn(async () => ({ data: { user: null }, error: new Error('Auth session missing!') })) },
+    } as unknown as SupabaseClient;
+
+    const response = await getPostResourceBundleRouteResponse({
+      request: new Request('http://localhost/api/posts/post-1/resource-bundle'),
+      context: { params: Promise.resolve({ postId: 'post-1' }) },
+      dependencies: {
+        createUserClient: () => noSession,
+        getPostResourceBundleDetailByPostId,
+        isMarketplaceCreatorBlockedForViewer: vi.fn(),
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ success: true, bundle: { id: 'bundle-1', resources: null } });
+    expect(getPostResourceBundleDetailByPostId).toHaveBeenCalledWith('post-1', { viewerUserId: null, countryCode: null });
   });
 
   // The proxy admits that read on the route's word that it asks for no one.
@@ -285,6 +384,19 @@ describe('route identity policy', () => {
         ? { status: 200, recordedFor: null }
         : { status: 401, recordedFor: undefined });
     }
+  });
+
+  // What the registry admits with no token, or with a guest's, the operations
+  // contract (the proxy's mobile route list) calls optional (finding 02-9).
+  it('marks the recipe reads the app makes as optional in the operations contract', () => {
+    expect(mobileApiOperationsV1.operations.getMarketplaceResourceDetail.auth).toBe('optional');
+    expect(mobileApiOperationsV1.fallbackRoutes).toContainEqual({
+      method: 'GET',
+      path: '/api/posts/:postId/resource-bundle',
+      auth: 'optional',
+    });
+    expect(routeIdentityPolicyForRequest('/api/marketplace/resources/bundle-1', 'GET')).toBe('public');
+    expect(routeIdentityPolicyForRequest('/api/posts/post-1/resource-bundle', 'GET')).toBe('public');
   });
 
   it('covers every route the mobile app actually calls', () => {

@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { isPostResourceBundleBuyWithheld } from '@/lib/marketplace-viewer-filter';
 import { unlockFreePostResourceBundleForRoute } from '@/lib/post-resource-bundle-free-unlock-service';
+import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 
 type BundleForUnlock = {
   id: string;
@@ -22,6 +24,23 @@ function createBundle(overrides?: Partial<BundleForUnlock>): BundleForUnlock {
     price_usd_cents: 0,
     ...overrides,
   };
+}
+
+// The bundle is on the buyer's side of every gate the detail read and the
+// blocks put up.
+function notWithheld() {
+  return vi.fn(async () => false);
+}
+
+// The real buy gate over a detail read that shows (or withholds) the bundle and
+// a block check that finds (or does not find) one between buyer and creator.
+function buyGate({ readShowsBundle = true, blocked = false } = {}) {
+  return ((input) => isPostResourceBundleBuyWithheld(input, {
+    getPostResourceBundleDetailByPostId: vi.fn(async () => (readShowsBundle
+      ? { id: 'bundle-1', seller: { id: 'owner-1' }, viewerIsOwner: false } as unknown as PostResourceBundleDetail
+      : null)),
+    isUserRelationshipBlocked: vi.fn(async () => blocked),
+  })) as typeof isPostResourceBundleBuyWithheld;
 }
 
 function createAdminSupabaseMock(options?: {
@@ -134,12 +153,14 @@ describe('unlockFreePostResourceBundleForRoute', () => {
 
   it('treats owner access as already purchased without invoking the unlock transaction', async () => {
     const admin = createAdminSupabaseMock();
+    const isWithheld = notWithheld();
 
     const result = await unlockFreePostResourceBundleForRoute({
       adminSupabase: admin.client,
       postId: 'post-1',
       buyerUserId: 'owner-1',
       getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      isPostResourceBundleBuyWithheld: isWithheld,
       notifyPostResourceUnlockCompleted: vi.fn(),
     });
 
@@ -149,6 +170,76 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     });
     expect(admin.rpcCalls.map((call) => call.fn)).not.toContain('unlock_free_post_resource_bundle');
     expect(admin.tableCalls).toEqual([]);
+    // The owner reads their own recipe whatever the gate would say.
+    expect(isWithheld).not.toHaveBeenCalled();
+  });
+
+  // A free unlock is a purchase too: it notifies the creator and grants the
+  // files. The RPC checks only the bundle's status, so a direct call could open
+  // what the read refuses (2026-10-15 marketplace comparison, finding 02-3).
+  it.each([
+    ['the buyer and the creator block each other', { blocked: true }],
+    ['the detail read withholds the bundle (a take-down, an unrevealed mature post)', { readShowsBundle: false }],
+  ])('answers not found when %s, with nothing unlocked or notified', async (_reason, gate) => {
+    const admin = createAdminSupabaseMock();
+    const notifyPostResourceUnlockCompleted = vi.fn();
+    const invalidateMarketplaceResourceListCache = vi.fn();
+    const runAfterResponse = vi.fn();
+
+    const result = await unlockFreePostResourceBundleForRoute({
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      isPostResourceBundleBuyWithheld: buyGate(gate),
+      notifyPostResourceUnlockCompleted,
+      invalidateMarketplaceResourceListCache,
+      createId: vi.fn(() => 'id'),
+      runAfterResponse,
+    });
+
+    expect(result).toEqual({ ok: false, status: 404, body: { error: 'Unlock not found.' } });
+    expect(admin.rpcCalls.map((call) => call.fn)).not.toContain('unlock_free_post_resource_bundle');
+    expect(notifyPostResourceUnlockCompleted).not.toHaveBeenCalled();
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(invalidateMarketplaceResourceListCache).not.toHaveBeenCalled();
+  });
+
+  it('refuses before saying the bundle is paid, and asks the gate about this buyer and post', async () => {
+    const admin = createAdminSupabaseMock();
+    const isWithheld = vi.fn(async () => true);
+
+    const result = await unlockFreePostResourceBundleForRoute({
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      getBundleForOrderByPostId: vi.fn(async () => createBundle({ access_mode: 'paid', price_usd_cents: 500 })),
+      isPostResourceBundleBuyWithheld: isWithheld,
+      notifyPostResourceUnlockCompleted: vi.fn(),
+    });
+
+    expect(result).toEqual({ ok: false, status: 404, body: { error: 'Unlock not found.' } });
+    expect(isWithheld).toHaveBeenCalledWith({ adminSupabase: admin.client, buyerUserId: 'buyer-1', postId: 'post-1' });
+  });
+
+  it('unlocks nothing when the gate cannot be checked', async () => {
+    const admin = createAdminSupabaseMock();
+    const notifyPostResourceUnlockCompleted = vi.fn();
+
+    const result = await unlockFreePostResourceBundleForRoute({
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      isPostResourceBundleBuyWithheld: vi.fn(async () => {
+        throw new Error('bundle read failed');
+      }),
+      notifyPostResourceUnlockCompleted,
+    });
+
+    expect(result).toEqual({ ok: false, status: 500, body: { error: 'Failed to get the free recipe.' } });
+    expect(admin.rpcCalls.map((call) => call.fn)).not.toContain('unlock_free_post_resource_bundle');
+    expect(notifyPostResourceUnlockCompleted).not.toHaveBeenCalled();
   });
 
   it('rejects a bundle already known to require payment', async () => {
@@ -162,6 +253,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
         access_mode: 'paid',
         price_usd_cents: 500,
       })),
+      isPostResourceBundleBuyWithheld: notWithheld(),
       notifyPostResourceUnlockCompleted: vi.fn(),
     });
 
@@ -184,6 +276,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       postId: 'post-1',
       buyerUserId: 'buyer-1',
       getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      isPostResourceBundleBuyWithheld: notWithheld(),
       notifyPostResourceUnlockCompleted,
       invalidateMarketplaceResourceListCache,
       createId: vi.fn(() => idValues.shift() ?? 'fallback-id'),
@@ -227,6 +320,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       postId: 'post-1',
       buyerUserId: 'buyer-1',
       getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      isPostResourceBundleBuyWithheld: notWithheld(),
       notifyPostResourceUnlockCompleted,
       invalidateMarketplaceResourceListCache: vi.fn(),
       createId: vi.fn(() => 'id'),
@@ -262,6 +356,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       postId: 'post-1',
       buyerUserId: 'buyer-1',
       getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      isPostResourceBundleBuyWithheld: notWithheld(),
       notifyPostResourceUnlockCompleted: vi.fn(),
       invalidateMarketplaceResourceListCache: vi.fn(),
       createId: vi.fn(() => 'id'),
@@ -287,6 +382,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       postId: 'post-1',
       buyerUserId: 'buyer-1',
       getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      isPostResourceBundleBuyWithheld: notWithheld(),
       notifyPostResourceUnlockCompleted,
       invalidateMarketplaceResourceListCache,
       createId: vi.fn(() => 'id'),
@@ -311,6 +407,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       postId: 'post-1',
       buyerUserId: 'buyer-1',
       getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      isPostResourceBundleBuyWithheld: notWithheld(),
       notifyPostResourceUnlockCompleted,
       invalidateMarketplaceResourceListCache,
       createId: vi.fn(() => 'id'),
@@ -335,6 +432,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       postId: 'post-1',
       buyerUserId: 'buyer-1',
       getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      isPostResourceBundleBuyWithheld: notWithheld(),
       notifyPostResourceUnlockCompleted,
       createId: vi.fn(() => 'id'),
     });
@@ -356,6 +454,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       postId: 'post-1',
       buyerUserId: 'buyer-1',
       getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      isPostResourceBundleBuyWithheld: notWithheld(),
       notifyPostResourceUnlockCompleted: vi.fn(),
       createId: vi.fn(() => 'id'),
     });

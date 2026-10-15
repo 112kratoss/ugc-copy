@@ -9,6 +9,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import type { MarketplacePriceQuote } from '@/lib/marketplace';
+import { isPostResourceBundleBuyWithheld as defaultIsPostResourceBundleBuyWithheld } from '@/lib/marketplace-viewer-filter';
 import {
   getBundleForOrderByPostId as defaultGetBundleForOrderByPostId,
   getPostResourceBundlePriceQuote as defaultGetPostResourceBundlePriceQuote,
@@ -175,6 +176,7 @@ type CreatePostResourceBundleOrderParams = {
     priceUsdCents: number,
     countryCode?: string | null,
   ) => Promise<MarketplacePriceQuote>;
+  isPostResourceBundleBuyWithheld?: typeof defaultIsPostResourceBundleBuyWithheld;
 };
 
 export function inferPostResourceBundleOrderCountryFromLocale(locale: string | null): string | null {
@@ -269,6 +271,7 @@ export async function createPostResourceBundleOrderForRoute({
   fetchRazorpayOrderByReceipt = defaultFetchRazorpayOrderByReceipt,
   getBundleForOrderByPostId = defaultGetBundleForOrderByPostId as GetBundleForOrderByPostId,
   getPostResourceBundlePriceQuote = defaultGetPostResourceBundlePriceQuote,
+  isPostResourceBundleBuyWithheld = defaultIsPostResourceBundleBuyWithheld,
 }: CreatePostResourceBundleOrderParams): Promise<PostResourceBundleOrderRouteResult> {
   try {
     await enforceBackendRateLimit(adminSupabase, {
@@ -306,6 +309,21 @@ export async function createPostResourceBundleOrderForRoute({
 
   if (bundle.owner_user_id === buyerUserId) {
     return { ok: false, status: 400, body: { error: 'You already own this unlock.' } };
+  }
+
+  // The quote and order RPCs check only the bundle's status. What the detail
+  // read would not show this buyer, or a creator either of them has blocked,
+  // is answered as a missing unlock: no provider order, so no payment and no
+  // sale to notify.
+  let withheld: boolean;
+  try {
+    withheld = await isPostResourceBundleBuyWithheld({ adminSupabase, buyerUserId, postId });
+  } catch (error) {
+    logBackendError('failed_to_check_post_resource_order_buyer_access', { error });
+    return { ok: false, status: 500, body: { error: 'Failed to prepare a secure checkout quote.' } };
+  }
+  if (withheld) {
+    return { ok: false, status: 404, body: { error: 'Unlock not found.' } };
   }
 
   const { data: existingPurchase, error: existingPurchaseError } = await adminSupabase
