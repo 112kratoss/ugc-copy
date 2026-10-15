@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Session } from '@supabase/supabase-js';
+import { Activity } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider, useAuth } from '@/components/AuthProvider';
@@ -36,6 +37,10 @@ const authenticatedSession = {
 } as Session;
 
 let authStateCallback: ((event: string, session: Session | null) => void) | null = null;
+
+/** What auth-js returns when Supabase Auth cannot be reached. */
+const unreachable = Object.assign(new Error('Failed to fetch'), { name: 'AuthRetryableFetchError', status: 0 });
+const refused = { name: 'AuthApiError', message: 'invalid JWT: unable to parse or verify signature', status: 403, code: 'bad_jwt' };
 
 vi.mock('@/lib/supabase', () => ({
   supabase: {
@@ -103,6 +108,7 @@ describe('AuthProvider', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -235,7 +241,7 @@ describe('AuthProvider', () => {
     authCookieState.hasHint = true;
     authProviderMocks.getUser.mockResolvedValue({
       data: { user: null },
-      error: { message: 'Invalid token' },
+      error: refused,
     });
 
     render(
@@ -399,5 +405,125 @@ describe('AuthProvider', () => {
 
     await waitFor(() => expect(screen.getByTestId('user-name')).toHaveTextContent('Queued Update'));
     expect(authProviderMocks.getUser).toHaveBeenCalledTimes(2);
+  });
+
+  // Audit 01-10: an Auth outage is not a sign-out. The app never concludes
+  // anything from a check Supabase could not answer, and nor does the web now.
+  describe('when Supabase Auth cannot answer the session check', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout'] });
+      authCookieState.hasHint = true;
+    });
+
+    it('keeps the session and checks it once more two seconds later', async () => {
+      authProviderMocks.getUser
+        .mockResolvedValueOnce({ data: { user: null }, error: unreachable })
+        .mockResolvedValueOnce({ data: { user: authenticatedSession.user }, error: null });
+
+      render(
+        <AuthProvider>
+          <AuthProbe />
+        </AuthProvider>
+      );
+
+      await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-in'));
+      expect(authProviderMocks.getUser).toHaveBeenCalledTimes(1);
+      expect(authProviderMocks.from).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1295'));
+      expect(screen.getByTestId('loading')).toHaveTextContent('false');
+      expect(authProviderMocks.getUser).toHaveBeenCalledTimes(2);
+    });
+
+    it('clears the session when the second check is refused', async () => {
+      authProviderMocks.getUser
+        .mockResolvedValueOnce({ data: { user: null }, error: { name: 'AuthRetryableFetchError', message: 'Service Unavailable', status: 503 } })
+        .mockResolvedValueOnce({ data: { user: null }, error: refused });
+
+      render(
+        <AuthProvider>
+          <AuthProbe />
+        </AuthProvider>
+      );
+      await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-in'));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-out'));
+      expect(authProviderMocks.from).not.toHaveBeenCalled();
+    });
+
+    it('stays signed in, without a third check, when the second cannot be answered either', async () => {
+      authProviderMocks.getUser
+        .mockResolvedValueOnce({ data: { user: null }, error: { name: 'AuthApiError', message: 'Request rate limit reached', status: 429, code: 'over_request_rate_limit' } })
+        .mockResolvedValueOnce({ data: { user: null }, error: unreachable });
+
+      render(
+        <AuthProvider>
+          <AuthProbe />
+        </AuthProvider>
+      );
+      await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-in'));
+      expect(screen.getByTestId('loading')).toHaveTextContent('true');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      await waitFor(() => expect(screen.getByTestId('loading')).toHaveTextContent('false'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      expect(screen.getByTestId('session')).toHaveTextContent('signed-in');
+      expect(authProviderMocks.getUser).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps the session when a manual refresh cannot reach Supabase Auth', async () => {
+      render(
+        <AuthProvider>
+          <AuthProbe />
+        </AuthProvider>
+      );
+      await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1295'));
+
+      authProviderMocks.getUser.mockResolvedValueOnce({ data: { user: null }, error: unreachable });
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh auth' }));
+
+      await waitFor(() => expect(authProviderMocks.getUser).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.getByTestId('loading')).toHaveTextContent('false'));
+      expect(screen.getByTestId('session')).toHaveTextContent('signed-in');
+    });
+
+    // A hidden <Activity> runs every cleanup, then every effect again.
+    it('drops the pending check when hidden, and checks again when shown', async () => {
+      authProviderMocks.getUser.mockResolvedValueOnce({ data: { user: null }, error: unreachable });
+      const inActivity = (mode: 'visible' | 'hidden') => (
+        <Activity mode={mode}>
+          <AuthProvider>
+            <AuthProbe />
+          </AuthProvider>
+        </Activity>
+      );
+      const { rerender } = render(inActivity('visible'));
+      await waitFor(() => expect(authProviderMocks.getUser).toHaveBeenCalledTimes(1));
+
+      rerender(inActivity('hidden'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(authProviderMocks.getUser).toHaveBeenCalledTimes(1);
+
+      rerender(inActivity('visible'));
+      await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1295'));
+      expect(authProviderMocks.getUser).toHaveBeenCalledTimes(2);
+      expect(authProviderMocks.onAuthStateChange).toHaveBeenCalledTimes(2);
+      expect(authProviderMocks.unsubscribe).toHaveBeenCalledTimes(1);
+    });
   });
 });

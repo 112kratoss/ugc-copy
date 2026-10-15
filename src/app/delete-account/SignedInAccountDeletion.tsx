@@ -7,6 +7,7 @@ import { useEffect, useState, type FormEvent, type MouseEvent, type ReactNode } 
 
 import { describeAuthError } from '@/lib/auth-error-copy';
 import { siteConfig } from '@/lib/seo';
+import { removeSupabaseAuthCookies } from '@/lib/supabase-auth-cookie';
 
 type BrowserSupabase = typeof import('@/lib/supabase')['supabase'];
 
@@ -32,7 +33,14 @@ const SIGN_IN_AGAIN_PATH = '/login?returnUrl=/delete-account';
 /** Where a seller requests a payout. */
 const PAYOUT_PATH = '/marketplace/sell';
 const APPLE_REAUTH_CODES = new Set(['APPLE_REAUTH_REQUIRED', 'APPLE_REAUTH_FAILED']);
+/** Neither the answer nor Supabase could say whether it started; the app says the same. */
 const UNCONFIRMED_DELETION_COPY = 'We could not confirm the deletion. Check the connection and try again.';
+/** The request never left: the client or the session could not be loaded. */
+const NOT_SENT_COPY = 'Your account was not deleted. Check the connection and try again.';
+/** Supabase still accepts the session the request carried, so nothing started. */
+const STILL_ACTIVE_COPY = 'The deletion did not go through. Your account is still active.';
+/** Supabase's words for a session, or an account, that no longer exists. */
+const ENDED_SESSION_CODES = new Set(['session_not_found', 'user_not_found']);
 
 type Earnings =
   | { status: 'loading' }
@@ -51,8 +59,12 @@ type DeletionOutcome =
   | { kind: 'deleted' }
   | { kind: 'reauthenticate' }
   | { kind: 'apple' }
-  | { kind: 'session-ended' }
-  | { kind: 'refused'; message: string };
+  | { kind: 'refused'; message: string }
+  /** Neither the answer nor Supabase could say whether the deletion started. */
+  | { kind: 'unconfirmed' };
+
+/** An answer that cannot say whether the deletion started: Supabase is asked. */
+type DeletionAnswer = DeletionOutcome | { kind: 'ambiguous' };
 
 function signInProviders(user: User): Set<string> {
   const providers = new Set<string>();
@@ -70,7 +82,7 @@ function signInProviders(user: User): Set<string> {
 }
 
 /** What `DELETE /api/account` said, in the terms this page acts on. */
-async function readDeletionOutcome(response: Response): Promise<DeletionOutcome> {
+async function readDeletionOutcome(response: Response): Promise<DeletionAnswer> {
   let body: Record<string, unknown> | null = null;
   try {
     const parsed: unknown = await response.json();
@@ -87,36 +99,90 @@ async function readDeletionOutcome(response: Response): Promise<DeletionOutcome>
   if (response.status === 403 && body?.reason === 'reauthentication_required') {
     return code && APPLE_REAUTH_CODES.has(code) ? { kind: 'apple' } : { kind: 'reauthenticate' };
   }
-  if (response.status === 401) return { kind: 'session-ended' };
-  // The route's 500 says whether the account was touched. A failure answered by
-  // the platform rather than the route came after the request arrived, and the
-  // scheduler finishes a deletion that started.
-  if (response.status === 500) {
-    return body?.deletionScheduled === false ? { kind: 'refused', message } : { kind: 'scheduled' };
+  // The route's own 500 says whether the account was touched.
+  if (response.status === 500 && body) {
+    return body.deletionScheduled === false ? { kind: 'refused', message } : { kind: 'scheduled' };
   }
-  if (response.status > 500 && !body) return { kind: 'scheduled' };
+  // A 401 also follows a deletion that already ended every session, and a 5xx
+  // without the route's JSON came from the platform, before the route ran or
+  // after: neither says whether the account was touched.
+  if (response.status === 401 || (response.status >= 500 && !body)) return { kind: 'ambiguous' };
   return { kind: 'refused', message };
 }
 
-async function requestDeletion(accessToken: string): Promise<DeletionOutcome> {
-  const response = await fetch('/api/account', {
-    method: 'DELETE',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ confirmation: 'DELETE' }),
-  });
-  return readDeletionOutcome(response);
+function isEndedSession(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const { name, code } = error as { name?: unknown; code?: unknown };
+  // auth-js reports Supabase's session_not_found as AuthSessionMissingError.
+  return name === 'AuthSessionMissingError' || (typeof code === 'string' && ENDED_SESSION_CODES.has(code));
 }
 
-/** Ends this browser's session; the server has already ended the account's others. */
-async function signOutHere() {
+/**
+ * Asks Supabase about the session the deletion request carried, when the
+ * answer could not say whether the deletion started (audit 04-3). A deletion
+ * ends every session of the account as soon as it starts, so a session that
+ * is gone means it started, and a live one means it did not. Anything else,
+ * the probe failing included, proves nothing. The app asks the same question.
+ */
+async function probeDeletion(accessToken: string): Promise<DeletionOutcome> {
   try {
     const supabase = await getSupabase();
-    await supabase.auth.signOut({ scope: 'local' });
+    const { data, error } = await supabase.auth.getUser(accessToken);
+    if (!error && data.user) return { kind: 'refused', message: STILL_ACTIVE_COPY };
+    if (isEndedSession(error)) return { kind: 'scheduled' };
   } catch {
-    // Every request with the old session is refused from now on anyway.
+    // Nothing is known.
+  }
+  return { kind: 'unconfirmed' };
+}
+
+async function requestDeletion(accessToken: string): Promise<DeletionOutcome> {
+  let response: Response;
+  try {
+    response = await fetch('/api/account', {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ confirmation: 'DELETE' }),
+    });
+  } catch {
+    // The connection failed: the request may or may not have arrived.
+    return probeDeletion(accessToken);
+  }
+  const answer = await readDeletionOutcome(response);
+  return answer.kind === 'ambiguous' ? probeDeletion(accessToken) : answer;
+}
+
+/**
+ * Ends this browser's session; the server has already ended the account's
+ * others. When the logout call fails, auth-js keeps the session and the
+ * sign-in page sends it straight back here, so its cookies go anyway.
+ */
+async function signOutHere() {
+  let signedOut = false;
+  try {
+    const supabase = await getSupabase();
+    const { error } = await supabase.auth.signOut({ scope: 'local' });
+    signedOut = !error;
+  } catch {
+    // Ended below, as for a returned error.
+  }
+  if (!signedOut) removeSupabaseAuthCookies();
+}
+
+/**
+ * The account's drafts and staged files in this browser go with it, as they
+ * do when the account menu signs out (audit 04-7). The menu's own clean-up,
+ * loaded when needed like the client.
+ */
+async function clearCreatorDataHere(userId: string) {
+  try {
+    const { clearCreatorDataForSignOut } = await import('@/components/AppShellAccount');
+    await clearCreatorDataForSignOut(userId);
+  } catch {
+    // The keys are per account: whatever is left stays out of the next account's reach.
   }
 }
 
@@ -281,6 +347,7 @@ export default function SignedInAccountDeletion() {
       case 'scheduled':
       case 'deleted':
         setStage({ kind: 'done', alreadyDeleted: outcome.kind === 'deleted' });
+        if (userId) await clearCreatorDataHere(userId);
         await signOutHere();
         return;
       case 'reauthenticate':
@@ -289,11 +356,12 @@ export default function SignedInAccountDeletion() {
       case 'apple':
         setStage({ kind: 'apple' });
         return;
-      case 'session-ended':
-        setStage({ kind: 'session-ended' });
-        return;
       case 'refused':
         setError(`Your account was not deleted. ${outcome.message}`);
+        return;
+      case 'unconfirmed':
+        // Still signed in here, so the form stays and a retry settles it.
+        setError(UNCONFIRMED_DELETION_COPY);
         return;
     }
   };
@@ -313,8 +381,9 @@ export default function SignedInAccountDeletion() {
       }
       await applyOutcome(await requestDeletion(token));
     } catch {
-      // The request may or may not have arrived; a retry is safe either way.
-      setError(UNCONFIRMED_DELETION_COPY);
+      // requestDeletion settles every answer, a lost one included, so this is
+      // a failure before the request left.
+      setError(NOT_SENT_COPY);
     } finally {
       setIsWorking(false);
     }
@@ -348,7 +417,7 @@ export default function SignedInAccountDeletion() {
       }
       await applyOutcome(outcome);
     } catch {
-      setError(UNCONFIRMED_DELETION_COPY);
+      setError(NOT_SENT_COPY);
     } finally {
       setIsWorking(false);
     }

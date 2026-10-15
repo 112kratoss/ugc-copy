@@ -15,6 +15,30 @@ describe('AuthCodeErrorPage', () => {
     );
   });
 
+  // Audit 01-9: /auth/continue follows a password sign-in, where no link was involved.
+  it('does not blame a link when a password sign-in could not be finished', async () => {
+    render(await AuthCodeErrorPage({
+      searchParams: Promise.resolve({ next: '/pricing', method: 'password' }),
+    }));
+
+    expect(screen.getByRole('heading', { name: 'We could not finish signing you in' })).toBeInTheDocument();
+    expect(screen.getByText('Try again.')).toBeInTheDocument();
+    expect(screen.queryByText(/link/i)).toBeNull();
+    expect(screen.getByRole('link', { name: /try sign in again/i })).toHaveAttribute(
+      'href',
+      '/login?returnUrl=%2Fpricing'
+    );
+  });
+
+  it('keeps the link advice for a sign-in that came through a link', async () => {
+    render(await AuthCodeErrorPage({
+      searchParams: Promise.resolve({ next: '/pricing' }),
+    }));
+
+    expect(screen.getByRole('heading', { name: 'We could not finish signing you in' })).toBeInTheDocument();
+    expect(screen.getByText(/The sign-in link may have expired/)).toBeInTheDocument();
+  });
+
   it('unwraps the final destination when requesting a replacement recovery link', async () => {
     render(await AuthCodeErrorPage({
       searchParams: Promise.resolve({

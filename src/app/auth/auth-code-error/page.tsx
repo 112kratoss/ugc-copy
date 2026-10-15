@@ -19,6 +19,9 @@ export default async function AuthCodeErrorPage({ searchParams }: AuthCodeErrorP
   const params = searchParams ? await searchParams : {};
   const next = getSafeAuthNextPath(getFirstParam(params.next));
   const isRecovery = isPasswordRecoveryPath(next);
+  // /auth/continue finishes a password sign-in and says so with method=password;
+  // no link was involved, so the link-centric advice would mislead.
+  const isPasswordSignIn = !isRecovery && getFirstParam(params.method) === 'password';
   const retryNext = isRecovery ? getPasswordRecoveryNextPath(next) : next;
   const retryHref = `/login?returnUrl=${encodeURIComponent(retryNext)}${isRecovery ? '&recovery=1' : ''}`;
 
@@ -42,7 +45,9 @@ export default async function AuthCodeErrorPage({ searchParams }: AuthCodeErrorP
           <p className="mt-3 text-sm leading-6 text-[var(--ui-text-muted)]">
             {isRecovery
               ? 'The link may have expired or already been used. Request a fresh link and we’ll bring you back to the same place afterward.'
-              : 'The sign-in link may have expired, already been used, or opened in a different browser. Try again to continue where you left off.'}
+              : isPasswordSignIn
+                ? 'Try again.'
+                : 'The sign-in link may have expired, already been used, or opened in a different browser. Try again to continue where you left off.'}
           </p>
 
           <div className="mt-7 flex flex-col gap-3 sm:flex-row">

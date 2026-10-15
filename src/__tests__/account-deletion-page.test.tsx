@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
     listeners: new Set<(event: string, session: unknown) => void>(),
     signOut: vi.fn(),
     signInWithPassword: vi.fn(),
+    getUser: vi.fn(),
+    clearPersistedCreatorData: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({ useRouter: () => mocks.router }));
@@ -37,8 +39,12 @@ vi.mock('@/lib/supabase', () => ({
             },
             signOut: mocks.signOut,
             signInWithPassword: mocks.signInWithPassword,
+            getUser: mocks.getUser,
         },
     },
+}));
+vi.mock('@/lib/persisted-media', () => ({
+    clearPersistedCreatorData: mocks.clearPersistedCreatorData,
 }));
 
 const emailUser: TestUser = {
@@ -60,11 +66,26 @@ const appleUser: TestUser = {
     identities: [{ provider: 'apple' }],
 };
 const PASSWORD = 'correct-Horse-7!';
+const SUPABASE_URL = 'https://project-ref.supabase.co';
+const AUTH_COOKIE = 'sb-project-ref-auth-token';
+
+/** What auth-js returns when Supabase Auth cannot be reached. */
+const unreachable = Object.assign(new Error('Failed to fetch'), { name: 'AuthRetryableFetchError', status: 0 });
+/** What auth-js makes of Supabase's session_not_found. */
+const sessionMissing = Object.assign(new Error('Auth session missing!'), { name: 'AuthSessionMissingError', status: 400 });
+
+function clearCookies() {
+    for (const part of document.cookie.split(';')) {
+        const name = part.trim().split('=', 1)[0];
+        if (name) document.cookie = `${name}=; Max-Age=0; Path=/`;
+    }
+}
 
 const signedInAs = (user: TestUser): TestSession => ({ access_token: 'old-token', user });
 const emit = (event: string) => mocks.listeners.forEach((listener) => listener(event, mocks.session));
 
-type Answer = { status?: number; body?: unknown };
+/** `lost` is a request whose connection failed: it may or may not have arrived. */
+type Answer = { status?: number; body?: unknown; lost?: true };
 const payouts = (availableTokenSubunits: number, availableUsd: string, canRequest: boolean): Answer => ({
     body: {
         success: true,
@@ -97,6 +118,7 @@ function answerRequests({ payout = payouts(0, '$0.00', false), deletions = [sche
     const deletionAnswers = [...deletions];
     const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
         const answer = input === '/api/account' ? deletionAnswers.shift() ?? scheduled : payout;
+        if (answer.lost) throw new TypeError('Failed to fetch');
         const status = answer.status ?? 200;
         return {
             ok: status >= 200 && status < 300,
@@ -135,6 +157,10 @@ describe('account deletion page', () => {
             emit('SIGNED_OUT');
             return { error: null };
         });
+        mocks.getUser.mockReset();
+        mocks.getUser.mockResolvedValue({ data: { user: null }, error: unreachable });
+        mocks.clearPersistedCreatorData.mockReset();
+        mocks.clearPersistedCreatorData.mockResolvedValue(undefined);
         mocks.signInWithPassword.mockReset();
         mocks.signInWithPassword.mockImplementation(async ({ password }: { email: string; password: string }) => {
             if (password !== PASSWORD) {
@@ -148,6 +174,8 @@ describe('account deletion page', () => {
 
     afterEach(() => {
         cleanup();
+        clearCookies();
+        vi.unstubAllEnvs();
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });
@@ -362,11 +390,143 @@ describe('account deletion page', () => {
             'Your account was not deleted. Account deletion could not be completed. Please try again.',
         );
         expect(mocks.signOut).not.toHaveBeenCalled();
+        // The route's own answer is taken at its word.
+        expect(mocks.getUser).not.toHaveBeenCalled();
 
         fireEvent.click(within(section).getByRole('button', { name: 'Permanently delete account' }));
 
         expect(await screen.findByText('Your account is being deleted. You have been signed out.')).toBeInTheDocument();
         await waitFor(() => expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'local' }));
+    });
+
+    // Audit 04-7: the menu's sign-out already cleared these; the deletion did not.
+    it("clears the account's drafts and staged files in this browser before signing out", async () => {
+        mocks.session = signedInAs(emailUser);
+        answerRequests({ deletions: [scheduled] });
+        const order: string[] = [];
+        mocks.clearPersistedCreatorData.mockImplementation(async () => {
+            order.push('clear');
+        });
+        mocks.signOut.mockImplementation(async () => {
+            order.push('signOut');
+            mocks.session = null;
+            emit('SIGNED_OUT');
+            return { error: null };
+        });
+        render(<DeleteAccountPage />);
+
+        await confirmDeletion();
+
+        expect(await screen.findByText('Your account is being deleted. You have been signed out.')).toBeInTheDocument();
+        await waitFor(() => expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'local' }));
+        expect(mocks.clearPersistedCreatorData).toHaveBeenCalledWith('user-email');
+        expect(order).toEqual(['clear', 'signOut']);
+    });
+
+    // Audit 04-4: auth-js keeps the session when its logout call fails, and the
+    // sign-in page sends a browser holding one straight back.
+    describe('when the logout call fails', () => {
+        beforeEach(() => {
+            vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPABASE_URL);
+            document.cookie = `${AUTH_COOKIE}.0=chunk-zero; Path=/`;
+            document.cookie = `${AUTH_COOKIE}.1=chunk-one; Path=/`;
+            mocks.signOut.mockResolvedValue({ error: unreachable });
+        });
+
+        it('still ends the session in this browser after a deletion', async () => {
+            mocks.session = signedInAs(emailUser);
+            answerRequests({ deletions: [scheduled] });
+            render(<DeleteAccountPage />);
+
+            await confirmDeletion();
+
+            expect(await screen.findByText('Your account is being deleted. You have been signed out.')).toBeInTheDocument();
+            await waitFor(() => expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'local' }));
+            await waitFor(() => expect(document.cookie).toBe(''));
+        });
+
+        it('still sends Sign in again to the sign-in page signed out', async () => {
+            mocks.session = signedInAs(googleUser);
+            answerRequests({ deletions: [reauthenticationRequired] });
+            render(<DeleteAccountPage />);
+
+            const section = await confirmDeletion();
+            fireEvent.click(await within(section).findByRole('link', { name: 'Sign in again to continue' }));
+
+            await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login?returnUrl=/delete-account'));
+            expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'local' });
+            expect(document.cookie).toBe('');
+        });
+    });
+
+    // Audit 04-3: a lost answer, a 401 or a platform 5xx cannot say whether the
+    // deletion started; the session the request carried can.
+    describe('an answer that cannot say whether the deletion started', () => {
+        it.each<[string, Answer]>([
+            ['a lost answer', { lost: true }],
+            ['a 401', { status: 401, body: { error: 'Unauthorized' } }],
+            ['a 502 without JSON', { status: 502 }],
+        ])('after %s, a session Supabase no longer has means the deletion started', async (_label, answer) => {
+            mocks.session = signedInAs(emailUser);
+            answerRequests({ deletions: [answer] });
+            mocks.getUser.mockResolvedValue({ data: { user: null }, error: sessionMissing });
+            render(<DeleteAccountPage />);
+
+            await confirmDeletion();
+
+            expect(await screen.findByText('Your account is being deleted. You have been signed out.')).toBeInTheDocument();
+            expect(mocks.getUser).toHaveBeenCalledWith('old-token');
+            await waitFor(() => expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'local' }));
+        });
+
+        it('takes an account Supabase no longer has as deleted', async () => {
+            mocks.session = signedInAs(emailUser);
+            answerRequests({ deletions: [{ status: 401, body: { error: 'Unauthorized' } }] });
+            mocks.getUser.mockResolvedValue({
+                data: { user: null },
+                error: { name: 'AuthApiError', message: 'User from sub claim in JWT does not exist', status: 403, code: 'user_not_found' },
+            });
+            render(<DeleteAccountPage />);
+
+            await confirmDeletion();
+
+            expect(await screen.findByText('Your account is being deleted. You have been signed out.')).toBeInTheDocument();
+        });
+
+        it.each<[string, Answer]>([
+            ['a lost answer', { lost: true }],
+            ['a 401', { status: 401, body: { error: 'Unauthorized' } }],
+            ['a 500 without JSON', { status: 500 }],
+        ])('after %s, a session Supabase still accepts means the account is still active', async (_label, answer) => {
+            mocks.session = signedInAs(emailUser);
+            answerRequests({ deletions: [answer] });
+            mocks.getUser.mockResolvedValue({ data: { user: emailUser }, error: null });
+            render(<DeleteAccountPage />);
+
+            const section = await confirmDeletion();
+
+            expect(await within(section).findByRole('alert')).toHaveTextContent(
+                'Your account was not deleted. The deletion did not go through. Your account is still active.',
+            );
+            expect(mocks.getUser).toHaveBeenCalledWith('old-token');
+            expect(mocks.signOut).not.toHaveBeenCalled();
+            expect(within(section).getByRole('button', { name: 'Permanently delete account' })).toBeInTheDocument();
+        });
+
+        it('says it could not confirm the deletion when Supabase cannot answer either', async () => {
+            mocks.session = signedInAs(emailUser);
+            answerRequests({ deletions: [{ status: 504 }] });
+            render(<DeleteAccountPage />);
+
+            const section = await confirmDeletion();
+
+            expect(await within(section).findByRole('alert')).toHaveTextContent(
+                'We could not confirm the deletion. Check the connection and try again.',
+            );
+            expect(mocks.getUser).toHaveBeenCalledWith('old-token');
+            expect(mocks.signOut).not.toHaveBeenCalled();
+            expect(within(section).getByRole('button', { name: 'Permanently delete account' })).toBeInTheDocument();
+        });
     });
 
     // A hidden <Activity> runs every cleanup and every effect again.
