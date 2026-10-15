@@ -4,6 +4,9 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  getMediaTemplate,
+  listActiveMediaTemplatesPage,
+  listOwnedMediaTemplates,
   normalizeTemplateInputSlots,
   normalizeTemplateSlug,
   resolveOwnedTemplateAssetSource,
@@ -217,6 +220,8 @@ describe('graph media template MVP', () => {
       'template_assets/template-1/version-2/private.mp4',
       'template_assets/template-1/version-1/%252fprivate.mp4',
       'generated_images/creator-2/private.png',
+      // An outside URL saved before writes were limited to template assets.
+      'https://cdn.example.com/swapped-poster.png',
     ]) {
       from.mockClear();
       createSignedUrl.mockClear();
@@ -224,6 +229,103 @@ describe('graph media template MVP', () => {
       expect(from).not.toHaveBeenCalled();
       expect(createSignedUrl).not.toHaveBeenCalled();
     }
+  });
+
+  it('still signs the creator\'s own stored media, as a storage path and never as a link', async () => {
+    const createSignedUrl = vi.fn(async (objectPath: string) => ({
+      data: { signedUrl: `https://signed.example.test/${objectPath}` },
+      error: null,
+    }));
+    const from = vi.fn(() => ({ createSignedUrl }));
+    const client = { storage: { from } } as never;
+
+    await expect(resolveTemplateCatalogMediaUrl(client, 'generated_images/creator-1/poster.png', {
+      creatorUserId: 'creator-1',
+      templateId: 'template-1',
+      activeVersionId: 'version-1',
+    })).resolves.toBe('https://signed.example.test/creator-1/poster.png');
+    expect(from).toHaveBeenCalledWith('generated_images');
+  });
+
+  describe('catalog media signing', () => {
+    const DAY_IN_SECONDS = 24 * 60 * 60;
+    const demo = 'template-1/version-1/demo/playback.mp4';
+    const poster = 'template-1/version-1/demo/poster.webp';
+    const liveVideoTemplate = {
+      id: 'template-1',
+      slug: 'product-reveal',
+      name: 'Product reveal',
+      description: null,
+      category: 'general',
+      is_active: true,
+      created_at: '2026-10-01T00:00:00.000Z',
+      creator_user_id: 'creator-1',
+      source_canvas_id: 'canvas-1',
+      input_slots: [],
+      output_kind: 'video',
+      status: 'active',
+      use_count: 3,
+      active_version_id: 'version-1',
+      draft_output_node_id: null,
+      draft_catalog_revision: null,
+      updated_at: '2026-10-01T00:00:00.000Z',
+      video_url: `template_assets/${demo}`,
+      thumbnail_url: `template_assets/${poster}`,
+    };
+
+    /** Every template read answers the one row; profiles and versions answer none. */
+    function catalogClient() {
+      const createSignedUrl = vi.fn(async (objectPath: string, expiresIn: number) => ({
+        data: { signedUrl: `https://signed.example.test/${objectPath}?expires=${expiresIn}` },
+        error: null,
+      }));
+      const from = (table: string) => {
+        const data = table === 'templates' ? [liveVideoTemplate] : [];
+        const query: Record<string, unknown> = {};
+        for (const method of ['select', 'eq', 'not', 'order', 'limit', 'or', 'in']) query[method] = () => query;
+        query.maybeSingle = async () => ({ data: data[0] ?? null, error: null });
+        query.then = (resolve: (value: unknown) => unknown) => Promise.resolve({ data, error: null }).then(resolve);
+        return query;
+      };
+      return { client: { from, storage: { from: () => ({ createSignedUrl }) } } as never, createSignedUrl };
+    }
+
+    it('lists posters only, signed for a day', async () => {
+      const { client, createSignedUrl } = catalogClient();
+
+      const page = await listActiveMediaTemplatesPage(client);
+
+      expect(page.templates[0]).toMatchObject({
+        videoUrl: null,
+        thumbnailUrl: `https://signed.example.test/${poster}?expires=${DAY_IN_SECONDS}`,
+      });
+      expect(createSignedUrl.mock.calls).toEqual([[poster, DAY_IN_SECONDS]]);
+    });
+
+    it('lists the creator\'s own templates the same way', async () => {
+      const { client, createSignedUrl } = catalogClient();
+
+      const [template] = await listOwnedMediaTemplates(client, 'creator-1');
+
+      expect(template).toMatchObject({ videoUrl: null, authoring: { activeVersionId: 'version-1' } });
+      expect(createSignedUrl.mock.calls).toEqual([[poster, DAY_IN_SECONDS]]);
+    });
+
+    it('signs the demo and its poster for a day on the template page', async () => {
+      const { client, createSignedUrl } = catalogClient();
+
+      const template = await getMediaTemplate(client, 'product-reveal', null);
+
+      expect(template).toMatchObject({
+        videoUrl: `https://signed.example.test/${demo}?expires=${DAY_IN_SECONDS}`,
+        thumbnailUrl: `https://signed.example.test/${poster}?expires=${DAY_IN_SECONDS}`,
+      });
+      expect(createSignedUrl).toHaveBeenCalledTimes(2);
+      expect(createSignedUrl.mock.calls).toEqual(expect.arrayContaining([
+        [demo, DAY_IN_SECONDS],
+        [poster, DAY_IN_SECONDS],
+      ]));
+    });
   });
 
   it('ships immutable versions, atomic activation, private inputs, and private template generations', () => {

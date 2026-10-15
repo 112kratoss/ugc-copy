@@ -26,6 +26,7 @@ export type MediaTemplateDto = {
   name: string;
   description: string | null;
   category: string;
+  /** The demo clip. Lists leave it null: their cards show the poster only. */
   videoUrl: string | null;
   thumbnailUrl: string | null;
   creatorUserId: string | null;

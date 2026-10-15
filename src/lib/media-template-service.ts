@@ -31,6 +31,7 @@ import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import {
   getCanonicalStoredMediaLocation,
   getUserOwnedStoredMediaLocation,
+  type UserOwnedStorageLocation,
 } from '@/lib/storage-ownership';
 import type { WorkflowCanvasGraph } from '@/lib/workflow-canvas';
 
@@ -98,6 +99,30 @@ function requiredText(value: unknown, field: string, maxLength: number): string 
   return text;
 }
 
+const TEMPLATE_THUMBNAIL_ERROR = 'Thumbnails must be uploaded template assets.';
+
+/**
+ * Every viewer's device loads a template's poster, so it may only be one of
+ * the template's own stored assets: an outside URL let the image of a live
+ * listing be swapped for anything after it was published. Null or blank
+ * clears it. A template that is being created has no assets yet.
+ */
+function ownedTemplateThumbnail(value: unknown, templateId: string | null): string | null {
+  if (value === undefined || value === null) return null;
+  const storagePath = typeof value === 'string' ? value.trim() : null;
+  if (storagePath === '') return null;
+  const location = templateId && storagePath && storagePath.length <= 1000
+    && storagePath.startsWith('template_assets/')
+    ? getCanonicalStoredMediaLocation(storagePath, { allowedBuckets: ['template_assets'] })
+    : null;
+  if (!location || !location.filePath.startsWith(`${templateId}/`)) {
+    throw new MediaTemplateError(TEMPLATE_THUMBNAIL_ERROR, 400, 'INVALID_TEMPLATE', {
+      thumbnailUrl: TEMPLATE_THUMBNAIL_ERROR,
+    });
+  }
+  return storagePath;
+}
+
 export function normalizeTemplateInputSlots(value: unknown): TemplateInputSlot[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
@@ -121,10 +146,15 @@ export function normalizeTemplateSlug(value: string): string {
   return slug || 'template';
 }
 
+// Paths under /templates the web serves itself, or keeps for itself: a
+// template given one of these slugs would open that page instead of its own.
+const RESERVED_TEMPLATE_SLUGS = new Set(['new', 'mine', 'create', 'edit', 'run', 'runs']);
+
 async function createUniqueSlug(client: SupabaseClient, name: string, templateId?: string): Promise<string> {
   const base = normalizeTemplateSlug(name);
   for (let suffix = 0; suffix < 50; suffix += 1) {
     const candidate = suffix === 0 ? base : `${base.slice(0, 58)}-${suffix + 1}`;
+    if (RESERVED_TEMPLATE_SLUGS.has(candidate)) continue;
     let query = client.from('templates').select('id').eq('slug', candidate).limit(1);
     if (templateId) query = query.neq('id', templateId);
     const { data, error } = await query;
@@ -170,6 +200,11 @@ async function activeVersionCosts(client: SupabaseClient, versionIds: string[]) 
     .map((row) => [row.id, Math.max(0, Number(row.estimated_total_credits ?? 0))]));
 }
 
+// Templates are public, not secrets. A day outlives every cache in front of
+// the catalog (the edge, the app's client cache, the ISR page), so a cached
+// page no longer carries posters that died after an hour.
+const TEMPLATE_CATALOG_MEDIA_TTL_SECONDS = 24 * 60 * 60;
+
 export async function resolveTemplateCatalogMediaUrl(
   client: SupabaseClient,
   value: string | null,
@@ -177,23 +212,29 @@ export async function resolveTemplateCatalogMediaUrl(
     creatorUserId: string | null;
     templateId: string;
     activeVersionId: string | null;
+    // A run's fixed inputs are private and keep the one-hour default.
+    expiresInSeconds?: number;
   },
 ): Promise<string | null> {
   if (!value) return null;
-  if (!value.startsWith('template_assets/')) {
-    return options.creatorUserId
-      ? resolveOwnedStoredMediaUrl(client, value, options.creatorUserId)
+  let location: UserOwnedStorageLocation | null;
+  if (value.startsWith('template_assets/')) {
+    location = getCanonicalStoredMediaLocation(value, { allowedBuckets: ['template_assets'] });
+    const requiredPrefix = options.activeVersionId
+      ? `${options.templateId}/${options.activeVersionId}/`
+      : `${options.templateId}/`;
+    if (location && !location.filePath.startsWith(requiredPrefix)) location = null;
+  } else {
+    // The creator's own stored media only. An outside URL, which the write
+    // path once accepted, is never handed to a viewer's device.
+    location = options.creatorUserId
+      ? getUserOwnedStoredMediaLocation(value, options.creatorUserId)
       : null;
   }
-  const location = getCanonicalStoredMediaLocation(value, { allowedBuckets: ['template_assets'] });
   if (!location) return null;
-  const requiredPrefix = options.activeVersionId
-    ? `${options.templateId}/${options.activeVersionId}/`
-    : `${options.templateId}/`;
-  if (!location.filePath.startsWith(requiredPrefix)) return null;
   const { data, error } = await client.storage
     .from(location.bucket)
-    .createSignedUrl(location.filePath, 60 * 60);
+    .createSignedUrl(location.filePath, options.expiresInSeconds ?? 60 * 60);
   return error || !data?.signedUrl ? null : data.signedUrl;
 }
 
@@ -235,28 +276,27 @@ async function attachTemplateDetails(
   client: SupabaseClient,
   rows: MediaTemplateRow[],
   includeAuthoring: boolean,
+  // A list feeds cards, which show the poster only: signing every demo clip
+  // too cost a Storage call per template for a URL nothing loaded.
+  { includeDemo = true }: { includeDemo?: boolean } = {},
 ): Promise<MediaTemplateDto[]> {
   const creators = await getCreatorMap(client, rows.flatMap((row) => row.creator_user_id ? [row.creator_user_id] : []));
   const costs = await activeVersionCosts(client, rows.flatMap((row) => row.active_version_id ? [row.active_version_id] : []));
-  return Promise.all(rows.map(async (row) => rowToDto(row, {
-    creator: row.creator_user_id ? creators.get(row.creator_user_id) ?? null : null,
-    estimatedTotalCredits: row.active_version_id ? costs.get(row.active_version_id) ?? null : null,
-    includeAuthoring,
-    videoUrl: await resolveTemplateCatalogMediaUrl(client, row.video_url, {
+  return Promise.all(rows.map(async (row) => {
+    const scope = {
       creatorUserId: row.creator_user_id,
       templateId: row.id,
       activeVersionId: row.active_version_id,
-    }),
-    thumbnailUrl: await resolveTemplateCatalogMediaUrl(client, row.thumbnail_url, {
-      creatorUserId: row.creator_user_id,
-      templateId: row.id,
-      activeVersionId: row.active_version_id,
-    }),
-  })));
-}
-
-export async function listActiveMediaTemplates(client: SupabaseClient): Promise<MediaTemplateDto[]> {
-  return (await listActiveMediaTemplatesPage(client)).templates;
+      expiresInSeconds: TEMPLATE_CATALOG_MEDIA_TTL_SECONDS,
+    };
+    return rowToDto(row, {
+      creator: row.creator_user_id ? creators.get(row.creator_user_id) ?? null : null,
+      estimatedTotalCredits: row.active_version_id ? costs.get(row.active_version_id) ?? null : null,
+      includeAuthoring,
+      videoUrl: includeDemo ? await resolveTemplateCatalogMediaUrl(client, row.video_url, scope) : null,
+      thumbnailUrl: await resolveTemplateCatalogMediaUrl(client, row.thumbnail_url, scope),
+    });
+  }));
 }
 
 const PUBLIC_TEMPLATE_PAGE_SIZE = 48;
@@ -297,7 +337,7 @@ export async function listActiveMediaTemplatesPage(
   const rows = (data ?? []) as unknown as MediaTemplateRow[];
   const pageRows = rows.slice(0, limit);
   return {
-    templates: await attachTemplateDetails(client, pageRows, false),
+    templates: await attachTemplateDetails(client, pageRows, false, { includeDemo: false }),
     nextCursor: rows.length > limit && pageRows.length > 0
       ? encodeTemplateCursor(pageRows[pageRows.length - 1]!)
       : null,
@@ -308,7 +348,7 @@ export async function listOwnedMediaTemplates(client: SupabaseClient, userId: st
   const { data, error } = await client.from('templates').select(TEMPLATE_SELECT)
     .eq('creator_user_id', userId).order('updated_at', { ascending: false });
   if (error) throw error;
-  return attachTemplateDetails(client, (data ?? []) as unknown as MediaTemplateRow[], true);
+  return attachTemplateDetails(client, (data ?? []) as unknown as MediaTemplateRow[], true, { includeDemo: false });
 }
 
 export async function loadMediaTemplateRow(client: SupabaseClient, identifier: string): Promise<MediaTemplateRow | null> {
@@ -393,6 +433,7 @@ export async function createMediaTemplate(client: SupabaseClient, userId: string
     return updateMediaTemplate(client, userId, existing.id, input);
   }
   const name = normalizeText(input.name, 80) ?? canvas.title.slice(0, 80);
+  const thumbnailUrl = ownedTemplateThumbnail(input.thumbnailUrl, null);
   const slug = await createUniqueSlug(client, name);
   const { data, error } = await client.from('templates').insert({
     creator_user_id: userId,
@@ -401,7 +442,7 @@ export async function createMediaTemplate(client: SupabaseClient, userId: string
     slug,
     description: normalizeText(input.description, 500),
     category: normalizeText(input.category, 80) ?? 'general',
-    thumbnail_url: normalizeText(input.thumbnailUrl, 1000),
+    thumbnail_url: thumbnailUrl,
     draft_output_node_id: normalizeText(input.outputNodeId, 160),
     draft_catalog_revision: normalizeText(input.catalogRevision, 160),
     video_url: null,
@@ -443,11 +484,16 @@ export async function updateMediaTemplate(client: SupabaseClient, userId: string
   if ('name' in input) {
     const name = requiredText(input.name, 'name', 80);
     patch.name = name;
-    if (name !== current.name) patch.slug = await createUniqueSlug(client, name, current.id);
+    // Once published, the address is shared, indexed and in the sitemap, so a
+    // rename keeps it. A draft that still holds a reserved slug from before
+    // they were reserved moves off it on its next save.
+    const slugMayMove = current.status === 'draft'
+      && (name !== current.name || RESERVED_TEMPLATE_SLUGS.has(current.slug ?? ''));
+    if (slugMayMove) patch.slug = await createUniqueSlug(client, name, current.id);
   }
   if ('description' in input) patch.description = normalizeText(input.description, 500);
   if ('category' in input) patch.category = normalizeText(input.category, 80) ?? 'general';
-  if ('thumbnailUrl' in input) patch.thumbnail_url = normalizeText(input.thumbnailUrl, 1000);
+  if ('thumbnailUrl' in input) patch.thumbnail_url = ownedTemplateThumbnail(input.thumbnailUrl, current.id);
   if ('outputNodeId' in input) patch.draft_output_node_id = normalizeText(input.outputNodeId, 160);
   if ('catalogRevision' in input) patch.draft_catalog_revision = normalizeText(input.catalogRevision, 160);
   const { data, error } = await client.from('templates').update(patch)
