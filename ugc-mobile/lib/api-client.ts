@@ -4,6 +4,7 @@ import type {
   CreatePostResponse,
   CreatorFollowAttribution,
   CreatorProfileResponse,
+  CreditHistoryResponse,
   GenerationListItem,
   GenerationListResponse,
   GenerationStartResponse,
@@ -1102,6 +1103,17 @@ export function createApiClient({
       method: 'POST',
       body: JSON.stringify({ sourceSurface: 'mobile' }),
     }),
+    /**
+     * What added credits to this identity and what took them, newest first: a
+     * guest's own, or an account's with every guest linked to it (contract C4).
+     * `cursor` is the previous page's `nextCursor`; the server takes a `limit`
+     * of 1 to 50 (30 when left out) and answers a cursor it did not write 400.
+     */
+    getCreditHistory: (params: { cursor?: string | null; limit?: number } = {}) =>
+      request<CreditHistoryResponse>(`/api/credits/history${buildQuery({
+        cursor: params.cursor,
+        limit: params.limit,
+      })}`),
     recordOnboardingEvent: async (body: OnboardingEventRequest) => {
       const installationId = await getInstallationId?.().catch(() => null);
       if (!installationId) return { success: false as const };

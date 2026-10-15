@@ -355,6 +355,7 @@ function RootLayoutNav() {
                 <Stack.Screen name="edit-profile" options={{ headerShown: false, presentation: 'modal', animation: reducedMotion ? 'none' : 'slide_from_bottom' }} />
                 <Stack.Screen name="seller-dashboard" options={{ title: 'Your Sales' }} />
                 <Stack.Screen name="unlocks" options={{ title: 'Your Unlocks' }} />
+                <Stack.Screen name="credit-history" options={{ title: 'Credit History' }} />
                 <Stack.Screen name="invite" options={{ title: 'Invite & Earn' }} />
                 <Stack.Screen name="r/[code]" options={{ title: 'Your Invite' }} />
                 <Stack.Screen name="settings" options={{ title: 'Settings' }} />

@@ -150,6 +150,35 @@ export interface WelcomeCreditResponse {
   identityComplete: boolean;
 }
 
+/**
+ * What moved credits on a balance (`GET /api/credits/history`, contract C4 of
+ * the 2026-10-15 decisions run). The web's `/credits` page reads the same
+ * answer (`src/app/credits/credit-history.ts`).
+ */
+export type CreditHistoryEntryKind = 'purchase' | 'grant' | 'refund' | 'reversal' | 'spend' | 'adjustment';
+
+export interface CreditHistoryEntry {
+  id: string;
+  kind: CreditHistoryEntryKind;
+  /** Signed whole credits: positive came in, negative went out. */
+  amount: number;
+  /** ISO 8601. */
+  occurredAt: string;
+  /** The server's plain-English words: "Creator pack", "Video generation", "Refund: failed video". */
+  title: string;
+  detail: string | null;
+}
+
+/**
+ * One page, newest first. It covers the caller and every guest identity linked
+ * to it; the guest-to-account merge itself is not an entry.
+ */
+export interface CreditHistoryResponse {
+  entries: CreditHistoryEntry[];
+  /** Opaque; sent back as `cursor` for the next, older page. Null on the last page. */
+  nextCursor: string | null;
+}
+
 export interface OnboardingEventRequest {
   clientEventId: string;
   eventName: OnboardingEventName;

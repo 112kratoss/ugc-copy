@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { CheckCircle2, Circle } from 'lucide-react-native';
+import { CheckCircle2, ChevronRight, Circle, History } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Platform,
@@ -131,6 +131,7 @@ export default function PricingScreen() {
   // so everything here — store configuration, purchase, restore — keys off the
   // identity. `isGuest` only decides whether to offer registration.
   const { isGuest, identityUserId, api, credits, refreshProfile, ensureGuestMergeTicket } = useAuth();
+  const theme = useAppTheme();
   const queryClient = useQueryClient();
   const [isConfigured, setIsConfigured] = useState(false);
   const [paymentsAllowed, setPaymentsAllowed] = useState(true);
@@ -425,6 +426,30 @@ export default function PricingScreen() {
             accent={storeReady ? 'workflow' : 'amber'}
           />
         </View>
+        {/* What added these credits and what spent them (D6, finding 03-11),
+            beside the balance as on the web. A guest's too: its history is
+            read for its identity, as its balance is. Back from there returns
+            here, so the history offers no way back to the packs of its own. */}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Credit history"
+          accessibilityHint="Lists what added credits to your balance and what spent them"
+          onPress={() => router.push({ pathname: '/credit-history', params: { source: 'pricing' } } as never)}
+          style={({ pressed }) => ({
+            minHeight: appTheme.touch.default,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: appTheme.spacing.compact,
+            paddingHorizontal: appTheme.spacing.compact,
+            borderTopWidth: 1,
+            borderTopColor: theme.colors.borderSubtle,
+            opacity: pressed ? appTheme.opacity.pressed : 1,
+          })}
+        >
+          <History size={appTheme.icon.sm} color={theme.colors.commerce} />
+          <AppText selectable={false} variant="label" style={{ flex: 1 }}>Credit history</AppText>
+          <ChevronRight size={appTheme.icon.sm} color={theme.colors.faint} />
+        </Pressable>
       </Card>
 
       <GuestMergeBanner />

@@ -295,6 +295,12 @@ export function ProfileDashboard({
   const postCards = postsScope === 'archived' ? archivedPostCards : activePostCards;
   const profile = profileQuery.data;
   const wallet = getWalletCardContent(payoutQuery);
+  const creditBalance = fresherCreditBalance({
+    authCredits: credits,
+    authUpdatedAt: creditsUpdatedAt,
+    profileCredits: profile?.credits,
+    profileUpdatedAt: profileQuery.dataUpdatedAt,
+  });
   const displayName = getProfileName(profile, user?.email);
   const handle = getProfileHandle(profile, user?.email);
   const initials = getProfileInitials(profile, user?.email);
@@ -505,16 +511,16 @@ export function ProfileDashboard({
             onClaimHandle={profile && !publicUsername ? () => router.push('/edit-profile' as never) : undefined}
           />
           <View style={{ flexDirection: 'row', gap: 10 }}>
+            {/* The balance opens what moved it, as the Wallet opens Your Sales
+                (D6, finding 03-11); the history offers the credit packs from
+                its balance, and Settings and the side menu still open them. */}
             <BalanceCard
               icon={<Crown size={appTheme.icon.default} color={theme.colors.commerce} />}
               label="Credits"
-              value={formatCreditBalance(fresherCreditBalance({
-                authCredits: credits,
-                authUpdatedAt: creditsUpdatedAt,
-                profileCredits: profile?.credits,
-                profileUpdatedAt: profileQuery.dataUpdatedAt,
-              }))}
-              onPress={() => router.push('/pricing' as never)}
+              value={formatCreditBalance(creditBalance)}
+              accessibilityLabel={creditBalance === null ? 'Credits, balance loading' : `Credits, ${formatCreditBalance(creditBalance)}`}
+              accessibilityHint="Opens your credit history"
+              onPress={() => router.push('/credit-history' as never)}
             />
             <BalanceCard
               icon={<Wallet size={appTheme.icon.default} color={theme.colors.primary} />}
@@ -1122,6 +1128,7 @@ function BalanceCard({
   value,
   caption,
   accessibilityLabel = label,
+  accessibilityHint,
   onPress,
 }: {
   icon: React.ReactNode;
@@ -1130,6 +1137,8 @@ function BalanceCard({
   /** What the figure is, when the label alone does not say. */
   caption?: string;
   accessibilityLabel?: string;
+  /** Where the card goes, when its label does not say. */
+  accessibilityHint?: string;
   onPress: () => void;
 }) {
   const theme = useAppTheme();
@@ -1137,6 +1146,7 @@ function BalanceCard({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
+      accessibilityHint={accessibilityHint}
       onPress={onPress}
       style={({ pressed }) => ({
         flex: 1,
