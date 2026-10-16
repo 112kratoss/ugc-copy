@@ -380,12 +380,6 @@ export const PROVIDER_STATUS_POLL_RETRY_POLICY: ProviderRetryPolicy = {
   maxDelayMs: 2_000,
 };
 
-export const PROVIDER_MEDIA_DOWNLOAD_RETRY_POLICY: ProviderRetryPolicy = {
-  maxAttempts: 3,
-  baseDelayMs: 500,
-  maxDelayMs: 4_000,
-};
-
 const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const MAX_RETRY_AFTER_MS = 10_000;

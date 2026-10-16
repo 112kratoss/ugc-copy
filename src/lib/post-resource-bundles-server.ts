@@ -581,24 +581,6 @@ export function mergeGenerationReferenceItemsIntoBundle(
   };
 }
 
-export function buildFreeGenerationReferenceBundle(referenceItems: PostResourceItem[]): PostResourceBundleInput {
-  const summary = buildReferenceSummary(referenceItems.length);
-
-  return {
-    accessMode: 'free',
-    summary,
-    previewText: `Open ${summary}.`,
-    resources: {
-      promptText: null,
-      notesMarkdown: null,
-      workflowShareUrl: null,
-      attachments: [],
-      allowRemix: false,
-      items: mergeResourceItems([], referenceItems),
-    },
-  };
-}
-
 /**
  * Copies a creation's saved references into the publisher's resource files.
  *

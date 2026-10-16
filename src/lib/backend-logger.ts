@@ -203,10 +203,6 @@ export function logBackendEvent(
   }
 }
 
-export function logBackendDebug(event: string, fields?: BackendLogFields): void {
-  logBackendEvent('debug', event, fields);
-}
-
 export function logBackendInfo(event: string, fields?: BackendLogFields): void {
   logBackendEvent('info', event, fields);
 }

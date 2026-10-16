@@ -313,14 +313,6 @@ export function isValidElementHandle(value: string): boolean {
   return /^@[a-z0-9_]+$/.test(value);
 }
 
-export function isUploadsStoragePath(value: string | null | undefined): boolean {
-  return typeof value === 'string' && value.startsWith('uploads/');
-}
-
-export function getUploadsBucketPath(storagePath: string): string {
-  return storagePath.replace(/^uploads\//, '');
-}
-
 export function createElementHandleReplacementMap(
   previousElements: Array<{ id: string; handle: string }>,
   nextElements: Array<{ id: string; handle: string }>

@@ -1,4 +1,3 @@
-import { NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
@@ -160,17 +159,3 @@ export function createWorkflowAssistantSetupRequiredBody({
   };
 }
 
-export function createWorkflowAssistantSetupRequiredResponse({
-  messages = [],
-  proposal = null,
-  status = 503,
-}: {
-  messages?: WorkflowCanvasAssistantMessageRecord[];
-  proposal?: WorkflowCanvasAssistantProposalRecord | null;
-  status?: number;
-} = {}) {
-  return NextResponse.json(
-    createWorkflowAssistantSetupRequiredBody({ messages, proposal }),
-    { status }
-  );
-}

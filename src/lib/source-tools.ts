@@ -478,26 +478,11 @@ function getSourceToolByLabel(
   return catalog.find((tool) => tool.label.toLowerCase() === normalizedLabel) ?? null;
 }
 
-export function getSourceToolLabelFromCatalog(
-  catalog: SourceToolOption[],
-  slug: string | null | undefined
-): string | null {
-  return getSourceToolBySlug(catalog, slug)?.label ?? null;
-}
-
 export function getSourceToolOptionFromCatalog(
   catalog: SourceToolOption[],
   slug: string | null | undefined
 ): SourceToolOption | null {
   return getSourceToolBySlug(catalog, slug);
-}
-
-export function getSourceToolLabel(slug: string | null | undefined): string | null {
-  return getSourceToolLabelFromCatalog(FALLBACK_SOURCE_TOOLS, slug);
-}
-
-export function getSourceToolOption(slug: string | null | undefined): SourceToolOption | null {
-  return getSourceToolOptionFromCatalog(FALLBACK_SOURCE_TOOLS, slug);
 }
 
 export function normalizeSourceToolInputWithCatalog(
@@ -538,13 +523,6 @@ export function normalizeSourceToolInputWithCatalog(
     label,
     slug: slugifySourceTool(label),
   };
-}
-
-export function normalizeSourceToolInput(params: {
-  label?: string | null;
-  slug?: string | null;
-}): { label: string | null; slug: string | null } {
-  return normalizeSourceToolInputWithCatalog(FALLBACK_SOURCE_TOOLS, params);
 }
 
 function normalizeOptionalLabel(value: unknown, maxLength: number): string | null {
@@ -641,10 +619,6 @@ export function normalizeSourceToolSelectionsWithCatalog(
     .filter((entry): entry is SourceToolSelection => entry !== null);
 }
 
-export function normalizeSourceToolSelections(value: unknown): SourceToolSelection[] {
-  return normalizeSourceToolSelectionsWithCatalog(FALLBACK_SOURCE_TOOLS, value);
-}
-
 export function validateSourceToolSelections(value: unknown): string | null {
   if (!Array.isArray(value)) {
     return 'Source tool metadata must be an array.';
@@ -701,27 +675,3 @@ export function validateSourceToolSelections(value: unknown): string | null {
   return null;
 }
 
-export function formatSourceToolWithModel(params: {
-  toolLabel: string | null | undefined;
-  modelLabel?: string | null;
-}): string | null {
-  const tool = params.toolLabel?.trim();
-  if (!tool) return null;
-
-  const model = params.modelLabel?.trim();
-  if (!model) return tool;
-
-  return `${tool} · ${model}`;
-}
-
-export function formatSourceToolsCompact(
-  tools: Array<{ toolLabel: string; modelLabel?: string | null }>
-): string | null {
-  const filled = tools.filter((t) => t.toolLabel.trim());
-  if (filled.length === 0) return null;
-
-  const first = formatSourceToolWithModel(filled[0]);
-  if (filled.length === 1) return first;
-
-  return `${first} + ${filled.length - 1} more`;
-}

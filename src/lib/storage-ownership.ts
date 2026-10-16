@@ -122,10 +122,6 @@ export function isStorageObjectOwnedByUser(filePath: string, userId: string): bo
   return parseCanonicalStorageObjectPath(filePath, { ownerUserId: userId }) !== null;
 }
 
-export function isUserScopedStorageBucket(bucket: string): boolean {
-  return USER_SCOPED_STORAGE_BUCKETS.has(bucket);
-}
-
 export function getUserOwnedStoredMediaLocation(
   storagePath: string,
   userId: string,
@@ -187,14 +183,3 @@ export function getCanonicalStoredMediaLocation(
   }
 }
 
-export function assertUserOwnedStorageLocation(
-  location: UserOwnedStorageLocation,
-  userId: string,
-): void {
-  if (
-    !isUserScopedStorageBucket(location.bucket)
-    || !parseCanonicalStorageObjectPath(location.filePath, { ownerUserId: userId })
-  ) {
-    throw new Error('Storage object does not belong to the authenticated user.');
-  }
-}
