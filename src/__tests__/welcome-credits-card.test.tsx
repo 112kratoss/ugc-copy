@@ -64,7 +64,13 @@ describe('WelcomeCreditsCard', () => {
         mockWelcome({ status: 'legacy_ineligible', amount: 25, identityComplete: false });
         // The strip and the rail each draw the card; the stylesheet shows one.
         render(<><WelcomeCreditsCard /><WelcomeCreditsCard /></>);
-        expect(await screen.findAllByRole('link', { name: /Finish your creator setup/ })).toHaveLength(2);
+        // The status lands inside act, which runs the render and its effects before
+        // it returns, so both cards listen for Later before the click. Waiting with
+        // findAllByRole left those effects to React's scheduler: a busy runner
+        // clicked before either card listened, and both kept the prompt (main's
+        // Quality run 38933773939, 2026-10-16).
+        await settle();
+        expect(screen.getAllByRole('link', { name: /Finish your creator setup/ })).toHaveLength(2);
 
         fireEvent.click(screen.getAllByRole('button', { name: 'Finish your creator setup later' })[0]);
 
