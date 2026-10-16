@@ -55,8 +55,11 @@ export function useShowcaseLaneSource({
   mediaOnly?: boolean;
   enabled?: boolean;
 }) {
-  const registeredUserId = useAuth().user?.id ?? null;
-  const active = enabled && Boolean(lane);
+  const { user, isLoading: isAuthLoading } = useAuth();
+  const registeredUserId = user?.id ?? null;
+  // A reel opened by link on a cold start would otherwise rank its lane before the
+  // stored session lands, then again for the identity (see home-dashboard).
+  const active = enabled && Boolean(lane) && !isAuthLoading;
   const laneQuery = useInfiniteQuery({
     ...showcaseFeedLaneQueryOptions(api, lane ?? {}, userId),
     enabled: active,

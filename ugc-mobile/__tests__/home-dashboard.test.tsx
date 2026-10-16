@@ -46,6 +46,8 @@ const platformState = vi.hoisted(() => ({ os: 'ios' as 'ios' | 'android' }));
 const navState = vi.hoisted(() => ({ focused: true }));
 
 const queryState = vi.hoisted(() => ({
+  // `enabled` of every lane query the screen made, in render order.
+  enabled: [] as Array<boolean | undefined>,
   pages: [] as Array<Record<string, unknown>>,
   // When the lane's pages were fetched (React Query's `dataUpdatedAt`).
   dataUpdatedAt: 1,
@@ -101,7 +103,7 @@ vi.mock('@shopify/flash-list', () => ({
 }));
 
 vi.mock('@tanstack/react-query', () => ({
-  useInfiniteQuery: () => ({
+  useInfiniteQuery: (options: { enabled?: boolean }) => (queryState.enabled.push(options.enabled), {
     data: { pages: queryState.pages, pageParams: [{ offset: 0 }] },
     dataUpdatedAt: queryState.dataUpdatedAt,
     fetchNextPage: vi.fn(() => Promise.resolve()),
@@ -544,6 +546,8 @@ describe('Home screen', () => {
     navState.focused = true;
     authState.user = { id: 'viewer-1' };
     authState.identityUserId = 'viewer-1';
+    authState.isLoading = false;
+    queryState.enabled.length = 0;
     activeGenerationState.count = 0;
     queryState.pages = [];
     queryState.dataUpdatedAt = 1;
@@ -687,6 +691,26 @@ describe('Home screen', () => {
 
   // 04-3: a guest is a viewer of its own. Its lane, the key its removals
   // reach and the page saved for the next launch are all its identity's.
+  // A cold start: the stored session lands a moment after Home mounts. The lane is
+  // keyed by identity, so a request made before it would be keyed to no identity
+  // and made again for the identity, two fresh ranked sessions on the server.
+  it('asks for its lane only once auth has settled whose lane it is', () => {
+    authState.isLoading = true;
+    authState.identityUserId = null;
+    authState.user = null;
+    const { tree } = renderHome();
+    expect(queryState.enabled.length).toBeGreaterThan(0);
+    expect(queryState.enabled.every((enabled) => enabled === false)).toBe(true);
+
+    authState.isLoading = false;
+    authState.identityUserId = 'viewer-1';
+    authState.user = { id: 'viewer-1' };
+    renderer.act(() => tree.update(<HomeDashboard />));
+    expect(queryState.enabled.at(-1)).toBe(true);
+
+    renderer.act(() => tree.unmount());
+  });
+
   it('keys a guest’s lane, its cached feeds and its saved page by the guest’s identity', () => {
     authState.user = null;
     authState.identityUserId = 'guest-1';
