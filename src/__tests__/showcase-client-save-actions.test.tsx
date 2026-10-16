@@ -2116,9 +2116,17 @@ describe('ShowcaseClient save actions', () => {
       'Ranked Next',
     ]);
 
-    const tileObserver = intersectionObservers.findLast((observer) => observer.observedTargets.some((target) => (
-      target.getAttribute('data-showcase-post-id') === 'post-1'
+    // The viewer's own page gives post-1 a delivery, and its tile observes again
+    // for it: the impression effect depends on the item. findByText can return
+    // before React has run that commit's effects, as on a busy runner, and the
+    // observer found then still held the first page's item, whose impression has
+    // no delivery and is not sent (main's Quality run 38942335920, 2026-10-16).
+    // The new tile is observed in the same commit's effects.
+    const observing = (postId: string) => intersectionObservers.filter((observer) => observer.observedTargets.some((target) => (
+      target.getAttribute('data-showcase-post-id') === postId
     )));
+    await waitFor(() => expect(observing('post-ranked-next')).not.toHaveLength(0));
+    const tileObserver = observing('post-1').at(-1);
     vi.useFakeTimers();
     act(() => {
       tileObserver?.trigger(true, { intersectionRatio: 1 });
