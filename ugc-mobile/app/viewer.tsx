@@ -8,7 +8,7 @@ import { useViewerVideoPlayer } from '@/lib/use-viewer-video-player';
 import { useReelBackdrop } from '@/lib/reel-backdrop';
 import { AudioLines, ImageOff, Play, Volume2, VolumeX } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
-import { createContext, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
+import { createContext, memo, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
@@ -192,6 +192,19 @@ type SaveItemHandler = (
   item: ImmersivePreviewItem,
   trigger?: SaveMutationVariables['trigger']
 ) => void;
+
+/** What a slide can ask the screen to do. Each handler names the item it acts on. */
+type ImmersiveSlideHandlers = {
+  onActionsOpen: (itemId: string) => void;
+  onComments: (item: ImmersivePreviewItem) => void;
+  onCreatorOpen: (item: ImmersivePreviewItem) => void;
+  onOwnerAction: (action: string, item: ImmersivePreviewItem) => void;
+  onPageChange: (itemId: string, pageKey: string) => void;
+  onRecreate: (item: ImmersivePreviewItem) => void;
+  onSave: SaveItemHandler;
+  onShare: (item: ImmersivePreviewItem) => void;
+  onUnlockRemix: (item: ImmersivePreviewItem) => void;
+};
 
 type DoubleTapSavePosition = {
   x: number;
@@ -1261,6 +1274,42 @@ function ImmersivePreviewViewer() {
     if (!next) requestAnimationFrame(leaveViewer);
   };
 
+  // One set of handlers for every slide, the same functions for the life of the
+  // reel: each takes the item it acts on and calls the screen's latest function
+  // through a ref written after commit. With ImmersiveSlide memoised, a swipe
+  // re-renders only the slides whose own props changed (the one leaving, the one
+  // arriving, a neighbour entering the prepared window). Measured on the lab
+  // emulator, 2026-10-16: the inline per-slide closures made every viewer render
+  // re-render all four mounted slides, 14-18 slide renders per swipe.
+  const slideHandlersRef = useRef<ImmersiveSlideHandlers | null>(null);
+  useLayoutEffect(() => {
+    slideHandlersRef.current = {
+      onActionsOpen: (itemId) => setActionsOpenItemId(itemId),
+      onComments: (item) => {
+        setCommentsReplyToId(null);
+        setCommentsOpenItemId(item.id);
+      },
+      onCreatorOpen: openCreatorProfile,
+      onOwnerAction: runOwnerAction,
+      onPageChange: changePage,
+      onRecreate: (item) => void recreateItem(item),
+      onSave: saveItem,
+      onShare: (item) => void shareItem(item),
+      onUnlockRemix: (nextItem) => setUnlockRemixOpenItemId(nextItem.id),
+    };
+  });
+  const slideHandlers = useMemo<ImmersiveSlideHandlers>(() => ({
+    onActionsOpen: (itemId) => slideHandlersRef.current?.onActionsOpen(itemId),
+    onComments: (item) => slideHandlersRef.current?.onComments(item),
+    onCreatorOpen: (item) => slideHandlersRef.current?.onCreatorOpen(item),
+    onOwnerAction: (action, item) => slideHandlersRef.current?.onOwnerAction(action, item),
+    onPageChange: (itemId, pageKey) => slideHandlersRef.current?.onPageChange(itemId, pageKey),
+    onRecreate: (item) => slideHandlersRef.current?.onRecreate(item),
+    onSave: (item, trigger) => slideHandlersRef.current?.onSave(item, trigger),
+    onShare: (item) => slideHandlersRef.current?.onShare(item),
+    onUnlockRemix: (item) => slideHandlersRef.current?.onUnlockRemix(item),
+  }), []);
+
   if (selectionMissing && !savedPosition) {
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset}>
@@ -1508,28 +1557,27 @@ function ImmersivePreviewViewer() {
             activeSlideRef={activeSlideRef}
             onLayoutAsNeighbour={index === activeIndex ? undefined : zoom.reportNeighbourDrawn}
             onChromeLayout={index === activeIndex ? zoom.reportChromeDrawn : undefined}
-            activeVideoId={activeVideoId}
+            // Only the slide that owns the playing video sees its id: the others keep
+            // an unchanged null, so the swipe does not re-render them.
+            activeVideoId={activeVideoId === item.id ? activeVideoId : null}
             authReturnTo={returnPathFor(item)}
             bottomInset={bottomInset}
             chromeHidden={actionsOpenItemId === item.id}
             height={height}
             item={item}
             initialSection={item.id === openedSection?.itemId ? openedSection.section : undefined}
-            onActionsOpen={() => setActionsOpenItemId(item.id)}
-            onComments={item.canComment ? () => {
-              setCommentsReplyToId(null);
-              setCommentsOpenItemId(item.id);
-            } : undefined}
-            onCreatorOpen={openCreatorProfile}
+            onActionsOpen={slideHandlers.onActionsOpen}
+            onComments={slideHandlers.onComments}
+            onCreatorOpen={slideHandlers.onCreatorOpen}
             pageKey={index === activeIndex ? position?.pageKey : undefined}
             mediaPageKey={index === activeIndex ? position?.mediaPageKey : undefined}
-            onPageChange={changePage}
+            onPageChange={slideHandlers.onPageChange}
             onHorizontalScrollToggle={setIsHorizontalScrolling}
-            onOwnerAction={(action) => runOwnerAction(action, item)}
-            onRecreate={recreateItem}
-            onSave={saveItem}
-            onShare={shareItem}
-            onUnlockRemix={(nextItem) => setUnlockRemixOpenItemId(nextItem.id)}
+            onOwnerAction={slideHandlers.onOwnerAction}
+            onRecreate={slideHandlers.onRecreate}
+            onSave={slideHandlers.onSave}
+            onShare={slideHandlers.onShare}
+            onUnlockRemix={slideHandlers.onUnlockRemix}
             ownerActionPending={index === activeIndex ? ownerActionPending : null}
             remixLoading={remixingItemId === item.id}
             saveLoading={saveMutation.isPending && saveMutation.variables?.postId === item.showcasePostId}
@@ -1838,7 +1886,9 @@ interface ImmersiveSlideHandle {
   showMedia: () => void;
 }
 
-function ImmersiveSlide({
+// Memoised: the reel's renderItem gives a slide that did not change the same
+// props on every viewer render (see `slideHandlers`), so it skips the render.
+const ImmersiveSlide = memo(function ImmersiveSlide({
   active,
   initialSection,
   prepareVideo,
@@ -1891,13 +1941,13 @@ function ImmersiveSlide({
   chromeHidden: boolean;
   height: number;
   item: ImmersivePreviewItem;
-  onActionsOpen: () => void;
-  onComments?: () => void;
-  onCreatorOpen: (item: ImmersivePreviewItem) => void;
+  onActionsOpen: ImmersiveSlideHandlers['onActionsOpen'];
+  onComments: ImmersiveSlideHandlers['onComments'];
+  onCreatorOpen: ImmersiveSlideHandlers['onCreatorOpen'];
   pageKey?: string;
   mediaPageKey?: string;
   onPageChange: (itemId: string, pageKey: string) => void;
-  onOwnerAction?: (action: string) => void;
+  onOwnerAction: ImmersiveSlideHandlers['onOwnerAction'];
   onRecreate: (item: ImmersivePreviewItem) => void;
   onSave: SaveItemHandler;
   onShare: (item: ImmersivePreviewItem) => void;
@@ -1910,6 +1960,14 @@ function ImmersiveSlide({
   onHorizontalScrollToggle?: (scrolling: boolean) => void;
 }) {
   const horizontalRef = useRef<FlatList<ImmersiveSlidePage>>(null);
+  // The chrome and the pages take closures over this item; they are made once
+  // per item here, so the memoised slide hands its children stable functions.
+  const openActions = useCallback(() => onActionsOpen(item.id), [item.id, onActionsOpen]);
+  const openComments = useMemo(
+    () => (item.canComment ? () => onComments(item) : undefined),
+    [item, onComments],
+  );
+  const ownerAction = useCallback((action: string) => onOwnerAction(action, item), [item, onOwnerAction]);
   const reducedMotion = useReducedMotion();
   // The rail, caption and double-tap heart are no part of the picture a zoom
   // into the reel flies, yet each of their views — the rail's icons alone are a
@@ -2058,13 +2116,13 @@ function ImmersiveSlide({
           remixLoading={remixLoading}
           ownerActionPending={ownerActionPending}
           onSave={onSave}
-          onComments={onComments}
+          onComments={openComments}
           onShare={onShare}
           onOpenDetails={openDetailsPage}
           onUnlockRemix={onUnlockRemix}
           onRecreate={onRecreate}
-          onOwnerAction={onOwnerAction}
-          onActionsOpen={onActionsOpen}
+          onOwnerAction={ownerAction}
+          onActionsOpen={openActions}
           actionsMenuEnabled={active}
           onCreatorOpen={onCreatorOpen}
         />
@@ -2144,8 +2202,8 @@ function ImmersiveSlide({
             height={height}
             item={item}
             initialSection={initialSection}
-            onActionsOpen={onActionsOpen}
-            onComments={onComments}
+            onActionsOpen={openActions}
+            onComments={openComments}
             onCreatorOpen={onCreatorOpen}
             onRecreate={onRecreate}
             onSave={onSave}
@@ -2168,7 +2226,7 @@ function ImmersiveSlide({
       {renderChrome()}
     </View>
   );
-}
+});
 
 function useDoubleTapSaveHeartAnimation({
   height,
