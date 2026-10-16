@@ -165,18 +165,6 @@ export async function deferWorkflowRunStepJob(
   return typeof data === 'string' ? data : null;
 }
 
-export async function cancelWorkflowRunStepJobs(
-  client: RpcClient,
-  params: { runId: string },
-): Promise<number> {
-  const { data, error } = await client.rpc('cancel_workflow_run_step_jobs', {
-    p_run_id: params.runId,
-  });
-
-  if (error) throw error;
-  return typeof data === 'number' ? data : 0;
-}
-
 export async function pruneWorkflowRunStepJobs(
   client: RpcClient,
   params: WorkflowRunStepPruneOptions = {},

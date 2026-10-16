@@ -259,5 +259,4 @@ export async function clearGuestMergeOutcome(storage: TicketStorage = defaultSto
 
 export const GUEST_MERGE_TICKETS_STORAGE_KEY = TICKETS_STORAGE_KEY;
 export const LEGACY_GUEST_MERGE_TICKET_STORAGE_KEY = LEGACY_TICKET_STORAGE_KEY;
-export const GUEST_MERGE_OUTCOME_STORAGE_KEY = OUTCOME_STORAGE_KEY;
 export { isWellFormedMergeTicket };

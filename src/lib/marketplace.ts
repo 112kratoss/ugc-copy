@@ -19,13 +19,3 @@ export function isMarketplaceAssetStatus(value: string | null | undefined): valu
   return value === 'draft' || value === 'active' || value === 'unlisted' || value === 'deleted';
 }
 
-export function getMarketplaceAssetTypeLabel(type: ShowcaseAssetType): string {
-  switch (type) {
-    case 'prompt_pack':
-      return 'Prompt pack';
-    case 'guide':
-      return 'Guide';
-    default:
-      return 'Workflow';
-  }
-}

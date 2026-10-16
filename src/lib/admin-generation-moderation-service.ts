@@ -83,24 +83,3 @@ export async function applyAdminGenerationModeration(
   };
 }
 
-export async function listAdminGenerationModeration(
-  client: SupabaseClient,
-  generationId: string,
-): Promise<AdminGenerationModerationEntry[]> {
-  const { data, error } = await client
-    .from('admin_generation_moderation_actions')
-    .select('id, generation_id, reviewer_id, action, reason, created_at')
-    .eq('generation_id', generationId)
-    .order('created_at', { ascending: false })
-    .limit(25);
-  if (error) throw error;
-
-  return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
-    id: String(row.id),
-    generationId: String(row.generation_id),
-    reviewerId: String(row.reviewer_id),
-    action: row.action === 'restore' ? 'restore' : 'remove',
-    reason: String(row.reason ?? ''),
-    createdAt: String(row.created_at ?? ''),
-  }));
-}

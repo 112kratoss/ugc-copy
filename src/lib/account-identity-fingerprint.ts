@@ -35,8 +35,6 @@ export const ACCOUNT_IDENTITY_FINGERPRINT_TABLE = 'credit_grant_identity_fingerp
  */
 const FINGERPRINT_HASH_SUBKEY_LABEL = 'magicbooklet/account-identity-fingerprint/v1';
 
-const FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/;
-
 /**
  * The identity surface a fingerprint can be derived from. Always pass a user
  * fetched via `admin.auth.admin.getUserById` — the request-scoped `User` can
@@ -120,10 +118,6 @@ export function hashIdentityFingerprintSignal(signal: string | null | undefined)
   const normalized = signal?.trim();
   if (!normalized) return null;
   return createHmac('sha256', getFingerprintHashSecret()).update(normalized).digest('hex');
-}
-
-export function isIdentityFingerprint(value: unknown): value is string {
-  return typeof value === 'string' && FINGERPRINT_PATTERN.test(value);
 }
 
 /** Signals → digests, deduped, blanks dropped. */

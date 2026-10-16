@@ -401,7 +401,6 @@ New or migrated UI uses these primitives from `components/ui.tsx`. A missing one
 | `SecondaryButton` | Supporting actions; never competes with the primary |
 | `IconButton` | An icon-only control; its label is required |
 | `AppTextInput` | Label above; `hint`, an announced `error`, a `footer` for counts, a clear button |
-| `BottomActionDock` | The action dock at the foot of a long form |
 | `MediaFrame` | A picture or video with its aspect ratio held before load |
 | `StatusBlock` | Empty, info, success, warning and error states: a title and a next step |
 | `WebLinkButton` | Opens a web page (help, legal) |

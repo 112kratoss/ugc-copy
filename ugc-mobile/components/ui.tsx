@@ -767,54 +767,6 @@ export function ToggleRow({
   );
 }
 
-export function BottomActionDock({
-  children,
-  eyebrow = 'Publish dock',
-  title,
-  body,
-  accent = 'primary',
-  style,
-}: {
-  children: React.ReactNode;
-  eyebrow?: string;
-  title: string;
-  body?: string;
-  accent?: ToolAccent;
-  style?: StyleProp<ViewStyle>;
-}) {
-  const theme = useAppTheme();
-  const color = accentColor(accent, theme.colors);
-
-  return (
-    <View
-      style={[
-        {
-          borderRadius: appTheme.radii.xl,
-          borderCurve: 'continuous',
-          borderWidth: 1,
-          borderColor: `${color}55`,
-          backgroundColor: theme.colors.panel,
-          padding: appTheme.spacing.card,
-          gap: appTheme.spacing.gap,
-        },
-        theme.shadow.panel as ViewStyle,
-        style,
-      ]}
-    >
-      <View style={{ gap: 4 }}>
-        <Kicker color={color}>{eyebrow}</Kicker>
-        <AppText heading variant="cardTitle">{title}</AppText>
-        {body ? (
-          <AppText variant="caption" color="muted">
-            {body}
-          </AppText>
-        ) : null}
-      </View>
-      {children}
-    </View>
-  );
-}
-
 export function PrimaryButton({
   label,
   loadingLabel,

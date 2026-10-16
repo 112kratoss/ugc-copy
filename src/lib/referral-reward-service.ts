@@ -127,31 +127,6 @@ export async function settleReferralPurchaseRewards(
   );
 }
 
-export async function reverseReferralPurchaseRewards(
-  adminSupabase: ReferralRewardRpcClient,
-  transactionId: string,
-  reason: string,
-): Promise<ReferralRewardSettlement> {
-  return callRewardRpc(
-    adminSupabase,
-    'reverse_referral_purchase_rewards',
-    { p_transaction_id: transactionId, p_reason: reason },
-    'referral_reward_reversed',
-  );
-}
-
-export async function restoreReferralPurchaseRewards(
-  adminSupabase: ReferralRewardRpcClient,
-  transactionId: string,
-): Promise<ReferralRewardSettlement> {
-  return callRewardRpc(
-    adminSupabase,
-    'restore_referral_purchase_rewards',
-    { p_transaction_id: transactionId },
-    'referral_reward_earned',
-  );
-}
-
 export async function reconcileReferralPurchaseRewardAdjustment(
   adminSupabase: ReferralRewardRpcClient,
   input: {
@@ -173,58 +148,6 @@ export async function reconcileReferralPurchaseRewardAdjustment(
       p_reason: input.reason ?? null,
     },
     input.action === 'reverse' ? 'referral_reward_reversed' : 'referral_reward_earned',
-  );
-}
-
-export async function reconcileRazorpayCreditPurchaseAdjustment(
-  adminSupabase: ReferralRewardRpcClient,
-  input: {
-    transactionId: string;
-    providerEventId: string;
-    paymentId: string;
-    cumulativeReversedSubunits: number;
-    action: 'reverse' | 'restore';
-    reason: string;
-  },
-): Promise<ReferralRewardSettlement> {
-  return callRewardRpc(
-    adminSupabase,
-    'reconcile_razorpay_credit_purchase_adjustment',
-    {
-      p_transaction_id: input.transactionId,
-      p_provider_event_id: input.providerEventId,
-      p_payment_id: input.paymentId,
-      p_cumulative_reversed_subunits: input.cumulativeReversedSubunits,
-      p_action: input.action,
-      p_reason: input.reason,
-    },
-    input.action === 'reverse' ? 'referral_reward_reversed' : 'referral_reward_earned',
-  );
-}
-
-export async function reconcileMobileCreditPurchaseAdjustment(
-  adminSupabase: ReferralRewardRpcClient,
-  input: {
-    externalOrderId: string;
-    userId: string;
-    productId: string;
-    providerEventId: string;
-    providerEventTimestampMs: number;
-    action: 'refund' | 'restore';
-  },
-): Promise<ReferralRewardSettlement> {
-  return callRewardRpc(
-    adminSupabase,
-    'reconcile_mobile_credit_purchase_adjustment',
-    {
-      p_external_order_id: input.externalOrderId,
-      p_user_id: input.userId,
-      p_product_id: input.productId,
-      p_event_id: input.providerEventId,
-      p_event_timestamp_ms: input.providerEventTimestampMs,
-      p_action: input.action,
-    },
-    input.action === 'refund' ? 'referral_reward_reversed' : 'referral_reward_earned',
   );
 }
 

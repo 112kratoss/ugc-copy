@@ -759,10 +759,6 @@ export function getCatalogModel(catalog: GenerationModelCatalog, modelId: string
   return catalog.models.find((model) => model.id === modelId) ?? null;
 }
 
-export function getCatalogControl(model: GenerationModelDescriptor, key: string) {
-  return model.controls.find((control) => control.key === key) ?? null;
-}
-
 export function normalizeCatalogSettings(
   model: GenerationModelDescriptor,
   settings: Record<string, CatalogPrimitive>,
@@ -823,14 +819,3 @@ export function getActiveCatalogInputSlots(
     .filter((slot) => catalogConditionsMatch(slot.conditions, settings, inputCounts));
 }
 
-export function getCatalogDefaultModel(
-  catalog: GenerationModelCatalog,
-  kind: GenerationModelKind,
-): GenerationModelDescriptor | null {
-  const models = getCatalogModels(catalog, kind);
-  const defaultId = catalog.defaults[kind];
-  return models.find((model) => model.id === defaultId)
-    ?? models.find((model) => model.recommended)
-    ?? models[0]
-    ?? null;
-}
