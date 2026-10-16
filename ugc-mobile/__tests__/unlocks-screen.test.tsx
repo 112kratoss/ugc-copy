@@ -240,7 +240,9 @@ describe('mature unlocks', () => {
     });
 
     expect(images(tree)).toHaveLength(1);
-    expect(findRow(tree).props.accessibilityActions).toBeUndefined();
+    // Empty, not undefined: Android keeps the actions a view had when the prop
+    // goes back to undefined (hig-accessibility-label-states.test.ts).
+    expect(findRow(tree).props.accessibilityActions).toEqual([]);
   });
 
   it('asks for the preference only for a row with a mature still to cover', () => {
@@ -259,7 +261,7 @@ describe('mature unlocks', () => {
       expect(images(tree)).toHaveLength(0);
       expect(showControls(tree)).toHaveLength(0);
       expect(tree.root.findAll((node) => String(node.type) === 'icon' && node.props.name === 'EyeOff')).toHaveLength(1);
-      expect(findRow(tree).props.accessibilityActions).toBeUndefined();
+      expect(findRow(tree).props.accessibilityActions).toEqual([]);
       expect(texts(tree)).toContain('Mature content');
     }
   });
@@ -286,7 +288,7 @@ describe('mature unlocks', () => {
     expect(images(tree)).toHaveLength(0);
     expect(showControls(tree)).toHaveLength(0);
     expect(tree.root.findAll((node) => String(node.type) === 'icon' && node.props.name === 'EyeOff')).toHaveLength(1);
-    expect(findRow(tree).props.accessibilityActions).toBeUndefined();
+    expect(findRow(tree).props.accessibilityActions).toEqual([]);
   });
 });
 

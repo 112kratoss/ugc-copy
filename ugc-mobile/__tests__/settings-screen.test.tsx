@@ -660,5 +660,7 @@ describe('settings screen — guest data (D5)', () => {
     await settle();
     expect(showMessageDialog).toHaveBeenCalledWith(DELETED);
     expect(rowByTitle(tree, ROW).props.disabled).toBeFalsy();
+    // Booleans, not undefined: Android keeps a busy that goes back to undefined.
+    expect(rowByTitle(tree, ROW).props.accessibilityState).toEqual({ busy: false, disabled: false });
   });
 });

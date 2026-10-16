@@ -487,7 +487,9 @@ function SettingsCard({
       accessibilityRole={external ? 'link' : 'button'}
       accessibilityLabel={`${title}. ${body}`}
       accessibilityHint={external ? 'Opens in your browser.' : undefined}
-      accessibilityState={busy ? { busy: true, disabled: true } : undefined}
+      // Booleans in every state: on Android a busy that goes back to undefined
+      // stays, and the guest row read "busy" after its deletion had ended.
+      accessibilityState={{ busy: Boolean(busy), disabled: Boolean(busy) }}
       accessibilityLiveRegion={busy ? 'polite' : undefined}
       disabled={busy}
       onPress={onPress}

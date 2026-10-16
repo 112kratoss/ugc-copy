@@ -63,7 +63,10 @@ export function ViewerTopControl({ label, onPress, topInset, side, selected, chi
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={label}
-          accessibilityState={selected === undefined ? undefined : { selected }}
+          // An object in every state, as hig-accessibility-label-states asks:
+          // Android keeps a state that reaches it as undefined. A `selected`
+          // left undefined (the Back control) is simply not sent.
+          accessibilityState={{ selected }}
           onPress={onPress}
           style={content}
         >
@@ -77,7 +80,7 @@ export function ViewerTopControl({ label, onPress, topInset, side, selected, chi
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={selected === undefined ? undefined : { selected }}
+      accessibilityState={{ selected }}
       onPress={onPress}
       style={({ pressed }) => ({
         ...frame,
