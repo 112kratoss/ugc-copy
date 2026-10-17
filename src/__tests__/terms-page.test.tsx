@@ -7,6 +7,7 @@ import { siteConfig } from '@/lib/seo';
 describe('Terms of Service', () => {
   // Decision 7b (2026-10-17): the seller payout terms follow Invite & Earn as
   // section 6, in the owner's words, and every section after it moves down one.
+  // The exchange-rate sentence was added at the owner's request on 2026-10-18.
   it('states the seller payout terms as section 6 and numbers the sections after it', () => {
     render(<TermsOfService />);
 
@@ -34,8 +35,9 @@ describe('Terms of Service', () => {
       'Your earnings collect in your seller balance, and you can request a payout once that balance reaches $100.',
       'Payouts are paid in Indian rupees (INR) to a UPI ID or an Indian bank account that you give us, and we send',
       'each payout within 14 days of your request.',
+      'We convert your dollar balance to rupees at the exchange rate on the day we send the payout.',
       'PayPal and international transfers are not available yet.',
     ].join(' '));
-    expect(screen.getByText('Last updated: October 17, 2026')).toBeInTheDocument();
+    expect(screen.getByText('Last updated: October 18, 2026')).toBeInTheDocument();
   });
 });
