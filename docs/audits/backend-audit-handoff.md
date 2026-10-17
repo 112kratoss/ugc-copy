@@ -1,15 +1,1046 @@
 # Backend audit — session handoff
 
-Updated 2026-10-07 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
+Updated 2026-10-10 (Asia/Kolkata). Read this first when continuing the section-by-section Magicbooklet backend audit.
+
+> **Series closed 2026-10-18.** Codex's section-by-section backend audit ended with the 10-10 entry below, and Codex no
+> longer runs on this repository. This file is kept as the record, not as live instructions: the checkout paths, the
+> "current checkout" lines and the "next work" lines describe the state on 2026-10-10, and the `auth-section-one`
+> checkout has been removed. Two corrections to that state: the 12Z retention migration
+> (`20261010071057_skip_locked_operational_retention.sql`) is applied in production, since #436's production release
+> succeeded on 2026-10-10 at 07:48 UTC; and PR #438 (13A) was closed unmerged on 2026-10-18, its patch and the stacked
+> 13B commit kept outside the repository (the owner's `archive/codex-wind-down-2026-10-18/`).
 
 ## Workspace and authorization
 
 Primary repository: `/Users/athuls/UGC copy/ugc-app`.
 Active audit checkout: `/Users/athuls/UGC copy/auth-section-one` (reuse it; preserve uncommitted evidence).
-Current checkout: `codex/backend-referral-account-deletion-12c`, investigating referral history across account deletion. The user receipt/evidence edits remain untouched.
+Current checkout: `codex/backend-assistant-inputs-13a`, candidate
+`23004e0723f3bf89ea4c4aef95119cef01ebeafa`, PR438 open and attached, stacked on
+PR436's `codex/backend-template-run-auth-12y` branch. Do not merge438 into that
+intermediate branch; retarget to main after436 release is independently verified.
+PR436 remains frozen743, including25 identity controls,12Z retention fix and12V
+release evidence. PR433 is independently verified on ec0e08db; main1f9bd76a's
+Quality38033537640 still running. Retention migration12Z is UNAPPLIED production.
+Existing user edits preserved.
 Read the parent and repository AGENTS.md. The user authorized section-by-section audit, reproduction, fixes, verification, and deployment of completed batches. Production rollback fixtures are authorized. Do not charge providers, alter real customer balances, or run production contention/load tests as incidental probes. No new permission is needed for the already-authorized audit/release workflow. Do not spawn subagents unless newly authorized by applicable instructions.
 
 ## Exact checkpoint
+
+### Newest continuation — October 10, assistant admission13A / release waits
+
+Previous turn made concrete progress (25realAuth controls, reproducednullinput,
+fix,17focusedtests,newPR438); notblocked. Main1f9bd76aQuality38033537640 has4/5
+success,webBuildrunning atlastcheck. Standardnotyetready(latest1frun38034020527
+skippedfromothertrigger). PR436 exact743Quality38033798081 islive:mobile/SQL/E2E
+passed,webBuild/APIrunning. Preserveexistingretentionbaselineandguard; don't
+rerunprepareormergeuntilfreshparentstandard+verification/candidateall5.
+
+13A actualassistantAuth/PostgREST suite:state/message/apply/discard foreign,
+unsigned,invalid identity12cases;9malformedbodies;owned100messageboundedordered
+read;apply/discardduplicates/oppositeactions;stalerevision. Baselinecorrected
+suite24pass1fail:JSONnullthrowsTypeErroratbody.content, actualnativeRequest/Auth.
+Initialstaleproposalexpectationwaswrong:SQLdeliberatelydiscardsstaleproposal;
+onlytestcorrected. Servicebodyunknown+nonobject400guardfixesnullbeforestate,
+rateorcredits.25actualpass1.41s;17focusedpass;app/testtypes,scopedlint,diffpass.
+Actualcleanupzero,unchanged500balances,noledgerentries,noexternalrequests.
+NoDDL/providerrequest. Evidenceassistant-auth-*; reportbackend-section-13-assistant-request-admission-2026-10-10.md.
+
+Commit23004e0723f3bf89ea4c4aef95119cef01ebeafa pushed; exactQuality38034258613
+allfivejobsconfirmedRUNNING. PR438 openattached
+https://github.com/112kratoss/ugc-copy/pull/438 . BASEisPR436branchbydesignfor
+seven-file review/parallelCI. After436mergeANDindependentrelease,retarget438to
+main,mergeoriginmainasneeded,exactchecks+noDDLbaseline/guard/standardverification.
+No13Areleasebaselinepreparedyetbecause12Zreleasepending. Keep438frozen.
+Localledger24passed24untested3failed2external:WORKFLOW04failed13A,JOB02failed12Z,
+MEDIA07legacyretirement. Hostedidentity/provider/persistencefailure/billingmatrix
+notcertifiedbythese25admissiontests. Noactive localtestfixtureorworker.
+
+
+### Newest checkpoint — October 10, 07:12 UTC approval verified; 12Z candidate743
+
+PR433 approval release FULLY verified: exactmainQuality38027773322 allfive,
+standard38028486183 SUCCESS. Independentverify07:11:40UTC liveec0e08db,
+existing schema/permissions unchanged,newfunction/grant matchcleanreplay,
+112advisorsunchanged. Ledgeratomic_template_checkpoint_approval20261010054423
+(source20261009163235; APPLIED NEVEREDIT). Publicsmoke200/200/307/401.
+Boundedrollbackprobe07:12:00UTC PASS,independent7tablescleanupzero. Report
+backend-section-12-template-approval-release-2026-10-10.md committed65a6eb96.
+WORKFLOW02 returnsuntested; JOB02nowFAILED12Z,ledgerstill24/25/2/2.
+
+12Y candidate80f allfiveQuality38027808527SUCCESS, butmergeguardcorrectly
+refused mainadvanced to1f9bd76a09d3a14b32cb91fa338cc9c4261cbc95 via437.
+Inspected20files:client safety/creator/reels/UI tests/design docs; no server,
+DDL,AGENTS orreleaseworkflowchanges. Current1f mainQuality38033537640RUNNING;
+needstandardthenindependentreadback beforemerge436. Do notbypassguard.
+
+12Z reproducesactualSQL locktimeout inall5operational retention tables.
+Newmigration20261010071057_skip_locked_operational_retention.sql (pinnedCLI)
+adds orderedFORUPDATE SKIPLOCKED preservingpolicy/cap/grants/latestmodelcheck.
+7actualcasespass (eachtable,alllocked,overlappingsweeps) +2migrationchecks.
+Cleanisolated55332 replayPASS all2376SQL/112files;7+2oncleanreplayPASS1.01s.
+Testtyping/scopedlint/diffPASS. Twoearlyfixturemistakesrecordedseparately;
+realbeforeevidenceretention-lock-reproduction.log shows5locktimeouts. Exact
+localfixturecleanupzero; failedimmutablemodelidentities5removedonlylocally.
+Allprunesrollback/ancientfixturecutoff1901, no otherlocal/proddata deleted.
+Noactivefixtures/testworkers.
+
+Commit65a6eb96 plus merge1f => candidate74385eda0a4a17f940d4f0eda7a5ea5d2354cfa7.
+Pushed toexistingPR436branch;title/bodyrewrittenfinalscope (oneDDL+12Ytests).
+ExactQuality38033798081 RUNNING. Localbranch12Z;remotePRbranch12Y intentional.
+Do notpushextradocsandrestartCI unlessnecessary.
+
+retention-lock-release baseline CAPTURED onverifiedec0e08db andMUSTNOT be
+preparedagain. Expectedfunction/grant2signatures fromcleanreplay, baseline
+schema/advisors112,exactlyonependingnewmigration,nooutoforder,candidatehashes.
+verify.cjs SHA,release-smoke.cjs SHA,probe.cjs SHA prepared. Localrollbackprobe
+PASS;productionprobeNOTRUN. Probe checksnoexistingpre1901rows,threeexactjob
+fixtures,service-rolecap/retry/activeprotection,ROLLBACK,separatecleanupzero;
+no productionlock/contention. prepare-retention-lock.cjs preserved.
+merge-guard.cjs STANDARD_ID pinscandidate743/Quality38033798081,main1f/
+Quality38033537640 andrequiresfreshtemplate-approval-release/comparison.json
+verifiedon1f; also schema/advisors/source/ledger/mobile checks beforemerge436.
+Next: once1fmainQuality+standardSUCCESS, rerun12Vverify+smokeon1f (no need
+repeatapprovalproductionprobe), then436guardaftercandidateCI. Aftermerge:
+exactmainCI+standard,12Zverify+smoke+probe,report. Goalactive,notblocked.
+
+
+### Release checkpoint — October 10, 05:31 UTC / PR433 merged; PR436 opened
+
+PR433 exactcandidate985 Quality38027148902 allfiveSUCCESS. Existing mergeguard
+passed fresh production/source/schema/advisors/live/main/mobile-release checks
+and merged433 at05:31:03UTC as ec0e08dbf0df48ee5dd9b07ba50192a63baf2c70.
+Evidence template-approval-release/merge-gates.json; guard exit0. Baselines
+preserved. Exactmain Quality38027773322 RUNNING, standard not verified yet.
+Next: await allfive exactmain checks and standard production-release success;
+then run existing template-approval-release/verify.cjs SHA, release-smoke.cjs SHA,
+and probe.cjs SHA in order. Production rollback probe requires successful
+independent new-schema/live verification first. Record report and only then
+resolve reproduced12V failure; broader WORKFLOW02 remains open.
+
+12Y tests/report committedd6c8110c; mergedorigin/main locally withno sourcechange,
+newhead80f514b4bb6c610d3999fc6e7cfbda6fb8a76699. Pushed andopened PR436:
+https://github.com/112kratoss/ugc-copy/pull/436 (attached). Exactlysix changedfiles,
+25localAuth/PostgREST/Storage casespass, testtyping/lint/diffpass. No runtimeorDDL.
+KeepPR436 frozen forCI; don'tmerge it before verifying433's standardrelease.
+User receipt diff unchanged; ownhandoff/privateevidence andoriginalSection1files
+remainlocal. Noactive localtestworkers/fixtures. Goalactive, notblocked.
+
+
+### Newest continuation — October 10, template HTTP identity controls
+
+12Y local commit d6c8110c adds 25 actual Auth/PostgREST/Storage controls for
+run GET/cancel/retry/approval: foreign/unsigned/invalid identities, real foreign
+step IDs, signed image bytes, duplicate actions, terminal refusal and transport
+failure/retry. All25 pass (9.19s); test typing/scoped lint/diff checks pass. No
+runtime/schema fix. Sequential API CI step included. Initial21 pass and one
+intermediate default-5s test timeout during actual SDK GET backoff are retained;
+final bounded30s outage case passes. Evidence template-run-auth-*; report12Y.
+Method inventory reconciled with released11Q/R/S and7K; no full row closed.
+PR433 still frozen985, four of five Quality38027148902 jobs passed; API job
+has reached stack teardown after its tests. No merge until allfive success.
+Currentmain remains64bf; existing mergeguard and release baseline unchanged.
+12Y not pushed/PR-created yet; it can follow433 without restarting433 CI.
+Docker was restarted with existing isolated volumes; no reset. No active fixture
+or local test worker. Original receipt diff SHA256 remains bb579a5c0a2ee1540000d57c7e7580feeb4c0cb0ff1e9427f2c9bf41025007fc.
+
+
+### Newest checkpoint — October 10, 05:19 UTC verification / current live64bf; refreshed433
+
+12U/#431 allfive mainQuality37961087969 andstandard37962589617SUCCESS.
+Independent6b39c0b7readbackpassed October9 17:03:58UTC. Public12S/T/Urelease
+report committed7bbeb4d0 andnowincluded433. No migrationorcustomerrepair.
+Mainadvancedvia#4327387be03, #4347ca0de6d, #43564bf7cdc. Inspectedlatest28files:
+reportUI/mobile/clientchanges andpost-report-service self-report400guard; no
+migration/workflow/AGENTSchange beyondprevious#432contractinventoryupdate.
+Latest64bf7cdcb7e74ab67005de7c575173cf9d6e9b75 allfiveQuality37985943664SUCCESS,
+standard37987301024SUCCESS. Independent12Uverify+smoke atOctober10 05:19:33UTC
+passlive64bf/source/schema/advisors112unchanged and200/200/307/401. Theattempted
+738readbackcorrectlyfailedLiveMismatchbecauseproductionalreadyadvanced; no
+baselineoverwrite. Updatedcomparison.jsonnow64bf. Prior6bpublicreportretained.
+
+PR433 candidatea829/Quality37963629572 allfiveSUCCESS beforemainadvancedagain.
+Refreshedcandidate now **985ef9a633abdb0e7fb9f95dc550a09d49897070**, exactQuality
+**38027148902RUNNING**. It includes latestmain64bf,unchanged12Vruntime/migration,
+12R+12Uverifiedreports, and9newworkflowmanagedtests wired intoAPIjob. PRbodyupdated.
+Currentbranch12Vfast-forwardedthrough12X (testcommit649a2ea6/latestmainmerge985).
+KeepcandidatefrozenwhileCIruns; noextraPRfor12W/12X needed.
+
+12Vbaseline WAS CAPTURED onverified6b beforemainadvanced: schema/advisors,
+expectedtwofunction/grant signatures, exactlyonependingmigration/nooutoforder.
+DoNOT rerunprepare-template-approval.cjs oroverwritebaselines. Its sourcehashes
+stillmatchcurrent433;freshmergeguardverifies. MergeguardUPDATED forcurrent64bf,
+Quality37985943664, candidate985/CI38027148902. Afterall5CIpassrun
+`template-approval-release/merge-guard.cjs 37987301024`. It checksunchanged
+baseline/schema/advisors, currentlive/main andnomobilestorereleasebeforemerge.
+ThenexactmainQuality+standard,verify.cjs SHA,smoke,andboundedprobe.cjs SHA.
+Probe requiresindependentlive/schemafirst. Migration remainsUNAPPLIEDproduction.
+
+12Xactualworkflowmanaged controls NINE PASS29.48s; testtyping/lintFINALpass.
+SevenHTTP503failures (workflowpending/heartbeat/missingheartbeat,due-template,
+strandedworkflow/strandedtemplate,templateprune) persistfailedresults;healthy
+retryrecordsskipped. Emptycaseandactualheldmanagedleasepreservespendingtemplate
+job/owner,claimneitherqueue, exactfixturecleanupzero. No runtimefindingorfixedbug.
+Initialwrongtablenameandmissingexplicitfixtureenqueuefailuresaretestsetup,
+retainedinprivateworkflow-managed-first/final.log;complete.logisthepassingrun.
+UseslocalrealPostgREST+SQL,externaloriginblocked;noclaimpaid-workexecutionorfull
+leasefencing. CInewstepserialinAPIjob. Reportbackend-section-12-workflow-job-admission-2026-10-10.md.
+
+Noactive localtestworkerorfixture. Onlyownhandoff/userreceipt/privateevidence/
+originalSection1filesdirty. Receiptoriginalhashstillpreserved. Currentledger
+24passed25untested2failed2external (WORKFLOW02 pending12V;MEDIA07legacyretirement).
+Wholeauditactive; thiscontinuationmadeprogress,notblocked. Remainingfullscope
+stillrequiresbroaderauth/provider/workflow/social/job/restore/capacityevidence.
+
+
+### Newest checkpoint — October 9, after 16:42 UTC verification / 12R complete; 12U merged
+
+12R/#429 is fully independently verified on0ad91678 at16:42:18UTC: standard
+37960469877 SUCCESS, exactmainQuality37958955983 all5SUCCESS; testedreleasefile
+hashes/schema/advisors112unchanged; actualnewhealthgate marker confirms exactSHA
+success after1request. Publicsmoke200/200/307/401PASS. Report
+`backend-section-12-release-health-gate-verification-2026-10-09.md` committed in
+local12W asd35d2719; ledgerheadercurrent0ad committedfdbdac21. OPS04untestedagain.
+Do notredothebaseline orclaimstale-IDproductionretry fromthisone-requestrelease.
+
+12U/#431 baseline CAPTURED in `template-retry-resume-release/`, pinnedcandidate
+1f5d85e3 runtime/migrationlist, noDDL. Guardpassedfreshgates andmerged431as
+`6b39c0b7aadecfeefc2c137ec3809801c214abba` at16:42:46UTC. ExactmainQuality
+37961087969 RUNNING. Needautomaticstandard, then existing verify.cjs SHA and
+release-smoke.cjs SHA; no migration/prodfixture for12U. Do notrunprepareagain.
+Its main tree is identical to includedcandidate1f5d85e3 (gitdiffemptyverified).
+A watch for37961087969 was started; use authoritative exact-runstate ratherthan
+assuming missing/ended local watch meansCIstopped. Logtemplate-retry-main-quality-watch.
+
+Current12Wlocal includes433candidate952plus12Rreleasedocs andmergeofmain6b
+(commit67c48e38). NoPRfor12W. PR433 remains952f1dcfec48769add158228f9991b48b56d6a24,
+exactQuality37960737676RUNNING. Don'tpush12Wonto433 just torecorddocs whileCIruns.
+OtheruserPR432 hide-rowwording wasopen; don'ttouchit. Guardwillrejectmainadvance.
+
+12V future release setup COMPLETE but baseline NOT CAPTURED:
+prepare-template-approval.cjs VERIFIED_PARENT_SHA requires12Ucomparison, reads
+pinned952source/migrationlist andcleanDB55332function/grant. Expectedtwo signatures
+confirmed: approve_template_checkpoint(uuid,uuid,uuid) andservice_rolegrant.
+merge-guard.cjs STANDARD_RUN_ID expects6b/mainQuality37961087969 and433/37960737676.
+It requires6b treeequal1f and1fancestor952, provingnewcandidatecontainsverifiedparent
+contents withoutneedlesslyrestartingCIforapuremergecommit. Main/liveexact6brequired.
+verify.cjs SHA checks newfunction/grantagainstcleanreplay, remaining schemaunchanged,
+advisors, ledgerandruntime/migrationsource. ProbeSQL+probe.cjs requiresverifiedlive
+schemafirst; localrollbackproofpassed andindependentcleanupzero in7tables.
+Production inventorymatchingstrandedapproval=0; noactualproductionprobeorrepairyet.
+Noappliedmigrationhasbeenedited. New12V migrationisUNAPPLIEDproduction.
+
+Alllocaltestsfinished:49DBonbothstacks,265template,2376SQL112files,app/testTS/lint.
+Currentledger24passed25untested2failed2external:WORKFLOW02(12U/12Vpending),MEDIA07.
+12Wdocsnotpushed. Userreceiptstillhashbb579a5c0a2ee1540000d57c7e7580feeb4c0cb0ff1e9427f2c9bf41025007fc.
+No fixture or owned local worker remains. Full audit active; progressmade.
+
+
+### Newest checkpoint — October 9, 16:43 UTC / 12V approval atomicity; 12R promoting
+
+12R main0ad exact Quality37958955983 ALL FIVE SUCCESS. Standard37960469877
+is RUNNING at protected production health after promotion. The earlier skipped
+standard37960330390 is not the release. Next verify existing health-gate script
+with0ad and37960469877, then smoke; preserve original baseline. Main watch41344
+is obsolete now that exact Quality success is authoritative.
+
+431 candidate1f5d85e3 Quality37959157884 ALL FIVE SUCCESS. The prepared
+`prepare-template-retry-resume.cjs` now reads candidate source/migration lists
+from that exact Git commit, so newer12V local work cannot contaminate its baseline.
+Still NOT RUN until12Rlive independently verified. Capture, then run its existing
+mergeguard with37960469877. Do not merge ahead of verified parent.
+
+12V: two additional SQL-trigger regressions reproduce ignored run-resume errors
+and committed approval checkpoints. Before logs `template-approval-sql-before.log`;
+the earlier adapter-only first repro is also retained. New additive migration
+`20261009163235_atomic_template_checkpoint_approval.sql` creates service-only
+SECURITY INVOKER approval RPC, owned-run then step lock, current-attempt/output/
+terminal checks, approval+resume+enqueue in one transaction. NOT APPLIED PRODUCTION.
+Four actual local trigger fault cases cover run and queue rejection/rollback;
+concurrent approval/retry/cancel/abandon still passes with stricter terminal refusal.
+49actualDB cases PASS both local and clean-replayDB55332;265template tests PASS
+(79environment-gated skipped explicitly not counted);2376pgTAP/112files clean
+replay PASS;app/testtyping/lint PASS. Nofixturesremain. All local workers finished.
+
+12V committed952f1dcf, pushedPR433attached. Quality37960737676RUNNING. Includes431
+until431 merges; hold433merge for independently verified431. Current runtime/schema
+fix is separate from431. Production count of awaiting_approval runs with all latest
+checkpoints approved is ZERO (template-approval-inventory.json). No customer repair.
+
+Private12V release setup: `prepare-template-approval.cjs VERIFIED_PARENT_SHA`
+PREPARED NOT RUN; requires12U comparison first, uses pinned952 Git source/migration
+list and local clean-replay function+grant signatures. verify/smoke/probe scripts
+are prepared in `template-approval-release/`. Probe SQL uses bounded transaction,
+service-role owned synthetic records, ROLLBACK and independent zero cleanup;
+it PASSED LOCALLY on clean replay only. Production probe requires verified live
+schema first. Need433 mergeguard after431 exactmain/standard IDs known. Do not
+capture baselines before the proper parent or overwrite prior baseline files.
+
+Current ledger remains24passed24untested3failed2external (WORKFLOW02,OPS04,MEDIA07).
+WORKFLOW02 also includes12Vunreleased now; do not clear it just because431 ships.
+The previous goal turn made concrete progress; this turn adds reproduced/fixed
+approval failure evidence and clean migration proof. Whole audit stays active.
+
+
+### Newest checkpoint — October 9, 16:29 UTC / 12R merged; 12U reproduced and fixed
+
+PR #429 passed all five candidate Quality jobs (37957625786). Fresh release
+merge guard passed schema/advisors/live/source/main/mobile checks and merged as
+`0ad91678fa7030dfcc1ad5f54d015cd0eb1c5bd0` at 16:24:58 UTC. Exact-main Quality
+37958955983 is running. Wait for its automatic standard release, then use existing
+`production-health-gate-release/verify.cjs SHA STANDARD_RUN_ID` plus smoke. Baseline
+is already captured; do not overwrite it. OPS-04 remains failed pending independent
+verification, including the actual modified health-gate log marker.
+
+12T adds two pre-submission SIGKILL cases: committed hold / zero provider calls,
+lease takeover with no duplicate submission, stale reaper exact refund and one
+notification, retry one new attempt, cancellation remains terminal. All 27 cases
+passed, along with typing/lint. Committed as `4707d7d3`; report is in candidate.
+Fixture timestamps are aged, provider/Storage boundaries controlled; do not claim
+real elapsed TTL or external provider/Storage behavior from these tests.
+
+12U then reproduced TWO real SQL-backed failures: generation retry ignores a
+rejected run-resume write and returns success; repeating its original request
+returns early and leaves the committed queued attempt in needs_attention.
+`template-retry-resume-before.log` retains both failures. The service now checks
+resume errors and lets a replay resume/enqueue its existing queued generation
+attempt. Four new cases include missing-ticket restoration and cancellation.
+45 database cases pass sequentially in26.46s, 58 focused cases pass, app/test
+TS and lint pass. Initial parallel invocation of the two global-queue suites
+failed due to fixture interference (another suite consumed the crash fixture);
+its log is retained, corrected sequential invocation matches CI. No migration.
+
+PR #431 https://github.com/112kratoss/ugc-copy/pull/431 is OPEN and attached,
+candidate `1f5d85e36171cfe2388b759700f0827c3ba5c3e2`, exact Quality
+37959157884 running. It includes local12S's13 actual profile-media controls,
+12T,12U and verified12P report. 12S needs no separate PR. Local branch contains
+main0ad via mergec38eff57. WORKFLOW-02 failed pending12U release; current candidate
+ledger24passed24untested3failed2external. Broader workflow scope remains open.
+
+Private `prepare-template-retry-resume.cjs` PREPARED NOT RUN; expects verified0ad
+live and captures unchanged-schema baseline plus one template-runtime hash.
+`template-retry-resume-release/verify.cjs SHA` and smoke are prepared. Need
+mergeguard with431candidateCI and verified0adQuality/standard IDs after baseline.
+A bounded read-only count of needs_attention runs with latest queued generation
+retry returned zero; private template-retry-inventory.json retains the timestamp.
+No production repair was needed. The431 merge-guard is prepared and takes the
+verified0ad standard run ID as its first argument; never run before parent verification.
+
+Main Quality watch for37958955983 is active as exec session41344, logging
+production-health-gate-main-quality-watch.log. No release run ID yet; inspect
+exact commit0ad workflows after main Quality. Candidate431 CI37959157884 active.
+Only own handoff, user receipt, private evidence and original Section1 files
+remain outside commits. No active local test worker/fixture remains; both suites
+finished, per-case cleanup readback passed. Whole audit remains active.
+
+
+### Newest checkpoint — October 9, 16:22 UTC / profile release verified; template recovery controls
+
+Current main `a4fb1d9ee6d803c74f6191984e3f7e390755f0b5` passed all five Quality
+jobs (37945161319) and standard release 37946668616. Independent 12P verification
+at 16:14:05 UTC confirms live identity, four runtime hashes, unchanged schema and
+112 unchanged security findings. Public smoke 200/200/307/401 passes. Public
+12P release report is committed in local 12S as `4f1127ac`; SOCIAL-04 returns to
+untested. Ledger is 24 passed / 25 untested / 2 failed / 2 external (53 total).
+
+PR #429 remains OPEN at `90b9fcb018d2886fb51a74c6d7e5438934df4905`, exact
+Quality 37957625786 running (three jobs passed at this checkpoint). Its release
+baseline HAS BEEN CAPTURED in private `backend-social/production-health-gate-release/`;
+do not rerun the generator or overwrite baseline files. `merge-guard.cjs` checks
+this candidate/CI against verified a4 main and merges only after all five pass.
+After main Quality/standard, `verify.cjs SHA STANDARD_RUN_ID` requires actual
+modified protected-health-gate execution proof; then `release-smoke.cjs SHA`.
+OPS-04 stays failed until that release is independently verified.
+
+Local 12S's five additional rate/admission controls (13 actual profile-media cases)
+remain in history; no PR yet. Current 12T extends the template worker death suite
+at the committed credit hold before any provider dispatch. The first run passed
+26 cases; test typing/lint passed. A further cancellation-before-reaping control
+is now running, so do not claim that added case passed yet. No runtime or schema
+change established. Worker/provider/Storage boundaries and fixture timestamp
+aging must be disclosed; these tests do not make real provider calls or prove
+elapsed wall-clock TTL. Docker is healthy; no reset was needed this resumption.
+
+Receipt diff SHA256 is still
+`bb579a5c0a2ee1540000d57c7e7580feeb4c0cb0ff1e9427f2c9bf41025007fc`.
+The user's two original untracked Section 1 files are preserved. Continue the
+full audit; no full-completion claim or current external blocker established.
+
+
+### Newest checkpoint — October 9, 13:00 UTC / main advanced through Android menus
+
+Otheruser#428merged **791a5ce659d17c3a06700be2d699c8b9db952450**. Inspected19
+changedpaths:Androidmenus/docs/tests only; noAGENTS/backendruntime/migration/
+releaseworkflowchanges. #427'smainQuality37933118860CANCELLEDsuperseded; do not
+rerun4ca. CurrentmainQuality **37933416612RUNNING**. Needautomaticstandardfor791
+then12Pverify/smokeagainst791 (fourruntimehashesunchanged). 12Pbaselineunchanged.
+No releaseclaim for4ca; carryitsfixintoverified791release.
+
+Refreshed429branch bymergingorigin/main; pushedcandidate
+**02de7013770e5272245d6047d78fef654a39aabd**, exactQuality **37933788498PENDING**.
+Old4e1d/37933168198superseded; explicitcancellationrequestedtofreecurrentcandidate.
+Do notuseoldCI. PRbodyupdated. `prepare-production-health-gate.cjs` expects791
+live; stillPREPAREDNOTRUN. Needcapturethenverify/smoke/guardwithnewIDsafterparent
+verification. All original22healthchecks/type/lint evidence retained.
+
+Returned12Sbranchandmergedrefreshed12R; localHEAD
+**58117400762edd55fa305a56c2f481dd1704c10a**. Notpushed/noPR. Ownfive-ratecase
+commitcd94unchanged;13actualpassed/types/lintcompletedexit0. Needeventual429merge
+beforepushing12S. Noownedtestprocesses/fixturesleft. Dockerrestartedexistingvolumes
+againafterpre-fixtureconnectionrefusal; noreset. Allusereditsstillpreserved.
+Mainwatchattempt for37933118860finishedexit1duecancel; noactivewatchsessionfromit.
+
+Thisgoalturnmadeprogress: independentlyverified12Mretry+publicreport,merged12P,
+reproduced/fixedreleaseidentitygateand22controls/PR429,added5actualprofile-rate
+controls,adaptedtootherusermainadvance. Wholegoalactive; notblocked/completed.
+
+### Latest checkpoint — October 9, 12:59 UTC / 12P merged, 12R CI, 12S local controls
+
+12M/#424 standard37914826551attempt2SUCCESS; refreshedindependentreadback
+**10:17:35UTC** exactlive775/source/schema/advisors112unchangedPASS;smoke
+200/200/307/401PASS. Publicrelease report andJOB02backuntested committed in12R.
+OriginalpostpromotionIDmismatch retained; rootcauseNOTestablished. Watch8275
+nowmissing; authoritativeGitHubcompleted meansfinished, don'trerun.
+
+12P/#427candidate **c3772b1bbb701280d252b6f4c72fd87a8e313030** all5Quality
+**37916144417SUCCESS**. Guardranfresh, merged **4ca608a1cf7a6859fe988c2382acdf4846dbd491**
+at12:54:13UTC. 426mergedtransitively. ExactmainQuality **37933118860RUNNING**.
+AftermainQuality andautomaticstandard: run`profile-request-bounds-release/verify.cjs SHA`
+and`release-smoke.cjs SHA`. BaselinealreadycapturedDONOToverwrite. Need12Ppublic
+release report+SOCIAL04backuntested onceindependentlyverified.
+
+12Ractualworkflowrepro: runningexistingprotectedhealthshell againstlocalHTTP
+acceptsmissingbuildIDandfailsold-then-currentafterfirstresponse (2failed/4pass).
+ScriptsnowrequireexactSHAforstaged+promotedhealth;onlyvaliddifferentSHAretries,
+max12requests/60stotal/5srequestdeadline,redirectsrefused,missing/invalid/HTTP/
+malformed/unhealthycurrentfailimmediate. **22checksPASS** incl9actualshell/HTTP,
+actual12staleexhaustion+nonrespondingserver,deterministicdeadline,4stagedNode,
+6workflowguards;types/lintPASS. Private`production-health-gate-before/final*`.
+Noapp/schema/credential changes. Reports include independentlyverified12Mrelease.
+12Rbranch **codex/backend-release-health-gate-12r**,HEAD
+**4e1d304e0de1d7c31e80418111dfc5618f991264**, PR**429** attached,
+Quality**37933168198RUNNING**. Wait12Pverifiedbeforemerge. Generator
+`prepare-production-health-gate.cjs` PREPARED NOTRUN; expects4calive then captures
+unchangedschema/advisors +2release-sourcehashes. Needownverify/smoke/guard and
+standardlogproofnewgateexecuted. OPS04failedfornewgatefindinguntilverification.
+OtheruserPR428AndroidmenusOPEN; don'ttouch it, inspectmainifitadvances.
+
+Current12Sbranch **codex/backend-profile-media-limits-12s**, localHEAD
+**cd94d14677e16079fd5385264bb1027c609f775b**, basedon12R4e1d. NOTpushed/noPR.
+Fiveadditionalrealcasesbringprofilemediasuite13:30signs/31st429noextrareservation
+orsigning;30cleanup/31st429leavesrecreatedobject;otherownerlimitsindependent;
+realRPC503signrate/cleanuprate/eligibilityfailclosed andsuccessretry. Actual
+13PASS11.65s,types/lintPASS. Logs`profile-media-limits-active.log`,types/lint.
+FirstlimitsrunDockerstoppedECONNREFUSEDbeforefixturewrites. RestartedDockerexisting
+volumesnoreset,healthyStoragebeforepass. Don'tcountinitialconnectfailureasbug.
+Report+SOCIAL04evidence+testcommitted. After429merged:mergeorigin/main then
+push/open/attach12S. No runtimechangeornewfinding.
+
+Ledger53:24pass24untested3failed2external (SOCIAL04pending12P,OPS04pending12R,
+MEDIA07legacyretirement). Wholeauditactive. Userreceiptstilloriginalhash
+bb579a5c0a2ee1540000d57c7e7580feeb4c0cb0ff1e9427f2c9bf41025007fc. Onlyownedhandoff,
+userreceipt,privateevidence,originaluseruntrackeddirty. No localfixtureleft.
+
+### Latest execution state — October 9, 10:16 UTC
+
+Actual checkout is now **codex/backend-audit-release-followup-12q**, at
+c3772b1bbb701280d252b6f4c72fd87a8e313030 with no additional commit yet. This
+branch is for release reports after verification; do not accidentally push its
+reports onto the already-tested 427 candidate without refreshing CI/guard.
+
+Standard37914826551 attempt2 is authoritatively in_progress, staging since
+10:13:04UTC. Owned `gh run watch` execsession **8275** is still live; private
+`upload-reclaim-managed-release/standard-retry-watch.log`. Poll same handle or
+query GitHub; do not restart merely because observation yields. Candidate
+37916144417 also authoritatively in_progress in all5jobs. Mainstill775.
+Afterrelease success refresh managedverify+smoke (scripts exist), write12Mpublic
+release report and JOB02→untested on12Q. Then427all5success+guard→main/release/
+verify. Read10:13checkpoint for scriptnames/IDs and full test evidence.
+
+Currentgoalturn made concrete progress: merged424, independentliveverification,
+8actualmediacontrols and new12P request-limitrepro/fix/28actualcontrols,contract/
+136mobile+30focused+types/lint,PR426/427,releasebaseline. No blocker threshold.
+
+### Newest checkpoint — October 9, 10:13 UTC / 12P bounded-request fix in CI
+
+424all5candidatepassed; mergeguard succeeded, **775f8b0e4a6f15c2d4e68323afd45ecfeac2965b**
+merged09:49:40UTC. 423mergedtransitively; no separatemerge. ExactmainQuality
+**37913764069all5PASS**. Standard **37914826551attempt1FAILED** protected
+postpromotionhealthbuild-IDmismatch; sourcecause notestablished. Failurelog
+retained in`upload-reclaim-managed-release/standard-failure.log`. Publiclive775;
+strictmanagedverify schema/advisors112/runtimePASS andsmoke200/200/307/401.
+Mainunchanged/mobileidlechecked, reranONLYfailedjob unchanged. Attempt2currently
+staging; watchhandle see toolhistory. Must pass before mergingnextbatch.
+
+12O branchpushed **5de9a24ab1158fba15cb6f60952d78da9cde8d84**, PR**426** attached,
+Quality**37913803815all5PASS**. Includes eightactualprofilemediacontrols,app/schema
+unchanged. **DO NOT MERGE426SEPARATELY**,427includesit.
+
+12P currentHEAD **c3772b1bbb701280d252b6f4c72fd87a8e313030**, PR**427** attached,
+Quality **37916144417RUNNING**. Newactualadapter/realAuthSQLrepro: fourprofile
+adapters accept128KiBignoredpaddingand200withabsent/honest/understatedlength.
+12beforefailures retained`profile-request-bounds-before.log`. Shared64KiB
+streamedreader nowreturns413before domainwork, authstillfirst,validateoriginal
+ratelimitstillfirst. Fourruntimefiles(profile-request-body.ts +profile/profile-
+validate/profile-media adapters),nomigration. Sharedmobilecontract+3clientcases.
+**28actualcontrols,30focused,136mobile,app/test/mobiletypes,scopedlintPASS**.
+Exactfixturecleanup/countersPASS. Theseare actualadapters withnativeRequest/
+streamsandrealAuthSQL; donotclaimdeployedNextHTTPsockettest. Unknownoversized
+fields/whitespacecounted,exactlimitsucceed,UTF8bytecount,earlycancel/authbefore-
+read tested. No newobligation. Ledger24pass24untested3failed2external (SOCIAL04
+new12P,JOB02pending12Mrelease,MEDIA07retirement).
+
+12PbaselineCAPTURED in`profile-request-bounds-release/`:unchangedschema/advisors,
+4runtimehashes,nopendingmigrations. NEVERrerunprepare/overwritebaseline. Prepared
+verify.cjs/release-smoke.cjs/merge-guard.cjs. Guardexpects427headc377/CI37916144417,
+parent/live775/mainQ37913764069/standard37914826551success,independent12Mproof,
+main/live/schema/advisors/mobileidle. Aftercandidate+parentreleaseallpass→guard→
+exactmainQuality→standard→verify/smoke. NoSQLmutationneeded.
+
+Needpublish12Mrelease reportafterretrysuccess,JOB02backuntested,then12Prelease
+reportafteritsproductionverification,SOCIAL04backuntestedforbroadermatrix.
+Userreceiptstillhashbb579a5c0a2ee1540000d57c7e7580feeb4c0cb0ff1e9427f2c9bf41025007fc.
+Onlyownhandoff/userreceipt/private/originaluseruntrackeddirty. Dockerstarted
+thisturnwithoutreset; noownedtestfixtures/processesremain. Wholeauditactive.
+
+### Newest checkpoint — October 9, 09:50 UTC / 12O eight actual controls committed
+
+Local12O HEAD **8be8e698** (resolve full locally), based on424candidate7034838f.
+Eight actual Storage/PostgREST/SQL cases pass in
+`profile-media-publication-controls.log`; test types and scoped lint also pass
+(`profile-media-*-publication.log`). Exact fixture cleanup and counter
+reconciliation pass in every case. No runtime/schema change or new defect.
+The extra profile save/edit case verifies immutable bytes/version survive
+best-effort normalization and the later edit succeeds. Initial replay-after-
+finalization expectation was corrected to denial (existing guard), not a fix.
+Private failed diagnostics retained. Permanenttest/config/API-CIstep/report/
+SOCIAL04evidence committed. Not pushed / no12OPR yet. After424merges, merge
+origin/main into12O, push/open/attach nextPR. Its broader obligation stays open.
+
+424candidate37912714396 currentlyallteststepspassed, APIstackteardownfinishing;
+wait conclusion success beforemergeguard. Main/source/live baseline remainsc3.
+User receipt hashunchanged; onlyownhandoff/userreceipt/private/originaluser
+untracked dirty. No owned test process or fixtures remain.
+
+### Newest checkpoint — October 9, 09:45 UTC / refreshed 12M candidate, profile-media controls
+
+Main advanced through #425 to `c3db5de58ef2560f15982cb36a9a9c2f8df31cbb`.
+Inspected all changed paths: Home/web/mobile UI changes, no migrations, audit
+runtime or AGENTS changes. Main Quality37907709099 and standard37909099459
+passed. Independent 12K verifier refreshed successfully against c3 (schema,
+permissions, runtime, advisors112), smoke200/200/307/401. Previous b950 JSON
+proof is preserved in `upload-reclaim-leases-release/verified-b950-snapshot/`.
+
+Merged main and local 12N report commit6ae05497 into PR424 branch, pushed
+**7034838f164de720940bbe19309dd96ddf193311**. Exact candidate Quality
+**37912714396 RUNNING**. Guard updated to this candidate/current c3 parent and
+its exact Quality/standard IDs. All five must succeed before running guard.
+No other guard bypass; parent runtime remains unchanged. PR body refreshed.
+After merge wait exact-main Quality + standard, then managed verify/smoke.
+
+Separate local branch **codex/backend-profile-media-controls-12o** has new
+uncommitted `profile-media-postgrest.test.ts` and dedicated config. Seven real
+Storage/SQL cases: avatar, cover, metadata, ownership, remove failure, lost ACK,
+duplicate cleanup. Initial test run never connected (Docker daemon/database
+were stopped, no fixture writes). Started Docker; existing volumes returned
+without reset. Rerun and types/lint in progress; inspect private
+`profile-media-controls-active.log`, `profile-media-types.log`,
+`profile-media-lint.log`. Do not claim a product defect from the initial
+connection-refused log. No application/schema change yet.
+
+Whole audit remains active. Ledger24passed/25untested/2failed/2external.
+User receipt diff hash unchanged bb579a5c0a2ee1540000d57c7e7580feeb4c0cb0ff1e9427f2c9bf41025007fc.
+
+### Newest checkpoint — October 9, 04:24 UTC / 12K release retry passes, 12M CI
+
+PR422merged **b95045d844079717745be85058a6cfc314667d32** at04:05:19UTC;
+421markedmergedtransitively. ExactmainQuality **37882251025** all5pass.
+Standard **37882874131** attempt1 promotedcorrectbuild thenfailedprotectedhealth
+build-IDcheck. Publiclivealreadyb950; strictreadback04:19:43 source/schema/advisors
+allpass, smoke200/200/307/401 and rollback04:19:56 all4invariantspass/sixcleanup0.
+Localopscredentialwas401so don'tclaimindependentprotectedhealthfromit. After
+freshmain/public/strictverification, reranONLYfailedjob unchanged; **attempt2
+nowSUCCESS includingprotectedhealth**. Freshstrictverification session89936 was
+earliercomplete; a newrefresh is currentlyrunning (inspectsession/toolhistory).
+Needpublic12Krelease reportcommit and MEDIA09backtountested. Migration12Kapplied
+ledger **20261009041440**; NEVEReditappliedfile.
+
+Actual timedcapacityprobe session60411 **completedPASS exit0**,961.92s. Real
+60scapabilityexpiry03:49:44, firstabsenceobservation03:49:45, earlypasskeptcharge,
+real15mingate04:04:45 thenrelease04:04:46 counter0, duplicateempty, exactcleanup0,
+reconciledcounters. Public12Kreporton12L/12Mincludesthis. 422mergeguardrequired
+thisevidenceandall5candidatepass beforemerging.
+
+12L private signedread/range testcommitted/pushed **f81718abc836d9594b82d530a864a011729f6ee2**,
+PR **423** attached. Quality **37882285385all5pass**. **Don'tseparatelymerge423**:
+12M424includesallitscommits. Realowner/crossowner/anon/privatepublicendpoint,
+token/pathintegrity,actualexpiry/deletion,valid206exactrangeandfailedunsigned/
+expired/deletedranges,otherownerpreserved; integration/types/lintPASS.
+
+Currentbranch **codex/backend-upload-reclaim-job-reporting-12m**, HEAD
+**1d77d6583ed8cd568a185bec4b8130f413302c39**, PR **424** attached. Exactcandidate
+Quality **37883585276RUNNING**. Newactualreproduction: rejectedlegacyeligibility
+RPCstoredsuccessfulno-work; rejectedrepairselectionwithanoldconsumedintentstored
+succeeded/emptyrepair. Logs/result`upload-reclaim-managed-before*` andfirstfull
+controls retainfailures. Bothcatchblocksnowlog+throwtoexistingmanagedwrapper.
+NoDDL. 7newactualmanagedcases empty/eligibilityerror/intenterror/repairerror/
+claimerror/locked/normalwithdurablerowassertions,retries,duplicates,exactcleanup0.
+All **28actualreclaimcases** PASS final `upload-reclaim-managed-all-held-worker.log`
+(exit0,27s);27focused,app/testtypes,scopedlintPASS. Firstfullrunhadrealrepair-error
+findingand501object30stimeoutunderhostactivity; secondfullrunexposedworkerfixture
+normalexitbeforeSIGKILL(pendingPromisealonewon'tkeepNodealive). Ownedworkerpause
+nowkeepsintervalaliveuntilparentSIGKILL; originalsignalassertionunchanged. Preserve
+failedlogs; finalfullsuitepassed. Do notkillotheruserprocesses/devservers.
+
+12Mprivatebaseline **captured** againstb950 in`upload-reclaim-managed-release/`:
+unchangedschema/advisors112,2runtimehashes(repair/reclaim),nopendingmigration.
+DoNOTrerungenerator/overwritebaseline. verify/smokeandmergeguardprepared. Guard
+expects424head1d77/run37883585276,parentb950/mainQ37882251025/standard37882874131
+successful,currentmain/live/schema/advisors/mobileidle,and12Kindependentcomparison.
+Afterallcandidatepass→guard→exactmainQuality→automaticstandard→12Mverify/smoke.
+No12MproductionSQLmutationneeded. 423shouldmerge transitively.
+
+Local12Mledgercurrently24passed/24untested/3failed/2external untilrecord12Kverified
+(MEDIA09returnsuntested) then24/25/2/2 (JOB02new12M+MEDIA07). Wholeauditactive.
+Receiptuserhashunchanged; onlyownhandoff/userreceipt/private+originaluntrackeddirty.
+
+### Newest checkpoint — October 9, 03:57 UTC / real-time capacity probe running
+
+Active checkout is now **codex/backend-private-signed-read-controls-12l**, HEAD
+**ba003425** (resolve full locally). It contains final12K4b96 plus a separate
+local test-only signed-read batch; **not pushed / no12LPR yet**. Wait422merge,
+mergeorigin/main into12L, then push/open/attach nextPR. Do not put12L onto422.
+
+PR422 finalcandidate **4b96b6d84d8ee977dcf28b352773ca45ef919c7e**, Quality
+**37880754176**: migration/API/mobile/E2E allpass, webBUILD running lastcheck.
+Parent3d/standard37878281215 independentlyverified as below. **Mergeguard now
+also requires the real elapsed-time capacity probe to complete and clean up.**
+Do not remove that gate or claimcapacityrelease before its result exists.
+
+Owned exec session **60411** is running the private actual-life-cycle test:
+`upload-reclaim-capacity-lifecycle.test.ts` with private config/log and result
+prefix of same name. It created one exact local fixture recorded privately in
+`...-fixture.json`. API55321/DB55322 only. Storageobjectdeleted; reservation is
+charged at262144000. Actualcapabilityexpired03:49:44UTC; firstretentionpass then
+claimedreclaiming and an earlysecondpass deferredwithoutrelease. Its real
+quiescence ends **04:04:45UTC** (~09:34:45 IST); test automatically resumes just
+after, assertsabsentrelease1/counter0/duplicateempty and exactcleanup0/counter
+reconciliation. It uses30secondnonblockingwaitchunks, nofakeclock. HTTPread
+selectionislimitedtoitsowner toavoidprocessingotherlocalauditfixtures. No
+provider/production calls. DO NOT reset55322 or restart/kill this owned process
+while it is alive. Poll `write_stdin` session60411; output is buffered but
+`...-progress.json` records durable phases. If handlemissing inspectprocess/log
+and exactfixture before decidingcleanup; never rerunblindly. Testtimeout20min.
+`upload-reclaim-leases-release/merge-guard.cjs` checks final result +cleanupzero.
+
+Afterall5candidateANDcapacitypass: run422guard, waitnewmainQuality +automatic
+standard, run12Kverify/smoke/SQLrollback. RecordreleaseandreturnMEDIA09untested
+forbroaderremainingmatrix. 421commitsincluded; don'tseparatelymerge421.
+
+12L actual private signed-file scenario passes nine controls: owner200/exact
+bytes; cross-owner andanonymoussigningdeny; unsignedprivateendpointdeny;
+token/pathtamperingdeny; realtwo-secondURLexpiresafterfourseconds; deletion
+invalidatesstill-validURL; otherownerobjectsurvives. RealAuthpasswordsignin,
+Storage,SQLcleanup users/objects0. Permanenttest
+`src/__tests__/private-signed-read-postgrest.test.ts`, dedicatedVitestconfig and
+API-CIstep, publicreport andMEDIA08link committedlocallyba003425. One sequential
+scenario, ninecontrols; donotcallitninetestcases. Permanentintegration/testtypes/
+lintPASS exit0. Noapp/schema change. Private baseline/permanent logs andresult
+`private-signed-read-*`; PRbodyready `private-signed-read-pr-body.md`. No hosted
+CDN/video/range/providerimport/nativeentitlement claim. No newdefectfound.
+
+Userreceiptstilloriginalhashbb579a5c0a2ee1540000d57c7e7580feeb4c0cb0ff1e9427f2c9bf41025007fc.
+Onlyownedhandoff/userreceipt/privateandoriginaluseruntrackeddirty.
+
+### Newest checkpoint — October 9, 03:47 UTC / 12I verified
+
+12I is released and independently verified as **3d709e529add076ec17d0863dba968f70086119c**.
+Main Quality37877301611 and automatic standard37878281215 succeeded. Strict
+readback03:44:42 confirms five clean-replay schema additions, other signatures
+and permissions unchanged, 112 advisors unchanged, exact runtime/migration
+sources. Production ledger applied version **20261009031400**; never edit12I.
+Smoke200/200/307/401 and unsigned reclaim401no-store pass. Four bounded SQL
+rollback checks pass03:44:50, independent fixture users/intents0. Public report
+`backend-section-12-upload-reclaim-progress-release-2026-10-09.md` committed on12K.
+JOB-02 returns untested; ledger **24passed/25untested/2failed/2external**.
+
+12K final candidate now **4b96b6d84d8ee977dcf28b352773ca45ef919c7e**, PR422,
+Quality **37880754176** RUNNING. Previous58674408/37878210304 all5pass is
+superseded. Follow-up actual regression found inherited one-day reclaim_after
+survived deleted-state ownership; four cases failed before, all21 pass after
+newRPC clears scheduling deferral atomically. Original expiry and quiescence
+remain. Local migration12K updated (still UNAPPLIEDprod); cleanreplay plus
+**2360SQL/111files**,28focused,testtypes/scopedlint allpass aftercorrection.
+Logs `upload-reclaim-leases-deferral-before.log`, `...-deferral-after.log`,
+`...-replay-final.log`, `...-pgtap-final.log` preserve the sequence.
+
+**12K baseline capture IS COMPLETE** against verified3d: two expected new
+function/service-role-grant signatures from finalcleanreplay, unchangedschema,
+112advisors, unique pending12Kmigration and sourcehashes, inventory. Never rerun
+`prepare-upload-reclaim-leases.cjs` or overwritebaseline. 12Kmergeguard updated
+for4b96/run37880754176, main3d/Quality37877301611/standard37878281215. Requires
+freshschema/advisors/live/main/mobile-idle checks. Afterall5candidatepass,
+run `upload-reclaim-leases-release/merge-guard.cjs` then waitexactmainCI and
+standard release, run12Kverify/smoke/rollback. 421includedin422; don't separately
+merge421. New12Kpublicrelease report and MEDIA09status remainpending.
+
+### Newest checkpoint — October 9, 12I merged / 12K candidate
+
+PR #419 passed all five candidate gates (37876225878), then its guarded merge
+succeeded as `3d709e529add076ec17d0863dba968f70086119c` at 03:00:54 UTC.
+Exact-main Quality **37877301611** is running (four jobs passed, web building at
+last check). Wait for all five and the automatic standard production release;
+then use `upload-reclaim-progress-release/verify.cjs SHA`, `release-smoke.cjs SHA`
+and `rollback-probe.cjs SHA`. Do not overwrite its pre-DDL baselines. Production
+12I verification and its public release report are still pending.
+
+12J is pushed as `8723c10d85357653735dfff1aa7b129344e0cedf`, PR **#421** attached.
+Its three real worker-death cases pass (14 total before 12K). **Do not separately
+merge #421**: the complete #422 batch includes those commits and its verified
+12H release report. Merging #422 should include/close #421 transitively.
+
+A separate 12K bug is now actually reproduced: the real finalization service
+acquires a second generation read lease, but staged cleanup deletes the object
+and clears its old consumed intent while its reservation is still `consuming`.
+A real download then fails. Private `upload-reclaim-active-lease-repro.log` and
+`...-before.json` preserve the valid failure. Initial teardown column typo is
+separate `...-teardown-error.log`; corrected cleanup is all zero and upload
+admission counters reconcile. No production objects were used.
+
+12K candidate **586744089344d25baf82771a8195026a1313ffc1**, branch
+`codex/backend-upload-reclaim-active-leases-12k`, PR **#422** attached. Quality
+**37878210304** is the current gate. Initial e179882c / 37877957352 is superseded;
+its cancellation was requested to free the current candidate. Never use the old
+run to merge. New migration **20261009030218_fence_media_upload_reclaim_consumption_leases.sql**
+is local-only (DB55322 and clean replay55332); do not apply manually to production.
+
+The new service-only bounded RPC locks the owner/path and matching reservation,
+withholds consuming/uncertain/preserve/unfinalized rows, and changes an eligible
+finalized/consumed reservation to deleted before external Storage deletion. This
+closes admission to later readers atomically. It does not release capacity or
+clear the intent; rejected/lost-ack deletes and post-claim process death retry.
+Legacy unreserved readers remain outside this v2 fence. Existing deleted-state
+accounting holds the original reserved-byte maximum until the reservation worker
+proves absence; the new tests explicitly check this conservative charge.
+
+Local evidence: **21 actual API/Storage/SQL cases**, including seven new lease
+cases and an actual SIGKILL after the claim; **28 focused tests**; app/test types
+and scoped lint; **clean replay + 2,360 pgTAP assertions in 111 files**, all pass.
+An added counter assertion was rechecked in all seven lease cases. Initial app
+typecheck hit a stale generated `.next` declaration from the #420 removed route;
+`next typegen` refreshed it and final app/test types pass. Logs are private
+`upload-reclaim-leases-*`. Public 12K report and ledger are committed. Ledger is
+now **24 passed / 24 untested / 3 failed / 2 external** (53): MEDIA-09 reopened
+for 12K, JOB-02 still pending 12I release, MEDIA-07 legacy retirement remains.
+
+12K release preparation exists but **baseline capture has NOT run**:
+`prepare-upload-reclaim-leases.cjs` requires live 3d709e52 and captures exactly
+one pending 12K migration, two clean-replay function/grant signatures, unchanged
+schema/advisors and inventory. Run ONLY AFTER independent 12I verification.
+`upload-reclaim-leases-release/` already has verify/smoke and rollback scripts.
+The bounded rollback SQL passes four local invariants and six zero cleanup
+counts. Initial local probe incorrectly tried a private charge helper as service
+role, then assumed the finalized rather than reserved charge; both diagnostics
+are retained. Final probe checks the actual service-readable reserved counter.
+It inserts only synthetic SQL metadata inside a transaction; no Storage/provider
+API call. Production wrapper refuses to run before strict deployed verification.
+Need prepare new exact-main/candidate/mobile-idle merge guard for #422 after
+12I standard release is independently verified; never bypass that gate.
+
+User receipt diff remains `bb579a5c0a2ee1540000d57c7e7580feeb4c0cb0ff1e9427f2c9bf41025007fc`.
+Only owned handoff, user receipt and original user/private untracked files remain
+dirty. No subagents, provider charges, real balance repair or production load.
+
+### Newest checkpoint — 2026-10-09 / main420 included
+
+Mainadvanced51c4eefab1bf4ec1812d29f4313a14ce10ed56c6 (#420web/mobilecheckup),
+Quality37819267292 andstandard37820897239bothsuccess. AGENTSdiffread(rewritepath
+clarification). No migrations or changes to12G/12I runtimefiles. Independent51
+verify+smoke PASS inupload-reclaim-controls-release; 12HoriginalcfcQuality37793677744
+andstandard37795497135 alsosuccess. Public12Hreleaseevidenceaddedlocallyon12J.
+
+419 nowcandidate513fe9a74a51965aea02c78d71ee193ab96a5944 aftermergingnewmain,
+Quality37876225878 queued/running. Oldb962Quality37794086091 all5pass is superseded.
+Updated419guard expects51parent/live,newcandidate/run, parentQuality37819267292
+andstandard37820897239, independentlyverifiedparent. Allbaseline12Ipre-DDLintact.
+Waitall5candidate→guardmerge→mainCI→automaticstandard→12Iverify/smoke/rollback.
+
+12Jbranchmergednew419headwithoutconflict, local315cd2d89bf260a935ac934dfc8f5a93d9432b9b.
+Its3actualSIGKILLcases(and14total), types/lintpreviouslypass; commitca3ec428 preserved.
+No12JPRyet; wait419merge beforeopening12JevidencePR. Userreceiptunchanged.
+
+### Newest local12J while gatesrun
+
+Activebranchcodex/backend-upload-reclaim-worker-recovery-12j basedonb96212I.
+ThreeactualownedNodeSIGKILLcasespass afterscanmarker/StorageDELETE/clearingPATCH.
+EachreadsdurableSQL/Storagebeforekill, verifiesSIGKILLexit, startsfreshreplacement
+andduplicate, keepsoldneverconsumedcontroluntouched(flagabsent), verifieszero
+ownedusers/intents/objectsaftercleanup. 14totalactualreclaimcasesPASS, testtypes
+andlintPASS. Workerhelper+test+config+report+jobmatrixcommittedlocally; notpushed
+orPRyet. No runtime/schema changebeyondinherited12I. Outerjobfencing/reference
+racesnotcertified. Privateupload-reclaim-worker-death.log. Wait419merge thenmerge
+itsmain into12JbeforeopeningnextPR. Donotstageuserreceipt orprivateevidence.
+
+Parent418mainQuality37793677744 stillrunning APIreferralintake/webtests;419Quality
+37794086091 stillrunning. Specificrunsarelive; donotrestart. Parentstandard,
+independentparentverify,and419guard/merge/release remainasrecordedbelow.
+
+### Current PR419 / final local checkpoint
+
+12I committed/pushedb962d6520f1cf433a0d3a33a2707bfd0a93fafb4. PR419
+https://github.com/112kratoss/ugc-copy/pull/419 attached, Quality37794086091 running.
+Parent418 main cfc0b1c24a871a1c6a62314e24be10ac3b16a548 Quality37793677744 running.
+No user changes staged. Existing receipt diff stillbb579a5c0a2ee1540000d57c7e7580feeb4c0cb0ff1e9427f2c9bf41025007fc.
+
+11actualfinal/36focusedfinal/app+testtypes/lint/cleanreplay2350SQL PASS exit0.
+Four SQLrollbackinvariants also locallyPASS withzero cleanup; productionprobe
+requires strictcomparisonfirst. Private12Ireleasehasverify.cjs,smoke,rollback
+SQL+wrapper+cleanup,5expectednewsignatures,112advisorbaseline,sourcehashes,
+onependingmigrationplanandinventory242/160/0oldconsumed. Do notrerunbaselineprep.
+
+Next: waitparent418mainQuality thenautomaticstandard; verifycfc0b1c2using copied
+12Gverifier+smoke inupload-reclaim-controls-release (runtime/schema unchanged).
+Guard for419 inupload-reclaim-progress-release expects exactb962/cfc/mainQuality/
+candidateQuality, but parentstandard deliberatelyPENDING_PARENT_STANDARD: resolve
+successfulstandardrunandreplaceplaceholderONLYaftermatchingSHA; verifyparent
+comparison. Thenall5candidatepass→guardedmerge→exactmainQuality→automaticstandard
+→strict12Iverify/smoke/rollback. No manualdeploy or duplicateworkflowdispatch.
+12Goriginal676release evidencepreserved. JOB02failedfor12I; fullauditactive.
+
+### Newest checkpoint — verified12G / local12I / merged12H
+
+12G is LIVE and independently verified as6766777860d3099478948b57ef7f14b4d63295f5.
+MainQuality37790197606 all5pass; standard37791925353success. 14:27:25UTC strict
+readback exact2runtimehashes/schema/advisors112unchanged and smoke200/200/307/401.
+Public12Greleasereportaddedon12Ibranch. JOB02staysfailed fornew12Iprogressfinding.
+
+PR418 candidate69c6cd87 Quality37792050694 all5pass; guardedmerge succeeded
+cfc0b1c24a871a1c6a62314e24be10ac3b16a548 at14:35:09UTC. MainQuality37793677744
+running. Nine realuploadcleanupcontrols; noapp/schema changes. Needmainall5,
+standardrelease then copied12Gverifier/smoke toconfirmunchangedruntime/schema.
+
+Activebranchcodex/backend-upload-reclaim-progress-12i, basedon418merge cfc0b1c2.
+Real501objectfixture: two500rowpasses selectsame500protecteduploads, leaving
+laterreclaimable501stuntouched. Beforelog/repro/result/cleanupprivate. Initial
+SQLparameterfixtureerrorseparatelyretained; nottheapplicationrepro. Allcleanup0.
+Candidateadds reclaim_checked_at andgeneratedcoalesce(check,created)priority plus
+partialindex, marksboundedselectedbatchbeforeexternalwork, orderspriority/id.
+Age/protection/rollout unchanged. Initial500UUIDmarkerPATCH hit URI-too-long;
+markerandclearingnowchunk100IDs. Actualcasepasses lateritemsecondpass, all500
+protectedpreserved, thenall500clearafterprotectionremoved, finalempty/objects0.
+Newmarkerwritefailurecasefailclosed. 11actualcontrols,36focused,app/testtypes,
+lint,cleanreplayand2350SQLassertions110filesallPASS. MigrationCLIgenerated
+20261008142924_rotate_checked_upload_reclaim_candidates.sql UNAPPLIEDproduction.
+Local55322appliedandclean55332replayed. Needcommit/push/PRandallreleasegates.
+
+Privateupload-reclaim-progress-release baseline captured againstverified676:
+5exactnewsignatures(cleanreplay),unchangedschema,112advisors,completeledgerplan
+onlynewmigrationpending/nooutoforder. Candidatehashesrecorded. Inventory242intents,
+160uncleared,0oldconsumed: nocurrenteligibleaffectedbacklog/historicalrepair.
+Do NOT overwritethesebaselinesafterdeployment. Receiptuserdiffunchanged.
+
+### Latest — 12G release staging, expanded12Hcandidate
+
+Exact-main Quality37790197606 all5success. Automatic standard37791925353 currently
+staging6766777860d3099478948b57ef7f14b4d63295f5. Once succeeds, run12G
+`media-rendition-budget-release/verify.cjs SHA` then`release-smoke.cjs SHA` and
+recordverifiedrelease. No12Gmigration or productionmutationneeded.
+
+PR418 https://github.com/112kratoss/ugc-copy/pull/418 attached. Finalcandidate
+69c6cd8728f826b8e790af99f322f44775425077, Quality37792050694 running.
+It expands6to9actualuploadcleanupcases: reallegacygenerationstoredpath,
+signedURLandfailedprotectionRPC inadditiontofirst6. All9localPASS including
+zeroAuth/intent/Storage/generationcleanup, testtypes+lintPASS. Oldcandidate
+9a9cc948 Quality37790871297 superseded; donotmergebasedonoldrun. No runtime/DDL.
+Activebranchcodex/backend-upload-reclaim-controls-12h. Candidatecommitted/pushed.
+
+### Newest checkpoint — PR413 merged / 12H local controls
+
+PR413 merged as6766777860d3099478948b57ef7f14b4d63295f5 at14:09:42UTC.
+All5candidate37787974905 passed; parentb4 standard37789509511 succeeded and
+copied12Fverifier+smoke passed. Guard then checked main/live/schema/advisors/mobile
+idle and merged. Exact-main Quality37790197606 running; automaticstandard and
+independent12Gverify/smoke remain pending. Do NOT call12Greleasedyet.
+
+Active local branch codex/backend-upload-reclaim-controls-12h starts at413merge.
+Six actual local upload-reclaim controls pass: normal/removeerror/lostack/markerror/
+protected/unverifiable. Exact cleanupzero; no runtime/schema change. Tests types
+andlintpass. Newtest+config+CIstep andpublicreport beingcommitted; production
+protection-set construction/races, signedexpiry/backlog/death remainuntested.
+Original6caseinstrumentedfixture andpercaseJSON remainprivate. This is scoped
+regressioncoverage, not wholeMEDIA/JOBclosure. Receiptuserdiffunchanged.
+
+### Newest release gate — 2026-10-08
+
+PR413 candidate fa1be24a Quality37787974905 ALL FIVE PASS. Merge guard correctly
+stopped before merge because another actor reran main Quality37784965464: attempt2
+now passes all5. Parent b4fad8be standard37789509511 is in progress, with companion
+37789712069 pending (do not dispatch duplicate workflows). Wait for parent release,
+then independently verify b4fad8be using copied `media-rendition-budget-parent-release/`
+verify.cjs + smoke. Original12F43631e8a evidence is preserved. Updated12G merge guard
+expects b4 main/live, parent standard37789509511 and all5main/candidatepass; run
+only after parent independent comparison succeeds. PR413 has NOT merged yet.
+
+### Current checkpoint — 2026-10-08 13:56 UTC
+
+12F is independently verified on live `43631e8aa2112cdac259af48cbfa30ce75505179`.
+Original #412 main Quality 37722828062 and standard 37723828380 passed.
+Live standard 37772138814 also passed. Strict readback at 13:49:53 UTC confirms
+all expected schema/function/ACL/source checks, migration ledger 20261008034053,
+and 112 advisors (only the expected private-table INFO added). Smoke passes;
+production rollback at 13:50:22 UTC passes all checks and independent cleanup is
+zero. Public release report is committed on the 12G branch. PAY-04 is untested
+again; JOB-02 remains failed for 12G. Ledger: 24 passed/25 untested/2 failed/2 external.
+
+PR #413 is open and attached. Current candidate
+`fa1be24a0736635100d0dca9c47f9e5fa63c721a`, Quality 37787974905 running all five.
+Its old Quality 37722931809 failed the pre-existing account-switch credit test;
+current main `b4fad8be34e81b991babfc5443617e218f07784b` Quality 37784965464 failed
+the identical assertion. Main includes #414–417, merged locally without conflict;
+new AGENTS changes read. No schema changes in those PRs. Do not rerun broken main
+just hoping it passes. Candidate now fixes the race: synchronous credit-request
+identity invalidation and identity check inside the React updater. A deterministic
+extra test fails before, passes after; 25 account/shell tests, app/test types and
+lint pass. No stored balances changed. Existing assertions retained. Current main
+is not deployed; live remains 43631e8a. A merge guard must distinguish current main
+from last passing live parent and document the sole known main failure fixed by
+this candidate. Exact candidate all-five success is mandatory.
+
+12G release verification is prepared in private `media-rendition-budget-release/`:
+112-advisor and schema baselines after verified12F, two runtime hashes (media
+worker/account component), strict verify.cjs + release-smoke.cjs. No migration.
+It still needs candidate CI, guarded merge with fresh main/mobile-store check,
+exact-main Quality, automatic standard release and independent live verification.
+No original 12F baseline/evidence was overwritten.
+
+Next media lease investigation is private `media-publish-lease.test.ts`/config.
+It checks publish-time repair against an already held sweep lease. First execution
+failed because Docker was stopped (ECONNREFUSED55322), NOT an application repro.
+Docker launch requested. Existing isolated stack workdir is
+`.audit-evidence/backend-storage/local` (API55321/DB55322); start CLI2.75.0 without
+reset and keep output private (keys). Do not claim a new defect until actual test.
+Receipt user diff hash is unchanged: bb579a5c0a2ee1540000d57c7e7580feeb4c0cb0ff1e9427f2c9bf41025007fc.
+
+### Additional investigation scope correction
+
+Docker restarted successfully; original local stacks recovered without reset.
+The private media-publish-lease probe does reproduce direct-helper lease overwrite
+(actual local SQL/Storage, cleanup zero), but production reachability review shows
+`repairMediaForPost` has NO runtime callers. All three publish adapters explicitly
+ignore the deprecated seam; route tests assert no publish repair scheduling.
+Do not label this a reachable production defect or implement speculative lease
+changes. Evidence/scope note: `media-publish-lease-scope.md`. A temporary local12H
+branch was created at fa1be24a with no edits/commits and removed after scope review; active branch is back on12G. The 27 route adapter controls passed.
+
+### Superseded historical checkpoints
+
+NEWEST: #412 mergedf7067d5ef9fda9be8cbc5d5ee26644bd5f00a49b at03:27:43UTC.
+Finalcandidate6a991e50 Quality37722003054 all5pass. Guardverifiedparent53d,
+standard37722339684, newparentindependentreadback andmobile-storeidle. GitHub
+marked411merged transitively becauseincluded in412 (closeattemptsaid already
+merged; no separatemainpush). Exact-mainQuality37722828062 queued/running.
+Waitall5→standardautomatic→12Fverify.cjs/smoke/rollback exactliveSHA. No manual
+productiondeploy. Do NOT call12Freleasedyet. Baselines intact; expected2progress
+cases; productionexpected111+onlynewprivate-tableINFO. Local12Gbranch nowmerged
+origin/main f7067d5e withoutconflict. 12Ginventoryread-only:9video rowsallready,
+attempt1,noexpiredleases; nohistoricalrepair indicated. Reportupdatedlocally.
+
+
+LATEST: parent53d9314b standard37722339684 succeeded; fresh copied12Cverifier
+and smoke bothpass53d. Originalcc159f12Crelease evidencepreserved.12Fmergeguard
+nowexpects37722339684/parentQuality37721330661; allparentgatesready. Final412
+candidate6a991e50 Quality37722003054 lastseen APIonboarding /webtesttypes with
+other3success. Waitall5thenuseguard (checks freshmain/live/mobileidle/schema).
+
+12G newlocalcommitbdf4322e oncodex/backend-media-rendition-budget-12g, branched
+fromfinal12F. Actual PostgREST/Storage/SQL repro: batch2/timeBudgetMs0 downloads
+firstrowonly but leavessecond processing/count1. Initial fixtureSQLtypeerror was
+fixed; validbefore logmedia-rendition-budget-repro.log+before.json; cleanup0.
+Fix onlynormalbudgetexit: release unstarted leasedtail guardedbyid,oldowner,
+processingstatus,exactreservedcount; decrementunusedattempt,clearlastlease.
+Killedworkerkeepsreservation. 6actualcasespass normalrepeatedbudgetprogress,
+newowner/changedcount/terminalfencing, rejection+lostack.43focusedpass,app/test
+types+lintpass. CIstepadded. No migration/provider/encoder call. Localcommitnot
+pushed/PRyet; wait412merge thenmerge itsmain into12G before openingnextPR.
+Runtimefile src/lib/media-preview-repair.ts only. Report committed12G.
+JOB-02muststayfailed for12G after12Fverified; no newobligationadded.
+
+
+LATEST12F: candidate6a991e50fdac0df3586c91d00c280e2865d4e567,
+Quality37722003054 pending/running. Olda7e2candidate superseded. Cadence review
+reproduced healthy-starvation again when all failed retry rows were alreadydue
+at next hourlyjob. Correction orders by coalesce(retry.updated_at,txn.updated_at)
+to rotate failures behind olderwaiting work. Both immediate/overdue101purchase
+regressions pass; cleanreplay/full2340SQL pass; types/lint pass. Local55322updated,
+clean55332replayed; onlyexpected candidate signatures/defs/hashrefreshed,
+production baselinespreserved. PR412bodyrewritten includes/supersedes411; merge
+412afterallgates thenclose411 (do not separatelymerge411). New12Fmergeguard
+expects53dparent/currentcandidate/currentCI and deliberatelyplaceholderparent
+standardrelease. Resolve parentrun, verify53d with copied12Cverifier in
+referral-settlement-progress-parent-release (preservesoriginalcc159fevidence),
+thenfillplaceholderandmerge. Nootherproductionchangesbeyondstandardworkflow.
+
+12C PR #407 is deployed and independently verified. Live tested SHA
+cc159f7e7fdea346476543d40756cbe442092261, exact-main Quality37719493430 attempt2
+all5success, standard37720962542success. Independent verification03:08:34UTC
+2026-10-08: ten SQL definitions/ACLs, auth trigger, expected schema changes,
+remaining schema unchanged,111advisors unchanged, exact live/source, smoke200/
+307/401. Both bounded production rollback probes pass; independent cleanup all0.
+Migration20261007174934 maps productionledger20261008030458. Release report
+backend-section-12-referral-deletion-release-2026-10-08.md committed in #412.
+Earlier merged-main attempt failed one pre-existing admin collector upstream
+response;48 local controls passed, its rerun superseded/cancelled. Failed logs
+retained. Original expanded candidate SQL trigger-order failure also retained.
+
+Main subsequently advanced to53d9314b65f30829eeaf62cba60a2cd4108120c1 (#410,
+PixVerse mobile/catalog/consent change). It has no migrations/AGENTS changes.
+Quality37721330661 running. Merge guard for411 correctly rejected the old parent;
+wait for new parentQuality+automaticstandard+independent12Cverifier/smoke on53d,
+then update guard IDs/SHAs before merge. Preserve the originalcc159f evidence
+when rechecking newer parent (copy verifier directory rather than overwrite).
+
+12E PR #411 candidate5659c8ad288f3ef31c91c80d0147ccee1c81f336 includes newmain,
+Quality37721555582 running. Old b3d20307 run37720268560 passed all5.44 actual local
+Auth/PostgREST/SQL route/admission checks pass, including real guest/revoked
+sessions, actual rate thresholds, competing claims, owner scoping and cookie
+claim. App/test boundary is actual but not full NextHTTP/browser/native. No
+runtime/schema changes. Full test types and lint pass. 12D historical review
+committed here. Merge guard private referral-intake-release/merge-guard.cjs
+currently deliberately STALE cc159fparent/b3dhead: update to finalcurrent IDs.
+
+12F PR #412 candidatea7e2a38c (resolvefullSHA/run), branch
+codex/backend-referral-settlement-progress-12f includes411/newmain. Reproduction:
+actual local service retries100 older failing transactions twice and never
+settles the later healthy purchase. Fault is one fixtureinviter atintegerceiling;
+no claim this happened to production users. Before result/log/cleanup retained.
+Fix: CLI-created20261008030002_defer_failed_referral_purchase_settlements.sql,
+private retry table, guarded deferral with1minute→1hourbackoff, selector excludes
+notdue rows, eventinsert atomicallyclears retry. Service defers onlysettlement
+errors; notification failures keep12Bqueue. No realbalances changed.
+Tests: actual101purchase regression passes healthysecondpass+100recovery,
+increasing/cappedbackoff, counter saturation, foregroundcleanup and staleack;
+9focused,18notification,16deletion pass; cleanreplay2340assertions109files PASS;
+app/testtypes andscopedlint PASS. Candidate implementation/docs committed/pushed.
+Release prep: private referral-settlement-progress-release/ has production
+baseline after12C, cleanreplay3definitions/ACLs/21signatures, unchangedschema,
+111advisorbaseline; only12Fmigrationpending/nooutoforder. Inventoryallreferral0.
+Strict verify.cjs expects exactliveSHA/runtime/migration, expected one additional
+private-table INFO advisor; smoke/prodrollback wrappers prepared. Bounded SQL
+rollback controls pass locally withzero cleanup. Do NOT overwrite predeployment
+baselines after12Fapplied. Need candidateCI, parentgates, productionrelease, strict
+verify/smoke/rollback.412currentlyincludes411 until411merges; no needduplicate
+its work. PAY-04/JOB-02 failed for12F; AUTH-03 untested after12Cverified.
+
+12D historical admin-credit review resolved read-only: promotional-only25000
+AppReviewtopup alreadycorrected by later sameaccount +25000total/0promo entry.
+No grantdue; anothercompensation wouldduplicate. Publicreportcommitted411,
+privatehistorical-admin-credit-review-private.json/followup.json keptprivate.
+
+Current ledger53unequalobligations:24passed24untested3failed2external. Remaining
+failures PAY-04/JOB-02(12F), MEDIA-07(legacyretirement). Fullgoalnotcomplete.
+Userreceipteditsha256 remainsbb579a5c0a2ee1540000d57c7e7580feeb4c0cb0ff1e9427f2c9bf41025007fc.
+Do not stage it or originalsection1untracked evidence; .audit-evidenceprivate.
+
+### Historical candidate checkpoints (superseded by the state above)
 
 #407 expanded8871bd69 CI37679833609 passes web/mobile/browser/API but fails
 pgTAP guest_account_link test9: new receipt identity trigger changes established

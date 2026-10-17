@@ -44,6 +44,7 @@ second standard release attempt. Referral notification recovery 12B and account-
 [9G release evidence](backend-section-09-push-progress-release-2026-10-05.md).
 [9F release evidence](backend-section-09-first-send-release-2026-10-05.md).
 [9E release evidence](backend-section-09-push-claims-release-2026-10-05.md).
+[9E investigation before the fix](backend-section-09-push-send-budget-2026-10-05.md).
 [9A–9D release evidence](backend-section-09-jobs-release-2026-10-05.md).
 [8H release evidence](backend-section-08-share-controls-release-2026-10-05.md).
 Exact-main Quality, standard release, function digests and live checks pass; see

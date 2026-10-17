@@ -1,0 +1,202 @@
+{
+  "productionCommit": "c40fbe9e4c7556888ed1e353a67b1a2eb9f582d6",
+  "sessionChecks": {
+    "at": "2026-09-26T15:08:36.591Z",
+    "checks": [
+      "google OAuth initiation returns a redirect",
+      "google redirects to the expected provider",
+      "google uses the project callback",
+      "public email signup is blocked by the configured Auth hook",
+      "guest is admitted through the regional feed",
+      "guest cannot invoke account deletion",
+      "registered identity is admitted through regional feed",
+      "refresh returns a usable session",
+      "refreshed token accesses profile",
+      "refreshed token accesses regional feed",
+      "logged-out token is denied by profile API",
+      "logged-out token is denied by regional feed",
+      "logged-out refresh token cannot mint another session",
+      "deletion without explicit confirmation is rejected",
+      "rejected deletion keeps fixture active",
+      "freshly authenticated fixture deletion succeeds",
+      "deletion reports removed identity",
+      "deletion schedules the deliberate delayed resweep",
+      "deleted fixture no longer exists in Auth",
+      "deleted fixture token loses profile API access",
+      "deleted fixture token loses regional feed access",
+      "deleted fixture cannot replay account deletion"
+    ],
+    "passed": 22
+  },
+  "mergeChecks": {
+    "at": "2026-09-26T19:03:24.674Z",
+    "checks": [
+      "ordinary client cannot invoke merge_guest_account",
+      "ordinary client cannot invoke redeem_account_merge_ticket",
+      "ordinary client cannot invoke prepare_account_deletion",
+      "ordinary client cannot read account_merge_tickets",
+      "ordinary client cannot read account_merges",
+      "ordinary client cannot read account_deletion_jobs",
+      "ordinary client cannot read admin_sessions",
+      "guest prepares ticket 1",
+      "guest prepares ticket 2",
+      "guest prepares ticket 3",
+      "registered user cannot prepare guest ticket",
+      "guest cannot redeem a merge ticket",
+      "expired ticket cannot merge",
+      "concurrent requests both return handled responses",
+      "competing targets produce one merge and one conflict",
+      "merge target is derived from caller, not submitted target",
+      "guest is durably marked merged",
+      "concurrent redemption writes exactly one merge ledger entry",
+      "concurrent retries are idempotent",
+      "concurrent redemption conserves fixture balances",
+      "consumed guest loses regional feed access"
+    ],
+    "passed": 21
+  },
+  "adminPostChecks": {
+    "at": "2026-09-26T19:04:17.557Z",
+    "checks": [
+      {
+        "path": "moderation/post-reports",
+        "method": "POST",
+        "status": 401,
+        "privateNoStore": true
+      },
+      {
+        "path": "moderation/generations",
+        "method": "POST",
+        "status": 401,
+        "privateNoStore": true
+      },
+      {
+        "path": "contact",
+        "method": "POST",
+        "status": 401,
+        "privateNoStore": true
+      },
+      {
+        "path": "payouts",
+        "method": "POST",
+        "status": 401,
+        "privateNoStore": true
+      },
+      {
+        "path": "moderation/subject-reports",
+        "method": "POST",
+        "status": 401,
+        "privateNoStore": true
+      },
+      {
+        "path": "moderation/posts",
+        "method": "POST",
+        "status": 401,
+        "privateNoStore": true
+      },
+      {
+        "path": "users/sanctions",
+        "method": "POST",
+        "status": 401,
+        "privateNoStore": true
+      },
+      {
+        "path": "users/credits",
+        "method": "POST",
+        "status": 401,
+        "privateNoStore": true
+      }
+    ]
+  },
+  "priorDeletionCleanup": {
+    "status": "completed",
+    "error": false,
+    "completedAt": "2026-09-26T17:30:07.061033Z",
+    "initialStorageComplete": true
+  },
+  "remainingRegisteredFixtures": 0,
+  "hostedAuthReview": {
+    "source": "Signed-in production Supabase dashboard in Chrome, read only, 2026-09-27 IST",
+    "accessTokenSeconds": 3600,
+    "refreshReplayDetection": true,
+    "refreshReuseSeconds": 10,
+    "singleSessionOnly": false,
+    "sessionMaxHours": 0,
+    "inactivityTimeoutHours": 0,
+    "captchaEnabled": false,
+    "anonymousSigninPerIpPerHour": 30,
+    "refreshPerIpPer5Minutes": 150,
+    "otpVerifyPerIpPer5Minutes": 30,
+    "signupSigninPerIpPer5Minutes": 30,
+    "ipForwarding": false,
+    "manualLinking": false,
+    "confirmEmail": false,
+    "signupHookEnabled": true,
+    "googleEnabled": true,
+    "googleSkipNonce": false,
+    "googleAllowMissingEmail": false,
+    "appleEnabled": true,
+    "appleClientId": "com.magicbooklet.mobile",
+    "appleAllowMissingEmail": false,
+    "passwordMinimum": 8,
+    "passwordCharacterClasses": [
+      "lowercase",
+      "uppercase",
+      "digits",
+      "symbols"
+    ],
+    "leakedPasswordProtection": true,
+    "secureEmailChange": true,
+    "securePasswordChange": true,
+    "requireCurrentPasswordOnChange": false,
+    "emailOtpSeconds": 3600,
+    "emailOtpDigits": 8,
+    "siteUrl": "https://magicbooklet.com",
+    "redirectAllowlist": [
+      "https://magicbooklet.com/auth/callback",
+      "https://www.magicbooklet.com/auth/callback",
+      "http://localhost:3000/auth/callback",
+      "http://localhost:3000/**",
+      "http://127.0.0.1:3000/auth/callback",
+      "http://127.0.0.1:3000/**",
+      "https://*-athuls-projects-2ab559ed.vercel.app/**",
+      "magicbooklet://oauth/callback"
+    ],
+    "configurationChanges": false
+  },
+  "adminAuthenticatedChecks": {
+    "at": "2026-09-26T19:28:25.137Z",
+    "passed": 12,
+    "checks": [
+      "new production admin credential logs in",
+      "admin cookie is HttpOnly",
+      "admin cookie is Secure",
+      "admin cookie is SameSite Lax",
+      "authenticated admin page is accessible",
+      "authenticated action reaches input validation without making a change",
+      "admin logout succeeds",
+      "logout clears cookie",
+      "logged-out admin cookie replay is denied",
+      "logged-out cookie cannot reopen protected admin page",
+      "protected page sends revoked session to login",
+      "unauthenticated admin page redirects to login"
+    ],
+    "releaseRun": "36265315695"
+  },
+  "googleBrowserCheck": {
+    "accountUseAuthorized": true,
+    "logoutRedirectedToLogin": true,
+    "protectedProfileDeniedAfterLogout": true,
+    "googleButtonReturnedToSameProfile": true,
+    "creditBalanceUnchanged": true,
+    "backendGoogleLoginEventObserved": true
+  },
+  "nativeAppleLogin": {
+    "userReportedSuccessfulIphoneSignin": true,
+    "backendWindowStart": "2026-09-26T19:27:00Z",
+    "backendWindowEnd": "2026-09-26T19:29:16Z",
+    "appleAuditLoginEvents": 1,
+    "appleTokenLoginHttpStatus": 200,
+    "providerRevocationTested": false
+  }
+}
