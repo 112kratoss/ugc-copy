@@ -938,6 +938,27 @@
         }
       }
     },
+    "resolveShowcasePost": {
+      "method": "GET",
+      "path": "/api/showcase/posts/:postId/resolve",
+      "auth": "optional",
+      "cacheControl": "public, s-maxage=60, stale-while-revalidate=300",
+      "pathParams": {
+        "postId": "generation-1"
+      },
+      "response": {
+        "success": true,
+        "postId": "post-1"
+      },
+      "errors": {
+        "notFound": {
+          "status": 404,
+          "response": {
+            "error": "Post not found."
+          }
+        }
+      }
+    },
     "listPostComments": {
       "method": "GET",
       "path": "/api/showcase/posts/:postId/comments",
@@ -1071,6 +1092,41 @@
       "cacheControl": "private, no-store",
       "response": {
         "success": true
+      }
+    },
+    "recordShareVisit": {
+      "method": "POST",
+      "path": "/api/showcase/share",
+      "auth": "none",
+      "cacheControl": "private, no-store",
+      "request": {
+        "postId": "post-1",
+        "eventType": "share_visit",
+        "sourceSurface": "feed"
+      },
+      "requestVariants": {
+        "unknownSurface": {
+          "postId": "post-1",
+          "eventType": "share_visit",
+          "sourceSurface": "a-surface-from-a-newer-app"
+        }
+      },
+      "response": {
+        "success": true
+      },
+      "errors": {
+        "notPublic": {
+          "status": 404,
+          "response": {
+            "error": "Only public creations can be shared"
+          }
+        },
+        "missingSurface": {
+          "status": 400,
+          "response": {
+            "error": "Invalid share source surface"
+          }
+        }
       }
     },
     "shareCreatorProfile": {

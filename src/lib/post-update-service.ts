@@ -317,12 +317,15 @@ function normalizeBody(value: unknown): string | null {
     : null;
 }
 
-function normalizeVisibility(value: unknown): ShowcaseVisibility | null {
-  if (value === 'public' || value === 'unlisted' || value === 'private') {
+// Unlisted was dropped (product decision 12, 2026-10-17): a post is public or
+// private. An installed app can still ask for unlisted and a post saved before
+// the decision can still hold it; either way the save stores private.
+function normalizeVisibility(value: unknown): 'public' | 'private' | null {
+  if (value === 'public' || value === 'private') {
     return value;
   }
 
-  return null;
+  return value === 'unlisted' ? 'private' : null;
 }
 
 function resourceBundleUsesMediaScope(value: unknown): boolean {
@@ -1266,7 +1269,7 @@ export async function updateOwnerPostForRoute({
       };
     }
 
-    const nextVisibility = normalizeVisibility(body.visibility) ?? post.visibility;
+    const nextVisibility = normalizeVisibility(body.visibility) ?? normalizeVisibility(post.visibility) ?? 'private';
 
     const nextCategory =
       post.post_format === 'text'

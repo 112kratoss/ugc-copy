@@ -453,6 +453,7 @@ describe('/api/posts route', () => {
     formData.set('postFormat', 'mixed');
     formData.set('body', 'This cutdown worked because the hook hits in under two seconds.');
     formData.set('category', 'video');
+    // An installed app can still ask for unlisted: it is created private (product decision 12).
     formData.set('visibility', 'unlisted');
     formData.set('sourceTool', 'Runway');
     formData.set('media', new File(['video-bytes'], 'hook.mp4', { type: 'video/mp4' }));
@@ -465,7 +466,7 @@ describe('/api/posts route', () => {
       post_format: 'mixed',
       source_kind: 'external',
       source_tool: 'Runway',
-      visibility: 'unlisted',
+      visibility: 'private',
       body: 'This cutdown worked because the hook hits in under two seconds.',// Author-supplied, not derived from the body.	itle: 'Studio lighting reference',
     });
   });

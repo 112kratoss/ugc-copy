@@ -595,6 +595,75 @@ describe('publishGenerationToShowcaseForRoute', () => {
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
+  // Product decision 12 (2026-10-17): a post is public or private. Installed
+  // apps and Studio's old menu can still ask for unlisted; it is stored and
+  // answered as private, the safe reading of "only people with the link".
+  it('stores and answers a requested unlisted post as private, taking its derivative down', async () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: 'showcase/gen-1/example.jpg',
+      title: 'Original title',
+      description: 'Original description',
+      prompt: 'Original prompt',
+    };
+    const adminClient = createAdminClientMock(generation);
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => ({
+      postId: 'post-1',
+      visibility: 'private' as const,
+      bundleId: null,
+      bundleStatus: null,
+    }));
+    const ensureGenerationPostCoverMedia = vi.fn();
+    const requestPostEmbedding = vi.fn(async () => undefined);
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: { generationId: 'gen-1', visibility: 'unlisted' },
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+          outputUrl: mediaGeneration.outputUrl,
+          createdLocation: null,
+        })),
+        listSourceToolsCatalog: vi.fn(async () => [
+          { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+        ]),
+        publishGenerationPostWithResourceBundleAtomically,
+        ensureGenerationPostCoverMedia,
+        requestPostEmbedding,
+      } satisfies Partial<ShowcasePublishServiceDependencies>,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      body: {
+        success: true,
+        isPublic: false,
+        visibility: 'private',
+        postId: 'post-1',
+        showcasePath: null,
+        ownerPath: '/post/post-1/edit',
+        resourceBundlePath: '/post/post-1/edit#recipe',
+        resourceBundleStatus: null,
+        message: 'Saved as a private post',
+      },
+    });
+    expect(publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      generationUpdate: expect.objectContaining({ is_public: false, showcase_asset_path: null }),
+      post: expect.objectContaining({ visibility: 'private', showcase_asset_path: null }),
+    }));
+    expect(adminClient.removeMock).toHaveBeenCalledWith(['showcase/gen-1/example.jpg']);
+    expect(ensureGenerationPostCoverMedia).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(requestPostEmbedding).not.toHaveBeenCalled();
+  });
+
   // This endpoint serves the composer and Studio's visibility switch. Only the
   // first is composing a post, so only the first has to name one — otherwise
   // flipping an old untitled generation to private would start failing.
@@ -1385,9 +1454,11 @@ describe('publishGenerationToShowcaseForRoute', () => {
 
     const result = await publishGenerationToShowcaseForRoute({
       adminSupabase: adminClient.client,
-      body: { generationId: 'gen-1', visibility: 'unlisted' },
+      body: { generationId: 'gen-1', visibility: 'public' },
       userId: 'user-1',
       dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        requestPostEmbedding: vi.fn(async () => undefined),
         ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
           outputUrl: mediaGeneration.outputUrl,
           createdLocation: null,
@@ -1397,7 +1468,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
         ]),
         publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
           postId: 'post-1',
-          visibility: 'unlisted' as const,
+          visibility: 'public' as const,
           bundleId: null,
           bundleStatus: null,
         })),
@@ -1434,9 +1505,11 @@ describe('publishGenerationToShowcaseForRoute', () => {
 
     const result = await publishGenerationToShowcaseForRoute({
       adminSupabase: adminClient.client,
-      body: { generationId: 'gen-1', visibility: 'unlisted' },
+      body: { generationId: 'gen-1', visibility: 'public' },
       userId: 'user-1',
       dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        requestPostEmbedding: vi.fn(async () => undefined),
         ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
           outputUrl: mediaGeneration.outputUrl,
           createdLocation: null,
@@ -1446,7 +1519,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
         ]),
         publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
           postId: 'post-1',
-          visibility: 'unlisted' as const,
+          visibility: 'public' as const,
           bundleId: null,
           bundleStatus: null,
         })),
@@ -1607,9 +1680,11 @@ describe('publishGenerationToShowcaseForRoute', () => {
 
     const result = await publishGenerationToShowcaseForRoute({
       adminSupabase: adminClient.client,
-      body: { generationId: 'gen-1', visibility: 'unlisted' },
+      body: { generationId: 'gen-1', visibility: 'public' },
       userId: 'user-1',
       dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        requestPostEmbedding: vi.fn(async () => undefined),
         ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
           outputUrl: mediaGeneration.outputUrl,
           createdLocation: null,
@@ -1619,7 +1694,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
         ]),
         publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
           postId: 'post-1',
-          visibility: 'unlisted' as const,
+          visibility: 'public' as const,
           bundleId: null,
           bundleStatus: null,
         })),

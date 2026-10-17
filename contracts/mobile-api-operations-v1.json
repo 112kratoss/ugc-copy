@@ -201,6 +201,11 @@
       "path": "/api/showcase/posts/:postId",
       "auth": "required"
     },
+    "resolveShowcasePost": {
+      "method": "GET",
+      "path": "/api/showcase/posts/:postId/resolve",
+      "auth": "optional"
+    },
     "listPostComments": {
       "method": "GET",
       "path": "/api/showcase/posts/:postId/comments",
@@ -287,6 +292,11 @@
       "auth": "required"
     },
     "shareShowcasePost": {
+      "method": "POST",
+      "path": "/api/showcase/share",
+      "auth": "required"
+    },
+    "recordShareVisit": {
       "method": "POST",
       "path": "/api/showcase/share",
       "auth": "required"

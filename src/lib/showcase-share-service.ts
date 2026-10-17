@@ -20,11 +20,24 @@ type PostReference = {
   user_id?: string | null;
 };
 
-export type ShowcaseSharePayload = {
-  referenceId: string;
-  sourceSurface: GenerationShareSourceSurface;
-  channel: GenerationShareChannel;
-};
+export type ShowcaseSharePayload =
+  | {
+      /** Absent on every client older than share visits: a click. */
+      eventType?: 'share_click';
+      referenceId: string;
+      sourceSurface: GenerationShareSourceSurface;
+      channel: GenerationShareChannel;
+    }
+  | {
+      /**
+       * Someone arrived from a shared link: the app reports one when it opens a
+       * link carrying `s`, as the web post page records one on arrival.
+       */
+      eventType: 'share_visit';
+      referenceId: string;
+      sourceSurface: GenerationShareSourceSurface;
+      channel?: undefined;
+    };
 
 export type ShowcaseShareServiceDependencies = {
   findPublicPostReferenceByIdOrGenerationId: typeof findPublicPostReferenceByIdOrGenerationId;
@@ -98,11 +111,26 @@ async function isPostInteractionUnavailable({
   }
 }
 
+/**
+ * The surface a visit is credited to, by the web post page's rule
+ * (`getShareVisitSurface` in `src/app/showcase/[id]/page.tsx`): the link's `s`
+ * names it, and one this server does not know still counts, as `detail-page`.
+ * A link without `s` is not a share, so there is nothing to credit.
+ */
+function getShareVisitSourceSurface(value: unknown): GenerationShareSourceSurface | null {
+  if (typeof value !== 'string' || !value) {
+    return null;
+  }
+
+  return isGenerationShareSourceSurface(value) ? value : 'detail-page';
+}
+
 export function parseShowcaseSharePayloadForRoute(body: {
   generationId?: unknown;
   postId?: unknown;
   sourceSurface?: unknown;
   channel?: unknown;
+  eventType?: unknown;
 }): ShowcaseSharePayloadResult {
   const referenceId = typeof body.postId === 'string' ? body.postId : body.generationId;
 
@@ -111,6 +139,31 @@ export function parseShowcaseSharePayloadForRoute(body: {
       ok: false,
       status: 400,
       body: { error: 'Missing post ID' },
+    };
+  }
+
+  if (body.eventType != null && body.eventType !== 'share_click' && body.eventType !== 'share_visit') {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: 'Invalid share event type' },
+    };
+  }
+
+  if (body.eventType === 'share_visit') {
+    const sourceSurface = getShareVisitSourceSurface(body.sourceSurface);
+    if (!sourceSurface) {
+      return {
+        ok: false,
+        status: 400,
+        body: { error: 'Invalid share source surface' },
+      };
+    }
+
+    // No channel: a visit did not go out through one, and the web records none.
+    return {
+      ok: true,
+      payload: { eventType: 'share_visit', referenceId, sourceSurface },
     };
   }
 
@@ -148,6 +201,7 @@ export async function shareShowcasePostForRoute({
   actorUserId,
   channel,
   dependencies,
+  eventType,
   referenceId,
   runAfterResponse,
   serviceClient,
@@ -186,6 +240,21 @@ export async function shareShowcasePostForRoute({
       ok: false,
       status: 404,
       body: { error: 'Only public creations can be shared' },
+    };
+  }
+
+  if (eventType === 'share_visit') {
+    // Written as the web post page writes a visit (no channel, no actor), and
+    // nobody is told: a visit is not something the viewer did to the post.
+    await resolvedDependencies.recordPostShareEvent({
+      postId: post.id,
+      eventType: 'share_visit',
+      sourceSurface,
+    }, serviceClient);
+
+    return {
+      ok: true,
+      body: { success: true },
     };
   }
 

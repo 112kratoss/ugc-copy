@@ -307,8 +307,10 @@ function resolveCategory(
 }
 
 function normalizeVisibility(value: string | null): ShowcaseVisibility {
+  // Unlisted was dropped (product decision 12, 2026-10-17): a post is public
+  // or private. Installed apps can still ask for it, and get a private post.
   if (value === 'private' || value === 'unlisted') {
-    return value;
+    return 'private';
   }
 
   return 'public';

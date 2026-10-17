@@ -104,6 +104,7 @@ export type ShowcasePublishRequestBody = {
   isNsfw?: boolean;
   generationId: string;
   isPublic?: boolean;
+  /** Installed apps can still send 'unlisted'; it is stored and answered as 'private'. */
   visibility?: 'public' | 'unlisted' | 'private';
   title?: string;
   description?: string;
@@ -143,7 +144,7 @@ export type ShowcasePublishServiceResult =
       body: {
         success: true;
         isPublic: boolean;
-        visibility: 'public' | 'unlisted' | 'private';
+        visibility: 'public' | 'private';
         postId: string | null;
         showcasePath: string | null;
         ownerPath: string | null;
@@ -207,9 +208,16 @@ function normalizeTextValue(value: unknown): string | null {
   return typeof value === 'string' ? value.trim() : null;
 }
 
-function normalizeRequestedVisibility(value: unknown, legacyIsPublic?: boolean): 'public' | 'unlisted' | 'private' {
-  if (value === 'public' || value === 'unlisted' || value === 'private') {
+function normalizeRequestedVisibility(value: unknown, legacyIsPublic?: boolean): 'public' | 'private' {
+  if (value === 'public' || value === 'private') {
     return value;
+  }
+
+  // Unlisted was dropped (product decision 12, 2026-10-17): a post is public
+  // or private. Installed apps and Studio's old menu can still ask for it, and
+  // get a private post, the safe reading of "only people with the link".
+  if (value === 'unlisted') {
+    return 'private';
   }
 
   return legacyIsPublic ? 'public' : 'private';
@@ -989,9 +997,7 @@ export async function publishGenerationToShowcaseForRoute({
       message:
         effectiveVisibility === 'public'
           ? 'Successfully published to showcase'
-          : effectiveVisibility === 'unlisted'
-            ? 'Saved as an unlisted post'
-            : 'Saved as a private post',
+          : 'Saved as a private post',
     },
   };
 }

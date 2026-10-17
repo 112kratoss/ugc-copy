@@ -81,6 +81,71 @@ describe('parseShowcaseSharePayloadForRoute', () => {
       body: { error: expectedError },
     });
   });
+
+  // C14 (product decision 14, 2026-10-17): the app reports a shared link it
+  // opened, as the web post page records one on arrival.
+  describe('share visits', () => {
+    it('takes a visit with the link\'s surface and no channel', () => {
+      expect(parseShowcaseSharePayloadForRoute({
+        postId: 'post-1',
+        eventType: 'share_visit',
+        sourceSurface: 'feed',
+      })).toEqual({
+        ok: true,
+        payload: { eventType: 'share_visit', referenceId: 'post-1', sourceSurface: 'feed' },
+      });
+    });
+
+    it('counts a surface it does not know as the detail page, as the web post page does', () => {
+      expect(parseShowcaseSharePayloadForRoute({
+        postId: 'post-1',
+        eventType: 'share_visit',
+        sourceSurface: 'a-surface-from-a-newer-app',
+      })).toEqual({
+        ok: true,
+        payload: { eventType: 'share_visit', referenceId: 'post-1', sourceSurface: 'detail-page' },
+      });
+    });
+
+    it('ignores a channel sent with a visit, valid or not', () => {
+      expect(parseShowcaseSharePayloadForRoute({
+        postId: 'post-1',
+        eventType: 'share_visit',
+        sourceSurface: 'showcase',
+        channel: 'not-a-channel',
+      })).toEqual({
+        ok: true,
+        payload: { eventType: 'share_visit', referenceId: 'post-1', sourceSurface: 'showcase' },
+      });
+    });
+
+    it.each([
+      [{ postId: 'post-1', eventType: 'share_visit' }, 'Invalid share source surface'],
+      [{ postId: 'post-1', eventType: 'share_visit', sourceSurface: '' }, 'Invalid share source surface'],
+      [{ postId: 'post-1', eventType: 'share_visit', sourceSurface: 7 }, 'Invalid share source surface'],
+      [{ eventType: 'share_visit', sourceSurface: 'feed' }, 'Missing post ID'],
+      [{ postId: 'post-1', eventType: 'share_like', sourceSurface: 'feed', channel: 'copy-link' }, 'Invalid share event type'],
+    ])('refuses a visit that names no link surface, no post, or an unknown event (%o)', (body, expectedError) => {
+      expect(parseShowcaseSharePayloadForRoute(body)).toEqual({
+        ok: false,
+        status: 400,
+        body: { error: expectedError },
+      });
+    });
+
+    it('reads a payload with no event type, or share_click, as today\'s click', () => {
+      const click = { postId: 'post-1', sourceSurface: 'showcase', channel: 'copy-link' };
+      const expected = {
+        ok: true,
+        payload: { referenceId: 'post-1', sourceSurface: 'showcase', channel: 'copy-link' },
+      };
+
+      expect(parseShowcaseSharePayloadForRoute(click)).toEqual(expected);
+      expect(parseShowcaseSharePayloadForRoute({ ...click, eventType: 'share_click' })).toEqual(expected);
+      expect(parseShowcaseSharePayloadForRoute({ postId: 'post-1', eventType: 'share_click', sourceSurface: 'showcase' }))
+        .toEqual({ ok: false, status: 400, body: { error: 'Invalid share channel' } });
+    });
+  });
 });
 
 describe('shareShowcasePostForRoute', () => {
@@ -190,6 +255,78 @@ describe('shareShowcasePostForRoute', () => {
     });
     expect(dependencies.recordPostShareEvent).not.toHaveBeenCalled();
     expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
+  });
+
+  describe('share visits', () => {
+    it('records one visit with the link\'s surface, as the web post page records it, and tells no one', async () => {
+      const serviceClient = createServiceClientMock();
+      const dependencies = createDependencies();
+      const runAfterResponse = vi.fn();
+
+      const result = await shareShowcasePostForRoute({
+        actorUserId: 'user-1',
+        eventType: 'share_visit',
+        referenceId: 'post-1',
+        serviceClient: serviceClient.client,
+        sourceSurface: 'feed',
+        runAfterResponse,
+        dependencies,
+      });
+
+      expect(result).toEqual({ ok: true, body: { success: true } });
+      expect(dependencies.findPublicPostReferenceByIdOrGenerationId).toHaveBeenCalledWith(
+        'post-1',
+        serviceClient.client,
+      );
+      // No channel and no actor, exactly what the web page writes for a visit.
+      expect(dependencies.recordPostShareEvent).toHaveBeenCalledTimes(1);
+      expect(dependencies.recordPostShareEvent).toHaveBeenCalledWith({
+        postId: 'post-1',
+        eventType: 'share_visit',
+        sourceSurface: 'feed',
+      }, serviceClient.client);
+      expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
+      expect(runAfterResponse).not.toHaveBeenCalled();
+    });
+
+    it('records a visit to a private or missing post as nothing, answering 404', async () => {
+      const serviceClient = createServiceClientMock();
+      const dependencies = createDependencies(null);
+
+      const result = await shareShowcasePostForRoute({
+        actorUserId: 'user-1',
+        eventType: 'share_visit',
+        referenceId: 'post-2',
+        serviceClient: serviceClient.client,
+        sourceSurface: 'detail-page',
+        dependencies,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        status: 404,
+        body: { error: 'Only public creations can be shared' },
+      });
+      expect(dependencies.recordPostShareEvent).not.toHaveBeenCalled();
+    });
+
+    it('records no visit across a block, as the web post page shows the blocked viewer nothing', async () => {
+      const serviceClient = createServiceClientMock();
+      const dependencies = createDependencies();
+      dependencies.isUserRelationshipBlocked.mockResolvedValue(true);
+
+      const result = await shareShowcasePostForRoute({
+        actorUserId: 'user-1',
+        eventType: 'share_visit',
+        referenceId: 'post-1',
+        serviceClient: serviceClient.client,
+        sourceSurface: 'feed',
+        dependencies,
+      });
+
+      expect(result).toMatchObject({ ok: false, status: 404 });
+      expect(dependencies.recordPostShareEvent).not.toHaveBeenCalled();
+    });
   });
 });
 
