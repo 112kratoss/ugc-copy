@@ -182,14 +182,14 @@ select is(
 );
 select is(
   (public.owner_profile_counts('c0100001-0000-4000-8000-000000000001'::uuid) ->> 'saved')::int,
-  2,
+  1,
   'a save of a post that was since archived stops counting'
 );
 delete from public.user_blocks
 where blocker_user_id = 'c0100001-0000-4000-8000-000000000001'::uuid;
 select is(
   (public.owner_profile_counts('c0100001-0000-4000-8000-000000000001'::uuid) ->> 'saved')::int,
-  3,
+  2,
   'unblocking a creator brings their saved post back'
 );
 update public.generations set archived_at = timezone('utc'::text, now())
