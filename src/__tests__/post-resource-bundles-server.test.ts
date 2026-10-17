@@ -1202,6 +1202,24 @@ describe('post resource bundle server access', () => {
       expect(dashboard.totalEarningsUsdCents).toBe(1530);
     });
 
+    // Decision 6 (2026-10-17): a free unlock is not a sale. Its order is a
+    // "paid" row of 0 subunits, counted under Free unlocks and not listed here.
+    it('lists paid sales only under Recent sales, never a free unlock', async () => {
+      orderRows = [
+        paidOrder('order-paid', 'buyer-with-handle'),
+        { ...paidOrder('order-free', 'buyer-with-name'), amount_subunits: 0 },
+      ];
+      buyerProfileRows = [
+        { id: 'buyer-with-handle', username: 'maya', display_name: 'Maya R', avatar_url: null },
+        { id: 'buyer-with-name', username: null, display_name: 'Sam Buyer', avatar_url: null },
+      ];
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.sales.map((sale) => sale.id)).toEqual(['order-paid']);
+    });
+
     it('calls every buyer "A buyer" when the buyer profiles cannot be read', async () => {
       const anonymousBuyerId = '6f1c2a4e-1111-4222-8333-444455556666';
       orderRows = [paidOrder('order-1', anonymousBuyerId)];

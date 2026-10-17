@@ -2385,7 +2385,10 @@ export async function getSellerPostResourceBundleDashboard(
       throw orderError;
     }
 
-    const orders = (orderData ?? []) as OrderRow[];
+    // A free unlock leaves a "paid" order of 0 subunits. It is not a sale
+    // (decision 6, 2026-10-17): the dashboard counts it under Free unlocks and
+    // lists only what buyers paid for here.
+    const orders = ((orderData ?? []) as OrderRow[]).filter((row) => row.amount_subunits > 0);
     const buyerProfiles = await loadProfileMap(orders.map((row) => row.buyer_user_id));
     sales = orders.map((row) => {
       const buyerProfile = buyerProfiles.get(row.buyer_user_id);
