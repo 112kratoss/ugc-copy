@@ -22,7 +22,7 @@ export function isFreeRecipeAsset(asset: NonNullable<ShowcaseFeedItem['asset']>)
  * ugc-mobile/lib/pricing.ts): one credit per US cent, grouped in the app's
  * pinned `en-IN` locale (1,25,000), "credit" for exactly one.
  */
-function formatRecipeCreditPrice(priceUsdCents: number): string {
+export function formatRecipeCreditPrice(priceUsdCents: number): string {
     const credits = Math.max(0, Math.trunc(priceUsdCents));
     return `${credits.toLocaleString('en-IN')} ${credits === 1 ? 'credit' : 'credits'}`;
 }

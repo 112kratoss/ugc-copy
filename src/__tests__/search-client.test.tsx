@@ -431,9 +431,10 @@ describe('SearchClient', () => {
       expect(card).toHaveTextContent('Free');
     });
 
-    // The row printed the cash quote, which priced a credits-only recipe in a
-    // currency no checkout takes.
-    it('prices a paid recipe in one figure, and a credits-only one in credits', async () => {
+    // The row printed the viewer's cash quote; since decision 2 (2026-10-17) a
+    // recipe's price on a listing reads in credits on both clients, as the
+    // app's search row does, cash-eligible or not.
+    it('prices every paid recipe in credits, never the cash quote', async () => {
       fetchMock.mockResolvedValueOnce(jsonResponse(searchResponse({
         type: 'recipes',
         recipes: {
@@ -457,7 +458,9 @@ describe('SearchClient', () => {
       render(<SearchClient initialQuery="moonlit" initialType="recipes" />);
       await settle();
 
-      expect(screen.getByRole('link', { name: /Moonlit lighting/ })).toHaveTextContent('₹750');
+      const cashEligible = screen.getByRole('link', { name: /Moonlit lighting/ });
+      expect(cashEligible).toHaveTextContent('900 credits');
+      expect(cashEligible).not.toHaveTextContent('₹750');
       const creditsOnly = screen.getByRole('link', { name: /Moonlit grade/ });
       expect(creditsOnly).toHaveTextContent('50 credits');
       expect(creditsOnly).not.toHaveTextContent('₹42');

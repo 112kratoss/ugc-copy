@@ -16,7 +16,7 @@ import {
   type PublicSearchType,
   type RecipeSearchResult,
 } from '@/lib/public-search';
-import { formatPostResourceCompactPriceLabel } from '@/lib/post-resource-bundles';
+import { formatRecipeCreditPrice } from '@/lib/showcase-asset-labels';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 import { supabase } from '@/lib/supabase';
@@ -134,9 +134,8 @@ function RecipeSearchCard({ recipe, returnTo }: { recipe: RecipeSearchResult; re
         <span className="mt-3 flex items-center justify-between gap-3 text-xs">
           <span className="truncate text-zinc-500">{recipe.seller.name}</span>
           <span className="shrink-0 font-semibold text-emerald-300">
-            {recipe.accessMode === 'free'
-              ? 'Free'
-              : formatPostResourceCompactPriceLabel(recipe.priceUsdCents, recipe.priceQuote.formatted)}
+            {/* In credits, as the app's search row and every recipe chip price it (decision 2). */}
+            {recipe.accessMode === 'free' ? 'Free' : formatRecipeCreditPrice(recipe.priceUsdCents)}
           </span>
         </span>
       </span>
