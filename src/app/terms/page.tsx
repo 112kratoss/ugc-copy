@@ -15,7 +15,7 @@ export default function TermsOfService() {
             <div className="max-w-4xl mx-auto px-6 py-16">
 
                 <h1 className="text-4xl font-bold mb-4">Terms of Service</h1>
-                <p className="text-zinc-400 mb-12">Last updated: October 17, 2026</p>
+                <p className="text-zinc-400 mb-12">Last updated: October 18, 2026</p>
 
                 <div className="space-y-8 text-zinc-300">
                     <section>
@@ -90,7 +90,8 @@ export default function TermsOfService() {
                             and we keep 15%. Free unlocks do not earn anything. Your earnings collect in your seller
                             balance, and you can request a payout once that balance reaches $100. Payouts are paid in
                             Indian rupees (INR) to a UPI ID or an Indian bank account that you give us, and we send each
-                            payout within 14 days of your request. PayPal and international transfers are not available yet.
+                            payout within 14 days of your request. We convert your dollar balance to rupees at the exchange
+                            rate on the day we send the payout. PayPal and international transfers are not available yet.
                         </p>
                     </section>
 
