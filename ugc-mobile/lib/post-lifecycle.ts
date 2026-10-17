@@ -28,9 +28,11 @@ export interface PostLifecyclePost extends PostLifecycleSubject {
 
 type Confirm = (confirmation: PostLifecycleConfirmation) => Promise<boolean>;
 
+// Decision 12 (2026-10-17): a post is Public or Private. Unlisted is no longer
+// offered; the server stores a requested one as private, and an old unlisted
+// post reads as Private in the picker below.
 export const POST_VISIBILITY_OPTIONS: ReadonlyArray<{ value: PostLifecycleVisibility; label: string }> = [
   { value: 'public', label: 'Public' },
-  { value: 'unlisted', label: 'Unlisted' },
   { value: 'private', label: 'Private' },
 ];
 
@@ -38,12 +40,19 @@ export function normalizePostLifecycleVisibility(value: string | null | undefine
   return value === 'public' || value === 'unlisted' ? value : 'private';
 }
 
+/**
+ * A record's recipe, as far as the policy reads it. The free count is optional:
+ * a record that does not carry it counts none.
+ */
+type LifecycleBundleRecord = Pick<OwnerPostBundleSummary, 'accessMode' | 'status' | 'salesCount'>
+  & Partial<Pick<OwnerPostBundleSummary, 'freeUnlockCount'>>;
+
 /** The policy's view of a post, from whichever record a surface holds. */
 export function toPostLifecyclePost(input: {
   id: string;
   visibility?: string | null;
   archivedAt?: string | null;
-  bundle?: Pick<OwnerPostBundleSummary, 'accessMode' | 'status' | 'salesCount'> | null;
+  bundle?: LifecycleBundleRecord | null;
 }): PostLifecyclePost {
   const bundle = input.bundle ?? null;
   return {
@@ -55,6 +64,7 @@ export function toPostLifecyclePost(input: {
           accessMode: bundle.accessMode,
           status: bundle.status === 'published' ? 'published' : 'draft',
           salesCount: bundle.salesCount ?? 0,
+          freeUnlockCount: bundle.freeUnlockCount ?? 0,
         }
       : null,
   };
@@ -79,7 +89,7 @@ export async function resolveLinkedLifecyclePost({
     linkedPostId?: string | null;
     linkedPostVisibility?: string | null;
     linkedPostArchivedAt?: string | null;
-    linkedPostBundle?: Pick<OwnerPostBundleSummary, 'accessMode' | 'status' | 'salesCount'> | null;
+    linkedPostBundle?: LifecycleBundleRecord | null;
     linkedPostDetailsLoaded?: boolean;
   };
 }): Promise<PostLifecyclePost | null> {
@@ -120,7 +130,7 @@ export function confirmPostLifecycleAction(confirmation: PostLifecycleConfirmati
 }
 
 /**
- * The three-state picker every surface offers.
+ * The visibility picker every surface offers.
  *
  * It was an alert, which the Alerts chapter reserves for problems and caps at
  * three buttons — so the current state had to double as the way out ("Keep
@@ -133,13 +143,16 @@ export function pickPostVisibility(
   current: PostLifecycleVisibility,
   onPick: (next: PostLifecycleVisibility) => void,
 ) {
+  // An unlisted post reads as Private: the server stores a requested unlisted
+  // as private now, and moved the old ones there.
+  const shown = current === 'unlisted' ? 'private' : current;
   showActionSheet({
     title: 'Change visibility',
     message: 'Choose who can see this post.',
     actions: POST_VISIBILITY_OPTIONS.map((option) => ({
       label: option.label,
-      detail: option.value === current ? 'Current' : undefined,
-      disabled: option.value === current,
+      detail: option.value === shown ? 'Current' : undefined,
+      disabled: option.value === shown,
       onPress: () => onPick(option.value),
     })),
   });

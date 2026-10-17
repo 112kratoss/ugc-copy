@@ -123,8 +123,8 @@ describe('unlock library view model', () => {
   });
 
   it('pluralizes the count', () => {
-    expect(summarizeUnlockCount(1)).toBe('1 unlock · yours permanently');
-    expect(summarizeUnlockCount(4)).toBe('4 unlocks · yours permanently');
+    expect(summarizeUnlockCount(1)).toBe('1 recipe · yours permanently');
+    expect(summarizeUnlockCount(4)).toBe('4 recipes · yours permanently');
   });
 
   it('degrades to an empty string on an unparseable date', () => {
@@ -330,14 +330,14 @@ describe('canOpenUnlockedPost', () => {
 
   it('gives a block the neutral reason, and a private or archived post its own', () => {
     expect(describeUnreachableUnlockedPost(detail({ postReachable: false })))
-      .toBe("This post isn't available to you. Your unlock stays here.");
+      .toBe("This post isn't available to you. Your recipe stays here.");
     expect(describeUnreachableUnlockedPost(detail({ post: { ...livePost, visibility: 'unlisted' }, postReachable: false })))
-      .toBe("This post isn't available to you. Your unlock stays here.");
+      .toBe("This post isn't available to you. Your recipe stays here.");
     expect(describeUnreachableUnlockedPost(detail({ post: { ...livePost, visibility: 'private' } })))
-      .toBe('This post is no longer public. Your unlock stays available here.');
+      .toBe('This post is no longer public. Your recipe stays available here.');
     expect(describeUnreachableUnlockedPost(detail({ post: { ...livePost, archivedAt: '2026-10-01T00:00:00.000Z' } })))
-      .toBe('This post is no longer public. Your unlock stays available here.');
+      .toBe('This post is no longer public. Your recipe stays available here.');
     expect(describeUnreachableUnlockedPost(detail({ post: null, postVisibility: null })))
-      .toBe('This post is no longer public. Your unlock stays available here.');
+      .toBe('This post is no longer public. Your recipe stays available here.');
   });
 });

@@ -1070,7 +1070,7 @@ describe('post new view model', () => {
 
     expect(validatePostComposerDraft(draft)).toEqual({
       valid: false,
-      message: 'Add a buyer preview for the unlock.',
+      message: 'Add a buyer preview for the recipe.',
     });
   });
 

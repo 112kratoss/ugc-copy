@@ -1,3 +1,4 @@
+import { homeModelLabel } from './home-feed-view-model';
 import { formatCompactCount, formatRelativeTime } from './home-view-model';
 import { formatCreditAmount, formatUnlockCreditPrice } from './pricing';
 import type { ImmersivePostUnlockDetails, ImmersivePreviewItem } from './immersive-preview-view-model';
@@ -53,8 +54,14 @@ export function buildPostDetailsMeta(item: ImmersivePreviewItem, now = new Date(
   const commentCount = Math.max(0, item.commentCount ?? 0);
   if (commentCount > 0) parts.push(countLabel(commentCount, 'comment', 'comments'));
 
+  // The model by the feed card's rule (`homeModelLabel`, decision 13,
+  // 2026-10-17): its display name, never a slug, and none for a text post or
+  // a model the catalog does not name. Without one, an outside tool the
+  // creator named keeps the line, as on the web's post page.
+  const modelLabel = item.previewKind === 'text' ? null : homeModelLabel(details?.model);
   const toolLabel = details?.toolLabel?.trim();
-  if (toolLabel && !isOwnTool(toolLabel)) parts.push(`Made with ${toolLabel}`);
+  if (modelLabel) parts.push(`Made with ${modelLabel}`);
+  else if (toolLabel && !isOwnTool(toolLabel)) parts.push(`Made with ${toolLabel}`);
 
   return {
     creatorLabel: details?.creatorLabel ?? item.creatorLabel,

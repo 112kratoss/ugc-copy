@@ -57,6 +57,7 @@ vi.mock('lucide-react-native', () => ({
   BarChart3: () => null,
   ChevronRight: () => null,
   DollarSign: () => null,
+  LockOpen: () => null,
   PackageCheck: () => null,
 }));
 
@@ -139,6 +140,7 @@ function listing(
       status: 'published',
       priceUsdCents: 900,
       salesCount: 0,
+      freeUnlockCount: 0,
       earningsUsdCents: 0,
       resourceKinds: ['prompt'],
       reviewStatus: 'visible',
@@ -152,7 +154,7 @@ function listing(
 function signedInWith(posts: OwnerPostListItem[], overrides: Record<string, unknown> = {}) {
   authState.user = { id: 'seller-1', email: 'seller@example.com' };
   listings.result = listingsResult({
-    data: { pages: [{ success: true, posts, summary: { earningsUsdCents: 2295, listingCount: posts.length, salesCount: 3 } }] },
+    data: { pages: [{ success: true, posts, summary: { earningsUsdCents: 2295, listingCount: posts.length, salesCount: 3, freeUnlockCount: 20 } }] },
     ...overrides,
   });
 }
@@ -247,12 +249,15 @@ describe('Your Sales listings', () => {
     expect(listings.options!.getNextPageParam(page(null))).toBeUndefined();
   });
 
-  it('reads the totals from the first page', () => {
+  // Decision 6 (2026-10-17): Sales counts paid unlocks only, with the free
+  // unlocks beside it, as on the web's sell page.
+  it('reads the totals from the first page, free unlocks beside the sales', () => {
     signedInWith([listing('a')]);
     const tree = renderScreen();
 
     const metrics = ofType(tree.root, 'view').map((node) => node.props.accessibilityLabel).filter(Boolean);
-    expect(metrics).toEqual(expect.arrayContaining(['Tracked earnings: $22.95', 'Sales: 3']));
+    expect(metrics).toEqual(expect.arrayContaining(['Tracked earnings: $22.95', 'Sales: 3', 'Free unlocks: 20']));
+    expect(metrics.indexOf('Free unlocks: 20')).toBe(metrics.indexOf('Sales: 3') + 1);
   });
 
   // A listing taken down, flagged or failing the listing check read
@@ -308,17 +313,26 @@ describe('Your Sales listings', () => {
   });
 
   // The app drew neither price nor kinds, and called a free open a sale (audit 03-3, 03-8).
-  it('prices a recipe in credits, counts free opens apart from sales, and lists its kinds', () => {
+  // Since decision 6 (2026-10-17) the server counts them apart: sales are paid,
+  // free unlocks sit beside them.
+  it('prices a recipe in credits, counts free unlocks beside sales, and lists its kinds', () => {
     signedInWith([
       listing('paid', { title: 'Paid recipe', bundle: { salesCount: 3, earningsUsdCents: 2295, resourceKinds: ['prompt', 'notes'] } }),
       listing('one', { title: 'One sale', bundle: { priceUsdCents: 1200, salesCount: 1, earningsUsdCents: 1020 } }),
-      listing('free', { title: 'Free recipe kit', bundle: { accessMode: 'free', priceUsdCents: 0, salesCount: 5 } }),
+      listing('free', { title: 'Free recipe kit', bundle: { accessMode: 'free', priceUsdCents: 0, salesCount: 0, freeUnlockCount: 5 } }),
+      listing('single', { title: 'Opened once', bundle: { accessMode: 'free', priceUsdCents: 0, freeUnlockCount: 1 } }),
+      // A recipe can change price: each count shows once it is above zero.
+      listing('was-paid', { title: 'Now free', bundle: { accessMode: 'free', priceUsdCents: 0, salesCount: 2, freeUnlockCount: 5, earningsUsdCents: 1530 } }),
+      listing('was-free', { title: 'Now paid', bundle: { salesCount: 1, freeUnlockCount: 4, earningsUsdCents: 765 } }),
     ]);
     const tree = renderScreen();
 
     expect(texts(row(tree, 'Paid recipe'))).toContain('900 credits · 3 sales · $22.95 tracked earnings');
     expect(texts(row(tree, 'One sale'))).toContain('1,200 credits · 1 sale · $10.20 tracked earnings');
-    expect(texts(row(tree, 'Free recipe kit'))).toContain('Free recipe · 5 opened');
+    expect(texts(row(tree, 'Free recipe kit'))).toContain('Free recipe · 5 free unlocks');
+    expect(texts(row(tree, 'Opened once'))).toContain('Free recipe · 1 free unlock');
+    expect(texts(row(tree, 'Now free'))).toContain('Free recipe · 2 sales · 5 free unlocks · $15.30 tracked earnings');
+    expect(texts(row(tree, 'Now paid'))).toContain('900 credits · 1 sale · 4 free unlocks · $7.65 tracked earnings');
     expect(ofType(row(tree, 'Paid recipe'), 'resource-kind-row')[0].props.kinds).toEqual(['prompt', 'notes']);
     // Never a cash price beside a recipe in the app (App Review, 0.1.6).
     expect(texts(tree.root).join(' ')).not.toMatch(/\$9\.00|\$12\.00/);

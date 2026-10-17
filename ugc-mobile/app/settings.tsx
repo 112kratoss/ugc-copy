@@ -127,7 +127,7 @@ export default function SettingsScreen() {
       <SettingsCard
         icon={<CircleHelp size={appTheme.icon.feature} color={theme.colors.text} />}
         title="Help & support"
-        body="Find quick guidance for creations, unlocks, and contacting support."
+        body="Find quick guidance for creations, recipes, and contacting support."
         onPress={() => router.push('/help' as never)}
       />
 

@@ -199,10 +199,10 @@ export function describeUnreachableUnlockedPost(detail: Pick<ViewerUnlockDetail,
   const visibility = detail.post?.visibility ?? detail.postVisibility;
   const listed = (visibility === 'public' || visibility === 'unlisted') && !detail.post?.archivedAt;
   return listed
-    ? "This post isn't available to you. Your unlock stays here."
-    : 'This post is no longer public. Your unlock stays available here.';
+    ? "This post isn't available to you. Your recipe stays here."
+    : 'This post is no longer public. Your recipe stays available here.';
 }
 
 export function summarizeUnlockCount(total: number): string {
-  return `${total} ${total === 1 ? 'unlock' : 'unlocks'} · yours permanently`;
+  return `${total} ${total === 1 ? 'recipe' : 'recipes'} · yours permanently`;
 }

@@ -333,6 +333,7 @@ function recipe(id: string, access: { accessMode: 'free' | 'paid'; priceUsdCents
     previewText: '',
     ...access,
     salesCount: 0,
+    freeUnlockCount: 0,
     allowRemix: true,
     resourceKinds: ['prompt'],
     createdAt: '2026-10-01T00:00:00.000Z',

@@ -560,7 +560,9 @@ export function savedShowcaseToProfileMediaCards(items: ShowcaseFeedItem[] | nul
 function ownerPostBadge(item: OwnerPostListItem) {
   if (item.bundle?.accessMode === 'free') return FREE_RECIPE_LABEL;
   if (item.bundle?.accessMode === 'paid') return formatUnlockCreditPrice(item.bundle.priceUsdCents);
-  if (item.category === 'text' || item.postFormat === 'text') return 'Prompt';
+  // A text post is "Text", beside Image, Video and Motion (decision 10,
+  // 2026-10-17); "Prompt" names a real prompt only.
+  if (item.category === 'text' || item.postFormat === 'text') return 'Text';
   if (item.mediaKind === 'video' || item.category === 'video') return 'Video';
   return 'Post';
 }

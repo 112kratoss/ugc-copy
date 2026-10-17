@@ -1055,7 +1055,7 @@ describe('ProfileDashboard media tiles routing', () => {
       tree = renderer.create(<ProfileDashboard />);
     });
 
-    const sellerDashboard = findPressableByText(tree!.root, 'Your Sales');
+    const sellerDashboard = findPressableByText(tree!.root, 'Recipe Sales');
     renderer.act(() => {
       sellerDashboard.props.onPress();
     });

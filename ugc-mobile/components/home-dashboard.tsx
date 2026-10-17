@@ -746,7 +746,7 @@ export function HomeDashboard() {
         void queryClient.invalidateQueries({ queryKey: ['showcase-feed'] });
         showMessageDialog({
           title: 'Unlock needed',
-          message: 'The creator has put this remix behind an unlock. Open the post to get it.',
+          message: 'The creator has put this remix behind a recipe. Open the post to get it.',
         });
         return;
       }

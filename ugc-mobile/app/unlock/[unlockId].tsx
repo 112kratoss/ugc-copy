@@ -57,7 +57,7 @@ export default function ViewerUnlockScreen() {
     ? detail?.purchasedRevision.resources ?? null
     : detail?.currentResources ?? detail?.purchasedRevision.resources ?? null;
   const selectedRevision = purchasedSelected ? detail?.purchasedRevision : null;
-  const activeTitle = selectedRevision?.title ?? detail?.title ?? 'Creator unlock';
+  const activeTitle = selectedRevision?.title ?? detail?.title ?? 'Recipe';
   const activeSummary = selectedRevision?.summary
     || selectedRevision?.previewText
     || detail?.summary
@@ -106,7 +106,7 @@ export default function ViewerUnlockScreen() {
   if (!user) {
     return (
       <Screen>
-        <SectionTitle eyebrow="Your unlock" title="Sign in to open this unlock." body="Only the buyer account can access retained resources." />
+        <SectionTitle eyebrow="Your recipe" title="Sign in to open this recipe." body="Only the buyer account can access retained resources." />
         <PrimaryButton
           label="Sign in"
           onPress={() => router.push({
@@ -122,22 +122,22 @@ export default function ViewerUnlockScreen() {
   return (
     <Screen>
       <SectionTitle
-        eyebrow="Your unlock"
+        eyebrow="Your recipe"
         title={activeTitle}
         body={detail
           ? `by ${detail.creatorDisplayName}`
           : loadError
-            ? 'This unlock could not be opened.'
+            ? 'This recipe could not be opened.'
             : 'Loading your purchased resources.'}
       />
 
-      {detailQuery.isLoading ? <DetailSkeleton label="Loading your unlock" /> : null}
+      {detailQuery.isLoading ? <DetailSkeleton label="Loading your recipe" /> : null}
       {loadError ? (
         unlockGone ? (
-          <StatusBlock title="Unlock unavailable" body="It may have been removed by moderation, or belong to another account." />
+          <StatusBlock title="Recipe unavailable" body="It may have been removed by moderation, or belong to another account." />
         ) : (
           <View style={{ gap: appTheme.spacing.gap }}>
-            <StatusBlock tone="danger" title="Could not load your unlock" body="Check your connection, then try again." />
+            <StatusBlock tone="danger" title="Could not load your recipe" body="Check your connection, then try again." />
             <SecondaryButton label="Retry" onPress={() => void detailQuery.refetch()} />
           </View>
         )
@@ -174,7 +174,7 @@ export default function ViewerUnlockScreen() {
 
           <Card accent="workflow">
             <View style={{ gap: 4 }}>
-              <AppText variant="cardTitle">Unlocked resources</AppText>
+              <AppText variant="cardTitle">In this recipe</AppText>
               <AppText variant="caption" color="faint">
                 {purchasedSelected ? `Purchased version ${detail.purchasedRevision.revisionNumber}` : 'Latest version'}
               </AppText>
@@ -184,7 +184,7 @@ export default function ViewerUnlockScreen() {
               <View style={{ gap: appTheme.spacing.compact }}>
                 {/* Why there are two versions, as the post's resources card says it. */}
                 <AppText variant="bodySm" color="muted">
-                  The creator has updated this unlock since you bought it. You can read either version.
+                  The creator has updated this recipe since you bought it. You can read either version.
                 </AppText>
                 <ResourceRevisionSwitch
                   selected={showPurchased ? 'purchased' : 'latest'}

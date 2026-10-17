@@ -1,6 +1,6 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { BarChart3, ChevronRight, DollarSign, PackageCheck } from 'lucide-react-native';
+import { BarChart3, ChevronRight, DollarSign, LockOpen, PackageCheck } from 'lucide-react-native';
 import { Pressable, View } from 'react-native';
 
 import { ResourceKindRow } from '@/components/resource-kind-row';
@@ -64,8 +64,8 @@ export default function SellerDashboardScreen() {
   if (!user) {
     return (
       <Screen>
-        <SectionTitle eyebrow="Your Sales" title="Sign in to view sales." body="Your paid unlock earnings and seller listings appear here once you sign in." />
-        {/* Signing in comes back to Your Sales, not Home (audit 01-12). */}
+        <SectionTitle eyebrow="Recipe Sales" title="Sign in to view sales." body="Your paid unlock earnings and seller listings appear here once you sign in." />
+        {/* Signing in comes back to Recipe Sales, not Home (audit 01-12). */}
         <PrimaryButton
           label="Sign in"
           onPress={() => router.push({ pathname: '/auth', params: { returnTo: '/seller-dashboard' } } as never)}
@@ -86,7 +86,7 @@ export default function SellerDashboardScreen() {
   return (
     <Screen>
       <SectionTitle
-        eyebrow="Your Sales"
+        eyebrow="Recipe Sales"
         title="Sales and unlocks."
         body="Track total sales from your reusable resources. Earnings are shown as lifetime tracked sales."
       />
@@ -106,17 +106,29 @@ export default function SellerDashboardScreen() {
 
       {data ? (
         <>
-          <View style={{ flexDirection: 'row', gap: 12 }}>
-            <MetricCard
-              icon={<DollarSign size={appTheme.icon.feature} color={theme.colors.info} />}
-              label="Tracked earnings"
-              value={summary ? formatUsdCents(summary.earningsUsdCents) : UNKNOWN_AMOUNT_LABEL}
-            />
-            <MetricCard
-              icon={<BarChart3 size={appTheme.icon.feature} color={theme.colors.primary} />}
-              label="Sales"
-              value={summary ? String(summary.salesCount) : UNKNOWN_AMOUNT_LABEL}
-            />
+          <View style={{ gap: 12 }}>
+            <View style={{ flexDirection: 'row' }}>
+              <MetricCard
+                icon={<DollarSign size={appTheme.icon.feature} color={theme.colors.info} />}
+                label="Tracked earnings"
+                value={summary ? formatUsdCents(summary.earningsUsdCents) : UNKNOWN_AMOUNT_LABEL}
+              />
+            </View>
+            {/* Sales are paid unlocks; free unlocks stopped counting as sales on
+                2026-10-17 and sit beside them, as on the web's sell page. Three
+                cards in one row leave a figure like "$1,234.56" no room. */}
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <MetricCard
+                icon={<BarChart3 size={appTheme.icon.feature} color={theme.colors.primary} />}
+                label="Sales"
+                value={summary ? String(summary.salesCount) : UNKNOWN_AMOUNT_LABEL}
+              />
+              <MetricCard
+                icon={<LockOpen size={appTheme.icon.feature} color={theme.colors.success} />}
+                label="Free unlocks"
+                value={summary ? String(summary.freeUnlockCount ?? 0) : UNKNOWN_AMOUNT_LABEL}
+              />
+            </View>
           </View>
 
           {isRefetchError ? null : <SecondaryButton label="Refresh dashboard" onPress={refreshDashboard} />}
@@ -209,16 +221,23 @@ function listingIssue(item: OwnerPostListItem) {
   return quality.message ?? 'Improve this listing before it appears in the marketplace.';
 }
 
-/** The price in credits, as the app prices every recipe, then what it has done. */
+/**
+ * The price in credits, as the app prices every recipe, then what it has done:
+ * its paid sales with its free unlocks beside them, then its earnings. A free
+ * unlock stopped counting as a sale on 2026-10-17 (it never read as money here,
+ * audit 03-8). A count shows on a listing of its own access mode, or once it is
+ * above zero, since a recipe can have been free before it was paid or the other
+ * way round; the web's sell page draws the same line.
+ */
 function listingSalesLine(bundle: OwnerPostBundleSummary) {
-  const count = Math.max(0, bundle.salesCount);
+  const sales = Math.max(0, bundle.salesCount);
+  const freeUnlocks = Math.max(0, bundle.freeUnlockCount ?? 0);
   const isFree = bundle.accessMode === 'free';
-  const price = isFree ? FREE_RECIPE_LABEL : formatUnlockCreditPrice(bundle.priceUsdCents);
-  // The server counts a free open like a sale; its own word keeps it from
-  // reading as money (audit 03-8).
-  const unlocks = isFree ? `${count} opened` : count === 1 ? '1 sale' : `${count} sales`;
-  const earnings = !isFree || bundle.earningsUsdCents > 0 ? ` · ${formatUsdCents(bundle.earningsUsdCents)} tracked earnings` : '';
-  return `${price} · ${unlocks}${earnings}`;
+  const parts = [isFree ? FREE_RECIPE_LABEL : formatUnlockCreditPrice(bundle.priceUsdCents)];
+  if (!isFree || sales > 0) parts.push(sales === 1 ? '1 sale' : `${sales} sales`);
+  if (isFree || freeUnlocks > 0) parts.push(freeUnlocks === 1 ? '1 free unlock' : `${freeUnlocks} free unlocks`);
+  if (!isFree || bundle.earningsUsdCents > 0) parts.push(`${formatUsdCents(bundle.earningsUsdCents)} tracked earnings`);
+  return parts.join(' · ');
 }
 
 function ListingRow({ item }: { item: OwnerPostListItem }) {

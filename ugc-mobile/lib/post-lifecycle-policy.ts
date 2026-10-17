@@ -23,7 +23,18 @@ export interface PostLifecycleSubject {
     status: 'draft' | 'published';
     /** Completed paid orders. A sold bundle is frozen server-side. */
     salesCount: number;
+    /** Free unlocks; a surface that does not send it counts none. */
+    freeUnlockCount?: number;
   } | null;
+}
+
+/**
+ * Whether anyone holds an unlock of the recipe. Free unlocks stopped counting
+ * as sales on 2026-10-17, but their owners keep them all the same and the
+ * server asks again before deleting a post that has one.
+ */
+function hasUnlocks(bundle: NonNullable<PostLifecycleSubject['bundle']>): boolean {
+  return bundle.salesCount + (bundle.freeUnlockCount ?? 0) > 0;
 }
 
 export interface PostLifecycleConfirmation {
@@ -52,7 +63,7 @@ export function getPostLifecycleConfirmation(
     case 'delete':
       return {
         title: 'Delete this post permanently?',
-        message: post.bundle && post.bundle.salesCount > 0
+        message: post.bundle && hasUnlocks(post.bundle)
           ? 'People have bought its recipe. Archive keeps it resolvable for them; you will be asked again before a forced delete.'
           : 'This cannot be undone.',
         confirmLabel: 'Delete',
@@ -74,7 +85,7 @@ export function getPostLifecycleConfirmation(
       return {
         title: `Make this post ${label}?`,
         message: `Its recipe comes off the marketplace until the post is public again${
-          post.bundle.salesCount > 0 ? '; buyers keep their unlock' : ''
+          hasUnlocks(post.bundle) ? '; buyers keep their unlock' : ''
         }.`,
         confirmLabel: `Make ${label}`,
       };

@@ -24,7 +24,7 @@ import { formatUnlockPrice } from '@/lib/unlock-library-view-model';
 
 function resourceLabel(kinds?: PostResourceKind[]) {
   const labels = (kinds ?? []).map(resourceKindLabel).filter(Boolean);
-  return labels.length ? labels.join(' · ') : 'Creator unlock';
+  return labels.length ? labels.join(' · ') : 'Recipe';
 }
 
 function marketplaceAccent(accessMode?: MarketplaceResource['accessMode']): ToolAccent {
@@ -127,34 +127,34 @@ export default function MarketplaceAssetScreen() {
   return (
     <Screen>
       <SectionTitle
-        eyebrow="Unlock detail"
-        title={detail?.title ?? 'Creator unlock'}
-        // Without the error branch this still read "Loading unlock details."
+        eyebrow="Recipe details"
+        title={detail?.title ?? 'Recipe'}
+        // Without the error branch this still read "Loading recipe details."
         // directly above a failure notice, so the page contradicted itself.
         body={detail
           ? `${resourceLabel(detail.resourceKinds)} · ${detail.seller?.name ?? detail.creator?.name ?? 'Creator'}`
           : detailQuery.isError
-            ? 'This unlock could not be opened.'
-            : 'Loading unlock details.'}
+            ? 'This recipe could not be opened.'
+            : 'Loading recipe details.'}
       />
 
       {detailQuery.error ? (
         // A 404 is the unlock being gone (a removed listing opened from an
         // alert), not a connection problem; the two used to show together.
         isUnlockGone ? (
-          <StatusBlock title="Unlock unavailable" body="This resource may be unlisted, private, or removed." />
+          <StatusBlock title="Recipe unavailable" body="This resource may be unlisted, private, or removed." />
         ) : (
           <View style={{ gap: appTheme.spacing.gap }}>
             <StatusBlock
               tone="danger"
-              title="Could not load unlock"
+              title="Could not load recipe"
               body="Check your connection, then try again."
             />
-            <SecondaryButton label="Retry unlock" onPress={() => void detailQuery.refetch()} />
+            <SecondaryButton label="Retry recipe" onPress={() => void detailQuery.refetch()} />
           </View>
         )
       ) : null}
-      {detailQuery.isLoading ? <DetailSkeleton label="Loading unlock details" /> : null}
+      {detailQuery.isLoading ? <DetailSkeleton label="Loading recipe details" /> : null}
       {bundleUnlock.error ? (
         <StatusBlock tone="danger" title="Unlock failed" body={bundleUnlock.error} />
       ) : null}
@@ -169,14 +169,14 @@ export default function MarketplaceAssetScreen() {
                 {detail.summary || detail.description || detail.previewText || 'Reusable creator resource.'}
               </AppText>
               <AppText variant="bodySm" color="muted">
-                {detail.previewText || 'Unlock includes creator-facing resources for this post.'}
+                {detail.previewText || 'This recipe includes creator-facing resources for this post.'}
               </AppText>
             </View>
           </Card>
 
           <Card accent={detail.viewerCanAccess ? 'workflow' : marketplaceAccent(detail.accessMode)}>
             <View style={{ gap: 4 }}>
-              <AppText variant="cardTitle">{detail.viewerCanAccess ? 'Unlocked resources' : "What's included"}</AppText>
+              <AppText variant="cardTitle">{detail.viewerCanAccess ? 'Your recipe' : 'In this recipe'}</AppText>
               <AppText variant="caption" color="faint">{resourceLabel(detail.resourceKinds)}</AppText>
             </View>
             <PostResourceBundleContent
@@ -202,7 +202,9 @@ export default function MarketplaceAssetScreen() {
               </View>
             ) : detail.viewerCanAccess ? (
               <View style={{ gap: 4 }}>
-                <AppText variant="label" color="success">Unlocked</AppText>
+                {/* The creator reads their own recipe by owning it, not by
+                    having unlocked it, as Details and the web panel say. */}
+                <AppText variant="label" color="success">{detail.viewerIsOwner ? 'Owner access' : 'Unlocked'}</AppText>
                 <AppText variant="bodySm" color="muted">This resource is available on your account.</AppText>
               </View>
             ) : detail.accessMode === 'free' ? (
@@ -246,7 +248,7 @@ export default function MarketplaceAssetScreen() {
           </Card>
         </>
       ) : !detailQuery.isLoading && !detailQuery.error ? (
-        <StatusBlock title="Unlock unavailable" body="This resource may be unlisted, private, or removed." />
+        <StatusBlock title="Recipe unavailable" body="This resource may be unlisted, private, or removed." />
       ) : null}
     </Screen>
   );

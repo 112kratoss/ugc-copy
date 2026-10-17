@@ -130,7 +130,7 @@ const FEED_FILTERS: Array<{
   },
   {
     id: 'unlocks',
-    label: 'Unlocks',
+    label: 'Recipes',
     params: { unlock: 'with-unlock' },
   },
   {

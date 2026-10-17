@@ -60,6 +60,12 @@ export interface ImmersivePostDetails {
   sourceLabel: string;
   /** The tool (and model) the post was made with, when the source names one. */
   toolLabel?: string | null;
+  /**
+   * The id of the model the post was made with, as the feed sends it
+   * (`ShowcaseFeedItem.model`: a catalog id, `manual`, or an outside tool's).
+   * Details names it by its display name and never prints the id.
+   */
+  model?: string | null;
   creatorLabel: string;
   creatorAvatar: string | null;
   saveCount: number;
@@ -643,6 +649,7 @@ function showcaseToImmersiveItem(
       categoryLabel: categoryLabel(item.category, item.postFormat),
       sourceLabel: 'Showcase',
       toolLabel: item.sourceTool?.trim() || null,
+      model: item.model ?? null,
       creatorLabel,
       creatorAvatar: item.creator.avatar,
       saveCount: item.saveCount,
@@ -1030,7 +1037,9 @@ function showcaseBadge(item: ShowcaseFeedItem) {
   if (item.asset?.accessMode === 'free') return FREE_RECIPE_LABEL;
   if (item.asset) return formatUnlockCreditPrice(item.asset.priceUsdCents);
   if (getShowcaseRemixAccess(item) === 'open') return 'Remix';
-  if (item.category === 'text' || item.postFormat === 'text') return 'Prompt';
+  // A text post is "Text", beside Image, Video and Motion (decision 10,
+  // 2026-10-17); "Prompt" names a real prompt only.
+  if (item.category === 'text' || item.postFormat === 'text') return 'Text';
   if (item.creationMode === 'motion') return 'Motion';
   if (item.mediaKind === 'video' || item.category === 'video') return 'Video';
   return 'Image';
@@ -1039,7 +1048,7 @@ function showcaseBadge(item: ShowcaseFeedItem) {
 function ownerPostBadge(item: OwnerPostListItem) {
   if (item.bundle?.accessMode === 'free') return FREE_RECIPE_LABEL;
   if (item.bundle?.accessMode === 'paid') return 'Paid recipe';
-  if (item.category === 'text' || item.postFormat === 'text') return 'Prompt';
+  if (item.category === 'text' || item.postFormat === 'text') return 'Text';
   if (item.mediaKind === 'video' || item.category === 'video') return 'Video';
   return 'Post';
 }
@@ -1048,7 +1057,7 @@ function categoryLabel(
   category: ShowcaseFeedItem['category'] | OwnerPostListItem['category'] | undefined,
   postFormat?: ShowcaseFeedItem['postFormat'] | OwnerPostListItem['postFormat']
 ) {
-  if (category === 'text' || postFormat === 'text') return 'Prompt';
+  if (category === 'text' || postFormat === 'text') return 'Text';
   if (category === 'video') return 'Video';
   return 'Image';
 }
@@ -1064,7 +1073,7 @@ function showcaseResource(item: ShowcaseFeedItem): ImmersivePreviewResource | un
   return {
     resourceId: item.asset.id,
     postId: item.asset.postId || item.id,
-    title: item.asset.title || item.title || item.prompt || 'Creator unlock',
+    title: item.asset.title || item.title || item.prompt || 'Recipe',
     accessMode: item.asset.accessMode,
     priceUsdCents: item.asset.priceUsdCents,
     previewText: item.asset.previewText || item.body || item.prompt || item.title,
@@ -1080,7 +1089,7 @@ function ownerPostResource(item: OwnerPostListItem, displayText: string): Immers
   return {
     resourceId: item.bundle.id,
     postId: item.id,
-    title: item.title || 'Creator unlock',
+    title: item.title || 'Recipe',
     accessMode: item.bundle.accessMode,
     priceUsdCents: item.bundle.priceUsdCents,
     previewText: item.body || item.prompt || item.description || displayText,

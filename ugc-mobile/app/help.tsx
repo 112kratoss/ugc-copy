@@ -34,7 +34,7 @@ export default function HelpScreen() {
       <SectionTitle
         eyebrow="Help & Support"
         title="We can help."
-        body="Find quick guidance for creations, unlocks, and contacting support."
+        body="Find quick guidance for creations, recipes, and contacting support."
       />
 
       <HelpCard
@@ -44,7 +44,7 @@ export default function HelpScreen() {
       />
       <HelpCard
         icon={<ShieldCheck size={appTheme.icon.feature} color={theme.colors.info} />}
-        title="Unlocks and sales"
+        title="Recipes and sales"
         body="Reusable resources appear after the public post and listing details pass the quality checks."
       />
       <HelpCard

@@ -121,7 +121,17 @@ describe('formatLockedBundleFacts', () => {
     const updatedAt = '2026-10-03T10:00:00.000Z';
     expect(formatLockedBundleFacts({ accessMode: 'paid', salesCount: 12, updatedAt }))
       .toBe(`12 sold · Updated ${formatUnlockDate(updatedAt)}`);
-    expect(formatLockedBundleFacts({ accessMode: 'free', salesCount: 0, updatedAt: null })).toBe('0 opened');
+    expect(formatLockedBundleFacts({ accessMode: 'free', salesCount: 0, freeUnlockCount: 0, updatedAt: null })).toBe('0 opened');
     expect(formatLockedBundleFacts({ accessMode: 'paid', salesCount: undefined, updatedAt: 'not-a-date' })).toBe('');
+  });
+
+  // Decision 6 (2026-10-17): a free unlock is not a sale. A free recipe's
+  // "opened" counts its free unlocks and a paid one's "sold" its paid unlocks,
+  // whatever the other count holds: a recipe can change price.
+  it('counts free unlocks on a free recipe and paid unlocks on a paid one', () => {
+    expect(formatLockedBundleFacts({ accessMode: 'free', salesCount: 2, freeUnlockCount: 20, updatedAt: null })).toBe('20 opened');
+    expect(formatLockedBundleFacts({ accessMode: 'paid', salesCount: 2, freeUnlockCount: 20, updatedAt: null })).toBe('2 sold');
+    // A record without the free count says nothing, never its sales as opens.
+    expect(formatLockedBundleFacts({ accessMode: 'free', salesCount: 3, updatedAt: null })).toBe('');
   });
 });

@@ -374,7 +374,7 @@ export function getViewerActionLabel(action: string, sourceType?: ImmersivePrevi
     case 'view-linked':
       return 'View linked post';
     case 'edit-linked-resources':
-      return 'Manage unlock';
+      return 'Manage recipe';
     case 'change-linked-visibility':
       return 'Change visibility';
     case 'view-details':
@@ -604,8 +604,8 @@ export function getViewerActionSlots(item: ImmersivePreviewItem): ViewerActionSl
       slots.push({
         id: 'unlock',
         action: 'edit-linked-resources',
-        label: 'Unlock',
-        a11yLabel: item.linkedPostBundle ? 'Manage unlock bundle' : 'Add an unlock bundle',
+        label: 'Recipe',
+        a11yLabel: item.linkedPostBundle ? 'Manage recipe' : 'Add a recipe',
         tone: 'success',
       });
     }

@@ -47,8 +47,8 @@ export default function UnlocksScreen() {
     return (
       <Screen>
         <SectionTitle
-          eyebrow="Your unlocks"
-          title="Sign in to see your unlocks."
+          eyebrow="Your recipes"
+          title="Sign in to see your recipes."
           body="Prompts, workflows, and files you unlock from other creators live here."
         />
         {/* Back to this list afterwards; a bare /auth ended on Home. */}
@@ -71,7 +71,7 @@ export default function UnlocksScreen() {
   return (
     <Screen>
       <SectionTitle
-        eyebrow="Your unlocks"
+        eyebrow="Your recipes"
         title="Everything you have unlocked."
         body="These stay yours even if the creator later changes or removes the post."
       />
@@ -80,28 +80,28 @@ export default function UnlocksScreen() {
         <SecondaryButton label="Back to profile" onPress={() => router.replace('/(tabs)/profile' as never)} />
       ) : null}
 
-      {isLoading ? <CardListSkeleton label="Loading unlocks" /> : null}
+      {isLoading ? <CardListSkeleton label="Loading recipes" /> : null}
 
       {firstLoadError ? (
         <View style={{ gap: appTheme.spacing.gap }}>
           <StatusBlock
             tone="danger"
-            title="Could not load your unlocks"
-            body={firstLoadError instanceof Error ? firstLoadError.message : 'Your unlocks are safe. Check your connection, then retry.'}
+            title="Could not load your recipes"
+            body={firstLoadError instanceof Error ? firstLoadError.message : 'Your recipes are safe. Check your connection, then retry.'}
           />
-          <SecondaryButton label="Retry unlocks" onPress={() => void refetch()} />
+          <SecondaryButton label="Retry recipes" onPress={() => void refetch()} />
         </View>
       ) : null}
 
       {!isLoading && !firstLoadError && items.length === 0 ? (
         <View style={{ gap: appTheme.spacing.gap }}>
           <StatusBlock
-            title="No unlocks yet"
+            title="No recipes yet"
             body="When you unlock a creator's prompt, workflow, or reference files, it lands here and stays here."
           />
           {/* A way on from an empty library, as the web has. Home reads no chip
-              from a link, so this lands on its feed, not its Unlocks chip. */}
-          <PrimaryButton label="Browse unlocks" accent="primary" onPress={() => router.dismissTo('/(tabs)' as never)} />
+              from a link, so this lands on its feed, not its Recipes chip. */}
+          <PrimaryButton label="Browse recipes" accent="primary" onPress={() => router.dismissTo('/(tabs)' as never)} />
         </View>
       ) : null}
 
@@ -118,7 +118,7 @@ export default function UnlocksScreen() {
           {nextPageFailed ? (
             <StatusBlock
               tone="danger"
-              title="Could not load more unlocks"
+              title="Could not load more recipes"
               body={error instanceof Error ? error.message : 'Check your connection, then retry.'}
             />
           ) : null}

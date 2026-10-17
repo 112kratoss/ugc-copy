@@ -127,6 +127,32 @@ describe('buildPostDetailsMeta', () => {
   it('has no time label when the source carries no timestamp', () => {
     expect(buildPostDetailsMeta(showcaseItem({ createdAt: null }), NOW).timeLabel).toBe('');
   });
+
+  // Decision 13 (2026-10-17): the page names the model, as the cards have
+  // since #452, by the feed card's rule (`homeModelLabel`): the catalog's
+  // display name, never a slug, and nothing for a text post or an unknown id.
+  describe('what the post was made with', () => {
+    function madeWith(model: string | null, toolLabel: string | null = null, overrides: Partial<ImmersivePreviewItem> = {}) {
+      const item = showcaseItem({ ...overrides, details: { ...showcaseItem().details!, model, toolLabel } });
+      return buildPostDetailsMeta(item, NOW).metaParts;
+    }
+
+    it('names a model the catalog knows by its display name, in place of the tool', () => {
+      expect(madeWith('imagen-4', 'magicbooklet')).toEqual(['Image', 'Made with Imagen 4']);
+      expect(madeWith('imagen-4', 'Midjourney')).toEqual(['Image', 'Made with Imagen 4']);
+    });
+
+    it('never prints a slug, and keeps an outside tool the creator named', () => {
+      expect(madeWith('some-unknown-model')).toEqual(['Image']);
+      expect(madeWith('manual', 'magicbooklet')).toEqual(['Image']);
+      expect(madeWith('manual', 'Midjourney')).toEqual(['Image', 'Made with Midjourney']);
+    });
+
+    it('names nothing on a text post', () => {
+      const textPost = { previewKind: 'text' as const };
+      expect(madeWith('imagen-4', null, textPost)).toEqual(['Image']);
+    });
+  });
 });
 
 describe('getDetailsPrimaryAction', () => {

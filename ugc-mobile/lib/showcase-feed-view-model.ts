@@ -211,7 +211,9 @@ function cardBadge(item: ShowcaseFeedItem) {
   if (item.asset?.accessMode === 'free') return FREE_RECIPE_LABEL;
   if (item.asset) return formatUnlockCreditPrice(item.asset.priceUsdCents);
   if (canRecreateShowcaseItem(item)) return 'Remix';
-  if (item.category === 'text' || item.postFormat === 'text') return 'Prompt';
+  // A text post is "Text", beside Image, Video and Motion (decision 10,
+  // 2026-10-17); "Prompt" names a real prompt only.
+  if (item.category === 'text' || item.postFormat === 'text') return 'Text';
   if (item.creationMode === 'motion') return 'Motion';
   if (item.mediaKind === 'video' || item.category === 'video') return 'Video';
   return 'Image';
@@ -224,7 +226,7 @@ export function cardUnlock(item: ShowcaseFeedItem): ShowcaseMasonryUnlock | null
       // In credits, as the unlock is paid in the app: never a cash price.
       label: free ? FREE_RECIPE_LABEL : formatUnlockCreditPrice(item.asset.priceUsdCents),
       summary: resourceSummary(item.asset.resourceKinds, item.asset.allowRemix),
-      ctaLabel: free ? 'Get resources — Free' : 'View unlock',
+      ctaLabel: free ? 'Get resources — Free' : 'View recipe',
       accent: free ? 'workflow' : 'commerce',
     };
   }

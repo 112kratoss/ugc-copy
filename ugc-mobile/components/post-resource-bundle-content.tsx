@@ -174,7 +174,7 @@ export function PostResourceBundleContent({
         ) : null}
         {cardPreviews.length === 0 && redactedAttachments.length === 0 ? (
           <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
-            Resource details stay private until this package is unlocked.
+            Resource details stay private until this recipe is unlocked.
           </Text>
         ) : null}
       </View>
@@ -241,7 +241,7 @@ export function ResourceRevisionSwitch({
         const isSelected = option.revision === selected;
         return (
           <Pressable
-            accessibilityLabel={`Show ${option.label.toLowerCase()} unlock version`}
+            accessibilityLabel={`Show ${option.label.toLowerCase()} recipe version`}
             accessibilityRole="button"
             accessibilityState={{ selected: isSelected }}
             hitSlop={verticalHitSlop(REVISION_PILL_HEIGHT)}

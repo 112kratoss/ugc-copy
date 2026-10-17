@@ -78,7 +78,7 @@ vi.mock('@/components/post-resource-bundle-content', async () => {
       {},
       ['latest', 'purchased'].map((revision) => React.createElement('pressable', {
         key: revision,
-        accessibilityLabel: `Show ${revision} unlock version`,
+        accessibilityLabel: `Show ${revision} recipe version`,
         accessibilityState: { selected: selected === revision },
         onPress: () => onSelect(revision),
       })),
@@ -224,7 +224,7 @@ describe('viewer unlock revision switching', () => {
     }));
 
     const purchasedButton = tree!.root.find(
-      (node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Show purchased unlock version'
+      (node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Show purchased recipe version'
     );
     renderer.act(() => {
       purchasedButton.props.onPress();
@@ -239,7 +239,7 @@ describe('viewer unlock revision switching', () => {
   });
 
   it('says why there are two versions beside the switch', () => {
-    const line = 'The creator has updated this unlock since you bought it. You can read either version.';
+    const line = 'The creator has updated this recipe since you bought it. You can read either version.';
     expect(textValues(renderScreen())).toContain(line);
 
     unlockDetail.current = { ...unlockDetail.current!, hasNewerRevision: false };
@@ -267,7 +267,7 @@ describe('viewer unlock revision switching', () => {
       unlockDetail.current = { ...unlockDetail.current!, post, postVisibility: post?.visibility ?? null, postReachable: false };
       const tree = renderScreen();
       expect(buttonLabels(tree)).not.toContain('View original post');
-      expect(textValues(tree)).toContain('This post is no longer public. Your unlock stays available here.');
+      expect(textValues(tree)).toContain('This post is no longer public. Your recipe stays available here.');
     }
   });
 
@@ -276,7 +276,7 @@ describe('viewer unlock revision switching', () => {
     const tree = renderScreen();
 
     expect(buttonLabels(tree)).not.toContain('View original post');
-    expect(textValues(tree)).toContain("This post isn't available to you. Your unlock stays here.");
+    expect(textValues(tree)).toContain("This post isn't available to you. Your recipe stays here.");
   });
 
   it("signs the purchase's files through the batched signing, to open in place", async () => {
@@ -513,9 +513,9 @@ describe('when the unlock does not load (03-5)', () => {
     queryError.current = new ApiError('Unlock not found.', 404);
     const tree = renderScreen();
 
-    expect(statusBlocks(tree)).toEqual([{ title: 'Unlock unavailable', body: 'It may have been removed by moderation, or belong to another account.' }]);
+    expect(statusBlocks(tree)).toEqual([{ title: 'Recipe unavailable', body: 'It may have been removed by moderation, or belong to another account.' }]);
     expect(buttonLabels(tree)).not.toContain('Retry');
-    expect(textValues(tree)).toContain('This unlock could not be opened.');
+    expect(textValues(tree)).toContain('This recipe could not be opened.');
     expect(textValues(tree)).not.toContain('Loading your purchased resources.');
   });
 
@@ -524,7 +524,7 @@ describe('when the unlock does not load (03-5)', () => {
       queryError.current = error;
       const tree = renderScreen();
 
-      expect(statusBlocks(tree)).toEqual([{ title: 'Could not load your unlock', body: 'Check your connection, then try again.' }]);
+      expect(statusBlocks(tree)).toEqual([{ title: 'Could not load your recipe', body: 'Check your connection, then try again.' }]);
       expect(textValues(tree)).not.toContain('Loading your purchased resources.');
       pressButton(tree, 'Retry');
     }

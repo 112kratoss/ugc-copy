@@ -643,7 +643,7 @@ describe('Showcase screen', () => {
     });
 
     expect(tree!.root.findAll((node) => (
-      String(node.type) === 'text' && node.props.children === "You've reached the end of Unlocks."
+      String(node.type) === 'text' && node.props.children === "You've reached the end of Recipes."
     ))).toHaveLength(1);
     renderer.act(() => tree!.unmount());
   });

@@ -98,7 +98,7 @@ vi.mock('@/components/post-resource-bundle-content', () => ({
     {},
     ['latest', 'purchased'].map((revision) => React.createElement('pressable', {
       key: revision,
-      accessibilityLabel: `Show ${revision} unlock version`,
+      accessibilityLabel: `Show ${revision} recipe version`,
       accessibilityState: { selected: selected === revision },
       onPress: () => onSelect(revision),
     })),
@@ -241,7 +241,7 @@ describe('PostDetailsPage', () => {
     const tree = render(page());
 
     const values = textValues(tree);
-    expect(values).toContain("Creator's resources");
+    expect(values).toContain('Recipe');
     expect(values).toContain('Free');
     expect(values).toContain('Prompt');
     expect(pressable(tree, 'Get resources — Free')).toBeUndefined();
@@ -293,7 +293,7 @@ describe('PostDetailsPage', () => {
     const tree = render(page());
 
     const values = textValues(tree);
-    expect(values).toContain("Creator's resources");
+    expect(values).toContain('Recipe');
     expect(values).toContain('Unlocked');
     expect(values).toContain('Remix included');
     expect(values).not.toContain('₹0');
@@ -358,7 +358,7 @@ describe('PostDetailsPage', () => {
 
     expect(pressable(tree, 'Back to post')).toBeDefined();
     expect(textValues(tree)).not.toContain('Minnal Murali');
-    expect(textValues(tree)).not.toContain("Creator's resources");
+    expect(textValues(tree)).not.toContain('Recipe');
   });
 });
 
@@ -530,8 +530,10 @@ describe('the locked card', () => {
     expect(values).not.toContain('A teaser');
   });
 
+  // A free unlock stopped counting as a sale (decision 6, 2026-10-17): a free
+  // recipe's "opened" reads its free unlocks, not the sales it made while paid.
   it('counts a free recipe as opened, and falls back to the preview text without a summary', () => {
-    queryState.current = lockedPaid({ accessMode: 'free', priceUsdCents: 0, summary: '  ', salesCount: 4 });
+    queryState.current = lockedPaid({ accessMode: 'free', priceUsdCents: 0, summary: '  ', salesCount: 1, freeUnlockCount: 4 });
     const tree = render(page());
 
     const values = textValues(tree);
@@ -595,15 +597,15 @@ describe('the unlocked card', () => {
     });
     const tree = render(page());
 
-    expect(textValues(tree)).toContain('The creator has updated this unlock since you bought it. You can read either version.');
+    expect(textValues(tree)).toContain('The creator has updated this recipe since you bought it. You can read either version.');
     expect(lastContent().resources.items[0]?.textContent).toBe('Latest prompt');
 
-    renderer.act(() => { pressable(tree, 'Show purchased unlock version').props.onPress(); });
+    renderer.act(() => { pressable(tree, 'Show purchased recipe version').props.onPress(); });
     expect(lastContent().resources.items[0]?.textContent).toBe('Purchased prompt');
     expect(lastContent().mediaItems).toBe(purchasedMedia);
-    expect(pressable(tree, 'Show purchased unlock version').props.accessibilityState).toEqual({ selected: true });
+    expect(pressable(tree, 'Show purchased recipe version').props.accessibilityState).toEqual({ selected: true });
 
-    renderer.act(() => { pressable(tree, 'Show latest unlock version').props.onPress(); });
+    renderer.act(() => { pressable(tree, 'Show latest recipe version').props.onPress(); });
     expect(lastContent().resources.items[0]?.textContent).toBe('Latest prompt');
   });
 
@@ -611,7 +613,7 @@ describe('the unlocked card', () => {
     queryState.current = unlocked();
     const tree = render(page());
 
-    expect(pressable(tree, 'Show purchased unlock version')).toBeUndefined();
+    expect(pressable(tree, 'Show purchased recipe version')).toBeUndefined();
   });
 
   it("signs the bundle's files to open in place, through the batched signing", async () => {
@@ -676,7 +678,7 @@ describe('a recipe opened from search', () => {
     expect(unlock).toBeLessThan(placeOf(tree, heading(tree, 'Prompt')));
     expect(unlock).toBeLessThan(placeOf(tree, heading(tree, 'Story')));
     // Moved, not drawn twice.
-    expect(textValues(tree).filter((value) => value === "Creator's resources")).toHaveLength(1);
+    expect(textValues(tree).filter((value) => value === 'Recipe')).toHaveLength(1);
   });
 
   it('keeps the card where the page closes for every other way in', () => {
@@ -687,7 +689,7 @@ describe('a recipe opened from search', () => {
       expect(placeOf(tree, pressable(tree, 'Save'))).toBeLessThan(unlock);
       expect(placeOf(tree, heading(tree, 'Prompt'))).toBeLessThan(unlock);
       expect(placeOf(tree, heading(tree, 'Story'))).toBeLessThan(unlock);
-      expect(textValues(tree).filter((value) => value === "Creator's resources")).toHaveLength(1);
+      expect(textValues(tree).filter((value) => value === 'Recipe')).toHaveLength(1);
       renderer.act(() => tree.unmount());
     }
   });
@@ -708,7 +710,7 @@ describe('a recipe opened from search', () => {
     };
     const tree = render(page({ item: recipePost(), initialSection: 'resources' }));
 
-    const card = placeOf(tree, heading(tree, "Creator's resources"));
+    const card = placeOf(tree, heading(tree, 'Recipe'));
     expect(card).toBeLessThan(placeOf(tree, pressable(tree, 'Save')));
     expect(card).toBeLessThan(placeOf(tree, heading(tree, 'Prompt')));
     expect(textValues(tree)).toContain('Unlocked');

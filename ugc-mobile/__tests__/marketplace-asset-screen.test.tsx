@@ -22,6 +22,7 @@ const authState = vi.hoisted(() => ({
 
 const queryState = vi.hoisted(() => ({
   data: null as Record<string, unknown> | null,
+  error: null as unknown,
 }));
 
 vi.mock('expo-router', () => ({
@@ -72,11 +73,12 @@ vi.mock('@/lib/unlock-cache', () => ({ refreshUnlockedBundleCaches: vi.fn() }));
 
 vi.mock('@tanstack/react-query', () => ({
   useMutation: () => ({ mutate, isPending: false, error: null }),
-  useQuery: () => ({ data: queryState.data, error: null, isLoading: false, refetch: vi.fn() }),
+  useQuery: () => ({ data: queryState.data, error: queryState.error, isError: Boolean(queryState.error), isLoading: false, refetch: vi.fn() }),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
 
 import MarketplaceAssetScreen from '../app/marketplace/[assetId]';
+import { ApiError } from '../lib/api-client';
 
 function paidDetail(priceUsdCents = 900) {
   return {
@@ -128,6 +130,7 @@ beforeEach(() => {
   authState.marketplaceSpendableCredits = 2000;
   authState.user = { id: 'user-1' };
   queryState.data = paidDetail();
+  queryState.error = null;
 });
 
 describe('marketplace asset screen (HIG S18)', () => {
@@ -240,5 +243,56 @@ describe('marketplace asset screen (HIG S18)', () => {
     renderer.act(() => { (get.props.onPress as () => void)(); });
     expect(showActionSheet).not.toHaveBeenCalled();
     expect(mutate).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Decision 1 (2026-10-17): the noun is "Recipe" and "Unlock" stays the verb on
+// the buttons; the creator reads their own recipe as its owner, as Details and
+// the web panel say.
+describe('marketplace asset screen recipe words', () => {
+  function sectionTitle(tree: renderer.ReactTestRenderer) {
+    return tree.root.findAll((node) => String(node.type) === 'section-title')[0]?.props as Record<string, unknown>;
+  }
+
+  function statusTitles(tree: renderer.ReactTestRenderer) {
+    return tree.root.findAll((node) => String(node.type) === 'status-block').map((node) => node.props.title);
+  }
+
+  it('names the page a recipe and says what is in it, with Unlock left the verb', () => {
+    const tree = renderScreen();
+
+    expect(sectionTitle(tree).eyebrow).toBe('Recipe details');
+    expect(texts(tree)).toContain('In this recipe');
+    expect(tree.root.findAll((node) => String(node.type) === 'primary-button')[0]?.props.label).toBe('Unlock for 900 credits');
+  });
+
+  it('tells a buyer the recipe is theirs and unlocked', () => {
+    queryState.data = { ...paidDetail(), viewerCanAccess: true, viewerHasPurchased: true, viewerIsOwner: false };
+    const tree = renderScreen();
+
+    expect(texts(tree)).toEqual(expect.arrayContaining(['Your recipe', 'Unlocked']));
+    expect(texts(tree)).not.toContain('Owner access');
+  });
+
+  it('tells the creator they read it as its owner, not that they unlocked it', () => {
+    queryState.data = { ...paidDetail(), viewerCanAccess: true, viewerHasPurchased: false, viewerIsOwner: true };
+    const tree = renderScreen();
+
+    expect(texts(tree)).toContain('Owner access');
+    expect(texts(tree)).not.toContain('Unlocked');
+  });
+
+  it('calls a recipe that is gone unavailable, and a failed read a recipe to retry', () => {
+    queryState.data = null;
+    queryState.error = new ApiError('Not found', 404);
+    const gone = renderScreen();
+    expect(statusTitles(gone)).toEqual(['Recipe unavailable']);
+    expect(sectionTitle(gone).title).toBe('Recipe');
+    expect(sectionTitle(gone).body).toBe('This recipe could not be opened.');
+
+    queryState.error = new Error('Network request failed.');
+    const failed = renderScreen();
+    expect(statusTitles(failed)).toEqual(['Could not load recipe']);
+    expect(failed.root.findAll((node) => String(node.type) === 'secondary-button').map((node) => node.props.label)).toEqual(['Retry recipe']);
   });
 });

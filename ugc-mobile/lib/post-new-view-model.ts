@@ -940,7 +940,7 @@ export function validatePostComposerDraft(
     // composer labels this author-written field as required. Validate the raw
     // draft so an empty field cannot silently submit generated copy instead.
     if (!draft.resource.previewText.trim()) {
-      return { valid: false, message: 'Add a buyer preview for the unlock.' };
+      return { valid: false, message: 'Add a buyer preview for the recipe.' };
     }
 
     if (draft.visibility === 'public' && !hasUsefulBuyerPreview(draft.resource)) {
