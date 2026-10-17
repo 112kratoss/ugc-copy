@@ -55,7 +55,7 @@ import {
   type PostResourceSection,
   type PostResourceSignedFileUrl,
 } from '@/lib/post-resource-bundles';
-import { FREE_RECIPE_LABEL, isFreeRecipeAsset } from '@/lib/showcase-asset-labels';
+import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 import { formatCompactCount } from '@/lib/post-feed-presentation';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import { trackProductEvent } from '@/lib/product-analytics';
@@ -188,12 +188,11 @@ function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
+// Both ways to pay, for the unlock button and the checkout's price pill. The
+// recipe's chips (its badge, a text post's card) take `getAssetAccessLabel`:
+// credits alone, as the feed and the app price a recipe.
 function getAssetPriceLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
   return formatPostResourcePriceLabel(asset.priceUsdCents, asset.priceQuote?.formatted);
-}
-
-function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
-  return isFreeRecipeAsset(asset) ? FREE_RECIPE_LABEL : getAssetPriceLabel(asset);
 }
 
 function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
@@ -223,12 +222,13 @@ function getItemSummary(item: ShowcaseFeedItem): string {
       : 'Reusable recipe attached.';
   }
 
-  return `${item.category === 'text' ? 'Tip' : item.category} by ${item.creator.name}`;
+  return `${item.category === 'text' ? 'Text' : item.category} by ${item.creator.name}`;
 }
 
 function getMediaTypeLabel(item: ShowcaseFeedItem): string {
+  // "Text", beside Image and Video, as the post page and the app name it.
   if (item.postFormat === 'text' || item.category === 'text') {
-    return 'Tip / note';
+    return 'Text';
   }
 
   const mediaKinds = new Set((item.mediaItems ?? []).map((mediaItem) => mediaItem.mediaKind));

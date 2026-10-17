@@ -259,7 +259,7 @@ function MediaDetailsPreviewDialog({
         return (
           <div className="w-full max-w-2xl px-2 py-2">
             <div className="rounded-[24px] border border-white/8 bg-zinc-950/80 p-6 shadow-[0_20px_60px_rgba(0,0,0,0.25)]">
-              <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Tip / Note</div>
+              <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Text</div>
               <div className="mt-4 whitespace-pre-wrap text-base leading-8 text-zinc-100">
                 {hasBody ? trimmedBody : 'No note content available.'}
               </div>

@@ -46,6 +46,7 @@ const baseDetail = {
   paidAmountSubunits: 500,
   paidCurrency: null,
   salesCount: null,
+  freeUnlockCount: null,
   purchasedAt: '2026-07-02T00:00:00.000Z',
   creatorDisplayName: 'Creator',
   creatorUserId: 'creator-1',
@@ -89,6 +90,7 @@ describe('UnlockDetail', () => {
     expect(panelProps).toHaveBeenCalledWith(expect.objectContaining({
       mediaItems,
       salesCount: null,
+      freeUnlockCount: null,
       purchasedRevision: expect.objectContaining({
         title: 'Purchased title',
         summary: 'Purchased summary',
@@ -98,6 +100,14 @@ describe('UnlockDetail', () => {
         mediaItems: mediaItems.slice(0, 1),
       }),
     }));
+  });
+
+  // A free recipe's "N opened" counts free unlocks, which stopped counting as
+  // sales on 2026-10-17 (decision 6); the panel picks the one its mode needs.
+  it('forwards both unlock counts', () => {
+    renderDetail({ accessMode: 'free', salesCount: 1, freeUnlockCount: 5 });
+
+    expect(panelProps).toHaveBeenCalledWith(expect.objectContaining({ salesCount: 1, freeUnlockCount: 5 }));
   });
 
   // The panel draws its price line only while a recipe is locked, so the page

@@ -297,7 +297,7 @@ function signUpSubtitle(providerButtons: readonly SignInProvider[]) {
   const ways = providerButtons.length > 0
     ? providerButtons.join(' or ')
     : 'Apple or Google on a mobile device';
-  return `Start saving generations, unlocks, and profile work. New accounts are created with ${ways}.`;
+  return `Start saving generations, recipes, and profile work. New accounts are created with ${ways}.`;
 }
 
 function AuthPanel({

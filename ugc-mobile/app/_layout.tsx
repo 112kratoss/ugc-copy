@@ -350,11 +350,11 @@ function RootLayoutNav() {
                     zoom's veil covers and a close never re-lays out (see
                     `CreatorTopBar` in components/creator-profile-screen.tsx). */}
                 <Stack.Screen name="creators/[username]" options={{ title: 'Creator', headerShown: !isAppleZoomAvailable() }} />
-                <Stack.Screen name="marketplace/[assetId]" options={{ title: 'Unlock' }} />
-                <Stack.Screen name="unlock/[unlockId]" options={{ title: 'Your Unlock' }} />
+                <Stack.Screen name="marketplace/[assetId]" options={{ title: 'Recipe' }} />
+                <Stack.Screen name="unlock/[unlockId]" options={{ title: 'Your Recipe' }} />
                 <Stack.Screen name="edit-profile" options={{ headerShown: false, presentation: 'modal', animation: reducedMotion ? 'none' : 'slide_from_bottom' }} />
-                <Stack.Screen name="seller-dashboard" options={{ title: 'Your Sales' }} />
-                <Stack.Screen name="unlocks" options={{ title: 'Your Unlocks' }} />
+                <Stack.Screen name="seller-dashboard" options={{ title: 'Recipe Sales' }} />
+                <Stack.Screen name="unlocks" options={{ title: 'Your Recipes' }} />
                 <Stack.Screen name="credit-history" options={{ title: 'Credit History' }} />
                 <Stack.Screen name="invite" options={{ title: 'Invite & Earn' }} />
                 <Stack.Screen name="r/[code]" options={{ title: 'Your Invite' }} />

@@ -347,7 +347,9 @@ describe('publishPreparedPost', () => {
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
-  it.each(['public', 'unlisted'] as const)(
+  // Unlisted is created private since product decision 12, and private posts
+  // are not held to the public-text gate (see the private case below).
+  it.each(['public'] as const)(
     'rejects clearly unsafe text before publishing a %s post',
     async (visibility) => {
       const formData = new FormData();

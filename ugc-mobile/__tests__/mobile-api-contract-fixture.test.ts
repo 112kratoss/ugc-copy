@@ -189,6 +189,7 @@ const successCases: Array<{
   { key: 'getShowcaseFeed', call: (api) => api.getShowcaseFeed({ limit: 10, ...mobileApiContract.endpoints.getShowcaseFeed.query }, { auth: false }) },
   { key: 'getSavedMedia', call: (api) => api.getSavedMedia({ limit: 10 }) },
   { key: 'getShowcasePost', call: (api) => api.getShowcasePost('post-1') },
+  { key: 'resolveShowcasePost', call: (api) => api.resolveShowcasePost('generation-1') },
   { key: 'listPostComments', call: (api) => api.listPostComments('post-1', { sort: 'top', limit: 20 }) },
   {
     key: 'createPostComment',
@@ -217,6 +218,7 @@ const successCases: Array<{
   { key: 'saveShowcasePost', call: (api) => api.saveShowcasePost('post-1', { shouldSave: true }) },
   { key: 'remixShowcasePost', call: (api) => api.remixShowcasePost('post-1') },
   { key: 'shareShowcasePost', call: (api) => api.shareShowcasePost('post-1', { sourceSurface: 'showcase-reel' }) },
+  { key: 'recordShareVisit', call: (api) => api.recordShareVisit('post-1', 'feed') },
   { key: 'shareCreatorProfile', call: (api) => api.shareCreatorProfile('nova', { sourceSurface: 'creator-profile' }) },
   { key: 'publishGeneration', call: (api) => api.publishGeneration({ generationId: 'generation-1', visibility: 'public' }) },
   { key: 'createPost', call: (api) => api.createPost(new FormData()) },
@@ -788,6 +790,38 @@ describe('mobile shared API v1 contract fixture', () => {
 
     await expect(api.shareShowcasePost('post-1', { sourceSurface: 'showcase-reel' }))
       .resolves.toEqual(contract.endpoints.shareShowcasePost.response);
+  });
+
+  it('records a share visit with the surface the link carried, and reads the resolver\'s 404 as an API error', async () => {
+    const visit = mobileApiContract.endpoints.recordShareVisit;
+    const resolve = mobileApiContract.endpoints.resolveShowcasePost;
+    const asked: Array<{ method: string; path: string; body: unknown }> = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      asked.push({ method: (init?.method ?? 'GET').toUpperCase(), path: url.pathname, body: init?.body ? JSON.parse(String(init.body)) : null });
+      return url.pathname === visit.path
+        ? jsonResponse(visit.response)
+        : jsonResponse(resolve.errors.notFound.response, resolve.errors.notFound.status);
+    });
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    // A newer app's surface goes out as the link carried it; the server counts
+    // one it does not know as the detail page, so the app never maps it.
+    await expect(api.recordShareVisit('post-1', visit.requestVariants.unknownSurface.sourceSurface))
+      .resolves.toEqual(visit.response);
+    await expect(api.resolveShowcasePost('gen/1')).rejects.toMatchObject({
+      status: resolve.errors.notFound.status,
+      message: resolve.errors.notFound.response.error,
+    });
+
+    expect(asked).toEqual([
+      { method: 'POST', path: visit.path, body: visit.requestVariants.unknownSurface },
+      { method: 'GET', path: '/api/showcase/posts/gen%2F1/resolve', body: null },
+    ]);
   });
 });
 

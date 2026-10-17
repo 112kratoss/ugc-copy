@@ -186,6 +186,65 @@ describe('/api/showcase/share route', () => {
     });
   });
 
+  // C14: the app opening a shared link records one visit, credited to the
+  // link's `s` (an unknown one as the detail page), and tells no one.
+  it('records a share visit from the app with the link surface, and sends no notification', async () => {
+    findPublicPostReferenceByIdOrGenerationIdMock.mockResolvedValue({
+      id: 'post-1',
+      generation_id: 'gen-1',
+      user_id: 'creator-1',
+      visibility: 'public',
+      category: 'image',
+      prompt: 'Prompt',
+      source_kind: 'magicbooklet',
+    });
+
+    const { POST } = await import('@/app/api/showcase/share/route');
+    const response = await POST(
+      new Request('http://localhost/api/showcase/share', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+          'x-request-id': 'showcase-share-visit-1',
+        },
+        body: JSON.stringify({
+          postId: 'post-1',
+          eventType: 'share_visit',
+          sourceSurface: 'not-a-known-surface',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(200);
+    expectPrivateNoStoreTraceHeaders(response, 'showcase-share-visit-1');
+    await expect(response.json()).resolves.toEqual({ success: true });
+    expect(recordPostShareEventMock).toHaveBeenCalledTimes(1);
+    expect(recordPostShareEventMock).toHaveBeenCalledWith({
+      postId: 'post-1',
+      eventType: 'share_visit',
+      sourceSurface: 'detail-page',
+    });
+    expect(afterMock).not.toHaveBeenCalled();
+    expect(notifyPostSocialActivityMock).not.toHaveBeenCalled();
+  });
+
+  it('records no share visit to a private or missing post', async () => {
+    findPublicPostReferenceByIdOrGenerationIdMock.mockResolvedValue(null);
+
+    const { POST } = await import('@/app/api/showcase/share/route');
+    const response = await POST(
+      new Request('http://localhost/api/showcase/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ postId: 'post-2', eventType: 'share_visit', sourceSurface: 'feed' }),
+      }) as never
+    );
+
+    expect(response.status).toBe(404);
+    expect(recordPostShareEventMock).not.toHaveBeenCalled();
+  });
+
   it('rejects private or missing posts', async () => {
     findPublicPostReferenceByIdOrGenerationIdMock.mockResolvedValue(null);
 

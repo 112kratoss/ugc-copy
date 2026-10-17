@@ -499,7 +499,7 @@ function BootstrapMediaPreview({
     return (
       <div className="min-h-56 border-b border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.12),transparent_46%),rgba(9,9,12,0.98)] p-5">
         <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-400">
-          <span>Tip / note</span>
+          <span>Text</span>
           <span>{accessLabel}</span>
         </div>
         <div className="mt-8 text-lg font-semibold text-white">{post.title}</div>

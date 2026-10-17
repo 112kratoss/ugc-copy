@@ -246,7 +246,7 @@ vi.mock('@/lib/server-helpers', () => ({
                 data: bundleRows.value
                   .filter((row) => args.p_post_ids.includes(row.post_id as string))
                   .map((row) => ({
-                    ...pickColumns(row, 'id, post_id, access_mode, status, price_usd_cents, sales_count, earnings_usd_cents'),
+                    ...pickColumns(row, 'id, post_id, access_mode, status, price_usd_cents, sales_count, free_unlock_count, earnings_usd_cents'),
                     resource_kinds: row.prompt_text ? ['prompt'] : [],
                   })),
                 error: null,
@@ -353,6 +353,30 @@ describe('owner posts', () => {
     expect(createServiceClientMock).toHaveBeenCalledTimes(1);
   });
 
+  // Decision 6 (2026-10-17): sales_count counts paid unlocks only. The editor's
+  // lock still follows any unlock of a paid recipe, as it did while free
+  // unlocks were counted as sales, so the composer and the update service agree.
+  it.each([
+    ['unlocked only while it was free', { salesCount: 0, freeUnlockCount: 3 }, true],
+    ['sold', { salesCount: 1, freeUnlockCount: 0 }, true],
+    ['never unlocked', { salesCount: 0, freeUnlockCount: 0 }, false],
+  ])('locks a paid recipe in the editor when it was %s', async (_label, counts, locked) => {
+    const bundles = await import('@/lib/post-resource-bundles-server');
+    vi.mocked(bundles.getPostResourceBundleDetailByPostId).mockResolvedValueOnce({
+      accessMode: 'paid',
+      summary: '',
+      previewText: '',
+      priceUsdCents: 900,
+      resources: null,
+      ...counts,
+    } as never);
+    const { getOwnerPostDetail } = await import('@/lib/owner-posts');
+
+    const post = await getOwnerPostDetail('post-1', 'user-1');
+
+    expect(post?.hasPaidOrders).toBe(locked);
+  });
+
   // 03-3 / 03-7: the app found listings by paging every own post and filtering
   // on the client, and drew "Published · Public" for listings buyers cannot
   // see: the owner list carried no moderation state, no listing check, no
@@ -425,6 +449,27 @@ describe('owner posts', () => {
         recipe('listing-flagged'),
         recipe('listing-deleted', { status: 'draft', retired_at: deletedAt }),
       ];
+    });
+
+    // Decision 6 (2026-10-17): "Sales" is paid unlocks, with free unlocks beside it.
+    it('carries paid sales and free unlocks apart through the compact summary RPC', async () => {
+      compactSummaryRpc.enabled = true;
+      bundleRows.value = [recipe('listing-ready', { sales_count: 2, free_unlock_count: 5 })];
+      const { getOwnerPostList } = await import('@/lib/owner-posts');
+
+      const listings = await getOwnerPostList('user-1', { includeArchived: true, visibility: 'all', listingsOnly: true });
+
+      expect(listings.find((post) => post.id === 'listing-ready')?.bundle).toMatchObject({ salesCount: 2, freeUnlockCount: 5 });
+    });
+
+    it('reads no free unlocks through the select fallback, which serves a database older than the column', async () => {
+      compactSummaryRpc.enabled = false;
+      bundleRows.value = [recipe('listing-ready', { sales_count: 2, free_unlock_count: 5 })];
+      const { getOwnerPostList } = await import('@/lib/owner-posts');
+
+      const listings = await getOwnerPostList('user-1', { includeArchived: true, visibility: 'all', listingsOnly: true });
+
+      expect(listings.find((post) => post.id === 'listing-ready')?.bundle).toMatchObject({ salesCount: 2, freeUnlockCount: 0 });
     });
 
     it('pages through posts with a recipe only, newest first', async () => {

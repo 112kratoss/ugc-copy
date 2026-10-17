@@ -2728,7 +2728,9 @@ describe('NewPostClient', () => {
     expect(String(request.body.get('visibility'))).toBe('private');
   });
 
-  it('shows the make public button for unlisted paid posts and attempts submit', async () => {
+  // A post is public or private since 2026-10-17 (decision 12): one saved as
+  // unlisted before then opens as the private post the server stores it as.
+  it('publishes a paid post saved as unlisted with Publish public', async () => {
     enqueueResponse({
       ok: true,
       json: async () => ({
@@ -2775,7 +2777,8 @@ describe('NewPostClient', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /make public/i }));
+    expect(screen.queryByRole('button', { name: /make public/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -2783,39 +2786,38 @@ describe('NewPostClient', () => {
     expect(fetchMock.mock.calls[1][1].body).toContain('"visibility":"public"');
   });
 
-  it('shows unlisted management options when editing an unlisted post', () => {
-    render(
-      <NewPostClient
-        initialPost={{
-          id: 'post-unlisted-1',
-          generationId: null,
-          title: 'Unlisted link post',
-          description: '',
-          prompt: '',
-          body: 'Shareable by link only.',
-          visibility: 'unlisted',
-          category: 'text',
-          postFormat: 'text',
-          sourceKind: 'manual',
-          sourceTool: null,
-          mediaUrl: null,
-          mediaKind: null,
-          archivedAt: null,
-          resourceBundle: { accessMode: 'none' },
-          hasPaidOrders: false,
-        }}
-      />
-    );
+  const postSavedAsUnlisted = {
+    id: 'post-unlisted-1',
+    generationId: null,
+    title: 'Link post',
+    description: '',
+    prompt: '',
+    body: 'A post from before the change.',
+    visibility: 'unlisted' as const,
+    category: 'text' as const,
+    postFormat: 'text' as const,
+    sourceKind: 'manual' as const,
+    sourceTool: null,
+    mediaUrl: null,
+    mediaKind: null,
+    archivedAt: null,
+    resourceBundle: { accessMode: 'none' as const },
+    hasPaidOrders: false,
+  };
+
+  it('opens a post saved as unlisted as private, with Public and Private only', () => {
+    render(<NewPostClient initialPost={postSavedAsUnlisted} />);
 
     expect(screen.getByRole('heading', { name: /update post/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /save unlisted changes/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /make public/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /make private/i })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /publish public/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /save private/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /save private/i }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole('button', { name: /publish public/i }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByRole('button', { name: /unlisted/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /make public|make private/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/unlisted|shareable by link/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Saved privately in Studio')).toBeInTheDocument();
   });
 
-  it('preserves unlisted visibility when saving unlisted changes', async () => {
+  it('saves a post saved as unlisted as private', async () => {
     enqueueResponse({
       ok: true,
       json: async () => ({
@@ -2823,35 +2825,14 @@ describe('NewPostClient', () => {
         showcasePath: null,
         ownerPath: '/post/post-unlisted-1/edit',
         resourceBundlePath: null,
-        visibility: 'unlisted',
+        visibility: 'private',
         resourceBundleStatus: null,
       }),
     });
 
-    render(
-      <NewPostClient
-        initialPost={{
-          id: 'post-unlisted-1',
-          generationId: null,
-          title: 'Unlisted link post',
-          description: '',
-          prompt: '',
-          body: 'Shareable by link only.',
-          visibility: 'unlisted',
-          category: 'text',
-          postFormat: 'text',
-          sourceKind: 'manual',
-          sourceTool: null,
-          mediaUrl: null,
-          mediaKind: null,
-          archivedAt: null,
-          resourceBundle: { accessMode: 'none' },
-          hasPaidOrders: false,
-        }}
-      />
-    );
+    render(<NewPostClient initialPost={postSavedAsUnlisted} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /save unlisted changes/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -2859,7 +2840,7 @@ describe('NewPostClient', () => {
 
     const call = fetchMock.mock.calls[1];
     const body = JSON.parse(call[1].body);
-    expect(body.visibility).toBe('unlisted');
+    expect(body.visibility).toBe('private');
   });
 
   describe('media upload progress', () => {

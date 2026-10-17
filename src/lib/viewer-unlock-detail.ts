@@ -95,8 +95,10 @@ export interface ViewerUnlockDetail extends ViewerUnlockPayment {
   accessMode: PersistedPostResourceBundleAccessMode;
   priceUsdCents: number;
   purchasePriceUsdCents: number;
-  /** Null after detachment because there is no live listing to count. */
+  /** Paid unlocks. Null after detachment because there is no live listing to count. */
   salesCount: number | null;
+  /** Free unlocks, null in the same case. */
+  freeUnlockCount: number | null;
   purchasedAt: string;
   creatorDisplayName: string;
   /** Present while the live bundle exists; detached revisions rely on retained-file mappings. */
@@ -338,6 +340,7 @@ export async function getViewerUnlockDetail({
     priceUsdCents: liveDetail?.priceUsdCents ?? purchasedRevision.priceUsdCents,
     purchasePriceUsdCents: projection.purchase_price_usd_cents ?? 0,
     salesCount: liveDetail?.salesCount ?? null,
+    freeUnlockCount: liveDetail?.freeUnlockCount ?? null,
     purchasedAt: projection.purchased_at,
     creatorDisplayName: liveDetail?.seller.name
       ?? normalizeOptionalText(projection.seller_display_name)

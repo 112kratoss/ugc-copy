@@ -87,6 +87,8 @@ type GenerationRow = {
 type StoredGenerationBundleRow = {
   access_mode: 'none' | 'free' | 'paid';
   sales_count: number | null;
+  // Free unlocks count as unlocks here, as they did while sales_count held them.
+  free_unlock_count?: number | null;
   summary: string | null;
   preview_text: string | null;
   prompt_text: string | null;
@@ -104,6 +106,7 @@ export type ShowcasePublishRequestBody = {
   isNsfw?: boolean;
   generationId: string;
   isPublic?: boolean;
+  /** Installed apps can still send 'unlisted'; it is stored and answered as 'private'. */
   visibility?: 'public' | 'unlisted' | 'private';
   title?: string;
   description?: string;
@@ -143,7 +146,7 @@ export type ShowcasePublishServiceResult =
       body: {
         success: true;
         isPublic: boolean;
-        visibility: 'public' | 'unlisted' | 'private';
+        visibility: 'public' | 'private';
         postId: string | null;
         showcasePath: string | null;
         ownerPath: string | null;
@@ -207,9 +210,16 @@ function normalizeTextValue(value: unknown): string | null {
   return typeof value === 'string' ? value.trim() : null;
 }
 
-function normalizeRequestedVisibility(value: unknown, legacyIsPublic?: boolean): 'public' | 'unlisted' | 'private' {
-  if (value === 'public' || value === 'unlisted' || value === 'private') {
+function normalizeRequestedVisibility(value: unknown, legacyIsPublic?: boolean): 'public' | 'private' {
+  if (value === 'public' || value === 'private') {
     return value;
+  }
+
+  // Unlisted was dropped (product decision 12, 2026-10-17): a post is public
+  // or private. Installed apps and Studio's old menu can still ask for it, and
+  // get a private post, the safe reading of "only people with the link".
+  if (value === 'unlisted') {
+    return 'private';
   }
 
   return legacyIsPublic ? 'public' : 'private';
@@ -285,7 +295,7 @@ async function loadFrozenSoldGenerationBundleForQuality({
   const { data, error } = await supabase
     .from('post_resource_bundles')
     .select(
-      'access_mode, sales_count, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, resource_sections, resource_items',
+      'access_mode, sales_count, free_unlock_count, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, resource_sections, resource_items',
     )
     .eq('post_id', post.id)
     .eq('owner_user_id', ownerUserId)
@@ -295,7 +305,7 @@ async function loadFrozenSoldGenerationBundleForQuality({
   }
 
   const bundle = data as StoredGenerationBundleRow | null;
-  if (!bundle || (bundle.sales_count ?? 0) <= 0 || bundle.access_mode === 'none') {
+  if (!bundle || ((bundle.sales_count ?? 0) + (bundle.free_unlock_count ?? 0)) <= 0 || bundle.access_mode === 'none') {
     return null;
   }
 
@@ -989,9 +999,7 @@ export async function publishGenerationToShowcaseForRoute({
       message:
         effectiveVisibility === 'public'
           ? 'Successfully published to showcase'
-          : effectiveVisibility === 'unlisted'
-            ? 'Saved as an unlisted post'
-            : 'Saved as a private post',
+          : 'Saved as a private post',
     },
   };
 }

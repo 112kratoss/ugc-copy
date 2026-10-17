@@ -104,6 +104,7 @@ function renderPanel(overrides: Partial<Parameters<typeof PostResourceBundlePane
       resourceKinds={resourceKinds}
       lockedPreview={promptOnlyPreview}
       salesCount={0}
+      freeUnlockCount={0}
       initialResources={null}
       {...overrides}
     />
@@ -759,6 +760,21 @@ describe('PostResourceBundlePanel', () => {
       fireEvent.click(screen.getByRole('button', { name: /show resources for output 2/i }));
       expect(screen.getByText(/no resources apply to this output/i)).toBeInTheDocument();
     });
+  });
+
+  // A free unlock stopped counting as a sale on 2026-10-17 (decision 6): a
+  // free recipe's line counts its free unlocks, a paid one's its paid sales.
+  it.each([
+    ['a free recipe its free unlocks', { isFree: true, salesCount: 0, freeUnlockCount: 5 }, '5 opened'],
+    [
+      'a paid recipe its paid sales',
+      { isFree: false, priceLabel: '$9.00', priceUsdCents: 900, salesCount: 3, freeUnlockCount: 2 },
+      '3 sold',
+    ],
+  ])('counts for %s', (_name, props, label) => {
+    renderPanel(props);
+
+    expect(screen.getByText(label)).toBeInTheDocument();
   });
 
   it('switches the purchased revision metadata together with its resources', () => {

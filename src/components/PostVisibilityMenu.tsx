@@ -2,31 +2,36 @@
 
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronDown, Globe, Link2, Loader2, LockKeyhole } from 'lucide-react';
+import { Check, ChevronDown, Globe, Loader2, LockKeyhole } from 'lucide-react';
 
 import { useAnchoredMenu } from '@/components/useAnchoredMenu';
 import type { PostVisibility } from '@/lib/post-lifecycle-client';
 
+/**
+ * What a post can be set to: public or private (decision 12, 2026-10-17).
+ * The server stores a requested unlisted post as private.
+ */
+type SelectablePostVisibility = Exclude<PostVisibility, 'unlisted'>;
+
 export const POST_VISIBILITY_OPTIONS: ReadonlyArray<{
-  value: PostVisibility;
+  value: SelectablePostVisibility;
   label: string;
   hint: string;
   Icon: typeof Globe;
 }> = [
   { value: 'public', label: 'Public', hint: 'In Explore and the feed.', Icon: Globe },
-  { value: 'unlisted', label: 'Unlisted', hint: 'Only people with the link.', Icon: Link2 },
   { value: 'private', label: 'Private', hint: 'Only you.', Icon: LockKeyhole },
 ];
 
-const TRIGGER_TONE_CLASS: Record<PostVisibility, string> = {
+const TRIGGER_TONE_CLASS: Record<SelectablePostVisibility, string> = {
   public: 'border-sky-400/25 bg-sky-500/10 text-sky-100 hover:border-sky-300/35 hover:bg-sky-500/15',
-  unlisted: 'border-violet-400/25 bg-violet-500/10 text-violet-100 hover:border-violet-300/35 hover:bg-violet-500/15',
   private: 'border-white/12 bg-white/[0.05] text-zinc-200 hover:border-white/20 hover:bg-white/[0.08]',
 };
 
 interface PostVisibilityMenuProps {
+  /** A post saved as unlisted before 2026-10-17 reads as private. */
   value: PostVisibility;
-  onChange: (next: PostVisibility) => void;
+  onChange: (next: SelectablePostVisibility) => void;
   disabled?: boolean;
   /** A change is in flight: the trigger shows a spinner and stays disabled. */
   pending?: boolean;
@@ -41,12 +46,12 @@ const MENU_WIDTH_PX = 256;
 
 /**
  * The one visibility control for an owned post: a trigger showing the
- * current state and a menu of the three states with what each means.
+ * current state and a menu of the two states with what each means.
  * Rendered on the showcase detail page and in Studio, so it avoids responsive
  * display utilities (see the CSS note in globals.css).
  */
 export default function PostVisibilityMenu({
-  value,
+  value: storedValue,
   onChange,
   disabled = false,
   pending = false,
@@ -54,6 +59,8 @@ export default function PostVisibilityMenu({
   label = 'Change visibility',
   size = 'md',
 }: PostVisibilityMenuProps) {
+  // The private post the server now stores an old unlisted one as.
+  const value: SelectablePostVisibility = storedValue === 'unlisted' ? 'private' : storedValue;
   const { isOpen, position, open: openMenu, close, rootRef, triggerRef, menuRef } = useAnchoredMenu({
     align,
     width: MENU_WIDTH_PX,
@@ -88,7 +95,7 @@ export default function PostVisibilityMenu({
     itemRefs.current[nextIndex]?.focus();
   };
 
-  const choose = (next: PostVisibility) => {
+  const choose = (next: SelectablePostVisibility) => {
     close(true);
     if (next !== value) {
       onChange(next);

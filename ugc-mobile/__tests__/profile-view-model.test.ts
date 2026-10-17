@@ -341,6 +341,8 @@ describe('profile view model media cards', () => {
       mediaUrl: 'https://cdn.example.com/post.mp4',
       mediaKind: 'video',
     }).isGridReady).toBe(false);
+    // Decision 10 (2026-10-17): a text post is labelled "Text", beside Image,
+    // Video and Motion; "Prompt" names a real prompt only.
     expect(ownerPostToProfileMediaCard({
       ...base,
       id: 'text-post',
@@ -350,6 +352,8 @@ describe('profile view model media cards', () => {
     })).toMatchObject({
       previewState: 'text',
       isGridReady: true,
+      badge: 'Text',
+      mediaTypeLabel: 'Text',
     });
     expect(ownerPostToProfileMediaCard({ ...base, id: 'empty-media-post' }).isGridReady).toBe(false);
     // Archived posts stay renderable: the Posts tab shows them under their

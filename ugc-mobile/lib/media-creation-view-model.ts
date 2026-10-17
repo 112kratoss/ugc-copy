@@ -1987,6 +1987,42 @@ export function buildPromptEnhancementRequest(
   };
 }
 
+/** A shot's request names its shot, which the app's request type does not carry yet. */
+export type ShotPromptEnhancementRequest = PromptEnhancementRequest & {
+  context: NonNullable<PromptEnhancementRequest['context']> & { shotIndex: number };
+};
+
+/**
+ * What the enhancer is asked for one shot of a multi-shot run, as the web's per-shot Enhance
+ * asks (buildShotPromptQualityContext in CreateVideoClient): the shot's own text and length,
+ * its place among the shots, and the run's inputs. Without `shotIndex` the enhancer answers a
+ * multi-shot request with the whole sequence ("Shot 1: … Shot 2: …"), which is no shot's
+ * prompt. The run's frames open the story, so a shot is not shown them, as on the web. Null
+ * when the draft has no such shot.
+ */
+export function buildShotPromptEnhancementRequest(
+  draft: VideoCreationDraft,
+  shotId: string,
+  options: PromptEnhancementRequestOptions = {},
+): ShotPromptEnhancementRequest | null {
+  const shotIndex = draft.multiPrompts.findIndex((shot) => shot.id === shotId);
+  if (shotIndex < 0) return null;
+  const shot = draft.multiPrompts[shotIndex];
+  const request = buildPromptEnhancementRequest({ ...draft, prompt: shot.prompt, isMultiShot: true }, options);
+  const context = { ...request.context };
+  delete context.frameImageUrls;
+  return { ...request, context: { ...context, duration: shot.duration, isMultiShot: true, shotIndex } };
+}
+
+/** The draft with one shot's prompt replaced, every other shot and the run's own prompt as they were. */
+export function replaceShotPrompt(draft: VideoCreationDraft, shotId: string, prompt: string): VideoCreationDraft {
+  if (!draft.multiPrompts.some((shot) => shot.id === shotId)) return draft;
+  return {
+    ...draft,
+    multiPrompts: draft.multiPrompts.map((shot) => (shot.id === shotId ? { ...shot, prompt } : shot)),
+  };
+}
+
 export function applyModelDefaults(draft: CreationDraft): CreationDraft {
   if (draft.tool === 'image') {
     const config = bundledImageModel(draft.model);

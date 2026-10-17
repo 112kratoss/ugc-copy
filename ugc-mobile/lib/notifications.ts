@@ -268,6 +268,31 @@ export async function unregisterMobilePushNotifications(
   await clearLocalMobilePushRegistration();
 }
 
+/**
+ * Before a sign-out of all devices (product decisions 2026-10-17, item 9):
+ * every push token of the account is retired, then this install's own
+ * registration. The other phones lose their session with it and can no longer
+ * retire their tokens themselves, so without this they would keep receiving
+ * the account's notifications. Best effort, like the one-device sign-out: a
+ * failure is logged and the sign-out goes on.
+ */
+export async function unregisterAccountMobilePushNotifications(
+  api: MagicbookletApiClient,
+  { signal }: { signal?: AbortSignal } = {},
+) {
+  if (!isNativeMobile()) {
+    return;
+  }
+
+  try {
+    await api.unregisterMobilePushToken({ scope: 'account' }, signal);
+  } catch (error) {
+    console.error('Failed to unregister the account\'s mobile push tokens', error);
+  }
+
+  await clearLocalMobilePushRegistration();
+}
+
 export async function clearLocalMobilePushRegistration() {
   if (!isNativeMobile()) {
     return;

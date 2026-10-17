@@ -565,7 +565,10 @@ function MarketplaceCard({
         </div>
 
         <div className="mt-5 grid grid-cols-3 gap-2 text-xs text-zinc-500">
-          <span>{formatUnlockCountLabel(asset.accessMode, asset.salesCount)}</span>
+          {/* "N opened" counts free unlocks, "N sold" paid ones (decision 6, 2026-10-17). */}
+          <span>
+            {formatUnlockCountLabel(asset.accessMode, asset.accessMode === 'free' ? asset.freeUnlockCount : asset.salesCount)}
+          </span>
           <span className="text-center">Updated {updatedLabel}</span>
           <span className="text-right font-semibold text-zinc-200">{unlockCtaLabel}</span>
         </div>

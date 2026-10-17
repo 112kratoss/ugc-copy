@@ -274,6 +274,24 @@ describe('preparePostCreationSubmission', () => {
     });
   });
 
+  // Product decision 12 (2026-10-17): a post is public or private. An installed
+  // app can still send unlisted; the post is created private.
+  it('creates a post asked for as unlisted as a private one', async () => {
+    const formData = new FormData();
+    formData.set('postFormat', 'text');
+    formData.set('title', 'Lighting notes');
+    formData.set('body', 'Key light at forty-five degrees, fill at half.');
+    formData.set('visibility', 'unlisted');
+
+    const result = await preparePostCreationSubmission({
+      formData,
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+
+    expect(result).toMatchObject({ ok: true, submission: { visibility: 'private' } });
+  });
+
   it('rejects a title that is only whitespace', async () => {
     const formData = new FormData();
     formData.set('postFormat', 'text');

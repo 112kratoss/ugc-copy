@@ -159,7 +159,7 @@ describe('PostResourceBundleContent', () => {
     const values = textValues(tree);
     expect(values).toContain('File 1');
     expect(values).toContain('Link 1');
-    expect(values).not.toContain('Resource details stay private until this package is unlocked.');
+    expect(values).not.toContain('Resource details stay private until this recipe is unlocked.');
   });
 
   it('renders the section description a creator wrote after unlock', () => {
@@ -504,8 +504,8 @@ describe('ResourceRevisionSwitch', () => {
     const onSelect = vi.fn();
     const tree = renderContent(<ResourceRevisionSwitch selected="latest" onSelect={onSelect} />);
 
-    const latest = pressable(tree, 'Show latest unlock version');
-    const purchased = pressable(tree, 'Show purchased unlock version');
+    const latest = pressable(tree, 'Show latest recipe version');
+    const purchased = pressable(tree, 'Show purchased recipe version');
     expect(textValues(tree)).toEqual(['Latest', 'Purchased']);
     expect(latest?.props.accessibilityState).toEqual({ selected: true });
     expect(purchased?.props.accessibilityState).toEqual({ selected: false });
@@ -516,7 +516,7 @@ describe('ResourceRevisionSwitch', () => {
 
   it('reaches 44pt with a compact pill', () => {
     const tree = renderContent(<ResourceRevisionSwitch selected="purchased" onSelect={vi.fn()} />);
-    const pill = pressable(tree, 'Show purchased unlock version');
+    const pill = pressable(tree, 'Show purchased recipe version');
 
     expect(pill?.props.style.minHeight).toBe(36);
     expect(pill?.props.hitSlop).toEqual({ top: 4, bottom: 4 });

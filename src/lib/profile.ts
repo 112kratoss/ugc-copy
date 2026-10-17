@@ -75,7 +75,9 @@ export interface OwnerProfileStats {
 export interface OwnerProfileSales {
   earningsUsdCents: number;
   listingCount: number;
+  /** Paid unlocks. A free unlock is not a sale (decision 6, 2026-10-17). */
   salesCount: number;
+  freeUnlockCount: number;
 }
 
 export interface EditableCreatorProfile {

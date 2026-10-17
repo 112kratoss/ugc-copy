@@ -114,9 +114,13 @@ describe('credit mutation security boundary', () => {
     expect(razorpayVerifyAdapter).toMatch(/createAdminSupabase:\s*\(\)\s*=>\s*dependencies\.createServiceClient\(\)/);
     expect(razorpayVerifyAdapter).toContain('verifyCreditRazorpayPaymentForRoute');
     expect(razorpayVerifyService).toContain("adminSupabase.rpc('add_credits'");
-    expect(generate).toContain('postMotionGenerationForRoute');
-    expect(generateImage).toContain('postImageGenerationForRoute');
-    expect(generateVideo).toContain('postVideoGenerationForRoute');
+    // The per-kind routes start nothing since product decision 21: their POST
+    // answers 410 (GENERATION_ROUTE_RETIRED) and only GET, the status poll, is wired.
+    for (const route of [generate, generateImage, generateVideo]) {
+      expect(route).toContain('createGenerationRouteHandlers');
+      expect(route).not.toMatch(/post\w*GenerationForRoute/);
+    }
+    expect(generationRouteAdapter).toContain('GENERATION_ROUTE_RETIRED');
     expect(generationRouteAdapter).toContain('createAdminSupabase: dependencies.createServiceClient');
     expect(motionStartService).toContain('startMotionGeneration');
     expect(motionStartService).toContain('creditSupabase: adminSupabase');

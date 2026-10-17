@@ -28,7 +28,7 @@ export const HOME_FEED_CHIPS: HomeFeedChip[] = [
    */
   { id: 'notes', label: 'Notes', filters: { sort: 'for-you', category: 'text' } },
   { id: 'recent', label: 'Recent', filters: { sort: 'recent' } },
-  { id: 'unlocks', label: 'Unlocks', filters: { sort: 'for-you', unlock: 'with-unlock' } },
+  { id: 'unlocks', label: 'Recipes', filters: { sort: 'for-you', unlock: 'with-unlock' } },
 ];
 
 export type HomeFeedSlide =

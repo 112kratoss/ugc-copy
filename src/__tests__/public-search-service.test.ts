@@ -222,4 +222,43 @@ describe('public search service', () => {
     expect(pageThree.recipes.items.map((item) => item.id)).toEqual(['recipe-4']);
     expect(pageThree.recipes.nextCursor).toBeNull();
   });
+
+  // Decision 6 (2026-10-17): a recipe result counts paid sales and free unlocks apart.
+  it('hands a recipe\'s paid sales and free unlocks out apart', async () => {
+    const getMarketplaceResourceList = vi.fn(async () => ({
+      items: [{
+        id: 'recipe-1',
+        postId: 'post-1',
+        title: 'Free portrait recipe',
+        summary: 'Summary',
+        previewText: 'Preview',
+        accessMode: 'free',
+        priceUsdCents: 0,
+        salesCount: 1,
+        freeUnlockCount: 12,
+        allowRemix: false,
+        resourceKinds: ['prompt'],
+        createdAt: '2026-10-01T00:00:00.000Z',
+        seller: { id: 'seller-1', username: 'maker', name: 'Maker', avatar: null },
+        post: null,
+        priceQuote: null,
+      }],
+      pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 2 },
+    }));
+
+    const result = await searchPublicContent({
+      query: 'portrait',
+      normalizedQuery: 'portrait',
+      type: 'recipes',
+      cursor: null,
+      limit: 2,
+      viewerUserId: null,
+      countryCode: null,
+    }, {
+      createServiceClient: vi.fn(() => ({ rpc: vi.fn() }) as unknown as SupabaseClient),
+      getMarketplaceResourceList: getMarketplaceResourceList as never,
+    });
+
+    expect(result.recipes.items).toEqual([expect.objectContaining({ salesCount: 1, freeUnlockCount: 12 })]);
+  });
 });

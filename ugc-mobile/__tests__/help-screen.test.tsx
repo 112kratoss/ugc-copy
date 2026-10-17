@@ -79,8 +79,8 @@ describe('help screen', () => {
     const tree = renderScreen();
 
     expect(tree.root.findByType('section-title' as never).props.body)
-      .toBe('Find quick guidance for creations, unlocks, and contacting support.');
-    expect(cardTitles(tree)).toEqual(['Creation help', 'Unlocks and sales', 'Contact support']);
+      .toBe('Find quick guidance for creations, recipes, and contacting support.');
+    expect(cardTitles(tree)).toEqual(['Creation help', 'Recipes and sales', 'Contact support']);
   });
 
   // Settings builds these lines for support, and the mail never carried them.

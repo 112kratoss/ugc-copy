@@ -13,6 +13,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import {
+  creatorPayoutMethodRefusal,
   getCreatorPayoutState,
   isCreatorPayoutMethod,
   requestCreatorPayout,
@@ -101,7 +102,7 @@ async function handlePOST(request: Request, dependencies: ReturnType<typeof reso
   }
 
   if (!isCreatorPayoutMethod(body.payoutMethod)) {
-    return NextResponse.json({ error: 'Choose how you want to be paid.' }, { status: 400 });
+    return NextResponse.json(creatorPayoutMethodRefusal(body.payoutMethod), { status: 400 });
   }
 
   if (typeof body.payoutDetails !== 'string' || body.payoutDetails.trim().length < 3) {

@@ -1294,6 +1294,11 @@ export function createApiClient({
     getContentPreferences: () => request<{ showMature: boolean }>('/api/content-preferences'),
     getShowcasePost: (postId: string) =>
       request<ShowcasePostResponse>(`/api/showcase/posts/${postId}`),
+    // Names the live post behind an id the by-id read did not find: an old
+    // link carries a generation id, which the web's post page has always
+    // followed. A post id answers with itself; anything else is a 404.
+    resolveShowcasePost: (id: string) =>
+      request<{ success: true; postId: string }>(`/api/showcase/posts/${encodeURIComponent(id)}/resolve`),
     listPostComments: (postId: string, params?: Record<string, QueryValue>) =>
       request<PostCommentsResponse>(
         `/api/showcase/posts/${encodeURIComponent(postId)}/comments${buildQuery(params)}`
@@ -1432,6 +1437,14 @@ export function createApiClient({
           sourceSurface: options.sourceSurface,
           channel: options.channel ?? 'native-share',
         }),
+      }),
+    // One open of a shared link: `sourceSurface` is the link's `s` exactly as
+    // it arrived (the server counts a surface it does not know as the detail
+    // page, as the web post page does), and a visit has no channel.
+    recordShareVisit: (postId: string, sourceSurface: string) =>
+      request<{ success: boolean }>('/api/showcase/share', {
+        method: 'POST',
+        body: JSON.stringify({ postId, eventType: 'share_visit', sourceSurface }),
       }),
     shareCreatorProfile: (username: string, options: ShareCreatorProfileOptions) =>
       request<{ success: boolean }>('/api/profile/share', {
@@ -1737,7 +1750,9 @@ export function createApiClient({
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    unregisterMobilePushToken: (body?: Partial<MobilePushTokenRegistration>, signal?: AbortSignal) =>
+    // `scope: 'account'` retires every push token of the account, asked before a
+    // sign-out of all devices; anything else retires the token or device named.
+    unregisterMobilePushToken: (body?: Partial<MobilePushTokenRegistration> & { scope?: 'account' }, signal?: AbortSignal) =>
       request<{ success: boolean }>('/api/mobile/notifications/unregister', {
         method: 'POST',
         body: JSON.stringify(body ?? {}),

@@ -338,7 +338,7 @@ describe('loading and empty states (03-6, 03-10)', () => {
 
     expect(findRow(tree)).toBeTruthy();
     const blocks = tree.root.findAll((node) => String(node.type) === 'status-block');
-    expect(blocks.map((node) => node.props.title)).toEqual(['Could not load more unlocks']);
+    expect(blocks.map((node) => node.props.title)).toEqual(['Could not load more recipes']);
     expect(blocks[0]?.props.body).toBe('Network request failed. Please check your connection and try again.');
     const retry = tree.root.find((node) => String(node.type) === 'secondary-button' && node.props.label === 'Retry');
     renderer.act(() => { (retry.props.onPress as () => void)(); });
@@ -359,18 +359,18 @@ describe('loading and empty states (03-6, 03-10)', () => {
     const tree = renderScreen();
 
     expect(tree.root.findAll((node) => String(node.type) === 'status-block').map((node) => node.props.title))
-      .toEqual(['Could not load your unlocks']);
-    const retry = tree.root.find((node) => String(node.type) === 'secondary-button' && node.props.label === 'Retry unlocks');
+      .toEqual(['Could not load your recipes']);
+    const retry = tree.root.find((node) => String(node.type) === 'secondary-button' && node.props.label === 'Retry recipes');
     renderer.act(() => { (retry.props.onPress as () => void)(); });
     expect(refetch).toHaveBeenCalledTimes(1);
   });
 
-  it('gives an empty library a way on to browse unlocks', () => {
+  it('gives an empty library a way on to browse recipes', () => {
     loaded([]);
     const tree = renderScreen();
 
-    expect(tree.root.findAll((node) => String(node.type) === 'status-block').map((node) => node.props.title)).toEqual(['No unlocks yet']);
-    const browse = tree.root.find((node) => String(node.type) === 'primary-button' && node.props.label === 'Browse unlocks');
+    expect(tree.root.findAll((node) => String(node.type) === 'status-block').map((node) => node.props.title)).toEqual(['No recipes yet']);
+    const browse = tree.root.find((node) => String(node.type) === 'primary-button' && node.props.label === 'Browse recipes');
     renderer.act(() => { (browse.props.onPress as () => void)(); });
     expect(routerDismissTo).toHaveBeenCalledWith('/(tabs)');
   });

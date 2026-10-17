@@ -24,13 +24,21 @@ type PayoutState = {
   history: PayoutRequest[];
 };
 
+// What a new payout can be sent by. Payouts go out in rupees over Indian rails,
+// so the server takes UPI and Indian bank transfers only (decision 7,
+// 2026-10-17) and answers a PayPal request 400 METHOD_UNAVAILABLE.
 const PAYOUT_METHODS = [
   { value: 'upi', label: 'UPI', placeholder: 'your-name@bank' },
-  { value: 'bank_transfer', label: 'Bank transfer', placeholder: 'Account name and last 4 digits, plus a contact' },
-  { value: 'paypal', label: 'PayPal', placeholder: 'Your PayPal email' },
+  { value: 'bank_transfer', label: 'Indian bank transfer', placeholder: 'Account name and last 4 digits, plus a contact' },
 ] as const;
 
+// Shown so a seller abroad sees they are planned; never selectable or sent.
+const COMING_SOON_PAYOUT_METHODS = ['PayPal', 'International transfer'] as const;
+
 type PayoutMethod = (typeof PAYOUT_METHODS)[number]['value'];
+
+// A request made before 2026-10-17 may name PayPal, and still reads by name.
+const STORED_PAYOUT_METHOD_LABELS: Record<string, string> = { paypal: 'PayPal' };
 
 // The server refuses details past this length (creator-payouts.ts) with a
 // message that does not say the text was too long.
@@ -38,7 +46,9 @@ const PAYOUT_DETAILS_MAX_LENGTH = 500;
 
 // The server keeps the method's id ("bank_transfer"); the seller reads its name.
 function formatPayoutMethod(value: string): string {
-  return PAYOUT_METHODS.find((option) => option.value === value)?.label ?? value.replace(/_/g, ' ');
+  return PAYOUT_METHODS.find((option) => option.value === value)?.label
+    ?? STORED_PAYOUT_METHOD_LABELS[value]
+    ?? value.replace(/_/g, ' ');
 }
 
 function formatDate(value: string): string {
@@ -189,7 +199,8 @@ export default function PayoutPanel() {
           </div>
           <div className="mt-2 text-3xl font-semibold text-white">{state.availableUsd}</div>
           <p className="mt-1 text-xs text-zinc-500">
-            You keep 85% of every unlock. Payouts start at {state.minimumUsd}.
+            You keep 85% of every paid unlock. Payouts start at {state.minimumUsd} and are paid in INR to a
+            UPI ID or an Indian bank account within 14 days of your request.
           </p>
         </div>
       </div>
@@ -221,6 +232,21 @@ export default function PayoutPanel() {
                 {option.label}
               </button>
             ))}
+            {COMING_SOON_PAYOUT_METHODS.map((label) => (
+              <button
+                key={label}
+                type="button"
+                disabled
+                className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-white/10 px-3.5 py-1.5 text-xs font-semibold text-zinc-500 disabled:cursor-not-allowed"
+              >
+                {label}
+                {/* The space keeps the button's name "PayPal Coming soon"; flex layout drops it. */}
+                {' '}
+                <span className="rounded-full bg-white/[0.06] px-1.5 py-px text-[10px] font-medium uppercase tracking-[0.12em] text-zinc-400">
+                  Coming soon
+                </span>
+              </button>
+            ))}
           </div>
 
           <label className="block">
@@ -235,8 +261,8 @@ export default function PayoutPanel() {
             />
           </label>
           <p className="text-[11px] leading-4 text-zinc-500">
-            Never paste a full account number here. Send a UPI id, your PayPal email, or the account
-            name with the last four digits and a contact we can reach you on.
+            Never paste a full account number here. Send a UPI ID, or the account name with the last
+            four digits and a contact we can reach you on.
           </p>
 
           <button

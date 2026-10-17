@@ -138,17 +138,41 @@ export function getGenerationRouteResponse({
   });
 }
 
+export const GENERATION_ROUTE_RETIRED_CODE = 'GENERATION_ROUTE_RETIRED';
+
+/** Said to an app too old to start on POST /api/generations, and to any other caller. */
+export const GENERATION_ROUTE_RETIRED_MESSAGE =
+  'This way of starting a creation has been retired. Update Magicbooklet to keep creating, or start again from the current creator.';
+
+/**
+ * A start on a per-kind route (product decision 21, 2026-10-17). Every supported
+ * build and the web start on POST /api/generations, which measures what it
+ * charges for; the per-kind routes are only polled now. Nothing is read, asked
+ * of the caller, quoted or held before this answer.
+ */
+async function answerRetiredGenerationStart(): Promise<GenerationRouteResult> {
+  return {
+    ok: false,
+    status: 410,
+    body: { code: GENERATION_ROUTE_RETIRED_CODE, error: GENERATION_ROUTE_RETIRED_MESSAGE },
+  };
+}
+
+/**
+ * The handlers of /api/generate, /api/generate-image and /api/generate-video:
+ * GET checks a run's status, as every supported build and the web still do;
+ * POST answers 410.
+ */
 export function createGenerationRouteHandlers({
   dependencies,
   getGenerationForRoute,
   kieApiKey = process.env.KIE_AI_API_KEY,
-  postGenerationForRoute,
 }: {
   dependencies?: GenerationRouteAdapterDependencies;
   getGenerationForRoute: GenerationRouteOperation;
   kieApiKey?: string;
-  postGenerationForRoute: GenerationRouteOperation;
 }) {
+  const resolvedDependencies = resolveDependencies(dependencies);
   return {
     GET(request: Request) {
       return getGenerationRouteResponse({
@@ -159,10 +183,10 @@ export function createGenerationRouteHandlers({
       });
     },
     POST(request: Request) {
-      return postGenerationRouteResponse({
-        dependencies,
-        kieApiKey,
-        postGenerationForRoute,
+      // No body reader and no key: the answer needs neither.
+      return runGenerationRouteOperation({
+        dependencies: resolvedDependencies,
+        operation: answerRetiredGenerationStart,
         request,
       });
     },

@@ -27,7 +27,9 @@ export interface RecipeSearchResult {
   previewText: string;
   accessMode: 'free' | 'paid';
   priceUsdCents: number;
+  /** Paid unlocks. */
   salesCount: number;
+  freeUnlockCount: number;
   allowRemix: boolean;
   resourceKinds: string[];
   createdAt: string;

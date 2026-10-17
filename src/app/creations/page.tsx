@@ -142,7 +142,10 @@ interface OwnerPost {
         accessMode: 'free' | 'paid';
         status: 'draft' | 'published';
         priceUsdCents: number;
+        /** Paid unlocks. */
         salesCount: number;
+        /** Free unlocks, which stopped counting as sales on 2026-10-17 (decision 6). */
+        freeUnlockCount: number;
         earningsUsdCents: number;
         resourceKinds: Array<'prompt' | 'workflow' | 'files' | 'notes' | 'remix'>;
     } | null;
@@ -180,6 +183,17 @@ const GENERATION_HIGHLIGHT_MS = 4000;
 
 function getGenerationCardAnchorId(generationId: string): string {
     return `studio-generation-${generationId}`;
+}
+
+/**
+ * Paid sales and earnings, with free unlocks beside them once there are any:
+ * a free unlock is not a sale since 2026-10-17 (decision 6).
+ */
+function formatRecipeTrackRecord(bundle: NonNullable<OwnerPost['bundle']>): string {
+    const freeUnlocks = bundle.freeUnlockCount > 0
+        ? ` · ${bundle.freeUnlockCount} free unlock${bundle.freeUnlockCount === 1 ? '' : 's'}`
+        : '';
+    return `${bundle.salesCount} sold${freeUnlocks} · ${formatUsdCents(bundle.earningsUsdCents)} earned`;
 }
 
 function getCreationsWorkspaceCacheKey(userId: string) {
@@ -704,7 +718,7 @@ export default function CreationsPage() {
             generationId: generation.id,
             visibility: linkedPost.visibility,
             archivedAt: linkedPost.archivedAt,
-            // The summary has no sales count, so a confirmation leaves out its line about buyers.
+            // The summary has no unlock counts, so a confirmation leaves out its line about buyers.
             bundle: linkedPost.bundle
                 ? { accessMode: linkedPost.bundle.accessMode, status: linkedPost.bundle.status, salesCount: 0 }
                 : null,
@@ -1725,6 +1739,7 @@ export default function CreationsPage() {
     ).length;
     const activePostCount = posts.filter((post) => !post.archivedAt).length;
     const archivedPostCount = posts.length - activePostCount;
+    const unlistedPostCount = posts.filter((post) => !post.archivedAt && post.visibility === 'unlisted').length;
     const isProfileIncomplete = !profileReadiness.profileComplete;
     const hasPortfolioProof = successfulGenerations.length > 0 && activePortfolioPostCount > 0;
     const shouldShowPortfolioStarter = activeView === 'creations' && !isLoading && (
@@ -1967,10 +1982,14 @@ export default function CreationsPage() {
                         {([
                             { key: 'all', label: `All (${activePostCount})` },
                             { key: 'public', label: `Public (${posts.filter((post) => !post.archivedAt && post.visibility === 'public').length})` },
-                            { key: 'unlisted', label: `Unlisted (${posts.filter((post) => !post.archivedAt && post.visibility === 'unlisted').length})` },
+                            { key: 'unlisted', label: `Unlisted (${unlistedPostCount})` },
                             { key: 'private', label: `Private (${posts.filter((post) => !post.archivedAt && post.visibility === 'private').length})` },
                             { key: 'archived', label: `Archived (${archivedPostCount})` },
-                        ] as Array<{ key: OwnerPostVisibilityFilter; label: string }>).map((tab) => (
+                        ] as Array<{ key: OwnerPostVisibilityFilter; label: string }>)
+                            // A post is public or private since 2026-10-17 (decision 12):
+                            // Unlisted stays a filter only while a post saved as one is left.
+                            .filter((tab) => tab.key !== 'unlisted' || unlistedPostCount > 0 || postVisibilityFilter === 'unlisted')
+                            .map((tab) => (
                             // A filter is a refinement of the current section, so it
                             // replaces the history entry instead of adding one.
                             <Link
@@ -2708,7 +2727,7 @@ export default function CreationsPage() {
                                                 labelTone="text-emerald-300/80"
                                                 trailing={(
                                                     <span className="text-xs leading-5 text-zinc-500">
-                                                        {post.bundle.salesCount} sold · {formatUsdCents(post.bundle.earningsUsdCents)} earned
+                                                        {formatRecipeTrackRecord(post.bundle)}
                                                     </span>
                                                 )}
                                             >

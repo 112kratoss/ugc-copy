@@ -1005,7 +1005,7 @@ function ImmersivePreviewViewer() {
         void queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] });
         showMessageDialog({
           title: 'Unlock needed',
-          message: 'The creator has put this remix behind an unlock. Open the post’s details to get it.',
+          message: 'The creator has put this remix behind a recipe. Open the post’s details to get it.',
         });
         return;
       }

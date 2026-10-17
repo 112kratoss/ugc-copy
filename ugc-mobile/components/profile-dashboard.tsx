@@ -1208,7 +1208,7 @@ function SellerDashboardButton() {
         <Store size={appTheme.icon.default} color={theme.colors.primary} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <AppText variant="label" numberOfLines={1} style={{ fontSize: 14 }}>Your Sales</AppText>
+        <AppText variant="label" numberOfLines={1} style={{ fontSize: 14 }}>Recipe Sales</AppText>
         <AppText variant="caption" color="muted" numberOfLines={1}>Sales, unlocks, and listings</AppText>
       </View>
       <ChevronRight size={20} color={theme.colors.faint} />

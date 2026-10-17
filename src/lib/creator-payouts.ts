@@ -10,11 +10,31 @@ import { POST_RESOURCE_TOKEN_SUBUNITS, POST_RESOURCE_TOKENS_PER_USD } from '@/li
 export const CREATOR_PAYOUT_MINIMUM_TOKEN_SUBUNITS =
   100 * POST_RESOURCE_TOKENS_PER_USD * POST_RESOURCE_TOKEN_SUBUNITS;
 
-export const CREATOR_PAYOUT_METHODS = ['upi', 'bank_transfer', 'paypal'] as const;
+/**
+ * What a new request may choose. Payouts are sent by hand in INR over Indian
+ * rails (decision 7, 2026-10-17), so PayPal waits until there is a way to pay
+ * abroad. A request stored earlier with any method still reads and resolves:
+ * the creator's history and /admin treat the stored method as text, and the
+ * database keeps accepting it.
+ */
+export const CREATOR_PAYOUT_METHODS = ['upi', 'bank_transfer'] as const;
 export type CreatorPayoutMethod = (typeof CREATOR_PAYOUT_METHODS)[number];
+
+/** Offered as "Coming soon"; a request for one is told so, not that it is unknown. */
+const CREATOR_PAYOUT_METHODS_COMING_SOON: readonly string[] = ['paypal'];
 
 export function isCreatorPayoutMethod(value: unknown): value is CreatorPayoutMethod {
   return typeof value === 'string' && (CREATOR_PAYOUT_METHODS as readonly string[]).includes(value);
+}
+
+/** Why a method a new request may not use is refused. */
+export function creatorPayoutMethodRefusal(value: unknown): {
+  code: 'METHOD_UNAVAILABLE' | 'INVALID_METHOD';
+  error: string;
+} {
+  return typeof value === 'string' && CREATOR_PAYOUT_METHODS_COMING_SOON.includes(value)
+    ? { code: 'METHOD_UNAVAILABLE', error: 'PayPal payouts are coming soon. Choose UPI or an Indian bank transfer.' }
+    : { code: 'INVALID_METHOD', error: 'Choose how you want to be paid.' };
 }
 
 export function tokenSubunitsToUsdCents(subunits: number): number {
@@ -144,7 +164,7 @@ export type RequestCreatorPayoutResult =
       ok: false;
       status: 400 | 409;
       error: string;
-      code: 'BELOW_MINIMUM' | 'ALREADY_PENDING' | 'INVALID_METHOD' | 'INVALID_DETAILS';
+      code: 'BELOW_MINIMUM' | 'ALREADY_PENDING' | 'INVALID_METHOD' | 'METHOD_UNAVAILABLE' | 'INVALID_DETAILS';
     };
 
 /**
@@ -163,6 +183,12 @@ export async function requestCreatorPayout({
   payoutMethod: string;
   payoutDetails: string;
 }): Promise<RequestCreatorPayoutResult> {
+  // The database takes any short method name, so which ones a new request may
+  // use is decided here.
+  if (!isCreatorPayoutMethod(payoutMethod)) {
+    return { ok: false, status: 400, ...creatorPayoutMethodRefusal(payoutMethod) };
+  }
+
   // The plaintext bound lives here now: the database CHECK and the RPC only
   // see ciphertext, whose length says nothing about what the creator typed.
   const trimmedDetails = payoutDetails.trim();

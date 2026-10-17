@@ -191,6 +191,79 @@ describe('postShowcaseShareRouteResponse', () => {
     }));
   });
 
+  // C14: the app reports a shared link it opened. Same route, same rate limit,
+  // keyed on the viewer or the network like a click; the link's surface is
+  // credited by the web post page's rule and no channel is asked for.
+  it('passes a share visit through with the link surface and no channel, under the click rate limit', async () => {
+    const serviceClient = createServiceClient();
+    const shareShowcasePostForRoute = vi.fn(async () => ({
+      ok: true as const,
+      body: { success: true as const },
+    }));
+
+    const response = await postShowcaseShareRouteResponse({
+      request: new Request('http://localhost/api/showcase/share', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer guest-token',
+        },
+        body: JSON.stringify({
+          postId: 'post-1',
+          eventType: 'share_visit',
+          sourceSurface: 'a-surface-from-a-newer-app',
+        }),
+      }),
+      dependencies: {
+        createServiceClient: vi.fn(() => serviceClient),
+        createUserClient: () => createUserClient('guest-1'),
+        shareShowcasePostForRoute,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ success: true });
+    expect(serviceClient.rpc).toHaveBeenCalledWith('check_backend_rate_limit', {
+      p_scope: 'showcase:share',
+      p_subject_key: 'guest-1',
+      p_limit: 120,
+      p_window_seconds: 600,
+    });
+    expect(shareShowcasePostForRoute).toHaveBeenCalledWith({
+      actorUserId: 'guest-1',
+      eventType: 'share_visit',
+      referenceId: 'post-1',
+      serviceClient,
+      sourceSurface: 'detail-page',
+      runAfterResponse: expect.any(Function),
+    });
+  });
+
+  it('refuses a share visit that names no link surface before auth or service-client work', async () => {
+    const createUserClientMock = vi.fn();
+    const createServiceClientMock = vi.fn();
+    const shareShowcasePostForRoute = vi.fn();
+
+    const response = await postShowcaseShareRouteResponse({
+      request: new Request('http://localhost/api/showcase/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ postId: 'post-1', eventType: 'share_visit' }),
+      }),
+      dependencies: {
+        createServiceClient: createServiceClientMock,
+        createUserClient: createUserClientMock,
+        shareShowcasePostForRoute,
+      },
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: 'Invalid share source surface' });
+    expect(createUserClientMock).not.toHaveBeenCalled();
+    expect(createServiceClientMock).not.toHaveBeenCalled();
+    expect(shareShowcasePostForRoute).not.toHaveBeenCalled();
+  });
+
   it('maps backend rate-limit errors before public post lookup or event recording', async () => {
     const serviceClient = {
       rpc: vi.fn(async () => {

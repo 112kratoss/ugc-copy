@@ -7,6 +7,7 @@ import {
   applyModelDefaults,
   buildGenerationPayload,
   buildPromptEnhancementRequest,
+  buildShotPromptEnhancementRequest,
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
   extractPromptHandles,
@@ -18,6 +19,7 @@ import {
   hydrateCreationDraftFromRemixSource,
   renameMediaDraft,
   replaceMediaDraftMedia,
+  replaceShotPrompt,
   validateCreationDraft,
   videoDraftReferenceMode,
   VIDEO_MODELS,
@@ -927,6 +929,58 @@ describe('media creation view model', () => {
       references: [imageReference({ url: 'https://cdn.example.com/ref.png', storagePath: 'uploads/user/ref.png', displayName: 'Hero', fileName: 'ref.png' })],
     };
     expect(buildPromptEnhancementRequest(elementsDraft).context?.frameImageUrls).toBeUndefined();
+  });
+
+  // Product decision 19: a multi-shot run's Enhance works on one shot, as each shot's on the web.
+  describe('a shot’s enhancement', () => {
+    const story = () => ({
+      ...createDefaultCreationDraft('video'),
+      model: 'kling-3.0-video' as const,
+      prompt: 'The single-shot prompt the run still carries.',
+      sound: true,
+      isMultiShot: true,
+      duration: 11,
+      referenceMode: 'frames' as const,
+      startFrame: imageReference({ url: 'https://cdn.example.com/start.png', storagePath: 'uploads/user/start.png', displayName: 'Start', fileName: 'start.png' }),
+      multiPrompts: [
+        { id: 's1', prompt: 'A door opens.', duration: 5 },
+        { id: 's2', prompt: 'She walks in.', duration: 6 },
+      ],
+    });
+
+    it('asks for that shot’s text, told which shot of how many it is and how long it runs', () => {
+      const request = buildShotPromptEnhancementRequest(story(), 's2', { level: 'faithful' });
+
+      expect(request).toMatchObject({
+        medium: 'video',
+        selectedModel: 'kling-3.0-video',
+        prompt: 'She walks in.',
+        context: {
+          duration: 6,
+          sound: true,
+          hasStartImage: true,
+          isMultiShot: true,
+          shotIndex: 1,
+          shotCount: 2,
+          enhancementLevel: 'faithful',
+        },
+      });
+      // The frames belong to the story's opening, so a shot is not shown them, as on the web.
+      expect(request?.context).not.toHaveProperty('frameImageUrls');
+      expect(buildShotPromptEnhancementRequest(story(), 'gone')).toBeNull();
+    });
+
+    it('writes an enhanced prompt back to that shot alone', () => {
+      const draft = story();
+      const next = replaceShotPrompt(draft, 's2', 'She walks in slowly, lit from the hall.');
+
+      expect(next.multiPrompts).toEqual([
+        { id: 's1', prompt: 'A door opens.', duration: 5 },
+        { id: 's2', prompt: 'She walks in slowly, lit from the hall.', duration: 6 },
+      ]);
+      expect(next.prompt).toBe(draft.prompt);
+      expect(replaceShotPrompt(draft, 'gone', 'Nothing')).toBe(draft);
+    });
   });
 
   it('derives the reference mode from what is attached, and validates the models that had no branch', () => {

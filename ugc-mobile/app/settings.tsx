@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useRef, useState, useSyncExternalStore } from 'react';
 import { router } from 'expo-router';
-import { ArrowUpRight, Ban, Bell, ChevronRight, CircleHelp, CreditCard, EyeOff, FileText, Gift, ShieldCheck, Sparkles, Trash2, UserRound } from 'lucide-react-native';
+import { ArrowUpRight, Ban, Bell, ChevronRight, CircleHelp, CreditCard, EyeOff, FileText, Gift, LogOut, ShieldCheck, Sparkles, Trash2, UserRound } from 'lucide-react-native';
 import { ActivityIndicator, Linking, Platform, Pressable, View } from 'react-native';
 
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
@@ -83,6 +83,9 @@ export default function SettingsScreen() {
         onPress={() => router.push('/studio' as never)}
       />
 
+      {/* An account only: a guest's one session is this phone. */}
+      {user ? <SignOutEverywhereCard /> : null}
+
       {isAppearanceChoiceAvailable() ? (
         <>
           <GroupLabel>Display</GroupLabel>
@@ -124,7 +127,7 @@ export default function SettingsScreen() {
       <SettingsCard
         icon={<CircleHelp size={appTheme.icon.feature} color={theme.colors.text} />}
         title="Help & support"
-        body="Find quick guidance for creations, unlocks, and contacting support."
+        body="Find quick guidance for creations, recipes, and contacting support."
         onPress={() => router.push('/help' as never)}
       />
 
@@ -295,6 +298,71 @@ async function deleteGuestDataFor(deleteAccount: () => Promise<AccountDeletionOu
   } catch (error) {
     return guestDataNotDeletedNotice(error);
   }
+}
+
+/** Asked before every session of the account ends, in the web account menu's words. */
+const SIGN_OUT_EVERYWHERE_CONFIRMATION: ConfirmDialogRequest = {
+  title: 'Sign out of all devices?',
+  message: 'You’ll be signed out here and on every other device.',
+  confirmLabel: 'Sign out',
+  destructive: true,
+};
+
+/**
+ * The server could not confirm it (offline, timed out): this phone kept its
+ * session, and the other devices may still be signed in, so it is said plainly
+ * and the row is ready for another try.
+ */
+const SIGN_OUT_EVERYWHERE_FAILED: MessageDialogRequest = {
+  title: 'Could not sign out of all devices',
+  message: 'The sign-out did not go through, and you’re still signed in on this phone. Check your connection and try again.',
+};
+
+/**
+ * Whether the sign-out everywhere went through. Kept out of the component,
+ * whose handler React Compiler would otherwise skip for the branches inside
+ * this try.
+ */
+async function signedOutEverywhere(signOutEverywhere: () => Promise<void>) {
+  try {
+    await signOutEverywhere();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ends every session of the account, this phone's included (product decisions
+ * 2026-10-17, item 9), behind one confirmation. While it runs the app-wide
+ * sign-out cover is up, and it lands on the sign-in screen as the side menu's
+ * Sign out does; the other devices drop out on their next request.
+ */
+function SignOutEverywhereCard() {
+  const theme = useAppTheme();
+  const { signOutEverywhere } = useAuth();
+  // From the first tap until the answer: a second tap before the confirmation
+  // is drawn asks nothing more.
+  const busyRef = useRef(false);
+
+  const signOutOfAllDevices = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    const confirmed = await showConfirmDialog(SIGN_OUT_EVERYWHERE_CONFIRMATION);
+    const failed = confirmed && !(await signedOutEverywhere(signOutEverywhere));
+    busyRef.current = false;
+    if (failed) showMessageDialog(SIGN_OUT_EVERYWHERE_FAILED);
+  };
+
+  return (
+    <SettingsCard
+      icon={<LogOut size={appTheme.icon.feature} color={theme.colors.text} />}
+      title="Sign out of all devices"
+      body="Sign out here and on every other phone or browser."
+      action
+      onPress={() => void signOutOfAllDevices()}
+    />
+  );
 }
 
 /**

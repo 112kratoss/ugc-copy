@@ -196,6 +196,40 @@ describe('mobile push token unregister service', () => {
     ]);
   });
 
+  // Sign out of all devices (product decisions 2026-10-17, item 9) ends every
+  // session of the account, and a phone whose session ended cannot retire its
+  // own token afterwards: the app asks for the whole account first, by name.
+  it('retires every live token of the account for a sign-out everywhere', async () => {
+    const user = createUserClient();
+
+    await expect(unregisterMobilePushTokenForRoute({
+      getAdminSupabase: () => createRateLimitClient(),
+      requestBody: { scope: 'account', expoPushToken: 'ExponentPushToken[this-phone]', platform: 'ios' },
+      userSupabase: user.client,
+    })).resolves.toEqual({ ok: true, body: { success: true } });
+
+    expect(user.updateCalls).toHaveLength(1);
+    expect(user.updateCalls[0]?.eqFilters).toEqual([
+      ['user_id', 'user-1'],
+      ['is_active', true],
+    ]);
+  });
+
+  it('reads no other scope as the whole account', async () => {
+    const user = createUserClient();
+
+    await expect(unregisterMobilePushTokenForRoute({
+      getAdminSupabase: () => createRateLimitClient(),
+      requestBody: { scope: 'all', allDevices: true },
+      userSupabase: user.client,
+    })).resolves.toEqual({
+      ok: false,
+      body: { error: 'Provide an Expo push token or device ID.' },
+      status: 400,
+    });
+    expect(user.updateCalls).toEqual([]);
+  });
+
   it('returns a rate-limit error before token updates', async () => {
     const user = createUserClient();
     const result = await unregisterMobilePushTokenForRoute({

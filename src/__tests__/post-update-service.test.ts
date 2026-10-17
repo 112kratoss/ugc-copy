@@ -371,6 +371,87 @@ describe('updateOwnerPostForRoute', () => {
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
+  // Product decision 12 (2026-10-17): a post is public or private. An installed
+  // app's menu can still ask for unlisted, and a post saved before the
+  // decision may still hold it: either way the save stores and answers private.
+  describe('unlisted', () => {
+    function createDependencies() {
+      return {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async ({ patch }) => ({
+          postId: 'post-1',
+          visibility: patch.visibility as 'public' | 'unlisted' | 'private',
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      } satisfies PostUpdateDependencies;
+    }
+
+    it('stores and answers a requested unlisted as private', async () => {
+      const { client } = createSupabaseMock({ bundle: null });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: 'unlisted' },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        body: { visibility: 'private', showcasePath: null, resourceBundlePath: '/post/post-1/edit#recipe' },
+      });
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+        patch: expect.objectContaining({ visibility: 'private' }),
+      }));
+    });
+
+    it('moves a post still stored unlisted to private on a save that names no visibility', async () => {
+      const { client } = createSupabaseMock({
+        post: {
+          id: 'post-1',
+          user_id: 'user-1',
+          generation_id: null,
+          visibility: 'unlisted',
+          title: 'Old unlisted note',
+          description: null,
+          prompt: null,
+          body: 'Saved before unlisted was dropped.',
+          category: 'text',
+          post_format: 'text',
+          source_tool: null,
+          source_tool_slug: null,
+          source_kind: 'manual',
+          archived_at: null,
+          showcase_asset_path: null,
+          output_url: null,
+          review_status: 'visible',
+        },
+        bundle: null,
+      });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { title: 'Old unlisted note, retitled' },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({ ok: true, body: { visibility: 'private', showcasePath: null } });
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+        patch: expect.objectContaining({ visibility: 'private', title: 'Old unlisted note, retitled' }),
+      }));
+    });
+  });
+
   // The owner read APIs substitute "Untitled post"/"Untitled note" for an empty
   // title, and both composers PATCH the whole hydrated draft back. Without the
   // echo shim the fallback becomes the stored title, which the marketplace
@@ -616,6 +697,37 @@ describe('updateOwnerPostForRoute', () => {
       });
       expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
       expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    });
+
+    // Free unlocks left sales_count on 2026-10-17 (decision 6); a paid recipe
+    // whose unlocks came while it was free stays locked, as it was before.
+    it('rejects a bundle payload when its only unlocks were free ones', async () => {
+      const { client } = createSupabaseMock({
+        bundle: { access_mode: 'paid', status: 'published', sales_count: 0, free_unlock_count: 2 },
+      });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          title: 'Helpful launch proof',
+          body: 'A draft post with an unlock package.',
+          visibility: 'private',
+          resourceBundle: {
+            accessMode: 'paid',
+            summary: 'A hollowed-out package.',
+            previewText: 'Nothing like what buyers paid for.',
+            priceUsdCents: 100,
+            resources: { promptText: 'Gutted.', attachments: [], allowRemix: false },
+          },
+        },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({ ok: false, status: 409, body: { code: 'RESOURCE_BUNDLE_LOCKED' } });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
     });
 
     // Without this the delete is caught by a trigger that retires the bundle
@@ -975,6 +1087,36 @@ describe('updateOwnerPostForRoute', () => {
         postId: 'post-1',
       }));
       expect(dependencies.createGenerationShowcaseDerivative).not.toHaveBeenCalled();
+    });
+
+    // Unlisted is stored private (product decision 12), so it takes the
+    // going-private path: no public copy is made for it, and the one the
+    // public post had is taken down.
+    it('takes a public post asked to go unlisted private, media included', async () => {
+      const { client } = createSupabaseMock({
+        post: generatedPost,
+        bundle: null,
+        generation: generationRow,
+      });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: 'unlisted' },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({ ok: true, body: { visibility: 'private', showcasePath: null } });
+      expect(dependencies.createGenerationShowcaseDerivative).not.toHaveBeenCalled();
+      expect(dependencies.ensureDurableGenerationMedia).toHaveBeenCalledTimes(1);
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+        patch: expect.objectContaining({ visibility: 'private', showcase_asset_path: null }),
+      }));
+      expect(dependencies.removeGenerationShowcaseDerivative).toHaveBeenCalledWith(expect.objectContaining({
+        showcaseAssetPath: 'showcase/generation-1/example.abc123.jpg',
+      }));
     });
 
     it('keeps the current visibility when the private copy cannot be secured', async () => {

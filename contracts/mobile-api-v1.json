@@ -818,6 +818,7 @@
               "accessMode": "paid",
               "priceUsdCents": 900,
               "salesCount": 12,
+              "freeUnlockCount": 0,
               "allowRemix": true,
               "resourceKinds": [
                 "prompt"
@@ -935,6 +936,27 @@
           "generationId": "generation-1",
           "asset": null,
           "canRemix": true
+        }
+      }
+    },
+    "resolveShowcasePost": {
+      "method": "GET",
+      "path": "/api/showcase/posts/:postId/resolve",
+      "auth": "optional",
+      "cacheControl": "public, s-maxage=60, stale-while-revalidate=300",
+      "pathParams": {
+        "postId": "generation-1"
+      },
+      "response": {
+        "success": true,
+        "postId": "post-1"
+      },
+      "errors": {
+        "notFound": {
+          "status": 404,
+          "response": {
+            "error": "Post not found."
+          }
         }
       }
     },
@@ -1071,6 +1093,41 @@
       "cacheControl": "private, no-store",
       "response": {
         "success": true
+      }
+    },
+    "recordShareVisit": {
+      "method": "POST",
+      "path": "/api/showcase/share",
+      "auth": "none",
+      "cacheControl": "private, no-store",
+      "request": {
+        "postId": "post-1",
+        "eventType": "share_visit",
+        "sourceSurface": "feed"
+      },
+      "requestVariants": {
+        "unknownSurface": {
+          "postId": "post-1",
+          "eventType": "share_visit",
+          "sourceSurface": "a-surface-from-a-newer-app"
+        }
+      },
+      "response": {
+        "success": true
+      },
+      "errors": {
+        "notPublic": {
+          "status": 404,
+          "response": {
+            "error": "Only public creations can be shared"
+          }
+        },
+        "missingSurface": {
+          "status": 400,
+          "response": {
+            "error": "Invalid share source surface"
+          }
+        }
       }
     },
     "shareCreatorProfile": {
@@ -1459,6 +1516,7 @@
               "status": "published",
               "priceUsdCents": 0,
               "salesCount": 0,
+              "freeUnlockCount": 0,
               "earningsUsdCents": 0,
               "resourceKinds": [
                 "prompt",
@@ -1517,6 +1575,7 @@
               "status": "published",
               "priceUsdCents": 0,
               "salesCount": 0,
+              "freeUnlockCount": 0,
               "earningsUsdCents": 0,
               "resourceKinds": [
                 "prompt",
@@ -1547,7 +1606,8 @@
         "summary": {
           "earningsUsdCents": 0,
           "listingCount": 1,
-          "salesCount": 0
+          "salesCount": 0,
+          "freeUnlockCount": 0
         }
       },
       "pagination": {
@@ -1589,6 +1649,7 @@
             "status": "published",
             "priceUsdCents": 0,
             "salesCount": 0,
+            "freeUnlockCount": 0,
             "earningsUsdCents": 0,
             "resourceKinds": [
               "prompt",
@@ -1701,6 +1762,7 @@
             "accessMode": "free",
             "priceUsdCents": 0,
             "salesCount": 0,
+            "freeUnlockCount": 0,
             "allowRemix": true,
             "priceQuote": {
               "formatted": "Free",
@@ -1745,6 +1807,7 @@
           "accessMode": "free",
           "priceUsdCents": 0,
           "salesCount": 0,
+          "freeUnlockCount": 0,
           "allowRemix": true,
           "priceQuote": {
             "formatted": "Free",
@@ -1810,6 +1873,7 @@
           "accessMode": "free",
           "priceUsdCents": 0,
           "salesCount": 0,
+          "freeUnlockCount": 0,
           "allowRemix": true,
           "priceQuote": {
             "formatted": "Free",

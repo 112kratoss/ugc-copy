@@ -1653,6 +1653,24 @@ describe('ShowcaseReelViewer pagination', () => {
       expect(screen.getAllByRole('button', { name: 'Unlock for $9.00 · 900 credits' }).length).toBeGreaterThan(0);
     });
 
+    // The badge beside the recipe's title is a chip, and a chip reads in
+    // credits on both clients; the viewer's quote stays on the unlock button.
+    it("prices the recipe's chip in credits, never in the viewer's quote", () => {
+      stubRequests();
+      render(<ShowcaseReelViewer {...reelProps({
+        items: [createShowcaseItem({
+          asset: {
+            ...paidAsset,
+            priceQuote: { currency: 'INR', amountSubunits: 75000, formatted: '₹750', note: null },
+          },
+        })],
+      })} />);
+
+      expect(screen.getAllByText('900 credits').length).toBeGreaterThan(0);
+      expect(screen.queryByText('₹750 · 900 credits')).not.toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Unlock for ₹750 · 900 credits' }).length).toBeGreaterThan(0);
+    });
+
     it('offers credits alone below the cash minimum, where the server refuses cash', () => {
       authState.session = { access_token: 'token-1' };
       authState.credits = 1200;
@@ -2299,6 +2317,23 @@ describe('ShowcaseReelViewer pagination', () => {
       const { container } = render(<ShowcaseReelViewer {...reelProps()} />);
 
       expect(within(details(container)).getAllByText(prompt)).toHaveLength(1);
+    });
+
+    // Beside Image and Video, as the post page and the app name it; it read "Tip / note".
+    it('labels a text post Text', () => {
+      const { container } = render(<ShowcaseReelViewer {...reelProps({
+        items: [createShowcaseItem({
+          postFormat: 'text',
+          category: 'text',
+          mediaUrl: null,
+          mediaKind: null,
+          prompt: '',
+          body: 'Open with tension.',
+        })],
+      })} />);
+
+      expect(within(details(container)).getByText('Text')).toBeInTheDocument();
+      expect(container.textContent).not.toContain('Tip / note');
     });
 
     it('copies the prompt it shows', async () => {

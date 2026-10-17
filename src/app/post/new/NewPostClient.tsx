@@ -82,7 +82,8 @@ import ResourceCardsSection from './ResourceCardsSection';
 import CreatableCombobox, { type CreatableComboboxOption } from './CreatableCombobox';
 import type { EditablePostDraft } from './post-editor-types';
 
-type PostVisibility = 'public' | 'unlisted' | 'private';
+/** A post is public or private (decision 12, 2026-10-17). */
+type PostVisibility = 'public' | 'private';
 type ProofMode = 'media' | 'text';
 type PostFormat = 'text' | 'media' | 'mixed';
 type PostMediaCategory = Exclude<ShowcaseItemCategory, 'text'>;
@@ -396,8 +397,15 @@ function formatGeneratedCategory(value: string | null | undefined): PostMediaCat
 
 function getVisibilityStatusLabel(v: PostVisibility): string {
   if (v === 'public') return 'Visible in Explore';
-  if (v === 'unlisted') return 'Shareable by link only';
   return 'Saved privately in Studio';
+}
+
+/**
+ * A post saved as unlisted before 2026-10-17 opens as private: the server
+ * stores a requested unlisted post as private on every save anyway.
+ */
+function getComposerVisibility(stored: EditablePostDraft['visibility'] | undefined): PostVisibility {
+  return stored === 'unlisted' ? 'private' : stored ?? 'public';
 }
 
 async function uploadResourceFile(
@@ -654,7 +662,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     }];
   });
   const [sourceToolsData, setSourceToolsData] = useState<SourceToolOption[]>([]);
-  const [visibility, setVisibility] = useState<PostVisibility>(initialPost?.visibility ?? 'public');
+  const [visibility, setVisibility] = useState<PostVisibility>(() => getComposerVisibility(initialPost?.visibility));
   const [category, setCategory] = useState<PostMediaCategory>(initialCategory);
   const [isDetailsOpen, setIsDetailsOpen] = useState(Boolean(initialPost?.description));
   const [resourceAccessMode, setResourceAccessMode] = useState<PostResourceBundleAccessMode>(initialResourceAccessMode);
@@ -699,7 +707,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   );
   const [isLoadingGeneration, setIsLoadingGeneration] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
-  const submitVisibilityRef = useRef<PostVisibility>(initialPost?.visibility ?? 'public');
+  const submitVisibilityRef = useRef<PostVisibility>(getComposerVisibility(initialPost?.visibility));
   const priceInputRef = useRef<HTMLInputElement | null>(null);
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const postSectionRef = useRef<HTMLDivElement | null>(null);
@@ -2433,7 +2441,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     : createdPost?.showcasePath
       ? 'View post'
       : 'Open editor';
-  const isEditingUnlisted = isEditMode && displayVisibility === 'unlisted';
   // Where the editor was opened from wins; edit mode's own default is Studio.
   // The seller dashboard's edit links carry `from=seller`, and used to read
   // "Back to studio" over a link that returned to /marketplace/sell.
@@ -2470,51 +2477,28 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
       {!createdPost ? (
         <div className="fixed inset-x-4 bottom-4 z-40 lg:hidden">
-          {isEditingUnlisted ? (
-            <div className="flex items-center justify-between gap-3 rounded-[24px] border border-white/10 bg-zinc-950/95 p-3 shadow-[0_20px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl">
-              <div className="min-w-0">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                  Unlisted post
-                </div>
-                <div className="mt-1 truncate text-sm font-semibold text-white">
-                  Shareable by link only
-                </div>
-              </div>
-              <button
-                type="submit"
-                form="post-composer-form"
-                disabled={isSubmitting || isLoadingGeneration}
-                onClick={() => submitWithVisibility('unlisted')}
-                className="ui-focus-ring inline-flex min-h-12 shrink-0 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-70"
-              >
-                {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                Save unlisted
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-3 rounded-[24px] border border-white/10 bg-zinc-950/95 p-3 shadow-[0_20px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl">
-              <button
-                type="submit"
-                form="post-composer-form"
-                disabled={isSubmitting || isLoadingGeneration}
-                onClick={() => submitWithVisibility('private')}
-                className="inline-flex flex-1 shrink-0 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-70"
-              >
-                {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                Save private
-              </button>
-              <button
-                type="submit"
-                form="post-composer-form"
-                disabled={isSubmitting || isLoadingGeneration}
-                onClick={() => submitWithVisibility('public')}
-                className="ui-focus-ring inline-flex min-h-12 flex-1 shrink-0 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-70"
-              >
-                {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgePlus className="h-4 w-4" />}
-                Publish public
-              </button>
-            </div>
-          )}
+          <div className="flex items-center gap-3 rounded-[24px] border border-white/10 bg-zinc-950/95 p-3 shadow-[0_20px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+            <button
+              type="submit"
+              form="post-composer-form"
+              disabled={isSubmitting || isLoadingGeneration}
+              onClick={() => submitWithVisibility('private')}
+              className="inline-flex flex-1 shrink-0 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Save private
+            </button>
+            <button
+              type="submit"
+              form="post-composer-form"
+              disabled={isSubmitting || isLoadingGeneration}
+              onClick={() => submitWithVisibility('public')}
+              className="ui-focus-ring inline-flex min-h-12 flex-1 shrink-0 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <BadgePlus className="h-4 w-4" />}
+              Publish public
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -3572,65 +3556,28 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
                 {renderSectionError('publish')}
 
-                {isEditingUnlisted ? (
-                  <div className="mt-5 space-y-4">
-                    <div className="rounded-[24px] border border-amber-400/20 bg-amber-500/10 px-5 py-4 text-sm leading-6 text-amber-50">
-                      This post is currently <span className="font-semibold">Unlisted</span> — shareable by link only.
-                    </div>
-                    <div className="flex flex-wrap gap-3">
-                      <button
-                        type="submit"
-                        disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
-                        onClick={() => submitWithVisibility('unlisted')}
-                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-70"
-                      >
-                        {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                        Save unlisted changes
-                      </button>
-                      <button
-                        type="submit"
-                        disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
-                        onClick={() => submitWithVisibility('public')}
-                        className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-70"
-                      >
-                        {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                        Make public
-                      </button>
-                      <button
-                        type="submit"
-                        disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
-                        onClick={() => submitWithVisibility('private')}
-                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-70"
-                      >
-                        {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                        Make private
-                      </button>
-                    </div>
+                <div className="mt-5">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <button
+                      type="submit"
+                      disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
+                      onClick={() => submitWithVisibility('private')}
+                      className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-5 text-left transition hover:border-white/20 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      <div className="text-sm font-semibold text-zinc-200">Save private</div>
+                      <p className="mt-1.5 text-xs leading-5 text-zinc-500">Saved privately in Studio.</p>
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
+                      onClick={() => submitWithVisibility('public')}
+                      className="ui-focus-ring rounded-2xl bg-[var(--ui-primary)] px-5 py-5 text-left transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      <div className="text-sm font-extrabold text-[var(--ui-primary-on)]">Publish public</div>
+                      <p className="mt-1.5 text-xs leading-5 text-[#5c2c20]">Visible in Explore.</p>
+                    </button>
                   </div>
-                ) : (
-                  <div className="mt-5">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <button
-                        type="submit"
-                        disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
-                        onClick={() => submitWithVisibility('private')}
-                        className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-5 text-left transition hover:border-white/20 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-70"
-                      >
-                        <div className="text-sm font-semibold text-zinc-200">Save private</div>
-                        <p className="mt-1.5 text-xs leading-5 text-zinc-500">Saved privately in Studio.</p>
-                      </button>
-                      <button
-                        type="submit"
-                        disabled={isSubmitting || isLoadingGeneration || Boolean(createdPost)}
-                        onClick={() => submitWithVisibility('public')}
-                        className="ui-focus-ring rounded-2xl bg-[var(--ui-primary)] px-5 py-5 text-left transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-70"
-                      >
-                        <div className="text-sm font-extrabold text-[var(--ui-primary-on)]">Publish public</div>
-                        <p className="mt-1.5 text-xs leading-5 text-[#5c2c20]">Visible in Explore.</p>
-                      </button>
-                    </div>
-                  </div>
-                )}
+                </div>
 
               </div>
             </form>

@@ -266,6 +266,15 @@ export function parseModelCatalogPage(
 export const GENERATION_PROMPT_MAX_LENGTH = 10000;
 
 /**
+ * The longest motion prompt: Kie documents 2,500 characters for both motion-control
+ * models (docs/model-api-references/kling2.6_motion_control.md and the Kling 3.0
+ * page), so a longer one was held, sent and refused by the provider. Every motion
+ * start, the motion composers' inputs and their counters read this one value;
+ * image and video prompts keep GENERATION_PROMPT_MAX_LENGTH.
+ */
+export const MOTION_PROMPT_MAX_LENGTH = 2500;
+
+/**
  * What one prompt enhancement debits. The enhancement service charges this
  * value and every Enhance button, on the web and in the app, prints it, so the
  * price a creator sees is the price taken. The app's buttons showed none.

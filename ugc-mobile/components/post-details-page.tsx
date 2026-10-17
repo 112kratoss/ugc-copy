@@ -124,7 +124,7 @@ export function PostDetailsPage({
     queryKey: ['post-resource-bundle', unlock?.postId, unlock?.resourceId, user?.id ?? null],
     enabled: active && Boolean(unlock),
     queryFn: async () => {
-      if (!unlock) throw new Error('Missing unlock details');
+      if (!unlock) throw new Error('Missing recipe details');
       return api.getMarketplaceResourceDetail(unlock.resourceId, { postId: unlock.postId });
     },
     staleTime: 1000 * 60,
@@ -182,6 +182,7 @@ export function PostDetailsPage({
     ? formatLockedBundleFacts({
       accessMode: bundle.accessMode ?? unlock.accessMode,
       salesCount: bundle.salesCount,
+      freeUnlockCount: bundle.freeUnlockCount,
       updatedAt: bundle.lockedPreview?.updatedAt,
     })
     : '';
@@ -241,7 +242,7 @@ export function PostDetailsPage({
         {purchasedRevision ? (
           <View style={{ gap: 8 }}>
             <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
-              The creator has updated this unlock since you bought it. You can read either version.
+              The creator has updated this recipe since you bought it. You can read either version.
             </Text>
             <ResourceRevisionSwitch
               selected={shownRevision ? 'purchased' : 'latest'}
@@ -267,7 +268,7 @@ export function PostDetailsPage({
       <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: `${accentColor(unlockAccent, theme.colors)}55`, backgroundColor: theme.colors.surface, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
           <View style={{ flex: 1, gap: 5 }}>
-            <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>Creator's resources</Text>
+            <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>Recipe</Text>
             {lockedFacts ? (
               <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{lockedFacts}</Text>
             ) : null}
@@ -592,7 +593,7 @@ function ResourcesHeading({ pills }: { pills: Array<{ label: string; accent: Too
   return (
     <View style={{ gap: 8 }}>
       <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
-        Creator's resources
+        Recipe
       </Text>
       <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         {pills.map((pill) => <Pill key={pill.label} label={pill.label} accent={pill.accent} />)}

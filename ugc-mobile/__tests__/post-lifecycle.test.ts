@@ -92,10 +92,60 @@ describe('post lifecycle', () => {
       id: 'post-1',
       visibility: 'unlisted',
       archivedAt: null,
-      bundle: { accessMode: 'paid', status: 'draft', salesCount: 0 },
+      bundle: { accessMode: 'paid', status: 'draft', salesCount: 0, freeUnlockCount: 0 },
     });
     expect(toPostLifecyclePost({ id: 'post-2', visibility: 'bogus' }).visibility).toBe('private');
     expect(toPostLifecyclePost({ id: 'post-3', bundle: null }).bundle).toBeNull();
+  });
+
+  // Decision 6 (2026-10-17): salesCount counts paid unlocks only. A free unlock
+  // is still an unlock its owner keeps, and the server still asks again before
+  // deleting a post that has one, so both confirmations read both counts, as
+  // the web's src/lib/post-lifecycle-policy.ts does.
+  describe('a recipe unlocked only for free', () => {
+    const openedRecipe: PostLifecyclePost = {
+      ...publicWithListedRecipe,
+      bundle: { accessMode: 'free', status: 'published', salesCount: 0, freeUnlockCount: 4 },
+    };
+
+    it('still says the people who opened it keep their unlock before it leaves public', async () => {
+      const confirm = vi.fn(async () => false);
+
+      await changePostVisibility({ api: { updatePost: vi.fn() }, post: openedRecipe, visibility: 'private', confirm });
+
+      expect(confirm).toHaveBeenCalledWith(expect.objectContaining({
+        message: 'Its recipe comes off the marketplace until the post is public again; buyers keep their unlock.',
+      }));
+    });
+
+    it('still warns before a delete that the server will ask again', async () => {
+      const confirm = vi.fn(async () => false);
+
+      await deletePost({ api: { deletePost: vi.fn() }, post: openedRecipe, confirm });
+
+      expect(confirm).toHaveBeenCalledWith(expect.objectContaining({
+        message: 'People have bought its recipe. Archive keeps it resolvable for them; you will be asked again before a forced delete.',
+      }));
+    });
+
+    it('keeps the free count of the record a surface holds, and of the post it reads', async () => {
+      const bundle = { accessMode: 'free' as const, status: 'published', salesCount: 0, freeUnlockCount: 4 };
+      expect(toPostLifecyclePost({ id: 'post-1', visibility: 'public', bundle }).bundle)
+        .toEqual({ accessMode: 'free', status: 'published', salesCount: 0, freeUnlockCount: 4 });
+
+      const api = { getOwnerPost: vi.fn(async () => ({ success: true, post: { id: 'post-1', visibility: 'public', archivedAt: null, bundle } })) };
+      await expect(resolveLinkedLifecyclePost({ api: api as never, item: { linkedPostId: 'post-1', linkedPostDetailsLoaded: false } }))
+        .resolves.toMatchObject({ bundle: { salesCount: 0, freeUnlockCount: 4 } });
+    });
+
+    it('reads a record that carries no free count as none', async () => {
+      const confirm = vi.fn(async () => false);
+      const unsold = toPostLifecyclePost({ id: 'post-1', visibility: 'public', bundle: { accessMode: 'free', status: 'published', salesCount: 0 } });
+
+      await deletePost({ api: { deletePost: vi.fn() }, post: unsold, confirm });
+
+      expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ message: 'This cannot be undone.' }));
+    });
   });
 
   it('asks with the shared policy copy before a listed recipe leaves public, and does nothing on cancel', async () => {
@@ -158,7 +208,9 @@ describe('post lifecycle', () => {
     expect(describePostLifecycleError(new Error('   '), 'Please try again.')).toBe('Please try again.');
   });
 
-  it('offers the three states through an action sheet, with the current one shown as state', () => {
+  // Decision 12 (2026-10-17): a post is Public or Private. The server stores a
+  // requested unlisted as private, so an old unlisted post reads as Private.
+  it('offers public and private through an action sheet, with the current one shown as state', () => {
     const presented: ActionSheetRequest[] = [];
     const unregister = registerActionSheetPresenter((request) => presented.push(request));
     const onPick = vi.fn();
@@ -175,14 +227,14 @@ describe('post lifecycle', () => {
     expect(alertState.alert).not.toHaveBeenCalled();
     expect(presented).toHaveLength(1);
     expect(presented[0].title).toBe('Change visibility');
-    expect(presented[0].actions.map((action) => action.label)).toEqual(['Public', 'Unlisted', 'Private']);
+    expect(presented[0].actions.map((action) => action.label)).toEqual(['Public', 'Private']);
 
-    const current = presented[0].actions.find((action) => action.label === 'Unlisted');
+    const current = presented[0].actions.find((action) => action.label === 'Private');
     expect(current?.detail).toBe('Current');
     expect(current?.disabled).toBe(true);
 
-    presented[0].actions.find((action) => action.label === 'Private')?.onPress?.();
-    expect(onPick).toHaveBeenCalledWith('private');
+    presented[0].actions.find((action) => action.label === 'Public')?.onPress?.();
+    expect(onPick).toHaveBeenCalledWith('public');
   });
 
   it('falls back to the system dialog when no host is mounted, cancel last', () => {
@@ -190,7 +242,7 @@ describe('post lifecycle', () => {
     pickPostVisibility('unlisted', onPick);
 
     const actions = alertState.alert.mock.calls[0][2] as Array<{ text: string; style?: string }>;
-    expect(actions.map((action) => action.text)).toEqual(['Public', 'Unlisted', 'Private', 'Cancel']);
+    expect(actions.map((action) => action.text)).toEqual(['Public', 'Private', 'Cancel']);
     expect(actions.at(-1)?.style).toBe('cancel');
   });
 

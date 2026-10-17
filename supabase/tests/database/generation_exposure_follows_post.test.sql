@@ -102,7 +102,7 @@ select is(
   'serving the post''s new derivative'
 );
 
--- 3. Unlisted is exposed but not public.
+-- 3. Unlisted is stored private (product decision 12, 2026-10-17).
 select public.update_post_with_resource_bundle(
   'e3000000-0000-4000-8000-00000000e001'::uuid,
   'e1000000-0000-4000-8000-00000000e001'::uuid,
@@ -116,8 +116,8 @@ select is(
 );
 select is(
   (select showcase_asset_path from public.generations where id = 'e2000000-0000-4000-8000-00000000e001'::uuid),
-  'showcase/e2000000-0000-4000-8000-00000000e001/one.def456.jpg',
-  'but still serves its derivative'
+  null,
+  'and serves no derivative, being stored private'
 );
 
 select public.update_post_with_resource_bundle(

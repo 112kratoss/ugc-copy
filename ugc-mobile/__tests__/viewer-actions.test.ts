@@ -102,8 +102,8 @@ describe('viewer rail slots', () => {
     // No bundle attached yet, so the unlock slot invites creating one — the rail label
     // stays short and the full phrasing lives on the accessibility label.
     expect(slots.find((slot) => slot.id === 'unlock')).toMatchObject({
-      label: 'Unlock',
-      a11yLabel: 'Add an unlock bundle',
+      label: 'Recipe',
+      a11yLabel: 'Add a recipe',
     });
   });
 

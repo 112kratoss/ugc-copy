@@ -89,6 +89,9 @@ type BundleSummaryRow = {
   status: PostResourceBundleStatus;
   price_usd_cents: number;
   sales_count: number;
+  // The compact summary RPC returns it; the select fallback, which serves only
+  // a database older than that RPC and this column, does not.
+  free_unlock_count?: number;
   earnings_usd_cents: number;
   prompt_text?: string | null;
   notes_markdown?: string | null;
@@ -127,7 +130,9 @@ interface OwnerPostBundleSummary {
   accessMode: 'free' | 'paid';
   status: PostResourceBundleStatus;
   priceUsdCents: number;
+  /** Paid unlocks. A free unlock is not a sale (decision 6, 2026-10-17). */
   salesCount: number;
+  freeUnlockCount: number;
   earningsUsdCents: number;
   resourceKinds: PostResourceKind[];
   /** The post's moderation state: anything but 'visible' keeps the recipe off the marketplace. */
@@ -698,6 +703,7 @@ async function toOwnerPostListItem(
           status: bundleRow.status,
           priceUsdCents: bundleRow.price_usd_cents,
           salesCount: bundleRow.sales_count,
+          freeUnlockCount: bundleRow.free_unlock_count ?? 0,
           earningsUsdCents: bundleRow.earnings_usd_cents,
           resourceKinds,
           reviewStatus: row.review_status ?? null,
@@ -835,10 +841,12 @@ export async function getOwnerPostDetail(
       : {
           accessMode: 'none',
         },
+    // Any unlock of a paid recipe locks its editor, as it did while free
+    // unlocks were counted in salesCount.
     hasPaidOrders: Boolean(
       bundleDetail &&
         bundleDetail.accessMode === 'paid' &&
-        bundleDetail.salesCount > 0
+        bundleDetail.salesCount + bundleDetail.freeUnlockCount > 0
     ),
   };
 }

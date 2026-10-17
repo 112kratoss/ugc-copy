@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { GENERATION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import { GenerationModelCatalogSchemaUnavailableError } from '@/lib/generation-model-catalog-store';
 import {
@@ -1319,5 +1319,38 @@ describe('a page run the provider is sent', () => {
     expect(sent?.input?.image_input).toEqual([HERO]);
     expect(reservation?.p_prompt).toBe('@hero on a clean tabletop.');
     expect(reservation?.p_workflow_settings).toMatchObject({ compiledPrompt: sent?.input?.prompt });
+  });
+
+  // Product decision 20: a motion run on this route is held to Kie's own 2,500 characters.
+  describe('a motion run’s prompt', () => {
+    const STORAGE = 'https://project.supabase.co/storage/v1/object/sign/uploads/user-1';
+    const motionRun = (prompt: string) => startFromPage({
+      kind: 'motion',
+      modelId: 'kling-2.6',
+      prompt,
+      shots: [],
+      settings: { resolution: '720p', characterOrientation: 'video', duration: 4 },
+      inputs: [
+        { slot: 'characterImage', kind: 'image', url: `${STORAGE}/character.png?token=t` },
+        { slot: 'referenceVideo', kind: 'video', url: `${STORAGE}/reference.mp4?token=t`, durationSeconds: 4 },
+      ],
+    });
+
+    it('is refused past 2,500 characters, before anything is held', async () => {
+      await expect(motionRun('a'.repeat(MOTION_PROMPT_MAX_LENGTH + 1))).rejects.toMatchObject({
+        status: 400,
+        message: `Prompts support up to ${MOTION_PROMPT_MAX_LENGTH} characters.`,
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('starts at 2,500 characters', async () => {
+      const atLimit = 'a'.repeat(MOTION_PROMPT_MAX_LENGTH);
+      const { outcome, request, reservation } = await motionRun(atLimit);
+
+      expect(outcome).toMatchObject({ success: true, predictionId: 'provider-task-1', modelId: 'kling-2.6' });
+      expect((request as { input?: { prompt?: string } } | undefined)?.input?.prompt).toBe(atLimit);
+      expect(reservation?.p_prompt).toBe(atLimit);
+    });
   });
 });

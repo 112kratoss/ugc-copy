@@ -1220,6 +1220,9 @@ describe('ShowcaseClient save actions', () => {
     expect(unlockLink).toHaveAttribute('href', expect.stringContaining('#recipe'));
     // Both ways to pay, as the post page names them.
     expect(unlockLink).toHaveAccessibleName(/^Unlock for \$9\.00 · 900 credits for /);
+    // The tile's badge is a chip: credits alone, as the app prices it.
+    expect(screen.getByText('900 credits')).toBeInTheDocument();
+    expect(screen.queryByText('$9.00')).not.toBeInTheDocument();
   });
 
   it('prices a credits-only recipe in credits alone, with no cash figure the checkout refuses', () => {

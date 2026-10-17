@@ -358,6 +358,26 @@ function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string)
   expect(response.headers.get('x-request-id')).toBe(requestId);
 }
 
+/**
+ * The start this route served until product decision 21 (2026-10-17), since when its POST
+ * answers 410. The start itself is kept, and builds the provider requests POST
+ * /api/generations sends through the same start services, so these cases drive it through
+ * the adapter the route used.
+ */
+async function importRetiredStart() {
+  const [{ postGenerationRouteResponse }, { postImageGenerationForRoute }] = await Promise.all([
+    import('@/lib/generation-route-adapter-service'),
+    import('@/lib/image-generation-route-service'),
+  ]);
+  return {
+    POST: (request: Request) => postGenerationRouteResponse({
+      request,
+      postGenerationForRoute: postImageGenerationForRoute,
+      kieApiKey: process.env.KIE_AI_API_KEY,
+    }),
+  };
+}
+
 describe('/api/generate-image route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -399,11 +419,44 @@ describe('/api/generate-image route', () => {
     vi.restoreAllMocks();
   });
 
+  // Product decision 21 (2026-10-17): every supported build and the web start a run on
+  // POST /api/generations and only poll here, so a start is answered 410 and costs nothing.
+  it('answers a start 410 before reading it, asking who sent it, or holding anything', async () => {
+    currentSupabaseMock = createSupabaseMock(null);
+    const { POST } = await import('@/app/api/generate-image/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+          'x-request-id': 'image-retired-1',
+        },
+        body: JSON.stringify({
+          model: 'nano-banana-2',
+          prompt: 'A cinematic product shot',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(410);
+    expectPrivateNoStoreTraceHeaders(response, 'image-retired-1');
+    expect(await response.json()).toEqual({
+      code: 'GENERATION_ROUTE_RETIRED',
+      error: expect.stringContaining('Update Magicbooklet'),
+    });
+    expect(createUserClientMock).not.toHaveBeenCalled();
+    expect(rawCreateClientMock).not.toHaveBeenCalled();
+    expect(currentSupabaseMock.client.auth.getUser).not.toHaveBeenCalled();
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('authenticates before reporting provider configuration errors', async () => {
     currentSupabaseMock = createSupabaseMock(null, null, true, true, null);
     delete process.env.KIE_AI_API_KEY;
 
-    const { POST } = await import('@/app/api/generate-image/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-image', {
         method: 'POST',
@@ -434,7 +487,7 @@ describe('/api/generate-image route', () => {
   it('rejects a stale catalog revision before deducting credits', async () => {
     currentSupabaseMock = createSupabaseMock(null);
 
-    const { POST } = await import('@/app/api/generate-image/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-image', {
         method: 'POST',
@@ -467,7 +520,7 @@ describe('/api/generate-image route', () => {
       is_public: true,
     });
 
-    const { POST } = await import('@/app/api/generate-image/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-image', {
         method: 'POST',
@@ -497,7 +550,7 @@ describe('/api/generate-image route', () => {
   it('rejects inaccessible sourceGenerationId values before inserting', async () => {
     currentSupabaseMock = createSupabaseMock(null);
 
-    const { POST } = await import('@/app/api/generate-image/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-image', {
         method: 'POST',
@@ -522,7 +575,7 @@ describe('/api/generate-image route', () => {
   it('rejects invalid GPT Image 2 resolution combinations before inserting or deducting credits', async () => {
     currentSupabaseMock = createSupabaseMock(null);
 
-    const { POST } = await import('@/app/api/generate-image/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-image', {
         method: 'POST',
@@ -555,7 +608,7 @@ describe('/api/generate-image route', () => {
     const providerFetch = vi.fn();
     vi.stubGlobal('fetch', providerFetch);
 
-    const { POST } = await import('@/app/api/generate-image/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-image', {
         method: 'POST',
@@ -591,7 +644,7 @@ describe('/api/generate-image route', () => {
       is_public: true,
     });
 
-    const { POST } = await import('@/app/api/generate-image/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-image', {
         method: 'POST',

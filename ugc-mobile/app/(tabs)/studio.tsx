@@ -57,8 +57,8 @@ const NOTIFICATION_CATEGORIES = [
     tone: 'danger',
   },
   {
-    title: 'Unlocks & credits',
-    body: 'Credit purchases, restores, and resource unlocks stay visible after the push fades.',
+    title: 'Recipes & credits',
+    body: 'Credit purchases, restores, and recipe unlocks stay visible after the push fades.',
     icon: CreditCard,
     tone: 'amber',
   },
@@ -514,7 +514,7 @@ function NotificationPreferences({
   const theme = useAppTheme();
   const rows: Array<{ key: keyof PreferenceState; title: string; body: string }> = [
     { key: 'generationEnabled', title: 'Generation', body: 'Finished and failed renders.' },
-    { key: 'commerceEnabled', title: 'Credits & unlocks', body: 'Purchases, restores, and resource access.' },
+    { key: 'commerceEnabled', title: 'Recipes & credits', body: 'Purchases, restores, and resource access.' },
     { key: 'socialEnabled', title: 'Creator activity', body: 'Follows, saves, remixes, and shares.' },
   ];
 

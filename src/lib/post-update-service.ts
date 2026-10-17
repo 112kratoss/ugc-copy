@@ -150,6 +150,8 @@ type BundleStatusRow = {
   access_mode: 'none' | 'free' | 'paid';
   status: 'draft' | 'published';
   sales_count?: number | null;
+  // Free unlocks lock a paid recipe's editor as they did while sales_count counted them.
+  free_unlock_count?: number | null;
   summary?: string | null;
   preview_text?: string | null;
   prompt_text?: string | null;
@@ -317,12 +319,15 @@ function normalizeBody(value: unknown): string | null {
     : null;
 }
 
-function normalizeVisibility(value: unknown): ShowcaseVisibility | null {
-  if (value === 'public' || value === 'unlisted' || value === 'private') {
+// Unlisted was dropped (product decision 12, 2026-10-17): a post is public or
+// private. An installed app can still ask for unlisted and a post saved before
+// the decision can still hold it; either way the save stores private.
+function normalizeVisibility(value: unknown): 'public' | 'private' | null {
+  if (value === 'public' || value === 'private') {
     return value;
   }
 
-  return null;
+  return value === 'unlisted' ? 'private' : null;
 }
 
 function resourceBundleUsesMediaScope(value: unknown): boolean {
@@ -483,7 +488,7 @@ async function loadOwnedBundleStatus(
   const { data, error } = await adminSupabase
     .from('post_resource_bundles')
     .select(
-      'id, access_mode, status, sales_count, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, resource_items, resource_sections',
+      'id, access_mode, status, sales_count, free_unlock_count, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, resource_items, resource_sections',
     )
     .eq('post_id', postId)
     .eq('owner_user_id', ownerUserId)
@@ -1206,7 +1211,7 @@ export async function updateOwnerPostForRoute({
       hasResourceBundlePayload
       && existingBundle
       && existingBundle.access_mode === 'paid'
-      && (existingBundle.sales_count ?? 0) > 0
+      && ((existingBundle.sales_count ?? 0) + (existingBundle.free_unlock_count ?? 0)) > 0
     ) {
       return createSoldResourceBundleLockedResult();
     }
@@ -1266,7 +1271,7 @@ export async function updateOwnerPostForRoute({
       };
     }
 
-    const nextVisibility = normalizeVisibility(body.visibility) ?? post.visibility;
+    const nextVisibility = normalizeVisibility(body.visibility) ?? normalizeVisibility(post.visibility) ?? 'private';
 
     const nextCategory =
       post.post_format === 'text'
@@ -1305,7 +1310,7 @@ export async function updateOwnerPostForRoute({
     const frozenSoldBundleForRepublish = nextVisibility === 'public'
       && !hasResourceBundlePayload
       && existingBundle
-      && (existingBundle.sales_count ?? 0) > 0
+      && ((existingBundle.sales_count ?? 0) + (existingBundle.free_unlock_count ?? 0)) > 0
       ? buildStoredBundleForQualityCheck(existingBundle)
       : null;
     const bundleForPublicValidation = hasResourceBundlePayload

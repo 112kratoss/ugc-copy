@@ -444,6 +444,27 @@ describe('mobile notifications helper', () => {
     consoleError.mockRestore();
   });
 
+  // Sign out of all devices: the other phones lose their session with it and
+  // could not retire their own tokens afterwards, so the account's go first.
+  it('retires every push token of the account before a sign-out everywhere, then this install\'s', async () => {
+    const deadline = new AbortController();
+    const api = {
+      unregisterMobilePushToken: vi.fn(async () => {
+        throw new Error('offline');
+      }),
+    };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const { unregisterAccountMobilePushNotifications } = await import('../lib/notifications');
+    await unregisterAccountMobilePushNotifications(api as never, { signal: deadline.signal });
+
+    expect(api.unregisterMobilePushToken).toHaveBeenCalledWith({ scope: 'account' }, deadline.signal);
+    // A failed request is logged; this install's own registration goes either way.
+    expect(notificationsMocks.unregisterForNotificationsAsync).toHaveBeenCalledTimes(1);
+    expect(secureStoreMocks.deleteItemAsync).toHaveBeenCalledWith('magicbooklet.mobileNotifications.expoPushToken');
+    consoleError.mockRestore();
+  });
+
   it('asks the backend for nothing when this install never registered for push', async () => {
     // The device id is written alongside the first token and outlives sign-out,
     // so an empty store means this install never registered. Sign-out used to

@@ -229,6 +229,10 @@ const PUBLIC_ROUTES = [
   // is read, and every caller gets the same cacheable answer.
   '/api/showcase/feed/newest',
   '/api/showcase/posts/[postId]',
+  // Which live post an id names (an old link's generation id included), for
+  // the app when the read above answers 404. A token only keys the by-id
+  // read's rate limit on its caller; every caller gets the same answer.
+  '/api/showcase/posts/[postId]/resolve',
   '/api/marketplace/resources',
   '/api/marketplace/resources/[resourceId]',
   '/api/security/csp-report',

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildShowcaseMasonry, getShowcaseGridLayout, getShowcaseMediaHeight } from '../lib/showcase-feed-view-model';
+import { buildShowcaseMasonry, getShowcaseGridLayout, getShowcaseMediaHeight, showcaseToMasonryCard } from '../lib/showcase-feed-view-model';
 import { applyShowcaseSaveStateToFeedResponse } from '../lib/showcase-save-cache';
 import type { ShowcaseFeedItem } from '../lib/types';
 
@@ -154,7 +154,7 @@ describe('showcase feed view model', () => {
 
     expect(cards[0]?.unlock).toEqual({
       accent: 'commerce',
-      ctaLabel: 'View unlock',
+      ctaLabel: 'View recipe',
       // The credits the unlock costs, never the web checkout's cash quote.
       label: '900 credits',
       summary: 'Prompt + Notes',
@@ -165,6 +165,25 @@ describe('showcase feed view model', () => {
       label: 'Remixable',
       summary: 'Use this post as a starting point',
     });
+  });
+
+  // Decision 10 (2026-10-17): a text post is labelled "Text", beside Image,
+  // Video and Motion; "Prompt" stays the name of a real prompt in a recipe.
+  it('labels a text post Text, and keeps Prompt for a recipe that holds one', () => {
+    expect(showcaseToMasonryCard(item({ id: 'note', category: 'text', postFormat: 'text' })).badge).toBe('Text');
+    expect(showcaseToMasonryCard(item({
+      id: 'recipe',
+      asset: {
+        id: 'asset-1',
+        postId: 'recipe',
+        title: 'Prompt pack',
+        accessMode: 'free',
+        priceUsdCents: 0,
+        previewText: '',
+        allowRemix: false,
+        resourceKinds: ['prompt'],
+      },
+    })).unlock?.summary).toBe('Prompt');
   });
 
   it('does not show a remix CTA for manual or external posts without an app generation', () => {

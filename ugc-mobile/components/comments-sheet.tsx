@@ -13,8 +13,10 @@ import { showActionSheet } from '@/lib/action-sheet';
 import { useAuth } from '@/lib/auth';
 import {
   ALL_POST_COMMENT_QUERY_KEYS,
+  DEFAULT_POST_COMMENT_SORT,
   POST_COMMENTS_PAGE_SIZE,
   POST_COMMENT_MAX_LENGTH,
+  POST_COMMENT_SORTS,
   applyCommentCountToInfiniteFeed,
   applyCommentCountToPostResponse,
   applyCommentCountToSourceData,
@@ -25,6 +27,7 @@ import {
   canReportComment,
   createPostCommentRepliesQueryKey,
   createPostCommentsQueryKey,
+  createPostCommentsThreadQueryKey,
   getCommentAuthReturnTo,
   getCommentDisplay,
   getCommentPostErrorCopy,
@@ -129,7 +132,11 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   const insets = useSafeAreaInsets();
   const bottomInset = resolvedBottomInset(insets.bottom);
 
-  const [sort] = useState<PostCommentSort>('top');
+  // The order the reader picked, kept with the post it was picked on: every
+  // thread opens on Top, as the web's does, and a sheet that moves on to
+  // another post never asks for the new post's thread in the old order first.
+  const [sortChoice, setSortChoice] = useState<{ postId: string; sort: PostCommentSort } | null>(null);
+  const sort = sortChoice?.postId === postId ? sortChoice.sort : DEFAULT_POST_COMMENT_SORT;
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState<PostComment | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
@@ -337,6 +344,29 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     });
   }, []);
 
+  // A write lands in the order on screen, which refetches straight after it.
+  // The other order's pages were read before the write, so they are marked
+  // stale here and read again when the reader switches to them; until then
+  // they would show the old count and keep a removed comment.
+  const markThreadStale = useCallback(() => {
+    void queryClient.invalidateQueries({
+      queryKey: createPostCommentsThreadQueryKey(postId),
+      refetchType: 'none',
+    });
+  }, [postId, queryClient]);
+
+  const selectSort = useCallback((next: PostCommentSort) => {
+    if (next === sort) return;
+    haptic.select();
+    setSortChoice({ postId, sort: next });
+    // In the sheet the control sits above the list, which may be scrolled
+    // far down the old order; the new one is read from its start. On the
+    // post page the control is in the list's own header, already in view.
+    if (presentation === 'sheet') {
+      commentsListRef.current?.scrollToOffset({ offset: 0, animated: false });
+    }
+  }, [postId, presentation, sort]);
+
   const submitComment = useCallback(async () => {
     const body = draft.trim();
     if (!body || submitting) return;
@@ -376,6 +406,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
         // A pinned parent may sit on no loaded page; its own copy counts the reply.
         setPendingTopLevel((current) => incrementReplyCountInList(current, parentId, 1));
         setExpandedIds((current) => new Set(current).add(parentId));
+        markThreadStale();
         void commentsQuery.refetch();
       } else {
         queryClient.setQueryData<InfiniteData<PostCommentsResponse>>(
@@ -388,6 +419,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
           response.comment,
           ...current.filter((comment) => comment.id !== response.comment.id),
         ]);
+        markThreadStale();
         void commentsQuery.refetch();
       }
 
@@ -406,7 +438,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     } finally {
       setSubmitting(false);
     }
-  }, [api, commentsQuery, commentsQueryKey, deliveryId, draft, openSignIn, postId, publishCommentCount, queryClient, replyTo, requireSignIn, submitting, user?.id]);
+  }, [api, commentsQuery, commentsQueryKey, deliveryId, draft, markThreadStale, openSignIn, postId, publishCommentCount, queryClient, replyTo, requireSignIn, submitting, user?.id]);
 
   const removeComment = useCallback((comment: PostComment, asOwner: boolean) => {
     void showConfirmDialog({
@@ -451,6 +483,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
           );
           setPendingTopLevel((current) => markCommentRemovedInList(current, comment.id, response.status));
         }
+        markThreadStale();
         void commentsQuery.refetch();
         publishCommentCount(response.commentCount);
       } catch (error) {
@@ -458,7 +491,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
         showErrorDialog('Could not remove comment', error);
       }
     });
-  }, [api, commentsQuery, commentsQueryKey, postId, publishCommentCount, queryClient, user?.id]);
+  }, [api, commentsQuery, commentsQueryKey, markThreadStale, postId, publishCommentCount, queryClient, user?.id]);
 
   const submitReport = useCallback(async (comment: PostComment, reason: CommentReportReason) => {
     setReporting(true);
@@ -623,6 +656,14 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     commentsOffsetRef.current = event.nativeEvent.layout.y;
   }, []);
 
+  // Sorting nothing is noise, so the control comes with the first comment, as
+  // on the web. Once the reader has picked New it stays while that order
+  // loads (the count falls back to the card's until the first page answers),
+  // so the way back to Top never leaves from under the finger.
+  const showSort = enabled
+    && !commentsUnavailable
+    && (serverCommentCount > 0 || topLevel.length > 0 || sort !== DEFAULT_POST_COMMENT_SORT);
+
   const commentsHeader = (
     <View
       onLayout={presentation === 'inline' ? captureCommentsOffset : undefined}
@@ -640,9 +681,12 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
           {postTitle}
         </Text>
       ) : null}
-      <Text accessibilityRole="header" style={{ color: theme.colors.text, ...appTheme.type.cardTitle }}>
-        {serverCommentCount > 0 ? `Comments · ${serverCommentCount}` : 'Comments'}
-      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
+        <Text accessibilityRole="header" style={{ flex: 1, minWidth: 0, color: theme.colors.text, ...appTheme.type.cardTitle }}>
+          {serverCommentCount > 0 ? `Comments · ${serverCommentCount}` : 'Comments'}
+        </Text>
+        {showSort ? <CommentSortControl value={sort} onChange={selectSort} /> : null}
+      </View>
     </View>
   );
 
@@ -896,6 +940,59 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
 
   return <Overlay visible={presented}>{keyboardSurface}</Overlay>;
 });
+
+/**
+ * Top or New, drawn as the app's segmented control (`ProfileSegment`, the
+ * creator page's tabs): a track with a solid fill on the order in use, each
+ * order a tab at the 48pt touch height.
+ */
+function CommentSortControl({ value, onChange }: { value: PostCommentSort; onChange: (sort: PostCommentSort) => void }) {
+  const theme = useAppTheme();
+  return (
+    <View
+      accessibilityRole="tablist"
+      accessibilityLabel="Sort comments"
+      style={{
+        flexDirection: 'row',
+        gap: 4,
+        padding: 4,
+        borderRadius: 18,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surfaceInset,
+      }}
+    >
+      {POST_COMMENT_SORTS.map((option) => {
+        const active = option.id === value;
+        return (
+          <Pressable
+            key={option.id}
+            accessibilityRole="tab"
+            accessibilityLabel={option.label}
+            accessibilityState={{ selected: active }}
+            onPress={() => onChange(option.id)}
+            style={({ pressed }) => ({
+              minWidth: 56,
+              minHeight: appTheme.touch.compact,
+              paddingHorizontal: appTheme.spacing.gap,
+              borderRadius: 14,
+              borderCurve: 'continuous',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: active ? theme.colors.primaryFill : 'transparent',
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+            })}
+          >
+            <Text numberOfLines={1} style={{ color: active ? theme.colors.onPrimary : theme.colors.muted, ...appTheme.type.label }}>
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
 
 export function CommentsSheet(props: Omit<PostCommentsProps, 'presentation' | 'enabled' | 'contentHeader' | 'unavailableMessage'> & {
   visible: boolean;

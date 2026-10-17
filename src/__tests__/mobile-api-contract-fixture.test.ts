@@ -30,6 +30,12 @@ import {
   getShowcaseFeedNewestRouteResponse,
   type ShowcaseFeedNewestResponse,
 } from '@/lib/showcase-feed-newest-route-adapter-service';
+import type { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
+import { getShowcasePostResolveRouteResponse } from '@/lib/showcase-post-resolve-route-adapter-service';
+import {
+  parseShowcaseSharePayloadForRoute,
+  shareShowcasePostForRoute,
+} from '@/lib/showcase-share-service';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
@@ -137,6 +143,7 @@ const expectedEndpointKeys = [
   'searchPublicContent',
   'getSavedMedia',
   'getShowcasePost',
+  'resolveShowcasePost',
   'listPostComments',
   'createPostComment',
   'deletePostComment',
@@ -144,6 +151,7 @@ const expectedEndpointKeys = [
   'saveShowcasePost',
   'remixShowcasePost',
   'shareShowcasePost',
+  'recordShareVisit',
   'shareCreatorProfile',
   'publishGeneration',
   'createPost',
@@ -509,6 +517,96 @@ describe('shared mobile API v1 contract fixture', () => {
     await expect(probe({ id: String(endpoint.response.newestPostId), created_at: '2026-10-14T05:30:00+00:00' }))
       .resolves.toEqual(endpoint.response);
     await expect(probe(null)).resolves.toEqual(endpoint.responseVariants.emptyLane);
+  });
+
+  // C14 (product decision 14): the app reports a shared link it opened on the
+  // share route, with the link's surface and no channel.
+  it('records a share visit from the request the fixture pins, and refuses in its words', async () => {
+    const endpoint = mobileApiContract.endpoints.recordShareVisit;
+    const parsed = parseShowcaseSharePayloadForRoute(endpoint.request);
+    expect(parsed).toEqual({
+      ok: true,
+      payload: { eventType: 'share_visit', referenceId: endpoint.request.postId, sourceSurface: endpoint.request.sourceSurface },
+    });
+    expect(parseShowcaseSharePayloadForRoute(endpoint.requestVariants.unknownSurface)).toMatchObject({
+      ok: true,
+      payload: { eventType: 'share_visit', sourceSurface: 'detail-page' },
+    });
+    expect(parseShowcaseSharePayloadForRoute({ postId: endpoint.request.postId, eventType: 'share_visit' })).toEqual({
+      ok: false,
+      status: endpoint.errors.missingSurface.status,
+      body: endpoint.errors.missingSurface.response,
+    });
+    if (!parsed.ok) throw new Error('Expected the fixture request to parse');
+
+    const share = (post: Awaited<ReturnType<typeof findPublicPostReferenceByIdOrGenerationId>>) => shareShowcasePostForRoute({
+      ...parsed.payload,
+      actorUserId: 'viewer-1',
+      serviceClient: {} as SupabaseClient,
+      dependencies: {
+        findPublicPostReferenceByIdOrGenerationId: vi.fn(async () => post),
+        isUserRelationshipBlocked: vi.fn(async () => false),
+        notifyPostSocialActivity: vi.fn(async () => null),
+        recordPostShareEvent: vi.fn(async () => undefined),
+      },
+    });
+    await expect(share({
+      id: endpoint.request.postId,
+      user_id: 'creator-1',
+      generation_id: null,
+      visibility: 'public',
+      category: 'image',
+      prompt: null,
+      source_kind: 'magicbooklet',
+    })).resolves.toEqual({ ok: true, body: endpoint.response });
+    await expect(share(null)).resolves.toEqual({
+      ok: false,
+      status: endpoint.errors.notPublic.status,
+      body: endpoint.errors.notPublic.response,
+    });
+  });
+
+  // C15 (product decision 15): which live post an id names, an old link's
+  // generation id included.
+  it('answers the post resolver in the shapes and cache policy the fixture pins', async () => {
+    const endpoint = mobileApiContract.endpoints.resolveShowcasePost;
+    const resolve = (id: string) => getShowcasePostResolveRouteResponse({
+      request: new Request(`http://localhost${endpoint.path.replace(':postId', id)}`),
+      context: { params: Promise.resolve({ postId: id }) },
+      dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 300,
+          remaining: 299,
+          retryAfterSeconds: 0,
+          resetAt: '2026-10-17T15:00:00.000Z',
+        })),
+        getFeedNetworkKeyHash: vi.fn(() => 'network-hash'),
+        getPostReferenceForShowcaseId: vi.fn(async (postId: string) => (
+          postId === endpoint.pathParams.postId
+            ? {
+              id: endpoint.response.postId,
+              user_id: 'creator-1',
+              generation_id: endpoint.pathParams.postId,
+              visibility: 'public' as const,
+              category: 'image' as const,
+              prompt: null,
+              source_kind: 'magicbooklet' as const,
+            }
+            : null
+        )),
+      },
+    });
+
+    const found = await resolve(endpoint.pathParams.postId);
+    expect(found.status).toBe(200);
+    expect(found.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
+    await expect(found.json()).resolves.toEqual(endpoint.response);
+
+    const missing = await resolve('nothing-1');
+    expect(missing.status).toBe(endpoint.errors.notFound.status);
+    await expect(missing.json()).resolves.toEqual(endpoint.errors.notFound.response);
   });
 
   // A bundle's files signed in one call: the request and the answer the app

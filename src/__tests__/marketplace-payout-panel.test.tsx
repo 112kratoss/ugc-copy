@@ -103,7 +103,7 @@ describe('PayoutPanel', () => {
 
     render(<PayoutPanel />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Bank transfer' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Indian bank transfer' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Payout details' }), {
       target: { value: 'Asha Rao 4321, asha@example.com' },
     });
@@ -128,14 +128,23 @@ describe('PayoutPanel', () => {
     expect(sent).toHaveLength(4);
   });
 
-  it('shows a refused request as the refusal alone', async () => {
-    answerPayoutRequests([
-      json(READY_STATE),
-      json({
-        error: 'You already have a payout in progress. It has to be settled before you can request another.',
-        code: 'ALREADY_PENDING',
-      }, 409),
-    ]);
+  // A PayPal request has answered 400 METHOD_UNAVAILABLE since 2026-10-17
+  // (decision 7); the panel no longer sends one, but says what the server says.
+  it.each([
+    [
+      'a second request',
+      'You already have a payout in progress. It has to be settled before you can request another.',
+      'ALREADY_PENDING',
+      409,
+    ],
+    [
+      'a method the server stopped taking',
+      'PayPal payouts are coming soon. Choose UPI or an Indian bank transfer.',
+      'METHOD_UNAVAILABLE',
+      400,
+    ],
+  ])('shows a refused request (%s) as the refusal alone', async (_name, refusal, code, status) => {
+    answerPayoutRequests([json(READY_STATE), json({ error: refusal, code }, status)]);
 
     render(<PayoutPanel />);
 
@@ -144,33 +153,62 @@ describe('PayoutPanel', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Withdraw $150.00' }));
 
-    expect(await screen.findByText(/You already have a payout in progress/)).toBeInTheDocument();
+    expect(await screen.findByText(refusal)).toBeInTheDocument();
     expect(screen.queryByText(/Payout requested/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Withdraw $150.00' })).toBeEnabled();
   });
 
-  it('names the payout method of a request in progress, not its id', async () => {
-    answerPayoutRequests([json(PENDING_STATE)]);
+  // A request made before 2026-10-17 may name PayPal: it still reads by name.
+  it.each([
+    ['bank_transfer', /via Indian bank transfer\./],
+    ['paypal', /via PayPal\./],
+  ])('names the payout method of a request in progress (%s), not its id', async (payoutMethod, label) => {
+    answerPayoutRequests([json({
+      ...PENDING_STATE,
+      pendingRequest: { ...PENDING_REQUEST, payoutMethod },
+      history: [{ ...PENDING_REQUEST, payoutMethod }],
+    })]);
 
     render(<PayoutPanel />);
 
-    expect(await screen.findByText(/via Bank transfer\./)).toBeInTheDocument();
-    expect(screen.queryByText(/bank_transfer/)).not.toBeInTheDocument();
+    expect(await screen.findByText(label)).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(payoutMethod))).not.toBeInTheDocument();
   });
 
-  it('asks each method for its own details, PayPal included, within the length the server takes', async () => {
-    answerPayoutRequests([json(READY_STATE)]);
+  // Decision 7 (2026-10-17): payouts are sent in rupees, by UPI or an Indian
+  // bank transfer; PayPal and international transfers are listed as coming
+  // soon and can be neither chosen nor sent.
+  it('offers UPI and Indian bank transfer only, each with its own details, and lists the others as coming soon', async () => {
+    const sent = answerPayoutRequests([
+      json(READY_STATE),
+      json({ success: true, requestId: 'request-1', amountTokenSubunits: 1_500_000 }),
+      json(PENDING_STATE),
+    ]);
 
     render(<PayoutPanel />);
 
     const details = await screen.findByRole('textbox', { name: 'Payout details' });
     expect(details).toHaveAttribute('placeholder', 'your-name@bank');
     expect(details).toHaveAttribute('maxLength', '500');
+    expect(screen.getByText(
+      /paid in INR to a UPI ID or an Indian bank account within 14 days of your request/
+    )).toBeInTheDocument();
+    expect(screen.queryByText(/PayPal email/)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'PayPal' }));
-    expect(details).toHaveAttribute('placeholder', 'Your PayPal email');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Bank transfer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Indian bank transfer' }));
     expect(details).toHaveAttribute('placeholder', 'Account name and last 4 digits, plus a contact');
+
+    for (const name of ['PayPal Coming soon', 'International transfer Coming soon']) {
+      const unavailable = screen.getByRole('button', { name });
+      expect(unavailable).toBeDisabled();
+      fireEvent.click(unavailable);
+    }
+    expect(details).toHaveAttribute('placeholder', 'Account name and last 4 digits, plus a contact');
+
+    fireEvent.change(details, { target: { value: 'Asha Rao 4321, asha@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Withdraw $150.00' }));
+
+    expect(await screen.findByText('$150.00 payout in progress')).toBeInTheDocument();
+    expect(sent[1].body).toEqual({ payoutMethod: 'bank_transfer', payoutDetails: 'Asha Rao 4321, asha@example.com' });
   });
 });

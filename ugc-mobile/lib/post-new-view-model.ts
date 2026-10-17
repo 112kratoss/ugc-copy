@@ -23,7 +23,23 @@ import type {
 
 export type PostComposerMode = 'text' | 'upload' | 'creation';
 export type PostComposerProofMode = 'media' | 'text';
-export type PostComposerVisibility = 'public' | 'unlisted' | 'private';
+/**
+ * A post is public or private. Unlisted was dropped (product decisions
+ * 2026-10-17): the server stores a requested unlisted as private, so the
+ * composer never offers it and reads an old one as private
+ * (`getComposerVisibility`).
+ */
+export type PostComposerVisibility = 'public' | 'private';
+
+/**
+ * The composer's visibility for a stored or saved value: an old unlisted post,
+ * or a draft an older build saved as unlisted, opens as private, which is what
+ * its next save stores. No value keeps the composer's public default.
+ */
+export function getComposerVisibility(visibility: string | null | undefined): PostComposerVisibility {
+  return visibility === 'private' || visibility === 'unlisted' ? 'private' : 'public';
+}
+
 export type PostComposerCategory = ShowcaseFeedItem['category'];
 
 export interface PostComposerSourceToolSelection {
@@ -924,7 +940,7 @@ export function validatePostComposerDraft(
     // composer labels this author-written field as required. Validate the raw
     // draft so an empty field cannot silently submit generated copy instead.
     if (!draft.resource.previewText.trim()) {
-      return { valid: false, message: 'Add a buyer preview for the unlock.' };
+      return { valid: false, message: 'Add a buyer preview for the recipe.' };
     }
 
     if (draft.visibility === 'public' && !hasUsefulBuyerPreview(draft.resource)) {
@@ -1508,10 +1524,6 @@ export function getPostComposerSubmitLabel(params: {
 
   if (params.visibility === 'private') {
     return 'Save private';
-  }
-
-  if (params.visibility === 'unlisted') {
-    return 'Save unlisted';
   }
 
   return 'Publish public';

@@ -143,8 +143,8 @@ select is(
 );
 select is(
   (public.owner_profile_counts('c0100001-0000-4000-8000-000000000001'::uuid) ->> 'saved')::int,
-  3,
-  'saved: the friend''s public and unlisted posts and the owner''s own; never private, archived, hidden or blocked either way'
+  2,
+  'saved: the friend''s public post and the owner''s own (an unlisted one is stored private); never private, archived, hidden or blocked either way'
 );
 select is(
   (public.owner_profile_counts('c0100006-0000-4000-8000-000000000006'::uuid) ->> 'saved')::int,
@@ -182,14 +182,14 @@ select is(
 );
 select is(
   (public.owner_profile_counts('c0100001-0000-4000-8000-000000000001'::uuid) ->> 'saved')::int,
-  2,
+  1,
   'a save of a post that was since archived stops counting'
 );
 delete from public.user_blocks
 where blocker_user_id = 'c0100001-0000-4000-8000-000000000001'::uuid;
 select is(
   (public.owner_profile_counts('c0100001-0000-4000-8000-000000000001'::uuid) ->> 'saved')::int,
-  3,
+  2,
   'unblocking a creator brings their saved post back'
 );
 update public.generations set archived_at = timezone('utc'::text, now())

@@ -132,20 +132,25 @@ export function formatUnlockCountLabel(accessMode: 'free' | 'paid', count: numbe
 /**
  * The locked card's line of social proof and freshness, "12 sold · Updated
  * Oct 3, 2026", the facts the web panel's header carries. The server keeps
- * `salesCount` public for exactly this.
+ * both counts public for exactly this. Since 2026-10-17 a free unlock is not
+ * a sale, so a free recipe's "opened" reads `freeUnlockCount` and a paid one's
+ * "sold" reads `salesCount`, whatever the other holds from an earlier price.
  */
 export function formatLockedBundleFacts({
   accessMode,
   salesCount,
+  freeUnlockCount,
   updatedAt,
 }: {
   accessMode: 'free' | 'paid';
   salesCount?: number | null;
+  freeUnlockCount?: number | null;
   updatedAt?: string | null;
 }) {
   const parts: string[] = [];
-  if (typeof salesCount === 'number' && Number.isFinite(salesCount)) {
-    parts.push(formatUnlockCountLabel(accessMode, salesCount));
+  const count = accessMode === 'free' ? freeUnlockCount : salesCount;
+  if (typeof count === 'number' && Number.isFinite(count)) {
+    parts.push(formatUnlockCountLabel(accessMode, count));
   }
   const updated = updatedAt ? formatUnlockDate(updatedAt) : '';
   if (updated) parts.push(`Updated ${updated}`);

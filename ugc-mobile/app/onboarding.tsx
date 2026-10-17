@@ -539,7 +539,7 @@ function OnboardingFlow() {
               <View style={{ gap: 8 }}>
                 <Kicker color="primary">Creator identity</Kicker>
                 <AppText heading variant="pageTitle">Claim your creator name</AppText>
-                <AppText variant="bodySm" color="muted">This is the name people will see on your posts, profile, and unlocks.</AppText>
+                <AppText variant="bodySm" color="muted">This is the name people will see on your posts, profile, and recipes.</AppText>
               </View>
               <Card padding="lg" style={{ gap: 18 }}>
                 <AppTextInput

@@ -281,6 +281,56 @@ describe('CreationsPage', () => {
     expect(within(filters).getByRole('link', { name: 'Private (1)' })).toHaveAttribute('aria-current', 'true');
     expect(within(filters).getByRole('link', { name: 'Archived (1)' })).toHaveAttribute('href', '/creations?view=posts&visibility=archived');
     expect(within(filters).getByRole('link', { name: 'Public (1)' })).not.toHaveAttribute('aria-current');
+    // Unlisted was dropped on 2026-10-17 (decision 12): no chip for a state
+    // no post is in.
+    expect(within(filters).queryByRole('link', { name: /^Unlisted/ })).not.toBeInTheDocument();
+  });
+
+  it('keeps the Unlisted filter while a post saved as unlisted is left', async () => {
+    navigationState.searchParams = new URLSearchParams('view=posts');
+    stubStudioFetch((url) => {
+      if (url.startsWith('/api/generations')) {
+        return Promise.resolve(jsonResponse({ generations: [] }));
+      }
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
+        return Promise.resolve(jsonResponse({
+          posts: [{
+            id: 'post-old',
+            generationId: null,
+            visibility: 'unlisted',
+            archivedAt: null,
+            mediaUrl: null,
+            mediaKind: null,
+            title: 'Old link post',
+            description: '',
+            prompt: '',
+            body: 'Body',
+            category: 'text',
+            postFormat: 'text',
+            sourceKind: 'manual',
+            sourceTool: null,
+            sourceLabel: 'Manual',
+            createdAt: '2026-06-01T10:00:00.000Z',
+            updatedAt: '2026-06-01T10:00:00.000Z',
+            publicPath: null,
+            ownerPath: '/post/post-old/edit',
+            resourcePath: null,
+            canShare: false,
+            bundle: null,
+          }],
+        }));
+      }
+      return null;
+    });
+
+    render(<CreationsPage />);
+
+    expect(await screen.findByText('Old link post')).toBeInTheDocument();
+    const filters = screen.getByRole('group', { name: 'Filter posts by visibility' });
+    expect(within(filters).getByRole('link', { name: 'Unlisted (1)' })).toHaveAttribute(
+      'href',
+      '/creations?view=posts&visibility=unlisted',
+    );
   });
 
   it('uses the authenticated layout session for tab data instead of importing a fresh Supabase session', async () => {
@@ -549,13 +599,13 @@ describe('CreationsPage', () => {
     render(<><CreationsPage /><FeedbackViewport /></>);
 
     expect(await screen.findByText('Public portrait post')).toBeInTheDocument();
-    // One control with the three states; it reads the current one.
+    // One control with the two states (decision 12, 2026-10-17); it reads the current one.
     const trigger = screen.getByRole('button', { name: 'Visibility of Public portrait post: Public' });
     expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
     fireEvent.click(trigger);
     const menu = await screen.findByRole('menu', { name: 'Visibility of Public portrait post' });
     expect(within(menu).getByRole('menuitemradio', { name: /public/i })).toHaveAttribute('aria-checked', 'true');
-    expect(within(menu).getByRole('menuitemradio', { name: /unlisted/i })).toBeInTheDocument();
+    expect(within(menu).getAllByRole('menuitemradio')).toHaveLength(2);
     fireEvent.click(within(menu).getByRole('menuitemradio', { name: /private/i }));
 
     // The card moves before the server answers, and the All filter keeps it.
@@ -812,6 +862,64 @@ describe('CreationsPage', () => {
     expect(fetchMock).not.toHaveBeenCalledWith('/api/showcase/publish', expect.anything());
   });
 
+  // A free unlock stopped counting as a sale on 2026-10-17 (decision 6): the
+  // line counts paid sales, and free unlocks beside them once there are any.
+  it("says what each recipe sold and earned, with its free unlocks beside them", async () => {
+    navigationState.searchParams = new URLSearchParams('view=posts');
+    const recipePost = (id: string, title: string, bundle: Record<string, unknown>) => ({
+      id,
+      generationId: null,
+      visibility: 'public',
+      archivedAt: null,
+      mediaUrl: `https://example.com/${id}.jpg`,
+      mediaKind: 'image',
+      title,
+      description: '',
+      prompt: '',
+      body: '',
+      category: 'image',
+      postFormat: 'media',
+      sourceKind: 'external',
+      sourceTool: 'Midjourney',
+      sourceLabel: 'Midjourney',
+      createdAt: '2026-06-01T10:00:00.000Z',
+      updatedAt: '2026-06-01T10:00:00.000Z',
+      publicPath: `/showcase/${id}`,
+      ownerPath: `/post/${id}/edit`,
+      resourcePath: `/showcase/${id}#recipe`,
+      canShare: true,
+      bundle: {
+        id: `bundle-${id}`,
+        status: 'published',
+        resourceKinds: ['prompt'],
+        ...bundle,
+      },
+    });
+    stubStudioFetch((url) => {
+      if (url.startsWith('/api/generations')) {
+        return Promise.resolve(jsonResponse({ generations: [] }));
+      }
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
+        return Promise.resolve(jsonResponse({
+          posts: [
+            recipePost('post-paid', 'Paid recipe post', {
+              accessMode: 'paid', priceUsdCents: 900, salesCount: 2, freeUnlockCount: 0, earningsUsdCents: 1530,
+            }),
+            recipePost('post-free', 'Free recipe post', {
+              accessMode: 'free', priceUsdCents: 0, salesCount: 0, freeUnlockCount: 5, earningsUsdCents: 0,
+            }),
+          ],
+        }));
+      }
+      return null;
+    });
+
+    render(<CreationsPage />);
+
+    expect(await screen.findByText('2 sold · $15.30 earned')).toBeInTheDocument();
+    expect(screen.getByText('0 sold · 5 free unlocks · $0.00 earned')).toBeInTheDocument();
+  });
+
   it('keeps Post Library previews intrinsically sized and lazy-loaded', async () => {
     navigationState.searchParams = new URLSearchParams('view=posts');
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
@@ -901,7 +1009,7 @@ describe('CreationsPage', () => {
     expect(video).not.toHaveClass('h-full');
   });
 
-  it('offers the three-state visibility menu on creation cards with a linked post', async () => {
+  it('offers the public or private visibility menu on creation cards with a linked post', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
 
@@ -967,17 +1075,17 @@ describe('CreationsPage', () => {
 
     fireEvent.click(privateTrigger);
     const menu = await screen.findByRole('menu', { name: 'Visibility of Private generated post' });
-    // Unlisted was unreachable from the old two-way toggle.
-    fireEvent.click(within(menu).getByRole('menuitemradio', { name: /unlisted/i }));
+    expect(within(menu).queryByRole('menuitemradio', { name: /unlisted/i })).not.toBeInTheDocument();
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: /public/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-private', expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({ visibility: 'unlisted' }),
+        body: JSON.stringify({ visibility: 'public' }),
       }));
     });
-    expect(await screen.findByRole('status')).toHaveTextContent('Post is unlisted.');
-    expect(screen.getByRole('button', { name: 'Visibility of Private generated post: Unlisted' })).toBeInTheDocument();
+    expect(await screen.findByRole('status')).toHaveTextContent('Post is public.');
+    expect(screen.getByRole('button', { name: 'Visibility of Private generated post: Public' })).toBeInTheDocument();
     // Staying on the Creations tab: a visibility change is not a reason to switch views.
     expect(screen.getByText('Public generated post')).toBeInTheDocument();
   });

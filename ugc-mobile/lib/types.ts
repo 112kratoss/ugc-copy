@@ -105,7 +105,9 @@ export interface ProfileStatsResponse {
 export interface ProfileSalesResponse {
   earningsUsdCents: number;
   listingCount: number;
+  /** Paid unlocks only since 2026-10-17; free ones are `freeUnlockCount`. */
   salesCount: number;
+  freeUnlockCount: number;
 }
 
 export type OnboardingGoal = 'image' | 'video' | 'motion';
@@ -821,7 +823,10 @@ export interface ShowcaseAssetSummary {
   priceUsdCents: number;
   previewText: string;
   allowRemix: boolean;
+  /** Paid unlocks; absent at 0. */
   salesCount?: number;
+  /** Free unlocks; absent at 0, like `salesCount`. */
+  freeUnlockCount?: number;
   resourceKinds?: string[];
   priceQuote?: { formatted?: string; amountSubunits?: number; currency?: string };
   lockedPreview?: PostResourceBundleLockedPreview | null;
@@ -1045,7 +1050,9 @@ export interface RecipeSearchResult {
   previewText: string;
   accessMode: 'free' | 'paid';
   priceUsdCents: number;
+  /** Paid unlocks; free ones are `freeUnlockCount`. */
   salesCount: number;
+  freeUnlockCount: number;
   allowRemix: boolean;
   resourceKinds: string[];
   createdAt: string;
@@ -1418,7 +1425,9 @@ export interface MarketplaceResource {
   previewText?: string;
   accessMode?: 'free' | 'paid';
   priceUsdCents?: number;
+  /** Paid unlocks; free ones are `freeUnlockCount`. */
   salesCount?: number;
+  freeUnlockCount?: number;
   allowRemix?: boolean;
   priceQuote?: { formatted?: string; amountSubunits?: number; currency?: string; note?: string | null };
   resourceKinds?: PostResourceKind[];
@@ -1510,7 +1519,10 @@ export interface OwnerPostBundleSummary {
   accessMode: 'free' | 'paid';
   status: string;
   priceUsdCents: number;
+  /** Paid unlocks only since 2026-10-17. */
   salesCount: number;
+  /** Free unlocks, which earn nothing and are not sales. */
+  freeUnlockCount: number;
   earningsUsdCents: number;
   resourceKinds: PostResourceKind[];
   /** The post's moderation state, as the web sell page reads it. */
@@ -1574,7 +1586,10 @@ export interface OwnerPostsResponse {
   summary?: {
     earningsUsdCents: number;
     listingCount: number;
+    /** Paid unlocks across every listing. */
     salesCount: number;
+    /** Free unlocks across every listing. */
+    freeUnlockCount: number;
   };
 }
 
@@ -1760,6 +1775,8 @@ export interface ViewerUnlockDetail extends ViewerUnlockPayment {
   priceUsdCents: number;
   purchasePriceUsdCents: number;
   salesCount: number | null;
+  /** Free unlocks; null when detached, like `salesCount`. */
+  freeUnlockCount: number | null;
   purchasedAt: string;
   creatorDisplayName: string;
   resourceKinds: PostResourceKind[];

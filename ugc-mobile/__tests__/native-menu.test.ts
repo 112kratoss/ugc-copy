@@ -373,19 +373,24 @@ describe('comment menu', () => {
 });
 
 describe('post visibility choices', () => {
-  it('checks the current value and marks every row as part of a pick-one list', () => {
-    const rows = postVisibilityChoices('unlisted', noop);
-    expect(rows.map((row) => [row.label, row.checked])).toEqual([
-      ['Public', false],
-      ['Unlisted', true],
+  // A post is public or private (product decisions 2026-10-17, item 12): the
+  // server stores a requested unlisted as private, so an old unlisted post is
+  // shown as the private post it becomes on its next save.
+  it('offers Public and Private only, checking the current one', () => {
+    expect(postVisibilityChoices('public', noop).map((row) => [row.label, row.checked])).toEqual([
+      ['Public', true],
       ['Private', false],
+    ]);
+    expect(postVisibilityChoices('unlisted', noop).map((row) => [row.label, row.checked])).toEqual([
+      ['Public', false],
+      ['Private', true],
     ]);
   });
 
   it('changes nothing when the current value is chosen again', () => {
     const onPick = vi.fn();
-    const [publicRow, unlistedRow] = postVisibilityChoices('unlisted', onPick);
-    unlistedRow.onSelect();
+    const [publicRow, privateRow] = postVisibilityChoices('unlisted', onPick);
+    privateRow.onSelect();
     expect(onPick).not.toHaveBeenCalled();
     publicRow.onSelect();
     expect(onPick).toHaveBeenCalledWith('public');
@@ -438,10 +443,9 @@ describe('viewer menu', () => {
     if (submenu?.kind !== 'submenu') throw new Error('expected a submenu');
     expect(submenu.items.map((row) => [row.label, row.checked])).toEqual([
       ['Public', true],
-      ['Unlisted', false],
       ['Private', false],
     ]);
-    submenu.items[2].onSelect();
+    submenu.items[1].onSelect();
     expect(onPickVisibility).toHaveBeenCalledWith('private');
     submenu.onSelectFlat?.();
     expect(onAction).toHaveBeenCalledWith('change-visibility');

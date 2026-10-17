@@ -231,9 +231,10 @@ describe('CreatorContentTabs', () => {
     expect(screen.getByRole('link', { name: /runway/i })).toHaveAttribute('href', '/showcase?tool=runway');
   });
 
-  // The tile badge read "$0.50 recipe" for a recipe only credits buy. It gives
-  // the label Explore and the feed give the same recipe.
-  it('prices a recipe tile in one figure, and a credits-only one in credits', () => {
+  // The tile badge read "$0.50 recipe" for a recipe only credits buy, and
+  // "$9.00" where the app read "900 credits". It gives the label Explore and
+  // the feed give the same recipe: credits, whatever the viewer's quote.
+  it('prices a recipe tile in credits, a credits-only one included', () => {
     const creditsOnly: ShowcaseFeedItem = {
       ...items[1],
       id: 'item-4',
@@ -253,8 +254,9 @@ describe('CreatorContentTabs', () => {
       />
     );
 
-    expect(screen.getByText('$9.00')).toBeInTheDocument();
+    expect(screen.getByText('900 credits')).toBeInTheDocument();
     expect(screen.getByText('50 credits')).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('$9.00');
     expect(document.body.textContent).not.toContain('₹42');
   });
 

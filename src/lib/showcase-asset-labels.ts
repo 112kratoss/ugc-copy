@@ -1,4 +1,3 @@
-import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 /**
@@ -10,26 +9,33 @@ export const FREE_RECIPE_LABEL = 'Free recipe';
 /**
  * Whether the recipe costs the viewer nothing. Branch for branch the question
  * `getAssetAccessLabel` answers with "Free recipe", so the two cannot disagree
- * about which posts are for sale.
+ * about which posts are for sale. The credit price decides, as in the app
+ * (`homeRecipeChip`): the viewer's cash quote no longer reaches a chip, so it
+ * has no say in whether one reads free.
  */
 export function isFreeRecipeAsset(asset: NonNullable<ShowcaseFeedItem['asset']>): boolean {
-    if (asset.accessMode === 'free') {
-        return true;
-    }
-
-    return asset.priceQuote ? asset.priceQuote.amountSubunits === 0 : asset.priceUsdCents === 0;
+    return asset.accessMode === 'free' || asset.priceUsdCents <= 0;
 }
 
 /**
- * How a post's attached resource bundle is labelled wherever a post is listed:
- * "Free recipe", "$9.00" (the viewer's quote, where cash is taken) or "50
- * credits". Shared by the Showcase grid, the feed and the creator page so they
- * never drift on wording like "Free recipe" vs "Free unlock".
+ * A recipe's price in the app's words (`formatUnlockCreditPrice` in
+ * ugc-mobile/lib/pricing.ts): one credit per US cent, grouped in the app's
+ * pinned `en-IN` locale (1,25,000), "credit" for exactly one.
+ */
+export function formatRecipeCreditPrice(priceUsdCents: number): string {
+    const credits = Math.max(0, Math.trunc(priceUsdCents));
+    return `${credits.toLocaleString('en-IN')} ${credits === 1 ? 'credit' : 'credits'}`;
+}
+
+/**
+ * How a post's attached resource bundle is labelled on a chip wherever a post
+ * is listed: "Free recipe" or "250 credits", the app's words for the same
+ * recipe. It printed the viewer's cash quote ("$2.50", "₹210") where the app
+ * printed credits; the buttons and price pills that offer both ways to pay
+ * keep the cash figure (`formatPostResourcePriceLabel`). Shared by the
+ * Showcase grid, the reel, the feed and the creator page so they never drift
+ * on wording like "Free recipe" vs "Free unlock".
  */
 export function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
-    return formatBundleAccessLabel({
-        accessMode: asset.accessMode,
-        priceUsdCents: asset.priceUsdCents,
-        priceQuote: asset.priceQuote,
-    });
+    return isFreeRecipeAsset(asset) ? FREE_RECIPE_LABEL : formatRecipeCreditPrice(asset.priceUsdCents);
 }

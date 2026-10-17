@@ -977,3 +977,124 @@ describe('comments sheet', () => {
     expect(composerInput(tree.root).props.accessibilityLabel).toBe('Write a reply to @batman');
   });
 });
+
+describe('comment order', () => {
+  type ThreadQueryOptions = {
+    queryKey: readonly unknown[];
+    queryFn: (context: { pageParam: number }) => Promise<unknown>;
+  };
+
+  /** The options of the latest render's top-level thread query. */
+  function threadQuery(): ThreadQueryOptions {
+    const threads = queryOptions.mock.calls
+      .map(([options]) => options as ThreadQueryOptions)
+      .filter((options) => options.queryKey[0] === 'post-comments');
+    return threads[threads.length - 1];
+  }
+
+  function pickOrder(root: renderer.ReactTestInstance, label: 'Top' | 'New') {
+    renderer.act(() => {
+      pressable(root, label).props.onPress();
+    });
+  }
+
+  it('opens on Top and asks the server for the newest comments first under New', async () => {
+    pages = [page([comment()])];
+    listPostComments.mockResolvedValue(page([comment()]));
+    const tree = renderSheet();
+
+    expect(pressable(tree.root, 'Top').props.accessibilityState).toEqual({ selected: true });
+    expect(pressable(tree.root, 'New').props.accessibilityState).toEqual({ selected: false });
+    expect(threadQuery().queryKey).toEqual(['post-comments', 'post-1', 'top', 'viewer-1']);
+
+    pickOrder(tree.root, 'New');
+
+    expect(pressable(tree.root, 'Top').props.accessibilityState).toEqual({ selected: false });
+    expect(pressable(tree.root, 'New').props.accessibilityState).toEqual({ selected: true });
+    expect(threadQuery().queryKey).toEqual(['post-comments', 'post-1', 'newest', 'viewer-1']);
+    await threadQuery().queryFn({ pageParam: 0 });
+    expect(listPostComments).toHaveBeenLastCalledWith('post-1', { limit: 20, offset: 0, sort: 'newest' });
+    // The control sits above the list in the sheet, so the list goes back to
+    // its start to show the thread in its new order from the top.
+    expect(listScrollToOffset).toHaveBeenCalledWith({ offset: 0, animated: false });
+  });
+
+  it('keeps a just-posted comment on top after a switch, and has the other order read again', async () => {
+    const mine = comment({
+      id: 'mine',
+      body: 'Just said this',
+      author: { id: 'viewer-1', username: 'viewer', displayName: 'Viewer', avatarUrl: null },
+    });
+    // The other order's pages were read before the comment was posted.
+    pages = [page([comment({ id: 'older', body: 'Older thought' })], 1)];
+    createPostComment.mockResolvedValue({ comment: mine, commentCount: 2 });
+    const tree = renderSheet();
+
+    await postFromComposer(tree.root, 'Just said this');
+    expect(queryInvalidate).toHaveBeenCalledWith({ queryKey: ['post-comments', 'post-1'], refetchType: 'none' });
+
+    pickOrder(tree.root, 'New');
+
+    const shown = texts(tree.root);
+    expect(shown).toContain('Just said this');
+    expect(shown.indexOf('Just said this')).toBeLessThan(shown.indexOf('Older thought'));
+  });
+
+  it('has the other order read again after a comment is removed', async () => {
+    pages = [page([comment({
+      id: 'mine',
+      author: { id: 'viewer-1', username: 'viewer', displayName: 'Viewer', avatarUrl: null },
+    })], 1)];
+    deletePostComment.mockResolvedValue({ status: 'removed_by_author', commentCount: 0 });
+    const tree = renderSheet();
+
+    const options = commentOptions(tree.root, '@viewer');
+    renderer.act(() => {
+      options.actions.find((action) => action.label === 'Delete')?.onPress?.();
+    });
+    await renderer.act(async () => {
+      pressDialogButton('Delete your comment?', 'Delete');
+      await flushPromises();
+    });
+
+    expect(deletePostComment).toHaveBeenCalledWith('post-1', 'mine');
+    expect(queryInvalidate).toHaveBeenCalledWith({ queryKey: ['post-comments', 'post-1'], refetchType: 'none' });
+  });
+
+  it('offers no order before the first comment', () => {
+    pages = [page([], 0)];
+    const tree = renderSheet();
+
+    expect(pressables(tree.root, 'Top')).toHaveLength(0);
+    expect(pressables(tree.root, 'New')).toHaveLength(0);
+  });
+
+  it('opens the next post on Top, without asking for its newest page first', () => {
+    pages = [page([comment()])];
+    const tree = renderSheet();
+    pickOrder(tree.root, 'New');
+    queryOptions.mockClear();
+
+    renderer.act(() => {
+      tree.update(sheetElement({ postId: 'post-2' }));
+    });
+
+    expect(pressable(tree.root, 'Top').props.accessibilityState).toEqual({ selected: true });
+    const asked = queryOptions.mock.calls
+      .map(([options]) => (options as ThreadQueryOptions).queryKey)
+      .filter((key) => key[0] === 'post-comments');
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.every((key) => key[2] === 'top')).toBe(true);
+  });
+
+  it('offers the same order on the post page, where the control scrolls with the thread', () => {
+    pages = [page([comment()])];
+    const { tree } = renderInline();
+
+    pickOrder(tree.root, 'New');
+
+    expect(pressable(tree.root, 'New').props.accessibilityState).toEqual({ selected: true });
+    expect(threadQuery().queryKey).toEqual(['post-comments', 'post-1', 'newest', 'viewer-1']);
+    expect(listScrollToOffset).not.toHaveBeenCalled();
+  });
+});

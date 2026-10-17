@@ -62,13 +62,20 @@ export async function unregisterMobilePushTokenForRoute(
     const body = asRecord(await readRequestBody(input));
     const expoPushToken = optionalString(body.expoPushToken ?? body.token);
     const deviceId = optionalString(body.deviceId);
+    // Sign out of all devices (product decisions 2026-10-17, item 9) asks for
+    // the whole account by name, before it ends every session: a phone whose
+    // session has ended can no longer retire its own token, and would keep
+    // receiving the account's notifications. Only this exact value means it;
+    // `allDevices`, which installed apps still send on an ordinary sign-out,
+    // never does (below).
+    const accountWide = body.scope === 'account';
 
     // A request has to name what it retires. Installed app builds still send
     // `allDevices: true` on sign-out from a phone that never registered for
     // push: it stood in for the missing token and device id, and it retired the
     // token of every other device on the account. It is refused like the empty
     // request it replaced, and ignored beside a token or a device id.
-    if (!expoPushToken && !deviceId) {
+    if (!accountWide && !expoPushToken && !deviceId) {
       return {
         ok: false,
         body: { error: 'Provide an Expo push token or device ID.' },
@@ -107,8 +114,10 @@ export async function unregisterMobilePushTokenForRoute(
       })
       .eq('user_id', user.id);
 
-    query = expoPushToken ? query.eq('expo_push_token', expoPushToken) : query;
-    query = !expoPushToken && deviceId ? query.eq('device_id', deviceId) : query;
+    if (!accountWide) {
+      query = expoPushToken ? query.eq('expo_push_token', expoPushToken) : query;
+      query = !expoPushToken && deviceId ? query.eq('device_id', deviceId) : query;
+    }
     // Live rows only. A row the receipts job, a newer token on the same device
     // or an earlier sign-out already retired keeps the disabled_at it was given
     // then, so the column still says when that token stopped receiving pushes.

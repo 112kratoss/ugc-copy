@@ -85,6 +85,7 @@ function recipeResult(item: MarketplaceResourceListItem): RecipeSearchResult {
     accessMode: item.accessMode,
     priceUsdCents: item.priceUsdCents,
     salesCount: item.salesCount,
+    freeUnlockCount: item.freeUnlockCount,
     allowRemix: item.allowRemix,
     resourceKinds: item.resourceKinds,
     createdAt: item.createdAt,

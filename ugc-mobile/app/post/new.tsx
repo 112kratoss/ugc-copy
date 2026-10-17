@@ -52,6 +52,7 @@ import {
   createPostComposerResourceCard,
   createMadeWithRow,
   deriveCreationPackageFromResourceCards,
+  getComposerVisibility,
   getDefaultPostComposerDraft,
   getPostComposerDetailErrors,
   getPostComposerPackageStatus,
@@ -866,7 +867,7 @@ function PostPublishSummary({
       ? selectedGeneration.output_url
       : null)
     || null;
-  const visibilityLabel = draft.visibility === 'public' ? 'Public' : draft.visibility === 'unlisted' ? 'Unlisted' : 'Private';
+  const visibilityLabel = draft.visibility === 'public' ? 'Public' : 'Private';
   const resourceLabel = draft.resource.accessMode === 'paid'
     ? `${getPostComposerPriceTokens(draft.resource)} tokens`
     : draft.resource.accessMode === 'free'
@@ -1114,7 +1115,7 @@ function PostComposerFooter({
   onPublish: () => void;
 }) {
   const theme = useAppTheme();
-  const visibilityLabel = visibility === 'public' ? 'Public' : visibility === 'unlisted' ? 'Unlisted' : 'Private';
+  const visibilityLabel = visibility === 'public' ? 'Public' : 'Private';
   const submitLabel = getPostComposerSubmitLabel({ visibility, isEditMode, isPending: loading });
   return (
     <View
@@ -1212,7 +1213,6 @@ function VisibilitySheet({
   const theme = useAppTheme();
   const options: Array<{ id: PostComposerDraft['visibility']; label: string; body: string }> = [
     { id: 'public', label: 'Public', body: 'Visible in Explore and your profile.' },
-    { id: 'unlisted', label: 'Unlisted', body: 'Only people with the link can open it.' },
     { id: 'private', label: 'Private', body: 'Only you can see it in Studio.' },
   ];
   const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
@@ -2097,7 +2097,8 @@ function NewPostComposer() {
               toolSlug: post.sourceToolSlug || 'manual',
             })],
         category: post.category || 'image',
-        visibility: (post.visibility as any) || 'public',
+        // An old unlisted post opens as the private post its save stores.
+        visibility: getComposerVisibility(post.visibility),
         isNsfw: post.isNsfw === true,
         selectedGenerationId: post.generationId || null,
         upload: post.mediaUrl ? {
@@ -2193,6 +2194,8 @@ function NewPostComposer() {
       if (persisted) {
         const restoredDraft: PostComposerDraft = {
           ...persisted.draft,
+          // An older build could save a draft as unlisted, which is private now.
+          visibility: getComposerVisibility(persisted.draft.visibility),
           // Drafts saved by older builds can carry duplicate card ids; dedupe
           // them before they become React keys and edit/remove targets.
           resource: sanitizePostComposerResourceCardIds(

@@ -34,6 +34,7 @@ const state = vi.hoisted(() => ({
   startAutoRefresh: vi.fn(),
   stopAutoRefresh: vi.fn(),
   unregisterPush: vi.fn(),
+  unregisterAccountPush: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-query', () => ({
@@ -106,6 +107,7 @@ vi.mock('../lib/notifications', () => ({
   registerForMobilePushNotifications: vi.fn(async () => undefined),
   subscribeToMobilePushTokenChanges: vi.fn(() => vi.fn()),
   unregisterMobilePushNotifications: state.unregisterPush,
+  unregisterAccountMobilePushNotifications: state.unregisterAccountPush,
 }));
 vi.mock('../lib/supabase-auth-recovery', () => ({
   isInvalidRefreshTokenError: () => false,
@@ -140,6 +142,7 @@ vi.mock('../lib/supabase', () => ({
 }));
 
 import { AuthProvider, useAuth } from '../lib/auth';
+import { registerForMobilePushNotifications } from '../lib/notifications';
 
 const session = {
   access_token: 'access-token',
@@ -179,6 +182,7 @@ describe('AuthProvider startup performance', () => {
     state.routerReplace.mockReset();
     state.signOut.mockReset().mockResolvedValue({ error: null });
     state.unregisterPush.mockReset().mockResolvedValue(undefined);
+    state.unregisterAccountPush.mockReset().mockResolvedValue(undefined);
     state.startAutoRefresh.mockReset().mockResolvedValue(undefined);
     state.stopAutoRefresh.mockReset().mockResolvedValue(undefined);
     state.duringSignOut.mockReset().mockImplementation((work: () => Promise<unknown>) => work());
@@ -656,5 +660,118 @@ describe('AuthProvider startup performance', () => {
     expect(state.queryClient.removeQueries.mock.invocationCallOrder[0])
       .toBeLessThan(state.routerReplace.mock.invocationCallOrder[0]);
     unmount();
+  });
+
+  // Product decisions 2026-10-17, item 9: one global sign-out ends every
+  // session of the account; this phone ends exactly as a sign-out leaves it.
+  describe('sign out of all devices', () => {
+    async function signedIn(as: typeof session = session) {
+      const rendered = renderProvider();
+      await settle();
+      await renderer.act(async () => {
+        state.sessionResolve?.({ data: { session: as }, error: null });
+      });
+      await settle();
+      return rendered;
+    }
+
+    it('ends every session of the account, then leaves this phone as a sign-out does', async () => {
+      const { latest, unmount } = await signedIn();
+
+      await renderer.act(async () => {
+        await latest.current?.signOutEverywhere();
+      });
+
+      expect(state.signOut).toHaveBeenCalledOnce();
+      expect(state.signOut).toHaveBeenCalledWith({ scope: 'global' });
+      expect(state.duringSignOut).toHaveBeenCalledOnce();
+      // Every push token of the account goes first, while this session can
+      // still ask: a phone whose session ends cannot retire its own afterwards,
+      // and would keep receiving the account's notifications.
+      expect(state.unregisterAccountPush).toHaveBeenCalledWith(expect.anything(), { signal: expect.any(AbortSignal) });
+      expect(state.unregisterAccountPush.mock.invocationCallOrder[0]).toBeLessThan(state.signOut.mock.invocationCallOrder[0]);
+      expect(state.unregisterPush).not.toHaveBeenCalled();
+      expect(state.stopAutoRefresh.mock.invocationCallOrder[0]).toBeLessThan(state.signOut.mock.invocationCallOrder[0]);
+      expect(state.clearPersistedSession).toHaveBeenCalledOnce();
+      expect(state.clearPersistedHomeFeed).toHaveBeenCalledOnce();
+      expect(state.clearSearchHistory).toHaveBeenCalledOnce();
+      expect(state.clearPersistedAccountState).toHaveBeenCalledOnce();
+      expect(state.queryClient.removeQueries).toHaveBeenCalledOnce();
+      expect(latest.current?.user).toBeNull();
+      expect(latest.current?.isSigningOut).toBe(false);
+      expect(state.routerReplace).toHaveBeenCalledWith('/auth');
+      expect(state.startAutoRefresh.mock.invocationCallOrder.at(-1))
+        .toBeGreaterThan(state.clearPersistedSession.mock.invocationCallOrder[0]);
+      unmount();
+    });
+
+    it('keeps this phone signed in, and its push, when the server cannot confirm it', async () => {
+      const { latest, unmount } = await signedIn();
+      // What auth-js returns, keeping the session, when the logout request is
+      // offline or aborted.
+      const offline = new Error('Supabase auth request timed out after 10000ms');
+      state.signOut.mockResolvedValueOnce({ error: offline });
+      let failure: unknown;
+
+      await renderer.act(async () => {
+        await latest.current?.signOutEverywhere().catch((error: unknown) => {
+          failure = error;
+        });
+      });
+
+      expect(failure).toBe(offline);
+      expect(state.clearPersistedSession).not.toHaveBeenCalled();
+      expect(state.clearPersistedHomeFeed).not.toHaveBeenCalled();
+      expect(state.clearSearchHistory).not.toHaveBeenCalled();
+      expect(state.queryClient.removeQueries).not.toHaveBeenCalled();
+      expect(latest.current?.user?.id).toBe('user-1');
+      expect(latest.current?.isSigningOut).toBe(false);
+      expect(state.routerReplace).not.toHaveBeenCalled();
+      // The token went from the server before the sign-out was refused: the
+      // phone, still signed in, registers again.
+      expect(vi.mocked(registerForMobilePushNotifications)).toHaveBeenCalledWith(expect.anything(), { requestPermission: false });
+      expect(state.startAutoRefresh).toHaveBeenCalledOnce();
+      unmount();
+    });
+
+    it('asks nothing of a guest, whose one session is this phone', async () => {
+      const { latest, unmount } = await signedIn({
+        ...session,
+        user: { id: 'guest-1', is_anonymous: true } as unknown as typeof session.user,
+      });
+
+      await renderer.act(async () => {
+        await latest.current?.signOutEverywhere();
+      });
+
+      expect(state.signOut).not.toHaveBeenCalled();
+      expect(state.clearPersistedSession).not.toHaveBeenCalled();
+      expect(state.routerReplace).not.toHaveBeenCalled();
+      unmount();
+    });
+
+    it('joins a sign-out already under way rather than starting a second', async () => {
+      const { latest, unmount } = await signedIn();
+      let finish: ((result: { error: null }) => void) | undefined;
+      state.signOut.mockImplementationOnce(() => new Promise((resolve) => {
+        finish = resolve;
+      }));
+
+      let first: Promise<void> | undefined;
+      let second: Promise<void> | undefined;
+      await renderer.act(async () => {
+        first = latest.current?.signOutEverywhere();
+        second = latest.current?.signOutEverywhere();
+      });
+      expect(second).toBe(first);
+      expect(state.signOut).toHaveBeenCalledOnce();
+
+      await renderer.act(async () => {
+        finish?.({ error: null });
+        await first;
+      });
+      expect(state.routerReplace).toHaveBeenCalledWith('/auth');
+      unmount();
+    });
   });
 });

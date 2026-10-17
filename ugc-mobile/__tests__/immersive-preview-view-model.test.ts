@@ -321,9 +321,17 @@ describe('immersive preview view model', () => {
       mediaKind: null,
       previewKind: 'text',
       displayText: 'Caption framework',
-      badge: 'Prompt',
+      // Decision 10 (2026-10-17): a text post reads "Text", not "Prompt".
+      badge: 'Text',
       recreateTool: 'image',
     });
+  });
+
+  // Decision 13 (2026-10-17): Details names the model, so it needs the id.
+  it('hands Details the model a showcase post was made with', () => {
+    const [item] = buildImmersiveShowcaseItems('showcase-feed', [showcaseItem({ id: 'imagen-post', model: 'imagen-4' })]);
+
+    expect(item?.details?.model).toBe('imagen-4');
   });
 
   it('maps showcase resource metadata for viewer details', () => {
@@ -410,6 +418,7 @@ describe('immersive preview view model', () => {
           status: 'published',
           priceUsdCents: 0,
           salesCount: 3,
+          freeUnlockCount: 0,
           earningsUsdCents: 0,
           resourceKinds: ['prompt'],
         },
@@ -536,11 +545,13 @@ describe('immersive preview view model', () => {
       sharePath: '/showcase/body-post',
       recreateTool: 'image',
       recreatePrompt: 'Prompt',
+      // A text post reads "Text" (decision 10, 2026-10-17); its prompt keeps its name.
+      badge: 'Text',
       details: {
         title: 'Title',
         prompt: 'Prompt',
         body: 'Body wins',
-        categoryLabel: 'Prompt',
+        categoryLabel: 'Text',
         sourceLabel: 'Post',
         creatorLabel: '@batman',
         unlock: null,
@@ -791,6 +802,7 @@ describe('immersive preview view model', () => {
             status: 'published',
             priceUsdCents: 900,
             salesCount: 2,
+            freeUnlockCount: 0,
             earningsUsdCents: 1800,
             resourceKinds: ['prompt'],
           },

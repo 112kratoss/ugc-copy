@@ -5,7 +5,7 @@ import {
   createMobileNotificationHistory,
   withMobileNotificationHistory,
 } from '@/__tests__/fixtures/mobile-notification-history';
-import { GENERATION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { BackendLogRecord } from '@/lib/backend-logger';
 
 // Foreign references stay rejected by default; individual tests opt into an
@@ -5489,8 +5489,8 @@ describe('generation services', () => {
   });
 
   // 05-9: the shared limit held image and single-shot video prompts only.
-  it('holds every shot prompt, a multi-shot run’s own prompt and a motion prompt to the shared limit', async () => {
-    const { startMotionGeneration, startVideoGeneration } = await import('@/lib/generation-services');
+  it('holds every shot prompt and a multi-shot run’s own prompt to the shared limit', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
     const tooLong = 'a'.repeat(GENERATION_PROMPT_MAX_LENGTH + 1);
     const { supabase, rpcCalls } = createSupabaseMock();
     const multiShot = (prompt: string, shotPrompts: string[]) => startVideoGeneration({
@@ -5513,21 +5513,121 @@ describe('generation services', () => {
       status: 400,
       message: `Prompts support up to ${GENERATION_PROMPT_MAX_LENGTH} characters.`,
     });
-    await expect(startMotionGeneration({
+    expect(rpcCalls).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  // Product decision 20 (2026-10-17): both motion-control models document a 2,500-character
+  // prompt, so a longer one was held, sent and refused by Kie.
+  it('holds a motion prompt to Kie’s 2,500 characters, and starts one at the limit', async () => {
+    const { startMotionGeneration } = await import('@/lib/generation-services');
+    let providerBody: { input?: { prompt?: string } } | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-motion-limit-1' } }),
+      } as Response;
+    });
+    const motion = (supabase: SupabaseClient, prompt: string) => startMotionGeneration({
       supabase,
       creditSupabase: supabase,
       userId: 'user-1',
-      prompt: tooLong,
+      prompt,
       model: 'kling-2.6',
       referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
       characterImageUrl: 'https://cdn.example.com/character.png',
       duration: 5,
-    })).rejects.toMatchObject({
-      status: 400,
-      message: `Prompts support up to ${GENERATION_PROMPT_MAX_LENGTH} characters.`,
     });
-    expect(rpcCalls).toEqual([]);
+
+    const refused = createSupabaseMock();
+    await expect(motion(refused.supabase, 'a'.repeat(MOTION_PROMPT_MAX_LENGTH + 1))).rejects.toMatchObject({
+      status: 400,
+      message: `Prompts support up to ${MOTION_PROMPT_MAX_LENGTH} characters.`,
+    });
+    expect(refused.rpcCalls).toEqual([]);
     expect(fetch).not.toHaveBeenCalled();
+
+    const atLimit = 'a'.repeat(MOTION_PROMPT_MAX_LENGTH);
+    const started = createSupabaseMock();
+    await expect(motion(started.supabase, atLimit)).resolves.toMatchObject({ predictionId: 'task-motion-limit-1' });
+    const sent = providerBody as { input?: { prompt?: string } } | null;
+    expect(sent?.input?.prompt).toBe(atLimit);
+  });
+
+  // Creators finding 01-1: the catalog adapter (kie-task-v1) checked no length at all.
+  describe('a catalog run’s prompts', () => {
+    const operation = (kind: 'image' | 'video' | 'motion') => ({
+      modelId: `catalog-${kind}-model`,
+      kind,
+      adapterKey: 'kie-task-v1',
+      providerModelMap: { default: `provider/${kind}` },
+      adapterConfig: { promptField: 'prompt', shotsField: 'multi_prompt' },
+    });
+    const start = async (
+      supabase: SupabaseClient,
+      kind: 'image' | 'video' | 'motion',
+      prompt: string,
+      shots: Array<{ prompt: string; duration: number }> = [],
+    ) => {
+      const { startCatalogGeneration } = await import('@/lib/generation-services');
+      return startCatalogGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        operation: operation(kind),
+        catalogRevision: 'rev-1',
+        prompt,
+        settings: {},
+        shots,
+        quotedCostCredits: 40,
+      });
+    };
+
+    beforeEach(() => {
+      vi.mocked(fetch).mockImplementation(async () => ({
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-catalog-limit-1' } }),
+      }) as Response);
+    });
+
+    it.each([
+      ['image', GENERATION_PROMPT_MAX_LENGTH],
+      ['video', GENERATION_PROMPT_MAX_LENGTH],
+      ['motion', MOTION_PROMPT_MAX_LENGTH],
+    ] as const)('holds a %s prompt to %i characters before anything is held', async (kind, limit) => {
+      const refused = createSupabaseMock();
+      await expect(start(refused.supabase, kind, 'a'.repeat(limit + 1))).rejects.toMatchObject({
+        status: 400,
+        message: `Prompts support up to ${limit} characters.`,
+      });
+      expect(refused.rpcCalls).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+
+      const started = createSupabaseMock();
+      await expect(start(started.supabase, kind, 'a'.repeat(limit))).resolves.toMatchObject({
+        predictionId: 'task-catalog-limit-1',
+      });
+    });
+
+    it('holds each shot to the limit and names the shot that is over it', async () => {
+      const refused = createSupabaseMock();
+      await expect(start(refused.supabase, 'video', '', [
+        { prompt: 'Open on the harbour at dusk.', duration: 3 },
+        { prompt: 'a'.repeat(GENERATION_PROMPT_MAX_LENGTH + 1), duration: 3 },
+      ])).rejects.toMatchObject({
+        status: 400,
+        message: `Shot 2: prompts support up to ${GENERATION_PROMPT_MAX_LENGTH} characters.`,
+      });
+      expect(refused.rpcCalls).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+
+      const started = createSupabaseMock();
+      await expect(start(started.supabase, 'video', '', [
+        { prompt: 'Open on the harbour at dusk.', duration: 3 },
+        { prompt: 'a'.repeat(GENERATION_PROMPT_MAX_LENGTH), duration: 3 },
+      ])).resolves.toMatchObject({ predictionId: 'task-catalog-limit-1' });
+    });
   });
 
   it('still starts a motion run with no prompt', async () => {

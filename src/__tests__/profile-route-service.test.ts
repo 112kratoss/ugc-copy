@@ -33,7 +33,8 @@ const user: ProfileRouteUser = {
 };
 
 const COUNTS = { creations: 6, posts: 3, archivedPosts: 1, saved: 2 };
-const SALES = { earningsUsdCents: 1250, listingCount: 3, salesCount: 4 };
+// The RPC's jsonb since 2026-10-17: paid sales and free unlocks apart.
+const SALES = { earningsUsdCents: 1250, listingCount: 3, salesCount: 4, freeUnlockCount: 9 };
 
 function createClient({
   profiles = [] as ProfileRow[],
@@ -452,7 +453,7 @@ describe('profile route service', () => {
       ok: true,
       response: {
         stats: { creations: 7, posts: 0, archivedPosts: 2, saved: 0 },
-        sales: { earningsUsdCents: 90, listingCount: 0, salesCount: 0 },
+        sales: { earningsUsdCents: 90, listingCount: 0, salesCount: 0, freeUnlockCount: 0 },
       },
     });
   });
