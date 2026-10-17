@@ -97,6 +97,7 @@ import {
 } from '@/lib/generation-model-catalog';
 import {
   buildPromptEnhancementRequest,
+  buildShotPromptEnhancementRequest,
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
   createSubjectDraft,
@@ -105,6 +106,7 @@ import {
   renameMediaDraft,
   renameSubjectDraft,
   replaceMediaDraftMedia,
+  replaceShotPrompt,
   subjectAsReference,
   type CreationDraft,
   type ImageCreationDraft,
@@ -141,8 +143,8 @@ import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentColor, appTheme, mediaColors, type ToolAccent } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
-import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel, PromptEnhancementRequest, PromptEnhancementWarning, SeedanceAssetResponse } from '@/lib/types';
-import { SUBJECT_IMAGES_PER_NAME, subjectsPerRun, type ModelCatalogSummary, GENERATION_PROMPT_MAX_LENGTH, PROMPT_ENHANCEMENT_COST_CREDITS } from '@/lib/model-catalog/protocol';
+import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel, PromptEnhancementRequest, PromptEnhancementResponse, PromptEnhancementWarning, SeedanceAssetResponse } from '@/lib/types';
+import { SUBJECT_IMAGES_PER_NAME, subjectsPerRun, type ModelCatalogSummary, GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH, PROMPT_ENHANCEMENT_COST_CREDITS } from '@/lib/model-catalog/protocol';
 import { createSeedanceAssetMetadata, isSeedance2VideoModelId, type SeedanceAssetKind, type SeedanceAssetMetadata } from '@/lib/model-catalog/seedance-assets';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
@@ -528,6 +530,20 @@ function enhanceButtonLabels(verb: EnhanceVerb, busy: boolean) {
   };
 }
 
+/** A shot's Enhance names its shot, so it is not taken for the prompt's, priced as every Enhance is. */
+function shotEnhanceButtonLabels(shotNumber: number, busy: boolean) {
+  const word = `${busy ? 'Enhancing' : 'Enhance'} shot ${shotNumber}`;
+  return {
+    label: busy ? word : withCreditCost(word, PROMPT_ENHANCEMENT_COST_CREDITS),
+    accessibilityLabel: withCreditCost(word, PROMPT_ENHANCEMENT_COST_CREDITS),
+  };
+}
+
+/** Notes such as a prompt longer than the model reads; a blocking one is a refusal, not a note. */
+function enhancementNotes(result: PromptEnhancementResponse): PromptEnhancementWarning[] {
+  return (result.warnings ?? []).filter((warning) => warning.severity !== 'blocking').slice(0, 3);
+}
+
 /** The references an image run sends: the first ones, up to the model's max; all of them before its descriptor is in. */
 function imageRunReferences(draft: ImageCreationDraft, model: CreatorCatalogModel | null) {
   if (!model) return draft.references;
@@ -800,9 +816,10 @@ function IdentityCreationScreen({
   const [isGenerating, setIsGenerating] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhanceLevel, setEnhanceLevel] = useState<'cinematic' | 'faithful'>('cinematic');
-  const [enhanceUndo, setEnhanceUndo] = useState<{ previous: string; enhanced: string } | null>(null);
-  // What the enhancer said about the prompt it wrote, shown while that prompt stands.
-  const [enhanceNotes, setEnhanceNotes] = useState<{ tool: CreatorToolId; prompt: string; warnings: PromptEnhancementWarning[] } | null>(null);
+  // `shotId` names the shot of a multi-shot run whose words were enhanced, and not the prompt.
+  const [enhanceUndo, setEnhanceUndo] = useState<{ previous: string; enhanced: string; shotId?: string } | null>(null);
+  // What the enhancer said about the prompt it wrote, shown while that prompt (or that shot's words) stands.
+  const [enhanceNotes, setEnhanceNotes] = useState<{ tool: CreatorToolId; prompt: string; warnings: PromptEnhancementWarning[]; shotId?: string } | null>(null);
   const [status, setStatus] = useState<GenerationStatusResponse | null>(null);
   const [lastGenerationId, setLastGenerationId] = useState<string | null>(null);
   const [lastPredictionId, setLastPredictionId] = useState<string | null>(null);
@@ -1892,6 +1909,17 @@ function IdentityCreationScreen({
     }
   };
 
+  // A refusal is said under the prompt (or the shot); a failed enhancement is refunded, and the
+  // answer carries the balance after the refund.
+  const showEnhancementFailure = (error: unknown) => {
+    setPromptMessage(error instanceof Error ? error.message : 'Prompt enhancement failed.');
+    setMessage(null);
+    const details = error && typeof error === 'object' && 'details' in error ? (error as { details?: unknown }).details : null;
+    const remainingCredits = details && typeof details === 'object' ? (details as { remainingCredits?: unknown }).remainingCredits : undefined;
+    if (typeof remainingCredits === 'number' && Number.isFinite(remainingCredits)) updateCredits(remainingCredits);
+    haptic.error();
+  };
+
   const enhancePrompt = async () => {
     if (!currentDraft.prompt.trim()) {
       setPromptMessage('Add a prompt before enhancing.');
@@ -1916,19 +1944,46 @@ function IdentityCreationScreen({
       const result = await api.enhancePrompt(promptEnhancementRequest(currentDraft));
       updatePrompt(result.enhancedPrompt);
       setEnhanceUndo({ previous: previousPrompt, enhanced: result.enhancedPrompt });
-      // Notes such as a prompt longer than the model reads; a blocking one is a refusal, not a note.
-      const warnings = (result.warnings ?? []).filter((warning) => warning.severity !== 'blocking').slice(0, 3);
+      const warnings = enhancementNotes(result);
       if (warnings.length > 0) setEnhanceNotes({ tool: currentDraft.tool, prompt: result.enhancedPrompt, warnings });
       if (typeof result.remainingCredits === 'number') updateCredits(result.remainingCredits);
       haptic.success();
     } catch (error) {
-      setPromptMessage(error instanceof Error ? error.message : 'Prompt enhancement failed.');
-      setMessage(null);
-      // A failed enhancement is refunded, and the answer carries the balance after the refund.
-      const details = error && typeof error === 'object' && 'details' in error ? (error as { details?: unknown }).details : null;
-      const remainingCredits = details && typeof details === 'object' ? (details as { remainingCredits?: unknown }).remainingCredits : undefined;
-      if (typeof remainingCredits === 'number' && Number.isFinite(remainingCredits)) updateCredits(remainingCredits);
-      haptic.error();
+      showEnhancementFailure(error);
+    } finally {
+      setIsEnhancing(false);
+    }
+  };
+
+  /**
+   * One shot's Enhance in a multi-shot run, as each shot has on the web: that shot's words go to
+   * the enhancer, at the same price and with the same permission as the prompt's, and only that
+   * shot changes.
+   */
+  const enhanceShotPrompt = async (shotId: string) => {
+    if (currentDraft.tool !== 'video') return;
+    const request = buildShotPromptEnhancementRequest(currentDraft, shotId, { level: enhanceLevel });
+    if (!request?.prompt.trim()) return;
+    if (!identityUserId) {
+      openAuthForCurrentDraft();
+      return;
+    }
+    // The enhancer is Google's Gemini: the shot's words leave the phone.
+    if (!(await ensureAiDataConsent())) return;
+    setMessage(null);
+    setPromptMessage(null);
+    setEnhanceNotes(null);
+    setIsEnhancing(true);
+    try {
+      const result = await api.enhancePrompt(request);
+      setVideoDraft((draft) => replaceShotPrompt(draft, shotId, result.enhancedPrompt));
+      setEnhanceUndo({ previous: request.prompt, enhanced: result.enhancedPrompt, shotId });
+      const warnings = enhancementNotes(result);
+      if (warnings.length > 0) setEnhanceNotes({ tool: 'video', prompt: result.enhancedPrompt, warnings, shotId });
+      if (typeof result.remainingCredits === 'number') updateCredits(result.remainingCredits);
+      haptic.success();
+    } catch (error) {
+      showEnhancementFailure(error);
     } finally {
       setIsEnhancing(false);
     }
@@ -1955,7 +2010,14 @@ function IdentityCreationScreen({
   };
 
   const handleUndoEnhance = () => {
-    if (enhanceUndo && enhanceUndo.enhanced === currentDraft.prompt) {
+    if (enhanceUndo?.shotId !== undefined) {
+      const { shotId, previous, enhanced } = enhanceUndo;
+      setVideoDraft((draft) => (
+        draft.multiPrompts.some((shot) => shot.id === shotId && shot.prompt === enhanced)
+          ? replaceShotPrompt(draft, shotId, previous)
+          : draft
+      ));
+    } else if (enhanceUndo && enhanceUndo.enhanced === currentDraft.prompt) {
       updatePrompt(enhanceUndo.previous);
     }
     setEnhanceUndo(null);
@@ -2045,18 +2107,15 @@ function IdentityCreationScreen({
   };
 
   const sendGenerationAttempt = (attempt: PendingGenerationAttempt): Promise<GenerationStartResponse> => {
+    // Only POST /api/generations starts a run: the per-kind routes answer a start 410
+    // (product decision 21), so an attempt an older build saved under one is not sent.
+    if (attempt.route !== 'unified' || !api.startGeneration) {
+      return Promise.reject(new Error('This version of the app can’t check that generation. Start a new run instead.'));
+    }
     // Parsed back from what was saved, so a check replays the exact request the
     // server hashed under this key.
     const body = JSON.parse(attempt.requestJson) as never;
-    if (attempt.route === 'unified') {
-      if (!api.startGeneration) {
-        return Promise.reject(new Error('This version of the app can’t check that generation. Start a new run instead.'));
-      }
-      return api.startGeneration(body, attempt.idempotencyKey);
-    }
-    if (attempt.route === 'image') return api.startImageGeneration(body, attempt.idempotencyKey);
-    if (attempt.route === 'video') return api.startVideoGeneration(body, attempt.idempotencyKey);
-    return api.startMotionGeneration(body, attempt.idempotencyKey);
+    return api.startGeneration(body, attempt.idempotencyKey);
   };
 
   const runGenerationAttempt = async (
@@ -2186,8 +2245,8 @@ function IdentityCreationScreen({
       }
       return;
     }
-    // Every new run starts on POST /api/generations, which the app's catalog schema always
-    // has; the per-kind routes are left for replaying an attempt an older build saved.
+    // Every run starts on POST /api/generations, which the app's catalog schema always has;
+    // the per-kind routes answer a start 410 and are only polled.
     const route = 'unified' as const;
     // Kept so a refusal that measured the references can be matched back to the draft's media.
     const unifiedRequest = buildUnifiedCatalogGenerationRequest(
@@ -2441,9 +2500,18 @@ function IdentityCreationScreen({
   };
   const refusalActionLabel = startRefusalActionLabel(startRefusal);
   const refusalAction = refusalActionLabel ? { label: refusalActionLabel, onPress: runRefusalAction } : null;
-  const promptNotes = enhanceNotes && enhanceNotes.tool === activeTool && enhanceNotes.prompt === currentDraft.prompt
+  const promptNotes = enhanceNotes && enhanceNotes.shotId === undefined && enhanceNotes.tool === activeTool && enhanceNotes.prompt === currentDraft.prompt
     ? enhanceNotes.warnings
     : [];
+  // A shot's notes go to the shot editor, which shows them while that shot's enhanced words stand.
+  const shotNotes = enhanceNotes?.shotId !== undefined && enhanceNotes.tool === activeTool
+    ? { shotId: enhanceNotes.shotId, prompt: enhanceNotes.prompt, warnings: enhanceNotes.warnings }
+    : null;
+  // Undo stands while the enhanced words do: the prompt's, or the one shot's they were written for.
+  const canUndoEnhance = enhanceUndo !== null && (enhanceUndo.shotId === undefined
+    ? enhanceUndo.enhanced === currentDraft.prompt
+    : currentDraft.tool === 'video'
+      && currentDraft.multiPrompts.some((shot) => shot.id === enhanceUndo.shotId && shot.prompt === enhanceUndo.enhanced));
   // The parameter sheet is a Modal, which would stay over the pricing page.
   const openCreditsFromParameters = () => {
     setParametersVisible(false);
@@ -2586,9 +2654,11 @@ function IdentityCreationScreen({
               validationErrors={validation.errors}
               onPromptChange={updatePrompt}
               onEnhance={enhancePrompt}
+              onEnhanceShot={(shotId) => void enhanceShotPrompt(shotId)}
+              shotNotes={shotNotes}
               enhanceLevel={enhanceLevel}
               onEnhanceLevelChange={setEnhanceLevel}
-              canUndoEnhance={enhanceUndo !== null && enhanceUndo.enhanced === currentDraft.prompt}
+              canUndoEnhance={canUndoEnhance}
               onUndoEnhance={handleUndoEnhance}
               onChange={(draft) => replaceDraft(draft)}
               onUploadImages={() => uploadImageReferences('video')}
@@ -2625,7 +2695,7 @@ function IdentityCreationScreen({
               onEnhance={enhancePrompt}
               enhanceLevel={enhanceLevel}
               onEnhanceLevelChange={setEnhanceLevel}
-              canUndoEnhance={enhanceUndo !== null && enhanceUndo.enhanced === currentDraft.prompt}
+              canUndoEnhance={canUndoEnhance}
               onUndoEnhance={handleUndoEnhance}
               onChange={(draft) => replaceDraft(draft)}
               onUploadCharacter={() => uploadSingleImage('character')}
@@ -2872,7 +2942,7 @@ function IdentityCreationScreen({
             onEnhance={enhancePrompt}
             enhanceLevel={enhanceLevel}
             onEnhanceLevelChange={setEnhanceLevel}
-            canUndoEnhance={enhanceUndo !== null && enhanceUndo.enhanced === currentDraft.prompt}
+            canUndoEnhance={canUndoEnhance}
             onUndoEnhance={handleUndoEnhance}
             onUploadReferences={() => uploadImageReferences('image')}
             onRenameReference={(id, displayName) => setImageDraft((draft) => {
@@ -3651,15 +3721,27 @@ function CompactReferenceSlot({
   );
 }
 
+/** What the enhancer said about one shot's words, shown under that shot while they stand. */
+type ShotEnhancementNotes = { shotId: string; prompt: string; warnings: PromptEnhancementWarning[] };
+
 function CompactShotEditor({
   draft,
   model,
+  isEnhancing,
+  promptMessage,
+  notes,
+  onEnhanceShot,
   onChange,
   onFocus,
   onBlur,
 }: {
   draft: VideoCreationDraft;
   model: CreatorCatalogModel | null;
+  isEnhancing: boolean;
+  /** In a multi-shot run the prompt box is the shot's, so what is said about a prompt is said here. */
+  promptMessage: string | null;
+  notes: ShotEnhancementNotes | null;
+  onEnhanceShot: (shotId: string) => void;
   onChange: (draft: VideoCreationDraft) => void;
   onFocus: () => void;
   onBlur: () => void;
@@ -3675,6 +3757,10 @@ function CompactShotEditor({
   // At either cap another shot could only be refused; the shots already there can still be shortened.
   const atShotCap = (maxShots !== null && draft.multiPrompts.length >= maxShots)
     || (maxTotalSeconds !== null && totalDuration >= maxTotalSeconds);
+  const selectedShotNumber = selectedShot ? draft.multiPrompts.findIndex((shot) => shot.id === selectedShot.id) + 1 : 0;
+  const shotEnhanceLabels = shotEnhanceButtonLabels(selectedShotNumber, isEnhancing);
+  // A shot with no words has nothing to enhance, as the web's per-shot button says by being off.
+  const shotEnhanceDisabled = isEnhancing || !selectedShot?.prompt.trim();
 
   useEffect(() => {
     if (selectedShot || draft.multiPrompts.length === 0) return;
@@ -3733,6 +3819,7 @@ function CompactShotEditor({
       {selectedShot ? (
         <View style={{ borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.image, 0.2), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
           <TextInput
+            maxLength={GENERATION_PROMPT_MAX_LENGTH}
             testID="selected-shot-prompt"
             accessibilityLabel="Selected shot prompt"
             value={selectedShot.prompt}
@@ -3746,6 +3833,21 @@ function CompactShotEditor({
             onBlur={onBlur}
             style={{ height: 154, color: theme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 15, paddingTop: 15, paddingBottom: 22 }}
           />
+          {promptMessage ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 15, paddingBottom: 10 }}>{promptMessage}</Text> : null}
+          {notes && notes.shotId === selectedShot.id && notes.prompt === selectedShot.prompt ? <PromptQualityNotes warnings={notes.warnings} /> : null}
+          <View style={{ paddingHorizontal: 12, paddingBottom: 4 }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={shotEnhanceLabels.accessibilityLabel}
+              accessibilityState={{ disabled: shotEnhanceDisabled }}
+              disabled={shotEnhanceDisabled}
+              onPress={() => onEnhanceShot(selectedShot.id)}
+              style={({ pressed }) => ({ minHeight: 44, borderRadius: 16, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.primary, 0.3), backgroundColor: hexWithAlpha(theme.colors.primary, 0.11), flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 12, opacity: shotEnhanceDisabled ? 0.45 : pressed ? appTheme.opacity.pressed : 1 })}
+            >
+              <Wand2 size={16} color={theme.colors.primary} />
+              <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '800' }}>{shotEnhanceLabels.label}</Text>
+            </Pressable>
+          </View>
           <View style={{ paddingHorizontal: 12, paddingBottom: 12, gap: 8 }}>
             <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Shot duration</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 7 }}>
@@ -3785,6 +3887,8 @@ function VideoCreatorComposer({
   validationErrors,
   onPromptChange,
   onEnhance,
+  onEnhanceShot,
+  shotNotes,
   enhanceLevel,
   onEnhanceLevelChange,
   canUndoEnhance,
@@ -3819,6 +3923,9 @@ function VideoCreatorComposer({
   validationErrors: string[];
   onPromptChange: (prompt: string) => void;
   onEnhance: () => void;
+  /** A multi-shot run's Enhance for one shot. */
+  onEnhanceShot: (shotId: string) => void;
+  shotNotes: ShotEnhancementNotes | null;
   enhanceLevel: PromptEnhancementLevel;
   onEnhanceLevelChange: (level: PromptEnhancementLevel) => void;
   canUndoEnhance: boolean;
@@ -4141,7 +4248,17 @@ function VideoCreatorComposer({
       ) : null}
 
       {draft.isMultiShot ? (
-        <CompactShotEditor draft={draft} model={model} onChange={onChange} onFocus={onFocus} onBlur={onBlur} />
+        <CompactShotEditor
+          draft={draft}
+          model={model}
+          isEnhancing={isEnhancing}
+          promptMessage={promptMessage}
+          notes={shotNotes}
+          onEnhanceShot={onEnhanceShot}
+          onChange={onChange}
+          onFocus={onFocus}
+          onBlur={onBlur}
+        />
       ) : (
         <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.image, 0.2), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
           <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 }}>
@@ -4578,7 +4695,7 @@ function MotionCreatorComposer({
         </View>
         <TextInput
           ref={promptInputRef}
-          maxLength={GENERATION_PROMPT_MAX_LENGTH}
+          maxLength={MOTION_PROMPT_MAX_LENGTH}
           testID="motion-prompt-input"
           accessibilityLabel="Optional motion prompt"
           value={draft.prompt}
@@ -4592,7 +4709,7 @@ function MotionCreatorComposer({
           onBlur={onBlur}
           style={{ height: 128, color: theme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 22 }}
         />
-        <PromptLengthCounter length={draft.prompt.length} />
+        <PromptLengthCounter length={draft.prompt.length} limit={MOTION_PROMPT_MAX_LENGTH} />
         {promptMessage ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 11 }}>{promptMessage}</Text> : null}
         <PromptQualityNotes warnings={promptNotes} />
       </View>
@@ -6372,17 +6489,20 @@ function useReferencePreviewUrl(media: MediaDraft) {
   return (media.storagePath ? localPreviews.get(media.storagePath) : undefined) ?? media.url;
 }
 
-/** The prompt's length against the one limit the routes and every composer read, as web's counter shows it. */
-function PromptLengthCounter({ length }: { length: number }) {
+/**
+ * The prompt's length against the limit the routes and every composer read for its kind, as web's
+ * counter shows it: 10,000 for image and video, Kie's own 2,500 for motion.
+ */
+function PromptLengthCounter({ length, limit = GENERATION_PROMPT_MAX_LENGTH }: { length: number; limit?: number }) {
   const theme = useAppTheme();
-  const atLimit = length >= GENERATION_PROMPT_MAX_LENGTH;
+  const atLimit = length >= limit;
   return (
     <Text
       testID="prompt-length"
-      accessibilityLabel={`${groupDigits(length)} of ${groupDigits(GENERATION_PROMPT_MAX_LENGTH)} characters`}
+      accessibilityLabel={`${groupDigits(length)} of ${groupDigits(limit)} characters`}
       style={{ alignSelf: 'flex-end', color: atLimit ? theme.colors.amber : theme.colors.muted, fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'], paddingHorizontal: 16, paddingBottom: 10 }}
     >
-      {`${groupDigits(length)}/${groupDigits(GENERATION_PROMPT_MAX_LENGTH)}`}
+      {`${groupDigits(length)}/${groupDigits(limit)}`}
     </Text>
   );
 }

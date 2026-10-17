@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CreateMotionClient from '@/app/create-motion/CreateMotionClient';
 import { GenerationStatusRequestError } from '@/lib/generation-status-client';
 import { loadPendingWebStart, savePendingWebStart, type PendingWebStart } from '@/lib/generation-model-client';
+import { MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 const modelCatalogState = vi.hoisted(() => ({
   missingIds: [] as string[],
@@ -740,6 +741,19 @@ describe('CreateMotionClient deploys', () => {
 
     await waitFor(() => expect(deployState.enabled.length).toBeGreaterThan(0));
     expect(deployState.enabled.every((enabled) => enabled === false)).toBe(true);
+  });
+});
+
+describe('CreateMotionClient prompt', () => {
+  // Product decision 20: Kie's motion cap, read from the constant the app and the motion start share.
+  it('takes a prompt up to the motion limit of 2,500 characters and counts against it', () => {
+    render(<CreateMotionClient prefill={{}} />);
+    const prompt = screen.getByPlaceholderText(/Describe the kind of movement/);
+    expect(MOTION_PROMPT_MAX_LENGTH).toBe(2500);
+    expect(prompt).toHaveAttribute('maxlength', String(MOTION_PROMPT_MAX_LENGTH));
+
+    fireEvent.change(prompt, { target: { value: 'x'.repeat(1200) } });
+    expect(screen.getByText(`1200/${MOTION_PROMPT_MAX_LENGTH}`)).toBeInTheDocument();
   });
 });
 

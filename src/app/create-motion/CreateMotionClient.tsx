@@ -66,6 +66,8 @@ import {
     type GenerationTiming,
 } from '@/lib/generation-timing';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
+// Kie's motion cap; the motion start refuses a longer prompt before anything is held.
+import { MOTION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import { useTicker } from '@/lib/use-ticker';
 import {
     refreshTemporaryMediaUrl,
@@ -1602,10 +1604,10 @@ export default function CreateMotionClient({
                                     setPrompt(event.target.value);
                                 }}
                                 placeholder="Describe the kind of movement, pacing, and constraints you want to preserve."
-                                maxLength={2500}
+                                maxLength={MOTION_PROMPT_MAX_LENGTH}
                                 className="mt-3 min-h-[140px] w-full resize-y rounded-2xl border border-white/10 bg-black/50 p-5 text-sm leading-relaxed text-white outline-none transition focus:border-[#ff7a59]/50 focus:ring-4 focus:ring-[#ff7a59]/10"
                             />
-                            <div className="mt-3 flex justify-end text-xs text-zinc-500">{prompt.length}/2500</div>
+                            <div className="mt-3 flex justify-end text-xs text-zinc-500">{prompt.length}/{MOTION_PROMPT_MAX_LENGTH}</div>
                         </StudioControlCard>
 
                         <StudioControlCard title="Output settings" description="Set how closely the result follows the reference and the fidelity you want.">

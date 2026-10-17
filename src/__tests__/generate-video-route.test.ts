@@ -333,6 +333,26 @@ function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string)
   expect(response.headers.get('x-request-id')).toBe(requestId);
 }
 
+/**
+ * The start this route served until product decision 21 (2026-10-17), since when its POST
+ * answers 410. The start itself is kept, and builds the provider requests POST
+ * /api/generations sends through the same start services, so these cases drive it through
+ * the adapter the route used.
+ */
+async function importRetiredStart() {
+  const [{ postGenerationRouteResponse }, { postVideoGenerationForRoute }] = await Promise.all([
+    import('@/lib/generation-route-adapter-service'),
+    import('@/lib/video-generation-route-service'),
+  ]);
+  return {
+    POST: (request: Request) => postGenerationRouteResponse({
+      request,
+      postGenerationForRoute: postVideoGenerationForRoute,
+      kieApiKey: process.env.KIE_AI_API_KEY,
+    }),
+  };
+}
+
 describe('/api/generate-video route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -354,13 +374,47 @@ describe('/api/generate-video route', () => {
     vi.restoreAllMocks();
   });
 
+  // Product decision 21 (2026-10-17): every supported build and the web start a run on
+  // POST /api/generations and only poll here, so a start is answered 410 and costs nothing.
+  it('answers a start 410 before reading it, asking who sent it, or holding anything', async () => {
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+    const { POST } = await import('@/app/api/generate-video/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate-video', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+          'x-request-id': 'video-retired-1',
+        },
+        body: JSON.stringify({
+          model: 'kling-3.0-video',
+          prompt: 'A slow reveal of the product',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(410);
+    expectPrivateNoStoreTraceHeaders(response, 'video-retired-1');
+    expect(await response.json()).toEqual({
+      code: 'GENERATION_ROUTE_RETIRED',
+      error: expect.stringContaining('Update Magicbooklet'),
+    });
+    expect(createUserClientMock).not.toHaveBeenCalled();
+    expect(rawCreateClientMock).not.toHaveBeenCalled();
+    expect(currentSupabaseMock.client.auth.getUser).not.toHaveBeenCalled();
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalled();
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
   it('authenticates before reporting provider configuration errors', async () => {
     currentSupabaseMock = createSupabaseMock(null, null, true, true, null);
     delete process.env.KIE_AI_API_KEY;
     const providerFetch = vi.fn();
     vi.stubGlobal('fetch', providerFetch);
 
-    const { POST } = await import('@/app/api/generate-video/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-video', {
         method: 'POST',
@@ -392,7 +446,7 @@ describe('/api/generate-video route', () => {
     const providerFetch = vi.fn();
     vi.stubGlobal('fetch', providerFetch);
 
-    const { POST } = await import('@/app/api/generate-video/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-video', {
         method: 'POST',
@@ -432,7 +486,7 @@ describe('/api/generate-video route', () => {
       })
     );
 
-    const { POST } = await import('@/app/api/generate-video/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-video', {
         method: 'POST',
@@ -484,7 +538,7 @@ describe('/api/generate-video route', () => {
       })
     );
 
-    const { POST } = await import('@/app/api/generate-video/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-video', {
         method: 'POST',
@@ -524,7 +578,7 @@ describe('/api/generate-video route', () => {
     const providerFetch = vi.fn();
     vi.stubGlobal('fetch', providerFetch);
 
-    const { POST } = await import('@/app/api/generate-video/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-video', {
         method: 'POST',
@@ -570,7 +624,7 @@ describe('/api/generate-video route', () => {
       })
     );
 
-    const { POST } = await import('@/app/api/generate-video/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-video', {
         method: 'POST',
@@ -621,7 +675,7 @@ describe('/api/generate-video route', () => {
       }))
     );
 
-    const { POST } = await import('@/app/api/generate-video/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-video', {
         method: 'POST',
@@ -684,7 +738,7 @@ describe('/api/generate-video route', () => {
       })
     );
 
-    const { POST } = await import('@/app/api/generate-video/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-video', {
         method: 'POST',
@@ -762,7 +816,7 @@ describe('/api/generate-video route', () => {
       })
     );
 
-    const { POST } = await import('@/app/api/generate-video/route');
+    const { POST } = await importRetiredStart();
     const response = await POST(
       new Request('http://localhost/api/generate-video', {
         method: 'POST',

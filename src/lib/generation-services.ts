@@ -62,7 +62,7 @@ import {
 } from '@/lib/generation-input-media';
 import { importSharedGenerationInputMedia } from '@/lib/generation-input-media-import';
 // Shared with both composers' inputs, so the three limits cannot drift.
-import { GENERATION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-candidates';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { getCanonicalStoredMediaLocation, getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
@@ -127,7 +127,7 @@ import {
   WAN_REFERENCE_MAX_DURATION_SECONDS,
   type GenerationModelOperationalConfig,
 } from '@/lib/generation-model-runtime';
-import { getVideoInputLimits, type CatalogPrimitive } from '@/lib/generation-model-catalog';
+import { getVideoInputLimits, type CatalogPrimitive, type GenerationModelKind } from '@/lib/generation-model-catalog';
 import {
   buildGenerationProviderRequest,
   type CatalogGenerationInputAsset,
@@ -854,18 +854,27 @@ async function settleGenerationStartFailureQuietly(params: {
 
 /**
  * GENERATION_PROMPT_MAX_LENGTH is a generous ceiling above every supported
- * model's accepted prompt size; it only exists to stop unbounded payloads from
- * reaching the provider and database. A prompt that may be blank (a motion
- * prompt, the single-shot prompt a multi-shot run still carries) is held to it
- * here; `shotIndex` names the shot whose prompt is over it.
+ * image and video model's accepted prompt size; it only exists to stop unbounded
+ * payloads from reaching the provider and database. Motion is held to
+ * MOTION_PROMPT_MAX_LENGTH, the provider's own cap, which it would otherwise
+ * refuse only after the credits were held. A prompt that may be blank (a motion
+ * prompt, the single-shot prompt a multi-shot run still carries) is held to its
+ * limit here; `shotIndex` names the shot whose prompt is over it.
  */
-function assertPromptWithinLimit(prompt: string, shotIndex?: number): void {
-  if (prompt.trim().length <= GENERATION_PROMPT_MAX_LENGTH) return;
-  const limit = `support up to ${GENERATION_PROMPT_MAX_LENGTH} characters.`;
+function assertPromptWithinLimit(
+  prompt: string,
+  { shotIndex, maxLength = GENERATION_PROMPT_MAX_LENGTH }: { shotIndex?: number; maxLength?: number } = {},
+): void {
+  if (prompt.trim().length <= maxLength) return;
+  const limit = `support up to ${maxLength} characters.`;
   throw new GenerationServiceError(
     shotIndex === undefined ? `Prompts ${limit}` : `Shot ${shotIndex + 1}: prompts ${limit}`,
     400
   );
+}
+
+function promptMaxLengthForKind(kind: GenerationModelKind): number {
+  return kind === 'motion' ? MOTION_PROMPT_MAX_LENGTH : GENERATION_PROMPT_MAX_LENGTH;
 }
 
 export function trimPrompt(prompt: string, errorMessage: string): string {
@@ -2379,7 +2388,7 @@ export async function startVideoGeneration(params: {
       normalizedMultiPrompts.every((shot) => shot.prompt.length > 0),
       'All multi-shot entries need a text prompt.'
     );
-    normalizedMultiPrompts.forEach((shot, index) => assertPromptWithinLimit(shot.prompt, index));
+    normalizedMultiPrompts.forEach((shot, index) => assertPromptWithinLimit(shot.prompt, { shotIndex: index }));
     assertPromptWithinLimit(trimmedPrompt);
   } else {
     trimPrompt(prompt, 'A prompt is required to generate a video.');
@@ -3570,8 +3579,8 @@ export async function startMotionGeneration(params: {
     throw new Error('Motion generation requires both a reference video and a character image.');
   }
   // A motion run may leave its prompt blank (the provider is given a default), so
-  // only the length is held.
-  assertPromptWithinLimit(prompt);
+  // only the length is held, to the provider's own motion cap.
+  assertPromptWithinLimit(prompt, { maxLength: MOTION_PROMPT_MAX_LENGTH });
   assertGenerationPromptsAllowed([prompt], { userId, model });
 
   // Motion inputs are forwarded to the provider as-is, so gate their sources
@@ -3758,6 +3767,14 @@ export async function startCatalogGeneration(params: {
   const providerPrompt = typeof compiledPrompt === 'string' && compiledPrompt.trim()
     ? compiledPrompt.trim()
     : creatorPrompt;
+  // What the creator wrote, each shot included, is held to its kind's limit, as the
+  // image, video and motion starts hold theirs; this adapter held none.
+  const maxLength = promptMaxLengthForKind(operation.kind);
+  assertPromptWithinLimit(creatorPrompt, { maxLength });
+  shots.forEach((shot, index) => assertPromptWithinLimit(
+    typeof shot.prompt === 'string' ? shot.prompt : '',
+    { shotIndex: index, maxLength },
+  ));
   // The legend carries the pictures' names to the provider, so it is checked too.
   assertGenerationPromptsAllowed(
     [prompt, compiledPrompt, ...shots.map((shot) => (typeof shot.prompt === 'string' ? shot.prompt : null))],

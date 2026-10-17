@@ -39,8 +39,8 @@ const authState = vi.hoisted(() => ({
   ensureGuestMergeTicket: vi.fn(async () => undefined),
   api: {
     enhancePrompt: vi.fn(),
-    // Every new run starts here, as in the app (catalog schema 3); the per-kind starts
-    // below only replay an attempt an older build saved.
+    // Every run starts here, as in the app (catalog schema 3); the per-kind starts below
+    // answer 410 on the server now, and the screen never calls them.
     startGeneration: vi.fn(),
     startImageGeneration: vi.fn(),
     startVideoGeneration: vi.fn(),
@@ -4135,6 +4135,49 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     vi.useRealTimers();
   });
 
+  // Product decision 21: the per-kind start routes answer 410, so an attempt a build from
+  // before POST /api/generations saved under one is not sent again.
+  it('sends nothing for an attempt saved under a per-kind route, and offers a new run', async () => {
+    vi.useFakeTimers();
+    catalogState.catalog = catalogV2();
+    const attemptKey = 'magicbooklet.generation.pendingAttempt.v1:user-123';
+    draftStorage.getItem.mockImplementation(async (key: string) => (key === attemptKey
+      ? JSON.stringify({
+        version: 1,
+        identityUserId: 'user-123',
+        tool: 'video',
+        route: 'video',
+        idempotencyKey: 'video:per-kind',
+        requestJson: JSON.stringify({ model: 'fallback-video-v2', prompt: 'A run from an older build.' }),
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+      })
+      : null));
+    authState.api.startGeneration = vi.fn();
+    authState.api.quoteGenerationModel.mockResolvedValue({
+      modelId: 'fallback-video-v2',
+      catalogRevision: 'catalog-v2-revision',
+      normalizedSettings: { referenceMode: 'elements', resolution: '720p', duration: 7 },
+      costCredits: 29,
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="video" />);
+    });
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Check again').props.onPress();
+    });
+
+    expect(authState.api.startVideoGeneration).not.toHaveBeenCalled();
+    expect(authState.api.startGeneration).not.toHaveBeenCalled();
+    expect(collectText(tree!.root)).toContain('This version of the app can’t check that generation. Start a new run instead.');
+    expect(draftStorage.removeItem).toHaveBeenCalledWith(attemptKey);
+    vi.useRealTimers();
+  });
+
   it('forgets an attempt the server refused outright', async () => {
     vi.useFakeTimers();
     catalogState.catalog = catalogV2();
@@ -5674,6 +5717,74 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(context).not.toHaveProperty('elementEnhancementMode');
       });
 
+      // Product decision 19: in a multi-shot run each shot has its own Enhance, as on the web.
+      describe('a shot of a multi-shot run', () => {
+        const shotPrompt = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ testID: 'selected-shot-prompt' }).props.value as string;
+        const openStory = async () => {
+          catalogState.catalog = parityCatalog([parityKlingVideo()]);
+          memory.set(ordinaryKey, savedDrafts({ video: {
+            model: 'kling-3.0-video',
+            catalogRevision: 'parity-rev',
+            isMultiShot: true,
+            duration: 11,
+            multiPrompts: [{ id: 's1', prompt: 'A door opens', duration: 5 }, { id: 's2', prompt: 'She walks in', duration: 6 }],
+          } }));
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
+          renderer.act(() => { labelled(tree.root, 'Edit shot 2').props.onPress(); });
+          return tree;
+        };
+
+        it('enhances the shot on screen at its stated price, and writes back that shot alone', async () => {
+          authState.api.enhancePrompt.mockResolvedValue({ enhancedPrompt: 'She walks in slowly, lit from the hall.', remainingCredits: 900 });
+          const tree = await openStory();
+          const enhanceShot = labelled(tree.root, 'Enhance shot 2 · 2 credits');
+          expect(collectText(enhanceShot)).toContain('Enhance shot 2 · 2 credits');
+
+          await renderer.act(async () => { await enhanceShot.props.onPress(); });
+          await settle();
+
+          expect(aiDataConsentState.ensure).toHaveBeenCalledTimes(1);
+          expect(authState.api.enhancePrompt).toHaveBeenCalledTimes(1);
+          expect(authState.api.enhancePrompt.mock.calls[0][0]).toMatchObject({
+            medium: 'video',
+            selectedModel: 'kling-3.0-video',
+            prompt: 'She walks in',
+            context: { isMultiShot: true, shotIndex: 1, shotCount: 2, duration: 6 },
+          });
+          expect(shotPrompt(tree)).toBe('She walks in slowly, lit from the hall.');
+          expect(authState.updateCredits).toHaveBeenCalledWith(900);
+          expect(storedDrafts().video.multiPrompts).toEqual([
+            { id: 's1', prompt: 'A door opens', duration: 5 },
+            { id: 's2', prompt: 'She walks in slowly, lit from the hall.', duration: 6 },
+          ]);
+
+          // Undo puts back that shot's own words, and the other shot never changed.
+          renderer.act(() => { labelled(tree.root, 'Undo enhancement').props.onPress(); });
+          expect(shotPrompt(tree)).toBe('She walks in');
+          renderer.act(() => { labelled(tree.root, 'Edit shot 1').props.onPress(); });
+          expect(shotPrompt(tree)).toBe('A door opens');
+        });
+
+        it('sends nothing without permission, and keeps the shot as written when the enhancer refuses', async () => {
+          aiDataConsentState.ensure.mockResolvedValue(false);
+          const tree = await openStory();
+          await renderer.act(async () => { await labelled(tree.root, 'Enhance shot 2 · 2 credits').props.onPress(); });
+          expect(authState.api.enhancePrompt).not.toHaveBeenCalled();
+
+          aiDataConsentState.ensure.mockResolvedValue(true);
+          authState.api.enhancePrompt.mockRejectedValue(Object.assign(new Error('Insufficient credits. Enhancing a prompt costs 2 credits.'), {
+            status: 402,
+            details: { error: 'Insufficient credits. Enhancing a prompt costs 2 credits.', remainingCredits: 1 },
+          }));
+          await renderer.act(async () => { await labelled(tree.root, 'Enhance shot 2 · 2 credits').props.onPress(); });
+
+          expect(shotPrompt(tree)).toBe('She walks in');
+          expect(collectText(tree.root.findByProps({ testID: 'video-shot-editor' })))
+            .toContain('Insufficient credits. Enhancing a prompt costs 2 credits.');
+          expect(authState.updateCredits).toHaveBeenCalledWith(1);
+        });
+      });
+
       it('applies the balance a failed enhancement returns with its refund', async () => {
         authState.api.enhancePrompt.mockRejectedValue(Object.assign(new Error('Prompt enhancement failed. Your credits have been refunded.'), {
           status: 502,
@@ -5689,18 +5800,33 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     describe('the prompt and the parameter sheet', () => {
+      // Motion is held to Kie's own 2,500 (product decision 20); image and video keep 10,000.
       it.each([
-        ['image', 'Generation prompt'],
-        ['video', 'Generation prompt'],
-        ['motion', 'Optional motion prompt'],
-      ] as const)('count the %s prompt against its limit', async (tool, promptLabel) => {
+        ['image', 'Generation prompt', 10000, '10,000'],
+        ['video', 'Generation prompt', 10000, '10,000'],
+        ['motion', 'Optional motion prompt', 2500, '2,500'],
+      ] as const)('count the %s prompt against its limit', async (tool, promptLabel, limit, limitLabel) => {
         const tree = await open(<MediaCreationScreen initialTool={tool} />);
-        expect(collectText(tree.root.findByProps({ testID: 'prompt-length' }))).toEqual(['0/10,000']);
+        expect(collectText(tree.root.findByProps({ testID: 'prompt-length' }))).toEqual([`0/${limitLabel}`]);
+        expect(tree.root.findByProps({ accessibilityLabel: promptLabel }).props.maxLength).toBe(limit);
 
         await typePrompt(tree, 'x'.repeat(1234), promptLabel);
         const counter = tree.root.findByProps({ testID: 'prompt-length' });
-        expect(collectText(counter)).toEqual(['1,234/10,000']);
-        expect(counter.props.accessibilityLabel).toBe('1,234 of 10,000 characters');
+        expect(collectText(counter)).toEqual([`1,234/${limitLabel}`]);
+        expect(counter.props.accessibilityLabel).toBe(`1,234 of ${limitLabel} characters`);
+      });
+
+      // The server holds every shot to the video limit, and the web's shot boxes stop there.
+      it('holds each shot of a multi-shot run to the video limit', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'kling-3.0-video',
+          catalogRevision: 'parity-rev',
+          isMultiShot: true,
+          multiPrompts: [{ id: 's1', prompt: 'A door opens', duration: 5 }],
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+        expect(tree.root.findByProps({ testID: 'selected-shot-prompt' }).props.maxLength).toBe(10000);
       });
 
       it('offers Get credits in the sheet when the balance is short, closing the sheet on the way', async () => {

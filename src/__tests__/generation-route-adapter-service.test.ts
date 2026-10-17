@@ -164,20 +164,11 @@ describe('generation route adapter service', () => {
     });
   });
 
-  it('creates compact GET and POST handlers for media generation route entrypoints', async () => {
-    const postGenerationForRoute = vi.fn(async (input) => {
-      expect(input.kieApiKey).toBe('kie-key');
-      expect(input.createAdminSupabase()).toBe(adminSupabase);
-      expect(input.createUserSupabase()).toBe(userSupabase);
-      await expect(input.readRequestBody?.()).resolves.toEqual({
-        prompt: 'Factory generated image',
-      });
-
-      return {
-        ok: true as const,
-        body: { predictionId: 'task-factory-post' },
-      };
-    });
+  // Product decision 21 (2026-10-17): every supported build and the web start a run on
+  // POST /api/generations and only poll /api/generate, /api/generate-image and
+  // /api/generate-video, so a start there is answered 410 and polling stays as it was.
+  it('creates compact handlers for the per-kind routes: polling answers, a start is retired', async () => {
+    const postGenerationForRoute = vi.fn();
     const getGenerationForRoute = vi.fn(async (input) => {
       expect(input.kieApiKey).toBe('kie-key');
       expect(input.readRequestBody).toBeUndefined();
@@ -199,28 +190,66 @@ describe('generation route adapter service', () => {
       },
     });
 
-    const postResponse = await POST(new Request('http://localhost/api/generate-image', {
+    const startBody = vi.fn(async () => ({ prompt: 'Factory generated image' }));
+    const start = new Request('http://localhost/api/generate-image', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-request-id': 'generation-factory-post',
       },
       body: JSON.stringify({ prompt: 'Factory generated image' }),
-    }));
+    });
+    start.json = startBody;
+    const postResponse = await POST(start);
     const getResponse = await GET(new Request('http://localhost/api/generate-image?id=task-factory-post', {
       headers: { 'x-request-id': 'generation-factory-get' },
     }));
 
-    expect(postResponse.status).toBe(200);
+    expect(postResponse.status).toBe(410);
     expect(postResponse.headers.get('Cache-Control')).toBe('private, no-store');
     expect(postResponse.headers.get('x-request-id')).toBe('generation-factory-post');
-    await expect(postResponse.json()).resolves.toEqual({ predictionId: 'task-factory-post' });
+    await expect(postResponse.json()).resolves.toEqual({
+      code: 'GENERATION_ROUTE_RETIRED',
+      error: 'This way of starting a creation has been retired. Update Magicbooklet to keep creating, or start again from the current creator.',
+    });
+    // Answered before the body is read, anyone is asked who is calling, or anything is quoted or held.
+    expect(postGenerationForRoute).not.toHaveBeenCalled();
+    expect(startBody).not.toHaveBeenCalled();
+    expect(createUserClient).not.toHaveBeenCalled();
+    expect(createServiceClient).not.toHaveBeenCalled();
+
     expect(getResponse.status).toBe(200);
     expect(getResponse.headers.get('Cache-Control')).toBe('private, no-store');
     expect(getResponse.headers.get('x-request-id')).toBe('generation-factory-get');
     await expect(getResponse.json()).resolves.toEqual({ status: 'completed' });
+    expect(getGenerationForRoute).toHaveBeenCalledTimes(1);
     expect(withProviderFetchRequestId).toHaveBeenCalledWith('generation-factory-post', expect.any(Function));
     expect(withProviderFetchRequestId).toHaveBeenCalledWith('generation-factory-get', expect.any(Function));
+  });
+
+  it('keeps the shared start wrapper that POST /api/generations answers through', async () => {
+    const postGenerationForRoute = vi.fn(async () => ({
+      ok: true as const,
+      body: { predictionId: 'task-unified-1' },
+    }));
+
+    const response = await postGenerationRouteResponse({
+      kieApiKey: 'kie-key',
+      postGenerationForRoute,
+      request: new Request('http://localhost/api/generations', {
+        method: 'POST',
+        body: JSON.stringify({ kind: 'image' }),
+      }),
+      dependencies: {
+        createServiceClient,
+        createUserClient,
+        withProviderFetchRequestId,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ predictionId: 'task-unified-1' });
+    expect(postGenerationForRoute).toHaveBeenCalledTimes(1);
   });
 
   describe('work a status check leaves for after the response', () => {
