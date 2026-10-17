@@ -10,6 +10,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
 const queryState = vi.hoisted(() => ({
+  /** The lane query's `enabled`, as the screen last passed it. */
+  enabled: undefined as boolean | undefined,
   /** When the lane's pages were fetched, as React Query reports it. */
   dataUpdatedAt: 0,
   error: null as Error | null,
@@ -42,6 +44,7 @@ const authState = vi.hoisted(() => ({
     undoFeedFeedback: vi.fn((_body: unknown) => Promise.resolve({ ok: true as const, removed: true })),
   },
   identityUserId: 'viewer-1' as string | null,
+  isLoading: false,
   user: { id: 'viewer-1' } as { id: string } | null,
 }));
 
@@ -67,8 +70,9 @@ vi.mock('@shopify/flash-list', () => ({
 }));
 
 vi.mock('@tanstack/react-query', () => ({
-  useInfiniteQuery: (options: { queryKey: readonly unknown[] }) => {
+  useInfiniteQuery: (options: { queryKey: readonly unknown[]; enabled?: boolean }) => {
     queryState.queryKey = options.queryKey;
+    queryState.enabled = options.enabled;
     return {
       data: {
         pages: queryState.pages,
@@ -453,6 +457,7 @@ function creatorGrid(creatorId: string): InfiniteData<CreatorProfileResponse> {
 
 describe('Showcase screen', () => {
   beforeEach(() => {
+    authState.isLoading = false;
     vi.mocked(Image.loadAsync).mockClear();
     queryClient.getQueriesData.mockReset();
     queryClient.setQueriesData.mockReset();
@@ -475,6 +480,23 @@ describe('Showcase screen', () => {
     queryState.isLoading = false;
     queryState.pages = [{ items: [], pageInfo: { hasMore: false, nextOffset: null } }];
     queryState.tool = undefined;
+  });
+
+  // The lane is keyed by identity, like Home's: on a cold start it waits for the
+  // stored session instead of ranking once for no identity and again for the user.
+  it('asks for its lane only once auth has settled', () => {
+    authState.isLoading = true;
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<ShowcaseScreen />);
+    });
+    expect(queryState.enabled).toBe(false);
+
+    authState.isLoading = false;
+    renderer.act(() => tree.update(<ShowcaseScreen />));
+    expect(queryState.enabled).toBe(true);
+
+    renderer.act(() => tree.unmount());
   });
 
   it('keeps the list header one height while the feed loads, fails or comes back empty', () => {

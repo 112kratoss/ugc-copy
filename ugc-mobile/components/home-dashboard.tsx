@@ -416,7 +416,12 @@ export function HomeDashboard() {
     },
   ]);
 
-  const feedQuery = useInfiniteQuery(laneQueryOptions);
+  // The lane is keyed by identity, and on a cold start the stored session lands a
+  // moment after this screen mounts: a request made before it would be keyed to no
+  // identity and repeated once the identity arrives, two fresh ranked sessions on
+  // the server (11 of 38 fresh sessions had such a twin, 10-14 to 10-16). The
+  // stored session is a local read, so waiting for auth to settle costs nothing.
+  const feedQuery = useInfiniteQuery({ ...laneQueryOptions, enabled: !isAuthLoading });
 
   const feedSession = useMemo(
     () => getShowcaseFeedSessionContext(feedQuery.data?.pages),

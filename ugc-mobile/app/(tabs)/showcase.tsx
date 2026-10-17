@@ -248,7 +248,7 @@ export function partitionAspectRatiosByViewport(
 
 export default function ShowcaseScreen() {
   const theme = useAppTheme();
-  const { api, identityUserId, user } = useAuth();
+  const { api, identityUserId, user, isLoading: isAuthLoading } = useAuth();
   const queryClient = useQueryClient();
   const routeParams = useLocalSearchParams<{ filter?: string | string[]; tool?: string | string[] }>();
   const isFocused = useIsFocused();
@@ -478,7 +478,9 @@ export default function ShowcaseScreen() {
       onViewableItemsChanged: onQualifiedViewableItemsChanged,
     },
   ]);
-  const showcaseQuery = useInfiniteQuery(laneQueryOptions);
+  // Keyed by identity like Home's lane: the first request waits for the stored
+  // session, or a cold start ranks the lane twice (see home-dashboard).
+  const showcaseQuery = useInfiniteQuery({ ...laneQueryOptions, enabled: !isAuthLoading });
   const feedSession = useMemo(
     () => getShowcaseFeedSessionContext(showcaseQuery.data?.pages),
     [showcaseQuery.data?.pages]

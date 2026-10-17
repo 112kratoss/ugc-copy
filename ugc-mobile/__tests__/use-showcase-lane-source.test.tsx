@@ -6,7 +6,7 @@ import renderer from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // One stable object: the registered account the reel's auth reads, or null for a guest.
-const auth = vi.hoisted(() => ({ user: { id: 'user-1' } as { id: string } | null }));
+const auth = vi.hoisted(() => ({ user: { id: 'user-1' } as { id: string } | null, isLoading: false }));
 vi.mock('../lib/auth', () => ({ useAuth: () => auth }));
 
 import { ApiError } from '../lib/api-client';
@@ -80,6 +80,7 @@ const trees: renderer.ReactTestRenderer[] = [];
 afterEach(() => {
   renderer.act(() => { for (const tree of trees.splice(0)) tree.unmount(); });
   auth.user = { id: 'user-1' };
+  auth.isLoading = false;
   resetAnonymousShowcaseFeedRemovalsForTests();
 });
 
@@ -244,6 +245,21 @@ describe('useShowcaseLaneSource', () => {
     offlineApi.getShowcasePost.mockResolvedValue({ success: true, item: post('deleted') });
     await renderer.act(async () => { await failed.retrySelection(); });
     expect((await offline.until((result) => result.selection === 'found')).items[0].id).toBe('deleted');
+  });
+
+  // A reel opened by link on a cold start: the stored session has not landed, so a
+  // request now would rank the lane for no identity and again for the user.
+  it("asks for nothing while auth has not settled whose lane it is", async () => {
+    auth.isLoading = true;
+    const api = stubApi({ getShowcaseFeed: vi.fn(async () => page([post('tapped')], null)) });
+    await renderLane({ api, initialId: 'tapped', laneParam: serializeShowcaseFeedLane({ sort: 'recent' }) });
+    for (let tick = 0; tick < 5; tick += 1) {
+      await renderer.act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    expect(api.getShowcaseFeed).not.toHaveBeenCalled();
   });
 
   it("loads the lane's first page when nothing is cached for it", async () => {
