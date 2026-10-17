@@ -1,5 +1,9 @@
 # Section 9E investigation — push send budget and overlapping workers
 
+> Note added 2026-10-18: the findings below describe the baseline before the 9E fix. PR #356
+> (`fence_mobile_push_retry_attempts`, durable claims and fenced retries) shipped on 2026-10-05; see
+> [9E release evidence](backend-section-09-push-claims-release-2026-10-05.md).
+
 October 5, 2026; baseline `d87420ef` (9D candidate). Findings remain unfixed.
 Only isolated local PostgREST/SQL and injected provider responses were used.
 
