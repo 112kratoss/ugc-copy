@@ -92,11 +92,12 @@ Then:
 4. Run Supabase security and performance advisors.
 5. Verify the deployed product route calls `initialize_workflow_canvas_run(...)`
    and never the compatibility `start_workflow_canvas_run(...)` RPC. Compatibility
-   grant retirement is the separate DB-05 rollout in
-   [`audits/backend-audit-completion-checklist.md`](audits/backend-audit-completion-checklist.md).
+   grant retirement is the separate DB-05 rollout recorded in the backend audit
+   completion checklist (removed from `docs/audits/` on 2026-10-18; read it with
+   `git show 0daef048:docs/audits/backend-audit-completion-checklist.md`).
    Current production retains authenticated/service execution of both routines;
-   ownership, lifecycle and shared quota admission were verified in the
-   [`Section 3 release`](audits/backend-section-03-rpc-release-2026-09-27.md).
+   ownership, lifecycle and shared quota admission were verified in the Section 3
+   release record (`git show 0daef048:docs/audits/backend-section-03-rpc-release-2026-09-27.md`).
    Reconcile supported installed clients and record the compatibility decision
    before revoking or dropping a routine. An absent current source caller or
    verified build ID alone is not retirement evidence. Record the actual role
