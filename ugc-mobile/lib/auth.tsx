@@ -65,6 +65,7 @@ import {
   clearLocalMobilePushRegistration,
   registerForMobilePushNotifications,
   subscribeToMobilePushTokenChanges,
+  unregisterAccountMobilePushNotifications,
   unregisterMobilePushNotifications,
 } from './notifications';
 import {
@@ -445,11 +446,14 @@ function getUsableCachedAccessToken(session: Session | null, now = Date.now()): 
     : null;
 }
 
-async function unregisterPushBeforeSignOut(api: MagicbookletApiClient) {
+async function unregisterPushBeforeSignOut(api: MagicbookletApiClient, scope: 'local' | 'global') {
   const deadline = new AbortController();
   const timeoutId = setTimeout(() => deadline.abort(), SIGN_OUT_PUSH_UNREGISTER_DEADLINE_MS);
   try {
-    await unregisterMobilePushNotifications(api, { signal: deadline.signal });
+    // A sign-out of all devices retires every phone's token: the others lose
+    // their session with it and could not retire their own afterwards.
+    const unregister = scope === 'global' ? unregisterAccountMobilePushNotifications : unregisterMobilePushNotifications;
+    await unregister(api, { signal: deadline.signal });
   } finally {
     clearTimeout(timeoutId);
   }
@@ -1548,7 +1552,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // the old session back after the local clear below.
           await supabase.auth.stopAutoRefresh();
           await duringSignOut(async () => {
-            await unregisterPushBeforeSignOut(api);
+            await unregisterPushBeforeSignOut(api, scope);
             if (scope === 'global') {
               // Asked for in Settings: every session of the account, this one
               // included. The proxy refuses the other devices' tokens from their

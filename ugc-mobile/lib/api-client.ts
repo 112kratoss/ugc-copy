@@ -1750,7 +1750,9 @@ export function createApiClient({
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    unregisterMobilePushToken: (body?: Partial<MobilePushTokenRegistration>, signal?: AbortSignal) =>
+    // `scope: 'account'` retires every push token of the account, asked before a
+    // sign-out of all devices; anything else retires the token or device named.
+    unregisterMobilePushToken: (body?: Partial<MobilePushTokenRegistration> & { scope?: 'account' }, signal?: AbortSignal) =>
       request<{ success: boolean }>('/api/mobile/notifications/unregister', {
         method: 'POST',
         body: JSON.stringify(body ?? {}),

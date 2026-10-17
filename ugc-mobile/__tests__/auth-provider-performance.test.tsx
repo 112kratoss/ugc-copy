@@ -34,6 +34,7 @@ const state = vi.hoisted(() => ({
   startAutoRefresh: vi.fn(),
   stopAutoRefresh: vi.fn(),
   unregisterPush: vi.fn(),
+  unregisterAccountPush: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-query', () => ({
@@ -106,6 +107,7 @@ vi.mock('../lib/notifications', () => ({
   registerForMobilePushNotifications: vi.fn(async () => undefined),
   subscribeToMobilePushTokenChanges: vi.fn(() => vi.fn()),
   unregisterMobilePushNotifications: state.unregisterPush,
+  unregisterAccountMobilePushNotifications: state.unregisterAccountPush,
 }));
 vi.mock('../lib/supabase-auth-recovery', () => ({
   isInvalidRefreshTokenError: () => false,
@@ -180,6 +182,7 @@ describe('AuthProvider startup performance', () => {
     state.routerReplace.mockReset();
     state.signOut.mockReset().mockResolvedValue({ error: null });
     state.unregisterPush.mockReset().mockResolvedValue(undefined);
+    state.unregisterAccountPush.mockReset().mockResolvedValue(undefined);
     state.startAutoRefresh.mockReset().mockResolvedValue(undefined);
     state.stopAutoRefresh.mockReset().mockResolvedValue(undefined);
     state.duringSignOut.mockReset().mockImplementation((work: () => Promise<unknown>) => work());
@@ -682,9 +685,12 @@ describe('AuthProvider startup performance', () => {
       expect(state.signOut).toHaveBeenCalledOnce();
       expect(state.signOut).toHaveBeenCalledWith({ scope: 'global' });
       expect(state.duringSignOut).toHaveBeenCalledOnce();
-      // This phone's push token goes first, while its session can still ask.
-      expect(state.unregisterPush).toHaveBeenCalledWith(expect.anything(), { signal: expect.any(AbortSignal) });
-      expect(state.unregisterPush.mock.invocationCallOrder[0]).toBeLessThan(state.signOut.mock.invocationCallOrder[0]);
+      // Every push token of the account goes first, while this session can
+      // still ask: a phone whose session ends cannot retire its own afterwards,
+      // and would keep receiving the account's notifications.
+      expect(state.unregisterAccountPush).toHaveBeenCalledWith(expect.anything(), { signal: expect.any(AbortSignal) });
+      expect(state.unregisterAccountPush.mock.invocationCallOrder[0]).toBeLessThan(state.signOut.mock.invocationCallOrder[0]);
+      expect(state.unregisterPush).not.toHaveBeenCalled();
       expect(state.stopAutoRefresh.mock.invocationCallOrder[0]).toBeLessThan(state.signOut.mock.invocationCallOrder[0]);
       expect(state.clearPersistedSession).toHaveBeenCalledOnce();
       expect(state.clearPersistedHomeFeed).toHaveBeenCalledOnce();
