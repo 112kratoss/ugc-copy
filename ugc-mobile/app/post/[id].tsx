@@ -62,13 +62,18 @@ const CREATOR_ROW_HEIGHT = 32;
  */
 export default function PostScreen() {
   const theme = useAppTheme();
-  const params = useLocalSearchParams<{ id: string; source?: string; comments?: string; replyTo?: string; deliveryId?: string }>();
+  const params = useLocalSearchParams<{ id: string; source?: string; comments?: string; replyTo?: string; deliveryId?: string; s?: string }>();
   const postId = Array.isArray(params.id) ? params.id[0] : params.id;
   const source = Array.isArray(params.source) ? params.source[0] : params.source;
   const requestedCommentsPostId = Array.isArray(params.comments) ? params.comments[0] : params.comments;
   const requestedReplyToId = Array.isArray(params.replyTo) ? params.replyTo[0] : params.replyTo;
   // The feed delivery a Home card opened this post from: its comments are credited to it.
   const deliveryId = (Array.isArray(params.deliveryId) ? params.deliveryId[0] : params.deliveryId) || null;
+  // A shared URL carries `?s=<surface>` and in-app links never do, so its
+  // presence is what makes this open a share visit, as on the web post page
+  // (`src/app/showcase/[id]/page.tsx`). Sent as it came: the server counts a
+  // surface it does not know as the detail page.
+  const shareVisitSurface = (Array.isArray(params.s) ? params.s[0] : params.s)?.trim() || null;
   const isOwnerPost = source === 'profile-posts';
   const showcaseSource = source === 'profile-saved' ? 'profile-saved' : 'showcase-feed';
   const { api, user } = useAuth();
@@ -81,6 +86,8 @@ export default function PostScreen() {
   const pagerRef = useRef<FlatList<'post' | 'details'>>(null);
   const commentsRef = useRef<PostCommentsHandle>(null);
   const restoredCommentContextRef = useRef<string | null>(null);
+  const recordedShareVisitRef = useRef<string | null>(null);
+  const followedPostIdRef = useRef<string | null>(null);
 
   const [actionsVisible, setActionsVisible] = useState(false);
   const [pageIndex, setPageIndex] = useState(0);
@@ -158,6 +165,46 @@ export default function PostScreen() {
   // Anything else (offline, a timeout, a 429, a 5xx) may answer next time.
   const postIsGone = postQueryError instanceof ApiError && postQueryError.status === 404;
   const refetchPost = isOwnerPost ? ownerPostQuery.refetch : showcasePostQuery.refetch;
+
+  // An old link names a generation, which the by-id read does not find; the
+  // web's post page has always followed one to its post, and the server's
+  // resolver does the same for the app. Asked only after that 404: it names a
+  // post (a post id answers with itself) and checks no block, so the by-id read
+  // of the post it names still decides what is shown.
+  const resolvedPostQuery = useQuery({
+    queryKey: ['showcase-post-resolve', postId],
+    enabled: Boolean(postId) && !isOwnerPost && postIsGone,
+    queryFn: () => api.resolveShowcasePost(postId!),
+    // A second 404 is the same answer; the by-id read already reached the server.
+    retry: false,
+  });
+  const resolvedPostId = postIsGone && !isOwnerPost ? resolvedPostQuery.data?.postId ?? null : null;
+  const followsResolvedPost = Boolean(resolvedPostId && resolvedPostId !== postId);
+  // Waiting on the resolver, or on the page it names: no verdict to show yet.
+  const resolvingPost = postIsGone && !isOwnerPost && (
+    followsResolvedPost || (!resolvedPostQuery.data && !resolvedPostQuery.isError)
+  );
+
+  useEffect(() => {
+    if (!followsResolvedPost || !resolvedPostId || followedPostIdRef.current === resolvedPostId) return;
+    followedPostIdRef.current = resolvedPostId;
+    // In place of this page, with the link's own params (its `s` included).
+    router.replace({ pathname: '/post/[id]', params: { ...params, id: resolvedPostId } } as never);
+  }, [followsResolvedPost, params, resolvedPostId]);
+
+  // One visit per open of a shared link, for a public post (the server counts
+  // nothing else); a media post's open counts too, before the reel takes it.
+  const sharedPost = isOwnerPost ? null : showcasePostQuery.data?.item ?? null;
+  const sharedPostId = sharedPost?.id ?? null;
+  const sharedPostIsPublic = Boolean(sharedPost) && sharedPost?.visibility !== 'unlisted';
+  useEffect(() => {
+    if (!shareVisitSurface || !sharedPostId || !sharedPostIsPublic) return;
+    const visit = `${sharedPostId}:${shareVisitSurface}`;
+    if (recordedShareVisitRef.current === visit) return;
+    recordedShareVisitRef.current = visit;
+    // Fire and forget: nothing on the page waits for a count.
+    void api.recordShareVisit(sharedPostId, shareVisitSurface).catch(() => undefined);
+  }, [api, shareVisitSurface, sharedPostId, sharedPostIsPublic]);
 
   useEffect(() => {
     setCommentCountOverride(null);
@@ -256,7 +303,7 @@ export default function PostScreen() {
       <View style={{ flex: 1, backgroundColor: theme.colors.app }}>
         <BackControl topInset={topInset} />
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: appTheme.spacing.panel, gap: appTheme.spacing.gap }}>
-          {postQueryIsError && postIsGone ? (
+          {postQueryIsError && postIsGone && !resolvingPost ? (
             <>
               <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800', textAlign: 'center' }}>
                 This post isn&apos;t available
@@ -265,7 +312,7 @@ export default function PostScreen() {
                 It may have been deleted or made private.
               </Text>
             </>
-          ) : postQueryIsError ? (
+          ) : postQueryIsError && !postIsGone ? (
             <>
               <Text style={{ color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800', textAlign: 'center' }}>
                 Couldn&apos;t load this post

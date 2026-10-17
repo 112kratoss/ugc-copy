@@ -13,6 +13,7 @@ const authState = vi.hoisted(() => ({
   credits: 120 as number | null,
   deleteAccount: vi.fn(),
   isGuest: false,
+  signOutEverywhere: vi.fn(),
   user: { id: 'user-1', email: 'creator@example.com' } as { id: string; email: string } | null,
 }));
 
@@ -64,6 +65,7 @@ vi.mock('lucide-react-native', () => {
     EyeOff: icon('EyeOff'),
     FileText: icon('FileText'),
     Gift: icon('Gift'),
+    LogOut: icon('LogOut'),
     ShieldCheck: icon('ShieldCheck'),
     Sparkles: icon('Sparkles'),
     Trash2: icon('Trash2'),
@@ -164,6 +166,7 @@ beforeEach(() => {
   authState.isGuest = false;
   authState.credits = 120;
   authState.deleteAccount.mockReset();
+  authState.signOutEverywhere.mockReset();
   showConfirmDialog.mockReset();
   showMessageDialog.mockClear();
   platform.os = 'ios';
@@ -662,5 +665,103 @@ describe('settings screen — guest data (D5)', () => {
     expect(rowByTitle(tree, ROW).props.disabled).toBeFalsy();
     // Booleans, not undefined: Android keeps a busy that goes back to undefined.
     expect(rowByTitle(tree, ROW).props.accessibilityState).toEqual({ busy: false, disabled: false });
+  });
+});
+
+// Product decisions 2026-10-17, item 9.
+describe('settings screen — sign out of all devices', () => {
+  const ROW = 'Sign out of all devices';
+
+  async function settle() {
+    await renderer.act(async () => {
+      for (let tick = 0; tick < 6; tick += 1) await Promise.resolve();
+    });
+  }
+
+  async function press(row: renderer.ReactTestInstance) {
+    await renderer.act(async () => {
+      (row.props.onPress as () => void)();
+    });
+    await settle();
+  }
+
+  it("offers an account the row in its Account group, as an action here with no chevron", () => {
+    const tree = renderScreen();
+    const row = rowByTitle(tree, ROW);
+
+    expect(row.props.accessibilityRole).toBe('button');
+    expect(row.props.accessibilityLabel).toBe('Sign out of all devices. Sign out here and on every other phone or browser.');
+    expect(row.findAll((node) => String(node.type) === 'icon' && ['ChevronRight', 'ArrowUpRight'].includes(String(node.props.name))))
+      .toHaveLength(0);
+    // Right after Alerts, the last of the Account rows.
+    const titles = rows(tree).map((node) => String(node.props.accessibilityLabel).split('.')[0]);
+    expect(titles.indexOf(ROW)).toBe(titles.indexOf('Alerts') + 1);
+  });
+
+  it('never offers it to a guest, whose one session is this phone, or to a phone with no session', () => {
+    authState.user = null;
+    authState.isGuest = true;
+    expect(() => rowByTitle(renderScreen(), ROW)).toThrow(`No settings row titled "${ROW}"`);
+
+    authState.isGuest = false;
+    expect(() => rowByTitle(renderScreen(), ROW)).toThrow(`No settings row titled "${ROW}"`);
+  });
+
+  it('asks first, in the web menu\'s words, and stops at Cancel', async () => {
+    showConfirmDialog.mockResolvedValue(false);
+    await press(rowByTitle(renderScreen(), ROW));
+
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
+    expect(showConfirmDialog).toHaveBeenCalledWith({
+      title: 'Sign out of all devices?',
+      message: 'You’ll be signed out here and on every other device.',
+      confirmLabel: 'Sign out',
+      destructive: true,
+    });
+    expect(authState.signOutEverywhere).not.toHaveBeenCalled();
+  });
+
+  it('signs out everywhere on confirmation, and says nothing more', async () => {
+    showConfirmDialog.mockResolvedValue(true);
+    authState.signOutEverywhere.mockResolvedValue(undefined);
+    await press(rowByTitle(renderScreen(), ROW));
+
+    expect(authState.signOutEverywhere).toHaveBeenCalledOnce();
+    expect(showMessageDialog).not.toHaveBeenCalled();
+  });
+
+  it('says when it did not go through, with this phone still signed in, and is ready to try again', async () => {
+    showConfirmDialog.mockResolvedValue(true);
+    authState.signOutEverywhere.mockRejectedValue(new Error('Supabase auth request timed out after 10000ms'));
+    const tree = renderScreen();
+    await press(rowByTitle(tree, ROW));
+
+    expect(showMessageDialog).toHaveBeenCalledOnce();
+    expect(showMessageDialog).toHaveBeenCalledWith({
+      title: 'Could not sign out of all devices',
+      message: 'The sign-out did not go through, and you’re still signed in on this phone. Check your connection and try again.',
+    });
+    await press(rowByTitle(tree, ROW));
+    expect(showConfirmDialog).toHaveBeenCalledTimes(2);
+    expect(authState.signOutEverywhere).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks once for a second tap made before the first question is answered', async () => {
+    let answer: (confirmed: boolean) => void = () => undefined;
+    showConfirmDialog.mockImplementation(() => new Promise<boolean>((resolve) => {
+      answer = resolve;
+    }));
+    const tree = renderScreen();
+
+    await press(rowByTitle(tree, ROW));
+    await press(rowByTitle(tree, ROW));
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
+
+    await renderer.act(async () => {
+      answer(false);
+    });
+    await settle();
+    await press(rowByTitle(tree, ROW));
+    expect(showConfirmDialog).toHaveBeenCalledTimes(2);
   });
 });

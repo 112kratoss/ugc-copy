@@ -17,6 +17,17 @@ export const DELETED_COMMENT_LABEL = '[deleted]';
 
 export type PostCommentSort = 'top' | 'newest';
 
+/**
+ * The thread's orders, with the web's ids and words
+ * (`src/components/PostComments.tsx`, `SORTS`), so a thread reads the same
+ * whichever client opens it. Every thread opens on Top, as the web's does.
+ */
+export const POST_COMMENT_SORTS: ReadonlyArray<{ id: PostCommentSort; label: string }> = [
+  { id: 'top', label: 'Top' },
+  { id: 'newest', label: 'New' },
+];
+export const DEFAULT_POST_COMMENT_SORT: PostCommentSort = 'top';
+
 export interface CommentDisplay {
   isDeleted: boolean;
   bodyText: string;
@@ -42,6 +53,15 @@ export function createPostCommentsQueryKey(
   viewerUserId?: string | null
 ) {
   return [POST_COMMENTS_QUERY_ROOT, postId, sort, viewerUserId?.trim() || 'anonymous'] as const;
+}
+
+/**
+ * One post's thread in every order and for every viewer. A new or removed
+ * comment is written into the order on screen; the other order's pages, read
+ * before it, are stale from then on.
+ */
+export function createPostCommentsThreadQueryKey(postId: string) {
+  return [POST_COMMENTS_QUERY_ROOT, postId] as const;
 }
 
 export function createPostCommentRepliesQueryKey(

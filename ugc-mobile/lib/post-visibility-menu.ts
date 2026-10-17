@@ -1,34 +1,39 @@
 import { menuAction, type NativeMenuAction, type NativeMenuModel } from '@/lib/native-menu';
 import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
 
-/** Who can see a post, in the words the composer has always used. */
+/**
+ * Who can see a post, in the words the composer has always used. A post is
+ * public or private: Unlisted was dropped (product decisions 2026-10-17), and
+ * the server stores a requested unlisted as private.
+ */
 export const POST_VISIBILITY_CHOICES: ReadonlyArray<{
-  value: PostLifecycleVisibility;
+  value: Exclude<PostLifecycleVisibility, 'unlisted'>;
   label: string;
   body: string;
 }> = [
   { value: 'public', label: 'Public', body: 'Visible in Explore and your profile.' },
-  { value: 'unlisted', label: 'Unlisted', body: 'Only people with the link can open it.' },
   { value: 'private', label: 'Private', body: 'Only you can see it in Studio.' },
 ];
 
 /**
- * The three choices as pick-one menu rows, the current one checked. Pull-down
+ * The two choices as pick-one menu rows, the current one checked. Pull-down
  * buttons sends a list of mutually exclusive choices to a pop-up button, and
  * these are the rows one shows. Choosing the current value again changes
- * nothing.
+ * nothing. An old unlisted post reads as the private post its next save
+ * makes it.
  */
 export function postVisibilityChoices(
   current: PostLifecycleVisibility,
   onPick: (next: PostLifecycleVisibility) => void,
 ): NativeMenuAction[] {
+  const shown = current === 'unlisted' ? 'private' : current;
   return POST_VISIBILITY_CHOICES.map((choice) => menuAction({
     id: `visibility-${choice.value}`,
     label: choice.label,
     subtitle: choice.body,
-    checked: choice.value === current,
+    checked: choice.value === shown,
     onSelect: () => {
-      if (choice.value !== current) onPick(choice.value);
+      if (choice.value !== shown) onPick(choice.value);
     },
   }));
 }

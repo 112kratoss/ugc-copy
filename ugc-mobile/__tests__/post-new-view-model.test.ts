@@ -10,6 +10,7 @@ import {
   createPostComposerResourceCard,
   deriveCreationPackageFromResourceCards,
   applyCreationPromptResource,
+  getComposerVisibility,
   getDefaultPostComposerDraft,
   getExplicitPublishGeneration,
   getPostComposerDetailErrors,
@@ -1305,22 +1306,20 @@ describe('post new view model', () => {
       input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
     });
 
-    for (const visibility of ['private', 'unlisted'] as const) {
-      const draft = {
-        ...getDefaultPostComposerDraft(),
-        mode: 'creation',
-        title: 'Private reference post',
-        category: 'image',
-        visibility,
-        selectedGenerationId: 'gen-private-inputs',
-        sourceTool: 'Magicbooklet',
-        sourceToolSlug: 'magicbooklet',
-      } as const;
-      const payload = buildPublishGenerationPostPayload(item, draft);
+    const draft = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'creation',
+      title: 'Private reference post',
+      category: 'image',
+      visibility: 'private',
+      selectedGenerationId: 'gen-private-inputs',
+      sourceTool: 'Magicbooklet',
+      sourceToolSlug: 'magicbooklet',
+    } as const;
+    const payload = buildPublishGenerationPostPayload(item, draft);
 
-      expect(payload).not.toHaveProperty('includeGenerationReferences');
-      expect(getPostComposerPreviewStatusLabel(draft, item)).toBe('No resource package configured.');
-    }
+    expect(payload).not.toHaveProperty('includeGenerationReferences');
+    expect(getPostComposerPreviewStatusLabel(draft, item)).toBe('No resource package configured.');
   });
 
   it('prefills a free resource package from a creation prompt when enabled', () => {
@@ -1513,11 +1512,20 @@ describe('post new view model', () => {
 
   it('returns submit labels for publish visibility and edit states', () => {
     expect(getPostComposerSubmitLabel({ visibility: 'public', isEditMode: false, isPending: false })).toBe('Publish public');
-    expect(getPostComposerSubmitLabel({ visibility: 'unlisted', isEditMode: false, isPending: false })).toBe('Save unlisted');
     expect(getPostComposerSubmitLabel({ visibility: 'private', isEditMode: false, isPending: false })).toBe('Save private');
     expect(getPostComposerSubmitLabel({ visibility: 'public', isEditMode: true, isPending: false })).toBe('Save changes');
     expect(getPostComposerSubmitLabel({ visibility: 'private', isEditMode: false, isPending: true })).toBe('Publishing');
     expect(getPostComposerSubmitLabel({ visibility: 'private', isEditMode: true, isPending: true })).toBe('Saving');
+  });
+
+  // A post is public or private (product decisions 2026-10-17, item 12): the
+  // server stores a requested unlisted as private, so the composer opens an
+  // old unlisted post, or a draft an older build saved as unlisted, as private.
+  it('opens an old unlisted post as private and keeps the other two as they are', () => {
+    expect(getComposerVisibility('unlisted')).toBe('private');
+    expect(getComposerVisibility('private')).toBe('private');
+    expect(getComposerVisibility('public')).toBe('public');
+    expect(getComposerVisibility(undefined)).toBe('public');
   });
 
   describe('edit payload builder', () => {
@@ -1639,7 +1647,7 @@ describe('post new view model', () => {
         title: 'Media Title',
         caption: 'Media Caption',
         contentText: 'Ignored media notes',
-        visibility: 'unlisted' as const,
+        visibility: 'private' as const,
         category: 'image' as const,
         upload: {
           uri: 'file:///tmp/image.jpg',
@@ -1653,7 +1661,7 @@ describe('post new view model', () => {
       expect(payload).toMatchObject({
         title: 'Media Title',
         body: 'Media Caption',
-        visibility: 'unlisted',
+        visibility: 'private',
         category: 'image',
         sourceTools: [{
           toolLabel: 'Manual',

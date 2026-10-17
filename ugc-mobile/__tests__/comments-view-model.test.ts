@@ -5,7 +5,9 @@ import { ApiError } from '@/lib/api-client';
 import {
   ALL_POST_COMMENT_QUERY_KEYS,
   COMMENTS_CLOSED_TITLE,
+  DEFAULT_POST_COMMENT_SORT,
   DELETED_COMMENT_LABEL,
+  POST_COMMENT_SORTS,
   applyCommentCountToInfiniteFeed,
   applyCommentCountToPostResponse,
   applyCommentCountToSourceData,
@@ -16,6 +18,7 @@ import {
   canReportComment,
   createPostCommentRepliesQueryKey,
   createPostCommentsQueryKey,
+  createPostCommentsThreadQueryKey,
   flattenCommentPages,
   getCommentAuthReturnTo,
   getCommentDisplay,
@@ -81,6 +84,25 @@ describe('comments view model', () => {
       expect(createPostCommentsQueryKey('post-9', 'top', null).slice(0, threads.length)).toEqual(threads);
       expect(createPostCommentRepliesQueryKey('post-9', 'comment-9', VIEWER_ID).slice(0, replies.length))
         .toEqual(replies);
+    });
+
+    it("has a prefix for one post's thread in every order, and no other post's", () => {
+      const thread = createPostCommentsThreadQueryKey('post-1');
+
+      for (const sort of ['top', 'newest'] as const) {
+        expect(createPostCommentsQueryKey('post-1', sort, VIEWER_ID).slice(0, thread.length)).toEqual(thread);
+      }
+      expect(createPostCommentsQueryKey('post-10', 'top', VIEWER_ID).slice(0, thread.length)).not.toEqual(thread);
+    });
+
+    it("offers the web thread's two orders under its labels, opening on Top", () => {
+      // src/components/PostComments.tsx (SORTS): the same ids and words, so a
+      // thread reads the same whichever client opens it.
+      expect(POST_COMMENT_SORTS).toEqual([
+        { id: 'top', label: 'Top' },
+        { id: 'newest', label: 'New' },
+      ]);
+      expect(DEFAULT_POST_COMMENT_SORT).toBe('top');
     });
 
     it('builds request params and only sends parentId for reply pages', () => {

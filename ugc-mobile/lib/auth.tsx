@@ -165,6 +165,15 @@ interface AuthContextValue {
   signInWithGoogle: () => Promise<void>;
   /** Signs out. A call made while one is already running joins that one. */
   signOut: () => Promise<void>;
+  /**
+   * Signs the account out on every device, this one included (product
+   * decisions 2026-10-17, item 9): one global sign-out ends every session of
+   * the account, and this phone then ends exactly as `signOut` leaves it.
+   * Rejects, with this phone still signed in, when the server could not
+   * confirm it (offline). Does nothing for a guest, whose one session is this
+   * phone. A call made while a sign-out is already running joins that one.
+   */
+  signOutEverywhere: () => Promise<void>;
   /** True from the start of a sign-out until it has finished or failed. */
   isSigningOut: boolean;
   /**
@@ -1526,7 +1535,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     void ensureGuestSession();
   };
 
-  const runSignOut = async () => {
+  const runSignOut = async (scope: 'local' | 'global') => {
     // Drives the app-wide cover in components/sign-out-overlay.tsx.
     setIsSigningOut(true);
     const endedSession = sessionRef.current;
@@ -1540,6 +1549,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           await supabase.auth.stopAutoRefresh();
           await duringSignOut(async () => {
             await unregisterPushBeforeSignOut(api);
+            if (scope === 'global') {
+              // Asked for in Settings: every session of the account, this one
+              // included. The proxy refuses the other devices' tokens from their
+              // next request on (`current_identity_admission()`), and their apps
+              // take that as an ended session.
+              const { error } = await supabase.auth.signOut({ scope: 'global' });
+              if (error) {
+                // Not confirmed: offline, timed out, or failing. auth-js keeps
+                // the session, and so does this phone, so the person tries again
+                // rather than believe the other devices are signed out. Its push
+                // token was retired above and the session still holds, so the
+                // phone registers again.
+                void registerForMobilePushNotifications(api, { requestPermission: false }).catch(() => undefined);
+                throw error;
+              }
+              return;
+            }
             // This device only. Supabase's default is a global sign-out, which also
             // ended the account's session on every other phone, and each of those
             // then had every request refused until its token expired.
@@ -1553,8 +1579,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           });
         }
       } catch (error) {
-        // A failure on the phone itself. The session stays, and the side menu
-        // tells the person to try again.
+        // A failure on the phone itself, or a sign-out everywhere the server
+        // did not confirm. The session stays, and the screen that asked tells
+        // the person to try again.
         feedIdentityTransition?.cancel();
         throw error;
       }
@@ -1572,7 +1599,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = () => {
     // A second tap while the first sign-out is still on the network joins it
     // rather than starting another.
-    signOutInFlightRef.current ??= runSignOut().finally(() => {
+    signOutInFlightRef.current ??= runSignOut('local').finally(() => {
+      signOutInFlightRef.current = null;
+    });
+    return signOutInFlightRef.current;
+  };
+
+  const signOutEverywhere = () => {
+    // A guest's one session is this phone: there is nothing to end elsewhere.
+    if (!getRegisteredUser(sessionRef.current)) return Promise.resolve();
+    // Joins any sign-out already on the network, as a second tap does.
+    signOutInFlightRef.current ??= runSignOut('global').finally(() => {
       signOutInFlightRef.current = null;
     });
     return signOutInFlightRef.current;
@@ -1836,6 +1873,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signInWithApple,
         signInWithGoogle,
         signOut,
+        signOutEverywhere,
         isSigningOut,
         abandonMergedGuestSession,
         recoverRejectedSession,

@@ -20,7 +20,14 @@ const mocks = vi.hoisted(() => ({
   router: { push: vi.fn(), replace: vi.fn(), back: vi.fn(), canGoBack: vi.fn(() => true), setParams: vi.fn() },
   params: { id: 'post-1' } as Record<string, string | undefined>,
   auth: {
-    api: { getShowcasePost: vi.fn(), getOwnerPost: vi.fn(), getProfile: vi.fn(), shareShowcasePost: vi.fn() },
+    api: {
+      getShowcasePost: vi.fn(),
+      getOwnerPost: vi.fn(),
+      getProfile: vi.fn(),
+      shareShowcasePost: vi.fn(),
+      recordShareVisit: vi.fn(),
+      resolveShowcasePost: vi.fn(),
+    },
     user: { id: 'viewer-1' } as { id: string } | null,
   },
   showcasePost: { data: undefined, isError: false, error: null, refetch: vi.fn() } as {
@@ -29,6 +36,14 @@ const mocks = vi.hoisted(() => ({
     error: unknown;
     refetch: () => unknown;
   },
+  // The legacy-id resolver's read (`api.resolveShowcasePost`).
+  resolvedPost: { data: undefined, isError: false, error: null, refetch: vi.fn() } as {
+    data: unknown;
+    isError: boolean;
+    error: unknown;
+    refetch: () => unknown;
+  },
+  queryOptions: [] as Array<{ queryKey: readonly unknown[]; enabled?: boolean; queryFn?: () => unknown }>,
   saveOptions: { current: null as { sourceSurface?: string; authReturnTo?: string } | null },
   callbacksFor: { current: null as ((item: ImmersivePreviewItem) => ViewerActionCallbacks) | null },
 }));
@@ -87,11 +102,14 @@ vi.mock('react-native-safe-area-context', () => ({
 }));
 
 vi.mock('@tanstack/react-query', () => ({
-  useQuery: ({ queryKey }: { queryKey: readonly unknown[] }): QueryResult => (
-    queryKey[0] === 'showcase-post'
+  useQuery: (options: { queryKey: readonly unknown[]; enabled?: boolean; queryFn?: () => unknown }): QueryResult => {
+    mocks.queryOptions.push(options);
+    return options.queryKey[0] === 'showcase-post'
       ? mocks.showcasePost
-      : { data: undefined, isError: false, error: null, refetch: vi.fn() }
-  ),
+      : options.queryKey[0] === 'showcase-post-resolve'
+        ? mocks.resolvedPost
+        : { data: undefined, isError: false, error: null, refetch: vi.fn() };
+  },
   useQueryClient: () => ({}),
 }));
 
@@ -150,6 +168,7 @@ vi.mock('@/components/viewer-actions-menu', () => ({
 }));
 
 import PostScreen from '../app/post/[id]';
+import ShowcaseDetailScreen from '../app/showcase/[id]';
 
 const NSFW_DESCRIPTION = 'This post is marked NSFW. Reveal it only if you are 18 or older and comfortable viewing mature content.';
 
@@ -208,6 +227,18 @@ function renderScreen() {
   return tree;
 }
 
+/** What the resolver answers: the post an id names, or nothing (its 404). */
+function resolveTo(postId: string | null) {
+  mocks.resolvedPost = postId
+    ? { data: { success: true, postId }, isError: false, error: null, refetch: vi.fn() }
+    : { data: undefined, isError: true, error: new ApiError('Post not found.', 404), refetch: vi.fn() };
+}
+
+/** The options of the latest render's resolver read. */
+function resolverQuery() {
+  return mocks.queryOptions.filter((options) => options.queryKey[0] === 'showcase-post-resolve').at(-1);
+}
+
 function byType(tree: renderer.ReactTestRenderer, type: string) {
   return tree.root.findAll((node) => String(node.type) === type);
 }
@@ -229,9 +260,13 @@ beforeEach(() => {
   mocks.platform.OS = 'ios';
   mocks.params = { id: 'post-1' };
   mocks.auth.user = { id: 'viewer-1' };
+  mocks.auth.api.recordShareVisit.mockResolvedValue({ success: true });
   mocks.saveOptions.current = null;
   mocks.callbacksFor.current = null;
+  mocks.queryOptions = [];
   showPost(textPost());
+  // The resolver finds nothing unless a test says otherwise.
+  resolveTo(null);
 });
 
 describe('a covered NSFW post', () => {
@@ -382,5 +417,135 @@ describe('a post that does not load', () => {
 
     expect(textValues(tree)).toContain("Couldn't load this post");
     expect(pressable(tree, 'Try again')).toBeDefined();
+  });
+});
+
+describe('a shared link', () => {
+  // A shared URL carries `?s=<surface>`; in-app links never do, so its
+  // presence is what makes an open a share visit, as on the web post page.
+  it('records one share visit for the post it opened, with the surface the link carried', () => {
+    mocks.params = { id: 'post-1', s: 'feed' };
+    const tree = renderScreen();
+    renderer.act(() => { tree.update(React.createElement(PostScreen)); });
+
+    expect(mocks.auth.api.recordShareVisit).toHaveBeenCalledTimes(1);
+    expect(mocks.auth.api.recordShareVisit).toHaveBeenCalledWith('post-1', 'feed');
+  });
+
+  it('sends a surface it does not know as the link carried it', () => {
+    mocks.params = { id: 'post-1', s: 'a-surface-from-a-newer-app' };
+    renderScreen();
+
+    expect(mocks.auth.api.recordShareVisit).toHaveBeenCalledWith('post-1', 'a-surface-from-a-newer-app');
+  });
+
+  it('records the visit for a media post too, before handing it to the reel', () => {
+    mocks.params = { id: 'post-2', s: 'showcase-reel' };
+    showPost(textPost({
+      id: 'post-2',
+      postFormat: 'media',
+      category: 'image',
+      mediaKind: 'image',
+      mediaUrl: 'https://cdn.example.test/post-2.webp',
+    }));
+    const tree = renderScreen();
+
+    expect(byType(tree, 'redirect')).toHaveLength(1);
+    expect(mocks.auth.api.recordShareVisit).toHaveBeenCalledWith('post-2', 'showcase-reel');
+  });
+
+  it('keeps the page as it is when the visit is refused', async () => {
+    mocks.auth.api.recordShareVisit.mockRejectedValue(new ApiError('Only public creations can be shared', 404));
+    mocks.params = { id: 'post-1', s: 'feed' };
+    const tree = renderScreen();
+    await renderer.act(async () => { await Promise.resolve(); });
+
+    expect(textValues(tree)).toContain('Three hooks that keep working');
+  });
+
+  it('records nothing for an in-app open, a post that is not public, or the owner list', () => {
+    renderScreen();
+    expect(mocks.auth.api.recordShareVisit).not.toHaveBeenCalled();
+
+    mocks.params = { id: 'post-1', s: 'feed' };
+    showPost(textPost({ visibility: 'unlisted' }));
+    renderScreen();
+    expect(mocks.auth.api.recordShareVisit).not.toHaveBeenCalled();
+
+    mocks.params = { id: 'post-1', s: 'feed', source: 'profile-posts' };
+    showPost(textPost());
+    renderScreen();
+    expect(mocks.auth.api.recordShareVisit).not.toHaveBeenCalled();
+  });
+
+  it('is passed on by the showcase link the app opens', () => {
+    mocks.params = { id: 'post-1', s: 'feed' };
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(React.createElement(ShowcaseDetailScreen)); });
+    expect(byType(tree, 'redirect')[0]!.props.href).toBe('/post/post-1?s=feed');
+
+    mocks.params = { id: 'post-1' };
+    renderer.act(() => { tree = renderer.create(React.createElement(ShowcaseDetailScreen)); });
+    expect(byType(tree, 'redirect')[0]!.props.href).toBe('/post/post-1');
+  });
+});
+
+describe('an old link', () => {
+  // Old links name a generation; the web's post page has always followed one
+  // to its post (src/lib/public-posts.ts), and the app asks the same resolver.
+  it('follows a generation id to its post, keeping the link\'s params', () => {
+    mocks.params = { id: 'generation-1', s: 'feed' };
+    failPost(new ApiError('Post not found.', 404));
+    resolveTo('post-9');
+    const tree = renderScreen();
+
+    expect(mocks.router.replace).toHaveBeenCalledTimes(1);
+    expect(mocks.router.replace).toHaveBeenCalledWith({ pathname: '/post/[id]', params: { id: 'post-9', s: 'feed' } });
+    expect(textValues(tree)).not.toContain("This post isn't available");
+    expect(byType(tree, 'activity-indicator')).toHaveLength(1);
+  });
+
+  it('asks the resolver only once the by-id read has said 404', async () => {
+    mocks.params = { id: 'generation-1' };
+    renderScreen();
+    expect(resolverQuery()?.enabled).toBe(false);
+
+    failPost(new ApiError('Could not reach Magicbooklet.', 0));
+    renderScreen();
+    expect(resolverQuery()?.enabled).toBe(false);
+
+    failPost(new ApiError('Post not found.', 404));
+    mocks.resolvedPost = { data: undefined, isError: false, error: null, refetch: vi.fn() };
+    const tree = renderScreen();
+    expect(resolverQuery()?.enabled).toBe(true);
+    // Not answered yet: the page waits rather than saying the post is gone.
+    expect(textValues(tree)).not.toContain("This post isn't available");
+    expect(byType(tree, 'activity-indicator')).toHaveLength(1);
+
+    mocks.auth.api.resolveShowcasePost.mockResolvedValue({ success: true, postId: 'post-9' });
+    await expect(resolverQuery()?.queryFn?.()).resolves.toEqual({ success: true, postId: 'post-9' });
+    expect(mocks.auth.api.resolveShowcasePost).toHaveBeenCalledWith('generation-1');
+  });
+
+  it('says the post is gone when the resolver finds nothing, or names the same post', () => {
+    mocks.params = { id: 'generation-1' };
+    failPost(new ApiError('Post not found.', 404));
+    const gone = renderScreen();
+    expect(textValues(gone)).toContain("This post isn't available");
+
+    // A post id answers with itself: the by-id read hid it (a block), so the
+    // page is not opened again.
+    mocks.params = { id: 'post-1' };
+    resolveTo('post-1');
+    const same = renderScreen();
+    expect(textValues(same)).toContain("This post isn't available");
+    expect(mocks.router.replace).not.toHaveBeenCalled();
+  });
+
+  it("never asks about a post opened from the owner's own list", () => {
+    mocks.params = { id: 'post-1', source: 'profile-posts' };
+    renderScreen();
+
+    expect(resolverQuery()?.enabled).toBe(false);
   });
 });

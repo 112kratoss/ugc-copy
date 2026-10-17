@@ -278,7 +278,7 @@ vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
 
 import NewPostScreen from '../app/post/new';
 import { pickMediaList, pickResourceDocument, uploadPickedMedia, uploadResourceDocument } from '@/lib/media';
-import { buildPostResourceBundleInput, type PostComposerDraft } from '../lib/post-new-view-model';
+import { buildPostResourceBundleInput, getDefaultPostComposerDraft, type PostComposerDraft } from '../lib/post-new-view-model';
 
 function collectText(root: renderer.ReactTestInstance) {
   return root
@@ -1150,6 +1150,68 @@ describe('mobile external post composer', () => {
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Visibility: Public').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Private').props.onPress());
     expect(findPressableByAccessibilityLabel(tree.root, 'Visibility: Private')).toBeTruthy();
+  });
+
+  // A post is public or private (product decisions 2026-10-17, item 12).
+  it('offers Public and Private only', async () => {
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Visibility: Public').props.onPress());
+
+    const text = collectText(tree.root);
+    expect(text).toContain('Visible in Explore and your profile.');
+    expect(text).toContain('Only you can see it in Studio.');
+    expect(text).not.toContain('Unlisted');
+    expect(text).not.toContain('Only people with the link can open it.');
+  });
+
+  it('opens an old unlisted post as Private', async () => {
+    paramsState.params = { postId: 'post-unlisted' };
+    postEditState.post = {
+      id: 'post-unlisted',
+      title: 'Link-only post',
+      description: null,
+      body: 'Existing story',
+      postFormat: 'media',
+      generationId: null,
+      category: 'image',
+      visibility: 'unlisted',
+      sourceTool: 'Manual',
+      sourceToolSlug: 'manual',
+      mediaUrl: 'https://cdn.example.com/unlisted.png',
+      mediaKind: 'image',
+      mediaItems: [],
+      resourceBundleInput: null,
+      hasPaidOrders: false,
+    };
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+
+    expect(findPressableByAccessibilityLabel(tree.root, 'Visibility: Private')).toBeTruthy();
+    expect(collectText(tree.root)).not.toContain('Unlisted');
+  });
+
+  it('restores a draft an older build saved as unlisted as Private', async () => {
+    paramsState.params = {};
+    storageState.values.set('magicbooklet.post.drafts.v1', JSON.stringify({
+      'user-123:new': {
+        draft: {
+          ...getDefaultPostComposerDraft(),
+          mode: 'text',
+          title: 'Saved before the update',
+          contentText: 'A note kept on this device.',
+          visibility: 'unlisted',
+        },
+        step: 'details',
+        updatedAt: new Date().toISOString(),
+      },
+    }));
+    const tree = await renderScreen();
+    expect(collectText(tree.root)).toContain('Draft restored');
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+
+    expect(findPressableByAccessibilityLabel(tree.root, 'Visibility: Private')).toBeTruthy();
+    expect(findPressableByAccessibilityLabel(tree.root, 'Save private')).toBeTruthy();
   });
 
   it('locks a paid resource package after buyers have unlocked it', async () => {
