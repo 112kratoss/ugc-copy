@@ -67,33 +67,28 @@ describe('ShowcaseDetailActions owner tools', () => {
     resetFeedbackState();
   });
 
-  it('offers the same three-state visibility menu as Studio and refreshes after a public change', async () => {
+  // A post is public or private since 2026-10-17 (decision 12). A page drawn
+  // for a post saved as unlisted before then reads it as private, and making
+  // it public keeps the viewer on the post, refreshed.
+  it('offers the same public or private menu as Studio and refreshes after a public change', async () => {
     clientMocks.requestPostVisibilityChange.mockResolvedValue({
-      visibility: 'unlisted',
+      visibility: 'public',
       ownerPath: '/post/post-1/edit',
       showcasePath: '/showcase/post-1',
-      resourceBundleStatus: 'draft',
+      resourceBundleStatus: 'published',
     });
-    renderOwnerTools();
+    renderOwnerTools({ visibility: 'unlisted', bundle: { accessMode: 'paid', status: 'draft', salesCount: 0 } });
 
-    const trigger = screen.getByRole('button', { name: 'Visibility of Sunset study: Public' });
+    const trigger = screen.getByRole('button', { name: 'Visibility of Sunset study: Private' });
     fireEvent.click(trigger);
-    fireEvent.click(within(await screen.findByRole('menu')).getByRole('menuitemradio', { name: /unlisted/i }));
-
-    // The recipe is listed, so policy asks before the post leaves public —
-    // and nothing moves until the answer.
-    const dialog = await screen.findByRole('alertdialog', { name: 'Make this post unlisted?' });
-    expect(dialog).toHaveAccessibleDescription(
-      'Its recipe comes off the marketplace until the post is public again.',
-    );
-    expect(clientMocks.requestPostVisibilityChange).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Visibility of Sunset study: Public' })).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Make unlisted' }));
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).queryByRole('menuitemradio', { name: /unlisted/i })).not.toBeInTheDocument();
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: /public/i }));
 
     await waitFor(() => {
       expect(clientMocks.requestPostVisibilityChange).toHaveBeenCalledWith({
-        post: expect.objectContaining({ id: 'post-1', generationId: 'gen-1', visibility: 'public' }),
-        visibility: 'unlisted',
+        post: expect.objectContaining({ id: 'post-1', generationId: 'gen-1', visibility: 'unlisted' }),
+        visibility: 'public',
         accessToken: 'token',
       });
     });
@@ -101,8 +96,8 @@ describe('ShowcaseDetailActions owner tools', () => {
       expect(routerMocks.refresh).toHaveBeenCalledTimes(1);
     });
     expect(routerMocks.push).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Visibility of Sunset study: Unlisted' })).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('Post is unlisted.');
+    expect(screen.getByRole('button', { name: 'Visibility of Sunset study: Public' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Post is public.');
   });
 
   it('leaves the public page for the editor once a post is private', async () => {

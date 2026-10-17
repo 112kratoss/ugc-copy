@@ -102,6 +102,27 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     expect(freeCard).not.toHaveTextContent('$0.00');
   });
 
+  // A free unlock stopped counting as a sale on 2026-10-17 (decision 6).
+  it("counts a free recipe's free unlocks and a paid recipe's sales", () => {
+    const page = createPage(2, false);
+    page.items[0] = { ...page.items[0], salesCount: 0, freeUnlockCount: 5 };
+    page.items[1] = {
+      ...page.items[1],
+      accessMode: 'paid',
+      priceUsdCents: 900,
+      priceQuote: { currency: 'INR', amountSubunits: 75000, formatted: '₹750', note: null },
+      salesCount: 3,
+      freeUnlockCount: 2,
+    };
+
+    renderMarketplace(page);
+
+    expect(within(screen.getByRole('link', { name: 'View free recipe: Unlock 1' })).getByText('5 opened')).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('link', { name: 'Unlock for ₹750 · 900 credits: Unlock 2' })).getByText('3 sold')
+    ).toBeInTheDocument();
+  });
+
   it('continues a three-item bootstrap at offset three with the compact API page size', async () => {
     vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({
       items: [

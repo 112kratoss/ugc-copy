@@ -194,6 +194,7 @@ export default function ShowcaseDetailBody({
       resourceKinds={bundle.resourceKinds}
       lockedPreview={bundle.lockedPreview}
       salesCount={bundle.salesCount}
+      freeUnlockCount={bundle.freeUnlockCount}
       initialResources={bundle.resources
         ? {
             promptText: bundle.resources.promptText,
@@ -453,7 +454,14 @@ export default function ShowcaseDetailBody({
                   viewerIsOwner={viewerIsOwner}
                   hasResourceBundle={Boolean(detail.resourceBundle)}
                   bundle={bundle
-                    ? { accessMode: bundle.accessMode, status: bundle.status, salesCount: bundle.salesCount }
+                    ? {
+                        accessMode: bundle.accessMode,
+                        status: bundle.status,
+                        salesCount: bundle.salesCount,
+                        // Free unlocks are not sales, but their owners keep them
+                        // and the confirmations still say so.
+                        freeUnlockCount: bundle.freeUnlockCount,
+                      }
                     : null}
                 />
               </div>

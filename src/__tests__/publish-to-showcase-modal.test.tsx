@@ -75,6 +75,51 @@ describe('PublishToShowcaseModal', () => {
     expect(screen.getByRole('textbox', { name: /^title$/i })).toHaveAttribute('maxlength', String(TITLE_MAX_LENGTH));
   });
 
+  // Decision 18 (2026-10-17): the quick form stays, with a way into the full
+  // composer for the same creation. The composer takes the creation from its
+  // address and reads no title or caption there.
+  it('links More options to the full composer for the same creation', () => {
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="gen-1"
+        defaultTitle="Broadcast"
+      />
+    );
+
+    expect(screen.getByRole('link', { name: 'More options' })).toHaveAttribute('href', '/post/new?generationId=gen-1');
+  });
+
+  it('does not leave for the composer while a publish is in flight', async () => {
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => (
+      String(url) === '/api/profile'
+        ? new Response(JSON.stringify({
+            id: 'user-1',
+            username: 'launchmaker',
+            displayName: 'Launch Maker',
+            avatarUrl: 'https://cdn.example.com/avatar.jpg',
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+        : new Promise<Response>(() => {})
+    ));
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="gen-1"
+        defaultTitle="Broadcast"
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^private post$/i }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/showcase/publish', expect.anything()));
+
+    const moreOptions = screen.getByRole('link', { name: 'More options' });
+    expect(moreOptions).toHaveAttribute('aria-disabled', 'true');
+    // A click that went through would post the creation a second time.
+    expect(fireEvent.click(moreOptions)).toBe(false);
+  });
+
   it('keeps a long creation title within the post limit so the publish is not refused', async () => {
     const creationTitle = `${'Golden hour rooftop portrait '.repeat(5)}with city lights`;
     expect(creationTitle.length).toBeGreaterThan(TITLE_MAX_LENGTH);

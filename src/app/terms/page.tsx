@@ -15,7 +15,7 @@ export default function TermsOfService() {
             <div className="max-w-4xl mx-auto px-6 py-16">
 
                 <h1 className="text-4xl font-bold mb-4">Terms of Service</h1>
-                <p className="text-zinc-400 mb-12">Last updated: September 30, 2026</p>
+                <p className="text-zinc-400 mb-12">Last updated: October 17, 2026</p>
 
                 <div className="space-y-8 text-zinc-300">
                     <section>
@@ -84,7 +84,18 @@ export default function TermsOfService() {
                     </section>
 
                     <section>
-                        <h2 className="text-2xl font-semibold text-white mb-4">6. Acceptable Use</h2>
+                        <h2 className="text-2xl font-semibold text-white mb-4">6. Seller Payouts</h2>
+                        <p>
+                            When you sell a recipe on {siteConfig.name}, you keep 85% of the price of every paid unlock,
+                            and we keep 15%. Free unlocks do not earn anything. Your earnings collect in your seller
+                            balance, and you can request a payout once that balance reaches $100. Payouts are paid in
+                            Indian rupees (INR) to a UPI ID or an Indian bank account that you give us, and we send each
+                            payout within 14 days of your request. PayPal and international transfers are not available yet.
+                        </p>
+                    </section>
+
+                    <section>
+                        <h2 className="text-2xl font-semibold text-white mb-4">7. Acceptable Use</h2>
                         <p className="mb-4">You agree NOT to use the Service to:</p>
                         <ul className="list-disc list-inside space-y-2 ml-4">
                             <li>Create content that is illegal, harmful, or infringes on others&apos; rights</li>
@@ -100,7 +111,7 @@ export default function TermsOfService() {
                     </section>
 
                     <section>
-                        <h2 className="text-2xl font-semibold text-white mb-4">7. Intellectual Property</h2>
+                        <h2 className="text-2xl font-semibold text-white mb-4">8. Intellectual Property</h2>
                         <p className="mb-4">
                             <strong>Your Content:</strong> You retain ownership of images and videos you upload.
                             By uploading content, you grant us a limited license to process it for providing the Service.
@@ -113,7 +124,7 @@ export default function TermsOfService() {
                     </section>
 
                     <section>
-                        <h2 className="text-2xl font-semibold text-white mb-4">8. Disclaimer of Warranties</h2>
+                        <h2 className="text-2xl font-semibold text-white mb-4">9. Disclaimer of Warranties</h2>
                         <p>
                             The Service is provided &ldquo;as is&rdquo; without warranties of any kind. We do not guarantee that
                             the Service will be uninterrupted, error-free, or meet your specific requirements.
@@ -122,7 +133,7 @@ export default function TermsOfService() {
                     </section>
 
                     <section>
-                        <h2 className="text-2xl font-semibold text-white mb-4">9. Limitation of Liability</h2>
+                        <h2 className="text-2xl font-semibold text-white mb-4">10. Limitation of Liability</h2>
                         <p>
                             To the maximum extent permitted by law, we shall not be liable for any indirect,
                             incidental, special, or consequential damages arising from your use of the Service.
@@ -130,7 +141,7 @@ export default function TermsOfService() {
                     </section>
 
                     <section>
-                        <h2 className="text-2xl font-semibold text-white mb-4">10. Termination</h2>
+                        <h2 className="text-2xl font-semibold text-white mb-4">11. Termination</h2>
                         <p>
                             We reserve the right to suspend or terminate your access to the Service at any time
                             for violations of these Terms or for any other reason at our discretion. Upon termination,
@@ -139,7 +150,7 @@ export default function TermsOfService() {
                     </section>
 
                     <section>
-                        <h2 className="text-2xl font-semibold text-white mb-4">11. Changes to Terms</h2>
+                        <h2 className="text-2xl font-semibold text-white mb-4">12. Changes to Terms</h2>
                         <p>
                             We may update these Terms from time to time. We will notify you of material changes
                             by posting the updated Terms on our website. Continued use of the Service after changes
@@ -148,7 +159,7 @@ export default function TermsOfService() {
                     </section>
 
                     <section>
-                        <h2 className="text-2xl font-semibold text-white mb-4">12. Contact Us</h2>
+                        <h2 className="text-2xl font-semibold text-white mb-4">13. Contact Us</h2>
                         <p>
                             If you have any questions about these Terms, please contact us at{" "}
                             <a href={`mailto:${siteConfig.supportEmail}`} className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]">

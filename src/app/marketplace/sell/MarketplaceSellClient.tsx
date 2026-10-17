@@ -26,7 +26,10 @@ interface SellerBundle {
   status: 'draft' | 'published';
   priceUsdCents: number;
   priceQuote?: MarketplacePriceQuote;
+  /** Paid unlocks. */
   salesCount: number;
+  /** Free unlocks, which stopped counting as sales on 2026-10-17 (decision 6). */
+  freeUnlockCount: number;
   earningsUsdCents: number;
   resourceKinds: Array<'prompt' | 'workflow' | 'files' | 'notes' | 'remix'>;
   createdAt: string;
@@ -75,6 +78,7 @@ interface SellerDashboardPayload {
   deletedSnapshots: DeletedSnapshot[];
   sales: SellerSale[];
   totalSalesCount: number;
+  totalFreeUnlockCount: number;
   totalEarningsUsdCents: number;
   generatedAt?: string;
 }
@@ -112,6 +116,30 @@ function formatSellerTimestamp(value: string, hydrated: boolean): string {
 // server and the seller's in the browser.
 function formatSaleAmount(amountSubunits: number, currency: SellerSale['currency']): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amountSubunits / 100);
+}
+
+function formatFreeUnlockCount(count: number): string {
+  return `${count} free unlock${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * A listing's paid sales with its free unlocks beside them (a free unlock is
+ * not a sale since 2026-10-17). A count shows on a listing of its own access
+ * mode, or once it is above zero: a recipe can have been free before it was
+ * paid, or the other way round.
+ */
+function formatListingUnlockLine(bundle: SellerBundle): string {
+  const parts: string[] = [];
+  if (bundle.accessMode === 'paid' || bundle.salesCount > 0) {
+    parts.push(formatUnlockCountLabel('paid', bundle.salesCount));
+  }
+  if (bundle.accessMode === 'free' || bundle.freeUnlockCount > 0) {
+    parts.push(formatFreeUnlockCount(bundle.freeUnlockCount));
+  }
+  if (bundle.accessMode === 'paid' || bundle.earningsUsdCents > 0) {
+    parts.push(`${formatUsdCents(bundle.earningsUsdCents)} tracked earnings`);
+  }
+  return parts.join(' · ');
 }
 
 function getListingHealth(bundle: SellerBundle): { label: 'Ready' | 'Needs work' | 'Draft' } {
@@ -229,7 +257,7 @@ export default function MarketplaceSellClient({
           <PayoutPanel />
         </div>
 
-        <div className="mt-8 grid gap-4 md:grid-cols-3">
+        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-[28px] border border-white/8 bg-zinc-950/70 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
             <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Recipes</div>
             <div className="mt-3 text-3xl font-semibold text-white">{initialDashboard.bundles.length}</div>
@@ -237,6 +265,10 @@ export default function MarketplaceSellClient({
           <div className="rounded-[28px] border border-white/8 bg-zinc-950/70 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
             <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Sales</div>
             <div className="mt-3 text-3xl font-semibold text-white">{initialDashboard.totalSalesCount}</div>
+          </div>
+          <div className="rounded-[28px] border border-white/8 bg-zinc-950/70 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
+            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Free unlocks</div>
+            <div className="mt-3 text-3xl font-semibold text-white">{initialDashboard.totalFreeUnlockCount}</div>
           </div>
           <div className="rounded-[28px] border border-white/8 bg-zinc-950/70 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
             <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Tracked earnings</div>
@@ -372,12 +404,7 @@ export default function MarketplaceSellClient({
                       ))}
                     </div>
                     <div className="mt-4 flex items-center justify-between text-xs text-zinc-500">
-                      <span>
-                        {formatUnlockCountLabel(bundle.accessMode, bundle.salesCount)}
-                        {bundle.accessMode === 'paid' || bundle.earningsUsdCents > 0
-                          ? ` · ${formatUsdCents(bundle.earningsUsdCents)} tracked earnings`
-                          : ''}
-                      </span>
+                      <span>{formatListingUnlockLine(bundle)}</span>
                       <span>{bundle.post?.title || 'Post attached'}</span>
                     </div>
                     {!isDeletedPost && bundle.quality && !bundle.quality.eligible ? (

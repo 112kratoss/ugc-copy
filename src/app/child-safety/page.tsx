@@ -44,8 +44,9 @@ export default function ChildSafetyPage() {
         </h1>
         <p className="mt-5 max-w-3xl text-base leading-7 text-[var(--ui-text-secondary)]">
           {siteConfig.name} has zero tolerance for child sexual abuse material, grooming,
-          sexual exploitation of children, or content that sexualizes a minor. The service
-          is intended only for people aged 18 or older.
+          sexual exploitation of children, or content that sexualizes a minor. You must be at
+          least 13 years old to use the service, and anyone under 18 may use it only with a
+          parent&apos;s or guardian&apos;s consent.
         </p>
 
         <section className="mt-10 rounded-[28px] border border-rose-400/25 bg-rose-400/[0.07] p-6 sm:p-8">

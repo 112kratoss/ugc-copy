@@ -1,7 +1,7 @@
 'use client';
 
 import type { Session, User } from '@supabase/supabase-js';
-import { ChevronDown, Gift, History, Loader2, LogOut, Sparkles } from 'lucide-react';
+import { ChevronDown, Gift, History, Loader2, LogOut, MonitorSmartphone, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
@@ -18,6 +18,7 @@ import { removeSupabaseAuthCookies } from '@/lib/supabase-auth-cookie';
 import AppShellAccountFallback from './AppShellAccountFallback';
 import { OptimizedPreviewImage } from './OptimizedPreviewImage';
 import { publishAppShellAuthentication } from './app-shell-auth-state';
+import { pushToast, requestConfirmation } from './feedback-state';
 
 type ProfileSummary = {
   display_name: string | null;
@@ -96,6 +97,7 @@ export default function AppShellAccount() {
   const [profile, setProfile] = useState<ProfileSummary | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [isSigningOutEverywhere, setIsSigningOutEverywhere] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const creditIdentityRef = useRef<{ userId: string } | null>(null);
   const credits = profile?.credits;
@@ -341,8 +343,18 @@ export default function AppShellAccount() {
     };
   }, [signedInUserId]);
 
+  // Where both sign-outs leave this browser once its session is gone.
+  const leaveSignedOut = () => {
+    creditIdentityRef.current = null;
+    publishAppShellAuthentication(false);
+    setSession(null);
+    setProfile(null);
+    setAccountOpen(false);
+    router.push('/login');
+  };
+
   const handleSignOut = async () => {
-    if (isSigningOut) return;
+    if (isSigningOut || isSigningOutEverywhere) return;
     setIsSigningOut(true);
     const userId = session?.user?.id;
     if (userId) {
@@ -359,13 +371,72 @@ export default function AppShellAccount() {
       // would walk away signed in.
       removeSupabaseAuthCookies();
     }
-    creditIdentityRef.current = null;
-    publishAppShellAuthentication(false);
-    setSession(null);
-    setProfile(null);
-    setAccountOpen(false);
     setIsSigningOut(false);
-    router.push('/login');
+    leaveSignedOut();
+  };
+
+  /**
+   * Every phone of the account loses its session with a sign-out everywhere and
+   * cannot retire its own push token afterwards, so the account's tokens go
+   * first, while this session can still ask. Best effort, as the app's: a
+   * failure here does not stop the sign-out.
+   */
+  const retireAccountPushTokens = async () => {
+    const { data } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+    const accessToken = data.session?.access_token;
+    if (!accessToken) return;
+    const deadline = new AbortController();
+    const timeoutId = window.setTimeout(() => deadline.abort(), 5000);
+    try {
+      await fetch('/api/mobile/notifications/unregister', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: 'account' }),
+        signal: deadline.signal,
+      });
+    } catch {
+      // Offline or cut short: the sign-out still runs.
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  };
+
+  /**
+   * Ends every session of the account, this browser's included (decision 9,
+   * 2026-10-17): the proxy refuses the other devices' tokens on their next
+   * request. When the call fails, auth-js keeps this session and the other
+   * devices are still signed in, so this browser stays as it is and says so,
+   * ready to try again; leaving for /login would read as done.
+   */
+  const handleSignOutEverywhere = async () => {
+    if (isSigningOut || isSigningOutEverywhere) return;
+    const confirmed = await requestConfirmation({
+      title: 'Sign out of all devices?',
+      message: 'You’ll be signed out here and on every other device.',
+      confirmLabel: 'Sign out everywhere',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+    setIsSigningOutEverywhere(true);
+    const userId = session?.user?.id;
+    await retireAccountPushTokens();
+    const { error } = await supabase.auth.signOut({ scope: 'global' })
+      .catch((thrown: unknown) => ({ error: thrown }));
+    if (error) {
+      setIsSigningOutEverywhere(false);
+      pushToast({
+        tone: 'error',
+        message: 'Could not sign out of all devices. You’re still signed in here; check your connection and try again.',
+      });
+      return;
+    }
+    // After the call, unlike Sign out: a failed one keeps the account here,
+    // with its drafts.
+    if (userId) {
+      await clearCreatorDataForSignOut(userId);
+    }
+    setIsSigningOutEverywhere(false);
+    leaveSignedOut();
   };
 
   if (!session) {
@@ -449,7 +520,7 @@ export default function AppShellAccount() {
               type="button"
               role="menuitem"
               onClick={() => void handleSignOut()}
-              disabled={isSigningOut}
+              disabled={isSigningOut || isSigningOutEverywhere}
               aria-busy={isSigningOut || undefined}
               className="ui-focus-ring mt-1 flex min-h-11 w-full items-center gap-2 rounded-2xl px-3 py-2 text-left text-sm font-bold text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)] disabled:cursor-wait disabled:opacity-70"
             >
@@ -460,6 +531,24 @@ export default function AppShellAccount() {
               )}
               {isSigningOut ? 'Signing out…' : 'Sign out'}
             </button>
+            {/* An account only: a guest's one session is this browser. */}
+            {session.user.is_anonymous ? null : (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => void handleSignOutEverywhere()}
+                disabled={isSigningOut || isSigningOutEverywhere}
+                aria-busy={isSigningOutEverywhere || undefined}
+                className="ui-focus-ring mt-1 flex min-h-11 w-full items-center gap-2 rounded-2xl px-3 py-2 text-left text-sm font-bold text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)] disabled:cursor-wait disabled:opacity-70"
+              >
+                {isSigningOutEverywhere ? (
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                ) : (
+                  <MonitorSmartphone className="h-4 w-4" aria-hidden />
+                )}
+                {isSigningOutEverywhere ? 'Signing out everywhere…' : 'Sign out of all devices'}
+              </button>
+            )}
           </div>
         ) : null}
       </div>

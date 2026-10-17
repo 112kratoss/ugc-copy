@@ -123,7 +123,10 @@ interface PostResourceBundlePanelProps {
   viewerIsOwner: boolean;
   resourceKinds: PostResourceKind[];
   lockedPreview: PostResourceBundleLockedPreview | null;
+  /** Paid unlocks: a paid recipe's "N sold". */
   salesCount: number | null;
+  /** Free unlocks, which stopped counting as sales on 2026-10-17: a free recipe's "N opened". */
+  freeUnlockCount: number | null;
   initialResources: {
     promptText: string | null;
     notesMarkdown: string | null;
@@ -313,6 +316,7 @@ export default function PostResourceBundlePanel({
   resourceKinds,
   lockedPreview,
   salesCount,
+  freeUnlockCount,
   initialResources,
   purchasedRevision = null,
 }: PostResourceBundlePanelProps) {
@@ -336,6 +340,8 @@ export default function PostResourceBundlePanel({
   const activeIsFree = showingPurchasedRevision && purchasedRevision
     ? purchasedRevision.accessMode === 'free'
     : isFree;
+  // The count its label names: "N opened" is free unlocks, "N sold" paid ones.
+  const activeUnlockCount = activeIsFree ? freeUnlockCount : salesCount;
   const activePriceUsdCents = showingPurchasedRevision && purchasedRevision
     ? purchasedRevision.priceUsdCents
     : priceUsdCents;
@@ -1095,8 +1101,8 @@ export default function PostResourceBundlePanel({
         <span className="rounded-full border border-emerald-300/25 bg-emerald-300 px-2.5 py-0.5 font-bold text-slate-950">
           {isRecipeVisible ? (viewerIsOwner ? 'Owner access' : activeIsFree ? 'Free recipe' : 'Unlocked') : isFree ? 'Free recipe' : accessPriceLabel}
         </span>
-        {typeof salesCount === 'number' ? (
-          <span>{formatUnlockCountLabel(activeIsFree ? 'free' : 'paid', salesCount)}</span>
+        {typeof activeUnlockCount === 'number' ? (
+          <span>{formatUnlockCountLabel(activeIsFree ? 'free' : 'paid', activeUnlockCount)}</span>
         ) : null}
         {formattedUpdatedAt ? <span>Updated {formattedUpdatedAt}</span> : null}
       </div>

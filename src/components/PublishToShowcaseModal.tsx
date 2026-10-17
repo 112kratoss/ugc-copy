@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { BadgeDollarSign, BookOpen, Check, CircleAlert, Globe, Loader2, LockKeyhole, Share2, UserRound, X } from 'lucide-react';
+import { ArrowRight, BadgeDollarSign, BookOpen, Check, CircleAlert, Globe, Loader2, LockKeyhole, Share2, UserRound, X } from 'lucide-react';
 
 import { sharePublicGeneration } from '@/lib/share-client';
 import type { GenerationShareSourceSurface } from '@/lib/share';
@@ -20,7 +20,8 @@ import {
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 
-type PostVisibility = 'public' | 'unlisted' | 'private';
+/** A post is public or private (decision 12, 2026-10-17); the server answers no other. */
+type PostVisibility = 'public' | 'private';
 type ProfileLoadState = 'idle' | 'loading' | 'ready' | 'error';
 
 const RESOURCE_KIND_ORDER: PostResourceKind[] = ['prompt', 'workflow', 'files', 'notes', 'remix'];
@@ -833,6 +834,27 @@ export default function PublishToShowcaseModal({
               {publishingVisibility === 'public' ? <Loader2 className="h-4 w-4 animate-spin" /> : isPaidRecipe ? <BadgeDollarSign className="h-4 w-4" /> : <Globe className="h-4 w-4" />}
               Public post
             </button>
+          </div>
+
+          {/* The full composer for the same creation (decision 18, 2026-10-17):
+              media, Made with, hand-built recipe cards. It reads the creation
+              from its address, and no title or caption, so it starts from the
+              creation's own. */}
+          <div className="flex justify-center">
+            <Link
+              href={`/post/new?${new URLSearchParams({ generationId }).toString()}`}
+              aria-disabled={isPublishing || undefined}
+              onClick={(event) => {
+                // Leaving while a publish is in flight would post the creation twice.
+                if (isPublishing) event.preventDefault();
+              }}
+              className={`ui-focus-ring inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-sm font-semibold text-zinc-400 transition ${
+                isPublishing ? 'pointer-events-none opacity-50' : 'hover:text-white'
+              }`}
+            >
+              More options
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </Link>
           </div>
         </form>
       </div>

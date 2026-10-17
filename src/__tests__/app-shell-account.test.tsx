@@ -1,8 +1,10 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AppShellAccount from '@/components/AppShellAccount';
 import AppShellAccountFallback from '@/components/AppShellAccountFallback';
+import FeedbackViewport from '@/components/FeedbackViewport';
+import { resetFeedbackState } from '@/components/feedback-state';
 
 const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
@@ -470,6 +472,124 @@ describe('AppShellAccount', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  // Decision 9 (2026-10-17): an account can end every one of its sessions from
+  // the menu. The proxy refuses the other devices' tokens on their next request.
+  describe('sign out of all devices', () => {
+    const SIGN_OUT_EVERYWHERE_FAILED =
+      'Could not sign out of all devices. You’re still signed in here; check your connection and try again.';
+
+    async function chooseSignOutEverywhere() {
+      render(
+        <>
+          <AppShellAccount />
+          <FeedbackViewport />
+        </>
+      );
+      fireEvent.click(await screen.findByRole('button', { name: 'Open account menu for Test Creator' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out of all devices' }));
+      return screen.findByRole('alertdialog', { name: 'Sign out of all devices?' });
+    }
+
+    afterEach(() => {
+      resetFeedbackState();
+      clearCookies();
+      vi.unstubAllEnvs();
+    });
+
+    it('asks first, then signs out everywhere and leaves this browser as Sign out does', async () => {
+      const dialog = await chooseSignOutEverywhere();
+
+      expect(dialog).toHaveTextContent('You’ll be signed out here and on every other device.');
+      expect(mocks.signOut).not.toHaveBeenCalled();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
+
+      await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
+      expect(mocks.signOut).toHaveBeenCalledTimes(1);
+      expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'global' });
+      expect(mocks.clearPersistedCreatorData).toHaveBeenCalledWith('user-1');
+      expect(screen.getByRole('link', { name: 'Sign in' })).toBeInTheDocument();
+    });
+
+    // The phones lose their session with this and cannot retire their own push
+    // tokens afterwards, so the account's go first, with this session's token.
+    it('retires the account\'s push tokens before it signs out everywhere', async () => {
+      const order: string[] = [];
+      const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () => {
+        order.push('retire');
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      mocks.signOut.mockImplementation(async () => {
+        order.push('signOut');
+        return { error: null };
+      });
+      try {
+        const dialog = await chooseSignOutEverywhere();
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
+
+        await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
+        const retire = fetchMock.mock.calls.find(([url]) => url === '/api/mobile/notifications/unregister');
+        expect(retire?.[1]).toMatchObject({ method: 'POST', body: JSON.stringify({ scope: 'account' }) });
+        expect(new Headers(retire?.[1]?.headers).get('Authorization')).toBe('Bearer verified-access-token');
+        expect(order.indexOf('retire')).toBeLessThan(order.indexOf('signOut'));
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('does nothing when the person cancels', async () => {
+      const dialog = await chooseSignOutEverywhere();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+      expect(mocks.signOut).not.toHaveBeenCalled();
+      expect(mocks.clearPersistedCreatorData).not.toHaveBeenCalled();
+      expect(mocks.router.push).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Open account menu for Test Creator' })).toBeInTheDocument();
+    });
+
+    // auth-js keeps the session when the call fails, and the other devices are
+    // still signed in: leaving here would read as done. It says so instead, and
+    // the person can try again.
+    it.each([
+      ['answers with an error', () => mocks.signOut.mockResolvedValue({ error: unreachable })],
+      ['throws', () => mocks.signOut.mockRejectedValue(new Error('Lock broken'))],
+    ])('keeps this browser signed in and says so when the sign-out %s', async (_name, fail) => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPABASE_URL);
+      document.cookie = `${AUTH_COOKIE}=session; Path=/`;
+      fail();
+      const dialog = await chooseSignOutEverywhere();
+      const confirm = within(dialog).getByRole('button', { name: 'Sign out everywhere' });
+
+      // A press in the dialog is a press outside the menu, which closes it.
+      fireEvent.pointerDown(confirm);
+      fireEvent.click(confirm);
+
+      expect(await screen.findByText(SIGN_OUT_EVERYWHERE_FAILED)).toBeInTheDocument();
+      expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'global' });
+      expect(mocks.router.push).not.toHaveBeenCalled();
+      expect(mocks.clearPersistedCreatorData).not.toHaveBeenCalled();
+      expect(document.cookie).toBe(`${AUTH_COOKIE}=session`);
+      fireEvent.click(screen.getByRole('button', { name: 'Open account menu for Test Creator' }));
+      expect(screen.getByRole('menuitem', { name: 'Sign out of all devices' })).toBeEnabled();
+    });
+
+    it('is offered to an account, not to a guest, whose one session is this browser', async () => {
+      mocks.getUser.mockResolvedValue({
+        data: { user: { ...authenticatedSession.user, is_anonymous: true } },
+        error: null,
+      });
+      render(<AppShellAccount />);
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Open account menu for Test Creator' }));
+
+      expect(screen.getByRole('menuitem', { name: 'Sign out' })).toBeInTheDocument();
+      expect(screen.queryByRole('menuitem', { name: 'Sign out of all devices' })).not.toBeInTheDocument();
     });
   });
 });

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { renderToString } from 'react-dom/server';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import ChildSafetyPage from '@/app/child-safety/page';
@@ -32,6 +33,15 @@ describe('moderation production readiness', () => {
         process.env.CHILD_SAFETY_CONTACT_EMAIL = previous;
       }
     }
+  });
+
+  // Decision 8 (2026-10-17): the age line matches the Terms (13+, a parent's or
+  // guardian's consent under 18); it said 18+ before.
+  it('states the minimum age the Terms state', () => {
+    render(<ChildSafetyPage />);
+
+    expect(screen.getByText(/You must be at least 13 years old to use the service, and anyone under 18 may use it only with a parent's or guardian's consent\./)).toBeInTheDocument();
+    expect(screen.queryByText(/18 or older/)).not.toBeInTheDocument();
   });
 
   it('uses general support as a safe fallback for absent or invalid configuration', () => {

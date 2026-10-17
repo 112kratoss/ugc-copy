@@ -40,6 +40,7 @@ const dashboard = {
       status: 'published' as const,
       priceUsdCents: 1900,
       salesCount: 4,
+      freeUnlockCount: 0,
       earningsUsdCents: 7600,
       priceQuote: {
         currency: 'INR' as const,
@@ -68,6 +69,7 @@ const dashboard = {
   deletedSnapshots: [],
   sales: [],
   totalSalesCount: 4,
+  totalFreeUnlockCount: 0,
   totalEarningsUsdCents: 7600,
 };
 
@@ -117,6 +119,7 @@ describe('MarketplaceSellClient', () => {
           deletedSnapshots: [],
           sales: [],
           totalSalesCount: 0,
+          totalFreeUnlockCount: 0,
           totalEarningsUsdCents: 0,
         }}
       />
@@ -166,7 +169,8 @@ describe('MarketplaceSellClient', () => {
               title: 'Free starter notes',
               accessMode: 'free' as const,
               priceUsdCents: 0,
-              salesCount: 3,
+              salesCount: 0,
+              freeUnlockCount: 3,
               earningsUsdCents: 0,
               post: { ...dashboard.bundles[0].post, id: 'post-free', title: 'Free proof' },
             },
@@ -176,7 +180,42 @@ describe('MarketplaceSellClient', () => {
     );
 
     expect(screen.getByText('4 sold · $76.00 tracked earnings')).toBeInTheDocument();
-    expect(screen.getByText('3 opened')).toBeInTheDocument();
+    expect(screen.getByText('3 free unlocks')).toBeInTheDocument();
+  });
+
+  // A free unlock stopped counting as a sale on 2026-10-17 (decision 6): the
+  // totals and each listing count paid sales, with free unlocks beside them.
+  it('counts paid sales and free unlocks apart, in the totals and on each listing', () => {
+    render(
+      <MarketplaceSellClient
+        initialDashboard={{
+          ...dashboard,
+          bundles: [
+            // Paid now, opened for free before it had a price.
+            { ...dashboard.bundles[0], freeUnlockCount: 2 },
+            {
+              ...dashboard.bundles[0],
+              id: 'bundle-free',
+              postId: 'post-free',
+              title: 'Free starter notes',
+              accessMode: 'free' as const,
+              priceUsdCents: 0,
+              salesCount: 0,
+              freeUnlockCount: 1,
+              earningsUsdCents: 0,
+              post: { ...dashboard.bundles[0].post, id: 'post-free', title: 'Free proof' },
+            },
+          ],
+          totalSalesCount: 4,
+          totalFreeUnlockCount: 3,
+        }}
+      />
+    );
+
+    expect(within(screen.getByText('Sales').parentElement!).getByText('4')).toBeInTheDocument();
+    expect(within(screen.getByText('Free unlocks').parentElement!).getByText('3')).toBeInTheDocument();
+    expect(screen.getByText('4 sold · 2 free unlocks · $76.00 tracked earnings')).toBeInTheDocument();
+    expect(screen.getByText('1 free unlock')).toBeInTheDocument();
   });
 
   // A post deleted after a sale is private and archived for its buyers. It read

@@ -90,6 +90,7 @@ export default function UnlockDetail({ detail }: { detail: ViewerUnlockDetailMod
             resourceKinds={detail.resourceKinds}
             lockedPreview={buildPostResourceBundleLockedPreview(initialResources)}
             salesCount={detail.salesCount}
+            freeUnlockCount={detail.freeUnlockCount}
             initialResources={initialResources}
             purchasedRevision={detail.hasNewerRevision && detail.currentResources
               ? {
