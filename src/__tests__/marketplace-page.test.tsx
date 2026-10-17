@@ -242,7 +242,8 @@ describe('MarketplacePage', () => {
       }));
     });
 
-    expect(await screen.findByText('Tip / note')).toBeInTheDocument();
+    // A text post is labelled "Text", as on the post page (it read "Tip / note").
+    expect(await screen.findByText('Text')).toBeInTheDocument();
     expect(screen.getAllByText('Prompt pacing tip')).toHaveLength(2);
     expect(screen.getByText('Lead with the product benefit before adding style language.')).toBeInTheDocument();
     expect(screen.getByText('Free recipe')).toBeInTheDocument();

@@ -3,7 +3,12 @@ import Link from 'next/link';
 import { BookText, ShoppingBag } from 'lucide-react';
 
 import PostCommentAvatar from '@/components/PostCommentAvatar';
-import { formatRelativeTime, getPostFeedTitle, type PostPreviewKind } from '@/lib/post-feed-presentation';
+import {
+  formatRelativeTime,
+  getPostFeedTitle,
+  getPostModelDisplayName,
+  type PostPreviewKind,
+} from '@/lib/post-feed-presentation';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import {
   formatPostResourcePriceLabel,
@@ -45,6 +50,15 @@ function normalizeComparableText(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+/**
+ * Posts made here record Magicbooklet as their tool, and its own name says
+ * nothing on its own page; the app's post Details leave it out the same way
+ * (`isOwnTool` in ugc-mobile/lib/post-details-view-model.ts).
+ */
+function isOwnSourceTool(label: string): boolean {
+  return label.replace(/[\s-]+/g, '').toLowerCase() === 'magicbooklet';
+}
+
 function getPostTypeLabel({
   category,
   creationMode,
@@ -56,8 +70,9 @@ function getPostTypeLabel({
   mediaKind: string | null;
   postFormat: string;
 }): string {
+  // "Text", beside Image, Video and Motion, as the feed card and the app name it.
   if (postFormat === 'text' || category === 'text') {
-    return 'Tip / note';
+    return 'Text';
   }
 
   // A motion post is a video by category, so it has to be asked first; the
@@ -106,7 +121,15 @@ export default function ShowcaseDetailBody({
     postFormat: detail.postFormat,
   });
   const isTextOnlyPost = (detail.postFormat === 'text' || detail.category === 'text') && !detail.mediaUrl;
-  const sourceToolLabel = detail.sourceTool || (detail.model !== 'external' ? detail.model : null);
+  // What the post was made with: its model by the name the feed card gives it
+  // (`getPostModelDisplayName`; the slug, "nano-banana-2", was printed here),
+  // else an outside tool its creator named. Nothing on a text post, as its card
+  // names no model either.
+  const outsideTool = detail.sourceTool?.trim();
+  const madeWithLabel = isTextOnlyPost
+    ? null
+    : getPostModelDisplayName(detail.model)
+      ?? (outsideTool && !isOwnSourceTool(outsideTool) ? outsideTool : null);
   const detailMediaItems = detail.mediaItems?.length
     ? detail.mediaItems
     : detail.mediaUrl && detail.mediaKind
@@ -123,8 +146,8 @@ export default function ShowcaseDetailBody({
         }]
       : [];
   const publicPostFallback = [
-    detail.sourceTool ? `Made with ${detail.sourceTool}` : null,
-    `${detail.category === 'text' ? 'Tip' : detail.category} by ${detail.creator.name}`,
+    madeWithLabel ? `Made with ${madeWithLabel}` : null,
+    `${detail.category === 'text' ? 'Text' : detail.category} by ${detail.creator.name}`,
     bundle ? `${previewKindSummary} recipe attached` : null,
   ].filter(Boolean).join(' · ');
   const publicText = detail.body || publicPostFallback || detail.description || detail.title;
@@ -292,10 +315,10 @@ export default function ShowcaseDetailBody({
                   )}
                   <span aria-hidden="true">·</span>
                   <span title={formatPostDate(detail.createdAt)}>{formatRelativeTime(detail.createdAt)}</span>
-                  {!isTextOnlyPost && sourceToolLabel ? (
+                  {madeWithLabel ? (
                     <>
                       <span aria-hidden="true">·</span>
-                      <span>{sourceToolLabel}</span>
+                      <span>{`Made with ${madeWithLabel}`}</span>
                     </>
                   ) : null}
                   {detail.visibility === 'unlisted' ? (

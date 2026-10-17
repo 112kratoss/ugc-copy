@@ -274,11 +274,12 @@ describe('post feed presentation', () => {
             expect(card.recipeChip).toBeNull();
         });
 
+        // In credits, as the app's locked Remix reads ("900 credits"), not "$9.00".
         it('puts the price on a Remix behind a paid unlock, and names it once', () => {
             const card = buildPostFeedCard(locked({ asset: paidRecipe }));
 
             expect(card.remixAccess).toBe('paid-unlock');
-            expect(card.remixLabel).toBe('$9.00');
+            expect(card.remixLabel).toBe('900 credits');
             expect(card.recipeChip).toBeNull();
         });
 
@@ -286,7 +287,7 @@ describe('post feed presentation', () => {
             expect(buildPostFeedCard(item({ asset: paidRecipe }))).toMatchObject({
                 remixAccess: 'open',
                 remixLabel: 'Remix · 8',
-                recipeChip: { label: '$9.00', tone: 'paid' },
+                recipeChip: { label: '900 credits', tone: 'paid' },
             });
         });
 
@@ -362,7 +363,9 @@ describe('post feed presentation', () => {
                 .toEqual({ label: 'Free recipe', tone: 'free' });
         });
 
-        it('prices a paid recipe as this viewer pays it, beside Remix too', () => {
+        // The chip printed this viewer's quote ("₹210"); it prices the recipe in
+        // credits now, as the app does, and leaves cash to the unlock button.
+        it("prices a paid recipe in credits whatever this viewer's quote, beside Remix too", () => {
             const paid = {
                 ...recipe,
                 accessMode: 'paid',
@@ -371,7 +374,7 @@ describe('post feed presentation', () => {
             } as NonNullable<ShowcaseFeedItem['asset']>;
 
             expect(buildPostFeedCard(item({ asset: paid, canRemix: true })).recipeChip)
-                .toEqual({ label: '\u20b9210', tone: 'paid' });
+                .toEqual({ label: '250 credits', tone: 'paid' });
         });
 
         it('prices a credits-only recipe in credits whatever its cash quote says', () => {

@@ -47,7 +47,7 @@ export default function TextPostPreviewCard({
       <div className="flex flex-wrap items-center gap-2">
         <span className="inline-flex items-center gap-2 rounded-full border border-sky-300/20 bg-sky-400/10 px-3 py-1 text-xs font-semibold text-sky-100">
           <BookText className="h-3.5 w-3.5" />
-          Tip / note
+          Text
         </span>
         {sourceLabel ? (
           <span className="rounded-full border border-white/10 bg-black/35 px-3 py-1 text-xs font-medium text-zinc-200">

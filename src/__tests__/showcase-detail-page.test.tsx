@@ -660,7 +660,7 @@ describe('Showcase detail page', () => {
       const head = screen.getByTestId('canonical-post-head');
       expect(head).toHaveTextContent('@creator-name');
       // The cover's type and title are placeholders; the gate holds the one heading.
-      expect(head).not.toHaveTextContent('Tip / note');
+      expect(within(head).queryByText('Text')).not.toBeInTheDocument();
       expect(screen.getAllByRole('heading', { level: 1 }).map((heading) => heading.textContent))
         .toEqual(['Mature content']);
       const media = screen.getByTestId('canonical-post-media');
@@ -1017,6 +1017,61 @@ describe('Showcase detail page', () => {
     expect(head).not.toHaveTextContent('Video creation');
   });
 
+  // The page names the model as the feed card does (`getPostModelDisplayName`).
+  // It printed the slug ("nano-banana-2"), or "magicbooklet", the app's own
+  // name recorded as the tool of every post made here.
+  describe('what the post was made with', () => {
+    async function renderHead(fields: Record<string, unknown>) {
+      const detail = await getPublicPostDetailMock('post-1');
+      getPublicPostDetailMock.mockReset().mockResolvedValue({ ...detail, ...fields });
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+      return screen.getByTestId('canonical-post-head');
+    }
+
+    it('names a model by its display name, never its slug', async () => {
+      const head = await renderHead({ model: 'nano-banana-2', sourceTool: null });
+
+      expect(within(head).getByText('Made with Nano Banana 2.0')).toBeInTheDocument();
+      expect(head).not.toHaveTextContent('nano-banana-2');
+    });
+
+    it("names the model, not the app, on a post made here", async () => {
+      const head = await renderHead({ model: 'gpt-image-2', sourceKind: 'magicbooklet', sourceTool: 'magicbooklet' });
+
+      expect(within(head).getByText('Made with GPT Image 2')).toBeInTheDocument();
+      expect(head).not.toHaveTextContent(/magicbooklet/i);
+    });
+
+    it('says nothing of a model it cannot name', async () => {
+      const head = await renderHead({ model: 'mystery-model-9', sourceKind: 'magicbooklet', sourceTool: 'Magicbooklet' });
+
+      expect(head).not.toHaveTextContent('Made with');
+      expect(head).not.toHaveTextContent('mystery-model-9');
+      expect(head).not.toHaveTextContent(/magicbooklet/i);
+    });
+
+    it('names the outside tool a creator made the post with', async () => {
+      // The read gives an outside post's tool as its model when no generation names one.
+      const head = await renderHead({ generationId: null, model: 'Midjourney', sourceKind: 'external', sourceTool: 'Midjourney' });
+
+      expect(within(head).getByText('Made with Midjourney')).toBeInTheDocument();
+    });
+
+    it('names no model on a text post, as its card names none', async () => {
+      const head = await renderHead({
+        model: 'nano-banana-2',
+        mediaUrl: null,
+        mediaKind: null,
+        category: 'text',
+        postFormat: 'text',
+        body: 'Open with tension.',
+      });
+
+      expect(head).not.toHaveTextContent('Made with');
+      expect(head).not.toHaveTextContent('Nano Banana');
+    });
+  });
+
   it('renders text-only posts without a media url', async () => {
     getPublicPostDetailMock.mockResolvedValueOnce({
       id: 'post-text',
@@ -1065,7 +1120,8 @@ describe('Showcase detail page', () => {
     expect(screen.getAllByText('Three hooks that keep working')).toHaveLength(1);
     // Attribution sits in the masthead row; the note keeps the writing.
     expect(screen.getByTestId('canonical-post-head')).toHaveTextContent('@creator-name');
-    expect(screen.getByTestId('canonical-post-head')).toHaveTextContent('Tip / note');
+    // A text post is labelled "Text", beside Image, Video and Motion (it read "Tip / note").
+    expect(within(screen.getByTestId('canonical-post-head')).getByText('Text')).toBeInTheDocument();
 
     // The chip bar is media furniture; a written note carries its own byline.
     expect(screen.queryByText(/shared post/i)).not.toBeInTheDocument();

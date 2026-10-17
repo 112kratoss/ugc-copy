@@ -34,39 +34,39 @@ describe("a feed card's recipe chip, on the web and in the app", () => {
     expect(drawn).toEqual(chip ? { tone: chip.tone, label: chip.label.web } : null);
   });
 
-  // The web chip printed "$0.50 recipe" for a recipe only credits can buy. It
-  // names cash only where a checkout takes it, and otherwise says what the app
-  // says.
-  it('prices a recipe in cash on the web only where cash is taken', () => {
+  // The web chip read "$2.50" where the app read "250 credits" (and before
+  // that "$0.50 recipe" for a recipe only credits can buy). A chip prices a
+  // recipe in credits on both clients, cash-eligible or not; the buttons and
+  // price pills that offer both ways to pay keep the cash figure.
+  it('prices every recipe in credits on the web, as the app does, cash or not', () => {
     const paid = contract.cases.flatMap((entry) => (
       entry.asset && entry.chip?.tone === 'paid'
         ? [{ price: entry.asset.priceUsdCents, label: entry.chip.label }]
         : []
     ));
-    const creditsOnly = paid.filter(({ price }) => price < POST_RESOURCE_WEB_CASH_MIN_TOKENS);
-    const cashEligible = paid.filter(({ price }) => price >= POST_RESOURCE_WEB_CASH_MIN_TOKENS);
 
-    // Both kinds are in the contract, so neither check passes on nothing.
-    expect(creditsOnly.length).toBeGreaterThan(0);
-    expect(cashEligible.length).toBeGreaterThan(0);
-    for (const { label } of creditsOnly) {
+    // Both kinds are in the contract, so the rule is asked of each.
+    expect(paid.some(({ price }) => price < POST_RESOURCE_WEB_CASH_MIN_TOKENS)).toBe(true);
+    expect(paid.some(({ price }) => price >= POST_RESOURCE_WEB_CASH_MIN_TOKENS)).toBe(true);
+    for (const { label } of paid) {
       expect(label.web).not.toMatch(/[$₹]/);
       expect(label.web).toBe(label.mobile);
     }
-    for (const { label } of cashEligible) {
-      expect(label.web).toMatch(/^\$\d/);
-    }
   });
 
-  it("names a credits-only recipe in credits even where the viewer's quote is in rupees", () => {
-    const summary = {
-      ...asset({ accessMode: 'paid', priceUsdCents: 50 }),
-      priceQuote: { currency: 'INR', formatted: '₹42', amountSubunits: 4200, note: null },
-    } as ShowcaseAssetSummary;
+  // The chip printed the viewer's quote ("₹750") wherever cash is taken. It
+  // reads the recipe's own credit price now, and the quote decides nothing,
+  // as in the app: a zero quote beside a price is not a free recipe.
+  it.each([
+    { priceUsdCents: 50, priceQuote: { currency: 'INR', formatted: '₹42', amountSubunits: 4200, note: null }, label: '50 credits' },
+    { priceUsdCents: 900, priceQuote: { currency: 'INR', formatted: '₹750', amountSubunits: 75000, note: null }, label: '900 credits' },
+    { priceUsdCents: 900, priceQuote: { currency: 'USD', formatted: '$9.00', amountSubunits: 900, note: null }, label: '900 credits' },
+    { priceUsdCents: 250, priceQuote: { currency: 'INR', formatted: '₹0', amountSubunits: 0, note: null }, label: '250 credits' },
+  ] as const)('never puts the quote $priceQuote.formatted on a chip for $priceUsdCents credits', ({ priceUsdCents, priceQuote, label }) => {
+    const summary = { ...asset({ accessMode: 'paid', priceUsdCents }), priceQuote } as ShowcaseAssetSummary;
 
-    expect(getAssetAccessLabel(summary)).toBe('50 credits');
-    expect(getAssetAccessLabel({ ...summary, priceUsdCents: 900, priceQuote: { ...summary.priceQuote!, formatted: '₹750' } }))
-      .toBe('₹750');
+    expect(getAssetAccessLabel(summary)).toBe(label);
+    expect(getPostFeedRecipeChip({ asset: summary, canRemix: false })).toEqual({ tone: 'paid', label });
   });
 
   it('is asked the same cases by the app', () => {

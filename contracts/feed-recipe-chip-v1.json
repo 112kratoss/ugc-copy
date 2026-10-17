@@ -36,19 +36,25 @@
       "name": "a paid recipe beside Remix",
       "asset": { "accessMode": "paid", "priceUsdCents": 250 },
       "remix": true,
-      "chip": { "tone": "paid", "label": { "web": "$2.50", "mobile": "250 credits" } }
+      "chip": { "tone": "paid", "label": { "web": "250 credits", "mobile": "250 credits" } }
     },
     {
       "name": "a paid recipe on a card with no Remix",
       "asset": { "accessMode": "paid", "priceUsdCents": 250 },
       "remix": false,
-      "chip": { "tone": "paid", "label": { "web": "$2.50", "mobile": "250 credits" } }
+      "chip": { "tone": "paid", "label": { "web": "250 credits", "mobile": "250 credits" } }
     },
     {
       "name": "a paid recipe at the cash minimum, on a card with no Remix",
       "asset": { "accessMode": "paid", "priceUsdCents": 100 },
       "remix": false,
-      "chip": { "tone": "paid", "label": { "web": "$1.00", "mobile": "100 credits" } }
+      "chip": { "tone": "paid", "label": { "web": "100 credits", "mobile": "100 credits" } }
+    },
+    {
+      "name": "a paid recipe past a lakh of credits, on a card with no Remix",
+      "asset": { "accessMode": "paid", "priceUsdCents": 125000 },
+      "remix": false,
+      "chip": { "tone": "paid", "label": { "web": "1,25,000 credits", "mobile": "1,25,000 credits" } }
     },
     {
       "name": "a credits-only recipe beside Remix",
