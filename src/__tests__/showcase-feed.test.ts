@@ -106,6 +106,7 @@ type ResourceBundleRow = {
   resource_items?: unknown;
   allow_remix: boolean;
   sales_count?: number;
+  free_unlock_count?: number;
   status: 'published' | 'draft';
 };
 
@@ -258,6 +259,7 @@ function createServiceClientMock() {
                   resource_sections: null,
                   resource_items: null,
                   sales_count: null,
+                  free_unlock_count: null,
                   status: row.status,
                 }
           )),
@@ -1833,6 +1835,50 @@ describe('showcase feed', () => {
 
     expect(page.items.map((item) => item.id)).toEqual(['older-best-seller']);
     expect(page.items[0].asset?.salesCount).toBe(42);
+  });
+
+  // Decision 6 (2026-10-17): best selling stays on paid sales, and a free
+  // recipe's opens reach the card as freeUnlockCount without lifting it.
+  it('orders top sales by paid sales and carries free unlocks to the card apart', async () => {
+    postsState = [
+      createPostRow({ id: 'free-favourite', created_at: '2026-03-20T10:00:00.000Z' }),
+      createPostRow({ id: 'paid-seller', created_at: '2026-03-19T10:00:00.000Z' }),
+    ];
+    generationModelsState = [];
+    resourceBundlesState = [
+      {
+        id: 'bundle-free-favourite',
+        post_id: 'free-favourite',
+        title: 'Free favourite',
+        access_mode: 'free',
+        price_usd_cents: 0,
+        preview_text: 'Opened often.',
+        allow_remix: false,
+        sales_count: 0,
+        free_unlock_count: 99,
+        status: 'published',
+      },
+      {
+        id: 'bundle-paid-seller',
+        post_id: 'paid-seller',
+        title: 'Paid seller',
+        access_mode: 'paid',
+        price_usd_cents: 900,
+        preview_text: 'Sold a few.',
+        allow_remix: false,
+        sales_count: 3,
+        free_unlock_count: 0,
+        status: 'published',
+      },
+    ];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({ category: 'all', sort: 'top-sales', offset: 0, limit: 2 });
+
+    expect(page.items.map((item) => [item.id, item.asset?.salesCount, item.asset?.freeUnlockCount])).toEqual([
+      ['paid-seller', 3, undefined],
+      ['free-favourite', undefined, 99],
+    ]);
   });
 
   function seedTopSalesResourceFixture() {

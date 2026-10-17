@@ -342,6 +342,7 @@ function createMarketplaceItem(index: number): MarketplaceResourceListItem {
     accessMode: 'free',
     priceUsdCents: 0,
     salesCount: 0,
+    freeUnlockCount: 0,
     earningsUsdCents: 0,
     allowRemix: false,
     resourceKinds: ['prompt'],

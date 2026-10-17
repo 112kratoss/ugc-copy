@@ -83,4 +83,32 @@ describe('post lifecycle confirmation policy', () => {
       'People have bought its recipe. Archive keeps it resolvable for them; you will be asked again before a forced delete.',
     );
   });
+
+  // Decision 6 (2026-10-17): salesCount counts paid unlocks only. A free unlock
+  // is still an unlock its owner keeps, and the server still asks again before
+  // deleting a post that has one, so both lines read both counts.
+  describe('a recipe unlocked only for free', () => {
+    const openedRecipe: PostLifecycleSubject['bundle'] = {
+      accessMode: 'free',
+      status: 'published',
+      salesCount: 0,
+      freeUnlockCount: 4,
+    };
+
+    it('still reassures that the people who opened it keep their unlock', () => {
+      expect(getPostLifecycleConfirmation({ type: 'visibility', next: 'private' }, publicPost(openedRecipe))?.message).toBe(
+        'Its recipe comes off the marketplace until the post is public again; buyers keep their unlock.',
+      );
+    });
+
+    it('still warns before a delete that the server will ask again', () => {
+      expect(getPostLifecycleConfirmation({ type: 'delete' }, publicPost(openedRecipe))?.message).toBe(
+        'People have bought its recipe. Archive keeps it resolvable for them; you will be asked again before a forced delete.',
+      );
+    });
+
+    it('reads a surface that sends no free unlock count as none', () => {
+      expect(getPostLifecycleConfirmation({ type: 'delete' }, publicPost(listedRecipe))?.message).toBe('This cannot be undone.');
+    });
+  });
 });

@@ -75,6 +75,27 @@ describe('listOpenCreatorPayoutRequests', () => {
     }
   });
 
+  // Decision 7 (2026-10-17) stopped new PayPal requests; one stored before that
+  // is still the operator's to settle.
+  it('still lists a PayPal request stored before PayPal was paused', async () => {
+    vi.stubEnv('CREATOR_PAYOUT_DETAILS_ENCRYPTION_KEY', KEY);
+    try {
+      const stored = encryptCreatorPayoutDetails('creator@example.com');
+      const queue = await listOpenCreatorPayoutRequests(
+        createSupabaseMock([{ ...requestRow(stored), payout_method: 'paypal' }]),
+      );
+
+      expect(queue).toEqual([expect.objectContaining({
+        id: 'request-1',
+        payoutMethod: 'paypal',
+        payoutDetails: 'creator@example.com',
+        amountUsd: '$150.00',
+      })]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('passes legacy plaintext rows through unchanged', async () => {
     vi.stubEnv('CREATOR_PAYOUT_DETAILS_ENCRYPTION_KEY', KEY);
     try {
@@ -178,6 +199,17 @@ describe('resolveCreatorPayoutRequest', () => {
       body: 'The UPI id did not match the account name. $150.00 is back in your payout balance.',
       deep_link: '/seller-dashboard',
     })]);
+  });
+
+  it('settles a PayPal request stored before PayPal was paused', async () => {
+    const { adminSupabase, history } = settling(
+      { payout_method: 'paypal', resolution_note: 'PayPal txn 9XY' },
+      { status: 'paid', request_id: 'request-1', amount_token_subunits: 1_500_000 },
+    );
+
+    await expect(settle(adminSupabase, 'mark_paid', 'PayPal txn 9XY'))
+      .resolves.toEqual({ ok: true, status: 'paid', amountTokenSubunits: 1_500_000 });
+    expect(history.sent).toEqual([expect.objectContaining({ type: 'creator_payout_paid', user_id: 'creator-1' })]);
   });
 
   it('tells no one about a request whose account was deleted', async () => {

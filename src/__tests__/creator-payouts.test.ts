@@ -68,6 +68,8 @@ describe('creator payout money math', () => {
   it('accepts only the payout methods the operator can actually settle', () => {
     expect(isCreatorPayoutMethod('upi')).toBe(true);
     expect(isCreatorPayoutMethod('bank_transfer')).toBe(true);
+    // Decision 7 (2026-10-17): payouts go out by hand over Indian rails.
+    expect(isCreatorPayoutMethod('paypal')).toBe(false);
     expect(isCreatorPayoutMethod('crypto')).toBe(false);
     expect(isCreatorPayoutMethod(null)).toBe(false);
   });
@@ -161,9 +163,80 @@ describe('getCreatorPayoutState', () => {
     expect(state.history[0].resolutionNote).toBe('Bank details did not match the account name.');
     expect(state.pendingRequest).toBeNull();
   });
+
+  it('still reads a PayPal request made before PayPal was paused', async () => {
+    const { client } = createSupabaseMock({
+      wallet: null,
+      requests: [{
+        id: 'request-paypal',
+        amount_token_subunits: 1_000_000,
+        status: 'requested',
+        payout_method: 'paypal',
+        requested_at: '2026-09-01T00:00:00.000Z',
+        resolved_at: null,
+        resolution_note: null,
+        external_reference: null,
+      }],
+    });
+
+    const state = await getCreatorPayoutState({ adminSupabase: client, userId: 'creator-1' });
+
+    expect(state.pendingRequest).toMatchObject({ id: 'request-paypal', payoutMethod: 'paypal' });
+    expect(state.history.map((request) => request.payoutMethod)).toEqual(['paypal']);
+  });
 });
 
 describe('requestCreatorPayout', () => {
+  // Decision 7 (2026-10-17): UPI and an Indian bank transfer only.
+  it.each(['upi', 'bank_transfer'])('takes a %s request', async (payoutMethod) => {
+    const { client, rpc } = createSupabaseMock({
+      rpcResult: { status: 'requested', request_id: 'request-1', amount_token_subunits: 1_500_000 },
+    });
+
+    const result = await requestCreatorPayout({
+      adminSupabase: client,
+      userId: 'creator-1',
+      payoutMethod,
+      payoutDetails: 'creator@upi',
+    });
+
+    expect(result).toEqual({ ok: true, requestId: 'request-1', amountTokenSubunits: 1_500_000 });
+    expect(rpc).toHaveBeenCalledWith('request_creator_payout', expect.objectContaining({ p_payout_method: payoutMethod }));
+  });
+
+  it('answers a PayPal request that PayPal is coming soon, before anything is stored', async () => {
+    const { client, rpc } = createSupabaseMock({});
+
+    const result = await requestCreatorPayout({
+      adminSupabase: client,
+      userId: 'creator-1',
+      payoutMethod: 'paypal',
+      payoutDetails: 'creator@example.com',
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      code: 'METHOD_UNAVAILABLE',
+      error: 'PayPal payouts are coming soon. Choose UPI or an Indian bank transfer.',
+    });
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it.each(['international_transfer', 'crypto', ''])('refuses an unknown method %j before anything is stored', async (payoutMethod) => {
+    const { client, rpc } = createSupabaseMock({});
+
+    const result = await requestCreatorPayout({
+      adminSupabase: client,
+      userId: 'creator-1',
+      payoutMethod,
+      payoutDetails: 'creator@upi',
+    });
+
+    expect(result).toEqual({ ok: false, status: 400, code: 'INVALID_METHOD', error: 'Choose how you want to be paid.' });
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
   it('passes the caller id straight to the row-locking RPC', async () => {
     const { client, rpc } = createSupabaseMock({
       rpcResult: { status: 'requested', request_id: 'request-1', amount_token_subunits: 1_500_000 },

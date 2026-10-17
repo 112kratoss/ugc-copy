@@ -168,7 +168,6 @@ describe('generation route adapter service', () => {
   // POST /api/generations and only poll /api/generate, /api/generate-image and
   // /api/generate-video, so a start there is answered 410 and polling stays as it was.
   it('creates compact handlers for the per-kind routes: polling answers, a start is retired', async () => {
-    const postGenerationForRoute = vi.fn();
     const getGenerationForRoute = vi.fn(async (input) => {
       expect(input.kieApiKey).toBe('kie-key');
       expect(input.readRequestBody).toBeUndefined();
@@ -182,7 +181,6 @@ describe('generation route adapter service', () => {
     const { GET, POST } = createGenerationRouteHandlers({
       getGenerationForRoute,
       kieApiKey: 'kie-key',
-      postGenerationForRoute,
       dependencies: {
         createServiceClient,
         createUserClient,
@@ -213,7 +211,6 @@ describe('generation route adapter service', () => {
       error: 'This way of starting a creation has been retired. Update Magicbooklet to keep creating, or start again from the current creator.',
     });
     // Answered before the body is read, anyone is asked who is calling, or anything is quoted or held.
-    expect(postGenerationForRoute).not.toHaveBeenCalled();
     expect(startBody).not.toHaveBeenCalled();
     expect(createUserClient).not.toHaveBeenCalled();
     expect(createServiceClient).not.toHaveBeenCalled();
@@ -274,7 +271,6 @@ describe('generation route adapter service', () => {
       const { GET } = createGenerationRouteHandlers({
         getGenerationForRoute: statusCheckThatDefers,
         kieApiKey: 'kie-key',
-        postGenerationForRoute: vi.fn(),
         dependencies: {
           createServiceClient,
           createUserClient,

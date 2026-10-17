@@ -97,6 +97,7 @@ describe('listOwnerPostsForRoute', () => {
       earningsUsdCents: 12_300,
       listingCount: 18,
       salesCount: 42,
+      freeUnlockCount: 20,
     })) satisfies LoadOwnerPostSalesSummary;
 
     const result = await listOwnerPostsForRoute({
@@ -120,10 +121,12 @@ describe('listOwnerPostsForRoute', () => {
     expect(result).toMatchObject({
       ok: true,
       posts: [{ id: 'post-1' }],
+      // Paid sales and free unlocks apart (decision 6, 2026-10-17).
       summary: {
         earningsUsdCents: 12_300,
         listingCount: 18,
         salesCount: 42,
+        freeUnlockCount: 20,
       },
     });
   });
@@ -136,6 +139,7 @@ describe('listOwnerPostsForRoute', () => {
       earningsUsdCents: 1_530,
       listingCount: 2,
       salesCount: 2,
+      freeUnlockCount: 5,
     })) satisfies LoadOwnerPostSalesSummary;
 
     const result = await listOwnerPostsForRoute({
@@ -171,6 +175,7 @@ describe('listOwnerPostsForRoute', () => {
         earningsUsdCents: 1_530,
         listingCount: 2,
         salesCount: 2,
+        freeUnlockCount: 5,
       },
     });
   });

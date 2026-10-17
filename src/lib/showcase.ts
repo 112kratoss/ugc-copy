@@ -71,7 +71,10 @@ export interface ShowcaseAssetSummary {
     priceQuote?: MarketplacePriceQuote;
     previewText: string;
     allowRemix: boolean;
+    /** Paid unlocks; left out when there are none. */
     salesCount?: number;
+    /** Free unlocks (a free recipe's "N opened"); left out when there are none. */
+    freeUnlockCount?: number;
     resourceKinds?: PostResourceKind[];
     lockedPreview?: PostResourceBundleLockedPreview;
     itemCounts?: PostResourceItemCounts;
@@ -229,6 +232,10 @@ export function sanitizeShowcaseAssetSummary(
 
     if (typeof asset.salesCount === 'number') {
         sanitized.salesCount = asset.salesCount;
+    }
+
+    if (typeof asset.freeUnlockCount === 'number') {
+        sanitized.freeUnlockCount = asset.freeUnlockCount;
     }
 
     if (asset.resourceKinds) {

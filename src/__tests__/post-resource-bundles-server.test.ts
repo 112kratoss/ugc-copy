@@ -20,6 +20,8 @@ type BundleRow = {
   resource_items: unknown[];
   price_usd_cents: number;
   sales_count: number;
+  /** Absent on a row read through the pre-resource-items select. */
+  free_unlock_count?: number;
   earnings_usd_cents: number;
   created_at: string;
   updated_at: string;
@@ -466,6 +468,31 @@ describe('post resource bundle server access', () => {
 
     expect(detail?.viewerCanAccess).toBe(false);
     expect(detail?.resources).toBeNull();
+  });
+
+  // Decision 6 (2026-10-17): free unlocks are not sales. Both counts are public
+  // social proof, so a visitor's detail carries them side by side.
+  it('counts paid sales and free unlocks apart in the public detail', async () => {
+    bundleRow = { ...(bundleRow as BundleRow), sales_count: 2, free_unlock_count: 5 };
+    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+    const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null });
+
+    expect(detail?.salesCount).toBe(2);
+    expect(detail?.freeUnlockCount).toBe(5);
+    // Earnings stay owner-only beside them.
+    expect(detail).not.toHaveProperty('earningsUsdCents');
+  });
+
+  it('reads a bundle row that has no free unlock column as none', async () => {
+    const legacyRow = { ...(bundleRow as BundleRow) };
+    delete legacyRow.free_unlock_count;
+    bundleRow = legacyRow;
+    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+    const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: null });
+
+    expect(detail?.freeUnlockCount).toBe(0);
   });
 
   it('takes the post\'s NSFW flag from a caller that has just read its row', async () => {
@@ -1160,6 +1187,19 @@ describe('post resource bundle server access', () => {
       for (const buyerId of ['buyer-with-handle', 'buyer-with-name', anonymousBuyerId]) {
         expect(serialized).not.toContain(buyerId);
       }
+    });
+
+    it('totals paid sales and free unlocks apart, per listing and overall', async () => {
+      bundleRow = { ...(bundleRow as BundleRow), sales_count: 3, free_unlock_count: 7, earnings_usd_cents: 1530 };
+
+      const { getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+      const dashboard = await getSellerPostResourceBundleDashboard('owner-1');
+
+      expect(dashboard.bundles.map((bundle) => [bundle.salesCount, bundle.freeUnlockCount])).toEqual([[3, 7]]);
+      expect(dashboard.totalSalesCount).toBe(3);
+      expect(dashboard.totalFreeUnlockCount).toBe(7);
+      // Free unlocks earn nothing: the earnings total is the paid one, unchanged.
+      expect(dashboard.totalEarningsUsdCents).toBe(1530);
     });
 
     it('calls every buyer "A buyer" when the buyer profiles cannot be read', async () => {

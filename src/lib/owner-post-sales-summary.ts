@@ -5,7 +5,9 @@ import { createServiceClient } from '@/lib/server-helpers';
 export interface OwnerPostSalesSummary {
   earningsUsdCents: number;
   listingCount: number;
+  /** Paid unlocks. A free unlock is not a sale (decision 6, 2026-10-17). */
   salesCount: number;
+  freeUnlockCount: number;
 }
 
 export async function getOwnerPostSalesSummary(userId: string): Promise<OwnerPostSalesSummary> {
@@ -28,6 +30,7 @@ export function parseOwnerPostSalesSummary(data: unknown): OwnerPostSalesSummary
     earningsUsdCents: nonNegativeInteger(record.earningsUsdCents),
     listingCount: nonNegativeInteger(record.listingCount),
     salesCount: nonNegativeInteger(record.salesCount),
+    freeUnlockCount: nonNegativeInteger(record.freeUnlockCount),
   };
 }
 

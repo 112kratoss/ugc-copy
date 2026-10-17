@@ -150,6 +150,8 @@ type BundleStatusRow = {
   access_mode: 'none' | 'free' | 'paid';
   status: 'draft' | 'published';
   sales_count?: number | null;
+  // Free unlocks lock a paid recipe's editor as they did while sales_count counted them.
+  free_unlock_count?: number | null;
   summary?: string | null;
   preview_text?: string | null;
   prompt_text?: string | null;
@@ -486,7 +488,7 @@ async function loadOwnedBundleStatus(
   const { data, error } = await adminSupabase
     .from('post_resource_bundles')
     .select(
-      'id, access_mode, status, sales_count, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, resource_items, resource_sections',
+      'id, access_mode, status, sales_count, free_unlock_count, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, resource_items, resource_sections',
     )
     .eq('post_id', postId)
     .eq('owner_user_id', ownerUserId)
@@ -1209,7 +1211,7 @@ export async function updateOwnerPostForRoute({
       hasResourceBundlePayload
       && existingBundle
       && existingBundle.access_mode === 'paid'
-      && (existingBundle.sales_count ?? 0) > 0
+      && ((existingBundle.sales_count ?? 0) + (existingBundle.free_unlock_count ?? 0)) > 0
     ) {
       return createSoldResourceBundleLockedResult();
     }
@@ -1308,7 +1310,7 @@ export async function updateOwnerPostForRoute({
     const frozenSoldBundleForRepublish = nextVisibility === 'public'
       && !hasResourceBundlePayload
       && existingBundle
-      && (existingBundle.sales_count ?? 0) > 0
+      && ((existingBundle.sales_count ?? 0) + (existingBundle.free_unlock_count ?? 0)) > 0
       ? buildStoredBundleForQualityCheck(existingBundle)
       : null;
     const bundleForPublicValidation = hasResourceBundlePayload

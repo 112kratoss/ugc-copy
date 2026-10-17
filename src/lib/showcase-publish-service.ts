@@ -87,6 +87,8 @@ type GenerationRow = {
 type StoredGenerationBundleRow = {
   access_mode: 'none' | 'free' | 'paid';
   sales_count: number | null;
+  // Free unlocks count as unlocks here, as they did while sales_count held them.
+  free_unlock_count?: number | null;
   summary: string | null;
   preview_text: string | null;
   prompt_text: string | null;
@@ -293,7 +295,7 @@ async function loadFrozenSoldGenerationBundleForQuality({
   const { data, error } = await supabase
     .from('post_resource_bundles')
     .select(
-      'access_mode, sales_count, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, resource_sections, resource_items',
+      'access_mode, sales_count, free_unlock_count, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, resource_sections, resource_items',
     )
     .eq('post_id', post.id)
     .eq('owner_user_id', ownerUserId)
@@ -303,7 +305,7 @@ async function loadFrozenSoldGenerationBundleForQuality({
   }
 
   const bundle = data as StoredGenerationBundleRow | null;
-  if (!bundle || (bundle.sales_count ?? 0) <= 0 || bundle.access_mode === 'none') {
+  if (!bundle || ((bundle.sales_count ?? 0) + (bundle.free_unlock_count ?? 0)) <= 0 || bundle.access_mode === 'none') {
     return null;
   }
 

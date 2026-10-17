@@ -379,6 +379,25 @@ describe('viewer unlock entitlement and state', () => {
     expect(admin.from).not.toHaveBeenCalledWith('post_resource_bundle_revision_files');
   });
 
+  it('carries the live recipe\'s paid sales and free unlocks apart, and neither once detached', async () => {
+    getLiveDetail.mockResolvedValue(liveDetail({ accessMode: 'free', priceUsdCents: 0, salesCount: 2, freeUnlockCount: 9 }));
+
+    const live = await getViewerUnlockDetail({
+      adminSupabase: adminClient(liveProjection()) as never,
+      unlockId: UNLOCK_ID,
+      viewerUserId: 'buyer-1',
+    });
+    expect(live).toMatchObject({ salesCount: 2, freeUnlockCount: 9 });
+
+    getLiveDetail.mockResolvedValue(null);
+    const detached = await getViewerUnlockDetail({
+      adminSupabase: adminClient(projection()) as never,
+      unlockId: UNLOCK_ID,
+      viewerUserId: 'buyer-1',
+    });
+    expect(detached).toMatchObject({ detached: true, salesCount: null, freeUnlockCount: null });
+  });
+
   it('falls back to the purchased version when the live read comes back empty, without calling it detached', async () => {
     getLiveDetail.mockResolvedValue(null);
 

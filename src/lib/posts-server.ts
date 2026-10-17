@@ -426,6 +426,7 @@ const PRIVATE_BUNDLE_SUMMARY_FIELDS = [
   'resource_sections',
   'resource_items',
   'sales_count',
+  'free_unlock_count',
 ] as const;
 
 function isMissingPublicBundleSummaryRpcError(error: unknown): boolean {
@@ -466,6 +467,9 @@ function buildMarketplaceAssetSummaryMap(
       )
       .map((row) => {
         const salesCount = typeof row.sales_count === 'number' ? row.sales_count : 0;
+        // Absent from the missing-RPC fallback's select, which serves only a
+        // database that predates both the RPC and this column.
+        const freeUnlockCount = typeof row.free_unlock_count === 'number' ? row.free_unlock_count : 0;
         const legacyResources: Partial<PostResourceBundleResources> = {
           promptText: typeof row.prompt_text === 'string' ? row.prompt_text : null,
           notesMarkdown: typeof row.notes_markdown === 'string' ? row.notes_markdown : null,
@@ -494,6 +498,7 @@ function buildMarketplaceAssetSummaryMap(
             previewText: typeof row.preview_text === 'string' ? row.preview_text : '',
             allowRemix: Boolean(row.allow_remix || resourceItems.some((item) => item.type === 'remix_access' || item.remixUse === 'direct_remix')),
             ...(salesCount > 0 ? { salesCount } : {}),
+            ...(freeUnlockCount > 0 ? { freeUnlockCount } : {}),
             resourceKinds,
             itemCounts: lockedPreview.itemCounts,
             lockedPreview,

@@ -699,6 +699,37 @@ describe('updateOwnerPostForRoute', () => {
       expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
     });
 
+    // Free unlocks left sales_count on 2026-10-17 (decision 6); a paid recipe
+    // whose unlocks came while it was free stays locked, as it was before.
+    it('rejects a bundle payload when its only unlocks were free ones', async () => {
+      const { client } = createSupabaseMock({
+        bundle: { access_mode: 'paid', status: 'published', sales_count: 0, free_unlock_count: 2 },
+      });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          title: 'Helpful launch proof',
+          body: 'A draft post with an unlock package.',
+          visibility: 'private',
+          resourceBundle: {
+            accessMode: 'paid',
+            summary: 'A hollowed-out package.',
+            previewText: 'Nothing like what buyers paid for.',
+            priceUsdCents: 100,
+            resources: { promptText: 'Gutted.', attachments: [], allowRemix: false },
+          },
+        },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({ ok: false, status: 409, body: { code: 'RESOURCE_BUNDLE_LOCKED' } });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    });
+
     // Without this the delete is caught by a trigger that retires the bundle
     // instead, so the storefront listing disappears with no error at all.
     it('rejects retiring a sold package through an accessMode none payload', async () => {

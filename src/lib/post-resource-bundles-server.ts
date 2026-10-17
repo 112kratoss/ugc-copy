@@ -119,7 +119,7 @@ import {
 type LinkedPostScope = 'public' | 'entitled' | 'owner';
 
 const BUNDLE_ROW_SELECT =
-  'id, post_id, owner_user_id, legacy_asset_id, access_mode, status, title, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, resource_sections, resource_items, price_usd_cents, sales_count, earnings_usd_cents, retired_at, created_at, updated_at';
+  'id, post_id, owner_user_id, legacy_asset_id, access_mode, status, title, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, resource_sections, resource_items, price_usd_cents, sales_count, free_unlock_count, earnings_usd_cents, retired_at, created_at, updated_at';
 // Same projection minus `retired_at`, for a database that predates the
 // bundle-revisions migration. Without it, one unknown column 500s every bundle
 // read instead of degrading to a bundle that simply is not retired.
@@ -165,7 +165,10 @@ interface BundleRow {
   resource_sections?: unknown;
   resource_items?: unknown;
   price_usd_cents: number;
+  /** Paid unlocks only, since 2026-10-17. */
   sales_count: number;
+  /** Absent from the pre-resource-items projection. */
+  free_unlock_count?: number;
   earnings_usd_cents: number;
   retired_at?: string | null;
   created_at: string;
@@ -272,11 +275,14 @@ export interface MarketplaceResourceListItem {
   previewText: string;
   accessMode: PersistedPostResourceBundleAccessMode;
   priceUsdCents: number;
+  /** Paid unlocks. A free unlock is not a sale (decision 6, 2026-10-17). */
   salesCount: number;
+  /** Free unlocks: what a free recipe's "N opened" counts. */
+  freeUnlockCount: number;
   /**
    * Owner-scope only. Public marketplace responses are edge-cached and
    * unauthenticated, so a creator's revenue must never ride along with them;
-   * `salesCount` stays public as social proof.
+   * `salesCount` and `freeUnlockCount` stay public as social proof.
    */
   earningsUsdCents?: number;
   allowRemix: boolean;
@@ -375,7 +381,9 @@ export interface SellerPostResourceBundleDashboard {
     currency: MarketplaceCheckoutCurrency;
     createdAt: string;
   }>;
+  /** Paid unlocks across the seller's listings. */
   totalSalesCount: number;
+  totalFreeUnlockCount: number;
   totalEarningsUsdCents: number;
   generatedAt: string;
 }
@@ -1226,6 +1234,7 @@ async function hydrateBundleRows(
         accessMode: row.access_mode,
         priceUsdCents: row.price_usd_cents,
         salesCount: row.sales_count,
+        freeUnlockCount: row.free_unlock_count ?? 0,
         ...(scope === 'owner' ? { earningsUsdCents: row.earnings_usd_cents } : {}),
         allowRemix: row.allow_remix,
         resourceKinds: lockedPreview.resourceKinds,
@@ -2332,6 +2341,7 @@ export async function getSellerPostResourceBundleDashboard(
         deletedSnapshots: [],
         sales: [],
         totalSalesCount: 0,
+        totalFreeUnlockCount: 0,
         totalEarningsUsdCents: 0,
         generatedAt: new Date().toISOString(),
       };
@@ -2452,6 +2462,7 @@ export async function getSellerPostResourceBundleDashboard(
     deletedSnapshots,
     sales,
     totalSalesCount: rows.reduce((sum, row) => sum + row.sales_count, 0),
+    totalFreeUnlockCount: rows.reduce((sum, row) => sum + (row.free_unlock_count ?? 0), 0),
     totalEarningsUsdCents: rows.reduce((sum, row) => sum + row.earnings_usd_cents, 0),
     generatedAt: new Date().toISOString(),
   };

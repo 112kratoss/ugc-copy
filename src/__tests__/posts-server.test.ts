@@ -16,8 +16,12 @@ type ResourceBundleRow = {
   resource_items?: unknown;
   allow_remix: boolean;
   sales_count?: number;
+  free_unlock_count?: number;
   status: 'published' | 'draft';
 };
+
+/** A draft row as the RPC masks it, unless a test makes it leak. */
+let draftFreeUnlockCountState: number | null = null;
 
 type TestDatabaseError = {
   code: string;
@@ -96,6 +100,7 @@ vi.mock('@/lib/server-helpers', () => ({
               resource_sections: null,
               resource_items: null,
               sales_count: null,
+              free_unlock_count: draftFreeUnlockCountState,
               status: row.status,
             }
       ));
@@ -122,6 +127,7 @@ describe('posts-server marketplace summaries', () => {
     tableAccessesState = [];
     selectedColumnsState = [];
     tableQueryErrorState = null;
+    draftFreeUnlockCountState = null;
     resourceBundlesState = [
       {
         id: 'asset-active',
@@ -175,6 +181,32 @@ describe('posts-server marketplace summaries', () => {
         remixUse: 'direct_remix',
       }),
     ]);
+  });
+
+  // Decision 6 (2026-10-17): the feed card's "N sold" counts paid unlocks and a
+  // free recipe's "N opened" counts free ones, so the asset carries both.
+  it('carries a recipe\'s paid sales and free unlocks apart, leaving out a zero', async () => {
+    resourceBundlesState[0] = { ...resourceBundlesState[0], sales_count: 2, free_unlock_count: 6 };
+    const { getMarketplaceAssetSummaryHydration } = await import('@/lib/posts-server');
+    const counted = await getMarketplaceAssetSummaryHydration(['post-1']);
+    expect(counted.assetMap.get('post-1')).toMatchObject({ salesCount: 2, freeUnlockCount: 6 });
+
+    resourceBundlesState[0] = { ...resourceBundlesState[0], sales_count: 0, free_unlock_count: 0 };
+    const uncounted = await getMarketplaceAssetSummaryHydration(['post-1']);
+    expect(uncounted.assetMap.get('post-1')).not.toHaveProperty('salesCount');
+    expect(uncounted.assetMap.get('post-1')).not.toHaveProperty('freeUnlockCount');
+  });
+
+  it('fails closed when the RPC hands out a draft bundle\'s free unlock count', async () => {
+    draftFreeUnlockCountState = 3;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { getMarketplaceAssetSummaryHydration } = await import('@/lib/posts-server');
+    const hydration = await getMarketplaceAssetSummaryHydration(['post-1', 'post-2']);
+
+    expect(hydration.assetMap.size).toBe(0);
+    expect(Array.from(hydration.knownBundlePostIds ?? []).sort()).toEqual(['post-1', 'post-2']);
+    expect(JSON.parse(consoleError.mock.calls[0][0] as string).msg)
+      .toBe('public_bundle_summary_rpc_returned_details_for_a_non_published_bundle');
   });
 
   it('reports bundle presence for unpublished bundles without exposing their summaries', async () => {
