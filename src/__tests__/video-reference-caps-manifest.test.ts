@@ -201,9 +201,11 @@ describe('video reference caps track Kie', () => {
         max?: number;
         conditions?: Array<{ key: string; value: unknown }>;
       }>;
+      // Wan 2.7's cap counts its reference slot, because its start frame rides beside the
+      // references (release wan-start-frame-apart-20261019); every other cap counts pictures.
       const elementsRule = rules.find((rule) => (
         rule.type === 'max-slot-count'
-        && rule.slotKey === 'images'
+        && rule.slotKey === (model.id === 'wan-2.7' ? 'imageReferences' : 'images')
         && (rule.conditions ?? []).some((condition) => (
           condition.key === 'referenceMode' && condition.value === 'elements'
         ))

@@ -3,9 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
   CatalogError,
   buildGenerationModelCatalog,
+  normalizeGenerationModelInputFacts,
   quoteGenerationModel,
 } from '@/lib/generation-model-catalog';
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
+import {
+  catalogRunQuoteInput,
+  type CatalogRunInputFact,
+} from '../../ugc-mobile/lib/model-catalog/protocol';
 
 describe('generation model catalog', () => {
   it('returns a deterministic schema-v1 catalog without private provider fields', () => {
@@ -356,5 +361,91 @@ describe('generation model quotes', () => {
       code: 'CATALOG_CHANGED',
       status: 409,
     } satisfies Partial<CatalogError>));
+  });
+});
+
+// wan/2-7-r2v takes `reference_image` and `reference_video`, five in total, and a
+// `first_frame` of its own beside them ("At most one image"); the run sends the start
+// frame there (the r2v branch of generation-services) and the published descriptor counts
+// only the reference slots (docs/model-api-references/reference-audit-2026-09-04.md).
+describe('a Wan 2.7 reference run with a start frame', () => {
+  const revision = buildGenerationModelCatalog({ platform: 'mobile', schemaVersion: 3 }).revision;
+  const picture: CatalogRunInputFact = { slot: 'imageReferences', kind: 'image' };
+  const clip: CatalogRunInputFact = { slot: 'videoReferences', kind: 'video', durationSeconds: 3 };
+  const voice: CatalogRunInputFact = { slot: 'audioReferences', kind: 'audio', durationSeconds: 3 };
+  const startFrame: CatalogRunInputFact = { slot: 'startFrame', kind: 'image' };
+  const times = (count: number, input: CatalogRunInputFact) => Array.from({ length: count }, () => input);
+  // The quote the start takes of the run it sends (buildUnifiedGenerationQuoteInput), and the
+  // native creator's quote of the same run.
+  const quoteRun = (inputs: CatalogRunInputFact[]) => quoteGenerationModel(catalogRunQuoteInput({
+    kind: 'video',
+    modelId: 'wan-2.7',
+    catalogRevision: revision,
+    settings: { aspectRatio: '16:9', duration: 5, resolution: '720p', referenceMode: 'elements' },
+    inputs,
+  }));
+  const tooMany = expect.objectContaining({
+    code: 'INVALID_MODEL_SETTINGS',
+    fieldErrors: expect.objectContaining({
+      references: 'Wan 2.7 supports up to 5 reusable references in total.',
+    }),
+  });
+
+  it('quotes five reference pictures beside the start frame', () => {
+    expect(quoteRun([...times(5, picture), startFrame]).costCredits).toBe(80);
+  });
+
+  it('quotes five reference clips beside the start frame', () => {
+    expect(quoteRun([...times(5, clip), startFrame]).costCredits).toBe(80);
+  });
+
+  it('quotes a full mix of pictures, clips and the voice beside the start frame', () => {
+    expect(quoteRun([...times(3, picture), clip, voice, startFrame]).costCredits).toBe(80);
+  });
+
+  it('still refuses a sixth reference of any kind', () => {
+    expect(() => quoteRun([...times(6, picture), startFrame])).toThrowError(tooMany);
+    expect(() => quoteRun([...times(5, picture), clip, startFrame])).toThrowError(tooMany);
+    expect(() => quoteRun([...times(5, clip), voice])).toThrowError(tooMany);
+  });
+
+  it('counts every picture of a quote that sends counts only, as before', () => {
+    // The workflow runner, the template compiler and the legacy starts send kind totals
+    // without slots, so they cannot tell a start frame from a reference; their callers
+    // count references alone.
+    const countOnly = (images: number) => () => quoteGenerationModel({
+      kind: 'video',
+      modelId: 'wan-2.7',
+      settings: { aspectRatio: '16:9', duration: 5, resolution: '720p', referenceMode: 'elements' },
+      inputCounts: { images, videos: 0, audios: 0 },
+      inputMetadata: { referenceVideoDurationsSeconds: [] },
+    });
+    expect(countOnly(5)().costCredits).toBe(80);
+    expect(countOnly(6)).toThrowError(tooMany);
+  });
+});
+
+describe('the input facts a quote is counted by', () => {
+  it('are the slots a quote names, and kind totals only when it names none', () => {
+    expect(normalizeGenerationModelInputFacts({
+      inputCounts: { images: 1, videos: 5 },
+      inputMetadata: { slots: { startFrame: { count: 1 }, videoReferences: { count: 5 } } },
+    }).slotCounts).toEqual({ startFrame: 1, videoReferences: 5 });
+    expect(normalizeGenerationModelInputFacts({
+      inputCounts: { images: 1, videos: 5 },
+    }).slotCounts).toEqual({
+      imageReferences: 1,
+      videoReferences: 5,
+      audioReferences: 0,
+      preparedVoices: 0,
+      characters: 0,
+    });
+  });
+
+  it('count a slot named with its lengths alone by the lengths it lists', () => {
+    expect(normalizeGenerationModelInputFacts({
+      inputCounts: { images: 1, videos: 2 },
+      inputMetadata: { slots: { videoReferences: { durationsSeconds: [3, 4] } } },
+    }).slotCounts).toEqual({ videoReferences: 2 });
   });
 });

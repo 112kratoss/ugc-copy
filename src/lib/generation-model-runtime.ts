@@ -944,7 +944,19 @@ function validationConfigForModel(
     // run that attaches one — which is exactly how seedance-2-5, kling-o3, and
     // minimax-h3 shipped with their reference support unreachable.
     const max = VIDEO_REFERENCE_IMAGE_CAPS[modelId];
-    if (max !== undefined) {
+    if (max !== undefined && modelId === 'wan-2.7') {
+      // wan/2-7-r2v takes a `first_frame` beside its reference pictures, so the cap counts
+      // the reference slot rather than every picture the run sends. No other model's
+      // reference mode carries a frame, so for them the two counts are the same.
+      rules.push({
+        type: 'max-slot-count',
+        slotKey: 'imageReferences',
+        max,
+        conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' }],
+        field: 'images',
+        message: `Wan 2.7 supports up to ${max} reference images.`,
+      });
+    } else if (max !== undefined) {
       rules.push({
         type: 'max-slot-count',
         slotKey: 'images',
@@ -987,8 +999,10 @@ function validationConfigForModel(
     if (modelId === 'wan-2.7') {
       rules.push(
         {
+          // The reference slots, as the descriptor's total-count constraint reads them: the
+          // start frame travels apart as `first_frame`.
           type: 'weighted-slot-count',
-          weights: { images: 1, videos: 1, audios: 1 },
+          weights: { imageReferences: 1, videoReferences: 1, audioReferences: 1 },
           max: 5,
           conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' }],
           field: 'references',

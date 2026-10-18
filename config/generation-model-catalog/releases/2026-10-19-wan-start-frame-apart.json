@@ -1,0 +1,426 @@
+{
+  "manifestVersion": 1,
+  "mode": "clone-active",
+  "release": {
+    "schemaVersion": 2,
+    "revision": "wan-start-frame-apart-20261019",
+    "basedOnRevision": "pixverse-mobile-20261008",
+    "changeNote": "Wan 2.7 counts a start frame apart from its five reusable references: wan/2-7-r2v takes first_frame beside reference_image/reference_video (five in total), as the published descriptor already counts. The elements-mode image cap and the five-reference total are keyed on the reference slots instead of every picture the run sends.",
+    "createdBy": "catalog-operations"
+  },
+  "upgrade": {
+    "legacyDescriptorsToV2": true
+  },
+  "expectedModelIds": [
+    "flux-2-pro",
+    "gemini-omni-1.1-flash",
+    "gemini-omni-video",
+    "gpt-image-2",
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst",
+    "grok-imagine-image",
+    "grok-imagine-image-2",
+    "grok-imagine-video",
+    "grok-imagine-video-1.5",
+    "hailuo-2.3",
+    "happyhorse-1.1",
+    "ideogram-character",
+    "ideogram-v3",
+    "imagen-4",
+    "imagen-4-fast",
+    "imagen-4-ultra",
+    "kling-2.6",
+    "kling-3.0",
+    "kling-3.0-turbo",
+    "kling-3.0-video",
+    "kling-o3",
+    "minimax-h3",
+    "nano-banana-2",
+    "nano-banana-2-lite",
+    "nano-banana-pro",
+    "pixverse-v6",
+    "qwen-image-2.1",
+    "qwen3",
+    "qwen3-pro",
+    "seedance-1.5-pro",
+    "seedance-2",
+    "seedance-2-5",
+    "seedance-2-fast",
+    "seedance-2-mini",
+    "seedream-5-flash",
+    "seedream-5-lite",
+    "seedream-5-pro",
+    "veo-3.1",
+    "wan-2.7",
+    "wan-2.7-image",
+    "wan-2.7-image-pro",
+    "wan-3.0",
+    "wan-3.0-prime",
+    "z-image"
+  ],
+  "defaults": {
+    "web": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    },
+    "mobile": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    }
+  },
+  "entries": [
+    {
+      "modelId": "wan-2.7",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "wan-2.7",
+        "kind": "video",
+        "displayName": "Wan 2.7",
+        "description": "Flexible text, frame, and multimodal reference-to-video generation",
+        "badge": "New",
+        "recommended": false,
+        "sortOrder": 60,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "16:9",
+            "options": [
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "720p",
+            "options": [
+              {
+                "value": "720p",
+                "label": "720p"
+              },
+              {
+                "value": "1080p",
+                "label": "1080p"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "integer",
+            "presentation": "stepper",
+            "defaultValue": 5,
+            "min": 2,
+            "max": 15,
+            "step": 1,
+            "unit": "seconds"
+          },
+          {
+            "key": "referenceMode",
+            "label": "Input mode",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "frames",
+            "options": [
+              {
+                "value": "frames",
+                "label": "Frames"
+              },
+              {
+                "value": "elements",
+                "label": "References"
+              }
+            ],
+            "minClientSchemaVersion": 2
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 5,
+            "supportsNaming": true
+          },
+          "videoReferences": {
+            "max": 5
+          },
+          "audioReferences": {
+            "max": 1
+          },
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": true,
+          "combineFramesWithReferences": true
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              },
+              {
+                "key": "endFrame",
+                "kind": "image",
+                "role": "endFrame",
+                "label": "End frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 5,
+                "supportsNaming": true
+              },
+              {
+                "key": "videoReferences",
+                "kind": "video",
+                "role": "reference",
+                "label": "Reference videos",
+                "min": 0,
+                "max": 5,
+                "durationMetadata": "optional"
+              },
+              {
+                "key": "audioReferences",
+                "kind": "audio",
+                "role": "reference",
+                "label": "Reference audio",
+                "min": 0,
+                "max": 1,
+                "durationMetadata": "optional"
+              },
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          }
+        ],
+        "inputConstraints": [
+          {
+            "type": "total-count",
+            "slotKeys": [
+              "imageReferences",
+              "videoReferences",
+              "audioReferences"
+            ],
+            "max": 5,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "message": "Wan 2.7 supports up to 5 reusable references in total."
+          }
+        ]
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "wan/2-7-text-to-video",
+        "text": "wan/2-7-text-to-video",
+        "image": "wan/2-7-image-to-video",
+        "reference": "wan/2-7-r2v"
+      },
+      "pricingStrategy": "per-second",
+      "pricingConfig": {
+        "durationSettingKey": "duration",
+        "rate": {
+          "strategy": "lookup",
+          "config": {
+            "dimensions": [
+              {
+                "source": "setting",
+                "key": "resolution",
+                "defaultValue": "720p"
+              }
+            ],
+            "table": {
+              "720p": 16,
+              "1080p": 24
+            }
+          }
+        },
+        "rounding": "ceil"
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "imageReferences",
+            "max": 5,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "field": "images",
+            "message": "Wan 2.7 supports up to 5 reference images."
+          },
+          {
+            "type": "weighted-slot-count",
+            "weights": {
+              "imageReferences": 1,
+              "videoReferences": 1,
+              "audioReferences": 1
+            },
+            "max": 5,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "field": "references",
+            "message": "Wan 2.7 supports up to 5 reusable references in total."
+          },
+          {
+            "type": "control-range",
+            "key": "duration",
+            "min": 2,
+            "max": 10,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "field": "duration",
+            "message": "Wan 2.7 reference-to-video runs may be at most 10 seconds."
+          },
+          {
+            "type": "min-slot-count",
+            "slotKey": "startFrame",
+            "min": 1,
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "endFrame",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "startFrame",
+            "message": "Add a start frame to use an end frame with this model."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    }
+  ]
+}

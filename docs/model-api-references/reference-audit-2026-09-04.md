@@ -143,6 +143,12 @@ image-to-video declare 2–15. `reference_image` and `reference_video` are `maxI
 each with "The total number of images and videos cannot exceed 5"; `reference_voice` is a
 single URL; `first_frame` "At most one image".
 
+Re-read 2026-10-19 (`https://docs.kie.ai/market/wan/2-7-r2v.md`, `kie-evidence.mjs spec
+wan/2-7-r2v`): unchanged. `first_frame` is a field of its own beside the five references
+("If supplied, `aspect_ratio` is ignored"), so release `wan-start-frame-apart-20261019` counts
+a start frame apart from them. The catalog still counts the voice among the five, though
+`reference_voice` sits outside Kie's total too.
+
 ## `gpt-image-2`
 
 Image-to-image: "5:4 and 4:5 aspect ratios only support 1K images." Text-to-image: "for
