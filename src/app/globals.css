@@ -115,8 +115,9 @@
 }
 
 :root {
-  /* The sticky app-shell topbar height; anything else that pins
-     below the topbar (e.g. .home-rail) must offset by this. */
+  /* The sticky app-shell topbar height, which .app-shell-header is
+     exactly; anything else that pins below the topbar (e.g. .home-rail)
+     must offset by this. */
   --app-shell-topbar-height: 64px;
   --background: #101012;
   --foreground: #fff8ed;
@@ -282,6 +283,8 @@ button:disabled,
   display: none;
 }
 
+/* Inside the app shell a page root fills what the shell leaves it instead
+   (`.app-shell-content .ui-page`, below). */
 .ui-page {
   min-height: 100vh;
   background: var(--ui-bg-page);
@@ -962,6 +965,12 @@ button:disabled,
   width: 100%;
 }
 
+/* The token tall, border included; its controls (48px, the search field 50px)
+   centre in the bar. With 8px of vertical padding it came to 65px, and to 67px
+   once the search field showed, so everything sized by the token was 1-3px
+   short of it. A min-height, not a height: at a larger browser text size the
+   3rem controls outgrow 64px, and the bar grows around them rather than letting
+   them spill over the page. */
 .app-shell-header {
   position: sticky;
   top: 0;
@@ -972,7 +981,7 @@ button:disabled,
   gap: 1rem;
   border-bottom: 1px solid var(--ui-border-subtle);
   background: rgba(12, 12, 14, 0.9);
-  padding: 0.5rem 0.75rem;
+  padding: 0 0.75rem;
   backdrop-filter: blur(20px);
 }
 
@@ -990,8 +999,21 @@ button:disabled,
 }
 
 .app-shell-content {
+  /* Room for the bottom navigation, which floats over the page below 768px. */
+  --app-shell-bottom-nav-space: calc(6.25rem + env(safe-area-inset-bottom));
   min-height: calc(100dvh - var(--app-shell-topbar-height));
-  padding-bottom: calc(6.25rem + env(safe-area-inset-bottom));
+  padding-bottom: var(--app-shell-bottom-nav-space);
+}
+
+/* A page root that fills the window (`.ui-page`, `min-h-screen`) fills what the
+   shell leaves it: the window less the top bar and the bottom navigation's
+   room. At 100vh under the bar every short page was one bar taller than the
+   window (165px at 390px, with the room), and a trackpad nudge or Space moved
+   its top under the bar over nothing. Unlayered, like .ui-page, so it also
+   beats a page's own min-h-* utility in either sheet. */
+.app-shell-content > .min-h-screen,
+.app-shell-content .ui-page {
+  min-height: calc(100dvh - var(--app-shell-topbar-height) - var(--app-shell-bottom-nav-space));
 }
 
 .app-shell-command {
@@ -1092,7 +1114,6 @@ button:disabled,
   }
 
   .app-shell-header {
-    min-height: var(--app-shell-topbar-height);
     padding-inline: 1.7rem;
   }
 
@@ -1102,8 +1123,7 @@ button:disabled,
   }
 
   .app-shell-content {
-    min-height: calc(100dvh - var(--app-shell-topbar-height));
-    padding-bottom: 0;
+    --app-shell-bottom-nav-space: 0px;
   }
 
   .app-shell-command {
