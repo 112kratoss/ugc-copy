@@ -441,4 +441,11 @@ describe('the input facts a quote is counted by', () => {
       characters: 0,
     });
   });
+
+  it('count a slot named with its lengths alone by the lengths it lists', () => {
+    expect(normalizeGenerationModelInputFacts({
+      inputCounts: { images: 1, videos: 2 },
+      inputMetadata: { slots: { videoReferences: { durationsSeconds: [3, 4] } } },
+    }).slotCounts).toEqual({ videoReferences: 2 });
+  });
 });
