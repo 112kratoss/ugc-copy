@@ -218,6 +218,8 @@ export interface CatalogGenerationRequest {
   shots?: CatalogGenerationShot[];
   inputs: CatalogGenerationInputAsset[];
   sourceGenerationId?: string | null;
+  /** The price the creator was shown for this run: the server refuses a start it prices above it. */
+  expectedCostCredits?: number;
 }
 
 interface CatalogStorage {

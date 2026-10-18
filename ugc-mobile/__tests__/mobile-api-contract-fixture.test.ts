@@ -13,7 +13,8 @@ import type {
   UndoFeedFeedbackRequest,
 } from '../lib/types';
 import { getShowcaseViewerImageUrl } from '../lib/showcase-media';
-import { isAmbiguousGenerationStartFailure } from '../lib/generation-attempts';
+import { generationStartRefusalCode, isAmbiguousGenerationStartFailure } from '../lib/generation-attempts';
+import type { CatalogGenerationRequest } from '../lib/generation-model-catalog';
 import { describeRestoreOutcome, restoreLandedPurchase } from '../lib/pricing-view-model';
 import { readReferralProgram } from '../lib/referral-attribution';
 
@@ -876,6 +877,45 @@ it.each(['submissionPending', 'submissionUnconfirmed'] as const)('retains %s for
   expect(error).toBeInstanceOf(ApiError);
   expect(error).toMatchObject({status:409,details:pending.response});
   expect(isAmbiguousGenerationStartFailure(error)).toBe(true);
+});
+
+// A run starts on POST /api/generations with the price its quote showed (`expectedCostCredits`).
+// The server charges its own price up to that one and refuses, before anything is held, a start
+// it prices above it or a price in no whole credits: both refusals are final, and the creator
+// prices the run again.
+it('sends the start the fixture documents, with its quote’s price, and reads the answers it pins', async () => {
+  const endpoint = mobileApiContract.endpoints.startGeneration;
+  expect(endpoint.request.expectedCostCredits).toBe(mobileApiContract.endpoints.quoteGenerationModel.response.costCredits);
+  const answering = (status: number, body: unknown) => {
+    const asked: Array<{ method: string; path: string; key: string | null; body: unknown }> = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      asked.push({
+        method: (init?.method ?? 'GET').toUpperCase(),
+        path: new URL(String(input)).pathname,
+        key: new Headers(init?.headers).get('Idempotency-Key'),
+        body: JSON.parse(String(init?.body)),
+      });
+      return jsonResponse(body, status);
+    });
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      clientInfo: { appVersion: '1.0.0', apiVersion: 1, catalogSchemaVersion: 2 },
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    return { start: () => api.startGeneration!(endpoint.request as CatalogGenerationRequest, 'image:contract-1'), asked };
+  };
+
+  const accepted = answering(200, endpoint.response);
+  await expect(accepted.start()).resolves.toEqual(endpoint.response);
+  expect(accepted.asked).toEqual([{ method: endpoint.method, path: endpoint.path, key: 'image:contract-1', body: endpoint.request }]);
+
+  for (const refusal of Object.values(endpoint.errors)) {
+    const error = await answering(refusal.status, refusal.response).start().catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ status: refusal.status, message: refusal.response.error, details: refusal.response });
+    expect(isAmbiguousGenerationStartFailure(error)).toBe(false);
+    expect(generationStartRefusalCode(error)).toBe(refusal.response.code);
+  }
 });
 
 

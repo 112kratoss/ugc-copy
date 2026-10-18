@@ -73,6 +73,7 @@ import {
   catalogDraftRunHandles,
   catalogMultiShotLimits,
   catalogRunInputSlots,
+  catalogStartRequest,
   catalogSubjectSlot,
   catalogVideoRunReferenceMode,
   getCatalogDraftSettings,
@@ -2274,7 +2275,11 @@ function IdentityCreationScreen({
     // the per-kind routes answer a start 410 and are only polled.
     const route = 'unified' as const;
     // Kept so a refusal that measured the references can be matched back to the draft's media.
-    const unifiedRequest = buildUnifiedCatalogGenerationRequest(currentDraft, currentCatalogModel, catalog?.revision ?? '');
+    // It carries the price on the button, which the server will not charge more than.
+    const unifiedRequest = catalogStartRequest(
+      buildUnifiedCatalogGenerationRequest(currentDraft, currentCatalogModel, catalog?.revision ?? ''),
+      quoteState,
+    );
     const requestJson = JSON.stringify(unifiedRequest);
     // An unchanged press after a lost response is the same attempt, under the same key.
     const reusedKey = newRun ? null : reusableAttemptKey(pendingAttempt, identityUserId, route, requestJson);

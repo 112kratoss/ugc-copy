@@ -2,6 +2,7 @@ import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { getAppVersionRouteResponse } from '@/lib/app-version-route-adapter-service';
+import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 import { getCreditHistoryRouteResponse } from '@/lib/credit-history-route-adapter-service';
 import {
   CREDIT_HISTORY_DEFAULT_LIMIT,
@@ -36,6 +37,8 @@ import {
   parseShowcaseSharePayloadForRoute,
   shareShowcasePostForRoute,
 } from '@/lib/showcase-share-service';
+import { mapGenerationStartRouteError } from '@/lib/unified-generation-route-service';
+import { startUnifiedGenerationForRoute } from '@/lib/unified-generation-start-service';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
@@ -158,6 +161,7 @@ const expectedEndpointKeys = [
   'listSourceTools',
   'listGenerationModels',
   'quoteGenerationModel',
+  'startGeneration',
   'signPostResourceFileUpload',
   'finalizePostResourceFileUpload',
   'mediaUploadIntent',
@@ -723,6 +727,114 @@ describe('shared mobile API v1 contract fixture', () => {
     const { status, message, details } = refusal as MobileCommerceError;
     expect(status).toBe(refused.status);
     expect({ error: message, ...details }).toEqual(refused.response);
+  });
+
+  // The unified start carries the price its quote showed (`expectedCostCredits`). The
+  // start prices the run again and charges its own price up to that one; above it, or
+  // for a price that is no whole number of credits, it answers in the fixture's words
+  // before anything is held.
+  it('starts the run the fixture sends at the price its quote showed, and refuses in the fixture words', async () => {
+    const endpoint = mobileApiContract.endpoints.startGeneration;
+    const quote = mobileApiContract.endpoints.quoteGenerationModel.response;
+    expect(endpoint.request).toMatchObject({
+      modelId: quote.modelId,
+      catalogRevision: quote.catalogRevision,
+      settings: quote.normalizedSettings,
+      expectedCostCredits: quote.costCredits,
+    });
+
+    const records: BackendLogRecord[] = [];
+    const restoreSink = setBackendLogSink((record) => {
+      records.push(record);
+    });
+    const startPricedAt = (costCredits: number, body: Record<string, unknown> = endpoint.request) => {
+      const startImage = vi.fn(async () => ({
+        predictionId: endpoint.response.predictionId,
+        generationId: endpoint.response.generationId,
+        remainingCredits: endpoint.response.remainingCredits,
+        cost: costCredits,
+      }));
+      const outcome = startUnifiedGenerationForRoute({
+        request: new Request('http://localhost/api/generations', {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'contract-start-1', 'x-magicbooklet-client': 'mobile' },
+        }),
+        body,
+        userId: 'user-1',
+        supabase: {} as SupabaseClient,
+        // Just enough for the idempotent start: a claim, a lock, and no earlier attempt.
+        adminSupabase: {
+          rpc: vi.fn(async (fn: string) => ({ data: fn === 'claim_generation_start_request' ? 'claimed' : true, error: null })),
+          from: vi.fn(() => {
+            const builder = { select: () => builder, eq: () => builder, maybeSingle: async () => ({ data: null, error: null }) };
+            return builder;
+          }),
+        } as unknown as SupabaseClient,
+      }, {
+        loadCatalog: vi.fn(async () => ({
+          catalog: { schemaVersion: 2, revision: quote.catalogRevision, defaults: { image: quote.modelId, video: null, motion: null }, models: [] },
+          operations: new Map([[quote.modelId, {
+            modelId: quote.modelId,
+            kind: 'image',
+            adapterKey: 'image-v1',
+            providerModelMap: {},
+            adapterConfig: {},
+            pricingStrategy: 'fixed',
+            pricingConfig: {},
+            validationStrategy: 'descriptor-rules-v1',
+            validationConfig: {},
+            verificationConfig: {},
+          }]]),
+          source: 'database',
+          releaseId: 'release-1',
+          releaseSchemaVersion: 2,
+        })) as never,
+        quoteModel: vi.fn(() => ({ ...quote, costCredits })) as never,
+        resolveSource: vi.fn(async () => null) as never,
+        enforceRateLimit: vi.fn(async () => undefined) as never,
+        startImage: startImage as never,
+      });
+      return { outcome, startImage };
+    };
+    const answered = (outcome: Promise<unknown>) => outcome.then(
+      () => null,
+      (error: unknown) => mapGenerationStartRouteError(error, { logEvent: 'unified_generation_start_failed', fallbackMessage: 'Failed to start generation.' }),
+    );
+
+    try {
+      // At the price shown, and below it: charged its own price, answered as the fixture says.
+      const atPrice = startPricedAt(quote.costCredits);
+      await expect(atPrice.outcome).resolves.toEqual(endpoint.response);
+      expect(atPrice.startImage).toHaveBeenCalledWith(expect.objectContaining({ quotedCostCredits: quote.costCredits }));
+      const below = startPricedAt(quote.costCredits - 1);
+      await expect(below.outcome).resolves.toMatchObject({ cost: quote.costCredits - 1 });
+      expect(below.startImage).toHaveBeenCalledWith(expect.objectContaining({ quotedCostCredits: quote.costCredits - 1 }));
+
+      const above = startPricedAt(quote.costCredits + 1);
+      expect(await answered(above.outcome)).toEqual({
+        ok: false,
+        status: endpoint.errors.costChanged.status,
+        body: endpoint.errors.costChanged.response,
+      });
+      expect(above.startImage).not.toHaveBeenCalled();
+      expect(records).toContainEqual(expect.objectContaining({
+        level: 'error',
+        msg: 'generation_start_quote_drift',
+        client: 'mobile',
+        expectedCostCredits: quote.costCredits,
+        quotedCostCredits: quote.costCredits + 1,
+      }));
+
+      const malformed = startPricedAt(quote.costCredits, { ...endpoint.request, expectedCostCredits: String(quote.costCredits) });
+      expect(await answered(malformed.outcome)).toEqual({
+        ok: false,
+        status: endpoint.errors.invalidExpectedCost.status,
+        body: endpoint.errors.invalidExpectedCost.response,
+      });
+      expect(malformed.startImage).not.toHaveBeenCalled();
+    } finally {
+      restoreSink();
+    }
   });
 });
 

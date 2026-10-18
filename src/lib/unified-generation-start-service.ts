@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { logBackendEvent } from '@/lib/backend-logger';
 import {
   enforceBackendRateLimit,
   MEDIA_GENERATION_RATE_LIMIT,
@@ -29,6 +30,7 @@ import {
 import type { ReferenceMediaDescriptor } from '@/lib/generation-input-media';
 import type { GenerationModelOperationalConfig } from '@/lib/generation-model-runtime';
 import {
+  generationCostChangedError,
   GenerationServiceError,
   resolveGenerationMediaSource,
   startCatalogGeneration,
@@ -133,6 +135,11 @@ export type UnifiedGenerationRequest = {
   shots: CatalogGenerationShot[];
   inputs: CatalogGenerationInputAsset[];
   sourceGenerationId: string | null;
+};
+
+/** A start body: the run, and the price its caller showed for it when it sends one. */
+export type UnifiedGenerationStartRequest = UnifiedGenerationRequest & {
+  expectedCostCredits: number | null;
 };
 
 export type UnifiedGenerationStartPayload = {
@@ -305,9 +312,25 @@ function parseShots(value: unknown): CatalogGenerationShot[] {
   });
 }
 
+/**
+ * The price the caller showed for the run, in whole credits, when it sends one.
+ * An app from before the field sends none, and its run is charged as before.
+ */
+function readExpectedCostCredits(
+  value: unknown,
+  fieldErrors: Record<string, string>,
+): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    fieldErrors.expectedCostCredits = 'expectedCostCredits must be a whole number of credits, zero or more.';
+    return null;
+  }
+  return value;
+}
+
 export function parseUnifiedGenerationRequest(
   body: Record<string, unknown>,
-): UnifiedGenerationRequest {
+): UnifiedGenerationStartRequest {
   const fieldErrors: Record<string, string> = {};
   const kind = body.kind;
   if (kind !== 'image' && kind !== 'video' && kind !== 'motion') {
@@ -319,6 +342,7 @@ export function parseUnifiedGenerationRequest(
     'catalogRevision',
     fieldErrors,
   );
+  const expectedCostCredits = readExpectedCostCredits(body.expectedCostCredits, fieldErrors);
   if (Object.keys(fieldErrors).length > 0) {
     throw new UnifiedGenerationRequestError(
       'Invalid generation request.',
@@ -336,6 +360,7 @@ export function parseUnifiedGenerationRequest(
     shots: parseShots(body.shots),
     inputs: parseInputs(body.inputs),
     sourceGenerationId: optionalString(body.sourceGenerationId),
+    expectedCostCredits,
   };
 }
 
@@ -882,7 +907,8 @@ export async function startUnifiedGenerationForRoute(
     // later model release or privacy change cannot hide an already-started run.
     start: async (clientRequestKeyHash) => {
       const run = withShotsDuration(parsed);
-      const snapshot = await loadUnifiedGenerationCatalog(loadCatalog, platformForRequest(request));
+      const platform = platformForRequest(request);
+      const snapshot = await loadUnifiedGenerationCatalog(loadCatalog, platform);
       const quote = quoteModel(buildUnifiedGenerationQuoteInputForCatalog(run, snapshot), {
         catalog: snapshot.catalog,
         operations: snapshot.operations,
@@ -904,14 +930,40 @@ export async function startUnifiedGenerationForRoute(
           operations: snapshot.operations,
         })
         : quote;
-      // Never charge more than the price the caller saw. A lower price after
-      // measuring (an overstated length) is charged as measured.
-      if (billableQuote.costCredits > quote.costCredits) {
-        throw new ReferenceDurationChangedError(
-          billable.verified,
-          quote.costCredits,
-          billableQuote.costCredits,
+      const { expectedCostCredits } = parsed;
+      if (expectedCostCredits !== null && quote.costCredits !== expectedCostCredits) {
+        // One revision, one run, two prices: the caller's quote and this one have
+        // drifted apart (pricing or validation code deployed without a new catalog
+        // revision, or an app whose quote request predates a change to how runs are
+        // quoted). Logged so drift shows before creators report it; an error when
+        // this start would have charged more than the caller showed.
+        logBackendEvent(
+          quote.costCredits > expectedCostCredits ? 'error' : 'warn',
+          'generation_start_quote_drift',
+          {
+            modelId: parsed.modelId,
+            kind: parsed.kind,
+            catalogRevision: parsed.catalogRevision,
+            client: platform,
+            expectedCostCredits,
+            quotedCostCredits: quote.costCredits,
+            costCredits: billableQuote.costCredits,
+          },
         );
+      }
+      // Never charge more than the price the caller saw: the price it sent, or
+      // else this start's own quote of the run as the caller described it. A
+      // lower price (an overstated length, a price that fell) is charged as priced.
+      if (billableQuote.costCredits > (expectedCostCredits ?? quote.costCredits)) {
+        // The measured lengths raised it, so the caller quotes again with them.
+        if (billableQuote.costCredits > quote.costCredits) {
+          throw new ReferenceDurationChangedError(
+            billable.verified,
+            quote.costCredits,
+            billableQuote.costCredits,
+          );
+        }
+        throw generationCostChangedError();
       }
 
       return dispatchCatalogGenerationAdapter({
