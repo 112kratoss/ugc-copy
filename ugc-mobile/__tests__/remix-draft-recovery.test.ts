@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultCreationDraft, type MotionCreationDraft, type VideoCreationDraft } from '../lib/media-creation-view-model';
-import { needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaUrl } from '../lib/remix-draft-recovery';
+import { countDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaUrl } from '../lib/remix-draft-recovery';
 import type { RemixSourceBundle } from '../lib/types';
 const reference = { id: 'girl', kind: 'image' as const, url: 'https://example.com/girl.jpg', fileName: 'girl.jpg', displayName: 'Girl', handle: '@girl' };
 function draft(overrides: Partial<VideoCreationDraft> = {}): VideoCreationDraft {
@@ -133,5 +133,71 @@ describe('renewing one reference link', () => {
     });
     expect(replaceDraftMediaUrl(current, 'start', 'https://cdn.example.com/start-fresh.png').startFrame?.url).toBe('https://cdn.example.com/start-fresh.png');
     expect(replaceDraftMediaUrl(current, 'missing', 'https://cdn.example.com/x.png')).toBe(current);
+  });
+});
+
+// A named subject's pictures go with a subjects run (Kling O3's) as much as a reference does, and a
+// remix restores them with links that last an hour. The walks over a draft's media left them out:
+// their links were never renewed, and a swept one was never found.
+describe('the pictures of named subjects', () => {
+  const STORAGE = 'https://project.supabase.co';
+  const NOW = Date.parse('2026-09-16T10:00:00.000Z');
+  const signed = (path: string, expiresAtMs: number) => (
+    `${STORAGE}/storage/v1/object/sign/${path}?token=head.${Buffer.from(JSON.stringify({ exp: Math.floor(expiresAtMs / 1000) })).toString('base64url')}.signature`
+  );
+  const clock = { now: NOW, storageBaseUrl: STORAGE };
+  const picture = (id: string, url: string) => ({
+    id, kind: 'image' as const, url, storagePath: `uploads/owner/${id}.png`, fileName: `${id}.png`, displayName: id, handle: '@hero',
+  });
+  const withHero = (images: ReturnType<typeof picture>[]) => draft({
+    model: 'kling-o3',
+    prompt: '@hero walks in',
+    subjects: [{ id: 'subject-hero', displayName: 'Hero', handle: '@hero', images }],
+  });
+  const fresh = signed('uploads/owner/side.png', NOW + 3_600_000);
+  const current = withHero([picture('front', signed('uploads/owner/front.png', NOW + 3_600_000)), picture('side', signed('uploads/owner/side.png', NOW - 60_000))]);
+
+  it('counts them, and reads the source again when one of their links has run out', () => {
+    expect(countDraftMedia(current)).toBe(2);
+    expect(needsRemixReferenceRecovery(current, clock)).toBe(true);
+    // A subject is an input the draft holds, as a frame or a clip is: a prompt naming it has its reference.
+    expect(needsRemixReferenceRecovery(withHero([picture('front', 'https://example.com/front.png')]))).toBe(false);
+  });
+
+  it('renews them from the source read again, matched by where each is stored', () => {
+    const restored = withHero([
+      { ...picture('front-restored', signed('uploads/owner/front.png', NOW + 3_600_000)), storagePath: 'uploads/owner/front.png' },
+      { ...picture('side-restored', fresh), storagePath: 'uploads/owner/side.png' },
+    ]);
+    const recovered = recoverRemixReferences(current, restored);
+
+    expect(recovered.tool === 'video' && recovered.subjects?.[0].images.map((image) => [image.id, image.url])).toEqual([
+      ['front', current.subjects![0].images[0].url],
+      ['side', fresh],
+    ]);
+  });
+
+  it('renews one picture’s link, from the source’s subjects or by signing it again', () => {
+    const bundle = {
+      generation: { id: 'gen-hero', title: 'Original', prompt: '@hero walks in', category: 'video', model: 'kling-o3' },
+      result: null,
+      inputs: {
+        video: {
+          referenceMode: 'elements',
+          startFrame: null,
+          endFrame: null,
+          elements: [],
+          subjects: [{ handle: '@hero', displayName: 'Hero', images: [{ kind: 'image', url: fresh, storagePath: 'uploads/owner/side.png' }] }],
+        },
+      },
+      workflowSettings: {},
+      restoreIssues: [],
+    } satisfies RemixSourceBundle;
+    const side = current.subjects![0].images[1];
+
+    expect(remixSourceMediaUrl(bundle, side)).toBe(fresh);
+    const renewed = replaceDraftMediaUrl(current, 'side', 'https://example.com/renewed.png');
+    expect(renewed.subjects?.[0].images.map((image) => image.url)).toEqual([current.subjects![0].images[0].url, 'https://example.com/renewed.png']);
+    expect(replaceDraftMediaUrl(current, 'missing', 'https://example.com/x.png')).toBe(current);
   });
 });

@@ -32,6 +32,7 @@ import {
   type MotionCreationDraft,
   type ReferenceMode,
   type VideoCreationDraft,
+  type VideoRunEnhancementInputs,
   type VideoShotDraft,
 } from './media-creation-view-model';
 import {
@@ -221,7 +222,13 @@ function heldSlotAssets(draft: CreationDraft, slot: CatalogInputSlot): CatalogDr
   return draft.catalogInputSlots?.[slot.key] ?? legacyAssetsForSlot(draft, slot);
 }
 
-function heldInputCounts(draft: CreationDraft, model: GenerationModelDescriptor): Record<string, number> {
+/**
+ * What a draft holds for each slot this model declares, counted as its run counts it: a
+ * subject's pictures under the subjects' slot, and no end frame in a multi-shot run, which
+ * sends none. A mode or slot that opens on a count reads these, on the creator's screen as in
+ * the run, its quote and its checks.
+ */
+export function catalogDraftInputCounts(draft: CreationDraft, model: GenerationModelDescriptor): Record<string, number> {
   return Object.fromEntries((model.inputModes ?? [])
     .flatMap((mode) => mode.slots)
     .map((slot) => [slot.key, heldSlotAssets(draft, slot).length]));
@@ -236,25 +243,8 @@ function heldCatalogDraftInputSlots(
   model: GenerationModelDescriptor,
   settings: Record<string, CatalogPrimitive>,
 ): Array<{ slot: CatalogInputSlot; assets: CatalogDraftInputAsset[] }> {
-  return getActiveCatalogInputSlots(model, settings, heldInputCounts(draft, model))
+  return getActiveCatalogInputSlots(model, settings, catalogDraftInputCounts(draft, model))
     .map((slot) => ({ slot, assets: heldSlotAssets(draft, slot) }));
-}
-
-/**
- * What a run sends in each slot its settings open: at most the slot's max, and nothing for
- * a slot the model does not have. A draft keeps its references when the model changes, as
- * the web creator does, so it can hold more than this model takes; the rest wait in the
- * draft, and `validateCatalogCreationDraft` blocks the run until they are removed. The settings
- * are the run's (catalogRunSettings): the draft's own leave a video run's reference shape out,
- * and a mode gated on it closed. Outside this module, catalogRunInputSlots asks it for a run.
- */
-function buildCatalogDraftInputSlots(
-  draft: CreationDraft,
-  model: GenerationModelDescriptor,
-  settings: Record<string, CatalogPrimitive>,
-): CatalogDraftInputSlots {
-  return Object.fromEntries(heldCatalogDraftInputSlots(draft, model, settings)
-    .map(({ slot, assets }) => [slot.key, assets.slice(0, Math.max(0, slot.max))]));
 }
 
 function hasReusableVideoInputs(model: GenerationModelDescriptor) {
@@ -324,7 +314,7 @@ export function catalogVideoRunReferenceMode(
     return supportsReusableReferences ? 'elements' : 'frames';
   }
   const settings = getCatalogDraftSettings(draft, model);
-  const counts = heldInputCounts(draft, model);
+  const counts = catalogDraftInputCounts(draft, model);
   const framesShape = getActiveCatalogInputSlots(model, { ...settings, referenceMode: 'frames' }, counts);
   const referencesShape = getActiveCatalogInputSlots(model, { ...settings, referenceMode: 'elements' }, counts);
   const inFramesShape = new Set(framesShape.map((slot) => slot.key));
@@ -350,13 +340,61 @@ function catalogRunSettings(runDraft: CreationDraft, model: GenerationModelDescr
 }
 
 /**
- * What a run on this model sends in each slot it opens, in the shape and with the settings its
- * quote request and its run request read: what the creator shows as going with the run. A
- * descriptor without input modes opens no slots, so nothing is listed.
+ * Each slot a run on this model opens, with what it sends there, in the shape and with the
+ * settings its quote request and its run request read: at most the slot's max, and nothing for a
+ * slot the model does not have. A draft keeps its references when the model changes, as the web
+ * creator does, so it can hold more than this model takes; the rest wait in the draft, and
+ * `validateCatalogCreationDraft` blocks the run until those past a max are removed. The settings
+ * are the run's (catalogRunSettings): the draft's own leave a video run's reference shape out, and
+ * a mode gated on it closed. A descriptor without input modes opens no slots, so nothing is listed.
  */
-export function catalogRunInputSlots(draft: CreationDraft, model: GenerationModelDescriptor): CatalogDraftInputSlots {
+export function catalogRunSlots(
+  draft: CreationDraft,
+  model: GenerationModelDescriptor,
+): Array<{ slot: CatalogInputSlot; assets: CatalogDraftInputAsset[] }> {
   const runDraft = catalogRunDraft(draft, model);
-  return buildCatalogDraftInputSlots(runDraft, model, catalogRunSettings(runDraft, model));
+  return heldCatalogDraftInputSlots(runDraft, model, catalogRunSettings(runDraft, model))
+    .map(({ slot, assets }) => ({ slot, assets: assets.slice(0, Math.max(0, slot.max)) }));
+}
+
+/** What a run on this model sends, by slot key: what the creator shows as going with the run. */
+export function catalogRunInputSlots(draft: CreationDraft, model: GenerationModelDescriptor): CatalogDraftInputSlots {
+  return Object.fromEntries(catalogRunSlots(draft, model).map(({ slot, assets }) => [slot.key, assets]));
+}
+
+/**
+ * What a video run on this model sends, as its Enhance request tells the enhancer: the frames it
+ * starts and ends on, how many reference pictures go with it, whether a clip does, and the named
+ * references its prompt may mention, each once (a subject is one, however many pictures make it).
+ * Read off the run, as an image run's request is read off the references it sends: Kling 3.0's
+ * clips ride beside its frames, Wan 2.7 sends a start frame beside its references and no end
+ * frame, and a clip kept from another model goes nowhere.
+ */
+export function catalogRunEnhancementInputs(
+  draft: VideoCreationDraft,
+  model: GenerationModelDescriptor,
+): VideoRunEnhancementInputs {
+  const slots = catalogRunSlots(draft, model);
+  const sent = (sends: (slot: CatalogInputSlot) => boolean) => slots
+    .filter(({ slot }) => sends(slot))
+    .flatMap(({ assets }) => assets);
+  const frame = (role: 'startFrame' | 'endFrame') => {
+    const [asset] = sent((slot) => slot.role === role);
+    return asset ? { url: asset.url ?? null } : null;
+  };
+  const elementReferences = new Map<string, string>();
+  for (const asset of sent((slot) => slot.role === 'reference')) {
+    if (asset.handle && !elementReferences.has(asset.handle)) {
+      elementReferences.set(asset.handle, asset.displayName ?? asset.handle.slice(1));
+    }
+  }
+  return {
+    startFrame: frame('startFrame'),
+    endFrame: frame('endFrame'),
+    referenceImageCount: sent((slot) => slot.role === 'reference' && slot.kind === 'image' && slot.key !== SUBJECT_IMAGES_SLOT_KEY).length,
+    hasReferenceVideo: sent((slot) => slot.role === 'reference' && slot.kind === 'video').length > 0,
+    elementReferences: [...elementReferences].map(([handle, displayName]) => ({ handle, displayName })),
+  };
 }
 
 export function applyCatalogModelDefaults(
@@ -367,7 +405,7 @@ export function applyCatalogModelDefaults(
   const values = writeControlValues(draft, model);
   // References, clips, tracks and generic slot inputs stay in the draft whatever this model
   // takes: cut to its slots, they were gone for good, and picking the first model again did
-  // not bring them back. A run sends what the model takes (buildCatalogDraftInputSlots), and
+  // not bring them back. A run sends what the model takes (catalogRunSlots), and
   // an excess blocks Generate with the slot's message until it is removed.
   if (draft.tool === 'image') {
     const normalized = { ...draft, ...values, model: model.id, catalogRevision } as ImageCreationDraft;

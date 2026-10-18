@@ -1,4 +1,4 @@
-import { extractPromptHandles, type CreationDraft, type MediaDraft } from './media-creation-view-model';
+import { extractPromptHandles, videoSubjects, type CreationDraft, type MediaDraft, type SubjectDraft } from './media-creation-view-model';
 import type { SeedanceAssetMetadata } from './model-catalog/seedance-assets';
 import { signedStorageUrlExpiresAt } from './media-url-expiry';
 import type { RemixSourceBundle } from './types';
@@ -8,19 +8,30 @@ const LINK_EXPIRY_MARGIN_MS = 60_000;
 
 export type ReferenceLinkClock = { now: number; storageBaseUrl: string };
 
-/** Every piece of media a draft holds behind a link. */
-function draftMedia(draft: CreationDraft): MediaDraft[] {
+/**
+ * Every piece of media a draft holds behind a link, sent with its run or not: its references,
+ * clips and tracks, its frames, its subjects' pictures, and a motion draft's two inputs. A link
+ * renewal and the swept-upload check reach each of them through this.
+ */
+export function heldDraftMedia(draft: CreationDraft): MediaDraft[] {
   const media = draft.tool === 'image'
     ? draft.references
     : draft.tool === 'video'
-      ? [...draft.references, ...draft.referenceVideos, ...draft.referenceAudios, draft.startFrame, draft.endFrame]
+      ? [
+          ...draft.references,
+          ...draft.referenceVideos,
+          ...draft.referenceAudios,
+          draft.startFrame,
+          draft.endFrame,
+          ...videoSubjects(draft).flatMap((subject) => subject.images),
+        ]
       : [draft.characterImage, draft.referenceVideo];
   return media.filter((item): item is MediaDraft => Boolean(item));
 }
 
 /** How many pieces of media a draft holds. Support diagnostics report the count, never the media. */
 export function countDraftMedia(draft: CreationDraft): number {
-  return draftMedia(draft).length;
+  return heldDraftMedia(draft).length;
 }
 
 /** The draft with `map` applied to each piece of media, and the same draft when nothing changed. */
@@ -35,6 +46,11 @@ function mapDraftMedia<T extends CreationDraft>(draft: T, map: (media: MediaDraf
     return references === draft.references ? draft : { ...draft, references };
   }
   if (draft.tool === 'video') {
+    const mapSubject = (subject: SubjectDraft) => {
+      const images = mapList(subject.images);
+      return images === subject.images ? subject : { ...subject, images };
+    };
+    const subjects = draft.subjects?.map(mapSubject);
     const next = {
       references: mapList(draft.references),
       referenceVideos: mapList(draft.referenceVideos),
@@ -46,8 +62,9 @@ function mapDraftMedia<T extends CreationDraft>(draft: T, map: (media: MediaDraf
       && next.referenceVideos === draft.referenceVideos
       && next.referenceAudios === draft.referenceAudios
       && next.startFrame === draft.startFrame
-      && next.endFrame === draft.endFrame;
-    return unchanged ? draft : { ...draft, ...next };
+      && next.endFrame === draft.endFrame
+      && (subjects ?? []).every((subject, index) => subject === draft.subjects?.[index]);
+    return unchanged ? draft : { ...draft, ...next, ...(subjects ? { subjects } : {}) };
   }
   const characterImage = mapOne(draft.characterImage);
   const referenceVideo = mapOne(draft.referenceVideo);
@@ -63,7 +80,7 @@ function isSameMedia(saved: MediaDraft, candidate: { id?: string | null; storage
 }
 
 function hasExpiredLink(draft: CreationDraft, { now, storageBaseUrl }: ReferenceLinkClock) {
-  return draftMedia(draft).some((media) => {
+  return heldDraftMedia(draft).some((media) => {
     const expiresAt = signedStorageUrlExpiresAt(media.url, storageBaseUrl);
     return expiresAt !== null && expiresAt - LINK_EXPIRY_MARGIN_MS <= now;
   });
@@ -84,7 +101,7 @@ function hasExpiredLink(draft: CreationDraft, { now, storageBaseUrl }: Reference
 export function needsRemixReferenceRecovery(draft: CreationDraft, clock?: ReferenceLinkClock): boolean {
   if (clock && hasExpiredLink(draft, clock)) return true;
   if (draft.tool === 'motion' || draft.references.length > 0) return false;
-  if (draft.tool === 'video' && (draft.startFrame || draft.endFrame || draft.referenceVideos.length > 0)) return false;
+  if (draft.tool === 'video' && (draft.startFrame || draft.endFrame || draft.referenceVideos.length > 0 || videoSubjects(draft).length > 0)) return false;
   return extractPromptHandles(draft.prompt).length > 0;
 }
 
@@ -96,7 +113,7 @@ export function needsRemixReferenceRecovery(draft: CreationDraft, clock?: Refere
  * Missing images come back only while the prompt still mentions them.
  */
 export function recoverRemixReferences(current: CreationDraft, restored: CreationDraft): CreationDraft {
-  const sourceMedia = draftMedia(restored);
+  const sourceMedia = heldDraftMedia(restored);
   const renewed = mapDraftMedia(current, (media) => {
     const match = sourceMedia.find((candidate) => isSameMedia(media, candidate));
     return match?.url && match.url !== media.url ? { ...media, url: match.url } : media;
@@ -116,6 +133,7 @@ export function remixSourceMediaUrl(bundle: RemixSourceBundle, media: MediaDraft
     ...(video?.elements ?? []),
     ...(video?.referenceVideos ?? []),
     ...(video?.referenceAudios ?? []),
+    ...(video?.subjects ?? []).flatMap((subject) => subject.images ?? []),
     ...[video?.startFrame, video?.endFrame, motion?.characterImage, motion?.referenceVideo]
       .filter((asset): asset is NonNullable<typeof asset> => Boolean(asset)),
   ];
