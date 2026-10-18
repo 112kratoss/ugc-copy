@@ -903,11 +903,8 @@ describe('a multi-shot run is priced and checked by its shots', () => {
     expect(draft.duration).toBe(5);
     expect(getCatalogDraftSettings(draft, kling30).duration).toBe(10);
     expect(buildCatalogQuoteRequest(draft, kling30, 'revision-1').settings.duration).toBe(10);
-    // Built from the quote's own settings too, the run carries the total.
-    const request = buildUnifiedCatalogGenerationRequest(draft, kling30, 'revision-1', {
-      ...getCatalogDraftSettings({ ...draft, isMultiShot: false }, kling30),
-      isMultiShot: true,
-    });
+    const request = buildUnifiedCatalogGenerationRequest(draft, kling30, 'revision-1');
+    expect(request.settings).toEqual(buildCatalogQuoteRequest(draft, kling30, 'revision-1').settings);
     expect(request.settings.duration).toBe(10);
     expect(request.shots).toEqual([{ prompt: 'Beat 1.', duration: 5 }, { prompt: 'Beat 2.', duration: 5 }]);
     expect(buildCatalogGenerationPayload(draft, kling30, 'revision-1')).toMatchObject({ isMultiShot: true, duration: 10 });
@@ -1014,15 +1011,15 @@ describe('prepared Seedance assets in a run on /api/generations', () => {
 });
 
 describe('a choice duration the server hands back as a number', () => {
-  // The quote answers a choice duration as a number (the descriptor's normalizedValueType), and a
-  // run is built from that answer: a chosen 8 s Seedance 1.5 Pro run went out as the default '4'.
+  // The quote answers a choice duration as a number (the descriptor's normalizedValueType). A run
+  // read back from that answer went out at the default '4' for a chosen 8 s Seedance 1.5 Pro run
+  // (PR #480), so a run is built from the draft, as its quote request is, and never from the answer.
   const draft = videoDraft(seedance15ProModel, { prompt: 'A lighthouse in a storm', duration: 8, resolution: '720p' });
 
   it('runs the duration the quote priced', () => {
-    const request = buildUnifiedCatalogGenerationRequest(draft, seedance15ProModel, 'revision-1', {
-      aspectRatio: '1:1', resolution: '720p', duration: 8, sound: false, fixedLens: false, referenceMode: 'frames',
-    });
+    const request = buildUnifiedCatalogGenerationRequest(draft, seedance15ProModel, 'revision-1');
 
+    expect(request.settings).toEqual(buildCatalogQuoteRequest(draft, seedance15ProModel, 'revision-1').settings);
     expect(request.settings).toMatchObject({ duration: '8', resolution: '720p' });
   });
 

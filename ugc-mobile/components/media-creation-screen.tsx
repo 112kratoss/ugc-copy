@@ -1164,22 +1164,23 @@ function IdentityCreationScreen({
     [catalog, currentCatalogModel, currentDraft, motionInputsMissing]
   );
   const quoteKey = quoteRequest ? JSON.stringify(quoteRequest) : null;
+  // Only the price is kept from a quote. The run is built from the draft as this request was
+  // (buildUnifiedCatalogGenerationRequest), and the server normalizes and prices it again.
   const [quoteState, setQuoteState] = useState<{
     key: string | null;
     status: 'idle' | 'pending' | 'ready' | 'error';
     cost: number | null;
     error: string | null;
-    normalizedSettings: Record<string, CatalogPrimitive> | null;
-  }>({ key: null, status: 'idle', cost: null, error: null, normalizedSettings: null });
+  }>({ key: null, status: 'idle', cost: null, error: null });
   const [quoteRetryNonce, setQuoteRetryNonce] = useState(0);
 
   useEffect(() => {
     if (!quoteRequest || !quoteKey) {
-      setQuoteState({ key: null, status: 'idle', cost: null, error: null, normalizedSettings: null });
+      setQuoteState({ key: null, status: 'idle', cost: null, error: null });
       return;
     }
     const controller = new AbortController();
-    setQuoteState({ key: quoteKey, status: 'pending', cost: null, error: null, normalizedSettings: null });
+    setQuoteState({ key: quoteKey, status: 'pending', cost: null, error: null });
     const timer = setTimeout(() => {
       void api.quoteGenerationModel(quoteRequest, controller.signal)
         .then((quote) => {
@@ -1188,7 +1189,6 @@ function IdentityCreationScreen({
             status: 'ready',
             cost: quote.costCredits,
             error: null,
-            normalizedSettings: quote.normalizedSettings,
           });
         })
         .catch((error) => {
@@ -1215,7 +1215,6 @@ function IdentityCreationScreen({
             status: 'error',
             cost: null,
             error: fieldMessage ?? (error instanceof Error ? error.message : 'Could not calculate generation cost.'),
-            normalizedSettings: null,
           });
         });
     }, 200);
@@ -1227,7 +1226,7 @@ function IdentityCreationScreen({
 
   const activeQuote = quoteState.key === quoteKey
     ? quoteState
-    : { status: 'pending' as const, cost: null, error: null, normalizedSettings: null };
+    : { status: 'pending' as const, cost: null, error: null };
   const catalogUnavailable = Boolean(
     catalogQuery.isUnavailable ?? (!catalog && catalogQuery.error),
   );
@@ -2277,12 +2276,7 @@ function IdentityCreationScreen({
     // the per-kind routes answer a start 410 and are only polled.
     const route = 'unified' as const;
     // Kept so a refusal that measured the references can be matched back to the draft's media.
-    const unifiedRequest = buildUnifiedCatalogGenerationRequest(
-      currentDraft,
-      currentCatalogModel,
-      catalog?.revision ?? '',
-      activeQuote.normalizedSettings ?? undefined,
-    );
+    const unifiedRequest = buildUnifiedCatalogGenerationRequest(currentDraft, currentCatalogModel, catalog?.revision ?? '');
     const requestJson = JSON.stringify(unifiedRequest);
     // An unchanged press after a lost response is the same attempt, under the same key.
     const reusedKey = newRun ? null : reusableAttemptKey(pendingAttempt, identityUserId, route, requestJson);

@@ -908,19 +908,13 @@ export function buildUnifiedCatalogGenerationRequest(
   draft: CreationDraft,
   model: GenerationModelDescriptor,
   catalogRevision: string,
-  normalizedSettings?: Record<string, CatalogPrimitive>,
 ): CatalogGenerationRequest {
   const runDraft = catalogRunDraft(draft, model);
-  const settings = normalizedSettings
-    ? normalizeCatalogSettings(model, normalizedSettings)
-    : getCatalogDraftSettings(runDraft, model);
-  if (runDraft.tool === 'video' && !('referenceMode' in settings)) {
-    settings.referenceMode = runDraft.referenceMode;
-  }
-  if (runDraft.tool === 'video' && runDraft.isMultiShot) {
-    // The server refuses a multi-shot run whose duration is not its shots' total.
-    settings.duration = multiShotTotalDuration(runDraft.multiPrompts);
-  }
+  // The settings its quote was asked for (buildCatalogQuoteRequest), never the quote's answer
+  // read back: the server quotes the run again from these and is the only place they are
+  // normalized, so the run is made and charged as quoted. A multi-shot run's duration is its
+  // shots' total here, which the server checks against the shots.
+  const settings = catalogRunSettings(runDraft, model);
   const inputSlots = buildCatalogDraftInputSlots(runDraft, model, settings);
   const slotDescriptors = new Map(
     getActiveCatalogInputSlots(model, settings).map((slot) => [slot.key, slot]),
