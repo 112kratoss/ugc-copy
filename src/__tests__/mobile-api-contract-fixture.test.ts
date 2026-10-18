@@ -779,7 +779,7 @@ describe('shared mobile API v1 contract fixture', () => {
             adapterKey: 'image-v1',
             providerModelMap: {},
             adapterConfig: {},
-            pricingStrategy: 'fixed',
+            pricingStrategy: 'flat',
             pricingConfig: {},
             validationStrategy: 'descriptor-rules-v1',
             validationConfig: {},

@@ -5301,6 +5301,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await settle();
         expect(authState.api.startGeneration).toHaveBeenCalledTimes(2);
         expect(authState.api.startGeneration.mock.calls[1][0]).toMatchObject({ expectedCostCredits: 9 });
+        // Another price is another request: the same key would be refused as a reused key.
+        expect(authState.api.startGeneration.mock.calls[1][1]).not.toBe(authState.api.startGeneration.mock.calls[0][1]);
       });
 
       it('asks storage which reference is gone when the server cannot use the run’s media, and marks it', async () => {

@@ -930,40 +930,36 @@ export async function startUnifiedGenerationForRoute(
           operations: snapshot.operations,
         })
         : quote;
-      const { expectedCostCredits } = parsed;
-      if (expectedCostCredits !== null && quote.costCredits !== expectedCostCredits) {
+      // The price the caller saw: the price it sent, or else this start's own
+      // quote of the run as the caller described it. Never charged more than that.
+      const shownCostCredits = parsed.expectedCostCredits ?? quote.costCredits;
+      if (quote.costCredits !== shownCostCredits) {
         // One revision, one run, two prices: the caller's quote and this one have
         // drifted apart (pricing or validation code deployed without a new catalog
         // revision, or an app whose quote request predates a change to how runs are
         // quoted). Logged so drift shows before creators report it; an error when
         // this start would have charged more than the caller showed.
         logBackendEvent(
-          quote.costCredits > expectedCostCredits ? 'error' : 'warn',
+          quote.costCredits > shownCostCredits ? 'error' : 'warn',
           'generation_start_quote_drift',
           {
             modelId: parsed.modelId,
             kind: parsed.kind,
             catalogRevision: parsed.catalogRevision,
             client: platform,
-            expectedCostCredits,
+            expectedCostCredits: shownCostCredits,
             quotedCostCredits: quote.costCredits,
             costCredits: billableQuote.costCredits,
           },
         );
       }
-      // Never charge more than the price the caller saw: the price it sent, or
-      // else this start's own quote of the run as the caller described it. A
-      // lower price (an overstated length, a price that fell) is charged as priced.
-      if (billableQuote.costCredits > (expectedCostCredits ?? quote.costCredits)) {
-        // The measured lengths raised it, so the caller quotes again with them.
-        if (billableQuote.costCredits > quote.costCredits) {
-          throw new ReferenceDurationChangedError(
-            billable.verified,
-            quote.costCredits,
-            billableQuote.costCredits,
-          );
-        }
-        throw generationCostChangedError();
+      // A lower price (an overstated length, a price that fell) is charged as priced.
+      // Above the price shown, measured lengths that raised it send the caller to
+      // quote again with them; otherwise the price itself changed.
+      if (billableQuote.costCredits > shownCostCredits) {
+        throw billableQuote.costCredits > quote.costCredits
+          ? new ReferenceDurationChangedError(billable.verified, quote.costCredits, billableQuote.costCredits)
+          : generationCostChangedError();
       }
 
       return dispatchCatalogGenerationAdapter({

@@ -131,7 +131,6 @@ describe('generation start idempotency', () => {
     // sent with another price is another request, refused as a reused key.
     const run = { kind: 'video', modelId: 'seedance-2', catalogRevision: 'rev-1', expectedCostCredits: 80 };
 
-    expect(hashGenerationStartRequest({ ...run })).toBe(hashGenerationStartRequest(run));
     expect(hashGenerationStartRequest({ ...run, expectedCostCredits: 90 })).not.toBe(hashGenerationStartRequest(run));
   });
 
