@@ -182,7 +182,7 @@ describe('named subjects on the native creator', () => {
     const hero = createSubjectDraft([picture(1), picture(2)], 'Hero', []);
     const withSubject = subjectDraft(model, [hero]);
     expect(withSubject.referenceMode).toBe('subjects');
-    expect(getActiveCatalogInputSlots(model, { referenceMode: 'subjects' }).map((slot) => slot.key)).toEqual([SUBJECT_IMAGES_SLOT_KEY]);
+    expect(getActiveCatalogInputSlots(model, { referenceMode: 'subjects' }, {}).map((slot) => slot.key)).toEqual([SUBJECT_IMAGES_SLOT_KEY]);
 
     const withoutSubject = subjectDraft(model, []);
     expect(withoutSubject.referenceMode).not.toBe('subjects');

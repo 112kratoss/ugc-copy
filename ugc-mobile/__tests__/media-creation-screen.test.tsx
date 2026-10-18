@@ -429,6 +429,20 @@ function quoteEchoingSettings(costCredits = 8) {
   }));
 }
 
+/**
+ * A quote that prices the request and hands no settings back. The screen keeps only a quote's price,
+ * so a run's settings come from the draft: one read back from this answer would go out at the
+ * model's defaults.
+ */
+function quoteAnsweringOnlyItsPrice(costCredits = 8) {
+  authState.api.quoteGenerationModel.mockImplementation(async (request: { modelId: string; catalogRevision: string }) => ({
+    modelId: request.modelId,
+    catalogRevision: request.catalogRevision,
+    normalizedSettings: {},
+    costCredits,
+  }));
+}
+
 /** A reference the creator uploaded: staged under their own path, named after its file. */
 function stagedMedia(id: string, kind: 'image' | 'video' | 'audio' = 'image', extra: Record<string, unknown> = {}) {
   const extension = kind === 'image' ? 'png' : kind === 'video' ? 'mp4' : 'mp3';
@@ -1460,8 +1474,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     it('prepares a Seedance 2 reference from its details sheet, checks on it, and sends the asset id on the run', async () => {
-      // The quote hands back the settings it priced, the run's shape among them, as the server's does.
-      quoteEchoingSettings();
+      // The quote answers with settings that name no input mode (this suite's default answer).
+      // The run takes its references shape from the draft, as its quote request did: read back
+      // from this answer, it went out as a frames run and left the prepared reference out.
       authState.api.createSeedanceAsset.mockResolvedValue(assetAnswer('processing', 'Image'));
       authState.api.getSeedanceAsset.mockResolvedValue(assetAnswer('active', 'Image'));
       const tree = await openEditor('seedance-2');
@@ -1489,6 +1504,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
       expect(authState.api.startGeneration.mock.calls[0][0]).toMatchObject({
         modelId: 'seedance-2',
+        settings: expect.objectContaining({ referenceMode: 'elements', duration: 4 }),
         inputs: expect.arrayContaining([
           expect.objectContaining({ slot: 'imageReferences', url: 'https://cdn.example.com/girl.png', assetId: 'asset-girl' }),
         ]),
@@ -4043,16 +4059,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       status: 'succeeded',
       output: 'https://cdn.example.com/unified-output.mp4',
     });
-    authState.api.quoteGenerationModel.mockResolvedValue({
-      modelId: 'fallback-video-v2',
-      catalogRevision: 'catalog-v2-revision',
-      normalizedSettings: {
-        referenceMode: 'elements',
-        resolution: '720p',
-        duration: 7,
-      },
-      costCredits: 29,
-    });
+    // The run's settings are the draft's (the model's defaults here), not anything the quote hands back.
+    quoteAnsweringOnlyItsPrice(29);
 
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
@@ -5056,6 +5064,146 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(addShot().props.accessibilityState).toEqual({ disabled: true });
         expect(blocker(tree)).toContain('Kling 3.0 Cinematic multi-shot runs can be at most 15 seconds in total.');
         expect(generateButton(tree).props.disabled).toBe(true);
+      });
+    });
+
+    // A run is the request its price was quoted for: it carries the draft's settings in the shape
+    // the quote request sent them, and nothing is read back from the quote's answer; the server
+    // quotes every run again and makes it with its own normalized result. The quote here answers
+    // with its price alone. A run read back from the answer went out at the model's defaults, and
+    // a references run lost its input mode and its references.
+    describe('the settings each kind of run carries', () => {
+      const quotedSettings = () => (authState.api.quoteGenerationModel.mock.lastCall?.[0] as { settings: Record<string, unknown> }).settings;
+      const sentRun = () => {
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
+        return authState.api.startGeneration.mock.calls[0][0] as {
+          settings: Record<string, unknown>;
+          inputs: Array<Record<string, unknown>>;
+          shots?: Array<Record<string, unknown>>;
+        };
+      };
+      /** A production descriptor from the Recreate fixture, with the input modes it is published with. */
+      const published = (id: string, inputModes: CatalogInputMode[] | undefined): GenerationModelDescriptor => ({
+        ...createRemixRestoreCatalog().models.find((model) => model.id === id)!,
+        availability: { web: true, mobile: true },
+        inputModes,
+      });
+
+      beforeEach(() => {
+        quoteAnsweringOnlyItsPrice();
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+      });
+
+      it('an image run', async () => {
+        catalogState.catalog = parityCatalog([published('nano-banana-2', parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14).inputModes)]);
+        memory.set(ordinaryKey, savedDrafts({ image: {
+          model: 'nano-banana-2',
+          catalogRevision: 'parity-rev',
+          prompt: 'A bottle on linen',
+          aspectRatio: '9:16',
+          resolution: '2K',
+          outputFormat: 'png',
+          googleSearch: true,
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await pressGenerate(tree);
+
+        const run = sentRun();
+        expect(run.settings).toEqual({ aspectRatio: '9:16', resolution: '2K', outputFormat: 'png', googleSearch: true });
+        expect(run.settings).toEqual(quotedSettings());
+      });
+
+      // Seedance 1.5 Pro's duration is a choice: the draft holds 8 and the run sends the option '8'.
+      it('a single-shot video run, its duration a choice the draft holds as a number', async () => {
+        catalogState.catalog = parityCatalog([{ ...seedance15ProModel, availability: { web: true, mobile: true } }]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'seedance-1.5-pro',
+          catalogRevision: 'parity-rev',
+          prompt: 'A lighthouse in a storm',
+          aspectRatio: '16:9',
+          resolution: '720p',
+          duration: 8,
+          sound: true,
+          fixedLens: true,
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+        await pressGenerate(tree);
+
+        const run = sentRun();
+        expect(run.settings).toEqual({
+          aspectRatio: '16:9', resolution: '720p', duration: '8', sound: true, fixedLens: true, referenceMode: 'frames',
+        });
+        expect(run.settings).toEqual(quotedSettings());
+        expect(run.inputs).toEqual([]);
+      });
+
+      it('a video run with references, in the shape its references take', async () => {
+        catalogState.catalog = parityCatalog([paritySeedanceVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'seedance-2',
+          catalogRevision: 'parity-rev',
+          prompt: 'The bottle from @hero turns',
+          aspectRatio: '9:16',
+          duration: 10,
+          references: [stagedMedia('hero')],
+          referenceVideos: [stagedMedia('stroll', 'video')],
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+        await pressGenerate(tree);
+
+        const run = sentRun();
+        expect(run.settings).toEqual({ aspectRatio: '9:16', duration: 10, referenceMode: 'elements' });
+        expect(run.settings).toEqual(quotedSettings());
+        expect(run.inputs).toEqual([
+          expect.objectContaining({ slot: 'imageReferences', url: 'https://cdn.example.com/hero.png', handle: '@hero' }),
+          expect.objectContaining({ slot: 'videoReferences', url: 'https://cdn.example.com/stroll.mp4', durationSeconds: 4 }),
+        ]);
+      });
+
+      it('a multi-shot video run, at its shots’ total', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'kling-3.0-video',
+          catalogRevision: 'parity-rev',
+          aspectRatio: '9:16',
+          mode: 'pro',
+          sound: true,
+          duration: 5,
+          isMultiShot: true,
+          multiPrompts: [{ id: 's1', prompt: 'A door opens', duration: 5 }, { id: 's2', prompt: 'She walks in', duration: 6 }],
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+        await pressGenerate(tree);
+
+        const run = sentRun();
+        expect(run.settings).toEqual({
+          aspectRatio: '9:16', mode: 'pro', duration: 11, sound: true, isMultiShot: true, referenceMode: 'frames',
+        });
+        expect(run.settings).toEqual(quotedSettings());
+        expect(run.shots).toEqual([{ prompt: 'A door opens', duration: 5 }, { prompt: 'She walks in', duration: 6 }]);
+      });
+
+      it('a motion run', async () => {
+        catalogState.catalog = parityCatalog([published('kling-2.6', parityMotionModel().inputModes)]);
+        memory.set(ordinaryKey, savedDrafts({ motion: {
+          model: 'kling-2.6',
+          catalogRevision: 'parity-rev',
+          characterImage: stagedMedia('dancer'),
+          referenceVideo: stagedMedia('routine', 'video', { durationSeconds: 6 }),
+          mode: '1080p',
+          characterOrientation: 'image',
+          duration: 6,
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+        await pressGenerate(tree);
+
+        const run = sentRun();
+        expect(run.settings).toEqual({ resolution: '1080p', characterOrientation: 'image', duration: 6 });
+        expect(run.settings).toEqual(quotedSettings());
+        expect(run.inputs).toEqual([
+          expect.objectContaining({ slot: 'characterImage', url: 'https://cdn.example.com/dancer.png' }),
+          expect.objectContaining({ slot: 'referenceVideo', url: 'https://cdn.example.com/routine.mp4', durationSeconds: 6 }),
+        ]);
       });
     });
 

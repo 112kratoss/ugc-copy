@@ -28,12 +28,12 @@ describe('generation model catalog v2', () => {
       referenceMode: 'elements',
       resolution: '1080p',
       duration: 7,
-    }).map((slot) => slot.key)).toEqual(['imageReferences', 'videoReferences']);
+    }, {}).map((slot) => slot.key)).toEqual(['imageReferences', 'videoReferences']);
     expect(getActiveCatalogInputSlots(model, {
       referenceMode: 'frames',
       resolution: '1080p',
       duration: 7,
-    }).map((slot) => slot.key)).toEqual(['startFrame']);
+    }, {}).map((slot) => slot.key)).toEqual(['startFrame']);
     expect(getCatalogModels(parsed, 'video').map((candidate) => candidate.id)).not.toContain('web-only');
   });
 
