@@ -965,16 +965,18 @@ button:disabled,
   width: 100%;
 }
 
-/* Exactly the token tall, border included; its controls (48px, the search
-   field 50px) centre in the bar. As a min-height with 8px of padding it came
-   to 65px, and to 67px once the search field showed, so everything sized by
-   the token was 1-3px short of it. */
+/* The token tall, border included; its controls (48px, the search field 50px)
+   centre in the bar. With 8px of vertical padding it came to 65px, and to 67px
+   once the search field showed, so everything sized by the token was 1-3px
+   short of it. A min-height, not a height: at a larger browser text size the
+   3rem controls outgrow 64px, and the bar grows around them rather than letting
+   them spill over the page. */
 .app-shell-header {
   position: sticky;
   top: 0;
   z-index: 50;
   display: flex;
-  height: var(--app-shell-topbar-height);
+  min-height: var(--app-shell-topbar-height);
   align-items: center;
   gap: 1rem;
   border-bottom: 1px solid var(--ui-border-subtle);
