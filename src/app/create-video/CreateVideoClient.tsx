@@ -34,6 +34,7 @@ import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/client-generation-models';
 import { getVideoInputAffordances, getVideoRunAffordances } from '@/lib/generation-model-affordances';
+import { planVideoRunInputs, type VideoRunInput } from '@/lib/creator-run-inputs';
 import type { CatalogGenerationInputAsset, CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
 import type { CatalogPrimitive, GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import {
@@ -51,7 +52,7 @@ import {
     type WebGenerationStartResponse,
 } from '@/lib/generation-model-client';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
-import { GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
+import { catalogRunQuoteInput, GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import { useAuth } from '@/components/AuthProvider';
 import type { RemixMediaAssetDescriptor, RemixResolvedAsset, RemixSourceBundle } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
@@ -520,6 +521,16 @@ type KlingSubjectDraft = {
 // A subject on its way in: a new one, a saved one, or one just renamed, which
 // has given up its handle to take the handle of its new name.
 type KlingSubjectSeed = Omit<KlingSubjectDraft, 'handle'> & { handle?: string | null };
+
+// What this page's draft fills a run's slots from, and the inputs a run sends as
+// planned from it before any upload (creator-run-inputs.ts).
+type PageVideoRunMedia = {
+    imageReference: VideoElementDraft;
+    reference: SeedanceMediaReferenceDraft;
+    videoElement: KlingVideoElementDraft;
+    subjectImage: KlingSubjectImageDraft;
+};
+type PageVideoRunInput = VideoRunInput<PageVideoRunMedia>;
 
 // How many subjects a run takes, and how many pictures make one. Read off the model's
 // catalog descriptor, which is how the native creator reads them too.
@@ -1307,9 +1318,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     };
     const canUseVideoElements = affordances.elements.enabled;
     const activeReferenceMode = affordances.activeMode;
-    // Named video elements live in their own always-active input mode, so their count is
-    // quotable regardless of which reference mode is showing.
-    const videoElementsSlotActive = affordances.namedVideoElements.enabled;
     const combinesFrameWithReferences = affordances.combineFramesWithReferences;
     const supportsStartFrame = affordances.frames.start;
     const supportsEndFrame = affordances.frames.end;
@@ -1351,74 +1359,45 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         ? klingSubjects.map((subject) => subject.handle)
         : [];
     const additionalSettings = useAdditionalCatalogSettings(catalogDescriptor, CATALOG_HANDLED_KEYS);
-    const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady ? {
+    // One settings object for the price and the run, as the image creator has.
+    const runSettings = useMemo(() => ({
+        duration: totalDuration,
+        mode: currentMode,
+        aspectRatio: currentAspectRatio,
+        sound: currentSound,
+        resolution: currentResolution,
+        fixedLens: currentFixedLens,
+        isMultiShot: currentIsMultiShot,
+        referenceMode: klingSubjectsActive ? 'subjects' : activeReferenceMode,
+        ...additionalSettings.settings,
+    }), [activeReferenceMode, additionalSettings.settings, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, klingSubjectsActive, totalDuration]);
+    // The inputs the run sends, before any upload. The price is the server's quote of
+    // these (catalogRunQuoteInput, as the server quotes the run it starts) and the run is
+    // posted from them, so the two count the same inputs: counted by the part each played,
+    // Wan 2.7's start frame beside five references was left out of the price, and the
+    // start refused the run for its sixth image.
+    const runInputs = useMemo(() => planVideoRunInputs<PageVideoRunMedia>({
+        activeReferenceMode,
+        combinesFrameWithReferences,
+        takesEndFrame: activeSupportsEndFrame,
+        isMultiShot: currentIsMultiShot,
+        imageReferences: runElements,
+        videoReferences: runReferenceVideos,
+        audioReferences: runReferenceAudios,
+        videoElements: isKlingVideoModel ? klingVideoElements : [],
+        subjects: klingSubjectsActive ? klingSubjects : [],
+        hasStartFrame: Boolean(startImageUrl || startImageFile),
+        hasEndFrame: Boolean(endImageUrl || endImageFile),
+        preparedVoiceIds: isGeminiOmniVideoModel ? preparedAudioIds : [],
+        characterIds: isGeminiOmniVideoModel ? characterIds : [],
+    }), [activeReferenceMode, activeSupportsEndFrame, characterIds, combinesFrameWithReferences, currentIsMultiShot, endImageFile, endImageUrl, isGeminiOmniVideoModel, isKlingVideoModel, klingSubjects, klingSubjectsActive, klingVideoElements, preparedAudioIds, runElements, runReferenceAudios, runReferenceVideos, startImageFile, startImageUrl]);
+    const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady ? catalogRunQuoteInput({
         kind: 'video' as const,
         modelId: selectedModel,
-        settings: {
-            mode: currentMode,
-            aspectRatio: currentAspectRatio,
-            sound: currentSound,
-            duration: totalDuration,
-            resolution: currentResolution,
-            fixedLens: currentFixedLens,
-            isMultiShot: currentIsMultiShot,
-            referenceMode: klingSubjectsActive ? 'subjects' : activeReferenceMode,
-            ...additionalSettings.settings,
-        },
-        inputCounts: {
-            images: klingSubjectsActive
-                ? klingSubjects.reduce((count, subject) => count + subject.images.length, 0)
-                : activeReferenceMode === 'elements' ? runElements.length : frameReferenceCount,
-            // A Kling clip is a named video element, which only Kling 3.0 has a slot for.
-            videos: (activeReferenceMode === 'elements' ? runReferenceVideos.length : 0) + (isKlingVideoModel ? klingVideoElements.length : 0),
-            audios: activeReferenceMode === 'elements' ? runReferenceAudios.length : 0,
-            preparedAudios: isGeminiOmniVideoModel ? preparedAudioIds.length : 0,
-            characters: isGeminiOmniVideoModel ? characterIds.length : 0,
-        },
-        inputMetadata: {
-            slots: {
-                imageReferences: { count: activeReferenceMode === 'elements' ? runElements.length : 0 },
-                videoReferences: {
-                    count: activeReferenceMode === 'elements' ? runReferenceVideos.length : 0,
-                    durationsSeconds: activeReferenceMode === 'elements'
-                        ? runReferenceVideos.flatMap((reference) => (
-                            typeof reference.durationSeconds === 'number'
-                                ? [reference.durationSeconds]
-                                : []
-                        ))
-                        : [],
-                },
-                audioReferences: {
-                    count: activeReferenceMode === 'elements' ? runReferenceAudios.length : 0,
-                    durationsSeconds: activeReferenceMode === 'elements'
-                        ? runReferenceAudios.flatMap((reference) => (
-                            typeof reference.durationSeconds === 'number'
-                                ? [reference.durationSeconds]
-                                : []
-                        ))
-                        : [],
-                },
-                // Kling 3.0's named video elements have an input mode of their own,
-                // active beside either shape (generation-model-catalog.ts), so their
-                // count is quoted whenever the model has the slot.
-                videoElements: {
-                    count: videoElementsSlotActive ? klingVideoElements.length : 0,
-                },
-                startFrame: { count: Number(Boolean(startImageUrl || startImageFile)) },
-                endFrame: { count: activeSupportsEndFrame ? Number(Boolean(endImageUrl || endImageFile)) : 0 },
-                preparedVoices: { count: isGeminiOmniVideoModel ? preparedAudioIds.length : 0 },
-                characters: { count: isGeminiOmniVideoModel ? characterIds.length : 0 },
-            },
-            referenceVideoDurationsSeconds: activeReferenceMode === 'elements'
-                ? runReferenceVideos.flatMap((reference) => (
-                    typeof reference.durationSeconds === 'number'
-                        ? [reference.durationSeconds]
-                        : []
-                ))
-                : [],
-        },
         catalogRevision: modelCatalog.catalog.revision,
-    } : null, [activeReferenceMode, activeSupportsEndFrame, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, runElements.length, endImageFile, endImageUrl, frameReferenceCount, isGeminiOmniVideoModel, isKlingVideoModel, klingSubjects, klingSubjectsActive, klingVideoElements.length, modelCatalog.catalog, videoElementsSlotActive, preparedAudioIds.length, runReferenceAudios, runReferenceVideos, selectedModel, startImageFile, startImageUrl, totalDuration, modelCatalog.detailsReady, additionalSettings.settings]);
+        settings: runSettings,
+        inputs: runInputs,
+    }) : null, [modelCatalog.catalog, modelCatalog.detailsReady, runInputs, runSettings, selectedModel]);
     const [quoteAttempt, setQuoteAttempt] = useState(0);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token, quoteAttempt);
     useEffect(() => {
@@ -3620,86 +3599,110 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
         let attempt: PendingWebStart | null = null;
         try {
-            let startUrl: string | null = activeReferenceMode === 'frames' || combinesFrameWithReferences ? startImageUrl : null;
-            let endUrl: string | null = activeReferenceMode === 'frames' && activeSupportsEndFrame ? endImageUrl : null;
+            // The run is posted from the inputs its price was quoted from (`runInputs`), each
+            // made into what the server is sent once its file is up. One that was priced
+            // and not made fails the run here rather than being left out of it.
+            const sent = new Map<PageVideoRunInput, CatalogGenerationInputAsset>();
+            const send = (input: PageVideoRunInput, asset: Omit<CatalogGenerationInputAsset, 'slot' | 'kind'>) => {
+                sent.set(input, { slot: input.slot, kind: input.kind, ...asset });
+            };
+            const planned = <Slot extends PageVideoRunInput['slot']>(slot: Slot) => runInputs.filter(
+                (input): input is Extract<PageVideoRunInput, { slot: Slot }> => input.slot === slot,
+            );
             let nextStartFrameDescriptor = startFrameDescriptor;
             let nextEndFrameDescriptor = endFrameDescriptor;
-            const requestElements: Array<{ element: VideoElementDraft; url: string; assetId: string | null }> = [];
-            const requestReferenceVideos: Array<{ reference: SeedanceMediaReferenceDraft; url: string; assetId: string | null }> = [];
-            const requestReferenceAudios: Array<{ reference: SeedanceMediaReferenceDraft; url: string; assetId: string | null }> = [];
-            const requestKlingVideoElements: Array<{
-                id: string;
-                url: string;
-                handle: string;
-                displayName: string;
-                storagePath: string | null;
-                sourceGenerationId: string | null;
-            }> = [];
 
-            if (!currentIsMultiShot && activeReferenceMode === 'elements' && runElements.length > 0) {
+            const imageReferenceInputs = planned('imageReferences');
+            if (imageReferenceInputs.length > 0) {
                 setGenerationTiming(createLocalGenerationTiming({
                     kind: 'video',
-                    phaseLabel: runElements.length === 1 ? 'Uploading 1 image reference' : `Uploading ${runElements.length} image references`,
+                    phaseLabel: imageReferenceInputs.length === 1 ? 'Uploading 1 image reference' : `Uploading ${imageReferenceInputs.length} image references`,
                     startedAtMs,
                     estimatedTotalMs,
                 }));
 
-                const preparedElements = await Promise.all(runElements.map((element) => ensureUploadedElement(element)));
+                const preparedElements = await Promise.all(imageReferenceInputs.map((input) => ensureUploadedElement(input.element)));
                 commitElements(withStagedUploads(elementsRef.current, preparedElements));
-                for (const preparedElement of preparedElements) {
+                preparedElements.forEach((preparedElement, index) => {
                     const imageUrl = preparedElement.providerUrl || preparedElement.previewUrl;
                     if (!imageUrl) {
                         throw new Error(`Missing media for ${preparedElement.displayName}`);
                     }
-                    requestElements.push({ element: preparedElement, url: imageUrl, assetId: preparedAssetId(preparedElement.seedanceAsset) });
-                }
+                    send(imageReferenceInputs[index], {
+                        url: imageUrl,
+                        assetId: preparedAssetId(preparedElement.seedanceAsset),
+                        label: preparedElement.displayName,
+                        handle: preparedElement.handle,
+                        storagePath: preparedElement.storagePath ?? null,
+                        sourceGenerationId: preparedElement.sourceGenerationId ?? null,
+                    });
+                });
             }
 
-            if (supportsMultimodalReferences && activeReferenceMode === 'elements' && runReferenceVideos.length > 0) {
+            const referenceVideoInputs = planned('videoReferences');
+            if (referenceVideoInputs.length > 0) {
                 setGenerationTiming(createLocalGenerationTiming({
                     kind: 'video',
-                    phaseLabel: runReferenceVideos.length === 1 ? 'Uploading 1 reference video' : `Uploading ${runReferenceVideos.length} reference videos`,
+                    phaseLabel: referenceVideoInputs.length === 1 ? 'Uploading 1 reference video' : `Uploading ${referenceVideoInputs.length} reference videos`,
                     startedAtMs,
                     estimatedTotalMs,
                 }));
-                const preparedReferences = await Promise.all(runReferenceVideos.map((reference) => ensureUploadedReference(reference, 'Video')));
+                const preparedReferences = await Promise.all(referenceVideoInputs.map((input) => ensureUploadedReference(input.reference, 'Video')));
                 commitReferenceVideos(withStagedUploads(referenceVideosRef.current, preparedReferences));
-                for (const preparedReference of preparedReferences) {
+                preparedReferences.forEach((preparedReference, index) => {
                     const sourceUrl = preparedReference.providerUrl || preparedReference.previewUrl;
                     if (!sourceUrl) {
                         throw new Error(`Missing media for ${preparedReference.displayName}`);
                     }
-                    requestReferenceVideos.push({ reference: preparedReference, url: sourceUrl, assetId: preparedAssetId(preparedReference.seedanceAsset) });
-                }
+                    const input = referenceVideoInputs[index];
+                    send(input, {
+                        url: sourceUrl,
+                        assetId: preparedAssetId(preparedReference.seedanceAsset),
+                        label: preparedReference.displayName,
+                        durationSeconds: input.durationSeconds,
+                        storagePath: preparedReference.storagePath ?? null,
+                        sourceGenerationId: preparedReference.sourceGenerationId ?? null,
+                    });
+                });
             }
 
-            if (supportsReferenceAudio && activeReferenceMode === 'elements' && runReferenceAudios.length > 0) {
+            const referenceAudioInputs = planned('audioReferences');
+            if (referenceAudioInputs.length > 0) {
                 setGenerationTiming(createLocalGenerationTiming({
                     kind: 'video',
-                    phaseLabel: runReferenceAudios.length === 1 ? 'Uploading 1 reference audio clip' : `Uploading ${runReferenceAudios.length} reference audio clips`,
+                    phaseLabel: referenceAudioInputs.length === 1 ? 'Uploading 1 reference audio clip' : `Uploading ${referenceAudioInputs.length} reference audio clips`,
                     startedAtMs,
                     estimatedTotalMs,
                 }));
-                const preparedReferences = await Promise.all(runReferenceAudios.map((reference) => ensureUploadedReference(reference, 'Audio')));
+                const preparedReferences = await Promise.all(referenceAudioInputs.map((input) => ensureUploadedReference(input.reference, 'Audio')));
                 commitReferenceAudios(withStagedUploads(referenceAudiosRef.current, preparedReferences));
-                for (const preparedReference of preparedReferences) {
+                preparedReferences.forEach((preparedReference, index) => {
                     const sourceUrl = preparedReference.providerUrl || preparedReference.previewUrl;
                     if (!sourceUrl) {
                         throw new Error(`Missing media for ${preparedReference.displayName}`);
                     }
-                    requestReferenceAudios.push({ reference: preparedReference, url: sourceUrl, assetId: preparedAssetId(preparedReference.seedanceAsset) });
-                }
+                    const input = referenceAudioInputs[index];
+                    send(input, {
+                        url: sourceUrl,
+                        assetId: preparedAssetId(preparedReference.seedanceAsset),
+                        label: preparedReference.displayName,
+                        durationSeconds: input.durationSeconds,
+                        storagePath: preparedReference.storagePath ?? null,
+                        sourceGenerationId: preparedReference.sourceGenerationId ?? null,
+                    });
+                });
             }
 
-            if (isKlingVideoModel && klingVideoElements.length > 0) {
+            const videoElementInputs = planned('videoElements');
+            if (videoElementInputs.length > 0) {
                 setGenerationTiming(createLocalGenerationTiming({
                     kind: 'video',
-                    phaseLabel: klingVideoElements.length === 1 ? 'Uploading 1 Kling video element' : `Uploading ${klingVideoElements.length} Kling video elements`,
+                    phaseLabel: videoElementInputs.length === 1 ? 'Uploading 1 Kling video element' : `Uploading ${videoElementInputs.length} Kling video elements`,
                     startedAtMs,
                     estimatedTotalMs,
                 }));
 
-                const uploadedKlingElements = await Promise.all(klingVideoElements.map(async (element) => {
+                const uploadedKlingElements = await Promise.all(videoElementInputs.map(async ({ element }) => {
                     const preparedElement = await ensureUploadedKlingVideoElement(element);
                     const sourceUrl = preparedElement.providerUrl || preparedElement.previewUrl;
                     if (!sourceUrl) {
@@ -3713,107 +3716,128 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 }));
 
                 commitKlingVideoElements(withStagedUploads(klingVideoElementsRef.current, uploadedKlingElements));
-                requestKlingVideoElements.push(...uploadedKlingElements.map((element) => ({
-                    id: element.id,
-                    url: element.requestUrl,
-                    handle: element.handle,
-                    displayName: element.displayName,
-                    storagePath: element.storagePath ?? null,
-                    sourceGenerationId: element.sourceGenerationId ?? null,
+                uploadedKlingElements.forEach((element, index) => {
+                    send(videoElementInputs[index], {
+                        url: element.requestUrl,
+                        label: element.displayName,
+                        handle: element.handle,
+                        storagePath: element.storagePath ?? null,
+                        sourceGenerationId: element.sourceGenerationId ?? null,
+                    });
+                });
+            }
+
+            const subjectImageInputs = planned('subjectImages');
+            if (subjectImageInputs.length > 0) {
+                setGenerationTiming(createLocalGenerationTiming({
+                    kind: 'video',
+                    phaseLabel: subjectImageInputs.length === 1 ? 'Uploading 1 subject image' : `Uploading ${subjectImageInputs.length} subject images`,
+                    startedAtMs,
+                    estimatedTotalMs,
+                }));
+                const uploadedImages = new Map<KlingSubjectImageDraft, KlingSubjectImageDraft>();
+                for (const input of subjectImageInputs) {
+                    const { image, subject } = input;
+                    let remoteUrl = image.remoteUrl;
+                    let storagePath = image.storagePath;
+                    let staged = image.staged ?? null;
+                    // A picture of the creator's own is staged; a remix's is the file the run kept.
+                    if (image.file) {
+                        staged = await stageReferenceFile(image.file, image.staged);
+                        remoteUrl = staged.signedUrl;
+                        storagePath = staged.storagePath;
+                    }
+                    if (!remoteUrl && !storagePath) {
+                        throw new Error(`Missing media for ${subject.displayName}`);
+                    }
+                    uploadedImages.set(image, { ...image, remoteUrl, storagePath, staged });
+                    send(input, {
+                        url: storagePath || remoteUrl!,
+                        label: subject.displayName,
+                        handle: subject.handle,
+                        storagePath: storagePath ?? null,
+                        sourceGenerationId: null,
+                    });
+                }
+                // Keep the uploaded URLs so a retry does not re-upload the set.
+                commitKlingSubjects(klingSubjects.map((subject) => ({
+                    ...subject,
+                    images: subject.images.map((image) => uploadedImages.get(image) ?? image),
                 })));
             }
 
-            const requestKlingSubjectInputs: Array<{
-                slot: 'subjectImages';
-                kind: 'image';
-                url: string;
-                label: string;
-                handle: string;
-                storagePath: string | null;
-                sourceGenerationId: null;
-            }> = [];
-            if (klingSubjectsActive) {
-                const subjectImageCount = klingSubjects.reduce((count, subject) => count + subject.images.length, 0);
-                setGenerationTiming(createLocalGenerationTiming({
-                    kind: 'video',
-                    phaseLabel: subjectImageCount === 1 ? 'Uploading 1 subject image' : `Uploading ${subjectImageCount} subject images`,
-                    startedAtMs,
-                    estimatedTotalMs,
-                }));
-                const uploadedSubjects: KlingSubjectDraft[] = [];
-                for (const [subjectIndex, subject] of klingSubjects.entries()) {
-                    const handle = klingSubjectHandles[subjectIndex];
-                    const uploadedImages: KlingSubjectImageDraft[] = [];
-                    for (const image of subject.images) {
-                        let remoteUrl = image.remoteUrl;
-                        let storagePath = image.storagePath;
-                        let staged = image.staged ?? null;
-                        // A picture of the creator's own is staged; a remix's is the file the run kept.
-                        if (image.file) {
-                            staged = await stageReferenceFile(image.file, image.staged);
-                            remoteUrl = staged.signedUrl;
-                            storagePath = staged.storagePath;
-                        }
-                        if (!remoteUrl && !storagePath) {
-                            throw new Error(`Missing media for ${subject.displayName}`);
-                        }
-                        uploadedImages.push({ ...image, remoteUrl, storagePath, staged });
-                        requestKlingSubjectInputs.push({
-                            slot: 'subjectImages',
-                            kind: 'image',
-                            url: storagePath || remoteUrl!,
-                            label: subject.displayName,
-                            handle,
-                            storagePath: storagePath ?? null,
-                            sourceGenerationId: null,
-                        });
-                    }
-                    uploadedSubjects.push({ ...subject, images: uploadedImages });
+            const [startFrameInput] = planned('startFrame');
+            if (startFrameInput) {
+                let startUrl = startImageUrl;
+                if (startImageFile) {
+                    setGenerationTiming(createLocalGenerationTiming({
+                        kind: 'video',
+                        phaseLabel: 'Uploading start frame',
+                        startedAtMs,
+                        estimatedTotalMs,
+                    }));
+                    const staged = await stageReferenceFile(
+                        startImageFile,
+                        startFrameStaged?.file === startImageFile ? startFrameStaged.staged : null,
+                    );
+                    setStartFrameStaged({ file: startImageFile, staged });
+                    startUrl = staged.signedUrl;
+                    nextStartFrameDescriptor = {
+                        kind: 'image',
+                        label: 'Start frame',
+                        storagePath: staged.storagePath,
+                        sourceGenerationId: null,
+                    };
                 }
-                // Keep the uploaded URLs so a retry does not re-upload the set.
-                commitKlingSubjects(uploadedSubjects);
+                if (!startUrl) {
+                    throw new Error('Missing media for Start frame');
+                }
+                send(startFrameInput, {
+                    url: startUrl,
+                    label: nextStartFrameDescriptor?.label ?? 'Start frame',
+                    storagePath: nextStartFrameDescriptor?.storagePath ?? null,
+                    sourceGenerationId: nextStartFrameDescriptor?.sourceGenerationId ?? null,
+                });
             }
 
-            if (!klingSubjectsActive && (activeReferenceMode === 'frames' || combinesFrameWithReferences) && startImageFile) {
-                setGenerationTiming(createLocalGenerationTiming({
-                    kind: 'video',
-                    phaseLabel: 'Uploading start frame',
-                    startedAtMs,
-                    estimatedTotalMs,
-                }));
-                const staged = await stageReferenceFile(
-                    startImageFile,
-                    startFrameStaged?.file === startImageFile ? startFrameStaged.staged : null,
-                );
-                setStartFrameStaged({ file: startImageFile, staged });
-                startUrl = staged.signedUrl;
-                nextStartFrameDescriptor = {
-                    kind: 'image',
-                    label: 'Start frame',
-                    storagePath: staged.storagePath,
-                    sourceGenerationId: null,
-                };
+            const [endFrameInput] = planned('endFrame');
+            if (endFrameInput) {
+                let endUrl = endImageUrl;
+                if (endImageFile) {
+                    setGenerationTiming(createLocalGenerationTiming({
+                        kind: 'video',
+                        phaseLabel: 'Uploading end frame',
+                        startedAtMs,
+                        estimatedTotalMs,
+                    }));
+                    const staged = await stageReferenceFile(
+                        endImageFile,
+                        endFrameStaged?.file === endImageFile ? endFrameStaged.staged : null,
+                    );
+                    setEndFrameStaged({ file: endImageFile, staged });
+                    endUrl = staged.signedUrl;
+                    nextEndFrameDescriptor = {
+                        kind: 'image',
+                        label: 'End frame',
+                        storagePath: staged.storagePath,
+                        sourceGenerationId: null,
+                    };
+                }
+                if (!endUrl) {
+                    throw new Error('Missing media for End frame');
+                }
+                send(endFrameInput, {
+                    url: endUrl,
+                    label: nextEndFrameDescriptor?.label ?? 'End frame',
+                    storagePath: nextEndFrameDescriptor?.storagePath ?? null,
+                    sourceGenerationId: nextEndFrameDescriptor?.sourceGenerationId ?? null,
+                });
             }
 
-            if (activeReferenceMode === 'frames' && activeSupportsEndFrame && endImageFile && !isMultiShot) {
-                setGenerationTiming(createLocalGenerationTiming({
-                    kind: 'video',
-                    phaseLabel: 'Uploading end frame',
-                    startedAtMs,
-                    estimatedTotalMs,
-                }));
-                const staged = await stageReferenceFile(
-                    endImageFile,
-                    endFrameStaged?.file === endImageFile ? endFrameStaged.staged : null,
-                );
-                setEndFrameStaged({ file: endImageFile, staged });
-                endUrl = staged.signedUrl;
-                nextEndFrameDescriptor = {
-                    kind: 'image',
-                    label: 'End frame',
-                    storagePath: staged.storagePath,
-                    sourceGenerationId: null,
-                };
+            for (const input of runInputs) {
+                if (input.slot === 'preparedVoices' || input.slot === 'characters') {
+                    send(input, { assetId: input.assetId });
+                }
             }
 
             const payload: CatalogGenerationRequestPayload = {
@@ -3826,85 +3850,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         duration: Math.max(1, Math.round(shot.duration)),
                     }))
                     : [],
-                settings: {
-                    duration: totalDuration,
-                    mode: currentMode,
-                    aspectRatio: currentAspectRatio,
-                    sound: currentSound,
-                    resolution: currentResolution,
-                    fixedLens: currentFixedLens,
-                    isMultiShot: currentIsMultiShot,
-                    referenceMode: klingSubjectsActive ? 'subjects' : activeReferenceMode,
-                    ...additionalSettings.settings,
-                },
-                inputs: [
-                    ...requestElements.map(({ element, url, assetId }): CatalogGenerationInputAsset => ({
-                        slot: 'imageReferences',
-                        kind: 'image',
-                        url,
-                        assetId,
-                        label: element.displayName,
-                        handle: element.handle,
-                        storagePath: element.storagePath ?? null,
-                        sourceGenerationId: element.sourceGenerationId ?? null,
-                    })),
-                    ...requestReferenceVideos.map(({ reference, url, assetId }): CatalogGenerationInputAsset => ({
-                        slot: 'videoReferences',
-                        kind: 'video',
-                        url,
-                        assetId,
-                        label: reference.displayName,
-                        durationSeconds: reference.durationSeconds ?? null,
-                        storagePath: reference.storagePath ?? null,
-                        sourceGenerationId: reference.sourceGenerationId ?? null,
-                    })),
-                    ...requestReferenceAudios.map(({ reference, url, assetId }): CatalogGenerationInputAsset => ({
-                        slot: 'audioReferences',
-                        kind: 'audio',
-                        url,
-                        assetId,
-                        label: reference.displayName,
-                        durationSeconds: reference.durationSeconds ?? null,
-                        storagePath: reference.storagePath ?? null,
-                        sourceGenerationId: reference.sourceGenerationId ?? null,
-                    })),
-                    ...requestKlingVideoElements.map((element): CatalogGenerationInputAsset => ({
-                        slot: 'videoElements',
-                        kind: 'video',
-                        url: element.url,
-                        label: element.displayName,
-                        handle: element.handle,
-                        storagePath: element.storagePath,
-                        sourceGenerationId: element.sourceGenerationId,
-                    })),
-                    ...requestKlingSubjectInputs,
-                    ...(startUrl ? [{
-                        slot: 'startFrame',
-                        kind: 'image' as const,
-                        url: startUrl,
-                        label: nextStartFrameDescriptor?.label ?? 'Start frame',
-                        storagePath: nextStartFrameDescriptor?.storagePath ?? null,
-                        sourceGenerationId: nextStartFrameDescriptor?.sourceGenerationId ?? null,
-                    }] : []),
-                    ...(endUrl ? [{
-                        slot: 'endFrame',
-                        kind: 'image' as const,
-                        url: endUrl,
-                        label: nextEndFrameDescriptor?.label ?? 'End frame',
-                        storagePath: nextEndFrameDescriptor?.storagePath ?? null,
-                        sourceGenerationId: nextEndFrameDescriptor?.sourceGenerationId ?? null,
-                    }] : []),
-                    ...(isGeminiOmniVideoModel ? preparedAudioIds.map((assetId): CatalogGenerationInputAsset => ({
-                        slot: 'preparedVoices',
-                        kind: 'preparedVoice',
-                        assetId,
-                    })) : []),
-                    ...(isGeminiOmniVideoModel ? characterIds.map((assetId): CatalogGenerationInputAsset => ({
-                        slot: 'characters',
-                        kind: 'character',
-                        assetId,
-                    })) : []),
-                ],
+                settings: runSettings,
+                inputs: runInputs.map((input) => {
+                    const asset = sent.get(input);
+                    if (!asset) {
+                        throw new Error(`Missing media for ${input.slot}`);
+                    }
+                    return asset;
+                }),
                 ...(remixId ? { sourceGenerationId: remixId } : {}),
                 catalogRevision: modelCatalog.catalog?.revision ?? '',
             };

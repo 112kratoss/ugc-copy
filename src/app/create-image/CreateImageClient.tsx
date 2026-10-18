@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { Sparkles, Loader2, Download, X, Image as ImageIcon, Images, Zap, ChevronDown, Check, Share2, Expand } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
-import { GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
+import { catalogRunQuoteInput, GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import {
     GeneratorPageHeader,
     MediaStudioShell,
@@ -85,6 +85,7 @@ import {
     type ImageResolution,
 } from '@/lib/client-generation-models';
 import { getImageInputAffordances } from '@/lib/generation-model-affordances';
+import { planImageRunInputs, type ImageRunInput } from '@/lib/creator-run-inputs';
 import type { CatalogPrimitive, GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import type { CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
 import {
@@ -1018,13 +1019,18 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         googleSearch: model.supportsGoogleSearch ? googleSearch : false,
         ...additionalSettings.settings,
     }), [additionalSettings.settings, aspectRatio, googleSearch, model.supportsGoogleSearch, qualityMode, resolution]);
-    const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady ? {
+    // Only what the request carries is priced and sent: a model that takes fewer pictures
+    // (none, when it is prompt-only) leaves the rest on the grid unsent. The price is the
+    // server's quote of these inputs, as the server quotes the run it starts, and the run
+    // is posted from them; the quote counted every picture on the grid.
+    const runInputs = useMemo(() => planImageRunInputs(elements, model.maxImages), [elements, model.maxImages]);
+    const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady ? catalogRunQuoteInput({
         kind: 'image' as const,
         modelId: selectedModel,
-        settings: generationSettings,
-        inputCounts: { images: elements.length, videos: 0, audios: 0 },
         catalogRevision: modelCatalog.catalog.revision,
-    } : null, [elements.length, generationSettings, modelCatalog.catalog, modelCatalog.detailsReady, selectedModel]);
+        settings: generationSettings,
+        inputs: runInputs,
+    }) : null, [generationSettings, modelCatalog.catalog, modelCatalog.detailsReady, runInputs, selectedModel]);
 
     const applyRestoredAdditionalSetting = additionalSettings.onChange;
     useEffect(() => {
@@ -1114,10 +1120,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         : null;
     const showTopUp = insufficientCredits || Boolean(creditRefusalMessage);
     const quotePending = quoteUi.blocksGenerate;
-    // Only what the request carries can be mentioned. A model that takes fewer
-    // pictures (none, when it is prompt-only) leaves the rest on the grid unsent,
-    // and the server refuses a mention of a picture it was not sent.
-    const sentElements = elements.slice(0, Math.max(0, model.maxImages));
+    // Only what the request carries can be mentioned: the server refuses a mention
+    // of a picture it was not sent.
+    const sentElements = runInputs.map((input) => input.element);
     const sentElementHandles = sentElements.map((element) => element.handle);
     const referencedElementHandles = extractPromptHandles(prompt).filter((handle) => sentElementHandles.includes(handle));
     const isElementEnhancementLocked = referencedElementHandles.length > 0;
@@ -1340,11 +1345,12 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     }, []);
 
     const stageReferenceInputs = async (
-        requestElements: ImageElementDraft[],
+        requestInputs: ImageRunInput<ImageElementDraft>[],
         startedAtMs: number,
         estimatedTotalMs: number | null,
     ): Promise<NonNullable<CatalogGenerationRequestPayload['inputs']>> => {
-        if (requestElements.length === 0) return [];
+        if (requestInputs.length === 0) return [];
+        const requestElements = requestInputs.map((input) => input.element);
         const uploadCount = requestElements.filter((element) => (
             element.file && !(element.staged && Date.now() - element.staged.uploadedAt < STAGED_UPLOAD_REUSE_MS)
         )).length;
@@ -1404,8 +1410,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             return result.value;
         });
         return prepared.map(({ element, url, storagePath, sourceGenerationId }, index) => ({
-            slot: 'imageReferences',
-            kind: 'image' as const,
+            slot: requestInputs[index].slot,
+            kind: requestInputs[index].kind,
             url,
             label: element.displayName ?? `Reference ${index + 1}`,
             handle: element.handle ?? null,
@@ -1469,7 +1475,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 return;
             }
 
-            const inputs = await stageReferenceInputs(sentElements, startedAtMs, estimatedTotalMs);
+            const inputs = await stageReferenceInputs(runInputs, startedAtMs, estimatedTotalMs);
 
             setGenerationTiming(createLocalGenerationTiming({
                 kind: 'image',

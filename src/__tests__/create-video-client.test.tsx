@@ -16,6 +16,8 @@ import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { inspectPromptQuality } from '@/lib/prompt-quality';
 import { supabase } from '@/lib/supabase';
 import { TemporaryMediaReadUrlError } from '@/lib/temporary-media-upload';
+// What the server quotes when it starts a run: for "the price of the run the page sends".
+import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 
 // One router for every render: a new object per render restarts effects that read it.
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
@@ -2581,6 +2583,11 @@ describe('CreateVideoClient Kling video elements', () => {
       };
     }
 
+    /** How many inputs a quote request says go in a slot: a run sends nothing for an empty slot. */
+    function slotCount(request: GenerationModelQuoteInput, slot: string) {
+      return request.inputMetadata?.slots?.[slot]?.count ?? 0;
+    }
+
     /** The server's answer to that request: null when it gives a price, or why it refuses. */
     function refusedByTheServer(request: GenerationModelQuoteInput) {
       try {
@@ -2642,10 +2649,10 @@ describe('CreateVideoClient Kling video elements', () => {
       };
 
       expect({
-        imageReferences: request.inputMetadata.slots.imageReferences.count,
-        videoReferences: request.inputMetadata.slots.videoReferences.count,
-        audioReferences: request.inputMetadata.slots.audioReferences.count,
-        videoElements: request.inputMetadata.slots.videoElements.count,
+        imageReferences: slotCount(request, 'imageReferences'),
+        videoReferences: slotCount(request, 'videoReferences'),
+        audioReferences: slotCount(request, 'audioReferences'),
+        videoElements: slotCount(request, 'videoElements'),
       }).toEqual(carried);
       expect(request.inputCounts.videos).toBe(carried.videoReferences + carried.videoElements);
       expect(request.inputCounts.audios).toBe(carried.audioReferences);
@@ -2679,8 +2686,8 @@ describe('CreateVideoClient Kling video elements', () => {
       const request = lastQuoteRequest();
       expect(request.settings.referenceMode).toBe('frames');
       expect(request.inputCounts).toMatchObject({ images: 1, videos: 0, audios: 0 });
-      expect(request.inputMetadata.slots.imageReferences.count).toBe(0);
-      expect(request.inputMetadata.slots.startFrame.count).toBe(1);
+      expect(slotCount(request, 'imageReferences')).toBe(0);
+      expect(slotCount(request, 'startFrame')).toBe(1);
       expect(refusedByTheServer(request)).toBeNull();
 
       // The page says the same of the run as its standby card does.
@@ -2798,7 +2805,7 @@ describe('CreateVideoClient Kling video elements', () => {
       const request = lastQuoteRequest();
       expect(request.settings.referenceMode).toBe('frames');
       expect(request.inputCounts).toMatchObject({ images: 1, videos: 0, audios: 0 });
-      expect(request.inputMetadata.slots.imageReferences.count).toBe(0);
+      expect(slotCount(request, 'imageReferences')).toBe(0);
       expect(refusedByTheServer(request)).toBeNull();
       expect(frameGroupLocked(view.container)).toBe(false);
 
@@ -2832,7 +2839,7 @@ describe('CreateVideoClient Kling video elements', () => {
       const request = lastQuoteRequest();
       expect(request.settings.referenceMode).toBe('subjects');
       expect(request.inputCounts).toMatchObject({ images: 2, videos: 0, audios: 0 });
-      expect(request.inputMetadata.slots.videoReferences.count).toBe(0);
+      expect(slotCount(request, 'videoReferences')).toBe(0);
 
       fireEvent.change(screen.getByPlaceholderText(/^Describe the Kling O3 scene/), {
         target: { value: '@hero_creator lifts the serum and smiles at the camera in a bright studio, slow push in.' },
@@ -2929,6 +2936,94 @@ describe('CreateVideoClient Kling video elements', () => {
 
       expect(screen.getByText('Saved clip')).toBeInTheDocument();
       expect(standbyCard()).toBeNull();
+    });
+
+    /**
+     * The price is the server's own quote of the run the page sends. The server quotes a
+     * run again from the inputs it posts when it starts it, every input counted by its
+     * kind, and charges or refuses that quote. The page counted inputs by the part each
+     * plays, so Wan 2.7's start frame, sent beside five references, was left out of an
+     * 80-credit quote and the start refused the run for its sixth image (2026-10-18).
+     */
+    describe('the price of the run the page sends', () => {
+      const runPrompt = 'A dancer crosses a bright studio in the rhythm of the references, slow push in, soft daylight.';
+
+      /** The page's last quote request, less the catalog revision this file's hook makes up. */
+      function shownQuote() {
+        const { catalogRevision: _revision, ...quote } = lastQuoteRequest();
+        void _revision;
+        return quote;
+      }
+
+      /** What the server quotes when it starts the run the page posted, less the revision. */
+      function startQuote() {
+        const { catalogRevision: _revision, ...quote } = buildUnifiedGenerationQuoteInput(parseUnifiedGenerationRequest(postedRun()));
+        void _revision;
+        return quote;
+      }
+
+      async function generate() {
+        fireEvent.change(screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/), {
+          target: { value: runPrompt },
+        });
+        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+        await waitFor(() => expect(postedRun()).toBeDefined());
+      }
+
+      it("counts Wan 2.7's start frame beside five reference images as the run's sixth image", async () => {
+        saveInTheBrowser({ images: 5, startFrame: true });
+        render(<CreateVideoClient prefill={{ model: 'wan-2.7' }} />);
+        await screen.findAllByPlaceholderText('Rename element');
+        await restored();
+
+        const shown = shownQuote();
+        expect(shown.inputCounts).toMatchObject({ images: 6, videos: 0, audios: 0 });
+        expect(shown.inputMetadata?.slots).toMatchObject({ imageReferences: { count: 5 }, startFrame: { count: 1 } });
+
+        await generate();
+
+        expect(runInputs('imageReferences')).toHaveLength(5);
+        expect(runInputs('startFrame')).toHaveLength(1);
+        // The request the page priced is the one the start prices, so the price on the
+        // button, or the refusal under it, is the start's own answer.
+        expect(shown).toEqual(startQuote());
+      });
+
+      it("counts Wan 2.7's start frame beside five reference clips as an image of the run", async () => {
+        saveInTheBrowser({ clips: 5, startFrame: true });
+        render(<CreateVideoClient prefill={{ model: 'wan-2.7' }} />);
+        await screen.findByText('Saved clip 5');
+        await restored();
+
+        const shown = shownQuote();
+        expect(shown.inputCounts).toMatchObject({ images: 1, videos: 5, audios: 0 });
+        expect(shown.inputMetadata?.slots).toMatchObject({
+          videoReferences: { count: 5, durationsSeconds: [4, 4, 4, 4, 4] },
+          startFrame: { count: 1 },
+        });
+
+        await generate();
+
+        expect(runInputs('videoReferences')).toHaveLength(5);
+        expect(runInputs('startFrame')).toHaveLength(1);
+        expect(shown).toEqual(startQuote());
+      });
+
+      it.each(videoModelIds)('%s: prices exactly the run it sends of a saved image, clip, track, Kling clip and start frame', async (modelId) => {
+        saveInTheBrowser({ images: 1, clip: true, track: true, klingClip: true, startFrame: true });
+        render(<CreateVideoClient prefill={{ model: modelId }} />);
+        await restored();
+
+        const shown = shownQuote();
+        // A frame the run leaves out is no part of its price either. Counted, a saved frame
+        // had the quote refuse the references run of a model that takes frames or
+        // references, and any run of Gemini Omni, which takes no frame, while the start
+        // took those runs.
+        expect(refusedByTheServer(lastQuoteRequest())).toBeNull();
+        await generate();
+
+        expect(shown).toEqual(startQuote());
+      });
     });
 
     it('leaves the frames of another model free after a character id was added on Gemini Omni', async () => {
