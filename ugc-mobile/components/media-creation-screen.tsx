@@ -39,7 +39,7 @@ import { showConfirmDialog } from '@/lib/dialog';
 import { reportGenerationOutput } from '@/lib/use-viewer-action-handlers';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
-import { countDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaSeedanceAsset, replaceDraftMediaUrl } from '@/lib/remix-draft-recovery';
+import { countDraftMedia, heldDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaSeedanceAsset, replaceDraftMediaUrl } from '@/lib/remix-draft-recovery';
 import { recordCreatorSession } from '@/lib/creator-session-diagnostics';
 import { CREATION_DRAFT_FORMAT, clearPersistedCreationDrafts, loadOrdinaryCreationDrafts, loadPersistedCreationDrafts, ordinaryDraftScope, persistCreationDrafts, remixDraftScope } from '@/lib/creation-draft-resume';
 import {
@@ -70,9 +70,11 @@ import {
   applyVerifiedInputDurations,
   buildCatalogQuoteRequest,
   buildUnifiedCatalogGenerationRequest,
+  catalogDraftInputCounts,
   catalogDraftRunHandles,
   catalogMultiShotLimits,
-  catalogRunInputSlots,
+  catalogRunEnhancementInputs,
+  catalogRunSlots,
   catalogStartRequest,
   catalogSubjectSlot,
   catalogVideoRunReferenceMode,
@@ -146,7 +148,7 @@ import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentColor, appTheme, mediaColors, type ToolAccent } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel, PromptEnhancementRequest, PromptEnhancementResponse, PromptEnhancementWarning, SeedanceAssetResponse } from '@/lib/types';
-import { SUBJECT_IMAGES_PER_NAME, subjectsPerRun, type ModelCatalogSummary, GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH, PROMPT_ENHANCEMENT_COST_CREDITS } from '@/lib/model-catalog/protocol';
+import { SUBJECT_IMAGES_PER_NAME, SUBJECT_IMAGES_SLOT_KEY, subjectsPerRun, type ModelCatalogSummary, GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH, PROMPT_ENHANCEMENT_COST_CREDITS } from '@/lib/model-catalog/protocol';
 import { createSeedanceAssetMetadata, isSeedance2VideoModelId, type SeedanceAssetKind, type SeedanceAssetMetadata } from '@/lib/model-catalog/seedance-assets';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
@@ -305,33 +307,6 @@ function orderAspectRatioOptions<T extends { value: string }>(options: T[]) {
 
 type CreatorCatalogModel = ReturnType<typeof getCatalogModels>[number];
 
-function catalogDraftInputCounts(
-  model: CreatorCatalogModel,
-  draft: CreationDraft,
-): Record<string, number> {
-  const countForSlot = (slot: CatalogInputSlot) => {
-    const catalogAssets = draft.catalogInputSlots?.[slot.key];
-    if (catalogAssets) return catalogAssets.length;
-    if (slot.role === 'startFrame') return draft.tool === 'video' && draft.startFrame ? 1 : 0;
-    if (slot.role === 'endFrame') return draft.tool === 'video' && draft.endFrame ? 1 : 0;
-    if (slot.kind === 'image') {
-      if (draft.tool === 'image' || draft.tool === 'video') return draft.references.length;
-      return draft.characterImage ? 1 : 0;
-    }
-    if (slot.kind === 'video') {
-      if (draft.tool === 'video') return draft.referenceVideos.length;
-      return draft.tool === 'motion' && draft.referenceVideo ? 1 : 0;
-    }
-    if (slot.kind === 'audio') return draft.tool === 'video' ? draft.referenceAudios.length : 0;
-    if (slot.kind === 'preparedVoice') return draft.tool === 'video' ? draft.preparedAudioIds.length : 0;
-    return draft.tool === 'video' ? draft.characterIds.length : 0;
-  };
-
-  return Object.fromEntries((model.inputModes ?? [])
-    .flatMap((mode) => mode.slots)
-    .map((slot) => [slot.key, countForSlot(slot)]));
-}
-
 function activeCatalogInputSlots(
   model: CreatorCatalogModel | null,
   draft: CreationDraft,
@@ -350,7 +325,8 @@ function activeCatalogInputSlots(
       ? { referenceMode, isMultiShot: draft.isMultiShot }
       : {}),
   };
-  return getActiveCatalogInputSlots(model, settings, catalogDraftInputCounts(model, draft));
+  // Opened with what the draft holds, counted as the run counts it.
+  return getActiveCatalogInputSlots(model, settings, catalogDraftInputCounts(draft, model));
 }
 
 function catalogInputSlot(
@@ -404,15 +380,19 @@ function modeGatedReferenceSlots(model: CreatorCatalogModel | null) {
 function supportsReusableVideoInputs(
   model: CreatorCatalogModel | null,
   draft: VideoCreationDraft,
+  shape: ReferenceMode,
 ) {
   if (!model) return false;
   if (model.inputModes) {
-    return (activeCatalogInputSlots(model, draft, 'elements') ?? []).some((slot) => (
+    // Subjects' pictures have a group of their own.
+    return (activeCatalogInputSlots(model, draft, shape) ?? []).some((slot) => (
       slot.role === 'reference'
+      && slot.key !== SUBJECT_IMAGES_SLOT_KEY
       && ['image', 'video', 'audio', 'character', 'preparedVoice'].includes(slot.kind)
     ));
   }
-  return Boolean(
+  // A descriptor without input modes sends its references in single shots only.
+  return !draft.isMultiShot && Boolean(
     model.inputs.imageReferences
     || model.inputs.videoReferences
     || model.inputs.audioReferences
@@ -433,19 +413,36 @@ function videoRunReferenceMode(draft: VideoCreationDraft, model: CreatorCatalogM
 }
 
 /**
+ * The shape a video draft's reference rail, and the uploads it starts, ask about. A single shot
+ * becomes a references run once a reference is attached, so its rail offers the references shape
+ * whatever the run is now. A multi-shot run keeps its own shape (frames, or subjects): its rail
+ * offers only what goes with that, Kling 3.0's video elements, which its multi_prompt takes
+ * beside the shots.
+ */
+function referenceRailShape(draft: VideoCreationDraft, model: CreatorCatalogModel | null): ReferenceMode {
+  return draft.isMultiShot ? videoRunReferenceMode(draft, model) : 'elements';
+}
+
+/**
  * The slot a model takes reference clips in, found by kind rather than key: Kling 3.0, the
  * default video model, takes its clips as named `videoElements` beside its frames, and a
  * lookup by `videoReferences` left it with no way to add one.
  */
-function referenceVideoSlot(model: CreatorCatalogModel | null, draft: VideoCreationDraft): CatalogInputSlot | null {
-  return activeCatalogInputSlots(model, draft, 'elements')?.find((slot) => slot.role === 'reference' && slot.kind === 'video') ?? null;
+function referenceVideoSlot(model: CreatorCatalogModel | null, draft: VideoCreationDraft, shape: ReferenceMode): CatalogInputSlot | null {
+  return activeCatalogInputSlots(model, draft, shape)?.find((slot) => slot.role === 'reference' && slot.kind === 'video') ?? null;
+}
+
+function isFrameRole(role: CatalogInputSlot['role']) {
+  return role === 'startFrame' || role === 'endFrame';
 }
 
 /**
- * What a video draft holds that a run on this model would not send: past a slot's max, or
- * of a kind the run's shape has no slot for. A draft keeps them across a model change, as
- * the web creator does, so they wait apart from the run's own references until they are
- * removed or a model that takes them is picked.
+ * What a video draft holds that a run on this model would not send: past a slot's max, of a
+ * kind the run's shape has no slot for, or a frame the run's shape leaves out while it sends the
+ * other (Wan 2.7 takes a start frame beside references, and no end frame). A draft keeps them
+ * across a model change, as the web creator does, so they wait apart from the run's own inputs
+ * until they are removed or a model or shape that takes them is picked. Frames a run sends none
+ * of are the other side of a frames-or-references choice, which the frames group itself says.
  */
 function standbyVideoReferences(draft: VideoCreationDraft, model: CreatorCatalogModel | null): MediaDraft[] {
   if (!model) return [];
@@ -456,8 +453,12 @@ function standbyVideoReferences(draft: VideoCreationDraft, model: CreatorCatalog
       ...draft.referenceAudios.slice(model.inputs.audioReferences?.max ?? 0),
     ];
   }
-  const sent = new Set(Object.values(catalogRunInputSlots(draft, model)).flat().map((asset) => asset.id));
-  return [...draft.references, ...draft.referenceVideos, ...draft.referenceAudios].filter((media) => !sent.has(media.id));
+  const run = catalogRunSlots(draft, model);
+  const sent = new Set(run.flatMap(({ assets }) => assets).map((asset) => asset.id));
+  const frames = run.some(({ slot }) => isFrameRole(slot.role))
+    ? [draft.startFrame, draft.endFrame].filter((media): media is MediaDraft => Boolean(media))
+    : [];
+  return [...draft.references, ...draft.referenceVideos, ...draft.referenceAudios, ...frames].filter((media) => !sent.has(media.id));
 }
 
 /** The validator's word on a slot holding more than it takes, said beside the extras. */
@@ -465,23 +466,33 @@ function isReferenceLimitError(error: string) {
   return / supports up to \d+ /.test(error) || / does not support (?:image references|reference videos|reference audio)\.$/.test(error);
 }
 
-/** Every piece of media a draft holds behind a stored link, as the link renewal reaches it. */
-function draftMediaList(draft: CreationDraft): MediaDraft[] {
-  const media = draft.tool === 'image'
-    ? draft.references
-    : draft.tool === 'video'
-      ? [...draft.references, ...draft.referenceVideos, ...draft.referenceAudios, draft.startFrame, draft.endFrame]
-      : [draft.characterImage, draft.referenceVideo];
-  return media.filter((item): item is MediaDraft => Boolean(item));
-}
-
 /** Only a positive 404 says a staged upload was swept; offline, a rate limit or a 5xx says nothing. */
 function isMissingUploadError(error: unknown) {
   return Boolean(error && typeof error === 'object' && (error as { status?: unknown }).status === 404);
 }
 
-function unavailableReferenceMessage(media: MediaDraft) {
-  return `${mediaAccessibleName(media)} is no longer available. Add this reference again.`;
+/**
+ * What holds a run whose own inputs include a swept upload: one the run leaves out (past a slot's
+ * max, kept for another model) is marked where it waits and holds nothing. A subject's picture
+ * carries the subject's name, and the subject is what is added again. A descriptor without input
+ * modes has no slots to read, so every piece of media the draft holds counts, as its quote counts
+ * them from the draft.
+ */
+function unavailableRunInputMessage(
+  draft: CreationDraft,
+  model: CreatorCatalogModel | null,
+  unavailablePaths: ReadonlySet<string>,
+): string | null {
+  if (!model || unavailablePaths.size === 0) return null;
+  const inputs = model.inputModes
+    ? catalogRunSlots(draft, model).flatMap(({ slot, assets }) => assets.map((asset) => ({ asset, ofSubject: slot.key === SUBJECT_IMAGES_SLOT_KEY })))
+    : heldDraftMedia(draft).map((asset) => ({ asset, ofSubject: false }));
+  const gone = inputs.find(({ asset }) => Boolean(asset.storagePath && unavailablePaths.has(asset.storagePath)));
+  if (!gone) return null;
+  const name = gone.asset.displayName?.trim() || gone.asset.fileName?.trim() || 'unnamed reference';
+  return gone.ofSubject
+    ? `A picture of ${name} is no longer available. Add ${name} again.`
+    : `${name} is no longer available. Add this reference again.`;
 }
 
 /** Shown in place of a motion quote the server would refuse: it needs both inputs to price. */
@@ -1238,9 +1249,8 @@ function IdentityCreationScreen({
     }
     setQuoteRetryNonce((value) => value + 1);
   };
-  // A swept upload cannot be sent, so the run waits until it is removed or replaced.
-  const unavailableReference = draftMediaList(currentDraft)
-    .find((media) => Boolean(media.storagePath && unavailableReferencePaths.has(media.storagePath))) ?? null;
+  // A swept upload the run sends cannot be sent, so the run waits until it is removed or replaced.
+  const unavailableReference = unavailableRunInputMessage(currentDraft, currentCatalogModel, unavailableReferencePaths);
   const validation = useMemo(() => {
     const result = currentCatalogModel
       ? validateCatalogCreationDraft(currentDraft, currentCatalogModel, { credits, quotedCost: activeQuote.cost })
@@ -1258,7 +1268,7 @@ function IdentityCreationScreen({
             canGenerate: false,
           };
     return unavailableReference
-      ? { ...result, errors: [unavailableReferenceMessage(unavailableReference), ...result.errors], canGenerate: false }
+      ? { ...result, errors: [unavailableReference, ...result.errors], canGenerate: false }
       : result;
   }, [activeQuote.cost, catalog, catalogUnavailable, currentCatalogModel, currentDraft, credits, unavailableReference]);
   const outputUrl = useMemo(() => (status ? getGenerationOutput(status) : null), [status]);
@@ -1593,7 +1603,7 @@ function IdentityCreationScreen({
       selectedDraft,
       'imageReferences',
       selectedModel?.inputs.imageReferences?.max ?? 0,
-      'elements',
+      tool === 'video' ? referenceRailShape(videoDraft, selectedModel) : 'elements',
     );
     const remainingSlots = Math.max(0, maxImages - selectedDraft.references.length);
     if (remainingSlots === 0) {
@@ -1776,7 +1786,7 @@ function IdentityCreationScreen({
     const selectedDraft = target === 'video' ? videoDraft : motionDraft;
     const selectedModel = catalog ? getCatalogModel(catalog, selectedDraft.model) : null;
     const currentCount = target === 'video' ? videoDraft.referenceVideos.length : motionDraft.referenceVideo ? 1 : 0;
-    const clipSlot = target === 'video' && selectedModel?.inputModes ? referenceVideoSlot(selectedModel, videoDraft) : null;
+    const clipSlot = target === 'video' && selectedModel?.inputModes ? referenceVideoSlot(selectedModel, videoDraft, referenceRailShape(videoDraft, selectedModel)) : null;
     const maxVideos = target === 'video'
       ? selectedModel?.inputModes ? clipSlot?.max ?? 0 : selectedModel?.inputs.videoReferences?.max ?? 0
       : catalogInputLimit(selectedModel, selectedDraft, 'referenceVideo', 1, 'elements');
@@ -1847,7 +1857,7 @@ function IdentityCreationScreen({
       videoDraft,
       'audioReferences',
       selectedModel?.inputs.audioReferences?.max ?? 0,
-      'elements',
+      referenceRailShape(videoDraft, selectedModel),
     );
     if (videoDraft.referenceAudios.length >= maxAudios) {
       setMessage(maxAudios > 0
@@ -1988,7 +1998,7 @@ function IdentityCreationScreen({
    */
   const enhanceShotPrompt = async (shotId: string) => {
     if (currentDraft.tool !== 'video') return;
-    const request = buildShotPromptEnhancementRequest(currentDraft, shotId, { level: enhanceLevel });
+    const request = buildShotPromptEnhancementRequest(currentDraft, shotId, { level: enhanceLevel, ...videoRunEnhancement(currentDraft) });
     if (!request?.prompt.trim()) return;
     if (!identityUserId) {
       openAuthForCurrentDraft();
@@ -2015,12 +2025,20 @@ function IdentityCreationScreen({
     }
   };
 
+  /** A video run's inputs as its model sends them, for its Enhance request; none before the model is in. */
+  const videoRunEnhancement = (draft: VideoCreationDraft) => {
+    const model = catalog ? getCatalogModel(catalog, draft.model) : null;
+    return model ? { videoRun: catalogRunEnhancementInputs(draft, model) } : {};
+  };
+
   /**
    * What the enhancer is asked. An image's request says what the web creator's does: the run's
    * settings, only the references the run sends, and append-only ("Polish") when the prompt names
-   * one of them, so a sentence naming a reference is kept as written instead of rewritten.
+   * one of them, so a sentence naming a reference is kept as written instead of rewritten. A
+   * video's describes what its run sends too: its frames, pictures, clips and named references.
    */
   const promptEnhancementRequest = (draft: CreationDraft): PromptEnhancementRequest => {
+    if (draft.tool === 'video') return buildPromptEnhancementRequest(draft, { level: enhanceLevel, ...videoRunEnhancement(draft) });
     if (draft.tool !== 'image') return buildPromptEnhancementRequest(draft, { level: enhanceLevel });
     const model = catalog ? getCatalogModel(catalog, draft.model) : null;
     const request = buildPromptEnhancementRequest({ ...draft, references: imageRunReferences(draft, model) }, { level: enhanceLevel });
@@ -2258,7 +2276,7 @@ function IdentityCreationScreen({
     }
     const nextValidation = validateCatalogCreationDraft(currentDraft, currentCatalogModel, { credits, quotedCost: activeQuote.cost });
     const nextErrors = unavailableReference
-      ? [unavailableReferenceMessage(unavailableReference), ...nextValidation.errors]
+      ? [unavailableReference, ...nextValidation.errors]
       : nextValidation.errors;
     if (nextErrors.length > 0) {
       const promptError = promptValidationMessage(nextErrors[0]);
@@ -2463,7 +2481,7 @@ function IdentityCreationScreen({
   const verifyStagedReferences = async (tools: readonly CreatorToolId[], { onlyExpired }: { onlyExpired: boolean }) => {
     const now = Date.now();
     const staged = tools
-      .flatMap((tool) => draftMediaList(latestDrafts.current[tool]))
+      .flatMap((tool) => heldDraftMedia(latestDrafts.current[tool]))
       .filter((media): media is MediaDraft & { storagePath: string } => Boolean(media.storagePath) && !media.sourceGenerationId)
       .filter((media) => {
         if (!onlyExpired) return true;
@@ -4004,8 +4022,17 @@ function VideoCreatorComposer({
   const startFrameSlot = catalogInputSlot(model, draft, 'startFrame');
   const endFrameSlot = catalogInputSlot(model, draft, 'endFrame');
   const supportsFrames = supportsStartFrame || supportsEndFrame;
-  const supportsReusable = !draft.isMultiShot && supportsReusableVideoInputs(model, draft);
   const referenceMode = videoRunReferenceMode(draft, model);
+  const railShape = referenceRailShape(draft, model);
+  const supportsReusable = supportsReusableVideoInputs(model, draft, railShape);
+  // A frame the run's shape leaves out while it sends the other (Wan 2.7 takes a start frame
+  // beside references, and no end frame): its slot takes none, and one held waits apart with the
+  // run's other leftovers (standbyVideoReferences).
+  const runSlotRoles = new Set(model?.inputModes ? catalogRunSlots(draft, model).map(({ slot }) => slot.role) : []);
+  const runTakesFrames = runSlotRoles.has('startFrame') || runSlotRoles.has('endFrame');
+  const startFrameLeftOut = runTakesFrames && !runSlotRoles.has('startFrame');
+  const endFrameLeftOut = runTakesFrames && !runSlotRoles.has('endFrame');
+  const frameLeftOutHelper = referenceMode === 'elements' ? 'Not with references' : 'Not with these settings';
   // Kie only lets wan-2.7 send a first frame alongside references; Seedance documents the
   // two as mutually exclusive scenarios, and minimax-h3 and kling-o3 route references to
   // an endpoint with no frame field. Both groups stay on screen either way — the one the
@@ -4043,10 +4070,10 @@ function VideoCreatorComposer({
     draft,
     'imageReferences',
     model?.inputs.imageReferences?.max ?? 0,
-    'elements',
+    railShape,
   );
   const videoLimit = model?.inputModes
-    ? referenceVideoSlot(model, draft)?.max ?? 0
+    ? referenceVideoSlot(model, draft, railShape)?.max ?? 0
     : model?.inputs.videoReferences?.max ?? 0;
   // Held for another model, or past a slot's max: drawn apart, each with its own Remove.
   const standbyReferences = standbyVideoReferences(draft, model);
@@ -4062,21 +4089,21 @@ function VideoCreatorComposer({
     draft,
     'audioReferences',
     model?.inputs.audioReferences?.max ?? 0,
-    'elements',
+    railShape,
   );
   const preparedVoiceLimit = catalogInputLimit(
     model,
     draft,
     'preparedVoices',
     model?.inputs.preparedAudioReferences?.max ?? 0,
-    'elements',
+    railShape,
   );
   const characterLimit = catalogInputLimit(
     model,
     draft,
     'characters',
     model?.inputs.characterReferences?.max ?? 0,
-    'elements',
+    railShape,
   );
   const frameModeLabel = model?.inputModes?.find((mode) => (
     mode.slots.some((slot) => slot.role === 'startFrame' || slot.role === 'endFrame')
@@ -4166,14 +4193,24 @@ function VideoCreatorComposer({
     restorePromptFocus(focusDelay);
   };
 
+  // Whether the words the run reads name a handle: a single shot's prompt, or a story's shots.
+  const runTextNames = (handle?: string | null) => (draft.isMultiShot
+    ? draft.multiPrompts.some((shot) => promptContainsHandle(shot.prompt, handle))
+    : promptContainsHandle(draft.prompt, handle));
+  // Those words with a reference's @handle renamed, or taken out when it is removed.
+  const withMentionReplaced = (handle: string, replacement = '') => (draft.isMultiShot
+    ? { multiPrompts: draft.multiPrompts.map((shot) => (promptContainsHandle(shot.prompt, handle) ? { ...shot, prompt: replacePromptHandle(shot.prompt, handle, replacement) } : shot)) }
+    : { prompt: replacePromptHandle(draft.prompt, handle, replacement) });
+
   const renameSelectedReference = (displayName: string) => {
     if (!selectedReference) return;
     if (selectedSubject) {
       const renamedSubject = renameSubjectDraft(selectedSubject, displayName, videoDraftHandles(draft));
-      const prompt = promptContainsHandle(draft.prompt, selectedSubject.handle)
-        ? replacePromptHandle(draft.prompt, selectedSubject.handle, renamedSubject.handle)
-        : draft.prompt;
-      onChange({ ...draft, prompt, subjects: subjects.map((subject) => (subject.id === selectedSubject.id ? renamedSubject : subject)) });
+      onChange({
+        ...draft,
+        ...(runTextNames(selectedSubject.handle) ? withMentionReplaced(selectedSubject.handle, renamedSubject.handle) : {}),
+        subjects: subjects.map((subject) => (subject.id === selectedSubject.id ? renamedSubject : subject)),
+      });
       return;
     }
     const nextName = renameMediaDraft(selectedReference, displayName);
@@ -4183,34 +4220,41 @@ function VideoCreatorComposer({
         .filter((media) => media.id !== selectedReference.id))
       : nextName;
     const withRenamed = (items: MediaDraft[]) => items.map((media) => (media.id === selectedReference.id ? renamed : media));
+    const mention = selectedReference.handle && runTextNames(selectedReference.handle)
+      ? withMentionReplaced(selectedReference.handle, renamed.handle ?? '')
+      : {};
     if (draft.references.some((media) => media.id === selectedReference.id)) {
-      const prompt = selectedReference.handle && promptContainsHandle(draft.prompt, selectedReference.handle)
-        ? replacePromptHandle(draft.prompt, selectedReference.handle, renamed.handle ?? '')
-        : draft.prompt;
-      onChange({ ...draft, prompt, references: withRenamed(draft.references) });
+      onChange({ ...draft, ...mention, references: withRenamed(draft.references) });
       return;
     }
     if (draft.referenceVideos.some((media) => media.id === selectedReference.id)) {
-      const prompt = selectedReference.handle && promptContainsHandle(draft.prompt, selectedReference.handle)
-        ? replacePromptHandle(draft.prompt, selectedReference.handle, renamed.handle ?? '')
-        : draft.prompt;
-      onChange({ ...draft, prompt, referenceVideos: withRenamed(draft.referenceVideos) });
+      onChange({ ...draft, ...mention, referenceVideos: withRenamed(draft.referenceVideos) });
       return;
     }
     if (draft.startFrame?.id === selectedReference.id) onChange({ ...draft, startFrame: renameMediaDraft(selectedReference, displayName) });
     if (draft.endFrame?.id === selectedReference.id) onChange({ ...draft, endFrame: renameMediaDraft(selectedReference, displayName) });
   };
 
-  // A reference, clip or track, with its @handle taken out of the prompt.
+  // A reference, clip or track, with its @handle taken out of the words the run reads. A frame
+  // waiting apart goes as its own slot's Remove takes it.
   const removeReference = (media: MediaDraft) => {
-    const handleUsed = promptContainsHandle(draft.prompt, media.handle);
+    if (draft.startFrame?.id === media.id || draft.endFrame?.id === media.id) {
+      onReferenceNotice(`${media.displayName} was removed from this draft.`);
+      onChange({
+        ...draft,
+        startFrame: draft.startFrame?.id === media.id ? null : draft.startFrame,
+        endFrame: draft.endFrame?.id === media.id ? null : draft.endFrame,
+      });
+      return;
+    }
+    const handleUsed = runTextNames(media.handle);
     onReferenceNotice(handleUsed && media.handle
       ? `${media.displayName} and ${media.handle} were removed from this draft.`
       : `${media.displayName} was removed from this draft.`);
     const without = (items: MediaDraft[]) => items.filter((item) => item.id !== media.id);
     onChange({
       ...draft,
-      prompt: handleUsed && media.handle ? replacePromptHandle(draft.prompt, media.handle) : draft.prompt,
+      ...(handleUsed && media.handle ? withMentionReplaced(media.handle) : {}),
       references: without(draft.references),
       referenceVideos: without(draft.referenceVideos),
       referenceAudios: without(draft.referenceAudios),
@@ -4220,13 +4264,13 @@ function VideoCreatorComposer({
   const removeSelectedReference = () => {
     if (!selectedReference) return;
     if (selectedSubject) {
-      const handleUsed = promptContainsHandle(draft.prompt, selectedSubject.handle);
+      const handleUsed = runTextNames(selectedSubject.handle);
       onReferenceNotice(handleUsed
         ? `${selectedSubject.displayName} and ${selectedSubject.handle} were removed from this draft.`
         : `${selectedSubject.displayName} was removed from this draft.`);
       onChange({
         ...draft,
-        prompt: handleUsed ? replacePromptHandle(draft.prompt, selectedSubject.handle) : draft.prompt,
+        ...(handleUsed ? withMentionReplaced(selectedSubject.handle) : {}),
         subjects: subjects.filter((subject) => subject.id !== selectedSubject.id),
       });
     } else if ([...draft.references, ...draft.referenceVideos].some((media) => media.id === selectedReference.id)) {
@@ -4368,7 +4412,9 @@ function VideoCreatorComposer({
                   ? `${reusableModeLabel} unavailable with frames attached`
                   : framesExcludeReferences
                     ? `${frameModeLabel} or ${reusableModeLabel} — one per run`
-                    : draft.isMultiShot ? 'Start frame for the story' : 'Frames and references'}
+                    : draft.isMultiShot
+                      ? supportsReusable ? `Start frame and ${reusableModeLabel.toLowerCase()} for the story` : 'Start frame for the story'
+                      : 'Frames and references'}
             </Text>
           </View>
         </View>
@@ -4380,16 +4426,16 @@ function VideoCreatorComposer({
           >
             <View testID="video-frame-slots" style={{ flexDirection: 'row', gap: 9 }}>
               {supportsStartFrame ? (
-                <CompactReferenceSlot testID="video-start-frame-slot" title={startFrameSlot?.label ?? 'Start frame'} helper="First visual" media={draft.startFrame} required={(startFrameSlot?.min ?? (model?.id === 'hailuo-2.3' ? 1 : 0)) > 0} isUploading={isUploading} progress={upload?.target === 'start-frame' ? upload : null} onAdd={onUploadStart} onOpen={() => setReferenceId(draft.startFrame?.id ?? null)} />
+                <CompactReferenceSlot testID="video-start-frame-slot" title={startFrameSlot?.label ?? 'Start frame'} helper={startFrameLeftOut ? frameLeftOutHelper : 'First visual'} media={startFrameLeftOut ? null : draft.startFrame} required={(startFrameSlot?.min ?? (model?.id === 'hailuo-2.3' ? 1 : 0)) > 0} disabled={startFrameLeftOut} isUploading={isUploading} progress={upload?.target === 'start-frame' ? upload : null} onAdd={onUploadStart} onOpen={() => setReferenceId(draft.startFrame?.id ?? null)} />
               ) : null}
               {supportsEndFrame ? (
                 <CompactReferenceSlot
                   testID="video-end-frame-slot"
                   title={endFrameSlot?.label ?? 'End frame'}
-                  helper={draft.isMultiShot ? 'Single shot only' : 'Optional finish'}
-                  media={draft.endFrame}
+                  helper={endFrameLeftOut ? frameLeftOutHelper : draft.isMultiShot ? 'Single shot only' : 'Optional finish'}
+                  media={endFrameLeftOut ? null : draft.endFrame}
                   required={(endFrameSlot?.min ?? 0) > 0}
-                  disabled={draft.isMultiShot && !draft.endFrame}
+                  disabled={endFrameLeftOut || (draft.isMultiShot && !draft.endFrame)}
                   isUploading={isUploading}
                   progress={upload?.target === 'end-frame' ? upload : null}
                   onAdd={onUploadEnd}
@@ -4505,10 +4551,11 @@ function VideoCreatorComposer({
         media={selectedReference}
         gallery={selectedSubject?.images ?? null}
         noun={selectedSubject ? 'subject' : 'reference'}
-        handleUsedInPrompt={promptContainsHandle(draft.prompt, selectedReference?.handle)}
+        handleUsedInPrompt={runTextNames(selectedReference?.handle)}
         onClose={() => setReferenceId(null)}
         onRename={renameSelectedReference}
-        onUseHandle={selectedReference && (selectedSubject !== null || Boolean(selectedReference.handle && runHandles.has(selectedReference.handle)))
+        // A story's prompt is its shots: the single shot's prompt an insert would write into is hidden.
+        onUseHandle={selectedReference && !draft.isMultiShot && (selectedSubject !== null || Boolean(selectedReference.handle && runHandles.has(selectedReference.handle)))
           ? (handle) => {
               insertReferenceHandle(handle, lastPromptSelectionRef.current, 280);
               setReferenceId(null);
@@ -6571,7 +6618,18 @@ function SubjectPreview({ subject, size = 72 }: { subject: SubjectDraft; size?: 
 }
 
 function SubjectPicture({ image, size, renewLink }: { image: MediaDraft; size: number; renewLink: ((media: MediaDraft) => Promise<string>) | null }) {
+  const theme = useAppTheme();
+  const unavailable = useContext(UnavailableReferences);
   const url = useReferencePreviewUrl(image);
+  if (image.storagePath && unavailable.has(image.storagePath)) {
+    // Swept from storage: nothing is left to draw, and the subject is added again.
+    return (
+      <View
+        testID={`reference-unavailable-${image.id}`}
+        style={{ width: size, height: size, borderWidth: 1, borderStyle: 'dashed', borderColor: hexWithAlpha(theme.colors.amber, 0.5), backgroundColor: hexWithAlpha(theme.colors.amber, 0.08) }}
+      />
+    );
+  }
   return (
     <StableMediaImage
       url={url}

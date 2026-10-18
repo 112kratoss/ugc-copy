@@ -10,8 +10,10 @@ import type {
 import { normalizeCatalogSettings, parseModelCatalogDetail } from '../lib/generation-model-catalog';
 import {
   applyCatalogModelDefaults,
+  catalogDraftInputCounts,
   catalogDraftRunHandles,
   catalogMultiShotLimits,
+  catalogRunEnhancementInputs,
   catalogRunInputSlots,
   catalogVideoRunReferenceMode,
   reconcileCreationDraftWithCatalog,
@@ -26,6 +28,7 @@ import {
   validateCatalogCreationDraft,
 } from '../lib/generation-model-draft';
 import {
+  buildPromptEnhancementRequest,
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
   createSubjectDraft,
@@ -1170,5 +1173,98 @@ describe('the start a run is sent as', () => {
     const legacyQuoteKey = JSON.stringify(buildCatalogQuoteRequest(legacyDraft, remoteImageModel, 'revision-1'));
 
     expect(catalogStartRequest(legacyRun, { key: legacyQuoteKey, status: 'ready', cost: 8 })).toBe(legacyRun);
+  });
+});
+
+// A fresh-context review of PR #481 found the creator screen reading a draft its own way where the run
+// already says what it sends (catalogRunInputSlots): a copy of the held counts, and Enhance read off
+// the attachments without the model (videoDraftReferenceMode). These are the run's own answers.
+describe('what the creator reads off the run it would send', () => {
+  const wan = parseModelCatalogDetail(liveCatalog.models.find((model) => model.id === 'wan-2.7'));
+  const named = (media: MediaDraft, handle: string): MediaDraft => ({ ...media, handle });
+
+  it('counts what a draft holds for each slot as the run counts it', () => {
+    // The screen's copy counted a subject's pictures as the draft's references, and an end frame in a
+    // multi-shot run, which no run sends.
+    const hero = createSubjectDraft([upload('hero-front.png', 'image'), upload('hero-side.png', 'image')], 'Hero', []);
+    const subjects = videoDraft(klingO3, { prompt: '@hero walks in', subjects: [hero], references: [upload('kept.png', 'image')] });
+    expect(catalogDraftInputCounts(subjects, klingO3)).toEqual({ startFrame: 0, imageReferences: 1, subjectImages: 2 });
+
+    // Set past the creator's own normalizing, which drops a multi-shot run's end frame.
+    const story = { ...videoDraft(kling30, { isMultiShot: true, startFrame: upload('first.png', 'image') }), endFrame: upload('last.png', 'image') };
+    expect(catalogDraftInputCounts(story, kling30)).toEqual({ startFrame: 1, endFrame: 0, videoElements: 0 });
+  });
+
+  describe('Enhance is told what the run sends', () => {
+    const enhanced = (draft: VideoCreationDraft, model: GenerationModelDescriptor) => (
+      buildPromptEnhancementRequest(draft, { videoRun: catalogRunEnhancementInputs(draft, model) }).context
+    );
+
+    it('a Kling 3.0 run: its start frame, and the named clip that goes beside it', () => {
+      const draft = videoDraft(kling30, {
+        prompt: 'Open on the door, then @turn',
+        startFrame: upload('door.png', 'image'),
+        referenceVideos: [named(upload('turn.mp4', 'video', { durationSeconds: 3 }), '@turn')],
+      });
+
+      expect(enhanced(draft, kling30)).toMatchObject({
+        hasStartImage: true,
+        hasEndImage: false,
+        hasReferenceVideo: true,
+        referenceImageCount: 0,
+        elementReferences: [{ handle: '@turn', displayName: 'turn' }],
+        frameImageUrls: ['https://cdn.example.com/door.png'],
+      });
+    });
+
+    it('a Wan 2.7 references run: its picture and the start frame it takes beside it, and no end frame', () => {
+      const draft = videoDraft(wan, {
+        prompt: 'The product from @look turns on the doorstep',
+        references: [upload('look.png', 'image')],
+        startFrame: upload('doorstep.png', 'image'),
+        endFrame: upload('porch.png', 'image'),
+      });
+
+      expect(enhanced(draft, wan)).toMatchObject({
+        hasStartImage: true,
+        hasEndImage: false,
+        hasReferenceVideo: false,
+        referenceImageCount: 1,
+        elementReferences: [{ handle: '@look', displayName: 'look' }],
+        frameImageUrls: ['https://cdn.example.com/doorstep.png'],
+      });
+    });
+
+    it('a Seedance 1.5 Pro frames run: clips kept from another model are not sent, so not described', () => {
+      const draft = videoDraft(seedance15ProModel, {
+        prompt: 'A walk at dusk',
+        startFrame: upload('street.png', 'image'),
+        endFrame: upload('corner.png', 'image'),
+        referenceVideos: [named(upload('stroll.mp4', 'video', { durationSeconds: 4 }), '@stroll')],
+      });
+
+      expect(enhanced(draft, seedance15ProModel)).toMatchObject({
+        hasStartImage: true,
+        hasEndImage: true,
+        hasReferenceVideo: false,
+        referenceImageCount: 0,
+        elementReferences: [],
+        frameImageUrls: ['https://cdn.example.com/street.png', 'https://cdn.example.com/corner.png'],
+      });
+    });
+
+    it('a Kling O3 subjects run: each subject once, by its own name, and none of its pictures as a reference', () => {
+      const hero = createSubjectDraft([upload('hero-front.png', 'image'), upload('hero-side.png', 'image')], 'Hero', []);
+      const draft = videoDraft(klingO3, { prompt: '@hero walks in', subjects: [hero], startFrame: upload('hall.png', 'image') });
+
+      expect(enhanced(draft, klingO3)).toMatchObject({
+        hasStartImage: false,
+        hasEndImage: false,
+        hasReferenceVideo: false,
+        referenceImageCount: 0,
+        elementReferences: [{ handle: '@hero', displayName: 'Hero' }],
+      });
+      expect(enhanced(draft, klingO3)).not.toHaveProperty('frameImageUrls');
+    });
   });
 });

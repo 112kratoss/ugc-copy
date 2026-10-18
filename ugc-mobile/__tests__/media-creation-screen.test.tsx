@@ -280,6 +280,9 @@ import type { ModelCatalogKind, ModelCatalogSummary } from '../lib/model-catalog
 import { PrimaryButton, SecondaryButton } from '../components/ui';
 import { ApiError } from '../lib/api-client';
 import whatsNewContract from '../../contracts/whats-new-models-v1.json';
+import subjectsContract from '../../contracts/model-catalog-subjects-mode-v1.json';
+import liveCatalog from './fixtures/live-catalog-descriptors.json';
+import { parseModelCatalogDetail } from '../lib/generation-model-catalog';
 
 const referenceModeIs = (value: 'frames' | 'elements') => [{ source: 'setting' as const, key: 'referenceMode', operator: 'equals' as const, value }];
 const frameSlots: CatalogInputSlot[] = [
@@ -382,6 +385,57 @@ function paritySeedanceVideo(): GenerationModelDescriptor {
     inputs: { imageReferences: { max: 5, supportsNaming: true }, videoReferences: { max: 3 }, audioReferences: { max: 3 }, startFrame: true, endFrame: true, combineFramesWithReferences: false },
     inputModes: seedanceInputModes(),
   };
+}
+
+/** Seedance 1.5 Pro as published: frames, or two reference pictures, and no clip. */
+function paritySeedanceOneFive(): GenerationModelDescriptor {
+  return {
+    ...paritySeedanceVideo(),
+    id: 'seedance-1.5-pro',
+    displayName: 'Seedance 1.5 Pro',
+    inputs: { imageReferences: { max: 2, supportsNaming: true }, videoReferences: null, audioReferences: null, startFrame: true, endFrame: true, combineFramesWithReferences: false },
+    inputModes: [
+      { key: 'frames', label: 'Frames', default: true, conditions: referenceModeIs('frames'), slots: frameSlots },
+      {
+        key: 'references',
+        label: 'Reusable references',
+        default: false,
+        conditions: referenceModeIs('elements'),
+        slots: [{ key: 'imageReferences', kind: 'image', role: 'reference', label: 'Reference images', min: 0, max: 2, supportsNaming: true }],
+      },
+    ],
+  };
+}
+
+/** Kling O3 as published: a start frame, reference pictures, or named subjects, one shape per run. */
+function parityKlingO3(): GenerationModelDescriptor {
+  return {
+    ...parityKlingVideo(),
+    id: 'kling-o3',
+    displayName: 'Kling O3',
+    recommended: false,
+    controls: [
+      ...parityKlingVideo().controls.filter((control) => control.key !== 'mode'),
+      { key: 'referenceMode', label: 'Input mode', type: 'choice', presentation: 'chips', defaultValue: 'frames', options: [{ value: 'frames', label: 'Frames' }, { value: 'elements', label: 'References' }] },
+    ],
+    inputs: { imageReferences: { max: 7, supportsNaming: true }, videoReferences: null, audioReferences: null, startFrame: true, endFrame: false, combineFramesWithReferences: false },
+    inputModes: [
+      { key: 'frames', label: 'Frames', default: true, conditions: referenceModeIs('frames'), slots: [frameSlots[0]] },
+      {
+        key: 'references',
+        label: 'Reusable references',
+        default: false,
+        conditions: referenceModeIs('elements'),
+        slots: [{ key: 'imageReferences', kind: 'image', role: 'reference', label: 'Reference images', min: 0, max: 7, supportsNaming: true, maxNamed: 3 }],
+      },
+      subjectsContract.inputMode as CatalogInputMode,
+    ],
+  };
+}
+
+/** Wan 2.7 as production published it in revision pixverse-mobile-20261008. */
+function liveWan27(): GenerationModelDescriptor {
+  return parseModelCatalogDetail(liveCatalog.models.find((model) => model.id === 'wan-2.7'));
 }
 
 function parityMotionModel(): GenerationModelDescriptor {
@@ -5544,6 +5598,193 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await renderer.act(async () => { await expect(thumbnail.props.resolveRetryUrl()).rejects.toThrow('That upload is no longer available.'); });
         expect(tree.root.findAllByProps({ testID: 'reference-unavailable-alpha' })).not.toHaveLength(0);
         expect(generateButton(tree).props.disabled).toBe(true);
+      });
+    });
+
+    // A fresh-context review of PR #481 found the screen telling a run's story its own way in places
+    // where the run already says what it sends: a clip a Kling 3.0 story sends was drawn nowhere, a Wan
+    // 2.7 end frame the run leaves out was drawn as going with it, the swept-upload check walked what
+    // the draft holds rather than what the run sends, and Enhance described the attachments.
+    describe('what the screen shows, checks and describes is the run it would send', () => {
+      const shot = (id: string, prompt: string, duration: number) => ({ id, prompt, duration });
+      const removeFromDetails = async (tree: renderer.ReactTestRenderer, name: string) => {
+        renderer.act(() => { labelled(tree.root, `Open details for ${name}`).props.onPress(); });
+        renderer.act(() => { labelled(tree.root, `Remove ${name}`).props.onPress(); });
+        const buttons = nativeAlertState.alert.mock.lastCall![2] as Array<{ text: string; onPress?: () => void }>;
+        await renderer.act(async () => {
+          buttons.find((button) => button.text === 'Remove')?.onPress?.();
+          await Promise.resolve();
+        });
+        await settle();
+      };
+
+      const story = () => savedDrafts({ video: {
+        model: 'kling-3.0-video',
+        catalogRevision: 'parity-rev',
+        isMultiShot: true,
+        multiPrompts: [shot('s1', 'A door opens', 5), shot('s2', '@turn spins in', 4)],
+        referenceVideos: [stagedMedia('turn', 'video', { durationSeconds: 3 })],
+      } });
+
+      it('draws the clips a Kling 3.0 story sends, beside the rail’s own count', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, story());
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        // Kie's multi_prompt takes kling_elements, and the server reads the shots' mentions against them.
+        expect(labelled(tree.root, 'Open details for Turn')).toBeTruthy();
+        expect(labelled(tree.root, 'Add Video 1/3')).toBeTruthy();
+        expect(tree.root.findAllByProps({ testID: 'standby-references' })).toHaveLength(0);
+        await pressGenerate(tree);
+        expect((authState.api.startGeneration.mock.calls[0][0] as { inputs: unknown[] }).inputs).toEqual([
+          expect.objectContaining({ slot: 'videoElements', handle: '@turn', url: 'https://cdn.example.com/turn.mp4' }),
+        ]);
+      });
+
+      it('lets a story’s clip be removed with its mention, and inserts none into the prompt a story hides', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, story());
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        renderer.act(() => { labelled(tree.root, 'Open details for Turn').props.onPress(); });
+        expect(text(tree)).not.toContain('Insert @turn');
+        renderer.act(() => { labelled(tree.root, 'Close reference details').props.onPress(); });
+        await settle();
+        await removeFromDetails(tree, 'Turn');
+
+        // Asked as a shot's mention: the sheet reads the shots, not the prompt a story hides.
+        expect(nativeAlertState.alert.mock.lastCall?.[1]).toBe('Turn and @turn will be removed from this draft.');
+        expect(tree.root.findAllByProps({ accessibilityLabel: 'Open details for Turn' })).toHaveLength(0);
+        // Its mention goes from the shot that named it, as from a single shot's prompt.
+        expect(storedDrafts().video).toMatchObject({ referenceVideos: [], multiPrompts: [shot('s1', 'A door opens', 5), shot('s2', 'spins in', 4)] });
+        expect(text(tree)).toContain('Turn and @turn were removed from this draft.');
+      });
+
+      it('renames a story clip’s mention in the shot that names it', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, story());
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        renderer.act(() => { labelled(tree.root, 'Open details for Turn').props.onPress(); });
+        renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Reference name for Turn' }).props.onChangeText('Spin'); });
+        await settle();
+
+        expect(storedDrafts().video).toMatchObject({
+          prompt: '',
+          multiPrompts: [shot('s1', 'A door opens', 5), shot('s2', '@spin spins in', 4)],
+          referenceVideos: [expect.objectContaining({ displayName: 'Spin', handle: '@spin' })],
+        });
+      });
+
+      it('keeps a Wan 2.7 end frame apart while references go with the run, which takes a start frame beside them and no end frame', async () => {
+        catalogState.catalog = parityCatalog([liveWan27()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'wan-2.7',
+          catalogRevision: 'parity-rev',
+          prompt: 'The product from @look turns on the doorstep',
+          references: [stagedMedia('look')],
+          startFrame: stagedMedia('doorstep'),
+          endFrame: stagedMedia('porch'),
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        const standby = tree.root.findByProps({ testID: 'standby-references' });
+        expect(collectText(standby)).toContain('Not sent with this run');
+        expect(pressables(standby).map((node) => node.props.accessibilityLabel)).toEqual(['Remove Porch']);
+        // Its slot says why, and takes none while the references go.
+        const endSlot = tree.root.findByProps({ testID: 'video-end-frame-slot' });
+        expect(endSlot.props).toMatchObject({ media: null, disabled: true, helper: 'Not with references' });
+        // The start frame goes with the references.
+        expect(tree.root.findAllByProps({ accessibilityLabel: 'Open details for Doorstep' })).not.toHaveLength(0);
+        expect(generateButton(tree).props.disabled).toBe(false);
+
+        renderer.act(() => { labelled(standby, 'Remove Porch').props.onPress(); });
+        await settle();
+        expect(storedDrafts().video.endFrame).toBeNull();
+        expect(tree.root.findAllByProps({ testID: 'standby-references' })).toHaveLength(0);
+        expect(text(tree)).toContain('Porch was removed from this draft.');
+      });
+
+      it('lets a run go without a swept upload it leaves out, and marks that upload where it waits', async () => {
+        catalogState.catalog = parityCatalog([paritySeedanceOneFive()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'seedance-1.5-pro',
+          catalogRevision: 'parity-rev',
+          prompt: 'A walk at dusk',
+          referenceVideos: [stagedMedia('stroll', 'video', { url: expiredLink('uploads/user-123/stroll.mp4') })],
+        } }));
+        authState.api.createMediaReadUrl.mockRejectedValue(missingUpload());
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        expect(authState.api.createMediaReadUrl).toHaveBeenCalledWith({ storagePath: 'uploads/user-123/stroll.mp4' });
+        expect(tree.root.findByProps({ testID: 'standby-references' }).findAllByProps({ testID: 'reference-unavailable-stroll' })).not.toHaveLength(0);
+        // Seedance 1.5 Pro takes no clip, so the run never sends it, and nothing holds the run for it.
+        expect(text(tree)).not.toContain('Stroll is no longer available.');
+        expect(generateButton(tree).props.disabled).toBe(false);
+      });
+
+      describe('a named subject’s pictures, which a Kling O3 subjects run sends', () => {
+        const heroDraft = (side: Record<string, unknown>) => savedDrafts({ video: {
+          model: 'kling-o3',
+          catalogRevision: 'parity-rev',
+          prompt: '@hero walks in',
+          subjects: [{
+            id: 'subject-hero',
+            displayName: 'Hero',
+            handle: '@hero',
+            images: [stagedMedia('hero-front', 'image', { handle: '@hero' }), stagedMedia('hero-side', 'image', { handle: '@hero', ...side })],
+          }],
+        } });
+
+        it('are asked about on resume, and one swept holds the run with the subject’s name', async () => {
+          catalogState.catalog = parityCatalog([parityKlingO3()]);
+          memory.set(ordinaryKey, heroDraft({ url: expiredLink('uploads/user-123/hero-side.png') }));
+          authState.api.createMediaReadUrl.mockRejectedValue(missingUpload());
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+          expect(authState.api.createMediaReadUrl).toHaveBeenCalledTimes(1);
+          expect(authState.api.createMediaReadUrl).toHaveBeenCalledWith({ storagePath: 'uploads/user-123/hero-side.png' });
+          expect(tree.root.findAllByProps({ testID: 'reference-unavailable-hero-side' })).not.toHaveLength(0);
+          expect(blocker(tree)).toContain('A picture of Hero is no longer available. Add Hero again.');
+          expect(generateButton(tree).props.disabled).toBe(true);
+        });
+
+        it('have a link that ran out renewed in the draft', async () => {
+          catalogState.catalog = parityCatalog([parityKlingO3()]);
+          memory.set(ordinaryKey, heroDraft({ url: expiredLink('uploads/user-123/hero-side.png') }));
+          authState.api.createMediaReadUrl.mockResolvedValue({ success: true, signedUrl: 'https://cdn.example.com/hero-side-renewed.png', expiresInSeconds: 3600 });
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+          expect(storedDrafts().video.subjects[0].images.map((image: { url: string }) => image.url)).toEqual([
+            'https://cdn.example.com/hero-front.png',
+            'https://cdn.example.com/hero-side-renewed.png',
+          ]);
+          expect(generateButton(tree).props.disabled).toBe(false);
+        });
+      });
+
+      it('tells the enhancer what a Kling 3.0 run sends: its start frame, and the clip that goes beside it', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'kling-3.0-video',
+          catalogRevision: 'parity-rev',
+          prompt: 'Open on the door, then @turn',
+          startFrame: stagedMedia('door'),
+          referenceVideos: [stagedMedia('turn', 'video', { durationSeconds: 3 })],
+        } }));
+        authState.api.enhancePrompt.mockReset().mockResolvedValue({ enhancedPrompt: 'Open on the door, then @turn, slowly.' });
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Enhance · 2 credits').props.onPress(); });
+        expect(authState.api.enhancePrompt.mock.calls[0][0].context).toMatchObject({
+          hasStartImage: true,
+          hasEndImage: false,
+          hasReferenceVideo: true,
+          referenceImageCount: 0,
+          elementReferences: [{ handle: '@turn', displayName: 'Turn' }],
+          frameImageUrls: ['https://cdn.example.com/door.png'],
+        });
       });
     });
 

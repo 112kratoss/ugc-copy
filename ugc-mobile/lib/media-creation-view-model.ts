@@ -1914,15 +1914,39 @@ export function buildGenerationPayload(draft: CreationDraft): ImageGenerationReq
   };
 }
 
-export interface PromptEnhancementRequestOptions {
-  level?: 'faithful' | 'cinematic';
+/**
+ * What a video run sends that its Enhance request describes, read off the run on its model
+ * (catalogRunEnhancementInputs in generation-model-draft.ts): its frames, its reference pictures
+ * and clips, and the named references its prompt may mention.
+ */
+export interface VideoRunEnhancementInputs {
+  startFrame: { url: string | null } | null;
+  endFrame: { url: string | null } | null;
+  referenceImageCount: number;
+  hasReferenceVideo: boolean;
+  elementReferences: Array<{ handle: string; displayName: string }>;
 }
 
-/** Uploaded https frame URLs the enhancer LLM may be pointed at as vision input. */
-function enhancerFrameImageUrls(draft: VideoCreationDraft, usesReusableReferences: boolean): string[] {
-  if (usesReusableReferences) return [];
-  return [draft.startFrame?.url, draft.endFrame?.url]
-    .filter((url): url is string => typeof url === 'string' && url.startsWith('https://'));
+export interface PromptEnhancementRequestOptions {
+  level?: 'faithful' | 'cinematic';
+  /** A video run's inputs, as its model sends them. Without them, the attachments are read alone. */
+  videoRun?: VideoRunEnhancementInputs;
+}
+
+/** A video run's inputs read off the draft's attachments alone, for a draft whose model is not known. */
+function attachedVideoRunInputs(draft: VideoCreationDraft): VideoRunEnhancementInputs {
+  const usesReusableReferences = videoDraftReferenceMode(draft) === 'elements';
+  const references = namedReferences(usesReusableReferences ? draft.references : []);
+  return {
+    startFrame: usesReusableReferences ? null : draft.startFrame,
+    endFrame: usesReusableReferences ? null : draft.endFrame,
+    referenceImageCount: references.length,
+    hasReferenceVideo: usesReusableReferences && draft.referenceVideos.length > 0,
+    elementReferences: references.map((reference) => ({
+      handle: reference.handle ?? '',
+      displayName: reference.displayName,
+    })),
+  };
 }
 
 export function buildPromptEnhancementRequest(
@@ -1948,9 +1972,10 @@ export function buildPromptEnhancementRequest(
   }
 
   if (draft.tool === 'video') {
-    const usesReusableReferences = videoDraftReferenceMode(draft) === 'elements';
-    const references = namedReferences(usesReusableReferences ? draft.references : []);
-    const frameImageUrls = enhancerFrameImageUrls(draft, usesReusableReferences);
+    const run = options.videoRun ?? attachedVideoRunInputs(draft);
+    // Uploaded https frames the enhancer may be pointed at as vision input.
+    const frameImageUrls = [run.startFrame?.url, run.endFrame?.url]
+      .filter((url): url is string => typeof url === 'string' && url.startsWith('https://'));
     return {
       medium: 'video',
       selectedModel: draft.model,
@@ -1958,16 +1983,13 @@ export function buildPromptEnhancementRequest(
       context: {
         duration: draft.duration,
         sound: draft.sound,
-        hasStartImage: !usesReusableReferences && Boolean(draft.startFrame),
-        hasEndImage: !usesReusableReferences && Boolean(draft.endFrame),
-        hasReferenceVideo: usesReusableReferences && draft.referenceVideos.length > 0,
-        referenceImageCount: references.length,
+        hasStartImage: Boolean(run.startFrame),
+        hasEndImage: Boolean(run.endFrame),
+        hasReferenceVideo: run.hasReferenceVideo,
+        referenceImageCount: run.referenceImageCount,
         isMultiShot: draft.isMultiShot,
         shotCount: draft.multiPrompts.length,
-        elementReferences: references.map((reference) => ({
-          handle: reference.handle ?? '',
-          displayName: reference.displayName,
-        })),
+        elementReferences: run.elementReferences,
         ...(frameImageUrls.length > 0 ? { frameImageUrls } : {}),
         ...(level ? { enhancementLevel: level } : {}),
       },
