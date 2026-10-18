@@ -4,8 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CreateImageClient from '@/app/create-image/CreateImageClient';
 import { GenerationStatusRequestError } from '@/lib/generation-status-client';
 import type { PersistedImageElementRecord } from '@/lib/persisted-media';
+import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import type { RemixSourceBundle } from '@/lib/remix-source';
 import { TemporaryMediaReadUrlError } from '@/lib/temporary-media-upload';
+// What the server quotes when it starts a run: for "the price of the run the page sends".
+import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 
 const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string, _elements: PersistedImageElementRecord[]): Promise<void> => {
@@ -22,6 +25,10 @@ const getPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
 const removePersistedMediaMock = vi.hoisted(() => vi.fn(async () => undefined));
 const purgeLegacyPersistedMediaMock = vi.hoisted(() => vi.fn(async () => undefined));
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
+// Each quote request the page makes, as the quote hook is given it.
+const quoteRequestMock = vi.hoisted(() => vi.fn((_request: GenerationModelQuoteInput | null) => {
+  void _request;
+}));
 const testDescriptors = vi.hoisted(() => ({
   nanoBanana: {
     id: 'nano-banana-2',
@@ -185,16 +192,19 @@ vi.mock('@/lib/generation-model-client', async () => {
       revision: 'test-catalog-rev',
       refetch: generationCatalogRefetchMock,
     }),
-    useWebGenerationModelQuote: () => ({
-      status: 'ready',
-      quote: {
-        modelId: 'nano-banana-2',
-        catalogRevision: 'test-catalog-rev',
-        normalizedSettings: {},
-        costCredits: 8,
-      },
-      error: null,
-    }),
+    useWebGenerationModelQuote: (request: GenerationModelQuoteInput | null) => {
+      quoteRequestMock(request);
+      return {
+        status: 'ready',
+        quote: {
+          modelId: 'nano-banana-2',
+          catalogRevision: 'test-catalog-rev',
+          normalizedSettings: {},
+          costCredits: 8,
+        },
+        error: null,
+      };
+    },
   };
 });
 
@@ -202,6 +212,7 @@ const SIGNED_IN_SESSION = { data: { session: { access_token: 'test-token', user:
 
 beforeEach(() => {
   creatorDraftStore.clear();
+  quoteRequestMock.mockClear();
   loadCreatorDraftMock.mockClear();
   saveCreatorDraftMock.mockClear();
   purgeLegacyPersistedMediaMock.mockClear();
@@ -323,6 +334,23 @@ describe('CreateImageClient persisted elements', () => {
     });
     expect(await screen.findByText(/Your references are preserved/)).toBeInTheDocument();
     expect(setPersistedImageElementRecordsMock).not.toHaveBeenCalled();
+  });
+
+  it('prices the fourteen pictures a run would send while fifteen are on the grid', async () => {
+    // The run sends the pictures the model takes (the first fourteen); the quote
+    // counted all fifteen, so its price was not the price of any run the page sends.
+    getPersistedImageElementRecordsMock.mockResolvedValueOnce(Array.from({ length: 15 }, (_, index) => ({
+      id: `restored-${index + 1}`,
+      displayName: `Restored ${index + 1}`,
+      file: new File([`image-${index + 1}`], `restored-${index + 1}.png`, { type: 'image/png' }),
+    })));
+
+    render(<CreateImageClient prefill={{}} />);
+    expect(await screen.findByText(/Your references are preserved/)).toBeInTheDocument();
+
+    const request = quoteRequestMock.mock.calls.at(-1)?.[0];
+    expect(request?.inputCounts).toMatchObject({ images: 14, videos: 0, audios: 0 });
+    expect(request?.inputMetadata?.slots).toEqual({ imageReferences: { count: 14 } });
   });
 
   it('clears the over-limit explanation once the extra reference is removed', async () => {
@@ -890,6 +918,27 @@ describe('CreateImageClient generation pipeline', () => {
     // Each check reads the session again rather than reusing the token of the press.
     getSessionMock.mockResolvedValueOnce({ data: { session: { access_token: 'refreshed-token', user: { id: 'user-1' } } } });
     await expect(getAccessToken()).resolves.toBe('refreshed-token');
+  });
+
+  it('prices exactly the run it sends', async () => {
+    // The server quotes a run again from the inputs it posts when it starts it, and
+    // charges or refuses that quote, so the page asks for its price with that quote.
+    getPersistedImageElementRecordsMock.mockResolvedValue([{ id: 'restored-1', displayName: 'Restored product', file: restoredFile }]);
+    const fetchMock = installFetch({ starts: [startedReply()] });
+    render(<CreateImageClient prefill={{}} />);
+    expect((await screen.findAllByText('@restored_product')).length).toBeGreaterThan(0);
+    const shown = quoteRequestMock.mock.calls.at(-1)?.[0];
+    expect(shown?.inputCounts).toMatchObject({ images: 1 });
+
+    typePrompt('A portrait of @restored_product');
+    pressGenerate();
+    await findResult();
+
+    const started = buildUnifiedGenerationQuoteInput(
+      parseUnifiedGenerationRequest(startBody(startCalls(fetchMock)[0]) as unknown as Record<string, unknown>),
+    );
+    // This file's catalog hook makes up a revision of its own; the question is the rest.
+    expect({ ...shown, catalogRevision: undefined }).toEqual({ ...started, catalogRevision: undefined });
   });
 
   describe('a newer deploy', () => {
