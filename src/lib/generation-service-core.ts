@@ -35,6 +35,15 @@ export class GenerationServiceError extends Error {
   }
 }
 
+/** A start priced above the price its caller showed, refused before anything is held. */
+export function generationCostChangedError(): GenerationServiceError {
+  return new GenerationServiceError(
+    'The price of this run changed. Check the updated cost and generate again.',
+    409,
+    'cost_changed',
+  );
+}
+
 export function supabaseErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
   if (error && typeof error === 'object' && 'message' in error) {

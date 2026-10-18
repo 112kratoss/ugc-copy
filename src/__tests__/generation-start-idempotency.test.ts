@@ -126,6 +126,14 @@ describe('generation start idempotency', () => {
     }));
   });
 
+  it('binds the price a caller was shown to its attempt', () => {
+    // A retry of one attempt sends the same body, its price too, and replays; the same key
+    // sent with another price is another request, refused as a reused key.
+    const run = { kind: 'video', modelId: 'seedance-2', catalogRevision: 'rev-1', expectedCostCredits: 80 };
+
+    expect(hashGenerationStartRequest({ ...run, expectedCostCredits: 90 })).not.toBe(hashGenerationStartRequest(run));
+  });
+
   it('replays an existing generation without running the start function', async () => {
     const keyHash = hashGenerationStartIdempotencyKey('user-1', 'start-1');
     const { client, rpc } = createClient({

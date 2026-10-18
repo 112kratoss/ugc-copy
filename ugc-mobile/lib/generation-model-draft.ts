@@ -937,6 +937,26 @@ export function buildUnifiedCatalogGenerationRequest(
   };
 }
 
+/**
+ * The run as it is sent to start: with the price the creator was shown, when that price is a
+ * ready quote of this very run (asked with the run's own quote input, as `buildCatalogQuoteRequest`
+ * asks it). The server prices the run again, charges its own price up to that one, and refuses a
+ * start it prices above it (`cost_changed`) before anything is held. Without such a quote the run
+ * goes without a price, and the server charges its own as it always has.
+ */
+export function catalogStartRequest(
+  run: CatalogGenerationRequest,
+  quote: { key: string | null; status: string; cost: number | null },
+): CatalogGenerationRequest {
+  const { cost } = quote;
+  const shownForThisRun = quote.status === 'ready'
+    && typeof cost === 'number'
+    && Number.isSafeInteger(cost)
+    && cost >= 0
+    && quote.key === JSON.stringify(catalogRunQuoteInput(run));
+  return shownForThisRun ? { ...run, expectedCostCredits: cost } : run;
+}
+
 export const REFERENCE_DURATION_CHANGED_CODE = 'REFERENCE_DURATION_CHANGED';
 
 export type VerifiedInputDuration = {

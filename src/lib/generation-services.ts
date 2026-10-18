@@ -86,6 +86,7 @@ import {
 export { getPublicGenerationStartFailure };
 export type { GenerationStartFailureCode, PublicGenerationStartFailure };
 import {
+  generationCostChangedError,
   GenerationServiceError,
   isRecord,
   KIE_API_KEY,
@@ -93,7 +94,7 @@ import {
   resolveQuotedGenerationCost,
   supabaseErrorMessage,
 } from '@/lib/generation-service-core';
-export { GenerationServiceError };
+export { generationCostChangedError, GenerationServiceError };
 import {
   settleGenerationFailed,
   settleGenerationSucceeded,
@@ -2821,11 +2822,7 @@ export async function startVideoGeneration(params: {
   // single-shot duration): charging it would bill less than the run, so the
   // caller is sent back to quote again before anything is held.
   if (isMultiShot && quotedCostCredits !== undefined && computedCost > cost) {
-    throw new GenerationServiceError(
-      'The price of this run changed. Check the updated cost and generate again.',
-      409,
-      'cost_changed',
-    );
+    throw generationCostChangedError();
   }
 
   let generationId: string | null = null;

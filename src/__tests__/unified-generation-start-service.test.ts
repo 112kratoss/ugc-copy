@@ -5,8 +5,10 @@ import {
   GENERATION_PROMPT_MAX_LENGTH,
   MOTION_PROMPT_MAX_LENGTH,
 } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import { GenerationModelCatalogSchemaUnavailableError } from '@/lib/generation-model-catalog-store';
+import { GenerationServiceError } from '@/lib/generation-services';
 import {
   ReferenceDurationChangedError,
   UnifiedGenerationRequestError,
@@ -37,6 +39,29 @@ describe('unified generation start service', () => {
       modelId: 'remotely-published-model',
       catalogRevision: 'release-revision-2',
     });
+  });
+
+  it('reads the price the caller was shown, and refuses one that is not a whole number of credits', () => {
+    const body = { kind: 'video', modelId: 'seedance-2', catalogRevision: 'release-revision-2', settings: {} };
+    expect(parseUnifiedGenerationRequest({ ...body, expectedCostCredits: 80 }).expectedCostCredits).toBe(80);
+    expect(parseUnifiedGenerationRequest({ ...body, expectedCostCredits: 0 }).expectedCostCredits).toBe(0);
+    // An app from before the field sends nothing, and is priced and charged as before.
+    expect(parseUnifiedGenerationRequest(body).expectedCostCredits).toBeNull();
+    expect(parseUnifiedGenerationRequest({ ...body, expectedCostCredits: null }).expectedCostCredits).toBeNull();
+
+    for (const malformed of ['80', -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1, true, {}]) {
+      let refusal: unknown = null;
+      try {
+        parseUnifiedGenerationRequest({ ...body, expectedCostCredits: malformed });
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal, String(malformed)).toBeInstanceOf(UnifiedGenerationRequestError);
+      expect(refusal, String(malformed)).toMatchObject({
+        status: 422,
+        fieldErrors: { expectedCostCredits: expect.any(String) },
+      });
+    }
   });
 
   it('derives slot counts and reference-video duration metadata from assets', () => {
@@ -832,6 +857,123 @@ describe('reference lengths a caller reports', () => {
     );
 
     expect([...slots].sort()).toEqual(['audioReferences', 'clipReferences', 'motionReferences', 'videoReferences']);
+  });
+
+  // The start quotes the run itself and compared that only with its own second quote, at
+  // the measured lengths: a start priced above what the creator was shown was charged
+  // whenever its two quotes agreed with each other. The creator's price now comes with the
+  // run (`expectedCostCredits`), so a drift between the quote and the start is refused.
+  describe('a price the caller was shown', () => {
+    function shown(body: Record<string, unknown>, expectedCostCredits: number) {
+      return { ...body, expectedCostCredits };
+    }
+
+    it('refuses, before anything is held, a start it prices above that price', async () => {
+      const run = start({ body: shown(seedanceBody(10), 120), measuredSeconds: 10 });
+
+      const refusal = await run.outcome.then(() => null, (error: unknown) => error);
+      expect(refusal).toBeInstanceOf(GenerationServiceError);
+      expect(refusal).toMatchObject({ status: 409, failureCode: 'cost_changed' });
+      expect(run.startVideo).not.toHaveBeenCalled();
+    });
+
+    it('charges its own price when that is the price shown, or less', async () => {
+      for (const price of [150, 200]) {
+        const run = start({ body: shown(seedanceBody(10), price), measuredSeconds: 10 });
+
+        await expect(run.outcome).resolves.toMatchObject({ success: true });
+        expect(run.startVideo).toHaveBeenCalledWith(expect.objectContaining({ quotedCostCredits: 150 }));
+      }
+    });
+
+    it('prices and charges a run that comes without one as before', async () => {
+      const run = start({ body: seedanceBody(10), measuredSeconds: 10 });
+
+      await expect(run.outcome).resolves.toMatchObject({ success: true });
+      expect(run.startVideo).toHaveBeenCalledWith(expect.objectContaining({ quotedCostCredits: 150 }));
+    });
+
+    it('sends a reference that runs longer than reported back to be priced at its measured length', async () => {
+      const run = start({ body: shown(seedanceBody(10), 150), measuredSeconds: 12 });
+
+      await expect(run.outcome).rejects.toMatchObject({
+        code: 'REFERENCE_DURATION_CHANGED',
+        quotedCostCredits: 150,
+        costCredits: 170,
+        inputs: [{ index: 0, slot: 'videoReferences', durationSeconds: 12 }],
+      });
+      expect(run.startVideo).not.toHaveBeenCalled();
+    });
+
+    it('charges a measured length whose price stays within the price shown', async () => {
+      // Shown 160; quoted 150 at the reported 10 s and 155 at the measured 10.5 s.
+      const run = start({ body: shown(seedanceBody(10), 160), measuredSeconds: 10.5 });
+
+      await expect(run.outcome).resolves.toMatchObject({ success: true });
+      expect(run.startVideo).toHaveBeenCalledWith(expect.objectContaining({ quotedCostCredits: 155 }));
+    });
+
+    it('replays an accepted attempt whatever the run costs now', async () => {
+      const run = start({
+        body: shown(seedanceBody(10), 1),
+        measuredSeconds: 10,
+        existingGeneration: { id: 'generation-1', prediction_id: 'original-task', status: 'processing', cost: 150 },
+      });
+
+      await expect(run.outcome).resolves.toMatchObject({ predictionId: 'original-task', idempotentReplay: true });
+      expect(run.startVideo).not.toHaveBeenCalled();
+    });
+
+    describe('when its quote of the run differs from that price', () => {
+      let records: BackendLogRecord[] = [];
+      let restoreSink: () => void = () => undefined;
+
+      beforeEach(() => {
+        records = [];
+        restoreSink = setBackendLogSink((record) => {
+          records.push(record);
+        });
+      });
+
+      afterEach(() => {
+        restoreSink();
+      });
+
+      it('logs an error for a price above it, with both prices', async () => {
+        await start({ body: shown(seedanceBody(10), 120), measuredSeconds: 10 }).outcome.catch(() => undefined);
+
+        expect(records).toEqual([expect.objectContaining({
+          level: 'error',
+          msg: 'generation_start_quote_drift',
+          modelId: 'seedance-2',
+          kind: 'video',
+          catalogRevision: 'catalog-v2',
+          client: 'web',
+          expectedCostCredits: 120,
+          quotedCostCredits: 150,
+          costCredits: 150,
+        })]);
+      });
+
+      it('logs a warning for a price below it', async () => {
+        await start({ body: shown(seedanceBody(10), 200), measuredSeconds: 10 }).outcome;
+
+        expect(records).toEqual([expect.objectContaining({
+          level: 'warn',
+          msg: 'generation_start_quote_drift',
+          expectedCostCredits: 200,
+          quotedCostCredits: 150,
+        })]);
+      });
+
+      it('logs nothing when the two agree, even when the measured length moves the price', async () => {
+        await start({ body: shown(seedanceBody(10), 150), measuredSeconds: 10 }).outcome;
+        await start({ body: shown(seedanceBody(10), 150), measuredSeconds: 12 }).outcome.catch(() => undefined);
+        await start({ body: shown(seedanceBody(14), 190), measuredSeconds: 10 }).outcome;
+
+        expect(records).toEqual([]);
+      });
+    });
   });
 });
 

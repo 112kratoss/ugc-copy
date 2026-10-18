@@ -18,6 +18,7 @@ import {
   buildCatalogGenerationPayload,
   buildCatalogQuoteRequest,
   buildUnifiedCatalogGenerationRequest,
+  catalogStartRequest,
   getCatalogCreationSectionSummary,
   getCatalogDraftSettings,
   hydrateCatalogCreationDraftFromRemixSource,
@@ -1131,5 +1132,43 @@ describe('the inputs a quote counts are the inputs its run sends', () => {
       slots: { startFrame: { count: 1 }, videoElements: { count: 1 } },
       referenceVideoDurationsSeconds: [],
     });
+  });
+});
+
+describe('the start a run is sent as', () => {
+  // The creator shows the price of its ready quote, asked with the run's own quote input. The
+  // run carries that price to the server, which refuses a start it prices above it
+  // (cost_changed) before anything is held: drift between the quote and the start is a refusal,
+  // never a charge the creator was not shown.
+  const draft = videoDraft(kling30, { startFrame: upload('doorstep.png', 'image') });
+  const run = buildUnifiedCatalogGenerationRequest(draft, kling30, 'revision-1');
+  const quoteKey = JSON.stringify(buildCatalogQuoteRequest(draft, kling30, 'revision-1'));
+
+  it('carries the price of the ready quote of that very run', () => {
+    expect(catalogStartRequest(run, { key: quoteKey, status: 'ready', cost: 70 }))
+      .toEqual({ ...run, expectedCostCredits: 70 });
+  });
+
+  it('carries no price without a ready quote of that run in whole credits', () => {
+    const otherRun = JSON.stringify(buildCatalogQuoteRequest(videoDraft(kling30), kling30, 'revision-1'));
+    for (const quote of [
+      { key: quoteKey, status: 'pending' as const, cost: null },
+      { key: quoteKey, status: 'error' as const, cost: null },
+      { key: null, status: 'idle' as const, cost: null },
+      { key: otherRun, status: 'ready' as const, cost: 70 },
+      { key: quoteKey, status: 'ready' as const, cost: 70.5 },
+    ]) {
+      expect(catalogStartRequest(run, quote)).toBe(run);
+    }
+  });
+
+  it('carries no price for a descriptor without input modes, whose quote is not the run’s own', () => {
+    // Schema-1 descriptors only: their quote counts the draft's inputs, which may not be the
+    // run's, so a price from it could refuse a run the server would price right.
+    const legacyDraft: ImageCreationDraft = { ...createDefaultCreationDraft('image'), model: remoteImageModel.id, prompt: 'A bottle on linen' };
+    const legacyRun = buildUnifiedCatalogGenerationRequest(legacyDraft, remoteImageModel, 'revision-1');
+    const legacyQuoteKey = JSON.stringify(buildCatalogQuoteRequest(legacyDraft, remoteImageModel, 'revision-1'));
+
+    expect(catalogStartRequest(legacyRun, { key: legacyQuoteKey, status: 'ready', cost: 8 })).toBe(legacyRun);
   });
 });

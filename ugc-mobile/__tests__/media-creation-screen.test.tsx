@@ -5284,6 +5284,27 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(blocker(tree)).toContain('The price of this run changed.');
       });
 
+      it('sends the run with the price it showed, and with the new price once it has priced the run again', async () => {
+        // A schema-3 descriptor, as production's: its quote is asked with the run's own quote input.
+        catalogState.catalog = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14)]);
+        // The server refuses a start it prices above the price the run carries.
+        authState.api.startGeneration.mockRejectedValueOnce(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'));
+        const tree = await openTyped();
+        quoteEchoingSettings(9);
+        await pressGenerate(tree);
+        expect(authState.api.startGeneration.mock.calls[0][0]).toMatchObject({ expectedCostCredits: 8 });
+
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        await renderer.act(async () => {
+          labelled(tree.root.findByProps({ testID: 'generation-workspace' }), 'Try again · 9 credits').props.onPress();
+        });
+        await settle();
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(2);
+        expect(authState.api.startGeneration.mock.calls[1][0]).toMatchObject({ expectedCostCredits: 9 });
+        // Another price is another request: the same key would be refused as a reused key.
+        expect(authState.api.startGeneration.mock.calls[1][1]).not.toBe(authState.api.startGeneration.mock.calls[0][1]);
+      });
+
       it('asks storage which reference is gone when the server cannot use the run’s media, and marks it', async () => {
         memory.set(ordinaryKey, savedDrafts({ image: { prompt: 'A bottle with @alpha', references: [stagedMedia('alpha')] } }));
         authState.api.startGeneration.mockRejectedValue(refusal(400, 'invalid_input_media', 'This reference upload has expired. Add it again.'));

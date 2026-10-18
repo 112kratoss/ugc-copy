@@ -1393,6 +1393,54 @@
         "costCredits": 8
       }
     },
+    "startGeneration": {
+      "method": "POST",
+      "path": "/api/generations",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "request": {
+        "kind": "image",
+        "modelId": "nano-banana",
+        "catalogRevision": "catalog-rev-1",
+        "settings": {
+          "aspectRatio": "1:1",
+          "resolution": "1K"
+        },
+        "prompt": "A clean product shot.",
+        "inputs": [],
+        "sourceGenerationId": null,
+        "expectedCostCredits": 8
+      },
+      "response": {
+        "success": true,
+        "predictionId": "prediction-image-1",
+        "generationId": "generation-1",
+        "status": "processing",
+        "remainingCredits": 112,
+        "cost": 8,
+        "catalogRevision": "catalog-rev-1",
+        "modelId": "nano-banana"
+      },
+      "errors": {
+        "costChanged": {
+          "status": 409,
+          "response": {
+            "code": "cost_changed",
+            "error": "The price of this run changed. Check the updated cost and generate again."
+          }
+        },
+        "invalidExpectedCost": {
+          "status": 422,
+          "response": {
+            "code": "INVALID_GENERATION_REQUEST",
+            "error": "Invalid generation request.",
+            "fieldErrors": {
+              "expectedCostCredits": "expectedCostCredits must be a whole number of credits, zero or more."
+            }
+          }
+        }
+      }
+    },
     "signPostResourceFileUpload": {
       "method": "POST",
       "path": "/api/posts/resource-files/sign",
