@@ -809,10 +809,12 @@ export function catalogConditionsMatch(
   return sharedCatalogConditionsMatch(conditions, settings, inputCounts);
 }
 
+// The input counts are required: a mode or slot can open on what the draft holds, and a lookup
+// that left them out read every count as 0 and closed it.
 export function getActiveCatalogInputModes(
   model: GenerationModelDescriptor,
   settings: Record<string, CatalogPrimitive>,
-  inputCounts: Record<string, number> = {},
+  inputCounts: Record<string, number>,
 ) {
   return (model.inputModes ?? []).filter((mode) => (
     catalogConditionsMatch(mode.conditions, settings, inputCounts)
@@ -822,7 +824,7 @@ export function getActiveCatalogInputModes(
 export function getActiveCatalogInputSlots(
   model: GenerationModelDescriptor,
   settings: Record<string, CatalogPrimitive>,
-  inputCounts: Record<string, number> = {},
+  inputCounts: Record<string, number>,
 ) {
   return getActiveCatalogInputModes(model, settings, inputCounts)
     .flatMap((mode) => mode.slots)

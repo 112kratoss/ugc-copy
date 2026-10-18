@@ -243,12 +243,14 @@ function heldCatalogDraftInputSlots(
  * What a run sends in each slot its settings open: at most the slot's max, and nothing for
  * a slot the model does not have. A draft keeps its references when the model changes, as
  * the web creator does, so it can hold more than this model takes; the rest wait in the
- * draft, and `validateCatalogCreationDraft` blocks the run until they are removed.
+ * draft, and `validateCatalogCreationDraft` blocks the run until they are removed. The settings
+ * are the run's (catalogRunSettings): the draft's own leave a video run's reference shape out,
+ * and a mode gated on it closed. Outside this module, catalogRunInputSlots asks it for a run.
  */
-export function buildCatalogDraftInputSlots(
+function buildCatalogDraftInputSlots(
   draft: CreationDraft,
   model: GenerationModelDescriptor,
-  settings: Record<string, CatalogPrimitive> = getCatalogDraftSettings(draft, model),
+  settings: Record<string, CatalogPrimitive>,
 ): CatalogDraftInputSlots {
   return Object.fromEntries(heldCatalogDraftInputSlots(draft, model, settings)
     .map(({ slot, assets }) => [slot.key, assets.slice(0, Math.max(0, slot.max))]));
@@ -348,7 +350,8 @@ function catalogRunSettings(runDraft: CreationDraft, model: GenerationModelDescr
 
 /**
  * What a run on this model sends in each slot it opens, in the shape and with the settings its
- * quote request and its run request read: what the creator shows as going with the run.
+ * quote request and its run request read: what the creator shows as going with the run. A
+ * descriptor without input modes opens no slots, so nothing is listed.
  */
 export function catalogRunInputSlots(draft: CreationDraft, model: GenerationModelDescriptor): CatalogDraftInputSlots {
   const runDraft = catalogRunDraft(draft, model);
@@ -1373,7 +1376,6 @@ export function buildCatalogGenerationPayload(
       googleSearch: model.capabilities.googleSearch ? draft.googleSearch : false,
       sourceGenerationId: draft.sourceGenerationId ?? null,
       catalogRevision,
-      settings: {},
     };
   }
   if (draft.tool === 'video') {
@@ -1441,7 +1443,6 @@ export function buildCatalogGenerationPayload(
         : null,
       sourceGenerationId: draft.sourceGenerationId ?? null,
       catalogRevision,
-      settings: {},
     };
   }
   return {
@@ -1456,6 +1457,5 @@ export function buildCatalogGenerationPayload(
     referenceVideo: mediaDescriptor(draft.referenceVideo),
     sourceGenerationId: draft.sourceGenerationId ?? null,
     catalogRevision,
-    settings: {},
   };
 }

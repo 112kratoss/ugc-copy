@@ -12,6 +12,7 @@ import {
   applyCatalogModelDefaults,
   catalogDraftRunHandles,
   catalogMultiShotLimits,
+  catalogRunInputSlots,
   catalogVideoRunReferenceMode,
   reconcileCreationDraftWithCatalog,
   buildCatalogGenerationPayload,
@@ -1015,13 +1016,7 @@ describe('a slot whose mode opens on what the draft holds', () => {
   // without them, so an input in a mode that opens on a count was priced and then left out.
   const voiceGated = remoteVideoModel('voice-gated-video', {
     inputModes: [
-      {
-        key: 'frames',
-        label: 'Frames',
-        default: true,
-        conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'frames' }],
-        slots: [{ key: 'startFrame', kind: 'image', role: 'startFrame', label: 'Start frame', min: 0, max: 1 }],
-      },
+      framesMode([startFrameSlot]),
       {
         key: 'voice',
         label: 'Voice track',
@@ -1030,16 +1025,21 @@ describe('a slot whose mode opens on what the draft holds', () => {
         slots: [{ key: 'voiceTrack', kind: 'audio', role: 'reference', label: 'Voice track', min: 0, max: 1 }],
       },
     ],
+    inputConstraints: [],
   });
 
-  it('sends the input its quote counted', () => {
+  it('sends the input its quote counted, and the creator shows it as going with the run', () => {
     const track = upload('voice.mp3', 'audio', { durationSeconds: 5 });
     const draft = videoDraft(voiceGated, { referenceAudios: [track] });
+    const run = buildUnifiedCatalogGenerationRequest(draft, voiceGated, 'revision-1');
 
     expect(buildCatalogQuoteRequest(draft, voiceGated, 'revision-1').inputMetadata?.slots?.voiceTrack).toEqual({ count: 1, durationsSeconds: [5] });
-    expect(buildUnifiedCatalogGenerationRequest(draft, voiceGated, 'revision-1').inputs).toEqual([
+    expect(run.inputs).toEqual([
       expect.objectContaining({ slot: 'voiceTrack', kind: 'audio', url: track.url, durationSeconds: 5 }),
     ]);
+    // What the standby rail counts as sent is what the run sends.
+    expect(Object.values(catalogRunInputSlots(draft, voiceGated)).flat().map((asset) => asset.url))
+      .toEqual(run.inputs.map((input) => input.url));
   });
 });
 

@@ -5113,8 +5113,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(run.settings).toEqual(quotedSettings());
       });
 
-      // Seedance 1.5 Pro's duration is a choice the server's answer gives back as a number.
-      it('a single-shot video run, its duration a choice', async () => {
+      // Seedance 1.5 Pro's duration is a choice: the draft holds 8 and the run sends the option '8'.
+      it('a single-shot video run, its duration a choice the draft holds as a number', async () => {
         catalogState.catalog = parityCatalog([{ ...seedance15ProModel, availability: { web: true, mobile: true } }]);
         memory.set(ordinaryKey, savedDrafts({ video: {
           model: 'seedance-1.5-pro',
