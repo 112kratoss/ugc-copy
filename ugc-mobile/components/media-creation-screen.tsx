@@ -84,6 +84,7 @@ import {
   REFERENCE_DURATION_CHANGED_CODE,
   validateCatalogCreationDraft,
 } from '@/lib/generation-model-draft';
+import { GUIDED_CREATION_STARTERS } from '@/lib/guided-creation-starter';
 import {
   getActiveCatalogInputSlots,
   getCatalogModel,
@@ -787,15 +788,21 @@ function IdentityCreationScreen({
   const { identityUserId, isGuest, session, api, credits, updateCredits, refreshProfile, ensureGuestMergeTicket } = useAuth();
   const queryClient = useQueryClient();
   const [activeTool, setActiveTool] = useState<CreatorToolId>(isTool(initialTool) ? initialTool : 'image');
-  const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => ({
+  // A guided first creation names its starter's model from the outset, so the catalog loads that
+  // model's details and the default is never quoted first; the catalog reconcile below applies it.
+  const withGuidedStart = <T extends CreationDraft>(draft: T): T => {
+    const starter = guided ? GUIDED_CREATION_STARTERS[draft.tool] : undefined;
+    return starter ? { ...draft, model: starter.modelId } : draft;
+  };
+  const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => withGuidedStart({
     ...createDefaultCreationDraft('image'),
     prompt: initialTool === 'image' ? initialPrompt ?? '' : '',
   }));
-  const [videoDraft, setVideoDraft] = useState<VideoCreationDraft>(() => ({
+  const [videoDraft, setVideoDraft] = useState<VideoCreationDraft>(() => withGuidedStart({
     ...createDefaultCreationDraft('video'),
     prompt: initialTool === 'video' ? initialPrompt ?? '' : '',
   }));
-  const [motionDraft, setMotionDraft] = useState<MotionCreationDraft>(() => ({
+  const [motionDraft, setMotionDraft] = useState<MotionCreationDraft>(() => withGuidedStart({
     ...createDefaultCreationDraft('motion'),
     prompt: initialTool === 'motion' ? initialPrompt ?? '' : '',
   }));
@@ -1096,12 +1103,20 @@ function IdentityCreationScreen({
 
   useEffect(() => {
     if (!catalog) return;
+    const starterFor = (kind: CreatorToolId) => {
+      const starter = guided ? GUIDED_CREATION_STARTERS[kind] : undefined;
+      // A starter the catalog no longer carries gives way to the catalog default.
+      return starter && !catalogQuery.missingIds.includes(starter.modelId) ? starter : null;
+    };
     const reconcile = <T extends CreationDraft>(
       kind: CreatorToolId,
       setter: (updater: (draft: T) => T) => void
     ) => {
       setter((draft) => {
-        const result = normalizeCreationDraftForCatalog(draft, catalog, { modelSelectionTouched: modelSelectionTouched.current[kind] });
+        const result = normalizeCreationDraftForCatalog(draft, catalog, {
+          modelSelectionTouched: modelSelectionTouched.current[kind],
+          starter: starterFor(kind),
+        });
         if (result.missingModel) {
           if (catalogQuery.missingIds.includes(draft.model)) setCatalogNotice('This model is no longer available. Your draft is saved; choose another model.');
           return draft;
@@ -1113,7 +1128,7 @@ function IdentityCreationScreen({
     reconcile<ImageCreationDraft>('image', setImageDraft);
     reconcile<VideoCreationDraft>('video', setVideoDraft);
     reconcile<MotionCreationDraft>('motion', setMotionDraft);
-  }, [catalog, catalogQuery.missingIds]);
+  }, [catalog, catalogQuery.missingIds, guided]);
 
   const rawDraft: CreationDraft = activeTool === 'image' ? imageDraft : activeTool === 'video' ? videoDraft : motionDraft;
   const currentCatalogModel = useMemo(

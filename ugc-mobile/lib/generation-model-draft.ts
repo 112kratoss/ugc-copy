@@ -1056,17 +1056,24 @@ export interface CatalogDraftReconciliation {
   warning: string | null;
 }
 
+/** Whether this app can run the model for the tool: its kind, a schema it reads and, past schema 1, mobile availability. */
+function isUsableCatalogModel(
+  model: GenerationModelDescriptor | null | undefined,
+  tool: CreationDraft['tool'],
+  catalog: GenerationModelCatalog,
+): model is GenerationModelDescriptor {
+  return model?.kind === tool
+    && model.minClientSchemaVersion <= catalog.schemaVersion
+    && (catalog.schemaVersion === 1 || Boolean(model.availability?.mobile));
+}
+
 export function reconcileCreationDraftWithCatalog(
   draft: CreationDraft,
   catalog: GenerationModelCatalog,
 ): CatalogDraftReconciliation {
   const previousModelId = draft.model;
   const existing = getCatalogModel(catalog, previousModelId);
-  const selected = existing?.kind === draft.tool
-    && existing.minClientSchemaVersion <= catalog.schemaVersion
-    && (catalog.schemaVersion === 1 || existing.availability?.mobile)
-    ? existing
-    : null;
+  const selected = isUsableCatalogModel(existing, draft.tool, catalog) ? existing : null;
   if (!selected) {
     return {
       draft,
@@ -1136,26 +1143,60 @@ export interface CatalogDraftNormalization {
 }
 
 /**
+ * A model and settings an untouched draft starts on in place of the catalog default (see
+ * `GUIDED_CREATION_STARTERS`). Settings are written as the catalog writes them: a duration
+ * choice is a string.
+ */
+export interface CreationStarter {
+  modelId: string;
+  settings: Record<string, CatalogPrimitive>;
+}
+
+/** The model with these values as its control defaults, wherever the control takes the value. */
+function withStartingValues(
+  model: GenerationModelDescriptor,
+  values: Record<string, CatalogPrimitive>,
+): GenerationModelDescriptor {
+  const valid = normalizeCatalogSettings(model, values);
+  return {
+    ...model,
+    controls: model.controls.map((control) => (
+      control.key in values ? { ...control, defaultValue: valid[control.key] } as CatalogControl : control
+    )),
+  };
+}
+
+/**
  * What the create screen does to a draft each time a catalog arrives, as one pure step.
  *
- * An untouched draft takes the catalog's default model and that model's published defaults;
- * any other draft is reconciled against its own model. A remix restore compares the live
- * draft with baselines passed through this same step, so the screen's own normalization,
- * which lands while the source is still loading, never reads as an edit the creator made.
+ * An untouched draft takes the catalog's default model and that model's published defaults,
+ * or the starter's model and settings when one is given; any other draft is reconciled
+ * against its own model. A remix restore compares the live draft with baselines passed
+ * through this same step, so the screen's own normalization, which lands while the source is
+ * still loading, never reads as an edit the creator made.
  */
 export function normalizeCreationDraftForCatalog(
   draft: CreationDraft,
   catalog: GenerationModelCatalog,
-  options: { modelSelectionTouched: boolean },
+  options: { modelSelectionTouched: boolean; starter?: CreationStarter | null },
 ): CatalogDraftNormalization {
+  const untouched = !draft.catalogRevision && !options.modelSelectionTouched && !hasStartedCreationDraft(draft);
+  if (untouched && options.starter) {
+    const starter = getCatalogModel(catalog, options.starter.modelId);
+    // Its details are still loading. The default would stick (the draft gets a revision), so
+    // wait; a starter the catalog does not carry is the caller's to stop passing.
+    if (!starter) return { draft, warning: null, missingModel: false };
+    if (isUsableCatalogModel(starter, draft.tool, catalog)) {
+      return {
+        draft: applyCatalogModelInitialDefaults(draft, withStartingValues(starter, options.starter.settings), catalog.revision),
+        warning: null,
+        missingModel: false,
+      };
+    }
+  }
   const defaultId = catalog.defaults[draft.tool];
   const fallback = defaultId ? getCatalogModel(catalog, defaultId) : null;
-  if (
-    fallback?.kind === draft.tool
-    && !draft.catalogRevision
-    && !options.modelSelectionTouched
-    && !hasStartedCreationDraft(draft)
-  ) {
+  if (fallback?.kind === draft.tool && untouched) {
     return {
       draft: applyCatalogModelInitialDefaults(draft, fallback, catalog.revision),
       warning: null,

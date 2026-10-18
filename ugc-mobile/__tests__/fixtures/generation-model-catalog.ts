@@ -100,6 +100,47 @@ function choiceControl(
   return { key, label, type: 'choice', presentation, defaultValue, options: values.map((value) => ({ value, label: value })) };
 }
 
+const seedanceReferenceModeIs = (value: 'frames' | 'elements') => [
+  { source: 'setting' as const, key: 'referenceMode', operator: 'equals' as const, value },
+];
+
+/**
+ * Seedance 1.5 Pro as the production mobile catalog publishes it (revision pixverse-mobile-20261008): the
+ * guided first video's starting model. Its duration is a choice of strings, and nothing in a run needs a picture.
+ */
+export const seedance15ProModel = model('seedance-1.5-pro', 'video', 'Seedance 1.5 Pro', {
+  sortOrder: 20,
+  controls: [
+    choiceControl('aspectRatio', 'Aspect ratio', '1:1', ['1:1', '21:9', '4:3', '3:4', '16:9', '9:16']),
+    choiceControl('resolution', 'Resolution', '480p', ['480p', '720p', '1080p']),
+    choiceControl('duration', 'Duration', '4', ['4', '8', '12']),
+    { key: 'sound', label: 'Sound', type: 'boolean', presentation: 'toggle', defaultValue: false },
+    { key: 'fixedLens', label: 'Fixed lens', type: 'boolean', presentation: 'toggle', defaultValue: false },
+    choiceControl('referenceMode', 'Input mode', 'frames', ['frames', 'elements']),
+  ],
+  capabilities: { multiShot: false, sound: true, fixedLens: true, googleSearch: false, outputFormat: false },
+  inputs: { imageReferences: { max: 2, supportsNaming: true }, videoReferences: null, audioReferences: null, startFrame: true, endFrame: true },
+  inputModes: [
+    {
+      key: 'frames',
+      label: 'Frames',
+      default: true,
+      conditions: seedanceReferenceModeIs('frames'),
+      slots: [
+        { key: 'startFrame', kind: 'image', role: 'startFrame', label: 'Start frame', min: 0, max: 1 },
+        { key: 'endFrame', kind: 'image', role: 'endFrame', label: 'End frame', min: 0, max: 1 },
+      ],
+    },
+    {
+      key: 'references',
+      label: 'Reusable references',
+      default: false,
+      conditions: seedanceReferenceModeIs('elements'),
+      slots: [{ key: 'imageReferences', kind: 'image', role: 'reference', label: 'Reference images', min: 0, max: 2, supportsNaming: true }],
+    },
+  ],
+});
+
 /**
  * The production mobile descriptors a Recreate meets (revision gpt-image-2-5-20260911): their
  * controls, defaults, capabilities and input limits. Every tool's catalog default disagrees with

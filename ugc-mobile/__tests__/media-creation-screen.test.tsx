@@ -266,7 +266,7 @@ import { PUSH_OFFER_STORAGE_KEY, resetPushOffersForTests } from '../lib/push-pro
 import { readCreatorSession, resetCreatorSessionForTests } from '../lib/creator-session-diagnostics';
 import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia, type UploadedMedia } from '../lib/media';
 import { UploadCancelledError } from '../lib/upload-file';
-import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
+import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel, seedance15ProModel } from './fixtures/generation-model-catalog';
 import { catalogV2 } from './generation-model-catalog-v2-fixtures';
 import type { CatalogInputMode, CatalogInputSlot, GenerationModelCatalog, GenerationModelDescriptor } from '../lib/generation-model-catalog';
 import { creationDraftStorageKey, ordinaryDraftScope, remixDraftScope } from '../lib/creation-draft-resume';
@@ -705,6 +705,71 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(text).toContain('Kling 2.6');
     expect(text).toContain('720P · Add motion');
     expect(text).not.toContain('Model updated');
+  });
+
+  describe('a guided first video', () => {
+    const quotedModels = () => authState.api.quoteGenerationModel.mock.calls.map(([request]) => (request as { modelId: string }).modelId);
+
+    it('starts on the starter and quotes it inside the welcome credits, never the default first', async () => {
+      vi.useFakeTimers();
+      catalogState.catalog = createTestGenerationModelCatalog([seedance15ProModel]);
+      quoteEchoingSettings(14);
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<MediaCreationScreen initialTool="video" insideTab guided />);
+      });
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+
+      expect(quotedModels()).toEqual(['seedance-1.5-pro']);
+      expect(authState.api.quoteGenerationModel.mock.calls[0][0]).toMatchObject({
+        settings: { resolution: '720p', duration: '4', sound: false },
+      });
+      expect(collectText(tree!.root)).toContain('Seedance 1.5 Pro');
+      expect(collectText(tree!.root).some((item) => item.includes('14 credits'))).toBe(true);
+      vi.useRealTimers();
+    });
+
+    it('is the only creator that starts there: an ordinary one keeps the catalog default', async () => {
+      vi.useFakeTimers();
+      catalogState.catalog = createTestGenerationModelCatalog([seedance15ProModel]);
+      quoteEchoingSettings(70);
+      renderer.act(() => {
+        renderer.create(<MediaCreationScreen initialTool="video" insideTab />);
+      });
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+
+      expect(quotedModels()).toEqual(['kling-3.0-video']);
+    });
+
+    it('waits for the starter details, and takes the default once the catalog says it is gone', async () => {
+      vi.useFakeTimers();
+      catalogState.catalog = createTestGenerationModelCatalog();
+      quoteEchoingSettings(70);
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<MediaCreationScreen initialTool="video" insideTab guided />);
+      });
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(quotedModels()).toEqual([]);
+
+      catalogState.catalog = createTestGenerationModelCatalog();
+      EMPTY_MISSING_IDS.push(seedance15ProModel.id);
+      renderer.act(() => {
+        tree!.update(<MediaCreationScreen initialTool="video" insideTab guided />);
+      });
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+
+      expect(quotedModels()).toEqual(['kling-3.0-video']);
+      expect(collectText(tree!.root)).not.toContain('This model is no longer available. Your draft is saved; choose another model.');
+    });
   });
 
   it('renders the compact image composer with model selection outside parameters', () => {
