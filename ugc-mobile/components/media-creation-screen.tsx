@@ -84,7 +84,7 @@ import {
   REFERENCE_DURATION_CHANGED_CODE,
   validateCatalogCreationDraft,
 } from '@/lib/generation-model-draft';
-import { GUIDED_CREATION_STARTERS } from '@/lib/guided-creation-starter';
+import { guidedCreationStarter } from '@/lib/guided-creation-starter';
 import {
   getActiveCatalogInputSlots,
   getCatalogModel,
@@ -788,10 +788,11 @@ function IdentityCreationScreen({
   const { identityUserId, isGuest, session, api, credits, updateCredits, refreshProfile, ensureGuestMergeTicket } = useAuth();
   const queryClient = useQueryClient();
   const [activeTool, setActiveTool] = useState<CreatorToolId>(isTool(initialTool) ? initialTool : 'image');
-  // A guided first creation names its starter's model from the outset, so the catalog loads that
-  // model's details and the default is never quoted first; the catalog reconcile below applies it.
+  // A guided first creation names its starter's model from the outset, so the default is never
+  // quoted first; the catalog reconcile below applies the starter's settings.
+  const guidedStarterId = guidedCreationStarter(initialTool, { guided, initialTool })?.modelId ?? null;
   const withGuidedStart = <T extends CreationDraft>(draft: T): T => {
-    const starter = guided ? GUIDED_CREATION_STARTERS[draft.tool] : undefined;
+    const starter = guidedCreationStarter(draft.tool, { guided, initialTool });
     return starter ? { ...draft, model: starter.modelId } : draft;
   };
   const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => withGuidedStart({
@@ -922,7 +923,12 @@ function IdentityCreationScreen({
   // A pick whose model's details are still loading, or failed to: the draft changes once they are in.
   const [modelPick, setModelPick] = useState<{ modelId: string; error: string | null } | null>(null);
   const modelPickRef = useRef<string | null>(null);
-  const catalogQuery = useGenerationModelCatalog(api, { kind: activeTool, selectedIds: [imageDraft.model, videoDraft.model, motionDraft.model], pickerOpen: modelPickerVisible });
+  // The starter's details load whatever the drafts name, so the reconcile never waits on them for good.
+  const catalogQuery = useGenerationModelCatalog(api, {
+    kind: activeTool,
+    selectedIds: [imageDraft.model, videoDraft.model, motionDraft.model, ...(guidedStarterId ? [guidedStarterId] : [])],
+    pickerOpen: modelPickerVisible,
+  });
   const catalog = catalogQuery.catalog;
   const refetchCatalog = catalogQuery.refetch;
   const loadCatalogDetails = catalogQuery.loadDetails;
@@ -1033,7 +1039,11 @@ function IdentityCreationScreen({
         // Compare with the baseline as the catalog leaves it, so the screen's own
         // normalization is never saved as something the creator changed.
         const baseline = catalog
-          ? normalizeCreationDraftForCatalog(remixBaseline.current[tool], catalog, { modelSelectionTouched: false }).draft
+          ? normalizeCreationDraftForCatalog(remixBaseline.current[tool], catalog, {
+              modelSelectionTouched: false,
+              starter: guidedCreationStarter(tool, { guided, initialTool }),
+              missingIds: catalogQuery.missingIds,
+            }).draft
           : remixBaseline.current[tool];
         return [tool, Object.keys(saved[tool]).filter((key) => JSON.stringify((saved[tool] as unknown as Record<string, unknown>)[key]) !== JSON.stringify((baseline as unknown as Record<string, unknown>)[key]))];
       }));
@@ -1103,11 +1113,6 @@ function IdentityCreationScreen({
 
   useEffect(() => {
     if (!catalog) return;
-    const starterFor = (kind: CreatorToolId) => {
-      const starter = guided ? GUIDED_CREATION_STARTERS[kind] : undefined;
-      // A starter the catalog no longer carries gives way to the catalog default.
-      return starter && !catalogQuery.missingIds.includes(starter.modelId) ? starter : null;
-    };
     const reconcile = <T extends CreationDraft>(
       kind: CreatorToolId,
       setter: (updater: (draft: T) => T) => void
@@ -1115,7 +1120,8 @@ function IdentityCreationScreen({
       setter((draft) => {
         const result = normalizeCreationDraftForCatalog(draft, catalog, {
           modelSelectionTouched: modelSelectionTouched.current[kind],
-          starter: starterFor(kind),
+          starter: guidedCreationStarter(kind, { guided, initialTool }),
+          missingIds: catalogQuery.missingIds,
         });
         if (result.missingModel) {
           if (catalogQuery.missingIds.includes(draft.model)) setCatalogNotice('This model is no longer available. Your draft is saved; choose another model.');
@@ -1128,7 +1134,7 @@ function IdentityCreationScreen({
     reconcile<ImageCreationDraft>('image', setImageDraft);
     reconcile<VideoCreationDraft>('video', setVideoDraft);
     reconcile<MotionCreationDraft>('motion', setMotionDraft);
-  }, [catalog, catalogQuery.missingIds, guided]);
+  }, [catalog, catalogQuery.missingIds, guided, initialTool]);
 
   const rawDraft: CreationDraft = activeTool === 'image' ? imageDraft : activeTool === 'video' ? videoDraft : motionDraft;
   const currentCatalogModel = useMemo(
@@ -1409,7 +1415,11 @@ function IdentityCreationScreen({
     const draftWhenRemixStarted = normalizeCreationDraftForCatalog(
       latestDrafts.current[targetTool],
       catalog,
-      { modelSelectionTouched: modelSelectionTouched.current[targetTool] },
+      {
+        modelSelectionTouched: modelSelectionTouched.current[targetTool],
+        starter: guidedCreationStarter(targetTool, { guided, initialTool }),
+        missingIds: catalogQuery.missingIds,
+      },
     ).draft;
 
     void api.getRemixSourceBundle(generationId, { postId: remixSource?.postId ?? null })
@@ -5896,7 +5906,7 @@ const GUIDED_PROMPTS: Record<CreatorToolId, string[]> = {
     'Editorial lifestyle image with warm light and authentic texture',
   ],
   video: [
-    'A polished product reveal with a slow camera push and natural sound',
+    'A polished product reveal with a slow camera push and soft studio light',
     'A fast social ad with three clear beats, energetic motion, and a strong finish',
     'A cinematic lifestyle clip with soft handheld movement and warm evening light',
   ],

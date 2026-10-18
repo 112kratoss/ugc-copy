@@ -13,6 +13,7 @@ import {
   catalogConditionsMatch,
   getActiveCatalogInputSlots,
   getCatalogModel,
+  isUsableCatalogModel,
   normalizeCatalogSettings,
 } from './generation-model-catalog';
 import {
@@ -389,17 +390,24 @@ export function applyCatalogModelDefaults(
   return { ...normalized, catalogSettings: getCatalogDraftSettings(normalized, model) };
 }
 
+/**
+ * A draft on this model at its published defaults, or at `startingValues` where given (a guided
+ * starter's pins). A value the model does not take falls back to its default as the draft is
+ * normalized.
+ */
 export function applyCatalogModelInitialDefaults(
   draft: CreationDraft,
   model: GenerationModelDescriptor,
   catalogRevision: string,
+  startingValues: Readonly<Record<string, CatalogPrimitive>> = {},
 ): CreationDraft {
-  const descriptorDefaults = Object.fromEntries(model.controls.map((control) => [
-    draftKey(draft, control.key),
-    control.key === 'duration' && control.type === 'choice'
-      ? Number(control.defaultValue)
-      : control.defaultValue,
-  ]));
+  const descriptorDefaults = Object.fromEntries(model.controls.map((control) => {
+    const value = Object.hasOwn(startingValues, control.key) ? startingValues[control.key] : control.defaultValue;
+    return [
+      draftKey(draft, control.key),
+      control.key === 'duration' && control.type === 'choice' ? Number(value) : value,
+    ];
+  }));
   return applyCatalogModelDefaults({
     ...draft,
     ...descriptorDefaults,
@@ -1056,17 +1064,6 @@ export interface CatalogDraftReconciliation {
   warning: string | null;
 }
 
-/** Whether this app can run the model for the tool: its kind, a schema it reads and, past schema 1, mobile availability. */
-function isUsableCatalogModel(
-  model: GenerationModelDescriptor | null | undefined,
-  tool: CreationDraft['tool'],
-  catalog: GenerationModelCatalog,
-): model is GenerationModelDescriptor {
-  return model?.kind === tool
-    && model.minClientSchemaVersion <= catalog.schemaVersion
-    && (catalog.schemaVersion === 1 || Boolean(model.availability?.mobile));
-}
-
 export function reconcileCreationDraftWithCatalog(
   draft: CreationDraft,
   catalog: GenerationModelCatalog,
@@ -1149,21 +1146,7 @@ export interface CatalogDraftNormalization {
  */
 export interface CreationStarter {
   modelId: string;
-  settings: Record<string, CatalogPrimitive>;
-}
-
-/** The model with these values as its control defaults, wherever the control takes the value. */
-function withStartingValues(
-  model: GenerationModelDescriptor,
-  values: Record<string, CatalogPrimitive>,
-): GenerationModelDescriptor {
-  const valid = normalizeCatalogSettings(model, values);
-  return {
-    ...model,
-    controls: model.controls.map((control) => (
-      control.key in values ? { ...control, defaultValue: valid[control.key] } as CatalogControl : control
-    )),
-  };
+  settings: Readonly<Record<string, CatalogPrimitive>>;
 }
 
 /**
@@ -1174,21 +1157,30 @@ function withStartingValues(
  * against its own model. A remix restore compares the live draft with baselines passed
  * through this same step, so the screen's own normalization, which lands while the source is
  * still loading, never reads as an edit the creator made.
+ *
+ * `missingIds` are the models the catalog says it does not carry: a starter among them gives
+ * way to the default.
  */
 export function normalizeCreationDraftForCatalog(
   draft: CreationDraft,
   catalog: GenerationModelCatalog,
-  options: { modelSelectionTouched: boolean; starter?: CreationStarter | null },
+  options: { modelSelectionTouched: boolean; starter?: CreationStarter | null; missingIds?: readonly string[] },
 ): CatalogDraftNormalization {
-  const untouched = !draft.catalogRevision && !options.modelSelectionTouched && !hasStartedCreationDraft(draft);
-  if (untouched && options.starter) {
-    const starter = getCatalogModel(catalog, options.starter.modelId);
-    // Its details are still loading. The default would stick (the draft gets a revision), so
-    // wait; a starter the catalog does not carry is the caller's to stop passing.
-    if (!starter) return { draft, warning: null, missingModel: false };
-    if (isUsableCatalogModel(starter, draft.tool, catalog)) {
+  const fresh = !draft.catalogRevision && !options.modelSelectionTouched;
+  const starter = options.starter ?? null;
+  // The screen names a starter's model in its first draft, so words typed before the model's
+  // details arrive do not make it the creator's pick: the starter, or the default once the
+  // starter is gone, still applies, and keeps them.
+  const seeded = fresh && starter !== null && draft.model === starter.modelId;
+  const untouched = seeded || (fresh && !hasStartedCreationDraft(draft));
+  if (untouched && starter) {
+    const starterModel = getCatalogModel(catalog, starter.modelId);
+    const starterGone = options.missingIds?.includes(starter.modelId) ?? false;
+    // Its details are still loading. The default would stick (the draft gets a revision), so wait.
+    if (!starterModel && !starterGone) return { draft, warning: null, missingModel: false };
+    if (isUsableCatalogModel(starterModel, draft.tool, catalog)) {
       return {
-        draft: applyCatalogModelInitialDefaults(draft, withStartingValues(starter, options.starter.settings), catalog.revision),
+        draft: applyCatalogModelInitialDefaults(draft, starterModel, catalog.revision, starter.settings),
         warning: null,
         missingModel: false,
       };
@@ -1203,6 +1195,8 @@ export function normalizeCreationDraftForCatalog(
       missingModel: false,
     };
   }
+  // A seeded draft whose starter is gone waits for the default's details: its model was never the creator's.
+  if (seeded) return { draft, warning: null, missingModel: false };
   if (!getCatalogModel(catalog, draft.model)) return { draft, warning: null, missingModel: true };
   const result = reconcileCreationDraftWithCatalog(draft, catalog);
   return { draft: result.draft, warning: result.warning, missingModel: false };
@@ -1275,11 +1269,7 @@ export function hydrateCatalogCreationDraftFromRemixSource(
     ? bundle.workflowSettings.model
     : bundle.generation.model;
   const requestedModel = getCatalogModel(catalog, requestedModelId);
-  const model = requestedModel?.kind === baseDraft.tool
-    && requestedModel.minClientSchemaVersion <= catalog.schemaVersion
-    && (catalog.schemaVersion === 1 || requestedModel.availability?.mobile)
-    ? requestedModel
-    : null;
+  const model = isUsableCatalogModel(requestedModel, baseDraft.tool, catalog) ? requestedModel : null;
   // The legacy hydrator restores signed media descriptors. Catalog model
   // selection and settings are deliberately reapplied afterwards so a remote
   // id never has to exist in the bundled registry. It must not cap media:

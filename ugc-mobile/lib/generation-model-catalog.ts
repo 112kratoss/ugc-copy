@@ -747,12 +747,19 @@ export async function saveCachedGenerationModelCatalog(
   } satisfies GenerationModelCatalogCacheEnvelope));
 }
 
-export function getCatalogModels(catalog: GenerationModelCatalog, kind: GenerationModelKind) {
-  return catalog.models.filter((model) => (
-    model.kind === kind
+/** Whether this app can run the model for the kind: its kind, a schema it reads and, past schema 1, mobile availability. */
+export function isUsableCatalogModel(
+  model: GenerationModelDescriptor | null | undefined,
+  kind: GenerationModelKind,
+  catalog: GenerationModelCatalog,
+): model is GenerationModelDescriptor {
+  return model?.kind === kind
     && model.minClientSchemaVersion <= catalog.schemaVersion
-    && (catalog.schemaVersion === 1 || model.availability?.mobile === true)
-  ));
+    && (catalog.schemaVersion === 1 || model.availability?.mobile === true);
+}
+
+export function getCatalogModels(catalog: GenerationModelCatalog, kind: GenerationModelKind) {
+  return catalog.models.filter((model) => isUsableCatalogModel(model, kind, catalog));
 }
 
 export function getCatalogModel(catalog: GenerationModelCatalog, modelId: string) {
@@ -770,11 +777,13 @@ export function normalizeCatalogSettings(
   return Object.fromEntries(model.controls.map((control) => {
     const current = settings[control.key];
     if (control.type === 'choice') {
+      // A quote answers a numeric choice (a duration) as a number; it is the option it names.
+      const value = typeof current === 'number' ? String(current) : current;
       return [
         control.key,
-        typeof current === 'string'
-          && (control.options.some((option) => option.value === current) || modeGated.get(control.key)?.has(current))
-          ? current
+        typeof value === 'string'
+          && (control.options.some((option) => option.value === value) || modeGated.get(control.key)?.has(value))
+          ? value
           : control.defaultValue,
       ];
     }

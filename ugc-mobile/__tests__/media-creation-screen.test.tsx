@@ -770,6 +770,56 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(quotedModels()).toEqual(['kling-3.0-video']);
       expect(collectText(tree!.root)).not.toContain('This model is no longer available. Your draft is saved; choose another model.');
     });
+
+    it('keeps the starter when a prompt is typed before its details arrive, with no settings notice', async () => {
+      vi.useFakeTimers();
+      catalogState.catalog = createTestGenerationModelCatalog();
+      quoteEchoingSettings(14);
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<MediaCreationScreen initialTool="video" insideTab guided />);
+      });
+      renderer.act(() => {
+        tree!.root.findAll((node) => String(node.type) === 'textinput')[0].props.onChangeText('A lighthouse in a storm');
+      });
+
+      catalogState.catalog = createTestGenerationModelCatalog([seedance15ProModel]);
+      renderer.act(() => {
+        tree!.update(<MediaCreationScreen initialTool="video" insideTab guided />);
+      });
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+
+      expect(quotedModels()).toEqual(['seedance-1.5-pro']);
+      expect(authState.api.quoteGenerationModel.mock.calls[0][0]).toMatchObject({
+        settings: { resolution: '720p', duration: '4', sound: false },
+      });
+      expect(tree!.root.findAll((node) => String(node.type) === 'textinput')[0].props.value).toBe('A lighthouse in a storm');
+      expect(collectText(tree!.root).some((item) => item.includes('no longer supported'))).toBe(false);
+    });
+
+    it('leaves the video draft on the catalog default in a guided image session', async () => {
+      vi.useFakeTimers();
+      catalogState.catalog = createTestGenerationModelCatalog([seedance15ProModel]);
+      quoteEchoingSettings(8);
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab guided />);
+      });
+      const videoTab = tree!.root.findAll((node) => (
+        node.props.accessibilityRole === 'button' && node.props.accessibilityLabel === 'Video' && typeof node.props.onPress === 'function'
+      ))[0];
+      renderer.act(() => {
+        videoTab.props.onPress();
+      });
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+
+      expect(quotedModels()).toContain('kling-3.0-video');
+      expect(quotedModels()).not.toContain('seedance-1.5-pro');
+    });
   });
 
   it('renders the compact image composer with model selection outside parameters', () => {

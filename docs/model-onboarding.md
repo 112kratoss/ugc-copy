@@ -217,6 +217,12 @@ A new price, cap or option follows the same path without the id work: change the
 release that lists only the changed model, pin it with a manifest test, deploy, then stage and
 publish.
 
+The app's guided first video starts on a pinned model and settings, sized to fit the welcome credits
+(`ugc-mobile/lib/guided-creation-starter.ts`: Seedance 1.5 Pro at 720p, 4 s, no sound, 14 of 25 credits
+on 2026-10-18). A release that reprices that model, renames or retypes its `resolution`, `duration` or
+`sound` control, or takes it off mobile changes what a new account's first video costs: keep it within
+the `welcome_credits_v1` grant or change the starter in the same piece of work (an app OTA).
+
 ## Background
 
 - `docs/audits/model-onboarding-audit-2026-08-16.md`: why the registration tests and the
