@@ -84,6 +84,7 @@ import {
   REFERENCE_DURATION_CHANGED_CODE,
   validateCatalogCreationDraft,
 } from '@/lib/generation-model-draft';
+import { guidedCreationStarter } from '@/lib/guided-creation-starter';
 import {
   getActiveCatalogInputSlots,
   getCatalogModel,
@@ -787,15 +788,24 @@ function IdentityCreationScreen({
   const { identityUserId, isGuest, session, api, credits, updateCredits, refreshProfile, ensureGuestMergeTicket } = useAuth();
   const queryClient = useQueryClient();
   const [activeTool, setActiveTool] = useState<CreatorToolId>(isTool(initialTool) ? initialTool : 'image');
-  const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => ({
+  // A guided first creation names its starter's model from the outset, so the default is never
+  // quoted first; the catalog reconcile below applies the starter's settings. A remix restores
+  // its source's model instead, so a remix opened as guided takes no starter.
+  const guidedScreen = guided && !remixSource;
+  const guidedStarterId = guidedCreationStarter(initialTool, { guided: guidedScreen, initialTool })?.modelId ?? null;
+  const withGuidedStart = <T extends CreationDraft>(draft: T): T => {
+    const starter = guidedCreationStarter(draft.tool, { guided: guidedScreen, initialTool });
+    return starter ? { ...draft, model: starter.modelId } : draft;
+  };
+  const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => withGuidedStart({
     ...createDefaultCreationDraft('image'),
     prompt: initialTool === 'image' ? initialPrompt ?? '' : '',
   }));
-  const [videoDraft, setVideoDraft] = useState<VideoCreationDraft>(() => ({
+  const [videoDraft, setVideoDraft] = useState<VideoCreationDraft>(() => withGuidedStart({
     ...createDefaultCreationDraft('video'),
     prompt: initialTool === 'video' ? initialPrompt ?? '' : '',
   }));
-  const [motionDraft, setMotionDraft] = useState<MotionCreationDraft>(() => ({
+  const [motionDraft, setMotionDraft] = useState<MotionCreationDraft>(() => withGuidedStart({
     ...createDefaultCreationDraft('motion'),
     prompt: initialTool === 'motion' ? initialPrompt ?? '' : '',
   }));
@@ -915,7 +925,16 @@ function IdentityCreationScreen({
   // A pick whose model's details are still loading, or failed to: the draft changes once they are in.
   const [modelPick, setModelPick] = useState<{ modelId: string; error: string | null } | null>(null);
   const modelPickRef = useRef<string | null>(null);
-  const catalogQuery = useGenerationModelCatalog(api, { kind: activeTool, selectedIds: [imageDraft.model, videoDraft.model, motionDraft.model], pickerOpen: modelPickerVisible });
+  // The starter's details load whatever the drafts name, so the reconcile never waits on them for
+  // good, until the guided draft settles (a revision): a starter the catalog dropped then leaves
+  // the selected ids, where it would hold the creator "unavailable" through any catalog error.
+  const guidedDraft = initialTool === 'image' ? imageDraft : initialTool === 'motion' ? motionDraft : videoDraft;
+  const pinnedStarterId = guidedStarterId && !guidedDraft.catalogRevision ? guidedStarterId : null;
+  const catalogQuery = useGenerationModelCatalog(api, {
+    kind: activeTool,
+    selectedIds: [imageDraft.model, videoDraft.model, motionDraft.model, ...(pinnedStarterId ? [pinnedStarterId] : [])],
+    pickerOpen: modelPickerVisible,
+  });
   const catalog = catalogQuery.catalog;
   const refetchCatalog = catalogQuery.refetch;
   const loadCatalogDetails = catalogQuery.loadDetails;
@@ -1026,7 +1045,11 @@ function IdentityCreationScreen({
         // Compare with the baseline as the catalog leaves it, so the screen's own
         // normalization is never saved as something the creator changed.
         const baseline = catalog
-          ? normalizeCreationDraftForCatalog(remixBaseline.current[tool], catalog, { modelSelectionTouched: false }).draft
+          ? normalizeCreationDraftForCatalog(remixBaseline.current[tool], catalog, {
+              modelSelectionTouched: false,
+              starter: guidedCreationStarter(tool, { guided: guidedScreen, initialTool }),
+              missingIds: catalogQuery.missingIds,
+            }).draft
           : remixBaseline.current[tool];
         return [tool, Object.keys(saved[tool]).filter((key) => JSON.stringify((saved[tool] as unknown as Record<string, unknown>)[key]) !== JSON.stringify((baseline as unknown as Record<string, unknown>)[key]))];
       }));
@@ -1101,7 +1124,11 @@ function IdentityCreationScreen({
       setter: (updater: (draft: T) => T) => void
     ) => {
       setter((draft) => {
-        const result = normalizeCreationDraftForCatalog(draft, catalog, { modelSelectionTouched: modelSelectionTouched.current[kind] });
+        const result = normalizeCreationDraftForCatalog(draft, catalog, {
+          modelSelectionTouched: modelSelectionTouched.current[kind],
+          starter: guidedCreationStarter(kind, { guided: guidedScreen, initialTool }),
+          missingIds: catalogQuery.missingIds,
+        });
         if (result.missingModel) {
           if (catalogQuery.missingIds.includes(draft.model)) setCatalogNotice('This model is no longer available. Your draft is saved; choose another model.');
           return draft;
@@ -1113,7 +1140,7 @@ function IdentityCreationScreen({
     reconcile<ImageCreationDraft>('image', setImageDraft);
     reconcile<VideoCreationDraft>('video', setVideoDraft);
     reconcile<MotionCreationDraft>('motion', setMotionDraft);
-  }, [catalog, catalogQuery.missingIds]);
+  }, [catalog, catalogQuery.missingIds, guidedScreen, initialTool]);
 
   const rawDraft: CreationDraft = activeTool === 'image' ? imageDraft : activeTool === 'video' ? videoDraft : motionDraft;
   const currentCatalogModel = useMemo(
@@ -1391,6 +1418,7 @@ function IdentityCreationScreen({
     // Taken as this catalog leaves the draft. The reconcile effect above normalizes the same
     // draft in this commit, but its update has not rendered yet; the raw draft would make the
     // catalog's own defaults read as edits made while the source loaded, spread over the restore.
+    // A remix takes no guided starter (guidedScreen), so its baseline needs none either.
     const draftWhenRemixStarted = normalizeCreationDraftForCatalog(
       latestDrafts.current[targetTool],
       catalog,
@@ -5881,7 +5909,7 @@ const GUIDED_PROMPTS: Record<CreatorToolId, string[]> = {
     'Editorial lifestyle image with warm light and authentic texture',
   ],
   video: [
-    'A polished product reveal with a slow camera push and natural sound',
+    'A polished product reveal with a slow camera push and soft studio light',
     'A fast social ad with three clear beats, energetic motion, and a strong finish',
     'A cinematic lifestyle clip with soft handheld movement and warm evening light',
   ],

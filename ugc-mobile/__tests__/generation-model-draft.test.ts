@@ -7,6 +7,7 @@ import type {
   CatalogInputSlot,
   GenerationModelDescriptor,
 } from '../lib/generation-model-catalog';
+import { normalizeCatalogSettings } from '../lib/generation-model-catalog';
 import {
   applyCatalogModelDefaults,
   catalogDraftRunHandles,
@@ -18,6 +19,7 @@ import {
   buildUnifiedCatalogGenerationRequest,
   getCatalogCreationSectionSummary,
   getCatalogDraftSettings,
+  hydrateCatalogCreationDraftFromRemixSource,
   multiShotTotalDuration,
   validateCatalogCreationDraft,
 } from '../lib/generation-model-draft';
@@ -32,7 +34,8 @@ import {
   type VideoShotDraft,
 } from '../lib/media-creation-view-model';
 import type { SeedanceAssetMetadata } from '../lib/model-catalog/seedance-assets';
-import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
+import type { RemixSourceBundle } from '../lib/types';
+import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel, seedance15ProModel } from './fixtures/generation-model-catalog';
 import { remoteVideoModel } from './generation-model-catalog-v2-fixtures';
 
 describe('catalog-backed mobile creation drafts', () => {
@@ -1007,5 +1010,44 @@ describe('prepared Seedance assets in a run on /api/generations', () => {
     const other = remoteVideoModel('other-video', { ...seedance2, id: 'other-video', displayName: 'Other video' });
     const elsewhere = videoDraft(other, { prompt: 'The product from @hero spins.', references: [hero], referenceVideos: [motion] });
     expect(buildUnifiedCatalogGenerationRequest(elsewhere, other, 'revision-1').inputs.some((input) => 'assetId' in input)).toBe(false);
+  });
+});
+
+describe('a choice duration the server hands back as a number', () => {
+  // The quote answers a choice duration as a number (the descriptor's normalizedValueType), and a
+  // run is built from that answer: a chosen 8 s Seedance 1.5 Pro run went out as the default '4'.
+  const draft = videoDraft(seedance15ProModel, { prompt: 'A lighthouse in a storm', duration: 8, resolution: '720p' });
+
+  it('runs the duration the quote priced', () => {
+    const request = buildUnifiedCatalogGenerationRequest(draft, seedance15ProModel, 'revision-1', {
+      aspectRatio: '1:1', resolution: '720p', duration: 8, sound: false, fixedLens: false, referenceMode: 'frames',
+    });
+
+    expect(request.settings).toMatchObject({ duration: '8', resolution: '720p' });
+  });
+
+  it('keeps a number that names an option, and still refuses one that does not', () => {
+    expect(normalizeCatalogSettings(seedance15ProModel, { duration: 12 }).duration).toBe('12');
+    expect(normalizeCatalogSettings(seedance15ProModel, { duration: 5 }).duration).toBe('4');
+    expect(normalizeCatalogSettings(seedance15ProModel, { resolution: 720 }).resolution).toBe('480p');
+  });
+
+  it('restores a remixed run at the duration it was made at', () => {
+    // A run's workflow settings store its duration as a number too.
+    const catalog = createRemixRestoreCatalog();
+    const bundle: RemixSourceBundle = {
+      generation: { id: 'source-generation', title: 'Lighthouse', prompt: 'A lighthouse in a storm', category: 'video', model: seedance15ProModel.id },
+      result: null,
+      inputs: { video: { referenceMode: 'frames', startFrame: null, endFrame: null, elements: [], referenceVideos: [], referenceAudios: [] } },
+      workflowSettings: { model: seedance15ProModel.id, resolution: '720p', duration: 8, sound: false },
+      restoreIssues: [],
+    };
+    const restored = hydrateCatalogCreationDraftFromRemixSource(
+      createDefaultCreationDraft('video'),
+      bundle,
+      { ...catalog, models: [...catalog.models, seedance15ProModel] },
+    );
+
+    expect(restored.draft).toMatchObject({ model: 'seedance-1.5-pro', duration: 8, resolution: '720p' });
   });
 });
