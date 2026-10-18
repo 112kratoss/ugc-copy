@@ -15,6 +15,7 @@ import { usePathname } from 'next/navigation';
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -42,23 +43,17 @@ const subscribeToHydration = () => () => undefined;
 const getHydratedSnapshot = () => true;
 const getServerHydratedSnapshot = () => false;
 
-const RESTORABLE_TAB_IDS = new Set<AppNavItem['id']>([
+/**
+ * The tabs that scroll back to the top when pressed while already open, as a
+ * phone's tab bar does. A tab opened from another page always starts at the
+ * top: the shell used to bring back where each of these was left, and a
+ * Profile that opened at its last row read as a page that loaded wrong.
+ */
+const RESELECT_TO_TOP_TAB_IDS = new Set<AppNavItem['id']>([
   'home',
   'showcase',
   'alerts',
   'profile',
-]);
-const TAB_SCROLL_POSITION_PREFIX = 'magicbooklet:app-tab-scroll:';
-const PENDING_TAB_RESTORE_KEY = 'magicbooklet:pending-app-tab-restore';
-const RESTORE_SETTLE_MS = 10_000;
-const SCROLL_INTENT_KEYS = new Set([
-  'ArrowDown',
-  'ArrowUp',
-  'End',
-  'Home',
-  'PageDown',
-  'PageUp',
-  ' ',
 ]);
 
 type AppNavClickHandler = (
@@ -66,15 +61,11 @@ type AppNavClickHandler = (
   item: AppNavItem
 ) => void;
 
-function isRestorableTab(item: AppNavItem) {
-  return RESTORABLE_TAB_IDS.has(item.id);
-}
-
-function getRestorableTabId(pathname: string) {
+function getReselectableTabId(pathname: string) {
   if (pathname === '/' || pathname === '/home') return 'home';
 
   const item = APP_NAV_ITEMS.find(
-    (candidate) => RESTORABLE_TAB_IDS.has(candidate.id) && candidate.href === pathname
+    (candidate) => RESELECT_TO_TOP_TAB_IDS.has(candidate.id) && candidate.href === pathname
   );
   return item?.id ?? null;
 }
@@ -83,49 +74,40 @@ function prefersReducedMotion() {
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 }
 
-function readStoredScrollPosition(id: AppNavItem['id']) {
-  try {
-    const storedValue = window.sessionStorage.getItem(`${TAB_SCROLL_POSITION_PREFIX}${id}`);
-    if (storedValue === null) return null;
-    const value = Number(storedValue);
-    return Number.isFinite(value) && value >= 0 ? value : null;
-  } catch {
-    return null;
+/**
+ * Next scrolls a new page to its top only when the page's first element is out
+ * of view, and a top hidden under the sticky bar still counts as in view. A
+ * short page (a min-h-screen root makes it one bar taller than the window)
+ * opened from a scrolled one keeps the scroll the browser clamped it to, its top
+ * under the bar. That clamp can leave at most the bar's height, so a page found
+ * scrolled that little with its top under the bar goes to the top.
+ *
+ * Not `scroll-padding-top` on the root, the remedy Next's docs give for sticky
+ * headers: every focus then scrolls the page to reveal a control already in
+ * view in the bar or in the drawer, half a window at a time.
+ */
+function bringPageTopOutFromUnderBar() {
+  const bar = document.querySelector('.app-shell-header');
+  const main = document.getElementById('main-content');
+  if (!bar || !main) return;
+
+  const barBottom = bar.getBoundingClientRect().bottom;
+  if (window.scrollY <= barBottom && main.getBoundingClientRect().top < barBottom) {
+    window.scrollTo({ top: 0, behavior: 'auto' });
   }
 }
 
-function storeScrollPosition(id: AppNavItem['id'], top: number) {
+/** Whether a URL hash names something Next scrolls to (its own lookup). */
+function hashHasTarget(hash: string) {
+  let fragment = hash.slice(1);
   try {
-    window.sessionStorage.setItem(
-      `${TAB_SCROLL_POSITION_PREFIX}${id}`,
-      String(Math.max(0, top))
-    );
+    fragment = decodeURIComponent(fragment);
   } catch {
-    // Session storage can be unavailable in privacy-restricted browsers.
+    // A malformed escape is looked up as written.
   }
-}
-
-function readPendingRestore() {
-  try {
-    const id = window.sessionStorage.getItem(PENDING_TAB_RESTORE_KEY);
-    return id && RESTORABLE_TAB_IDS.has(id as AppNavItem['id'])
-      ? id as AppNavItem['id']
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function storePendingRestore(id: AppNavItem['id'] | null) {
-  try {
-    if (id) {
-      window.sessionStorage.setItem(PENDING_TAB_RESTORE_KEY, id);
-    } else {
-      window.sessionStorage.removeItem(PENDING_TAB_RESTORE_KEY);
-    }
-  } catch {
-    // The in-memory ref still covers layouts that remain mounted.
-  }
+  return fragment === 'top'
+    || document.getElementById(fragment) !== null
+    || document.getElementsByName(fragment).length > 0;
 }
 
 function DesktopNavItem({
@@ -143,7 +125,6 @@ function DesktopNavItem({
     <Link
       href={item.href}
       prefetch={false}
-      scroll={isRestorableTab(item) ? false : undefined}
       aria-current={active ? 'page' : undefined}
       onClick={(event) => onNavigate(event, item)}
       className={`ui-focus-ring group relative flex min-h-11 items-center gap-3 rounded-[14px] border px-3 py-2 text-[13px] font-semibold transition ${
@@ -184,7 +165,6 @@ function DrawerNavItem({
     <Link
       href={item.href}
       prefetch={false}
-      scroll={isRestorableTab(item) ? false : undefined}
       aria-current={active ? 'page' : undefined}
       onClick={(event) => {
         onClick();
@@ -236,7 +216,6 @@ function BottomNavItem({
     <Link
       href={item.href}
       prefetch={false}
-      scroll={isRestorableTab(item) ? false : undefined}
       aria-current={active ? 'page' : undefined}
       onClick={(event) => onNavigate(event, item)}
       className={`ui-focus-ring relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-[18px] px-1 py-2 text-[11px] font-bold transition ${
@@ -289,11 +268,6 @@ export default function AppShellClient({ children }: { children: React.ReactNode
   const [mobileOpen, setMobileOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
-  const scrollPositionsRef = useRef<Partial<Record<AppNavItem['id'], number>>>({});
-  const pendingRestoreRef = useRef<AppNavItem['id'] | null>(null);
-  const restoreFrameRef = useRef<number | null>(null);
-  const cancelRestoreRef = useRef<(() => void) | null>(null);
-  const isRestoringRef = useRef(false);
 
   const activeItem = useMemo(() => getActiveAppNavItem(pathname), [pathname]);
   const title = useMemo(() => getAppShellTitle(pathname), [pathname]);
@@ -309,148 +283,52 @@ export default function AppShellClient({ children }: { children: React.ReactNode
       return;
     }
 
-    const currentTabId = getRestorableTabId(routePathname);
-    const wasRestoring = isRestoringRef.current;
-    cancelRestoreRef.current?.();
-    if (restoreFrameRef.current !== null) {
-      window.cancelAnimationFrame(restoreFrameRef.current);
-      restoreFrameRef.current = null;
-    }
-    isRestoringRef.current = false;
+    // Pressing the tab that is already open returns it to its top. Any other
+    // tab is an ordinary navigation: Next scrolls the new page to its top, and
+    // the effect below finishes the job under the bar.
+    if (getReselectableTabId(routePathname) !== item.id) return;
 
-    if (currentTabId && !wasRestoring) {
-      scrollPositionsRef.current[currentTabId] = window.scrollY;
-      storeScrollPosition(currentTabId, window.scrollY);
-    }
-
-    if (!isRestorableTab(item)) {
-      pendingRestoreRef.current = null;
-      storePendingRestore(null);
-      return;
-    }
-
-    if (currentTabId === item.id) {
-      event.preventDefault();
-      pendingRestoreRef.current = null;
-      storePendingRestore(null);
-      scrollPositionsRef.current[item.id] = 0;
-      storeScrollPosition(item.id, 0);
-      window.scrollTo({
-        top: 0,
-        behavior: prefersReducedMotion() ? 'auto' : 'smooth',
-      });
-      return;
-    }
-
-    pendingRestoreRef.current = item.id;
-    storePendingRestore(item.id);
+    event.preventDefault();
+    window.scrollTo({
+      top: 0,
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    });
   }, [routePathname]);
 
+  // Back and Forward bring a page back where the browser left it, which the
+  // check below must leave alone: remember where each traversal lands. In the
+  // capture phase, so it is noted before Next's own listener commits the page.
+  const traversalPathRef = useRef<string | null>(null);
   useEffect(() => {
-    const currentTabId = getRestorableTabId(routePathname);
-    if (!currentTabId) return;
-
-    const captureScrollPosition = () => {
-      if (isRestoringRef.current) return;
-      scrollPositionsRef.current[currentTabId] = window.scrollY;
-      storeScrollPosition(currentTabId, window.scrollY);
+    const rememberTraversal = () => {
+      traversalPathRef.current = window.location.pathname;
     };
+    window.addEventListener('popstate', rememberTraversal, { capture: true });
+    return () => window.removeEventListener('popstate', rememberTraversal, { capture: true });
+  }, []);
 
-    window.addEventListener('scroll', captureScrollPosition, { passive: true });
-    return () => window.removeEventListener('scroll', captureScrollPosition);
-  }, [routePathname]);
+  // A layout effect: it runs after Next's own scroll (the page's layout
+  // effects come first) but before any page reads the scroll in a passive
+  // effect, where Explore's bootstrap would take this reset for the visitor
+  // scrolling, and before the frame is painted.
+  const previousPathnameRef = useRef(routePathname);
+  useLayoutEffect(() => {
+    if (previousPathnameRef.current === routePathname) return;
+    previousPathnameRef.current = routePathname;
 
-  useEffect(() => {
-    const currentTabId = getRestorableTabId(routePathname);
-    const pendingRestore = pendingRestoreRef.current ?? readPendingRestore();
-    if (!currentTabId || pendingRestore !== currentTabId) return;
+    const traversalPath = traversalPathRef.current;
+    traversalPathRef.current = null;
+    // A traversal lands where it was left.
+    if (traversalPath === routePathname) return;
 
-    const top = scrollPositionsRef.current[currentTabId]
-      ?? readStoredScrollPosition(currentTabId)
-      ?? 0;
-    let finished = false;
-    let resizeObserver: ResizeObserver | null = null;
-    let settleTimeout: number | null = null;
-    isRestoringRef.current = true;
-
-    function removeIntentListeners() {
-      window.removeEventListener('wheel', finishRestore);
-      window.removeEventListener('touchstart', finishRestore);
-      window.removeEventListener('pointerdown', finishRestore);
-      window.removeEventListener('keydown', handleRestoreKeyDown);
-      window.removeEventListener('scroll', handleRestoreScroll);
+    const { hash } = window.location;
+    if (!hash) {
+      bringPageTopOutFromUnderBar();
+    } else if (!hashHasTarget(hash) && window.scrollY > 0) {
+      // A hash that names no element, as the creator page's tab hashes do:
+      // Next drops its scroll altogether and the page keeps the last offset.
+      window.scrollTo({ top: 0, behavior: 'auto' });
     }
-
-    function stopRestoreWork() {
-      if (restoreFrameRef.current !== null) {
-        window.cancelAnimationFrame(restoreFrameRef.current);
-        restoreFrameRef.current = null;
-      }
-      if (settleTimeout !== null) {
-        window.clearTimeout(settleTimeout);
-        settleTimeout = null;
-      }
-      resizeObserver?.disconnect();
-      resizeObserver = null;
-      removeIntentListeners();
-      cancelRestoreRef.current = null;
-      isRestoringRef.current = false;
-    }
-
-    function finishRestore() {
-      if (finished) return;
-      finished = true;
-      stopRestoreWork();
-      pendingRestoreRef.current = null;
-      storePendingRestore(null);
-    }
-
-    function handleRestoreKeyDown(event: KeyboardEvent) {
-      if (SCROLL_INTENT_KEYS.has(event.key)) finishRestore();
-    }
-
-    function handleRestoreScroll() {
-      if (Math.abs(window.scrollY - top) > 1) scheduleRestore();
-    }
-
-    const restore = () => {
-      if (finished) return;
-      window.scrollTo({ top, behavior: 'auto' });
-    };
-
-    function scheduleRestore() {
-      if (finished || restoreFrameRef.current !== null) return;
-      restoreFrameRef.current = window.requestAnimationFrame(() => {
-        restoreFrameRef.current = null;
-        restore();
-      });
-    }
-
-    cancelRestoreRef.current = finishRestore;
-    window.addEventListener('wheel', finishRestore, { passive: true });
-    window.addEventListener('touchstart', finishRestore, { passive: true });
-    window.addEventListener('pointerdown', finishRestore, { passive: true });
-    window.addEventListener('keydown', handleRestoreKeyDown);
-    window.addEventListener('scroll', handleRestoreScroll, { passive: true });
-
-    if (typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(() => {
-        restore();
-        scheduleRestore();
-      });
-      resizeObserver.observe(document.body);
-      const mainContent = document.getElementById('main-content');
-      if (mainContent) resizeObserver.observe(mainContent);
-    }
-
-    settleTimeout = window.setTimeout(finishRestore, RESTORE_SETTLE_MS);
-    restore();
-    scheduleRestore();
-
-    return () => {
-      finished = true;
-      stopRestoreWork();
-    };
   }, [routePathname]);
 
   useEffect(() => {
