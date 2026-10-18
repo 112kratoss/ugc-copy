@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
+import {
+  catalogRunInputFacts,
+  GENERATION_PROMPT_MAX_LENGTH,
+  MOTION_PROMPT_MAX_LENGTH,
+} from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import { GenerationModelCatalogSchemaUnavailableError } from '@/lib/generation-model-catalog-store';
 import {
@@ -69,6 +73,79 @@ describe('unified generation start service', () => {
         referenceVideoDurationsSeconds: [4.25, 2.75],
       },
     });
+  });
+
+  it('reads from a run body every input fact the app priced it with', () => {
+    // The app asks for a run's price with catalogRunQuoteInput of the run it is about to
+    // send; this start quotes the run with the same function after parsing its JSON body.
+    // Parsing keeps every fact the app counted: inputs sent by asset id alone, a clip of
+    // no measured length, a zero-second one. A Wan 2.7 start frame beside five references
+    // is a sixth image here, as in the app's quote.
+    const appInputs = [
+      ...[1, 2, 3, 4, 5].map((index) => ({
+        slot: 'imageReferences',
+        kind: 'image' as const,
+        url: `https://cdn.example.com/look-${index}.png`,
+        storagePath: `uploads/user/look-${index}.png`,
+        label: `Look ${index}`,
+        handle: `@look_${index}`,
+        durationSeconds: null,
+        sourceGenerationId: null,
+      })),
+      { slot: 'startFrame', kind: 'image' as const, url: 'https://cdn.example.com/doorstep.png', storagePath: null, label: 'Doorstep', handle: null, durationSeconds: null, sourceGenerationId: null },
+      { slot: 'videoReferences', kind: 'video' as const, url: 'https://cdn.example.com/walk.mp4', storagePath: null, label: 'Walk', handle: '@walk', durationSeconds: 0, sourceGenerationId: null },
+      { slot: 'videoReferences', kind: 'video' as const, url: 'https://cdn.example.com/turn.mp4', assetId: 'asset-turn', storagePath: null, label: 'Turn', handle: '@turn', durationSeconds: 4.5, sourceGenerationId: null },
+      { slot: 'characters', kind: 'character' as const, url: null, assetId: 'character-1', storagePath: null, label: 'Hero', handle: null, durationSeconds: null, sourceGenerationId: null },
+      { slot: 'preparedVoices', kind: 'preparedVoice' as const, url: null, assetId: 'voice-1', storagePath: null, label: 'Narrator', handle: null, durationSeconds: null, sourceGenerationId: null },
+    ];
+    const body = {
+      kind: 'video',
+      modelId: 'wan-2.7',
+      catalogRevision: 'wan-release',
+      settings: { referenceMode: 'elements' },
+      prompt: 'The product turns on the doorstep.',
+      inputs: appInputs,
+      sourceGenerationId: null,
+    };
+    const input = buildUnifiedGenerationQuoteInput(parseUnifiedGenerationRequest(JSON.parse(JSON.stringify(body))));
+
+    expect({ inputCounts: input.inputCounts, inputMetadata: input.inputMetadata }).toEqual(catalogRunInputFacts(appInputs));
+    expect(input.inputCounts).toEqual({ images: 6, videos: 2, audios: 0, preparedAudios: 1, characters: 1 });
+    expect(input.inputMetadata).toEqual({
+      slots: {
+        imageReferences: { count: 5 },
+        startFrame: { count: 1 },
+        videoReferences: { count: 2, durationsSeconds: [0, 4.5] },
+        characters: { count: 1 },
+        preparedVoices: { count: 1 },
+      },
+      referenceVideoDurationsSeconds: [0, 4.5],
+    });
+  });
+
+  it('counts a slot named after a built-in as a slot of that name, and changes no built-in', () => {
+    // Slot names come from the request body, and `constructor` or `toString` pass the slot
+    // pattern: counted in a plain object, each read the built-in it shadows and wrote onto it
+    // (`Object.count`, a `durationsSeconds` list on Object that grew with every start).
+    const parsed = parseUnifiedGenerationRequest({
+      kind: 'video',
+      modelId: 'remotely-published-model',
+      catalogRevision: 'release-revision-2',
+      settings: {},
+      inputs: [
+        { slot: 'constructor', kind: 'video', url: 'https://cdn.example.com/a.mp4', durationSeconds: 2 },
+        { slot: 'toString', kind: 'video', url: 'https://cdn.example.com/b.mp4', durationSeconds: 3 },
+      ],
+    });
+    const input = buildUnifiedGenerationQuoteInput(parsed);
+
+    expect(Object.hasOwn(Object, 'count')).toBe(false);
+    expect(Object.hasOwn(Object, 'durationsSeconds')).toBe(false);
+    expect(Object.hasOwn(Object.prototype.toString, 'count')).toBe(false);
+    expect(Object.entries(input.inputMetadata?.slots ?? {})).toEqual([
+      ['constructor', { count: 1, durationsSeconds: [2] }],
+      ['toString', { count: 1, durationsSeconds: [3] }],
+    ]);
   });
 
   it('uses only the authoritative v1 release during the rolling v2 publication window', async () => {

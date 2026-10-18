@@ -1,0 +1,206 @@
+{
+  "revision": "pixverse-mobile-20261008",
+  "models": [
+    {
+      "id": "wan-2.7",
+      "kind": "video",
+      "displayName": "Wan 2.7",
+      "description": "Flexible text, frame, and multimodal reference-to-video generation",
+      "badge": "New",
+      "recommended": false,
+      "sortOrder": 60,
+      "minClientSchemaVersion": 1,
+      "controls": [
+        {
+          "key": "aspectRatio",
+          "label": "Aspect ratio",
+          "type": "choice",
+          "presentation": "chips",
+          "defaultValue": "16:9",
+          "options": [
+            {
+              "value": "16:9",
+              "label": "16:9"
+            },
+            {
+              "value": "9:16",
+              "label": "9:16"
+            },
+            {
+              "value": "1:1",
+              "label": "1:1"
+            },
+            {
+              "value": "4:3",
+              "label": "4:3"
+            },
+            {
+              "value": "3:4",
+              "label": "3:4"
+            }
+          ]
+        },
+        {
+          "key": "resolution",
+          "label": "Resolution",
+          "type": "choice",
+          "presentation": "chips",
+          "defaultValue": "720p",
+          "options": [
+            {
+              "value": "720p",
+              "label": "720p"
+            },
+            {
+              "value": "1080p",
+              "label": "1080p"
+            }
+          ]
+        },
+        {
+          "key": "duration",
+          "label": "Duration",
+          "type": "integer",
+          "presentation": "stepper",
+          "defaultValue": 5,
+          "min": 2,
+          "max": 15,
+          "step": 1,
+          "unit": "seconds"
+        },
+        {
+          "key": "referenceMode",
+          "label": "Input mode",
+          "type": "choice",
+          "presentation": "chips",
+          "defaultValue": "frames",
+          "options": [
+            {
+              "value": "frames",
+              "label": "Frames"
+            },
+            {
+              "value": "elements",
+              "label": "References"
+            }
+          ],
+          "minClientSchemaVersion": 2
+        }
+      ],
+      "capabilities": {
+        "multiShot": false,
+        "sound": false,
+        "fixedLens": false,
+        "googleSearch": false,
+        "outputFormat": false
+      },
+      "availability": {
+        "web": true,
+        "mobile": true
+      },
+      "inputModes": [
+        {
+          "key": "frames",
+          "label": "Frames",
+          "default": true,
+          "slots": [
+            {
+              "key": "startFrame",
+              "label": "Start frame",
+              "kind": "image",
+              "role": "startFrame",
+              "min": 0,
+              "max": 1
+            },
+            {
+              "key": "endFrame",
+              "label": "End frame",
+              "kind": "image",
+              "role": "endFrame",
+              "min": 0,
+              "max": 1
+            }
+          ],
+          "conditions": [
+            {
+              "source": "setting",
+              "key": "referenceMode",
+              "operator": "equals",
+              "value": "frames"
+            }
+          ]
+        },
+        {
+          "key": "references",
+          "label": "Reusable references",
+          "default": false,
+          "slots": [
+            {
+              "key": "imageReferences",
+              "label": "Reference images",
+              "kind": "image",
+              "role": "reference",
+              "min": 0,
+              "max": 5,
+              "supportsNaming": true
+            },
+            {
+              "key": "videoReferences",
+              "label": "Reference videos",
+              "kind": "video",
+              "role": "reference",
+              "min": 0,
+              "max": 5,
+              "durationMetadata": "optional"
+            },
+            {
+              "key": "audioReferences",
+              "label": "Reference audio",
+              "kind": "audio",
+              "role": "reference",
+              "min": 0,
+              "max": 1,
+              "durationMetadata": "optional"
+            },
+            {
+              "key": "startFrame",
+              "label": "Start frame",
+              "kind": "image",
+              "role": "startFrame",
+              "min": 0,
+              "max": 1
+            }
+          ],
+          "conditions": [
+            {
+              "source": "setting",
+              "key": "referenceMode",
+              "operator": "equals",
+              "value": "elements"
+            }
+          ]
+        }
+      ],
+      "inputConstraints": [
+        {
+          "type": "total-count",
+          "slotKeys": [
+            "imageReferences",
+            "videoReferences",
+            "audioReferences"
+          ],
+          "max": 5,
+          "message": "Wan 2.7 supports up to 5 reusable references in total.",
+          "conditions": [
+            {
+              "source": "setting",
+              "key": "referenceMode",
+              "operator": "equals",
+              "value": "elements"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

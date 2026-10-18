@@ -66,6 +66,7 @@ import {
 } from '@/lib/seedance-assets';
 import { resolveSourceGenerationId } from '@/lib/source-generation';
 import { probeMediaDurationSeconds } from '@/lib/video-rendition';
+import { catalogRunQuoteInput } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 const INPUT_KINDS = new Set<CatalogGenerationInputKind>([
   'image',
@@ -369,39 +370,9 @@ function withShotsDuration(request: UnifiedGenerationRequest): UnifiedGeneration
 export function buildUnifiedGenerationQuoteInput(
   request: UnifiedGenerationRequest,
 ): GenerationModelQuoteInput {
-  const slots: Record<string, { count: number; durationsSeconds?: number[] }> = {};
-  for (const asset of request.inputs) {
-    const slot = slots[asset.slot] ?? { count: 0 };
-    slot.count += 1;
-    if (typeof asset.durationSeconds === 'number') {
-      slot.durationsSeconds = [...(slot.durationsSeconds ?? []), asset.durationSeconds];
-    }
-    slots[asset.slot] = slot;
-  }
-  const referenceVideoDurationsSeconds = request.inputs
-    .filter((asset) => asset.kind === 'video')
-    .flatMap((asset) => (
-      typeof asset.durationSeconds === 'number' ? [asset.durationSeconds] : []
-    ));
-
-  return {
-    schemaVersion: 2,
-    kind: request.kind,
-    modelId: request.modelId,
-    settings: request.settings,
-    inputCounts: {
-      images: request.inputs.filter((asset) => asset.kind === 'image').length,
-      videos: request.inputs.filter((asset) => asset.kind === 'video').length,
-      audios: request.inputs.filter((asset) => asset.kind === 'audio').length,
-      preparedAudios: request.inputs.filter((asset) => asset.kind === 'preparedVoice').length,
-      characters: request.inputs.filter((asset) => asset.kind === 'character').length,
-    },
-    inputMetadata: {
-      slots,
-      referenceVideoDurationsSeconds,
-    },
-    catalogRevision: request.catalogRevision,
-  };
+  // The native creator asks for a run's price with this same quote of the run it is
+  // about to send, so the price it shows is the one this quote charges, or refuses.
+  return catalogRunQuoteInput(request);
 }
 
 function collectDurationSlotKeys(value: unknown, keys: Set<string>): void {

@@ -35,6 +35,7 @@ import {
   type VideoShotDraft,
 } from './media-creation-view-model';
 import {
+  catalogRunQuoteInput,
   modeGatedSettingValues,
   SUBJECT_IMAGES_PER_NAME,
   SUBJECT_IMAGES_SLOT_KEY,
@@ -780,12 +781,6 @@ export function validateCatalogCreationDraft(
   return { errors, warnings: [], cost, canGenerate: errors.length === 0 && hasServerQuote };
 }
 
-function referenceSlotOf(kind: CatalogInputSlot['kind']) {
-  return (slot: CatalogInputSlot) => (
-    slot.role === 'reference' && slot.kind === kind && slot.key !== SUBJECT_IMAGES_SLOT_KEY
-  );
-}
-
 /**
  * The draft with each kind cut to the limit the descriptor states, which
  * applyCatalogModelDefaults used to cut the draft itself to: what the per-kind payload
@@ -811,96 +806,64 @@ export function buildCatalogQuoteRequest(
   model: GenerationModelDescriptor,
   catalogRevision: string
 ): GenerationModelQuoteRequest {
-  // Priced as the run it would start: in that run's shape, counting what it sends. A
-  // reference the model has no room for is no part of the price, as it is no part of the run.
+  // Priced as the run it would start, from the run request itself: its settings and the inputs
+  // it sends, told to the server as the server tells itself when it quotes the run again to
+  // start it. A reference the model has no room for is no part of the price, as it is no part
+  // of the run.
+  if (model.inputModes) {
+    return catalogRunQuoteInput(buildUnifiedCatalogGenerationRequest(draft, model, catalogRevision));
+  }
+  // A descriptor without input modes, from a schema-1 catalog, has no slots to send inputs
+  // in: its inputs are counted from the draft, cut to the limits the descriptor states.
   const runDraft = catalogRunDraft(draft, model);
   const settings = catalogRunSettings(runDraft, model);
-  const inputSlots = buildCatalogDraftInputSlots(runDraft, model, settings);
-  const activeSlots = getActiveCatalogInputSlots(model, settings, heldInputCounts(runDraft, model));
-  const counted = (matches: (slot: CatalogInputSlot) => boolean) => activeSlots
-    .filter(matches)
-    .reduce((total, slot) => total + (inputSlots[slot.key]?.length ?? 0), 0);
   const legacy = legacyRunDraft(runDraft, model);
-  const inputMetadataSlots = Object.fromEntries(Object.entries(inputSlots).map(([slotKey, assets]) => {
-    const durationsSeconds = assets
-      .map((asset) => asset.durationSeconds)
-      .filter((duration): duration is number => typeof duration === 'number' && Number.isFinite(duration));
-    return [slotKey, {
-      count: assets.length,
-      ...(durationsSeconds.length > 0 ? { durationsSeconds } : {}),
-    }];
-  }));
-  const v2ReferenceVideoDurations = activeSlots
-    .filter((slot) => slot.kind === 'video' && slot.role === 'reference')
-    .flatMap((slot) => inputSlots[slot.key] ?? [])
-    .map((asset) => asset.durationSeconds)
-    .filter((duration): duration is number => typeof duration === 'number' && Number.isFinite(duration));
-  const legacyReferenceVideoDurations = legacy.tool === 'video'
+  const referenceVideoDurationsSeconds = legacy.tool === 'video'
     ? legacy.referenceVideos
       .map((asset) => asset.durationSeconds)
       .filter((duration): duration is number => typeof duration === 'number' && Number.isFinite(duration))
     : legacy.tool === 'motion' && typeof legacy.referenceVideo?.durationSeconds === 'number'
       ? [legacy.referenceVideo.durationSeconds]
       : [];
-  const referenceVideoDurationsSeconds = v2ReferenceVideoDurations.length > 0
-    ? v2ReferenceVideoDurations
-    : legacyReferenceVideoDurations;
   const inputMetadata = {
-    slots: inputMetadataSlots,
+    slots: {},
     ...(referenceVideoDurationsSeconds.length > 0 ? { referenceVideoDurationsSeconds } : {}),
   };
-  const schemaVersion = model.inputModes ? 2 as const : 1 as const;
   if (legacy.tool === 'image') {
     return {
-      schemaVersion,
+      schemaVersion: 1,
       kind: 'image',
       modelId: model.id,
       settings,
-      inputCounts: {
-        images: model.inputModes ? counted((slot) => slot.kind === 'image') : legacy.references.length,
-        videos: 0,
-        audios: 0,
-      },
+      inputCounts: { images: legacy.references.length, videos: 0, audios: 0 },
       inputMetadata,
       catalogRevision,
     };
   }
   if (legacy.tool === 'video') {
     const usesReusableReferences = legacy.referenceMode === 'elements';
-    const usesSubjects = legacy.referenceMode === 'subjects';
-    const inputCounts = model.inputModes
-      ? {
-          images: usesSubjects
-            ? counted((slot) => slot.key === SUBJECT_IMAGES_SLOT_KEY)
-            : usesReusableReferences ? counted(referenceSlotOf('image')) : counted(isFrameSlot),
-          videos: usesReusableReferences ? counted(referenceSlotOf('video')) : 0,
-          audios: usesReusableReferences ? counted(referenceSlotOf('audio')) : 0,
-          preparedAudios: usesReusableReferences ? counted(referenceSlotOf('preparedVoice')) : 0,
-          characters: usesReusableReferences ? counted(referenceSlotOf('character')) : 0,
-        }
-      : {
-          images: usesSubjects
-            ? videoSubjects(legacy).reduce((count, subject) => count + subject.images.length, 0)
-            : usesReusableReferences
-              ? legacy.references.length
-              : (legacy.startFrame ? 1 : 0) + (!legacy.isMultiShot && legacy.endFrame ? 1 : 0),
-          videos: usesReusableReferences ? legacy.referenceVideos.length : 0,
-          audios: usesReusableReferences ? legacy.referenceAudios.length : 0,
-          preparedAudios: usesReusableReferences ? preparedAudioIds(legacy).length : 0,
-          characters: usesReusableReferences ? characterIds(legacy).length : 0,
-        };
     return {
-      schemaVersion,
+      schemaVersion: 1,
       kind: 'video',
       modelId: model.id,
       settings,
-      inputCounts,
+      inputCounts: {
+        images: legacy.referenceMode === 'subjects'
+          ? videoSubjects(legacy).reduce((count, subject) => count + subject.images.length, 0)
+          : usesReusableReferences
+            ? legacy.references.length
+            : (legacy.startFrame ? 1 : 0) + (!legacy.isMultiShot && legacy.endFrame ? 1 : 0),
+        videos: usesReusableReferences ? legacy.referenceVideos.length : 0,
+        audios: usesReusableReferences ? legacy.referenceAudios.length : 0,
+        preparedAudios: usesReusableReferences ? preparedAudioIds(legacy).length : 0,
+        characters: usesReusableReferences ? characterIds(legacy).length : 0,
+      },
       inputMetadata,
       catalogRevision,
     };
   }
   return {
-    schemaVersion,
+    schemaVersion: 1,
     kind: 'motion',
     modelId: model.id,
     settings,
@@ -910,37 +873,29 @@ export function buildCatalogQuoteRequest(
   };
 }
 
-function generationInputKind(
-  slot: CatalogInputSlot,
-): CatalogGenerationInputAsset['kind'] {
-  return slot.kind;
-}
-
 export function buildUnifiedCatalogGenerationRequest(
   draft: CreationDraft,
   model: GenerationModelDescriptor,
   catalogRevision: string,
 ): CatalogGenerationRequest {
   const runDraft = catalogRunDraft(draft, model);
-  // The settings its quote request was built from (buildCatalogQuoteRequest), never the quote's
-  // answer read back: the server quotes the run again from these and makes it with its own
-  // normalized result, so it runs the settings it priced. A multi-shot run's duration is its
-  // shots' total here, which the server checks against the shots.
+  // The settings of the draft, as its quote is asked with them (buildCatalogQuoteRequest prices
+  // this request), never the quote's answer read back: the server quotes the run again from
+  // these and makes it with its own normalized result, so it runs the settings it priced. A
+  // multi-shot run's duration is its shots' total here, which the server checks against the shots.
   const settings = catalogRunSettings(runDraft, model);
-  const inputSlots = buildCatalogDraftInputSlots(runDraft, model, settings);
-  // Opened with the draft's held input counts, as the slots above and the quote's are: a slot
-  // whose mode opens on a count is otherwise counted by the quote and left out of the run.
-  const slotDescriptors = new Map(
-    getActiveCatalogInputSlots(model, settings, heldInputCounts(runDraft, model)).map((slot) => [slot.key, slot]),
-  );
+  // Each slot the run opens, with what it sends there, at most the slot's max, from one lookup
+  // opened with the draft's held input counts. Looked up twice, the second time without those
+  // counts, a slot whose mode opens on a count lost its inputs from the run.
+  const sent = new Map(heldCatalogDraftInputSlots(runDraft, model, settings).map(({ slot, assets }) => (
+    [slot.key, { slot, assets: assets.slice(0, Math.max(0, slot.max)) }] as const
+  )));
   // The Seedance 2 family takes a reference's prepared asset in place of the file, once the
   // provider reports it active: the server hands any id it gets to Seedance, and one still
   // processing, or failed, would be refused there after the credit hold. The link goes
   // beside the id, so the server can still measure the file and price it.
   const preparesSeedanceAssets = isSeedance2VideoModelId(model.id);
-  const inputs = Object.entries(inputSlots).flatMap(([slotKey, assets]) => {
-    const slot = slotDescriptors.get(slotKey);
-    if (!slot) return [];
+  const inputs = [...sent.values()].flatMap(({ slot, assets }) => {
     const takesPreparedAsset = preparesSeedanceAssets
       && slot.role === 'reference'
       && (slot.kind === 'image' || slot.kind === 'video' || slot.kind === 'audio');
@@ -949,8 +904,8 @@ export function buildUnifiedCatalogGenerationRequest(
         ? getPreferredSeedanceReferenceValue(null, asset.seedanceAsset)
         : null;
       return {
-        slot: slotKey,
-        kind: generationInputKind(slot),
+        slot: slot.key,
+        kind: slot.kind,
         url: asset.url ?? null,
         ...(slot.kind === 'character' || slot.kind === 'preparedVoice'
           ? { assetId: asset.id }
