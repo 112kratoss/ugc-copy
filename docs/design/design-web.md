@@ -164,6 +164,7 @@ Rules:
 The destinations, in order (`APP_NAV_ITEMS`), are Home, Feed, Create, Studio, Explore, Search, Marketplace, Workflow Canvas, Alerts, Invite & Earn, and Profile.
 
 - **Names:** they match the mobile app where the surfaces match. Alerts is Alerts on both, and Explore is Explore.
+- **Scroll on arrival:** a page opened from the navigation starts at its top, and pressing Home, Explore, Alerts or Profile while it is open scrolls it back to the top. Back and Forward keep the browser's own restoration. The shell keeps no scroll position per tab: a Profile that reopened at its last row read as a page that loaded wrong (owner, 2026-10-18). Next scrolls to the top only when the new page's top is out of view, and a top under the sticky bar counts as in view, so after a forward navigation `AppShellClient` scrolls a page left within one bar's height of the top, with its top under the bar, to the top. A link whose hash names an element lands on it; one whose hash names nothing (the creator page's tab hashes) starts at the top, because Next drops its scroll for it. Not `scroll-padding-top` on the root, which Next's docs suggest: it made every focus in the bar or the drawer scroll the page by half a window.
 - **Rewrites:** signed-in `/`, `/feed`, `/showcase` and `/marketplace` are served through rewrites (`next.config.ts`, `src/proxy.ts`), and Next route interception never fires on a rewritten path. An overlay on those pages is a client-side component, not an intercepting route.
 
 ## Page Patterns
