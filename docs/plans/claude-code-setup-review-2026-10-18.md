@@ -1,6 +1,6 @@
 # Claude Code setup review: what Anthropic does, what we do, what to adopt
 
-Status (2026-10-18): all five P3 decisions taken by the owner and written in (see "P3 decisions"). P1 shipped in PR #475 (`AGENTS.md` split into a 21 KB core plus eight path-scoped rules, three hooks and a committed `.claude/settings.json`, a compaction section, symlinked mirrors at the top level). P2 shipped in PR #476 (four repo skills, the design skill split into a core plus references, `npm run test:quiet`). Left: the worktree load count (see "P3 decisions"); the monthly prompt-audit is the standing follow-up.
+Status (2026-10-18): all five P3 decisions taken by the owner and written in (see "P3 decisions"). P1 shipped in PR #475 (`AGENTS.md` split into a 21 KB core plus eight path-scoped rules, three hooks and a committed `.claude/settings.json`, a compaction section, symlinked mirrors at the top level). P2 shipped in PR #476 (four repo skills, the design skill split into a core plus references, `npm run test:quiet`). Nothing is left open; the monthly prompt-audit is the standing follow-up.
 
 ## Why
 
@@ -149,7 +149,7 @@ Shipped in the second PR (P2):
 4. **Session root: keep `UGC copy`, with mirrors.** `rules/`, `hooks/`, `agents/`, every skill and `settings.json` are symlinked at the top level, and the top-level AGENTS.md now says every new entry gets its link in the same change.
 5. **Routines: not now.** The audit runs by hand about monthly: in a terminal `claude` started in `ugc-app`, `/doctor prompt-audit` over AGENTS.md, `.claude/rules/` and the skills, then a PR with the trims worth keeping.
 
-The double-load question was measured on 2026-10-18 by a read-only session rooted in `ugc-app`: it saw the parent `UGC copy/AGENTS.md` and then `ugc-app/AGENTS.md`, each once, and the parent's `@ugc-app/AGENTS.md` line stayed literal text, so a session rooted in the repo pays for the repo's instructions once. Not yet measured: a session rooted in a worktree under `ugc-app/.claude/worktrees/`, which has the primary checkout's `ugc-app/AGENTS.md` as an ancestor directory's file and may load that copy as well as its own; the same counting prompt, run from a worktree session, settles it. The first `/doctor prompt-audit` is deferred to the monthly cadence of decision 5, since the 2026-10-18 split verified every path, count and version pin in the files it would audit.
+The double-load question was measured on 2026-10-18 by a read-only session rooted in `ugc-app`: it saw the parent `UGC copy/AGENTS.md` and then `ugc-app/AGENTS.md`, each once, and the parent's `@ugc-app/AGENTS.md` line stayed literal text, so a session rooted in the repo pays for the repo's instructions once. The worktree case was measured the same way later that day: a session rooted in a fresh worktree under `ugc-app/.claude/worktrees/` also saw the parent file and one `ugc-app/AGENTS.md`, the repo's sentences once, so neither root double-loads. The first `/doctor prompt-audit` is deferred to the monthly cadence of decision 5, since the 2026-10-18 split verified every path, count and version pin in the files it would audit.
 
 ## Sources
 
