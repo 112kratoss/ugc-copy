@@ -58,6 +58,8 @@ const authState = vi.hoisted(() => ({
 }));
 
 const EMPTY_MISSING_IDS = vi.hoisted(() => [] as string[]);
+// The model ids the screen last asked the catalog hook to load.
+const catalogHookCalls = vi.hoisted(() => ({ selectedIds: [] as string[] }));
 const catalogState = vi.hoisted(() => ({
   catalog: null as unknown,
   // When set, what the hook's loadDetails answers, so a case can hold a model's details
@@ -256,7 +258,10 @@ vi.mock('@/lib/env', async (importOriginal) => {
 const loadCatalogDetails = async (ids: string[]) => (catalogState.loadDetails ? catalogState.loadDetails(ids) : catalogState.catalog);
 
 vi.mock('@/lib/use-generation-model-catalog', () => ({
-  useGenerationModelCatalog: () => ({ ...catalogState, loadDetails: loadCatalogDetails, summaries: catalogState.summaries ?? (catalogState.catalog as {models?: unknown[]} | null)?.models ?? [], missingIds: EMPTY_MISSING_IDS, isLoadingModels: false }),
+  useGenerationModelCatalog: (_api: unknown, options: { selectedIds?: string[] } = {}) => {
+    catalogHookCalls.selectedIds = options.selectedIds ?? [];
+    return { ...catalogState, loadDetails: loadCatalogDetails, summaries: catalogState.summaries ?? (catalogState.catalog as {models?: unknown[]} | null)?.models ?? [], missingIds: EMPTY_MISSING_IDS, isLoadingModels: false };
+  },
 }));
 
 import { AppState, PanResponder } from 'react-native';
@@ -572,6 +577,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     catalogState.error = null;
     catalogState.refetch.mockReset();
     EMPTY_MISSING_IDS.length = 0;
+    catalogHookCalls.selectedIds = [];
     nativeAlertState.alert.mockReset();
     keyboardState.dismiss.mockReset();
     backHandlerState.listeners.clear();
@@ -780,7 +786,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         tree = renderer.create(<MediaCreationScreen initialTool="video" insideTab guided />);
       });
       renderer.act(() => {
-        tree!.root.findAll((node) => String(node.type) === 'textinput')[0].props.onChangeText('A lighthouse in a storm');
+        tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('A lighthouse in a storm');
       });
 
       catalogState.catalog = createTestGenerationModelCatalog([seedance15ProModel]);
@@ -795,8 +801,27 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(authState.api.quoteGenerationModel.mock.calls[0][0]).toMatchObject({
         settings: { resolution: '720p', duration: '4', sound: false },
       });
-      expect(tree!.root.findAll((node) => String(node.type) === 'textinput')[0].props.value).toBe('A lighthouse in a storm');
+      expect(tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('A lighthouse in a storm');
       expect(collectText(tree!.root).some((item) => item.includes('no longer supported'))).toBe(false);
+    });
+
+    it('asks for the starter details only while the guided draft can still take them', () => {
+      catalogState.catalog = createTestGenerationModelCatalog();
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<MediaCreationScreen initialTool="video" insideTab guided />);
+      });
+      expect(catalogHookCalls.selectedIds).toContain('seedance-1.5-pro');
+
+      // Gone from the catalog: the draft settles on the default and lets the starter go, which
+      // would otherwise keep the creator "unavailable" through any later catalog error.
+      catalogState.catalog = createTestGenerationModelCatalog();
+      EMPTY_MISSING_IDS.push(seedance15ProModel.id);
+      renderer.act(() => {
+        tree!.update(<MediaCreationScreen initialTool="video" insideTab guided />);
+      });
+      expect(catalogHookCalls.selectedIds).toContain('kling-3.0-video');
+      expect(catalogHookCalls.selectedIds).not.toContain('seedance-1.5-pro');
     });
 
     it('leaves the video draft on the catalog default in a guided image session', async () => {

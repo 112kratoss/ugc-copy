@@ -199,7 +199,9 @@ know. A mobile release is needed only for:
 
 - a new control type, input slot kind or role, or constraint type;
 - a new model kind;
-- a `minClientSchemaVersion` above what the shipped apps read.
+- a `minClientSchemaVersion` above what the shipped apps read;
+- a change to the guided first video's starter model that the starter no longer fits (see "Changing a model
+  we already run").
 
 New optional keys are fine.
 
@@ -217,11 +219,11 @@ A new price, cap or option follows the same path without the id work: change the
 release that lists only the changed model, pin it with a manifest test, deploy, then stage and
 publish.
 
-The app's guided first video starts on a pinned model and settings, sized to fit the welcome credits
-(`ugc-mobile/lib/guided-creation-starter.ts`: Seedance 1.5 Pro at 720p, 4 s, no sound, 14 of 25 credits
-on 2026-10-18). A release that reprices that model, renames or retypes its `resolution`, `duration` or
-`sound` control, or takes it off mobile changes what a new account's first video costs: keep it within
-the `welcome_credits_v1` grant or change the starter in the same piece of work (an app OTA).
+The app's guided first video starts on a pinned model and the settings that set its price, sized to fit
+the welcome credits (`ugc-mobile/lib/guided-creation-starter.ts`). A release that reprices that model,
+renames or retypes a control the starter pins, or takes the model off mobile changes what a new account's
+first video costs: keep it within the `welcome_credits_v1` grant or change the starter in the same piece of
+work (an app OTA).
 
 ## Background
 

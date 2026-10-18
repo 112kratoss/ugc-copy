@@ -789,10 +789,12 @@ function IdentityCreationScreen({
   const queryClient = useQueryClient();
   const [activeTool, setActiveTool] = useState<CreatorToolId>(isTool(initialTool) ? initialTool : 'image');
   // A guided first creation names its starter's model from the outset, so the default is never
-  // quoted first; the catalog reconcile below applies the starter's settings.
-  const guidedStarterId = guidedCreationStarter(initialTool, { guided, initialTool })?.modelId ?? null;
+  // quoted first; the catalog reconcile below applies the starter's settings. A remix restores
+  // its source's model instead, so a remix opened as guided takes no starter.
+  const guidedScreen = guided && !remixSource;
+  const guidedStarterId = guidedCreationStarter(initialTool, { guided: guidedScreen, initialTool })?.modelId ?? null;
   const withGuidedStart = <T extends CreationDraft>(draft: T): T => {
-    const starter = guidedCreationStarter(draft.tool, { guided, initialTool });
+    const starter = guidedCreationStarter(draft.tool, { guided: guidedScreen, initialTool });
     return starter ? { ...draft, model: starter.modelId } : draft;
   };
   const [imageDraft, setImageDraft] = useState<ImageCreationDraft>(() => withGuidedStart({
@@ -923,10 +925,14 @@ function IdentityCreationScreen({
   // A pick whose model's details are still loading, or failed to: the draft changes once they are in.
   const [modelPick, setModelPick] = useState<{ modelId: string; error: string | null } | null>(null);
   const modelPickRef = useRef<string | null>(null);
-  // The starter's details load whatever the drafts name, so the reconcile never waits on them for good.
+  // The starter's details load whatever the drafts name, so the reconcile never waits on them for
+  // good, until the guided draft settles (a revision): a starter the catalog dropped then leaves
+  // the selected ids, where it would hold the creator "unavailable" through any catalog error.
+  const guidedDraft = initialTool === 'image' ? imageDraft : initialTool === 'motion' ? motionDraft : videoDraft;
+  const pinnedStarterId = guidedStarterId && !guidedDraft.catalogRevision ? guidedStarterId : null;
   const catalogQuery = useGenerationModelCatalog(api, {
     kind: activeTool,
-    selectedIds: [imageDraft.model, videoDraft.model, motionDraft.model, ...(guidedStarterId ? [guidedStarterId] : [])],
+    selectedIds: [imageDraft.model, videoDraft.model, motionDraft.model, ...(pinnedStarterId ? [pinnedStarterId] : [])],
     pickerOpen: modelPickerVisible,
   });
   const catalog = catalogQuery.catalog;
@@ -1041,7 +1047,7 @@ function IdentityCreationScreen({
         const baseline = catalog
           ? normalizeCreationDraftForCatalog(remixBaseline.current[tool], catalog, {
               modelSelectionTouched: false,
-              starter: guidedCreationStarter(tool, { guided, initialTool }),
+              starter: guidedCreationStarter(tool, { guided: guidedScreen, initialTool }),
               missingIds: catalogQuery.missingIds,
             }).draft
           : remixBaseline.current[tool];
@@ -1120,7 +1126,7 @@ function IdentityCreationScreen({
       setter((draft) => {
         const result = normalizeCreationDraftForCatalog(draft, catalog, {
           modelSelectionTouched: modelSelectionTouched.current[kind],
-          starter: guidedCreationStarter(kind, { guided, initialTool }),
+          starter: guidedCreationStarter(kind, { guided: guidedScreen, initialTool }),
           missingIds: catalogQuery.missingIds,
         });
         if (result.missingModel) {
@@ -1134,7 +1140,7 @@ function IdentityCreationScreen({
     reconcile<ImageCreationDraft>('image', setImageDraft);
     reconcile<VideoCreationDraft>('video', setVideoDraft);
     reconcile<MotionCreationDraft>('motion', setMotionDraft);
-  }, [catalog, catalogQuery.missingIds, guided, initialTool]);
+  }, [catalog, catalogQuery.missingIds, guidedScreen, initialTool]);
 
   const rawDraft: CreationDraft = activeTool === 'image' ? imageDraft : activeTool === 'video' ? videoDraft : motionDraft;
   const currentCatalogModel = useMemo(
@@ -1412,14 +1418,11 @@ function IdentityCreationScreen({
     // Taken as this catalog leaves the draft. The reconcile effect above normalizes the same
     // draft in this commit, but its update has not rendered yet; the raw draft would make the
     // catalog's own defaults read as edits made while the source loaded, spread over the restore.
+    // A remix takes no guided starter (guidedScreen), so its baseline needs none either.
     const draftWhenRemixStarted = normalizeCreationDraftForCatalog(
       latestDrafts.current[targetTool],
       catalog,
-      {
-        modelSelectionTouched: modelSelectionTouched.current[targetTool],
-        starter: guidedCreationStarter(targetTool, { guided, initialTool }),
-        missingIds: catalogQuery.missingIds,
-      },
+      { modelSelectionTouched: modelSelectionTouched.current[targetTool] },
     ).draft;
 
     void api.getRemixSourceBundle(generationId, { postId: remixSource?.postId ?? null })

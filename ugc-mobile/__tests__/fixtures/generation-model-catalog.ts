@@ -96,8 +96,12 @@ function choiceControl(
   defaultValue: string,
   values: string[],
   presentation: 'chips' | 'select' = 'chips',
+  normalizedValueType?: 'string' | 'number',
 ): CatalogControl {
-  return { key, label, type: 'choice', presentation, defaultValue, options: values.map((value) => ({ value, label: value })) };
+  return {
+    key, label, type: 'choice', presentation, defaultValue, options: values.map((value) => ({ value, label: value })),
+    ...(normalizedValueType ? { normalizedValueType } : {}),
+  };
 }
 
 const seedanceReferenceModeIs = (value: 'frames' | 'elements') => [
@@ -113,7 +117,8 @@ export const seedance15ProModel = model('seedance-1.5-pro', 'video', 'Seedance 1
   controls: [
     choiceControl('aspectRatio', 'Aspect ratio', '1:1', ['1:1', '21:9', '4:3', '3:4', '16:9', '9:16']),
     choiceControl('resolution', 'Resolution', '480p', ['480p', '720p', '1080p']),
-    choiceControl('duration', 'Duration', '4', ['4', '8', '12']),
+    // The server answers this choice as a number in a quote's normalized settings.
+    choiceControl('duration', 'Duration', '4', ['4', '8', '12'], 'chips', 'number'),
     { key: 'sound', label: 'Sound', type: 'boolean', presentation: 'toggle', defaultValue: false },
     { key: 'fixedLens', label: 'Fixed lens', type: 'boolean', presentation: 'toggle', defaultValue: false },
     choiceControl('referenceMode', 'Input mode', 'frames', ['frames', 'elements']),
