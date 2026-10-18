@@ -879,6 +879,15 @@ function normalizedDurations(value: unknown): number[] {
     : [];
 }
 
+/**
+ * Whether a quote names the slots its inputs fill: every run's own quote does
+ * (`catalogRunQuoteInput`), and so does the web creator's. The workflow runner, the
+ * template compiler and the schema-1 starts send kind totals alone.
+ */
+function quoteNamesItsSlots(input: Pick<GenerationModelQuoteInput, 'inputMetadata'>): boolean {
+  return isRecord(input.inputMetadata?.slots);
+}
+
 export function normalizeGenerationModelInputFacts(
   input: Pick<GenerationModelQuoteInput, 'inputCounts' | 'inputMetadata'>,
 ): GenerationModelRuntimeInputs {
@@ -889,7 +898,11 @@ export function normalizeGenerationModelInputFacts(
     preparedAudios: normalizedCount(input.inputCounts?.preparedAudios),
     characters: normalizedCount(input.inputCounts?.characters),
   };
-  const slotCounts: Record<string, number> = {
+  // A quote that names its slots is counted by what it names: a Wan 2.7 start frame is
+  // its `startFrame`, not one of the reference pictures the image total would stand in
+  // for. Kind totals stand in for the reference slots only when a quote names none.
+  const namesSlots = quoteNamesItsSlots(input);
+  const slotCounts: Record<string, number> = namesSlots ? {} : {
     imageReferences: counts.images,
     videoReferences: counts.videos,
     audioReferences: counts.audios,
@@ -899,9 +912,14 @@ export function normalizeGenerationModelInputFacts(
   const slotDurationsSeconds: Record<string, number[]> = {};
   for (const [slotKey, metadata] of Object.entries(input.inputMetadata?.slots ?? {})) {
     if (metadata && typeof metadata === 'object') {
-      if (metadata.count !== undefined) slotCounts[slotKey] = normalizedCount(metadata.count);
       if (metadata.durationsSeconds !== undefined) {
         slotDurationsSeconds[slotKey] = normalizedDurations(metadata.durationsSeconds);
+      }
+      if (metadata.count !== undefined) {
+        slotCounts[slotKey] = normalizedCount(metadata.count);
+      } else if (namesSlots) {
+        // Named with its lengths alone, a slot holds as many inputs as it lists.
+        slotCounts[slotKey] = slotDurationsSeconds[slotKey]?.length ?? 0;
       }
     }
   }
@@ -1070,8 +1088,12 @@ function descriptorSlotCount(
   inputs: GenerationModelRuntimeInputs,
   key: string,
   settings: Record<string, CatalogPrimitive>,
+  namesSlots: boolean,
 ): number {
   if (key in inputs.slotCounts) return inputs.slotCounts[key] ?? 0;
+  // A slot a quote leaves out of the slots it names is empty; only a quote of kind
+  // totals has its frames and motion inputs read off them.
+  if (namesSlots) return 0;
   if (key === 'startFrame' && settings.referenceMode !== 'elements') {
     return Math.min(1, inputs.counts.images);
   }
@@ -1117,6 +1139,7 @@ function validateDescriptorInputs(
   input: GenerationModelQuoteInput,
   fieldErrors: Record<string, string>,
 ): void {
+  const namesSlots = quoteNamesItsSlots(input);
   if (descriptor.kind === 'image') {
     const maxImages = descriptor.inputs.imageReferences?.max ?? 0;
     if (inputs.counts.images > maxImages) {
@@ -1158,7 +1181,7 @@ function validateDescriptorInputs(
     for (const slot of mode.slots) {
       if (!conditionsMatch(slot.conditions, settings, inputs)) continue;
       activeSlotKeys.add(slot.key);
-      const count = descriptorSlotCount(inputs, slot.key, settings);
+      const count = descriptorSlotCount(inputs, slot.key, settings, namesSlots);
       if (count < slot.min) fieldErrors[slot.key] = `${slot.label} requires at least ${slot.min}.`;
       if (count > slot.max) fieldErrors[slot.key] = `${slot.label} supports up to ${slot.max}.`;
       const durations = inputs.slotDurationsSeconds[slot.key]
@@ -1194,7 +1217,7 @@ function validateDescriptorInputs(
       let totalDuration = 0;
       let missingDurationMetadata = false;
       for (const slotKey of constraint.slotKeys) {
-        const count = descriptorSlotCount(inputs, slotKey, settings);
+        const count = descriptorSlotCount(inputs, slotKey, settings, namesSlots);
         const durations = inputs.slotDurationsSeconds[slotKey]
           ?? (slotKey === 'videoReferences' ? inputs.referenceVideoDurationsSeconds : []);
         if (count > durations.length) missingDurationMetadata = true;
@@ -1209,10 +1232,10 @@ function validateDescriptorInputs(
     }
     const total = constraint.type === 'weighted-count'
       ? constraint.slotKeys.reduce((sum, slotKey) => (
-          sum + descriptorSlotCount(inputs, slotKey, settings) * (constraint.weights?.[slotKey] ?? 0)
+          sum + descriptorSlotCount(inputs, slotKey, settings, namesSlots) * (constraint.weights?.[slotKey] ?? 0)
         ), 0)
       : constraint.slotKeys.reduce((sum, slotKey) => (
-          sum + descriptorSlotCount(inputs, slotKey, settings)
+          sum + descriptorSlotCount(inputs, slotKey, settings, namesSlots)
         ), 0);
     if (total > constraint.max) fieldErrors[field] = constraint.message;
   }

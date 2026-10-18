@@ -60,6 +60,31 @@ function rulesFor(modelId: string): Array<Record<string, unknown>> {
   return (operations.get(modelId)?.validationConfig.rules ?? []) as Array<Record<string, unknown>>;
 }
 
+/**
+ * The code build as this release shipped it. Release wan-start-frame-apart-20261019 keyed
+ * Wan 2.7's two reference-count rules on the reference slots, so its start frame rides
+ * beside five references (wan-start-frame-apart-manifest.test.ts); here they still counted
+ * every picture.
+ */
+function validationConfigAsReleased(modelId: string, config: Record<string, unknown>): Record<string, unknown> {
+  if (modelId !== 'wan-2.7') return config;
+  return {
+    ...config,
+    rules: (config.rules as Array<Record<string, unknown>>).map((rule) => {
+      if (rule.type === 'max-slot-count' && rule.slotKey === 'imageReferences') {
+        const cap: Record<string, unknown> = { ...rule, slotKey: 'images' };
+        delete cap.field;
+        delete cap.message;
+        return cap;
+      }
+      if (rule.type === 'weighted-slot-count') {
+        return { ...rule, weights: { images: 1, videos: 1, audios: 1 } };
+      }
+      return rule;
+    }),
+  };
+}
+
 describe('reference-audit release', () => {
   it('chains onto the release production is running', () => {
     expect(manifest.release.revision).toBe('reference-audit-20260904');
@@ -93,7 +118,10 @@ describe('reference-audit release', () => {
       const operation = operations.get(modelId)!;
       expect(entry.pricingStrategy).toBe(operation.pricingStrategy);
       expect(entry.pricingConfig).toEqual(operation.pricingConfig);
-      const { passthroughSettingKeys, ...validationConfig } = operation.validationConfig as Record<string, unknown>;
+      const { passthroughSettingKeys, ...validationConfig } = validationConfigAsReleased(
+        modelId,
+        operation.validationConfig as Record<string, unknown>,
+      );
       expect(entry.validationConfig).toEqual(
         Array.isArray(passthroughSettingKeys) && passthroughSettingKeys.length > 0
           ? { ...validationConfig, passthroughSettingKeys }
