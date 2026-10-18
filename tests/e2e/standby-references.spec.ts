@@ -156,7 +156,8 @@ test.describe('references saved on another video model', () => {
       const request = newestQuote(modelId, 'startFrame')!;
       expect(request.settings?.referenceMode).toBe('frames');
       expect(request.inputCounts).toMatchObject({ images: 1, videos: 0, audios: 0 });
-      expect(request.inputMetadata?.slots?.imageReferences?.count).toBe(0);
+      // The quote names the slots the run fills (catalogRunQuoteInput): the start frame alone.
+      expect(request.inputMetadata?.slots).toEqual({ startFrame: { count: 1 } });
 
       // The page says of the run what its standby card says.
       await expect(runSummary(page, 'Reference')).toHaveText('Start / end frames');
@@ -200,7 +201,8 @@ test.describe('references saved on another video model', () => {
     const request = newestQuote('seedance-1.5-pro', 'imageReferences')!;
     expect(request.settings?.referenceMode).toBe('elements');
     expect(request.inputCounts).toMatchObject({ images: 1, videos: 0, audios: 0 });
-    expect(request.inputMetadata?.slots?.videoReferences?.count).toBe(0);
+    // The quote names the slots the run fills: the picture, and no clip.
+    expect(request.inputMetadata?.slots).toEqual({ imageReferences: { count: 1 } });
   });
 
   test('a prompt that mentions an image on standby is told so, and Generate names it', async ({ page }) => {
