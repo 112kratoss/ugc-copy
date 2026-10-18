@@ -57,6 +57,7 @@
     "typecheck:scripts": "tsc --project tsconfig.scripts.json --noEmit",
     "typecheck:tests": "tsc --project tsconfig.tests.json --noEmit",
     "test": "vitest run",
+    "test:quiet": "vitest run --reporter=dot --silent=passed-only",
     "test:e2e": "playwright test",
     "ops:guest-acceptance": "bash scripts/ops/guest-checkout-acceptance.sh",
     "ops:generation-model-catalog:emit": "tsx scripts/ops/emit-generation-model-catalog-entries.ts"

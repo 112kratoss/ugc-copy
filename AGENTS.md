@@ -25,6 +25,7 @@ npm run typecheck          # app only — excludes scripts/, src/__tests__/, ugc
 npm run typecheck:scripts  # separate project for scripts/ (tsconfig.scripts.json)
 npm run typecheck:tests    # separate project for src/__tests__/ (tsconfig.tests.json)
 npm test                   # vitest run — all unit/integration tests in src/__tests__/
+npm run test:quiet         # the same suite with the dot reporter and output only from failing tests (agents, long sessions)
 npx vitest run src/__tests__/<file>.test.ts   # single test file
 npm run test:e2e           # Playwright, tests/e2e/ — boots its own dev server on :3100 with E2E auth bypass
 # also available: backfill:* (media/preview/fingerprint backfills), perf:load / perf:lighthouse,

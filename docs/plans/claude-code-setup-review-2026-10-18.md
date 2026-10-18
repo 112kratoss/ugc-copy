@@ -1,6 +1,6 @@
 # Claude Code setup review: what Anthropic does, what we do, what to adopt
 
-Status (2026-10-18): P1 shipped in the PR that carries this revision: `AGENTS.md` split into a 21 KB core plus eight path-scoped rules, three hooks and a committed `.claude/settings.json`, a compaction section, and symlinked mirrors at the top level. P2 and P3 are open; see "What shipped and what is left" at the end.
+Status (2026-10-18): P1 shipped in PR #475 (`AGENTS.md` split into a 21 KB core plus eight path-scoped rules, three hooks and a committed `.claude/settings.json`, a compaction section, symlinked mirrors at the top level). P2 shipped in the PR that carries this revision (four repo skills, the design skill split into a core plus references, `npm run test:quiet`). P3 is open; see "What shipped and what is left" at the end.
 
 ## Why
 
@@ -134,9 +134,16 @@ Shipped in this PR (P1 plus the one cloud item):
 - `# Compact instructions` and a rules index in the core.
 - Top-level mirrors: `UGC copy/.claude/{rules,hooks,settings.json}` symlink into the repo, as the skills already did.
 
-Still to verify in a live session (cannot be done from a hook test): `/context` from a session rooted in `ugc-app` or a worktree, to confirm the rules load on a matching Read and that `ugc-app/AGENTS.md` is not loaded twice through the top-level import; `/doctor prompt-audit` on the core and the rules.
+Shipped in the second PR (P2):
 
-Open: P2 (recipe skills, trimming `emil-design-eng`, quieter test output) and the P3 decisions (session root, permission mode, CI review, a subagent exception, Routines).
+- Four repo skills under `.agents/skills/`, symlinked into `.claude/skills/` at the repo and at the parent folder, each with a description under 500 characters and a body under 60 lines, with the long steps in bundled scripts: `ship-ota` (`disable-model-invocation: true`; the publish script's flags, the dry-run reading, the served-manifest checker `verify_served_ipv4.py`, the on-phone check, the record's shape, the rollback form), `local-checks` (`scripts/run.sh`: the Quality workflow's laptop-runnable steps in CI's order, one verdict line per step, failing output only, `--build`, `--e2e`, `--ci-like`), `android-device` (`emulator.sh` for the lock, boot, launch, screenshot and restart history; `phone.sh`, `keep-awake.sh` and `ui_find.py` for the S24, with the phone's serial taken from `ANDROID_SERIAL` and never written down), `ios-dev-client` (`sim.sh` for which app is the dev client, boot, the single launch, screenshots, appearance). The recipes came from the memory notes of September and October 2026; the memory files stay as the history behind them.
+- `emil-design-eng/SKILL.md` went from 679 lines (27 KB) to 93 lines: the initial response, the philosophy, the required review format and the checklist stay, and the eight topic blocks moved unchanged into `reference/*.md`, indexed by a table that says which file to read for which topic. Every content line of the original is present exactly once across the core and the references (checked by script).
+- `npm run test:quiet` (`vitest run --reporter=dot --silent=passed-only`) and its line in the Commands section.
+- The live rule-loading check is done: in a session rooted at `UGC copy`, a Read of `ugc-mobile/lib/notifications.ts` loaded `mobile-ui`, `mobile-runtime`, `mobile-release` and `web-mobile-contract` through the symlinked rules directory, about 7k tokens of mobile material, as designed.
+
+Still to verify in a live session: whether a session rooted in `ugc-app` or a worktree loads `ugc-app/AGENTS.md` twice through the top-level import (`/context` shows it), and `/doctor prompt-audit` on the core and the rules.
+
+Open: the P3 decisions (session root, permission mode, CI review, a subagent exception, Routines). The session-root question matters less now that rules, hooks, settings and skills are mirrored at the top level.
 
 ## Sources
 
