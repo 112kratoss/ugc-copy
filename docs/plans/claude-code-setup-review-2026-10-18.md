@@ -1,6 +1,6 @@
 # Claude Code setup review: what Anthropic does, what we do, what to adopt
 
-Status (2026-10-18): P1 shipped in PR #475 (`AGENTS.md` split into a 21 KB core plus eight path-scoped rules, three hooks and a committed `.claude/settings.json`, a compaction section, symlinked mirrors at the top level). P2 shipped in the PR that carries this revision (four repo skills, the design skill split into a core plus references, `npm run test:quiet`). P3 is open; see "What shipped and what is left" at the end.
+Status (2026-10-18): all five P3 decisions taken by the owner and written in (see "P3 decisions"). P1 shipped in PR #475 (`AGENTS.md` split into a 21 KB core plus eight path-scoped rules, three hooks and a committed `.claude/settings.json`, a compaction section, symlinked mirrors at the top level). P2 shipped in PR #476 (four repo skills, the design skill split into a core plus references, `npm run test:quiet`). Left: the two terminal checks named under "P3 decisions".
 
 ## Why
 
@@ -141,9 +141,15 @@ Shipped in the second PR (P2):
 - `npm run test:quiet` (`vitest run --reporter=dot --silent=passed-only`) and its line in the Commands section.
 - The live rule-loading check is done: in a session rooted at `UGC copy`, a Read of `ugc-mobile/lib/notifications.ts` loaded `mobile-ui`, `mobile-runtime`, `mobile-release` and `web-mobile-contract` through the symlinked rules directory, about 7k tokens of mobile material, as designed.
 
-Still to verify in a live session: whether a session rooted in `ugc-app` or a worktree loads `ugc-app/AGENTS.md` twice through the top-level import (`/context` shows it), and `/doctor prompt-audit` on the core and the rules.
+## P3 decisions (owner, 2026-10-18)
 
-Open: the P3 decisions (session root, permission mode, CI review, a subagent exception, Routines). The session-root question matters less now that rules, hooks, settings and skills are mirrored at the top level.
+1. **Permission mode: keep bypass.** The hooks and the Read/Edit denies are the guard rails; rules load through the core's pointers and the Read tool; the core now asks sessions to prefer the Edit and Write tools for source files so `/rewind` covers them.
+2. **Review: `/code-review` before every merge**, in a fresh context, reporting gaps rather than style, after the local gate. Written into AGENTS.md. No GitHub Action for now.
+3. **Subagents: tests and reviews only.** `.claude/agents/test-runner.md` (shell only, Sonnet, failures only) may run suites and the local gate, and `/code-review` may use its reviewer agents; everything else still needs the owner's word in that turn. Written into AGENTS.md and the memory rule.
+4. **Session root: keep `UGC copy`, with mirrors.** `rules/`, `hooks/`, `agents/`, every skill and `settings.json` are symlinked at the top level, and the top-level AGENTS.md now says every new entry gets its link in the same change.
+5. **Routines: not now.** The audit runs by hand about monthly: in a terminal `claude` started in `ugc-app`, `/doctor prompt-audit` over AGENTS.md, `.claude/rules/` and the skills, then a PR with the trims worth keeping.
+
+Still owed, from a terminal `claude` session started in `ugc-app`: `/context`, to see whether `ugc-app/AGENTS.md` is listed twice (natively and through the top-level file's `@ugc-app/AGENTS.md` import); and the first `/doctor prompt-audit`.
 
 ## Sources
 
