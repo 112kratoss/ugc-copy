@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
+import {
+  catalogRunInputFacts,
+  GENERATION_PROMPT_MAX_LENGTH,
+  MOTION_PROMPT_MAX_LENGTH,
+} from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import { GenerationModelCatalogSchemaUnavailableError } from '@/lib/generation-model-catalog-store';
 import {
@@ -69,6 +73,25 @@ describe('unified generation start service', () => {
         referenceVideoDurationsSeconds: [4.25, 2.75],
       },
     });
+  });
+
+  it('quotes a run from the input facts the app prices it with, every input counted by its kind', () => {
+    // A Wan 2.7 references run with a start frame: the app's quote counted the five
+    // references and left the frame out, so it said 80 credits for a run this quote refuses.
+    const parsed = parseUnifiedGenerationRequest({
+      kind: 'video',
+      modelId: 'wan-2.7',
+      catalogRevision: 'wan-release',
+      settings: { referenceMode: 'elements' },
+      inputs: [
+        ...[1, 2, 3, 4, 5].map((index) => ({ slot: 'imageReferences', kind: 'image', url: `uploads/user/look-${index}.png` })),
+        { slot: 'startFrame', kind: 'image', url: 'uploads/user/doorstep.png' },
+      ],
+    });
+    const input = buildUnifiedGenerationQuoteInput(parsed);
+
+    expect({ inputCounts: input.inputCounts, inputMetadata: input.inputMetadata }).toEqual(catalogRunInputFacts(parsed.inputs));
+    expect(input.inputCounts).toMatchObject({ images: 6, videos: 0 });
   });
 
   it('uses only the authoritative v1 release during the rolling v2 publication window', async () => {
