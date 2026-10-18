@@ -231,7 +231,7 @@ export function modeGatedSettingValues(
 /** One input a run sends, as far as its price reads it. */
 export type CatalogRunInputFact = {
   slot: string;
-  kind: string;
+  kind: (typeof CLIENT_RENDERED_INPUT_SLOT_KINDS)[number];
   durationSeconds?: number | null;
 };
 export type CatalogRunInputFacts = {
@@ -247,31 +247,35 @@ export type CatalogRunInputFacts = {
     referenceVideoDurationsSeconds: number[];
   };
 };
+/** A length the run's JSON body carries: JSON has no NaN or Infinity, and sends them as null. */
+function sentLength(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
 /**
  * What a quote is told about a run's inputs, read off the inputs the run sends:
  * how many of each kind, each slot's count and lengths, and every video's
- * length. The server quotes a run from these when it starts it, and the native
- * creator asks for the run's price with them, so the price a creator sees counts
- * what the run sends. Counted by the part each input plays instead, a Wan 2.7
- * start frame sent beside five reference pictures was left out of an 80-credit
- * quote, and the server refused the run for its sixth image.
+ * length. Counted by the part each input plays instead, a Wan 2.7 start frame
+ * sent beside five reference pictures was left out of an 80-credit quote, and
+ * the server, whose rules count it, refused the run for its sixth image.
  */
 export function catalogRunInputFacts(
   inputs: readonly CatalogRunInputFact[],
 ): CatalogRunInputFacts {
-  const slots: CatalogRunInputFacts['inputMetadata']['slots'] = {};
+  // Slot names reach the server in request bodies: counted in a plain object, a
+  // name such as `constructor` read the built-in it shadows and wrote onto it.
+  const slots = new Map<string, { count: number; durationsSeconds?: number[] }>();
   for (const input of inputs) {
-    const slot = slots[input.slot] ?? { count: 0 };
+    const slot = slots.get(input.slot) ?? { count: 0 };
     slot.count += 1;
-    if (typeof input.durationSeconds === 'number') {
+    if (sentLength(input.durationSeconds)) {
       slot.durationsSeconds = [
         ...(slot.durationsSeconds ?? []),
         input.durationSeconds,
       ];
     }
-    slots[input.slot] = slot;
+    slots.set(input.slot, slot);
   }
-  const counted = (kind: string) =>
+  const counted = (kind: CatalogRunInputFact['kind']) =>
     inputs.filter((input) => input.kind === kind).length;
   return {
     inputCounts: {
@@ -282,13 +286,36 @@ export function catalogRunInputFacts(
       characters: counted('character'),
     },
     inputMetadata: {
-      slots,
+      slots: Object.fromEntries(slots),
       referenceVideoDurationsSeconds: inputs.flatMap((input) =>
-        input.kind === 'video' && typeof input.durationSeconds === 'number'
+        input.kind === 'video' && sentLength(input.durationSeconds)
           ? [input.durationSeconds]
           : [],
       ),
     },
+  };
+}
+/**
+ * A run's quote: what it makes, on which model and catalog revision, with its
+ * settings and the facts of the inputs it sends. The server quotes a run with
+ * this when it starts it, and the native creator asks for the run's price with
+ * it, so the price a creator sees is the price the start charges, or the refusal
+ * it gives.
+ */
+export function catalogRunQuoteInput<Kind extends string, Settings>(run: {
+  kind: Kind;
+  modelId: string;
+  catalogRevision: string;
+  settings: Settings;
+  inputs: readonly CatalogRunInputFact[];
+}) {
+  return {
+    schemaVersion: 2 as const,
+    kind: run.kind,
+    modelId: run.modelId,
+    settings: run.settings,
+    ...catalogRunInputFacts(run.inputs),
+    catalogRevision: run.catalogRevision,
   };
 }
 export function parseModelCatalogPage(

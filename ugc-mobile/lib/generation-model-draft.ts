@@ -35,7 +35,7 @@ import {
   type VideoShotDraft,
 } from './media-creation-view-model';
 import {
-  catalogRunInputFacts,
+  catalogRunQuoteInput,
   modeGatedSettingValues,
   SUBJECT_IMAGES_PER_NAME,
   SUBJECT_IMAGES_SLOT_KEY,
@@ -806,23 +806,17 @@ export function buildCatalogQuoteRequest(
   model: GenerationModelDescriptor,
   catalogRevision: string
 ): GenerationModelQuoteRequest {
-  // Priced as the run it would start: in that run's shape and settings, and told about the
-  // inputs the run sends as the server reads them when it quotes the run again to start it.
-  // A reference the model has no room for is no part of the price, as it is no part of the run.
-  const runDraft = catalogRunDraft(draft, model);
-  const settings = catalogRunSettings(runDraft, model);
+  // Priced as the run it would start, from the run request itself: its settings and the inputs
+  // it sends, told to the server as the server tells itself when it quotes the run again to
+  // start it. A reference the model has no room for is no part of the price, as it is no part
+  // of the run.
   if (model.inputModes) {
-    return {
-      schemaVersion: 2,
-      kind: runDraft.tool,
-      modelId: model.id,
-      settings,
-      ...catalogRunInputFacts(catalogRunInputs(runDraft, model, settings)),
-      catalogRevision,
-    };
+    return catalogRunQuoteInput(buildUnifiedCatalogGenerationRequest(draft, model, catalogRevision));
   }
   // A descriptor without input modes, from a schema-1 catalog, has no slots to send inputs
   // in: its inputs are counted from the draft, cut to the limits the descriptor states.
+  const runDraft = catalogRunDraft(draft, model);
+  const settings = catalogRunSettings(runDraft, model);
   const legacy = legacyRunDraft(runDraft, model);
   const referenceVideoDurationsSeconds = legacy.tool === 'video'
     ? legacy.referenceVideos
@@ -879,35 +873,29 @@ export function buildCatalogQuoteRequest(
   };
 }
 
-function generationInputKind(
-  slot: CatalogInputSlot,
-): CatalogGenerationInputAsset['kind'] {
-  return slot.kind;
-}
-
-/**
- * The inputs a run on this model sends, in the run's shape and with its settings: what the run
- * request carries, and what its quote is told about.
- */
-function catalogRunInputs(
-  runDraft: CreationDraft,
+export function buildUnifiedCatalogGenerationRequest(
+  draft: CreationDraft,
   model: GenerationModelDescriptor,
-  settings: Record<string, CatalogPrimitive>,
-): CatalogGenerationInputAsset[] {
-  const inputSlots = buildCatalogDraftInputSlots(runDraft, model, settings);
-  // Opened with the draft's held input counts, as buildCatalogDraftInputSlots opens them: looked
-  // up without them, a slot whose mode opens on a count kept its inputs out of the run.
-  const slotDescriptors = new Map(
-    getActiveCatalogInputSlots(model, settings, heldInputCounts(runDraft, model)).map((slot) => [slot.key, slot]),
-  );
+  catalogRevision: string,
+): CatalogGenerationRequest {
+  const runDraft = catalogRunDraft(draft, model);
+  // The settings of the draft, as its quote is asked with them (buildCatalogQuoteRequest prices
+  // this request), never the quote's answer read back: the server quotes the run again from
+  // these and makes it with its own normalized result, so it runs the settings it priced. A
+  // multi-shot run's duration is its shots' total here, which the server checks against the shots.
+  const settings = catalogRunSettings(runDraft, model);
+  // Each slot the run opens, with what it sends there, at most the slot's max, from one lookup
+  // opened with the draft's held input counts. Looked up twice, the second time without those
+  // counts, a slot whose mode opens on a count lost its inputs from the run.
+  const sent = new Map(heldCatalogDraftInputSlots(runDraft, model, settings).map(({ slot, assets }) => (
+    [slot.key, { slot, assets: assets.slice(0, Math.max(0, slot.max)) }] as const
+  )));
   // The Seedance 2 family takes a reference's prepared asset in place of the file, once the
   // provider reports it active: the server hands any id it gets to Seedance, and one still
   // processing, or failed, would be refused there after the credit hold. The link goes
   // beside the id, so the server can still measure the file and price it.
   const preparesSeedanceAssets = isSeedance2VideoModelId(model.id);
-  return Object.entries(inputSlots).flatMap(([slotKey, assets]) => {
-    const slot = slotDescriptors.get(slotKey);
-    if (!slot) return [];
+  const inputs = [...sent.values()].flatMap(({ slot, assets }) => {
     const takesPreparedAsset = preparesSeedanceAssets
       && slot.role === 'reference'
       && (slot.kind === 'image' || slot.kind === 'video' || slot.kind === 'audio');
@@ -916,8 +904,8 @@ function catalogRunInputs(
         ? getPreferredSeedanceReferenceValue(null, asset.seedanceAsset)
         : null;
       return {
-        slot: slotKey,
-        kind: generationInputKind(slot),
+        slot: slot.key,
+        kind: slot.kind,
         url: asset.url ?? null,
         ...(slot.kind === 'character' || slot.kind === 'preparedVoice'
           ? { assetId: asset.id }
@@ -930,19 +918,6 @@ function catalogRunInputs(
       };
     });
   });
-}
-
-export function buildUnifiedCatalogGenerationRequest(
-  draft: CreationDraft,
-  model: GenerationModelDescriptor,
-  catalogRevision: string,
-): CatalogGenerationRequest {
-  const runDraft = catalogRunDraft(draft, model);
-  // The settings its quote request was built from (buildCatalogQuoteRequest), never the quote's
-  // answer read back: the server quotes the run again from these and makes it with its own
-  // normalized result, so it runs the settings it priced. A multi-shot run's duration is its
-  // shots' total here, which the server checks against the shots.
-  const settings = catalogRunSettings(runDraft, model);
   return {
     kind: runDraft.tool,
     modelId: model.id,
@@ -957,7 +932,7 @@ export function buildUnifiedCatalogGenerationRequest(
           })),
         }
       : {}),
-    inputs: catalogRunInputs(runDraft, model, settings),
+    inputs,
     sourceGenerationId: runDraft.sourceGenerationId ?? null,
   };
 }

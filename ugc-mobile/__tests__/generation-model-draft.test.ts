@@ -10,7 +10,6 @@ import type {
 import { normalizeCatalogSettings, parseModelCatalogDetail } from '../lib/generation-model-catalog';
 import {
   applyCatalogModelDefaults,
-  applyCatalogModelInitialDefaults,
   catalogDraftRunHandles,
   catalogMultiShotLimits,
   catalogRunInputSlots,
@@ -35,7 +34,6 @@ import {
   type VideoCreationDraft,
   type VideoShotDraft,
 } from '../lib/media-creation-view-model';
-import { catalogRunInputFacts } from '../lib/model-catalog/protocol';
 import type { SeedanceAssetMetadata } from '../lib/model-catalog/seedance-assets';
 import type { RemixSourceBundle } from '../lib/types';
 import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel, seedance15ProModel } from './fixtures/generation-model-catalog';
@@ -1090,32 +1088,15 @@ describe('a choice duration the server hands back as a number', () => {
 });
 
 describe('the inputs a quote counts are the inputs its run sends', () => {
-  // Production's descriptors of revision pixverse-mobile-20261008, as /api/model-catalog/v1/details
-  // served them on 2026-10-18. The server quotes a run again from the inputs it sends, each
-  // counted by kind (buildUnifiedGenerationQuoteInput, src/lib/unified-generation-start-service.ts),
-  // and charges or refuses that quote. A quote that counted inputs by the part they play priced
-  // a Wan 2.7 run at 80 credits that the server then refused.
-  const live = liveCatalog.models.map(parseModelCatalogDetail);
-  const wan = live.find((model) => model.id === 'wan-2.7')!;
-  const kling = live.find((model) => model.id === 'kling-3.0-video')!;
-  const upload = (fileName: string, kind: 'image' | 'video' | 'audio', durationSeconds?: number): MediaDraft => ({
-    ...createMediaDraftFromUpload({
-      signedUrl: `https://cdn.example.com/${fileName}`,
-      storagePath: `uploads/user/${fileName}`,
-      mimeType: kind === 'image' ? 'image/png' : kind === 'video' ? 'video/mp4' : 'audio/mpeg',
-      fileName,
-      kind,
-    }, { displayName: fileName.replace(/\..+$/, '') }),
-    ...(durationSeconds === undefined ? {} : { durationSeconds }),
-  });
-  const onLiveModel = (model: GenerationModelDescriptor, overrides: Partial<VideoCreationDraft>) => ({
-    ...applyCatalogModelInitialDefaults(createDefaultCreationDraft('video'), model, liveCatalog.revision),
-    prompt: 'The product turns on the doorstep.',
-    ...overrides,
-  }) as VideoCreationDraft;
+  // The server quotes a run again from the inputs it sends, each counted by its kind
+  // (buildUnifiedGenerationQuoteInput, src/lib/unified-generation-start-service.ts), and charges
+  // or refuses that quote. A quote that counted inputs by the part they play priced a Wan 2.7
+  // run at 80 credits that the server then refused. Wan 2.7 is production's descriptor of
+  // revision pixverse-mobile-20261008, as /api/model-catalog/v1/details served it on 2026-10-18.
+  const wan = parseModelCatalogDetail(liveCatalog.models.find((model) => model.id === 'wan-2.7'));
 
   it('counts the start frame that rides with five Wan 2.7 reference pictures, as the server counts the run', () => {
-    const draft = onLiveModel(wan, {
+    const draft = videoDraft(wan, {
       references: [1, 2, 3, 4, 5].map((index) => upload(`look-${index}.png`, 'image')),
       startFrame: upload('doorstep.png', 'image'),
     });
@@ -1126,8 +1107,10 @@ describe('the inputs a quote counts are the inputs its run sends', () => {
     expect(run.inputs.map((input) => input.slot)).toEqual([
       'imageReferences', 'imageReferences', 'imageReferences', 'imageReferences', 'imageReferences', 'startFrame',
     ]);
-    // Six pictures go with the run, and the server refuses six ("Wan 2.7 requires at most 5
-    // images"): asked about five, the quote said 80 credits and Generate stayed on.
+    // Six pictures go with the run, and the server's rules refuse six ("Wan 2.7 requires at
+    // most 5 images"): asked about five, the quote said 80 credits and Generate stayed on.
+    // Whether the start frame should count against those five is the catalog's rule to
+    // decide; the quote answers as the start will.
     expect(quote.inputCounts).toEqual({ images: 6, videos: 0, audios: 0, preparedAudios: 0, characters: 0 });
     expect(quote.inputMetadata).toEqual({
       slots: { imageReferences: { count: 5 }, startFrame: { count: 1 } },
@@ -1135,49 +1118,18 @@ describe('the inputs a quote counts are the inputs its run sends', () => {
     });
   });
 
-  it('counts the video elements of a Kling 3.0 frames run', () => {
-    const draft = onLiveModel(kling, {
-      startFrame: upload('doorstep.png', 'image'),
-      referenceVideos: [upload('turn.mp4', 'video', 3), upload('walk.mp4', 'video', 4)],
-    });
-    const run = buildUnifiedCatalogGenerationRequest(draft, kling, liveCatalog.revision);
-    const quote = buildCatalogQuoteRequest(draft, kling, liveCatalog.revision);
+  it('prices a clip of no finite length as the run body carries it, with no length', () => {
+    // JSON has no NaN: the run's body carries such a length as null, which the server reads
+    // as none. A quote that kept it sent [null], and the server refused the quote for it.
+    const clip = { ...upload('turn.mp4', 'video'), durationSeconds: Number.NaN };
+    const draft = videoDraft(kling30, { startFrame: upload('doorstep.png', 'image'), referenceVideos: [clip] });
+    const quote = buildCatalogQuoteRequest(draft, kling30, 'revision-1');
 
-    expect(run.settings.referenceMode).toBe('frames');
-    expect(run.inputs.map((input) => `${input.slot}:${input.kind}`)).toEqual([
-      'startFrame:image', 'videoElements:video', 'videoElements:video',
-    ]);
-    expect(quote.inputCounts).toEqual({ images: 1, videos: 2, audios: 0, preparedAudios: 0, characters: 0 });
+    expect(JSON.parse(JSON.stringify(buildUnifiedCatalogGenerationRequest(draft, kling30, 'revision-1').inputs[1])))
+      .toMatchObject({ slot: 'videoElements', durationSeconds: null });
     expect(quote.inputMetadata).toEqual({
-      slots: { startFrame: { count: 1 }, videoElements: { count: 2, durationsSeconds: [3, 4] } },
-      referenceVideoDurationsSeconds: [3, 4],
+      slots: { startFrame: { count: 1 }, videoElements: { count: 1 } },
+      referenceVideoDurationsSeconds: [],
     });
-  });
-
-  it('tells each quote about exactly the inputs its run sends, with the derivation the server quotes the run by', () => {
-    const clip = (name: string, seconds: number) => upload(`${name}.mp4`, 'video', seconds);
-    const track = upload('hum.mp3', 'audio', 6);
-    const drafts: Array<[GenerationModelDescriptor, VideoCreationDraft]> = [
-      [wan, onLiveModel(wan, {})],
-      [wan, onLiveModel(wan, { startFrame: upload('first.png', 'image'), endFrame: upload('last.png', 'image') })],
-      [wan, onLiveModel(wan, { references: [upload('look.png', 'image')], referenceVideos: [clip('walk', 4)], referenceAudios: [track], startFrame: upload('first.png', 'image') })],
-      // Five clips and a start frame: the references shape, with a frame the server counts.
-      [wan, onLiveModel(wan, { referenceVideos: [1, 2, 3, 4, 5].map((index) => clip(`walk-${index}`, 2)), startFrame: upload('first.png', 'image') })],
-      [kling, onLiveModel(kling, { referenceVideos: [clip('turn', 3)] })],
-      [kling, onLiveModel(kling, {
-        isMultiShot: true,
-        multiPrompts: [{ id: 'shot-1', prompt: 'Beat one.', duration: 5 }, { id: 'shot-2', prompt: 'Beat two.', duration: 5 }],
-        startFrame: upload('first.png', 'image'),
-        endFrame: upload('last.png', 'image'),
-        referenceVideos: [clip('turn', 3)],
-      })],
-    ];
-    for (const [model, draft] of drafts) {
-      const quote = buildCatalogQuoteRequest(draft, model, liveCatalog.revision);
-      const run = buildUnifiedCatalogGenerationRequest(draft, model, liveCatalog.revision);
-
-      expect({ inputCounts: quote.inputCounts, inputMetadata: quote.inputMetadata }).toEqual(catalogRunInputFacts(run.inputs));
-      expect(quote.settings).toEqual(run.settings);
-    }
   });
 });
