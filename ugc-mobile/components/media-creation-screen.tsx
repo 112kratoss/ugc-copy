@@ -68,11 +68,11 @@ import { getGenerationOutput, getGenerationOutputs, pollGenerationStatus } from 
 import {
   applyCatalogModelDefaults,
   applyVerifiedInputDurations,
-  buildCatalogDraftInputSlots,
   buildCatalogQuoteRequest,
   buildUnifiedCatalogGenerationRequest,
   catalogDraftRunHandles,
   catalogMultiShotLimits,
+  catalogRunInputSlots,
   catalogSubjectSlot,
   catalogVideoRunReferenceMode,
   getCatalogDraftSettings,
@@ -455,9 +455,7 @@ function standbyVideoReferences(draft: VideoCreationDraft, model: CreatorCatalog
       ...draft.referenceAudios.slice(model.inputs.audioReferences?.max ?? 0),
     ];
   }
-  const runDraft = { ...draft, referenceMode: videoRunReferenceMode(draft, model) };
-  const settings = { ...getCatalogDraftSettings(runDraft, model), referenceMode: runDraft.referenceMode };
-  const sent = new Set(Object.values(buildCatalogDraftInputSlots(runDraft, model, settings)).flat().map((asset) => asset.id));
+  const sent = new Set(Object.values(catalogRunInputSlots(draft, model)).flat().map((asset) => asset.id));
   return [...draft.references, ...draft.referenceVideos, ...draft.referenceAudios].filter((media) => !sent.has(media.id));
 }
 

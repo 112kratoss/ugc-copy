@@ -1010,6 +1010,39 @@ describe('prepared Seedance assets in a run on /api/generations', () => {
   });
 });
 
+describe('a slot whose mode opens on what the draft holds', () => {
+  // The quote opens a run's slots with the draft's held input counts. The run looked its slots up
+  // without them, so an input in a mode that opens on a count was priced and then left out.
+  const voiceGated = remoteVideoModel('voice-gated-video', {
+    inputModes: [
+      {
+        key: 'frames',
+        label: 'Frames',
+        default: true,
+        conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'frames' }],
+        slots: [{ key: 'startFrame', kind: 'image', role: 'startFrame', label: 'Start frame', min: 0, max: 1 }],
+      },
+      {
+        key: 'voice',
+        label: 'Voice track',
+        default: false,
+        conditions: [{ source: 'inputCount', key: 'voiceTrack', operator: 'greaterThan', value: 0 }],
+        slots: [{ key: 'voiceTrack', kind: 'audio', role: 'reference', label: 'Voice track', min: 0, max: 1 }],
+      },
+    ],
+  });
+
+  it('sends the input its quote counted', () => {
+    const track = upload('voice.mp3', 'audio', { durationSeconds: 5 });
+    const draft = videoDraft(voiceGated, { referenceAudios: [track] });
+
+    expect(buildCatalogQuoteRequest(draft, voiceGated, 'revision-1').inputMetadata?.slots?.voiceTrack).toEqual({ count: 1, durationsSeconds: [5] });
+    expect(buildUnifiedCatalogGenerationRequest(draft, voiceGated, 'revision-1').inputs).toEqual([
+      expect.objectContaining({ slot: 'voiceTrack', kind: 'audio', url: track.url, durationSeconds: 5 }),
+    ]);
+  });
+});
+
 describe('a choice duration the server hands back as a number', () => {
   // The quote answers a choice duration as a number (the descriptor's normalizedValueType). A run
   // read back from that answer went out at the default '4' for a chosen 8 s Seedance 1.5 Pro run

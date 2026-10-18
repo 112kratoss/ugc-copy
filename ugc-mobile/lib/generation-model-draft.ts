@@ -346,6 +346,15 @@ function catalogRunSettings(runDraft: CreationDraft, model: GenerationModelDescr
   return settings;
 }
 
+/**
+ * What a run on this model sends in each slot it opens, in the shape and with the settings its
+ * quote request and its run request read: what the creator shows as going with the run.
+ */
+export function catalogRunInputSlots(draft: CreationDraft, model: GenerationModelDescriptor): CatalogDraftInputSlots {
+  const runDraft = catalogRunDraft(draft, model);
+  return buildCatalogDraftInputSlots(runDraft, model, catalogRunSettings(runDraft, model));
+}
+
 export function applyCatalogModelDefaults(
   draft: CreationDraft,
   model: GenerationModelDescriptor,
@@ -910,14 +919,16 @@ export function buildUnifiedCatalogGenerationRequest(
   catalogRevision: string,
 ): CatalogGenerationRequest {
   const runDraft = catalogRunDraft(draft, model);
-  // The settings its quote was asked for (buildCatalogQuoteRequest), never the quote's answer
-  // read back: the server quotes the run again from these and is the only place they are
-  // normalized, so the run is made and charged as quoted. A multi-shot run's duration is its
+  // The settings its quote request was built from (buildCatalogQuoteRequest), never the quote's
+  // answer read back: the server quotes the run again from these and makes it with its own
+  // normalized result, so it runs the settings it priced. A multi-shot run's duration is its
   // shots' total here, which the server checks against the shots.
   const settings = catalogRunSettings(runDraft, model);
   const inputSlots = buildCatalogDraftInputSlots(runDraft, model, settings);
+  // Opened with the draft's held input counts, as the slots above and the quote's are: a slot
+  // whose mode opens on a count is otherwise counted by the quote and left out of the run.
   const slotDescriptors = new Map(
-    getActiveCatalogInputSlots(model, settings).map((slot) => [slot.key, slot]),
+    getActiveCatalogInputSlots(model, settings, heldInputCounts(runDraft, model)).map((slot) => [slot.key, slot]),
   );
   // The Seedance 2 family takes a reference's prepared asset in place of the file, once the
   // provider reports it active: the server hands any id it gets to Seedance, and one still
@@ -1338,14 +1349,13 @@ function mediaDescriptor(media: ImageCreationDraft['references'][number] | null)
   } : null;
 }
 
-export function buildCatalogGenerationPayload(draft: ImageCreationDraft, model: GenerationModelDescriptor, catalogRevision: string, normalizedSettings?: Record<string, CatalogPrimitive>): ImageGenerationRequest;
-export function buildCatalogGenerationPayload(draft: VideoCreationDraft, model: GenerationModelDescriptor, catalogRevision: string, normalizedSettings?: Record<string, CatalogPrimitive>): VideoGenerationRequest;
-export function buildCatalogGenerationPayload(draft: MotionCreationDraft, model: GenerationModelDescriptor, catalogRevision: string, normalizedSettings?: Record<string, CatalogPrimitive>): MotionGenerationRequest;
+export function buildCatalogGenerationPayload(draft: ImageCreationDraft, model: GenerationModelDescriptor, catalogRevision: string): ImageGenerationRequest;
+export function buildCatalogGenerationPayload(draft: VideoCreationDraft, model: GenerationModelDescriptor, catalogRevision: string): VideoGenerationRequest;
+export function buildCatalogGenerationPayload(draft: MotionCreationDraft, model: GenerationModelDescriptor, catalogRevision: string): MotionGenerationRequest;
 export function buildCatalogGenerationPayload(
   creatorDraft: CreationDraft,
   model: GenerationModelDescriptor,
   catalogRevision: string,
-  normalizedSettings: Record<string, CatalogPrimitive> = {},
 ): ImageGenerationRequest | VideoGenerationRequest | MotionGenerationRequest {
   // The run's shape, and of each kind no more than the model takes.
   const draft = legacyRunDraft(catalogRunDraft(creatorDraft, model), model);
@@ -1363,7 +1373,7 @@ export function buildCatalogGenerationPayload(
       googleSearch: model.capabilities.googleSearch ? draft.googleSearch : false,
       sourceGenerationId: draft.sourceGenerationId ?? null,
       catalogRevision,
-      settings: normalizedSettings,
+      settings: {},
     };
   }
   if (draft.tool === 'video') {
@@ -1431,7 +1441,7 @@ export function buildCatalogGenerationPayload(
         : null,
       sourceGenerationId: draft.sourceGenerationId ?? null,
       catalogRevision,
-      settings: normalizedSettings,
+      settings: {},
     };
   }
   return {
@@ -1446,6 +1456,6 @@ export function buildCatalogGenerationPayload(
     referenceVideo: mediaDescriptor(draft.referenceVideo),
     sourceGenerationId: draft.sourceGenerationId ?? null,
     catalogRevision,
-    settings: normalizedSettings,
+    settings: {},
   };
 }

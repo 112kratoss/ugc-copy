@@ -777,7 +777,8 @@ export function normalizeCatalogSettings(
   return Object.fromEntries(model.controls.map((control) => {
     const current = settings[control.key];
     if (control.type === 'choice') {
-      // A quote answers a numeric choice (a duration) as a number; it is the option it names.
+      // A numeric choice (a duration) can arrive as a number, as a remixed run's stored settings
+      // hold it (remixCatalogSettings); it is the option it names.
       const value = typeof current === 'number' ? String(current) : current;
       return [
         control.key,

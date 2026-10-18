@@ -429,6 +429,20 @@ function quoteEchoingSettings(costCredits = 8) {
   }));
 }
 
+/**
+ * A quote that prices the request and hands no settings back. The screen keeps only a quote's price,
+ * so a run's settings come from the draft: one read back from this answer would go out at the
+ * model's defaults.
+ */
+function quoteAnsweringOnlyItsPrice(costCredits = 8) {
+  authState.api.quoteGenerationModel.mockImplementation(async (request: { modelId: string; catalogRevision: string }) => ({
+    modelId: request.modelId,
+    catalogRevision: request.catalogRevision,
+    normalizedSettings: {},
+    costCredits,
+  }));
+}
+
 /** A reference the creator uploaded: staged under their own path, named after its file. */
 function stagedMedia(id: string, kind: 'image' | 'video' | 'audio' = 'image', extra: Record<string, unknown> = {}) {
   const extension = kind === 'image' ? 'png' : kind === 'video' ? 'mp4' : 'mp3';
@@ -4045,16 +4059,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       status: 'succeeded',
       output: 'https://cdn.example.com/unified-output.mp4',
     });
-    authState.api.quoteGenerationModel.mockResolvedValue({
-      modelId: 'fallback-video-v2',
-      catalogRevision: 'catalog-v2-revision',
-      normalizedSettings: {
-        referenceMode: 'elements',
-        resolution: '720p',
-        duration: 7,
-      },
-      costCredits: 29,
-    });
+    // The run's settings are the draft's (the model's defaults here), not anything the quote hands back.
+    quoteAnsweringOnlyItsPrice(29);
 
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
@@ -5062,9 +5068,10 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     // A run is the request its price was quoted for: it carries the draft's settings in the shape
-    // the quote request sent them, and the server, which quotes every run again, is the only place
-    // they are normalized. The quote here answers with its price and no settings. A run read back
-    // from the answer went out at the model's defaults, and a references run lost its input mode.
+    // the quote request sent them, and nothing is read back from the quote's answer; the server
+    // quotes every run again and makes it with its own normalized result. The quote here answers
+    // with its price alone. A run read back from the answer went out at the model's defaults, and
+    // a references run lost its input mode and its references.
     describe('the settings each kind of run carries', () => {
       const quotedSettings = () => (authState.api.quoteGenerationModel.mock.lastCall?.[0] as { settings: Record<string, unknown> }).settings;
       const sentRun = () => {
@@ -5075,23 +5082,20 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           shots?: Array<Record<string, unknown>>;
         };
       };
+      /** A production descriptor from the Recreate fixture, with the input modes it is published with. */
+      const published = (id: string, inputModes: CatalogInputMode[] | undefined): GenerationModelDescriptor => ({
+        ...createRemixRestoreCatalog().models.find((model) => model.id === id)!,
+        availability: { web: true, mobile: true },
+        inputModes,
+      });
 
       beforeEach(() => {
-        authState.api.quoteGenerationModel.mockImplementation(async (request: { modelId: string; catalogRevision: string }) => ({
-          modelId: request.modelId,
-          catalogRevision: request.catalogRevision,
-          normalizedSettings: {},
-          costCredits: 8,
-        }));
+        quoteAnsweringOnlyItsPrice();
         authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
       });
 
       it('an image run', async () => {
-        const nanoBanana: GenerationModelDescriptor = {
-          ...parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14),
-          controls: createRemixRestoreCatalog().models.find((model) => model.id === 'nano-banana-2')!.controls,
-        };
-        catalogState.catalog = parityCatalog([nanoBanana]);
+        catalogState.catalog = parityCatalog([published('nano-banana-2', parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14).inputModes)]);
         memory.set(ordinaryKey, savedDrafts({ image: {
           model: 'nano-banana-2',
           catalogRevision: 'parity-rev',
@@ -5104,11 +5108,13 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         const tree = await open(<MediaCreationScreen initialTool="image" />);
         await pressGenerate(tree);
 
-        expect(sentRun().settings).toEqual({ aspectRatio: '9:16', resolution: '2K', outputFormat: 'png', googleSearch: true });
-        expect(sentRun().settings).toEqual(quotedSettings());
+        const run = sentRun();
+        expect(run.settings).toEqual({ aspectRatio: '9:16', resolution: '2K', outputFormat: 'png', googleSearch: true });
+        expect(run.settings).toEqual(quotedSettings());
       });
 
-      it('a single-shot video run, its duration a choice the server answers as a number', async () => {
+      // Seedance 1.5 Pro's duration is a choice the server's answer gives back as a number.
+      it('a single-shot video run, its duration a choice', async () => {
         catalogState.catalog = parityCatalog([{ ...seedance15ProModel, availability: { web: true, mobile: true } }]);
         memory.set(ordinaryKey, savedDrafts({ video: {
           model: 'seedance-1.5-pro',
@@ -5123,11 +5129,12 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         const tree = await open(<MediaCreationScreen initialTool="video" />);
         await pressGenerate(tree);
 
-        expect(sentRun().settings).toEqual({
+        const run = sentRun();
+        expect(run.settings).toEqual({
           aspectRatio: '16:9', resolution: '720p', duration: '8', sound: true, fixedLens: true, referenceMode: 'frames',
         });
-        expect(sentRun().settings).toEqual(quotedSettings());
-        expect(sentRun().inputs).toEqual([]);
+        expect(run.settings).toEqual(quotedSettings());
+        expect(run.inputs).toEqual([]);
       });
 
       it('a video run with references, in the shape its references take', async () => {
@@ -5144,9 +5151,10 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         const tree = await open(<MediaCreationScreen initialTool="video" />);
         await pressGenerate(tree);
 
-        expect(sentRun().settings).toEqual({ aspectRatio: '9:16', duration: 10, referenceMode: 'elements' });
-        expect(sentRun().settings).toEqual(quotedSettings());
-        expect(sentRun().inputs).toEqual([
+        const run = sentRun();
+        expect(run.settings).toEqual({ aspectRatio: '9:16', duration: 10, referenceMode: 'elements' });
+        expect(run.settings).toEqual(quotedSettings());
+        expect(run.inputs).toEqual([
           expect.objectContaining({ slot: 'imageReferences', url: 'https://cdn.example.com/hero.png', handle: '@hero' }),
           expect.objectContaining({ slot: 'videoReferences', url: 'https://cdn.example.com/stroll.mp4', durationSeconds: 4 }),
         ]);
@@ -5167,21 +5175,18 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         const tree = await open(<MediaCreationScreen initialTool="video" />);
         await pressGenerate(tree);
 
-        expect(sentRun().settings).toEqual({
+        const run = sentRun();
+        expect(run.settings).toEqual({
           aspectRatio: '9:16', mode: 'pro', duration: 11, sound: true, isMultiShot: true, referenceMode: 'frames',
         });
-        expect(sentRun().settings).toEqual(quotedSettings());
-        expect(sentRun().shots).toEqual([{ prompt: 'A door opens', duration: 5 }, { prompt: 'She walks in', duration: 6 }]);
+        expect(run.settings).toEqual(quotedSettings());
+        expect(run.shots).toEqual([{ prompt: 'A door opens', duration: 5 }, { prompt: 'She walks in', duration: 6 }]);
       });
 
       it('a motion run', async () => {
-        const kling: GenerationModelDescriptor = {
-          ...parityMotionModel(),
-          controls: createTestGenerationModelCatalog().models.find((model) => model.id === 'kling-3.0')!.controls,
-        };
-        catalogState.catalog = parityCatalog([kling]);
+        catalogState.catalog = parityCatalog([published('kling-2.6', parityMotionModel().inputModes)]);
         memory.set(ordinaryKey, savedDrafts({ motion: {
-          model: 'kling-3.0',
+          model: 'kling-2.6',
           catalogRevision: 'parity-rev',
           characterImage: stagedMedia('dancer'),
           referenceVideo: stagedMedia('routine', 'video', { durationSeconds: 6 }),
@@ -5192,9 +5197,10 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
         await pressGenerate(tree);
 
-        expect(sentRun().settings).toEqual({ resolution: '1080p', characterOrientation: 'image', duration: 6 });
-        expect(sentRun().settings).toEqual(quotedSettings());
-        expect(sentRun().inputs).toEqual([
+        const run = sentRun();
+        expect(run.settings).toEqual({ resolution: '1080p', characterOrientation: 'image', duration: 6 });
+        expect(run.settings).toEqual(quotedSettings());
+        expect(run.inputs).toEqual([
           expect.objectContaining({ slot: 'characterImage', url: 'https://cdn.example.com/dancer.png' }),
           expect.objectContaining({ slot: 'referenceVideo', url: 'https://cdn.example.com/routine.mp4', durationSeconds: 6 }),
         ]);
