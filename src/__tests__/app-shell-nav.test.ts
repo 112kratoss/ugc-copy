@@ -1,6 +1,13 @@
+import { UNDERSCORE_NOT_FOUND_ROUTE } from 'next/dist/shared/lib/entry-constants';
+import { NOT_FOUND_SEGMENT_KEY } from 'next/dist/shared/lib/segment';
 import { describe, expect, it } from 'vitest';
 
-import { getActiveAppNavItem, getAppShellTitle, isMinimalAppChromePath } from '@/components/app-shell-nav';
+import {
+  getActiveAppNavItem,
+  getAppShellTitle,
+  isMinimalAppChromePath,
+  isNotFoundRouteSegment,
+} from '@/components/app-shell-nav';
 
 describe('app shell navigation', () => {
   it('keeps post composer routes in the Studio section', () => {
@@ -62,5 +69,16 @@ describe('app shell navigation', () => {
     expect(isMinimalAppChromePath('/r/friend123')).toBe(true);
     expect(isMinimalAppChromePath('/child-safety')).toBe(true);
     expect(isMinimalAppChromePath('/showcase')).toBe(false);
+  });
+
+  it("recognises Next's not-found route segment under either bundler", () => {
+    // From Next itself, so an upgrade that respells either fails here: CI's
+    // E2E runs the dev server, which never hydrates the build-time 404.
+    // Turbopack's tree carries the segment key; webpack's loader writes the
+    // route without its slash.
+    expect(isNotFoundRouteSegment(NOT_FOUND_SEGMENT_KEY)).toBe(true);
+    expect(isNotFoundRouteSegment(UNDERSCORE_NOT_FOUND_ROUTE.slice(1))).toBe(true);
+    expect(isNotFoundRouteSegment(null)).toBe(false);
+    expect(isNotFoundRouteSegment('pricing')).toBe(false);
   });
 });

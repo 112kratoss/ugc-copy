@@ -11,8 +11,9 @@ import {
 } from 'lucide-react';
 import Form from 'next/form';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSelectedLayoutSegment } from 'next/navigation';
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -28,6 +29,7 @@ import {
   getActiveAppNavItem,
   getAppShellTitle,
   isMinimalAppChromePath,
+  isNotFoundRouteSegment,
   type AppNavItem,
 } from './app-shell-nav';
 import DeferredAppShellAccount from './DeferredAppShellAccount';
@@ -250,7 +252,13 @@ function Brand({ compact = false }: { compact?: boolean }) {
   );
 }
 
-export default function AppShellClient({ children }: { children: React.ReactNode }) {
+const AppShellFrame = memo(function AppShellFrame({
+  isNotFoundRoute,
+  children,
+}: {
+  isNotFoundRoute: boolean;
+  children: React.ReactNode;
+}) {
   const routePathname = usePathname() || '/';
   const hasMounted = useSyncExternalStore(
     subscribeToHydration,
@@ -262,9 +270,10 @@ export default function AppShellClient({ children }: { children: React.ReactNode
   // `/home` (src/proxy.ts), so the server sees `/home` while the hydrated
   // browser sees `/`. Keep both neutral for the first client render so the
   // markup matches the server shell, then activate Home.
-  const pathname = (routePathname === '/' || routePathname === '/home') && !hasMounted
-    ? ''
-    : routePathname;
+  const isHomeBeforeMount = (routePathname === '/' || routePathname === '/home') && !hasMounted;
+  // The not-found page keeps the neutral shell it was prerendered with, before
+  // and after hydration, at every address (see AppShellClient below).
+  const pathname = isNotFoundRoute || isHomeBeforeMount ? '' : routePathname;
   const [mobileOpen, setMobileOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -501,7 +510,7 @@ export default function AppShellClient({ children }: { children: React.ReactNode
               <Plus className="h-4 w-4" aria-hidden />
               <span className="app-shell-create-label">New creation</span>
             </Link>
-            <DeferredAppShellAccount />
+            <DeferredAppShellAccount pathname={pathname} />
           </div>
         </header>
 
@@ -591,4 +600,20 @@ export default function AppShellClient({ children }: { children: React.ReactNode
       ) : null}
     </div>
   );
+});
+
+export default function AppShellClient({ children }: { children: React.ReactNode }) {
+  // In production every address with no page is answered with the one
+  // build-time `/_not-found` prerender. Its shell was drawn for that internal
+  // pathname, but the browser reads the address it visited: `/auth/<x>` wants
+  // no shell and `/blog/a/b` another title, and on that mismatch React threw
+  // the server's markup away. The route tree comes with the page, so this
+  // segment reads the same on both sides.
+  //
+  // Read here, outside the memoised frame: the segment comes from the router's
+  // whole state, which also changes when only the query or the hash does (the
+  // Explore reel, search), and the frame draws again only when its pathname or
+  // this flag changes. The root layout's `children` keeps its identity.
+  const isNotFoundRoute = isNotFoundRouteSegment(useSelectedLayoutSegment());
+  return <AppShellFrame isNotFoundRoute={isNotFoundRoute}>{children}</AppShellFrame>;
 }
