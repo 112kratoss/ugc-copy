@@ -111,3 +111,17 @@ export function planImageRunInputs<Element>(elements: readonly Element[], maxIma
     .slice(0, Math.max(0, maxImages))
     .map((element) => ({ slot: 'imageReferences', kind: 'image', element }));
 }
+
+export type MotionRunInput = { slot: 'characterImage'; kind: 'image' } | { slot: 'referenceVideo'; kind: 'video' };
+
+/**
+ * The inputs every motion run sends, in this order: the character to animate and the clip
+ * whose movement it takes. The motion creator asked for its price with kind totals instead,
+ * and the start, which reads each input's slot, refused runs that price had been shown for.
+ * No length goes with the clip: the start measures it and, when the measured length costs
+ * more than the price shown, sends the creator back to quote with it.
+ */
+export const MOTION_RUN_INPUTS: readonly MotionRunInput[] = [
+  { slot: 'characterImage', kind: 'image' },
+  { slot: 'referenceVideo', kind: 'video' },
+];
