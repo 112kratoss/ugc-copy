@@ -61,6 +61,15 @@ const quoteRequestMock = vi.hoisted(() => vi.fn((_request: GenerationModelQuoteI
   void _request;
   void _attempt;
 }));
+// What the quote hook answers: unless a test says otherwise, 12 credits, ready, and the
+// price of the very request the page asked.
+const quoteAnswer = vi.hoisted(() => ({
+  status: 'ready' as 'ready' | 'pending',
+  /** The price at each asking (the hook's attempt); the last one stands after that. */
+  costCredits: [12] as number[],
+  /** An answer that prices another request than the page's. */
+  forAnotherRequest: false,
+}));
 const modelCatalogState = vi.hoisted(() => ({
   missingIds: [] as string[],
   error: null as Error | null,
@@ -309,15 +318,18 @@ vi.mock('@/lib/generation-model-client', async () => {
     useWebGenerationModelQuote: (request: GenerationModelQuoteInput | null, _accessToken?: string | null, attempt = 0) => {
       void _accessToken;
       quoteRequestMock(request, attempt);
+      const { costCredits } = quoteAnswer;
       return {
-        status: 'ready',
-        quote: {
+        status: quoteAnswer.status,
+        quote: quoteAnswer.status === 'ready' ? {
           modelId: 'kling-3.0-video',
           catalogRevision: 'test-catalog-rev',
           normalizedSettings: {},
-          costCredits: 12,
-        },
+          costCredits: costCredits[Math.min(attempt, costCredits.length - 1)],
+        } : null,
         error: null,
+        // The request the answer prices, as JSON, as the hook says it.
+        key: request ? JSON.stringify(quoteAnswer.forAnotherRequest ? { ...request, modelId: 'another-model' } : request) : null,
       };
     },
   };
@@ -428,6 +440,9 @@ describe('CreateVideoClient Kling video elements', () => {
     mockUpdateCredits.mockClear();
     generationCatalogRefetchMock.mockClear();
     quoteRequestMock.mockClear();
+    quoteAnswer.status = 'ready';
+    quoteAnswer.costCredits = [12];
+    quoteAnswer.forAnotherRequest = false;
     enhanceButtonPropsMock.mockClear();
     modelCatalogState.missingIds = [];
     modelCatalogState.error = null;
@@ -3064,8 +3079,13 @@ describe('CreateVideoClient Kling video elements', () => {
       return screen.getByRole('button', { name: /generate video/i });
     }
 
+    /** The price on the run panel. */
+    function costShown() {
+      return screen.getByText('Cost', { selector: 'div' }).nextElementSibling?.textContent;
+    }
+
     /** Every start the page sent, as its key and its body. */
-    function postedStarts(): Array<{ key: string | null; body: { inputs: Array<Record<string, unknown>>; settings: Record<string, unknown>; shots: unknown[] } }> {
+    function postedStarts(): Array<{ key: string | null; body: { inputs: Array<Record<string, unknown>>; settings: Record<string, unknown>; shots: unknown[]; expectedCostCredits?: unknown } }> {
       return fetchMock.mock.calls
         .filter(([input, init]) => String(input).includes('/api/generations') && init?.method === 'POST')
         .map(([, init]) => ({
@@ -3683,7 +3703,59 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(clips).toEqual([expect.objectContaining({ url: link, assetId: 'asset-clip-9' })]);
     });
 
-    it('asks for the price again when the server says it changed', async () => {
+    // The start charges its own price up to the one the creator was shown, and refuses a
+    // run it prices above it (`cost_changed`) before any credits are held.
+    it('sends the price it shows with the run, as the most the start may charge', async () => {
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      expect(costShown()).toBe('12 credits');
+
+      fireEvent.click(generateButton());
+
+      await waitFor(() => expect(postedStarts()).toHaveLength(1));
+      expect(postedStarts()[0].body.expectedCostCredits).toBe(12);
+      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+    });
+
+    it.each([
+      ['answers another request than the run’s', { forAnotherRequest: true }],
+      ['is not a whole number of credits', { costCredits: [12.5] }],
+    ])('sends the run without a price when the quote %s', async (_case, answer) => {
+      Object.assign(quoteAnswer, answer);
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+
+      fireEvent.click(generateButton());
+
+      // The run goes, and the start charges its own price, as it did before a price was sent.
+      await waitFor(() => expect(postedStarts()).toHaveLength(1));
+      expect(postedStarts()[0].body).not.toHaveProperty('expectedCostCredits');
+    });
+
+    it('sends nothing while the price is not ready, and the run with its price once it is', async () => {
+      quoteAnswer.status = 'pending';
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      expect(costShown()).toBe('Calculating...');
+
+      fireEvent.click(generateButton());
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(generateButton()).toBeDisabled();
+      expect(postedStarts()).toHaveLength(0);
+
+      quoteAnswer.status = 'ready';
+      fireEvent.change(promptBox(), { target: { value: `${PROMPT} The water stays calm.` } });
+      expect(costShown()).toBe('12 credits');
+      fireEvent.click(generateButton());
+
+      await waitFor(() => expect(postedStarts()).toHaveLength(1));
+      expect(postedStarts()[0].body.expectedCostCredits).toBe(12);
+    });
+
+    it('asks for the price again when the server says it changed, and sends the next run at the new price under a new key', async () => {
+      quoteAnswer.costCredits = [12, 15];
       answerStarts(refusal(409, {
         code: 'cost_changed',
         error: 'The price of this run changed. Check the updated cost and generate again.',
@@ -3691,11 +3763,22 @@ describe('CreateVideoClient Kling video elements', () => {
       render(<CreateVideoClient prefill={{}} />);
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
       expect(quoteRequestMock.mock.calls.at(-1)?.[1]).toBe(0);
+      expect(costShown()).toBe('12 credits');
       fireEvent.click(generateButton());
 
       expect(await screen.findByText('The price of this run changed. Check the updated cost and generate again.')).toBeInTheDocument();
       expect(quoteRequestMock.mock.calls.at(-1)?.[1]).toBe(1);
+      expect(costShown()).toBe('15 credits');
       expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
+
+      fireEvent.click(generateButton());
+
+      await waitFor(() => expect(postedStarts()).toHaveLength(2));
+      const [refused, next] = postedStarts();
+      expect(refused.body.expectedCostCredits).toBe(12);
+      expect(next.body.expectedCostCredits).toBe(15);
+      expect(next.key).not.toBe(refused.key);
+      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
     });
 
     it('promises a saved draft only where one is kept', async () => {

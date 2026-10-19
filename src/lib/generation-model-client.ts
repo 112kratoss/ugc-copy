@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useEffect, useMemo, useState } from 'react';
 import { ModelCatalogSession, type CatalogSessionState } from '../../ugc-mobile/lib/model-catalog/session';
-import type { ModelCatalogKind, ModelCatalogSummary } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { catalogRunQuoteInput, type ModelCatalogKind, type ModelCatalogSummary } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type {
@@ -692,6 +692,32 @@ export type WebGenerationStartResponse = {
   idempotentReplay?: true;
 };
 
+/**
+ * The run as it is sent to start: with the price the creator was shown
+ * (`expectedCostCredits`) when that price is a ready quote of this very run, asked with
+ * the run's own quote input. The start prices the run again, charges its own price up to
+ * that one, and refuses a run it prices above it (`cost_changed`) before any credits are
+ * held. Without such a quote the run goes without a price, and the start charges its own
+ * as it always has. The app's rule is the same (`catalogStartRequest` in
+ * ugc-mobile/lib/generation-model-draft.ts).
+ */
+export function webCatalogStartRequest(
+  run: CatalogGenerationRequestPayload,
+  quote: {
+    status: WebGenerationQuoteStatus;
+    quote: Pick<GenerationModelQuote, 'costCredits'> | null;
+    /** The quote request the state answers, as JSON (`useWebGenerationModelQuote`). */
+    key: string | null;
+  },
+): CatalogGenerationRequestPayload {
+  const cost = quote.status === 'ready' ? quote.quote?.costCredits : undefined;
+  const shownForThisRun = typeof cost === 'number'
+    && Number.isSafeInteger(cost)
+    && cost >= 0
+    && quote.key === JSON.stringify(catalogRunQuoteInput({ ...run, inputs: run.inputs ?? [] }));
+  return shownForThisRun ? { ...run, expectedCostCredits: cost } : run;
+}
+
 export async function requestWebGenerationStart(
   input: CatalogGenerationRequestPayload,
   {
@@ -898,13 +924,15 @@ export function useWebGenerationModelQuote(
     };
   }, [accessToken, requestKey, serializedInput]);
 
+  // `key` is the request a state answers, as JSON: a ready quote is the price of exactly
+  // that request, which is how a start tells the price shown for its own run.
   if (!requestKey) {
-    return { status: 'idle' as const, quote: null, error: null };
+    return { status: 'idle' as const, quote: null, error: null, key: null };
   }
   if (state?.key === requestKey) {
-    return { status: state.status, quote: state.quote, error: state.error };
+    return { status: state.status, quote: state.quote, error: state.error, key: serializedInput };
   }
-  return { status: 'pending' as const, quote: null, error: null };
+  return { status: 'pending' as const, quote: null, error: null, key: serializedInput };
 }
 
 export const WorkflowModelCatalogContext = createContext<ReturnType<typeof useWebGenerationModelCatalog> | null>(null);

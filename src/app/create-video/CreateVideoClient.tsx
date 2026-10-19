@@ -48,6 +48,7 @@ import {
     useWebGenerationModelCatalog,
     useWebGenerationModelQuote,
     WebCatalogRequestError,
+    webCatalogStartRequest,
     type PendingWebStart,
     type WebGenerationStartResponse,
 } from '@/lib/generation-model-client';
@@ -3840,7 +3841,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 }
             }
 
-            const payload: CatalogGenerationRequestPayload = {
+            // With the price on the run panel when it is the quote of this very run: the
+            // start charges its own price up to it, and refuses a run it prices above it
+            // (`cost_changed`) before any credits are held.
+            const payload = webCatalogStartRequest({
                 kind: 'video',
                 modelId: selectedModel,
                 prompt: prompt.trim(),
@@ -3860,7 +3864,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 }),
                 ...(remixId ? { sourceGenerationId: remixId } : {}),
                 catalogRevision: modelCatalog.catalog?.revision ?? '',
-            };
+            }, quoteState);
 
             attempt = {
                 version: 1,

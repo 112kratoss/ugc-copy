@@ -99,6 +99,7 @@ import {
     useWebGenerationModelCatalog,
     useWebGenerationModelQuote,
     WebCatalogRequestError,
+    webCatalogStartRequest,
     type PendingWebStart,
     type WebGenerationStartResponse,
 } from '@/lib/generation-model-client';
@@ -1190,6 +1191,10 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         setError(message);
         if (code === 'prompt_blocked' || code === 'INVALID_GENERATION_REQUEST') {
             promptTextareaRef.current?.focus();
+        } else if (code === 'cost_changed') {
+            // Priced again at once: the run panel shows what the run costs now, and the
+            // next press sends that price.
+            setQuoteAttempt((current) => current + 1);
         }
     };
 
@@ -1484,7 +1489,10 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 estimatedTotalMs,
             }));
 
-            const body: CatalogGenerationRequestPayload = {
+            // With the price on the run panel when it is the quote of this very run: the
+            // start charges its own price up to it, and refuses a run it prices above it
+            // (`cost_changed`) before any credits are held.
+            const body = webCatalogStartRequest({
                 kind: 'image',
                 modelId: selectedModel,
                 prompt: submitted,
@@ -1492,7 +1500,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 inputs,
                 sourceGenerationId: remixId || undefined,
                 catalogRevision: modelCatalog.catalog?.revision ?? '',
-            };
+            }, quoteState);
             const start: PendingWebStart = {
                 version: 1,
                 tool: 'image',

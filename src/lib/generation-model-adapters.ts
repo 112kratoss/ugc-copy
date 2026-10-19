@@ -44,6 +44,8 @@ export type CatalogGenerationRequestPayload = {
   shots?: CatalogGenerationShot[];
   inputs?: CatalogGenerationInputAsset[];
   sourceGenerationId?: string | null;
+  /** The price the creator was shown for the run, in whole credits: the most a start charges. */
+  expectedCostCredits?: number;
 };
 
 export type GenericGenerationAdapterOperation = {
