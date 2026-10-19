@@ -8,6 +8,7 @@ import { showActionSheet } from '@/lib/action-sheet';
 import { setCachedCreatorProfileBlocked } from '@/lib/creator-profile-view-model';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
+import { creatorSeesSaverFields } from '@/lib/saver-notice';
 import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
 import { immersiveViewerHref, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import {
@@ -289,14 +290,17 @@ export function useViewerActionHandlers({
         onSave(item);
         return;
       }
-      // A bookmark is reversible in place: no dialog, like the web.
+      // A bookmark is reversible in place: nothing to confirm, like the web.
       const shouldSave = action === 'save';
+      // Decided at the tap (`lib/saver-notice.ts`).
+      const saverFields = creatorSeesSaverFields(user?.id, shouldSave);
       void (async () => {
         try {
           if (item.showcasePostId) {
             await api.saveShowcasePost(item.showcasePostId, {
               shouldSave,
               sourceSurface: item.source === 'profile-saved' ? 'mobile-profile-saved' : 'mobile-viewer-actions',
+              ...saverFields,
             });
           }
           await refreshMedia();

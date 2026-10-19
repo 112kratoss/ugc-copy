@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import OwnerProfileMediaHub from '@/app/profile/OwnerProfileMediaHub';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
+import { resetSaverNoticeForTests } from '@/components/saver-notice';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 // One router object for every render, as Next's is.
@@ -349,6 +350,9 @@ describe('OwnerProfileMediaHub', () => {
         }
         return answerPage(input);
       }));
+      // Told on an earlier page and on record, under the signed-in account:
+      // its save may name it.
+      window.localStorage.setItem('magicbooklet:saver-notice:v2:owner-1', 'recorded');
       render(<OwnerProfileMediaHub creator={owner} stats={{ ...TOTALS, saved: 7 }} />);
       await screen.findByRole('button', { name: /open public post/i });
       fireEvent.click(screen.getByRole('tab', { name: /saved/i }));
@@ -364,8 +368,10 @@ describe('OwnerProfileMediaHub', () => {
       await waitFor(() => expect(statFor('Saved')).toBe('7'));
       expect(saveBodies).toMatchObject([
         { postId: 'saved-post', shouldSave: false },
-        { postId: 'saved-post', shouldSave: true },
+        { postId: 'saved-post', shouldSave: true, creatorSeesSaver: true },
       ]);
+      window.localStorage.clear();
+      resetSaverNoticeForTests();
     });
   });
 

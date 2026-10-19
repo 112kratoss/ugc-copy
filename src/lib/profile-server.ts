@@ -15,7 +15,7 @@ import {
 } from '@/lib/profile';
 
 export const PROFILE_SELECT_FIELDS =
-  'id, username, display_name, bio, avatar_url, cover_url, website_url, twitter_handle, instagram_handle, tiktok_handle, location, credits, promotional_credits';
+  'id, username, display_name, bio, avatar_url, cover_url, website_url, twitter_handle, instagram_handle, tiktok_handle, location, credits, promotional_credits, saver_notice_seen_at';
 
 export interface ProfileRow {
   id: string;
@@ -31,6 +31,7 @@ export interface ProfileRow {
   location: string | null;
   credits: number | null;
   promotional_credits?: number | null;
+  saver_notice_seen_at?: string | null;
 }
 
 interface ExistingProfileRow {
@@ -81,6 +82,62 @@ export async function findShareableProfileByUsername(
   return { id: profile.id, username: profile.username };
 }
 
+/**
+ * The handle a follow alert names ("@maya followed you."), or null when it
+ * cannot be read: that costs the name, never the alert. Any handle, the
+ * generated `creator-xxxxxxxx` one included: follows are public, and the alert
+ * opens the follower's page by it.
+ */
+export async function loadProfileHandle(
+  adminSupabase: SupabaseClient,
+  userId: string,
+): Promise<string | null> {
+  try {
+    const { data, error } = await adminSupabase
+      .from('profiles')
+      .select('username')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (error) {
+      logBackendError('failed_to_load_alert_profile', { error: error });
+      return null;
+    }
+    const username = (data as { username?: unknown } | null)?.username;
+    return typeof username === 'string' ? normalizeUsername(username) : null;
+  } catch (error) {
+    logBackendError('failed_to_load_alert_profile', { error: error });
+    return null;
+  }
+}
+
+/**
+ * Records that the account has been told that creators can see who saved its
+ * posts; the first telling's time is kept. False when the account has no
+ * profile row to hold the record, so nothing was recorded.
+ */
+export async function recordSaverNoticeSeen(adminSupabase: SupabaseClient, userId: string): Promise<boolean> {
+  const { data, error } = await adminSupabase
+    .from('profiles')
+    .update({ saver_notice_seen_at: new Date().toISOString() })
+    .eq('id', userId)
+    .is('saver_notice_seen_at', null)
+    .select('id');
+
+  if (error) throw error;
+  if (Array.isArray(data) && data.length > 0) return true;
+
+  // Nothing changed: told before (that time is kept), or no row at all.
+  const { data: existing, error: readError } = await adminSupabase
+    .from('profiles')
+    .select('saver_notice_seen_at')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (readError) throw readError;
+  return typeof (existing as { saver_notice_seen_at?: unknown } | null)?.saver_notice_seen_at === 'string';
+}
+
 interface ProfileValidationSuccess {
   ok: true;
   payload: ValidatedProfileUpdate;
@@ -117,6 +174,7 @@ export function buildProfileApiResponse(profile: ProfileRow, userId: string): Pr
   return {
     ...sanitizeProfileRecord(profile),
     suggestedUsername: buildFallbackUsername(userId),
+    saverNoticeSeen: typeof profile.saver_notice_seen_at === 'string',
   };
 }
 

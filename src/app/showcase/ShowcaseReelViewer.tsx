@@ -30,7 +30,7 @@ import CreatorIdentity from '@/components/CreatorIdentity';
 import PublicShareButton from '@/components/PublicShareButton';
 import TextPostPreviewCard from '@/components/TextPostPreviewCard';
 import { useAuth } from '@/components/AuthProvider';
-import { readFeedbackSnapshot, requestConfirmation } from '@/components/feedback-state';
+import { readFeedbackSnapshot, requestConfirmation, setToastHost } from '@/components/feedback-state';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import {
   ShowcaseFeedbackMenu,
@@ -287,6 +287,16 @@ export default function ShowcaseReelViewer({
   const referenceCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const referencePreviousFocusRef = useRef<HTMLElement | null>(null);
   const prefersReducedMotion = useReducedMotion();
+
+  // While the reel is up it draws the app's toasts: inside its `aria-modal`
+  // dialog a screen reader still reaches them and its focus trap includes
+  // their buttons, and below its header they sit clear of close and ⋯. The
+  // dialog exists only while the reel is open, and is another element while
+  // its post loads, so the host follows the element, not the viewer's mount.
+  const attachReelDialog = useCallback((node: HTMLDivElement | null) => {
+    reelDialogRef.current = node;
+    setToastHost(node);
+  }, []);
   const [transitionDirection, setTransitionDirection] = useState<ReelTransitionDirection>('neutral');
   const [activeMediaIndex, setActiveMediaIndex] = useState(initialMediaIndex);
   const [mediaLoadStates, setMediaLoadStates] = useState<Record<string, ReelMediaLoadState>>({});
@@ -767,7 +777,12 @@ export default function ShowcaseReelViewer({
 
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
+        if (!activeDialog?.contains(document.activeElement)) {
+          // Focus fell out of the dialog, as it does when a toast it holds
+          // goes with its button focused: back in, not on to the page behind.
+          event.preventDefault();
+          (event.shiftKey ? last : first).focus();
+        } else if (event.shiftKey && document.activeElement === first) {
           event.preventDefault();
           last.focus();
         } else if (!event.shiftKey && document.activeElement === last) {
@@ -865,7 +880,7 @@ export default function ShowcaseReelViewer({
 
     return (
       <div
-        ref={reelDialogRef}
+        ref={attachReelDialog}
         role="dialog"
         aria-modal="true"
         aria-label={`${originLabel} reel viewer`}
@@ -1780,7 +1795,7 @@ export default function ShowcaseReelViewer({
 
   return (
     <div
-      ref={reelDialogRef}
+      ref={attachReelDialog}
       role="dialog"
       aria-modal="true"
       aria-label={`${originLabel} reel viewer`}

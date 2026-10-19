@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
-import { ApiError, POST_RESOURCE_FILE_URL_BATCH_LIMIT, createApiClient, type MagicbookletApiClient } from '../lib/api-client';
+import {
+  ApiError,
+  POST_RESOURCE_FILE_URL_BATCH_LIMIT,
+  createApiClient,
+  type MagicbookletApiClient,
+  type SaveShowcasePostOptions,
+} from '../lib/api-client';
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
 import { buildImmersiveGenerationItems, buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
 import { buildShowcaseFeedEventRequest } from '../lib/showcase-feed-events';
@@ -216,7 +222,9 @@ const successCases: Array<{
     key: 'undoFeedFeedback',
     call: (api) => api.undoFeedFeedback(mobileApiContract.endpoints.undoFeedFeedback.request as UndoFeedFeedbackRequest),
   },
-  { key: 'saveShowcasePost', call: (api) => api.saveShowcasePost('post-1', { shouldSave: true }) },
+  // The app sends the flag only through lib/saver-notice.ts; here the client alone.
+  { key: 'saveShowcasePost', call: (api) => api.saveShowcasePost('post-1', { shouldSave: true, creatorSeesSaver: true }) },
+  { key: 'recordSaverNotice', call: (api) => api.recordSaverNotice() },
   { key: 'remixShowcasePost', call: (api) => api.remixShowcasePost('post-1') },
   { key: 'shareShowcasePost', call: (api) => api.shareShowcasePost('post-1', { sourceSurface: 'showcase-reel' }) },
   { key: 'recordShareVisit', call: (api) => api.recordShareVisit('post-1', 'feed') },
@@ -773,6 +781,36 @@ describe('mobile shared API v1 contract fixture', () => {
       { method: 'GET', path: newest.path, query: '?category=text', authorization: null, body: null },
       { method: 'POST', path: undo.path, query: '', authorization: 'Bearer token-1', body: undo.requestVariants.hideCreator },
     ]);
+  });
+
+  // Review finding #25: every save body the contract lists is what this
+  // client puts on the wire, the one sent while the notice is still telling
+  // the saver included, so the web's route and the app read the same fields.
+  it('sends each save body the contract lists, exactly as it lists it', async () => {
+    const endpoint = contract.endpoints.saveShowcasePost as ContractEndpoint & { requestVariants?: Record<string, unknown> };
+    const bodies = Object.entries({ request: endpoint.request, ...endpoint.requestVariants });
+    expect(bodies.some(([, body]) => (body as { creatorSeesSaver?: unknown }).creatorSeesSaver === true)).toBe(true);
+    expect(bodies.some(([, body]) => (body as { saverNotYetTold?: unknown }).saverNotYetTold === true)).toBe(true);
+
+    for (const [name, body] of bodies) {
+      const sent: Array<{ method: string; path: string; body: unknown }> = [];
+      const api = createApiClient({
+        baseUrl: 'https://magicbooklet.test',
+        getAccessToken: async () => 'token-1',
+        fetcher: (async (input: RequestInfo | URL, init?: RequestInit) => {
+          sent.push({
+            method: (init?.method ?? 'GET').toUpperCase(),
+            path: new URL(String(input)).pathname,
+            body: JSON.parse(String(init?.body)),
+          });
+          return jsonResponse(endpoint.response);
+        }) as typeof fetch,
+      });
+      const { postId, ...options } = body as { postId: string } & SaveShowcasePostOptions;
+
+      await expect(api.saveShowcasePost(postId, options), name).resolves.toEqual(endpoint.response);
+      expect(sent, name).toEqual([{ method: endpoint.method, path: endpoint.path, body }]);
+    }
   });
 
   it('sends auth for mobile showcase share calls so social notifications can identify the actor', async () => {

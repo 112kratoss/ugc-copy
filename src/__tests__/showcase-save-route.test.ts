@@ -334,7 +334,9 @@ describe('/api/showcase/save route', () => {
     expect(notifyPostSocialActivityMock).not.toHaveBeenCalled();
   });
 
-  it('idempotently unsaves without notifying creators', async () => {
+  // An alert that named the saver goes with the save, in the unsave's own
+  // transaction: nothing is left to run behind the answer.
+  it('idempotently unsaves without notifying creators, or leaving work behind its answer', async () => {
     queueBusinessRpcResult(saveRpcResult({ isSaved: false, saveCount: 4, changed: true }));
 
     const response = await postSave({

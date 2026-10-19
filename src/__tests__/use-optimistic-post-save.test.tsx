@@ -1,7 +1,26 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { dismissToast, readFeedbackSnapshot, resetFeedbackState, subscribeToFeedback } from '@/components/feedback-state';
+import { SAVER_NOTICE_MESSAGE, resetSaverNoticeForTests } from '@/components/saver-notice';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
+
+// The account signed in, and what the page has read of its saver notice
+// record (`AuthProvider`): nobody, and no record, unless a case is about it.
+const auth = vi.hoisted(() => ({
+    user: null as { id: string } | null,
+    session: null as { access_token: string } | null,
+    saverNoticeRecord: null as { userId: string; seen: boolean } | null,
+}));
+vi.mock('@/components/AuthProvider', () => ({
+    useAuth: () => auth,
+}));
+
+/** Signs `userId` in, as the hook's own `useAuth()` reads it. */
+function signIn(userId: string) {
+    auth.user = { id: userId };
+    auth.session = { access_token: 'token' };
+}
 
 type Post = { id: string; isSaved?: boolean; saveCount: number };
 
@@ -62,6 +81,9 @@ function stubSaveRequests() {
     vi.stubGlobal('fetch', vi.fn((input: unknown, init?: RequestInit) => {
         if (String(input).startsWith('/api/showcase/saved-state')) {
             return Promise.resolve({ ok: true, json: async () => [] });
+        }
+        if (String(input) === '/api/profile/saver-notice') {
+            return Promise.resolve({ ok: true, json: async () => ({ seen: false }) });
         }
         return new Promise<SaveAnswer>((resolve, reject) => {
             saves.push({ body: JSON.parse(String(init?.body)) as SaveBody, resolve, reject });
@@ -279,5 +301,91 @@ describe('useOptimisticPostSave, tapped faster than the server answers', () => {
         expect([heart('post-2'), count('post-2')]).toEqual([false, 0]);
         expect(onError).not.toHaveBeenCalled();
         expect(onSuccess).not.toHaveBeenCalled();
+    });
+});
+
+// A save names its saver only if they were told before tapping. A tap made
+// while an earlier request was out leaves later, after the notice may have
+// gone: what it says about its saver is still the tap's.
+describe('useOptimisticPostSave, telling who saved', () => {
+    let unsubscribe = () => {};
+
+    /** Every request made of the account's saver notice record. */
+    const recordRequests = () => vi.mocked(fetch).mock.calls
+        .filter(([input]) => String(input) === '/api/profile/saver-notice');
+
+    afterEach(() => {
+        unsubscribe();
+        auth.user = null;
+        auth.session = null;
+        auth.saverNoticeRecord = null;
+        resetFeedbackState();
+        resetSaverNoticeForTests();
+        window.localStorage.clear();
+        vi.unstubAllGlobals();
+    });
+
+    it.each([true, false])('asks nothing of the record, and goes by the one the page read (%s)', async (seen) => {
+        signIn('viewer-1');
+        auth.saverNoticeRecord = { userId: 'viewer-1', seen };
+        unsubscribe = subscribeToFeedback(() => {});
+        const saves = stubSaveRequests();
+        const { tap } = await renderSignedInSaveHook();
+
+        await tap('post-2');
+
+        expect(recordRequests()).toEqual([]);
+        expect(saves.map(({ body }) => body)).toEqual([
+            seen
+                ? { postId: 'post-2', shouldSave: true, sourceSurface: 'feed', creatorSeesSaver: true }
+                : { postId: 'post-2', shouldSave: true, sourceSurface: 'feed', saverNotYetTold: true },
+        ]);
+        expect(readFeedbackSnapshot().toasts.map((toast) => toast.message)).toEqual(seen ? [] : [SAVER_NOTICE_MESSAGE]);
+    });
+
+    // Review 4 finding #25: the account is the hook's own `useAuth()`'s, so its
+    // record is never paired with another account's id.
+    it("takes the signed-in account from the session, and no other account's record", async () => {
+        signIn('viewer-1');
+        auth.saverNoticeRecord = { userId: 'viewer-2', seen: true };
+        unsubscribe = subscribeToFeedback(() => {});
+        const saves = stubSaveRequests();
+        const { tap, rerender } = await renderSignedInSaveHook();
+        rerender();
+
+        await tap('post-2');
+
+        expect(recordRequests()).toEqual([]);
+        expect(saves.map(({ body }) => body)).toEqual([
+            { postId: 'post-2', shouldSave: true, sourceSurface: 'feed', saverNotYetTold: true },
+        ]);
+    });
+
+    it('sends a save tapped before the notice went as one that tells the creator nothing', async () => {
+        signIn('viewer-1');
+        // The root layout's FeedbackViewport, which draws the notice.
+        unsubscribe = subscribeToFeedback(() => {});
+        const saves = stubSaveRequests();
+        const { tap } = await renderSignedInSaveHook();
+
+        // post-1 starts saved: the unsave goes out, and the save tapped while
+        // it is out waits behind it, telling the viewer now.
+        await tap('post-1');
+        await tap('post-1');
+        expect(readFeedbackSnapshot().toasts.map((toast) => toast.message)).toEqual([SAVER_NOTICE_MESSAGE]);
+
+        // The notice goes before the unsave answers, and so before the save leaves.
+        act(() => dismissToast(readFeedbackSnapshot().toasts[0].id, 'closed'));
+        await act(async () => saves[0].resolve(serverHolds(false, 2)));
+
+        // And a save tapped after the notice went may name them.
+        await act(async () => saves[1].resolve(serverHolds(true, 3)));
+        await tap('post-2');
+
+        expect(saves.map(({ body }) => body)).toEqual([
+            { postId: 'post-1', shouldSave: false, sourceSurface: 'feed' },
+            { postId: 'post-1', shouldSave: true, sourceSurface: 'feed', saverNotYetTold: true },
+            { postId: 'post-2', shouldSave: true, sourceSurface: 'feed', creatorSeesSaver: true },
+        ]);
     });
 });

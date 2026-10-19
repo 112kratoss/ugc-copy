@@ -143,6 +143,20 @@ async function enforceNotificationReadRateLimit({
   }
 }
 
+/**
+ * Every column the inbox reads, filters or orders on. Alerts are read with the
+ * owner's own token, as `authenticated`, which may read only the columns
+ * granted in `20261019091221_hide_alert_actors_from_their_owners.sql`: a
+ * column outside them fails every Alerts request.
+ * `hide-alert-actors-from-their-owners-migration.test.ts` holds the two to each
+ * other.
+ */
+export const MOBILE_NOTIFICATION_INBOX_SELECT =
+  'id, type, category, title, body, deep_link, object_type, object_id, event_count, is_read, created_at, last_event_at';
+
+/** Columns the inbox filters on beyond the ones it reads. */
+export const MOBILE_NOTIFICATION_INBOX_FILTER_COLUMNS = ['user_id'] as const;
+
 export async function getMobileNotificationInboxForRoute(
   input: MobileNotificationInboxGetInput,
 ): Promise<MobileNotificationInboxRouteResult> {
@@ -159,7 +173,7 @@ export async function getMobileNotificationInboxForRoute(
     // top of the list as "Just now". `id` settles alerts that share a time.
     let query = userSupabase
       .from('mobile_notifications')
-      .select('id, type, category, title, body, deep_link, object_type, object_id, event_count, is_read, created_at, last_event_at')
+      .select(MOBILE_NOTIFICATION_INBOX_SELECT)
       .eq('user_id', userId)
       .order('last_event_at', { ascending: false })
       .order('id', { ascending: false })

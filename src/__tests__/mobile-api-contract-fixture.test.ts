@@ -19,6 +19,7 @@ import { POST_RESOURCE_FILE_URL_BATCH_LIMIT } from '@/lib/post-resource-bundles'
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import { createPostResourceFileReadUrlForRoute } from '@/lib/post-resource-file-url-service';
 import { sanitizeProfileRecord } from '@/lib/profile';
+import { getProfileRouteResult } from '@/lib/profile-route-adapter-service';
 import { normalizeShowcaseCategory } from '@/lib/showcase';
 import {
   parseShowcaseFeedEventBatchPayload,
@@ -33,6 +34,9 @@ import {
 } from '@/lib/showcase-feed-newest-route-adapter-service';
 import type { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
 import { getShowcasePostResolveRouteResponse } from '@/lib/showcase-post-resolve-route-adapter-service';
+import { postSaverNoticeRouteResponse } from '@/lib/saver-notice-route-adapter-service';
+import { postShowcaseSaveRouteResponse } from '@/lib/showcase-save-route-adapter-service';
+import type { ShowcaseSaveResponseBody } from '@/lib/showcase-save-service';
 import {
   parseShowcaseSharePayloadForRoute,
   shareShowcasePostForRoute,
@@ -152,6 +156,7 @@ const expectedEndpointKeys = [
   'deletePostComment',
   'setCreatorFollowing',
   'saveShowcasePost',
+  'recordSaverNotice',
   'remixShowcasePost',
   'shareShowcasePost',
   'recordShareVisit',
@@ -523,6 +528,79 @@ describe('shared mobile API v1 contract fixture', () => {
     await expect(probe(null)).resolves.toEqual(endpoint.responseVariants.emptyLane);
   });
 
+  // A save names its saver only when the app says it told them first: the field
+  // the app sends is the one the route reads, and anything else stays unnamed.
+  it('reads the save request the fixture pins, naming the saver only for its flag', async () => {
+    const endpoint = mobileApiContract.endpoints.saveShowcasePost;
+    const saveShowcasePostForRoute = vi.fn(async () => ({
+      ok: true as const,
+      body: endpoint.response as ShowcaseSaveResponseBody,
+    }));
+    const post = (body: unknown) => postShowcaseSaveRouteResponse({
+      request: new Request('http://localhost/api/showcase/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        createUserClient: () => ({
+          auth: { getUser: vi.fn(async () => ({ data: { user: { id: 'viewer-1' } }, error: null })) },
+        }) as unknown as SupabaseClient,
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0, resetAt: '2026-10-19T10:00:00.000Z',
+        })),
+        runAfterResponse: vi.fn(),
+        saveShowcasePostForRoute,
+      },
+    });
+
+    const response = await post(endpoint.request);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(endpoint.response);
+    expect(saveShowcasePostForRoute).toHaveBeenLastCalledWith(expect.objectContaining({
+      actorUserId: 'viewer-1',
+      referenceId: endpoint.request.postId,
+      requestedSaveState: endpoint.request.shouldSave,
+      creatorSeesSaver: true,
+    }));
+
+    await post({ postId: endpoint.request.postId, shouldSave: endpoint.request.shouldSave });
+    expect(saveShowcasePostForRoute).toHaveBeenLastCalledWith(expect.objectContaining({
+      creatorSeesSaver: false,
+      saverNotYetTold: false,
+    }));
+
+    // A save made while its saver is being told: the creator hears nothing of it.
+    await post(endpoint.requestVariants.notYetTold);
+    expect(saveShowcasePostForRoute).toHaveBeenLastCalledWith(expect.objectContaining({
+      creatorSeesSaver: false,
+      saverNotYetTold: true,
+    }));
+  });
+
+  // The record is read with the profile (`saverNoticeSeen`); the route only writes it.
+  it('records that the account was told, as the fixture pins', async () => {
+    const dependencies = {
+      createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+      createUserClient: () => ({
+        auth: { getUser: vi.fn(async () => ({ data: { user: { id: 'viewer-1' } }, error: null })) },
+      }) as unknown as SupabaseClient,
+      enforceBackendRateLimit: vi.fn(async () => ({
+        allowed: true, limit: 20, remaining: 19, retryAfterSeconds: 0, resetAt: '2026-10-19T10:00:00.000Z',
+      })),
+      recordSaverNoticeSeen: vi.fn(async () => true),
+    };
+    const request = new Request('http://localhost/api/profile/saver-notice', { method: 'POST' });
+
+    const recorded = await postSaverNoticeRouteResponse({ request, dependencies });
+    expect(recorded.status).toBe(200);
+    expect(recorded.headers.get('Cache-Control')).toBe(mobileApiContract.endpoints.recordSaverNotice.cacheControl);
+    await expect(recorded.json()).resolves.toEqual(mobileApiContract.endpoints.recordSaverNotice.response);
+    expect(dependencies.recordSaverNoticeSeen).toHaveBeenCalledWith(expect.anything(), 'viewer-1');
+    expect(mobileApiContract.endpoints).not.toHaveProperty('getSaverNotice');
+  });
+
   // C14 (product decision 14): the app reports a shared link it opened on the
   // share route, with the link's surface and no channel.
   it('records a share visit from the request the fixture pins, and refuses in its words', async () => {
@@ -684,6 +762,53 @@ describe('shared mobile API v1 contract fixture', () => {
       promotionalCredits: profile.promotionalCredits,
       marketplaceSpendableCredits: profile.marketplaceSpendableCredits,
     });
+  });
+
+  // The app starts its saver notice from the profile it loads at launch, so
+  // the read carries the account's record and the app never asks on its own.
+  it("answers the profile read with the account's saver notice record, as the fixture pins", async () => {
+    const endpoint = mobileApiContract.endpoints.getProfile;
+    const pinned = endpoint.response;
+    const storedRow = (saverNoticeSeenAt: string | null) => ({
+      id: pinned.id,
+      username: pinned.username,
+      display_name: pinned.displayName,
+      bio: pinned.bio,
+      avatar_url: pinned.avatarUrl,
+      cover_url: pinned.coverUrl,
+      website_url: pinned.websiteUrl,
+      twitter_handle: pinned.twitterHandle,
+      instagram_handle: pinned.instagramHandle,
+      tiktok_handle: pinned.tiktokHandle,
+      location: pinned.location,
+      credits: pinned.credits,
+      promotional_credits: pinned.promotionalCredits,
+      saver_notice_seen_at: saverNoticeSeenAt,
+    });
+    const read = (row: ReturnType<typeof storedRow>) => getProfileRouteResult({
+      request: new Request(`http://localhost${endpoint.path}`),
+      dependencies: {
+        createUserClient: () => ({
+          auth: { getUser: vi.fn(async () => ({ data: { user: { id: pinned.id } }, error: null })) },
+        }) as unknown as SupabaseClient,
+        createServiceClient: () => ({
+          from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }) }),
+          rpc: async () => ({ data: null, error: null }),
+        }) as unknown as SupabaseClient,
+      },
+    });
+
+    const untold = await read(storedRow(null));
+    expect(untold.status).toBe(200);
+    expect(untold.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
+    // Field for field, but the suggested handle the server makes for every account.
+    expect(untold.body).toMatchObject(Object.fromEntries(
+      Object.entries(pinned).filter(([field]) => field !== 'suggestedUsername'),
+    ));
+    expect(untold.body).toHaveProperty('saverNoticeSeen', pinned.saverNoticeSeen);
+
+    const told = await read(storedRow('2026-10-19T09:00:00.000Z'));
+    expect(told.body).toHaveProperty('saverNoticeSeen', true);
   });
 
   // Both answers of a credit unlock say what stays spendable, and the refusal

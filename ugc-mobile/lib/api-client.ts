@@ -368,6 +368,23 @@ export type OwnerPostsQuery = {
 export interface SaveShowcasePostOptions {
   shouldSave: boolean;
   sourceSurface?: string;
+  /**
+   * Lets the creator's alert name whoever saved: the person was told before
+   * this tap. Only ever set from `creatorSeesSaverFields` (lib/saver-notice.ts):
+   * the server takes it as word that they were told.
+   */
+  creatorSeesSaver?: true;
+  /**
+   * The person is being told now, at this tap or while the notice is up: the
+   * creator hears nothing of this save. Only ever set from
+   * `creatorSeesSaverFields`.
+   */
+  saverNotYetTold?: true;
+}
+
+/** Whether the account has been told that creators can see who saved its posts. */
+export interface SaverNoticeResponse {
+  seen: boolean;
 }
 
 export interface ShareShowcasePostOptions {
@@ -1417,8 +1434,12 @@ export function createApiClient({
           postId,
           shouldSave: options.shouldSave,
           ...(options.sourceSurface ? { sourceSurface: options.sourceSurface } : {}),
+          ...(options.creatorSeesSaver ? { creatorSeesSaver: true } : {}),
+          ...(options.saverNotYetTold ? { saverNotYetTold: true } : {}),
         }),
       }),
+    recordSaverNotice: () =>
+      request<SaverNoticeResponse>('/api/profile/saver-notice', { method: 'POST' }),
     remixShowcasePost: (postId: string) =>
       request<{ success: boolean; redirectTo?: string; prefill?: { prompt?: string; settings?: unknown } }>('/api/showcase/remix', {
         method: 'POST',

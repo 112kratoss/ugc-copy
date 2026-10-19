@@ -281,6 +281,11 @@
       "path": "/api/showcase/save",
       "auth": "required"
     },
+    "recordSaverNotice": {
+      "method": "POST",
+      "path": "/api/profile/saver-notice",
+      "auth": "required"
+    },
     "remixShowcasePost": {
       "method": "POST",
       "path": "/api/showcase/remix",

@@ -417,6 +417,11 @@ describe('moderation service', () => {
       blocked_user_id: CREATOR_ID,
     }]);
     expect(client.state.follows).toEqual([]);
+    // Neither stays named in the other's Alerts as having saved their posts:
+    // the block's own insert removes those alerts (a user_blocks trigger), so
+    // the route asks for nothing beyond its rate limit.
+    expect(client.rpc).toHaveBeenCalledTimes(1);
+    expect(client.rpc).toHaveBeenCalledWith('check_backend_rate_limit', expect.anything());
     expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });
 

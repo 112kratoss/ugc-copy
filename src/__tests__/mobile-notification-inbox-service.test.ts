@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  MOBILE_NOTIFICATION_INBOX_FILTER_COLUMNS,
+  MOBILE_NOTIFICATION_INBOX_SELECT,
   getMobileNotificationInboxForRoute,
   markAllMobileNotificationsReadForRoute,
   markMobileNotificationsReadForRoute,
@@ -45,6 +47,7 @@ function createInboxClient({
 } = {}) {
   const listQuery = {
     eq: vi.fn(() => listQuery),
+    is: vi.fn(() => listQuery),
     order: vi.fn(() => listQuery),
     limit: vi.fn(() => listQuery),
     lt: vi.fn(() => listQuery),
@@ -72,6 +75,7 @@ function createInboxClient({
   };
   const unreadQuery = {
     eq: vi.fn(() => unreadQuery),
+    is: vi.fn(() => unreadQuery),
     ...resolvedQuery({ count: 7, data: null, error: unreadError }),
   };
   const listSelect = vi.fn<(fields: string) => typeof listQuery>(() => listQuery);
@@ -212,6 +216,22 @@ describe('mobile notification inbox service', () => {
     expect(inbox.listQuery.limit).toHaveBeenCalledWith(80);
     expect(inbox.listQuery.lt).toHaveBeenCalledWith('last_event_at', '2026-06-22T06:02:00.000Z');
     expect(inbox.unreadQuery.eq).toHaveBeenCalledWith('is_read', false);
+  });
+
+  it('reads the list and the unread count by owner alone, in the columns the owner may read', async () => {
+    // A named save that was unsaved, or one between two accounts that blocked
+    // each other, is deleted with its save, not hidden in the table: there is
+    // nothing for Alerts to filter out.
+    const inbox = createInboxClient();
+
+    await getMobileNotificationInboxForRoute({ userSupabase: inbox.client });
+
+    expect(inbox.listQuery.eq.mock.calls).toEqual([['user_id', 'user-1']]);
+    expect(inbox.unreadQuery.eq.mock.calls).toEqual([['user_id', 'user-1'], ['is_read', false]]);
+    expect(inbox.listQuery.is).not.toHaveBeenCalled();
+    expect(inbox.unreadQuery.is).not.toHaveBeenCalled();
+    expect(inbox.listSelect).toHaveBeenCalledWith(MOBILE_NOTIFICATION_INBOX_SELECT);
+    expect(MOBILE_NOTIFICATION_INBOX_FILTER_COLUMNS).toEqual(['user_id']);
   });
 
   // Marking an alert read writes its row, and every write stamps updated_at. An

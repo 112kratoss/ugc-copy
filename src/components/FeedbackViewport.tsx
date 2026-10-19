@@ -1,14 +1,18 @@
 'use client';
 
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 
 import {
   dismissToast,
   readFeedbackSnapshot,
   readServerFeedbackSnapshot,
+  readServerToastHost,
+  readToastHost,
   resolveConfirmation,
   subscribeToFeedback,
+  subscribeToToastHost,
   type PendingConfirmation,
   type ToastRecord,
 } from './feedback-state';
@@ -19,6 +23,11 @@ import {
  *
  * Shared by public and authenticated routes, so the layout classes live in
  * globals.css rather than as responsive utilities.
+ *
+ * While a dialog hosts the toasts (`setToastHost`: the reel), they are drawn
+ * inside it, where a screen reader can reach them past its `aria-modal`, its
+ * focus order includes them, and `.ui-toast-viewport-in-dialog` places them
+ * below its header and under its ⋯ menu.
  */
 export default function FeedbackViewport() {
   const { toasts, confirmation } = useSyncExternalStore(
@@ -26,14 +35,24 @@ export default function FeedbackViewport() {
     readFeedbackSnapshot,
     readServerFeedbackSnapshot,
   );
+  const host = useSyncExternalStore(subscribeToToastHost, readToastHost, readServerToastHost);
+
+  const viewport = (
+    <div
+      className={host ? 'ui-toast-viewport ui-toast-viewport-in-dialog' : 'ui-toast-viewport'}
+      role="status"
+      aria-live="polite"
+      aria-atomic="false"
+    >
+      {toasts.map((toast) => (
+        <Toast key={toast.id} toast={toast} />
+      ))}
+    </div>
+  );
 
   return (
     <>
-      <div className="ui-toast-viewport" role="status" aria-live="polite" aria-atomic="false">
-        {toasts.map((toast) => (
-          <Toast key={toast.id} toast={toast} />
-        ))}
-      </div>
+      {host ? createPortal(viewport, host) : viewport}
       {confirmation ? <ConfirmDialog confirmation={confirmation} /> : null}
     </>
   );
@@ -51,19 +70,140 @@ function ToastIcon({ tone }: { tone: ToastRecord['tone'] }) {
   return <Info className="h-4 w-4 shrink-0 text-zinc-300" aria-hidden="true" />;
 }
 
-function Toast({ toast }: { toast: ToastRecord }) {
+/** How often a counting in-view-only toast looks again at what is drawn over it. */
+const TOAST_COVER_CHECK_MS = 400;
+
+/**
+ * Whether something is drawn over the toast:
+ * - another modal dialog: any `aria-modal` one that does not hold the toast (a
+ *   confirmation, the reel's reference preview), which a screen reader cannot
+ *   reach past either; the dialog holding it (the reel) does not count;
+ * - full screen: the browser's top layer, or iOS Safari's own video player;
+ * - anything else over its words, sampled across them (an open menu, such as
+ *   the reel's ⋯ on a phone).
+ */
+function isToastCovered(toast: HTMLElement | null, videoFullScreen: boolean) {
+  if (!toast) return true;
+  if (Array.from(document.querySelectorAll('[aria-modal="true"]')).some((dialog) => !dialog.contains(toast))) {
+    return true;
+  }
+  const fullScreen = document.fullscreenElement;
+  if (videoFullScreen || (fullScreen && !fullScreen.contains(toast))) return true;
+
+  const words = toast.querySelector('p') ?? toast;
+  const box = words.getBoundingClientRect();
+  if (typeof document.elementFromPoint !== 'function' || box.width === 0 || box.height === 0) return false;
+  const y = box.top + box.height / 2;
+  return [0.05, 0.5, 0.95].some((across) => {
+    const drawn = document.elementFromPoint(box.left + box.width * across, y);
+    return drawn !== null && !toast.contains(drawn);
+  });
+}
+
+/**
+ * Whether a toast can be seen now: its window has the focus (read when it
+ * mounts, since a save's answer can arrive after the viewer has gone to
+ * another window) and nothing is drawn over it (`isToastCovered`), looked at
+ * again whenever the page changes, the browser goes full screen or out of it,
+ * and every `TOAST_COVER_CHECK_MS` (a menu can slide over it without a change
+ * the observer hears). Followed only while `enabled`.
+ */
+function useToastInView(enabled: boolean, toastRef: RefObject<HTMLElement | null>) {
+  const [windowFocused, setWindowFocused] = useState(() => !enabled || document.hasFocus());
+  const [covered, setCovered] = useState(false);
+
   useEffect(() => {
-    const timeout = window.setTimeout(() => dismissToast(toast.id), toast.durationMs);
-    return () => window.clearTimeout(timeout);
-  }, [toast.durationMs, toast.id]);
+    if (!enabled) return undefined;
+    let videoFullScreen = false;
+    const blur = () => setWindowFocused(false);
+    const focus = () => setWindowFocused(true);
+    const check = () => setCovered(isToastCovered(toastRef.current, videoFullScreen));
+    // iOS Safari plays a video full screen in its own player; the events fire
+    // on the video and do not bubble.
+    const videoEnters = () => {
+      videoFullScreen = true;
+      check();
+    };
+    const videoLeaves = () => {
+      videoFullScreen = false;
+      check();
+    };
+    window.addEventListener('blur', blur);
+    window.addEventListener('focus', focus);
+    document.addEventListener('fullscreenchange', check);
+    document.addEventListener('webkitbeginfullscreen', videoEnters, true);
+    document.addEventListener('webkitendfullscreen', videoLeaves, true);
+    check();
+    const observer = new MutationObserver(check);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['aria-modal', 'class', 'style', 'hidden', 'open'],
+    });
+    const interval = window.setInterval(check, TOAST_COVER_CHECK_MS);
+    return () => {
+      window.removeEventListener('blur', blur);
+      window.removeEventListener('focus', focus);
+      document.removeEventListener('fullscreenchange', check);
+      document.removeEventListener('webkitbeginfullscreen', videoEnters, true);
+      document.removeEventListener('webkitendfullscreen', videoLeaves, true);
+      observer.disconnect();
+      window.clearInterval(interval);
+    };
+  }, [enabled, toastRef]);
+
+  return !enabled || (windowFocused && !covered);
+}
+
+function Toast({ toast }: { toast: ToastRecord }) {
+  const elementRef = useRef<HTMLDivElement | null>(null);
+  const inViewOnly = toast.inViewOnly === true;
+  const inView = useToastInView(inViewOnly, elementRef);
+
+  // When it first appeared on this page, for its close guard.
+  const shownAtRef = useRef<number | null>(null);
+  useEffect(() => {
+    shownAtRef.current ??= Date.now();
+  }, []);
+
+  // Its time, counted while it can be seen: what ran before a pause is kept.
+  const remainingRef = useRef(toast.durationMs);
+  useEffect(() => {
+    if (!inView) return undefined;
+    const startedAt = Date.now();
+    const timeout = window.setTimeout(() => dismissToast(toast.id, 'expired'), remainingRef.current);
+    return () => {
+      window.clearTimeout(timeout);
+      remainingRef.current = Math.max(0, remainingRef.current - (Date.now() - startedAt));
+    };
+  }, [inView, toast.id]);
+
+  // Leaving the page takes an in-view-only toast down unread, as leaving the
+  // app takes the app's notice down.
+  useEffect(() => {
+    if (!inViewOnly) return undefined;
+    const leave = () => {
+      if (document.visibilityState === 'hidden') dismissToast(toast.id, 'interrupted');
+    };
+    leave();
+    document.addEventListener('visibilitychange', leave);
+    return () => document.removeEventListener('visibilitychange', leave);
+  }, [inViewOnly, toast.id]);
+
+  const close = () => {
+    const shownAt = shownAtRef.current;
+    if (toast.closeGuardMs && shownAt !== null && Date.now() - shownAt < toast.closeGuardMs) return;
+    dismissToast(toast.id);
+  };
 
   return (
-    <div className={`ui-toast ${TOAST_TONE_CLASS[toast.tone]}`}>
+    <div ref={elementRef} className={`ui-toast ${TOAST_TONE_CLASS[toast.tone]}`}>
       <ToastIcon tone={toast.tone} />
       <p className="min-w-0 flex-1 text-sm leading-5">{toast.message}</p>
       <button
         type="button"
-        onClick={() => dismissToast(toast.id)}
+        onClick={close}
         aria-label="Dismiss notification"
         className="ui-focus-ring -m-1 shrink-0 rounded-full p-1 text-current opacity-70 transition hover:opacity-100"
       >

@@ -4,27 +4,57 @@
 import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { SaverNoticeFields } from '@/lib/saver-notice';
 
 import type { ShowcaseFeedResponse } from '../lib/types';
 
-const mocks = vi.hoisted(() => ({
-  saveShowcasePost: vi.fn(),
-  routerPush: vi.fn(),
-  hapticLight: vi.fn(),
-  hapticError: vi.fn(),
-  announce: vi.fn(),
-  user: { id: 'user-1' } as { id: string } | null,
-}));
+const mocks = vi.hoisted(() => {
+  const state = {
+    saveShowcasePost: vi.fn(),
+    routerPush: vi.fn(),
+    hapticLight: vi.fn(),
+    hapticError: vi.fn(),
+    announce: vi.fn(),
+    announceWithOptions: vi.fn(),
+    os: 'ios' as 'ios' | 'android',
+    user: { id: 'user-1' } as { id: string } | null,
+    /** The real notice module, for the cases that need it to tell someone. */
+    realSaverNotice: null as null | typeof import('@/lib/saver-notice'),
+    useRealSaverNotice: false,
+    // An account that has been told already, unless a case says otherwise.
+    creatorSeesSaverFields: vi.fn((accountId: string | null | undefined, shouldSave: boolean): SaverNoticeFields => {
+      if (state.useRealSaverNotice) return state.realSaverNotice!.creatorSeesSaverFields(accountId, shouldSave);
+      return accountId && shouldSave ? { creatorSeesSaver: true as const } : {};
+    }),
+  };
+  return state;
+});
 
 vi.mock('expo-router', () => ({ router: { push: mocks.routerPush } }));
 vi.mock('@/lib/haptics', () => ({ haptic: { light: mocks.hapticLight, error: mocks.hapticError } }));
 vi.mock('react-native', () => ({
-  AccessibilityInfo: { announceForAccessibility: mocks.announce },
+  AccessibilityInfo: {
+    announceForAccessibility: mocks.announce,
+    announceForAccessibilityWithOptions: mocks.announceWithOptions,
+  },
+  Platform: {
+    get OS() {
+      return mocks.os;
+    },
+  },
 }));
 vi.mock('@/lib/auth', () => ({
   useAuth: () => ({ api: { saveShowcasePost: mocks.saveShowcasePost }, user: mocks.user }),
 }));
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: { getItem: vi.fn(async () => null), setItem: vi.fn(async () => undefined), removeItem: vi.fn(async () => undefined) },
+}));
+vi.mock('@/lib/saver-notice', async (importOriginal) => {
+  mocks.realSaverNotice = await importOriginal<typeof import('@/lib/saver-notice')>();
+  return { creatorSeesSaverFields: mocks.creatorSeesSaverFields };
+});
 
 import { useShowcaseSaveMutation } from '../lib/use-showcase-save-mutation';
 
@@ -115,6 +145,148 @@ async function mountSaveSurfaces(surfaceCount = 1) {
 afterEach(() => {
   vi.clearAllMocks();
   mocks.user = { id: 'user-1' };
+  mocks.os = 'ios';
+});
+
+describe('what a save from Home sends', () => {
+  it('asks the saver notice for the signed-in account and sends exactly what it gives', async () => {
+    mocks.saveShowcasePost.mockImplementation(async (_postId: string, options: { shouldSave: boolean }) => ({
+      isSaved: options.shouldSave,
+      saveCount: options.shouldSave ? 5 : 4,
+    }));
+    // The first save is the one that tells them, so it tells the creator nothing.
+    mocks.creatorSeesSaverFields.mockReturnValueOnce({ saverNotYetTold: true });
+    const surface = await mountSaveSurfaces();
+
+    await surface.tap(false, 4);
+    await surface.tap(true, 5);
+    await surface.tap(false, 4);
+
+    expect(mocks.creatorSeesSaverFields.mock.calls).toEqual([['user-1', true], ['user-1', false], ['user-1', true]]);
+    expect(mocks.saveShowcasePost.mock.calls).toEqual([
+      [surface.postId, { shouldSave: true, sourceSurface: 'mobile-home-feed', saverNotYetTold: true }],
+      [surface.postId, { shouldSave: false, sourceSurface: 'mobile-home-feed' }],
+      [surface.postId, { shouldSave: true, sourceSurface: 'mobile-home-feed', creatorSeesSaver: true }],
+    ]);
+
+    surface.cleanup();
+  });
+});
+
+// Review finding #11: a save that brings the saver notice up must not cut
+// VoiceOver off while it reads the notice, so "Saved" waits behind it.
+describe('what a save from Home says to a screen reader', () => {
+  function answerEveryTap() {
+    mocks.saveShowcasePost.mockImplementation(async (_postId: string, options: { shouldSave: boolean }) => ({
+      isSaved: options.shouldSave,
+      saveCount: options.shouldSave ? 5 : 4,
+    }));
+  }
+
+  it('queues "Saved" and "Removed from saved" behind what VoiceOver is reading, on iOS', async () => {
+    mocks.os = 'ios';
+    answerEveryTap();
+    const surface = await mountSaveSurfaces();
+
+    await surface.tap(false, 4);
+    await surface.tap(true, 5);
+
+    expect(mocks.announceWithOptions.mock.calls).toEqual([
+      ['Saved', { queue: true }],
+      ['Removed from saved', { queue: true }],
+    ]);
+    expect(mocks.announce).not.toHaveBeenCalled();
+
+    surface.cleanup();
+  });
+
+  it('announces them as before on Android, which has no queue', async () => {
+    mocks.os = 'android';
+    answerEveryTap();
+    const surface = await mountSaveSurfaces();
+
+    await surface.tap(false, 4);
+    await surface.tap(true, 5);
+
+    expect(mocks.announce.mock.calls).toEqual([['Saved'], ['Removed from saved']]);
+    expect(mocks.announceWithOptions).not.toHaveBeenCalled();
+
+    surface.cleanup();
+  });
+});
+
+// Review finding #21: what a save tells its creator about who saved is
+// decided at the tap. Saves leave one at a time, so a save tapped while the
+// notice was telling the person can leave after they read it, and must still
+// tell the creator nothing.
+describe('a save tapped while an earlier one is on the wire and the notice is up', () => {
+  let unsubscribe = () => {};
+
+  beforeEach(() => {
+    mocks.useRealSaverNotice = true;
+    // The root layout's bar, which draws the notice.
+    unsubscribe = mocks.realSaverNotice!.subscribeToSaverNotice(() => {});
+  });
+
+  afterEach(() => {
+    unsubscribe();
+    mocks.realSaverNotice!.resetSaverNoticeForTests();
+    mocks.useRealSaverNotice = false;
+  });
+
+  /** One feed holding the posts, so each tap saves a different one. */
+  async function mountFeed(postIds: string[]) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    client.setQueryData<InfiniteData<ShowcaseFeedResponse>>(FEED_KEY, {
+      pageParams: [null],
+      pages: [{ items: postIds.map((id) => ({ id, isSaved: false, saveCount: 0 })) }],
+    } as never);
+    let toggle!: Toggle;
+    function Probe() {
+      toggle = useShowcaseSaveMutation().toggleSave;
+      return null;
+    }
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => {
+      tree = renderer.create(React.createElement(QueryClientProvider, { client }, React.createElement(Probe)));
+    });
+    return {
+      tap: async (postId: string) => {
+        await act(async () => { toggle({ postId, isSaved: false, saveCount: 0 }); });
+      },
+      cleanup: () => { tree.unmount(); client.clear(); },
+    };
+  }
+
+  it('sends it telling the creator nothing after the notice was read, and the save tapped after that names the saver', async () => {
+    const notice = mocks.realSaverNotice!;
+    const pending = deferResponses();
+    const [first, second, third] = [nextPostId(), nextPostId(), nextPostId()];
+    const feed = await mountFeed([first, second, third]);
+
+    await feed.tap(first);
+    expect(notice.readSaverNotice()).toMatchObject({ accountId: 'user-1' });
+    await feed.tap(second);
+    // One request on the wire; the second waits behind it.
+    expect(mocks.saveShowcasePost).toHaveBeenCalledTimes(1);
+
+    // OK on the notice while the second waits; then a third save.
+    await act(async () => { notice.settleSaverNotice(notice.readSaverNotice()!.id, 'closed'); });
+    expect(notice.readSaverNotice()).toBeNull();
+    await feed.tap(third);
+    expect(mocks.saveShowcasePost).toHaveBeenCalledTimes(1);
+
+    await act(async () => { pending[0].resolve({ isSaved: true, saveCount: 1 }); });
+    await act(async () => { pending[1].resolve({ isSaved: true, saveCount: 1 }); });
+
+    expect(mocks.saveShowcasePost.mock.calls).toEqual([
+      [first, { shouldSave: true, sourceSurface: 'mobile-home-feed', saverNotYetTold: true }],
+      [second, { shouldSave: true, sourceSurface: 'mobile-home-feed', saverNotYetTold: true }],
+      [third, { shouldSave: true, sourceSurface: 'mobile-home-feed', creatorSeesSaver: true }],
+    ]);
+
+    feed.cleanup();
+  });
 });
 
 describe('two quick taps on one save button', () => {

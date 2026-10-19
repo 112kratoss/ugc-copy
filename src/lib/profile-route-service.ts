@@ -94,6 +94,7 @@ function buildStarterProfileApiResponse(user: ProfileRouteUser): ProfileApiRespo
     tiktokHandle: null,
     location: null,
     credits: null,
+    saverNoticeSeen: false,
   };
 }
 

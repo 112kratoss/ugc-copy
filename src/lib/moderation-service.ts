@@ -364,6 +364,11 @@ export async function setUserBlockForRoute({
     if (outgoingFollow.error || incomingFollow.error) {
       logBackendError('user_was_blocked_but_follow_cleanup_failed', { error: outgoingFollow.error ?? incomingFollow.error });
     }
+
+    // The upsert's own trigger (user_blocks' remove_follows_for_user_block)
+    // has already removed, in its transaction, the follows both ways and the
+    // alerts naming either as having saved the other's posts; the deletes
+    // above are a fallback and normally find nothing.
   } else {
     const { error } = await adminSupabase
       .from('user_blocks')

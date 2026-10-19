@@ -333,11 +333,12 @@ describe('shareShowcasePostForRoute', () => {
 describe('post share notifications', () => {
   // The real notifier runs here against held notification history: one grouped
   // notification, to the creator whose post was shared. Its key ends in the
-  // quarter-hour it was sent in.
+  // quarter-hour it was sent in. It says "Someone", so it keeps no sharer's id
+  // for the creator to look up.
   const shareAggregationKey = expect.stringMatching(/^post-social:post_shared:creator-1:post-1:\d+$/);
   const shareNotification = expect.objectContaining({
     user_id: 'creator-1',
-    actor_user_id: 'user-1',
+    actor_user_id: null,
     type: 'post_shared',
     category: 'social',
     title: 'Someone shared your post',

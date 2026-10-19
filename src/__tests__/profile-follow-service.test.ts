@@ -348,6 +348,24 @@ describe('profile follow service', () => {
     });
   });
 
+  it('names a follower by the generated handle every account starts with, since follows are public', async () => {
+    // Save alerts never name a generated handle; a follow alert does, and
+    // opens the follower's page by it.
+    const client = createClient({ profileRows: [{ id: 'follower-1', username: 'creator-1a2b3c4d' }] });
+
+    await updateCreatorFollowForRoute({
+      adminSupabase: client.client,
+      followerId: 'follower-1',
+      body: { followingId: 'creator-1', following: true },
+    });
+
+    expect(notifyCreatorFollowedMock).toHaveBeenCalledWith(client.client, {
+      followerUserId: 'follower-1',
+      followingUserId: 'creator-1',
+      followerUsername: 'creator-1a2b3c4d',
+    });
+  });
+
   it('does not allow a follow across a block in either direction', async () => {
     const client = createClient({
       userBlocks: [{ blocker_user_id: 'creator-1', blocked_user_id: 'follower-1' }],

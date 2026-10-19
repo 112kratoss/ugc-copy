@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseClient from '@/app/showcase/ShowcaseClient';
+import { resetSaverNoticeForTests } from '@/components/saver-notice';
 import {
   FEED_REMOVAL_UNDO_MS,
   flushShowcaseFeedEvents,
@@ -43,6 +44,7 @@ const authState = vi.hoisted(() => ({
   user: { id: 'user-1' } as { id: string } | null,
   credits: 25,
   isLoading: false,
+  saverNoticeRecord: null as { userId: string; seen: boolean } | null,
 }));
 
 vi.mock('next/navigation', () => ({
@@ -195,6 +197,7 @@ describe('ShowcaseClient save actions', () => {
     authState.user = { id: 'user-1' };
     authState.credits = 25;
     authState.isLoading = false;
+    authState.saverNoticeRecord = null;
     intersectionObservers.length = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -265,6 +268,8 @@ describe('ShowcaseClient save actions', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    window.localStorage.removeItem('magicbooklet:saver-notice:v2:user-1');
+    resetSaverNoticeForTests();
   });
 
   it('optimistically saves a showcase card with accessible pressed state', async () => {
@@ -272,6 +277,9 @@ describe('ShowcaseClient save actions', () => {
       ok: true,
       json: async () => ({ success: true, isSaved: true, saveCount: 5, changed: true }),
     })));
+    // This viewer was told on an earlier page, as the page was drawn knowing,
+    // so the save may name them.
+    authState.saverNoticeRecord = { userId: 'user-1', seen: true };
 
     renderShowcase(createShowcaseItem());
 
@@ -293,6 +301,7 @@ describe('ShowcaseClient save actions', () => {
         postId: 'post-1',
         shouldSave: true,
         sourceSurface: 'showcase',
+        creatorSeesSaver: true,
       }),
     }));
     await waitFor(() => {

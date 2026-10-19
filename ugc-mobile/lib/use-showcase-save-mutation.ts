@@ -1,11 +1,12 @@
 import { useMutation, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { useCallback } from 'react';
-import { AccessibilityInfo } from 'react-native';
 
 import { useAuth } from '@/lib/auth';
 import { adjustProfileStats } from '@/lib/profile-stats';
+import { announceQueued } from '@/lib/accessibility-announcement';
 import { haptic } from '@/lib/haptics';
+import { creatorSeesSaverFields, type SaverNoticeFields } from '@/lib/saver-notice';
 import {
   applyShowcaseSaveStateToInfiniteFeed,
   applyShowcaseSaveStateToPostResponse,
@@ -23,6 +24,12 @@ interface SaveVariables {
   intentSeq: number;
   /** Told the state the server settled on, unless a later tap overtook this one. */
   onSaved?: (isSaved: boolean) => void;
+  /**
+   * What this tap's save tells its creator about who saved, decided at the
+   * tap: the request may leave much later, behind the other saves in the
+   * queue, and must not name someone told only after tapping.
+   */
+  saverFields?: SaverNoticeFields;
 }
 
 /**
@@ -62,8 +69,8 @@ export function useShowcaseSaveMutation({
 
   const mutation = useMutation({
     scope: SHOWCASE_SAVE_MUTATION_SCOPE,
-    mutationFn: ({ postId, shouldSave }: SaveVariables) =>
-      api.saveShowcasePost(postId, { shouldSave, sourceSurface }),
+    mutationFn: ({ postId, shouldSave, saverFields }: SaveVariables) =>
+      api.saveShowcasePost(postId, { shouldSave, sourceSurface, ...saverFields }),
     onMutate: (variables) => {
       reconcile({
         postId: variables.postId,
@@ -83,7 +90,8 @@ export function useShowcaseSaveMutation({
       });
       adjustProfileStats(queryClient, user?.id, { saved: variables.shouldSave ? -1 : 1 });
       haptic.error();
-      void AccessibilityInfo.announceForAccessibility(
+      // Queued on iOS, as "Saved" is: behind the saver notice the tap may have brought up.
+      announceQueued(
         variables.shouldSave
           ? 'Could not save. Please try again.'
           : 'Could not remove from saved. Please try again.'
@@ -101,7 +109,8 @@ export function useShowcaseSaveMutation({
         userId: user?.id,
         invalidateQueries: (filters) => queryClient.invalidateQueries(filters),
       });
-      void AccessibilityInfo.announceForAccessibility(result.isSaved ? 'Saved' : 'Removed from saved');
+      // Queued on iOS: the saver notice that may have just appeared is read first.
+      announceQueued(result.isSaved ? 'Saved' : 'Removed from saved');
       // After the guard above, as the reel's own: an overtaken tap does not
       // report itself to ranking. A failed one never gets here.
       variables.onSaved?.(result.isSaved);
@@ -140,12 +149,14 @@ export function useShowcaseSaveMutation({
     // function each time — which made the home feed's `renderCard` unstable and
     // defeated memoization of every cell. `mutate` itself is bound to the
     // observer and stable for the hook's lifetime.
+    const shouldSave = !options.isSaved;
     mutate({
       postId: options.postId,
       previousSaveCount: options.saveCount,
-      shouldSave: !options.isSaved,
+      shouldSave,
       intentSeq,
       onSaved: options.onSaved,
+      saverFields: creatorSeesSaverFields(user.id, shouldSave),
     });
   }, [authReturnTo, mutate, user]);
 

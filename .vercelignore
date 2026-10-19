@@ -17,3 +17,4 @@ ugc-mobile/*
 ugc-mobile/lib/*
 !ugc-mobile/lib/model-catalog
 !ugc-mobile/lib/media-upload
+!ugc-mobile/lib/saver-notice-policy

@@ -77,6 +77,38 @@ function resolveDependencies(
   };
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A post the saver may take their save off though it has left public view
+ * (made unlisted, private, archived or moderated since): the save is their own
+ * row, and taking it back, which also takes back any alert naming them, must
+ * not wait for the post to come back. Found only through their own save, so it
+ * reveals no other post.
+ */
+async function findOwnSavedPostReference(
+  serviceClient: SupabaseClient,
+  actorUserId: string,
+  referenceId: string,
+): Promise<PostReference | null> {
+  if (!UUID_PATTERN.test(referenceId)) return null;
+
+  const { data, error } = await serviceClient
+    .from('post_saves')
+    .select('post_id')
+    .eq('user_id', actorUserId)
+    .eq('post_id', referenceId)
+    .maybeSingle();
+
+  if (error) {
+    logBackendError('failed_to_find_own_saved_post', { error: error });
+    return null;
+  }
+
+  const postId = (data as { post_id?: unknown } | null)?.post_id;
+  return typeof postId === 'string' ? { id: postId, generation_id: null, user_id: null } : null;
+}
+
 async function isPostInteractionUnavailable({
   actorUserId,
   creatorUserId,
@@ -255,14 +287,31 @@ async function recordPostSaveEvent({
 
 export async function saveShowcasePostForRoute({
   actorUserId,
+  creatorSeesSaver = false,
   dependencies,
   referenceId,
   requestedSaveState,
   runAfterResponse,
+  saverNotYetTold = false,
   serviceClient,
   sourceSurface,
 }: {
   actorUserId: string;
+  /**
+   * The app this save came from had told this person that creators can see who
+   * saved before they tapped, so the creator's alert may name them by a handle
+   * they chose, once that telling is on record
+   * (`profiles.saver_notice_seen_at`, checked where the alert is written).
+   * Saves without it from apps that never say so stay "Someone", as every
+   * save was before.
+   */
+  creatorSeesSaver?: boolean;
+  /**
+   * The app is telling this person now, at this save or while the notice is
+   * still up: the creator is told nothing of it. "Someone saved your post"
+   * seconds before the first alert that names them would give them away.
+   */
+  saverNotYetTold?: boolean;
   dependencies?: Partial<ShowcaseSaveServiceDependencies>;
   referenceId: string;
   requestedSaveState: boolean | null;
@@ -276,11 +325,18 @@ export async function saveShowcasePostForRoute({
   sourceSurface: unknown;
 }): Promise<ShowcaseSaveServiceResult> {
   const resolvedDependencies = resolveDependencies(dependencies);
-  const post = await resolvedDependencies.findPublicPostReferenceByIdOrGenerationId(referenceId) as PostReference | null;
+  const publicPost = await resolvedDependencies.findPublicPostReferenceByIdOrGenerationId(referenceId) as PostReference | null;
+  // Anything but a save can be taking one back: a toggle on a post out of
+  // public view can only remove the saver's own row.
+  const post = publicPost ?? (requestedSaveState !== true
+    ? await findOwnSavedPostReference(serviceClient, actorUserId, referenceId)
+    : null);
   if (!post) {
     return { ok: false, status: 404, body: { error: 'Post not found' } };
   }
-  if (await isPostInteractionUnavailable({
+  // Taking a save back is let through a block: it touches only the saver's
+  // own row, and the alert naming them goes with that row.
+  if (requestedSaveState !== false && await isPostInteractionUnavailable({
     actorUserId,
     creatorUserId: post.user_id,
     dependencies: resolvedDependencies,
@@ -365,11 +421,13 @@ export async function saveShowcasePostForRoute({
     });
   }
 
-  if (isSaved && (requestedSaveState === null || changed)) {
+  if (isSaved && (requestedSaveState === null || changed) && !saverNotYetTold) {
     // The save is recorded; what is left is telling the creator. The first
-    // save of a post in a quarter-hour ends in a push request to Expo for
-    // their devices, and the app holds its later saves behind this answer.
-    // So the answer goes first wherever it can.
+    // alert about a post's saves in a quarter-hour ends in a push request to
+    // Expo for their devices (a named one after a hold), and the app holds its
+    // later saves behind this answer. So the answer goes first wherever it
+    // can. Whether the saver may be named is decided where the alert is
+    // written (`create_post_save_alert`): told on record, a handle they chose.
     await sendDeferrableNotification(
       runAfterResponse,
       () => resolvedDependencies.notifyPostSocialActivity(serviceClient, {
@@ -377,6 +435,7 @@ export async function saveShowcasePostForRoute({
         recipientUserId: post.user_id,
         actorUserId,
         postId: post.id,
+        ...(creatorSeesSaver ? { nameSaver: true } : {}),
       }),
     );
   }

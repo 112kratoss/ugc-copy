@@ -116,6 +116,26 @@ export const CREATOR_FOLLOW_MUTATION_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+/**
+ * Not a refusal: the push a post's save alert may send, named or not, keyed by
+ * creator and post and claimed only once an alert has been written anew. A
+ * creator's phone hears about one post's saves at most once a quarter-hour, as
+ * it did when every save alert was grouped; later alerts in that quarter-hour
+ * wait in Alerts.
+ */
+export const POST_SAVE_PUSH_RATE_LIMIT = {
+  scope: 'post-save:push',
+  limit: 1,
+  windowSeconds: 15 * 60,
+} as const;
+
+/** Recording that an account was told creators can see who saved: once per account, retried by each new device. */
+export const SAVER_NOTICE_RECORD_RATE_LIMIT = {
+  scope: 'saver-notice:record',
+  limit: 20,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const CREDIT_ORDER_RATE_LIMIT = {
   scope: 'credit-order:create',
   limit: 10,

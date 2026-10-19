@@ -12,6 +12,18 @@ export interface ToastRecord {
   tone: ToastTone;
   message: string;
   durationMs: number;
+  /**
+   * How long after it appears a press on its close button is ignored: a press
+   * that early was on its way to what sat there, not a reading of the toast.
+   */
+  closeGuardMs?: number;
+  /**
+   * Counts its time only while it can be seen: paused while the window is out
+   * of focus or another modal dialog is drawn over it, and taken down unread
+   * (`'interrupted'`) when the page is hidden. For a toast whose running out
+   * stands for its having been read (the saver notice).
+   */
+  inViewOnly?: true;
 }
 
 export interface ConfirmationRequest {
@@ -42,6 +54,10 @@ let snapshot: FeedbackSnapshot = EMPTY_SNAPSHOT;
 const listeners = new Set<Listener>();
 const confirmationResolvers = new Map<number, (confirmed: boolean) => void>();
 
+/** How a toast went: closed by the viewer, out of time, or taken down unread by the code that showed it. */
+export type ToastDismissal = 'closed' | 'expired' | 'interrupted';
+const toastDismissHandlers = new Map<number, (how: ToastDismissal) => void>();
+
 function commit(next: FeedbackSnapshot) {
   snapshot = next;
   listeners.forEach((listener) => listener());
@@ -58,13 +74,61 @@ export function readFeedbackSnapshot(): FeedbackSnapshot {
   return snapshot;
 }
 
+/**
+ * Whether anything draws this store right now (the root layout's
+ * `FeedbackViewport`). A toast pushed while nothing is subscribed is never
+ * seen.
+ */
+export function hasFeedbackViewport() {
+  return listeners.size > 0;
+}
+
+let toastHost: HTMLElement | null = null;
+const hostListeners = new Set<Listener>();
+
+/**
+ * The open dialog that draws the toasts while it is up (the reel), or null for
+ * the page. Inside an `aria-modal` dialog a toast drawn outside it is inert to
+ * a screen reader and out of the dialog's focus order; the dialog also places
+ * it clear of its own controls.
+ */
+export function setToastHost(element: HTMLElement | null) {
+  if (toastHost === element) return;
+  toastHost = element;
+  hostListeners.forEach((listener) => listener());
+}
+
+export function subscribeToToastHost(listener: Listener) {
+  hostListeners.add(listener);
+  return () => {
+    hostListeners.delete(listener);
+  };
+}
+
+export function readToastHost() {
+  return toastHost;
+}
+
+export function readServerToastHost(): HTMLElement | null {
+  return null;
+}
+
 /** The server and first client render must agree: nothing is showing. */
 export function readServerFeedbackSnapshot(): FeedbackSnapshot {
   return EMPTY_SNAPSHOT;
 }
 
-export function pushToast(toast: { tone: ToastTone; message: string; durationMs?: number }): number {
+export function pushToast(toast: {
+  tone: ToastTone;
+  message: string;
+  durationMs?: number;
+  closeGuardMs?: number;
+  inViewOnly?: boolean;
+  /** Told once, when the toast goes (not when tests reset the store). */
+  onDismiss?: (how: ToastDismissal) => void;
+}): number {
   const id = nextId++;
+  if (toast.onDismiss) toastDismissHandlers.set(id, toast.onDismiss);
   commit({
     ...snapshot,
     toasts: [
@@ -74,17 +138,22 @@ export function pushToast(toast: { tone: ToastTone; message: string; durationMs?
         tone: toast.tone,
         message: toast.message,
         durationMs: toast.durationMs ?? DEFAULT_TOAST_DURATION_MS,
+        ...(toast.closeGuardMs ? { closeGuardMs: toast.closeGuardMs } : {}),
+        ...(toast.inViewOnly ? { inViewOnly: true as const } : {}),
       },
     ],
   });
   return id;
 }
 
-export function dismissToast(id: number) {
+export function dismissToast(id: number, how: ToastDismissal = 'closed') {
   if (!snapshot.toasts.some((toast) => toast.id === id)) {
     return;
   }
   commit({ ...snapshot, toasts: snapshot.toasts.filter((toast) => toast.id !== id) });
+  const onDismiss = toastDismissHandlers.get(id);
+  toastDismissHandlers.delete(id);
+  onDismiss?.(how);
 }
 
 /**
@@ -130,5 +199,7 @@ export function resetFeedbackState() {
   for (const [id] of confirmationResolvers) {
     resolveConfirmation(id, false);
   }
+  toastDismissHandlers.clear();
+  setToastHost(null);
   commit(EMPTY_SNAPSHOT);
 }

@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { creatorSeesSaverFields, syncSaverNotice, type SaverNoticeFields } from './saver-notice';
+import { useAuth } from './AuthProvider';
+
 interface SaveablePostItem {
   id: string;
   generationId?: string | null;
@@ -55,6 +58,12 @@ interface SaveRun {
   /** The newest tap's, so a later request goes out as it would have. */
   accessToken: string;
   sourceSurface: string;
+  /**
+   * What the newest tap's save may tell its creator about who saved, decided
+   * when that tap was made: a request sent later must not name someone who was
+   * told only after tapping (`saver-notice.ts`).
+   */
+  saverFields: SaverNoticeFields;
 }
 
 function deriveSavedIds(items: SaveablePostItem[]) {
@@ -117,6 +126,7 @@ async function requestSave(id: string, run: SaveRun, shouldSave: boolean) {
       postId: id,
       shouldSave,
       sourceSurface: run.sourceSurface,
+      ...(shouldSave ? run.saverFields : {}),
     }),
   });
 
@@ -158,6 +168,16 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
     setItems(initialItems);
     setSavedItemIds(deriveSavedIds(initialItems));
   }, [initialItems]);
+
+  // Whether the signed-in account has been told, from the server as well as
+  // this browser, before its first tap needs the answer (`saver-notice.ts`),
+  // remembered per account, so a browser two people share tells each.
+  const { user, session, saverNoticeRecord } = useAuth();
+  const viewerId = user?.id ?? null;
+  const viewerToken = session?.access_token ?? null;
+  useEffect(() => {
+    syncSaverNotice(viewerId, viewerToken, saverNoticeRecord);
+  }, [viewerId, viewerToken, saverNoticeRecord]);
 
   useEffect(() => {
     if (!accessToken || savedStateLookupIds.length === 0) {
@@ -231,6 +251,8 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
     // From the heart the viewer sees: a lane change or the saved-state read
     // may have drawn it anew since this post's last tap.
     const wanted = !savedItemIds.has(id);
+    // Decided now, at the tap, whenever its request goes out.
+    const saverFields = creatorSeesSaverFields(viewerId, wanted, viewerToken);
     setSavedItemIds((previous) => updateSavedIds(previous, id, wanted));
     setItems((previous) => updateSaveCount(previous, id, wanted ? 1 : -1));
 
@@ -241,10 +263,11 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
       running.wanted = wanted;
       running.accessToken = accessToken;
       running.sourceSurface = actionSourceSurface;
+      running.saverFields = saverFields;
       return;
     }
 
-    const run: SaveRun = { wanted, accessToken, sourceSurface: actionSourceSurface };
+    const run: SaveRun = { wanted, accessToken, sourceSurface: actionSourceSurface, saverFields };
     runs.set(id, run);
     // What the server holds, as of the first tap and then of its last answer.
     let held = !wanted;

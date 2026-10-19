@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useState, type Ref } from 'react';
 import { MediaViewportScrollView as ScrollView } from '@/components/media-viewport-scroll-view';
 import { Image } from 'expo-image';
 import { Link } from 'expo-router';
@@ -56,6 +56,8 @@ type AppTextProps = Omit<TextProps, 'children' | 'numberOfLines' | 'selectable' 
   style?: StyleProp<TextStyle>;
   numberOfLines?: number;
   heading?: boolean;
+  /** The text itself, for a screen reader to be moved onto it. */
+  ref?: Ref<Text>;
 };
 
 function textRole(variant: TextVariant): TextStyle {
@@ -170,6 +172,7 @@ export function AppText({
   heading = false,
   accessibilityRole,
   maxFontSizeMultiplier,
+  ref,
   ...textProps
 }: AppTextProps) {
   const theme = useAppTheme();
@@ -183,6 +186,7 @@ export function AppText({
   return (
     <Text
       {...textProps}
+      ref={ref}
       accessibilityRole={accessibilityRole ?? (heading || isHeadingVariant(variant) ? 'header' : undefined)}
       maxFontSizeMultiplier={maxFontSizeMultiplier ?? variantScaleCap(variant)}
       selectable={isSelectable}

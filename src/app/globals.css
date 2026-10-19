@@ -73,6 +73,7 @@
 @source "../components/app-shell-nav.ts";
 @source "../components/feedback-state.ts";
 @source "../components/navigation-progress-state.ts";
+@source "../components/saver-notice.ts";
 @source "../components/templates/CreateTemplateRunClient.tsx";
 @source "../components/templates/TemplateCatalogClient.tsx";
 @source "../components/templates/TemplateDetailClient.tsx";
@@ -529,10 +530,13 @@ button:disabled,
  * Sits above the publish modal (z 80) and the generation notification stack
  * (z 70); the skip link (z 120) stays on top.
  */
+/* Below the app shell's top bar, never over its controls: a toast's close
+ * button there sat on the account button, where a press meant for the account
+ * closed the saver notice instead, which counts as having read it. */
 .ui-toast-viewport {
   pointer-events: none;
   position: fixed;
-  top: 1rem;
+  top: calc(var(--app-shell-topbar-height) + 0.75rem);
   left: 50%;
   z-index: 110;
   display: flex;
@@ -540,6 +544,16 @@ button:disabled,
   flex-direction: column;
   gap: 0.5rem;
   transform: translateX(-50%);
+}
+
+/* Toasts drawn inside a dialog that hosts them (the reel): below its 3.5rem
+ * header, clear of its close and ⋯ buttons, and under the header's layer
+ * (z 20), so the ⋯ menu hanging from it is drawn over a toast rather than a
+ * toast's close button over the menu's first row; above the reel's body
+ * (z 10). */
+.ui-toast-viewport-in-dialog {
+  top: calc(3.5rem + 0.75rem);
+  z-index: 15;
 }
 
 .ui-toast {

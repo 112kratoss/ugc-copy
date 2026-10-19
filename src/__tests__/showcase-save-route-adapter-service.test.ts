@@ -157,12 +157,88 @@ describe('showcase save route adapter service', () => {
     });
     expect(saveShowcasePostForRoute).toHaveBeenCalledWith({
       actorUserId: 'user-1',
+      creatorSeesSaver: false,
       referenceId: 'post-1',
       requestedSaveState: true,
+      saverNotYetTold: false,
       serviceClient,
       sourceSurface: 'showcase',
       runAfterResponse: expect.any(Function),
     });
+  });
+
+  it.each([
+    { sent: true, named: true },
+    // Anything but `true` is an app that never told its user: the creator is
+    // told "Someone", as before.
+    { sent: 'true', named: false },
+    { sent: 1, named: false },
+    { sent: undefined, named: false },
+  ])('lets a save name the saver only when the app says it told them ($sent)', async ({ sent, named }) => {
+    const saveShowcasePostForRoute = vi.fn(async () => ({
+      ok: true as const,
+      body: {
+        success: true as const,
+        isSaved: true,
+        saveCount: 5,
+        changed: true,
+        message: 'Saved to bookmarks',
+      },
+    }));
+
+    const response = await postShowcaseSaveRouteResponse({
+      request: new Request('http://localhost/api/showcase/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ postId: 'post-1', shouldSave: true, creatorSeesSaver: sent }),
+      }),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({ kind: 'service' }) as unknown as SupabaseClient),
+        createUserClient: () => createUserClient('user-1'),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 120,
+          remaining: 119,
+          retryAfterSeconds: 0,
+          resetAt: '2026-06-23T10:10:00.000Z',
+        })),
+        saveShowcasePostForRoute,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(saveShowcasePostForRoute).toHaveBeenCalledWith(expect.objectContaining({ creatorSeesSaver: named }));
+  });
+
+  it.each([
+    { sent: true, quiet: true },
+    // Anything but `true` is an app that says nothing of telling: the creator
+    // is told, as before.
+    { sent: 'true', quiet: false },
+    { sent: undefined, quiet: false },
+  ])('keeps the creator out of a save made while its saver is being told only for `true` ($sent)', async ({ sent, quiet }) => {
+    const saveShowcasePostForRoute = vi.fn(async () => ({
+      ok: true as const,
+      body: { success: true as const, isSaved: true, saveCount: 5, changed: true, message: 'Saved to bookmarks' },
+    }));
+
+    await postShowcaseSaveRouteResponse({
+      request: new Request('http://localhost/api/showcase/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ postId: 'post-1', shouldSave: true, saverNotYetTold: sent }),
+      }),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({ kind: 'service' }) as unknown as SupabaseClient),
+        createUserClient: () => createUserClient('user-1'),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0, resetAt: '2026-06-23T10:10:00.000Z',
+        })),
+        saveShowcasePostForRoute,
+      },
+    });
+
+    expect(saveShowcasePostForRoute).toHaveBeenCalledWith(expect.objectContaining({ saverNotYetTold: quiet }));
   });
 
   it('gives saves a way to tell the creator after the response', async () => {
@@ -205,8 +281,10 @@ describe('showcase save route adapter service', () => {
     expect(response.status).toBe(200);
     expect(saveShowcasePostForRoute).toHaveBeenCalledWith({
       actorUserId: 'user-1',
+      creatorSeesSaver: false,
       referenceId: 'post-1',
       requestedSaveState: true,
+      saverNotYetTold: false,
       serviceClient,
       sourceSurface: 'showcase',
       runAfterResponse,
