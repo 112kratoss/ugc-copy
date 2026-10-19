@@ -5,6 +5,7 @@
    their route layout. */
 @source "./page.tsx";
 @source "./layout.tsx";
+@source "./not-found.tsx";
 @source "./showcase";
 @source "./marketplace";
 @source "./feed";

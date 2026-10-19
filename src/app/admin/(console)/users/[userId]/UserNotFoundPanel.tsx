@@ -6,11 +6,12 @@ import { Surface, Text } from '@/components/DesignSystem';
 /**
  * Rendered in place of the support record when a user id does not resolve.
  *
- * Deliberately NOT `notFound()`. A `not-found.tsx` boundary was tried at the
- * console group, at `/admin`, and at the app root, and in this app none of them
- * render — `notFound()` always falls through to Next's built-in error shell,
- * which drops the sidebar and leaves a support lookup at a dead end. Rendering
- * the state inline keeps the operator inside the console with their navigation.
+ * Deliberately NOT `notFound()`. The console has no not-found of its own (one at
+ * the console group and one at `/admin` were tried on 2026-08-19 and judged not
+ * to render), so it would reach the app root's (`src/app/not-found.tsx`), which
+ * sits above the console's layout: the operator would land on the consumer 404
+ * with no sidebar, a support lookup at a dead end. Rendering the state inline
+ * keeps the operator inside the console with their navigation.
  *
  * The trade-off is an HTTP 200 for a record that does not exist. That is
  * acceptable here and nowhere else: `/admin` is noindex, is never crawled or

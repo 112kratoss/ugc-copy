@@ -96,7 +96,12 @@ function resolveLocalImport(specifier: string, importer: string): string | null 
   return candidates.find((candidate) => existsSync(candidate) && statSync(candidate).isFile()) ?? null;
 }
 
-/** Every file a route that links the supplement can draw, the root layout's shell included. */
+/**
+ * Every file a route that links the supplement can draw: its folders' files,
+ * and the root's own files but the public home page (the layout's shell, and
+ * the not-found that a link from such a route to a page calling notFound()
+ * draws in place).
+ */
 function collectFilesDrawnWithTheSupplement(): string[] {
   const supplementRouteFiles = readdirSync(APP_ROOT, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
@@ -106,7 +111,10 @@ function collectFilesDrawnWithTheSupplement(): string[] {
     })
     .flatMap((entry) => walkFiles(path.join(APP_ROOT, entry.name)))
     .filter((file) => /\.(?:ts|tsx|js|jsx)$/.test(file));
-  const pendingFiles = [path.join(APP_ROOT, 'layout.tsx'), ...supplementRouteFiles];
+  const rootFiles = readdirSync(APP_ROOT, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /\.(?:tsx|jsx)$/.test(entry.name) && entry.name !== 'page.tsx')
+    .map((entry) => path.join(APP_ROOT, entry.name));
+  const pendingFiles = [...rootFiles, ...supplementRouteFiles];
   const visitedFiles = new Set<string>();
 
   while (pendingFiles.length > 0) {
