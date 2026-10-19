@@ -2084,10 +2084,39 @@ export async function notifyPostSocialActivity(
     recipientUserId: string | null | undefined;
     actorUserId: string | null | undefined;
     postId: string;
+    /**
+     * The saver's handle, given only for a save made where the app tells people
+     * that creators can see who saved (`creatorSeesSaver` on the save request).
+     * Saves were private until then, so one without it stays "Someone". Shares
+     * are never named.
+     */
+    actorUsername?: string | null;
   }
 ) {
   if (!params.recipientUserId || !params.actorUserId) {
     return null;
+  }
+
+  const deepLink = buildMobileNotificationDeepLink({ kind: 'showcasePost', postId: params.postId });
+
+  if (params.type === 'post_saved' && params.actorUsername) {
+    // A named save is that person's own alert, once per post, as a follow is:
+    // grouped under one name, the others in the quarter-hour would read as
+    // theirs, and a save taken back and made again tells the creator nothing
+    // new.
+    return createMobileNotificationSafely({
+      adminSupabase,
+      userId: params.recipientUserId,
+      actorUserId: params.actorUserId,
+      type: 'post_saved',
+      category: 'social',
+      title: `@${params.actorUsername} saved your post`,
+      body: 'It is in their saved media now.',
+      deepLink,
+      objectType: 'post',
+      objectId: params.postId,
+      dedupeKey: `post-save:${params.actorUserId}:${params.postId}`,
+    });
   }
 
   const verb = params.type === 'post_saved' ? 'saved' : 'shared';
@@ -2110,7 +2139,7 @@ export async function notifyPostSocialActivity(
     category: 'social',
     title: `Someone ${verb} your post`,
     body,
-    deepLink: buildMobileNotificationDeepLink({ kind: 'showcasePost', postId: params.postId }),
+    deepLink,
     objectType: 'post',
     objectId: params.postId,
     aggregationKey: `post-social:${params.type}:${params.recipientUserId}:${params.postId}:${socialAggregationWindow()}`,

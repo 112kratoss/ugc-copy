@@ -368,6 +368,12 @@ export type OwnerPostsQuery = {
 export interface SaveShowcasePostOptions {
   shouldSave: boolean;
   sourceSurface?: string;
+  /**
+   * Lets the creator's alert name whoever saved. Only ever set from
+   * `creatorSeesSaverFields` (lib/saver-notice.ts), which tells the person
+   * first: the server takes it as word that they were told.
+   */
+  creatorSeesSaver?: true;
 }
 
 export interface ShareShowcasePostOptions {
@@ -1417,6 +1423,7 @@ export function createApiClient({
           postId,
           shouldSave: options.shouldSave,
           ...(options.sourceSurface ? { sourceSurface: options.sourceSurface } : {}),
+          ...(options.creatorSeesSaver ? { creatorSeesSaver: true } : {}),
         }),
       }),
     remixShowcasePost: (postId: string) =>

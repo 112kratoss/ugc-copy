@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { creatorSeesSaverFields } from './saver-notice';
+
 interface SaveablePostItem {
   id: string;
   generationId?: string | null;
@@ -199,6 +201,7 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
           postId: id,
           shouldSave: nextSaved,
           sourceSurface: actionSourceSurface,
+          ...creatorSeesSaverFields(nextSaved),
         }),
       });
 

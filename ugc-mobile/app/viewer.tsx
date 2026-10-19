@@ -89,6 +89,7 @@ import {
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
+import { creatorSeesSaverFields } from '@/lib/saver-notice';
 import { useReducedMotion } from '@/lib/motion';
 import {
   applyShowcaseSaveStateToInfiniteFeed,
@@ -853,8 +854,8 @@ function ImmersivePreviewViewer() {
   // overtaken one from reconciling a truth the viewer has already replaced.
   const saveMutation = useMutation({
     scope: SHOWCASE_SAVE_MUTATION_SCOPE,
-    mutationFn: ({ postId, shouldSave, sourceSurface }: SaveMutationVariables) =>
-      api.saveShowcasePost(postId, { shouldSave, sourceSurface }),
+    mutationFn: async ({ postId, shouldSave, sourceSurface }: SaveMutationVariables) =>
+      api.saveShowcasePost(postId, { shouldSave, sourceSurface, ...(await creatorSeesSaverFields(shouldSave)) }),
     onMutate: async (variables) => {
       const optimisticSaveCount = Math.max(
         0,

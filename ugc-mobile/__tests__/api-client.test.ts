@@ -1459,6 +1459,33 @@ describe('mobile api client caching', () => {
     });
   });
 
+  it('says a save may name its saver only when told to', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      success: true,
+      isSaved: true,
+      saveCount: 5,
+      changed: true,
+      message: 'Saved to bookmarks',
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.saveShowcasePost('post-1', { shouldSave: true, sourceSurface: 'mobile-home-feed', creatorSeesSaver: true });
+    await api.saveShowcasePost('post-1', { shouldSave: true, sourceSurface: 'mobile-home-feed' });
+
+    const bodies = fetcher.mock.calls.map((call) => {
+      const [, init] = call as unknown as [RequestInfo | URL, RequestInit];
+      return JSON.parse(String(init.body));
+    });
+    expect(bodies).toEqual([
+      { postId: 'post-1', shouldSave: true, sourceSurface: 'mobile-home-feed', creatorSeesSaver: true },
+      { postId: 'post-1', shouldSave: true, sourceSurface: 'mobile-home-feed' },
+    ]);
+  });
+
   // The multipart route these used to share is retired and answers 410, so
   // resource files take the same sign/finalize path the web composer uses.
   it('signs post resource file uploads as JSON', async () => {

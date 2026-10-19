@@ -266,7 +266,12 @@ describe('Save from the menu', () => {
     mountHandlers(postItem()).handleAction('save');
 
     await vi.waitFor(() => expect(refreshViewerMediaCaches).toHaveBeenCalledTimes(1));
-    expect(mocks.auth.api.saveShowcasePost).toHaveBeenCalledWith('post-1', { shouldSave: true, sourceSurface: 'mobile-viewer-actions' });
+    // Through the saver notice, so the creator's alert may name whoever saved.
+    expect(mocks.auth.api.saveShowcasePost).toHaveBeenCalledWith('post-1', {
+      shouldSave: true,
+      sourceSurface: 'mobile-viewer-actions',
+      creatorSeesSaver: true,
+    });
   });
 });
 

@@ -1073,7 +1073,11 @@ describe("a reel opened on a creator's page", () => {
     });
     await settle();
 
-    expect(authState.api.saveShowcasePost).toHaveBeenCalledWith('luna-2', { shouldSave: true, sourceSurface: 'mobile-viewer' });
+    expect(authState.api.saveShowcasePost).toHaveBeenCalledWith('luna-2', {
+      shouldSave: true,
+      sourceSurface: 'mobile-viewer',
+      creatorSeesSaver: true,
+    });
     expect(activeItem()).toMatchObject({ id: 'luna-2', isSaved: true, saveCount: 1 });
     expect(gridPages()?.[0].items[1]).toMatchObject({ id: 'luna-2', isSaved: true, saveCount: 1 });
     expect(gridPages()?.[0].profile.id).toBe(luna.id);

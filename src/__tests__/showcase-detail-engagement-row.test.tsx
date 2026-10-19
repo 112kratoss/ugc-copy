@@ -95,7 +95,7 @@ describe('ShowcaseDetailEngagementRow', () => {
     await waitFor(() => {
       expect(vi.mocked(fetch)).toHaveBeenCalledWith('/api/showcase/save', expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ postId: 'post-1', shouldSave: true, sourceSurface: 'detail-page' }),
+        body: JSON.stringify({ postId: 'post-1', shouldSave: true, sourceSurface: 'detail-page', creatorSeesSaver: true }),
       }));
     });
 

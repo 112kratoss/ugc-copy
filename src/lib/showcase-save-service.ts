@@ -216,6 +216,28 @@ async function resolveLegacyIdempotentSaveState({
   };
 }
 
+/** The handle a named save alert shows, or null to leave the saver as "Someone". */
+async function loadSaverUsername(serviceClient: SupabaseClient, userId: string) {
+  try {
+    const { data, error } = await serviceClient
+      .from('profiles')
+      .select('username')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (error) {
+      logBackendError('failed_to_load_saver_username', { error: error });
+      return null;
+    }
+
+    const username = (data as { username?: unknown } | null)?.username;
+    return typeof username === 'string' && username.trim() ? username.trim() : null;
+  } catch (error) {
+    logBackendError('failed_to_load_saver_username', { error: error });
+    return null;
+  }
+}
+
 async function recordPostSaveEvent({
   actorUserId,
   changed,
@@ -255,6 +277,7 @@ async function recordPostSaveEvent({
 
 export async function saveShowcasePostForRoute({
   actorUserId,
+  creatorSeesSaver = false,
   dependencies,
   referenceId,
   requestedSaveState,
@@ -263,6 +286,12 @@ export async function saveShowcasePostForRoute({
   sourceSurface,
 }: {
   actorUserId: string;
+  /**
+   * The app this save came from tells people that creators can see who saved,
+   * so the creator's alert may name them. Saves from apps that do not say so
+   * stay "Someone", as every save was before.
+   */
+  creatorSeesSaver?: boolean;
   dependencies?: Partial<ShowcaseSaveServiceDependencies>;
   referenceId: string;
   requestedSaveState: boolean | null;
@@ -366,18 +395,26 @@ export async function saveShowcasePostForRoute({
   }
 
   if (isSaved && (requestedSaveState === null || changed)) {
-    // The save is recorded; what is left is telling the creator. The first
-    // save of a post in a quarter-hour ends in a push request to Expo for
-    // their devices, and the app holds its later saves behind this answer.
-    // So the answer goes first wherever it can.
+    // The save is recorded; what is left is telling the creator. A new alert
+    // (the first unnamed save of a post in a quarter-hour, or a named saver's
+    // first save of it) ends in a push request to Expo for their devices, and
+    // the app holds its later saves behind this answer. So the answer goes
+    // first wherever it can, and the saver's handle is looked up behind it.
+    // A creator saving their own post is told nothing, so it is never looked
+    // up for that.
+    const namesSaver = creatorSeesSaver && Boolean(post.user_id) && post.user_id !== actorUserId;
     await sendDeferrableNotification(
       runAfterResponse,
-      () => resolvedDependencies.notifyPostSocialActivity(serviceClient, {
-        type: 'post_saved',
-        recipientUserId: post.user_id,
-        actorUserId,
-        postId: post.id,
-      }),
+      async () => {
+        const actorUsername = namesSaver ? await loadSaverUsername(serviceClient, actorUserId) : null;
+        return resolvedDependencies.notifyPostSocialActivity(serviceClient, {
+          type: 'post_saved',
+          recipientUserId: post.user_id,
+          actorUserId,
+          postId: post.id,
+          ...(actorUsername ? { actorUsername } : {}),
+        });
+      },
     );
   }
 

@@ -6,6 +6,7 @@ import { AccessibilityInfo } from 'react-native';
 import { useAuth } from '@/lib/auth';
 import { adjustProfileStats } from '@/lib/profile-stats';
 import { haptic } from '@/lib/haptics';
+import { creatorSeesSaverFields } from '@/lib/saver-notice';
 import {
   applyShowcaseSaveStateToInfiniteFeed,
   applyShowcaseSaveStateToPostResponse,
@@ -62,8 +63,8 @@ export function useShowcaseSaveMutation({
 
   const mutation = useMutation({
     scope: SHOWCASE_SAVE_MUTATION_SCOPE,
-    mutationFn: ({ postId, shouldSave }: SaveVariables) =>
-      api.saveShowcasePost(postId, { shouldSave, sourceSurface }),
+    mutationFn: async ({ postId, shouldSave }: SaveVariables) =>
+      api.saveShowcasePost(postId, { shouldSave, sourceSurface, ...(await creatorSeesSaverFields(shouldSave)) }),
     onMutate: (variables) => {
       reconcile({
         postId: variables.postId,

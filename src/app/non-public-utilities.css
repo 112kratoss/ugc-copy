@@ -97,6 +97,7 @@
 @source "../components/enhancePromptClient.ts";
 @source "../components/feedback-state.ts";
 @source "../components/navigation-progress-state.ts";
+@source "../components/saver-notice.ts";
 @source "../components/search/CreatorSearchResult.tsx";
 @source "../components/search/SearchField.tsx";
 @source "../components/search/SearchStateBlock.tsx";

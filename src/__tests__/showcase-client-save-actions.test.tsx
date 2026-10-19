@@ -293,6 +293,7 @@ describe('ShowcaseClient save actions', () => {
         postId: 'post-1',
         shouldSave: true,
         sourceSurface: 'showcase',
+        creatorSeesSaver: true,
       }),
     }));
     await waitFor(() => {

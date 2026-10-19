@@ -2516,6 +2516,27 @@ describe('what each alert opens and says', () => {
     ]);
   });
 
+  it('names a saver only when given their handle, in an alert of their own, and never a sharer', async () => {
+    const history = createMobileNotificationHistory();
+    const client = writtenTo(history);
+    const post = { recipientUserId: 'creator-1', postId: 'post-1' };
+
+    await notifyPostSocialActivity(client, { ...post, type: 'post_saved', actorUserId: 'reader-1', actorUsername: 'maya' });
+    await notifyPostSocialActivity(client, { ...post, type: 'post_saved', actorUserId: 'reader-2', actorUsername: null });
+    await notifyPostSocialActivity(client, { ...post, type: 'post_shared', actorUserId: 'reader-1', actorUsername: 'maya' });
+
+    expect(history.sent.map((row) => [
+      row.title,
+      row.deep_link,
+      row.dedupe_key ?? null,
+      typeof row.aggregation_key === 'string' ? 'grouped' : 'its own',
+    ])).toEqual([
+      ['@maya saved your post', '/showcase/post-1', 'post-save:reader-1:post-1', 'its own'],
+      ['Someone saved your post', '/showcase/post-1', null, 'grouped'],
+      ['Someone shared your post', '/showcase/post-1', null, 'grouped'],
+    ]);
+  });
+
   it('words its copy for both clients and spells the brand as the site does', async () => {
     // The web's Alerts prints these bodies as written, beside the app.
     const history = createMobileNotificationHistory();

@@ -72,6 +72,7 @@
 @source "../components/app-shell-nav.ts";
 @source "../components/feedback-state.ts";
 @source "../components/navigation-progress-state.ts";
+@source "../components/saver-notice.ts";
 @source "../components/templates/CreateTemplateRunClient.tsx";
 @source "../components/templates/TemplateCatalogClient.tsx";
 @source "../components/templates/TemplateDetailClient.tsx";
