@@ -457,7 +457,9 @@ export default function ShowcaseMediaCarousel({
           ...(placeholderUrl ? { backgroundImage: `url(${placeholderUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}),
         }}
         onClick={(event) => {
-          if (!onOpen || event.target instanceof HTMLElement && event.target.closest('button, video[controls]')) {
+          // `Element`: a click on a button's icon lands on an <svg> or a <path>,
+          // which are not HTMLElements (the retry icon opened the media too).
+          if (!onOpen || event.target instanceof Element && event.target.closest('button, video[controls]')) {
             return;
           }
 

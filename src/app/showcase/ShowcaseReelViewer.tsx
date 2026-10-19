@@ -85,7 +85,6 @@ interface ShowcaseReelViewerProps {
   items: ShowcaseFeedItem[];
   selectedItemId: string | null;
   savedItemIds: Set<string>;
-  savingItemIds: Set<string>;
   accessToken?: string | null;
   hasMoreItems: boolean;
   isLoadingMoreItems: boolean;
@@ -253,7 +252,6 @@ export default function ShowcaseReelViewer({
   items,
   selectedItemId,
   savedItemIds,
-  savingItemIds,
   accessToken,
   hasMoreItems,
   isLoadingMoreItems,
@@ -930,7 +928,6 @@ export default function ShowcaseReelViewer({
 
   const resourceKinds = getItemResourceKinds(item);
   const isSaved = savedItemIds.has(item.id);
-  const isSaving = savingItemIds.has(item.id);
   const summary = getItemSummary(item);
   const dateLabel = formatDate(item.createdAt);
   const mediaTypeLabel = getMediaTypeLabel(item);
@@ -1408,7 +1405,9 @@ export default function ShowcaseReelViewer({
       return;
     }
 
-    const target = event.target instanceof HTMLElement ? event.target : null;
+    // `Element`: the details scroll under a resting pointer, so a wheel often
+    // starts over one of their icons, an <svg> that is not an HTMLElement.
+    const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('[data-reel-scroll-region="details"]')) {
       return;
     }
@@ -1988,14 +1987,13 @@ export default function ShowcaseReelViewer({
           <button
             type="button"
             onClick={() => void onToggleSave(item.id)}
-            disabled={isSaving}
             aria-pressed={isSaved}
             aria-label={`${isSaved ? 'Remove save from' : 'Save'} ${item.title}`}
             className={`inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition lg:h-[70px] lg:w-[70px] lg:max-w-[70px] ${
               isSaved
                 ? 'border-[var(--ui-primary)]/35 bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]'
                 : 'border-white/10 bg-white/[0.05] text-zinc-100 hover:bg-white/[0.08]'
-            } disabled:opacity-60`}
+            }`}
           >
             <Heart size={20} className={`h-5 w-5 shrink-0 ${isSaved ? 'fill-[var(--ui-primary)] text-[var(--ui-primary)]' : ''}`} />
             <AnimatePresence mode="popLayout" initial={false}>
