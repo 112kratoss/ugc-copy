@@ -7,7 +7,12 @@
 --    save functions are as 20261004114652 defined them otherwise.
 -- 2. A post its creator deleted is tombstoned instead when it has buyers or a
 --    payable order: kept for them, gone for everyone else. Its saves now go
---    as a deleted post's do, with the alerts naming its savers.
+--    as a deleted post's do, with the alerts naming its savers. A save reads
+--    the post's visibility under the lock its counter update takes anyway
+--    (FOR NO KEY UPDATE, which the tombstoning UPDATE also takes), so a save
+--    racing a tombstone waits for it and is refused, rather than landing
+--    after the tombstone's delete has run. FOR SHARE would let two saves of
+--    one post deadlock at their counter updates.
 
 SET LOCAL lock_timeout = '5s';
 
@@ -40,7 +45,8 @@ BEGIN
     SELECT post.visibility
     INTO v_visibility
     FROM public.posts AS post
-    WHERE post.id = p_post_id;
+    WHERE post.id = p_post_id
+    FOR NO KEY UPDATE;
 
     IF NOT FOUND OR v_visibility IS DISTINCT FROM 'public' THEN
       RAISE EXCEPTION 'Post is private or not found';
@@ -133,7 +139,8 @@ BEGIN
   SELECT visibility
   INTO v_visibility
   FROM public.posts
-  WHERE id = p_post_id;
+  WHERE id = p_post_id
+  FOR NO KEY UPDATE;
 
   IF NOT FOUND OR v_visibility IS DISTINCT FROM 'public' THEN
     RAISE EXCEPTION 'Post is private or not found';

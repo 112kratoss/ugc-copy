@@ -70,12 +70,42 @@ function ToastIcon({ tone }: { tone: ToastRecord['tone'] }) {
   return <Info className="h-4 w-4 shrink-0 text-zinc-300" aria-hidden="true" />;
 }
 
+/** How often a counting in-view-only toast looks again at what is drawn over it. */
+const TOAST_COVER_CHECK_MS = 400;
+
+/**
+ * Whether something is drawn over the toast:
+ * - another modal dialog: any `aria-modal` one that does not hold the toast (a
+ *   confirmation, the reel's reference preview), which a screen reader cannot
+ *   reach past either; the dialog holding it (the reel) does not count;
+ * - full screen: the browser's top layer, or iOS Safari's own video player;
+ * - anything else over its words, sampled across them (an open menu, such as
+ *   the reel's ⋯ on a phone).
+ */
+function isToastCovered(toast: HTMLElement | null, videoFullScreen: boolean) {
+  if (!toast) return true;
+  if (Array.from(document.querySelectorAll('[aria-modal="true"]')).some((dialog) => !dialog.contains(toast))) {
+    return true;
+  }
+  const fullScreen = document.fullscreenElement;
+  if (videoFullScreen || (fullScreen && !fullScreen.contains(toast))) return true;
+
+  const words = toast.querySelector('p') ?? toast;
+  const box = words.getBoundingClientRect();
+  if (typeof document.elementFromPoint !== 'function' || box.width === 0 || box.height === 0) return false;
+  const y = box.top + box.height / 2;
+  return [0.05, 0.5, 0.95].some((across) => {
+    const drawn = document.elementFromPoint(box.left + box.width * across, y);
+    return drawn !== null && !toast.contains(drawn);
+  });
+}
+
 /**
  * Whether a toast can be seen now: its window has the focus (a save is a click
- * or a key in it, so it starts focused) and no other modal dialog is drawn over
- * it. A dialog holding the toast (the reel) does not cover it; any other
- * `aria-modal` one does (a confirmation, the reel's reference preview), to the
- * eye and to a screen reader, which cannot reach past it. Followed only while
+ * or a key in it, so it starts focused) and nothing is drawn over it
+ * (`isToastCovered`), looked at again whenever the page changes, the browser
+ * goes full screen or out of it, and every `TOAST_COVER_CHECK_MS` (a menu can
+ * slide over it without a change the observer hears). Followed only while
  * `enabled`.
  */
 function useToastInView(enabled: boolean, toastRef: RefObject<HTMLElement | null>) {
@@ -84,22 +114,42 @@ function useToastInView(enabled: boolean, toastRef: RefObject<HTMLElement | null
 
   useEffect(() => {
     if (!enabled) return undefined;
+    let videoFullScreen = false;
     const blur = () => setWindowFocused(false);
     const focus = () => setWindowFocused(true);
-    const check = () => {
-      const element = toastRef.current;
-      setCovered(Array.from(document.querySelectorAll('[aria-modal="true"]'))
-        .some((dialog) => !element || !dialog.contains(element)));
+    const check = () => setCovered(isToastCovered(toastRef.current, videoFullScreen));
+    // iOS Safari plays a video full screen in its own player; the events fire
+    // on the video and do not bubble.
+    const videoEnters = () => {
+      videoFullScreen = true;
+      check();
+    };
+    const videoLeaves = () => {
+      videoFullScreen = false;
+      check();
     };
     window.addEventListener('blur', blur);
     window.addEventListener('focus', focus);
+    document.addEventListener('fullscreenchange', check);
+    document.addEventListener('webkitbeginfullscreen', videoEnters, true);
+    document.addEventListener('webkitendfullscreen', videoLeaves, true);
     check();
     const observer = new MutationObserver(check);
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-modal'] });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['aria-modal', 'class', 'style', 'hidden', 'open'],
+    });
+    const interval = window.setInterval(check, TOAST_COVER_CHECK_MS);
     return () => {
       window.removeEventListener('blur', blur);
       window.removeEventListener('focus', focus);
+      document.removeEventListener('fullscreenchange', check);
+      document.removeEventListener('webkitbeginfullscreen', videoEnters, true);
+      document.removeEventListener('webkitendfullscreen', videoLeaves, true);
       observer.disconnect();
+      window.clearInterval(interval);
     };
   }, [enabled, toastRef]);
 

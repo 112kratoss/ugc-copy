@@ -400,6 +400,136 @@ describe('the saver notice in the viewport', () => {
     host.remove();
   });
 
+  // Review 5 finding #1: layers that are not `aria-modal` cover it too.
+  describe('under something drawn over it that is not a modal dialog', () => {
+    const toastWords = () => screen.getByText(SAVER_NOTICE_MESSAGE);
+
+    /** What the page draws at each point: the menu over the words, or the words. */
+    function drawOverWords(over: () => Element | null) {
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function rect(this: HTMLElement) {
+        return this.tagName === 'P'
+          ? ({ left: 16, top: 70, width: 300, height: 20, right: 316, bottom: 90, x: 16, y: 70, toJSON: () => ({}) } as DOMRect)
+          : ({ left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect);
+      });
+      const elementFromPoint = vi.fn(() => over() ?? toastWords());
+      Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: elementFromPoint });
+      return elementFromPoint;
+    }
+
+    afterEach(() => {
+      Reflect.deleteProperty(document, 'elementFromPoint');
+      Reflect.deleteProperty(document, 'fullscreenElement');
+    });
+
+    it("stops counting while a menu is drawn over its words, as the reel's ⋯ is on a phone", async () => {
+      render(<FeedbackViewport />);
+      tell();
+      let menu: HTMLElement | null = null;
+      const elementFromPoint = drawOverWords(() => menu);
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+
+      act(() => {
+        menu = document.createElement('div');
+        menu.setAttribute('role', 'menu');
+        document.body.appendChild(menu);
+      });
+      await flush();
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(elementFromPoint).toHaveBeenCalled();
+      expect(screen.getByRole('status')).toHaveTextContent(SAVER_NOTICE_MESSAGE);
+      expect(told()).toBeNull();
+
+      act(() => {
+        menu?.remove();
+        menu = null;
+      });
+      await flush();
+      act(() => {
+        vi.advanceTimersByTime(4_999);
+      });
+      expect(told()).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(told()).toBe('pending');
+      await flush();
+    });
+
+    it('stops counting while the browser shows something else full screen, and goes on after', async () => {
+      render(<FeedbackViewport />);
+      tell();
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+
+      const player = document.createElement('div');
+      document.body.appendChild(player);
+      Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => player });
+      act(() => {
+        document.dispatchEvent(new Event('fullscreenchange'));
+      });
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(told()).toBeNull();
+
+      Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => null });
+      act(() => {
+        document.dispatchEvent(new Event('fullscreenchange'));
+      });
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(told()).toBe('pending');
+      player.remove();
+      await flush();
+    });
+
+    it("stops counting while iOS Safari plays a video in its own full-screen player", async () => {
+      render(<FeedbackViewport />);
+      tell();
+      const video = document.createElement('video');
+      document.body.appendChild(video);
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+
+      // Fired on the video, not bubbling: heard in the capture phase.
+      act(() => {
+        video.dispatchEvent(new Event('webkitbeginfullscreen'));
+      });
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(told()).toBeNull();
+
+      act(() => {
+        video.dispatchEvent(new Event('webkitendfullscreen'));
+      });
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(told()).toBe('pending');
+      video.remove();
+      await flush();
+    });
+
+    it('counts on while its words are clear, and while the page has nothing to say about it', async () => {
+      render(<FeedbackViewport />);
+      tell();
+      drawOverWords(() => null);
+      act(() => {
+        vi.advanceTimersByTime(6_000);
+      });
+      expect(told()).toBe('pending');
+      await flush();
+    });
+  });
+
   it('leaves every other toast to its own clock, focus or no focus', () => {
     render(<FeedbackViewport />);
     act(() => {

@@ -172,6 +172,54 @@ describe.skipIf(!connectionString)('named save alerts with actual PostgreSQL', (
     }
   });
 
+  // Review 5 finding #2: the tombstone deletes the saves it can see, so a save
+  // must not land after it.
+  describe('a save racing its post being tombstoned', () => {
+    const tombstone = (client: Client) => client.query(
+      "update public.posts set tombstoned_at=now(), archived_at=now(), archived_by_user_id=$2, visibility='private' where id=$1",
+      [post, creator],
+    );
+    const savesOfPost = async () => Number((await db.query(
+      'select count(*)::int as count from public.post_saves where post_id=$1', [post],
+    )).rows[0].count);
+
+    it('is refused when the tombstone is still open as it arrives', async () => {
+      await saveState(false);
+      const tombstoner = await connect();
+      const saverClient = await connect();
+      try {
+        await tombstoner.query('begin');
+        await tombstone(tombstoner);
+        const { outcome: pending } = await waitingOnLock(saverClient, () => saveState(true, saverClient));
+        await tombstoner.query('commit');
+        expect(await pending).toMatchObject({ status: 'rejected', reason: { code: 'P0001' } });
+        expect(await savesOfPost()).toBe(0);
+        expect(await alerts()).toBe(0);
+      } finally {
+        await tombstoner.query('rollback');
+        await Promise.all([tombstoner.end(), saverClient.end()]);
+      }
+    });
+
+    it('goes with the tombstone when the save is still open as the tombstone arrives', async () => {
+      await saveState(false);
+      const saverClient = await connect();
+      const tombstoner = await connect();
+      try {
+        await saverClient.query('begin');
+        await saveState(true, saverClient);
+        const { outcome: pending } = await waitingOnLock(tombstoner, () => tombstone(tombstoner));
+        await saverClient.query('commit');
+        expect((await pending).status).toBe('fulfilled');
+        expect(await savesOfPost()).toBe(0);
+        expect(Number((await db.query('select save_count from public.posts where id=$1', [post])).rows[0].save_count)).toBe(0);
+      } finally {
+        await saverClient.query('rollback');
+        await Promise.all([saverClient.end(), tombstoner.end()]);
+      }
+    });
+  });
+
   it('writes nothing for a save whose unsave is still open', async () => {
     const unsaver = await connect();
     const writer = await connect();

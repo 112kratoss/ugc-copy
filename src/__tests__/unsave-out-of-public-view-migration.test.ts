@@ -35,6 +35,13 @@ describe('unsave out of public view migration', () => {
     expect(toggle.slice(toggle.indexOf('IF v_exists THEN'), toggle.indexOf('RETURN false;'))).not.toContain('visibility');
   });
 
+  // Review 5 finding #2: a save racing a tombstone waits for it, then is refused.
+  it('reads the visibility to save under the lock the counter update takes, in both', () => {
+    expect(functionBody('set_post_save_state')).toMatch(/SELECT post\.visibility\s+INTO v_visibility\s+FROM public\.posts AS post\s+WHERE post\.id = p_post_id\s+FOR NO KEY UPDATE;/);
+    expect(functionBody('toggle_post_save')).toMatch(/SELECT visibility\s+INTO v_visibility\s+FROM public\.posts\s+WHERE id = p_post_id\s+FOR NO KEY UPDATE;/);
+    for (const name of ['set_post_save_state', 'toggle_post_save']) expect(functionBody(name)).not.toMatch(/FOR SHARE/);
+  });
+
   it('keeps both under the per-save lock, and the service alone may call them', () => {
     for (const name of ['set_post_save_state', 'toggle_post_save']) {
       const body = functionBody(name);

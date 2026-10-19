@@ -366,8 +366,9 @@ export async function setUserBlockForRoute({
     }
 
     // Neither stays named in the other's Alerts as having saved their posts:
-    // the block's own insert removes those alerts (the
-    // user_blocks_remove_post_save_alerts trigger), in its transaction.
+    // the block's own insert removes those alerts, in its transaction (the
+    // user_blocks trigger's remove_follows_for_user_block, which also drops
+    // the follows the deletes above already took).
   } else {
     const { error } = await adminSupabase
       .from('user_blocks')
