@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { POST_SAVE_PUSH_RATE_LIMIT } from '@/lib/backend-rate-limit';
+import { isClaimedProfileUsername, normalizeUsername } from '@/lib/profile';
 
 /**
  * Notification history the real notifier can run against.
@@ -8,13 +9,16 @@ import { POST_SAVE_PUSH_RATE_LIMIT } from '@/lib/backend-rate-limit';
  * It answers the two tables `createMobileNotification` touches before it
  * pushes, the one call a grouped notification makes in place of the first
  * (`upsert_mobile_notification`: a group's first event writes its row, a later
- * one adds to it), the call that writes a named save's alert
- * (`create_post_save_alert`), and a post's save-alert push slot. A named alert
- * belongs to its save as the database ties it: unsaving (`recordSave`, which
- * `withMobileNotificationHistory` calls as `set_post_save_state` answers)
- * removes it, a block between the two accounts (`recordBlock`) removes it, and
- * none is written for a save already gone, across a block, or twice. Every
- * save stands until one says otherwise.
+ * one adds to it, and a save or share row keeps no actor, as the SQL does), the
+ * call that writes a named save's alert (`create_post_save_alert`), and a
+ * post's save-alert push slot. A named alert goes to the post's owner
+ * (`posts`), names only a saver told on record by a handle they chose
+ * (`savers`), and belongs to its save as the database ties it: unsaving
+ * (`recordSave`, which `withMobileNotificationHistory` calls as
+ * `set_post_save_state` answers) removes it, a block between the two accounts
+ * (`recordBlock`) removes it, and none is written for a save that does not
+ * stand, across a block, or twice. As in the database, no save stands until
+ * one is recorded.
  *
  * Push is switched off for every account unless `pushTo` names it with the
  * Expo tokens of its live devices. Then the real push path runs against these
@@ -27,6 +31,8 @@ import { POST_SAVE_PUSH_RATE_LIMIT } from '@/lib/backend-rate-limit';
  */
 export function createMobileNotificationHistory({
   pushTo = {},
+  posts = {},
+  savers = {},
 }: {
   /**
    * Accounts with push switched on, and the Expo token of each live device
@@ -34,6 +40,10 @@ export function createMobileNotificationHistory({
    * switch a phone on midway.
    */
   pushTo?: Record<string, string[]>;
+  /** The posts a named save alert may announce, each with the account that owns it. */
+  posts?: Record<string, string>;
+  /** Saving accounts' profiles: their handle, and whether their telling is on record. */
+  savers?: Record<string, { username: string | null; told: boolean }>;
 } = {}) {
   const started: string[] = [];
   const sent: Array<Record<string, unknown>> = [];
@@ -45,6 +55,9 @@ export function createMobileNotificationHistory({
   const preferenceReads: string[] = [];
   const tokenReads: string[] = [];
   const pushed: Array<{ user_id: unknown; title: unknown; expo_push_token: unknown }> = [];
+  /** Each reservation by its id, while it stands: a released one leaves `pushed`. */
+  const reservations = new Map<string, (typeof pushed)[number]>();
+  const outcomes: Array<Record<string, unknown>> = [];
   const referralEvents = new Map<string, Array<Record<string, unknown>>>();
   const saves = new Map<string, boolean>();
   const blocks = new Set<string>();
@@ -53,7 +66,7 @@ export function createMobileNotificationHistory({
 
   const saveKey = (actorUserId: unknown, postId: unknown) => `${String(actorUserId)}:${String(postId)}`;
   const pairKey = (first: unknown, second: unknown) => [String(first), String(second)].sort().join(':');
-  const isSaved = (actorUserId: unknown, postId: unknown) => saves.get(saveKey(actorUserId, postId)) ?? true;
+  const isSaved = (actorUserId: unknown, postId: unknown) => saves.get(saveKey(actorUserId, postId)) ?? false;
   const standingRow = (userId: unknown, dedupeKey: unknown) => sent.findIndex(
     (row, index) => !removedRows.has(index) && row.user_id === userId && row.dedupe_key === dedupeKey,
   );
@@ -74,10 +87,11 @@ export function createMobileNotificationHistory({
     };
   }
 
-  /** The row a delivery names, by the id `storedRow` gave it. */
+  /** The row a delivery names, by the id `storedRow` gave it, while it stands. */
   function rowById(id: unknown) {
     const match = /^notification-(\d+)$/.exec(String(id));
-    return match ? sent[Number(match[1]) - 1] : undefined;
+    const index = match ? Number(match[1]) - 1 : -1;
+    return index >= 0 && !removedRows.has(index) ? sent[index] : undefined;
   }
 
   return {
@@ -141,8 +155,13 @@ export function createMobileNotificationHistory({
      * for, and only when a device was found.
      */
     tokenReads,
-    /** Every push that went out, one per device, in order. */
+    /**
+     * Every push reserved, one per device, in order, less any whose reservation
+     * was taken back (its slot refused) before it was sent.
+     */
     pushed,
+    /** The first sends' outcomes, as `record_initial_mobile_push_outcomes` was given them. */
+    outcomes,
     enqueueReferralRewards(rewards: Array<Record<string, unknown>>) {
       for (const reward of rewards) {
         const eventKey = String(reward.event_key ?? reward.eventKey);
@@ -171,12 +190,18 @@ export function createMobileNotificationHistory({
       if (table === 'mobile_notifications') {
         return {
           select() {
+            const filters: Record<string, unknown> = {};
             const query = {
               eq(column: string, value: unknown) {
+                filters[column] = value;
                 if (column === 'dedupe_key') started.push(String(value));
                 return query;
               },
               async maybeSingle() {
+                // Whether an alert still stands, by its id.
+                if (filters.id !== undefined) {
+                  return { data: rowById(filters.id) ? { id: filters.id } : null, error: null };
+                }
                 await held;
                 return { data: null, error: null };
               },
@@ -261,16 +286,37 @@ export function createMobileNotificationHistory({
 
       if (table === 'mobile_push_deliveries') {
         return {
-          // A push reserves one delivery per device before it calls Expo.
+          // A push reserves one delivery per device before it calls Expo, all
+          // in one statement, each held to its alert by the foreign key.
           async insert(rows: Record<string, unknown> | Array<Record<string, unknown>>) {
-            for (const row of [rows].flat()) {
-              pushed.push({
+            const all = [rows].flat();
+            if (all.some((row) => !rowById(row.notification_id))) {
+              return { error: { code: '23503', message: 'violates foreign key constraint "mobile_push_deliveries_notification_id_fkey"' } };
+            }
+            for (const row of all) {
+              const push = {
                 user_id: row.user_id,
                 title: rowById(row.notification_id)?.title,
                 expo_push_token: row.expo_push_token,
-              });
+              };
+              pushed.push(push);
+              reservations.set(String(row.id), push);
             }
             return { error: null };
+          },
+          // A reservation taken back, never sent.
+          delete() {
+            return {
+              async in(_column: string, ids: unknown[]) {
+                for (const id of ids) {
+                  const push = reservations.get(String(id));
+                  if (!push) continue;
+                  reservations.delete(String(id));
+                  pushed.splice(pushed.indexOf(push), 1);
+                }
+                return { error: null };
+              },
+            };
           },
         };
       }
@@ -305,24 +351,34 @@ export function createMobileNotificationHistory({
           error: null,
         };
       }
-      if (name === 'record_initial_mobile_push_outcomes' || name === 'finish_initial_mobile_push_outcomes') {
+      if (name === 'record_initial_mobile_push_outcomes') {
+        if (Array.isArray(args.p_items)) outcomes.push(...args.p_items as Array<Record<string, unknown>>);
+        return { data: Array.isArray(args.p_items) ? args.p_items.length : 0, error: null };
+      }
+      if (name === 'finish_initial_mobile_push_outcomes') {
         return { data: Array.isArray(args.p_items) ? args.p_items.length : 0, error: null };
       }
       if (name === 'create_post_save_alert') {
-        const recipientUserId = args.p_recipient_user_id;
-        const actorUserId = args.p_actor_user_id;
         const postId = args.p_post_id;
+        const actorUserId = args.p_saver_user_id;
         const dedupeKey = `post-save:${String(actorUserId)}:${String(postId)}`;
         started.push(dedupeKey);
         await held;
 
         // What the function answers whenever it writes nothing.
-        const notWritten = { data: { wasCreated: false, notification: null }, error: null };
-        if (!recipientUserId || !actorUserId || !postId || recipientUserId === actorUserId) return notWritten;
+        const notWritten = { data: { nameable: true, wasCreated: false, notification: null }, error: null };
+        // To whoever owns the post; a post gone took its saves with it.
+        const recipientUserId = posts[String(postId)];
+        if (!recipientUserId || recipientUserId === actorUserId) return notWritten;
+        // Only a saver told on record, by a handle they chose.
+        const saver = savers[String(actorUserId)];
+        if (!saver?.told || !isClaimedProfileUsername(saver.username)) {
+          return { data: { nameable: false, wasCreated: false, notification: null }, error: null };
+        }
         if (blocks.has(pairKey(recipientUserId, actorUserId))) return notWritten;
         // ON CONFLICT (user_id, dedupe_key) DO NOTHING: this save's alert stands already.
         if (standingRow(recipientUserId, dedupeKey) >= 0) return notWritten;
-        // The foreign key to post_saves: the save is already gone.
+        // The foreign key to post_saves: the save does not stand.
         if (!isSaved(actorUserId, postId)) return notWritten;
 
         const index = sent.push({
@@ -330,7 +386,7 @@ export function createMobileNotificationHistory({
           actor_user_id: actorUserId,
           type: 'post_saved',
           category: 'social',
-          title: args.p_title,
+          title: `@${normalizeUsername(saver.username)} saved your post`,
           body: args.p_body,
           deep_link: args.p_deep_link,
           object_type: 'post',
@@ -340,7 +396,7 @@ export function createMobileNotificationHistory({
           save_user_id: actorUserId,
           save_post_id: postId,
         }) - 1;
-        return { data: { wasCreated: true, notification: storedRow(index) }, error: null };
+        return { data: { nameable: true, wasCreated: true, notification: storedRow(index) }, error: null };
       }
       if (name === 'deliver_referral_reward_notifications') {
         const event = referralEvents.get(String(args.p_event_key))?.shift();
@@ -359,7 +415,8 @@ export function createMobileNotificationHistory({
 
       const values = {
         user_id: args.p_user_id,
-        actor_user_id: args.p_actor_user_id,
+        // The SQL stores no actor on a grouped save or share, whatever it is passed.
+        actor_user_id: args.p_type === 'post_saved' || args.p_type === 'post_shared' ? null : args.p_actor_user_id,
         type: args.p_type,
         category: args.p_category,
         title: args.p_title,

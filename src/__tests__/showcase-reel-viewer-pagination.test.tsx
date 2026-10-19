@@ -8,7 +8,7 @@ import {
   resetShowcaseFeedEventQueueForTests,
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import FeedbackViewport from '@/components/FeedbackViewport';
-import { pushToast, requestConfirmation, resetFeedbackState } from '@/components/feedback-state';
+import { dismissToast, pushToast, requestConfirmation, resetFeedbackState } from '@/components/feedback-state';
 import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
 
 vi.mock('next/link', () => ({
@@ -520,6 +520,37 @@ describe('ShowcaseReelViewer pagination', () => {
     expect(toasts()).not.toBeNull();
     expect(toasts()).not.toHaveClass('ui-toast-viewport-in-dialog');
     expect(toasts()).toHaveTextContent('Saved to bookmarks.');
+  });
+
+  // Review 4 finding #19: a toast the reel holds goes with its close button
+  // focused (pressed, or run out), and focus falls to the page's body. The
+  // trap acted only from its first or last control, so Tab left the reel.
+  it('takes focus back into the reel when it has fallen out, as when a toast it held goes', () => {
+    render(
+      <>
+        <FeedbackViewport />
+        <ShowcaseReelViewer {...reelProps()} />
+      </>
+    );
+    let toastId = 0;
+    act(() => {
+      toastId = pushToast({ tone: 'info', message: 'Saved to bookmarks.' });
+    });
+    const reel = screen.getByRole('dialog', { name: /reel viewer/i });
+    within(reel).getByRole('button', { name: 'Dismiss notification' }).focus();
+    act(() => dismissToast(toastId, 'closed'));
+    expect(document.activeElement).toBe(document.body);
+
+    fireEvent.keyDown(window, { key: 'Tab' });
+    expect(reel).toContainElement(document.activeElement as HTMLElement);
+    // The first of its controls; Shift+Tab from outside lands on the last.
+    expect(document.activeElement).toBe(within(reel).getAllByRole('button')[0]);
+
+    (document.activeElement as HTMLElement).blur();
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+    const buttons = within(reel).getAllByRole('button');
+    expect(reel).toContainElement(document.activeElement as HTMLElement);
+    expect(document.activeElement).not.toBe(buttons[0]);
   });
 
   // The profile mounts the reel closed, for `?post=`, and keeps it mounted

@@ -1438,7 +1438,6 @@ export function createApiClient({
           ...(options.saverNotYetTold ? { saverNotYetTold: true } : {}),
         }),
       }),
-    getSaverNotice: () => request<SaverNoticeResponse>('/api/profile/saver-notice'),
     recordSaverNotice: () =>
       request<SaverNoticeResponse>('/api/profile/saver-notice', { method: 'POST' }),
     remixShowcasePost: (postId: string) =>

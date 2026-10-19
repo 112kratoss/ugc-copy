@@ -224,7 +224,6 @@ const successCases: Array<{
   },
   // The app sends the flag only through lib/saver-notice.ts; here the client alone.
   { key: 'saveShowcasePost', call: (api) => api.saveShowcasePost('post-1', { shouldSave: true, creatorSeesSaver: true }) },
-  { key: 'getSaverNotice', call: (api) => api.getSaverNotice() },
   { key: 'recordSaverNotice', call: (api) => api.recordSaverNotice() },
   { key: 'remixShowcasePost', call: (api) => api.remixShowcasePost('post-1') },
   { key: 'shareShowcasePost', call: (api) => api.shareShowcasePost('post-1', { sourceSurface: 'showcase-reel' }) },

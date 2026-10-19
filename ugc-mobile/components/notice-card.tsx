@@ -1,5 +1,5 @@
-import { forwardRef, useEffect, useState } from 'react';
-import { AccessibilityInfo, Platform, Pressable, type StyleProp, type View, type ViewStyle } from 'react-native';
+import { forwardRef, useEffect, useState, type ReactNode } from 'react';
+import { AccessibilityInfo, Platform, Pressable, View, type Animated, type Text, type ViewStyle } from 'react-native';
 
 import { AppText } from '@/components/ui';
 import { announceQueued } from '@/lib/accessibility-announcement';
@@ -41,29 +41,56 @@ export function useAnnounceNotice(id: string | number | null, message: string | 
 }
 
 /**
+ * Where a transient notice sits: across the screen at `top` or `bottom`, its
+ * own width capped by the card, above the screen's layers and taking no
+ * touches but the card's.
+ */
+export function NoticePlacement({ top, bottom, children }: { top?: number; bottom?: number; children: ReactNode }) {
+  return (
+    <View
+      pointerEvents="box-none"
+      style={{
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top,
+        bottom,
+        alignItems: 'center',
+        paddingHorizontal: appTheme.spacing.screen,
+        zIndex: 3,
+      }}
+    >
+      {children}
+    </View>
+  );
+}
+
+/**
  * The card the app's transient notices draw: the feed's Undo
  * (`feed-undo-notice.tsx`) and the saver notice (`saver-notice-bar.tsx`). One
- * line of text and one action; a reader's escape gesture and its Dismiss
- * action close it. The caller places it, fades it (`animatedStyle`) and
- * decides when it goes.
+ * line of text and one action, plus a Dismiss action for a screen reader. The
+ * caller places it (`NoticePlacement`), fades it (`animatedStyle`, as
+ * `useOverlayPresence` gives it) and decides when it goes.
  */
-export const NoticeCard = forwardRef<View, {
+export const NoticeCard = forwardRef<Text, {
   message: string;
   /** Still drawn while it fades out once its notice has gone; inactive, it neither takes touches nor reads. */
   active: boolean;
   actionLabel: string;
   onAction: () => void;
+  /** A screen reader's Dismiss action. */
   onDismiss: () => void;
-  animatedStyle?: StyleProp<ViewStyle>;
-}>(function NoticeCard({ message, active, actionLabel, onAction, onDismiss, animatedStyle }, ref) {
+  /** VoiceOver's escape gesture (a two-finger Z); the Dismiss action's when not given. */
+  onEscape?: () => void;
+  animatedStyle?: Animated.WithAnimatedValue<ViewStyle>;
+}>(function NoticeCard({ message, active, actionLabel, onAction, onDismiss, onEscape, animatedStyle }, messageRef) {
   const theme = useAppTheme();
   return (
     <MotionView
-      ref={ref}
       accessibilityLiveRegion="polite"
       accessibilityElementsHidden={!active}
       importantForAccessibility={active ? 'auto' : 'no-hide-descendants'}
-      onAccessibilityEscape={onDismiss}
+      onAccessibilityEscape={onEscape ?? onDismiss}
       pointerEvents={active ? 'auto' : 'none'}
       style={[
         {
@@ -85,7 +112,8 @@ export const NoticeCard = forwardRef<View, {
         animatedStyle,
       ]}
     >
-      <AppText variant="label" color="text" numberOfLines={2} style={{ flex: 1, minWidth: 0 }}>
+      {/* The ref: where a screen reader is moved to read the notice first. */}
+      <AppText ref={messageRef} variant="label" color="text" numberOfLines={2} style={{ flex: 1, minWidth: 0 }}>
         {message}
       </AppText>
       <Pressable

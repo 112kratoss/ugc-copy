@@ -1,11 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { View, type StyleProp, type ViewStyle } from 'react-native';
 
-import { NoticeCard, useAnnounceNotice, useScreenReaderRunning } from '@/components/notice-card';
+import { NoticeCard, NoticePlacement, useAnnounceNotice, useScreenReaderRunning } from '@/components/notice-card';
 import { useOverlayPresence } from '@/lib/motion';
-import { appTheme } from '@/lib/theme';
-
-export { useScreenReaderRunning } from '@/components/notice-card';
 
 /** How long a notice offers its Undo (product decision D7, 2026-10-14). */
 export const FEED_UNDO_NOTICE_MS = 5_000;
@@ -79,26 +75,15 @@ export function FeedUndoNotice({
   };
 
   return (
-    <View
-      pointerEvents="box-none"
-      style={{
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        bottom: bottomOffset,
-        alignItems: 'center',
-        paddingHorizontal: appTheme.spacing.screen,
-        zIndex: 3,
-      }}
-    >
+    <NoticePlacement bottom={bottomOffset}>
       <NoticeCard
         message={shown.message}
         active={Boolean(notice)}
         actionLabel="Undo"
         onAction={undo}
         onDismiss={dismiss}
-        animatedStyle={presence.animatedStyle as StyleProp<ViewStyle>}
+        animatedStyle={presence.animatedStyle}
       />
-    </View>
+    </NoticePlacement>
   );
 }

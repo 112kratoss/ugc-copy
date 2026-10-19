@@ -13,22 +13,36 @@ import { dismissToast, hasFeedbackViewport, pushToast } from './feedback-state';
  * (`ugc-mobile/lib/saver-notice-policy/saver-notice-policy.ts`); this gives it
  * the browser's storage, the account's record on the server and a toast.
  *
- * A toast that ran out on a page out of view was not read. One shown while the
+ * The toast counts its six seconds only while it can be seen
+ * (`inViewOnly`): paused while the window is out of focus or another dialog is
+ * over it, and taken down unread when the page is hidden. One shown while the
  * reel is open is drawn inside the reel's dialog (`setToastHost`), where a
  * screen reader can reach it and it sits below the reel's header.
  */
 export { SAVER_NOTICE_MESSAGE };
 export type { SaverNoticeFields };
 
+/**
+ * The account's record of being told, as one read gave it: the page as it was
+ * drawn, or a profile read since (`AuthProvider`). Each read is a new object,
+ * and each is taken in once.
+ */
+export interface SaverNoticeRecord {
+  userId: string;
+  seen: boolean;
+}
+
 const SAVER_NOTICE_ROUTE = '/api/profile/saver-notice';
 
 /** The last token seen for each account, so a telling is recorded as that account. */
 const tokens = new Map<string, string>();
 const toastIds = new Map<string, number>();
-/** Accounts whose record was asked for on this page. */
-const requested = new Set<string>();
-/** Accounts whose record as the page was drawn has been taken in. */
-const pageRecordsApplied = new Set<string>();
+/**
+ * Records taken in. The page hands out the same record at every sync (a token
+ * refresh, another save surface mounting): taken in again, a "not told" from
+ * the page load would wipe a telling another tab has made since.
+ */
+let appliedRecords = new WeakSet<SaverNoticeRecord>();
 
 function readStored(accountId: string) {
   try {
@@ -70,11 +84,10 @@ const policy = createSaverNoticePolicy({
       message: SAVER_NOTICE_MESSAGE,
       durationMs: SAVER_NOTICE_DURATION_MS,
       closeGuardMs: SAVER_NOTICE_TAP_GUARD_MS,
+      inViewOnly: true,
       onDismiss: (how) => {
         toastIds.delete(accountId);
-        // A notice that ran out on a page out of view was not read.
-        const unread = how === 'interrupted' || (how === 'expired' && document.visibilityState === 'hidden');
-        policy.settle(accountId, unread ? 'interrupted' : how === 'expired' ? 'expired' : 'closed');
+        policy.settle(accountId, how);
       },
     });
     toastIds.set(accountId, toastId);
@@ -87,43 +100,20 @@ const policy = createSaverNoticePolicy({
 });
 
 /**
- * The account signed in on this page, or null. `seen` is its record as the
- * page was drawn (`ServerAuthState.saverNoticeSeen`); when the page could not
- * know it (a sign-in without a reload), the record is asked for once.
+ * The account signed in on this page, or null, with the latest record of its
+ * telling the page has read (`AuthProvider`'s `saverNoticeRecord`).
  */
 export function syncSaverNotice(
   accountId: string | null,
   accessToken?: string | null,
-  seen?: boolean | null,
+  record?: SaverNoticeRecord | null,
 ) {
   if (accountId && accessToken) tokens.set(accountId, accessToken);
   if (accountId) policy.restore(accountId, readStored(accountId));
   policy.setActiveAccount(accountId);
-  if (!accountId) return;
-
-  if (typeof seen === 'boolean') {
-    // The page hands out the record it was drawn with for as long as it is
-    // open, and syncs again at every token refresh: taken in once, or a "not
-    // told" from the page load would wipe a telling recorded since.
-    if (!pageRecordsApplied.has(accountId)) {
-      pageRecordsApplied.add(accountId);
-      policy.applyServerRecord(accountId, seen);
-    }
-    return;
-  }
-  if (!accessToken || requested.has(accountId)) return;
-  requested.add(accountId);
-  void (async () => {
-    try {
-      const response = await fetch(SAVER_NOTICE_ROUTE, { headers: { Authorization: `Bearer ${accessToken}` } });
-      if (!response.ok) throw new Error(`saver notice record: ${response.status}`);
-      const data = await response.json() as { seen?: unknown };
-      policy.applyServerRecord(accountId, data.seen === true);
-    } catch {
-      // Asked again at the next sync on this page.
-      requested.delete(accountId);
-    }
-  })();
+  if (!accountId || !record || record.userId !== accountId || appliedRecords.has(record)) return;
+  appliedRecords.add(record);
+  policy.applyServerRecord(accountId, record.seen);
 }
 
 /**
@@ -150,6 +140,5 @@ export function resetSaverNoticeForTests() {
   policy.reset();
   tokens.clear();
   toastIds.clear();
-  requested.clear();
-  pageRecordsApplied.clear();
+  appliedRecords = new WeakSet();
 }

@@ -15,11 +15,6 @@ interface SaveablePostItem {
 interface UseOptimisticPostSaveOptions<TItem extends SaveablePostItem> {
   initialItems: TItem[];
   accessToken?: string | null;
-  /**
-   * The signed-in account. Whether its saves may name it is remembered per
-   * account (`saver-notice.ts`), so a browser two people share tells each.
-   */
-  viewerId: string | null;
   isSignedIn: boolean;
   onAuthRequired: () => void;
   onError: (error: unknown) => void;
@@ -145,7 +140,6 @@ async function requestSave(id: string, run: SaveRun, shouldSave: boolean) {
 export function useOptimisticPostSave<TItem extends SaveablePostItem>({
   initialItems,
   accessToken,
-  viewerId,
   isSignedIn,
   onAuthRequired,
   onError,
@@ -175,14 +169,15 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
     setSavedItemIds(deriveSavedIds(initialItems));
   }, [initialItems]);
 
-  // Whether this account has been told, from the server as well as this
-  // browser, before its first tap needs the answer (`saver-notice.ts`). The
-  // page drew the server's record with it; it is asked for only when the page
-  // could not know it.
-  const { saverNoticeSeen } = useAuth();
+  // Whether the signed-in account has been told, from the server as well as
+  // this browser, before its first tap needs the answer (`saver-notice.ts`),
+  // remembered per account, so a browser two people share tells each.
+  const { user, session, saverNoticeRecord } = useAuth();
+  const viewerId = user?.id ?? null;
+  const viewerToken = session?.access_token ?? null;
   useEffect(() => {
-    syncSaverNotice(viewerId, accessToken, saverNoticeSeen);
-  }, [viewerId, accessToken, saverNoticeSeen]);
+    syncSaverNotice(viewerId, viewerToken, saverNoticeRecord);
+  }, [viewerId, viewerToken, saverNoticeRecord]);
 
   useEffect(() => {
     if (!accessToken || savedStateLookupIds.length === 0) {
@@ -257,7 +252,7 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
     // may have drawn it anew since this post's last tap.
     const wanted = !savedItemIds.has(id);
     // Decided now, at the tap, whenever its request goes out.
-    const saverFields = creatorSeesSaverFields(viewerId, wanted, accessToken);
+    const saverFields = creatorSeesSaverFields(viewerId, wanted, viewerToken);
     setSavedItemIds((previous) => updateSavedIds(previous, id, wanted));
     setItems((previous) => updateSaveCount(previous, id, wanted ? 1 : -1));
 

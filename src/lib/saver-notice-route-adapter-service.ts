@@ -13,22 +13,21 @@ import {
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
-import { readSaverNoticeSeen, recordSaverNoticeSeen } from '@/lib/profile-server';
+import { recordSaverNoticeSeen } from '@/lib/profile-server';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
 /**
- * Whether an account has been told "Creators can see who saved their posts."
- * (`profiles.saver_notice_seen_at`). The web and the app read it before a
- * first save, so a person told on one device is not told again on another,
- * and record it once the notice has been read. Save alerts name a saver only
- * once it is recorded.
+ * Records that an account has been told "Creators can see who saved their
+ * posts." (`profiles.saver_notice_seen_at`), once the notice has been read on
+ * any device. The web and the app read the record with the profile they load
+ * anyway, so a person told on one device is not told again on another. Save
+ * alerts name a saver only once it is recorded.
  */
 type SaverNoticeRouteDependencies = {
   createServiceClient?: () => SupabaseClient;
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
   logError?: typeof logBackendRouteError;
-  readSaverNoticeSeen?: typeof readSaverNoticeSeen;
   recordSaverNoticeSeen?: typeof recordSaverNoticeSeen;
 };
 
@@ -40,7 +39,6 @@ function resolveDependencies(dependencies: SaverNoticeRouteDependencies | undefi
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
     logError: dependencies?.logError ?? logBackendRouteError,
-    readSaverNoticeSeen: dependencies?.readSaverNoticeSeen ?? readSaverNoticeSeen,
     recordSaverNoticeSeen: dependencies?.recordSaverNoticeSeen ?? recordSaverNoticeSeen,
   };
 }
@@ -52,19 +50,6 @@ async function getRegisteredUserId(request: Request, dependencies: ReturnType<ty
     error,
   } = await getVerifiedAuthUserResult(dependencies.createUserClient(request));
   return error || !user || isGuestUser(user) ? null : user.id;
-}
-
-async function handleGET(request: Request, dependencies: ReturnType<typeof resolveDependencies>) {
-  try {
-    const userId = await getRegisteredUserId(request, dependencies);
-    if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-    const seen = await dependencies.readSaverNoticeSeen(dependencies.createServiceClient(), userId);
-    return NextResponse.json({ seen } satisfies SaverNoticeResponseBody);
-  } catch (error) {
-    dependencies.logError('Saver notice read error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
-  }
 }
 
 async function handlePOST(request: Request, dependencies: ReturnType<typeof resolveDependencies>) {
@@ -80,22 +65,16 @@ async function handlePOST(request: Request, dependencies: ReturnType<typeof reso
       throw error;
     }
 
-    await dependencies.recordSaverNoticeSeen(serviceClient, userId);
+    // An account with no profile row to hold the record is not told: its
+    // device keeps the telling pending and asks again.
+    if (!(await dependencies.recordSaverNoticeSeen(serviceClient, userId))) {
+      return NextResponse.json({ error: 'Profile not found' }, { status: 404 });
+    }
     return NextResponse.json({ seen: true } satisfies SaverNoticeResponseBody);
   } catch (error) {
     dependencies.logError('Saver notice record error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
-}
-
-export async function getSaverNoticeRouteResponse({
-  dependencies,
-  request,
-}: {
-  dependencies?: SaverNoticeRouteDependencies;
-  request: Request;
-}) {
-  return applyPrivateNoStoreApiResponseHeaders(await handleGET(request, resolveDependencies(dependencies)), request);
 }
 
 export async function postSaverNoticeRouteResponse({

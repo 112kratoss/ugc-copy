@@ -95,7 +95,7 @@ describe('ShowcaseDetailEngagementRow', () => {
     useAuthMock.mockReturnValue({
       user: { id: 'viewer-1' },
       session: { access_token: 'token-1' },
-      saverNoticeSeen: true,
+      saverNoticeRecord: { userId: 'viewer-1', seen: true },
     });
     render(<ShowcaseDetailEngagementRow {...rowProps()} />);
 

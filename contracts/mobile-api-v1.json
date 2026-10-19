@@ -1083,15 +1083,6 @@
         "message": "Saved."
       }
     },
-    "getSaverNotice": {
-      "method": "GET",
-      "path": "/api/profile/saver-notice",
-      "auth": "required",
-      "cacheControl": "private, no-store",
-      "response": {
-        "seen": false
-      }
-    },
     "recordSaverNotice": {
       "method": "POST",
       "path": "/api/profile/saver-notice",

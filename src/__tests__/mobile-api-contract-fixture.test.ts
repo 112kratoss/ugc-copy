@@ -34,7 +34,7 @@ import {
 } from '@/lib/showcase-feed-newest-route-adapter-service';
 import type { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
 import { getShowcasePostResolveRouteResponse } from '@/lib/showcase-post-resolve-route-adapter-service';
-import { getSaverNoticeRouteResponse, postSaverNoticeRouteResponse } from '@/lib/saver-notice-route-adapter-service';
+import { postSaverNoticeRouteResponse } from '@/lib/saver-notice-route-adapter-service';
 import { postShowcaseSaveRouteResponse } from '@/lib/showcase-save-route-adapter-service';
 import type { ShowcaseSaveResponseBody } from '@/lib/showcase-save-service';
 import {
@@ -156,7 +156,6 @@ const expectedEndpointKeys = [
   'deletePostComment',
   'setCreatorFollowing',
   'saveShowcasePost',
-  'getSaverNotice',
   'recordSaverNotice',
   'remixShowcasePost',
   'shareShowcasePost',
@@ -580,7 +579,8 @@ describe('shared mobile API v1 contract fixture', () => {
     }));
   });
 
-  it('answers whether the account was told, and records it, as the fixture pins', async () => {
+  // The record is read with the profile (`saverNoticeSeen`); the route only writes it.
+  it('records that the account was told, as the fixture pins', async () => {
     const dependencies = {
       createServiceClient: vi.fn(() => ({}) as SupabaseClient),
       createUserClient: () => ({
@@ -589,20 +589,16 @@ describe('shared mobile API v1 contract fixture', () => {
       enforceBackendRateLimit: vi.fn(async () => ({
         allowed: true, limit: 20, remaining: 19, retryAfterSeconds: 0, resetAt: '2026-10-19T10:00:00.000Z',
       })),
-      readSaverNoticeSeen: vi.fn(async () => false),
-      recordSaverNoticeSeen: vi.fn(async () => undefined),
+      recordSaverNoticeSeen: vi.fn(async () => true),
     };
-    const request = (method: string) => new Request('http://localhost/api/profile/saver-notice', { method });
+    const request = new Request('http://localhost/api/profile/saver-notice', { method: 'POST' });
 
-    const read = await getSaverNoticeRouteResponse({ request: request('GET'), dependencies });
-    expect(read.status).toBe(200);
-    expect(read.headers.get('Cache-Control')).toBe(mobileApiContract.endpoints.getSaverNotice.cacheControl);
-    await expect(read.json()).resolves.toEqual(mobileApiContract.endpoints.getSaverNotice.response);
-
-    const recorded = await postSaverNoticeRouteResponse({ request: request('POST'), dependencies });
+    const recorded = await postSaverNoticeRouteResponse({ request, dependencies });
     expect(recorded.status).toBe(200);
+    expect(recorded.headers.get('Cache-Control')).toBe(mobileApiContract.endpoints.recordSaverNotice.cacheControl);
     await expect(recorded.json()).resolves.toEqual(mobileApiContract.endpoints.recordSaverNotice.response);
     expect(dependencies.recordSaverNoticeSeen).toHaveBeenCalledWith(expect.anything(), 'viewer-1');
+    expect(mobileApiContract.endpoints).not.toHaveProperty('getSaverNotice');
   });
 
   // C14 (product decision 14): the app reports a shared link it opened on the

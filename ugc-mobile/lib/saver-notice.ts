@@ -29,8 +29,6 @@ let current: SaverNoticeModel | null = null;
 let nextNoticeId = 1;
 const listeners = new Set<() => void>();
 let recorder: SaverNoticeRecorder | null = null;
-/** Accounts whose memory on this phone has been read on this run. */
-const restored = new Set<string>();
 /** Each account's read, while it is under way: a second sign-in waits on the first read. */
 const reads = new Map<string, Promise<void>>();
 /** Counts the calls to `setSaverNoticeAccount`: only the latest says who is signed in. */
@@ -86,7 +84,7 @@ export function readSaverNotice() {
 export async function setSaverNoticeAccount(accountId: string | null, record?: SaverNoticeRecorder) {
   if (record) recorder = record;
   const call = ++accountCalls;
-  if (accountId && !restored.has(accountId)) {
+  if (accountId && !policy.hasRestored(accountId)) {
     await readMemory(accountId);
     // Another account signed in, or this one out, while that read was under way.
     if (call !== accountCalls) return;
@@ -103,7 +101,6 @@ function readMemory(accountId: string) {
       .catch(() => null)
       .then((stored) => {
         policy.restore(accountId, stored);
-        restored.add(accountId);
         reads.delete(accountId);
       });
     reads.set(accountId, read);
@@ -111,9 +108,13 @@ function readMemory(accountId: string) {
   return read;
 }
 
-/** The server's record for the account, as its profile came back. */
+/**
+ * The server's record for the account, as its profile came back. False when a
+ * "no record" was set aside: read before this phone's record of the telling
+ * landed, so the profile it came in is out of date.
+ */
 export function applySaverNoticeRecord(accountId: string, seen: boolean) {
-  policy.applyServerRecord(accountId, seen);
+  return policy.applyServerRecord(accountId, seen);
 }
 
 /** Asks again for a telling not yet on record: the app is back in front. */
@@ -141,7 +142,6 @@ export function settleSaverNotice(id: number, ending: SaverNoticeEnding) {
 /** Tests only: forget what this run has told, shown and read. */
 export function resetSaverNoticeForTests() {
   policy.reset();
-  restored.clear();
   reads.clear();
   accountCalls = 0;
   recorder = null;

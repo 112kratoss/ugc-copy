@@ -10,7 +10,6 @@ import {
 
 const readMigration = (name: string) => fs.readFileSync(path.resolve(process.cwd(), 'supabase/migrations', name), 'utf8');
 const migration = readMigration('20261019091221_hide_alert_actors_from_their_owners.sql');
-const followingMigration = readMigration('20261019122652_save_alerts_follow_the_save.sql');
 
 function grantedColumns(source: string) {
   return [...source.matchAll(/GRANT SELECT \(([^)]*)\) ON TABLE public\.mobile_notifications TO authenticated;/g)]
@@ -19,8 +18,12 @@ function grantedColumns(source: string) {
     .filter(Boolean);
 }
 
-/** What `authenticated` may read once both migrations have run. */
-const granted = [...grantedColumns(migration), ...grantedColumns(followingMigration)];
+/**
+ * What `authenticated` may read. Nothing later grants it more: the save
+ * columns 20261019122652 adds stay the service's
+ * (`mobile_notification_actor_columns.test.sql` reads the live grants).
+ */
+const granted = grantedColumns(migration);
 
 describe('hide alert actors from their owners migration', () => {
   it('takes back the table-wide read and gives the owner only the columns Alerts show', () => {

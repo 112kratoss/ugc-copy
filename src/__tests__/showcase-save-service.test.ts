@@ -10,6 +10,7 @@ import {
   type MobileNotificationHistory,
 } from '@/__tests__/fixtures/mobile-notification-history';
 import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
+import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
 import {
   saveShowcasePostForRoute,
   type ShowcaseSaveServiceDependencies,
@@ -371,8 +372,9 @@ describe('post save notifications', () => {
 describe('named save notifications', () => {
   // Saves were private until the apps began telling people that creators can
   // see who saved. A save names its saver only when the app it came from says
-  // it told them before they tapped, only once that telling is on record, and
-  // only by a handle they chose.
+  // it told them before they tapped; whether the telling is on record, and
+  // whether they chose their handle, is decided where the alert is written
+  // (`create_post_save_alert`, stood in for by the notification history).
   const namedSaveNotification = expect.objectContaining({
     user_id: 'creator-1',
     actor_user_id: 'user-1',
@@ -391,21 +393,26 @@ describe('named save notifications', () => {
     title: 'Someone saved your post',
     aggregation_key: expect.stringMatching(/^post-social:post_saved:creator-1:post-1:\d+$/),
   });
-  const handleRead = ['username, saver_notice_seen_at', 'id', 'user-1'];
-  const toldOn = '2026-10-19T09:00:00.000Z';
-  const told = (username: unknown) => ({ data: { username, saver_notice_seen_at: toldOn }, error: null });
+  /** creator-1's post, and its savers: maya and lee told on record by handles they chose. */
+  const SAVING = {
+    posts: { 'post-1': 'creator-1' },
+    savers: {
+      'user-1': { username: 'maya', told: true },
+      'user-2': { username: 'lee', told: true },
+    },
+  };
 
   /** History in which the creator's phone takes pushes, with Expo stood in for. */
-  function withCreatorPhone() {
+  function withCreatorPhone(savers: typeof SAVING.savers = SAVING.savers) {
     vi.stubGlobal('fetch', createExpoPushService().fetch);
-    return createMobileNotificationHistory({ pushTo: { 'creator-1': ['ExponentPushToken[creator-phone]'] } });
+    return createMobileNotificationHistory({ ...SAVING, savers, pushTo: { 'creator-1': ['ExponentPushToken[creator-phone]'] } });
   }
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  function createDependencies(isUserRelationshipBlocked = vi.fn(async () => false)) {
+  function createDependencies() {
     return {
       findPublicPostReferenceByIdOrGenerationId: vi.fn(async () => ({
         id: 'post-1',
@@ -417,43 +424,27 @@ describe('named save notifications', () => {
         source_kind: 'magicbooklet' as const,
       })),
       isMissingPostsSchemaError: vi.fn(() => false),
-      isUserRelationshipBlocked,
+      isUserRelationshipBlocked: vi.fn(async () => false),
+      // The real notifier; its push hold is pinned in mobile-notifications.test.ts.
+      notifyPostSocialActivity: vi.fn((client: SupabaseClient, params: Parameters<typeof notifyPostSocialActivity>[1]) => (
+        notifyPostSocialActivity(client, { ...params, pushHoldMs: 0 })
+      )),
     } satisfies Partial<ShowcaseSaveServiceDependencies>;
   }
 
-  type ProfileAnswer = { data: unknown; error: unknown } | Error;
   type SaveState = { is_saved: boolean; save_count: number; changed: boolean };
   const saved: SaveState = { is_saved: true, save_count: 5, changed: true };
   const unsaved: SaveState = { is_saved: false, save_count: 4, changed: true };
 
-  /**
-   * The service client, with the `profiles` rows savers' handles are read from
-   * and the save states its saves answer, in order (the last one repeats).
-   */
-  function withSaverProfile(
-    answer: ProfileAnswer | ((userId: string) => ProfileAnswer),
-    states: SaveState[] = [saved],
-  ) {
+  /** The service client, with the save states its saves answer, in order (the last one repeats). */
+  function withSaveStates(states: SaveState[] = [saved]) {
     const serviceClient = createServiceClientMock();
-    const lookups: unknown[][] = [];
+    const tables: string[] = [];
     const pending = [...states];
     const client = {
       from: (table: string) => {
-        if (table !== 'profiles') return serviceClient.client.from(table);
-        return {
-          select: (columns: string) => ({
-            eq: (column: string, value: unknown) => {
-              lookups.push([columns, column, value]);
-              return {
-                maybeSingle: async () => {
-                  const row = typeof answer === 'function' ? answer(String(value)) : answer;
-                  if (row instanceof Error) throw row;
-                  return row;
-                },
-              };
-            },
-          }),
-        };
+        tables.push(table);
+        return serviceClient.client.from(table);
       },
       rpc: async (name: string, args?: Record<string, unknown>) => {
         if (name === 'set_post_save_state') {
@@ -463,7 +454,7 @@ describe('named save notifications', () => {
         return serviceClient.client.rpc(name, args);
       },
     } as unknown as SupabaseClient;
-    return { client, lookups };
+    return { client, tables };
   }
 
   function save(
@@ -475,6 +466,7 @@ describe('named save notifications', () => {
       actorUserId?: string;
       requestedSaveState?: boolean;
       runAfterResponse?: (task: () => Promise<unknown>) => void;
+      dependencies?: ReturnType<typeof createDependencies>;
     } = {},
   ) {
     return saveShowcasePostForRoute({
@@ -485,24 +477,29 @@ describe('named save notifications', () => {
       requestedSaveState: options.requestedSaveState ?? true,
       serviceClient: withMobileNotificationHistory(client, history),
       sourceSurface: 'showcase',
-      dependencies: createDependencies(),
+      dependencies: options.dependencies ?? createDependencies(),
       runAfterResponse: options.runAfterResponse,
     });
   }
 
-  it('names the saver to the creator when their app told them before the tap and the telling is on record', async () => {
-    const { client, lookups } = withSaverProfile(told('maya'));
-    const history = withUniqueDedupeKeys(createMobileNotificationHistory());
+  it('names the saver to the creator when their app told them before the tap, reading nothing of them itself', async () => {
+    const { client, tables } = withSaveStates();
+    const history = withUniqueDedupeKeys(createMobileNotificationHistory(SAVING));
+    const dependencies = createDependencies();
 
-    await save(client, history, { creatorSeesSaver: true });
+    await save(client, history, { creatorSeesSaver: true, dependencies });
 
     expect(history.sent).toEqual([namedSaveNotification]);
-    expect(lookups).toEqual([handleRead]);
+    expect(dependencies.notifyPostSocialActivity).toHaveBeenCalledWith(expect.anything(), {
+      type: 'post_saved', recipientUserId: 'creator-1', actorUserId: 'user-1', postId: 'post-1', nameSaver: true,
+    });
+    // No profile read: the told record and the handle are the database's to check.
+    expect(tables).not.toContain('profiles');
     expect(history.preferenceReads).toEqual(['creator-1']);
   });
 
   it('takes the named alert away with the save, and writes it anew at the next save', async () => {
-    const { client } = withSaverProfile(told('maya'), [saved, unsaved, saved]);
+    const { client } = withSaveStates([saved, unsaved, saved]);
     const history = withUniqueDedupeKeys(withCreatorPhone());
     const runAfterResponse = vi.fn();
 
@@ -529,7 +526,7 @@ describe('named save notifications', () => {
   });
 
   it("pushes one post's saves once a quarter-hour, however many people they name", async () => {
-    const { client } = withSaverProfile((userId) => told(userId === 'user-1' ? 'maya' : 'lee'));
+    const { client } = withSaveStates();
     const history = withUniqueDedupeKeys(withCreatorPhone());
 
     await save(client, history, { creatorSeesSaver: true });
@@ -546,9 +543,9 @@ describe('named save notifications', () => {
     expect(history.pushed.map((push) => push.title)).toEqual(['@maya saved your post']);
   });
 
-  it("answers before the saver's handle is read, and names them behind the answer", async () => {
-    const { client, lookups } = withSaverProfile(told('maya'));
-    const history = createMobileNotificationHistory();
+  it('answers first, and names the saver behind the answer', async () => {
+    const { client } = withSaveStates();
+    const history = createMobileNotificationHistory(SAVING);
     const deferred: Array<() => Promise<unknown>> = [];
 
     const answer = save(client, history, {
@@ -557,18 +554,17 @@ describe('named save notifications', () => {
     });
 
     expect(await hasAnswered(answer)).toBe(true);
-    expect(lookups).toEqual([]);
+    expect(history.started).toEqual([]);
     expect(history.sent).toEqual([]);
 
     await deferred[0]();
-    expect(lookups).toEqual([handleRead]);
     expect(history.sent).toEqual([namedSaveNotification]);
   });
 
   it('writes no named alert once an unsave answered first has taken the save away', async () => {
     // The save's alert is written behind its answer; the unsave that followed
     // was answered, and its save gone, before that ran.
-    const { client } = withSaverProfile(told('maya'), [saved, unsaved]);
+    const { client } = withSaveStates([saved, unsaved]);
     const history = withCreatorPhone();
     const deferred: Array<() => Promise<unknown>> = [];
     const runAfterResponse = (task: () => Promise<unknown>) => { deferred.push(task); };
@@ -585,8 +581,8 @@ describe('named save notifications', () => {
   });
 
   it("leaves nothing behind the answer to an unsave, of another's post or the creator's own", async () => {
-    const { client } = withSaverProfile(told('maya'), [unsaved]);
-    const history = createMobileNotificationHistory();
+    const { client } = withSaveStates([unsaved]);
+    const history = createMobileNotificationHistory(SAVING);
     const runAfterResponse = vi.fn();
 
     await expect(save(client, history, { requestedSaveState: false, runAfterResponse }))
@@ -598,63 +594,75 @@ describe('named save notifications', () => {
   });
 
   it.each([{ creatorSeesSaver: false }, { creatorSeesSaver: undefined }])(
-    'keeps a save from an app that never said so as "Someone", without reading the saver ($creatorSeesSaver)',
+    'keeps a save from an app that never said so as "Someone", never asking to name ($creatorSeesSaver)',
     async ({ creatorSeesSaver }) => {
-      const { client, lookups } = withSaverProfile(told('maya'));
-      const history = createMobileNotificationHistory();
+      const { client } = withSaveStates();
+      const history = createMobileNotificationHistory(SAVING);
 
       await save(client, history, { creatorSeesSaver });
 
       expect(history.sent).toEqual([unnamedSaveNotification]);
-      expect(lookups).toEqual([]);
+      expect(history.started.some((key) => key.startsWith('post-save:'))).toBe(false);
     },
   );
 
   it('tells the creator nothing of a save made while its saver is being told, whatever else it says', async () => {
-    const { client, lookups } = withSaverProfile(told('maya'));
-    const history = createMobileNotificationHistory();
+    const { client } = withSaveStates();
+    const history = createMobileNotificationHistory(SAVING);
     const runAfterResponse = vi.fn();
 
     await save(client, history, { saverNotYetTold: true, creatorSeesSaver: true, runAfterResponse });
 
     expect(runAfterResponse).not.toHaveBeenCalled();
-    expect(lookups).toEqual([]);
     expect(history.sent).toEqual([]);
   });
 
   it.each([
     // Every account starts with a generated handle it never chose.
-    { kind: 'only the generated placeholder handle', answer: told('creator-1a2b3c4d'), logs: false },
+    { kind: 'only the generated placeholder handle', saver: { username: 'creator-1a2b3c4d', told: true } },
     // The app says it told them, but no telling is on record for the account.
-    { kind: 'no telling on record', answer: { data: { username: 'maya', saver_notice_seen_at: null }, error: null }, logs: false },
-    { kind: 'no handle', answer: told(null), logs: false },
-    { kind: 'a blank handle', answer: told('  '), logs: false },
-    { kind: 'no profile row', answer: { data: null, error: null }, logs: false },
-    { kind: 'a read that errors', answer: { data: null, error: { message: 'timeout' } }, logs: true },
-    { kind: 'a read that throws', answer: new Error('socket hang up'), logs: true },
-  ])('falls back to "Someone" for a saver with $kind', async ({ answer, logs }) => {
-    const { client } = withSaverProfile(answer);
-    const history = createMobileNotificationHistory();
+    { kind: 'no telling on record', saver: { username: 'maya', told: false } },
+    { kind: 'no handle', saver: { username: null, told: true } },
+    { kind: 'a blank handle', saver: { username: '  ', told: true } },
+  ])('falls back to "Someone" when the database will not name a saver with $kind', async ({ saver }) => {
+    const { client } = withSaveStates();
+    const history = createMobileNotificationHistory({ ...SAVING, savers: { 'user-1': saver } });
+
+    await expect(save(client, history, { creatorSeesSaver: true })).resolves.toMatchObject({ ok: true });
+
+    expect(history.sent).toEqual([unnamedSaveNotification]);
+  });
+
+  it('answers the save all the same when the alert cannot be written, and logs it', async () => {
+    const { client } = withSaveStates();
+    const history = createMobileNotificationHistory(SAVING);
+    const failing = {
+      ...history,
+      handlesRpc: (name: string, args?: Record<string, unknown>) => history.handlesRpc(name, args),
+      rpc: async (name: string, args?: Record<string, unknown>) => (name === 'create_post_save_alert'
+        ? { data: null, error: { message: 'statement timeout' } }
+        : history.rpc(name, args)),
+    } as MobileNotificationHistory;
     const logged: BackendLogRecord[] = [];
     const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
 
     try {
-      await expect(save(client, history, { creatorSeesSaver: true })).resolves.toMatchObject({ ok: true });
+      await expect(save(client, failing, { creatorSeesSaver: true })).resolves.toMatchObject({ ok: true, body: { isSaved: true } });
     } finally {
       restoreLogSink();
     }
 
-    expect(history.sent).toEqual([unnamedSaveNotification]);
-    expect(logged.map((record) => record.msg)).toEqual(logs ? ['failed_to_load_alert_profile'] : []);
+    expect(history.sent).toEqual([]);
+    expect(logged.map((record) => record.msg)).toEqual(['failed_to_create_mobile_notification']);
   });
 
-  it('never reads the handle of a creator saving their own post', async () => {
-    const { client, lookups } = withSaverProfile(told('maya'));
-    const history = createMobileNotificationHistory();
+  it('tells nobody of a creator saving their own post', async () => {
+    const { client } = withSaveStates();
+    const history = createMobileNotificationHistory(SAVING);
 
     await save(client, history, { creatorSeesSaver: true, actorUserId: 'creator-1' });
 
-    expect(lookups).toEqual([]);
+    expect(history.started).toEqual([]);
     expect(history.sent).toEqual([]);
   });
 });
@@ -665,10 +673,15 @@ describe('an unsave of a post that has left public view', () => {
   // (which takes any alert naming them with it) must not wait for the post.
   const POST_ID = '7d3f2a10-5b8c-4e61-9a2f-0c1d2e3f4a5b';
 
+  // Whether the database then takes the save off a post out of public view
+  // is pinned against real SQL (supabase/tests/database/post_save_alerts.test.sql,
+  // post-save-alert-database.test.ts): these stand the RPC in.
   function createClient(ownSave: 'held' | 'none' | 'unreadable') {
     const saveLookups: unknown[][] = [];
     const rpcMock = vi.fn(async (name: string) => {
       if (name === 'set_post_save_state') return { data: [{ is_saved: false, save_count: 3, changed: true }], error: null };
+      // A legacy toggle of a save held takes it off.
+      if (name === 'toggle_post_save') return { data: false, error: null };
       throw new Error(`Unexpected RPC: ${name}`);
     });
     const fromMock = vi.fn((table: string) => {
@@ -760,15 +773,25 @@ describe('an unsave of a post that has left public view', () => {
     expect(rpcMock).not.toHaveBeenCalled();
   });
 
-  it('looks for no save of its own for a save, or a toggle, of a post out of public view', async () => {
+  it('looks for no save of its own for a save of a post out of public view', async () => {
     const { client, rpcMock, fromMock } = createClient('held');
 
-    for (const requestedSaveState of [true, null]) {
-      await expect(takeOff(client, { requestedSaveState }).result)
-        .resolves.toEqual({ ok: false, status: 404, body: { error: 'Post not found' } });
-    }
+    await expect(takeOff(client, { requestedSaveState: true }).result)
+      .resolves.toEqual({ ok: false, status: 404, body: { error: 'Post not found' } });
     expect(fromMock).not.toHaveBeenCalled();
     expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  // A toggle from an older app on a post it can no longer save can only be
+  // taking the saver's own save back.
+  it('takes a save off through a toggle too, found the same way', async () => {
+    const { client, rpcMock, saveLookups } = createClient('held');
+    const { result, notifyPostSocialActivity } = takeOff(client, { requestedSaveState: null });
+
+    await expect(result).resolves.toMatchObject({ ok: true, body: { isSaved: false } });
+    expect(saveLookups).toHaveLength(1);
+    expect(rpcMock).toHaveBeenCalledWith('toggle_post_save', { p_post_id: POST_ID, p_user_id: 'user-1' });
+    expect(notifyPostSocialActivity).not.toHaveBeenCalled();
   });
 
   it('answers not found, and logs, when its save cannot be read', async () => {

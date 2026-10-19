@@ -5,12 +5,22 @@ import { dismissToast, readFeedbackSnapshot, resetFeedbackState, subscribeToFeed
 import { SAVER_NOTICE_MESSAGE, resetSaverNoticeForTests } from '@/components/saver-notice';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 
-// What the page was drawn knowing of the account's saver notice record
-// (`AuthProvider`): null unless a case is about it.
-const auth = vi.hoisted(() => ({ saverNoticeSeen: null as boolean | null }));
+// The account signed in, and what the page has read of its saver notice
+// record (`AuthProvider`): nobody, and no record, unless a case is about it.
+const auth = vi.hoisted(() => ({
+    user: null as { id: string } | null,
+    session: null as { access_token: string } | null,
+    saverNoticeRecord: null as { userId: string; seen: boolean } | null,
+}));
 vi.mock('@/components/AuthProvider', () => ({
     useAuth: () => auth,
 }));
+
+/** Signs `userId` in, as the hook's own `useAuth()` reads it. */
+function signIn(userId: string) {
+    auth.user = { id: userId };
+    auth.session = { access_token: 'token' };
+}
 
 type Post = { id: string; isSaved?: boolean; saveCount: number };
 
@@ -24,7 +34,6 @@ function renderSaveHook() {
     return renderHook(() => useOptimisticPostSave<Post>({
         initialItems,
         accessToken: null,
-        viewerId: null,
         isSignedIn: false,
         onAuthRequired: vi.fn(),
         onError: vi.fn(),
@@ -87,13 +96,11 @@ function serverHolds(isSaved: boolean, saveCount: number): SaveAnswer {
     return { ok: true, json: async () => ({ success: true, isSaved, saveCount }) };
 }
 
-async function renderSignedInSaveHook(onSuccess = vi.fn(), viewerId: string | null = null) {
+async function renderSignedInSaveHook(onSuccess = vi.fn()) {
     const onError = vi.fn();
     const hook = renderHook(() => useOptimisticPostSave<Post>({
         initialItems,
         accessToken: 'token',
-        // No account unless a case is about telling who saved (saver-notice.ts).
-        viewerId,
         isSignedIn: true,
         onAuthRequired: vi.fn(),
         onError,
@@ -309,18 +316,21 @@ describe('useOptimisticPostSave, telling who saved', () => {
 
     afterEach(() => {
         unsubscribe();
-        auth.saverNoticeSeen = null;
+        auth.user = null;
+        auth.session = null;
+        auth.saverNoticeRecord = null;
         resetFeedbackState();
         resetSaverNoticeForTests();
         window.localStorage.clear();
         vi.unstubAllGlobals();
     });
 
-    it.each([true, false])('asks nothing of the record when the page was drawn with it (%s)', async (seen) => {
-        auth.saverNoticeSeen = seen;
+    it.each([true, false])('asks nothing of the record, and goes by the one the page read (%s)', async (seen) => {
+        signIn('viewer-1');
+        auth.saverNoticeRecord = { userId: 'viewer-1', seen };
         unsubscribe = subscribeToFeedback(() => {});
         const saves = stubSaveRequests();
-        const { tap } = await renderSignedInSaveHook(vi.fn(), 'viewer-1');
+        const { tap } = await renderSignedInSaveHook();
 
         await tap('post-2');
 
@@ -333,22 +343,30 @@ describe('useOptimisticPostSave, telling who saved', () => {
         expect(readFeedbackSnapshot().toasts.map((toast) => toast.message)).toEqual(seen ? [] : [SAVER_NOTICE_MESSAGE]);
     });
 
-    it('asks for the record once, as the account, when the page could not know it', async () => {
-        stubSaveRequests();
-        const { rerender } = await renderSignedInSaveHook(vi.fn(), 'viewer-1');
+    // Review 4 finding #25: the account is the hook's own `useAuth()`'s, so its
+    // record is never paired with another account's id.
+    it("takes the signed-in account from the session, and no other account's record", async () => {
+        signIn('viewer-1');
+        auth.saverNoticeRecord = { userId: 'viewer-2', seen: true };
+        unsubscribe = subscribeToFeedback(() => {});
+        const saves = stubSaveRequests();
+        const { tap, rerender } = await renderSignedInSaveHook();
         rerender();
-        await act(async () => {});
 
-        expect(recordRequests()).toEqual([
-            ['/api/profile/saver-notice', { headers: { Authorization: 'Bearer token' } }],
+        await tap('post-2');
+
+        expect(recordRequests()).toEqual([]);
+        expect(saves.map(({ body }) => body)).toEqual([
+            { postId: 'post-2', shouldSave: true, sourceSurface: 'feed', saverNotYetTold: true },
         ]);
     });
 
     it('sends a save tapped before the notice went as one that tells the creator nothing', async () => {
+        signIn('viewer-1');
         // The root layout's FeedbackViewport, which draws the notice.
         unsubscribe = subscribeToFeedback(() => {});
         const saves = stubSaveRequests();
-        const { tap } = await renderSignedInSaveHook(vi.fn(), 'viewer-1');
+        const { tap } = await renderSignedInSaveHook();
 
         // post-1 starts saved: the unsave goes out, and the save tapped while
         // it is out waits behind it, telling the viewer now.

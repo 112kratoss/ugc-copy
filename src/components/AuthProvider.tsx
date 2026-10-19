@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 
 import { isSessionRefusal } from '@/lib/auth-error-copy';
+import type { SaverNoticeRecord } from '@/components/saver-notice';
 import {
     getClientE2EAuthState,
 } from '@/lib/e2e-auth';
@@ -42,10 +43,11 @@ interface AuthContextValue {
     marketplaceSpendableCredits: number | null;
     /**
      * Whether the signed-in account has been told, on record, that creators can
-     * see who saved its posts, as the page was drawn. Null when the page could
-     * not know it (a sign-in, or another account, since).
+     * see who saved its posts: as the page was drawn, or as the profile was
+     * last read since (a sign-in, a balance refresh). A new object for each
+     * read. Null while neither has been read for the account signed in.
      */
-    saverNoticeSeen: boolean | null;
+    saverNoticeRecord: SaverNoticeRecord | null;
     isLoading: boolean;
     updateCredits: (nextCredits: number | null, options?: CreditUpdateOptions) => void;
     refreshSessionState: () => Promise<void>;
@@ -56,7 +58,7 @@ const anonymousAuthContext: AuthContextValue = {
     user: null,
     credits: null,
     marketplaceSpendableCredits: null,
-    saverNoticeSeen: null,
+    saverNoticeRecord: null,
     isLoading: false,
     updateCredits: () => undefined,
     refreshSessionState: async () => undefined,
@@ -68,6 +70,17 @@ interface CreditBalance {
 }
 
 const UNKNOWN_BALANCE: CreditBalance = { credits: null, marketplaceSpendableCredits: null };
+
+/** The profile columns the browser reads back for its own account. */
+const OWN_PROFILE_COLUMNS = 'credits, promotional_credits, saver_notice_seen_at';
+
+/** A profile row's record of its account being told that creators can see who saved. */
+function saverNoticeRecordFromProfile(
+    userId: string,
+    profile: { saver_notice_seen_at?: string | null } | null,
+): SaverNoticeRecord | null {
+    return profile ? { userId, seen: typeof profile.saver_notice_seen_at === 'string' } : null;
+}
 
 /** A profile row's balance, split by the rule the profile API and the unlock RPC apply. */
 function balanceFromProfile(
@@ -157,6 +170,14 @@ export function AuthProvider({
         marketplaceSpendableCredits: initialMarketplaceSpendableCredits ?? clientE2EAuth?.credits ?? null,
     }));
     const [isLoading, setIsLoading] = useState(!hasResolvedInitialState && !clientE2EAuth);
+    // The record the page was drawn with, kept as one object for as long as
+    // the page is open, and the latest one read in the browser since.
+    const [pageSaverNoticeRecord] = useState<SaverNoticeRecord | null>(() => (
+        initialSaverNoticeSeen !== null && initialSession?.user?.id
+            ? { userId: initialSession.user.id, seen: initialSaverNoticeSeen }
+            : null
+    ));
+    const [readSaverNoticeRecord, setReadSaverNoticeRecord] = useState<SaverNoticeRecord | null>(null);
     const witnessedAuthCookieRef = useRef(hasAuthCookieHint);
     const authEpochRef = useRef(0);
     const tokenEpochRef = useRef(0);
@@ -188,6 +209,7 @@ export function AuthProvider({
             deferredAuthSyncIds.clear();
             setSession(null);
             setBalance(UNKNOWN_BALANCE);
+            setReadSaverNoticeRecord(null);
             setIsLoading(false);
         };
 
@@ -294,7 +316,7 @@ export function AuthProvider({
 
             const { data: profile } = await supabase
                 .from('profiles')
-                .select('credits, promotional_credits')
+                .select(OWN_PROFILE_COLUMNS)
                 .eq('id', verifiedUser.id)
                 .single();
 
@@ -307,6 +329,8 @@ export function AuthProvider({
             }
 
             setBalance(balanceFromProfile(profile));
+            const saverNoticeRecord = saverNoticeRecordFromProfile(verifiedUser.id, profile);
+            if (saverNoticeRecord) setReadSaverNoticeRecord(saverNoticeRecord);
             setIsLoading(false);
         };
 
@@ -469,7 +493,7 @@ export function AuthProvider({
 
         const { data: profile } = await supabase
             .from('profiles')
-            .select('credits, promotional_credits')
+            .select(OWN_PROFILE_COLUMNS)
             .eq('id', verifiedUser.id)
             .single();
 
@@ -478,6 +502,8 @@ export function AuthProvider({
         }
 
         setBalance(balanceFromProfile(profile));
+        const saverNoticeRecord = saverNoticeRecordFromProfile(verifiedUser.id, profile);
+        if (saverNoticeRecord) setReadSaverNoticeRecord(saverNoticeRecord);
         setIsLoading(false);
     };
 
@@ -504,12 +530,9 @@ export function AuthProvider({
                 user: session?.user ?? null,
                 credits: balance.credits,
                 marketplaceSpendableCredits: balance.marketplaceSpendableCredits,
-                // Known only for the account the page was drawn for.
-                saverNoticeSeen: initialSaverNoticeSeen !== null
-                    && session?.user?.id !== undefined
-                    && session.user.id === initialSession?.user?.id
-                    ? initialSaverNoticeSeen
-                    : null,
+                // Only ever the account signed in now's, the latest read first.
+                saverNoticeRecord: [readSaverNoticeRecord, pageSaverNoticeRecord]
+                    .find((record) => record !== null && record.userId === session?.user?.id) ?? null,
                 isLoading: resolvedIsLoading,
                 updateCredits,
                 refreshSessionState,

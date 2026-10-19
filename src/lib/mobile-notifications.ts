@@ -630,6 +630,27 @@ function isRefusedExpoPushRequest(error: unknown) {
 }
 
 /**
+ * A push held back at its last moment because its alert is gone: a named save
+ * taken back, or a block. Final, so it is never retried, and recorded as
+ * refused.
+ */
+class PushWithdrawnError extends MobileNotificationError {
+  constructor() {
+    super('The alert was taken back before its push went out.', 410);
+  }
+}
+
+function isPushWithdrawn(error: unknown) {
+  return (error instanceof ExpoPushRetryError ? error.cause : error) instanceof PushWithdrawnError;
+}
+
+/** Runs one provider request, unless `stillWanted` says its alert has gone since. */
+async function unlessWithdrawn<T>(stillWanted: (() => Promise<boolean>) | undefined, request: () => Promise<T>) {
+  if (stillWanted && !(await stillWanted())) throw new PushWithdrawnError();
+  return request();
+}
+
+/**
  * Sends one notification to a batch of devices and reports on each, in order.
  *
  * Expo judges some things per request rather than per message — a single token
@@ -641,15 +662,17 @@ function isRefusedExpoPushRequest(error: unknown) {
 async function sendExpoPushBatchToDevices(
   devices: PushDevice[],
   content: ExpoPushMessageContent,
+  /** Asked before every provider request, retries included; false sends nothing more. */
+  stillWanted?: () => Promise<boolean>,
 ): Promise<PushSendOutcome[]> {
   try {
-    const { result, attemptCount } = await withExpoPushRetry(() => sendExpoPushNotificationBatch({
+    const { result, attemptCount } = await withExpoPushRetry(() => unlessWithdrawn(stillWanted, () => sendExpoPushNotificationBatch({
       expoPushTokens: devices.map((device) => device.expoPushToken),
       ...content,
-    }));
+    })));
     return result.map((ticket) => ({ result: ticket, attemptCount }));
   } catch (error) {
-    if (devices.length === 1 || !isRefusedExpoPushRequest(error)) {
+    if (devices.length === 1 || isPushWithdrawn(error) || !isRefusedExpoPushRequest(error)) {
       return devices.map(() => ({ failure: error }));
     }
   }
@@ -657,10 +680,10 @@ async function sendExpoPushBatchToDevices(
   const outcomes: PushSendOutcome[] = [];
   for (const device of devices) {
     try {
-      outcomes.push(await sendExpoPushNotificationWithRetry({
+      outcomes.push(await withExpoPushRetry(() => unlessWithdrawn(stillWanted, () => sendExpoPushNotification({
         expoPushToken: device.expoPushToken,
         ...content,
-      }));
+      }))));
     } catch (error) {
       outcomes.push({ failure: error });
     }
@@ -819,27 +842,19 @@ async function retireUnregisteredPushTokens(
   return data?.length ?? 0;
 }
 
-async function sendMobilePushForNotification(
-  adminSupabase: SupabaseClient,
-  notification: MobileNotificationRecord & { userId: string },
-  {
-    beforeSend,
-  }: {
-    /** Asked once a device can take the push, before anything is reserved; false sends nothing. */
-    beforeSend?: () => Promise<boolean>;
-  } = {},
-) {
+/** The account's live devices, as the first send reserves them. */
+async function loadPushDevices(adminSupabase: SupabaseClient, userId: string): Promise<PushDevice[]> {
   const { data, error } = await adminSupabase
     .from('mobile_push_tokens')
     .select('id, expo_push_token, platform')
-    .eq('user_id', notification.userId)
+    .eq('user_id', userId)
     .eq('is_active', true);
 
   if (error) {
     throw new MobileNotificationError('Failed to load mobile push tokens.', 500);
   }
 
-  const devices = ((data ?? []) as Array<{
+  return ((data ?? []) as Array<{
     id?: string | null;
     expo_push_token?: string | null;
     platform?: string | null;
@@ -850,10 +865,27 @@ async function sendMobilePushForNotification(
       platform: token.platform === 'android' ? 'android' : 'ios',
     }]
     : []));
+}
+
+async function sendMobilePushForNotification(
+  adminSupabase: SupabaseClient,
+  notification: MobileNotificationRecord & { userId: string },
+  {
+    beforeSend,
+    stillWanted,
+  }: {
+    /**
+     * Asked once the push is reserved, before anything is sent; false sends
+     * nothing and takes the reservation back. Asked that late so a push that
+     * cannot be reserved (its alert gone) never spends what it would grant.
+     */
+    beforeSend?: () => Promise<boolean>;
+    /** Asked before every provider request: false withdraws what is not yet sent. */
+    stillWanted?: () => Promise<boolean>;
+  } = {},
+) {
+  const devices = await loadPushDevices(adminSupabase, notification.userId);
   if (devices.length === 0) {
-    return;
-  }
-  if (beforeSend && !(await beforeSend())) {
     return;
   }
 
@@ -888,13 +920,31 @@ async function sendMobilePushForNotification(
       receipt_message: 'Initial push budget reserved; provider outcome has not been recorded.',
     })),
   }));
-  for (const batch of batches) {
-    const { error } = await adminSupabase.from('mobile_push_deliveries').insert(batch.reservations);
-    if (error) throw new MobileNotificationError('Failed to reserve mobile push deliveries.', 500);
+  // One statement, so the reservation is whole or not made at all.
+  const reservationIds = batches.flatMap((batch) => batch.reservations.map((reservation) => reservation.id));
+  const { error: reserveError } = await adminSupabase
+    .from('mobile_push_deliveries')
+    .insert(batches.flatMap((batch) => batch.reservations));
+  if (reserveError) {
+    // The alert is gone (its key no longer matches a row): nothing to push.
+    if ((reserveError as { code?: unknown }).code === '23503') return;
+    throw new MobileNotificationError('Failed to reserve mobile push deliveries.', 500);
+  }
+
+  if (beforeSend && !(await beforeSend())) {
+    // Never sent: the reservation goes rather than reading as a lost push.
+    const { error: releaseError } = await adminSupabase
+      .from('mobile_push_deliveries')
+      .delete()
+      .in('id', reservationIds);
+    if (releaseError) {
+      logBackendError('failed_to_release_mobile_push_reservation', { error: releaseError });
+    }
+    return;
   }
 
   for (const batch of batches) {
-    const outcomes = await sendExpoPushBatchToDevices(batch.devices, content);
+    const outcomes = await sendExpoPushBatchToDevices(batch.devices, content, stillWanted);
     const items = outcomes.map((outcome, index) => {
       const reservation = batch.reservations[index];
       let recorded: Record<string, unknown>;
@@ -1533,7 +1583,6 @@ export async function createMobileNotification({
   objectId = null,
   dedupeKey = null,
   aggregationKey = null,
-  saveOf,
   shouldPush,
 }: {
   adminSupabase: SupabaseClient;
@@ -1549,12 +1598,6 @@ export async function createMobileNotification({
   dedupeKey?: string | null;
   aggregationKey?: string | null;
   /**
-   * The save a named save alert announces. `create_post_save_alert` writes it
-   * tied to that post_saves row, so it goes with the save; it writes nothing
-   * for a save already gone, or across a block between the two accounts.
-   */
-  saveOf?: { saverUserId: string; postId: string };
-  /**
    * Asked only once a push would really go out: the alert written anew (a
    * grouped alert's first event, or a new row), push allowed for its category
    * and a live device to take it. False keeps it in Alerts without a push. A
@@ -1565,27 +1608,6 @@ export async function createMobileNotification({
 }): Promise<MobileNotificationRecord | null> {
   if (actorUserId && actorUserId === userId) {
     return null;
-  }
-
-  if (saveOf) {
-    const { data, error } = await adminSupabase.rpc('create_post_save_alert', {
-      p_recipient_user_id: userId,
-      p_actor_user_id: saveOf.saverUserId,
-      p_post_id: saveOf.postId,
-      p_title: title,
-      p_body: body,
-      p_deep_link: deepLink,
-    });
-
-    if (error) {
-      throw new MobileNotificationError('Failed to create mobile notification history.', 500);
-    }
-
-    const { notification, wasCreated } = readWrittenNotification(data, 'Named save alert');
-    if (wasCreated && notification) {
-      await pushWrittenNotification(adminSupabase, notification, userId, category, shouldPush);
-    }
-    return notification;
   }
 
   if (dedupeKey) {
@@ -1622,7 +1644,7 @@ export async function createMobileNotification({
     });
 
     if (wasCreated) {
-      await pushWrittenNotification(adminSupabase, notification, userId, category, shouldPush);
+      await pushWrittenNotification(adminSupabase, notification, userId, category, { shouldPush });
     }
 
     return notification;
@@ -1651,33 +1673,119 @@ export async function createMobileNotification({
   }
 
   const notification = toMobileNotificationRecord(inserted as NotificationRow);
-  await pushWrittenNotification(adminSupabase, notification, userId, category, shouldPush);
+  await pushWrittenNotification(adminSupabase, notification, userId, category, { shouldPush });
 
   return notification;
 }
 
 /**
  * Pushes an alert just written anew, if its owner's preferences allow it and a
- * device can take it. `shouldPush` is asked last, once a push would really go
- * out, so an owner with push off or no device never spends a post's push slot.
- * A failed push is logged.
+ * device can take it. The devices are read only once a push is allowed: an
+ * owner with push off has nothing else of theirs read. `shouldPush` is asked
+ * last, once the push is reserved, so an owner with push off or no device never
+ * spends a post's push slot. A failed push is logged.
  */
 async function pushWrittenNotification(
   adminSupabase: SupabaseClient,
   notification: MobileNotificationRecord,
   userId: string,
   category: MobileNotificationCategory,
-  shouldPush?: () => Promise<boolean>,
+  {
+    shouldPush,
+    stillWanted,
+  }: {
+    shouldPush?: () => Promise<boolean>;
+    stillWanted?: () => Promise<boolean>;
+  } = {},
 ) {
   const preferences = await ensureMobileNotificationPreferences(adminSupabase, userId);
 
   if (shouldPushForPreferences(preferences, category)) {
     try {
-      await sendMobilePushForNotification(adminSupabase, { ...notification, userId }, { beforeSend: shouldPush });
+      await sendMobilePushForNotification(adminSupabase, { ...notification, userId }, {
+        beforeSend: shouldPush,
+        stillWanted,
+      });
     } catch (error) {
       logBackendError('failed_to_send_mobile_push_notification', { error: error });
     }
   }
+}
+
+/**
+ * How long a named save alert's push waits before it goes, and then only if
+ * the save still stands: an accidental save taken back at once never reaches
+ * the creator's lock screen, where a push already shown cannot be taken back.
+ * The alert is in Alerts from the start. The owner's choice, 2026-10-20.
+ */
+export const NAMED_SAVE_PUSH_HOLD_MS = 30_000;
+
+/** Whether an alert still stands, asked before its push goes; a failed read counts as gone. */
+async function alertStillStands(adminSupabase: SupabaseClient, notificationId: string) {
+  try {
+    const { data, error } = await adminSupabase
+      .from('mobile_notifications')
+      .select('id')
+      .eq('id', notificationId)
+      .maybeSingle();
+    return !error && Boolean(data);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The alert naming whoever saved ("@maya saved your post"), written by
+ * `create_post_save_alert`, which decides whether the saver may be named (told
+ * on record, a handle they chose, no block between the two) and ties the alert
+ * to the save, so it goes when the save does. Null when the saver may not be
+ * named: the caller then writes the grouped "Someone" alert instead.
+ *
+ * Its push waits `pushHoldMs`, then goes only while the alert stands, checked
+ * again before every request to the provider.
+ */
+async function createNamedSaveAlert({
+  adminSupabase,
+  postId,
+  saverUserId,
+  body,
+  deepLink,
+  pushHoldMs,
+}: {
+  adminSupabase: SupabaseClient;
+  postId: string;
+  saverUserId: string;
+  body: string;
+  deepLink: string;
+  pushHoldMs: number;
+}): Promise<{ notification: MobileNotificationRecord | null } | null> {
+  const { data, error } = await adminSupabase.rpc('create_post_save_alert', {
+    p_post_id: postId,
+    p_saver_user_id: saverUserId,
+    p_body: body,
+    p_deep_link: deepLink,
+  });
+
+  if (error) {
+    throw new MobileNotificationError('Failed to create mobile notification history.', 500);
+  }
+  if (!isRecord(data) || typeof data.nameable !== 'boolean') {
+    throw new MobileNotificationError('Named save alert response was invalid.', 500);
+  }
+  if (!data.nameable) {
+    return null;
+  }
+
+  const { notification, wasCreated } = readWrittenNotification(data, 'Named save alert');
+  const recipientUserId = isRecord(data.notification) ? rowString(data.notification, 'user_id') : null;
+  if (wasCreated && notification && recipientUserId) {
+    await wait(pushHoldMs);
+    await pushWrittenNotification(adminSupabase, notification, recipientUserId, 'social', {
+      shouldPush: () => claimPostSavePush(adminSupabase, recipientUserId, postId),
+      stillWanted: () => alertStillStands(adminSupabase, notification.id),
+    });
+  }
+  return { notification };
 }
 
 async function createMobileNotificationSafely(params: Parameters<typeof createMobileNotification>[0]) {
@@ -2163,11 +2271,11 @@ function socialAggregationWindow(date = new Date()) {
 }
 
 /**
- * Whether a post's save alert may push, asked only once a push would really go
- * out (the alert written anew, push on, a live device): the first for the post
- * in a quarter-hour does, named or not, and later ones wait in Alerts, as when
- * every save alert was grouped. A check that fails lets the push through,
- * since an alert that never reaches the phone is the worse miss.
+ * Whether a post's save alert may push, asked only once a push is reserved
+ * (the alert written anew and still there, push on, a live device): the first
+ * for the post in a quarter-hour does, named or not, and later ones wait in
+ * Alerts, as when every save alert was grouped. A check that fails lets the
+ * push through, since an alert that never reaches the phone is the worse miss.
  */
 async function claimPostSavePush(adminSupabase: SupabaseClient, recipientUserId: string, postId: string) {
   try {
@@ -2195,12 +2303,15 @@ export async function notifyPostSocialActivity(
     actorUserId: string | null | undefined;
     postId: string;
     /**
-     * The handle the saver chose, given only for a save made after they had
-     * been told that creators can see who saved (`creatorSeesSaver` on the save
-     * request, and the telling on record). Saves were private until then, so
-     * one without it stays "Someone". Shares are never named.
+     * A save made after the app told its saver that creators can see who
+     * saved (`creatorSeesSaver` on the save request). The alert names them only
+     * if `create_post_save_alert` agrees: the telling on record and a handle
+     * they chose. Saves were private until then, so any other stays "Someone".
+     * Shares are never named.
      */
-    actorUsername?: string | null;
+    nameSaver?: boolean;
+    /** How long a named alert's push waits (`NAMED_SAVE_PUSH_HOLD_MS`; tests pass 0). */
+    pushHoldMs?: number;
   }
 ) {
   if (!params.recipientUserId || !params.actorUserId) {
@@ -2226,22 +2337,25 @@ export async function notifyPostSocialActivity(
 
   const recipientUserId = params.recipientUserId;
 
-  if (params.type === 'post_saved' && params.actorUsername) {
+  if (params.type === 'post_saved' && params.nameSaver) {
     // A named save is that person's own alert, once per post, as a follow is
     // (grouped under one name, the others in the quarter-hour would read as
     // theirs), and it belongs to the save: it goes when the save does.
-    return createMobileNotificationSafely({
-      adminSupabase,
-      userId: recipientUserId,
-      actorUserId: params.actorUserId,
-      type: 'post_saved',
-      category: 'social',
-      title: `@${params.actorUsername} saved your post`,
-      body,
-      deepLink,
-      saveOf: { saverUserId: params.actorUserId, postId: params.postId },
-      shouldPush: () => claimPostSavePush(adminSupabase, recipientUserId, params.postId),
-    });
+    try {
+      const named = await createNamedSaveAlert({
+        adminSupabase,
+        postId: params.postId,
+        saverUserId: params.actorUserId,
+        body,
+        deepLink,
+        pushHoldMs: params.pushHoldMs ?? NAMED_SAVE_PUSH_HOLD_MS,
+      });
+      if (named) return named.notification;
+    } catch (error) {
+      logBackendError('failed_to_create_mobile_notification', { error: error });
+      return null;
+    }
+    // Not nameable: "Someone", as below.
   }
 
   const verb = params.type === 'post_saved' ? 'saved' : 'shared';

@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -11,6 +14,7 @@ import { createStoredRows } from '@/__tests__/fixtures/stored-rows';
 import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 import {
   MobileNotificationError,
+  NAMED_SAVE_PUSH_HOLD_MS,
   buildMobileNotificationDeepLink,
   createMobileNotification,
   hasMobilePushMaintenanceWork,
@@ -1950,8 +1954,10 @@ describe('mobile notifications', () => {
     await unlockNotification(fanOut.adminSupabase);
 
     expect(sentBodies(fetchMock).map((messages) => messages.length)).toEqual([100, 1]);
-    // All intent batches are inserted before provider calls; results are also batched.
-    expect(fanOut.deliveryInsertCalls.map((rows) => rows.length)).toEqual([100, 1]);
+    // Every device's reservation is made before any provider call, in one
+    // statement, so an alert gone meanwhile leaves none reserved; results are
+    // recorded per request.
+    expect(fanOut.deliveryInsertCalls.map((rows) => rows.length)).toEqual([101]);
     // Tickets are matched to tokens by position, on both sides of the boundary.
     expect(fanOut.deliveries[99]).toMatchObject({
       token_id: 'token-99',
@@ -2410,11 +2416,27 @@ describe('what each alert opens and says', () => {
 
   const CREATOR_PHONE = 'ExponentPushToken[creator-phone]';
 
+  /**
+   * creator-1's posts and the readers who save them: maya, lee and ana told
+   * on record by handles they chose; reader-4 told, by the placeholder handle
+   * every account starts with; reader-0 never told.
+   */
+  const SAVING = {
+    posts: { 'post-1': 'creator-1', 'post-2': 'creator-1' },
+    savers: {
+      'reader-1': { username: 'maya', told: true },
+      'reader-2': { username: 'lee', told: true },
+      'reader-3': { username: 'ana', told: true },
+      'reader-4': { username: 'creator-0a1b2c3d', told: true },
+      'reader-0': { username: 'reader-zero', told: false },
+    },
+  };
+
   /** History in which creator-1's phone takes pushes, with Expo stood in for. */
   function withCreatorPhone() {
     const expo = createExpoPushService();
     vi.stubGlobal('fetch', expo.fetch);
-    return { history: createMobileNotificationHistory({ pushTo: { 'creator-1': [CREATOR_PHONE] } }), expo };
+    return { history: createMobileNotificationHistory({ ...SAVING, pushTo: { 'creator-1': [CREATOR_PHONE] } }), expo };
   }
 
   afterEach(() => {
@@ -2568,14 +2590,18 @@ describe('what each alert opens and says', () => {
     ]);
   });
 
-  it('names a saver only when given their handle, in an alert of their own, and keeps no one on the anonymous ones', async () => {
-    const history = createMobileNotificationHistory();
+  it('names a saver only where the alert is written says so, in an alert of their own, and keeps no one on the anonymous ones', async () => {
+    const history = createMobileNotificationHistory(SAVING);
     const client = writtenTo(history);
-    const post = { recipientUserId: 'creator-1', postId: 'post-1' };
+    const post = { recipientUserId: 'creator-1', postId: 'post-1', pushHoldMs: 0 };
+    for (const saver of ['reader-1', 'reader-0', 'reader-4']) history.recordSave(saver, 'post-1', true);
 
-    await notifyPostSocialActivity(client, { ...post, type: 'post_saved', actorUserId: 'reader-1', actorUsername: 'maya' });
-    await notifyPostSocialActivity(client, { ...post, type: 'post_saved', actorUserId: 'reader-2', actorUsername: null });
-    await notifyPostSocialActivity(client, { ...post, type: 'post_shared', actorUserId: 'reader-1', actorUsername: 'maya' });
+    await notifyPostSocialActivity(client, { ...post, type: 'post_saved', actorUserId: 'reader-1', nameSaver: true });
+    // Never told on record: "Someone", whatever the request said.
+    await notifyPostSocialActivity(client, { ...post, type: 'post_saved', actorUserId: 'reader-0', nameSaver: true });
+    // Told, by the placeholder handle every account starts with: "Someone".
+    await notifyPostSocialActivity(client, { ...post, type: 'post_saved', actorUserId: 'reader-4', nameSaver: true });
+    await notifyPostSocialActivity(client, { ...post, type: 'post_shared', actorUserId: 'reader-1', nameSaver: true });
 
     expect(history.sent.map((row) => [
       row.title,
@@ -2589,15 +2615,17 @@ describe('what each alert opens and says', () => {
       ['Someone saved your post', '/showcase/post-1', null, 'grouped', null],
       ['Someone shared your post', '/showcase/post-1', null, 'grouped', null],
     ]);
+    expect(history.eventCounts()).toEqual([1, 2, 1]);
   });
 
   it('tells nobody of a save or share of their own post, though the anonymous alert keeps no actor to check', async () => {
-    const history = createMobileNotificationHistory();
+    const history = createMobileNotificationHistory(SAVING);
     const client = writtenTo(history);
+    history.recordSave('creator-1', 'post-1', true);
 
     for (const type of ['post_saved', 'post_shared'] as const) {
       await expect(notifyPostSocialActivity(client, {
-        type, recipientUserId: 'creator-1', actorUserId: 'creator-1', postId: 'post-1',
+        type, recipientUserId: 'creator-1', actorUserId: 'creator-1', postId: 'post-1', nameSaver: true, pushHoldMs: 0,
       })).resolves.toBeNull();
     }
     expect(history.sent).toEqual([]);
@@ -2610,14 +2638,15 @@ describe('what each alert opens and says', () => {
     const { history } = withCreatorPhone();
     const client = writtenTo(history);
 
-    for (const [actorUserId, actorUsername, postId] of [
-      ['reader-0', null, 'post-1'],
-      ['reader-1', 'maya', 'post-1'],
-      ['reader-2', 'lee', 'post-1'],
-      ['reader-3', 'ana', 'post-2'],
+    for (const [actorUserId, postId] of [
+      ['reader-0', 'post-1'],
+      ['reader-1', 'post-1'],
+      ['reader-2', 'post-1'],
+      ['reader-3', 'post-2'],
     ] as const) {
+      history.recordSave(actorUserId, postId, true);
       await notifyPostSocialActivity(client, {
-        type: 'post_saved', recipientUserId: 'creator-1', postId, actorUserId, actorUsername,
+        type: 'post_saved', recipientUserId: 'creator-1', postId, actorUserId, nameSaver: actorUserId !== 'reader-0', pushHoldMs: 0,
       });
     }
 
@@ -2633,6 +2662,7 @@ describe('what each alert opens and says', () => {
       { key: 'creator-1:post-1', allowed: false },
       { key: 'creator-1:post-2', allowed: true },
     ]);
+    // A push refused its slot gives its reservation back: only two were made and kept.
     expect(history.pushed.map((push) => push.title)).toEqual(['Someone saved your post', '@ana saved your post']);
   });
 
@@ -2656,12 +2686,13 @@ describe('what each alert opens and says', () => {
   it('spends no push on a named save whose alert already stands', async () => {
     const { history } = withCreatorPhone();
     const client = writtenTo(history);
-    const saved = { type: 'post_saved' as const, recipientUserId: 'creator-1', postId: 'post-1' };
+    const saved = { type: 'post_saved' as const, recipientUserId: 'creator-1', postId: 'post-1', nameSaver: true, pushHoldMs: 0 };
+    history.recordSave('reader-1', 'post-1', true);
 
-    await expect(notifyPostSocialActivity(client, { ...saved, actorUserId: 'reader-1', actorUsername: 'maya' }))
+    await expect(notifyPostSocialActivity(client, { ...saved, actorUserId: 'reader-1' }))
       .resolves.toMatchObject({ title: '@maya saved your post' });
     // The function writes the save's alert once, and answers "not written", with no row, after that.
-    await expect(notifyPostSocialActivity(client, { ...saved, actorUserId: 'reader-1', actorUsername: 'maya' }))
+    await expect(notifyPostSocialActivity(client, { ...saved, actorUserId: 'reader-1' }))
       .resolves.toBeNull();
 
     expect(history.sent).toHaveLength(1);
@@ -2674,13 +2705,14 @@ describe('what each alert opens and says', () => {
     // The unsave was answered, and its save gone, before the save's alert was written.
     { when: 'its save was taken back first', setUp: (history: MobileNotificationHistory) => history.recordSave('reader-1', 'post-1', false) },
     { when: 'the two accounts block each other', setUp: (history: MobileNotificationHistory) => history.recordBlock('creator-1', 'reader-1') },
-  ])('writes no named alert, and spends no push, when $when', async ({ setUp }) => {
+  ])('writes no named alert, nor a "Someone" in its place, and spends no push, when $when', async ({ setUp }) => {
     const { history } = withCreatorPhone();
     const client = writtenTo(history);
+    history.recordSave('reader-1', 'post-1', true);
     setUp(history);
 
     await expect(notifyPostSocialActivity(client, {
-      type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', actorUsername: 'maya',
+      type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', nameSaver: true, pushHoldMs: 0,
     })).resolves.toBeNull();
 
     expect(history.sent).toEqual([]);
@@ -2688,8 +2720,9 @@ describe('what each alert opens and says', () => {
     expect(history.pushClaims).toEqual([]);
 
     // Another saver's alert of the same post is written and pushed as ever.
+    history.recordSave('reader-2', 'post-1', true);
     await notifyPostSocialActivity(client, {
-      type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-2', actorUsername: 'lee',
+      type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-2', nameSaver: true, pushHoldMs: 0,
     });
     expect(history.sent.map((row) => row.title)).toEqual(['@lee saved your post']);
     expect(history.pushed.map((push) => push.title)).toEqual(['@lee saved your post']);
@@ -2699,8 +2732,9 @@ describe('what each alert opens and says', () => {
     const { history } = withCreatorPhone();
     const client = writtenTo(history);
     const saved = {
-      type: 'post_saved' as const, recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', actorUsername: 'maya',
+      type: 'post_saved' as const, recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', nameSaver: true, pushHoldMs: 0,
     };
+    history.recordSave('reader-1', 'post-1', true);
 
     await notifyPostSocialActivity(client, saved);
     // The unsave deletes the save, and the alert that announced it goes with it.
@@ -2725,47 +2759,213 @@ describe('what each alert opens and says', () => {
   // creator who would not hear it, it kept the next save of that post, the
   // first their phone could take, from pushing for the rest of the quarter-hour.
   it.each([
-    { kind: 'push switched off', devices: undefined, readsDevices: false },
-    { kind: 'push on and no live device', devices: [] as string[], readsDevices: true },
-  ])('asks for no push slot for a save, named or grouped, to a creator with $kind', async ({ devices, readsDevices }) => {
+    { kind: 'push switched off', devices: undefined },
+    { kind: 'push on and no live device', devices: [] as string[] },
+  ])('asks for no push slot for a save, named or grouped, to a creator with $kind', async ({ devices }) => {
     const expo = createExpoPushService();
     vi.stubGlobal('fetch', expo.fetch);
     const pushTo: Record<string, string[]> = devices ? { 'creator-1': devices } : {};
-    const history = createMobileNotificationHistory({ pushTo });
+    const history = createMobileNotificationHistory({ ...SAVING, pushTo });
     const client = writtenTo(history);
+    for (const saver of ['reader-0', 'reader-1', 'reader-2']) history.recordSave(saver, 'post-1', true);
 
     await notifyPostSocialActivity(client, { type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-0' });
     await notifyPostSocialActivity(client, {
-      type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', actorUsername: 'maya',
+      type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', nameSaver: true, pushHoldMs: 0,
     });
 
-    // Both were written anew and went on to decide whether to push.
+    // Both were written anew and went on to decide whether to push; the
+    // creator's devices are read only when push is on.
     expect(history.sent.map((row) => row.title)).toEqual(['Someone saved your post', '@maya saved your post']);
     expect(history.preferenceReads).toEqual(['creator-1', 'creator-1']);
-    expect(history.tokenReads).toEqual(readsDevices ? ['creator-1', 'creator-1'] : []);
+    expect(history.tokenReads).toEqual(devices ? ['creator-1', 'creator-1'] : []);
     expect(history.pushClaims).toEqual([]);
+    expect(history.pushed).toEqual([]);
     expect(expo.requests).toEqual([]);
 
     // The phone can take pushes now: the next save of that post still has the slot.
     pushTo['creator-1'] = [CREATOR_PHONE];
     await notifyPostSocialActivity(client, {
-      type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-2', actorUsername: 'lee',
+      type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-2', nameSaver: true, pushHoldMs: 0,
     });
     expect(history.pushClaims).toEqual([{ key: 'creator-1:post-1', allowed: true }]);
     expect(history.pushed.map((push) => push.title)).toEqual(['@lee saved your post']);
   });
 
+  // Review 4 finding #3, the owner's choice of 2026-10-20: a named push waits,
+  // and goes only if the save still stands then.
+  describe('the hold before a named push', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it(`is ${NAMED_SAVE_PUSH_HOLD_MS / 1000} seconds by default, with the alert in Alerts from the start`, async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const { history, expo } = withCreatorPhone();
+      const client = writtenTo(history);
+      history.recordSave('reader-1', 'post-1', true);
+
+      const notified = notifyPostSocialActivity(client, {
+        type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', nameSaver: true,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(history.standing().map((row) => row.title)).toEqual(['@maya saved your post']);
+      expect(history.preferenceReads).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(NAMED_SAVE_PUSH_HOLD_MS - 1);
+      expect(expo.requests).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(notified).resolves.toMatchObject({ title: '@maya saved your post' });
+      expect(history.pushed.map((push) => push.title)).toEqual(['@maya saved your post']);
+      expect(expo.requests).toHaveLength(1);
+    });
+
+    it.each([
+      { what: 'an unsave', takeBack: (history: MobileNotificationHistory) => history.recordSave('reader-1', 'post-1', false) },
+      { what: 'a block', takeBack: (history: MobileNotificationHistory) => history.recordBlock('reader-1', 'creator-1') },
+    ])('sends nothing, and spends no slot, when $what takes the save back during it', async ({ takeBack }) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const { history, expo } = withCreatorPhone();
+      const client = writtenTo(history);
+      history.recordSave('reader-1', 'post-1', true);
+      const logged: BackendLogRecord[] = [];
+      const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+
+      try {
+        const notified = notifyPostSocialActivity(client, {
+          type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', nameSaver: true,
+        });
+        await vi.advanceTimersByTimeAsync(2_000);
+        // A double-tap undone a moment later.
+        takeBack(history);
+        await vi.advanceTimersByTimeAsync(NAMED_SAVE_PUSH_HOLD_MS);
+        await notified;
+      } finally {
+        restoreLogSink();
+      }
+
+      expect(history.standing()).toEqual([]);
+      expect(history.pushed).toEqual([]);
+      expect(history.pushClaims).toEqual([]);
+      expect(expo.requests).toEqual([]);
+      // Quietly: an alert gone before its push is not a failed push.
+      expect(logged).toEqual([]);
+    });
+
+    it('fits in the save route, whose answer it waits behind', () => {
+      const route = fs.readFileSync(path.join(process.cwd(), 'src/app/api/showcase/save/route.ts'), 'utf8');
+      const maxDurationSeconds = Number(/export const maxDuration = (\d+);/.exec(route)?.[1]);
+      // The hold, then a send with its retries, inside the function's time.
+      expect(maxDurationSeconds * 1000).toBeGreaterThanOrEqual(NAMED_SAVE_PUSH_HOLD_MS + 20_000);
+    });
+
+    it('holds no grouped push: "Someone" names nobody', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const { history, expo } = withCreatorPhone();
+      const client = writtenTo(history);
+
+      const notified = notifyPostSocialActivity(client, {
+        type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-0',
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(notified).resolves.toMatchObject({ title: 'Someone saved your post' });
+      expect(expo.requests).toHaveLength(1);
+    });
+  });
+
+  // Review 4 finding #8: the alert goes between the reservation and the send.
+  it('withdraws a named push whose alert goes after it was reserved: nothing reaches Expo, and the delivery says why', async () => {
+    const { history, expo } = withCreatorPhone();
+    history.recordSave('reader-1', 'post-1', true);
+    const client = writtenTo({
+      ...history,
+      // The unsave lands while the post's push slot is being claimed, after the reservation.
+      rpc: async (name: string, args?: Record<string, unknown>) => {
+        if (name === 'check_backend_rate_limit') history.recordSave('reader-1', 'post-1', false);
+        return history.rpc(name, args);
+      },
+    } as MobileNotificationHistory);
+
+    await notifyPostSocialActivity(client, {
+      type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', nameSaver: true, pushHoldMs: 0,
+    });
+
+    expect(expo.requests).toEqual([]);
+    expect(history.outcomes).toEqual([expect.objectContaining({
+      outcome: expect.objectContaining({ status: 'refused', message: 'The alert was taken back before its push went out.' }),
+    })]);
+  });
+
+  it('asks again before a retried request: an alert gone during the backoff is not sent the second time', async () => {
+    const { history } = withCreatorPhone();
+    history.recordSave('reader-1', 'post-1', true);
+    let requests = 0;
+    vi.stubGlobal('fetch', async () => {
+      requests += 1;
+      // Expo is down for the first attempt; the unsave lands in the backoff.
+      history.recordSave('reader-1', 'post-1', false);
+      return new Response('unavailable', { status: 503 });
+    });
+    const client = writtenTo(history);
+
+    await notifyPostSocialActivity(client, {
+      type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', nameSaver: true, pushHoldMs: 0,
+    });
+
+    expect(requests).toBe(1);
+    expect(history.outcomes).toEqual([expect.objectContaining({
+      outcome: expect.objectContaining({ status: 'refused', attempt_count: 2 }),
+    })]);
+  });
+
+  // Review 4 finding #12.
+  it('spends no slot, and logs nothing, for a named alert gone before its push could be reserved', async () => {
+    const { history, expo } = withCreatorPhone();
+    history.recordSave('reader-1', 'post-1', true);
+    const client = writtenTo({
+      ...history,
+      from: (table: string) => {
+        // The unsave lands while the creator's devices are read.
+        if (table === 'mobile_push_tokens') history.recordSave('reader-1', 'post-1', false);
+        return history.from(table);
+      },
+    } as MobileNotificationHistory);
+    const logged: BackendLogRecord[] = [];
+    const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+
+    try {
+      await notifyPostSocialActivity(client, {
+        type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', nameSaver: true, pushHoldMs: 0,
+      });
+    } finally {
+      restoreLogSink();
+    }
+
+    expect(history.pushClaims).toEqual([]);
+    expect(history.pushed).toEqual([]);
+    expect(expo.requests).toEqual([]);
+    expect(logged).toEqual([]);
+
+    // The post's next save still has its slot.
+    history.recordSave('reader-2', 'post-1', true);
+    await notifyPostSocialActivity(client, {
+      type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-2', nameSaver: true, pushHoldMs: 0,
+    });
+    expect(history.pushClaims).toEqual([{ key: 'creator-1:post-1', allowed: true }]);
+  });
+
   it.each([
-    // What the function answered before it took the grouped writer's shape.
-    { kind: 'the old shape', answer: { created: true, notification: { id: 'notification-1', title: '@maya saved your post' } } },
-    { kind: 'a write with no row', answer: { wasCreated: true, notification: null } },
-    { kind: 'a flag that is not a boolean', answer: { wasCreated: 'true', notification: { id: 'notification-1' } } },
-    { kind: 'a row that is not one', answer: { wasCreated: true, notification: 'notification-1' } },
+    // What the function answered before it decided naming itself.
+    { kind: 'no word on naming', answer: { wasCreated: true, notification: { id: 'notification-1', title: '@maya saved your post' } } },
+    { kind: 'the oldest shape', answer: { created: true, notification: { id: 'notification-1', title: '@maya saved your post' } } },
+    { kind: 'a write with no row', answer: { nameable: true, wasCreated: true, notification: null } },
+    { kind: 'a flag that is not a boolean', answer: { nameable: true, wasCreated: 'true', notification: { id: 'notification-1' } } },
+    { kind: 'a row that is not one', answer: { nameable: true, wasCreated: true, notification: 'notification-1' } },
     { kind: 'nothing at all', answer: null },
   ])('refuses a named save alert answered in $kind: it logs, answers null and pushes nothing', async ({ answer }) => {
     const expo = createExpoPushService();
     vi.stubGlobal('fetch', expo.fetch);
-    const history = createMobileNotificationHistory({ pushTo: { 'creator-1': [CREATOR_PHONE] } });
+    const history = createMobileNotificationHistory({ ...SAVING, pushTo: { 'creator-1': [CREATOR_PHONE] } });
     const client = {
       from: (table: string) => history.from(table),
       rpc: async (name: string, args?: Record<string, unknown>) => (name === 'create_post_save_alert'
@@ -2777,7 +2977,7 @@ describe('what each alert opens and says', () => {
 
     try {
       await expect(notifyPostSocialActivity(client, {
-        type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', actorUsername: 'maya',
+        type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', nameSaver: true, pushHoldMs: 0,
       })).resolves.toBeNull();
     } finally {
       restoreLogSink();
@@ -2792,6 +2992,31 @@ describe('what each alert opens and says', () => {
     expect(history.pushClaims).toEqual([]);
     expect(history.pushed).toEqual([]);
     expect(expo.requests).toEqual([]);
+  });
+
+  it('asks the database alone whether a saver may be named, and goes to whoever owns the post', async () => {
+    const history = createMobileNotificationHistory(SAVING);
+    const calls: Array<[string, Record<string, unknown> | undefined]> = [];
+    const client = writtenTo({
+      ...history,
+      rpc: async (name: string, args?: Record<string, unknown>) => {
+        calls.push([name, args]);
+        return history.rpc(name, args);
+      },
+    } as MobileNotificationHistory);
+    history.recordSave('reader-1', 'post-1', true);
+
+    await notifyPostSocialActivity(client, {
+      type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', nameSaver: true, pushHoldMs: 0,
+    });
+
+    // No title, no recipient: the function builds the first and finds the second.
+    expect(calls).toEqual([['create_post_save_alert', {
+      p_post_id: 'post-1',
+      p_saver_user_id: 'reader-1',
+      p_body: 'It is in their saved media now.',
+      p_deep_link: '/showcase/post-1',
+    }]]);
   });
 
   it('refuses a grouped answer that does not say whether the alert was written anew, and pushes nothing', async () => {
@@ -2826,6 +3051,7 @@ describe('what each alert opens and says', () => {
 
   it('lets a save alert push when its push slot cannot be checked', async () => {
     const { history } = withCreatorPhone();
+    history.recordSave('reader-1', 'post-1', true);
     const client = {
       from: (table: string) => history.from(table),
       rpc: async (name: string, args?: Record<string, unknown>) => (name === 'check_backend_rate_limit'
@@ -2837,7 +3063,7 @@ describe('what each alert opens and says', () => {
 
     try {
       await notifyPostSocialActivity(client, {
-        type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', actorUsername: 'maya',
+        type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', nameSaver: true, pushHoldMs: 0,
       });
     } finally {
       restoreLogSink();
@@ -2846,6 +3072,28 @@ describe('what each alert opens and says', () => {
     expect(history.sent.map((row) => row.title)).toEqual(['@maya saved your post']);
     expect(history.pushed.map((push) => push.title)).toEqual(['@maya saved your post']);
     expect(logged.map((record) => record.msg)).toEqual(['failed_to_claim_post_save_push']);
+  });
+
+  // Review 4 finding #16: the slot's window as the notifier passes it.
+  it("claims a post's save push for a quarter-hour, once, keyed by creator and post", async () => {
+    const { history } = withCreatorPhone();
+    const claims: Array<Record<string, unknown> | undefined> = [];
+    const client = writtenTo({
+      ...history,
+      rpc: async (name: string, args?: Record<string, unknown>) => {
+        if (name === 'check_backend_rate_limit') claims.push(args);
+        return history.rpc(name, args);
+      },
+    } as MobileNotificationHistory);
+
+    await notifyPostSocialActivity(client, { type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-0' });
+
+    expect(claims).toEqual([{
+      p_scope: 'post-save:push',
+      p_subject_key: 'creator-1:post-1',
+      p_limit: 1,
+      p_window_seconds: 900,
+    }]);
   });
 
   it('words its copy for both clients and spells the brand as the site does', async () => {

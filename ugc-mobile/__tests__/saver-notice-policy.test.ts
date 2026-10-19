@@ -77,7 +77,6 @@ describe('the saver notice policy: what a save carries', () => {
     policy.setActiveAccount('user-1');
 
     expect(policy.fieldsForSave('user-1', true)).toEqual(NOT_YET_TOLD);
-    expect(policy.isShowing('user-1')).toBe(true);
     // A save made while the notice is still up was not made after it.
     expect(policy.fieldsForSave('user-1', true)).toEqual(NOT_YET_TOLD);
     expect(shown).toEqual(['user-1']);
@@ -122,12 +121,14 @@ describe('the saver notice policy: what a save carries', () => {
     setDrawable(false);
 
     expect(policy.fieldsForSave('user-1', true)).toEqual(NOT_YET_TOLD);
-    expect(policy.isShowing('user-1')).toBe(false);
+    expect(shown).toEqual([]);
 
     setDrawable(true);
     expect(policy.fieldsForSave('user-1', true)).toEqual(NOT_YET_TOLD);
     expect(shown).toEqual(['user-1']);
-    expect(policy.isShowing('user-1')).toBe(true);
+    // Up now: a further save draws nothing more.
+    policy.fieldsForSave('user-1', true);
+    expect(shown).toEqual(['user-1']);
   });
 });
 
@@ -141,7 +142,6 @@ describe('the saver notice policy: how a notice ends', () => {
 
       policy.settle('user-1', ending);
 
-      expect(policy.isShowing('user-1')).toBe(false);
       expect(remembered).toEqual([['user-1', 'pending']]);
       expect(recordedFor()).toEqual(['user-1']);
       // Told from here on, before the server has answered.
@@ -163,7 +163,6 @@ describe('the saver notice policy: how a notice ends', () => {
 
     policy.settle('user-1', 'interrupted');
 
-    expect(policy.isShowing('user-1')).toBe(false);
     expect(remembered).toEqual([]);
     expect(records).toEqual([]);
     expect(policy.fieldsForSave('user-1', true)).toEqual(NOT_YET_TOLD);
@@ -274,20 +273,78 @@ describe("the saver notice policy: the server's record", () => {
     expect(shown).toEqual([]);
   });
 
-  it('forgets a telling this device saw on record once the server no longer has it, and the next save tells them again', async () => {
+  it('forgets a telling this device saw on record once the server no longer has it, and the next save tells them again', () => {
+    const { policy, remembered, shown } = harness();
+    policy.setActiveAccount('user-1');
+    policy.applyServerRecord('user-1', true);
+    expect(policy.fieldsForSave('user-1', true)).toEqual(NAMES_SAVER);
+
+    // Cleared on the server on purpose.
+    expect(policy.applyServerRecord('user-1', false)).toBe(true);
+
+    expect(remembered).toEqual([['user-1', 'recorded'], ['user-1', null]]);
+    expect(policy.fieldsForSave('user-1', true)).toEqual(NOT_YET_TOLD);
+    expect(shown).toEqual(['user-1']);
+  });
+
+  // Review 4 finding #9: a profile read that began before this device's
+  // record landed (the launch fetch the record's own refresh joined, or a
+  // refresh started with a retried record) answers "no record" after it.
+  it("sets aside a 'no record' once this device has put the telling on record since it started", async () => {
     const { policy, records, remembered, shown } = harness();
     policy.setActiveAccount('user-1');
     policy.fieldsForSave('user-1', true);
     policy.settle('user-1', 'closed');
     await records[0].answer(true);
+
+    expect(policy.applyServerRecord('user-1', false)).toBe(false);
+    expect(policy.applyServerRecord('user-1', false)).toBe(false);
+
+    expect(remembered).toEqual([['user-1', 'pending'], ['user-1', 'recorded']]);
     expect(policy.fieldsForSave('user-1', true)).toEqual(NAMES_SAVER);
+    expect(shown).toEqual(['user-1']);
+    // "On record" is taken as ever.
+    expect(policy.applyServerRecord('user-1', true)).toBe(true);
+  });
 
-    // Cleared on the server on purpose.
-    policy.applyServerRecord('user-1', false);
+  it("acts on a 'no record' while the telling is still on its way to the server: it is asked for, not forgotten", async () => {
+    const { policy, records, recordedFor, remembered } = harness();
+    policy.setActiveAccount('user-1');
+    policy.fieldsForSave('user-1', true);
+    policy.settle('user-1', 'closed');
 
-    expect(remembered).toEqual([['user-1', 'pending'], ['user-1', 'recorded'], ['user-1', null]]);
+    // The record is out; the read came back first.
+    expect(policy.applyServerRecord('user-1', false)).toBe(true);
+    expect(recordedFor()).toEqual(['user-1']);
+    await records[0].answer(true);
+    expect(remembered).toEqual([['user-1', 'pending'], ['user-1', 'recorded']]);
+    expect(policy.applyServerRecord('user-1', false)).toBe(false);
+  });
+
+  it('keeps setting aside only for the account this device recorded', async () => {
+    const { policy, records, remembered } = harness();
+    policy.setActiveAccount('user-1');
+    policy.fieldsForSave('user-1', true);
+    policy.settle('user-1', 'closed');
+    await records[0].answer(true);
+
+    policy.restore('user-2', 'recorded');
+    expect(policy.applyServerRecord('user-2', false)).toBe(true);
+    expect(remembered).toContainEqual(['user-2', null]);
+  });
+
+  it('starts again at reset: a later run acts on the record the server keeps', async () => {
+    const { policy, records } = harness();
+    policy.setActiveAccount('user-1');
+    policy.fieldsForSave('user-1', true);
+    policy.settle('user-1', 'closed');
+    await records[0].answer(true);
+
+    policy.reset();
+    policy.restore('user-1', 'recorded');
+    policy.setActiveAccount('user-1');
+    expect(policy.applyServerRecord('user-1', false)).toBe(true);
     expect(policy.fieldsForSave('user-1', true)).toEqual(NOT_YET_TOLD);
-    expect(shown).toEqual(['user-1', 'user-1']);
   });
 
   it('forgets a telling read back from the device as on record, as it does one seen on record this run', () => {
@@ -398,7 +455,6 @@ describe('the saver notice policy: another account signing in', () => {
     policy.setActiveAccount('user-2');
 
     expect(hidden).toEqual(['user-1']);
-    expect(policy.isShowing('user-1')).toBe(false);
     // The bar's countdown or OK arriving after the switch.
     policy.settle('user-1', 'expired');
     expect(remembered).toEqual([]);
@@ -412,25 +468,30 @@ describe('the saver notice policy: another account signing in', () => {
   });
 
   it('takes it down when the account signs out', () => {
-    const { policy, hidden } = harness();
+    const { policy, hidden, shown } = harness();
     policy.setActiveAccount('user-1');
     policy.fieldsForSave('user-1', true);
 
     policy.setActiveAccount(null);
 
     expect(hidden).toEqual(['user-1']);
-    expect(policy.isShowing('user-1')).toBe(false);
+    // Down: back on this phone, the next save draws it again.
+    policy.setActiveAccount('user-1');
+    policy.fieldsForSave('user-1', true);
+    expect(shown).toEqual(['user-1', 'user-1']);
   });
 
   it('leaves the notice up when the same account is set again', () => {
-    const { policy, hidden } = harness();
+    const { policy, hidden, shown } = harness();
     policy.setActiveAccount('user-1');
     policy.fieldsForSave('user-1', true);
 
     policy.setActiveAccount('user-1');
 
     expect(hidden).toEqual([]);
-    expect(policy.isShowing('user-1')).toBe(true);
+    // Still up: a further save draws nothing more.
+    policy.fieldsForSave('user-1', true);
+    expect(shown).toEqual(['user-1']);
   });
 
   it('never asks for a record for an account that is not signed in, and asks once it is', () => {
@@ -451,7 +512,7 @@ describe('the saver notice policy: another account signing in', () => {
   });
 
   it("keeps each account's telling to itself", async () => {
-    const { policy, records } = harness();
+    const { policy, records, shown } = harness();
     policy.setActiveAccount('user-1');
     policy.fieldsForSave('user-1', true);
     policy.settle('user-1', 'closed');
@@ -459,7 +520,7 @@ describe('the saver notice policy: another account signing in', () => {
 
     policy.setActiveAccount('user-2');
     expect(policy.fieldsForSave('user-2', true)).toEqual(NOT_YET_TOLD);
-    expect(policy.isShowing('user-2')).toBe(true);
+    expect(shown).toEqual(['user-1', 'user-2']);
     expect(policy.fieldsForSave('user-1', true)).toEqual(NAMES_SAVER);
   });
 });
@@ -504,14 +565,18 @@ describe("the saver notice policy: the device's memory", () => {
   });
 
   it('forgets everything at reset, the signed-in account too', () => {
-    const { policy, recordedFor } = harness();
+    const { policy, recordedFor, shown } = harness();
     policy.setActiveAccount('user-1');
     policy.applyServerRecord('user-1', true);
     policy.fieldsForSave('user-2', true);
+    policy.restore('user-3', null);
 
     policy.reset();
 
-    expect(policy.isShowing('user-2')).toBe(false);
+    // user-2's notice is no longer held up: its next save draws it again.
+    policy.fieldsForSave('user-2', true);
+    expect(shown).toEqual(['user-2', 'user-2']);
+    expect(policy.hasRestored('user-3')).toBe(false);
     expect(policy.fieldsForSave('user-1', true)).toEqual(NOT_YET_TOLD);
     // No account is signed in after a reset: a telling read now waits for one.
     policy.settle('user-1', 'closed');

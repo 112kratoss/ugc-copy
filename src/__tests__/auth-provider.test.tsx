@@ -269,13 +269,13 @@ describe('AuthProvider', () => {
 
       await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1200'));
       expect(screen.getByTestId('spendable')).toHaveTextContent('0');
-      expect(authProviderMocks.select).toHaveBeenCalledWith('credits, promotional_credits');
+      expect(authProviderMocks.select).toHaveBeenCalledWith('credits, promotional_credits, saver_notice_seen_at');
 
       authProviderMocks.single.mockResolvedValue({ data: { credits: 1500, promotional_credits: 300 } });
       fireEvent.click(screen.getByRole('button', { name: 'Refresh auth' }));
       await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1500'));
       expect(screen.getByTestId('spendable')).toHaveTextContent('1200');
-      expect(authProviderMocks.select).toHaveBeenLastCalledWith('credits, promotional_credits');
+      expect(authProviderMocks.select).toHaveBeenLastCalledWith('credits, promotional_credits, saver_notice_seen_at');
     });
 
     it('keeps it in step with the total, and takes the figure an answer carries', async () => {
@@ -342,15 +342,19 @@ describe('AuthProvider', () => {
   });
 
   // Whether the account was told, on record, that creators can see who saved:
-  // read with the page, so it holds only for the account the page was drawn
-  // for. Another account signed in since is unknown, never the first one's.
-  describe('the saver notice record the page was drawn with', () => {
+  // read with the page, and with the profile the browser reads after it (a
+  // sign-in, a balance refresh), each read a record of its own, for the
+  // account it was read for only.
+  describe('the saver notice record', () => {
+    const records: unknown[] = [];
     function SaverNoticeProbe() {
-      const { saverNoticeSeen, session } = useAuth();
+      const { saverNoticeRecord, session } = useAuth();
+      if (records.at(-1) !== saverNoticeRecord) records.push(saverNoticeRecord);
       return (
         <div>
           <span data-testid="account">{session?.user.id ?? 'none'}</span>
-          <span data-testid="saver-notice-seen">{String(saverNoticeSeen)}</span>
+          <span data-testid="saver-notice-seen">{String(saverNoticeRecord?.seen ?? null)}</span>
+          <span data-testid="saver-notice-for">{saverNoticeRecord?.userId ?? 'none'}</span>
         </div>
       );
     }
@@ -362,6 +366,7 @@ describe('AuthProvider', () => {
     } as Session;
 
     beforeEach(() => {
+      records.length = 0;
       vi.stubGlobal('requestIdleCallback', (callback: IdleRequestCallback) => {
         queueMicrotask(() => callback({ didTimeout: false, timeRemaining: () => 50 }));
         return 1;
@@ -373,7 +378,9 @@ describe('AuthProvider', () => {
       }));
     });
 
-    it.each([true, false])('hands the initial account its record (%s), and no other account', async (seen) => {
+    it.each([true, false])('hands the initial account the record it was drawn with (%s), and no other account', async (seen) => {
+      // The other account's profile, read once it signs in, has no record.
+      authProviderMocks.single.mockResolvedValue({ data: { credits: 10, promotional_credits: 0, saver_notice_seen_at: null } });
       render(
         <AuthProvider
           initialSession={authenticatedSession}
@@ -389,14 +396,46 @@ describe('AuthProvider', () => {
       expect(screen.getByTestId('saver-notice-seen')).toHaveTextContent(String(seen));
       await waitFor(() => expect(authStateCallback).not.toBeNull());
 
-      // Another account signs in on this page, without a reload.
+      expect(screen.getByTestId('saver-notice-for')).toHaveTextContent('user-1');
+      // One record for the page's whole life: re-renders hand out the same object.
+      expect(records.filter(Boolean)).toHaveLength(1);
+
+      // Another account signs in on this page, without a reload: its own
+      // profile read gives its own record.
       act(() => authStateCallback?.('SIGNED_IN', otherSession));
-      await waitFor(() => expect(screen.getByTestId('account')).toHaveTextContent('user-2'));
-      expect(screen.getByTestId('saver-notice-seen')).toHaveTextContent('null');
+      await waitFor(() => expect(screen.getByTestId('saver-notice-for')).toHaveTextContent('user-2'));
+      expect(screen.getByTestId('saver-notice-seen')).toHaveTextContent('false');
 
       act(() => authStateCallback?.('SIGNED_OUT', null));
       await waitFor(() => expect(screen.getByTestId('account')).toHaveTextContent('none'));
       expect(screen.getByTestId('saver-notice-seen')).toHaveTextContent('null');
+    });
+
+    // Review 4 finding #24: read with the profile the browser reads anyway,
+    // not asked of the server on its own.
+    it('reads the record with the balance when the page could not know it, a new record at each read', async () => {
+      authCookieState.hasHint = true;
+      authProviderMocks.single.mockResolvedValue({
+        data: { credits: 10, promotional_credits: 0, saver_notice_seen_at: null },
+      });
+      render(
+        <AuthProvider>
+          <SaverNoticeProbe />
+        </AuthProvider>
+      );
+      await waitFor(() => expect(screen.getByTestId('saver-notice-seen')).toHaveTextContent('false'));
+      const first = records.at(-1);
+
+      // Told on another device since; a balance refresh reads the profile again.
+      authProviderMocks.single.mockResolvedValue({
+        data: { credits: 10, promotional_credits: 0, saver_notice_seen_at: '2026-10-20T08:00:00.000Z' },
+      });
+      act(() => {
+        window.dispatchEvent(new CustomEvent('credits_updated', { detail: {} }));
+      });
+      await waitFor(() => expect(screen.getByTestId('saver-notice-seen')).toHaveTextContent('true'));
+      expect(records.at(-1)).not.toBe(first);
+      expect(screen.getByTestId('saver-notice-for')).toHaveTextContent('user-1');
     });
 
     it('knows nothing of it when the page could not read the record', () => {

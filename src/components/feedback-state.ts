@@ -17,6 +17,13 @@ export interface ToastRecord {
    * that early was on its way to what sat there, not a reading of the toast.
    */
   closeGuardMs?: number;
+  /**
+   * Counts its time only while it can be seen: paused while the window is out
+   * of focus or another modal dialog is drawn over it, and taken down unread
+   * (`'interrupted'`) when the page is hidden. For a toast whose running out
+   * stands for its having been read (the saver notice).
+   */
+  inViewOnly?: true;
 }
 
 export interface ConfirmationRequest {
@@ -116,6 +123,7 @@ export function pushToast(toast: {
   message: string;
   durationMs?: number;
   closeGuardMs?: number;
+  inViewOnly?: boolean;
   /** Told once, when the toast goes (not when tests reset the store). */
   onDismiss?: (how: ToastDismissal) => void;
 }): number {
@@ -131,6 +139,7 @@ export function pushToast(toast: {
         message: toast.message,
         durationMs: toast.durationMs ?? DEFAULT_TOAST_DURATION_MS,
         ...(toast.closeGuardMs ? { closeGuardMs: toast.closeGuardMs } : {}),
+        ...(toast.inViewOnly ? { inViewOnly: true as const } : {}),
       },
     ],
   });

@@ -18,7 +18,10 @@
  *   record is only ever written for the account signed in when it is asked.
  * - The server's record decides when the two differ: a telling this device
  *   saw on record that the server no longer has was cleared there on purpose,
- *   and the person is told again.
+ *   and the person is told again. Except for a telling this device put on
+ *   record since it started (this run of the app, this page): a "no record"
+ *   read since then began before that record, so it is set aside, and a
+ *   record cleared on purpose is acted on at the next start.
  */
 
 export const SAVER_NOTICE_MESSAGE = 'Creators can see who saved their posts.';
@@ -66,6 +69,8 @@ export function createSaverNoticePolicy(platform: SaverNoticePlatform) {
    * against it once it is read.
    */
   const unrecordedBeforeRestore = new Set<string>();
+  /** Accounts whose telling this device put on record since it started. */
+  const recordedHere = new Set<string>();
   const showing = new Set<string>();
   const recording = new Set<string>();
   let activeAccountId: string | null = null;
@@ -89,6 +94,7 @@ export function createSaverNoticePolicy(platform: SaverNoticePlatform) {
     recording.add(accountId);
     try {
       const recorded = await platform.record(accountId);
+      if (recorded) recordedHere.add(accountId);
       if (recorded && memory.get(accountId) === 'pending') remember(accountId, 'recorded');
     } finally {
       recording.delete(accountId);
@@ -111,6 +117,11 @@ export function createSaverNoticePolicy(platform: SaverNoticePlatform) {
       if (unrecordedBeforeRestore.delete(accountId)) applyNoRecord(accountId);
     },
 
+    /** Whether the account's memory on the device has been read back (`restore`). */
+    hasRestored(accountId: string) {
+      return restored.has(accountId);
+    },
+
     /** The account signed in now, or null. Another account's notice comes down unread. */
     setActiveAccount(accountId: string | null) {
       activeAccountId = accountId;
@@ -126,16 +137,20 @@ export function createSaverNoticePolicy(platform: SaverNoticePlatform) {
      * The server's record for the account, read with what the app already
      * loads. "No record" can come before the device's memory has been read
      * (the app's profile is back from its cache before storage answers), so
-     * it is held against that memory too, once it is read.
+     * it is held against that memory too, once it is read. False when it was
+     * set aside: a "no record" for an account whose telling this device put on
+     * record since it started, read before that record landed.
      */
     applyServerRecord(accountId: string, seen: boolean) {
       if (seen) {
         unrecordedBeforeRestore.delete(accountId);
         if (memory.get(accountId) !== 'recorded') remember(accountId, 'recorded');
-        return;
+        return true;
       }
+      if (recordedHere.has(accountId)) return false;
       if (!restored.has(accountId)) unrecordedBeforeRestore.add(accountId);
       applyNoRecord(accountId);
+      return true;
     },
 
     /** The fields a save request carries, decided at the tap. */
@@ -164,20 +179,15 @@ export function createSaverNoticePolicy(platform: SaverNoticePlatform) {
       if (accountId) void recordTelling(accountId);
     },
 
-    isShowing(accountId: string) {
-      return showing.has(accountId);
-    },
-
     /** Tests only. */
     reset() {
       memory.clear();
       restored.clear();
       unrecordedBeforeRestore.clear();
+      recordedHere.clear();
       showing.clear();
       recording.clear();
       activeAccountId = null;
     },
   };
 }
-
-export type SaverNoticePolicy = ReturnType<typeof createSaverNoticePolicy>;

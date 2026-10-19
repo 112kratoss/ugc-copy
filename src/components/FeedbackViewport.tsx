@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 
@@ -27,7 +27,7 @@ import {
  * While a dialog hosts the toasts (`setToastHost`: the reel), they are drawn
  * inside it, where a screen reader can reach them past its `aria-modal`, its
  * focus order includes them, and `.ui-toast-viewport-in-dialog` places them
- * below its header.
+ * below its header and under its ⋯ menu.
  */
 export default function FeedbackViewport() {
   const { toasts, confirmation } = useSyncExternalStore(
@@ -70,14 +70,76 @@ function ToastIcon({ tone }: { tone: ToastRecord['tone'] }) {
   return <Info className="h-4 w-4 shrink-0 text-zinc-300" aria-hidden="true" />;
 }
 
+/**
+ * Whether a toast can be seen now: its window has the focus (a save is a click
+ * or a key in it, so it starts focused) and no other modal dialog is drawn over
+ * it. A dialog holding the toast (the reel) does not cover it; any other
+ * `aria-modal` one does (a confirmation, the reel's reference preview), to the
+ * eye and to a screen reader, which cannot reach past it. Followed only while
+ * `enabled`.
+ */
+function useToastInView(enabled: boolean, toastRef: RefObject<HTMLElement | null>) {
+  const [windowFocused, setWindowFocused] = useState(true);
+  const [covered, setCovered] = useState(false);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const blur = () => setWindowFocused(false);
+    const focus = () => setWindowFocused(true);
+    const check = () => {
+      const element = toastRef.current;
+      setCovered(Array.from(document.querySelectorAll('[aria-modal="true"]'))
+        .some((dialog) => !element || !dialog.contains(element)));
+    };
+    window.addEventListener('blur', blur);
+    window.addEventListener('focus', focus);
+    check();
+    const observer = new MutationObserver(check);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-modal'] });
+    return () => {
+      window.removeEventListener('blur', blur);
+      window.removeEventListener('focus', focus);
+      observer.disconnect();
+    };
+  }, [enabled, toastRef]);
+
+  return !enabled || (windowFocused && !covered);
+}
+
 function Toast({ toast }: { toast: ToastRecord }) {
+  const elementRef = useRef<HTMLDivElement | null>(null);
+  const inViewOnly = toast.inViewOnly === true;
+  const inView = useToastInView(inViewOnly, elementRef);
+
   // When it first appeared on this page, for its close guard.
   const shownAtRef = useRef<number | null>(null);
   useEffect(() => {
     shownAtRef.current ??= Date.now();
-    const timeout = window.setTimeout(() => dismissToast(toast.id, 'expired'), toast.durationMs);
-    return () => window.clearTimeout(timeout);
-  }, [toast.durationMs, toast.id]);
+  }, []);
+
+  // Its time, counted while it can be seen: what ran before a pause is kept.
+  const remainingRef = useRef(toast.durationMs);
+  useEffect(() => {
+    if (!inView) return undefined;
+    const startedAt = Date.now();
+    const timeout = window.setTimeout(() => dismissToast(toast.id, 'expired'), remainingRef.current);
+    return () => {
+      window.clearTimeout(timeout);
+      remainingRef.current = Math.max(0, remainingRef.current - (Date.now() - startedAt));
+    };
+  }, [inView, toast.id]);
+
+  // Leaving the page takes an in-view-only toast down unread, as leaving the
+  // app takes the app's notice down.
+  useEffect(() => {
+    if (!inViewOnly) return undefined;
+    const leave = () => {
+      if (document.visibilityState === 'hidden') dismissToast(toast.id, 'interrupted');
+    };
+    leave();
+    document.addEventListener('visibilitychange', leave);
+    return () => document.removeEventListener('visibilitychange', leave);
+  }, [inViewOnly, toast.id]);
 
   const close = () => {
     const shownAt = shownAtRef.current;
@@ -86,7 +148,7 @@ function Toast({ toast }: { toast: ToastRecord }) {
   };
 
   return (
-    <div className={`ui-toast ${TOAST_TONE_CLASS[toast.tone]}`}>
+    <div ref={elementRef} className={`ui-toast ${TOAST_TONE_CLASS[toast.tone]}`}>
       <ToastIcon tone={toast.tone} />
       <p className="min-w-0 flex-1 text-sm leading-5">{toast.message}</p>
       <button

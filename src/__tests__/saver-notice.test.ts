@@ -14,6 +14,7 @@ import {
   creatorSeesSaverFields,
   resetSaverNoticeForTests,
   syncSaverNotice,
+  type SaverNoticeRecord,
 } from '@/components/saver-notice';
 
 function notices() {
@@ -27,6 +28,11 @@ function remembered(accountId: string) {
 
 function remember(accountId: string, memory: 'pending' | 'recorded') {
   window.localStorage.setItem(`magicbooklet:saver-notice:v2:${accountId}`, memory);
+}
+
+/** A record of the account's telling, as one read gives it: a new object per read. */
+function record(userId: string, seen: boolean): SaverNoticeRecord {
+  return { userId, seen };
 }
 
 /** Lets the notice module's own requests settle. */
@@ -93,14 +99,13 @@ describe('saver notice', () => {
     expect(notices()).toHaveLength(0);
   });
 
-  it('counts a notice that ran out on a page in view, and not one that ran out out of view or was taken down', () => {
+  // Whether it ran out while it could be seen is the toast's to judge: it
+  // counts down only in view and goes unread when the page is hidden
+  // (`inViewOnly`, feedback-viewport.test.tsx).
+  it('counts down only while it can be seen, and settles as its toast went: taken down unread tells nothing', () => {
     creatorSeesSaverFields('user-1', true, 'token-1');
-    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
-    dismissToast(notices()[0].id, 'expired');
-    expect(creatorSeesSaverFields('user-1', true, 'token-1')).toEqual({ saverNotYetTold: true });
-    expect(notices()).toHaveLength(1);
+    expect(notices()[0]).toMatchObject({ inViewOnly: true });
 
-    visibility.mockReturnValue('visible');
     dismissToast(notices()[0].id, 'interrupted');
     expect(creatorSeesSaverFields('user-1', true, 'token-1')).toEqual({ saverNotYetTold: true });
     expect(remembered('user-1')).toBeNull();
@@ -124,11 +129,11 @@ describe('saver notice', () => {
     { how: 'another account signs in', next: 'user-2' },
     { how: 'the account signs out', next: null },
   ])("takes the notice down unread when $how, recording a telling for no one", async ({ next }) => {
-    syncSaverNotice('user-1', 'token-1', false);
+    syncSaverNotice('user-1', 'token-1', record('user-1', false));
     expect(creatorSeesSaverFields('user-1', true, 'token-1')).toEqual({ saverNotYetTold: true });
     expect(notices()).toHaveLength(1);
 
-    syncSaverNotice(next, next ? 'token-2' : null, next ? false : null);
+    syncSaverNotice(next, next ? 'token-2' : null, next ? record(next, false) : null);
     expect(notices()).toHaveLength(0);
     await settle();
 
@@ -141,7 +146,7 @@ describe('saver notice', () => {
     }
 
     // The first account was not told either: back on this page, it is told at its next save.
-    syncSaverNotice('user-1', 'token-1', false);
+    syncSaverNotice('user-1', 'token-1', record('user-1', false));
     expect(creatorSeesSaverFields('user-1', true, 'token-1')).toEqual({ saverNotYetTold: true });
     expect(notices()).toHaveLength(1);
   });
@@ -182,9 +187,12 @@ describe('saver notice', () => {
     expect(notices()).toHaveLength(1);
   });
 
-  describe("the account's record, read with the page or asked for", () => {
-    it.each([true, false])('takes the record the page was drawn with (%s), and asks the server nothing', async (seen) => {
-      syncSaverNotice('user-1', 'token-1', seen);
+  // The record arrives with what the page reads anyway: the page as it was
+  // drawn, or the profile the browser reads after a sign-in or a balance
+  // refresh (AuthProvider's `saverNoticeRecord`). Nothing here asks for it.
+  describe("the account's record, as the page reads it", () => {
+    it.each([true, false])('takes a record (%s), and asks the server nothing', async (seen) => {
+      syncSaverNotice('user-1', 'token-1', record('user-1', seen));
       await settle();
 
       expect(fetchMock).not.toHaveBeenCalled();
@@ -196,121 +204,94 @@ describe('saver notice', () => {
 
     // The page hands out the record it was drawn with for its whole life, and
     // the save surfaces sync again at every token refresh and every mount.
-    it('takes the record the page was drawn with in once, so a telling recorded on the page outlives the syncs after it', async () => {
-      syncSaverNotice('user-1', 'token-1', false);
-      expect(creatorSeesSaverFields('user-1', true, 'token-1')).toEqual({ saverNotYetTold: true });
-      dismissToast(notices()[0].id, 'closed');
-      await settle();
-      expect(remembered('user-1')).toBe('recorded');
+    it('takes each record in once, so a telling made since in another tab outlives the syncs after it', async () => {
+      const drawnWith = record('user-1', false);
+      syncSaverNotice('user-1', 'token-1', drawnWith);
+      // Another tab told them and put it on record.
+      remember('user-1', 'recorded');
 
       // A token refresh, then another save surface mounting.
-      syncSaverNotice('user-1', 'token-2', false);
-      syncSaverNotice('user-1', 'token-2', false);
+      syncSaverNotice('user-1', 'token-2', drawnWith);
+      syncSaverNotice('user-1', 'token-2', drawnWith);
       await settle();
 
       expect(remembered('user-1')).toBe('recorded');
       expect(creatorSeesSaverFields('user-1', true, 'token-2')).toEqual({ creatorSeesSaver: true });
       expect(notices()).toHaveLength(0);
-      expect(recordRequests()).toEqual(['POST']);
+      expect(recordRequests()).toEqual([]);
     });
 
-    it('takes a telling on record from another device, without the notice', async () => {
-      serverSeen = true;
-      syncSaverNotice('user-1', 'token-1');
+    // Review 4 finding #21.
+    it('takes a later record that says told, from another device since the page was drawn', async () => {
+      syncSaverNotice('user-1', 'token-1', record('user-1', false));
+      syncSaverNotice('user-1', 'token-1', record('user-1', true));
       await settle();
 
-      expect(fetchMock).toHaveBeenCalledWith('/api/profile/saver-notice', { headers: { Authorization: 'Bearer token-1' } });
       expect(creatorSeesSaverFields('user-1', true, 'token-1')).toEqual({ creatorSeesSaver: true });
       expect(notices()).toHaveLength(0);
       expect(remembered('user-1')).toBe('recorded');
     });
 
-    it('asks for the record once a page when the page could not know it, and again after an ask that failed', async () => {
-      fetchMock.mockImplementationOnce(async () => {
-        throw new TypeError('Failed to fetch');
-      });
+    // Review 4 finding #9, the web's half.
+    it('keeps a telling it put on record when a read that began before that lands after it', async () => {
+      syncSaverNotice('user-1', 'token-1', record('user-1', false));
+      creatorSeesSaverFields('user-1', true, 'token-1');
+      dismissToast(notices()[0].id, 'closed');
+      await settle();
+      expect(remembered('user-1')).toBe('recorded');
 
-      syncSaverNotice('user-1', 'token-1', null);
-      await settle();
-      syncSaverNotice('user-1', 'token-1', null);
-      await settle();
-      syncSaverNotice('user-1', 'token-1');
-      syncSaverNotice('user-1', 'token-1', undefined);
+      syncSaverNotice('user-1', 'token-1', record('user-1', false));
       await settle();
 
-      expect(recordRequests()).toEqual(['GET', 'GET']);
-      // With no token there is nothing to ask with.
-      syncSaverNotice('user-2', null, null);
-      await settle();
-      expect(recordRequests()).toEqual(['GET', 'GET']);
+      expect(remembered('user-1')).toBe('recorded');
+      expect(creatorSeesSaverFields('user-1', true, 'token-1')).toEqual({ creatorSeesSaver: true });
+      expect(notices()).toHaveLength(0);
     });
 
-    it('records a telling this browser holds that the server missed, and reads the record once a page', async () => {
+    it("takes no other account's record as this one's", async () => {
+      syncSaverNotice('user-1', 'token-1', record('user-2', true));
+      await settle();
+
+      expect(creatorSeesSaverFields('user-1', true, 'token-1')).toEqual({ saverNotYetTold: true });
+      expect(remembered('user-2')).toBeNull();
+    });
+
+    it('records a telling this browser holds that the server missed, as soon as the account is on the page', async () => {
       remember('user-1', 'pending');
 
       syncSaverNotice('user-1', 'token-1');
       syncSaverNotice('user-1', 'token-1');
       await settle();
 
-      expect([...recordRequests()].sort()).toEqual(['GET', 'POST']);
+      expect(recordRequests()).toEqual(['POST']);
       expect(remembered('user-1')).toBe('recorded');
+      // With no token there is nothing to record with.
+      remember('user-2', 'pending');
+      syncSaverNotice('user-2', null);
+      await settle();
+      expect(recordRequests()).toEqual(['POST']);
     });
 
-    it.each([
-      { from: 'the page it was drawn with', seen: false as boolean | undefined },
-      { from: 'the server, asked', seen: undefined },
-    ])('tells an account again when $from says no telling is on record that this browser saw recorded', async ({ seen }) => {
+    it('tells an account again when a record says no telling is on record that this browser saw recorded', async () => {
       // Cleared there on purpose: the server's record decides.
       remember('user-1', 'recorded');
 
-      syncSaverNotice('user-1', 'token-1', seen);
+      syncSaverNotice('user-1', 'token-1', record('user-1', false));
       await settle();
 
       expect(remembered('user-1')).toBeNull();
       expect(creatorSeesSaverFields('user-1', true, 'token-1')).toEqual({ saverNotYetTold: true });
       expect(notices()).toHaveLength(1);
-      expect(recordRequests()).toEqual(seen === undefined ? ['GET'] : []);
+      expect(recordRequests()).toEqual([]);
     });
 
-    it('records a telling not yet on record when the page says the server has none, without telling them again', async () => {
+    it('records a telling not yet on record when a record says the server has none, without telling them again', async () => {
       remember('user-1', 'pending');
 
-      syncSaverNotice('user-1', 'token-1', false);
+      syncSaverNotice('user-1', 'token-1', record('user-1', false));
       await settle();
 
       expect(recordRequests()).toEqual(['POST']);
-      expect(remembered('user-1')).toBe('recorded');
-      expect(creatorSeesSaverFields('user-1', true, 'token-1')).toEqual({ creatorSeesSaver: true });
-      expect(notices()).toHaveLength(0);
-    });
-
-    it("asks again for a telling once the server's answer says it has none, after a record that was refused", async () => {
-      remember('user-1', 'pending');
-      let records = 0;
-      let answerRead: (seen: boolean) => void = () => {};
-      fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        if (init?.method === 'POST') {
-          // The first record is refused; the next one is taken.
-          records += 1;
-          return { ok: records > 1, json: async () => ({}) } as Response;
-        }
-        const seen = await new Promise<boolean>((resolve) => {
-          answerRead = resolve;
-        });
-        return { ok: true, json: async () => ({ seen }) } as Response;
-      });
-
-      syncSaverNotice('user-1', 'token-1');
-      await settle();
-      // What this browser holds went out at once, and was refused.
-      expect(recordRequests().filter((method) => method === 'POST')).toHaveLength(1);
-      expect(remembered('user-1')).toBe('pending');
-
-      answerRead(false);
-      await settle();
-
-      expect(recordRequests().filter((method) => method === 'POST')).toHaveLength(2);
-      expect(recordRequests().filter((method) => method === 'GET')).toHaveLength(1);
       expect(remembered('user-1')).toBe('recorded');
       expect(creatorSeesSaverFields('user-1', true, 'token-1')).toEqual({ creatorSeesSaver: true });
       expect(notices()).toHaveLength(0);

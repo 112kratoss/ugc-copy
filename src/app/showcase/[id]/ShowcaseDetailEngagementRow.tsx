@@ -74,7 +74,6 @@ export default function ShowcaseDetailEngagementRow({
   } = useOptimisticPostSave({
     initialItems,
     accessToken: session?.access_token ?? null,
-    viewerId: user?.id ?? null,
     isSignedIn: Boolean(user),
     onAuthRequired: () => router.push(loginHref()),
     onError: (error) => console.error('Failed to toggle save from the post page:', error),

@@ -8,8 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
-/** The card's node, as `findNodeHandle` hands it to VoiceOver. */
-const CARD_NODE = 7301;
+/** The notice's words, as `findNodeHandle` hands them to VoiceOver. */
+const MESSAGE_NODE = 7301;
 
 const native = vi.hoisted(() => ({
   os: 'android' as 'android' | 'ios',
@@ -145,7 +145,11 @@ async function mount(element: React.ReactElement) {
   let tree!: renderer.ReactTestRenderer;
   await renderer.act(async () => {
     tree = renderer.create(element, {
-      createNodeMock: (node) => ({ nodeHandle: String(node.type) === 'motion-view' ? CARD_NODE : -1 }),
+      createNodeMock: (node) => ({
+        nodeHandle: String(node.type) === 'text' && (node.props as { children?: unknown }).children === SAVER_NOTICE_MESSAGE
+          ? MESSAGE_NODE
+          : -1,
+      }),
     });
   });
   trees.push(tree);
@@ -373,7 +377,9 @@ describe('SaverNoticeBar', () => {
     expect(endings().at(-1)).toEqual([id, 'expired']);
   });
 
-  it('waits for OK while a screen reader runs, and moves VoiceOver onto it on iOS', async () => {
+  // Review 4 finding #7: onto its words, an element VoiceOver can land on,
+  // so they are read before OK, the next swipe.
+  it('waits for OK while a screen reader runs, and moves VoiceOver onto its words on iOS', async () => {
     native.os = 'ios';
     native.screenReader = true;
     const tree = await mount(<SaverNoticeBar />);
@@ -383,7 +389,7 @@ describe('SaverNoticeBar', () => {
     advance(249);
     expect(native.focused).toEqual([]);
     advance(1);
-    expect(native.focused).toEqual([CARD_NODE]);
+    expect(native.focused).toEqual([MESSAGE_NODE]);
 
     advance(SAVER_NOTICE_DURATION_MS * 3);
     expect(shownNotice().id).toBe(id);
@@ -417,16 +423,52 @@ describe('SaverNoticeBar', () => {
     expect(native.announced).toEqual([]);
   });
 
-  it("counts a reader's dismiss as read", async () => {
+  // Review 4 finding #6: the escape gesture is a way out, not a reading.
+  it("counts VoiceOver's escape gesture as not read, at any moment: the next save tells them again", async () => {
+    native.os = 'ios';
     native.screenReader = true;
     const tree = await mount(<SaverNoticeBar />);
     tapSave();
     const { id } = shownNotice();
+    advance(5_000);
 
     renderer.act(() => card(tree).props.onAccessibilityEscape());
 
+    expect(endings()).toEqual([[id, 'interrupted']]);
+    expect(readSaverNotice()).toBeNull();
+    expect(tapSave()).toEqual(NOT_YET_TOLD);
+  });
+
+  it("counts a reader's Dismiss action as read once the notice has been up a moment, and ignores it before", async () => {
+    native.screenReader = true;
+    const tree = await mount(<SaverNoticeBar />);
+    tapSave();
+    const { id } = shownNotice();
+    const dismissAction = () => renderer.act(() => okButton(tree).props.onAccessibilityAction({ nativeEvent: { actionName: 'dismiss' } }));
+
+    advance(300);
+    dismissAction();
+    expect(endings()).toEqual([]);
+
+    advance(500);
+    dismissAction();
     expect(endings()).toEqual([[id, 'closed']]);
     expect(tapSave()).toEqual(NAMES_SAVER);
+  });
+
+  // Review 4 finding #27: unknown counts as not in view.
+  it('counts nothing down while the app has not yet said it is active', async () => {
+    native.appState = 'unknown';
+    await mount(<SaverNoticeBar />);
+    tapSave();
+    const { id } = shownNotice();
+
+    advance(SAVER_NOTICE_DURATION_MS * 3);
+    expect(shownNotice().id).toBe(id);
+
+    appStateChangesTo('active');
+    advance(SAVER_NOTICE_DURATION_MS);
+    expect(endings()).toEqual([[id, 'expired']]);
   });
 
   it('cannot be pressed or reached while it fades out', async () => {
@@ -559,25 +601,50 @@ describe('SaverNoticeSync', () => {
   });
 
   // The profile the phone keeps for the next launch was read before the
-  // telling, and would come back saying "no record".
-  it('has the profile read again once a telling is on record, and not when it could not be put there', async () => {
+  // telling, and would come back saying "no record". Review 4 finding #23: it
+  // is marked, not read again whole.
+  it('marks the profile the phone keeps as told once the telling is on record, without reading it again, and not when it could not be put there', async () => {
     auth.user = { id: 'user-1' };
     const client = newClient();
+    client.setQueryData(['profile', 'user-1'], profile(false));
     const tree = await mount(app(client));
     auth.api.recordSaverNotice.mockRejectedValueOnce(new Error('Network request failed'));
     tapSave();
     advance(800);
     press(tree);
     await flush();
-    expect(auth.refreshProfile).not.toHaveBeenCalled();
+    expect(client.getQueryData<ProfileResponse>(['profile', 'user-1'])?.saverNoticeSeen).toBe(false);
 
     appStateChangesTo('background');
     appStateChangesTo('active');
     await flush();
 
     expect(auth.api.recordSaverNotice).toHaveBeenCalledTimes(2);
-    expect(auth.refreshProfile).toHaveBeenCalledTimes(1);
+    expect(client.getQueryData<ProfileResponse>(['profile', 'user-1'])?.saverNoticeSeen).toBe(true);
+    expect(auth.refreshProfile).not.toHaveBeenCalled();
+    expect(auth.api.getProfile).not.toHaveBeenCalled();
     expect(storage.stored.get(USER_1_KEY)).toBe('recorded');
+  });
+
+  // Review 4 finding #9: the launch's profile read, or one a return to the
+  // app started beside a retried record, was read before the record landed.
+  it('keeps a telling it put on record when a profile read before that lands after it, and puts the kept profile right', async () => {
+    auth.user = { id: 'user-1' };
+    const client = newClient();
+    const tree = await mount(app(client));
+    tapSave();
+    advance(800);
+    press(tree);
+    await flush();
+    expect(storage.stored.get(USER_1_KEY)).toBe('recorded');
+
+    await profileLoads(client, profile(false));
+
+    expect(storage.stored.get(USER_1_KEY)).toBe('recorded');
+    expect(tapSave()).toEqual(NAMES_SAVER);
+    expect(tree.toJSON()).toBeNull();
+    // What the next launch reads first says told too.
+    expect(client.getQueryData<ProfileResponse>(['profile', 'user-1'])?.saverNoticeSeen).toBe(true);
   });
 
   // Review finding #10.

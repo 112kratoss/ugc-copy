@@ -24,7 +24,7 @@ const auth = vi.hoisted(() => ({
         session: { access_token: string } | null;
         user: { id: string } | null;
         isLoading?: boolean;
-        saverNoticeSeen?: boolean | null;
+        saverNoticeRecord?: { userId: string; seen: boolean } | null;
     },
 }));
 // Renders of each card, by post id.
@@ -438,7 +438,7 @@ describe('FeedClient lanes and card actions', () => {
     it("saves for the signed-in viewer's account, so its alert may name them once they were told", async () => {
         // Told on an earlier page: the page is drawn with the signed-in
         // account's record, and only that account's telling counts.
-        auth.state = { session: { access_token: 'token' }, user: { id: 'viewer-1' }, saverNoticeSeen: true };
+        auth.state = { session: { access_token: 'token' }, user: { id: 'viewer-1' }, saverNoticeRecord: { userId: 'viewer-1', seen: true } };
         const fetchMock = mockJsonFetch({ success: true, isSaved: true, saveCount: 1 });
         render(<FeedClient initialFeed={feed} initialChipId="for-you" />);
 

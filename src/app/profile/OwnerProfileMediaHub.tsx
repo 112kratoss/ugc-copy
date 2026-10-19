@@ -442,7 +442,6 @@ export default function OwnerProfileMediaHub({
   const postSaveState = useOptimisticPostSave<ShowcaseFeedItem>({
     initialItems: EMPTY_SHOWCASE_ITEMS,
     accessToken,
-    viewerId: user?.id ?? null,
     isSignedIn: Boolean(user && accessToken),
     onAuthRequired: authRequired,
     onError: (error) => console.error('Profile post save failed:', error),
@@ -452,7 +451,6 @@ export default function OwnerProfileMediaHub({
   const savedSaveState = useOptimisticPostSave<ShowcaseFeedItem>({
     initialItems: EMPTY_SHOWCASE_ITEMS,
     accessToken,
-    viewerId: user?.id ?? null,
     isSignedIn: Boolean(user && accessToken),
     onAuthRequired: authRequired,
     onError: (error) => console.error('Profile saved-media update failed:', error),

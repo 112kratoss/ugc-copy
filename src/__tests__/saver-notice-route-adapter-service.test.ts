@@ -2,10 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
-import {
-  getSaverNoticeRouteResponse,
-  postSaverNoticeRouteResponse,
-} from '@/lib/saver-notice-route-adapter-service';
+import { postSaverNoticeRouteResponse } from '@/lib/saver-notice-route-adapter-service';
 
 function userClient(user: { id: string; is_anonymous?: boolean } | null) {
   return () => ({
@@ -21,50 +18,53 @@ function dependencies(overrides: Record<string, unknown> = {}) {
       allowed: true, limit: 20, remaining: 19, retryAfterSeconds: 0, resetAt: '2026-10-19T10:00:00.000Z',
     })),
     logError: vi.fn(),
-    readSaverNoticeSeen: vi.fn(async () => true),
-    recordSaverNoticeSeen: vi.fn(async () => undefined),
+    recordSaverNoticeSeen: vi.fn(async () => true),
     ...overrides,
   };
 }
 
-const request = (method: string) => new Request('http://localhost/api/profile/saver-notice', { method });
+const request = () => new Request('http://localhost/api/profile/saver-notice', { method: 'POST' });
 
+// The record is read with the profile both clients load (`saverNoticeSeen`);
+// the route only writes it.
 describe('saver notice route', () => {
-  it("answers whether the signed-in account has been told, privately", async () => {
+  it('records the telling for the signed-in account, privately, within its rate limit', async () => {
     const deps = dependencies();
-    const response = await getSaverNoticeRouteResponse({ request: request('GET'), dependencies: deps });
+    const response = await postSaverNoticeRouteResponse({ request: request(), dependencies: deps });
 
     expect(response.status).toBe(200);
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     await expect(response.json()).resolves.toEqual({ seen: true });
-    expect(deps.readSaverNoticeSeen).toHaveBeenCalledWith({ kind: 'service' }, 'viewer-1');
+    // Review 4 finding #16: the whole limit, window included, as the route passes it.
+    expect(deps.enforceBackendRateLimit).toHaveBeenCalledWith({ kind: 'service' }, {
+      scope: 'saver-notice:record',
+      limit: 20,
+      windowSeconds: 600,
+      key: 'viewer-1',
+    });
+    expect(deps.recordSaverNoticeSeen).toHaveBeenCalledWith({ kind: 'service' }, 'viewer-1');
   });
 
-  it('records the telling for the signed-in account, within its rate limit', async () => {
-    const deps = dependencies();
-    const response = await postSaverNoticeRouteResponse({ request: request('POST'), dependencies: deps });
+  // Review 4 finding #20.
+  it('answers 404, not "told", when the account has no profile to hold the record', async () => {
+    const deps = dependencies({ recordSaverNoticeSeen: vi.fn(async () => false) });
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ seen: true });
-    expect(deps.enforceBackendRateLimit).toHaveBeenCalledWith({ kind: 'service' }, expect.objectContaining({
-      scope: 'saver-notice:record',
-      key: 'viewer-1',
-    }));
-    expect(deps.recordSaverNoticeSeen).toHaveBeenCalledWith({ kind: 'service' }, 'viewer-1');
+    const response = await postSaverNoticeRouteResponse({ request: request(), dependencies: deps });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.not.toHaveProperty('seen');
   });
 
   it.each([
     { kind: 'no session', user: null },
     // A guest saves nothing, so it is told nothing.
     { kind: 'a guest', user: { id: 'guest-1', is_anonymous: true } },
-  ])('refuses $kind without reading or writing', async ({ user }) => {
+  ])('refuses $kind without writing', async ({ user }) => {
     const deps = dependencies({ createUserClient: userClient(user) });
 
-    for (const call of [getSaverNoticeRouteResponse, postSaverNoticeRouteResponse]) {
-      const response = await call({ request: request(call === getSaverNoticeRouteResponse ? 'GET' : 'POST'), dependencies: deps });
-      expect(response.status).toBe(401);
-    }
-    expect(deps.readSaverNoticeSeen).not.toHaveBeenCalled();
+    const response = await postSaverNoticeRouteResponse({ request: request(), dependencies: deps });
+
+    expect(response.status).toBe(401);
     expect(deps.recordSaverNoticeSeen).not.toHaveBeenCalled();
   });
 
@@ -77,20 +77,18 @@ describe('saver notice route', () => {
       }),
     });
 
-    const response = await postSaverNoticeRouteResponse({ request: request('POST'), dependencies: deps });
+    const response = await postSaverNoticeRouteResponse({ request: request(), dependencies: deps });
 
     expect(response.status).toBe(429);
     expect(deps.recordSaverNoticeSeen).not.toHaveBeenCalled();
   });
 
-  it('answers 500 when the record cannot be read or written, and logs it', async () => {
+  it('answers 500 when the record cannot be written, and logs it', async () => {
     const deps = dependencies({
-      readSaverNoticeSeen: vi.fn(async () => { throw new Error('timeout'); }),
       recordSaverNoticeSeen: vi.fn(async () => { throw new Error('timeout'); }),
     });
 
-    expect((await getSaverNoticeRouteResponse({ request: request('GET'), dependencies: deps })).status).toBe(500);
-    expect((await postSaverNoticeRouteResponse({ request: request('POST'), dependencies: deps })).status).toBe(500);
-    expect(deps.logError).toHaveBeenCalledTimes(2);
+    expect((await postSaverNoticeRouteResponse({ request: request(), dependencies: deps })).status).toBe(500);
+    expect(deps.logError).toHaveBeenCalledTimes(1);
   });
 });

@@ -777,7 +777,12 @@ export default function ShowcaseReelViewer({
 
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
+        if (!activeDialog?.contains(document.activeElement)) {
+          // Focus fell out of the dialog, as it does when a toast it holds
+          // goes with its button focused: back in, not on to the page behind.
+          event.preventDefault();
+          (event.shiftKey ? last : first).focus();
+        } else if (event.shiftKey && document.activeElement === first) {
           event.preventDefault();
           last.focus();
         } else if (!event.shiftKey && document.activeElement === last) {

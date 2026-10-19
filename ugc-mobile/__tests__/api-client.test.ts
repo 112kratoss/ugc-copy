@@ -1488,7 +1488,8 @@ describe('mobile api client caching', () => {
     ]);
   });
 
-  it('reads and records whether the account was told that creators can see who saved', async () => {
+  // The record is read with the profile (`saverNoticeSeen`): the route only writes it.
+  it('records that the account was told that creators can see who saved', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ seen: true }));
     const api = createApiClient({
       baseUrl: 'https://magicbooklet.test',
@@ -1496,16 +1497,15 @@ describe('mobile api client caching', () => {
       fetcher: fetcher as unknown as typeof fetch,
     });
 
-    await expect(api.getSaverNotice()).resolves.toEqual({ seen: true });
     await expect(api.recordSaverNotice()).resolves.toEqual({ seen: true });
 
     expect(fetcher.mock.calls.map((call) => {
       const [input, init] = call as unknown as [RequestInfo | URL, RequestInit | undefined];
       return [new URL(String(input)).pathname, init?.method ?? 'GET'];
     })).toEqual([
-      ['/api/profile/saver-notice', 'GET'],
       ['/api/profile/saver-notice', 'POST'],
     ]);
+    expect(api).not.toHaveProperty('getSaverNotice');
   });
 
   // The multipart route these used to share is retired and answers 410, so

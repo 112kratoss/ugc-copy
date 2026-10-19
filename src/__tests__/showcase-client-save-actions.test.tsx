@@ -44,7 +44,7 @@ const authState = vi.hoisted(() => ({
   user: { id: 'user-1' } as { id: string } | null,
   credits: 25,
   isLoading: false,
-  saverNoticeSeen: null as boolean | null,
+  saverNoticeRecord: null as { userId: string; seen: boolean } | null,
 }));
 
 vi.mock('next/navigation', () => ({
@@ -197,7 +197,7 @@ describe('ShowcaseClient save actions', () => {
     authState.user = { id: 'user-1' };
     authState.credits = 25;
     authState.isLoading = false;
-    authState.saverNoticeSeen = null;
+    authState.saverNoticeRecord = null;
     intersectionObservers.length = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -279,7 +279,7 @@ describe('ShowcaseClient save actions', () => {
     })));
     // This viewer was told on an earlier page, as the page was drawn knowing,
     // so the save may name them.
-    authState.saverNoticeSeen = true;
+    authState.saverNoticeRecord = { userId: 'user-1', seen: true };
 
     renderShowcase(createShowcaseItem());
 

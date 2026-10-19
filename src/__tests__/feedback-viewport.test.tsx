@@ -254,22 +254,162 @@ describe('the saver notice in the viewport', () => {
     expect(tell()).toEqual({ creatorSeesSaver: true });
   });
 
-  it('does not count one that ran out while the page was out of view', async () => {
-    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  /** The page goes out of view, or comes back. */
+  function pageVisibility(state: DocumentVisibilityState, spy = vi.spyOn(document, 'visibilityState', 'get')) {
+    spy.mockReturnValue(state);
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    return spy;
+  }
+
+  // Review 4 finding #5: leaving the page takes it down unread, as leaving the
+  // app takes the app's down.
+  it('takes the notice down unread when the page is hidden, whenever that is', async () => {
     render(<FeedbackViewport />);
     expect(tell()).toEqual({ saverNotYetTold: true });
-
     act(() => {
-      vi.advanceTimersByTime(6000);
+      vi.advanceTimersByTime(5_500);
     });
+
+    const visibility = pageVisibility('hidden');
     await flush();
 
     expect(screen.getByRole('status')).not.toHaveTextContent(SAVER_NOTICE_MESSAGE);
     expect(told()).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
-    // Not told: the next save tells them again.
+    // Back on the page: not told, so the next save tells them again.
+    pageVisibility('visible', visibility);
     expect(tell()).toEqual({ saverNotYetTold: true });
     expect(screen.getByRole('status')).toHaveTextContent(SAVER_NOTICE_MESSAGE);
+  });
+
+  it('never counts one pushed onto a page already hidden', async () => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    render(<FeedbackViewport />);
+    expect(tell()).toEqual({ saverNotYetTold: true });
+    act(() => {
+      vi.advanceTimersByTime(6_000);
+    });
+    await flush();
+
+    expect(told()).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // Review 4 finding #5: another window in front of the browser.
+  it('stops counting while the window is out of focus, and goes on with the time it had left', async () => {
+    render(<FeedbackViewport />);
+    tell();
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+
+    act(() => {
+      window.dispatchEvent(new Event('blur'));
+    });
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.getByRole('status')).toHaveTextContent(SAVER_NOTICE_MESSAGE);
+    expect(told()).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    act(() => {
+      vi.advanceTimersByTime(3_999);
+    });
+    expect(screen.getByRole('status')).toHaveTextContent(SAVER_NOTICE_MESSAGE);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(screen.getByRole('status')).not.toHaveTextContent(SAVER_NOTICE_MESSAGE);
+    expect(told()).toBe('pending');
+    await flush();
+  });
+
+  // Review 4 finding #2: the root confirmation ("Report content?", "Unlock
+  // this recipe?") is drawn over the reel, and with it over the notice.
+  it('stops counting while a confirmation is open over it, and goes on once it is answered', async () => {
+    render(<FeedbackViewport />);
+    tell();
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+
+    let answer: Promise<boolean> | null = null;
+    act(() => {
+      answer = requestConfirmation({ title: 'Report content?', message: 'm', confirmLabel: 'Report' });
+    });
+    await flush();
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.getByRole('status')).toHaveTextContent(SAVER_NOTICE_MESSAGE);
+    expect(told()).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await expect(answer).resolves.toBe(false);
+    await flush();
+    act(() => {
+      vi.advanceTimersByTime(4_999);
+    });
+    expect(told()).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(told()).toBe('pending');
+    await flush();
+  });
+
+  // Review 4 finding #2: a dialog inside the reel (its reference preview)
+  // covers a toast the reel hosts.
+  it('stops counting while another dialog inside its host is open, and not for the host itself', async () => {
+    render(<FeedbackViewport />);
+    const host = document.createElement('div');
+    host.setAttribute('role', 'dialog');
+    host.setAttribute('aria-modal', 'true');
+    document.body.appendChild(host);
+    act(() => setToastHost(host));
+    tell();
+    await flush();
+
+    const preview = document.createElement('div');
+    preview.setAttribute('role', 'dialog');
+    preview.setAttribute('aria-modal', 'true');
+    act(() => {
+      host.appendChild(preview);
+    });
+    await flush();
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(within(host).getByRole('status')).toHaveTextContent(SAVER_NOTICE_MESSAGE);
+    expect(told()).toBeNull();
+
+    act(() => {
+      preview.remove();
+    });
+    await flush();
+    act(() => {
+      vi.advanceTimersByTime(6_000);
+    });
+    expect(told()).toBe('pending');
+    await flush();
+    host.remove();
+  });
+
+  it('leaves every other toast to its own clock, focus or no focus', () => {
+    render(<FeedbackViewport />);
+    act(() => {
+      pushToast({ tone: 'success', message: 'Post archived.', durationMs: 1000 });
+      window.dispatchEvent(new Event('blur'));
+    });
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByRole('status')).not.toHaveTextContent('Post archived.');
   });
 
   // The notice comes up where a finger is already on its way: under the save

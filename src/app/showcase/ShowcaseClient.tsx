@@ -737,7 +737,6 @@ export default function ShowcaseClient({
     } = useOptimisticPostSave({
         initialItems: laneFirstPageItems,
         accessToken: session?.access_token ?? null,
-        viewerId: user?.id ?? null,
         isSignedIn: Boolean(user && session?.access_token),
         onAuthRequired: () => router.push(
             `/login?returnUrl=${encodeURIComponent(getCurrentInternalPath('/showcase'))}`

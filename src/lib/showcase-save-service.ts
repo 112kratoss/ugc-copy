@@ -10,7 +10,6 @@ import {
 } from '@/lib/posts-server';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
-import { loadNameableSaverHandle } from '@/lib/profile-server';
 
 type SetPostSaveStateRow = {
   is_saved?: boolean | null;
@@ -302,8 +301,9 @@ export async function saveShowcasePostForRoute({
    * The app this save came from had told this person that creators can see who
    * saved before they tapped, so the creator's alert may name them by a handle
    * they chose, once that telling is on record
-   * (`profiles.saver_notice_seen_at`). Saves without it from apps that never
-   * say so stay "Someone", as every save was before.
+   * (`profiles.saver_notice_seen_at`, checked where the alert is written).
+   * Saves without it from apps that never say so stay "Someone", as every
+   * save was before.
    */
   creatorSeesSaver?: boolean;
   /**
@@ -326,7 +326,9 @@ export async function saveShowcasePostForRoute({
 }): Promise<ShowcaseSaveServiceResult> {
   const resolvedDependencies = resolveDependencies(dependencies);
   const publicPost = await resolvedDependencies.findPublicPostReferenceByIdOrGenerationId(referenceId) as PostReference | null;
-  const post = publicPost ?? (requestedSaveState === false
+  // Anything but a save can be taking one back: a toggle on a post out of
+  // public view can only remove the saver's own row.
+  const post = publicPost ?? (requestedSaveState !== true
     ? await findOwnSavedPostReference(serviceClient, actorUserId, referenceId)
     : null);
   if (!post) {
@@ -422,23 +424,19 @@ export async function saveShowcasePostForRoute({
   if (isSaved && (requestedSaveState === null || changed) && !saverNotYetTold) {
     // The save is recorded; what is left is telling the creator. The first
     // alert about a post's saves in a quarter-hour ends in a push request to
-    // Expo for their devices, and the app holds its later saves behind this
-    // answer. So the answer goes first wherever it can, and the saver's handle
-    // is looked up behind it. A creator saving their own post is told
-    // nothing, so it is never looked up for that.
-    const namesSaver = creatorSeesSaver && Boolean(post.user_id) && post.user_id !== actorUserId;
+    // Expo for their devices (a named one after a hold), and the app holds its
+    // later saves behind this answer. So the answer goes first wherever it
+    // can. Whether the saver may be named is decided where the alert is
+    // written (`create_post_save_alert`): told on record, a handle they chose.
     await sendDeferrableNotification(
       runAfterResponse,
-      async () => {
-        const actorUsername = namesSaver ? await loadNameableSaverHandle(serviceClient, actorUserId) : null;
-        return resolvedDependencies.notifyPostSocialActivity(serviceClient, {
-          type: 'post_saved',
-          recipientUserId: post.user_id,
-          actorUserId,
-          postId: post.id,
-          ...(actorUsername ? { actorUsername } : {}),
-        });
-      },
+      () => resolvedDependencies.notifyPostSocialActivity(serviceClient, {
+        type: 'post_saved',
+        recipientUserId: post.user_id,
+        actorUserId,
+        postId: post.id,
+        ...(creatorSeesSaver ? { nameSaver: true } : {}),
+      }),
     );
   }
 
