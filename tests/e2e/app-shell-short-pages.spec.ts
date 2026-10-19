@@ -84,4 +84,23 @@ test.describe('a short page in the app shell', () => {
       await expectFitsAtEveryWidth(page);
     });
   }
+
+  // An address with no page, and a page that calls notFound() with no not-found
+  // of its own (a comparison's), draw the app's not-found. Next's default one
+  // sets `height: 100vh` inline, which no sheet rule overrides, so it overflowed
+  // by the bar and the room (164px at 390px, 64px wider). The comparison's
+  // metadata names it "Comparison Not Found"; the not-found's own title wins.
+  for (const route of ['/no-page-at-this-address', '/alternatives/no-comparison-at-this-address']) {
+    test(`${route} is a 404 no taller than the window`, async ({ page }) => {
+      await page.setViewportSize(VIEWPORTS[0]);
+      const response = await page.goto(route);
+      expect(response?.status()).toBe(404);
+      // Any heading first: Next's own page has another, and fails on its band.
+      await expect(page.locator('#main-content h1')).toBeVisible();
+      await expectFitsAtEveryWidth(page);
+      await expect(page.getByRole('heading', { level: 1, name: 'Page not found' })).toBeVisible();
+      // Read once, now that the browser has drawn the page and its head.
+      expect(await page.title()).toMatch(/^Page not found \| /);
+    });
+  }
 });

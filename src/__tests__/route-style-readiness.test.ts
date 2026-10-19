@@ -104,16 +104,23 @@ function collectImportClosure(entryFiles: string[]): Set<string> {
   return visitedFiles;
 }
 
+/**
+ * The root folder's own markup: the layout around every route, the home page
+ * and the not-found that any address with no page draws, all public.
+ */
+function listRootMarkupFiles(): string[] {
+  return readdirSync(APP_ROOT, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /\.(?:tsx|jsx)$/.test(entry.name))
+    .map((entry) => path.join(APP_ROOT, entry.name))
+    .sort();
+}
+
 function collectPublicImportClosure(): Set<string> {
   const routeSources = [...PUBLIC_ROUTE_DIRECTORIES].flatMap((directory) => (
     walkFiles(path.join(APP_ROOT, directory)).filter((file) => /\.(?:ts|tsx|js|jsx)$/.test(file))
   ));
 
-  return collectImportClosure([
-    path.join(APP_ROOT, 'layout.tsx'),
-    path.join(APP_ROOT, 'page.tsx'),
-    ...routeSources,
-  ]);
+  return collectImportClosure([...listRootMarkupFiles(), ...routeSources]);
 }
 
 function listNonPublicRouteDirectories(): string[] {
@@ -125,14 +132,18 @@ function listNonPublicRouteDirectories(): string[] {
 
 /**
  * Every file a route that links the supplement can draw: what its own folder
- * imports, and what the root layout draws around every route (the shell).
+ * imports, and the root's own files but the public home page. The layout draws
+ * the shell around every route, and a link from such a route to a page that
+ * calls notFound() is answered in place, so the not-found is drawn with the
+ * supplement still in the document.
  */
 function collectSupplementImportClosure(): Set<string> {
   const routeSources = listNonPublicRouteDirectories()
     .flatMap((directory) => walkFiles(path.join(APP_ROOT, directory)))
     .filter((file) => /\.(?:ts|tsx|js|jsx)$/.test(file));
+  const rootFiles = listRootMarkupFiles().filter((file) => path.basename(file) !== 'page.tsx');
 
-  return collectImportClosure([path.join(APP_ROOT, 'layout.tsx'), ...routeSources]);
+  return collectImportClosure([...rootFiles, ...routeSources]);
 }
 
 /** A source line for a file under `src/app`, as the supplement names it. */
@@ -192,8 +203,15 @@ describe('route utility stylesheet readiness', () => {
       expect(declaredSources.has(`./${publicDirectory}`), `${publicDirectory} must not be scanned by the supplement`)
         .toBe(false);
     }
-    expect(readFileSync(path.join(APP_ROOT, 'layout.tsx'), 'utf8'))
-      .not.toContain('non-public-utilities.css');
+    // An address with no page draws the root's files with globals.css alone,
+    // and the not-found rides in every page's payload: none links the supplement.
+    const rootMarkupFiles = listRootMarkupFiles().map((file) => path.basename(file));
+    expect(rootMarkupFiles).toEqual(expect.arrayContaining(['layout.tsx', 'not-found.tsx', 'page.tsx']));
+    for (const file of rootMarkupFiles) {
+      expect(publicSources.has(`./${file}`), `${file} must be scanned by globals.css`).toBe(true);
+      expect(readFileSync(path.join(APP_ROOT, file), 'utf8'), `${file} must not link the supplement`)
+        .not.toContain('non-public-utilities.css');
+    }
   });
 
   it('keeps parallel-route slots free of styled markup so an unscanned file cannot ship classes', () => {

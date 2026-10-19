@@ -118,12 +118,14 @@
  * one: scanning a whole public folder here would carry every public page's
  * utilities into the signed-in routes. `*` stands for a folder whose name is
  * in brackets, which the glob that reads these lines takes for a set of
- * letters. */
+ * letters. The root's not-found is among them: a link from a route above to a
+ * page that calls notFound() is answered in place, and this sheet stays. */
 @source "./feed/FeedClient.tsx";
 @source "./feed/FeedMediaLightbox.tsx";
 @source "./feed/FeedPostCard.tsx";
 @source "./feed/WindowedFeedList.tsx";
 @source "./layout.tsx";
+@source "./not-found.tsx";
 @source "./showcase/ShowcaseFeedInteraction.tsx";
 @source "./showcase/ShowcaseMediaCarousel.tsx";
 @source "./showcase/ShowcaseReelViewer.tsx";
