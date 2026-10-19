@@ -29,6 +29,7 @@ export async function RequireAuth({
       initialSession={auth.session}
       initialCredits={auth.credits}
       initialMarketplaceSpendableCredits={auth.marketplaceSpendableCredits ?? null}
+      initialSaverNoticeSeen={auth.saverNoticeSeen ?? null}
       hasResolvedInitialState
     >
       {children}
@@ -68,6 +69,7 @@ export async function RequestHintedOptionalAuth({
       initialSession={auth.session}
       initialCredits={auth.credits}
       initialMarketplaceSpendableCredits={auth.marketplaceSpendableCredits ?? null}
+      initialSaverNoticeSeen={auth.saverNoticeSeen ?? null}
       hasResolvedInitialState
     >
       {children}

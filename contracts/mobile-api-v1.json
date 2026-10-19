@@ -87,7 +87,8 @@
         "location": "Bengaluru",
         "credits": 120,
         "promotionalCredits": 20,
-        "marketplaceSpendableCredits": 100
+        "marketplaceSpendableCredits": 100,
+        "saverNoticeSeen": false
       }
     },
     "updateProfile": {

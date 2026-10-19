@@ -19,6 +19,7 @@ import { POST_RESOURCE_FILE_URL_BATCH_LIMIT } from '@/lib/post-resource-bundles'
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import { createPostResourceFileReadUrlForRoute } from '@/lib/post-resource-file-url-service';
 import { sanitizeProfileRecord } from '@/lib/profile';
+import { getProfileRouteResult } from '@/lib/profile-route-adapter-service';
 import { normalizeShowcaseCategory } from '@/lib/showcase';
 import {
   parseShowcaseFeedEventBatchPayload,
@@ -765,6 +766,53 @@ describe('shared mobile API v1 contract fixture', () => {
       promotionalCredits: profile.promotionalCredits,
       marketplaceSpendableCredits: profile.marketplaceSpendableCredits,
     });
+  });
+
+  // The app starts its saver notice from the profile it loads at launch, so
+  // the read carries the account's record and the app never asks on its own.
+  it("answers the profile read with the account's saver notice record, as the fixture pins", async () => {
+    const endpoint = mobileApiContract.endpoints.getProfile;
+    const pinned = endpoint.response;
+    const storedRow = (saverNoticeSeenAt: string | null) => ({
+      id: pinned.id,
+      username: pinned.username,
+      display_name: pinned.displayName,
+      bio: pinned.bio,
+      avatar_url: pinned.avatarUrl,
+      cover_url: pinned.coverUrl,
+      website_url: pinned.websiteUrl,
+      twitter_handle: pinned.twitterHandle,
+      instagram_handle: pinned.instagramHandle,
+      tiktok_handle: pinned.tiktokHandle,
+      location: pinned.location,
+      credits: pinned.credits,
+      promotional_credits: pinned.promotionalCredits,
+      saver_notice_seen_at: saverNoticeSeenAt,
+    });
+    const read = (row: ReturnType<typeof storedRow>) => getProfileRouteResult({
+      request: new Request(`http://localhost${endpoint.path}`),
+      dependencies: {
+        createUserClient: () => ({
+          auth: { getUser: vi.fn(async () => ({ data: { user: { id: pinned.id } }, error: null })) },
+        }) as unknown as SupabaseClient,
+        createServiceClient: () => ({
+          from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }) }),
+          rpc: async () => ({ data: null, error: null }),
+        }) as unknown as SupabaseClient,
+      },
+    });
+
+    const untold = await read(storedRow(null));
+    expect(untold.status).toBe(200);
+    expect(untold.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
+    // Field for field, but the suggested handle the server makes for every account.
+    expect(untold.body).toMatchObject(Object.fromEntries(
+      Object.entries(pinned).filter(([field]) => field !== 'suggestedUsername'),
+    ));
+    expect(untold.body).toHaveProperty('saverNoticeSeen', pinned.saverNoticeSeen);
+
+    const told = await read(storedRow('2026-10-19T09:00:00.000Z'));
+    expect(told.body).toHaveProperty('saverNoticeSeen', true);
   });
 
   // Both answers of a credit unlock say what stays spendable, and the refusal

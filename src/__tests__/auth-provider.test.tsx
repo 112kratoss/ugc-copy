@@ -341,6 +341,86 @@ describe('AuthProvider', () => {
     });
   });
 
+  // Whether the account was told, on record, that creators can see who saved:
+  // read with the page, so it holds only for the account the page was drawn
+  // for. Another account signed in since is unknown, never the first one's.
+  describe('the saver notice record the page was drawn with', () => {
+    function SaverNoticeProbe() {
+      const { saverNoticeSeen, session } = useAuth();
+      return (
+        <div>
+          <span data-testid="account">{session?.user.id ?? 'none'}</span>
+          <span data-testid="saver-notice-seen">{String(saverNoticeSeen)}</span>
+        </div>
+      );
+    }
+
+    const otherSession = {
+      ...authenticatedSession,
+      access_token: 'other-access-token',
+      user: { ...authenticatedSession.user, id: 'user-2', email: 'other@example.com' },
+    } as Session;
+
+    beforeEach(() => {
+      vi.stubGlobal('requestIdleCallback', (callback: IdleRequestCallback) => {
+        queueMicrotask(() => callback({ didTimeout: false, timeRemaining: () => 50 }));
+        return 1;
+      });
+      vi.stubGlobal('cancelIdleCallback', vi.fn());
+      authProviderMocks.getUser.mockImplementation(async (accessToken: string) => ({
+        data: { user: accessToken === otherSession.access_token ? otherSession.user : authenticatedSession.user },
+        error: null,
+      }));
+    });
+
+    it.each([true, false])('hands the initial account its record (%s), and no other account', async (seen) => {
+      render(
+        <AuthProvider
+          initialSession={authenticatedSession}
+          initialCredits={1295}
+          initialSaverNoticeSeen={seen}
+          hasResolvedInitialState
+        >
+          <SaverNoticeProbe />
+        </AuthProvider>
+      );
+
+      expect(screen.getByTestId('account')).toHaveTextContent('user-1');
+      expect(screen.getByTestId('saver-notice-seen')).toHaveTextContent(String(seen));
+      await waitFor(() => expect(authStateCallback).not.toBeNull());
+
+      // Another account signs in on this page, without a reload.
+      act(() => authStateCallback?.('SIGNED_IN', otherSession));
+      await waitFor(() => expect(screen.getByTestId('account')).toHaveTextContent('user-2'));
+      expect(screen.getByTestId('saver-notice-seen')).toHaveTextContent('null');
+
+      act(() => authStateCallback?.('SIGNED_OUT', null));
+      await waitFor(() => expect(screen.getByTestId('account')).toHaveTextContent('none'));
+      expect(screen.getByTestId('saver-notice-seen')).toHaveTextContent('null');
+    });
+
+    it('knows nothing of it when the page could not read the record', () => {
+      render(
+        <AuthProvider initialSession={authenticatedSession} hasResolvedInitialState>
+          <SaverNoticeProbe />
+        </AuthProvider>
+      );
+
+      expect(screen.getByTestId('account')).toHaveTextContent('user-1');
+      expect(screen.getByTestId('saver-notice-seen')).toHaveTextContent('null');
+    });
+
+    it('knows nothing of it for a visitor', () => {
+      render(
+        <AuthProvider initialSession={null} initialSaverNoticeSeen={false} hasResolvedInitialState>
+          <SaverNoticeProbe />
+        </AuthProvider>
+      );
+
+      expect(screen.getByTestId('saver-notice-seen')).toHaveTextContent('null');
+    });
+  });
+
   it('rejects an unverified browser session without loading profile data', async () => {
     authCookieState.hasHint = true;
     authProviderMocks.getUser.mockResolvedValue({

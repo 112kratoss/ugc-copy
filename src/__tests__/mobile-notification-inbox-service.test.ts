@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  MOBILE_NOTIFICATION_INBOX_FILTER_COLUMNS,
   MOBILE_NOTIFICATION_INBOX_SELECT,
   getMobileNotificationInboxForRoute,
   markAllMobileNotificationsReadForRoute,
@@ -145,10 +146,6 @@ function createPagedInboxClient(rows: InboxRow[]) {
         filters.push((row) => (row as Record<string, string>)[column] === value);
         return query;
       },
-      is: (column: string, value: null) => {
-        filters.push((row) => ((row as Record<string, unknown>)[column] ?? null) === value);
-        return query;
-      },
       lt: (column: string, value: string) => {
         filters.push((row) => compare('lt', (row as Record<string, string>)[column], value));
         return query;
@@ -188,7 +185,6 @@ function createPagedInboxClient(rows: InboxRow[]) {
   };
   const unreadQuery = {
     eq: () => unreadQuery,
-    is: () => unreadQuery,
     ...resolvedQuery({ count: 0, data: null, error: null }),
   };
   return {
@@ -222,16 +218,20 @@ describe('mobile notification inbox service', () => {
     expect(inbox.unreadQuery.eq).toHaveBeenCalledWith('is_read', false);
   });
 
-  it('leaves alerts that were taken back out of the list and the unread count', async () => {
+  it('reads the list and the unread count by owner alone, in the columns the owner may read', async () => {
     // A named save that was unsaved, or one between two accounts that blocked
-    // each other: hidden, while its push deliveries stay for their receipts.
+    // each other, is deleted with its save, not hidden in the table: there is
+    // nothing for Alerts to filter out.
     const inbox = createInboxClient();
 
     await getMobileNotificationInboxForRoute({ userSupabase: inbox.client });
 
-    expect(inbox.listQuery.is).toHaveBeenCalledWith('withdrawn_at', null);
-    expect(inbox.unreadQuery.is).toHaveBeenCalledWith('withdrawn_at', null);
+    expect(inbox.listQuery.eq.mock.calls).toEqual([['user_id', 'user-1']]);
+    expect(inbox.unreadQuery.eq.mock.calls).toEqual([['user_id', 'user-1'], ['is_read', false]]);
+    expect(inbox.listQuery.is).not.toHaveBeenCalled();
+    expect(inbox.unreadQuery.is).not.toHaveBeenCalled();
     expect(inbox.listSelect).toHaveBeenCalledWith(MOBILE_NOTIFICATION_INBOX_SELECT);
+    expect(MOBILE_NOTIFICATION_INBOX_FILTER_COLUMNS).toEqual(['user_id']);
   });
 
   // Marking an alert read writes its row, and every write stamps updated_at. An

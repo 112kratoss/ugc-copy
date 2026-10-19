@@ -44,6 +44,7 @@ const authState = vi.hoisted(() => ({
   user: { id: 'user-1' } as { id: string } | null,
   credits: 25,
   isLoading: false,
+  saverNoticeSeen: null as boolean | null,
 }));
 
 vi.mock('next/navigation', () => ({
@@ -196,6 +197,7 @@ describe('ShowcaseClient save actions', () => {
     authState.user = { id: 'user-1' };
     authState.credits = 25;
     authState.isLoading = false;
+    authState.saverNoticeSeen = null;
     intersectionObservers.length = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -266,7 +268,7 @@ describe('ShowcaseClient save actions', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    window.localStorage.removeItem('magicbooklet:saver-notice:v1:user-1');
+    window.localStorage.removeItem('magicbooklet:saver-notice:v2:user-1');
     resetSaverNoticeForTests();
   });
 
@@ -275,8 +277,9 @@ describe('ShowcaseClient save actions', () => {
       ok: true,
       json: async () => ({ success: true, isSaved: true, saveCount: 5, changed: true }),
     })));
-    // This viewer was told on an earlier page, so the save may name them.
-    window.localStorage.setItem('magicbooklet:saver-notice:v1:user-1', '1');
+    // This viewer was told on an earlier page, as the page was drawn knowing,
+    // so the save may name them.
+    authState.saverNoticeSeen = true;
 
     renderShowcase(createShowcaseItem());
 

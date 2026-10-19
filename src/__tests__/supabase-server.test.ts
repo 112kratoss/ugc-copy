@@ -185,8 +185,41 @@ describe('getServerAuthState', () => {
 
     expect(mocks.profileQuery.select).toHaveBeenCalledTimes(3);
     for (const [columns] of mocks.profileQuery.select.mock.calls) {
-      expect(columns).toBe('credits, promotional_credits, display_name');
+      expect(columns).toBe('credits, promotional_credits, display_name, saver_notice_seen_at');
     }
+  });
+
+  // The web's saver notice starts from this, so a page load never asks for the
+  // record on its own: told, not told, or unknown when the row was not read.
+  it('says whether the account has been told that creators can see who saved, from the same row', async () => {
+    mocks.getSession.mockResolvedValue({
+      data: { session: cookieSessionThatRefusesToBeRead() },
+      error: null,
+    });
+    mocks.getClaims.mockResolvedValue({
+      data: { claims: { sub: 'verified-user', aud: 'authenticated' } },
+      error: null,
+    });
+    const { getServerAuthState } = await import('@/lib/supabase-server');
+
+    mocks.profileQuery.maybeSingle.mockResolvedValueOnce({
+      data: { credits: 10, promotional_credits: 0, display_name: 'Maya', saver_notice_seen_at: '2026-10-19T09:00:00.000Z' },
+      error: null,
+    });
+    await expect(getServerAuthState()).resolves.toMatchObject({ saverNoticeSeen: true });
+
+    mocks.profileQuery.maybeSingle.mockResolvedValueOnce({
+      data: { credits: 10, promotional_credits: 0, display_name: 'Maya', saver_notice_seen_at: null },
+      error: null,
+    });
+    await expect(getServerAuthState()).resolves.toMatchObject({ saverNoticeSeen: false });
+
+    mocks.profileQuery.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
+    const unread = await getServerAuthState();
+    expect(unread.session).not.toBeNull();
+    expect(unread).not.toHaveProperty('saverNoticeSeen');
+
+    expect(mocks.profileQuery.eq).toHaveBeenCalledWith('id', 'verified-user');
   });
 
   it('does not call the auth server on the read path', async () => {

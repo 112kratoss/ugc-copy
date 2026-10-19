@@ -33,3 +33,10 @@ it('keeps the platform-free resumable transport in web deployments', () => {
   const config = JSON.parse(readFileSync('ugc-mobile/lib/media-upload/tsconfig.json', 'utf8'));
   expect(config.extends).toBeUndefined();
 });
+
+it('keeps the saver notice policy, which the web imports, in web deployments', () => {
+  const lines = readFileSync('.vercelignore', 'utf8').split('\n');
+  expect(lines.indexOf('!ugc-mobile/lib/saver-notice-policy')).toBeGreaterThan(lines.indexOf('ugc-mobile/lib/*'));
+  // Its own config, extending nothing: see the comment in it.
+  expect(readFileSync('ugc-mobile/lib/saver-notice-policy/tsconfig.json', 'utf8')).not.toMatch(/"extends"/);
+});

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, Platform, Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
+import { View, type StyleProp, type ViewStyle } from 'react-native';
 
-import { AppText } from '@/components/ui';
-import { MotionView, useOverlayPresence } from '@/lib/motion';
+import { NoticeCard, useAnnounceNotice, useScreenReaderRunning } from '@/components/notice-card';
+import { useOverlayPresence } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
-import { useAppTheme } from '@/lib/theme-context';
+
+export { useScreenReaderRunning } from '@/components/notice-card';
 
 /** How long a notice offers its Undo (product decision D7, 2026-10-14). */
 export const FEED_UNDO_NOTICE_MS = 5_000;
@@ -16,28 +17,6 @@ export interface FeedUndoNoticeModel {
   message: string;
   /** Runs at most once for a notice, when Undo is pressed. */
   onUndo: () => void;
-}
-
-/**
- * Whether VoiceOver or TalkBack is running. Read once and then followed, so a
- * reader turned on while a notice is up keeps it.
- */
-export function useScreenReaderRunning() {
-  const [running, setRunning] = useState(false);
-  useEffect(() => {
-    let current = true;
-    void AccessibilityInfo.isScreenReaderEnabled?.()
-      ?.then((value) => {
-        if (current) setRunning(value);
-      })
-      .catch(() => undefined);
-    const subscription = AccessibilityInfo.addEventListener?.('screenReaderChanged', setRunning);
-    return () => {
-      current = false;
-      subscription?.remove?.();
-    };
-  }, []);
-  return running;
 }
 
 /**
@@ -67,7 +46,6 @@ export function FeedUndoNotice({
   /** The notice is done: its time ran out, Undo was pressed, or a reader dismissed it. Clear it if it is still this id. */
   onDismiss: (id: string) => void;
 }) {
-  const theme = useAppTheme();
   const screenReaderRunning = useScreenReaderRunning();
   const presence = useOverlayPresence(Boolean(notice));
   // The last notice, still drawn while it fades out once the screen clears it.
@@ -80,19 +58,13 @@ export function FeedUndoNotice({
   });
 
   const id = notice?.id ?? null;
-  const message = notice?.message ?? null;
   useEffect(() => {
     if (!id || screenReaderRunning) return undefined;
     const timer = setTimeout(() => dismissRef.current(id), FEED_UNDO_NOTICE_MS);
     return () => clearTimeout(timer);
   }, [id, screenReaderRunning]);
 
-  // Android reads the live region below as it appears; iOS has no live
-  // regions, so the message is announced once per notice.
-  useEffect(() => {
-    if (!id || !message || Platform.OS !== 'ios') return;
-    AccessibilityInfo.announceForAccessibility?.(message);
-  }, [id, message]);
+  useAnnounceNotice(id, notice?.message ?? null);
 
   if (!presence.mounted || !shown) return null;
 
@@ -119,59 +91,14 @@ export function FeedUndoNotice({
         zIndex: 3,
       }}
     >
-      <MotionView
-        accessibilityLiveRegion="polite"
-        accessibilityElementsHidden={!notice}
-        importantForAccessibility={notice ? 'auto' : 'no-hide-descendants'}
-        onAccessibilityEscape={dismiss}
-        pointerEvents={notice ? 'auto' : 'none'}
-        style={[
-          {
-            width: '100%',
-            maxWidth: 480,
-            minHeight: 56,
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: appTheme.spacing.compact,
-            paddingLeft: appTheme.spacing.card,
-            paddingRight: appTheme.spacing.unit,
-            borderRadius: appTheme.radii.md,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderColor: theme.colors.borderStrong,
-            backgroundColor: theme.colors.panel,
-            boxShadow: theme.shadow.floating.boxShadow,
-          },
-          presence.animatedStyle as StyleProp<ViewStyle>,
-        ]}
-      >
-        <AppText variant="label" color="text" numberOfLines={2} style={{ flex: 1, minWidth: 0 }}>
-          {shown.message}
-        </AppText>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Undo"
-          accessibilityActions={[{ name: 'dismiss', label: 'Dismiss' }]}
-          onAccessibilityAction={(event) => {
-            if (event.nativeEvent.actionName === 'dismiss') dismiss();
-          }}
-          disabled={!notice}
-          onPress={undo}
-          style={({ pressed }) => ({
-            minHeight: appTheme.touch.compact,
-            minWidth: 72,
-            paddingHorizontal: appTheme.spacing.gap,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderRadius: appTheme.radii.sm,
-            backgroundColor: pressed ? theme.colors.pressed : 'transparent',
-          })}
-        >
-          <AppText selectable={false} variant="button" color="primary">
-            Undo
-          </AppText>
-        </Pressable>
-      </MotionView>
+      <NoticeCard
+        message={shown.message}
+        active={Boolean(notice)}
+        actionLabel="Undo"
+        onAction={undo}
+        onDismiss={dismiss}
+        animatedStyle={presence.animatedStyle as StyleProp<ViewStyle>}
+      />
     </View>
   );
 }

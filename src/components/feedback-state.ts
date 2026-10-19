@@ -12,6 +12,11 @@ export interface ToastRecord {
   tone: ToastTone;
   message: string;
   durationMs: number;
+  /**
+   * How long after it appears a press on its close button is ignored: a press
+   * that early was on its way to what sat there, not a reading of the toast.
+   */
+  closeGuardMs?: number;
 }
 
 export interface ConfirmationRequest {
@@ -42,8 +47,8 @@ let snapshot: FeedbackSnapshot = EMPTY_SNAPSHOT;
 const listeners = new Set<Listener>();
 const confirmationResolvers = new Map<number, (confirmed: boolean) => void>();
 
-/** How a toast went: closed by the viewer, or out of time. */
-export type ToastDismissal = 'closed' | 'expired';
+/** How a toast went: closed by the viewer, out of time, or taken down unread by the code that showed it. */
+export type ToastDismissal = 'closed' | 'expired' | 'interrupted';
 const toastDismissHandlers = new Map<number, (how: ToastDismissal) => void>();
 
 function commit(next: FeedbackSnapshot) {
@@ -71,6 +76,36 @@ export function hasFeedbackViewport() {
   return listeners.size > 0;
 }
 
+let toastHost: HTMLElement | null = null;
+const hostListeners = new Set<Listener>();
+
+/**
+ * The open dialog that draws the toasts while it is up (the reel), or null for
+ * the page. Inside an `aria-modal` dialog a toast drawn outside it is inert to
+ * a screen reader and out of the dialog's focus order; the dialog also places
+ * it clear of its own controls.
+ */
+export function setToastHost(element: HTMLElement | null) {
+  if (toastHost === element) return;
+  toastHost = element;
+  hostListeners.forEach((listener) => listener());
+}
+
+export function subscribeToToastHost(listener: Listener) {
+  hostListeners.add(listener);
+  return () => {
+    hostListeners.delete(listener);
+  };
+}
+
+export function readToastHost() {
+  return toastHost;
+}
+
+export function readServerToastHost(): HTMLElement | null {
+  return null;
+}
+
 /** The server and first client render must agree: nothing is showing. */
 export function readServerFeedbackSnapshot(): FeedbackSnapshot {
   return EMPTY_SNAPSHOT;
@@ -80,6 +115,7 @@ export function pushToast(toast: {
   tone: ToastTone;
   message: string;
   durationMs?: number;
+  closeGuardMs?: number;
   /** Told once, when the toast goes (not when tests reset the store). */
   onDismiss?: (how: ToastDismissal) => void;
 }): number {
@@ -94,6 +130,7 @@ export function pushToast(toast: {
         tone: toast.tone,
         message: toast.message,
         durationMs: toast.durationMs ?? DEFAULT_TOAST_DURATION_MS,
+        ...(toast.closeGuardMs ? { closeGuardMs: toast.closeGuardMs } : {}),
       },
     ],
   });
@@ -154,5 +191,6 @@ export function resetFeedbackState() {
     resolveConfirmation(id, false);
   }
   toastDismissHandlers.clear();
+  setToastHost(null);
   commit(EMPTY_SNAPSHOT);
 }

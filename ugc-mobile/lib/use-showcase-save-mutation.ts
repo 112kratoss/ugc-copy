@@ -1,10 +1,10 @@
 import { useMutation, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { useCallback } from 'react';
-import { AccessibilityInfo } from 'react-native';
 
 import { useAuth } from '@/lib/auth';
 import { adjustProfileStats } from '@/lib/profile-stats';
+import { announceQueued } from '@/lib/accessibility-announcement';
 import { haptic } from '@/lib/haptics';
 import { creatorSeesSaverFields, type SaverNoticeFields } from '@/lib/saver-notice';
 import {
@@ -90,7 +90,8 @@ export function useShowcaseSaveMutation({
       });
       adjustProfileStats(queryClient, user?.id, { saved: variables.shouldSave ? -1 : 1 });
       haptic.error();
-      void AccessibilityInfo.announceForAccessibility(
+      // Queued on iOS, as "Saved" is: behind the saver notice the tap may have brought up.
+      announceQueued(
         variables.shouldSave
           ? 'Could not save. Please try again.'
           : 'Could not remove from saved. Please try again.'
@@ -108,7 +109,8 @@ export function useShowcaseSaveMutation({
         userId: user?.id,
         invalidateQueries: (filters) => queryClient.invalidateQueries(filters),
       });
-      void AccessibilityInfo.announceForAccessibility(result.isSaved ? 'Saved' : 'Removed from saved');
+      // Queued on iOS: the saver notice that may have just appeared is read first.
+      announceQueued(result.isSaved ? 'Saved' : 'Removed from saved');
       // After the guard above, as the reel's own: an overtaken tap does not
       // report itself to ranking. A failed one never gets here.
       variables.onSaved?.(result.isSaved);

@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
+  createExpoPushService,
   createMobileNotificationHistory,
   hasAnswered,
   withMobileNotificationHistory,
@@ -304,12 +305,13 @@ describe('post save notifications', () => {
     expect(history.started).toEqual([]);
   });
 
-  it('lets an unsave through a block, and takes back any alert that names the saver', async () => {
-    // Blocked either way, the post is out of the saver's reach; the save and an
-    // alert naming them must not outlast the block.
+  it('lets an unsave through a block, with nothing left to do behind its answer', async () => {
+    // Blocked either way, the post is out of the saver's reach; the save must
+    // not outlast the block, and an alert naming them goes with the save.
     const serviceClient = createServiceClientMock({ is_saved: false, save_count: 4, changed: true });
     const history = createMobileNotificationHistory();
-    const deferred: Array<() => Promise<unknown>> = [];
+    const isUserRelationshipBlocked = vi.fn(async () => true);
+    const runAfterResponse = vi.fn();
 
     await expect(saveShowcasePostForRoute({
       actorUserId: 'user-1',
@@ -317,12 +319,18 @@ describe('post save notifications', () => {
       requestedSaveState: false,
       serviceClient: withMobileNotificationHistory(serviceClient.client, history),
       sourceSurface: 'showcase',
-      dependencies: createDependencies(vi.fn(async () => true)),
-      runAfterResponse: (task) => { deferred.push(task); },
+      dependencies: createDependencies(isUserRelationshipBlocked),
+      runAfterResponse,
     })).resolves.toMatchObject({ ok: true, body: { isSaved: false } });
 
-    await deferred[0]();
-    expect(history.withdrawn).toEqual([{ user_id: 'creator-1', dedupe_key: 'post-save:user-1:post-1' }]);
+    expect(serviceClient.rpcMock).toHaveBeenCalledWith('set_post_save_state', {
+      p_post_id: 'post-1',
+      p_user_id: 'user-1',
+      p_should_save: false,
+    });
+    expect(isUserRelationshipBlocked).not.toHaveBeenCalled();
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(history.started).toEqual([]);
   });
 
   it('tells the creator in front of the answer rather than fail a recorded save when the task cannot be queued', async () => {
@@ -386,6 +394,16 @@ describe('named save notifications', () => {
   const handleRead = ['username, saver_notice_seen_at', 'id', 'user-1'];
   const toldOn = '2026-10-19T09:00:00.000Z';
   const told = (username: unknown) => ({ data: { username, saver_notice_seen_at: toldOn }, error: null });
+
+  /** History in which the creator's phone takes pushes, with Expo stood in for. */
+  function withCreatorPhone() {
+    vi.stubGlobal('fetch', createExpoPushService().fetch);
+    return createMobileNotificationHistory({ pushTo: { 'creator-1': ['ExponentPushToken[creator-phone]'] } });
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
   function createDependencies(isUserRelationshipBlocked = vi.fn(async () => false)) {
     return {
@@ -483,32 +501,36 @@ describe('named save notifications', () => {
     expect(history.preferenceReads).toEqual(['creator-1']);
   });
 
-  it('takes the named alert back when the save is taken back, and brings it back at the next save', async () => {
+  it('takes the named alert away with the save, and writes it anew at the next save', async () => {
     const { client } = withSaverProfile(told('maya'), [saved, unsaved, saved]);
-    const history = withUniqueDedupeKeys(createMobileNotificationHistory());
+    const history = withUniqueDedupeKeys(withCreatorPhone());
+    const runAfterResponse = vi.fn();
 
     await save(client, history, { creatorSeesSaver: true });
-    // The unsave carries no flag: an alert written from another app comes back too.
-    await save(client, history, { requestedSaveState: false });
+    // The unsave carries no flag, and leaves nothing to do behind its answer:
+    // deleting the save deletes the alert, whichever app wrote it.
+    await save(client, history, { requestedSaveState: false, runAfterResponse });
 
-    expect(history.withdrawn).toEqual([{ user_id: 'creator-1', dedupe_key: 'post-save:user-1:post-1' }]);
-    expect([...history.withdrawnRows]).toEqual([0]);
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect([...history.removedRows]).toEqual([0]);
+    expect(history.standing()).toEqual([]);
 
     await save(client, history, { creatorSeesSaver: true });
 
     expect(history.sent).toEqual([namedSaveNotification, namedSaveNotification]);
-    // The alert brought back waits in Alerts: the creator's phone has heard
+    expect(history.standing()).toEqual([namedSaveNotification]);
+    // The alert written anew waits in Alerts: the creator's phone has heard
     // about this post's saves once this quarter-hour already.
     expect(history.pushClaims).toEqual([
       { key: 'creator-1:post-1', allowed: true },
       { key: 'creator-1:post-1', allowed: false },
     ]);
-    expect(history.preferenceReads).toEqual(['creator-1']);
+    expect(history.pushed.map((push) => push.title)).toEqual(['@maya saved your post']);
   });
 
   it("pushes one post's saves once a quarter-hour, however many people they name", async () => {
     const { client } = withSaverProfile((userId) => told(userId === 'user-1' ? 'maya' : 'lee'));
-    const history = withUniqueDedupeKeys(createMobileNotificationHistory());
+    const history = withUniqueDedupeKeys(withCreatorPhone());
 
     await save(client, history, { creatorSeesSaver: true });
     await save(client, history, { creatorSeesSaver: true, actorUserId: 'user-2' });
@@ -517,7 +539,11 @@ describe('named save notifications', () => {
       ['@maya saved your post', 'post-save:user-1:post-1'],
       ['@lee saved your post', 'post-save:user-2:post-1'],
     ]);
-    expect(history.preferenceReads).toEqual(['creator-1']);
+    expect(history.pushClaims).toEqual([
+      { key: 'creator-1:post-1', allowed: true },
+      { key: 'creator-1:post-1', allowed: false },
+    ]);
+    expect(history.pushed.map((push) => push.title)).toEqual(['@maya saved your post']);
   });
 
   it("answers before the saver's handle is read, and names them behind the answer", async () => {
@@ -543,33 +569,32 @@ describe('named save notifications', () => {
     // The save's alert is written behind its answer; the unsave that followed
     // was answered, and its save gone, before that ran.
     const { client } = withSaverProfile(told('maya'), [saved, unsaved]);
-    const history = createMobileNotificationHistory();
+    const history = withCreatorPhone();
     const deferred: Array<() => Promise<unknown>> = [];
     const runAfterResponse = (task: () => Promise<unknown>) => { deferred.push(task); };
 
     await save(client, history, { creatorSeesSaver: true, runAfterResponse });
     await save(client, history, { requestedSaveState: false, runAfterResponse });
-    await deferred[1]();
+    // Only the save left work behind its answer.
+    expect(deferred).toHaveLength(1);
     await deferred[0]();
 
     expect(history.sent).toEqual([]);
     expect(history.pushClaims).toEqual([]);
+    expect(history.pushed).toEqual([]);
   });
 
-  it('takes an alert back behind the answer to an unsave, and never for a creator unsaving their own post', async () => {
+  it("leaves nothing behind the answer to an unsave, of another's post or the creator's own", async () => {
     const { client } = withSaverProfile(told('maya'), [unsaved]);
     const history = createMobileNotificationHistory();
-    const deferred: Array<() => Promise<unknown>> = [];
-    const runAfterResponse = (task: () => Promise<unknown>) => { deferred.push(task); };
+    const runAfterResponse = vi.fn();
 
-    await save(client, history, { requestedSaveState: false, runAfterResponse });
-    expect(history.withdrawn).toEqual([]);
-    expect(deferred).toHaveLength(1);
-    await deferred[0]();
-    expect(history.withdrawn).toEqual([{ user_id: 'creator-1', dedupe_key: 'post-save:user-1:post-1' }]);
-
+    await expect(save(client, history, { requestedSaveState: false, runAfterResponse }))
+      .resolves.toMatchObject({ ok: true, body: { isSaved: false, changed: true } });
     await save(client, history, { requestedSaveState: false, runAfterResponse, actorUserId: 'creator-1' });
-    expect(deferred).toHaveLength(1);
+
+    expect(runAfterResponse).not.toHaveBeenCalled();
+    expect(history.started).toEqual([]);
   });
 
   it.each([{ creatorSeesSaver: false }, { creatorSeesSaver: undefined }])(
@@ -631,5 +656,133 @@ describe('named save notifications', () => {
 
     expect(lookups).toEqual([]);
     expect(history.sent).toEqual([]);
+  });
+});
+
+describe('an unsave of a post that has left public view', () => {
+  // Made unlisted, private or archived since it was saved: the public lookup
+  // no longer finds it. The save is the saver's own row, and taking it off
+  // (which takes any alert naming them with it) must not wait for the post.
+  const POST_ID = '7d3f2a10-5b8c-4e61-9a2f-0c1d2e3f4a5b';
+
+  function createClient(ownSave: 'held' | 'none' | 'unreadable') {
+    const saveLookups: unknown[][] = [];
+    const rpcMock = vi.fn(async (name: string) => {
+      if (name === 'set_post_save_state') return { data: [{ is_saved: false, save_count: 3, changed: true }], error: null };
+      throw new Error(`Unexpected RPC: ${name}`);
+    });
+    const fromMock = vi.fn((table: string) => {
+      if (table === 'post_save_events') return { insert: async () => ({ data: null, error: null }) };
+      if (table !== 'post_saves') throw new Error(`Unexpected table: ${table}`);
+
+      const calls: unknown[] = [];
+      saveLookups.push(calls);
+      const query = {
+        select(columns: string) {
+          calls.push(['select', columns]);
+          return query;
+        },
+        eq(column: string, value: unknown) {
+          calls.push(['eq', column, value]);
+          return query;
+        },
+        async maybeSingle() {
+          if (ownSave === 'unreadable') return { data: null, error: { message: 'statement timeout' } };
+          return { data: ownSave === 'held' ? { post_id: POST_ID } : null, error: null };
+        },
+      };
+      return query;
+    });
+    return { client: { from: fromMock, rpc: rpcMock } as unknown as SupabaseClient, rpcMock, fromMock, saveLookups };
+  }
+
+  function takeOff(
+    client: SupabaseClient,
+    { referenceId = POST_ID, requestedSaveState = false }: { referenceId?: string; requestedSaveState?: boolean | null } = {},
+  ) {
+    const notifyPostSocialActivity = vi.fn(async () => null);
+    const findPublicPostReferenceByIdOrGenerationId = vi.fn(async () => null);
+    const result = saveShowcasePostForRoute({
+      actorUserId: 'user-1',
+      referenceId,
+      requestedSaveState,
+      serviceClient: client,
+      sourceSurface: 'saved-media',
+      dependencies: {
+        findPublicPostReferenceByIdOrGenerationId,
+        isMissingPostsSchemaError: vi.fn(() => false),
+        isUserRelationshipBlocked: vi.fn(async () => false),
+        notifyPostSocialActivity,
+      },
+    });
+    return { result, notifyPostSocialActivity, findPublicPostReferenceByIdOrGenerationId };
+  }
+
+  it("takes the save off, found through the saver's own save of it", async () => {
+    const { client, rpcMock, saveLookups } = createClient('held');
+    const { result, notifyPostSocialActivity, findPublicPostReferenceByIdOrGenerationId } = takeOff(client);
+
+    await expect(result).resolves.toEqual({
+      ok: true,
+      body: { success: true, isSaved: false, saveCount: 3, changed: true, message: 'Removed from bookmarks' },
+    });
+    expect(findPublicPostReferenceByIdOrGenerationId).toHaveBeenCalledWith(POST_ID);
+    // Only this account's save of that post can be found this way.
+    expect(saveLookups).toEqual([[
+      ['select', 'post_id'],
+      ['eq', 'user_id', 'user-1'],
+      ['eq', 'post_id', POST_ID],
+    ]]);
+    expect(rpcMock).toHaveBeenCalledWith('set_post_save_state', {
+      p_post_id: POST_ID,
+      p_user_id: 'user-1',
+      p_should_save: false,
+    });
+    expect(notifyPostSocialActivity).not.toHaveBeenCalled();
+  });
+
+  it('answers not found when the account holds no save of it', async () => {
+    const { client, rpcMock, saveLookups } = createClient('none');
+
+    await expect(takeOff(client).result).resolves.toEqual({ ok: false, status: 404, body: { error: 'Post not found' } });
+    expect(saveLookups).toHaveLength(1);
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it('asks nothing of the saves for an id that is not a post id', async () => {
+    const { client, rpcMock, fromMock } = createClient('held');
+
+    for (const referenceId of ['post-1', 'gen-1', `${POST_ID}'`, ` ${POST_ID}`]) {
+      await expect(takeOff(client, { referenceId }).result)
+        .resolves.toEqual({ ok: false, status: 404, body: { error: 'Post not found' } });
+    }
+    expect(fromMock).not.toHaveBeenCalled();
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it('looks for no save of its own for a save, or a toggle, of a post out of public view', async () => {
+    const { client, rpcMock, fromMock } = createClient('held');
+
+    for (const requestedSaveState of [true, null]) {
+      await expect(takeOff(client, { requestedSaveState }).result)
+        .resolves.toEqual({ ok: false, status: 404, body: { error: 'Post not found' } });
+    }
+    expect(fromMock).not.toHaveBeenCalled();
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it('answers not found, and logs, when its save cannot be read', async () => {
+    const { client, rpcMock } = createClient('unreadable');
+    const logged: BackendLogRecord[] = [];
+    const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+
+    try {
+      await expect(takeOff(client).result).resolves.toEqual({ ok: false, status: 404, body: { error: 'Post not found' } });
+    } finally {
+      restoreLogSink();
+    }
+
+    expect(logged.map((record) => record.msg)).toEqual(['failed_to_find_own_saved_post']);
+    expect(rpcMock).not.toHaveBeenCalled();
   });
 });

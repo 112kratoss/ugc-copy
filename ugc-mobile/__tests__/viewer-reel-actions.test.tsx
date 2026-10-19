@@ -63,12 +63,19 @@ const dialogs = vi.hoisted(() => ({
   message: vi.fn(),
 }));
 
-// The notice module stands in as an account that has already been told.
-const saverNotice = vi.hoisted(() => ({
-  fields: vi.fn((accountId: string | null | undefined, shouldSave: boolean): { creatorSeesSaver?: true; saverNotYetTold?: true } => (
-    accountId && shouldSave ? { creatorSeesSaver: true as const } : {}
-  )),
-}));
+// The notice module stands in as an account that has already been told,
+// unless a case hands the tap to the real one.
+const saverNotice = vi.hoisted(() => {
+  const state = {
+    real: null as null | typeof import('@/lib/saver-notice'),
+    useReal: false,
+    fields: vi.fn((accountId: string | null | undefined, shouldSave: boolean): { creatorSeesSaver?: true; saverNotYetTold?: true } => {
+      if (state.useReal) return state.real!.creatorSeesSaverFields(accountId, shouldSave);
+      return accountId && shouldSave ? { creatorSeesSaver: true as const } : {};
+    }),
+  };
+  return state;
+});
 
 // What the screen hands its actions menu and its zoom stage, render by render.
 const screenState = vi.hoisted(() => ({
@@ -105,7 +112,7 @@ vi.mock('react-native-safe-area-context', () => ({
 }));
 
 vi.mock('react-native', () => ({
-  AccessibilityInfo: { announceForAccessibility: vi.fn() },
+  AccessibilityInfo: { announceForAccessibility: vi.fn(), announceForAccessibilityWithOptions: vi.fn() },
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   Animated: { View: passThrough, Value: class { setValue() {} } },
   AppState: { currentState: 'active', addEventListener: () => ({ remove: () => undefined }) },
@@ -195,7 +202,13 @@ vi.mock('@/lib/dialog', () => ({
   showErrorDialog: dialogs.error,
   showMessageDialog: dialogs.message,
 }));
-vi.mock('@/lib/saver-notice', () => ({ creatorSeesSaverFields: saverNotice.fields }));
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: { getItem: vi.fn(async () => null), setItem: vi.fn(async () => undefined), removeItem: vi.fn(async () => undefined) },
+}));
+vi.mock('@/lib/saver-notice', async (importOriginal) => {
+  saverNotice.real = await importOriginal<typeof import('@/lib/saver-notice')>();
+  return { creatorSeesSaverFields: saverNotice.fields };
+});
 vi.mock('@/lib/action-sheet', () => ({ showActionSheet: vi.fn() }));
 vi.mock('@/lib/haptics', () => ({
   haptic: { error: vi.fn(), light: vi.fn(), select: vi.fn(), soft: vi.fn(), success: vi.fn() },
@@ -1147,6 +1160,124 @@ describe("a reel opened on a creator's page", () => {
     expect(reelIds(tree)).toEqual(['luna-1', 'luna-3', 'luna-4']);
     expect(authState.api.getShowcasePost).not.toHaveBeenCalled();
     expect(routerState.back).not.toHaveBeenCalled();
+  });
+});
+
+describe("the reel's save", () => {
+  type SaveHandler = (item: ImmersivePreviewItem) => void;
+  type SaveAnswer = { success: boolean; isSaved: boolean; saveCount: number; changed: boolean };
+
+  const reelItem = (tree: renderer.ReactTestRenderer, id: string) => {
+    const item = (tree.root.findByType('flat-list' as never).props.data as ImmersivePreviewItem[]).find((candidate) => candidate.id === id);
+    expect(item).toBeDefined();
+    return item!;
+  };
+
+  async function tapSave(tree: renderer.ReactTestRenderer, id: string) {
+    await act(async () => {
+      (screenState.callbacksFor!(reelItem(tree, id)).onSave as SaveHandler)(reelItem(tree, id));
+    });
+    await settle();
+  }
+
+  function answerEveryTap() {
+    authState.api.saveShowcasePost.mockImplementation(async (_postId: string, options: { shouldSave: boolean }) => ({
+      success: true,
+      isSaved: options.shouldSave,
+      saveCount: options.shouldSave ? 1 : 0,
+      changed: true,
+    }));
+  }
+
+  afterEach(() => {
+    authState.api.saveShowcasePost.mockReset();
+  });
+
+  // Review finding #11: the saver notice a save brings up is read first.
+  it('queues "Saved" and "Removed from saved" behind what VoiceOver is reading, on iOS', async () => {
+    seedLane('viewer-1', lanePosts());
+    answerEveryTap();
+    const tree = await renderReel('post-b');
+
+    await tapSave(tree, 'post-b');
+    await tapSave(tree, 'post-b');
+
+    expect(vi.mocked(AccessibilityInfo.announceForAccessibilityWithOptions).mock.calls).toEqual([
+      ['Saved', { queue: true }],
+      ['Removed from saved', { queue: true }],
+    ]);
+    expect(AccessibilityInfo.announceForAccessibility).not.toHaveBeenCalled();
+  });
+
+  it('announces them as before on Android, which has no queue', async () => {
+    platformState.os = 'android';
+    seedLane('viewer-1', lanePosts());
+    answerEveryTap();
+    const tree = await renderReel('post-b');
+
+    await tapSave(tree, 'post-b');
+    await tapSave(tree, 'post-b');
+
+    expect(vi.mocked(AccessibilityInfo.announceForAccessibility).mock.calls).toEqual([['Saved'], ['Removed from saved']]);
+    expect(AccessibilityInfo.announceForAccessibilityWithOptions).not.toHaveBeenCalled();
+  });
+
+  // Review finding #21: decided at the tap, however long the request waits.
+  describe('tapped while an earlier one is on the wire and the notice is up', () => {
+    let unsubscribe = () => {};
+
+    beforeEach(() => {
+      saverNotice.useReal = true;
+      // The root layout's bar, which draws the notice.
+      unsubscribe = saverNotice.real!.subscribeToSaverNotice(() => {});
+    });
+
+    afterEach(() => {
+      unsubscribe();
+      saverNotice.real!.resetSaverNoticeForTests();
+      saverNotice.useReal = false;
+    });
+
+    it('sends it telling the creator nothing after the notice was read, and the save tapped after that names the saver', async () => {
+      const notice = saverNotice.real!;
+      seedLane('viewer-1', lanePosts());
+      const answers: Array<ReturnType<typeof deferred<SaveAnswer>>> = [];
+      authState.api.saveShowcasePost.mockImplementation(() => {
+        const answer = deferred<SaveAnswer>();
+        answers.push(answer);
+        return answer.promise;
+      });
+      const tree = await renderReel('post-b');
+
+      await tapSave(tree, 'post-b');
+      expect(notice.readSaverNotice()).toMatchObject({ accountId: 'viewer-1' });
+      await tapSave(tree, 'post-c');
+      // One request on the wire; the second waits behind it.
+      expect(authState.api.saveShowcasePost).toHaveBeenCalledTimes(1);
+
+      // OK on the notice while the second waits; then a third save.
+      await act(async () => {
+        notice.settleSaverNotice(notice.readSaverNotice()!.id, 'closed');
+      });
+      expect(notice.readSaverNotice()).toBeNull();
+      await tapSave(tree, 'post-d');
+      expect(authState.api.saveShowcasePost).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        answers[0].resolve({ success: true, isSaved: true, saveCount: 1, changed: true });
+      });
+      await settle();
+      await act(async () => {
+        answers[1].resolve({ success: true, isSaved: true, saveCount: 1, changed: true });
+      });
+      await settle();
+
+      expect(authState.api.saveShowcasePost.mock.calls).toEqual([
+        ['post-b', { shouldSave: true, sourceSurface: 'mobile-viewer', saverNotYetTold: true }],
+        ['post-c', { shouldSave: true, sourceSurface: 'mobile-viewer', saverNotYetTold: true }],
+        ['post-d', { shouldSave: true, sourceSurface: 'mobile-viewer', creatorSeesSaver: true }],
+      ]);
+    });
   });
 });
 

@@ -58,6 +58,13 @@ export interface ServerAuthState {
   marketplaceSpendableCredits?: number | null;
   /** The profile's display name, when the row was read with the session. */
   displayName?: string | null;
+  /**
+   * Whether the account has been told, on record, that creators can see who
+   * saved its posts (`profiles.saver_notice_seen_at`): the web's saver notice
+   * starts from it, so a page load never asks for it on its own. Absent when
+   * the row was not read.
+   */
+  saverNoticeSeen?: boolean;
 }
 
 function unauthenticatedServerState(): ServerAuthState {
@@ -166,7 +173,7 @@ export const getServerAuthState = cache(async (): Promise<ServerAuthState> => {
   const adminSupabase = createServiceClient();
   const { data: profile } = await adminSupabase
     .from('profiles')
-    .select('credits, promotional_credits, display_name')
+    .select('credits, promotional_credits, display_name, saver_notice_seen_at')
     .eq('id', user.id)
     .maybeSingle();
   const credits: number | null = profile?.credits ?? null;
@@ -176,5 +183,6 @@ export const getServerAuthState = cache(async (): Promise<ServerAuthState> => {
     credits,
     marketplaceSpendableCredits: getMarketplaceSpendableCredits(credits, profile?.promotional_credits),
     displayName: typeof profile?.display_name === 'string' ? profile.display_name : null,
+    ...(profile ? { saverNoticeSeen: typeof profile.saver_notice_seen_at === 'string' } : {}),
   };
 });

@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 
 const migrationsRoot = path.resolve(process.cwd(), 'supabase/migrations');
 const migration = fs.readFileSync(path.join(migrationsRoot, '20261019122652_save_alerts_follow_the_save.sql'), 'utf8');
-const saveStateMigration = fs.readFileSync(path.join(migrationsRoot, '20261004114652_maintain_post_save_counters.sql'), 'utf8');
 
 function functionBody(name: string) {
   const start = migration.indexOf(`CREATE OR REPLACE FUNCTION public.${name}(`);
@@ -13,61 +12,74 @@ function functionBody(name: string) {
   return migration.slice(start, migration.indexOf('\n$$;', start));
 }
 
+// The live definitions and the behaviour (cascades, blocks, the lock's place
+// in each function) are pinned in supabase/tests/database/post_save_alerts.test.sql.
 describe('save alerts follow the save migration', () => {
-  it('keeps the telling on record per account, written only by the service', () => {
-    expect(migration).toContain('ADD COLUMN IF NOT EXISTS saver_notice_seen_at timestamptz');
-    // Owners edit only the listed profile columns; this is not one of them.
-    expect(migration).not.toMatch(/GRANT UPDATE[^;]*saver_notice_seen_at/);
+  it('ties a named save alert to its save, so the save going takes the alert with it', () => {
+    expect(migration).toMatch(/FOREIGN KEY \(save_user_id, save_post_id\)\s+REFERENCES public\.post_saves \(user_id, post_id\)\s+ON DELETE CASCADE;/);
+    expect(migration).toContain('CHECK ((save_user_id IS NULL) = (save_post_id IS NULL))');
+    expect(migration).toMatch(/CREATE INDEX IF NOT EXISTS mobile_notifications_save_idx\s+ON public\.mobile_notifications \(save_user_id, save_post_id\)/);
+    expect(functionBody('create_post_save_alert')).toMatch(/EXCEPTION WHEN foreign_key_violation THEN[\s\S]*'wasCreated', false/);
+    // Nothing keeps the two in step by hand any more.
+    expect(migration).not.toMatch(/withdrawn_at|withdraw_post_save_alert|hashtextextended\(\s*'post-save:/);
   });
 
-  it('writes and takes back a named save alert under the very lock the save itself takes', () => {
-    const lock = /pg_advisory_xact_lock\(hashtextextended\('post-save:' \|\| (p_\w+)::text \|\| ':' \|\| (p_\w+)::text, 0\)\)/;
-    const saveLock = lock.exec(saveStateMigration);
-    expect(saveLock?.slice(1)).toEqual(['p_user_id', 'p_post_id']);
-
-    for (const name of ['create_post_save_alert', 'withdraw_post_save_alert']) {
-      expect(lock.exec(functionBody(name))?.slice(1), name).toEqual(['p_actor_user_id', 'p_post_id']);
-    }
+  it('keeps a delivery, for its receipt, when its alert goes', () => {
+    expect(migration).toContain('ALTER COLUMN notification_id DROP NOT NULL');
+    expect(migration).toMatch(/FOREIGN KEY \(notification_id\) REFERENCES public\.mobile_notifications \(id\)\s+ON DELETE SET NULL;/);
   });
 
-  it('writes a named alert only while the save stands, and takes it back only once it is gone', () => {
-    expect(functionBody('create_post_save_alert')).toMatch(/IF NOT EXISTS \(\s*SELECT 1 FROM public\.post_saves/);
-    expect(functionBody('withdraw_post_save_alert')).toMatch(/IF EXISTS \(\s*SELECT 1 FROM public\.post_saves[\s\S]*RETURN 0;/);
+  it('writes no named alert across a block, and a block removes the ones written', () => {
+    const create = functionBody('create_post_save_alert');
+    expect(create).toMatch(/FROM public\.user_blocks\s+WHERE \(blocker_user_id = p_recipient_user_id AND blocked_user_id = p_actor_user_id\)\s+OR \(blocker_user_id = p_actor_user_id AND blocked_user_id = p_recipient_user_id\)/);
+    expect(migration).toMatch(/CREATE TRIGGER user_blocks_remove_post_save_alerts\s+AFTER INSERT OR UPDATE ON public\.user_blocks/);
+    const trigger = functionBody('remove_post_save_alerts_for_user_block');
+    expect(trigger).toContain('(user_id = NEW.blocker_user_id AND save_user_id = NEW.blocked_user_id)');
+    expect(trigger).toContain('(user_id = NEW.blocked_user_id AND save_user_id = NEW.blocker_user_id)');
   });
 
-  it('hides a taken-back alert rather than deleting it, and brings it back at the next save', () => {
-    expect(functionBody('withdraw_post_save_alert')).toContain('SET withdrawn_at = timezone');
-    expect(functionBody('withdraw_post_save_alert')).not.toContain('DELETE');
-    expect(functionBody('create_post_save_alert')).toMatch(/ON CONFLICT \(user_id, dedupe_key\) WHERE dedupe_key IS NOT NULL DO UPDATE\s+SET withdrawn_at = NULL/);
-    expect(functionBody('create_post_save_alert')).toContain('WHERE public.mobile_notifications.withdrawn_at IS NOT NULL');
-    expect(migration).toContain('GRANT SELECT (withdrawn_at) ON TABLE public.mobile_notifications TO authenticated;');
+  it('takes one lock per pair of accounts in both, before what it guards', () => {
+    const pairLock = (left: string, right: string) => new RegExp(
+      `pg_advisory_xact_lock\\(hashtextextended\\(\\s*'user-pair:' \\|\\| least\\(${left}, ${right}\\)::text\\s*\\|\\| ':' \\|\\| greatest\\(${left}, ${right}\\)::text,\\s*0\\s*\\)\\)`,
+    );
+    const create = functionBody('create_post_save_alert');
+    expect(create).toMatch(pairLock('p_recipient_user_id', 'p_actor_user_id'));
+    expect(create.search(pairLock('p_recipient_user_id', 'p_actor_user_id'))).toBeLessThan(create.indexOf('public.user_blocks'));
+    expect(create.indexOf('public.user_blocks')).toBeLessThan(create.indexOf('INSERT INTO public.mobile_notifications'));
+
+    const trigger = functionBody('remove_post_save_alerts_for_user_block');
+    expect(trigger).toMatch(pairLock('NEW.blocker_user_id', 'NEW.blocked_user_id'));
+    expect(trigger.search(pairLock('NEW.blocker_user_id', 'NEW.blocked_user_id'))).toBeLessThan(trigger.indexOf('DELETE FROM'));
   });
 
-  it('deletes withdrawn alerts only once their deliveries are past retention', () => {
-    expect(functionBody('prune_mobile_notification_retention'))
-      .toMatch(/WHERE withdrawn_at IS NOT NULL AND withdrawn_at < p_delivery_cutoff/);
+  it('answers in the shape the grouped writer does', () => {
+    const create = functionBody('create_post_save_alert');
+    expect(create).toMatch(/'wasCreated', v_created,\s+'notification', CASE WHEN v_created THEN to_jsonb\(v_row\) END/);
+    expect(functionBody('upsert_mobile_notification')).toMatch(/'notification', to_jsonb\(v_row\),\s+'wasCreated', v_was_created/);
   });
 
-  it('takes back the save alerts naming either of two accounts to the other', () => {
-    const body = functionBody('withdraw_post_save_alerts_between');
-    expect(body).toContain("user_id = p_first_user_id AND dedupe_key LIKE 'post-save:' || p_second_user_id::text || ':%'");
-    expect(body).toContain("user_id = p_second_user_id AND dedupe_key LIKE 'post-save:' || p_first_user_id::text || ':%'");
-  });
-
-  it('lets only the service call the new functions', () => {
-    for (const signature of [
-      'create_post_save_alert(uuid, uuid, uuid, text, text, text)',
-      'withdraw_post_save_alert(uuid, uuid, uuid)',
-      'withdraw_post_save_alerts_between(uuid, uuid)',
-      'prune_mobile_notification_retention(timestamptz, timestamptz, integer)',
-    ]) {
-      expect(migration).toContain(`REVOKE ALL ON FUNCTION public.${signature}\n  FROM PUBLIC, anon, authenticated;`);
-      expect(migration).toContain(`GRANT EXECUTE ON FUNCTION public.${signature}\n  TO service_role;`);
-    }
-  });
-
-  it('clears the actor from anonymous save and share alerts without stamping them as written', () => {
+  it('stores no actor on grouped save and share rows, whoever calls, and clears the ones written', () => {
+    const upsert = functionBody('upsert_mobile_notification');
+    expect(upsert).toMatch(/v_actor_user_id uuid := CASE\s+WHEN p_type IN \('post_saved', 'post_shared'\) THEN NULL\s+ELSE p_actor_user_id\s+END;/);
+    expect(upsert).not.toMatch(/VALUES \(\s+p_user_id,\s+p_actor_user_id/);
     expect(migration).toMatch(/DISABLE TRIGGER mobile_notifications_set_updated_at;\s+UPDATE public\.mobile_notifications\s+SET actor_user_id = NULL\s+WHERE type IN \('post_saved', 'post_shared'\)\s+AND aggregation_key IS NOT NULL/);
     expect(migration).toContain('ENABLE TRIGGER mobile_notifications_set_updated_at;');
+  });
+
+  it('lets only the service call the functions it defines', () => {
+    for (const signature of [
+      'create_post_save_alert(uuid, uuid, uuid, text, text, text)',
+      'remove_post_save_alerts_for_user_block()',
+    ]) {
+      expect(migration).toMatch(new RegExp(`REVOKE ALL ON FUNCTION public\\.${signature.replace(/[()]/g, '\\$&')}\\s+FROM PUBLIC, anon, authenticated;`));
+      expect(migration).toMatch(new RegExp(`GRANT EXECUTE ON FUNCTION public\\.${signature.replace(/[()]/g, '\\$&')}\\s+TO service_role;`));
+    }
+    expect(migration).toMatch(/REVOKE ALL ON FUNCTION public\.upsert_mobile_notification\([^)]*\) FROM PUBLIC, anon, authenticated;/);
+  });
+
+  it('gives its locks a timeout, and leaves profiles to its own migration', () => {
+    expect(migration).toContain("SET LOCAL lock_timeout = '5s';");
+    // saver-notice-seen-at-migration.test.ts
+    expect(migration).not.toMatch(/ALTER TABLE public\.profiles/);
   });
 });

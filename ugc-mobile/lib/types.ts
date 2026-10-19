@@ -86,6 +86,13 @@ export interface ProfileResponse {
   promotionalCredits?: number | null;
   marketplaceSpendableCredits?: number | null;
   /**
+   * Whether the account has been told, on record, that creators can see who
+   * saved its posts. The saver notice reads it from here, so the app never
+   * asks for it on its own (`components/saver-notice-bar.tsx`). Missing from a
+   * server that predates it.
+   */
+  saverNoticeSeen?: boolean;
+  /**
    * Server-counted totals for the profile libraries, with the rules the lists
    * apply. Missing from a server that predates them or when a count failed;
    * the header then draws a dash, never a 0.

@@ -5,6 +5,13 @@ import { dismissToast, readFeedbackSnapshot, resetFeedbackState, subscribeToFeed
 import { SAVER_NOTICE_MESSAGE, resetSaverNoticeForTests } from '@/components/saver-notice';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 
+// What the page was drawn knowing of the account's saver notice record
+// (`AuthProvider`): null unless a case is about it.
+const auth = vi.hoisted(() => ({ saverNoticeSeen: null as boolean | null }));
+vi.mock('@/components/AuthProvider', () => ({
+    useAuth: () => auth,
+}));
+
 type Post = { id: string; isSaved?: boolean; saveCount: number };
 
 // Stable across renders: the hook starts over whenever `initialItems` changes.
@@ -296,12 +303,45 @@ describe('useOptimisticPostSave, tapped faster than the server answers', () => {
 describe('useOptimisticPostSave, telling who saved', () => {
     let unsubscribe = () => {};
 
+    /** Every request made of the account's saver notice record. */
+    const recordRequests = () => vi.mocked(fetch).mock.calls
+        .filter(([input]) => String(input) === '/api/profile/saver-notice');
+
     afterEach(() => {
         unsubscribe();
+        auth.saverNoticeSeen = null;
         resetFeedbackState();
         resetSaverNoticeForTests();
         window.localStorage.clear();
         vi.unstubAllGlobals();
+    });
+
+    it.each([true, false])('asks nothing of the record when the page was drawn with it (%s)', async (seen) => {
+        auth.saverNoticeSeen = seen;
+        unsubscribe = subscribeToFeedback(() => {});
+        const saves = stubSaveRequests();
+        const { tap } = await renderSignedInSaveHook(vi.fn(), 'viewer-1');
+
+        await tap('post-2');
+
+        expect(recordRequests()).toEqual([]);
+        expect(saves.map(({ body }) => body)).toEqual([
+            seen
+                ? { postId: 'post-2', shouldSave: true, sourceSurface: 'feed', creatorSeesSaver: true }
+                : { postId: 'post-2', shouldSave: true, sourceSurface: 'feed', saverNotYetTold: true },
+        ]);
+        expect(readFeedbackSnapshot().toasts.map((toast) => toast.message)).toEqual(seen ? [] : [SAVER_NOTICE_MESSAGE]);
+    });
+
+    it('asks for the record once, as the account, when the page could not know it', async () => {
+        stubSaveRequests();
+        const { rerender } = await renderSignedInSaveHook(vi.fn(), 'viewer-1');
+        rerender();
+        await act(async () => {});
+
+        expect(recordRequests()).toEqual([
+            ['/api/profile/saver-notice', { headers: { Authorization: 'Bearer token' } }],
+        ]);
     });
 
     it('sends a save tapped before the notice went as one that tells the creator nothing', async () => {

@@ -1,147 +1,155 @@
-import { hasFeedbackViewport, pushToast, type ToastDismissal } from './feedback-state';
+import {
+  SAVER_NOTICE_DURATION_MS,
+  SAVER_NOTICE_MESSAGE,
+  SAVER_NOTICE_TAP_GUARD_MS,
+  createSaverNoticePolicy,
+  saverNoticeStorageKey,
+  type SaverNoticeFields,
+} from '../../ugc-mobile/lib/saver-notice-policy/saver-notice-policy';
+import { dismissToast, hasFeedbackViewport, pushToast } from './feedback-state';
 
 /**
- * Saves were private until the creator's alert began naming whoever saved
- * ("@maya saved your post"). A save names its saver only when its request says
- * the person had been told before tapping, and only once that telling is on
- * record for the account (`/api/profile/saver-notice`), so the telling, the
- * record and those request fields come from this one place.
+ * The web's half of the saver notice: the policy is shared with the app
+ * (`ugc-mobile/lib/saver-notice-policy/saver-notice-policy.ts`); this gives it
+ * the browser's storage, the account's record on the server and a toast.
  *
- * Told counts once the notice has gone: closed, or left to run out on a page
- * in view. Until then the account's saves tell the creator nothing at all
- * (`saverNotYetTold`): "Someone saved your post" seconds before the first
- * alert that names them would give them away. It is remembered per account,
- * in this browser and on the server, so a person told on one device is not
- * told again on another, and a browser two people share tells each.
+ * A toast that ran out on a page out of view was not read. One shown while the
+ * reel is open is drawn inside the reel's dialog (`setToastHost`), where a
+ * screen reader can reach it and it sits below the reel's header.
  */
-export type SaverNoticeFields = { creatorSeesSaver?: true; saverNotYetTold?: true };
+export { SAVER_NOTICE_MESSAGE };
+export type { SaverNoticeFields };
 
-const SAVER_NOTICE_STORAGE_KEY_PREFIX = 'magicbooklet:saver-notice:v1:';
-const SAVER_NOTICE_DURATION_MS = 6000;
 const SAVER_NOTICE_ROUTE = '/api/profile/saver-notice';
 
-export const SAVER_NOTICE_MESSAGE = 'Creators can see who saved their posts.';
-
-const toldOnThisPage = new Set<string>();
-/** Accounts whose notice is up: their saves wait to be named until it goes. */
-const showing = new Set<string>();
-/** Accounts the server has on record as told. */
-const recorded = new Set<string>();
+/** The last token seen for each account, so a telling is recorded as that account. */
+const tokens = new Map<string, string>();
+const toastIds = new Map<string, number>();
 /** Accounts whose record was asked for on this page. */
-const synced = new Set<string>();
+const requested = new Set<string>();
+/** Accounts whose record as the page was drawn has been taken in. */
+const pageRecordsApplied = new Set<string>();
 
-function storageKey(accountId: string) {
-  return `${SAVER_NOTICE_STORAGE_KEY_PREFIX}${accountId}`;
-}
-
-function rememberTold(accountId: string) {
-  toldOnThisPage.add(accountId);
+function readStored(accountId: string) {
   try {
-    window.localStorage.setItem(storageKey(accountId), '1');
-  } catch {
-    // Told on this page; the server's record tells the next one.
-  }
-}
-
-function hasBeenTold(accountId: string) {
-  if (toldOnThisPage.has(accountId)) return true;
-
-  try {
-    if (window.localStorage.getItem(storageKey(accountId))) {
-      toldOnThisPage.add(accountId);
-      return true;
-    }
+    return window.localStorage.getItem(saverNoticeStorageKey(accountId));
   } catch {
     // Storage refused (a private window): this page's memory is all there is.
-  }
-  return false;
-}
-
-async function recordOnServer(accountId: string, accessToken: string) {
-  if (recorded.has(accountId)) return;
-  try {
-    const response = await fetch(SAVER_NOTICE_ROUTE, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (response.ok) recorded.add(accountId);
-  } catch {
-    // The next page records it.
+    return null;
   }
 }
 
-/**
- * Reads the account's record once a page, before its first tap needs it: a
- * person told elsewhere is told here too, without the notice. A telling this
- * browser holds that the server missed is recorded now.
- */
-export function syncSaverNotice(accountId: string, accessToken: string) {
-  if (synced.has(accountId)) return;
-  synced.add(accountId);
-
-  void (async () => {
+const policy = createSaverNoticePolicy({
+  remember(accountId, memory) {
+    try {
+      const key = saverNoticeStorageKey(accountId);
+      if (memory) window.localStorage.setItem(key, memory);
+      else window.localStorage.removeItem(key);
+    } catch {
+      // Remembered on this page; the server's record tells the next one.
+    }
+  },
+  async record(accountId) {
+    const accessToken = tokens.get(accountId);
+    if (!accessToken) return false;
     try {
       const response = await fetch(SAVER_NOTICE_ROUTE, {
+        method: 'POST',
         headers: { Authorization: `Bearer ${accessToken}` },
       });
-      if (!response.ok) return;
-      const data = await response.json() as { seen?: unknown };
-      if (data.seen === true) {
-        recorded.add(accountId);
-        if (!hasBeenTold(accountId)) rememberTold(accountId);
-        return;
-      }
-      if (hasBeenTold(accountId)) await recordOnServer(accountId, accessToken);
+      return response.ok;
     } catch {
-      // This browser's memory decides until the next page.
+      return false;
+    }
+  },
+  show(accountId) {
+    // A toast pushed with nothing subscribed is never seen: tell them at a later tap.
+    if (!hasFeedbackViewport()) return false;
+    const toastId = pushToast({
+      tone: 'info',
+      message: SAVER_NOTICE_MESSAGE,
+      durationMs: SAVER_NOTICE_DURATION_MS,
+      closeGuardMs: SAVER_NOTICE_TAP_GUARD_MS,
+      onDismiss: (how) => {
+        toastIds.delete(accountId);
+        // A notice that ran out on a page out of view was not read.
+        const unread = how === 'interrupted' || (how === 'expired' && document.visibilityState === 'hidden');
+        policy.settle(accountId, unread ? 'interrupted' : how === 'expired' ? 'expired' : 'closed');
+      },
+    });
+    toastIds.set(accountId, toastId);
+    return true;
+  },
+  hide(accountId) {
+    const toastId = toastIds.get(accountId);
+    if (toastId !== undefined) dismissToast(toastId, 'interrupted');
+  },
+});
+
+/**
+ * The account signed in on this page, or null. `seen` is its record as the
+ * page was drawn (`ServerAuthState.saverNoticeSeen`); when the page could not
+ * know it (a sign-in without a reload), the record is asked for once.
+ */
+export function syncSaverNotice(
+  accountId: string | null,
+  accessToken?: string | null,
+  seen?: boolean | null,
+) {
+  if (accountId && accessToken) tokens.set(accountId, accessToken);
+  if (accountId) policy.restore(accountId, readStored(accountId));
+  policy.setActiveAccount(accountId);
+  if (!accountId) return;
+
+  if (typeof seen === 'boolean') {
+    // The page hands out the record it was drawn with for as long as it is
+    // open, and syncs again at every token refresh: taken in once, or a "not
+    // told" from the page load would wipe a telling recorded since.
+    if (!pageRecordsApplied.has(accountId)) {
+      pageRecordsApplied.add(accountId);
+      policy.applyServerRecord(accountId, seen);
+    }
+    return;
+  }
+  if (!accessToken || requested.has(accountId)) return;
+  requested.add(accountId);
+  void (async () => {
+    try {
+      const response = await fetch(SAVER_NOTICE_ROUTE, { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!response.ok) throw new Error(`saver notice record: ${response.status}`);
+      const data = await response.json() as { seen?: unknown };
+      policy.applyServerRecord(accountId, data.seen === true);
+    } catch {
+      // Asked again at the next sync on this page.
+      requested.delete(accountId);
     }
   })();
 }
 
-function tell(accountId: string, accessToken: string) {
-  if (showing.has(accountId)) return;
-  // A toast pushed with nothing subscribed is never seen: tell them at a later tap.
-  if (!hasFeedbackViewport()) return;
-
-  showing.add(accountId);
-  pushToast({
-    tone: 'info',
-    message: SAVER_NOTICE_MESSAGE,
-    durationMs: SAVER_NOTICE_DURATION_MS,
-    onDismiss: (how: ToastDismissal) => {
-      showing.delete(accountId);
-      // A notice that ran out on a page out of view was not read.
-      if (how === 'expired' && document.visibilityState === 'hidden') return;
-      rememberTold(accountId);
-      void recordOnServer(accountId, accessToken);
-    },
-  });
-}
-
 /**
  * The fields a save request carries about telling its saver, decided at the
- * tap and spread into the request whenever it goes out. An account told
- * before this tap may be named (`creatorSeesSaver`). One not told yet is told
- * now, and its saves tell the creator nothing until the notice has gone
- * (`saverNotYetTold`). Send these only through here: the server takes them as
- * word of what the person was told.
+ * tap and spread into the request whenever it goes out. Send these only
+ * through here: the server takes them as word of what the person was told.
  */
 export function creatorSeesSaverFields(
   accountId: string | null | undefined,
   shouldSave: boolean,
   accessToken?: string | null,
 ): SaverNoticeFields {
-  if (!shouldSave || !accountId) return {};
-  if (hasBeenTold(accountId)) return { creatorSeesSaver: true };
-
-  if (accessToken) tell(accountId, accessToken);
-  return { saverNotYetTold: true };
+  if (accountId && accessToken) tokens.set(accountId, accessToken);
+  if (accountId) {
+    policy.restore(accountId, readStored(accountId));
+    // Whoever saves is the account signed in now.
+    policy.setActiveAccount(accountId);
+  }
+  return policy.fieldsForSave(accountId, shouldSave);
 }
 
 /** Tests only: forget what this page has told, shown and read. */
 export function resetSaverNoticeForTests() {
-  toldOnThisPage.clear();
-  showing.clear();
-  recorded.clear();
-  synced.clear();
+  policy.reset();
+  tokens.clear();
+  toastIds.clear();
+  requested.clear();
+  pageRecordsApplied.clear();
 }

@@ -2,9 +2,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  createExpoPushService,
   createMobileNotificationHistory,
   withMobileNotificationHistory,
-  withUniqueDedupeKeys,
   type MobileNotificationHistory,
 } from '@/__tests__/fixtures/mobile-notification-history';
 import { createStoredRows } from '@/__tests__/fixtures/stored-rows';
@@ -28,8 +28,6 @@ import {
   sendExpoPushNotificationBatch,
   sendExpoPushNotificationWithRetry,
   toMobileNotificationRecord,
-  withdrawPostSaveNotification,
-  withdrawPostSaveNotificationsBetween,
 } from '@/lib/mobile-notifications';
 import { EXTERNAL_API_REQUEST_TIMEOUT_MS } from '@/lib/provider-fetch';
 import { siteConfig } from '@/lib/seo';
@@ -1285,6 +1283,44 @@ describe('mobile notifications', () => {
     ]);
   });
 
+  // notification_id goes to null when the alert is deleted: a named save's
+  // alert goes with its save, and any alert with its account or post. The
+  // delivery stays for its receipt. Sent again, it would push an alert that is
+  // no longer there, naming a saver who took the save back.
+  it('closes a delivery whose alert is gone, without sending it or asking whether it could', async () => {
+    const maintenance = createPushMaintenanceSupabase({
+      retryableDeliveries: [retryableDelivery({ notification_id: null, receipt_error_code: 'MessageRateExceeded' })],
+      tokens: [{ ...PHONE_TOKEN }],
+      notification: { type: 'post_saved', category: 'social', title: '@maya saved your post' },
+    });
+    const fetcher = vi.fn<typeof fetch>(async () => expoResponse({ data: { status: 'ok', id: 'ticket-retry' } }));
+    const now = new Date('2026-10-04T05:10:00.000Z');
+
+    // The job hears about it once: this run closes it.
+    await expect(hasMobilePushMaintenanceWork(maintenance.adminSupabase as never, { now })).resolves.toBe(true);
+    const summary = await processMobilePushMaintenance(maintenance.adminSupabase as never, { fetcher, now });
+
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(summary).toMatchObject({ retryableCount: 1, retriedCount: 0, resentCount: 0, retryFailedCount: 0 });
+    // Closed where it stands, with the reason, and the attempt it made is kept.
+    expect(maintenance.deliveryUpdates).toEqual([
+      {
+        id: 'delivery-1',
+        values: {
+          receipt_status: 'stale',
+          receipt_checked_at: '2026-10-04T05:10:00.000Z',
+          receipt_message: 'Notification no longer exists.',
+        },
+      },
+    ]);
+    expect(maintenance.deliveries).toEqual([
+      expect.objectContaining({ send_status: 'error', receipt_status: 'stale', receipt_error_code: 'MessageRateExceeded', attempt_count: 1 }),
+    ]);
+    expect(maintenance.tokenTable.reads).toEqual([]);
+    expect(maintenance.preferenceTable.reads).toEqual([]);
+    await expect(hasMobilePushMaintenanceWork(maintenance.adminSupabase as never, { now })).resolves.toBe(false);
+  });
+
   it('re-sends a delivery with no token id when the account holds that token on a live row', async () => {
     const maintenance = createPushMaintenanceSupabase({
       retryableDeliveries: [retryableDelivery({ token_id: null })],
@@ -2372,6 +2408,19 @@ describe('what each alert opens and says', () => {
     } as unknown as SupabaseClient, history);
   }
 
+  const CREATOR_PHONE = 'ExponentPushToken[creator-phone]';
+
+  /** History in which creator-1's phone takes pushes, with Expo stood in for. */
+  function withCreatorPhone() {
+    const expo = createExpoPushService();
+    vi.stubGlobal('fetch', expo.fetch);
+    return { history: createMobileNotificationHistory({ pushTo: { 'creator-1': [CREATOR_PHONE] } }), expo };
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('opens the post page from a saved, shared or recipe-unlocked alert, and Your Sales from a sale', async () => {
     // A finished remix's alert is pinned in completed-remix-notification.test.ts.
     const history = createMobileNotificationHistory();
@@ -2558,7 +2607,7 @@ describe('what each alert opens and says', () => {
     // Grouped saves pushed at most once a post per quarter-hour; naming some
     // savers must not turn a busy post into a push per saver, nor give it a
     // second push for its anonymous saves.
-    const history = createMobileNotificationHistory();
+    const { history } = withCreatorPhone();
     const client = writtenTo(history);
 
     for (const [actorUserId, actorUsername, postId] of [
@@ -2584,36 +2633,199 @@ describe('what each alert opens and says', () => {
       { key: 'creator-1:post-1', allowed: false },
       { key: 'creator-1:post-2', allowed: true },
     ]);
-    expect(history.preferenceReads).toEqual(['creator-1', 'creator-1']);
+    expect(history.pushed.map((push) => push.title)).toEqual(['Someone saved your post', '@ana saved your post']);
+  });
+
+  it("pushes a grouped save once, at its group's first event: a later one adds to the group and claims no push slot", async () => {
+    const { history, expo } = withCreatorPhone();
+    const client = writtenTo(history);
+
+    for (const actorUserId of ['reader-0', 'reader-9']) {
+      await notifyPostSocialActivity(client, { type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId });
+    }
+
+    // One row holding both saves.
+    expect(history.sent.map((row) => row.title)).toEqual(['Someone saved your post']);
+    expect(history.eventCounts()).toEqual([2]);
+    expect(history.pushClaims).toEqual([{ key: 'creator-1:post-1', allowed: true }]);
+    expect(history.preferenceReads).toEqual(['creator-1']);
+    expect(history.pushed).toEqual([{ user_id: 'creator-1', title: 'Someone saved your post', expo_push_token: CREATOR_PHONE }]);
+    expect(expo.requests).toHaveLength(1);
   });
 
   it('spends no push on a named save whose alert already stands', async () => {
-    const history = createMobileNotificationHistory();
+    const { history } = withCreatorPhone();
     const client = writtenTo(history);
     const saved = { type: 'post_saved' as const, recipientUserId: 'creator-1', postId: 'post-1' };
 
-    await notifyPostSocialActivity(client, { ...saved, actorUserId: 'reader-1', actorUsername: 'maya' });
-    await notifyPostSocialActivity(client, { ...saved, actorUserId: 'reader-1', actorUsername: 'maya' });
+    await expect(notifyPostSocialActivity(client, { ...saved, actorUserId: 'reader-1', actorUsername: 'maya' }))
+      .resolves.toMatchObject({ title: '@maya saved your post' });
+    // The function writes the save's alert once, and answers "not written", with no row, after that.
+    await expect(notifyPostSocialActivity(client, { ...saved, actorUserId: 'reader-1', actorUsername: 'maya' }))
+      .resolves.toBeNull();
 
     expect(history.sent).toHaveLength(1);
     expect(history.pushClaims).toEqual([{ key: 'creator-1:post-1', allowed: true }]);
+    expect(history.preferenceReads).toEqual(['creator-1']);
+    expect(history.pushed).toHaveLength(1);
   });
 
-  it('writes no named alert for a save already taken back', async () => {
+  it.each([
     // The unsave was answered, and its save gone, before the save's alert was written.
-    const history = createMobileNotificationHistory();
-    history.recordSave('reader-1', 'post-1', false);
+    { when: 'its save was taken back first', setUp: (history: MobileNotificationHistory) => history.recordSave('reader-1', 'post-1', false) },
+    { when: 'the two accounts block each other', setUp: (history: MobileNotificationHistory) => history.recordBlock('creator-1', 'reader-1') },
+  ])('writes no named alert, and spends no push, when $when', async ({ setUp }) => {
+    const { history } = withCreatorPhone();
+    const client = writtenTo(history);
+    setUp(history);
 
-    await notifyPostSocialActivity(writtenTo(history), {
+    await expect(notifyPostSocialActivity(client, {
+      type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', actorUsername: 'maya',
+    })).resolves.toBeNull();
+
+    expect(history.sent).toEqual([]);
+    expect(history.preferenceReads).toEqual([]);
+    expect(history.pushClaims).toEqual([]);
+
+    // Another saver's alert of the same post is written and pushed as ever.
+    await notifyPostSocialActivity(client, {
+      type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-2', actorUsername: 'lee',
+    });
+    expect(history.sent.map((row) => row.title)).toEqual(['@lee saved your post']);
+    expect(history.pushed.map((push) => push.title)).toEqual(['@lee saved your post']);
+  });
+
+  it('writes a named alert anew when a save taken back, its alert with it, is made again', async () => {
+    const { history } = withCreatorPhone();
+    const client = writtenTo(history);
+    const saved = {
+      type: 'post_saved' as const, recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', actorUsername: 'maya',
+    };
+
+    await notifyPostSocialActivity(client, saved);
+    // The unsave deletes the save, and the alert that announced it goes with it.
+    history.recordSave('reader-1', 'post-1', false);
+    expect(history.standing()).toEqual([]);
+    history.recordSave('reader-1', 'post-1', true);
+    await expect(notifyPostSocialActivity(client, saved)).resolves.toMatchObject({ title: '@maya saved your post' });
+
+    expect([...history.removedRows]).toEqual([0]);
+    expect(history.standing()).toEqual([
+      expect.objectContaining({ title: '@maya saved your post', dedupe_key: 'post-save:reader-1:post-1' }),
+    ]);
+    // Written anew, it waits in Alerts: the phone heard about this post's saves this quarter-hour.
+    expect(history.pushClaims).toEqual([
+      { key: 'creator-1:post-1', allowed: true },
+      { key: 'creator-1:post-1', allowed: false },
+    ]);
+    expect(history.pushed).toHaveLength(1);
+  });
+
+  // A post's push slot is spent only by a push that goes out. Spent for a
+  // creator who would not hear it, it kept the next save of that post, the
+  // first their phone could take, from pushing for the rest of the quarter-hour.
+  it.each([
+    { kind: 'push switched off', devices: undefined, readsDevices: false },
+    { kind: 'push on and no live device', devices: [] as string[], readsDevices: true },
+  ])('asks for no push slot for a save, named or grouped, to a creator with $kind', async ({ devices, readsDevices }) => {
+    const expo = createExpoPushService();
+    vi.stubGlobal('fetch', expo.fetch);
+    const pushTo: Record<string, string[]> = devices ? { 'creator-1': devices } : {};
+    const history = createMobileNotificationHistory({ pushTo });
+    const client = writtenTo(history);
+
+    await notifyPostSocialActivity(client, { type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-0' });
+    await notifyPostSocialActivity(client, {
       type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', actorUsername: 'maya',
     });
 
-    expect(history.sent).toEqual([]);
+    // Both were written anew and went on to decide whether to push.
+    expect(history.sent.map((row) => row.title)).toEqual(['Someone saved your post', '@maya saved your post']);
+    expect(history.preferenceReads).toEqual(['creator-1', 'creator-1']);
+    expect(history.tokenReads).toEqual(readsDevices ? ['creator-1', 'creator-1'] : []);
     expect(history.pushClaims).toEqual([]);
+    expect(expo.requests).toEqual([]);
+
+    // The phone can take pushes now: the next save of that post still has the slot.
+    pushTo['creator-1'] = [CREATOR_PHONE];
+    await notifyPostSocialActivity(client, {
+      type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-2', actorUsername: 'lee',
+    });
+    expect(history.pushClaims).toEqual([{ key: 'creator-1:post-1', allowed: true }]);
+    expect(history.pushed.map((push) => push.title)).toEqual(['@lee saved your post']);
+  });
+
+  it.each([
+    // What the function answered before it took the grouped writer's shape.
+    { kind: 'the old shape', answer: { created: true, notification: { id: 'notification-1', title: '@maya saved your post' } } },
+    { kind: 'a write with no row', answer: { wasCreated: true, notification: null } },
+    { kind: 'a flag that is not a boolean', answer: { wasCreated: 'true', notification: { id: 'notification-1' } } },
+    { kind: 'a row that is not one', answer: { wasCreated: true, notification: 'notification-1' } },
+    { kind: 'nothing at all', answer: null },
+  ])('refuses a named save alert answered in $kind: it logs, answers null and pushes nothing', async ({ answer }) => {
+    const expo = createExpoPushService();
+    vi.stubGlobal('fetch', expo.fetch);
+    const history = createMobileNotificationHistory({ pushTo: { 'creator-1': [CREATOR_PHONE] } });
+    const client = {
+      from: (table: string) => history.from(table),
+      rpc: async (name: string, args?: Record<string, unknown>) => (name === 'create_post_save_alert'
+        ? { data: answer, error: null }
+        : history.rpc(name, args)),
+    } as unknown as SupabaseClient;
+    const logged: BackendLogRecord[] = [];
+    const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+
+    try {
+      await expect(notifyPostSocialActivity(client, {
+        type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', actorUsername: 'maya',
+      })).resolves.toBeNull();
+    } finally {
+      restoreLogSink();
+    }
+
+    expect(logged).toEqual([expect.objectContaining({
+      level: 'error',
+      msg: 'failed_to_create_mobile_notification',
+      errorMessage: 'Named save alert response was invalid.',
+    })]);
+    expect(history.preferenceReads).toEqual([]);
+    expect(history.pushClaims).toEqual([]);
+    expect(history.pushed).toEqual([]);
+    expect(expo.requests).toEqual([]);
+  });
+
+  it('refuses a grouped answer that does not say whether the alert was written anew, and pushes nothing', async () => {
+    const expo = createExpoPushService();
+    vi.stubGlobal('fetch', expo.fetch);
+    const history = createMobileNotificationHistory({ pushTo: { 'creator-1': [CREATOR_PHONE] } });
+    const client = {
+      from: (table: string) => history.from(table),
+      rpc: async (name: string, args?: Record<string, unknown>) => (name === 'upsert_mobile_notification'
+        ? { data: { notification: { id: 'notification-1', user_id: 'creator-1', type: 'post_saved', category: 'social', title: 'Someone saved your post', body: '', event_count: 1 } }, error: null }
+        : history.rpc(name, args)),
+    } as unknown as SupabaseClient;
+    const logged: BackendLogRecord[] = [];
+    const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+
+    try {
+      await expect(notifyPostSocialActivity(client, {
+        type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-0',
+      })).resolves.toBeNull();
+    } finally {
+      restoreLogSink();
+    }
+
+    expect(logged).toEqual([expect.objectContaining({
+      msg: 'failed_to_create_mobile_notification',
+      errorMessage: 'Aggregated mobile notification response was invalid.',
+    })]);
+    expect(history.pushClaims).toEqual([]);
+    expect(history.pushed).toEqual([]);
+    expect(expo.requests).toEqual([]);
   });
 
   it('lets a save alert push when its push slot cannot be checked', async () => {
-    const history = createMobileNotificationHistory();
+    const { history } = withCreatorPhone();
     const client = {
       from: (table: string) => history.from(table),
       rpc: async (name: string, args?: Record<string, unknown>) => (name === 'check_backend_rate_limit'
@@ -2632,91 +2844,8 @@ describe('what each alert opens and says', () => {
     }
 
     expect(history.sent.map((row) => row.title)).toEqual(['@maya saved your post']);
-    expect(history.preferenceReads).toEqual(['creator-1']);
+    expect(history.pushed.map((push) => push.title)).toEqual(['@maya saved your post']);
     expect(logged.map((record) => record.msg)).toEqual(['failed_to_claim_post_save_push']);
-  });
-
-  it("takes back only that saver's named alert, only once the save is gone, and nothing for a creator's own post", async () => {
-    const history = withUniqueDedupeKeys(createMobileNotificationHistory());
-    const client = writtenTo(history);
-    const saved = { type: 'post_saved' as const, recipientUserId: 'creator-1', postId: 'post-1' };
-
-    await notifyPostSocialActivity(client, { ...saved, actorUserId: 'reader-1', actorUsername: 'maya' });
-    await notifyPostSocialActivity(client, { ...saved, actorUserId: 'reader-2', actorUsername: 'lee' });
-
-    // Saved again before a late take-back ran: the alert is that save's now.
-    await withdrawPostSaveNotification(client, { recipientUserId: 'creator-1', actorUserId: 'reader-1', postId: 'post-1' });
-    expect([...history.withdrawnRows]).toEqual([]);
-
-    history.recordSave('reader-1', 'post-1', false);
-    await withdrawPostSaveNotification(client, { recipientUserId: 'creator-1', actorUserId: 'reader-1', postId: 'post-1' });
-    await withdrawPostSaveNotification(client, { recipientUserId: 'creator-1', actorUserId: 'creator-1', postId: 'post-1' });
-    await withdrawPostSaveNotification(client, { recipientUserId: null, actorUserId: 'reader-2', postId: 'post-1' });
-
-    expect(history.withdrawn).toEqual([
-      { user_id: 'creator-1', dedupe_key: 'post-save:reader-1:post-1' },
-      { user_id: 'creator-1', dedupe_key: 'post-save:reader-1:post-1' },
-    ]);
-    expect([...history.withdrawnRows]).toEqual([0]);
-  });
-
-  it('brings a taken-back alert back as new when the post is saved again', async () => {
-    const history = createMobileNotificationHistory();
-    const client = writtenTo(history);
-    const saved = { type: 'post_saved' as const, recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', actorUsername: 'maya' };
-
-    await notifyPostSocialActivity(client, saved);
-    history.recordSave('reader-1', 'post-1', false);
-    await withdrawPostSaveNotification(client, saved);
-    history.recordSave('reader-1', 'post-1', true);
-    await expect(notifyPostSocialActivity(client, saved)).resolves.toMatchObject({ title: '@maya saved your post' });
-
-    expect(history.sent.map((row) => [row.title, row.revived ?? false])).toEqual([
-      ['@maya saved your post', true],
-      ['@maya saved your post', false],
-    ]);
-  });
-
-  it('takes back the save alerts naming either account to the other when they block', async () => {
-    const history = createMobileNotificationHistory();
-    const client = writtenTo(history);
-
-    await notifyPostSocialActivity(client, { type: 'post_saved', recipientUserId: 'luna', postId: 'post-1', actorUserId: 'maya', actorUsername: 'maya' });
-    await notifyPostSocialActivity(client, { type: 'post_saved', recipientUserId: 'maya', postId: 'post-2', actorUserId: 'luna', actorUsername: 'luna' });
-    await notifyPostSocialActivity(client, { type: 'post_saved', recipientUserId: 'luna', postId: 'post-3', actorUserId: 'lee', actorUsername: 'lee' });
-
-    await withdrawPostSaveNotificationsBetween(client, { firstUserId: 'maya', secondUserId: 'luna' });
-
-    expect([...history.withdrawnRows].sort()).toEqual([0, 1]);
-  });
-
-  it('tries a failed take-back again, logs each failure, and never rejects', async () => {
-    const failing = (result: () => Promise<{ error: unknown }>) => ({
-      rpc: () => result(),
-    }) as unknown as SupabaseClient;
-    const logged: BackendLogRecord[] = [];
-    const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
-    const params = { recipientUserId: 'creator-1', actorUserId: 'reader-1', postId: 'post-1' };
-
-    try {
-      await expect(withdrawPostSaveNotification(failing(async () => ({ error: { message: 'timeout' } })), params))
-        .resolves.toBeUndefined();
-      await expect(withdrawPostSaveNotification(failing(() => Promise.reject(new Error('socket hang up'))), params))
-        .resolves.toBeUndefined();
-      await expect(withdrawPostSaveNotificationsBetween(failing(async () => ({ error: { message: 'timeout' } })), {
-        firstUserId: 'maya', secondUserId: 'luna',
-      })).resolves.toBeUndefined();
-    } finally {
-      restoreLogSink();
-    }
-
-    expect(logged.map((record) => record.msg)).toEqual([
-      'failed_to_withdraw_post_save_notification',
-      'failed_to_withdraw_post_save_notification',
-      'failed_to_withdraw_post_save_notification',
-      'failed_to_withdraw_post_save_notification',
-      'failed_to_withdraw_post_save_notifications_between',
-    ]);
   });
 
   it('words its copy for both clients and spells the brand as the site does', async () => {

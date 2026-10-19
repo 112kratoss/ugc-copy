@@ -16,7 +16,7 @@ import {
 } from '@/lib/profile';
 
 export const PROFILE_SELECT_FIELDS =
-  'id, username, display_name, bio, avatar_url, cover_url, website_url, twitter_handle, instagram_handle, tiktok_handle, location, credits, promotional_credits';
+  'id, username, display_name, bio, avatar_url, cover_url, website_url, twitter_handle, instagram_handle, tiktok_handle, location, credits, promotional_credits, saver_notice_seen_at';
 
 export interface ProfileRow {
   id: string;
@@ -32,6 +32,7 @@ export interface ProfileRow {
   location: string | null;
   credits: number | null;
   promotional_credits?: number | null;
+  saver_notice_seen_at?: string | null;
 }
 
 interface ExistingProfileRow {
@@ -199,6 +200,7 @@ export function buildProfileApiResponse(profile: ProfileRow, userId: string): Pr
   return {
     ...sanitizeProfileRecord(profile),
     suggestedUsername: buildFallbackUsername(userId),
+    saverNoticeSeen: typeof profile.saver_notice_seen_at === 'string',
   };
 }
 

@@ -8,7 +8,7 @@ import {
   resetShowcaseFeedEventQueueForTests,
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import FeedbackViewport from '@/components/FeedbackViewport';
-import { requestConfirmation, resetFeedbackState } from '@/components/feedback-state';
+import { pushToast, requestConfirmation, resetFeedbackState } from '@/components/feedback-state';
 import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
 
 vi.mock('next/link', () => ({
@@ -489,6 +489,75 @@ describe('ShowcaseReelViewer pagination', () => {
     await waitFor(() => {
       expect(loadMoreItems).toHaveBeenCalledTimes(1);
     });
+  });
+
+  // Inside the reel's `aria-modal` dialog a toast drawn on the page is inert to
+  // a screen reader and outside the reel's focus trap, and it sat over the
+  // reel's close and ⋯ buttons.
+  it("draws the app's toasts inside the reel while it is up, and on the page once it is gone", () => {
+    const view = render(
+      <>
+        <FeedbackViewport />
+        <ShowcaseReelViewer {...reelProps()} />
+      </>
+    );
+    act(() => {
+      pushToast({ tone: 'info', message: 'Saved to bookmarks.' });
+    });
+    const toasts = () => document.querySelector('.ui-toast-viewport');
+
+    const reel = screen.getByRole('dialog', { name: /reel viewer/i });
+    expect(reel).toContainElement(toasts() as HTMLElement);
+    expect(toasts()).toHaveClass('ui-toast-viewport-in-dialog');
+    expect(within(reel).getByText('Saved to bookmarks.')).toBeInTheDocument();
+
+    view.rerender(
+      <>
+        <FeedbackViewport />
+      </>
+    );
+
+    expect(toasts()).not.toBeNull();
+    expect(toasts()).not.toHaveClass('ui-toast-viewport-in-dialog');
+    expect(toasts()).toHaveTextContent('Saved to bookmarks.');
+  });
+
+  // The profile mounts the reel closed, for `?post=`, and keeps it mounted
+  // once closed: the toasts follow its dialog, not its mount.
+  it("draws the toasts in the reel's dialog when a reel mounted closed opens, and on the page again when it closes", () => {
+    const view = render(
+      <>
+        <FeedbackViewport />
+        <ShowcaseReelViewer {...reelProps()} isOpen={false} />
+      </>
+    );
+    act(() => {
+      pushToast({ tone: 'info', message: 'Saved to bookmarks.' });
+    });
+    const toasts = () => document.querySelector('.ui-toast-viewport');
+    expect(toasts()).not.toHaveClass('ui-toast-viewport-in-dialog');
+
+    view.rerender(
+      <>
+        <FeedbackViewport />
+        <ShowcaseReelViewer {...reelProps()} isOpen />
+      </>
+    );
+    const reel = screen.getByRole('dialog', { name: /reel viewer/i });
+    expect(reel).toContainElement(toasts() as HTMLElement);
+    expect(within(reel).getByText('Saved to bookmarks.')).toBeInTheDocument();
+
+    view.rerender(
+      <>
+        <FeedbackViewport />
+        <ShowcaseReelViewer {...reelProps()} isOpen={false} />
+      </>
+    );
+    expect(screen.queryByRole('dialog', { name: /reel viewer/i })).toBeNull();
+    expect(toasts()).not.toBeNull();
+    expect(document.body).toContainElement(toasts() as HTMLElement);
+    expect(toasts()).not.toHaveClass('ui-toast-viewport-in-dialog');
+    expect(toasts()).toHaveTextContent('Saved to bookmarks.');
   });
 
   // "Report content?" is asked from the reel's own menu and drawn above the

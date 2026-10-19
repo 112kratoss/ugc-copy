@@ -88,6 +88,7 @@ import {
 } from '@/lib/immersive-preview-source-data';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
+import { announceQueued } from '@/lib/accessibility-announcement';
 import { haptic } from '@/lib/haptics';
 import { creatorSeesSaverFields, type SaverNoticeFields } from '@/lib/saver-notice';
 import { useReducedMotion } from '@/lib/motion';
@@ -877,7 +878,8 @@ function ImmersivePreviewViewer() {
         saveCount: variables.previousSaveCount,
       });
       haptic.error();
-      void AccessibilityInfo.announceForAccessibility(
+      // Queued on iOS, as "Saved" is: behind the saver notice the tap may have brought up.
+      announceQueued(
         variables.shouldSave
           ? 'Could not save. Please try again.'
           : 'Could not remove from saved. Please try again.'
@@ -900,9 +902,8 @@ function ImmersivePreviewViewer() {
         userId: user?.id,
         invalidateQueries: (filters) => queryClient.invalidateQueries(filters),
       });
-      void AccessibilityInfo.announceForAccessibility(
-        result.isSaved ? 'Saved' : 'Removed from saved'
-      );
+      // Queued on iOS: the saver notice that may have just appeared is read first.
+      announceQueued(result.isSaved ? 'Saved' : 'Removed from saved');
       if (source === 'showcase-feed') {
         recordViewerFeedEvent(variables.item, result.isSaved ? 'save' : 'unsave');
       }

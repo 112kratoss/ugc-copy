@@ -1,14 +1,18 @@
 'use client';
 
 import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 
 import {
   dismissToast,
   readFeedbackSnapshot,
   readServerFeedbackSnapshot,
+  readServerToastHost,
+  readToastHost,
   resolveConfirmation,
   subscribeToFeedback,
+  subscribeToToastHost,
   type PendingConfirmation,
   type ToastRecord,
 } from './feedback-state';
@@ -19,6 +23,11 @@ import {
  *
  * Shared by public and authenticated routes, so the layout classes live in
  * globals.css rather than as responsive utilities.
+ *
+ * While a dialog hosts the toasts (`setToastHost`: the reel), they are drawn
+ * inside it, where a screen reader can reach them past its `aria-modal`, its
+ * focus order includes them, and `.ui-toast-viewport-in-dialog` places them
+ * below its header.
  */
 export default function FeedbackViewport() {
   const { toasts, confirmation } = useSyncExternalStore(
@@ -26,14 +35,24 @@ export default function FeedbackViewport() {
     readFeedbackSnapshot,
     readServerFeedbackSnapshot,
   );
+  const host = useSyncExternalStore(subscribeToToastHost, readToastHost, readServerToastHost);
+
+  const viewport = (
+    <div
+      className={host ? 'ui-toast-viewport ui-toast-viewport-in-dialog' : 'ui-toast-viewport'}
+      role="status"
+      aria-live="polite"
+      aria-atomic="false"
+    >
+      {toasts.map((toast) => (
+        <Toast key={toast.id} toast={toast} />
+      ))}
+    </div>
+  );
 
   return (
     <>
-      <div className="ui-toast-viewport" role="status" aria-live="polite" aria-atomic="false">
-        {toasts.map((toast) => (
-          <Toast key={toast.id} toast={toast} />
-        ))}
-      </div>
+      {host ? createPortal(viewport, host) : viewport}
       {confirmation ? <ConfirmDialog confirmation={confirmation} /> : null}
     </>
   );
@@ -52,10 +71,19 @@ function ToastIcon({ tone }: { tone: ToastRecord['tone'] }) {
 }
 
 function Toast({ toast }: { toast: ToastRecord }) {
+  // When it first appeared on this page, for its close guard.
+  const shownAtRef = useRef<number | null>(null);
   useEffect(() => {
+    shownAtRef.current ??= Date.now();
     const timeout = window.setTimeout(() => dismissToast(toast.id, 'expired'), toast.durationMs);
     return () => window.clearTimeout(timeout);
   }, [toast.durationMs, toast.id]);
+
+  const close = () => {
+    const shownAt = shownAtRef.current;
+    if (toast.closeGuardMs && shownAt !== null && Date.now() - shownAt < toast.closeGuardMs) return;
+    dismissToast(toast.id);
+  };
 
   return (
     <div className={`ui-toast ${TOAST_TONE_CLASS[toast.tone]}`}>
@@ -63,7 +91,7 @@ function Toast({ toast }: { toast: ToastRecord }) {
       <p className="min-w-0 flex-1 text-sm leading-5">{toast.message}</p>
       <button
         type="button"
-        onClick={() => dismissToast(toast.id)}
+        onClick={close}
         aria-label="Dismiss notification"
         className="ui-focus-ring -m-1 shrink-0 rounded-full p-1 text-current opacity-70 transition hover:opacity-100"
       >

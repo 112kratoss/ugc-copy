@@ -756,14 +756,34 @@ async function createAggregatedMobileNotification({
     throw new MobileNotificationError('Failed to upsert aggregated mobile notification.', 500);
   }
 
-  if (!isRecord(data) || !isRecord(data.notification)) {
+  const { notification, wasCreated } = readWrittenNotification(data, 'Aggregated mobile notification');
+  // A grouped write always answers with its row, the group's or a new one's.
+  if (!notification) {
     throw new MobileNotificationError('Aggregated mobile notification response was invalid.', 500);
   }
+  return { notification, wasCreated };
+}
 
-  return {
-    notification: toMobileNotificationRecord(data.notification),
-    wasCreated: rowBoolean(data, 'wasCreated', true),
-  };
+/**
+ * What both writers answer, `upsert_mobile_notification` (grouped alerts) and
+ * `create_post_save_alert` (a named save's own): whether the alert was written
+ * anew, and its row when it was. A malformed answer throws on either path.
+ */
+function readWrittenNotification(
+  data: unknown,
+  writer: string,
+): { notification: MobileNotificationRecord | null; wasCreated: boolean } {
+  if (!isRecord(data) || typeof data.wasCreated !== 'boolean') {
+    throw new MobileNotificationError(`${writer} response was invalid.`, 500);
+  }
+  if (data.notification === null || data.notification === undefined) {
+    if (data.wasCreated) throw new MobileNotificationError(`${writer} response was invalid.`, 500);
+    return { notification: null, wasCreated: false };
+  }
+  if (!isRecord(data.notification)) {
+    throw new MobileNotificationError(`${writer} response was invalid.`, 500);
+  }
+  return { notification: toMobileNotificationRecord(data.notification), wasCreated: data.wasCreated };
 }
 
 /**
@@ -801,7 +821,13 @@ async function retireUnregisteredPushTokens(
 
 async function sendMobilePushForNotification(
   adminSupabase: SupabaseClient,
-  notification: MobileNotificationRecord & { userId: string }
+  notification: MobileNotificationRecord & { userId: string },
+  {
+    beforeSend,
+  }: {
+    /** Asked once a device can take the push, before anything is reserved; false sends nothing. */
+    beforeSend?: () => Promise<boolean>;
+  } = {},
 ) {
   const { data, error } = await adminSupabase
     .from('mobile_push_tokens')
@@ -825,6 +851,9 @@ async function sendMobilePushForNotification(
     }]
     : []));
   if (devices.length === 0) {
+    return;
+  }
+  if (beforeSend && !(await beforeSend())) {
     return;
   }
 
@@ -1303,7 +1332,14 @@ async function processRetryableMobilePushDeliveries(
       const expoPushToken = rowString(delivery, 'expo_push_token');
       const priorAttemptCount = rowNumber(delivery, 'attempt_count', 0);
 
-      if (!deliveryId || !notificationId || !userId || !expoPushToken) {
+      if (!deliveryId || !userId || !expoPushToken) {
+        continue;
+      }
+
+      // The alert is gone (a named save taken back, a block, an account or post
+      // deleted): its delivery stays for the receipt, and is never sent again.
+      if (!notificationId) {
+        await closeUnsentPushDelivery(adminSupabase, deliveryId, nowIso, 'Notification no longer exists.');
         continue;
       }
 
@@ -1497,6 +1533,7 @@ export async function createMobileNotification({
   objectId = null,
   dedupeKey = null,
   aggregationKey = null,
+  saveOf,
   shouldPush,
 }: {
   adminSupabase: SupabaseClient;
@@ -1512,15 +1549,43 @@ export async function createMobileNotification({
   dedupeKey?: string | null;
   aggregationKey?: string | null;
   /**
-   * Asked only once the alert has been written anew (a grouped alert's first
-   * event, or an inserted row), and false keeps it in Alerts without a push.
-   * A post's save alerts pass one so the creator's phone hears about that
-   * post's saves at most once a quarter-hour.
+   * The save a named save alert announces. `create_post_save_alert` writes it
+   * tied to that post_saves row, so it goes with the save; it writes nothing
+   * for a save already gone, or across a block between the two accounts.
+   */
+  saveOf?: { saverUserId: string; postId: string };
+  /**
+   * Asked only once a push would really go out: the alert written anew (a
+   * grouped alert's first event, or a new row), push allowed for its category
+   * and a live device to take it. False keeps it in Alerts without a push. A
+   * post's save alerts pass one so the creator's phone hears about that post's
+   * saves at most once a quarter-hour.
    */
   shouldPush?: () => Promise<boolean>;
 }): Promise<MobileNotificationRecord | null> {
   if (actorUserId && actorUserId === userId) {
     return null;
+  }
+
+  if (saveOf) {
+    const { data, error } = await adminSupabase.rpc('create_post_save_alert', {
+      p_recipient_user_id: userId,
+      p_actor_user_id: saveOf.saverUserId,
+      p_post_id: saveOf.postId,
+      p_title: title,
+      p_body: body,
+      p_deep_link: deepLink,
+    });
+
+    if (error) {
+      throw new MobileNotificationError('Failed to create mobile notification history.', 500);
+    }
+
+    const { notification, wasCreated } = readWrittenNotification(data, 'Named save alert');
+    if (wasCreated && notification) {
+      await pushWrittenNotification(adminSupabase, notification, userId, category, shouldPush);
+    }
+    return notification;
   }
 
   if (dedupeKey) {
@@ -1556,8 +1621,8 @@ export async function createMobileNotification({
       aggregationKey,
     });
 
-    if (wasCreated && (!shouldPush || await shouldPush())) {
-      await pushWrittenNotification(adminSupabase, notification, userId, category);
+    if (wasCreated) {
+      await pushWrittenNotification(adminSupabase, notification, userId, category, shouldPush);
     }
 
     return notification;
@@ -1586,25 +1651,29 @@ export async function createMobileNotification({
   }
 
   const notification = toMobileNotificationRecord(inserted as NotificationRow);
-  if (!shouldPush || await shouldPush()) {
-    await pushWrittenNotification(adminSupabase, notification, userId, category);
-  }
+  await pushWrittenNotification(adminSupabase, notification, userId, category, shouldPush);
 
   return notification;
 }
 
-/** Pushes an alert just written, if its owner's preferences allow; a failed push is logged. */
+/**
+ * Pushes an alert just written anew, if its owner's preferences allow it and a
+ * device can take it. `shouldPush` is asked last, once a push would really go
+ * out, so an owner with push off or no device never spends a post's push slot.
+ * A failed push is logged.
+ */
 async function pushWrittenNotification(
   adminSupabase: SupabaseClient,
   notification: MobileNotificationRecord,
   userId: string,
   category: MobileNotificationCategory,
+  shouldPush?: () => Promise<boolean>,
 ) {
   const preferences = await ensureMobileNotificationPreferences(adminSupabase, userId);
 
   if (shouldPushForPreferences(preferences, category)) {
     try {
-      await sendMobilePushForNotification(adminSupabase, { ...notification, userId });
+      await sendMobilePushForNotification(adminSupabase, { ...notification, userId }, { beforeSend: shouldPush });
     } catch (error) {
       logBackendError('failed_to_send_mobile_push_notification', { error: error });
     }
@@ -2094,11 +2163,11 @@ function socialAggregationWindow(date = new Date()) {
 }
 
 /**
- * Whether a post's save alert may push, asked once the alert has been written
- * anew: the first for the post in a quarter-hour does, named or not, and later
- * ones wait in Alerts, as when every save alert was grouped. A check that
- * fails lets the push through, since an alert that never reaches the phone is
- * the worse miss.
+ * Whether a post's save alert may push, asked only once a push would really go
+ * out (the alert written anew, push on, a live device): the first for the post
+ * in a quarter-hour does, named or not, and later ones wait in Alerts, as when
+ * every save alert was grouped. A check that fails lets the push through,
+ * since an alert that never reaches the phone is the worse miss.
  */
 async function claimPostSavePush(adminSupabase: SupabaseClient, recipientUserId: string, postId: string) {
   try {
@@ -2113,47 +2182,6 @@ async function claimPostSavePush(adminSupabase: SupabaseClient, recipientUserId:
     }
     logBackendError('failed_to_claim_post_save_push', { error });
     return true;
-  }
-}
-
-/**
- * A named save's alert: that person's own, once per post, as a follow is
- * (grouped under one name, the others in the quarter-hour would read as
- * theirs). `create_post_save_alert` writes it only while the save stands,
- * under the lock the save itself takes, so an unsave answered first cannot
- * leave it behind; a save made again after a take-back brings the same alert
- * back as new.
- */
-async function notifyNamedPostSave(
-  adminSupabase: SupabaseClient,
-  params: { recipientUserId: string; actorUserId: string; actorUsername: string; postId: string; body: string; deepLink: string | null },
-) {
-  try {
-    const { data, error } = await adminSupabase.rpc('create_post_save_alert', {
-      p_recipient_user_id: params.recipientUserId,
-      p_actor_user_id: params.actorUserId,
-      p_post_id: params.postId,
-      p_title: `@${params.actorUsername} saved your post`,
-      p_body: params.body,
-      p_deep_link: params.deepLink,
-    });
-
-    if (error) {
-      throw new MobileNotificationError('Failed to create mobile notification history.', 500);
-    }
-
-    const result = isRecord(data) ? data : {};
-    const notification = isRecord(result.notification)
-      ? toMobileNotificationRecord(result.notification as NotificationRow)
-      : null;
-    if (notification && result.created === true
-      && await claimPostSavePush(adminSupabase, params.recipientUserId, params.postId)) {
-      await pushWrittenNotification(adminSupabase, notification, params.recipientUserId, 'social');
-    }
-    return notification;
-  } catch (error) {
-    logBackendError('failed_to_create_mobile_notification', { error: error });
-    return null;
   }
 }
 
@@ -2196,19 +2224,27 @@ export async function notifyPostSocialActivity(
       ? 'It is in their saved media now.'
       : 'They passed it on outside the app.';
 
+  const recipientUserId = params.recipientUserId;
+
   if (params.type === 'post_saved' && params.actorUsername) {
-    return notifyNamedPostSave(adminSupabase, {
-      recipientUserId: params.recipientUserId,
+    // A named save is that person's own alert, once per post, as a follow is
+    // (grouped under one name, the others in the quarter-hour would read as
+    // theirs), and it belongs to the save: it goes when the save does.
+    return createMobileNotificationSafely({
+      adminSupabase,
+      userId: recipientUserId,
       actorUserId: params.actorUserId,
-      actorUsername: params.actorUsername,
-      postId: params.postId,
+      type: 'post_saved',
+      category: 'social',
+      title: `@${params.actorUsername} saved your post`,
       body,
       deepLink,
+      saveOf: { saverUserId: params.actorUserId, postId: params.postId },
+      shouldPush: () => claimPostSavePush(adminSupabase, recipientUserId, params.postId),
     });
   }
 
   const verb = params.type === 'post_saved' ? 'saved' : 'shared';
-  const recipientUserId = params.recipientUserId;
 
   return createMobileNotificationSafely({
     adminSupabase,
@@ -2228,61 +2264,4 @@ export async function notifyPostSocialActivity(
       ? { shouldPush: () => claimPostSavePush(adminSupabase, recipientUserId, params.postId) }
       : {}),
   });
-}
-
-/**
- * Takes a named save's alert back when the save is taken back: the alert says
- * the post is in that person's saved media, and it no longer is.
- * `withdraw_post_save_alert` hides it from Alerts only while the save is gone,
- * under the lock the save itself takes, so a late take-back cannot hide the
- * alert of a save made again. A grouped "Someone" alert names nobody and stays,
- * and a push already delivered cannot be recalled. Tried twice; logs its own
- * failures and never rejects, as every notifier handed to
- * `sendDeferrableNotification` must.
- */
-export async function withdrawPostSaveNotification(
-  adminSupabase: SupabaseClient,
-  params: { recipientUserId: string | null | undefined; actorUserId: string; postId: string },
-) {
-  if (!params.recipientUserId || params.recipientUserId === params.actorUserId) {
-    return;
-  }
-
-  const args = {
-    p_recipient_user_id: params.recipientUserId,
-    p_actor_user_id: params.actorUserId,
-    p_post_id: params.postId,
-  };
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try {
-      const { error } = await adminSupabase.rpc('withdraw_post_save_alert', args);
-      if (!error) return;
-      logBackendError('failed_to_withdraw_post_save_notification', { error, attempt });
-    } catch (error) {
-      logBackendError('failed_to_withdraw_post_save_notification', { error, attempt });
-    }
-  }
-}
-
-/**
- * Takes back every save alert that names one of two accounts to the other, as
- * a block between them is made: a person who blocks someone, or is blocked,
- * stops being named in the other's Alerts. Logs its own failures and never
- * rejects.
- */
-export async function withdrawPostSaveNotificationsBetween(
-  adminSupabase: SupabaseClient,
-  params: { firstUserId: string; secondUserId: string },
-) {
-  try {
-    const { error } = await adminSupabase.rpc('withdraw_post_save_alerts_between', {
-      p_first_user_id: params.firstUserId,
-      p_second_user_id: params.secondUserId,
-    });
-    if (error) {
-      logBackendError('failed_to_withdraw_post_save_notifications_between', { error });
-    }
-  } catch (error) {
-    logBackendError('failed_to_withdraw_post_save_notifications_between', { error });
-  }
 }

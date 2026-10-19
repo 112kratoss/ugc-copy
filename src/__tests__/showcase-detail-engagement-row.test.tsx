@@ -90,8 +90,13 @@ describe('ShowcaseDetailEngagementRow', () => {
   });
 
   it('saves optimistically through the showcase save endpoint', async () => {
-    // This viewer was told on an earlier page, so the save may name them.
-    window.localStorage.setItem('magicbooklet:saver-notice:v1:viewer-1', '1');
+    // This viewer was told on an earlier page, as the page was drawn knowing,
+    // so the save may name them.
+    useAuthMock.mockReturnValue({
+      user: { id: 'viewer-1' },
+      session: { access_token: 'token-1' },
+      saverNoticeSeen: true,
+    });
     render(<ShowcaseDetailEngagementRow {...rowProps()} />);
 
     fireEvent.click(screen.getByRole('button', { name: /save shared creation/i }));

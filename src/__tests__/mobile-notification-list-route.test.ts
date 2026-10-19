@@ -154,8 +154,8 @@ describe('/api/mobile/notifications route', () => {
     expect(supabase.listQuery.lt).toHaveBeenCalledWith('last_event_at', '2026-06-22T06:02:00.000Z');
     expect(supabase.unreadCountQuery.eq).toHaveBeenCalledWith('user_id', 'user-1');
     expect(supabase.unreadCountQuery.eq).toHaveBeenCalledWith('is_read', false);
-    // A save alert taken back with its save is hidden from the list and the count.
-    expect(supabase.listQuery.is).toHaveBeenCalledWith('withdrawn_at', null);
-    expect(supabase.unreadCountQuery.is).toHaveBeenCalledWith('withdrawn_at', null);
+    // A save alert taken back is deleted with its save: nothing is filtered out.
+    expect(supabase.listQuery.is).not.toHaveBeenCalled();
+    expect(supabase.unreadCountQuery.is).not.toHaveBeenCalled();
   });
 });

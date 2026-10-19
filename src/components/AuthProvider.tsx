@@ -40,6 +40,12 @@ interface AuthContextValue {
      * not spend. Null when unknown.
      */
     marketplaceSpendableCredits: number | null;
+    /**
+     * Whether the signed-in account has been told, on record, that creators can
+     * see who saved its posts, as the page was drawn. Null when the page could
+     * not know it (a sign-in, or another account, since).
+     */
+    saverNoticeSeen: boolean | null;
     isLoading: boolean;
     updateCredits: (nextCredits: number | null, options?: CreditUpdateOptions) => void;
     refreshSessionState: () => Promise<void>;
@@ -50,6 +56,7 @@ const anonymousAuthContext: AuthContextValue = {
     user: null,
     credits: null,
     marketplaceSpendableCredits: null,
+    saverNoticeSeen: null,
     isLoading: false,
     updateCredits: () => undefined,
     refreshSessionState: async () => undefined,
@@ -130,12 +137,14 @@ export function AuthProvider({
     initialSession = null,
     initialCredits = null,
     initialMarketplaceSpendableCredits = null,
+    initialSaverNoticeSeen = null,
     hasResolvedInitialState = false,
 }: {
     children: React.ReactNode;
     initialSession?: Session | null;
     initialCredits?: number | null;
     initialMarketplaceSpendableCredits?: number | null;
+    initialSaverNoticeSeen?: boolean | null;
     hasResolvedInitialState?: boolean;
 }) {
     const [clientE2EAuth] = useState(() => getClientE2EAuthState());
@@ -495,6 +504,12 @@ export function AuthProvider({
                 user: session?.user ?? null,
                 credits: balance.credits,
                 marketplaceSpendableCredits: balance.marketplaceSpendableCredits,
+                // Known only for the account the page was drawn for.
+                saverNoticeSeen: initialSaverNoticeSeen !== null
+                    && session?.user?.id !== undefined
+                    && session.user.id === initialSession?.user?.id
+                    ? initialSaverNoticeSeen
+                    : null,
                 isLoading: resolvedIsLoading,
                 updateCredits,
                 refreshSessionState,

@@ -55,6 +55,12 @@ export interface ProfileApiResponse {
   promotionalCredits?: number | null;
   marketplaceSpendableCredits?: number | null;
   /**
+   * Whether the account has been told, on record, that creators can see who
+   * saved their posts (`profiles.saver_notice_seen_at`). The app reads it with
+   * the profile it loads at launch, so it never asks for it on its own.
+   */
+  saverNoticeSeen?: boolean;
+  /**
    * What the owner's profile libraries hold, counted by the server with the
    * same rules the library lists apply (`owner_profile_counts`). Absent when
    * the count could not be read; a screen then draws its unknown placeholder,

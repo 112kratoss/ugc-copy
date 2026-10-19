@@ -543,6 +543,12 @@ button:disabled,
   transform: translateX(-50%);
 }
 
+/* Toasts drawn inside a dialog that hosts them (the reel): below its 3.5rem
+ * header, clear of its close and ⋯ buttons. */
+.ui-toast-viewport-in-dialog {
+  top: calc(3.5rem + 0.75rem);
+}
+
 .ui-toast {
   pointer-events: auto;
   display: flex;

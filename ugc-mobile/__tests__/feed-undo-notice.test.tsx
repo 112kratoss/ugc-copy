@@ -12,12 +12,15 @@ const native = vi.hoisted(() => ({
   screenReader: false,
   screenReaderListeners: [] as Array<(enabled: boolean) => void>,
   announce: [] as string[],
+  /** iOS's queued announcements, with their options. */
+  queued: [] as unknown[][],
 }));
 const presence = vi.hoisted(() => ({ leaving: false }));
 
 vi.mock('react-native', () => ({
   AccessibilityInfo: {
     announceForAccessibility: (message: string) => native.announce.push(message),
+    announceForAccessibilityWithOptions: (...args: unknown[]) => native.queued.push(args),
     isScreenReaderEnabled: () => Promise.resolve(native.screenReader),
     addEventListener: (_event: string, listener: (enabled: boolean) => void) => {
       native.screenReaderListeners.push(listener);
@@ -80,6 +83,7 @@ describe('FeedUndoNotice', () => {
     native.screenReader = false;
     native.screenReaderListeners = [];
     native.announce = [];
+    native.queued = [];
     presence.leaving = false;
   });
 
@@ -192,19 +196,21 @@ describe('FeedUndoNotice', () => {
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
-  it('announces each notice once on iOS, where there are no live regions', async () => {
+  it('announces each notice once on iOS, where there are no live regions, behind what VoiceOver is reading', async () => {
     native.os = 'ios';
     const shown = notice('n1');
     const tree = await render(<FeedUndoNotice notice={shown} onDismiss={vi.fn()} bottomOffset={0} />);
     renderer.act(() => tree.update(<FeedUndoNotice notice={shown} onDismiss={vi.fn()} bottomOffset={12} />));
     renderer.act(() => tree.update(<FeedUndoNotice notice={notice('n2', 'Creator hidden')} onDismiss={vi.fn()} bottomOffset={12} />));
 
-    expect(native.announce).toEqual(['Post hidden', 'Creator hidden']);
+    expect(native.queued).toEqual([['Post hidden', { queue: true }], ['Creator hidden', { queue: true }]]);
+    expect(native.announce).toEqual([]);
   });
 
   it('leaves the announcing to the live region on Android', async () => {
     await render(<FeedUndoNotice notice={notice('n1')} onDismiss={vi.fn()} bottomOffset={0} />);
     expect(native.announce).toEqual([]);
+    expect(native.queued).toEqual([]);
   });
 
   it('cannot be undone, pressed or reached by a screen reader while it fades out', async () => {

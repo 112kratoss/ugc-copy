@@ -24,6 +24,7 @@ type ProfileRow = {
   location: string | null;
   credits: number | null;
   promotional_credits?: number | null;
+  saver_notice_seen_at?: string | null;
 };
 
 const user: ProfileRouteUser = {
@@ -388,10 +389,30 @@ describe('profile route service', () => {
         tiktokHandle: null,
         location: null,
         credits: null,
+        // An account with no row has been told nothing.
+        saverNoticeSeen: false,
         stats: COUNTS,
         sales: SALES,
       },
     });
+  });
+
+  // The app and the web start the saver notice from this, so neither has to
+  // ask for the record on its own.
+  it('says whether the account has been told that creators can see who saved, from the row it reads', async () => {
+    const client = createClient({ profiles: [{ ...storedProfile(), saver_notice_seen_at: '2026-10-19T09:00:00.000Z' }] });
+
+    await expect(getProfileForRoute({ user, client: client.client })).resolves.toMatchObject({
+      ok: true,
+      response: { username: 'luna', saverNoticeSeen: true },
+    });
+    expect(client.selectedColumns[0]?.split(',').map((column) => column.trim())).toContain('saver_notice_seen_at');
+
+    for (const seenAt of [null, undefined]) {
+      client.rows[0] = { ...client.rows[0], saver_notice_seen_at: seenAt };
+      const result = await getProfileForRoute({ user, client: client.client });
+      expect(result).toMatchObject({ ok: true, response: { saverNoticeSeen: false } });
+    }
   });
 
   it('says the library totals and the seller summary beside a stored profile, from the service-role RPCs', async () => {

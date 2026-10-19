@@ -2,7 +2,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path=public,extensions;
-select plan(7);
+select plan(9);
 
 insert into auth.users(id,email,aud,role,is_anonymous,created_at) values
   ('e5100001-0000-4000-8000-000000000001','actor-columns-creator@example.invalid','authenticated','authenticated',false,now()),
@@ -25,6 +25,8 @@ select is((select count(*) from public.mobile_notifications),2::bigint,'the owne
 select lives_ok($$ select id, type, category, title, body, deep_link, object_type, object_id, event_count, is_read, created_at, updated_at, last_event_at from public.mobile_notifications $$,'the owner reads every column Alerts show');
 select throws_ok($$ select actor_user_id from public.mobile_notifications $$,'42501',null,'the owner cannot read who is behind an alert');
 select throws_ok($$ select dedupe_key from public.mobile_notifications $$,'42501',null,'the owner cannot read the saver id a named save key carries');
+select throws_ok($$ select save_user_id from public.mobile_notifications $$,'42501',null,'the owner cannot read the save a named alert belongs to');
+select throws_ok($$ select save_post_id from public.mobile_notifications $$,'42501',null,'nor the post half of it');
 select throws_ok($$ select * from public.mobile_notifications $$,'42501',null,'a whole-row read is refused rather than leaking the hidden columns');
 select lives_ok($$ update public.mobile_notifications set is_read=true where id='e5300000-0000-4000-8000-000000000001' $$,'the owner still marks an alert read');
 

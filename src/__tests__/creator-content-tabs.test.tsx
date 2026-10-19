@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CreatorContentTabs } from '@/app/creators/[username]/CreatorContentTabs';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
+import { resetSaverNoticeForTests } from '@/components/saver-notice';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
@@ -725,10 +726,10 @@ describe('CreatorContentTabs', () => {
     });
 
     it("saves for the signed-in viewer's account, so its alert may name them once they were told", async () => {
-      // Told on an earlier page: the save names its saver, and only the
-      // signed-in account's telling counts.
+      // Told on an earlier page, and on record: the save names its saver, and
+      // only the signed-in account's telling counts.
       signIn();
-      window.localStorage.setItem('magicbooklet:saver-notice:v1:viewer-1', '1');
+      window.localStorage.setItem('magicbooklet:saver-notice:v2:viewer-1', 'recorded');
       const fetchMock = vi.fn(async (url: string) => {
         if (url === '/api/showcase/save') return { ok: true, status: 200, json: async () => ({ success: true, isSaved: true, saveCount: 1 }) };
         return { ok: true, status: 200, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { seen: true }) };
@@ -743,6 +744,7 @@ describe('CreatorContentTabs', () => {
         body: expect.stringContaining('"creatorSeesSaver":true'),
       })));
       window.localStorage.clear();
+      resetSaverNoticeForTests();
     });
 
     it('draws a linked post the viewer saved as saved', async () => {

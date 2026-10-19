@@ -1,43 +1,77 @@
--- Save alerts that name whoever saved ("@maya saved your post"), as reviewed.
+-- Save alerts that name whoever saved ("@maya saved your post").
 --
--- 1. Told, on record. profiles.saver_notice_seen_at is when the account was
---    first told "Creators can see who saved their posts." It is written by
---    POST /api/profile/saver-notice once the notice has been read, on any
---    device, and the save service names a saver only once it is set.
--- 2. A named save alert follows its save. create_post_save_alert writes one
---    only while the save stands, and withdraw_post_save_alert takes it back
---    only once the save is gone. Both hold the lock set_post_save_state takes
---    for that saver and post, so an unsave answered before the save's alert
---    was written can no longer leave the alert behind, and a late take-back
---    can no longer remove the alert of a save made again.
--- 3. Taken back, not deleted. withdrawn_at hides an alert from its owner's
---    inbox while its push deliveries stay, so their receipts still retire
---    dead tokens; retention deletes withdrawn alerts once their deliveries
---    are gone. A save made again brings the same alert back as new.
--- 4. A block between two accounts takes back the save alerts that name either
---    of them to the other (withdraw_post_save_alerts_between).
--- 5. Anonymous alerts keep no one. Grouped "Someone saved your post" and
---    "Someone shared your post" rows stop storing the latest actor, and the
---    actor is cleared from the ones already written.
+-- 1. A named save alert belongs to its save. save_user_id and save_post_id
+--    point at the post_saves row the alert announces, ON DELETE CASCADE: an
+--    unsave, the saver's account being deleted and the post being deleted
+--    each remove the alert in their own transaction, and an alert written
+--    after its save is gone fails the foreign key, which
+--    create_post_save_alert answers wasCreated false. Nothing else keeps the
+--    two in step, so no path that removes a save can leave its alert behind.
+-- 2. A push delivery outlives its alert. notification_id is set to NULL when
+--    the alert goes, so the delivery's receipt still retires a dead token,
+--    and the retry job closes a delivery whose alert is gone instead of
+--    sending it.
+-- 3. A block between two accounts removes every save alert naming either of
+--    them to the other, and create_post_save_alert writes none across a
+--    block. Both take one lock per pair of accounts, so a block and an alert
+--    written at the same moment cannot miss each other.
+-- 4. Anonymous alerts keep no one. upsert_mobile_notification stores no actor
+--    on grouped "Someone saved your post" and "Someone shared your post" rows
+--    whatever its caller passes (a deployment still running the old code
+--    while this applies included), and the actor is cleared from the rows
+--    already written.
+--
+-- profiles.saver_notice_seen_at, the told record naming waits for, comes in
+-- the next migration on its own: altering profiles takes a lock that every
+-- admitted API call queues behind.
 
-ALTER TABLE public.profiles
-  ADD COLUMN IF NOT EXISTS saver_notice_seen_at timestamptz;
+SET LOCAL lock_timeout = '5s';
 
-COMMENT ON COLUMN public.profiles.saver_notice_seen_at IS
-  'When the account was first told that creators can see who saved their posts. Save alerts name a saver only once it is set.';
+-- 1. A named save alert belongs to its save.
 
 ALTER TABLE public.mobile_notifications
-  ADD COLUMN IF NOT EXISTS withdrawn_at timestamptz;
+  ADD COLUMN IF NOT EXISTS save_user_id uuid,
+  ADD COLUMN IF NOT EXISTS save_post_id uuid;
 
-COMMENT ON COLUMN public.mobile_notifications.withdrawn_at IS
-  'When the alert was taken back (a named save that was unsaved, or a block between the two accounts). The inbox hides it; retention deletes it with its push deliveries.';
+ALTER TABLE public.mobile_notifications
+  DROP CONSTRAINT IF EXISTS mobile_notifications_save_pair_check,
+  ADD CONSTRAINT mobile_notifications_save_pair_check
+    CHECK ((save_user_id IS NULL) = (save_post_id IS NULL));
 
-CREATE INDEX IF NOT EXISTS mobile_notifications_withdrawn_retention_idx
-  ON public.mobile_notifications (withdrawn_at, id)
-  WHERE withdrawn_at IS NOT NULL;
+-- MATCH SIMPLE: a row with no save (every alert but a named save's) is not
+-- checked.
+ALTER TABLE public.mobile_notifications
+  DROP CONSTRAINT IF EXISTS mobile_notifications_save_fkey,
+  ADD CONSTRAINT mobile_notifications_save_fkey
+    FOREIGN KEY (save_user_id, save_post_id)
+    REFERENCES public.post_saves (user_id, post_id)
+    ON DELETE CASCADE;
 
--- The inbox filters on it, and a filtered column needs the read grant.
-GRANT SELECT (withdrawn_at) ON TABLE public.mobile_notifications TO authenticated;
+-- The cascade and the block below find a save's alerts through it.
+CREATE INDEX IF NOT EXISTS mobile_notifications_save_idx
+  ON public.mobile_notifications (save_user_id, save_post_id)
+  WHERE save_user_id IS NOT NULL;
+
+COMMENT ON COLUMN public.mobile_notifications.save_user_id IS
+  'With save_post_id, the post_saves row a named save alert announces; the alert goes with the save (ON DELETE CASCADE). Not granted to the alert''s owner.';
+COMMENT ON COLUMN public.mobile_notifications.save_post_id IS
+  'With save_user_id, the post_saves row a named save alert announces; the alert goes with the save (ON DELETE CASCADE). Not granted to the alert''s owner.';
+
+-- 2. A push delivery outlives its alert.
+
+ALTER TABLE public.mobile_push_deliveries
+  ALTER COLUMN notification_id DROP NOT NULL;
+
+ALTER TABLE public.mobile_push_deliveries
+  DROP CONSTRAINT IF EXISTS mobile_push_deliveries_notification_id_fkey,
+  ADD CONSTRAINT mobile_push_deliveries_notification_id_fkey
+    FOREIGN KEY (notification_id) REFERENCES public.mobile_notifications (id)
+    ON DELETE SET NULL;
+
+COMMENT ON COLUMN public.mobile_push_deliveries.notification_id IS
+  'The alert this delivery pushed. NULL once the alert is gone: the delivery stays for its receipt, and a retry of it is closed unsent.';
+
+-- 3. Writing a named save alert, and a block between two accounts.
 
 CREATE OR REPLACE FUNCTION public.create_post_save_alert(
   p_recipient_user_id uuid,
@@ -53,119 +87,54 @@ SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
 DECLARE
-  v_dedupe_key text := 'post-save:' || p_actor_user_id::text || ':' || p_post_id::text;
   v_row public.mobile_notifications%ROWTYPE;
+  v_created boolean := false;
 BEGIN
   IF p_recipient_user_id IS NULL OR p_actor_user_id IS NULL OR p_post_id IS NULL
     OR p_recipient_user_id = p_actor_user_id THEN
-    RETURN jsonb_build_object('created', false);
+    RETURN jsonb_build_object('wasCreated', false, 'notification', NULL);
   END IF;
 
-  -- The lock set_post_save_state holds while it saves or unsaves this post
-  -- for this saver: the save below is read as it stands.
-  PERFORM pg_advisory_xact_lock(hashtextextended('post-save:' || p_actor_user_id::text || ':' || p_post_id::text, 0));
+  -- The lock remove_post_save_alerts_for_user_block takes for this pair of
+  -- accounts: a block made while this runs is either seen below or removes
+  -- what this writes.
+  PERFORM pg_advisory_xact_lock(hashtextextended(
+    'user-pair:' || least(p_recipient_user_id, p_actor_user_id)::text
+      || ':' || greatest(p_recipient_user_id, p_actor_user_id)::text,
+    0
+  ));
 
-  IF NOT EXISTS (
-    SELECT 1 FROM public.post_saves
-    WHERE user_id = p_actor_user_id AND post_id = p_post_id
-  ) THEN
-    RETURN jsonb_build_object('created', false);
-  END IF;
-
-  INSERT INTO public.mobile_notifications (
-    user_id, actor_user_id, type, category, title, body, deep_link,
-    object_type, object_id, dedupe_key
-  )
-  VALUES (
-    p_recipient_user_id, p_actor_user_id, 'post_saved', 'social', p_title, p_body, p_deep_link,
-    'post', p_post_id::text, v_dedupe_key
-  )
-  ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE
-    SET withdrawn_at = NULL,
-        title = EXCLUDED.title,
-        body = EXCLUDED.body,
-        deep_link = EXCLUDED.deep_link,
-        is_read = false,
-        event_count = 1,
-        created_at = timezone('utc'::text, now()),
-        last_event_at = timezone('utc'::text, now())
-    WHERE public.mobile_notifications.withdrawn_at IS NOT NULL
-  RETURNING * INTO v_row;
-
-  IF FOUND THEN
-    RETURN jsonb_build_object('created', true, 'notification', to_jsonb(v_row));
-  END IF;
-
-  -- Saved again while its alert still stood: nothing new to tell.
-  SELECT * INTO v_row FROM public.mobile_notifications
-  WHERE user_id = p_recipient_user_id AND dedupe_key = v_dedupe_key;
-  RETURN jsonb_build_object('created', false, 'notification', to_jsonb(v_row));
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION public.withdraw_post_save_alert(
-  p_recipient_user_id uuid,
-  p_actor_user_id uuid,
-  p_post_id uuid
-)
-RETURNS integer
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = pg_catalog, public
-AS $$
-DECLARE
-  v_withdrawn integer;
-BEGIN
-  IF p_recipient_user_id IS NULL OR p_actor_user_id IS NULL OR p_post_id IS NULL THEN
-    RETURN 0;
-  END IF;
-
-  PERFORM pg_advisory_xact_lock(hashtextextended('post-save:' || p_actor_user_id::text || ':' || p_post_id::text, 0));
-
-  -- Saved again before this ran: the alert is that save's now.
   IF EXISTS (
-    SELECT 1 FROM public.post_saves
-    WHERE user_id = p_actor_user_id AND post_id = p_post_id
+    SELECT 1 FROM public.user_blocks
+    WHERE (blocker_user_id = p_recipient_user_id AND blocked_user_id = p_actor_user_id)
+       OR (blocker_user_id = p_actor_user_id AND blocked_user_id = p_recipient_user_id)
   ) THEN
-    RETURN 0;
+    RETURN jsonb_build_object('wasCreated', false, 'notification', NULL);
   END IF;
 
-  UPDATE public.mobile_notifications
-  SET withdrawn_at = timezone('utc'::text, now())
-  WHERE user_id = p_recipient_user_id
-    AND dedupe_key = 'post-save:' || p_actor_user_id::text || ':' || p_post_id::text
-    AND withdrawn_at IS NULL;
-  GET DIAGNOSTICS v_withdrawn = ROW_COUNT;
-  RETURN v_withdrawn;
-END;
-$$;
+  BEGIN
+    INSERT INTO public.mobile_notifications (
+      user_id, actor_user_id, type, category, title, body, deep_link,
+      object_type, object_id, dedupe_key, save_user_id, save_post_id
+    )
+    VALUES (
+      p_recipient_user_id, p_actor_user_id, 'post_saved', 'social', p_title, p_body, p_deep_link,
+      'post', p_post_id::text, 'post-save:' || p_actor_user_id::text || ':' || p_post_id::text,
+      p_actor_user_id, p_post_id
+    )
+    ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+    RETURNING * INTO v_row;
+    v_created := FOUND;
+  EXCEPTION WHEN foreign_key_violation THEN
+    -- The save is already gone: an alert announcing it would stand for nothing.
+    RETURN jsonb_build_object('wasCreated', false, 'notification', NULL);
+  END;
 
-CREATE OR REPLACE FUNCTION public.withdraw_post_save_alerts_between(
-  p_first_user_id uuid,
-  p_second_user_id uuid
-)
-RETURNS integer
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = pg_catalog, public
-AS $$
-DECLARE
-  v_withdrawn integer;
-BEGIN
-  IF p_first_user_id IS NULL OR p_second_user_id IS NULL OR p_first_user_id = p_second_user_id THEN
-    RETURN 0;
-  END IF;
-
-  UPDATE public.mobile_notifications
-  SET withdrawn_at = timezone('utc'::text, now())
-  WHERE withdrawn_at IS NULL
-    AND type = 'post_saved'
-    AND (
-      (user_id = p_first_user_id AND dedupe_key LIKE 'post-save:' || p_second_user_id::text || ':%')
-      OR (user_id = p_second_user_id AND dedupe_key LIKE 'post-save:' || p_first_user_id::text || ':%')
-    );
-  GET DIAGNOSTICS v_withdrawn = ROW_COUNT;
-  RETURN v_withdrawn;
+  -- Not created: this save's alert stands already.
+  RETURN jsonb_build_object(
+    'wasCreated', v_created,
+    'notification', CASE WHEN v_created THEN to_jsonb(v_row) END
+  );
 END;
 $$;
 
@@ -173,74 +142,143 @@ REVOKE ALL ON FUNCTION public.create_post_save_alert(uuid, uuid, uuid, text, tex
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.create_post_save_alert(uuid, uuid, uuid, text, text, text)
   TO service_role;
-REVOKE ALL ON FUNCTION public.withdraw_post_save_alert(uuid, uuid, uuid)
-  FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.withdraw_post_save_alert(uuid, uuid, uuid)
-  TO service_role;
-REVOKE ALL ON FUNCTION public.withdraw_post_save_alerts_between(uuid, uuid)
-  FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.withdraw_post_save_alerts_between(uuid, uuid)
-  TO service_role;
 
--- Withdrawn alerts go once their deliveries have: their receipts are read
--- from those rows until then.
-CREATE OR REPLACE FUNCTION public.prune_mobile_notification_retention(
-  p_delivery_cutoff timestamptz,
-  p_notification_cutoff timestamptz,
-  p_limit integer DEFAULT 5000
+CREATE OR REPLACE FUNCTION public.remove_post_save_alerts_for_user_block()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  -- The lock create_post_save_alert takes for this pair of accounts.
+  PERFORM pg_advisory_xact_lock(hashtextextended(
+    'user-pair:' || least(NEW.blocker_user_id, NEW.blocked_user_id)::text
+      || ':' || greatest(NEW.blocker_user_id, NEW.blocked_user_id)::text,
+    0
+  ));
+
+  DELETE FROM public.mobile_notifications
+  WHERE save_user_id IS NOT NULL
+    AND (
+      (user_id = NEW.blocker_user_id AND save_user_id = NEW.blocked_user_id)
+      OR (user_id = NEW.blocked_user_id AND save_user_id = NEW.blocker_user_id)
+    );
+
+  RETURN NEW;
+END
+$$;
+
+REVOKE ALL ON FUNCTION public.remove_post_save_alerts_for_user_block() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.remove_post_save_alerts_for_user_block() TO service_role;
+
+DROP TRIGGER IF EXISTS user_blocks_remove_post_save_alerts ON public.user_blocks;
+CREATE TRIGGER user_blocks_remove_post_save_alerts
+AFTER INSERT OR UPDATE ON public.user_blocks
+FOR EACH ROW
+EXECUTE FUNCTION public.remove_post_save_alerts_for_user_block();
+
+COMMENT ON FUNCTION public.remove_post_save_alerts_for_user_block() IS
+  'Removes every save alert that names either blocked account to the other.';
+
+-- 4. Anonymous alerts keep no one. As 20261003010001 defined it, except that
+-- a grouped save or share row never stores an actor.
+
+CREATE OR REPLACE FUNCTION public.upsert_mobile_notification(
+  p_user_id uuid,
+  p_actor_user_id uuid,
+  p_type text,
+  p_category text,
+  p_title text,
+  p_body text,
+  p_deep_link text DEFAULT NULL,
+  p_object_type text DEFAULT NULL,
+  p_object_id text DEFAULT NULL,
+  p_dedupe_key text DEFAULT NULL,
+  p_aggregation_key text DEFAULT NULL
 )
 RETURNS jsonb
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public
 AS $$
 DECLARE
-  v_limit integer := greatest(1, least(coalesce(p_limit, 5000), 50000));
-  v_deliveries integer;
-  v_notifications integer;
-  v_withdrawn integer;
+  v_row public.mobile_notifications%ROWTYPE;
+  v_was_created boolean := true;
+  v_actor_user_id uuid := CASE
+    WHEN p_type IN ('post_saved', 'post_shared') THEN NULL
+    ELSE p_actor_user_id
+  END;
 BEGIN
-  WITH victims AS (
-    SELECT id FROM public.mobile_push_deliveries
-    WHERE created_at < p_delivery_cutoff
-    ORDER BY created_at, id LIMIT v_limit FOR UPDATE SKIP LOCKED
-  )
-  DELETE FROM public.mobile_push_deliveries AS deliveries
-  USING victims WHERE deliveries.id = victims.id;
-  GET DIAGNOSTICS v_deliveries = ROW_COUNT;
+  IF p_aggregation_key IS NULL OR length(trim(p_aggregation_key)) = 0 THEN
+    RAISE EXCEPTION 'aggregation key is required'
+      USING ERRCODE = '22023';
+  END IF;
 
-  WITH victims AS (
-    SELECT id FROM public.mobile_notifications
-    WHERE is_read = true AND updated_at < p_notification_cutoff
-    ORDER BY updated_at, id LIMIT v_limit FOR UPDATE SKIP LOCKED
+  INSERT INTO public.mobile_notifications (
+    user_id,
+    actor_user_id,
+    type,
+    category,
+    title,
+    body,
+    deep_link,
+    object_type,
+    object_id,
+    dedupe_key,
+    aggregation_key,
+    event_count,
+    is_read
   )
-  DELETE FROM public.mobile_notifications AS notifications
-  USING victims WHERE notifications.id = victims.id;
-  GET DIAGNOSTICS v_notifications = ROW_COUNT;
+  VALUES (
+    p_user_id,
+    v_actor_user_id,
+    p_type,
+    p_category,
+    p_title,
+    p_body,
+    p_deep_link,
+    p_object_type,
+    p_object_id,
+    p_dedupe_key,
+    p_aggregation_key,
+    1,
+    false
+  )
+  ON CONFLICT (user_id, aggregation_key)
+    WHERE aggregation_key IS NOT NULL
+  DO UPDATE SET
+    actor_user_id = EXCLUDED.actor_user_id,
+    title = EXCLUDED.title,
+    body = EXCLUDED.body,
+    deep_link = EXCLUDED.deep_link,
+    object_type = EXCLUDED.object_type,
+    object_id = EXCLUDED.object_id,
+    event_count = public.mobile_notifications.event_count + 1,
+    is_read = false,
+    last_event_at = timezone('utc'::text, now()),
+    updated_at = timezone('utc'::text, now())
+  RETURNING * INTO v_row;
 
-  WITH victims AS (
-    SELECT id FROM public.mobile_notifications
-    WHERE withdrawn_at IS NOT NULL AND withdrawn_at < p_delivery_cutoff
-    ORDER BY withdrawn_at, id LIMIT v_limit FOR UPDATE SKIP LOCKED
-  )
-  DELETE FROM public.mobile_notifications AS notifications
-  USING victims WHERE notifications.id = victims.id;
-  GET DIAGNOSTICS v_withdrawn = ROW_COUNT;
+  v_was_created := v_row.event_count = 1;
 
   RETURN jsonb_build_object(
-    'deliveriesDeleted', v_deliveries,
-    'notificationsDeleted', v_notifications + v_withdrawn,
-    'batchLimitReached', v_deliveries = v_limit OR v_notifications = v_limit OR v_withdrawn = v_limit
+    'notification', to_jsonb(v_row),
+    'wasCreated', v_was_created
   );
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.prune_mobile_notification_retention(timestamptz, timestamptz, integer)
-  FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.prune_mobile_notification_retention(timestamptz, timestamptz, integer)
-  TO service_role;
+REVOKE ALL ON FUNCTION public.upsert_mobile_notification(
+  uuid, uuid, text, text, text, text, text, text, text, text, text
+) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.upsert_mobile_notification(
+  uuid, uuid, text, text, text, text, text, text, text, text, text
+) TO service_role;
 
--- Clear the actor from anonymous save and share alerts. The trigger is set
--- aside so the repair does not stamp updated_at (which read-alert retention
--- counts from); one statement, so a failed repair cannot leave it off.
+-- Clear the actor from the anonymous save and share alerts already written.
+-- The trigger is set aside so the repair does not stamp updated_at (which
+-- read-alert retention counts from); one statement, so a failed repair cannot
+-- leave it off.
 DO $$
 BEGIN
   ALTER TABLE public.mobile_notifications DISABLE TRIGGER mobile_notifications_set_updated_at;

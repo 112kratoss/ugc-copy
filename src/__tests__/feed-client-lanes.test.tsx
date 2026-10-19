@@ -3,6 +3,7 @@ import { Activity } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import FeedClient, { forgetFeedRemovalsForTests } from '@/app/feed/FeedClient';
+import { resetSaverNoticeForTests } from '@/components/saver-notice';
 import { FEED_REMOVAL_UNDO_MS } from '@/app/showcase/ShowcaseFeedInteraction';
 import { NEW_POSTS_PROBE_AFTER_MS } from '@/lib/feed-newest-probe';
 import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
@@ -23,6 +24,7 @@ const auth = vi.hoisted(() => ({
         session: { access_token: string } | null;
         user: { id: string } | null;
         isLoading?: boolean;
+        saverNoticeSeen?: boolean | null;
     },
 }));
 // Renders of each card, by post id.
@@ -434,9 +436,9 @@ describe('FeedClient lanes and card actions', () => {
     });
 
     it("saves for the signed-in viewer's account, so its alert may name them once they were told", async () => {
-        auth.state = { session: { access_token: 'token' }, user: { id: 'viewer-1' } };
-        // Told on an earlier page: only the signed-in account's telling counts.
-        window.localStorage.setItem('magicbooklet:saver-notice:v1:viewer-1', '1');
+        // Told on an earlier page: the page is drawn with the signed-in
+        // account's record, and only that account's telling counts.
+        auth.state = { session: { access_token: 'token' }, user: { id: 'viewer-1' }, saverNoticeSeen: true };
         const fetchMock = mockJsonFetch({ success: true, isSaved: true, saveCount: 1 });
         render(<FeedClient initialFeed={feed} initialChipId="for-you" />);
 
@@ -445,7 +447,10 @@ describe('FeedClient lanes and card actions', () => {
         await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/showcase/save', expect.objectContaining({
             body: expect.stringContaining('"creatorSeesSaver":true'),
         })));
+        // Read with the page: nothing asked of the record.
+        expect(fetchMock).not.toHaveBeenCalledWith('/api/profile/saver-notice', expect.anything());
         window.localStorage.clear();
+        resetSaverNoticeForTests();
     });
 
     // The Home feed's saves reached the ranker from Explore and the reel only.

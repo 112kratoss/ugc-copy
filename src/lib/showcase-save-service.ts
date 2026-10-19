@@ -9,7 +9,7 @@ import {
   isMissingPostsSchemaError,
 } from '@/lib/posts-server';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
-import { notifyPostSocialActivity, withdrawPostSaveNotification } from '@/lib/mobile-notifications';
+import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
 import { loadNameableSaverHandle } from '@/lib/profile-server';
 
 type SetPostSaveStateRow = {
@@ -43,7 +43,6 @@ export type ShowcaseSaveServiceDependencies = {
   isMissingPostsSchemaError: typeof isMissingPostsSchemaError;
   isUserRelationshipBlocked: typeof isUserRelationshipBlocked;
   notifyPostSocialActivity: typeof notifyPostSocialActivity;
-  withdrawPostSaveNotification: typeof withdrawPostSaveNotification;
 };
 
 export type ShowcaseSaveResponseBody = {
@@ -76,8 +75,39 @@ function resolveDependencies(
     isMissingPostsSchemaError: dependencies?.isMissingPostsSchemaError ?? isMissingPostsSchemaError,
     isUserRelationshipBlocked: dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked,
     notifyPostSocialActivity: dependencies?.notifyPostSocialActivity ?? notifyPostSocialActivity,
-    withdrawPostSaveNotification: dependencies?.withdrawPostSaveNotification ?? withdrawPostSaveNotification,
   };
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A post the saver may take their save off though it has left public view
+ * (made unlisted, private, archived or moderated since): the save is their own
+ * row, and taking it back, which also takes back any alert naming them, must
+ * not wait for the post to come back. Found only through their own save, so it
+ * reveals no other post.
+ */
+async function findOwnSavedPostReference(
+  serviceClient: SupabaseClient,
+  actorUserId: string,
+  referenceId: string,
+): Promise<PostReference | null> {
+  if (!UUID_PATTERN.test(referenceId)) return null;
+
+  const { data, error } = await serviceClient
+    .from('post_saves')
+    .select('post_id')
+    .eq('user_id', actorUserId)
+    .eq('post_id', referenceId)
+    .maybeSingle();
+
+  if (error) {
+    logBackendError('failed_to_find_own_saved_post', { error: error });
+    return null;
+  }
+
+  const postId = (data as { post_id?: unknown } | null)?.post_id;
+  return typeof postId === 'string' ? { id: postId, generation_id: null, user_id: null } : null;
 }
 
 async function isPostInteractionUnavailable({
@@ -295,12 +325,15 @@ export async function saveShowcasePostForRoute({
   sourceSurface: unknown;
 }): Promise<ShowcaseSaveServiceResult> {
   const resolvedDependencies = resolveDependencies(dependencies);
-  const post = await resolvedDependencies.findPublicPostReferenceByIdOrGenerationId(referenceId) as PostReference | null;
+  const publicPost = await resolvedDependencies.findPublicPostReferenceByIdOrGenerationId(referenceId) as PostReference | null;
+  const post = publicPost ?? (requestedSaveState === false
+    ? await findOwnSavedPostReference(serviceClient, actorUserId, referenceId)
+    : null);
   if (!post) {
     return { ok: false, status: 404, body: { error: 'Post not found' } };
   }
   // Taking a save back is let through a block: it touches only the saver's
-  // own row, and it takes back any alert that names them.
+  // own row, and the alert naming them goes with that row.
   if (requestedSaveState !== false && await isPostInteractionUnavailable({
     actorUserId,
     creatorUserId: post.user_id,
@@ -406,17 +439,6 @@ export async function saveShowcasePostForRoute({
           ...(actorUsername ? { actorUsername } : {}),
         });
       },
-    );
-  } else if (!isSaved && (requestedSaveState === null || changed) && post.user_id && post.user_id !== actorUserId) {
-    // Taken back: an alert that named this person must not go on saying the
-    // post is in their saved media.
-    await sendDeferrableNotification(
-      runAfterResponse,
-      () => resolvedDependencies.withdrawPostSaveNotification(serviceClient, {
-        recipientUserId: post.user_id,
-        actorUserId,
-        postId: post.id,
-      }),
     );
   }
 

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { creatorSeesSaverFields, syncSaverNotice, type SaverNoticeFields } from './saver-notice';
+import { useAuth } from './AuthProvider';
 
 interface SaveablePostItem {
   id: string;
@@ -175,10 +176,13 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
   }, [initialItems]);
 
   // Whether this account has been told, from the server as well as this
-  // browser, before its first tap needs the answer (`saver-notice.ts`).
+  // browser, before its first tap needs the answer (`saver-notice.ts`). The
+  // page drew the server's record with it; it is asked for only when the page
+  // could not know it.
+  const { saverNoticeSeen } = useAuth();
   useEffect(() => {
-    if (viewerId && accessToken) syncSaverNotice(viewerId, accessToken);
-  }, [viewerId, accessToken]);
+    syncSaverNotice(viewerId, accessToken, saverNoticeSeen);
+  }, [viewerId, accessToken, saverNoticeSeen]);
 
   useEffect(() => {
     if (!accessToken || savedStateLookupIds.length === 0) {
