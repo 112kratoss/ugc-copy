@@ -365,10 +365,10 @@ export async function setUserBlockForRoute({
       logBackendError('user_was_blocked_but_follow_cleanup_failed', { error: outgoingFollow.error ?? incomingFollow.error });
     }
 
-    // Neither stays named in the other's Alerts as having saved their posts:
-    // the block's own insert removes those alerts, in its transaction (the
-    // user_blocks trigger's remove_follows_for_user_block, which also drops
-    // the follows the deletes above already took).
+    // The upsert's own trigger (user_blocks' remove_follows_for_user_block)
+    // has already removed, in its transaction, the follows both ways and the
+    // alerts naming either as having saved the other's posts; the deletes
+    // above are a fallback and normally find nothing.
   } else {
     const { error } = await adminSupabase
       .from('user_blocks')

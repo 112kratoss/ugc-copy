@@ -101,15 +101,15 @@ function isToastCovered(toast: HTMLElement | null, videoFullScreen: boolean) {
 }
 
 /**
- * Whether a toast can be seen now: its window has the focus (a save is a click
- * or a key in it, so it starts focused) and nothing is drawn over it
- * (`isToastCovered`), looked at again whenever the page changes, the browser
- * goes full screen or out of it, and every `TOAST_COVER_CHECK_MS` (a menu can
- * slide over it without a change the observer hears). Followed only while
- * `enabled`.
+ * Whether a toast can be seen now: its window has the focus (read when it
+ * mounts, since a save's answer can arrive after the viewer has gone to
+ * another window) and nothing is drawn over it (`isToastCovered`), looked at
+ * again whenever the page changes, the browser goes full screen or out of it,
+ * and every `TOAST_COVER_CHECK_MS` (a menu can slide over it without a change
+ * the observer hears). Followed only while `enabled`.
  */
 function useToastInView(enabled: boolean, toastRef: RefObject<HTMLElement | null>) {
-  const [windowFocused, setWindowFocused] = useState(true);
+  const [windowFocused, setWindowFocused] = useState(() => !enabled || document.hasFocus());
   const [covered, setCovered] = useState(false);
 
   useEffect(() => {

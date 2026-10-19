@@ -217,6 +217,8 @@ describe('the saver notice in the viewport', () => {
     vi.useFakeTimers();
     fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ seen: true }) }) as Response);
     vi.stubGlobal('fetch', fetchMock);
+    // A save is a click in the window, so it has the focus.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -325,6 +327,31 @@ describe('the saver notice in the viewport', () => {
       vi.advanceTimersByTime(1);
     });
     expect(screen.getByRole('status')).not.toHaveTextContent(SAVER_NOTICE_MESSAGE);
+    expect(told()).toBe('pending');
+    await flush();
+  });
+
+  // The save's answer can arrive after the viewer has gone to another window.
+  it('never counts one pushed while its window is out of focus, until it has the focus', async () => {
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    render(<FeedbackViewport />);
+    tell();
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(screen.getByRole('status')).toHaveTextContent(SAVER_NOTICE_MESSAGE);
+    expect(told()).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    act(() => {
+      vi.advanceTimersByTime(5_999);
+    });
+    expect(told()).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
     expect(told()).toBe('pending');
     await flush();
   });
@@ -456,6 +483,47 @@ describe('the saver notice in the viewport', () => {
         vi.advanceTimersByTime(1);
       });
       expect(told()).toBe('pending');
+      await flush();
+    });
+
+    // What a transition moves over the words changes nothing the observer
+    // hears: the regular look catches it.
+    it('stops counting within 400 ms of a menu sliding over its words, and goes on after', async () => {
+      const menu = document.createElement('div');
+      menu.setAttribute('role', 'menu');
+      document.body.appendChild(menu);
+      let menuOverWords = false;
+      render(<FeedbackViewport />);
+      tell();
+      drawOverWords(() => (menuOverWords ? menu : null));
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+
+      menuOverWords = true;
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(screen.getByRole('status')).toHaveTextContent(SAVER_NOTICE_MESSAGE);
+      expect(told()).toBeNull();
+
+      // 1.4 s had run when it stopped, so 4.6 s are left.
+      menuOverWords = false;
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      act(() => {
+        vi.advanceTimersByTime(4_599);
+      });
+      expect(told()).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(told()).toBe('pending');
+      menu.remove();
       await flush();
     });
 
