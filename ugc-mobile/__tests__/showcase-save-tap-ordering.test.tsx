@@ -15,6 +15,10 @@ const mocks = vi.hoisted(() => ({
   hapticError: vi.fn(),
   announce: vi.fn(),
   user: { id: 'user-1' } as { id: string } | null,
+  // An account that has been told already, unless a case says otherwise.
+  creatorSeesSaverFields: vi.fn(async (accountId: string | null | undefined, shouldSave: boolean) => (
+    accountId && shouldSave ? { creatorSeesSaver: true as const } : {}
+  )),
 }));
 
 vi.mock('expo-router', () => ({ router: { push: mocks.routerPush } }));
@@ -25,6 +29,7 @@ vi.mock('react-native', () => ({
 vi.mock('@/lib/auth', () => ({
   useAuth: () => ({ api: { saveShowcasePost: mocks.saveShowcasePost }, user: mocks.user }),
 }));
+vi.mock('@/lib/saver-notice', () => ({ creatorSeesSaverFields: mocks.creatorSeesSaverFields }));
 
 import { useShowcaseSaveMutation } from '../lib/use-showcase-save-mutation';
 
@@ -115,6 +120,31 @@ async function mountSaveSurfaces(surfaceCount = 1) {
 afterEach(() => {
   vi.clearAllMocks();
   mocks.user = { id: 'user-1' };
+});
+
+describe('what a save from Home sends', () => {
+  it('asks the saver notice for the signed-in account and sends exactly what it gives', async () => {
+    mocks.saveShowcasePost.mockImplementation(async (_postId: string, options: { shouldSave: boolean }) => ({
+      isSaved: options.shouldSave,
+      saveCount: options.shouldSave ? 5 : 4,
+    }));
+    // The first save is the one that tells them, so it goes out unnamed.
+    mocks.creatorSeesSaverFields.mockResolvedValueOnce({});
+    const surface = await mountSaveSurfaces();
+
+    await surface.tap(false, 4);
+    await surface.tap(true, 5);
+    await surface.tap(false, 4);
+
+    expect(mocks.creatorSeesSaverFields.mock.calls).toEqual([['user-1', true], ['user-1', false], ['user-1', true]]);
+    expect(mocks.saveShowcasePost.mock.calls).toEqual([
+      [surface.postId, { shouldSave: true, sourceSurface: 'mobile-home-feed' }],
+      [surface.postId, { shouldSave: false, sourceSurface: 'mobile-home-feed' }],
+      [surface.postId, { shouldSave: true, sourceSurface: 'mobile-home-feed', creatorSeesSaver: true }],
+    ]);
+
+    surface.cleanup();
+  });
 });
 
 describe('two quick taps on one save button', () => {

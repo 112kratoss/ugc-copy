@@ -216,7 +216,8 @@ const successCases: Array<{
     key: 'undoFeedFeedback',
     call: (api) => api.undoFeedFeedback(mobileApiContract.endpoints.undoFeedFeedback.request as UndoFeedFeedbackRequest),
   },
-  { key: 'saveShowcasePost', call: (api) => api.saveShowcasePost('post-1', { shouldSave: true }) },
+  // The app sends the flag only through lib/saver-notice.ts; here the client alone.
+  { key: 'saveShowcasePost', call: (api) => api.saveShowcasePost('post-1', { shouldSave: true, creatorSeesSaver: true }) },
   { key: 'remixShowcasePost', call: (api) => api.remixShowcasePost('post-1') },
   { key: 'shareShowcasePost', call: (api) => api.shareShowcasePost('post-1', { sourceSurface: 'showcase-reel' }) },
   { key: 'recordShareVisit', call: (api) => api.recordShareVisit('post-1', 'feed') },

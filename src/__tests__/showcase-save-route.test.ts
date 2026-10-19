@@ -7,6 +7,7 @@ const rpcMock = vi.fn();
 const serviceFromMock = vi.fn();
 const eventInsertMock = vi.fn();
 const notifyPostSocialActivityMock = vi.fn();
+const withdrawPostSaveNotificationMock = vi.fn();
 const findPublicPostReferenceByIdOrGenerationIdMock = vi.fn();
 const isMissingPostsSchemaErrorMock = vi.fn<(error: unknown) => boolean>(() => false);
 const createServiceClientMock = vi.fn();
@@ -38,6 +39,8 @@ vi.mock('@/lib/posts-server', () => ({
 vi.mock('@/lib/mobile-notifications', () => ({
   notifyPostSocialActivity: (client: unknown, payload: unknown) =>
     notifyPostSocialActivityMock(client, payload),
+  withdrawPostSaveNotification: (client: unknown, payload: unknown) =>
+    withdrawPostSaveNotificationMock(client, payload),
 }));
 
 vi.mock('@/lib/moderation-service', () => ({
@@ -181,6 +184,7 @@ describe('/api/showcase/save route', () => {
     });
     eventInsertMock.mockReset();
     notifyPostSocialActivityMock.mockReset();
+    withdrawPostSaveNotificationMock.mockReset();
     afterMock.mockReset();
     findPublicPostReferenceByIdOrGenerationIdMock.mockReset();
     isMissingPostsSchemaErrorMock.mockReturnValue(false);
@@ -334,8 +338,9 @@ describe('/api/showcase/save route', () => {
     expect(notifyPostSocialActivityMock).not.toHaveBeenCalled();
   });
 
-  it('idempotently unsaves without notifying creators', async () => {
+  it('idempotently unsaves without notifying creators, taking back any alert that named the saver', async () => {
     queueBusinessRpcResult(saveRpcResult({ isSaved: false, saveCount: 4, changed: true }));
+    afterMock.mockImplementationOnce(() => undefined);
 
     const response = await postSave({
       postId: 'post-1',
@@ -356,8 +361,16 @@ describe('/api/showcase/save route', () => {
       changed: true,
       source_surface: 'showcase-reel',
     }));
-    expect(afterMock).not.toHaveBeenCalled();
     expect(notifyPostSocialActivityMock).not.toHaveBeenCalled();
+    // Behind the answer, never in front of it.
+    expect(withdrawPostSaveNotificationMock).not.toHaveBeenCalled();
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    await afterMock.mock.calls[0][0]();
+    expect(withdrawPostSaveNotificationMock).toHaveBeenCalledWith(expect.anything(), {
+      recipientUserId: 'creator-1',
+      actorUserId: 'user-1',
+      postId: 'post-1',
+    });
   });
 
   it('supports generation id lookup with the idempotent contract', async () => {

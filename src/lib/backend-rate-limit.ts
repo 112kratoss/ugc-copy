@@ -116,6 +116,18 @@ export const CREATOR_FOLLOW_MUTATION_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+/**
+ * Not a refusal: the push a named save alert may send, keyed by creator and
+ * post. A creator's phone hears about one post's saves at most once a
+ * quarter-hour, as it did when every save alert was grouped; later savers in
+ * that quarter-hour wait in Alerts.
+ */
+export const NAMED_POST_SAVE_PUSH_RATE_LIMIT = {
+  scope: 'post-save:named-push',
+  limit: 1,
+  windowSeconds: 15 * 60,
+} as const;
+
 export const CREDIT_ORDER_RATE_LIMIT = {
   scope: 'credit-order:create',
   limit: 10,

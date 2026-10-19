@@ -64,7 +64,7 @@ export function useShowcaseSaveMutation({
   const mutation = useMutation({
     scope: SHOWCASE_SAVE_MUTATION_SCOPE,
     mutationFn: async ({ postId, shouldSave }: SaveVariables) =>
-      api.saveShowcasePost(postId, { shouldSave, sourceSurface, ...(await creatorSeesSaverFields(shouldSave)) }),
+      api.saveShowcasePost(postId, { shouldSave, sourceSurface, ...(await creatorSeesSaverFields(user?.id, shouldSave)) }),
     onMutate: (variables) => {
       reconcile({
         postId: variables.postId,

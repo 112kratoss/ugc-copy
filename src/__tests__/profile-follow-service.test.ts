@@ -348,6 +348,22 @@ describe('profile follow service', () => {
     });
   });
 
+  it('leaves a follower unnamed while they still have the generated handle every account starts with', async () => {
+    const client = createClient({ profileRows: [{ id: 'follower-1', username: 'creator-1a2b3c4d' }] });
+
+    await updateCreatorFollowForRoute({
+      adminSupabase: client.client,
+      followerId: 'follower-1',
+      body: { followingId: 'creator-1', following: true },
+    });
+
+    expect(notifyCreatorFollowedMock).toHaveBeenCalledWith(client.client, {
+      followerUserId: 'follower-1',
+      followingUserId: 'creator-1',
+      followerUsername: null,
+    });
+  });
+
   it('does not allow a follow across a block in either direction', async () => {
     const client = createClient({
       userBlocks: [{ blocker_user_id: 'creator-1', blocked_user_id: 'follower-1' }],

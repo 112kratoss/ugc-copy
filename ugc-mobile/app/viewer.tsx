@@ -855,7 +855,7 @@ function ImmersivePreviewViewer() {
   const saveMutation = useMutation({
     scope: SHOWCASE_SAVE_MUTATION_SCOPE,
     mutationFn: async ({ postId, shouldSave, sourceSurface }: SaveMutationVariables) =>
-      api.saveShowcasePost(postId, { shouldSave, sourceSurface, ...(await creatorSeesSaverFields(shouldSave)) }),
+      api.saveShowcasePost(postId, { shouldSave, sourceSurface, ...(await creatorSeesSaverFields(user?.id, shouldSave)) }),
     onMutate: async (variables) => {
       const optimisticSaveCount = Math.max(
         0,

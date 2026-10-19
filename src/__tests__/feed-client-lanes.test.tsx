@@ -34,6 +34,9 @@ const confirmMock = vi.hoisted(() => vi.fn<(request: { title: string; tone?: str
 
 vi.mock('@/components/feedback-state', () => ({
     requestConfirmation: confirmMock,
+    // Nothing draws toasts here, so the saver notice waits for a page that can show it.
+    hasFeedbackViewport: () => false,
+    pushToast: vi.fn(),
 }));
 
 vi.mock('@/components/AuthProvider', () => ({

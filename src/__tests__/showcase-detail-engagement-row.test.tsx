@@ -7,6 +7,8 @@ import {
 } from '@/app/showcase/[id]/ShowcaseDetailCommentCount';
 import ShowcaseDetailEngagementRow from '@/app/showcase/[id]/ShowcaseDetailEngagementRow';
 import NsfwPostReveal from '@/components/NsfwPostReveal';
+import { readFeedbackSnapshot, resetFeedbackState, subscribeToFeedback } from '@/components/feedback-state';
+import { SAVER_NOTICE_MESSAGE, resetSaverNoticeForTests } from '@/components/saver-notice';
 
 const routerMock = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 const pushMock = routerMock.push;
@@ -73,6 +75,9 @@ describe('ShowcaseDetailEngagementRow', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+    resetSaverNoticeForTests();
+    resetFeedbackState();
+    window.localStorage.clear();
   });
 
   it('renders the verbs with compact counts and the comment anchor', () => {
@@ -85,6 +90,8 @@ describe('ShowcaseDetailEngagementRow', () => {
   });
 
   it('saves optimistically through the showcase save endpoint', async () => {
+    // This viewer was told on an earlier page, so the save may name them.
+    window.localStorage.setItem('magicbooklet:saver-notice:v1:viewer-1', '1');
     render(<ShowcaseDetailEngagementRow {...rowProps()} />);
 
     fireEvent.click(screen.getByRole('button', { name: /save shared creation/i }));
@@ -103,6 +110,49 @@ describe('ShowcaseDetailEngagementRow', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /remove save from shared creation/i })).toHaveTextContent('5');
     });
+  });
+
+  it('tells a viewer at their first save, which stays unnamed, and lets the saves after it name them', async () => {
+    // The root layout's FeedbackViewport, which draws the toast.
+    const unsubscribe = subscribeToFeedback(() => {});
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/api/showcase/saved-state')) {
+        return { ok: true, json: async () => [] } as Response;
+      }
+      const { shouldSave } = JSON.parse(String(init?.body)) as { shouldSave: boolean };
+      return { ok: true, json: async () => ({ success: true, isSaved: shouldSave, saveCount: shouldSave ? 5 : 4 }) } as Response;
+    }));
+    const saveBodies = () => vi.mocked(fetch).mock.calls
+      .filter(([input]) => String(input) === '/api/showcase/save')
+      .map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
+
+    try {
+      render(<ShowcaseDetailEngagementRow {...rowProps()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: /save shared creation/i }));
+      await waitFor(() => expect(saveBodies()).toHaveLength(1));
+      expect(readFeedbackSnapshot().toasts.map((toast) => toast.message)).toEqual([SAVER_NOTICE_MESSAGE]);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /remove save from shared creation/i })).not.toBeDisabled();
+      });
+      fireEvent.click(screen.getByRole('button', { name: /remove save from shared creation/i }));
+      await waitFor(() => expect(saveBodies()).toHaveLength(2));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /^save shared creation/i })).not.toBeDisabled();
+      });
+      fireEvent.click(screen.getByRole('button', { name: /^save shared creation/i }));
+      await waitFor(() => expect(saveBodies()).toHaveLength(3));
+
+      expect(saveBodies()).toEqual([
+        { postId: 'post-1', shouldSave: true, sourceSurface: 'detail-page' },
+        { postId: 'post-1', shouldSave: false, sourceSurface: 'detail-page' },
+        { postId: 'post-1', shouldSave: true, sourceSurface: 'detail-page', creatorSeesSaver: true },
+      ]);
+      expect(readFeedbackSnapshot().toasts).toHaveLength(1);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it('sends a signed-out viewer to login instead of saving', () => {

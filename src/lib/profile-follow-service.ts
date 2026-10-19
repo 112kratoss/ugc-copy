@@ -11,6 +11,7 @@ import {
 import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
 import { notifyCreatorFollowed } from '@/lib/mobile-notifications';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
+import { loadClaimedProfileHandle } from '@/lib/profile-server';
 import {
   parseFeedDeliveryIdField,
   scheduleAuthoritativeFeedEvent,
@@ -126,19 +127,6 @@ async function loadFollowRecord(
     .maybeSingle();
 }
 
-async function loadFollowerUsername(
-  adminSupabase: ProfileFollowServiceClient,
-  followerId: string
-) {
-  const { data } = await adminSupabase
-    .from('profiles')
-    .select('username')
-    .eq('id', followerId)
-    .maybeSingle();
-
-  return typeof data?.username === 'string' ? data.username : null;
-}
-
 export async function getCreatorFollowStateForRoute({
   adminSupabase,
   followerId,
@@ -242,7 +230,7 @@ export async function updateCreatorFollowForRoute({
       // ends in a push request to Expo for their devices. The follower's
       // button stays disabled until this answers, so the answer goes first
       // wherever it can.
-      const followerUsername = await loadFollowerUsername(resolvedClient, followerId);
+      const followerUsername = await loadClaimedProfileHandle(resolvedClient, followerId);
       await sendDeferrableNotification(runAfterResponse, () => notifyCreatorFollowed(resolvedClient, {
         followerUserId: followerId,
         followingUserId: followingId,

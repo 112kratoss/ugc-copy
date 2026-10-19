@@ -63,6 +63,13 @@ const dialogs = vi.hoisted(() => ({
   message: vi.fn(),
 }));
 
+// The notice module stands in as an account that has already been told.
+const saverNotice = vi.hoisted(() => ({
+  fields: vi.fn(async (accountId: string | null | undefined, shouldSave: boolean) => (
+    accountId && shouldSave ? { creatorSeesSaver: true as const } : {}
+  )),
+}));
+
 // What the screen hands its actions menu and its zoom stage, render by render.
 const screenState = vi.hoisted(() => ({
   callbacksFor: null as null | ((item: unknown) => Record<string, unknown>),
@@ -188,6 +195,7 @@ vi.mock('@/lib/dialog', () => ({
   showErrorDialog: dialogs.error,
   showMessageDialog: dialogs.message,
 }));
+vi.mock('@/lib/saver-notice', () => ({ creatorSeesSaverFields: saverNotice.fields }));
 vi.mock('@/lib/action-sheet', () => ({ showActionSheet: vi.fn() }));
 vi.mock('@/lib/haptics', () => ({
   haptic: { error: vi.fn(), light: vi.fn(), select: vi.fn(), soft: vi.fn(), success: vi.fn() },
@@ -1073,6 +1081,8 @@ describe("a reel opened on a creator's page", () => {
     });
     await settle();
 
+    // Through the saver notice, for the signed-in account.
+    expect(saverNotice.fields).toHaveBeenCalledWith('viewer-1', true);
     expect(authState.api.saveShowcasePost).toHaveBeenCalledWith('luna-2', {
       shouldSave: true,
       sourceSurface: 'mobile-viewer',

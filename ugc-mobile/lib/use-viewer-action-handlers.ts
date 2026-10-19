@@ -298,7 +298,7 @@ export function useViewerActionHandlers({
             await api.saveShowcasePost(item.showcasePostId, {
               shouldSave,
               sourceSurface: item.source === 'profile-saved' ? 'mobile-profile-saved' : 'mobile-viewer-actions',
-              ...(await creatorSeesSaverFields(shouldSave)),
+              ...(await creatorSeesSaverFields(user?.id, shouldSave)),
             });
           }
           await refreshMedia();

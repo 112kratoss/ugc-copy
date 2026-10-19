@@ -370,6 +370,7 @@ export default function FeedClient({
         // viewer just made on page 1.
         initialItems: seedFeed.items,
         accessToken,
+        viewerId,
         isSignedIn: Boolean(user),
         // With the way back: a bare /login landed the viewer on /create afterwards.
         onAuthRequired: () => { router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath('/feed'))}`); },

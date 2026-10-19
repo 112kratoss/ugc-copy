@@ -15,6 +15,7 @@ function renderSaveHook() {
     return renderHook(() => useOptimisticPostSave<Post>({
         initialItems,
         accessToken: null,
+        viewerId: null,
         isSignedIn: false,
         onAuthRequired: vi.fn(),
         onError: vi.fn(),

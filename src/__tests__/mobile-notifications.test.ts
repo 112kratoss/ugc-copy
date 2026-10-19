@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createMobileNotificationHistory,
   withMobileNotificationHistory,
+  withUniqueDedupeKeys,
   type MobileNotificationHistory,
 } from '@/__tests__/fixtures/mobile-notification-history';
 import { createStoredRows } from '@/__tests__/fixtures/stored-rows';
@@ -27,6 +28,7 @@ import {
   sendExpoPushNotificationBatch,
   sendExpoPushNotificationWithRetry,
   toMobileNotificationRecord,
+  withdrawPostSaveNotification,
 } from '@/lib/mobile-notifications';
 import { EXTERNAL_API_REQUEST_TIMEOUT_MS } from '@/lib/provider-fetch';
 import { siteConfig } from '@/lib/seo';
@@ -2534,6 +2536,95 @@ describe('what each alert opens and says', () => {
       ['@maya saved your post', '/showcase/post-1', 'post-save:reader-1:post-1', 'its own'],
       ['Someone saved your post', '/showcase/post-1', null, 'grouped'],
       ['Someone shared your post', '/showcase/post-1', null, 'grouped'],
+    ]);
+  });
+
+  it("pushes one post's named saves once a quarter-hour; the rest wait in Alerts", async () => {
+    // Grouped saves pushed at most once a post per quarter-hour; naming each
+    // saver must not turn a busy post into a push per saver.
+    const history = createMobileNotificationHistory();
+    const client = writtenTo(history);
+
+    for (const [actorUserId, actorUsername, postId] of [
+      ['reader-1', 'maya', 'post-1'],
+      ['reader-2', 'lee', 'post-1'],
+      ['reader-3', 'ana', 'post-2'],
+    ]) {
+      await notifyPostSocialActivity(client, {
+        type: 'post_saved', recipientUserId: 'creator-1', postId, actorUserId, actorUsername,
+      });
+    }
+
+    expect(history.sent.map((row) => row.title)).toEqual([
+      '@maya saved your post',
+      '@lee saved your post',
+      '@ana saved your post',
+    ]);
+    expect(history.pushClaims).toEqual([
+      { key: 'creator-1:post-1', allowed: true },
+      { key: 'creator-1:post-1', allowed: false },
+      { key: 'creator-1:post-2', allowed: true },
+    ]);
+    expect(history.preferenceReads).toEqual(['creator-1', 'creator-1']);
+  });
+
+  it('lets a named save push when its push slot cannot be checked', async () => {
+    const history = createMobileNotificationHistory();
+    const client = {
+      from: (table: string) => history.from(table),
+      rpc: async () => ({ data: null, error: { message: 'statement timeout' } }),
+    } as unknown as SupabaseClient;
+    const logged: BackendLogRecord[] = [];
+    const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+
+    try {
+      await notifyPostSocialActivity(client, {
+        type: 'post_saved', recipientUserId: 'creator-1', postId: 'post-1', actorUserId: 'reader-1', actorUsername: 'maya',
+      });
+    } finally {
+      restoreLogSink();
+    }
+
+    expect(history.sent.map((row) => row.title)).toEqual(['@maya saved your post']);
+    expect(history.preferenceReads).toEqual(['creator-1']);
+    expect(logged.map((record) => record.msg)).toEqual(['failed_to_claim_named_post_save_push']);
+  });
+
+  it("takes back only that saver's named alert, and nothing for a creator's own post", async () => {
+    const history = withUniqueDedupeKeys(createMobileNotificationHistory());
+    const client = writtenTo(history);
+    const saved = { type: 'post_saved' as const, recipientUserId: 'creator-1', postId: 'post-1' };
+
+    await notifyPostSocialActivity(client, { ...saved, actorUserId: 'reader-1', actorUsername: 'maya' });
+    await notifyPostSocialActivity(client, { ...saved, actorUserId: 'reader-2', actorUsername: 'lee' });
+    await withdrawPostSaveNotification(client, { recipientUserId: 'creator-1', actorUserId: 'reader-1', postId: 'post-1' });
+    await withdrawPostSaveNotification(client, { recipientUserId: 'creator-1', actorUserId: 'creator-1', postId: 'post-1' });
+    await withdrawPostSaveNotification(client, { recipientUserId: null, actorUserId: 'reader-2', postId: 'post-1' });
+
+    expect(history.withdrawn).toEqual([{ user_id: 'creator-1', dedupe_key: 'post-save:reader-1:post-1' }]);
+    expect([...history.deletedRows]).toEqual([0]);
+  });
+
+  it('logs a take-back that fails, and never rejects', async () => {
+    const failing = (result: Promise<{ error: unknown }>) => ({
+      from: () => ({ delete: () => ({ eq: () => ({ eq: () => result }) }) }),
+    }) as unknown as SupabaseClient;
+    const logged: BackendLogRecord[] = [];
+    const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+    const params = { recipientUserId: 'creator-1', actorUserId: 'reader-1', postId: 'post-1' };
+
+    try {
+      await expect(withdrawPostSaveNotification(failing(Promise.resolve({ error: { message: 'timeout' } })), params))
+        .resolves.toBeUndefined();
+      await expect(withdrawPostSaveNotification(failing(Promise.reject(new Error('socket hang up'))), params))
+        .resolves.toBeUndefined();
+    } finally {
+      restoreLogSink();
+    }
+
+    expect(logged.map((record) => record.msg)).toEqual([
+      'failed_to_withdraw_post_save_notification',
+      'failed_to_withdraw_post_save_notification',
     ]);
   });
 

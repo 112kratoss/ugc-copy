@@ -1,18 +1,26 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { NAMED_POST_SAVE_PUSH_RATE_LIMIT } from '@/lib/backend-rate-limit';
+
 /**
  * Notification history the real notifier can run against.
  *
  * It answers the two tables `createMobileNotification` touches before it
- * pushes, and the one call a grouped notification makes in place of the
- * first, records what was looked up and written, and can hold every
- * notification at its first step. Holding is how a test stands in for a push
+ * pushes, the one call a grouped notification makes in place of the first,
+ * the push-slot claim a named save makes and the delete that takes a named
+ * save back, records what was looked up, written and deleted, and can hold
+ * every notification at its first step. Holding is how a test stands in for a push
  * fan-out that has not finished: push is switched off in the preferences it
  * returns, so nothing here reaches the network.
  */
 export function createMobileNotificationHistory() {
   const started: string[] = [];
   const sent: Array<Record<string, unknown>> = [];
+  const withdrawn: Array<Record<string, unknown>> = [];
+  const deletedRows = new Set<number>();
+  const pushClaims: Array<{ key: string; allowed: boolean }> = [];
+  const claimCounts = new Map<string, number>();
+  const preferenceReads: string[] = [];
   const referralEvents = new Map<string, Array<Record<string, unknown>>>();
   let held: Promise<void> | null = null;
   let releaseHeld = () => {};
@@ -36,6 +44,21 @@ export function createMobileNotificationHistory() {
     started,
     /** Notification rows, in the order they were written. */
     sent,
+    /** The `user_id` / `dedupe_key` filters of every delete, in order. */
+    withdrawn,
+    /** Indexes into `sent` of rows a delete has removed. */
+    deletedRows,
+    /**
+     * Every claim on a rate-limited push slot, in order: a slot is free once
+     * per key, as one quarter-hour window is.
+     */
+    pushClaims,
+    /**
+     * The recipient of every written alert that went on to decide whether to
+     * push, which starts by reading their preferences. An alert written with
+     * `push: false` never does.
+     */
+    preferenceReads,
     enqueueReferralRewards(rewards: Array<Record<string, unknown>>) {
       for (const reward of rewards) {
         const eventKey = String(reward.event_key ?? reward.eventKey);
@@ -85,6 +108,25 @@ export function createMobileNotificationHistory() {
               },
             };
           },
+          delete() {
+            const filters: Record<string, unknown> = {};
+            const query = {
+              eq(column: string, value: unknown) {
+                filters[column] = value;
+                return query;
+              },
+              then(resolve: (result: { error: null }) => unknown, reject?: (error: unknown) => unknown) {
+                withdrawn.push({ ...filters });
+                sent.forEach((row, index) => {
+                  if (Object.entries(filters).every(([column, value]) => row[column] === value)) {
+                    deletedRows.add(index);
+                  }
+                });
+                return Promise.resolve({ error: null }).then(resolve, reject);
+              },
+            };
+            return query;
+          },
         };
       }
 
@@ -92,9 +134,10 @@ export function createMobileNotificationHistory() {
         return {
           select() {
             return {
-              eq() {
+              eq(_column: string, value: unknown) {
                 return {
                   async maybeSingle() {
+                    preferenceReads.push(String(value));
                     return {
                       data: {
                         push_enabled: false,
@@ -114,8 +157,11 @@ export function createMobileNotificationHistory() {
 
       throw new Error(`Unexpected notification table: ${table}`);
     },
-    handlesRpc(name: string) {
-      return name === 'upsert_mobile_notification' || name === 'deliver_referral_reward_notifications';
+    handlesRpc(name: string, args: Record<string, unknown> = {}) {
+      return name === 'upsert_mobile_notification'
+        || name === 'deliver_referral_reward_notifications'
+        // Only a named save's push slot: other rate limits stay the client's.
+        || (name === 'check_backend_rate_limit' && args.p_scope === NAMED_POST_SAVE_PUSH_RATE_LIMIT.scope);
     },
     /**
      * A grouped notification (a save or a share) is written by one call that
@@ -123,6 +169,24 @@ export function createMobileNotificationHistory() {
      * is the case that goes on to push.
      */
     async rpc(name: string, args: Record<string, unknown> = {}) {
+      if (name === 'check_backend_rate_limit') {
+        const key = `${String(args.p_scope)}|${String(args.p_subject_key)}`;
+        const count = (claimCounts.get(key) ?? 0) + 1;
+        claimCounts.set(key, count);
+        const limit = Number(args.p_limit);
+        const allowed = count <= limit;
+        pushClaims.push({ key: String(args.p_subject_key), allowed });
+        return {
+          data: {
+            allowed,
+            limit,
+            remaining: Math.max(0, limit - count),
+            retryAfterSeconds: allowed ? 0 : 60,
+            resetAt: '2026-10-19T00:15:00.000Z',
+          },
+          error: null,
+        };
+      }
       if (name === 'deliver_referral_reward_notifications') {
         const event = referralEvents.get(String(args.p_event_key))?.shift();
         if (!event) return { data: { processed: 0, delivered: 0, failed: 0 }, error: null };
@@ -167,7 +231,7 @@ export function withMobileNotificationHistory(
   return {
     from: (table: string) => (history.handles(table) ? history.from(table) : client.from(table)),
     rpc: async (name: string, args?: Record<string, unknown>) => {
-      if (history.handlesRpc(name)) return history.rpc(name, args);
+      if (history.handlesRpc(name, args)) return history.rpc(name, args);
       const result = await client.rpc(name, args);
       if (name === 'settle_referral_purchase_rewards' && result.data?.rewards) {
         history.enqueueReferralRewards(result.data.rewards);
@@ -216,7 +280,7 @@ export function withUniqueDedupeKeys(history: MobileNotificationHistory): Mobile
   const written = (userId: unknown, dedupeKey: unknown) => {
     if (dedupeKey === null || dedupeKey === undefined) return null;
     const index = history.sent.findIndex(
-      (row) => row.user_id === userId && row.dedupe_key === dedupeKey,
+      (row, rowIndex) => !history.deletedRows.has(rowIndex) && row.user_id === userId && row.dedupe_key === dedupeKey,
     );
     return index < 0 ? null : { id: `notification-${index + 1}`, ...history.sent[index] };
   };
@@ -225,9 +289,11 @@ export function withUniqueDedupeKeys(history: MobileNotificationHistory): Mobile
     const table = history.from('mobile_notifications') as unknown as {
       select(): DedupeLookup;
       insert(values: Record<string, unknown>): unknown;
+      delete(): unknown;
     };
 
     return {
+      delete: () => table.delete(),
       select() {
         const lookup = table.select();
         const filters: Record<string, unknown> = {};

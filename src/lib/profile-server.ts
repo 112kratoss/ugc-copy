@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   buildFallbackUsername,
+  isClaimedProfileUsername,
   normalizeUsername,
   sanitizeProfileRecord,
   validateProfileUpdate,
@@ -79,6 +80,39 @@ export async function findShareableProfileByUsername(
   if (!profile?.username || profile.identity_state === 'deleting') return null;
 
   return { id: profile.id, username: profile.username };
+}
+
+/**
+ * The handle someone chose, for an alert that names them ("@maya saved your
+ * post", "@maya followed you."), or null to leave them unnamed. The
+ * `creator-xxxxxxxx` placeholder every account starts with is not one: they
+ * never picked it. A profile that cannot be read costs the name, never the
+ * alert.
+ */
+export async function loadClaimedProfileHandle(
+  adminSupabase: SupabaseClient,
+  userId: string,
+): Promise<string | null> {
+  try {
+    const { data, error } = await adminSupabase
+      .from('profiles')
+      .select('username')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (error) {
+      logBackendError('failed_to_load_claimed_profile_handle', { error: error });
+      return null;
+    }
+
+    const username = (data as { username?: unknown } | null)?.username;
+    return typeof username === 'string' && isClaimedProfileUsername(username)
+      ? normalizeUsername(username)
+      : null;
+  } catch (error) {
+    logBackendError('failed_to_load_claimed_profile_handle', { error: error });
+    return null;
+  }
 }
 
 interface ProfileValidationSuccess {

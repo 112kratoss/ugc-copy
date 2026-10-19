@@ -1062,6 +1062,11 @@
       "path": "/api/showcase/save",
       "auth": "required",
       "cacheControl": "private, no-store",
+      "request": {
+        "postId": "post-1",
+        "shouldSave": true,
+        "creatorSeesSaver": true
+      },
       "response": {
         "success": true,
         "isSaved": true,

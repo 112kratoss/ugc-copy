@@ -58,6 +58,15 @@ export function readFeedbackSnapshot(): FeedbackSnapshot {
   return snapshot;
 }
 
+/**
+ * Whether anything draws this store right now (the root layout's
+ * `FeedbackViewport`). A toast pushed while nothing is subscribed is never
+ * seen.
+ */
+export function hasFeedbackViewport() {
+  return listeners.size > 0;
+}
+
 /** The server and first client render must agree: nothing is showing. */
 export function readServerFeedbackSnapshot(): FeedbackSnapshot {
   return EMPTY_SNAPSHOT;

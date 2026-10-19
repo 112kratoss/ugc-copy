@@ -1,60 +1,72 @@
-import { pushToast } from './feedback-state';
+import { hasFeedbackViewport, pushToast } from './feedback-state';
 
 /**
  * Saves were private until the creator's alert began naming whoever saved
  * ("@maya saved your post"). The server names a saver only for a save whose
- * request says the person was told, so that field and the telling come from
- * this one place.
+ * request says the person had been told, so that field and the telling come
+ * from this one place.
+ *
+ * Told is remembered per account, so a browser two people share tells each of
+ * them. The save that tells someone goes out unnamed: only saves made after
+ * the notice name them.
  */
-const SAVER_NOTICE_STORAGE_KEY = 'magicbooklet:saver-notice:v1';
+const SAVER_NOTICE_STORAGE_KEY_PREFIX = 'magicbooklet:saver-notice:v1:';
 const SAVER_NOTICE_DURATION_MS = 6000;
 
-export const SAVER_NOTICE_MESSAGE = 'Saved. Creators can see who saved their posts.';
+export const SAVER_NOTICE_MESSAGE = 'Creators can see who saved their posts.';
 
-let toldOnThisPage = false;
+const toldOnThisPage = new Set<string>();
 
-function hasBeenToldBefore() {
-  try {
-    return Boolean(window.localStorage.getItem(SAVER_NOTICE_STORAGE_KEY));
-  } catch {
-    // Storage refused (a private window): tell them once on this page rather than never.
-    return false;
-  }
+function storageKey(accountId: string) {
+  return `${SAVER_NOTICE_STORAGE_KEY_PREFIX}${accountId}`;
 }
 
-/** Whether this browser has been told, telling it now if not. False only when the notice could not be shown. */
-function tellOnce() {
-  if (toldOnThisPage) return true;
+function hasBeenTold(accountId: string) {
+  if (toldOnThisPage.has(accountId)) return true;
 
-  if (!hasBeenToldBefore()) {
-    try {
-      pushToast({ tone: 'info', message: SAVER_NOTICE_MESSAGE, durationMs: SAVER_NOTICE_DURATION_MS });
-    } catch {
-      return false;
+  try {
+    if (window.localStorage.getItem(storageKey(accountId))) {
+      toldOnThisPage.add(accountId);
+      return true;
     }
-    try {
-      window.localStorage.setItem(SAVER_NOTICE_STORAGE_KEY, '1');
-    } catch {
-      // Told on this page; a refused write only means telling them again on the next.
-    }
+  } catch {
+    // Storage refused (a private window): this page's memory is all there is.
   }
+  return false;
+}
 
-  toldOnThisPage = true;
-  return true;
+/** Shows the notice and remembers it for this account, unless nothing on the page would draw it. */
+function tell(accountId: string) {
+  // A toast pushed with nothing subscribed is never seen: tell them at a later save.
+  if (!hasFeedbackViewport()) return;
+
+  pushToast({ tone: 'info', message: SAVER_NOTICE_MESSAGE, durationMs: SAVER_NOTICE_DURATION_MS });
+  toldOnThisPage.add(accountId);
+  try {
+    window.localStorage.setItem(storageKey(accountId), '1');
+  } catch {
+    // Told on this page; a refused write only means telling them again on the next.
+  }
 }
 
 /**
  * The field that lets the creator's alert name whoever saved, spread into each
- * save request. The first save in a browser also shows the notice that says
- * so; a save whose notice could not be shown goes out unnamed. Send
- * `creatorSeesSaver` only through here: the server takes it as word that the
- * person was told.
+ * save request. An account not told yet is told now, and that save goes out
+ * unnamed. Send `creatorSeesSaver` only through here: the server takes it as
+ * word that the person was told.
  */
-export function creatorSeesSaverFields(shouldSave: boolean): { creatorSeesSaver?: true } {
-  return shouldSave && tellOnce() ? { creatorSeesSaver: true } : {};
+export function creatorSeesSaverFields(
+  accountId: string | null | undefined,
+  shouldSave: boolean,
+): { creatorSeesSaver?: true } {
+  if (!shouldSave || !accountId) return {};
+  if (hasBeenTold(accountId)) return { creatorSeesSaver: true };
+
+  tell(accountId);
+  return {};
 }
 
-/** Tests only: forget that this page has shown the notice. */
+/** Tests only: forget what this page has told. */
 export function resetSaverNoticeForTests() {
-  toldOnThisPage = false;
+  toldOnThisPage.clear();
 }

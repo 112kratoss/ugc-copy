@@ -9,7 +9,8 @@ import {
   isMissingPostsSchemaError,
 } from '@/lib/posts-server';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
-import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
+import { notifyPostSocialActivity, withdrawPostSaveNotification } from '@/lib/mobile-notifications';
+import { loadClaimedProfileHandle } from '@/lib/profile-server';
 
 type SetPostSaveStateRow = {
   is_saved?: boolean | null;
@@ -42,6 +43,7 @@ export type ShowcaseSaveServiceDependencies = {
   isMissingPostsSchemaError: typeof isMissingPostsSchemaError;
   isUserRelationshipBlocked: typeof isUserRelationshipBlocked;
   notifyPostSocialActivity: typeof notifyPostSocialActivity;
+  withdrawPostSaveNotification: typeof withdrawPostSaveNotification;
 };
 
 export type ShowcaseSaveResponseBody = {
@@ -74,6 +76,7 @@ function resolveDependencies(
     isMissingPostsSchemaError: dependencies?.isMissingPostsSchemaError ?? isMissingPostsSchemaError,
     isUserRelationshipBlocked: dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked,
     notifyPostSocialActivity: dependencies?.notifyPostSocialActivity ?? notifyPostSocialActivity,
+    withdrawPostSaveNotification: dependencies?.withdrawPostSaveNotification ?? withdrawPostSaveNotification,
   };
 }
 
@@ -216,28 +219,6 @@ async function resolveLegacyIdempotentSaveState({
   };
 }
 
-/** The handle a named save alert shows, or null to leave the saver as "Someone". */
-async function loadSaverUsername(serviceClient: SupabaseClient, userId: string) {
-  try {
-    const { data, error } = await serviceClient
-      .from('profiles')
-      .select('username')
-      .eq('id', userId)
-      .maybeSingle();
-
-    if (error) {
-      logBackendError('failed_to_load_saver_username', { error: error });
-      return null;
-    }
-
-    const username = (data as { username?: unknown } | null)?.username;
-    return typeof username === 'string' && username.trim() ? username.trim() : null;
-  } catch (error) {
-    logBackendError('failed_to_load_saver_username', { error: error });
-    return null;
-  }
-}
-
 async function recordPostSaveEvent({
   actorUserId,
   changed,
@@ -287,9 +268,10 @@ export async function saveShowcasePostForRoute({
 }: {
   actorUserId: string;
   /**
-   * The app this save came from tells people that creators can see who saved,
-   * so the creator's alert may name them. Saves from apps that do not say so
-   * stay "Someone", as every save was before.
+   * The app this save came from had already told this person that creators can
+   * see who saved, so the creator's alert may name them by a handle they chose.
+   * Saves without it (an app that never says so, or the save that first says
+   * so) stay "Someone", as every save was before.
    */
   creatorSeesSaver?: boolean;
   dependencies?: Partial<ShowcaseSaveServiceDependencies>;
@@ -395,18 +377,17 @@ export async function saveShowcasePostForRoute({
   }
 
   if (isSaved && (requestedSaveState === null || changed)) {
-    // The save is recorded; what is left is telling the creator. A new alert
-    // (the first unnamed save of a post in a quarter-hour, or a named saver's
-    // first save of it) ends in a push request to Expo for their devices, and
-    // the app holds its later saves behind this answer. So the answer goes
-    // first wherever it can, and the saver's handle is looked up behind it.
-    // A creator saving their own post is told nothing, so it is never looked
-    // up for that.
+    // The save is recorded; what is left is telling the creator. The first
+    // alert about a post's saves in a quarter-hour ends in a push request to
+    // Expo for their devices, and the app holds its later saves behind this
+    // answer. So the answer goes first wherever it can, and the saver's handle
+    // is looked up behind it. A creator saving their own post is told
+    // nothing, so it is never looked up for that.
     const namesSaver = creatorSeesSaver && Boolean(post.user_id) && post.user_id !== actorUserId;
     await sendDeferrableNotification(
       runAfterResponse,
       async () => {
-        const actorUsername = namesSaver ? await loadSaverUsername(serviceClient, actorUserId) : null;
+        const actorUsername = namesSaver ? await loadClaimedProfileHandle(serviceClient, actorUserId) : null;
         return resolvedDependencies.notifyPostSocialActivity(serviceClient, {
           type: 'post_saved',
           recipientUserId: post.user_id,
@@ -415,6 +396,17 @@ export async function saveShowcasePostForRoute({
           ...(actorUsername ? { actorUsername } : {}),
         });
       },
+    );
+  } else if (!isSaved && (requestedSaveState === null || changed) && post.user_id && post.user_id !== actorUserId) {
+    // Taken back: an alert that named this person must not go on saying the
+    // post is in their saved media.
+    await sendDeferrableNotification(
+      runAfterResponse,
+      () => resolvedDependencies.withdrawPostSaveNotification(serviceClient, {
+        recipientUserId: post.user_id,
+        actorUserId,
+        postId: post.id,
+      }),
     );
   }
 

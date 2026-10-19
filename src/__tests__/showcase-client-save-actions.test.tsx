@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseClient from '@/app/showcase/ShowcaseClient';
+import { resetSaverNoticeForTests } from '@/components/saver-notice';
 import {
   FEED_REMOVAL_UNDO_MS,
   flushShowcaseFeedEvents,
@@ -265,6 +266,8 @@ describe('ShowcaseClient save actions', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    window.localStorage.removeItem('magicbooklet:saver-notice:v1:user-1');
+    resetSaverNoticeForTests();
   });
 
   it('optimistically saves a showcase card with accessible pressed state', async () => {
@@ -272,6 +275,8 @@ describe('ShowcaseClient save actions', () => {
       ok: true,
       json: async () => ({ success: true, isSaved: true, saveCount: 5, changed: true }),
     })));
+    // This viewer was told on an earlier page, so the save may name them.
+    window.localStorage.setItem('magicbooklet:saver-notice:v1:user-1', '1');
 
     renderShowcase(createShowcaseItem());
 

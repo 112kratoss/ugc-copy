@@ -118,6 +118,7 @@ export function CreatorContentTabs({
   } = useOptimisticPostSave({
     initialItems: initialData.items,
     accessToken: session?.access_token ?? null,
+    viewerId: user?.id ?? null,
     isSignedIn: Boolean(user && session?.access_token),
     onAuthRequired: () => router.push(`/login?returnUrl=${encodeURIComponent(profilePath)}`),
     onError: (error) => console.error('Creator profile save failed:', error),

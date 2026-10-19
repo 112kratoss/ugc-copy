@@ -33,6 +33,8 @@ import {
 } from '@/lib/showcase-feed-newest-route-adapter-service';
 import type { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
 import { getShowcasePostResolveRouteResponse } from '@/lib/showcase-post-resolve-route-adapter-service';
+import { postShowcaseSaveRouteResponse } from '@/lib/showcase-save-route-adapter-service';
+import type { ShowcaseSaveResponseBody } from '@/lib/showcase-save-service';
 import {
   parseShowcaseSharePayloadForRoute,
   shareShowcasePostForRoute,
@@ -521,6 +523,47 @@ describe('shared mobile API v1 contract fixture', () => {
     await expect(probe({ id: String(endpoint.response.newestPostId), created_at: '2026-10-14T05:30:00+00:00' }))
       .resolves.toEqual(endpoint.response);
     await expect(probe(null)).resolves.toEqual(endpoint.responseVariants.emptyLane);
+  });
+
+  // A save names its saver only when the app says it told them first: the field
+  // the app sends is the one the route reads, and anything else stays unnamed.
+  it('reads the save request the fixture pins, naming the saver only for its flag', async () => {
+    const endpoint = mobileApiContract.endpoints.saveShowcasePost;
+    const saveShowcasePostForRoute = vi.fn(async () => ({
+      ok: true as const,
+      body: endpoint.response as ShowcaseSaveResponseBody,
+    }));
+    const post = (body: unknown) => postShowcaseSaveRouteResponse({
+      request: new Request('http://localhost/api/showcase/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        createUserClient: () => ({
+          auth: { getUser: vi.fn(async () => ({ data: { user: { id: 'viewer-1' } }, error: null })) },
+        }) as unknown as SupabaseClient,
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0, resetAt: '2026-10-19T10:00:00.000Z',
+        })),
+        runAfterResponse: vi.fn(),
+        saveShowcasePostForRoute,
+      },
+    });
+
+    const response = await post(endpoint.request);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(endpoint.response);
+    expect(saveShowcasePostForRoute).toHaveBeenLastCalledWith(expect.objectContaining({
+      actorUserId: 'viewer-1',
+      referenceId: endpoint.request.postId,
+      requestedSaveState: endpoint.request.shouldSave,
+      creatorSeesSaver: true,
+    }));
+
+    await post({ postId: endpoint.request.postId, shouldSave: endpoint.request.shouldSave });
+    expect(saveShowcasePostForRoute).toHaveBeenLastCalledWith(expect.objectContaining({ creatorSeesSaver: false }));
   });
 
   // C14 (product decision 14): the app reports a shared link it opened on the

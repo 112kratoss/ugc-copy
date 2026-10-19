@@ -14,6 +14,11 @@ interface SaveablePostItem {
 interface UseOptimisticPostSaveOptions<TItem extends SaveablePostItem> {
   initialItems: TItem[];
   accessToken?: string | null;
+  /**
+   * The signed-in account. Whether its saves may name it is remembered per
+   * account (`saver-notice.ts`), so a browser two people share tells each.
+   */
+  viewerId: string | null;
   isSignedIn: boolean;
   onAuthRequired: () => void;
   onError: (error: unknown) => void;
@@ -85,6 +90,7 @@ function setSaveCount<TItem extends SaveablePostItem>(
 export function useOptimisticPostSave<TItem extends SaveablePostItem>({
   initialItems,
   accessToken,
+  viewerId,
   isSignedIn,
   onAuthRequired,
   onError,
@@ -201,7 +207,7 @@ export function useOptimisticPostSave<TItem extends SaveablePostItem>({
           postId: id,
           shouldSave: nextSaved,
           sourceSurface: actionSourceSurface,
-          ...creatorSeesSaverFields(nextSaved),
+          ...creatorSeesSaverFields(viewerId, nextSaved),
         }),
       });
 
