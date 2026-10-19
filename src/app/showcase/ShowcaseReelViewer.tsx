@@ -1405,7 +1405,9 @@ export default function ShowcaseReelViewer({
       return;
     }
 
-    const target = event.target instanceof HTMLElement ? event.target : null;
+    // `Element`: the details scroll under a resting pointer, so a wheel often
+    // starts over one of their icons, an <svg> that is not an HTMLElement.
+    const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('[data-reel-scroll-region="details"]')) {
       return;
     }

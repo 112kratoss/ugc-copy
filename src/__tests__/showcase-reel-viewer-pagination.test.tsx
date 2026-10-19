@@ -545,6 +545,33 @@ describe('ShowcaseReelViewer pagination', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  // The details scroll under a resting pointer, so a wheel often starts over
+  // one of their icons: an <svg>, which is not an HTMLElement. Read as a wheel
+  // outside the details, it turned the reel to the next post mid-read.
+  it('scrolls the details, and stays on the post, when the wheel starts over an icon there', () => {
+    const onSelectItemId = vi.fn();
+    render(
+      <ShowcaseReelViewer
+        {...reelProps({
+          items: [
+            createShowcaseItem({ id: 'post-1', title: 'First Frame' }),
+            createShowcaseItem({ id: 'post-2', title: 'Second Frame' }),
+          ],
+          onSelectItemId,
+        })}
+      />
+    );
+    const icon = document.querySelector('[data-reel-scroll-region="details"] svg');
+    expect(icon).not.toBeNull();
+
+    fireEvent.wheel(icon!, { deltaY: 120 });
+    expect(onSelectItemId).not.toHaveBeenCalled();
+
+    // The same wheel outside the details turns the reel.
+    fireEvent.wheel(screen.getByRole('dialog', { name: /reel viewer/i }), { deltaY: 120 });
+    expect(onSelectItemId).toHaveBeenCalledWith('post-2');
+  });
+
   // Up and Down step through the open menu's rows. They used to turn the reel
   // to another post as well, under the menu.
   it('does not change post while the arrows step through its open menu', () => {

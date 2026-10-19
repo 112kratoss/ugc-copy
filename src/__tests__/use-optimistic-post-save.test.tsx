@@ -74,9 +74,8 @@ function serverHolds(isSaved: boolean, saveCount: number): SaveAnswer {
     return { ok: true, json: async () => ({ success: true, isSaved, saveCount }) };
 }
 
-async function renderSignedInSaveHook() {
+async function renderSignedInSaveHook(onSuccess = vi.fn()) {
     const onError = vi.fn();
-    const onSuccess = vi.fn();
     const hook = renderHook(() => useOptimisticPostSave<Post>({
         initialItems,
         accessToken: 'token',
@@ -197,5 +196,88 @@ describe('useOptimisticPostSave, tapped faster than the server answers', () => {
         expect([heart('post-2'), count('post-2')]).toEqual([false, 0]);
         expect(saves).toHaveLength(1);
         expect(onError).not.toHaveBeenCalled();
+    });
+
+    it('says a later request failed, after telling of the save the first one made', async () => {
+        const saves = stubSaveRequests();
+        const { tap, heart, count, onError, onSuccess } = await renderSignedInSaveHook();
+
+        tap('post-2');
+        tap('post-2');
+        await act(async () => saves[0].resolve(serverHolds(true, 6)));
+        await act(async () => saves[1].reject(new TypeError('Failed to fetch')));
+
+        // The server holds the save, with the count it gave for it.
+        expect([heart('post-2'), count('post-2')]).toEqual([true, 6]);
+        expect(onError).toHaveBeenCalledTimes(1);
+        expect(onSuccess).toHaveBeenCalledTimes(1);
+        expect(onSuccess).toHaveBeenCalledWith({ id: 'post-2', isSaved: true, sourceSurface: 'feed' });
+    });
+
+    // The feed's save event is checked against the saved state when it lands,
+    // so a later tap's request must not reach the server before it.
+    it('sends a tap made while the save is being told only once that is done', async () => {
+        const saves = stubSaveRequests();
+        let doneTelling = () => {};
+        const onSuccess = vi.fn()
+            .mockImplementationOnce(() => new Promise<void>((resolve) => { doneTelling = resolve; }));
+        const { tap, heart, count } = await renderSignedInSaveHook(onSuccess);
+
+        tap('post-2');
+        await act(async () => saves[0].resolve(serverHolds(true, 1)));
+        expect(onSuccess).toHaveBeenCalledWith({ id: 'post-2', isSaved: true, sourceSurface: 'feed' });
+
+        tap('post-2');
+        expect([heart('post-2'), count('post-2')]).toEqual([false, 0]);
+        expect(saves).toHaveLength(1);
+
+        await act(async () => doneTelling());
+        expect(saves).toHaveLength(2);
+        expect(saves[1].body).toMatchObject({ postId: 'post-2', shouldSave: false });
+
+        await act(async () => saves[1].resolve(serverHolds(false, 0)));
+        expect(onSuccess).toHaveBeenCalledTimes(2);
+        expect(onSuccess).toHaveBeenLastCalledWith({ id: 'post-2', isSaved: false, sourceSurface: 'feed' });
+    });
+
+    it('takes a tap from the heart the viewer sees, after something else drew it anew', async () => {
+        const saves = stubSaveRequests();
+        const { result, tap, heart } = await renderSignedInSaveHook();
+
+        tap('post-2');
+        // A lane change, or the saved-state read, draws the post unsaved meanwhile.
+        act(() => result.current.setSavedItemIds(new Set()));
+        tap('post-2');
+        expect(heart('post-2')).toBe(true);
+
+        await act(async () => saves[0].resolve(serverHolds(true, 1)));
+        // That tap asked for the save the first request carried: nothing more to send.
+        expect(saves).toHaveLength(1);
+        expect(heart('post-2')).toBe(true);
+    });
+
+    it('keeps the same set and items when the answer agrees with what is drawn', async () => {
+        const saves = stubSaveRequests();
+        const { result, tap } = await renderSignedInSaveHook();
+
+        tap('post-2');
+        const drawn = { savedItemIds: result.current.savedItemIds, items: result.current.items };
+        await act(async () => saves[0].resolve(serverHolds(true, 1)));
+
+        expect(result.current.savedItemIds).toBe(drawn.savedItemIds);
+        expect(result.current.items).toBe(drawn.items);
+    });
+
+    it('takes the answer when the server holds another state than asked, and does not ask again', async () => {
+        const saves = stubSaveRequests();
+        const { tap, heart, count, onError, onSuccess } = await renderSignedInSaveHook();
+
+        tap('post-2');
+        await act(async () => saves[0].resolve(serverHolds(false, 0)));
+
+        expect(saves).toHaveLength(1);
+        expect([heart('post-2'), count('post-2')]).toEqual([false, 0]);
+        expect(onError).not.toHaveBeenCalled();
+        expect(onSuccess).not.toHaveBeenCalled();
     });
 });
