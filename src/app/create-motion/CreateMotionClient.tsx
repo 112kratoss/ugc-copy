@@ -961,11 +961,10 @@ export default function CreateMotionClient({
 
     const startFreshRun = async () => {
         if (activeGenerationRequestKeyRef.current) return;
-        const effectiveDuration = Math.ceil(duration);
         const idempotencyKey = createGenerationIdempotencyKey('motion');
         activeGenerationRequestKeyRef.current = idempotencyKey;
         const startedAtMs = getCurrentTimestampMs();
-        const estimatedTotalMs = getMotionGenerationEstimate(effectiveDuration);
+        const estimatedTotalMs = getMotionGenerationEstimate(runSettings.duration);
         beginRunView(startedAtMs, estimatedTotalMs, 'Preparing inputs');
 
         try {
