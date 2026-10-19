@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useEffect, useMemo, useState } from 'react';
 import { ModelCatalogSession, type CatalogSessionState } from '../../ugc-mobile/lib/model-catalog/session';
-import { catalogRunQuoteInput, type ModelCatalogKind, type ModelCatalogSummary } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { catalogRunWithShownCost, type ModelCatalogKind, type ModelCatalogSummary } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type {
@@ -693,13 +693,9 @@ export type WebGenerationStartResponse = {
 };
 
 /**
- * The run as it is sent to start: with the price the creator was shown
- * (`expectedCostCredits`) when that price is a ready quote of this very run, asked with
- * the run's own quote input. The start prices the run again, charges its own price up to
- * that one, and refuses a run it prices above it (`cost_changed`) before any credits are
- * held. Without such a quote the run goes without a price, and the start charges its own
- * as it always has. The app's rule is the same (`catalogStartRequest` in
- * ugc-mobile/lib/generation-model-draft.ts).
+ * The run as a web creator sends it to start: with the price on its run panel
+ * (`expectedCostCredits`) when that price is a ready quote of this very run, read off the
+ * page's quote state. The rule both creators share is `catalogRunWithShownCost`.
  */
 export function webCatalogStartRequest(
   run: CatalogGenerationRequestPayload,
@@ -710,12 +706,7 @@ export function webCatalogStartRequest(
     key: string | null;
   },
 ): CatalogGenerationRequestPayload {
-  const cost = quote.status === 'ready' ? quote.quote?.costCredits : undefined;
-  const shownForThisRun = typeof cost === 'number'
-    && Number.isSafeInteger(cost)
-    && cost >= 0
-    && quote.key === JSON.stringify(catalogRunQuoteInput({ ...run, inputs: run.inputs ?? [] }));
-  return shownForThisRun ? { ...run, expectedCostCredits: cost } : run;
+  return catalogRunWithShownCost(run, { key: quote.key, status: quote.status, cost: quote.quote?.costCredits });
 }
 
 export async function requestWebGenerationStart(

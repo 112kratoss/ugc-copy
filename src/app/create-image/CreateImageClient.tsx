@@ -1121,6 +1121,10 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         : null;
     const showTopUp = insufficientCredits || Boolean(creditRefusalMessage);
     const quotePending = quoteUi.blocksGenerate;
+    // The price could not be read: Generate waits for one, and this asks again.
+    const quoteRetry = quoteState.status === 'error' ? (
+        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={() => setQuoteAttempt((current) => current + 1)} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
+    ) : null;
     // Only what the request carries can be mentioned: the server refuses a mention
     // of a picture it was not sent.
     const sentElements = runInputs.map((input) => input.element);
@@ -1489,9 +1493,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 estimatedTotalMs,
             }));
 
-            // With the price on the run panel when it is the quote of this very run: the
-            // start charges its own price up to it, and refuses a run it prices above it
-            // (`cost_changed`) before any credits are held.
+            // The price on the run panel goes with the run when it is this run's own quote.
             const body = webCatalogStartRequest({
                 kind: 'image',
                 modelId: selectedModel,
@@ -2274,14 +2276,20 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     ) : referenceLimitMessage ? (
                                         <p className="text-sm text-red-400">{referenceLimitMessage}</p>
                                     ) : error ? (
-                                        <p className="text-sm text-red-400">{error}</p>
+                                        // A price that could not be read since (asked again after
+                                        // `cost_changed`, say) keeps its Retry under the error:
+                                        // Generate waits for a price.
+                                        <div className="space-y-2">
+                                            <p className="text-sm text-red-400">{error}</p>
+                                            {quoteRetry}
+                                        </div>
                                     ) : staleElementMentions.length > 0 ? (
                                         <p className="text-sm text-rose-300">
                                             Resolve the unknown element mention{staleElementMentions.length > 1 ? 's' : ''} before generating:{' '}
                                             <StudioElementHandleList handles={staleElementMentions} />
                                         </p>
                                     ) : quoteState.status === 'error' ? (
-                                        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={() => setQuoteAttempt((current) => current + 1)} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
+                                        quoteRetry
                                     ) : (
                                         <p className="text-sm text-zinc-500">Your latest image will appear in the workspace as soon as the run finishes.</p>
                                     )}

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import contractFixture from '../../contracts/generation-model-catalog-v1.json';
 import { catalogRunQuoteInput } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
+import { parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 import {
   applyGenerationModelCatalogToRegistries,
   clearPendingWebStart,
@@ -499,8 +500,8 @@ describe('the price a web start carries', () => {
     expect(webCatalogStartRequest(run, ready(0))).toEqual({ ...run, expectedCostCredits: 0 });
   });
 
-  it.each(['idle', 'pending', 'error'] as const)('carries no price while the quote is %s', (status) => {
-    expect(webCatalogStartRequest(run, { status, quote: null, key: quoteKey(run) })).toEqual(run);
+  it.each(['idle', 'pending', 'error'] as const)('carries no price while the quote is %s, even one left from an earlier answer', (status) => {
+    expect(webCatalogStartRequest(run, { status, quote: { costCredits: 80 }, key: quoteKey(run) })).toEqual(run);
   });
 
   it('carries no price quoted for another run', () => {
@@ -527,8 +528,25 @@ describe('the price a web start carries', () => {
     expect(webCatalogStartRequest(relinked, ready(80))).toEqual({ ...relinked, expectedCostCredits: 80 });
   });
 
-  it.each([12.5, -1, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53])('carries no price of %s credits, which the start refuses as malformed', (costCredits) => {
+  it.each([12.5, -1, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53])('carries no price of %s credits, which is no whole number of credits', (costCredits) => {
     expect(webCatalogStartRequest(run, ready(costCredits))).toEqual(run);
+  });
+
+  it('sends no price the start would refuse the whole run for', () => {
+    // As the page would have sent them (JSON sends NaN and Infinity as null, which the start
+    // reads as no price at all), the start refuses these, and the run with them.
+    for (const costCredits of [12.5, -1, 2 ** 53]) {
+      let refusal: unknown = null;
+      try {
+        parseUnifiedGenerationRequest(JSON.parse(JSON.stringify({ ...run, expectedCostCredits: costCredits })));
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal, String(costCredits)).toMatchObject({ status: 422, fieldErrors: { expectedCostCredits: expect.any(String) } });
+      expect(webCatalogStartRequest(run, ready(costCredits))).not.toHaveProperty('expectedCostCredits');
+    }
+    // What it does send, it reads back as sent.
+    expect(parseUnifiedGenerationRequest(JSON.parse(JSON.stringify(webCatalogStartRequest(run, ready(80))))).expectedCostCredits).toBe(80);
   });
 
   it('is told by the quote hook which request each answer prices', async () => {
