@@ -1,5 +1,5 @@
 import { act, renderHook } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 
@@ -46,5 +46,156 @@ describe('useOptimisticPostSave', () => {
         });
 
         expect(result.current.savedItemIds).toBe(before);
+    });
+});
+
+type SaveBody = { postId: string; shouldSave: boolean; sourceSurface: string };
+type SaveAnswer = { ok: boolean; json: () => Promise<unknown> };
+
+/** Every save POST waits for the test to answer it; the saved-state read answers at once. */
+function stubSaveRequests() {
+    const saves: Array<{
+        body: SaveBody;
+        resolve: (answer: SaveAnswer) => void;
+        reject: (error: unknown) => void;
+    }> = [];
+    vi.stubGlobal('fetch', vi.fn((input: unknown, init?: RequestInit) => {
+        if (String(input).startsWith('/api/showcase/saved-state')) {
+            return Promise.resolve({ ok: true, json: async () => [] });
+        }
+        return new Promise<SaveAnswer>((resolve, reject) => {
+            saves.push({ body: JSON.parse(String(init?.body)) as SaveBody, resolve, reject });
+        });
+    }));
+    return saves;
+}
+
+function serverHolds(isSaved: boolean, saveCount: number): SaveAnswer {
+    return { ok: true, json: async () => ({ success: true, isSaved, saveCount }) };
+}
+
+async function renderSignedInSaveHook() {
+    const onError = vi.fn();
+    const onSuccess = vi.fn();
+    const hook = renderHook(() => useOptimisticPostSave<Post>({
+        initialItems,
+        accessToken: 'token',
+        isSignedIn: true,
+        onAuthRequired: vi.fn(),
+        onError,
+        onSuccess,
+        sourceSurface: 'feed',
+    }));
+    // The saved-state read on mount.
+    await act(async () => {});
+    const tap = (id: string, sourceSurface?: string) => act(() => {
+        void hook.result.current.toggleSave(id, sourceSurface);
+    });
+    const heart = (id: string) => hook.result.current.savedItemIds.has(id);
+    const count = (id: string) => hook.result.current.items.find((item) => item.id === id)?.saveCount;
+    return { ...hook, onError, onSuccess, tap, heart, count };
+}
+
+// The app's heart takes every tap: it flips at once, and the requests catch up
+// behind it. The web's used to lock for the whole round trip.
+describe('useOptimisticPostSave, tapped faster than the server answers', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it('flips the heart on every tap, with one request on the wire at a time', async () => {
+        const saves = stubSaveRequests();
+        const { tap, heart, count } = await renderSignedInSaveHook();
+
+        tap('post-2');
+        expect([heart('post-2'), count('post-2')]).toEqual([true, 1]);
+        tap('post-2');
+        expect([heart('post-2'), count('post-2')]).toEqual([false, 0]);
+        tap('post-2');
+        expect([heart('post-2'), count('post-2')]).toEqual([true, 1]);
+
+        expect(saves).toHaveLength(1);
+        expect(saves[0].body).toMatchObject({ postId: 'post-2', shouldSave: true });
+    });
+
+    it('sends the newest tap once the wire clears, and settles on what the server then holds', async () => {
+        const saves = stubSaveRequests();
+        const { tap, heart, count, onSuccess, onError } = await renderSignedInSaveHook();
+
+        tap('post-2');
+        tap('post-2', 'showcase-reel');
+        await act(async () => saves[0].resolve(serverHolds(true, 1)));
+
+        // The answer to a tap already taken back does not flick the heart.
+        expect(heart('post-2')).toBe(false);
+        expect(saves).toHaveLength(2);
+        expect(saves[1].body).toEqual({ postId: 'post-2', shouldSave: false, sourceSurface: 'showcase-reel' });
+
+        await act(async () => saves[1].resolve(serverHolds(false, 4)));
+
+        expect([heart('post-2'), count('post-2')]).toEqual([false, 4]);
+        expect(saves).toHaveLength(2);
+        // Saved and taken back: nothing changed for the ranker or a saved total.
+        expect(onSuccess).not.toHaveBeenCalled();
+        expect(onError).not.toHaveBeenCalled();
+    });
+
+    it('sends nothing more when the taps end where the first one asked, and reports that once', async () => {
+        const saves = stubSaveRequests();
+        const { tap, heart, count, onSuccess } = await renderSignedInSaveHook();
+
+        tap('post-2');
+        tap('post-2');
+        tap('post-2');
+        await act(async () => saves[0].resolve(serverHolds(true, 5)));
+
+        expect(saves).toHaveLength(1);
+        // Someone else saved it meanwhile: the count is the server's.
+        expect([heart('post-2'), count('post-2')]).toEqual([true, 5]);
+        expect(onSuccess).toHaveBeenCalledTimes(1);
+        expect(onSuccess).toHaveBeenCalledWith({ id: 'post-2', isSaved: true, sourceSurface: 'feed' });
+
+        // A settled post starts over on the next tap.
+        tap('post-2');
+        expect(saves).toHaveLength(2);
+        expect(saves[1].body).toMatchObject({ postId: 'post-2', shouldSave: false });
+    });
+
+    it('saves two posts side by side', async () => {
+        const saves = stubSaveRequests();
+        const { tap } = await renderSignedInSaveHook();
+
+        tap('post-1');
+        tap('post-2');
+
+        expect(saves.map((save) => save.body)).toEqual([
+            { postId: 'post-1', shouldSave: false, sourceSurface: 'feed' },
+            { postId: 'post-2', shouldSave: true, sourceSurface: 'feed' },
+        ]);
+    });
+
+    it('puts a failed save back as the server holds it, and says so once', async () => {
+        const saves = stubSaveRequests();
+        const { tap, heart, count, onError, onSuccess } = await renderSignedInSaveHook();
+
+        tap('post-2');
+        await act(async () => saves[0].resolve({ ok: false, json: async () => ({ error: 'Too many requests' }) }));
+
+        expect([heart('post-2'), count('post-2')]).toEqual([false, 0]);
+        expect(onError).toHaveBeenCalledTimes(1);
+        expect(onSuccess).not.toHaveBeenCalled();
+    });
+
+    it('says nothing of a failure the viewer has already taken back', async () => {
+        const saves = stubSaveRequests();
+        const { tap, heart, count, onError } = await renderSignedInSaveHook();
+
+        tap('post-2');
+        tap('post-2');
+        await act(async () => saves[0].reject(new TypeError('Failed to fetch')));
+
+        expect([heart('post-2'), count('post-2')]).toEqual([false, 0]);
+        expect(saves).toHaveLength(1);
+        expect(onError).not.toHaveBeenCalled();
     });
 });

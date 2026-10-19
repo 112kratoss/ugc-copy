@@ -20,9 +20,12 @@ vi.mock('@/components/PostComments', () => ({
     },
 }));
 
+// With an icon inside, as the real one draws: a click lands on the icon.
 vi.mock('@/components/PublicShareButton', () => ({
     default: ({ className }: { className?: string }) => (
-        <button type="button" aria-label="Share" className={className} />
+        <button type="button" aria-label="Share" className={className}>
+            <svg aria-hidden="true"><path d="M0 0h4v4H0z" /></svg>
+        </button>
     ),
 }));
 
@@ -101,7 +104,6 @@ function renderCard(overrides: Partial<ShowcaseFeedItem> = {}, props: Record<str
         <FeedPostCard
             card={card}
             isSaved={false}
-            saving={false}
             expanded={false}
             commentsOpen={false}
             accessToken={null}
@@ -232,6 +234,34 @@ describe('FeedPostCard click routing', () => {
         fireEvent.click(screen.getByRole('button', { name }));
 
         expect(onOpenPost).not.toHaveBeenCalled();
+    });
+
+    // Most of a pointer's clicks on these controls land on the icon: its <svg>,
+    // or a <path> inside it. Neither is an HTMLElement, and the card used to
+    // take that as a click on itself and open the post on top of the save.
+    it.each([
+        ['Save', /Save A launch frame/i],
+        ['Comment', /Show comments on A launch frame/i],
+        ['Remix', /Remix/i],
+        ['Share', /^Share$/],
+    ])('leaves a click on the %s icon to its control', (_label, name) => {
+        const { onOpenPost } = renderCard();
+        const icon = screen.getByRole('button', { name }).querySelector('svg');
+        expect(icon).not.toBeNull();
+
+        fireEvent.click(icon!);
+        fireEvent.click(icon!.querySelector('path')!);
+
+        expect(onOpenPost).not.toHaveBeenCalled();
+    });
+
+    it('saves from a click on the heart itself', () => {
+        const { onToggleSave } = renderCard();
+        const heart = screen.getByRole('button', { name: /Save A launch frame/i }).querySelector('svg')!;
+
+        fireEvent.click(heart.querySelector('path')!);
+
+        expect(onToggleSave).toHaveBeenCalledWith('post-1');
     });
 
     it('leaves the creator link alone', () => {
@@ -652,7 +682,6 @@ describe("FeedPostCard's feed telemetry", () => {
                 <FeedPostCard
                     card={card}
                     isSaved={false}
-                    saving={false}
                     expanded={false}
                     commentsOpen={false}
                     accessToken={null}

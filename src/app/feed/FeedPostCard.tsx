@@ -49,7 +49,6 @@ const INTERACTIVE_SELECTOR = [
 interface FeedPostCardProps {
     card: PostFeedCard;
     isSaved: boolean;
-    saving: boolean;
     expanded: boolean;
     commentsOpen: boolean;
     accessToken: string | null;
@@ -120,7 +119,6 @@ interface FeedPostCardProps {
 function FeedPostCardView({
     card,
     isSaved,
-    saving,
     expanded,
     commentsOpen,
     accessToken,
@@ -174,8 +172,11 @@ function FeedPostCardView({
     // permalink, so keyboard and screen-reader users get exactly one link, and
     // hover/right-click still show the URL. This handler is pointer convenience
     // layered on top of it, with no role and no tab stop of its own.
+    // `Element`, not `HTMLElement`: most clicks on a control land on its icon,
+    // an <svg> or a <path>, and those are SVGElements. Read as the card's own,
+    // a click on the heart saved the post and opened it too.
     const isOwnClick = (target: EventTarget | null) =>
-        !(target instanceof HTMLElement) || !target.closest(INTERACTIVE_SELECTOR);
+        !(target instanceof Element) || !target.closest(INTERACTIVE_SELECTOR);
 
     const openInNewTab = () => {
         onRecordOpen(item.id);
@@ -373,11 +374,12 @@ function FeedPostCardView({
                         {card.remixLabel}
                     </button>
                 ) : null}
+                {/* Never disabled: every tap flips the heart, as in the app
+                    (`useOptimisticPostSave` keeps the requests in order). */}
                 <ActionButton
                     label={card.saveLabel}
                     ariaLabel={`${isSaved ? 'Remove save from' : 'Save'} ${card.title}`}
                     pressed={isSaved}
-                    disabled={saving}
                     onClick={() => onToggleSave(item.id)}
                     icon={<Heart className={`h-4 w-4 ${isSaved ? 'fill-current text-[var(--ui-primary)]' : ''}`} />}
                 />
@@ -489,24 +491,21 @@ function ActionButton({
     ariaLabel,
     icon,
     pressed,
-    disabled,
     onClick,
 }: {
     label: string;
     ariaLabel: string;
     icon: React.ReactNode;
     pressed?: boolean;
-    disabled?: boolean;
     onClick: () => void;
 }) {
     return (
         <button
             type="button"
             onClick={onClick}
-            disabled={disabled}
             aria-label={ariaLabel}
             aria-pressed={pressed}
-            className={`ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full px-3 text-xs font-bold transition disabled:opacity-60 ${
+            className={`ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full px-3 text-xs font-bold transition ${
                 pressed
                     ? 'bg-[var(--ui-surface-3)] text-[var(--ui-text-primary)]'
                     : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]'

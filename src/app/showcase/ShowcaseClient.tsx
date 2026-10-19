@@ -433,7 +433,6 @@ interface ShowcaseGridCardProps {
     item: ShowcaseFeedItem;
     index: number;
     isSaved: boolean;
-    isSaving: boolean;
     isPriority: boolean;
     priorityPoster: ShowcasePriorityPosterData | null;
     feedSessionId: string | null;
@@ -468,7 +467,6 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
     item,
     index,
     isSaved,
-    isSaving,
     isPriority,
     priorityPoster,
     feedSessionId,
@@ -598,10 +596,8 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
                                 e.stopPropagation();
                                 onToggleSave(item.id);
                             }}
-                            disabled={isSaving}
                             aria-label={`${isSaved ? 'Remove save from' : 'Save'} ${item.title}. ${item.saveCount} saves`}
                             aria-pressed={isSaved}
-                            aria-busy={isSaving}
                             className={`ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full shadow-md transition ${
                                 isSaved
                                     ? 'bg-rose-600 text-white hover:bg-rose-700'
@@ -737,7 +733,6 @@ export default function ShowcaseClient({
         setItems,
         savedItemIds,
         setSavedItemIds,
-        savingItemIds,
         toggleSave,
     } = useOptimisticPostSave({
         initialItems: laneFirstPageItems,
@@ -2354,7 +2349,6 @@ export default function ShowcaseClient({
                                     item={item}
                                     index={itemIndex}
                                     isSaved={savedItemIds.has(item.id)}
-                                    isSaving={savingItemIds.has(item.id)}
                                     isPriority={item.id === priorityMediaItemId}
                                     priorityPoster={item.id === initialPriorityPoster?.postId ? initialPriorityPoster : null}
                                     feedSessionId={feedSessionId}
@@ -2483,7 +2477,6 @@ export default function ShowcaseClient({
                     selectedItemId={selectedItemId}
                     initialMediaIndex={selectedMediaIndex}
                     savedItemIds={savedItemIds}
-                    savingItemIds={savingItemIds}
                     accessToken={session?.access_token ?? null}
                     hasMoreItems={pageInfo.hasMore}
                     isLoadingMoreItems={isLoadingMore}

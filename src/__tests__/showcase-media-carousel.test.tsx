@@ -570,6 +570,29 @@ describe('ShowcaseMediaCarousel', () => {
     expect(screen.queryByRole('button', { name: 'Retry video' })).not.toBeInTheDocument();
   });
 
+  // Most of a pointer's clicks on the retry button land on its icon, and an
+  // <svg> is not an HTMLElement: the frame took that click as its own.
+  it('retries, and does not open the media, from a click on the retry icon', () => {
+    const onOpen = vi.fn();
+    const onMediaRetry = vi.fn();
+    const mediaItem = createVideoItem();
+    const { container } = render(
+      <ShowcaseMediaCarousel
+        title="Campaign clip"
+        mediaItems={[mediaItem]}
+        onOpen={onOpen}
+        onMediaRetry={onMediaRetry}
+      />
+    );
+
+    fireEvent.error(container.querySelector('video')!);
+    const icon = screen.getByRole('button', { name: 'Retry video' }).querySelector('svg')!;
+    fireEvent.click(icon.querySelector('path') ?? icon);
+
+    expect(onMediaRetry).toHaveBeenCalledWith(mediaItem);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
   it('turns a reel video that never becomes ready into a bounded, retryable error', () => {
     vi.useFakeTimers();
     const onMediaError = vi.fn();

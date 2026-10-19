@@ -113,7 +113,6 @@ export function CreatorContentTabs({
     setItems,
     savedItemIds,
     addSavedItemIds,
-    savingItemIds,
     toggleSave,
   } = useOptimisticPostSave({
     initialItems: initialData.items,
@@ -518,7 +517,6 @@ export function CreatorContentTabs({
           selectedItemId={selectedItemId}
           initialMediaIndex={selectedMediaIndex}
           savedItemIds={savedItemIds}
-          savingItemIds={savingItemIds}
           accessToken={session?.access_token ?? null}
           hasMoreItems={reelHasMore}
           isLoadingMoreItems={isLoadingMore}

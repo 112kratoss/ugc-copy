@@ -209,7 +209,6 @@ function createVideoReel(mediaItems: ShowcaseMediaItem[]) {
       ]}
       selectedItemId="post-1"
       savedItemIds={new Set()}
-      savingItemIds={new Set()}
       accessToken={null}
       hasMoreItems={false}
       isLoadingMoreItems={false}
@@ -293,7 +292,6 @@ function renderPaidReel() {
       ]}
       selectedItemId="post-1"
       savedItemIds={new Set()}
-      savingItemIds={new Set()}
       accessToken={null}
       hasMoreItems={false}
       isLoadingMoreItems={false}
@@ -320,7 +318,6 @@ function renderFreeReel() {
       ]}
       selectedItemId="post-1"
       savedItemIds={new Set()}
-      savingItemIds={new Set()}
       accessToken={null}
       hasMoreItems={false}
       isLoadingMoreItems={false}
@@ -340,7 +337,6 @@ function reelProps(overrides: Partial<ReelProps> = {}): ReelProps {
     items: [createShowcaseItem()],
     selectedItemId: 'post-1',
     savedItemIds: new Set(),
-    savingItemIds: new Set(),
     accessToken: null,
     hasMoreItems: false,
     isLoadingMoreItems: false,
@@ -427,7 +423,6 @@ describe('ShowcaseReelViewer pagination', () => {
         })]}
         selectedItemId="post-1"
         savedItemIds={new Set()}
-        savingItemIds={new Set()}
         accessToken={null}
         hasMoreItems={false}
         isLoadingMoreItems={false}
@@ -477,7 +472,6 @@ describe('ShowcaseReelViewer pagination', () => {
         ]}
         selectedItemId="post-2"
         savedItemIds={new Set()}
-        savingItemIds={new Set()}
         accessToken={null}
         hasMoreItems
         isLoadingMoreItems={false}
@@ -516,7 +510,6 @@ describe('ShowcaseReelViewer pagination', () => {
           ]}
           selectedItemId="post-1"
           savedItemIds={new Set()}
-          savingItemIds={new Set()}
           accessToken={null}
           hasMoreItems={false}
           isLoadingMoreItems={false}
@@ -565,7 +558,6 @@ describe('ShowcaseReelViewer pagination', () => {
         ]}
         selectedItemId="post-1"
         savedItemIds={new Set()}
-        savingItemIds={new Set()}
         accessToken={null}
         hasMoreItems={false}
         isLoadingMoreItems={false}
@@ -604,7 +596,6 @@ describe('ShowcaseReelViewer pagination', () => {
         items={[createShowcaseItem()]}
         selectedItemId="post-1"
         savedItemIds={new Set()}
-        savingItemIds={new Set()}
         accessToken={null}
         hasMoreItems={false}
         isLoadingMoreItems={false}
@@ -683,7 +674,6 @@ describe('ShowcaseReelViewer pagination', () => {
         items={[createShowcaseItem()]}
         selectedItemId="post-1"
         savedItemIds={new Set()}
-        savingItemIds={new Set()}
         accessToken={null}
         hasMoreItems={false}
         isLoadingMoreItems={false}
@@ -727,7 +717,6 @@ describe('ShowcaseReelViewer pagination', () => {
           items={[rankedItem]}
           selectedItemId="post-1"
           savedItemIds={new Set()}
-          savingItemIds={new Set()}
           accessToken="token-1"
           feedSessionId="session-1"
           hasMoreItems={false}
@@ -806,7 +795,6 @@ describe('ShowcaseReelViewer pagination', () => {
           items={[rankedItem]}
           selectedItemId="post-1"
           savedItemIds={new Set()}
-          savingItemIds={new Set()}
           accessToken={null}
           feedSessionId="session-1"
           hasMoreItems={false}
@@ -890,7 +878,6 @@ describe('ShowcaseReelViewer pagination', () => {
         ]}
         selectedItemId="post-1"
         savedItemIds={new Set()}
-        savingItemIds={new Set()}
         accessToken={null}
         hasMoreItems={false}
         isLoadingMoreItems={false}
@@ -943,7 +930,6 @@ describe('ShowcaseReelViewer pagination', () => {
       items: [item],
       selectedItemId: 'post-1',
       savedItemIds: new Set<string>(),
-      savingItemIds: new Set<string>(),
       accessToken: null,
       hasMoreItems: false,
       isLoadingMoreItems: false,
