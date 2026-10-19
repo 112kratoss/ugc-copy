@@ -257,7 +257,7 @@ export function WorkflowCanvasLeftRail({
           aria-controls="workflow-left-rail"
           aria-expanded="false"
           onClick={() => setIsMobileLibraryOpen(true)}
-          className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 z-40 inline-flex min-h-11 -translate-x-1/2 items-center gap-2 rounded-full border border-emerald-400/35 bg-[#07110d]/95 px-4 py-2.5 text-sm font-medium text-emerald-50 shadow-[0_18px_55px_rgba(0,0,0,0.6)] backdrop-blur-xl transition hover:bg-emerald-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70 md:hidden"
+          className="fixed bottom-[calc(var(--app-shell-bottom-nav-space,0px)+1rem)] left-1/2 z-40 inline-flex min-h-11 -translate-x-1/2 items-center gap-2 rounded-full border border-emerald-400/35 bg-[#07110d]/95 px-4 py-2.5 text-sm font-medium text-emerald-50 shadow-[0_18px_55px_rgba(0,0,0,0.6)] backdrop-blur-xl transition hover:bg-emerald-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70 md:hidden"
         >
           <PanelsTopLeft className="h-4 w-4" />
           {showWorkflowSwitcher ? 'Nodes & workflows' : 'Add nodes'}
