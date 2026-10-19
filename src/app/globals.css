@@ -5,6 +5,7 @@
    their route layout. */
 @source "./page.tsx";
 @source "./layout.tsx";
+@source "./not-found.tsx";
 @source "./showcase";
 @source "./marketplace";
 @source "./feed";
@@ -597,10 +598,10 @@ button:disabled,
 
 /*
  * The home layout (feed column + context rail) is shared by the public and
- * the authenticated home variants, so it must not depend on utility ordering:
+ * the authenticated home variants, so it does not depend on utility ordering:
  * authenticated routes load `non-public-utilities.css` AFTER this sheet, and
- * that sheet re-emits base utilities like `.hidden`. A `hidden xl:flex` rail
- * would lose to that later `.hidden` at every width and never appear. Named
+ * while that sheet re-emitted `.hidden` without `xl:flex`, a `hidden xl:flex`
+ * rail lost to the later `.hidden` at every width and never appeared. Named
  * classes carry the responsive switch instead — nothing downstream redeclares
  * them. Breakpoint mirrors Tailwind's `xl` (80rem).
  */
@@ -623,8 +624,8 @@ button:disabled,
 /*
  * The looping create rail at the top of the home column. Laid out here rather
  * than with utilities for the same reason as the grid above: it renders on
- * authenticated routes too, and a re-emitted utility from the second sheet
- * would win over anything responsive declared in the component.
+ * authenticated routes too, where a utility the second sheet re-emitted once
+ * won over anything responsive declared in the component.
  *
  * The track is bled to the viewport edges on narrow screens so a card can sit
  * flush against the gutter the way it does on mobile, then pulled back in once
@@ -1002,6 +1003,9 @@ button:disabled,
 .app-shell-content {
   /* Room for the bottom navigation, which floats over the page below 768px. */
   --app-shell-bottom-nav-space: calc(6.25rem + env(safe-area-inset-bottom));
+  /* What the shell leaves a page: the window less the top bar and that room.
+     Resolved here, so it follows the room's 0px from 768px. */
+  --app-shell-page-height: calc(100dvh - var(--app-shell-topbar-height) - var(--app-shell-bottom-nav-space));
   min-height: calc(100dvh - var(--app-shell-topbar-height));
   padding-bottom: var(--app-shell-bottom-nav-space);
 }
@@ -1014,7 +1018,17 @@ button:disabled,
    beats a page's own min-h-* utility in either sheet. */
 .app-shell-content > .min-h-screen,
 .app-shell-content .ui-page {
-  min-height: calc(100dvh - var(--app-shell-topbar-height) - var(--app-shell-bottom-nav-space));
+  min-height: var(--app-shell-page-height);
+}
+
+/* An editor that never scrolls the page (`h-screen`: the workflow canvas) takes
+   the same as its height, not a minimum, and scrolls its own panels. Sized by
+   hand as 100vh less the bar, the canvas ended at the window's bottom, under
+   the bottom navigation, and the page scrolled by the room. On a window too
+   short to leave it 20rem (a phone held sideways: 740x304 left its work area
+   2.5px) it keeps 20rem and the page scrolls instead. */
+.app-shell-content > .h-screen {
+  height: max(var(--app-shell-page-height), 20rem);
 }
 
 .app-shell-command {

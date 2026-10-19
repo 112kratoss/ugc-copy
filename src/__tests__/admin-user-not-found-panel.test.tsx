@@ -53,9 +53,8 @@ const MISSING_ID = '00000000-0000-4000-8000-00000000dead';
 
 describe('admin user detail — unresolvable id', () => {
   /**
-   * Deliberately not `notFound()`. A not-found boundary was tried at the console
-   * group, at /admin and at the app root; none render in this app, so notFound()
-   * fell through to Next's built-in shell and dropped the operator out of the
+   * Deliberately not `notFound()`: it would reach the app root's not-found,
+   * which replaces the console's layout and drops the operator out of the
    * console entirely. Rendering inline is what keeps the sidebar.
    */
   it('renders a recoverable panel instead of dead-ending the operator', async () => {

@@ -28,8 +28,13 @@ const readSearch = () => window.location.search;
 // A statically rendered page has no query on the server; the browser fills it in.
 const readServerSearch = () => '';
 
-export default function AppShellAccountFallback() {
-  const pathname = usePathname();
+export default function AppShellAccountFallback({ pathname: shellPathname }: { pathname?: string }) {
+  const routePathname = usePathname();
+  // The shell's pathname when it passes one. It is the neutral '' wherever the
+  // header must match HTML drawn for another address (the not-found page at
+  // every address, `/` before mounting), and '' returns Home, as the server
+  // wrote it: React never patches an attribute that hydrates differently.
+  const pathname = shellPathname ?? routePathname;
   const search = useSyncExternalStore(subscribeToHistory, readSearch, readServerSearch);
   // The router changes the query with history.pushState, which no event
   // reports, and the header does not re-render for a new query alone: reaching

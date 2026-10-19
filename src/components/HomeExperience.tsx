@@ -30,8 +30,8 @@ export default function HomeExperience({
         {/*
           The two-column switch and the rail's sticky behaviour come from named
           classes in globals.css, not responsive utilities: authenticated routes
-          load a second utility sheet after that one, and its re-emitted
-          `.hidden` would override an `xl:flex` rail at every width.
+          load a second utility sheet after that one, whose re-emitted `.hidden`
+          once overrode an `xl:flex` rail at every width.
         */}
         <div className="home-grid">
           <div className="home-column">

@@ -526,7 +526,7 @@ export default function WorkflowLibraryClient() {
   }, [authHeaders, dialog]);
 
   return (
-    <div className="relative min-h-[calc(100vh-4rem)] overflow-hidden bg-[#060706] text-white">
+    <div className="relative min-h-screen overflow-hidden bg-[#060706] text-white">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-[420px] bg-[radial-gradient(circle_at_72%_0%,rgba(16,185,129,0.14),transparent_48%),radial-gradient(circle_at_18%_10%,rgba(52,211,153,0.07),transparent_34%)]" />
       <div className="relative mx-auto w-full max-w-[1500px] px-5 py-8 sm:px-8 lg:px-10 lg:py-12">
         <header className="flex flex-col gap-7 border-b border-white/10 pb-8 lg:flex-row lg:items-end lg:justify-between">

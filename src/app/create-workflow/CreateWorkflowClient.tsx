@@ -1522,7 +1522,7 @@ export default function CreateWorkflowClient({
 
   return (
     <WorkflowModelCatalogContext.Provider value={modelCatalog}>
-      <div className="h-[calc(100vh-4rem)] overflow-hidden bg-[#060606] text-white">
+      <div className="h-screen overflow-hidden bg-[#060606] text-white">
         <div className="flex h-full">
           <WorkflowCanvasChrome
             canvasTitle={canvasTitle}
