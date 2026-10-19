@@ -15,7 +15,11 @@ const AppShellAccount = dynamic(() => import('./AppShellAccount'), {
   loading: () => <AppShellAccountFallback />,
 });
 
-export default function DeferredAppShellAccount() {
+/**
+ * `pathname` is the shell's own (see AppShellClient), for the Sign in link the
+ * server draws: the account itself loads in the browser only.
+ */
+export default function DeferredAppShellAccount({ pathname }: { pathname?: string }) {
   const shouldLoadAccount = useSupabaseAuthCookieHint();
   const hasHydratedCookieHint = useHasHydratedSupabaseAuthCookieHint();
 
@@ -25,5 +29,5 @@ export default function DeferredAppShellAccount() {
     }
   }, [hasHydratedCookieHint, shouldLoadAccount]);
 
-  return shouldLoadAccount ? <AppShellAccount /> : <AppShellAccountFallback />;
+  return shouldLoadAccount ? <AppShellAccount /> : <AppShellAccountFallback pathname={pathname} />;
 }

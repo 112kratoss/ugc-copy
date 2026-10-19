@@ -1,17 +1,21 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import { UNDERSCORE_NOT_FOUND_ROUTE } from 'next/dist/shared/lib/entry-constants';
+import { NOT_FOUND_SEGMENT_KEY } from 'next/dist/shared/lib/segment';
 import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 import { renderToString } from 'react-dom/server';
-import { hydrateRoot } from 'react-dom/client';
-import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AppShellClient from '@/components/AppShellClient';
 
 let mockedPathname = '/';
+/** The root layout's selected segment: the route's first segment. */
+let mockedSegment: string | null = null;
 let mockedScrollY = 0;
 let mockedReducedMotion = false;
 /** Hrefs the mocked Link would have navigated to: its handler left the click alone. */
 const navigations: string[] = [];
+/** How many times a shell link has been drawn. */
+let linkRenders = 0;
 const scrollToMock = vi.fn((options: ScrollToOptions | number) => {
   mockedScrollY = typeof options === 'number' ? options : options.top ?? 0;
 });
@@ -19,6 +23,7 @@ const scrollToMock = vi.fn((options: ScrollToOptions | number) => {
 vi.mock('next/navigation', () => ({
   usePathname: () => mockedPathname,
   useRouter: () => ({ push: vi.fn() }),
+  useSelectedLayoutSegment: () => mockedSegment,
 }));
 
 vi.mock('next/link', () => ({
@@ -27,25 +32,73 @@ vi.mock('next/link', () => ({
     scroll,
     onClick,
     ...props
-  }: ComponentPropsWithoutRef<'a'> & { prefetch?: boolean; scroll?: boolean }) => (
-    <a
-      {...props}
-      data-prefetch={prefetch === undefined ? undefined : String(prefetch)}
-      data-scroll={scroll === undefined ? undefined : String(scroll)}
-      onClick={(event) => {
-        // Next's Link runs the handler first and navigates unless it prevented
-        // the click; jsdom must not follow the href either way.
-        onClick?.(event);
-        if (!event.defaultPrevented) navigations.push(String(props.href));
-        event.preventDefault();
-      }}
-    />
-  ),
+  }: ComponentPropsWithoutRef<'a'> & { prefetch?: boolean; scroll?: boolean }) => {
+    linkRenders += 1;
+    return (
+      <a
+        {...props}
+        data-prefetch={prefetch === undefined ? undefined : String(prefetch)}
+        data-scroll={scroll === undefined ? undefined : String(scroll)}
+        onClick={(event) => {
+          // Next's Link runs the handler first and navigates unless it prevented
+          // the click; jsdom must not follow the href either way.
+          onClick?.(event);
+          if (!event.defaultPrevented) navigations.push(String(props.href));
+          event.preventDefault();
+        }}
+      />
+    );
+  },
 }));
+
+/**
+ * Draws the shell as the server did at `server` (renderToString), then
+ * hydrates that HTML where the browser reads `browser`, as Next does. React
+ * throws on a structure or text mismatch, which reaches onRecoverableError; an
+ * attribute that differs is never patched and only warned about in
+ * development, so those warnings are collected too. Testing Library's cleanup
+ * unmounts the root and removes the container after each test.
+ */
+function hydrateShell({
+  server,
+  browser,
+  segment = null,
+  content = 'Page content',
+}: {
+  server: string;
+  browser: string;
+  segment?: string | null;
+  content?: string;
+}) {
+  const shell = () => (
+    <AppShellClient>
+      <div>{content}</div>
+    </AppShellClient>
+  );
+  mockedSegment = segment;
+  mockedPathname = server;
+  const container = document.createElement('div');
+  container.innerHTML = renderToString(shell());
+  document.body.appendChild(container);
+  mockedPathname = browser;
+
+  const onRecoverableError = vi.fn();
+  const consoleError = vi.spyOn(console, 'error');
+  try {
+    render(shell(), { container, hydrate: true, onRecoverableError });
+    const attributeWarnings = consoleError.mock.calls
+      .map((args) => args.map(String).join(' '))
+      .filter((message) => message.includes("didn't match the client properties"));
+    return { container, onRecoverableError, attributeWarnings };
+  } finally {
+    consoleError.mockRestore();
+  }
+}
 
 describe('AppShellClient', () => {
   beforeEach(() => {
     mockedPathname = '/';
+    mockedSegment = null;
     mockedScrollY = 0;
     mockedReducedMotion = false;
     navigations.length = 0;
@@ -80,79 +133,107 @@ describe('AppShellClient', () => {
     expect(screen.getByText('Page content')).toBeInTheDocument();
   });
 
-  it('hydrates the root shell without recovering from a route markup mismatch', async () => {
-    mockedPathname = '/_not-found';
-    const serverHtml = renderToString(
-      <AppShellClient>
-        <div>Home content</div>
-      </AppShellClient>
-    );
-    const container = document.createElement('div');
-    container.innerHTML = serverHtml;
-    document.body.appendChild(container);
-    mockedPathname = '/';
-    const onRecoverableError = vi.fn();
+  it('hydrates the root shell without recovering from a route markup mismatch', () => {
+    const view = hydrateShell({ server: '/_not-found', browser: '/', content: 'Home content' });
 
-    let root: ReturnType<typeof hydrateRoot>;
-    await act(async () => {
-      root = hydrateRoot(
-        container,
-        <AppShellClient>
-          <div>Home content</div>
-        </AppShellClient>,
-        { onRecoverableError }
-      );
-    });
-
-    expect(onRecoverableError).not.toHaveBeenCalled();
-    expect(within(container).getByRole('banner')).toHaveTextContent('Home');
-    expect(
-      within(container)
-        .getAllByRole('link', { name: 'Home' })
-        .some((link) => link.getAttribute('aria-current') === 'page')
-    ).toBe(true);
-
-    await act(async () => root!.unmount());
-    container.remove();
+    // Only a mismatch React throws on is checked: from this internal pathname
+    // the header's Sign in link keeps the server's return address.
+    expect(view.onRecoverableError).not.toHaveBeenCalled();
+    expect(within(view.container).getByRole('banner')).toHaveTextContent('Home');
+    expect(within(view.container).getAllByRole('link', { name: 'Home', current: 'page' })).not.toEqual([]);
   });
 
-  it('hydrates the rewritten dashboard (/home on the server, / in the browser) without mismatch', async () => {
+  it('hydrates the rewritten dashboard (/home on the server, / in the browser) without mismatch', () => {
     // Signed-in `/` is middleware-rewritten to `/home` (src/proxy.ts): the
     // server render sees the internal pathname while the hydrated client
     // sees the browser URL. Both must resolve to identical shell markup.
-    mockedPathname = '/home';
-    const serverHtml = renderToString(
-      <AppShellClient>
-        <div>Dashboard content</div>
-      </AppShellClient>
-    );
-    const container = document.createElement('div');
-    container.innerHTML = serverHtml;
-    document.body.appendChild(container);
-    mockedPathname = '/';
-    const onRecoverableError = vi.fn();
+    const view = hydrateShell({ server: '/home', browser: '/', content: 'Dashboard content' });
 
-    let root: ReturnType<typeof hydrateRoot>;
-    await act(async () => {
-      root = hydrateRoot(
-        container,
-        <AppShellClient>
-          <div>Dashboard content</div>
-        </AppShellClient>,
-        { onRecoverableError }
-      );
+    expect(view.onRecoverableError).not.toHaveBeenCalled();
+    // The header's Sign in link included: it returns Home on both sides.
+    expect(view.attributeWarnings).toEqual([]);
+    expect(within(view.container).getByRole('banner')).toHaveTextContent('Home');
+    expect(within(view.container).getAllByRole('link', { name: 'Home', current: 'page' })).not.toEqual([]);
+  });
+
+  it('does not draw the shell again when only the router state around its pathname changes', () => {
+    // The root segment comes from the router's whole state, which also changes
+    // for a query-only address change (the Explore reel's replaceState): the
+    // frame draws again only for a new pathname or not-found flag.
+    mockedPathname = '/showcase';
+    const content = <div>Explore content</div>;
+    const view = render(<AppShellClient>{content}</AppShellClient>);
+    const drawn = linkRenders;
+
+    view.rerender(<AppShellClient>{content}</AppShellClient>);
+
+    expect(linkRenders).toBe(drawn);
+  });
+
+  describe('the not-found page', () => {
+    // In production every address with no page is answered with the one
+    // build-time `/_not-found` prerender: its shell was drawn for that internal
+    // pathname, while the browser reads the address it visited. The route tree
+    // comes with the page, so the root's selected segment is Next's not-found
+    // key on both sides (a Turbopack build's spelling).
+    it.each([
+      // Drawn without the shell when a page is there.
+      '/auth/zz-no-such-step',
+      '/r/zz/no-such-code',
+      '/admin/zz-no-such-tool',
+      // A section title or a tab of their own.
+      '/login/zz-no-such-step',
+      '/blog/zz/no-such-post',
+      '/pricing/zz-no-such-plan',
+      '/creations/zz/no-such-item',
+      '/search/zz-no-such-query',
+      '/showcase/zz/no-such-post',
+    ])('hydrates at %s as it was drawn, and keeps that shell', (address) => {
+      const view = hydrateShell({
+        server: '/_not-found',
+        browser: address,
+        segment: NOT_FOUND_SEGMENT_KEY,
+        content: 'Not-found content',
+      });
+
+      expect(view.onRecoverableError).not.toHaveBeenCalled();
+      expect(view.attributeWarnings).toEqual([]);
+      // Mounted, it still reads the same at every address: the neutral title,
+      // no section claiming an address that has no page, and a Sign in that
+      // returns Home rather than to that address.
+      const shell = within(view.container);
+      expect(shell.getByRole('banner')).toHaveTextContent('Workspace');
+      expect(shell.getByRole('main')).toHaveTextContent('Not-found content');
+      expect(shell.queryAllByRole('link', { current: 'page' })).toEqual([]);
+      expect(shell.getByRole('link', { name: 'Sign in' })).toHaveAttribute('href', '/login?returnUrl=%2F');
     });
 
-    expect(onRecoverableError).not.toHaveBeenCalled();
-    expect(within(container).getByRole('banner')).toHaveTextContent('Home');
-    expect(
-      within(container)
-        .getAllByRole('link', { name: 'Home' })
-        .some((link) => link.getAttribute('aria-current') === 'page')
-    ).toBe(true);
+    it('reads the webpack spelling of the segment, and follows the address again after a link out', () => {
+      // `next dev --webpack` names the segment after the route without its
+      // slash (next-app-loader) and renders the page per request with the
+      // visited address.
+      mockedSegment = UNDERSCORE_NOT_FOUND_ROUTE.slice(1);
+      mockedPathname = '/auth/zz-no-such-step';
 
-    await act(async () => root!.unmount());
-    container.remove();
+      const view = render(
+        <AppShellClient>
+          <div>Not-found content</div>
+        </AppShellClient>
+      );
+
+      expect(within(screen.getByRole('banner')).getByText('Workspace')).toBeInTheDocument();
+
+      // A link out of the not-found page swaps the route tree under the shell.
+      mockedSegment = 'pricing';
+      mockedPathname = '/pricing';
+      view.rerender(
+        <AppShellClient>
+          <div>Pricing content</div>
+        </AppShellClient>
+      );
+
+      expect(within(screen.getByRole('banner')).getByText('Pricing')).toBeInTheDocument();
+    });
   });
 
   it('server-renders the current route title instead of a stale home title', () => {

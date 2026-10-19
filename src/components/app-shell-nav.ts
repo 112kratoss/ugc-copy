@@ -204,8 +204,20 @@ export function isMinimalAppChromePath(pathname: string) {
     pathname.startsWith('/login?') ||
     pathname.startsWith('/r/') ||
     // The admin console renders its own operator chrome and must not show the
-    // consumer navigation, "Sign in" prompt, or mobile tab bar.
+    // consumer navigation, "Sign in" prompt, or mobile tab bar. An address
+    // with no page under /admin is not the console: it is Next's not-found
+    // page, which keeps the shell it was prerendered with (AppShellClient).
     pathname === '/admin' ||
     pathname.startsWith('/admin/')
   );
+}
+
+/**
+ * Whether the root layout's selected segment is Next's not-found route, which
+ * answers every address with no page. The bundler decides its spelling:
+ * `/_not-found` under Turbopack (`next build`), `_not-found` under webpack
+ * (`npm run dev`).
+ */
+export function isNotFoundRouteSegment(segment: string | null) {
+  return segment === '/_not-found' || segment === '_not-found';
 }
