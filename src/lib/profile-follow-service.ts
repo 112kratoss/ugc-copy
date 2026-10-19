@@ -11,7 +11,7 @@ import {
 import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
 import { notifyCreatorFollowed } from '@/lib/mobile-notifications';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
-import { loadClaimedProfileHandle } from '@/lib/profile-server';
+import { loadProfileHandle } from '@/lib/profile-server';
 import {
   parseFeedDeliveryIdField,
   scheduleAuthoritativeFeedEvent,
@@ -230,7 +230,7 @@ export async function updateCreatorFollowForRoute({
       // ends in a push request to Expo for their devices. The follower's
       // button stays disabled until this answers, so the answer goes first
       // wherever it can.
-      const followerUsername = await loadClaimedProfileHandle(resolvedClient, followerId);
+      const followerUsername = await loadProfileHandle(resolvedClient, followerId);
       await sendDeferrableNotification(runAfterResponse, () => notifyCreatorFollowed(resolvedClient, {
         followerUserId: followerId,
         followingUserId: followingId,

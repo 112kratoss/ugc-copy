@@ -42,6 +42,10 @@ let snapshot: FeedbackSnapshot = EMPTY_SNAPSHOT;
 const listeners = new Set<Listener>();
 const confirmationResolvers = new Map<number, (confirmed: boolean) => void>();
 
+/** How a toast went: closed by the viewer, or out of time. */
+export type ToastDismissal = 'closed' | 'expired';
+const toastDismissHandlers = new Map<number, (how: ToastDismissal) => void>();
+
 function commit(next: FeedbackSnapshot) {
   snapshot = next;
   listeners.forEach((listener) => listener());
@@ -72,8 +76,15 @@ export function readServerFeedbackSnapshot(): FeedbackSnapshot {
   return EMPTY_SNAPSHOT;
 }
 
-export function pushToast(toast: { tone: ToastTone; message: string; durationMs?: number }): number {
+export function pushToast(toast: {
+  tone: ToastTone;
+  message: string;
+  durationMs?: number;
+  /** Told once, when the toast goes (not when tests reset the store). */
+  onDismiss?: (how: ToastDismissal) => void;
+}): number {
   const id = nextId++;
+  if (toast.onDismiss) toastDismissHandlers.set(id, toast.onDismiss);
   commit({
     ...snapshot,
     toasts: [
@@ -89,11 +100,14 @@ export function pushToast(toast: { tone: ToastTone; message: string; durationMs?
   return id;
 }
 
-export function dismissToast(id: number) {
+export function dismissToast(id: number, how: ToastDismissal = 'closed') {
   if (!snapshot.toasts.some((toast) => toast.id === id)) {
     return;
   }
   commit({ ...snapshot, toasts: snapshot.toasts.filter((toast) => toast.id !== id) });
+  const onDismiss = toastDismissHandlers.get(id);
+  toastDismissHandlers.delete(id);
+  onDismiss?.(how);
 }
 
 /**
@@ -139,5 +153,6 @@ export function resetFeedbackState() {
   for (const [id] of confirmationResolvers) {
     resolveConfirmation(id, false);
   }
+  toastDismissHandlers.clear();
   commit(EMPTY_SNAPSHOT);
 }

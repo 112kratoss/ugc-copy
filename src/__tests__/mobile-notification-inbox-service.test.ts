@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  MOBILE_NOTIFICATION_INBOX_SELECT,
   getMobileNotificationInboxForRoute,
   markAllMobileNotificationsReadForRoute,
   markMobileNotificationsReadForRoute,
@@ -45,6 +46,7 @@ function createInboxClient({
 } = {}) {
   const listQuery = {
     eq: vi.fn(() => listQuery),
+    is: vi.fn(() => listQuery),
     order: vi.fn(() => listQuery),
     limit: vi.fn(() => listQuery),
     lt: vi.fn(() => listQuery),
@@ -72,6 +74,7 @@ function createInboxClient({
   };
   const unreadQuery = {
     eq: vi.fn(() => unreadQuery),
+    is: vi.fn(() => unreadQuery),
     ...resolvedQuery({ count: 7, data: null, error: unreadError }),
   };
   const listSelect = vi.fn<(fields: string) => typeof listQuery>(() => listQuery);
@@ -142,6 +145,10 @@ function createPagedInboxClient(rows: InboxRow[]) {
         filters.push((row) => (row as Record<string, string>)[column] === value);
         return query;
       },
+      is: (column: string, value: null) => {
+        filters.push((row) => ((row as Record<string, unknown>)[column] ?? null) === value);
+        return query;
+      },
       lt: (column: string, value: string) => {
         filters.push((row) => compare('lt', (row as Record<string, string>)[column], value));
         return query;
@@ -181,6 +188,7 @@ function createPagedInboxClient(rows: InboxRow[]) {
   };
   const unreadQuery = {
     eq: () => unreadQuery,
+    is: () => unreadQuery,
     ...resolvedQuery({ count: 0, data: null, error: null }),
   };
   return {
@@ -212,6 +220,18 @@ describe('mobile notification inbox service', () => {
     expect(inbox.listQuery.limit).toHaveBeenCalledWith(80);
     expect(inbox.listQuery.lt).toHaveBeenCalledWith('last_event_at', '2026-06-22T06:02:00.000Z');
     expect(inbox.unreadQuery.eq).toHaveBeenCalledWith('is_read', false);
+  });
+
+  it('leaves alerts that were taken back out of the list and the unread count', async () => {
+    // A named save that was unsaved, or one between two accounts that blocked
+    // each other: hidden, while its push deliveries stay for their receipts.
+    const inbox = createInboxClient();
+
+    await getMobileNotificationInboxForRoute({ userSupabase: inbox.client });
+
+    expect(inbox.listQuery.is).toHaveBeenCalledWith('withdrawn_at', null);
+    expect(inbox.unreadQuery.is).toHaveBeenCalledWith('withdrawn_at', null);
+    expect(inbox.listSelect).toHaveBeenCalledWith(MOBILE_NOTIFICATION_INBOX_SELECT);
   });
 
   // Marking an alert read writes its row, and every write stamps updated_at. An

@@ -23,6 +23,7 @@ import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { MediaZoomFlightLayer } from '@/components/media-zoom';
 import { ZoomPostChrome, ZoomPostPreparer } from '@/components/zoom-post-chrome';
 import { OverlayHost } from '@/components/overlay-host';
+import { SaverNoticeBar, SaverNoticeSync } from '@/components/saver-notice-bar';
 import { nativeMenuTouchGuardProps } from '@/lib/native-menu-shield';
 import { SignOutOverlay } from '@/components/sign-out-overlay';
 import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
@@ -229,6 +230,7 @@ function RootLayoutNav() {
           <AccountDeletingCoordinator />
           <OtaUpdateCoordinator />
           <MediaDiagnosticsCoordinator />
+          <SaverNoticeSync />
           <SafeAreaProvider>
             <ThemeProvider value={navigationThemeFor(theme)}>
               <GestureHandlerRootView style={{ flex: 1 }}>
@@ -365,6 +367,9 @@ function RootLayoutNav() {
                 <Stack.Screen name="blocked-users" options={{ title: 'Blocked Users' }} />
                 </Stack>
                 </OverlayHost>
+                {/* The one-line notice at an account's first save, above every
+                    screen and in the app's own window (lib/saver-notice.ts). */}
+                <SaverNoticeBar />
                 {/* Above every screen: the flight a tapped tile's picture makes
                     to the full screen and back, which no screen change can
                     interrupt. Nothing is rendered unless a post is opening or

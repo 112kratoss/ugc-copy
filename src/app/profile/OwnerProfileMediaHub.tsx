@@ -1134,7 +1134,6 @@ export default function OwnerProfileMediaHub({
           selectedItemId={selectedPostId}
           initialMediaIndex={selectedMediaIndex}
           savedItemIds={activeSaveState.savedItemIds}
-          savingItemIds={activeSaveState.savingItemIds}
           accessToken={accessToken}
           hasMoreItems={activePageInfo.hasMore}
           isLoadingMoreItems={loadingMoreTab === activeTab}

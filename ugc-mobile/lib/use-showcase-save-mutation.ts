@@ -6,7 +6,7 @@ import { AccessibilityInfo } from 'react-native';
 import { useAuth } from '@/lib/auth';
 import { adjustProfileStats } from '@/lib/profile-stats';
 import { haptic } from '@/lib/haptics';
-import { creatorSeesSaverFields } from '@/lib/saver-notice';
+import { creatorSeesSaverFields, type SaverNoticeFields } from '@/lib/saver-notice';
 import {
   applyShowcaseSaveStateToInfiniteFeed,
   applyShowcaseSaveStateToPostResponse,
@@ -24,6 +24,12 @@ interface SaveVariables {
   intentSeq: number;
   /** Told the state the server settled on, unless a later tap overtook this one. */
   onSaved?: (isSaved: boolean) => void;
+  /**
+   * What this tap's save tells its creator about who saved, decided at the
+   * tap: the request may leave much later, behind the other saves in the
+   * queue, and must not name someone told only after tapping.
+   */
+  saverFields?: SaverNoticeFields;
 }
 
 /**
@@ -63,8 +69,8 @@ export function useShowcaseSaveMutation({
 
   const mutation = useMutation({
     scope: SHOWCASE_SAVE_MUTATION_SCOPE,
-    mutationFn: async ({ postId, shouldSave }: SaveVariables) =>
-      api.saveShowcasePost(postId, { shouldSave, sourceSurface, ...(await creatorSeesSaverFields(user?.id, shouldSave)) }),
+    mutationFn: ({ postId, shouldSave, saverFields }: SaveVariables) =>
+      api.saveShowcasePost(postId, { shouldSave, sourceSurface, ...saverFields }),
     onMutate: (variables) => {
       reconcile({
         postId: variables.postId,
@@ -141,12 +147,14 @@ export function useShowcaseSaveMutation({
     // function each time — which made the home feed's `renderCard` unstable and
     // defeated memoization of every cell. `mutate` itself is bound to the
     // observer and stable for the hook's lifetime.
+    const shouldSave = !options.isSaved;
     mutate({
       postId: options.postId,
       previousSaveCount: options.saveCount,
-      shouldSave: !options.isSaved,
+      shouldSave,
       intentSeq,
       onSaved: options.onSaved,
+      saverFields: creatorSeesSaverFields(user.id, shouldSave),
     });
   }, [authReturnTo, mutate, user]);
 

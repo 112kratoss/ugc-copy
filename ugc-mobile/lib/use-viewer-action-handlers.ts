@@ -292,13 +292,15 @@ export function useViewerActionHandlers({
       }
       // A bookmark is reversible in place: nothing to confirm, like the web.
       const shouldSave = action === 'save';
+      // Decided at the tap (`lib/saver-notice.ts`).
+      const saverFields = creatorSeesSaverFields(user?.id, shouldSave);
       void (async () => {
         try {
           if (item.showcasePostId) {
             await api.saveShowcasePost(item.showcasePostId, {
               shouldSave,
               sourceSurface: item.source === 'profile-saved' ? 'mobile-profile-saved' : 'mobile-viewer-actions',
-              ...(await creatorSeesSaverFields(user?.id, shouldSave)),
+              ...saverFields,
             });
           }
           await refreshMedia();

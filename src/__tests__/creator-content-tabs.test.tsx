@@ -58,6 +58,7 @@ vi.mock('@/app/showcase/ShowcaseReelViewer', () => ({
     selectedItemStatus,
     onRetrySelectedItem,
     loadMoreError,
+    onToggleSave,
   }: {
     isOpen: boolean;
     items: ShowcaseFeedItem[];
@@ -72,6 +73,7 @@ vi.mock('@/app/showcase/ShowcaseReelViewer', () => ({
     selectedItemStatus?: string | null;
     onRetrySelectedItem?: () => void;
     loadMoreError?: string | null;
+    onToggleSave?: (id: string) => unknown;
   }) => {
     const openItem = reelItems.find((candidate) => candidate.id === selectedItemId);
     return isOpen ? (
@@ -89,6 +91,7 @@ vi.mock('@/app/showcase/ShowcaseReelViewer', () => ({
         {openItem && onReportContent ? <button type="button" onClick={() => void onReportContent(openItem)}>Report content</button> : null}
         {openItem && onReportUser ? <button type="button" onClick={() => void onReportUser(openItem)}>Report user</button> : null}
         {openItem && onBlockUser ? <button type="button" onClick={() => void onBlockUser(openItem)}>Block user</button> : null}
+        {openItem && onToggleSave ? <button type="button" onClick={() => void onToggleSave(openItem.id)}>Save post</button> : null}
       </div>
     ) : null;
   },
@@ -719,6 +722,27 @@ describe('CreatorContentTabs', () => {
         '/api/creators/creator-name?limit=24&offset=24',
         { headers: { Authorization: 'Bearer viewer-token' } },
       );
+    });
+
+    it("saves for the signed-in viewer's account, so its alert may name them once they were told", async () => {
+      // Told on an earlier page: the save names its saver, and only the
+      // signed-in account's telling counts.
+      signIn();
+      window.localStorage.setItem('magicbooklet:saver-notice:v1:viewer-1', '1');
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url === '/api/showcase/save') return { ok: true, status: 200, json: async () => ({ success: true, isSaved: true, saveCount: 1 }) };
+        return { ok: true, status: 200, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { seen: true }) };
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      render(<CreatorContentTabs initialData={initialData} profilePath="/creators/creator-name" />);
+
+      fireEvent.click((await screen.findAllByRole('button', { name: /campaign frame/i }))[0]);
+      fireEvent.click(await screen.findByRole('button', { name: 'Save post' }));
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/showcase/save', expect.objectContaining({
+        body: expect.stringContaining('"creatorSeesSaver":true'),
+      })));
+      window.localStorage.clear();
     });
 
     it('draws a linked post the viewer saved as saved', async () => {

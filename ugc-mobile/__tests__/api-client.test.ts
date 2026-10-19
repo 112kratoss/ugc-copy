@@ -1474,6 +1474,7 @@ describe('mobile api client caching', () => {
     });
 
     await api.saveShowcasePost('post-1', { shouldSave: true, sourceSurface: 'mobile-home-feed', creatorSeesSaver: true });
+    await api.saveShowcasePost('post-1', { shouldSave: true, sourceSurface: 'mobile-home-feed', saverNotYetTold: true });
     await api.saveShowcasePost('post-1', { shouldSave: true, sourceSurface: 'mobile-home-feed' });
 
     const bodies = fetcher.mock.calls.map((call) => {
@@ -1482,7 +1483,28 @@ describe('mobile api client caching', () => {
     });
     expect(bodies).toEqual([
       { postId: 'post-1', shouldSave: true, sourceSurface: 'mobile-home-feed', creatorSeesSaver: true },
+      { postId: 'post-1', shouldSave: true, sourceSurface: 'mobile-home-feed', saverNotYetTold: true },
       { postId: 'post-1', shouldSave: true, sourceSurface: 'mobile-home-feed' },
+    ]);
+  });
+
+  it('reads and records whether the account was told that creators can see who saved', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ seen: true }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await expect(api.getSaverNotice()).resolves.toEqual({ seen: true });
+    await expect(api.recordSaverNotice()).resolves.toEqual({ seen: true });
+
+    expect(fetcher.mock.calls.map((call) => {
+      const [input, init] = call as unknown as [RequestInfo | URL, RequestInit | undefined];
+      return [new URL(String(input)).pathname, init?.method ?? 'GET'];
+    })).toEqual([
+      ['/api/profile/saver-notice', 'GET'],
+      ['/api/profile/saver-notice', 'POST'],
     ]);
   });
 

@@ -33,7 +33,7 @@ set local role service_role;
 select is(
   (select actor_user_id from public.mobile_notifications where id='e5300000-0000-4000-8000-000000000002'),
   'e5100002-0000-4000-8000-000000000002'::uuid,
-  'the service role, which serves Alerts, still reads every column'
+  'the service role still reads every column'
 );
 
 select * from finish();

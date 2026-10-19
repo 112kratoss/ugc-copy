@@ -164,6 +164,22 @@ grants_table as (
     and c.relkind in ('r', 'p', 'v', 'm')
     and has_table_privilege(r.rolname, c.oid, pr.priv)
 ),
+-- Column grants a role holds without the table's: has_table_privilege is false
+-- for them, so grants_table cannot see a column that should (or should not) be
+-- readable on its own, such as the inbox's columns of mobile_notifications.
+grants_column as (
+  select 'grants_column' as class,
+         c.relname || '.' || a.attname || '|' || r.rolname || '|' || pr.priv as sig
+  from pg_class c
+  join pg_namespace n on n.oid = c.relnamespace
+  join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+  cross join (values ('anon'), ('authenticated'), ('service_role')) as r(rolname)
+  cross join (values ('SELECT'), ('INSERT'), ('UPDATE'), ('REFERENCES')) as pr(priv)
+  where n.nspname = 'public'
+    and c.relkind in ('r', 'p', 'v', 'm')
+    and has_column_privilege(r.rolname, c.oid, a.attnum, pr.priv)
+    and not has_table_privilege(r.rolname, c.oid, pr.priv)
+),
 grants_sequence as (
   select 'grants_sequence' as class,
          c.relname || '|' || r.rolname || '|' || pr.priv as sig
@@ -227,6 +243,7 @@ all_sigs as (
   union all select * from enums
   union all select * from sequences
   union all select * from grants_table
+  union all select * from grants_column
   union all select * from grants_sequence
   union all select * from grants_routine
   union all select * from extensions

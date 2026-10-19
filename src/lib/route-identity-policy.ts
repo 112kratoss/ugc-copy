@@ -133,6 +133,9 @@ const REGISTERED_ROUTES = [
   '/api/showcase/publish',
   '/api/showcase/remix',
   '/api/showcase/save',
+  // Whether the account has been told that creators can see who saved: a
+  // guest saves nothing.
+  '/api/profile/saver-notice',
   '/api/showcase/saved-media',
   '/api/showcase/saved-state',
   '/api/showcase/viewer-exclusions',

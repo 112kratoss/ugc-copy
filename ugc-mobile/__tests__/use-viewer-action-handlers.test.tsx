@@ -265,7 +265,7 @@ describe('Save from the menu', () => {
 
   it('saves through the API where the screen has no Save of its own', async () => {
     mocks.auth.api.saveShowcasePost.mockResolvedValueOnce({ success: true, isSaved: true, saveCount: 1 });
-    mocks.creatorSeesSaverFields.mockResolvedValueOnce({ creatorSeesSaver: true });
+    mocks.creatorSeesSaverFields.mockReturnValueOnce({ creatorSeesSaver: true });
     mountHandlers(postItem()).handleAction('save');
 
     await vi.waitFor(() => expect(refreshViewerMediaCaches).toHaveBeenCalledTimes(1));
@@ -279,16 +279,26 @@ describe('Save from the menu', () => {
     });
   });
 
-  it('sends a save unnamed when the notice module says so', async () => {
+  it('keeps the creator out of a save made while the notice module is telling the viewer', async () => {
     mocks.auth.api.saveShowcasePost.mockResolvedValueOnce({ success: true, isSaved: true, saveCount: 1 });
-    mocks.creatorSeesSaverFields.mockResolvedValueOnce({});
+    mocks.creatorSeesSaverFields.mockReturnValueOnce({ saverNotYetTold: true });
     mountHandlers(postItem()).handleAction('save');
 
     await vi.waitFor(() => expect(refreshViewerMediaCaches).toHaveBeenCalledTimes(1));
     expect(mocks.auth.api.saveShowcasePost).toHaveBeenCalledWith('post-1', {
       shouldSave: true,
       sourceSurface: 'mobile-viewer-actions',
+      saverNotYetTold: true,
     });
+  });
+
+  it('decides what the save says about its saver at the tap, before the request leaves', () => {
+    mocks.auth.api.saveShowcasePost.mockReturnValueOnce(new Promise(() => {}));
+    mocks.creatorSeesSaverFields.mockReturnValueOnce({ saverNotYetTold: true });
+    mountHandlers(postItem()).handleAction('save');
+
+    // Asked in the same turn as the tap, not after anything the request waits on.
+    expect(mocks.creatorSeesSaverFields).toHaveBeenCalledWith('viewer-1', true);
   });
 });
 

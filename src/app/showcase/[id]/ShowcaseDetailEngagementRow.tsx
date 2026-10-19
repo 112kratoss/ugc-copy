@@ -70,7 +70,6 @@ export default function ShowcaseDetailEngagementRow({
   const {
     items,
     savedItemIds,
-    savingItemIds,
     toggleSave,
   } = useOptimisticPostSave({
     initialItems,
@@ -129,10 +128,9 @@ export default function ShowcaseDetailEngagementRow({
         <button
           type="button"
           onClick={() => void toggleSave(postId)}
-          disabled={savingItemIds.has(postId)}
           aria-pressed={isSaved}
           aria-label={`${isSaved ? 'Remove save from' : 'Save'} ${title}`}
-          className={`ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full px-2 transition disabled:opacity-60 ${
+          className={`ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full px-2 transition ${
             isSaved ? 'text-[var(--ui-primary)]' : 'hover:text-white'
           }`}
         >

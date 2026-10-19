@@ -310,6 +310,34 @@ describe('ShowcaseClient save actions', () => {
     });
   });
 
+  // The heart used to lock until the save came back, so a second tap did
+  // nothing; the app's takes every tap.
+  it('takes a second tap while the first save is still on the wire', async () => {
+    let answerSave: (answer: unknown) => void = () => {};
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/showcase/save') {
+        return new Promise((resolve) => { answerSave = resolve; });
+      }
+      return Promise.resolve({ ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) });
+    }));
+    const saveRequests = () => vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === '/api/showcase/save');
+    renderShowcase(createShowcaseItem());
+
+    fireEvent.click(screen.getByRole('button', { name: /save campaign frame\. 4 saves/i }));
+    fireEvent.click(screen.getByRole('button', { name: /remove save from campaign frame\. 5 saves/i }));
+
+    expect(screen.getByRole('button', { name: /save campaign frame\. 4 saves/i })).toHaveAttribute('aria-pressed', 'false');
+    expect(saveRequests()).toHaveLength(1);
+
+    // The newest tap goes out once the first request has answered.
+    await act(async () => answerSave({ ok: true, json: async () => ({ success: true, isSaved: true, saveCount: 5 }) }));
+    await waitFor(() => expect(saveRequests()).toHaveLength(2));
+    expect(JSON.parse(String(saveRequests()[1][1]?.body))).toMatchObject({ postId: 'post-1', shouldSave: false });
+    await act(async () => answerSave({ ok: true, json: async () => ({ success: true, isSaved: false, saveCount: 4 }) }));
+    expect(screen.getByRole('button', { name: /save campaign frame\. 4 saves/i })).toHaveAttribute('aria-pressed', 'false');
+  });
+
   it('gives anonymous viewers the same complete card the bootstrap shell handed over', async () => {
     authState.session = null;
     authState.user = null;
@@ -598,8 +626,12 @@ describe('ShowcaseClient save actions', () => {
 
       const savedButton = await screen.findByRole('button', { name: /remove save from second frame\. 5 saves/i });
       expect(savedButton).toHaveAttribute('aria-pressed', 'true');
-      // The save has come back: the heart takes taps again.
-      await waitFor(() => expect(savedButton).toBeEnabled());
+      // The save has come back and settled: the ranker hears of it after that.
+      await waitFor(() => {
+        expect(vi.mocked(fetch).mock.calls.some(([input, request]) => String(input) === '/api/showcase/feed/events'
+          && JSON.parse(String(request?.body)).eventType === 'save')).toBe(true);
+      });
+      await act(async () => undefined);
       expect(drawsOf('post-2')).toBeGreaterThan(savedDraws);
       expect(drawsOf('post-1')).toBe(firstDraws);
       expect(drawsOf('post-3')).toBe(thirdDraws);

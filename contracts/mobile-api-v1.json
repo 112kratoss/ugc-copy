@@ -1067,12 +1067,37 @@
         "shouldSave": true,
         "creatorSeesSaver": true
       },
+      "requestVariants": {
+        "notYetTold": {
+          "postId": "post-1",
+          "shouldSave": true,
+          "saverNotYetTold": true
+        }
+      },
       "response": {
         "success": true,
         "isSaved": true,
         "saveCount": 4,
         "changed": true,
         "message": "Saved."
+      }
+    },
+    "getSaverNotice": {
+      "method": "GET",
+      "path": "/api/profile/saver-notice",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "seen": false
+      }
+    },
+    "recordSaverNotice": {
+      "method": "POST",
+      "path": "/api/profile/saver-notice",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "seen": true
       }
     },
     "remixShowcasePost": {

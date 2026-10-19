@@ -89,7 +89,7 @@ import {
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
-import { creatorSeesSaverFields } from '@/lib/saver-notice';
+import { creatorSeesSaverFields, type SaverNoticeFields } from '@/lib/saver-notice';
 import { useReducedMotion } from '@/lib/motion';
 import {
   applyShowcaseSaveStateToInfiniteFeed,
@@ -187,6 +187,8 @@ type SaveMutationVariables = {
   trigger: 'double-tap' | 'rail';
   /** Which tap this was, per post. See `showcaseSaveIntents`. */
   intentSeq: number;
+  /** Decided at the tap, however long the request waits in the queue (`lib/saver-notice.ts`). */
+  saverFields: SaverNoticeFields;
 };
 
 type SaveItemHandler = (
@@ -854,8 +856,8 @@ function ImmersivePreviewViewer() {
   // overtaken one from reconciling a truth the viewer has already replaced.
   const saveMutation = useMutation({
     scope: SHOWCASE_SAVE_MUTATION_SCOPE,
-    mutationFn: async ({ postId, shouldSave, sourceSurface }: SaveMutationVariables) =>
-      api.saveShowcasePost(postId, { shouldSave, sourceSurface, ...(await creatorSeesSaverFields(user?.id, shouldSave)) }),
+    mutationFn: ({ postId, shouldSave, sourceSurface, saverFields }: SaveMutationVariables) =>
+      api.saveShowcasePost(postId, { shouldSave, sourceSurface, ...saverFields }),
     onMutate: async (variables) => {
       const optimisticSaveCount = Math.max(
         0,
@@ -921,14 +923,16 @@ function ImmersivePreviewViewer() {
     // The rail button owns its tick the way the double-tap gesture already
     // does — at the tap, not a round trip later.
     if (trigger !== 'double-tap') haptic.light();
+    const shouldSave = !item.isSaved;
     saveMutation.mutate({
       item,
       postId: item.showcasePostId,
       previousSaveCount: item.saveCount,
-      shouldSave: !item.isSaved,
+      shouldSave,
       sourceSurface: source === 'profile-saved' ? 'mobile-profile-saved' : 'mobile-viewer',
       trigger,
       intentSeq: showcaseSaveIntents.open(item.showcasePostId),
+      saverFields: creatorSeesSaverFields(user.id, shouldSave),
     });
   };
 

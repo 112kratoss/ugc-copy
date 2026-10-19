@@ -11,113 +11,172 @@ const mocks = vi.hoisted(() => {
     setItem: vi.fn(async (key: string, value: string) => {
       stored.set(key, value);
     }),
-    showMessageDialog: vi.fn(),
   };
 });
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: { getItem: mocks.getItem, setItem: mocks.setItem },
 }));
-vi.mock('@/lib/dialog', () => ({ showMessageDialog: mocks.showMessageDialog }));
 
 import {
-  SAVER_NOTICE,
   creatorSeesSaverFields,
+  readSaverNotice,
   resetSaverNoticeForTests,
+  settleSaverNotice,
+  subscribeToSaverNotice,
+  syncSaverNotice,
+  type SaverNoticeApi,
 } from '@/lib/saver-notice';
 
-/** The person reads the notice and taps OK (or Android's back key). */
-function dismissNotice(call = mocks.showMessageDialog.mock.calls.length - 1) {
-  const [request] = mocks.showMessageDialog.mock.calls[call] as [{ onDismiss?: () => void }];
-  request.onDismiss?.();
+function api(seen = false) {
+  return {
+    getSaverNotice: vi.fn(async () => ({ seen })),
+    recordSaverNotice: vi.fn(async () => ({ seen: true })),
+  } satisfies SaverNoticeApi;
+}
+
+/** Lets the module's storage and server calls settle. */
+async function settle() {
+  for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 describe('saver notice', () => {
+  let unsubscribe = () => {};
+
   beforeEach(() => {
     mocks.stored.clear();
     mocks.getItem.mockReset().mockImplementation(async (key: string) => mocks.stored.get(key) ?? null);
     mocks.setItem.mockReset().mockImplementation(async (key: string, value: string) => {
       mocks.stored.set(key, value);
     });
-    mocks.showMessageDialog.mockReset();
+    // The root layout's bar, which draws the notice.
+    unsubscribe = subscribeToSaverNotice(() => {});
   });
 
   afterEach(() => {
+    unsubscribe();
     resetSaverNoticeForTests();
   });
 
-  it('tells an account at its first save, which goes out unnamed, and names it once the notice is dismissed', async () => {
-    await expect(creatorSeesSaverFields('user-1', true)).resolves.toEqual({});
-    expect(mocks.showMessageDialog.mock.calls).toEqual([[{ ...SAVER_NOTICE, onDismiss: expect.any(Function) }]]);
-    expect(SAVER_NOTICE).toEqual({ title: 'Creators can see who saved their posts.' });
+  it('tells an account at its first save, keeps the creator out of its saves until the bar goes, then names it', async () => {
+    const client = api();
+    await syncSaverNotice('user-1', client);
+
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ saverNotYetTold: true });
+    const notice = readSaverNotice();
+    expect(notice).toMatchObject({ accountId: 'user-1' });
 
     // A save made while the notice is still up was not made after it.
-    await expect(creatorSeesSaverFields('user-1', true)).resolves.toEqual({});
-    expect(mocks.showMessageDialog).toHaveBeenCalledTimes(1);
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ saverNotYetTold: true });
+    expect(readSaverNotice()).toBe(notice);
 
-    dismissNotice();
-    await expect(creatorSeesSaverFields('user-1', true)).resolves.toEqual({ creatorSeesSaver: true });
+    settleSaverNotice(notice!.id, 'closed');
+    expect(readSaverNotice()).toBeNull();
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ creatorSeesSaver: true });
+    await settle();
     expect(mocks.stored.get('magicbooklet:saver-notice:v1:user-1')).toBe('1');
+    // On record, for the account's other devices and for the server's check.
+    expect(client.recordSaverNotice).toHaveBeenCalledTimes(1);
 
     // The next launch reads that it has been told.
     resetSaverNoticeForTests();
-    await expect(creatorSeesSaverFields('user-1', true)).resolves.toEqual({ creatorSeesSaver: true });
-    expect(mocks.showMessageDialog).toHaveBeenCalledTimes(1);
+    unsubscribe = subscribeToSaverNotice(() => {});
+    await syncSaverNotice('user-1', api());
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ creatorSeesSaver: true });
+    expect(readSaverNotice()).toBeNull();
   });
 
-  it('tells each account on a shared phone for itself', async () => {
-    await creatorSeesSaverFields('user-1', true);
-    dismissNotice();
-    await expect(creatorSeesSaverFields('user-1', true)).resolves.toEqual({ creatorSeesSaver: true });
+  it('counts a notice left to run out, and not one the app was left with', () => {
+    creatorSeesSaverFields('user-1', true);
+    settleSaverNotice(readSaverNotice()!.id, 'interrupted');
+    // Not read: the next save tells them again.
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ saverNotYetTold: true });
+
+    settleSaverNotice(readSaverNotice()!.id, 'expired');
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ creatorSeesSaver: true });
+  });
+
+  it('ignores the ending of a notice that is no longer the one up', () => {
+    creatorSeesSaverFields('user-1', true);
+    const first = readSaverNotice()!;
+    settleSaverNotice(first.id, 'interrupted');
+    creatorSeesSaverFields('user-1', true);
+
+    settleSaverNotice(first.id, 'closed');
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ saverNotYetTold: true });
+  });
+
+  it('tells each account on a shared phone for itself', () => {
+    creatorSeesSaverFields('user-1', true);
+    settleSaverNotice(readSaverNotice()!.id, 'closed');
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ creatorSeesSaver: true });
 
     // Someone else signs in on the same phone, without a relaunch.
-    await expect(creatorSeesSaverFields('user-2', true)).resolves.toEqual({});
-    expect(mocks.showMessageDialog).toHaveBeenCalledTimes(2);
+    expect(creatorSeesSaverFields('user-2', true)).toEqual({ saverNotYetTold: true });
+    expect(readSaverNotice()).toMatchObject({ accountId: 'user-2' });
   });
 
-  it('never counts a notice that was not dismissed, as when Android draws a later dialog in its place', async () => {
-    await creatorSeesSaverFields('user-1', true);
-    // The notice was replaced before anyone read it: no dismissal ever comes.
-    await expect(creatorSeesSaverFields('user-1', true)).resolves.toEqual({});
-    expect(mocks.stored.size).toBe(0);
-
-    // The next launch tells them again.
-    resetSaverNoticeForTests();
-    await expect(creatorSeesSaverFields('user-1', true)).resolves.toEqual({});
-    expect(mocks.showMessageDialog).toHaveBeenCalledTimes(2);
+  it('adds nothing to taking a save back, or to a save with no account, and says nothing', () => {
+    expect(creatorSeesSaverFields('user-1', false)).toEqual({});
+    expect(creatorSeesSaverFields(null, true)).toEqual({});
+    expect(readSaverNotice()).toBeNull();
   });
 
-  it('shows one notice for two saves tapped before storage answers, and names neither', async () => {
-    const [first, second] = await Promise.all([
-      creatorSeesSaverFields('user-1', true),
-      creatorSeesSaverFields('user-1', true),
-    ]);
+  it('keeps the creator out of saves, and the account untold, while nothing draws the bar', () => {
+    unsubscribe();
 
-    expect([first, second]).toEqual([{}, {}]);
-    expect(mocks.showMessageDialog).toHaveBeenCalledTimes(1);
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ saverNotYetTold: true });
+    expect(readSaverNotice()).toBeNull();
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ saverNotYetTold: true });
   });
 
-  it('adds nothing to taking a save back, or to a save with no account, and says nothing', async () => {
-    await expect(creatorSeesSaverFields('user-1', false)).resolves.toEqual({});
-    await expect(creatorSeesSaverFields(null, true)).resolves.toEqual({});
-    expect(mocks.showMessageDialog).not.toHaveBeenCalled();
-    expect(mocks.getItem).not.toHaveBeenCalled();
+  it('takes a telling on record from another device, without the bar', async () => {
+    await syncSaverNotice('user-1', api(true));
+
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ creatorSeesSaver: true });
+    expect(readSaverNotice()).toBeNull();
+    await settle();
+    expect(mocks.stored.get('magicbooklet:saver-notice:v1:user-1')).toBe('1');
   });
 
-  it('still tells a device whose storage fails, once a run', async () => {
+  it('records a telling this phone holds that the server missed, and reads the record once a run', async () => {
+    mocks.stored.set('magicbooklet:saver-notice:v1:user-1', '1');
+    const client = api(false);
+
+    await syncSaverNotice('user-1', client);
+    await syncSaverNotice('user-1', client);
+
+    expect(client.getSaverNotice).toHaveBeenCalledTimes(1);
+    expect(client.recordSaverNotice).toHaveBeenCalledTimes(1);
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ creatorSeesSaver: true });
+  });
+
+  it('reads the record again at the next sign-in when it could not be read', async () => {
+    const client = api(true);
+    client.getSaverNotice.mockRejectedValueOnce(new Error('offline'));
+
+    await syncSaverNotice('user-1', client);
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ saverNotYetTold: true });
+
+    await syncSaverNotice('user-1', client);
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ creatorSeesSaver: true });
+  });
+
+  it('still tells a phone whose storage fails, once a run', async () => {
     mocks.getItem.mockRejectedValue(new Error('storage unavailable'));
     mocks.setItem.mockRejectedValue(new Error('storage unavailable'));
 
-    await expect(creatorSeesSaverFields('user-1', true)).resolves.toEqual({});
-    dismissNotice();
-    await expect(creatorSeesSaverFields('user-1', true)).resolves.toEqual({ creatorSeesSaver: true });
-    expect(mocks.showMessageDialog).toHaveBeenCalledTimes(1);
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ saverNotYetTold: true });
+    settleSaverNotice(readSaverNotice()!.id, 'closed');
+    expect(creatorSeesSaverFields('user-1', true)).toEqual({ creatorSeesSaver: true });
   });
 });
 
-describe('who may send creatorSeesSaver', () => {
-  // The server takes the field as word that the person was told, so nothing
-  // but the notice module may set it, and the API client only passes it on.
+describe('who may send creatorSeesSaver and saverNotYetTold', () => {
+  // The server takes the fields as word of what the person was told, so
+  // nothing but the notice module may set them, and the API client only
+  // passes them on. A shorthand property or a quoted key counts as much as a
+  // written-out one; comments do not.
   it('is set only by lib/saver-notice.ts and carried only by lib/api-client.ts', () => {
     const mobileRoot = path.resolve(__dirname, '..');
     const sourceFiles = (root: string): string[] => readdirSync(root).flatMap((entry) => {
@@ -125,10 +184,15 @@ describe('who may send creatorSeesSaver', () => {
       if (statSync(absolutePath).isDirectory()) return sourceFiles(absolutePath);
       return /\.(ts|tsx)$/.test(entry) ? [absolutePath] : [];
     });
+    const withoutComments = (source: string) => source
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('//'))
+      .join('\n');
 
     const mentioning = ['app', 'components', 'lib']
       .flatMap((root) => sourceFiles(path.join(mobileRoot, root)))
-      .filter((filePath) => readFileSync(filePath, 'utf8').includes('creatorSeesSaver:'))
+      .filter((filePath) => /\b(creatorSeesSaver|saverNotYetTold)\b/.test(withoutComments(readFileSync(filePath, 'utf8'))))
       .map((filePath) => path.relative(mobileRoot, filePath).replaceAll(path.sep, '/'))
       .sort();
 

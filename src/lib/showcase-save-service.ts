@@ -10,7 +10,7 @@ import {
 } from '@/lib/posts-server';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { notifyPostSocialActivity, withdrawPostSaveNotification } from '@/lib/mobile-notifications';
-import { loadClaimedProfileHandle } from '@/lib/profile-server';
+import { loadNameableSaverHandle } from '@/lib/profile-server';
 
 type SetPostSaveStateRow = {
   is_saved?: boolean | null;
@@ -263,17 +263,25 @@ export async function saveShowcasePostForRoute({
   referenceId,
   requestedSaveState,
   runAfterResponse,
+  saverNotYetTold = false,
   serviceClient,
   sourceSurface,
 }: {
   actorUserId: string;
   /**
-   * The app this save came from had already told this person that creators can
-   * see who saved, so the creator's alert may name them by a handle they chose.
-   * Saves without it (an app that never says so, or the save that first says
-   * so) stay "Someone", as every save was before.
+   * The app this save came from had told this person that creators can see who
+   * saved before they tapped, so the creator's alert may name them by a handle
+   * they chose, once that telling is on record
+   * (`profiles.saver_notice_seen_at`). Saves without it from apps that never
+   * say so stay "Someone", as every save was before.
    */
   creatorSeesSaver?: boolean;
+  /**
+   * The app is telling this person now, at this save or while the notice is
+   * still up: the creator is told nothing of it. "Someone saved your post"
+   * seconds before the first alert that names them would give them away.
+   */
+  saverNotYetTold?: boolean;
   dependencies?: Partial<ShowcaseSaveServiceDependencies>;
   referenceId: string;
   requestedSaveState: boolean | null;
@@ -291,7 +299,9 @@ export async function saveShowcasePostForRoute({
   if (!post) {
     return { ok: false, status: 404, body: { error: 'Post not found' } };
   }
-  if (await isPostInteractionUnavailable({
+  // Taking a save back is let through a block: it touches only the saver's
+  // own row, and it takes back any alert that names them.
+  if (requestedSaveState !== false && await isPostInteractionUnavailable({
     actorUserId,
     creatorUserId: post.user_id,
     dependencies: resolvedDependencies,
@@ -376,7 +386,7 @@ export async function saveShowcasePostForRoute({
     });
   }
 
-  if (isSaved && (requestedSaveState === null || changed)) {
+  if (isSaved && (requestedSaveState === null || changed) && !saverNotYetTold) {
     // The save is recorded; what is left is telling the creator. The first
     // alert about a post's saves in a quarter-hour ends in a push request to
     // Expo for their devices, and the app holds its later saves behind this
@@ -387,7 +397,7 @@ export async function saveShowcasePostForRoute({
     await sendDeferrableNotification(
       runAfterResponse,
       async () => {
-        const actorUsername = namesSaver ? await loadClaimedProfileHandle(serviceClient, actorUserId) : null;
+        const actorUsername = namesSaver ? await loadNameableSaverHandle(serviceClient, actorUserId) : null;
         return resolvedDependencies.notifyPostSocialActivity(serviceClient, {
           type: 'post_saved',
           recipientUserId: post.user_id,

@@ -10,6 +10,7 @@ import {
   USER_BLOCK_MUTATION_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { withdrawPostSaveNotificationsBetween } from '@/lib/mobile-notifications';
 import { getCreatorDisplayName } from '@/lib/profile';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
@@ -364,6 +365,14 @@ export async function setUserBlockForRoute({
     if (outgoingFollow.error || incomingFollow.error) {
       logBackendError('user_was_blocked_but_follow_cleanup_failed', { error: outgoingFollow.error ?? incomingFollow.error });
     }
+
+    // Neither stays named in the other's Alerts as having saved their posts:
+    // past the block the post drops out of the saver's reach, so an alert
+    // naming them would stand for good.
+    await withdrawPostSaveNotificationsBetween(adminSupabase, {
+      firstUserId: actorUserId,
+      secondUserId: blockedUserId,
+    });
   } else {
     const { error } = await adminSupabase
       .from('user_blocks')

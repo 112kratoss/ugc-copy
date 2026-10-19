@@ -349,6 +349,8 @@ describe('OwnerProfileMediaHub', () => {
         }
         return answerPage(input);
       }));
+      // Told on an earlier page, under the signed-in account: its save may name it.
+      window.localStorage.setItem('magicbooklet:saver-notice:v1:owner-1', '1');
       render(<OwnerProfileMediaHub creator={owner} stats={{ ...TOTALS, saved: 7 }} />);
       await screen.findByRole('button', { name: /open public post/i });
       fireEvent.click(screen.getByRole('tab', { name: /saved/i }));
@@ -364,8 +366,9 @@ describe('OwnerProfileMediaHub', () => {
       await waitFor(() => expect(statFor('Saved')).toBe('7'));
       expect(saveBodies).toMatchObject([
         { postId: 'saved-post', shouldSave: false },
-        { postId: 'saved-post', shouldSave: true },
+        { postId: 'saved-post', shouldSave: true, creatorSeesSaver: true },
       ]);
+      window.localStorage.clear();
     });
   });
 

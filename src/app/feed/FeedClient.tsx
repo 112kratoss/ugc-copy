@@ -361,7 +361,6 @@ export default function FeedClient({
         setItems,
         savedItemIds,
         addSavedItemIds,
-        savingItemIds,
         toggleSave,
     } = useOptimisticPostSave<ShowcaseFeedItem>({
         // The seed page only, and it never changes identity. The hook resets its
@@ -1237,7 +1236,6 @@ export default function FeedClient({
                                 <FeedPostCard
                                     card={card}
                                     isSaved={savedItemIds.has(card.id)}
-                                    saving={savingItemIds.has(card.id)}
                                     expanded={expandedIds.has(card.id)}
                                     commentsOpen={commentsOpenIds.has(card.id)}
                                     accessToken={accessToken}

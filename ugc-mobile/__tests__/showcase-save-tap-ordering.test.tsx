@@ -6,6 +6,8 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { SaverNoticeFields } from '@/lib/saver-notice';
+
 import type { ShowcaseFeedResponse } from '../lib/types';
 
 const mocks = vi.hoisted(() => ({
@@ -16,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   announce: vi.fn(),
   user: { id: 'user-1' } as { id: string } | null,
   // An account that has been told already, unless a case says otherwise.
-  creatorSeesSaverFields: vi.fn(async (accountId: string | null | undefined, shouldSave: boolean) => (
+  creatorSeesSaverFields: vi.fn((accountId: string | null | undefined, shouldSave: boolean): SaverNoticeFields => (
     accountId && shouldSave ? { creatorSeesSaver: true as const } : {}
   )),
 }));
@@ -128,8 +130,8 @@ describe('what a save from Home sends', () => {
       isSaved: options.shouldSave,
       saveCount: options.shouldSave ? 5 : 4,
     }));
-    // The first save is the one that tells them, so it goes out unnamed.
-    mocks.creatorSeesSaverFields.mockResolvedValueOnce({});
+    // The first save is the one that tells them, so it tells the creator nothing.
+    mocks.creatorSeesSaverFields.mockReturnValueOnce({ saverNotYetTold: true });
     const surface = await mountSaveSurfaces();
 
     await surface.tap(false, 4);
@@ -138,7 +140,7 @@ describe('what a save from Home sends', () => {
 
     expect(mocks.creatorSeesSaverFields.mock.calls).toEqual([['user-1', true], ['user-1', false], ['user-1', true]]);
     expect(mocks.saveShowcasePost.mock.calls).toEqual([
-      [surface.postId, { shouldSave: true, sourceSurface: 'mobile-home-feed' }],
+      [surface.postId, { shouldSave: true, sourceSurface: 'mobile-home-feed', saverNotYetTold: true }],
       [surface.postId, { shouldSave: false, sourceSurface: 'mobile-home-feed' }],
       [surface.postId, { shouldSave: true, sourceSurface: 'mobile-home-feed', creatorSeesSaver: true }],
     ]);

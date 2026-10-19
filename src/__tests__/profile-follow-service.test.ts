@@ -348,7 +348,9 @@ describe('profile follow service', () => {
     });
   });
 
-  it('leaves a follower unnamed while they still have the generated handle every account starts with', async () => {
+  it('names a follower by the generated handle every account starts with, since follows are public', async () => {
+    // Save alerts never name a generated handle; a follow alert does, and
+    // opens the follower's page by it.
     const client = createClient({ profileRows: [{ id: 'follower-1', username: 'creator-1a2b3c4d' }] });
 
     await updateCreatorFollowForRoute({
@@ -360,7 +362,7 @@ describe('profile follow service', () => {
     expect(notifyCreatorFollowedMock).toHaveBeenCalledWith(client.client, {
       followerUserId: 'follower-1',
       followingUserId: 'creator-1',
-      followerUsername: null,
+      followerUsername: 'creator-1a2b3c4d',
     });
   });
 

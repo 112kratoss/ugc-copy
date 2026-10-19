@@ -28,6 +28,7 @@ function resolvedQuery<T>(result: T) {
 function createListQuery() {
   const query = {
     eq: vi.fn(() => query),
+    is: vi.fn(() => query),
     order: vi.fn(() => query),
     limit: vi.fn(() => query),
     lt: vi.fn(() => query),
@@ -58,6 +59,7 @@ function createListQuery() {
 function createUnreadCountQuery() {
   const query = {
     eq: vi.fn(() => query),
+    is: vi.fn(() => query),
     ...resolvedQuery({
       count: 7,
       data: null,
@@ -152,5 +154,8 @@ describe('/api/mobile/notifications route', () => {
     expect(supabase.listQuery.lt).toHaveBeenCalledWith('last_event_at', '2026-06-22T06:02:00.000Z');
     expect(supabase.unreadCountQuery.eq).toHaveBeenCalledWith('user_id', 'user-1');
     expect(supabase.unreadCountQuery.eq).toHaveBeenCalledWith('is_read', false);
+    // A save alert taken back with its save is hidden from the list and the count.
+    expect(supabase.listQuery.is).toHaveBeenCalledWith('withdrawn_at', null);
+    expect(supabase.unreadCountQuery.is).toHaveBeenCalledWith('withdrawn_at', null);
   });
 });

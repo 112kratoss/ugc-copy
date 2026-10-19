@@ -53,7 +53,7 @@ function ToastIcon({ tone }: { tone: ToastRecord['tone'] }) {
 
 function Toast({ toast }: { toast: ToastRecord }) {
   useEffect(() => {
-    const timeout = window.setTimeout(() => dismissToast(toast.id), toast.durationMs);
+    const timeout = window.setTimeout(() => dismissToast(toast.id, 'expired'), toast.durationMs);
     return () => window.clearTimeout(timeout);
   }, [toast.durationMs, toast.id]);
 

@@ -433,6 +433,21 @@ describe('FeedClient lanes and card actions', () => {
         }));
     });
 
+    it("saves for the signed-in viewer's account, so its alert may name them once they were told", async () => {
+        auth.state = { session: { access_token: 'token' }, user: { id: 'viewer-1' } };
+        // Told on an earlier page: only the signed-in account's telling counts.
+        window.localStorage.setItem('magicbooklet:saver-notice:v1:viewer-1', '1');
+        const fetchMock = mockJsonFetch({ success: true, isSaved: true, saveCount: 1 });
+        render(<FeedClient initialFeed={feed} initialChipId="for-you" />);
+
+        fireEvent.click(screen.getByText('save:post-3'));
+
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/showcase/save', expect.objectContaining({
+            body: expect.stringContaining('"creatorSeesSaver":true'),
+        })));
+        window.localStorage.clear();
+    });
+
     // The Home feed's saves reached the ranker from Explore and the reel only.
     it('tells the ranker about a save, and its undoing, once the server has it', async () => {
         auth.state = { session: { access_token: 'token' }, user: { id: 'viewer-1' } };

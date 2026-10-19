@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -7,7 +7,7 @@ import {
 } from '@/app/showcase/[id]/ShowcaseDetailCommentCount';
 import ShowcaseDetailEngagementRow from '@/app/showcase/[id]/ShowcaseDetailEngagementRow';
 import NsfwPostReveal from '@/components/NsfwPostReveal';
-import { readFeedbackSnapshot, resetFeedbackState, subscribeToFeedback } from '@/components/feedback-state';
+import { dismissToast, readFeedbackSnapshot, resetFeedbackState, subscribeToFeedback } from '@/components/feedback-state';
 import { SAVER_NOTICE_MESSAGE, resetSaverNoticeForTests } from '@/components/saver-notice';
 
 const routerMock = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
@@ -112,12 +112,15 @@ describe('ShowcaseDetailEngagementRow', () => {
     });
   });
 
-  it('tells a viewer at their first save, which stays unnamed, and lets the saves after it name them', async () => {
+  it('tells a viewer at their first save, keeps the creator out of their saves until the notice goes, then names them', async () => {
     // The root layout's FeedbackViewport, which draws the toast.
     const unsubscribe = subscribeToFeedback(() => {});
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input).includes('/api/showcase/saved-state')) {
         return { ok: true, json: async () => [] } as Response;
+      }
+      if (String(input) === '/api/profile/saver-notice') {
+        return { ok: true, json: async () => ({ seen: init?.method === 'POST' }) } as Response;
       }
       const { shouldSave } = JSON.parse(String(init?.body)) as { shouldSave: boolean };
       return { ok: true, json: async () => ({ success: true, isSaved: shouldSave, saveCount: shouldSave ? 5 : 4 }) } as Response;
@@ -125,31 +128,42 @@ describe('ShowcaseDetailEngagementRow', () => {
     const saveBodies = () => vi.mocked(fetch).mock.calls
       .filter(([input]) => String(input) === '/api/showcase/save')
       .map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
+    const tapSave = async (count: number) => {
+      fireEvent.click(screen.getByRole('button', { name: /^save shared creation/i }));
+      await waitFor(() => expect(saveBodies()).toHaveLength(count));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /remove save from shared creation/i })).not.toBeDisabled();
+      });
+    };
+    const tapUnsave = async (count: number) => {
+      fireEvent.click(screen.getByRole('button', { name: /remove save from shared creation/i }));
+      await waitFor(() => expect(saveBodies()).toHaveLength(count));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /^save shared creation/i })).not.toBeDisabled();
+      });
+    };
 
     try {
       render(<ShowcaseDetailEngagementRow {...rowProps()} />);
 
-      fireEvent.click(screen.getByRole('button', { name: /save shared creation/i }));
-      await waitFor(() => expect(saveBodies()).toHaveLength(1));
+      await tapSave(1);
       expect(readFeedbackSnapshot().toasts.map((toast) => toast.message)).toEqual([SAVER_NOTICE_MESSAGE]);
+      // While the notice is up, a save is not one made after it.
+      await tapUnsave(2);
+      await tapSave(3);
 
-      await waitFor(() => {
-        expect(screen.getByRole('button', { name: /remove save from shared creation/i })).not.toBeDisabled();
-      });
-      fireEvent.click(screen.getByRole('button', { name: /remove save from shared creation/i }));
-      await waitFor(() => expect(saveBodies()).toHaveLength(2));
-      await waitFor(() => {
-        expect(screen.getByRole('button', { name: /^save shared creation/i })).not.toBeDisabled();
-      });
-      fireEvent.click(screen.getByRole('button', { name: /^save shared creation/i }));
-      await waitFor(() => expect(saveBodies()).toHaveLength(3));
+      act(() => dismissToast(readFeedbackSnapshot().toasts[0].id, 'closed'));
+      await tapUnsave(4);
+      await tapSave(5);
 
       expect(saveBodies()).toEqual([
-        { postId: 'post-1', shouldSave: true, sourceSurface: 'detail-page' },
+        { postId: 'post-1', shouldSave: true, sourceSurface: 'detail-page', saverNotYetTold: true },
+        { postId: 'post-1', shouldSave: false, sourceSurface: 'detail-page' },
+        { postId: 'post-1', shouldSave: true, sourceSurface: 'detail-page', saverNotYetTold: true },
         { postId: 'post-1', shouldSave: false, sourceSurface: 'detail-page' },
         { postId: 'post-1', shouldSave: true, sourceSurface: 'detail-page', creatorSeesSaver: true },
       ]);
-      expect(readFeedbackSnapshot().toasts).toHaveLength(1);
+      expect(readFeedbackSnapshot().toasts).toHaveLength(0);
     } finally {
       unsubscribe();
     }

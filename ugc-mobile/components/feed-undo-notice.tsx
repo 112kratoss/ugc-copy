@@ -22,7 +22,7 @@ export interface FeedUndoNoticeModel {
  * Whether VoiceOver or TalkBack is running. Read once and then followed, so a
  * reader turned on while a notice is up keeps it.
  */
-function useScreenReaderRunning() {
+export function useScreenReaderRunning() {
   const [running, setRunning] = useState(false);
   useEffect(() => {
     let current = true;

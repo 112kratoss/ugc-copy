@@ -417,7 +417,26 @@ describe('moderation service', () => {
       blocked_user_id: CREATOR_ID,
     }]);
     expect(client.state.follows).toEqual([]);
+    // Neither stays named in the other's Alerts as having saved their posts.
+    expect(client.rpc).toHaveBeenCalledWith('withdraw_post_save_alerts_between', {
+      p_first_user_id: REPORTER_ID,
+      p_second_user_id: CREATOR_ID,
+    });
     expect(invalidateFeedCache).toHaveBeenCalledOnce();
+  });
+
+  it('takes back no save alerts when unblocking', async () => {
+    const client = createClient({ userBlocks: [{ blocker_user_id: REPORTER_ID, blocked_user_id: CREATOR_ID }] });
+
+    await setUserBlockForRoute({
+      actorUserId: REPORTER_ID,
+      adminSupabase: client.client,
+      blockedUserId: CREATOR_ID,
+      shouldBlock: false,
+      invalidateFeedCache: vi.fn(),
+    });
+
+    expect(client.rpc).not.toHaveBeenCalledWith('withdraw_post_save_alerts_between', expect.anything());
   });
 
   it('loads blocks in both relationship directions for content filtering', async () => {

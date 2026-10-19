@@ -65,7 +65,7 @@ const dialogs = vi.hoisted(() => ({
 
 // The notice module stands in as an account that has already been told.
 const saverNotice = vi.hoisted(() => ({
-  fields: vi.fn(async (accountId: string | null | undefined, shouldSave: boolean) => (
+  fields: vi.fn((accountId: string | null | undefined, shouldSave: boolean): { creatorSeesSaver?: true; saverNotYetTold?: true } => (
     accountId && shouldSave ? { creatorSeesSaver: true as const } : {}
   )),
 }));
@@ -1091,6 +1091,24 @@ describe("a reel opened on a creator's page", () => {
     expect(activeItem()).toMatchObject({ id: 'luna-2', isSaved: true, saveCount: 1 });
     expect(gridPages()?.[0].items[1]).toMatchObject({ id: 'luna-2', isSaved: true, saveCount: 1 });
     expect(gridPages()?.[0].profile.id).toBe(luna.id);
+  });
+
+  it('sends a reel save by a viewer the notice is still telling as one the creator hears nothing of', async () => {
+    seedGrid([creatorPage([lunaPost('luna-1'), lunaPost('luna-2')])]);
+    authState.api.saveShowcasePost.mockResolvedValue({ success: true, isSaved: true, saveCount: 1, changed: true });
+    saverNotice.fields.mockReturnValueOnce({ saverNotYetTold: true });
+    await renderReel('luna-2', CREATOR_ROUTE);
+
+    await act(async () => {
+      (screenState.callbacksFor!(activeItem()).onSave as (item: ImmersivePreviewItem) => void)(activeItem());
+    });
+    await settle();
+
+    expect(authState.api.saveShowcasePost).toHaveBeenCalledWith('luna-2', {
+      shouldSave: true,
+      sourceSurface: 'mobile-viewer',
+      saverNotYetTold: true,
+    });
   });
 
   it('counts a comment written in the reel on the post the grid holds', async () => {
