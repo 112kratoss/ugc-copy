@@ -281,7 +281,7 @@ export function WorkflowAssistantDrawer({
         {isOpen ? (
           <aside
             data-testid="workflow-assistant-popup"
-            className="flex min-h-0 flex-1 w-[min(440px,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[30px] border border-white/10 bg-[#050505]/96 shadow-[0_30px_120px_rgba(0,0,0,0.58)] backdrop-blur-xl"
+            className="flex min-h-0 flex-1 w-[min(440px,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-x-hidden overflow-y-auto rounded-[30px] border border-white/10 bg-[#050505]/96 shadow-[0_30px_120px_rgba(0,0,0,0.58)] backdrop-blur-xl"
           >
             <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
               <div className="flex items-start gap-3">

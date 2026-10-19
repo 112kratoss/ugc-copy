@@ -1002,6 +1002,9 @@ button:disabled,
 .app-shell-content {
   /* Room for the bottom navigation, which floats over the page below 768px. */
   --app-shell-bottom-nav-space: calc(6.25rem + env(safe-area-inset-bottom));
+  /* What the shell leaves a page: the window less the top bar and that room.
+     Resolved here, so it follows the room's 0px from 768px. */
+  --app-shell-page-height: calc(100dvh - var(--app-shell-topbar-height) - var(--app-shell-bottom-nav-space));
   min-height: calc(100dvh - var(--app-shell-topbar-height));
   padding-bottom: var(--app-shell-bottom-nav-space);
 }
@@ -1014,7 +1017,17 @@ button:disabled,
    beats a page's own min-h-* utility in either sheet. */
 .app-shell-content > .min-h-screen,
 .app-shell-content .ui-page {
-  min-height: calc(100dvh - var(--app-shell-topbar-height) - var(--app-shell-bottom-nav-space));
+  min-height: var(--app-shell-page-height);
+}
+
+/* An editor that never scrolls the page (`h-screen`: the workflow canvas) takes
+   the same as its height, not a minimum, and scrolls its own panels. Sized by
+   hand as 100vh less the bar, the canvas ended at the window's bottom, under
+   the bottom navigation, and the page scrolled by the room. On a window too
+   short to leave it 20rem (a phone held sideways: 740x304 left its work area
+   2.5px) it keeps 20rem and the page scrolls instead. */
+.app-shell-content > .h-screen {
+  height: max(var(--app-shell-page-height), 20rem);
 }
 
 .app-shell-command {
