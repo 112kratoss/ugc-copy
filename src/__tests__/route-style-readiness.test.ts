@@ -13,9 +13,11 @@ const APP_ROOT = path.join(SRC_ROOT, 'app');
 const SUPPLEMENT_IMPORT = "import '@/app/non-public-utilities.css';";
 // Every route a signed-out visitor can land on: the marketing and SEO pages,
 // share landings (`/creators/[username]`, `/r/[code]`), the
-// template catalog and the sign-in/auth screens. These routes render with the
-// root `globals.css` alone. With `experimental.inlineCss` on, a public route
-// that also linked the supplement would inline both sheets twice per response.
+// template catalog and the sign-in/auth screens. A full load of these routes
+// carries the root `globals.css` alone (a client navigation from a route that
+// links the supplement keeps the supplement, which is why it scans every
+// route). With `experimental.inlineCss` on, a public route that also linked the
+// supplement would inline both sheets twice per response.
 // Signed-in-only pages that live inside these directories (`/templates/mine`,
 // `/templates/new`, `/creators/[username]` actions) are scanned by the public
 // sheet too; their component closure is already part of it. `/post` is not
@@ -123,34 +125,14 @@ function collectPublicImportClosure(): Set<string> {
   return collectImportClosure([...listRootMarkupFiles(), ...routeSources]);
 }
 
-function listNonPublicRouteDirectories(): string[] {
-  return readdirSync(APP_ROOT, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .filter((entry) => !PUBLIC_ROUTE_DIRECTORIES.has(entry.name) && entry.name !== 'api')
-    .map((entry) => entry.name);
-}
-
-/**
- * Every file a route that links the supplement can draw: what its own folder
- * imports, and the root's own files but the public home page. The layout draws
- * the shell around every route, and a link from such a route to a page that
- * calls notFound() is answered in place, so the not-found is drawn with the
- * supplement still in the document.
- */
-function collectSupplementImportClosure(): Set<string> {
-  const routeSources = listNonPublicRouteDirectories()
-    .flatMap((directory) => walkFiles(path.join(APP_ROOT, directory)))
+/** Every file any route can draw: the root's own files and every route folder, with what they import. */
+function collectRouteImportClosure(): Set<string> {
+  const routeSources = readdirSync(APP_ROOT, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name !== 'api')
+    .flatMap((entry) => walkFiles(path.join(APP_ROOT, entry.name)))
     .filter((file) => /\.(?:ts|tsx|js|jsx)$/.test(file));
-  const rootFiles = listRootMarkupFiles().filter((file) => path.basename(file) !== 'page.tsx');
 
-  return collectImportClosure([...rootFiles, ...routeSources]);
-}
-
-/** A source line for a file under `src/app`, as the supplement names it. */
-function toRouteFileSource(file: string): string {
-  // The glob that reads `@source` takes a bracketed folder (`[id]`) for a set
-  // of letters, and a line written that way matches nothing. `*` names it.
-  return `./${path.relative(APP_ROOT, file).split(path.sep).join('/')}`.replace(/\/\[[^\]/]+\]\//g, '/*/');
+  return collectImportClosure([...listRootMarkupFiles(), ...routeSources]);
 }
 
 function getDeclaredSources(stylesheet: string): string[] {
@@ -160,7 +142,6 @@ function getDeclaredSources(stylesheet: string): string[] {
 describe('route utility stylesheet readiness', () => {
   it('links the supplemental utility sheet from every non-public visual route boundary', () => {
     const supplementalCss = readFileSync(path.join(APP_ROOT, 'non-public-utilities.css'), 'utf8');
-    const declaredSources = new Set(getDeclaredSources(supplementalCss));
     const visualRouteDirectories = readdirSync(APP_ROOT, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .filter((entry) => walkFiles(path.join(APP_ROOT, entry.name)).some((file) => file.endsWith('/page.tsx')))
@@ -179,16 +160,10 @@ describe('route utility stylesheet readiness', () => {
       expect(existsSync(layoutPath), `${directory} needs a route layout`).toBe(true);
       expect(readFileSync(layoutPath, 'utf8'), `${directory} must link the supplement`)
         .toContain(SUPPLEMENT_IMPORT);
-      expect(declaredSources.has(`./${directory}`), `${directory} must be scanned`).toBe(true);
     }
 
     expect(supplementalCss).toContain('@import "tailwindcss/theme.css" theme(reference);');
     expect(supplementalCss).toContain('@import "tailwindcss/utilities.css" layer(utilities) source(none);');
-    expect(supplementalCss).toContain('@source "../lib/client-generation-models.ts";');
-    expect(supplementalCss).toContain('@source "../lib/models.ts";');
-    expect(supplementalCss).not.toContain('@source "./showcase";');
-    expect(supplementalCss).not.toContain('@source "./marketplace";');
-    expect(supplementalCss).not.toContain('@source "./feed";');
 
     const globalsCss = readFileSync(path.join(APP_ROOT, 'globals.css'), 'utf8');
     const publicSources = new Set(getDeclaredSources(globalsCss));
@@ -200,8 +175,6 @@ describe('route utility stylesheet readiness', () => {
       }
       expect(publicSources.has(`./${publicDirectory}`), `${publicDirectory} must be scanned by globals.css`)
         .toBe(true);
-      expect(declaredSources.has(`./${publicDirectory}`), `${publicDirectory} must not be scanned by the supplement`)
-        .toBe(false);
     }
     // An address with no page draws the root's files with globals.css alone,
     // and the not-found rides in every page's payload: none links the supplement.
@@ -258,52 +231,20 @@ describe('route utility stylesheet readiness', () => {
     expect(declaredLibSources).toEqual(expectedLibSources);
   });
 
-  // The supplement comes after globals.css on its routes, so a utility it emits
-  // outranks every rule of globals.css of the same weight. While it left out
-  // the components the public sheet already scanned, a shared component kept
-  // the supplement's `h-8` over its own `lg:h-px`: the reel on the profile and
-  // the shell on every signed-in route lost breakpoint and hover rules. So it
-  // scans everything its routes can draw, shared or not
-  // (`route-style-two-sheet-order.test.ts` reads the two compiled sheets).
-  it('keeps the supplemental stylesheet complete for every file its routes can draw', () => {
+  // The supplement comes after globals.css in the same cascade layer, and it
+  // stays in the document after a client navigation, so every page can be
+  // drawn with it: it has to hold every utility any route draws for its own
+  // order to decide (`.claude/rules/web-routes-and-css.md` has the history;
+  // `route-style-two-sheet-order.test.ts` checks the compiled sheets).
+  it('scans every route, every component and the registries any route imports into the supplement', () => {
     const supplementalCss = readFileSync(path.join(APP_ROOT, 'non-public-utilities.css'), 'utf8');
     const declaredSources = getDeclaredSources(supplementalCss);
-    const supplementClosure = collectSupplementImportClosure();
-    const expectedComponentSources = [...supplementClosure]
-      .filter((file) => file.startsWith(path.join(SRC_ROOT, 'components') + path.sep))
-      .map((file) => `../${path.relative(SRC_ROOT, file).split(path.sep).join('/')}`)
-      .sort();
-    const declaredComponentSources = declaredSources
-      .filter((source) => source.startsWith('../components/'))
-      .sort();
+    // The whole app folder but its API routes, and the whole components
+    // folder: a narrower line would only repeat these.
+    expect(declaredSources.filter((source) => !source.startsWith('../lib/'))).toEqual(['./', '../components']);
+    expect(supplementalCss).toMatch(/@source\s+not\s+"\.\/api";/);
 
-    expect(declaredComponentSources).toEqual(expectedComponentSources);
-    // Shared with the public routes, and scanned here all the same.
-    expect(declaredComponentSources).toContain('../components/AppShellClient.tsx');
-
-    // The public folders' own files that a signed-in route draws (the reel on
-    // the profile, the feed card on the signed-in home), and the root layout:
-    // named file by file, never as a whole public folder.
-    const nonPublicDirectories = listNonPublicRouteDirectories();
-    const expectedRouteFileSources = [...supplementClosure]
-      .filter((file) => file.startsWith(APP_ROOT + path.sep))
-      .filter((file) => !file.startsWith(path.join(APP_ROOT, 'api') + path.sep))
-      .filter((file) => !nonPublicDirectories.some((directory) => (
-        file.startsWith(path.join(APP_ROOT, directory) + path.sep)
-      )))
-      .map(toRouteFileSource)
-      .sort();
-    const declaredRouteFileSources = declaredSources
-      .filter((source) => source.startsWith('./') && !nonPublicDirectories.includes(source.slice(2)))
-      .sort();
-
-    expect(declaredRouteFileSources).toEqual(expectedRouteFileSources);
-    expect(declaredRouteFileSources).toContain('./showcase/ShowcaseReelViewer.tsx');
-    for (const source of declaredRouteFileSources) {
-      expect(source, `${source} would be read as a set of letters`).not.toMatch(/[[\]]/);
-    }
-
-    const expectedLibSources = [...supplementClosure]
+    const expectedLibSources = [...collectRouteImportClosure()]
       .filter((file) => file.startsWith(path.join(SRC_ROOT, 'lib') + path.sep))
       .filter((file) => DYNAMIC_UTILITY_STRING.test(readFileSync(file, 'utf8')))
       .map((file) => `../${path.relative(SRC_ROOT, file).split(path.sep).join('/')}`)
@@ -313,5 +254,17 @@ describe('route utility stylesheet readiness', () => {
       .sort();
 
     expect(declaredLibSources).toEqual(expectedLibSources);
+  });
+
+  // The glob that reads `@source` takes `[id]` for a set of letters, so a line
+  // naming a bracketed folder scans nothing and fails no other test.
+  it('names no bracketed folder in a source line', () => {
+    for (const stylesheet of ['globals.css', 'non-public-utilities.css']) {
+      const sources = getDeclaredSources(readFileSync(path.join(APP_ROOT, stylesheet), 'utf8'));
+      expect(
+        sources.filter((source) => /[[\]]/.test(source)),
+        `${stylesheet}: name the folder above it, or write the bracketed part as *`,
+      ).toEqual([]);
+    }
   });
 });

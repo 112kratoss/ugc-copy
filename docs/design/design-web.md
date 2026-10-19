@@ -37,9 +37,9 @@ Principles, distilled from Pinterest Gestalt, Shopify Polaris, Material 3, Apple
 ## CSS Split
 
 - `globals.css` is the stylesheet for every route a signed-out visitor can land on: marketing, blog, models, the post, creator and referral landings, templates, login and auth.
-- Signed-in surfaces add `non-public-utilities.css` through their route layouts. Its `@source` list names their folders.
+- Signed-in surfaces add `non-public-utilities.css` through their route layouts. It stays in the document after a client navigation, so a public page opened from a signed-in route is drawn with it too: it scans the whole app folder and every component, the public ones included, and holds every utility `globals.css` holds.
 - CSS is inlined per response (`experimental.inlineCss`), so a public route must never import the supplement.
-- `src/__tests__/route-style-readiness.test.ts` pins which directories belong to which sheet and the exact component closure of each.
+- `src/__tests__/route-style-readiness.test.ts` pins which directories link which sheet and the exact component closure of `globals.css`; `route-style-two-sheet-order.test.ts` holds the supplement to every utility rule of `globals.css`.
 - A class used by both public and signed-in pages, such as toasts and the confirm dialog, lives in `globals.css` as a named class rather than as utilities.
 
 ## Typography

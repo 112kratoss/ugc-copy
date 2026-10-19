@@ -597,10 +597,10 @@ button:disabled,
 
 /*
  * The home layout (feed column + context rail) is shared by the public and
- * the authenticated home variants, so it must not depend on utility ordering:
+ * the authenticated home variants, so it does not depend on utility ordering:
  * authenticated routes load `non-public-utilities.css` AFTER this sheet, and
- * that sheet re-emits base utilities like `.hidden`. A `hidden xl:flex` rail
- * would lose to that later `.hidden` at every width and never appear. Named
+ * while that sheet re-emitted `.hidden` without `xl:flex`, a `hidden xl:flex`
+ * rail lost to the later `.hidden` at every width and never appeared. Named
  * classes carry the responsive switch instead — nothing downstream redeclares
  * them. Breakpoint mirrors Tailwind's `xl` (80rem).
  */
@@ -623,8 +623,8 @@ button:disabled,
 /*
  * The looping create rail at the top of the home column. Laid out here rather
  * than with utilities for the same reason as the grid above: it renders on
- * authenticated routes too, and a re-emitted utility from the second sheet
- * would win over anything responsive declared in the component.
+ * authenticated routes too, where a utility the second sheet re-emitted once
+ * won over anything responsive declared in the component.
  *
  * The track is bled to the viewport edges on narrow screens so a card can sit
  * flush against the gutter the way it does on mobile, then pulled back in once
