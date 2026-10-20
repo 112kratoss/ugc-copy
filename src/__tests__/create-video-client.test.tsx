@@ -138,7 +138,8 @@ vi.mock('@/lib/video-metadata-probe', () => ({
   readVideoDurationSeconds: readDurationMock,
 }));
 
-vi.mock('@/lib/use-deployment-refresh', () => ({
+vi.mock('@/lib/use-deployment-refresh', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/use-deployment-refresh')>()),
   useDeploymentRefresh: (enabled: boolean) => {
     deployState.enabled.push(enabled);
     return { newBuildAvailable: deployState.newBuildAvailable };
@@ -3900,6 +3901,7 @@ describe('CreateVideoClient Kling video elements', () => {
         error: 'The price of this run changed. Check the updated cost and generate again.',
       });
       answerStarts(costChanged, costChanged, costChanged);
+      document.documentElement.dataset.buildId = 'build-7';
       render(<CreateVideoClient prefill={{}} />);
       await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalled());
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
@@ -3931,8 +3933,11 @@ describe('CreateVideoClient Kling video elements', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Reload page' }));
         await waitFor(() => expect(navigations).toHaveLength(1));
         expect(saveCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1', expect.objectContaining({ prompt: PROMPT }));
+        // The build it left, so the page that loads next can tell if the same one came back.
+        expect(window.sessionStorage.getItem('magicbooklet:deployment-refresh:reloaded-from-build-id')).toBe('build-7');
       } finally {
         virtualConsole.off('jsdomError', onJsdomError);
+        delete document.documentElement.dataset.buildId;
       }
     });
 

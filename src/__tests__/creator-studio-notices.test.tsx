@@ -43,14 +43,24 @@ describe('creator studio notices', () => {
 
   it('says a page is out of date, what a reload keeps, and reloads from its button', () => {
     const onReload = vi.fn();
-    const view = render(<StudioOutOfDatePageNotice isRemix={false} onReload={onReload} />);
+    const view = render(<StudioOutOfDatePageNotice isRemix={false} reloadDidNotHelp={false} onReload={onReload} />);
     expect(screen.getByRole('alert')).toHaveTextContent('This page is out of date, so it cannot show what this run costs. Reload it to see the current price. Your draft is kept.');
 
-    view.rerender(<StudioOutOfDatePageNotice isRemix onReload={onReload} />);
+    view.rerender(<StudioOutOfDatePageNotice isRemix reloadDidNotHelp={false} onReload={onReload} />);
     expect(screen.getByRole('alert')).toHaveTextContent('The remix starts again from the original.');
     expect(screen.getByRole('alert')).not.toHaveTextContent('Your draft is kept.');
     fireEvent.click(screen.getByRole('button', { name: 'Reload page' }));
 
     expect(onReload).toHaveBeenCalledTimes(1);
+  });
+
+  it('says a reload brought the same version back, and offers no reload again', () => {
+    const view = render(<StudioOutOfDatePageNotice isRemix={false} reloadDidNotHelp onReload={vi.fn()} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('This page is out of date, so it cannot show what this run costs, and reloading it brought back the same version. Wait a few minutes, then reload the page.');
+    expect(screen.getByRole('alert')).not.toHaveTextContent('Your draft is kept.');
+    expect(screen.queryByRole('button', { name: 'Reload page' })).not.toBeInTheDocument();
+
+    view.rerender(<StudioOutOfDatePageNotice isRemix reloadDidNotHelp onReload={vi.fn()} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('The remix starts again from the original.');
   });
 });

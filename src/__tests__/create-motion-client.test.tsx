@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import CreateMotionClient from '@/app/create-motion/CreateMotionClient';
 import { GenerationStatusRequestError } from '@/lib/generation-status-client';
@@ -148,7 +148,8 @@ vi.mock('@/lib/generation-status-client', async () => {
   return { ...actual, ...statusMocks };
 });
 
-vi.mock('@/lib/use-deployment-refresh', () => ({
+vi.mock('@/lib/use-deployment-refresh', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/use-deployment-refresh')>()),
   useDeploymentRefresh: (enabled: boolean) => {
     deployState.enabled.push(enabled);
     return { newBuildAvailable: deployState.newBuildAvailable };
@@ -632,6 +633,10 @@ describe('CreateMotionClient price of the run it sends', () => {
     remixSourceBody = ROOFTOP_REMIX;
     const costChanged = () => jsonResponse({ code: 'cost_changed', error: COST_CHANGED }, 409);
     startAnswers = [costChanged, costChanged, costChanged];
+    document.documentElement.dataset.buildId = 'build-7';
+    onTestFinished(() => {
+      delete document.documentElement.dataset.buildId;
+    });
     render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
     expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
     await waitFor(() => expect(costShown()).toBe('20 credits'));
@@ -653,6 +658,8 @@ describe('CreateMotionClient price of the run it sends', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reload page' }));
     await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    // The build it left, so the page that loads next can tell if the same one came back.
+    expect(window.sessionStorage.getItem('magicbooklet:deployment-refresh:reloaded-from-build-id')).toBe('build-7');
   });
 
   // A run that goes is forgotten as a refusal: a later quote back at the refused price (a

@@ -115,7 +115,7 @@ import {
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
 import { useCreatorQuote } from '@/lib/use-creator-quote';
-import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
+import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
 import {
@@ -1104,7 +1104,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     /** Onto the current build, with the draft saved first: it comes back after the reload. */
     const reloadPage = async () => {
         await saveDraftNow();
-        window.location.reload();
+        reloadForNewerBuild();
     };
     const quoteState = useCreatorQuote(quoteRequest, session?.access_token);
     useEffect(() => {
@@ -2307,7 +2307,11 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         <p className="text-sm text-red-400">{promptLimitMessage}</p>
                                     ) : quoteState.pageOutOfDate ? (
                                         // In place of the start's refusal it stands for.
-                                        <StudioOutOfDatePageNotice isRemix={Boolean(remixId)} onReload={() => void reloadPage()} />
+                                        <StudioOutOfDatePageNotice
+                                            isRemix={Boolean(remixId)}
+                                            reloadDidNotHelp={reloadBroughtBackThisBuild()}
+                                            onReload={() => void reloadPage()}
+                                        />
                                     ) : error ? (
                                         // A price that could not be read since (asked again after
                                         // `cost_changed`, say) keeps its Retry under the error:

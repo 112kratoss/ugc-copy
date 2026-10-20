@@ -129,7 +129,7 @@ import {
     type GenerationTiming,
 } from '@/lib/generation-timing';
 import { useCreatorQuote } from '@/lib/use-creator-quote';
-import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
+import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
 import {
@@ -2301,7 +2301,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     /** Onto the current build, with the draft saved first: it comes back after the reload. */
     const reloadPage = async () => {
         await saveTextDraftNow();
-        window.location.reload();
+        reloadForNewerBuild();
     };
 
     const addShot = () => {
@@ -5459,7 +5459,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         <p className="text-sm text-red-400">{promptLimitMessage}</p>
                                     ) : quoteState.pageOutOfDate ? (
                                         // In place of the start's refusal it stands for.
-                                        <StudioOutOfDatePageNotice isRemix={Boolean(remixId)} onReload={() => void reloadPage()} />
+                                        <StudioOutOfDatePageNotice
+                                            isRemix={Boolean(remixId)}
+                                            reloadDidNotHelp={reloadBroughtBackThisBuild()}
+                                            onReload={() => void reloadPage()}
+                                        />
                                     ) : error ? (
                                         // The error can name a handle, and can print a subject's name or
                                         // whatever the server answered. A handle gets its own box; any other

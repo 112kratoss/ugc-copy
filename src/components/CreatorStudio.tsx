@@ -534,9 +534,23 @@ export function StudioQuoteRetry({ message, onRetry }: { message: string | null;
  * (`useCreatorQuote`'s `pageOutOfDate`): only a reload onto the current build ends it, so a
  * creator page draws this in place of the start's refusal while Generate waits. A remix
  * keeps no draft and is restored from its original again; any other page saves its draft
- * before it reloads.
+ * before it reloads. When the last such reload brought this same build back
+ * (`reloadBroughtBackThisBuild`: a page served stale), the same reload would only bring it
+ * back again, so the notice says so and offers none.
  */
-export function StudioOutOfDatePageNotice({ isRemix, onReload }: { isRemix: boolean; onReload: () => void }) {
+export function StudioOutOfDatePageNotice({ isRemix, reloadDidNotHelp, onReload }: {
+  isRemix: boolean;
+  reloadDidNotHelp: boolean;
+  onReload: () => void;
+}) {
+  if (reloadDidNotHelp) {
+    return (
+      <p role="alert" className="text-sm text-amber-300">
+        This page is out of date, so it cannot show what this run costs, and reloading it brought back the same version. Wait a few minutes, then reload the page.
+        {isRemix ? ' The remix starts again from the original.' : ''}
+      </p>
+    );
+  }
   return (
     <p role="alert" className="text-sm text-amber-300">
       This page is out of date, so it cannot show what this run costs. Reload it to see the current price.

@@ -68,7 +68,7 @@ import {
     type GenerationTiming,
 } from '@/lib/generation-timing';
 import { useCreatorQuote } from '@/lib/use-creator-quote';
-import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
+import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { planMotionRunInputs } from '@/lib/creator-run-inputs';
 // Kie's motion cap; the motion start refuses a longer prompt before anything is held.
 import { catalogRunQuoteInput, MOTION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
@@ -689,7 +689,7 @@ export default function CreateMotionClient({
     /** Onto the current build, with the draft saved first: it comes back after the reload. */
     const reloadPage = async () => {
         await flushDraftSave();
-        window.location.reload();
+        reloadForNewerBuild();
     };
 
     // Read for every request: a run can outlive the token it started with.
@@ -1779,7 +1779,11 @@ export default function CreateMotionClient({
                                     ) : videoError ? (
                                         <p className="text-sm text-rose-300">{videoError}</p>
                                     ) : quoteState.pageOutOfDate ? (
-                                        <StudioOutOfDatePageNotice isRemix={Boolean(remixId)} onReload={() => void reloadPage()} />
+                                        <StudioOutOfDatePageNotice
+                                            isRemix={Boolean(remixId)}
+                                            reloadDidNotHelp={reloadBroughtBackThisBuild()}
+                                            onReload={() => void reloadPage()}
+                                        />
                                     ) : error ? (
                                         // A price that could not be read since (asked again after
                                         // `cost_changed`, say) keeps its Retry under the error:

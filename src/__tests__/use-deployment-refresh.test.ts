@@ -165,3 +165,46 @@ describe('useDeploymentRefresh', () => {
     expect(result.current.newBuildAvailable).toBe(true);
   });
 });
+
+// A creator page that finds itself out of date reloads to reach a newer build. A reload can
+// bring the same build back (a page served stale), and the page then offered the same reload
+// again. It notes the build it leaves, so the page that loads next can tell.
+describe('a reload for a newer build', () => {
+  const FROM_KEY = 'magicbooklet:deployment-refresh:reloaded-from-build-id';
+
+  beforeEach(() => {
+    document.documentElement.dataset.buildId = 'build-1';
+    window.sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    delete document.documentElement.dataset.buildId;
+    window.sessionStorage.clear();
+  });
+
+  it('notes the build it leaves, then reloads', async () => {
+    const { reloadForNewerBuild } = await import('@/lib/use-deployment-refresh');
+    const reload = vi.fn();
+
+    reloadForNewerBuild(reload);
+
+    expect(window.sessionStorage.getItem(FROM_KEY)).toBe('build-1');
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('says it brought the same build back on that build only', async () => {
+    const { reloadBroughtBackThisBuild } = await import('@/lib/use-deployment-refresh');
+    expect(reloadBroughtBackThisBuild()).toBe(false);
+
+    window.sessionStorage.setItem(FROM_KEY, 'build-1');
+    expect(reloadBroughtBackThisBuild()).toBe(true);
+
+    // The reload reached another build: it did its work.
+    document.documentElement.dataset.buildId = 'build-2';
+    expect(reloadBroughtBackThisBuild()).toBe(false);
+
+    // A page that names no build cannot tell, so it says nothing.
+    delete document.documentElement.dataset.buildId;
+    expect(reloadBroughtBackThisBuild()).toBe(false);
+  });
+});
