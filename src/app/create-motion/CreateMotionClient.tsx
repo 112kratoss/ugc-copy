@@ -825,9 +825,9 @@ export default function CreateMotionClient({
     // rose: quote with its length, which the refusal carries.
     const applyMeasuredClipLength = (details: Readonly<Record<string, unknown>>) => {
         const measuredInputs = Array.isArray(details.inputs) ? details.inputs.filter(isRecord) : [];
-        // The clip, in the slot its model gives it; a motion run always sends it second.
-        const clip = measuredInputs.find((input) => input.slot === runInputs[1].slot)
-            ?? measuredInputs.find((input) => input.index === 1);
+        // The start names each length it measured by the input's place in the run, and a
+        // motion run sends its clip second, in whichever slot its model gives it.
+        const clip = measuredInputs.find((input) => input.index === 1);
         const measured = clip && typeof clip.durationSeconds === 'number' && Number.isFinite(clip.durationSeconds) && clip.durationSeconds > 0
             ? Math.ceil(clip.durationSeconds)
             : null;

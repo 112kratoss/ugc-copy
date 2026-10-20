@@ -3,6 +3,8 @@ import {
   SUBJECT_IMAGES_SLOT_KEY,
   type CatalogConditionLike,
   type CatalogConditionPrimitive,
+  type CLIENT_RENDERED_INPUT_SLOT_KINDS,
+  type CLIENT_RENDERED_INPUT_SLOT_ROLES,
 } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 /**
@@ -121,7 +123,14 @@ export function planImageRunInputs<Element>(elements: readonly Element[], maxIma
 export type MotionRunDescriptor = {
   inputModes?: readonly {
     conditions?: readonly CatalogConditionLike[];
-    slots: readonly { key: string; kind: string; role?: string; conditions?: readonly CatalogConditionLike[] }[];
+    slots: readonly {
+      key: string;
+      kind: (typeof CLIENT_RENDERED_INPUT_SLOT_KINDS)[number];
+      role: (typeof CLIENT_RENDERED_INPUT_SLOT_ROLES)[number];
+      min?: number;
+      max?: number;
+      conditions?: readonly CatalogConditionLike[];
+    }[];
   }[];
 };
 
@@ -129,37 +138,47 @@ export type MotionRunInputs = readonly [{ slot: string; kind: 'image' }, { slot:
 
 /**
  * The inputs a motion run sends, in this order: the character to animate and the clip whose
- * movement it takes, each in the slot its model's descriptor opens for its kind (the first
- * image and the first video slot of the modes the run's settings select), as the app sends
- * them. The start quotes a run with each input in its slot and refuses a slot the model does
- * not declare: production published Kling 3.0 motion with `imageReferences` and
+ * movement it takes, each in a reference slot its model's descriptor opens for its kind with
+ * the run's settings (one the run must fill, or else the first that takes an input). The
+ * start quotes a run with each input in its slot and refuses a slot the model does not
+ * declare: production published Kling 3.0 motion with `imageReferences` and
  * `videoReferences`, and refused every web Kling 3.0 run while this page sent
- * `characterImage` and `referenceVideo` to every model (2026-10-19). A descriptor that opens
- * no such slot keeps those two, and its quote says why the run cannot start. No length goes
- * with the clip: the start measures it and, when the measured length costs more than the
- * price shown, sends the creator back to quote with it.
+ * `characterImage` and `referenceVideo` to every model (2026-10-19). The app reads the same
+ * slots, and puts each input in every open slot of its kind; for a motion model with one
+ * slot of each, as every published one has, the two send the same run. A descriptor that
+ * opens no such slot keeps `characterImage` and `referenceVideo`, and its quote says why the
+ * run cannot start. No length goes with the clip: the start measures it and, when the
+ * measured length costs more than the price shown, sends the creator back to quote with it.
  */
 export function planMotionRunInputs(
   descriptor: MotionRunDescriptor | null | undefined,
   settings: Record<string, CatalogConditionPrimitive | undefined>,
 ): MotionRunInputs {
   const modes = descriptor?.inputModes ?? [];
-  // What a motion run holds, counted as the app counts it: its picture in each image slot,
-  // its clip in each video slot.
+  const isReference = (slot: (typeof modes)[number]['slots'][number]) => (
+    slot.role === 'reference' && (slot.kind === 'image' || slot.kind === 'video')
+  );
+  // The counts a mode's or slot's conditions read: the run's kind totals, as the server
+  // reads them, and one input in each reference slot, as the app counts a motion draft,
+  // whose frame slots hold nothing.
   const inputCounts: Record<string, number> = { images: 1, videos: 1 };
   for (const slot of modes.flatMap((mode) => mode.slots)) {
-    if (slot.kind === 'image' || slot.kind === 'video') inputCounts[slot.key] = 1;
+    if (isReference(slot)) inputCounts[slot.key] = 1;
   }
   const open = modes
     .filter((mode) => catalogConditionsMatch(mode.conditions, settings, inputCounts))
     .flatMap((mode) => mode.slots)
     .filter((slot) => (
-      slot.role !== 'startFrame'
-      && slot.role !== 'endFrame'
+      isReference(slot)
+      && (slot.max ?? 1) > 0
       && catalogConditionsMatch(slot.conditions, settings, inputCounts)
     ));
+  const slotFor = (kind: 'image' | 'video') => {
+    const ofKind = open.filter((slot) => slot.kind === kind);
+    return (ofKind.find((slot) => (slot.min ?? 0) > 0) ?? ofKind[0])?.key;
+  };
   return [
-    { slot: open.find((slot) => slot.kind === 'image')?.key ?? 'characterImage', kind: 'image' },
-    { slot: open.find((slot) => slot.kind === 'video')?.key ?? 'referenceVideo', kind: 'video' },
+    { slot: slotFor('image') ?? 'characterImage', kind: 'image' },
+    { slot: slotFor('video') ?? 'referenceVideo', kind: 'video' },
   ];
 }
