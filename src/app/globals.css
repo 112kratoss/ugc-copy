@@ -184,7 +184,10 @@ body {
     var(--background);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  min-height: 100vh;
+  /* The window as it is now (dvh), as the app shell sizes itself. On a phone 100vh
+     is the window with its toolbar put away, so while the toolbar showed, a body of
+     100vh let every short page in the shell scroll by the toolbar's height. */
+  min-height: 100dvh;
   color-scheme: dark;
 }
 
