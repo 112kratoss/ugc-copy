@@ -620,6 +620,27 @@ describe('CreateImageClient element handles', () => {
       expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
     });
 
+    it('says so when the model now takes fewer references than the run used', async () => {
+      // Nano Banana 2 takes 10 since 2026-10-20; a run from before could hold 14.
+      const twelve = Array.from({ length: 12 }, (_, index) => ({
+        id: `remix-${index + 1}`,
+        displayName: `Ref ${index + 1}`,
+        handle: `@ref_${index + 1}`,
+        url: `https://signed.example.com/${index + 1}.png`,
+        storagePath: `generation_inputs/owner-1/gen-1/${String(index).padStart(2, '0')}.png`,
+        sourceGenerationId: 'gen-1',
+      }));
+      vi.stubGlobal('fetch', vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ ...bundle, inputs: { image: { elements: twelve } } }),
+      } as Response)));
+
+      const view = render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+
+      await waitFor(() => expect(cardHandles(view.container)).toHaveLength(10));
+      expect(await screen.findByText(/takes up to 10 reference images, so 10 of this run's 12 came back\./)).toBeInTheDocument();
+    });
+
     it('does not hand a restored handle to another element that is renamed to match it', async () => {
       const view = render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
       await waitFor(() => expect(cardHandles(view.container)).toEqual(['@lead', '@prop']));

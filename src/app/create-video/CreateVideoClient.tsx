@@ -59,6 +59,8 @@ import type { RemixMediaAssetDescriptor, RemixResolvedAsset, RemixSourceBundle }
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import {
     createRemixElementSeeds,
+    getRemixReferenceCapWarning,
+    joinRemixRestoreWarnings,
     createRestoredRemixAssetState,
     getRemixRestoreWarning,
 } from '@/lib/remix-source-client';
@@ -1815,6 +1817,15 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     nextModelId,
                     { mode: nextMode, isMultiShot: nextIsMultiShot },
                 ).elements;
+
+                // A model whose cap fell since the run gets its first references back, and says
+                // so. A multi-shot run takes none by design, so it says nothing.
+                const capWarning = nextIsMultiShot ? null : getRemixReferenceCapWarning(
+                    restoredVideoInputs?.elements ?? [],
+                    restoredElementSupport.maxTotal,
+                    VIDEO_MODELS[nextModelId].displayName,
+                );
+                if (capWarning) setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, capWarning));
 
                 if (isSeedance2VideoModelId(nextModelId)) {
                     const restoredSeeds = createRemixElementSeeds(

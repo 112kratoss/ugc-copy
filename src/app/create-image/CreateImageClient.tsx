@@ -32,6 +32,8 @@ import type { RemixSourceBundle } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import {
     createRemixElementSeeds,
+    getRemixReferenceCapWarning,
+    joinRemixRestoreWarnings,
     createRemixResultReferenceElement,
     getRemixRestoreWarning,
     getRemixResultReferenceLabel,
@@ -634,6 +636,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                     bundle.inputs.image?.elements ?? [],
                     IMAGE_MODELS[nextModelId].maxImages
                 );
+                // A model whose cap fell since the run gets its first references back, and says so.
+                const capWarning = getRemixReferenceCapWarning(
+                    bundle.inputs.image?.elements ?? [],
+                    IMAGE_MODELS[nextModelId].maxImages,
+                    IMAGE_MODELS[nextModelId].displayName,
+                );
+                if (capWarning) setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, capWarning));
 
                 if (restoredSeeds.length > 0) {
                     commitElements(hydrateImageElements(restoredSeeds));
