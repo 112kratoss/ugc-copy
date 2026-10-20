@@ -4821,11 +4821,15 @@ function MotionCreatorComposer({
   const selectedMedia = selectedRole === 'character' ? draft.characterImage : selectedRole === 'motion' ? draft.referenceVideo : null;
   const duration = draft.referenceVideo ? getMotionDuration(draft) : null;
   // The lines under the slots, found by what the slots are called (`catalogMotionDraftSlotLabels`):
-  // the draft's checks name an input by its slot's label, as the slot itself does.
+  // the draft's checks open a line about a slot with its label, as the slot itself is titled. A line
+  // goes under the slot whose label it opens with, the longer label where both do, so a line about
+  // a "Reference video" is not also the line of a "Reference".
   const labels = catalogMotionDraftSlotLabels(draft, model);
-  const names = (label: string) => (error: string) => error.toLowerCase().includes(label.toLowerCase());
-  const characterError = validationErrors.find(names(labels.image));
-  const motionError = validationErrors.find(names(labels.video));
+  const slotNamedBy = (error: string) => [labels.image, labels.video]
+    .filter((label) => error.startsWith(`${label} `))
+    .sort((a, b) => b.length - a.length)[0];
+  const characterError = validationErrors.find((error) => slotNamedBy(error) === labels.image);
+  const motionError = validationErrors.find((error) => slotNamedBy(error) === labels.video);
   // The slots the run sends its picture and its clip in, found by kind: Kling 3.0's are plain
   // reference slots, where Kling 2.6 has the motion-inputs pair.
   const slotKeys = catalogMotionDraftSlotKeys(draft, model);

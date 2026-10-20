@@ -6472,6 +6472,30 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(slotText(tree, 'motion-character-slot')).toEqual(['Cast image', 'Required', 'Dancer']);
         expect(slotText(tree, 'motion-video-slot')).toEqual(['Dance clip', 'Required', 'Moves']);
       });
+
+      it('draw a line once, under the slot it names, where one slot’s label begins the other’s', async () => {
+        const model = parseModelCatalogDetail(productionMotion.models.find((entry) => entry.id === 'kling-3.0'));
+        model.inputModes = [{
+          key: 'default',
+          label: 'Default',
+          default: true,
+          slots: [
+            { key: 'imageReferences', kind: 'image', role: 'reference', label: 'Reference', min: 0, max: 1 },
+            { key: 'videoReferences', kind: 'video', role: 'reference', label: 'Reference video', min: 0, max: 1 },
+          ],
+        }];
+        catalogState.catalog = { ...productionMotionCatalog(), models: [model] };
+        memory.set(ordinaryKey, savedDrafts({ motion: {
+          model: 'kling-3.0',
+          catalogRevision: productionMotion.revision,
+          characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }),
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        // Only the clip is missing: its line is drawn once, and the picture's slot has none.
+        expect(slotText(tree, 'motion-required-inputs').filter((line) => line.endsWith(' required.')))
+          .toEqual(['Reference video is required.']);
+      });
     });
 
     describe('the result', () => {
