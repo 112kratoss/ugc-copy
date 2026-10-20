@@ -157,6 +157,37 @@ describe('runBackendJobsSchedulerForRoute', () => {
     });
   });
 
+  it('dispatches the Kie balance check like every other logical job', async () => {
+    const runKieAccountBalanceBackendJob = vi.fn(async () => succeededResult('kie-account-balance'));
+
+    const result = await runBackendJobsSchedulerForRoute({
+      request: new Request('http://localhost/api/cron/backend-jobs', {
+        headers: { 'x-vercel-id': 'bom1::scheduler-43' },
+      }),
+      dependencies: {
+        now: () => Date.parse('2026-10-20T06:00:00.000Z'),
+        createServiceClient,
+        getDueBackendJobs: () => [backendJob('kie-account-balance')],
+        runKieAccountBalanceBackendJob,
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        success: true,
+        dueJobs: ['kie-account-balance'],
+        results: [expect.objectContaining({ job: 'kie-account-balance', status: 'succeeded' })],
+      },
+    });
+    expect(runKieAccountBalanceBackendJob).toHaveBeenCalledWith({
+      requestId: 'bom1::scheduler-43:kie-account-balance',
+      startedAtMs: Date.parse('2026-10-20T06:00:00.000Z'),
+      serviceClient,
+      triggerRoute: '/api/cron/backend-jobs',
+    });
+  });
+
   it('skips without creating a Supabase client when no logical job is due', async () => {
     const result = await runBackendJobsSchedulerForRoute({
       request: new Request('http://localhost/api/cron/backend-jobs'),

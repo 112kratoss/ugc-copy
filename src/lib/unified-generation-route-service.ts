@@ -12,8 +12,10 @@ import {
   getPublicGenerationStartFailure,
   getRefundedStartGenerationId,
   normalizeGenerationStartFailureCode,
+  type GenerationStartFailureCode,
 } from '@/lib/generation-public-failure';
 import { GenerationStartIdempotencyError } from '@/lib/generation-start-idempotency';
+import { reportKieInsufficientCreditsRefusal } from '@/lib/kie-account-balance-refusal';
 import { SourceGenerationValidationError } from '@/lib/source-generation';
 import {
   ReferenceDurationChangedError,
@@ -88,14 +90,26 @@ const REFUSED_START_ANSWERS = {
   },
 } as const;
 
-function refusedStartCode(error: unknown): keyof typeof REFUSED_START_ANSWERS {
-  const { code } = getPublicGenerationStartFailure(error);
+function refusedStartCode(code: GenerationStartFailureCode): keyof typeof REFUSED_START_ANSWERS {
   if (code === 'invalid_input_media' || code === 'provider_busy' || code === 'provider_unavailable') {
     return code;
   }
   // The creator's hold went through, so a balance the provider calls short is
   // the service's own account, not theirs.
   return code === 'insufficient_credits' ? 'provider_unavailable' : 'provider_rejected';
+}
+
+/**
+ * The creator is told the provider is unavailable; the operator is told why,
+ * now rather than at the next balance poll (kie-account-balance-refusal.ts).
+ * Reporting schedules its work behind this answer and must never change it.
+ */
+function reportProviderOutOfCredits(): void {
+  try {
+    reportKieInsufficientCreditsRefusal();
+  } catch (error) {
+    logBackendError('kie_balance_refusal_report_failed', { error });
+  }
 }
 
 function generationServiceErrorCode(error: GenerationServiceError): string {
@@ -240,7 +254,8 @@ export function mapGenerationStartRouteError(
   // text), and nothing of that start is left running or reserved.
   const refundedGenerationId = getRefundedStartGenerationId(error);
   if (refundedGenerationId) {
-    const code = refusedStartCode(error);
+    const code = refusedStartCode(publicFailure.code);
+    if (publicFailure.code === 'insufficient_credits') reportProviderOutOfCredits();
     // The provider's words go to the log only: they can carry model ids, URLs
     // or the prompt.
     logBackendError(logEvent, { failureCode: code, generationId: refundedGenerationId, error });

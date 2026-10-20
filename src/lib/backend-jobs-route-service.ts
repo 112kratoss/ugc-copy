@@ -10,6 +10,7 @@ import {
   runFeedMaintenanceBackendJob,
   runGenerationCompletionsBackendJob,
   runGenerationModelVerificationBackendJob,
+  runKieAccountBalanceBackendJob,
   runMediaPreviewRepairBackendJob,
   runMediaUploadReclaimBackendJob,
   runMobilePushReceiptsBackendJob,
@@ -37,6 +38,7 @@ type BackendJobsRouteDependencies = {
   runFeedMaintenanceBackendJob?: typeof runFeedMaintenanceBackendJob;
   runGenerationCompletionsBackendJob?: typeof runGenerationCompletionsBackendJob;
   runGenerationModelVerificationBackendJob?: typeof runGenerationModelVerificationBackendJob;
+  runKieAccountBalanceBackendJob?: typeof runKieAccountBalanceBackendJob;
   runMediaPreviewRepairBackendJob?: typeof runMediaPreviewRepairBackendJob;
   runMediaUploadReclaimBackendJob?: typeof runMediaUploadReclaimBackendJob;
   runMobilePushReceiptsBackendJob?: typeof runMobilePushReceiptsBackendJob;
@@ -85,6 +87,8 @@ function resolveDependencies(dependencies: BackendJobsRouteDependencies | undefi
       ?? runGenerationCompletionsBackendJob,
     runGenerationModelVerificationBackendJob: dependencies?.runGenerationModelVerificationBackendJob
       ?? runGenerationModelVerificationBackendJob,
+    runKieAccountBalanceBackendJob: dependencies?.runKieAccountBalanceBackendJob
+      ?? runKieAccountBalanceBackendJob,
     runMediaPreviewRepairBackendJob: dependencies?.runMediaPreviewRepairBackendJob
       ?? runMediaPreviewRepairBackendJob,
     runMediaUploadReclaimBackendJob: dependencies?.runMediaUploadReclaimBackendJob
@@ -132,6 +136,8 @@ async function runDueBackendJob(
       return options.dependencies.runGenerationCompletionsBackendJob(runOptions);
     case 'generation-model-verification':
       return options.dependencies.runGenerationModelVerificationBackendJob(runOptions);
+    case 'kie-account-balance':
+      return options.dependencies.runKieAccountBalanceBackendJob(runOptions);
     case 'media-preview-repair':
       return options.dependencies.runMediaPreviewRepairBackendJob(runOptions);
     case 'media-upload-reclaim':

@@ -15,6 +15,11 @@ import { GenerationStartIdempotencyError } from '@/lib/generation-start-idempote
 import { SourceGenerationValidationError } from '@/lib/source-generation';
 
 const startUnifiedGenerationForRouteMock = vi.hoisted(() => vi.fn());
+const reportKieInsufficientCreditsRefusalMock = vi.hoisted(() => vi.fn());
+
+vi.mock('@/lib/kie-account-balance-refusal', () => ({
+  reportKieInsufficientCreditsRefusal: (...args: unknown[]) => reportKieInsufficientCreditsRefusalMock(...args),
+}));
 
 vi.mock('@/lib/unified-generation-start-service', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/unified-generation-start-service')>();
@@ -58,6 +63,7 @@ function refundedProviderRejection(message: string, generationId = 'generation-r
 describe('unified generation route service', () => {
   beforeEach(() => {
     startUnifiedGenerationForRouteMock.mockReset();
+    reportKieInsufficientCreditsRefusalMock.mockReset();
   });
 
   it('returns submission_pending with the held generation id after an ambiguous provider accept', async () => {
@@ -352,6 +358,40 @@ describe('unified generation route service', () => {
       const result = await postRefusedStart(refundedProviderRejection('Insufficient credits on this account'));
 
       expect(result).toMatchObject({ status: 503, body: { code: 'provider_unavailable' } });
+    });
+
+    it('tells the operator at once when the provider account itself is out of credits', async () => {
+      await postRefusedStart(refundedProviderRejection('Insufficient credits on this account'));
+
+      expect(reportKieInsufficientCreditsRefusalMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not report the creator\'s own short balance, or any other refusal, as the provider running dry', async () => {
+      await postRefusedStart(new GenerationServiceError('Insufficient credits. This action costs 12 credits.', 402));
+      await postRefusedStart(refundedProviderRejection('image_input is invalid: image size too small'));
+      await postRefusedStart(refundedProviderRejection('Your prompt was flagged by the safety filter.'));
+      const held = new TypeError('fetch failed');
+      markHeldProviderSubmission(held, 'generation-held-3');
+      await postRefusedStart(held);
+
+      expect(reportKieInsufficientCreditsRefusalMock).not.toHaveBeenCalled();
+    });
+
+    it('still answers the creator when reporting the empty provider account fails', async () => {
+      reportKieInsufficientCreditsRefusalMock.mockImplementationOnce(() => {
+        throw new Error('scheduler unavailable');
+      });
+
+      const result = await postRefusedStart(refundedProviderRejection('Insufficient credits on this account'));
+
+      expect(result).toEqual({
+        ok: false,
+        status: 503,
+        body: {
+          code: 'provider_unavailable',
+          error: 'The generation provider is temporarily unavailable. Try again in a moment. No credits were used.',
+        },
+      });
     });
 
     it('answers an upload the provider could not read with invalid_input_media', async () => {
