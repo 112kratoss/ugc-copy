@@ -17,7 +17,7 @@ import {
   type ShowcaseMediaItem,
   type ShowcaseSort,
 } from '@/lib/showcase';
-import type { SourceToolOption } from '@/lib/source-tools';
+import type { SourceToolFilterOption } from '@/lib/source-tools';
 import {
   buildShowcaseClientCacheKey,
   clearShowcaseClientCacheForTests,
@@ -100,8 +100,8 @@ vi.mock('@/app/showcase/ShowcaseFeedInteraction', async (importOriginal) => {
   return { ...actual, QualifiedImpressionBoundary: CountedImpressionBoundary };
 });
 
-const SOURCE_TOOL_OPTIONS: SourceToolOption[] = [
-  { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
+const SOURCE_TOOL_OPTIONS: SourceToolFilterOption[] = [
+  { slug: 'magicbooklet', label: 'magicbooklet' },
 ];
 
 function createShowcaseItem(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem {

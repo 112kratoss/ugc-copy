@@ -13,7 +13,7 @@ import {
   normalizeMarketplaceResourceKindFilter,
   normalizeMarketplaceResourceSort,
 } from '@/lib/post-resource-bundles';
-import { slugifySourceTool } from '@/lib/source-tools';
+import { slugifySourceTool, toSourceToolFilterOptions } from '@/lib/source-tools';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import { MARKETPLACE_INITIAL_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
 import {
@@ -86,7 +86,8 @@ async function loadMarketplacePageData(searchParams: MarketplacePageProps['searc
       q,
     },
     shortQuery,
-    sourceToolOptions,
+    // Written into the flight data of every first load: only what the filter draws.
+    sourceToolOptions: toSourceToolFilterOptions(sourceToolOptions),
   };
 }
 

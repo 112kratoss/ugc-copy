@@ -30,7 +30,7 @@ import {
 } from '@/lib/post-resource-bundles';
 import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { buildShowcaseDetailPath } from '@/lib/share';
-import type { SourceToolOption } from '@/lib/source-tools';
+import type { SourceToolFilterOption } from '@/lib/source-tools';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 import { HoverVideo } from '@/components/HoverVideo';
 import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
@@ -63,7 +63,7 @@ interface MarketplaceBrowserProps {
    * hint, never applied (`initialFilters.q` stays empty).
    */
   shortQuery?: string;
-  sourceToolOptions: SourceToolOption[];
+  sourceToolOptions: SourceToolFilterOption[];
 }
 
 const SORT_LINKS: Array<{ label: string; value: MarketplaceResourceSort }> = [

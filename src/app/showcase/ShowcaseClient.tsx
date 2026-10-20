@@ -56,7 +56,7 @@ import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 import { isTextOnlyPost } from '@/lib/post-feed-presentation';
-import type { SourceToolOption } from '@/lib/source-tools';
+import type { SourceToolFilterOption } from '@/lib/source-tools';
 import {
     blockCreatorAfterConfirmation,
     reportCreatorAfterConfirmation,
@@ -187,7 +187,7 @@ interface ShowcaseClientProps {
     initialTool: string | null;
     initialUnlock: ShowcaseUnlockFilter;
     initialResource: ShowcaseResourceFilter;
-    sourceToolOptions: SourceToolOption[];
+    sourceToolOptions: SourceToolFilterOption[];
     initialPriorityPoster?: ShowcasePriorityPosterData | null;
 }
 

@@ -177,14 +177,17 @@ const nextConfig: NextConfig = {
   // and 0.8 s with it inlined (run 32591925400) against a 1.8 s budget; the
   // sheet itself took 1.5 s to arrive once it competed with the scripts.
   //
-  // Inlining duplicates the sheet per response — once in a <style> tag for SSR
-  // and once, escaped, inside the RSC flight payload — a documented limitation
-  // of the flag. On the wire that costs about one compressed copy, because
-  // brotli matches the second against the first (the home document went from
-  // 53 KB to 76 KB compressed). So what matters is the size of the sheet a
-  // public page inlines, and that is kept small by the route-scoped split:
-  // `globals.css` scans only the routes a signed-out visitor can land on, and
-  // signed-in surfaces add `non-public-utilities.css` from their own layouts.
+  // Inlining copies the root sheet three times per response: a <style> tag for
+  // SSR, an escaped copy inside the RSC flight payload (the flag's documented
+  // limitation), and a second escaped copy for the global-error boundary,
+  // which Turbopack credits with the root layout's CSS (a `global-error.tsx`
+  // of our own gets it as well; checked 2026-10-20). On the wire that costs
+  // about one compressed copy, because brotli matches the later copies against
+  // the first (the home document went from 53 KB to 76 KB compressed). So what
+  // matters is the size of the sheet a public page inlines, and that is kept
+  // small by the route-scoped split: `globals.css` scans only the routes a
+  // signed-out visitor can land on, and signed-in surfaces add
+  // `non-public-utilities.css` from their own layouts.
   // A public route must never import the supplement: with inlining on it would
   // carry both sheets twice, which is how a blog post once reached 800 KB of
   // HTML. `route-style-readiness.test.ts` pins that split.

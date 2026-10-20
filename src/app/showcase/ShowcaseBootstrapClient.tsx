@@ -26,7 +26,7 @@ import {
     getShowcaseItemMediaItems,
 } from '@/lib/showcase';
 import { isTextOnlyPost } from '@/lib/post-feed-presentation';
-import type { SourceToolOption } from '@/lib/source-tools';
+import type { SourceToolFilterOption } from '@/lib/source-tools';
 
 export interface ShowcaseBootstrapClientProps {
     initialFeed: ShowcaseFeedPage;
@@ -35,7 +35,7 @@ export interface ShowcaseBootstrapClientProps {
     initialTool: string | null;
     initialUnlock: ShowcaseUnlockFilter;
     initialResource: ShowcaseResourceFilter;
-    sourceToolOptions: SourceToolOption[];
+    sourceToolOptions: SourceToolFilterOption[];
     initialPriorityPoster?: ShowcasePriorityPosterData | null;
 }
 

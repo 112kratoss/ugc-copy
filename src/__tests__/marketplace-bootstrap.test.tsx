@@ -33,8 +33,6 @@ describe('MarketplaceBootstrap', () => {
           {
             label: 'A deliberately long source tool name',
             slug: 'long-source-tool',
-            models: [],
-            supportedMediaKinds: ['image'],
           },
         ]}
       />
@@ -232,7 +230,7 @@ describe('MarketplaceBootstrap', () => {
         initialPage={createPage(3, true)}
         initialFilters={INITIAL_FILTERS}
         sourceToolOptions={[
-          { slug: 'runway', label: 'Runway', models: [], supportedMediaKinds: ['image', 'video'] },
+          { slug: 'runway', label: 'Runway' },
         ]}
       />
     );
@@ -272,7 +270,7 @@ describe('MarketplaceBootstrap', () => {
           q: 'product demo',
         }}
         sourceToolOptions={[
-          { slug: 'runway', label: 'Runway', models: [], supportedMediaKinds: ['image', 'video'] },
+          { slug: 'runway', label: 'Runway' },
         ]}
       />
     );

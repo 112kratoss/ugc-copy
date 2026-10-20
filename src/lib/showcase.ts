@@ -314,6 +314,30 @@ export function sanitizeShowcaseFeedPage(feed: ShowcaseFeedPage): ShowcaseFeedPa
     };
 }
 
+/**
+ * The first feed page Explore hands its client, less the two media fields only
+ * the app needs: `preview`, a copy of the item's own preview fields (each web
+ * read of one is paired by `??` with the item's own field, which holds the
+ * same value), and `previewCacheKey`, the app's image-cache key. They were 14
+ * of the 47 KB the twelve posts took in the document on 2026-10-20.
+ * `/api/showcase/feed` still sends both.
+ */
+export function toShowcaseBootstrapFeedPage(feed: ShowcaseFeedPage): ShowcaseFeedPage {
+    return {
+        ...feed,
+        items: feed.items.map((item) => (item.mediaItems
+            ? { ...item, mediaItems: item.mediaItems.map(withoutAppOnlyMediaFields) }
+            : item)),
+    };
+}
+
+function withoutAppOnlyMediaFields(mediaItem: ShowcaseMediaItem): ShowcaseMediaItem {
+    const trimmed = { ...mediaItem };
+    delete trimmed.preview;
+    delete trimmed.previewCacheKey;
+    return trimmed;
+}
+
 export function normalizeShowcaseCategory(value: string | null | undefined): ShowcaseCategory {
     if (value === 'motion' || value === 'ugc-ad') return 'video';
     if (value === 'media' || value === 'image' || value === 'video' || value === 'text') {
