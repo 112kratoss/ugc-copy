@@ -1407,6 +1407,9 @@ describe('a multi-shot run', () => {
 describe('a page run the provider is sent', () => {
   const CLIP = 'https://signed.example.com/uploads/user-1/dance.mp4';
   const HERO = 'https://signed.example.com/uploads/user-1/hero.png';
+  /** The database calls of the last start, readable after one that was refused. */
+  let lastRpc: { mock: { calls: unknown[][] } } | null = null;
+  const lastRpcNames = () => (lastRpc?.mock.calls ?? []).map(([fn]) => String(fn));
 
   beforeEach(() => {
     vi.resetModules();
@@ -1424,7 +1427,7 @@ describe('a page run the provider is sent', () => {
     vi.unstubAllGlobals();
   });
 
-  async function startFromPage(body: Record<string, unknown>) {
+  async function startFromPage(body: Record<string, unknown>, { measuredSeconds = 4 }: { measuredSeconds?: number } = {}) {
     const { startUnifiedGenerationForRoute: startRoute } = await import('@/lib/unified-generation-start-service');
     const { startCatalogGeneration, startVideoGeneration } = await import('@/lib/generation-services');
     const { loadPublishedGenerationModelCatalog } = await import('@/lib/generation-model-catalog-store');
@@ -1448,7 +1451,8 @@ describe('a page run the provider is sent', () => {
       }
       return { data: true, error: null };
     });
-    const probeInputDuration = vi.fn(async () => 4);
+    lastRpc = rpc;
+    const probeInputDuration = vi.fn(async () => measuredSeconds);
 
     const outcome = await startRoute(
       {
@@ -1484,6 +1488,126 @@ describe('a page run the provider is sent', () => {
     const reservation = rpc.mock.calls.find(([fn]) => fn === 'start_generation')?.[1];
     return { outcome, request: requests[0], reservation, probeInputDuration };
   }
+
+  /** Refused with `message`, before the start's hold or any provider request. */
+  async function expectRefusedFromPage(
+    body: Record<string, unknown>,
+    message: string,
+    options: { measuredSeconds?: number } = {},
+  ) {
+    lastRpc = null;
+    const refusal = await startFromPage(body, options).then(() => null, (error: unknown) => error);
+    expect(refusal).toMatchObject({ status: 400, message });
+    // The start's own claim on its request key is made; the credit hold is not.
+    expect(lastRpcNames()).toContain('claim_generation_start_request');
+    expect(lastRpcNames()).not.toContain('start_generation');
+    expect(fetch).not.toHaveBeenCalled();
+  }
+
+  // The 2026-10-20 model check-up: these runs were held, sent, refused by Kie and refunded.
+  describe('what Kie refuses', () => {
+    it('refuses a Z-Image prompt past Kie’s 1,000 characters, and starts one at it', async () => {
+      const zImage = (prompt: string) => ({
+        kind: 'image',
+        modelId: 'z-image',
+        prompt,
+        settings: { aspectRatio: '1:1' },
+        inputs: [],
+      });
+      await expectRefusedFromPage(zImage('a'.repeat(1001)), 'Z-Image prompts support up to 1,000 characters.');
+
+      const { outcome, request } = await startFromPage(zImage('a'.repeat(1000)));
+      expect(outcome).toMatchObject({ success: true, modelId: 'z-image' });
+      expect((request as { input?: { prompt?: string } } | undefined)?.input?.prompt).toBe('a'.repeat(1000));
+    });
+
+    it('refuses a Kling 3 Turbo prompt past 2,500 characters', async () => {
+      await expectRefusedFromPage({
+        kind: 'video',
+        modelId: 'kling-3.0-turbo',
+        prompt: 'a'.repeat(2501),
+        shots: [],
+        settings: { aspectRatio: '16:9', duration: 5, resolution: '720p' },
+        inputs: [],
+      }, 'Kling 3 Turbo prompts support up to 2,500 characters.');
+    });
+
+    it('sends Kling O3 the first shot’s prompt for a multi-shot run the page sends without one', async () => {
+      const { outcome, request } = await startFromPage({
+        kind: 'video',
+        modelId: 'kling-o3',
+        prompt: '',
+        shots: [
+          { prompt: 'Open on the harbour at dusk.', duration: 3 },
+          { prompt: 'Cut to the lighthouse.', duration: 2 },
+        ],
+        settings: { aspectRatio: '16:9', sound: false, duration: 5, resolution: '720p', isMultiShot: true },
+        inputs: [],
+      });
+
+      expect(outcome).toMatchObject({ success: true, modelId: 'kling-o3' });
+      expect(request).toMatchObject({
+        model: 'kling-3.0-omni/text-to-video',
+        input: {
+          prompt: 'Open on the harbour at dusk.',
+          customize_multi_shots: true,
+          multi_prompt: [
+            { prompt: 'Open on the harbour at dusk.', duration: 3 },
+            { prompt: 'Cut to the lighthouse.', duration: 2 },
+          ],
+        },
+      });
+    });
+
+    it('refuses a motion clip that measures under 3 seconds', async () => {
+      const STORAGE = 'https://project.supabase.co/storage/v1/object/sign/uploads/user-1';
+      await expectRefusedFromPage({
+        kind: 'motion',
+        modelId: 'kling-2.6',
+        prompt: '',
+        shots: [],
+        settings: { resolution: '720p', characterOrientation: 'video', duration: 3 },
+        inputs: [
+          { slot: 'characterImage', kind: 'image', url: `${STORAGE}/character.png?token=t` },
+          { slot: 'referenceVideo', kind: 'video', url: `${STORAGE}/reference.mp4?token=t`, durationSeconds: 3 },
+        ],
+      }, 'Kling 2.6 motion reference videos must be at least 3 seconds long. The reference video runs 2.4 seconds.', { measuredSeconds: 2.4 });
+    });
+
+    it('refuses a Seedance 2 reference clip that measures under 2 seconds', async () => {
+      await expectRefusedFromPage({
+        kind: 'video',
+        modelId: 'seedance-2',
+        prompt: 'Follow the dance in the clip.',
+        shots: [],
+        settings: { aspectRatio: '16:9', sound: false, duration: 5, resolution: '720p', referenceMode: 'elements' },
+        inputs: [{ slot: 'videoReferences', kind: 'video', url: CLIP, label: 'Dance clip', durationSeconds: 2 }],
+      }, 'Seedance 2 reference videos must be at least 2 seconds long. Dance clip runs 1.5 seconds.', { measuredSeconds: 1.5 });
+    });
+
+    it('refuses a Kling 3.0 video element that measures under 3 seconds, and starts one at 3', async () => {
+      const element = {
+        kind: 'video',
+        modelId: 'kling-3.0-video',
+        prompt: 'Replace the background motion with @dancer.',
+        shots: [],
+        settings: { aspectRatio: '16:9', sound: false, duration: 5, mode: 'std' },
+        inputs: [{ slot: 'videoElements', kind: 'video', url: CLIP, label: 'Dancer', handle: '@dancer' }],
+      };
+      await expectRefusedFromPage(
+        element,
+        'Kling 3.0 Cinematic video elements must be at least 3 seconds long. Dancer runs 2.4 seconds.',
+        { measuredSeconds: 2.4 },
+      );
+
+      const { outcome, request } = await startFromPage(element, { measuredSeconds: 3 });
+      expect(outcome).toMatchObject({ success: true, modelId: 'kling-3.0-video' });
+      expect(request).toMatchObject({
+        model: 'kling-3.0/video',
+        input: { kling_elements: [{ name: 'dancer', element_input_urls: [CLIP] }] },
+      });
+    });
+  });
 
   it('sends Seedance 2 a prepared clip by its asset id, measured by its link', async () => {
     const { outcome, request, reservation, probeInputDuration } = await startFromPage({

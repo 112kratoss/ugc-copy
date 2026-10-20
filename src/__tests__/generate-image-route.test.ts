@@ -603,6 +603,35 @@ describe('/api/generate-image route', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  // The 2026-10-20 model check-up: Kie refuses a Z-Image prompt past 1,000 characters,
+  // which it answered only after this start had held the run's credits.
+  it('refuses a prompt past its model’s own cap before inserting or deducting credits', async () => {
+    currentSupabaseMock = createSupabaseMock(null);
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { POST } = await importRetiredStart();
+    const response = await POST(
+      new Request('http://localhost/api/generate-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+          'Idempotency-Key': 'image-prompt-cap-1',
+        },
+        body: JSON.stringify({ prompt: 'a'.repeat(1001), model: 'z-image', aspectRatio: '1:1' }),
+      }) as never
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'Z-Image prompts support up to 1,000 characters.',
+    });
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith('start_generation', expect.anything());
+    expect(currentSupabaseMock.inserts).toHaveLength(0);
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
   it('rate limits image starts before deducting credits or calling the provider', async () => {
     currentSupabaseMock = createSupabaseMock(null, null, true, false);
     const providerFetch = vi.fn();
