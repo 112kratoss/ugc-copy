@@ -2268,6 +2268,14 @@ export async function notifyCreatorPayoutResolved(
   });
 }
 
+/**
+ * Tells a creator who followed them, by the follower's handle. The database
+ * takes the name and the link to the follower's page back out of an alert
+ * written across a block, when a block comes later, and when the follower's
+ * account is deleted, which frees the handle for anyone to claim
+ * (20261020072851). `unnamed_follow_alert_words` there turns these words into
+ * the ones written for a follower with no handle, so the two change together.
+ */
 export async function notifyCreatorFollowed(
   adminSupabase: SupabaseClient,
   params: { followerUserId: string; followingUserId: string; followerUsername?: string | null }

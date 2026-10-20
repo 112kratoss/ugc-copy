@@ -464,6 +464,11 @@ jobs:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
         run: npx vitest run src/__tests__/sale-alert-names-database.test.ts
 
+      - name: Test follow alert names against blocks with real SQL
+        env:
+          SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: npx vitest run src/__tests__/follow-alert-names-database.test.ts
+
       - name: Test comment lifecycle with real SQL
         env:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
