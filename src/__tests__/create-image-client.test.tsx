@@ -742,6 +742,20 @@ describe('CreateImageClient model notices', () => {
 const PENDING_START_KEY = 'magicbooklet:pending-generation-start:v1:image';
 const OUTPUT_URL = 'https://project.supabase.co/storage/v1/object/sign/generated_images/user-1/run-1.png?token=signed';
 const PROMPT_PLACEHOLDER = 'Describe the image you want to create...';
+const HARBOUR_REMIX: RemixSourceBundle = {
+  generation: { id: 'gen-1', title: 'Harbour', prompt: '@lead walks past @prop at dusk', category: 'image', model: 'nano-banana-2' },
+  result: { mediaType: 'image', url: 'https://example.com/result.png' },
+  inputs: {
+    image: {
+      elements: [
+        { id: 'remix-1', displayName: 'Hero shot', handle: '@lead', url: 'https://signed.example.com/lead.png', storagePath: 'generation_inputs/owner-1/gen-1/00.png', sourceGenerationId: 'gen-1' },
+        { id: 'remix-2', displayName: 'Umbrella', handle: '@prop', url: 'https://signed.example.com/prop.png', storagePath: 'generation_inputs/owner-1/gen-1/01.png', sourceGenerationId: 'gen-1' },
+      ],
+    },
+  },
+  workflowSettings: { model: 'nano-banana-2' },
+  restoreIssues: [],
+};
 
 type StartReply = { status: number; body: unknown } | Error | 'hang';
 
@@ -1104,6 +1118,73 @@ describe('CreateImageClient generation pipeline', () => {
       pressGenerate();
       await findResult();
       expect(startBody(startCalls(fetchMock)[1]).expectedCostCredits).toBe(10);
+    });
+
+    it('says the page is out of date and holds Generate for a reload when asking again leaves a remix at the refused price', async () => {
+      // A remix sends from the page it is on, past a deploy too. When that deploy changed how
+      // its run is priced, the page's quote of the run and the start's disagree: asked again,
+      // the price did not move, and each press was refused the same way until a reload.
+      const reload = vi.fn();
+      vi.stubGlobal('location', { ...window.location, reload });
+      const costChanged = { status: 409, body: { code: 'cost_changed', error: 'The price of this run changed. Check the updated cost and generate again.' } };
+      const fetchMock = installFetch({ starts: [costChanged, costChanged, costChanged], remixBundle: HARBOUR_REMIX });
+      render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+      await waitFor(() => expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead walks past @prop at dusk'));
+      expect(costShown()).toBe('8 credits');
+
+      pressGenerate();
+
+      const notice = await screen.findByRole('alert');
+      expect(notice).toHaveTextContent('This page is out of date, so it cannot show what this run costs.');
+      expect(notice).toHaveTextContent('The remix starts again from the original.');
+      // Asked again once, and the start's refusal stood: the same run at the same price.
+      expect(quoteRequestMock.mock.calls.at(-1)?.[1]).toBe(1);
+      expect(costShown()).toBe('8 credits');
+      expect(screen.getByRole('button', { name: /Generate Image/ })).toBeDisabled();
+      pressGenerate();
+      await settleDraftRead();
+      expect(startCalls(fetchMock)).toHaveLength(1);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Reload page' }));
+      await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+      // A remix keeps no draft, and this one is not saved over the creator's own.
+      expect(saveCreatorDraftMock).not.toHaveBeenCalled();
+    });
+
+    it('keeps the draft through the reload it offers on a page of its own', async () => {
+      const reload = vi.fn();
+      vi.stubGlobal('location', { ...window.location, reload });
+      const costChanged = { status: 409, body: { code: 'cost_changed', error: 'The price of this run changed. Check the updated cost and generate again.' } };
+      installFetch({ starts: [costChanged] });
+      render(<CreateImageClient prefill={{}} />);
+      await settleDraftRead();
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Your draft is kept.');
+      fireEvent.click(screen.getByRole('button', { name: 'Reload page' }));
+
+      await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+      expect(saveCreatorDraftMock).toHaveBeenCalledWith('image', 'user-1', expect.objectContaining({ prompt: 'A lighthouse at dawn' }));
+    });
+
+    it('lets the creator go on with another run, which the refusal does not hold', async () => {
+      const costChanged = { status: 409, body: { code: 'cost_changed', error: 'The price of this run changed. Check the updated cost and generate again.' } };
+      const fetchMock = installFetch({ starts: [costChanged, startedReply()] });
+      const view = render(<CreateImageClient prefill={{}} />);
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+      expect(await screen.findByRole('alert')).toHaveTextContent('This page is out of date');
+
+      // Another run is priced on its own: nothing has refused it.
+      fireEvent.click(screen.getByRole('button', { name: '1:1' }));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Generate Image/ })).toBeEnabled();
+      pressGenerate();
+      await findResult();
+      expect(startCalls(fetchMock)).toHaveLength(2);
+      expect(startBody(startCalls(fetchMock)[1]).settings).toMatchObject({ aspectRatio: '1:1' });
+      view.unmount();
     });
   });
 

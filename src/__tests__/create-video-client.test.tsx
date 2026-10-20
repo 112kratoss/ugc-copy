@@ -3888,6 +3888,51 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(postedStarts()[1].body.expectedCostCredits).toBe(15);
     });
 
+    it('says the page is out of date and holds Generate for a reload when asking again leaves the run at the refused price', async () => {
+      // A page sends from its own build until it hears of a newer one, and a page served
+      // stale never does. When that build prices a run apart from the start, asking again
+      // gave the same price, and each press was refused the same way until a reload.
+      const costChanged = refusal(409, {
+        code: 'cost_changed',
+        error: 'The price of this run changed. Check the updated cost and generate again.',
+      });
+      answerStarts(costChanged, costChanged, costChanged);
+      render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalled());
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+
+      const notice = await screen.findByRole('alert');
+      expect(notice).toHaveTextContent('This page is out of date, so it cannot show what this run costs.');
+      expect(notice).toHaveTextContent('Your draft is kept.');
+      // Asked again once, and the start's refusal stood: the same run at the same price.
+      expect(quoteRequestMock.mock.calls.at(-1)?.[1]).toBe(1);
+      expect(costShown()).toBe('12 credits');
+      expect(generateButton()).toBeDisabled();
+      fireEvent.click(generateButton());
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(postedStarts()).toHaveLength(1);
+
+      // jsdom does not navigate: it reports the reload it was asked for as not implemented.
+      const { virtualConsole } = (globalThis as unknown as {
+        jsdom: { virtualConsole: { on: (event: string, listener: (error: Error) => void) => void; off: (event: string, listener: (error: Error) => void) => void } };
+      }).jsdom;
+      const navigations: string[] = [];
+      const onJsdomError = (jsdomError: Error) => {
+        if (/navigation/i.test(jsdomError.message)) navigations.push(jsdomError.message);
+      };
+      virtualConsole.on('jsdomError', onJsdomError);
+      try {
+        fireEvent.click(screen.getByRole('button', { name: 'Reload page' }));
+        await waitFor(() => expect(navigations).toHaveLength(1));
+        expect(saveCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1', expect.objectContaining({ prompt: PROMPT }));
+      } finally {
+        virtualConsole.off('jsdomError', onJsdomError);
+      }
+    });
+
     it('promises a saved draft only where one is kept', async () => {
       modelCatalogState.missingIds = ['kling-3.0-video'];
       const page = render(<CreateVideoClient prefill={{}} />);

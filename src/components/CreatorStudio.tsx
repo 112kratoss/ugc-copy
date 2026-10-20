@@ -518,6 +518,23 @@ export function StudioRunPanel({
   );
 }
 
+/**
+ * The page and the start price this run apart, and asking again did not move the price
+ * (`useCreatorQuote`'s `pageOutOfDate`): only a reload onto the current build ends it, so a
+ * creator page draws this in place of the start's refusal while Generate waits. A remix
+ * keeps no draft and is restored from its original again; any other page saves its draft
+ * before it reloads.
+ */
+export function StudioOutOfDatePageNotice({ isRemix, onReload }: { isRemix: boolean; onReload: () => void }) {
+  return (
+    <p role="alert" className="text-sm text-amber-300">
+      This page is out of date, so it cannot show what this run costs. Reload it to see the current price.
+      {isRemix ? ' The remix starts again from the original.' : ' Your draft is kept.'}
+      <button type="button" onClick={onReload} className="ml-2 underline underline-offset-2 hover:text-amber-100">Reload page</button>
+    </p>
+  );
+}
+
 export function StudioGenerationStatus({
   accent,
   timing,

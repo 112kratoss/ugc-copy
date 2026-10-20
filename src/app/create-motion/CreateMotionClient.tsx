@@ -16,6 +16,7 @@ import {
     StudioControlCard,
     StudioMediaPreviewModal,
     StudioModelNotice,
+    StudioOutOfDatePageNotice,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
     StudioRunPanel,
@@ -65,6 +66,7 @@ import {
     getGenerationTimingSummaryLabel,
     type GenerationTiming,
 } from '@/lib/generation-timing';
+import { useCreatorQuote } from '@/lib/use-creator-quote';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { planMotionRunInputs } from '@/lib/creator-run-inputs';
 // Kie's motion cap; the motion start refuses a longer prompt before anything is held.
@@ -84,7 +86,6 @@ import {
     resolveWebGenerationQuoteUi,
     savePendingWebStart,
     useWebGenerationModelCatalog,
-    useWebGenerationModelQuote,
     WebCatalogRequestError,
     webCatalogStartRequest,
     type PendingWebStart,
@@ -684,6 +685,12 @@ export default function CreateMotionClient({
         router.push(`/login?returnUrl=${encodeURIComponent(returnTo)}`);
     };
 
+    /** Onto the current build, with the draft saved first: it comes back after the reload. */
+    const reloadPage = async () => {
+        await flushDraftSave();
+        window.location.reload();
+    };
+
     // Read for every request: a run can outlive the token it started with.
     const readAccessToken = async () => {
         const { data: { session: currentSession } } = await supabase.auth.getSession();
@@ -840,7 +847,7 @@ export default function CreateMotionClient({
     };
 
     /** A definitive refusal: nothing is running and nothing is held. `code` picks what to offer. */
-    const handleStartRefusal = async (refusal: unknown) => {
+    const handleStartRefusal = async (refusal: unknown, run: CatalogGenerationRequestPayload) => {
         const requestError = refusal instanceof WebCatalogRequestError ? refusal : null;
         const code = requestError?.code;
         const message = refusal instanceof Error && refusal.message ? refusal.message : 'Failed to start generation.';
@@ -871,7 +878,7 @@ export default function CreateMotionClient({
         } else if (code === 'cost_changed') {
             // Priced again at once: the run panel shows what the run costs now, and the
             // next press sends that price.
-            setQuoteAttempt((current) => current + 1);
+            quoteState.costChanged(run);
         }
     };
 
@@ -898,7 +905,7 @@ export default function CreateMotionClient({
                 return;
             }
             forgetPendingStart();
-            await handleStartRefusal(startError);
+            await handleStartRefusal(startError, start.body as CatalogGenerationRequestPayload);
             return;
         }
         forgetPendingStart();
@@ -1086,8 +1093,7 @@ export default function CreateMotionClient({
         // A newer build is out: send from it rather than from this page. The
         // draft and both files are saved, so the reload loses nothing.
         if (newBuildAvailable && !remixId) {
-            await flushDraftSave();
-            window.location.reload();
+            await reloadPage();
             return;
         }
         await startFreshRun();
@@ -1213,8 +1219,7 @@ export default function CreateMotionClient({
         settings: runSettings,
         inputs: runInputs,
     }) : null, [modelCatalog.catalog, modelCatalog.detailsReady, motionInputsReady, runInputs, runSettings, selectedModel]);
-    const [quoteAttempt, setQuoteAttempt] = useState(0);
-    const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token, quoteAttempt);
+    const quoteState = useCreatorQuote(quoteRequest, session?.access_token);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
         // The quote response is the external signal that the local catalog is stale.
@@ -1236,10 +1241,11 @@ export default function CreateMotionClient({
             quoteErrorMessage: quoteState.error?.message,
         });
     const estimatedCost = quoteUi.costCredits;
-    const quotePending = quoteUi.blocksGenerate;
+    // A page the start keeps refusing at its own price waits for a reload, not another press.
+    const quotePending = quoteUi.blocksGenerate || quoteState.pageOutOfDate;
     // The price could not be read: Generate waits for one, and this asks again.
     const quoteRetry = quoteState.status === 'error' ? (
-        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={() => setQuoteAttempt((current) => current + 1)} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
+        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={quoteState.retry} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
     ) : null;
     const insufficientCredits = userCredits !== null && estimatedCost !== null && estimatedCost > 0 && userCredits < estimatedCost;
     // The server's refusal holds until the balance or the price on screen moves.
@@ -1773,6 +1779,8 @@ export default function CreateMotionClient({
                                         </div>
                                     ) : videoError ? (
                                         <p className="text-sm text-rose-300">{videoError}</p>
+                                    ) : quoteState.pageOutOfDate ? (
+                                        <StudioOutOfDatePageNotice isRemix={Boolean(remixId)} onReload={() => void reloadPage()} />
                                     ) : error ? (
                                         // A price that could not be read since (asked again after
                                         // `cost_changed`, say) keeps its Retry under the error:

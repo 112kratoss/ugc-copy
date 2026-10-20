@@ -515,6 +515,18 @@ describe('CreateMotionClient quote', () => {
  */
 describe('CreateMotionClient price of the run it sends', () => {
   const COST_CHANGED = 'The price of this run changed. Check the updated cost and generate again.';
+  const ROOFTOP_REMIX = {
+    generation: { id: 'generation-source', title: 'Rooftop dance', prompt: 'Dance on the roof at dusk', category: 'video', model: 'kling-2.6' },
+    result: { mediaType: 'video', url: 'https://cdn.example/source-result.mp4' },
+    inputs: {
+      motion: {
+        characterImage: { kind: 'image', url: 'https://cdn.example/hero.png', label: 'Hero still', storagePath: 'uploads/user-1/hero.png', sourceGenerationId: null },
+        referenceVideo: { kind: 'video', url: 'https://cdn.example/dance.mp4', label: 'Original result video', storagePath: null, sourceGenerationId: 'generation-older' },
+      },
+    },
+    workflowSettings: { model: 'kling-2.6', mode: '1080p', characterOrientation: 'image' },
+    restoreIssues: [],
+  };
 
   it.each([
     ['a fresh draft', async () => undefined, { modelId: 'kling-3.0', settings: { resolution: '720p', characterOrientation: 'video' } }],
@@ -653,6 +665,38 @@ describe('CreateMotionClient price of the run it sends', () => {
     expect(startBodies()[1].expectedCostCredits).toBe(24);
   });
 
+  it('says the page is out of date and holds Generate for a reload when asking again leaves a remix at the refused price', async () => {
+    // A remix sends from the page it is on, past a deploy too. When that deploy changed how
+    // its run is priced, the page's quote of the run and the start's disagree: asked again,
+    // the price did not move, and each press was refused the same way until a reload.
+    const reload = vi.fn();
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...originalLocation, reload } });
+    remixSourceBody = ROOFTOP_REMIX;
+    const costChanged = () => jsonResponse({ code: 'cost_changed', error: COST_CHANGED }, 409);
+    startAnswers = [costChanged, costChanged, costChanged];
+    render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
+    expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+    await waitFor(() => expect(costShown()).toBe('20 credits'));
+
+    await pressGenerate();
+
+    const notice = await screen.findByRole('alert');
+    expect(notice).toHaveTextContent('This page is out of date, so it cannot show what this run costs.');
+    expect(notice).toHaveTextContent('The remix starts again from the original.');
+    // Asked again once, and the start's refusal stood: the same run at the same price.
+    expect(quoteState.attempts.at(-1)).toBe(1);
+    expect(costShown()).toBe('20 credits');
+    expect(generateButton()).toBeDisabled();
+    fireEvent.click(generateButton());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(startPosts()).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reload page' }));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  });
+
   it('checks an unanswered start again with the run and price it sent, though the price has moved since', async () => {
     startAnswers = [new TypeError('Failed to fetch')];
     const view = render(<CreateMotionClient prefill={{}} />);
@@ -673,18 +717,7 @@ describe('CreateMotionClient price of the run it sends', () => {
   });
 
   it('posts a remix from the inputs it restored, with its source, under its own price', async () => {
-    remixSourceBody = {
-      generation: { id: 'generation-source', title: 'Rooftop dance', prompt: 'Dance on the roof at dusk', category: 'video', model: 'kling-2.6' },
-      result: { mediaType: 'video', url: 'https://cdn.example/source-result.mp4' },
-      inputs: {
-        motion: {
-          characterImage: { kind: 'image', url: 'https://cdn.example/hero.png', label: 'Hero still', storagePath: 'uploads/user-1/hero.png', sourceGenerationId: null },
-          referenceVideo: { kind: 'video', url: 'https://cdn.example/dance.mp4', label: 'Original result video', storagePath: null, sourceGenerationId: 'generation-older' },
-        },
-      },
-      workflowSettings: { model: 'kling-2.6', mode: '1080p', characterOrientation: 'image' },
-      restoreIssues: [],
-    };
+    remixSourceBody = ROOFTOP_REMIX;
     render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
     expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
     await waitFor(() => expect(costShown()).toBe('20 credits'));

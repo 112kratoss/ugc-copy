@@ -21,6 +21,7 @@ import {
     StudioGenerationStatus,
     StudioMediaPreviewModal,
     StudioModelNotice,
+    StudioOutOfDatePageNotice,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
     StudioRunPanel,
@@ -46,7 +47,6 @@ import {
     resolveWebGenerationQuoteUi,
     savePendingWebStart,
     useWebGenerationModelCatalog,
-    useWebGenerationModelQuote,
     WebCatalogRequestError,
     webCatalogStartRequest,
     type PendingWebStart,
@@ -127,6 +127,7 @@ import {
     getGenerationTimingSummaryLabel,
     type GenerationTiming,
 } from '@/lib/generation-timing';
+import { useCreatorQuote } from '@/lib/use-creator-quote';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
@@ -1408,8 +1409,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         settings: runSettings,
         inputs: runInputs,
     }) : null, [modelCatalog.catalog, modelCatalog.detailsReady, runInputs, runSettings, selectedModel]);
-    const [quoteAttempt, setQuoteAttempt] = useState(0);
-    const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token, quoteAttempt);
+    const quoteState = useCreatorQuote(quoteRequest, session?.access_token);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
         // The quote response is the external signal that the local catalog is stale.
@@ -1424,10 +1424,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         quoteErrorMessage: quoteState.error?.message,
     });
     const estimatedCost = quoteUi.costCredits;
-    const quotePending = quoteUi.blocksGenerate;
+    // A page the start keeps refusing at its own price waits for a reload, not another press.
+    const quotePending = quoteUi.blocksGenerate || quoteState.pageOutOfDate;
     // The price could not be read: Generate waits for one, and this asks again.
     const quoteRetry = quoteState.status === 'error' ? (
-        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={() => setQuoteAttempt((current) => current + 1)} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
+        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={quoteState.retry} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
     ) : null;
     const estimatedGenerationTotalMs = estimateGenerationDurationMs({
         kind: 'video',
@@ -2298,6 +2299,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             unsavedDraftRef.current = { userId, draft: textDraft };
         }
         await flushTextDraft();
+    };
+    /** Onto the current build, with the draft saved first: it comes back after the reload. */
+    const reloadPage = async () => {
+        await saveTextDraftNow();
+        window.location.reload();
     };
 
     const addShot = () => {
@@ -3302,7 +3308,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             const sentInputs = Array.isArray(attempt.body.inputs) ? attempt.body.inputs as CatalogGenerationInputAsset[] : [];
             await applyMeasuredReferenceLengths(sentInputs, readMeasuredInputDurations(startError.details));
         } else if (code === 'cost_changed') {
-            setQuoteAttempt((current) => current + 1);
+            quoteState.costChanged(attempt.body as CatalogGenerationRequestPayload);
         }
     };
 
@@ -3608,8 +3614,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         // A newer build was deployed since this page loaded. The run is not sent from the
         // old one: the draft is saved and the page reloads onto the new build.
         if (newBuildAvailable) {
-            await saveTextDraftNow();
-            window.location.reload();
+            await reloadPage();
             activeGenerationRequestKeyRef.current = null;
             return;
         }
@@ -5453,6 +5458,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         <p className="text-sm text-red-400">{referenceLimitMessage}</p>
                                     ) : promptLimitMessage ? (
                                         <p className="text-sm text-red-400">{promptLimitMessage}</p>
+                                    ) : quoteState.pageOutOfDate ? (
+                                        // In place of the start's refusal it stands for.
+                                        <StudioOutOfDatePageNotice isRemix={Boolean(remixId)} onReload={() => void reloadPage()} />
                                     ) : error ? (
                                         // The error can name a handle, and can print a subject's name or
                                         // whatever the server answered. A handle gets its own box; any other
