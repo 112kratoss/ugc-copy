@@ -28,6 +28,9 @@
 @source "./r";
 @source "./templates";
 @source "./terms";
+/* Files of signed-in route folders that a public page draws, one by one: the
+   profile editor a creator opens on their own public page. */
+@source "./creations/CreatorProfileCard.tsx";
 /* Public route import closure. Keep this list explicit so private editor and
    account utilities stay in the route-only supplemental stylesheet. */
 @source "../components/AlertsBadge.tsx";
