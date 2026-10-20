@@ -1176,19 +1176,27 @@ export interface CreationStarter {
  * still loading, never reads as an edit the creator made.
  *
  * `missingIds` are the models the catalog says it does not carry: a starter among them gives
- * way to the default.
+ * way to the default. `seededModelIds` are every starter the screen may have named in the
+ * draft (`guidedCreationStarters`), so a draft seeded with one the catalog has since dropped
+ * still moves to the next.
  */
 export function normalizeCreationDraftForCatalog(
   draft: CreationDraft,
   catalog: GenerationModelCatalog,
-  options: { modelSelectionTouched: boolean; starter?: CreationStarter | null; missingIds?: readonly string[] },
+  options: {
+    modelSelectionTouched: boolean;
+    starter?: CreationStarter | null;
+    missingIds?: readonly string[];
+    seededModelIds?: readonly string[];
+  },
 ): CatalogDraftNormalization {
   const fresh = !draft.catalogRevision && !options.modelSelectionTouched;
   const starter = options.starter ?? null;
   // The screen names a starter's model in its first draft, so words typed before the model's
   // details arrive do not make it the creator's pick: the starter, or the default once the
   // starter is gone, still applies, and keeps them.
-  const seeded = fresh && starter !== null && draft.model === starter.modelId;
+  const seeded = fresh && starter !== null
+    && (draft.model === starter.modelId || (options.seededModelIds?.includes(draft.model) ?? false));
   const untouched = seeded || (fresh && !hasStartedCreationDraft(draft));
   if (untouched && starter) {
     const starterModel = getCatalogModel(catalog, starter.modelId);

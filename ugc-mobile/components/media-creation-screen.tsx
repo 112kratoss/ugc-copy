@@ -87,7 +87,7 @@ import {
   REFERENCE_DURATION_CHANGED_CODE,
   validateCatalogCreationDraft,
 } from '@/lib/generation-model-draft';
-import { guidedCreationStarter } from '@/lib/guided-creation-starter';
+import { guidedCreationStarter, guidedCreationStarters } from '@/lib/guided-creation-starter';
 import {
   getActiveCatalogInputSlots,
   getCatalogModel,
@@ -802,7 +802,8 @@ function IdentityCreationScreen({
   // quoted first; the catalog reconcile below applies the starter's settings. A remix restores
   // its source's model instead, so a remix opened as guided takes no starter.
   const guidedScreen = guided && !remixSource;
-  const guidedStarterId = guidedCreationStarter(initialTool, { guided: guidedScreen, initialTool })?.modelId ?? null;
+  // Every starter the guided draft may land on, in order: the catalog may have dropped the first.
+  const guidedStarterIds = guidedCreationStarters(initialTool, { guided: guidedScreen, initialTool }).map((starter) => starter.modelId);
   const withGuidedStart = <T extends CreationDraft>(draft: T): T => {
     const starter = guidedCreationStarter(draft.tool, { guided: guidedScreen, initialTool });
     return starter ? { ...draft, model: starter.modelId } : draft;
@@ -939,10 +940,10 @@ function IdentityCreationScreen({
   // good, until the guided draft settles (a revision): a starter the catalog dropped then leaves
   // the selected ids, where it would hold the creator "unavailable" through any catalog error.
   const guidedDraft = initialTool === 'image' ? imageDraft : initialTool === 'motion' ? motionDraft : videoDraft;
-  const pinnedStarterId = guidedStarterId && !guidedDraft.catalogRevision ? guidedStarterId : null;
+  const pinnedStarterIds = guidedDraft.catalogRevision ? [] : guidedStarterIds;
   const catalogQuery = useGenerationModelCatalog(api, {
     kind: activeTool,
-    selectedIds: [imageDraft.model, videoDraft.model, motionDraft.model, ...(pinnedStarterId ? [pinnedStarterId] : [])],
+    selectedIds: [imageDraft.model, videoDraft.model, motionDraft.model, ...pinnedStarterIds],
     pickerOpen: modelPickerVisible,
   });
   const catalog = catalogQuery.catalog;
@@ -1057,8 +1058,9 @@ function IdentityCreationScreen({
         const baseline = catalog
           ? normalizeCreationDraftForCatalog(remixBaseline.current[tool], catalog, {
               modelSelectionTouched: false,
-              starter: guidedCreationStarter(tool, { guided: guidedScreen, initialTool }),
+              starter: guidedCreationStarter(tool, { guided: guidedScreen, initialTool }, catalogQuery.missingIds),
               missingIds: catalogQuery.missingIds,
+              seededModelIds: guidedCreationStarters(tool, { guided: guidedScreen, initialTool }).map((starter) => starter.modelId),
             }).draft
           : remixBaseline.current[tool];
         return [tool, Object.keys(saved[tool]).filter((key) => JSON.stringify((saved[tool] as unknown as Record<string, unknown>)[key]) !== JSON.stringify((baseline as unknown as Record<string, unknown>)[key]))];
@@ -1136,8 +1138,9 @@ function IdentityCreationScreen({
       setter((draft) => {
         const result = normalizeCreationDraftForCatalog(draft, catalog, {
           modelSelectionTouched: modelSelectionTouched.current[kind],
-          starter: guidedCreationStarter(kind, { guided: guidedScreen, initialTool }),
+          starter: guidedCreationStarter(kind, { guided: guidedScreen, initialTool }, catalogQuery.missingIds),
           missingIds: catalogQuery.missingIds,
+          seededModelIds: guidedCreationStarters(kind, { guided: guidedScreen, initialTool }).map((starter) => starter.modelId),
         });
         if (result.missingModel) {
           if (catalogQuery.missingIds.includes(draft.model)) setCatalogNotice('This model is no longer available. Your draft is saved; choose another model.');
