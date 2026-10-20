@@ -331,21 +331,22 @@ export function createMobileNotificationHistory({
         };
       }
 
+      // Only the read a sale's alert makes: an account's handle, by its id.
       if (table === 'profiles' && profiles) {
         return {
-          select() {
-            const filters: Record<string, unknown> = {};
-            const query = {
-              eq(column: string, value: unknown) {
-                filters[column] = value;
-                return query;
-              },
-              async maybeSingle() {
-                const userId = String(filters.id);
-                return { data: Object.hasOwn(profiles, userId) ? { username: profiles[userId] } : null, error: null };
+          select(columns: string) {
+            if (columns !== 'username') throw new Error(`Unexpected profiles read: ${columns}`);
+            return {
+              eq(column: string, userId: unknown) {
+                if (column !== 'id') throw new Error(`Unexpected profiles filter: ${column}`);
+                return {
+                  async maybeSingle() {
+                    const key = String(userId);
+                    return { data: Object.hasOwn(profiles, key) ? { username: profiles[key] } : null, error: null };
+                  },
+                };
               },
             };
-            return query;
           },
         };
       }

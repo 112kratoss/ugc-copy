@@ -63,11 +63,12 @@ function normalizeBody(value: unknown): PostResourceBundleVerifyBody {
 
 /**
  * Tells the buyer and the owner about a recipe bought through Razorpay, as a
- * purchase in the app is told ("Post resources unlocked", "Someone unlocked
- * your post"). A checkout names its order alone, so the post and its owner are
- * read from it. Whichever of the buyer's verify and the webhook settled the
- * order calls this, once; the alerts' dedupe keys make a second call harmless.
- * Never rejects: the purchase is settled whatever becomes of its alerts.
+ * purchase in the app is told ("Post resources unlocked"; "You made a sale",
+ * naming the buyer). A checkout names its order alone, so the post and its
+ * owner are read from it. Whichever of the buyer's verify and the webhook
+ * settled the order calls this, once; the alerts' dedupe keys make a second
+ * call harmless. Never rejects: the purchase is settled whatever becomes of
+ * its alerts.
  */
 export async function notifyRazorpayPostResourcePurchase(
   adminSupabase: SupabaseClient,

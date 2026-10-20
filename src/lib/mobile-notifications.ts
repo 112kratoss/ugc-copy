@@ -2158,8 +2158,10 @@ export async function notifyMarketplaceUnlockCompleted(
  * The seller's alert names the buyer by their handle: a paid buyer as Recent
  * sales lists them, and a free open too (the owner's decision, 2026-10-20). A
  * buyer with no handle, or one that cannot be read, stays unnamed: that costs
- * the name, never the alert. A buy across a block never gets here
- * (`isPostResourceBundleBuyWithheld`).
+ * the name, never the alert. The database takes the name back out of an alert
+ * written across a block, when a block comes later, and when the buyer's
+ * account is deleted (20261020053858); the push is sent from the stored row,
+ * so it carries the words the alert was stored with.
  */
 export async function notifyPostResourceUnlockCompleted(
   adminSupabase: SupabaseClient,
@@ -2206,9 +2208,10 @@ export async function notifyPostResourceUnlockCompleted(
 /**
  * The seller's words for an unlock. The name takes the place "A creator" or
  * "Someone" held; a named free open's title already says who, so its body says
- * what they have now.
+ * what they have now. `unnamed_sale_alert_words` (20261020053858) turns the
+ * named words back into the unnamed ones, so the two change together.
  */
-function sellerUnlockWords(free: boolean, buyerHandle: string | null) {
+export function sellerUnlockWords(free: boolean, buyerHandle: string | null) {
   if (free) {
     return buyerHandle
       ? { title: `@${buyerHandle} opened your free resources`, body: 'They can view the prompt, files, or workflow now.' }
