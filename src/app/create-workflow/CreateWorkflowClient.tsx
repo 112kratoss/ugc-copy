@@ -1362,6 +1362,14 @@ export default function CreateWorkflowClient({
         return;
       }
 
+      // Under the open context menu every other shortcut waits, as under a native
+      // menu: Enter opened the node editor beneath it, n took the focus to the node
+      // library's search, Cmd/Ctrl+A re-selected and re-labelled the menu, Cmd/Ctrl+C
+      // copied. Escape, above, and the menu's own actions close it.
+      if (contextMenu) {
+        return;
+      }
+
       if (isEditableTarget) {
         return;
       }

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateWorkflowPage from '@/app/create-workflow/page';
@@ -1146,6 +1146,40 @@ describe('CreateWorkflowPage', () => {
     fireEvent.click(screen.getByTestId('pane-context'));
     expect(await screen.findByTestId('canvas-context-menu')).toBeInTheDocument();
     expect(within(screen.getByTestId('canvas-context-menu')).getByRole('button', { name: /add note/i })).toBeInTheDocument();
+  });
+
+  // The window's keydown handler special-cased the open menu for Escape only, so under
+  // it Enter opened the node editor, n took the focus to the node library's search and
+  // Cmd/Ctrl+A re-selected everything and re-labelled the menu.
+  it('keeps the canvas shortcuts quiet under an open context menu until it closes', async () => {
+    await renderLoadedPage();
+
+    const firstNodeId = canvasesById['canvas-1'].graph.nodes[0]?.id;
+    fireEvent.click(await screen.findByTestId(`node-context-${firstNodeId}`));
+    const contextMenu = await screen.findByTestId('canvas-context-menu');
+    expect(within(contextMenu).getByText('Node')).toBeInTheDocument();
+    const librarySearch = screen.getByPlaceholderText('Search prompt, video, note...');
+
+    // The editor's popup is placed in an animation frame, so give it two.
+    fireEvent.keyDown(window, { key: 'Enter' });
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    });
+    expect(screen.queryByTestId('dock-node-editor')).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'n' });
+    expect(librarySearch).not.toHaveFocus();
+
+    fireEvent.keyDown(window, { key: 'a', metaKey: true });
+    expect(within(contextMenu).getByText('Node')).toBeInTheDocument();
+    expect(within(contextMenu).getByRole('button', { name: /edit node/i })).toBeInTheDocument();
+    expect(within(contextMenu).queryByRole('button', { name: /delete selected/i })).not.toBeInTheDocument();
+
+    // Escape closes it, and the shortcuts are back: Enter opens the node's editor.
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByTestId('canvas-context-menu')).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Enter' });
+    expect(await screen.findByTestId('dock-node-editor')).toBeInTheDocument();
   });
 
   it('keeps the popup closed while dragging', async () => {
