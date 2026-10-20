@@ -26,6 +26,11 @@ export class SignedInAlertsBoundary extends Component<SignedInAlertsBoundaryProp
 
   componentDidCatch(error: unknown) {
     console.error('Failed to load the signed-in half of Alerts:', error);
+    // Caught here, the error never reaches Next's own boundary, whose
+    // reportError is what Sentry's global handler hears
+    // (src/instrumentation-client.ts): in production Next only logs an error
+    // that a boundary of ours caught. So hand it on, as an uncaught one would be.
+    window.reportError?.(error);
   }
 
   render() {

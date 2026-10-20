@@ -53,11 +53,15 @@ vi.mock('next/dynamic', async () => {
 describe('the web Alerts page when its signed-in half does not load', () => {
   let consoleError: ReturnType<typeof vi.spyOn>;
   const reload = vi.fn();
+  // Where Sentry's global handler hears an error (jsdom has no reportError of its own).
+  const reportError = vi.fn();
 
   beforeEach(() => {
     consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     reload.mockReset();
+    reportError.mockReset();
     vi.stubGlobal('location', { reload });
+    vi.stubGlobal('reportError', reportError);
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -86,10 +90,12 @@ describe('the web Alerts page when its signed-in half does not load', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(reload).toHaveBeenCalledTimes(1);
 
-    // The failure was caught and logged, not thrown out of the page.
+    // The failure was caught and logged, not thrown out of the page, and handed
+    // on to reportError, as Next's own boundary would have, so Sentry hears it.
     expect(consoleError).toHaveBeenCalledWith(
       'Failed to load the signed-in half of Alerts:',
       expect.objectContaining({ message: 'Loading chunk SignedInAlerts failed.' }),
     );
+    expect(reportError).toHaveBeenCalledWith(expect.objectContaining({ message: 'Loading chunk SignedInAlerts failed.' }));
   });
 });
