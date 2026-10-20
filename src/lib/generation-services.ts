@@ -75,6 +75,7 @@ import {
   markGenerationStartRefusal,
   markHeldProviderSubmission,
   markRefundedGenerationStart,
+  PROVIDER_INPUT_REFUSED,
   type GenerationStartFailureCode,
   type GenerationStartRefusal,
   type PublicGenerationStartFailure,
@@ -135,6 +136,7 @@ import {
   type ProviderPromptRun,
   type ReferenceMediaLength,
 } from '@/lib/provider-input-limits';
+import { logProviderImageSizesOverLimit } from '@/lib/provider-image-sizes';
 import {
   buildGenerationProviderRequest,
   type CatalogGenerationInputAsset,
@@ -891,16 +893,18 @@ function promptMaxLengthForKind(kind: GenerationModelKind): number {
  * (provider-input-limits): the prompt as sent, with the legend that names its
  * pictures, and each shot. Kie refuses a longer or shorter one only after the
  * start has held the run's credits, so every start asks this before its hold.
+ * Both refusals carry `provider_input_refused`, so a run step can say them in
+ * their own words where POST /api/generations does.
  */
 function assertProviderPromptAccepted(modelId: string, run: ProviderPromptRun): void {
   const violation = providerPromptViolation(modelId, run);
-  if (violation) throw new GenerationServiceError(violation, 400);
+  if (violation) throw new GenerationServiceError(violation, 400, PROVIDER_INPUT_REFUSED);
 }
 
 /** Holds a run's reference clips and tracks, where their lengths are known, to the provider's shortest. */
 function assertReferenceMediaLongEnough(modelId: string, media: readonly ReferenceMediaLength[]): void {
   const violation = referenceMediaLengthViolation(modelId, media);
-  if (violation) throw new GenerationServiceError(violation, 400);
+  if (violation) throw new GenerationServiceError(violation, 400, PROVIDER_INPUT_REFUSED);
 }
 
 export function trimPrompt(prompt: string, errorMessage: string): string {
@@ -2193,6 +2197,8 @@ export async function startImageGeneration(params: {
       }
     }
 
+    // Kie fetches the pictures only after the hold; one over its documented limit is logged.
+    await logProviderImageSizesOverLimit({ supabase: creditSupabase, userId, modelId: model, request: { model: providerModel, input }, templateAssetScope: templateAssetScope(templateContext) });
     const reservation = await startGenerationRecord(creditSupabase, {
       user_id: userId,
       model,
@@ -3360,6 +3366,8 @@ export async function startVideoGeneration(params: {
       );
     }
 
+    // Kie fetches the pictures only after the hold; one over its documented limit is logged.
+    await logProviderImageSizesOverLimit({ supabase: creditSupabase, userId, modelId: model, request: body, templateAssetScope: templateAssetScope(templateContext) });
     const reservation = await startGenerationRecord(creditSupabase, {
       user_id: userId,
       model,
@@ -3699,6 +3707,8 @@ export async function startMotionGeneration(params: {
 
   const computedCost = getMotionCost(model, mode, duration);
   const cost = resolveQuotedGenerationCost(computedCost, quotedCostCredits);
+  // The character image as the task below sends it; Kie fetches it only after the hold.
+  await logProviderImageSizesOverLimit({ supabase: creditSupabase, userId, modelId: model, request: { model: providerModelId, input: { input_urls: [characterImageUrl] } } });
   let generationId: string | null = null;
   let predictionId: string | null = null;
   try {
@@ -3897,6 +3907,8 @@ export async function startCatalogGeneration(params: {
           : 0)
       ), 0) || null;
 
+  // The pictures as the request below will send them; Kie fetches them only after the hold.
+  await logProviderImageSizesOverLimit({ supabase: creditSupabase, userId, modelId: operation.modelId, request: () => buildGenerationProviderRequest({ operation, prompt: providerPrompt, settings, inputs, shots }).body, templateAssetScope: templateAssetScope(templateContext) });
   let generationId: string | null = null;
   let predictionId: string | null = null;
   try {

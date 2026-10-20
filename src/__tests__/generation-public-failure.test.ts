@@ -3,10 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
   GENERATION_PROMPT_BLOCKED_MESSAGE,
   getHeldProviderSubmissionGenerationId,
+  getProviderInputRefusal,
   getPublicGenerationStartFailure,
   getRefundedStartGenerationId,
   markHeldProviderSubmission,
   markRefundedGenerationStart,
+  normalizeGenerationStartFailureCode,
+  PROVIDER_INPUT_REFUSED,
+  PROVIDER_INPUT_REFUSED_MESSAGE,
   requiresReplacementGenerationInput,
 } from '@/lib/generation-public-failure';
 
@@ -83,6 +87,54 @@ describe('public generation failure classification', () => {
     expect(requiresReplacementGenerationInput({
       message: 'The generation provider timed out.',
     })).toBe(false);
+  });
+
+  // provider-input-limits: a start refuses, before any hold, what Kie would refuse after it.
+  // Its words name the model and the limit, which a template's private recipe hides.
+  describe('a request its provider would refuse', () => {
+    const refusal = (message: string) => ({ status: 400, failureCode: PROVIDER_INPUT_REFUSED, message });
+
+    it('ends the step under copy that names no model, limit or prompt', () => {
+      const failure = getPublicGenerationStartFailure(
+        refusal('Seedance 2.5 reference audio must be at least 2 seconds long. Beat runs 1.9 seconds.'),
+      );
+
+      expect(failure).toEqual({ code: 'provider_rejected', message: PROVIDER_INPUT_REFUSED_MESSAGE });
+      expect(PROVIDER_INPUT_REFUSED_MESSAGE).toContain('No credits were used');
+      expect(PROVIDER_INPUT_REFUSED_MESSAGE).not.toMatch(/seedance|second|character/i);
+    });
+
+    it.each([
+      // A creator's label is part of the words: a run worker must not wait for a busy
+      // provider, or ask for a new upload, because of what someone named a clip.
+      'Kling 3.0 Cinematic video elements must be at least 3 seconds long. Busy street runs 2 seconds.',
+      'Kling 3.0 Cinematic video elements must be at least 3 seconds long. Network outage intro runs 2.4 seconds.',
+      'MiniMax H3 reference videos must be at least 2 seconds long. Invalid image runs 1 second.',
+    ])('reads the code, never the words: %s', (message) => {
+      expect(getPublicGenerationStartFailure(refusal(message)).code).toBe('provider_rejected');
+    });
+
+    it('is not a code a run fails with, so the start routes keep answering it as an invalid request', () => {
+      expect(normalizeGenerationStartFailureCode(PROVIDER_INPUT_REFUSED)).toBeNull();
+    });
+
+    it('gives a caller that owns the recipe the refusal’s own words', () => {
+      expect(getProviderInputRefusal(refusal('Z-Image prompts support up to 1,000 characters.')))
+        .toBe('Z-Image prompts support up to 1,000 characters.');
+      expect(getProviderInputRefusal(Object.assign(
+        new Error('Z-Image prompts support up to 1,000 characters.'),
+        { status: 400, failureCode: PROVIDER_INPUT_REFUSED },
+      ))).toBe('Z-Image prompts support up to 1,000 characters.');
+    });
+
+    it.each([
+      ['an error with no code', new Error('Z-Image prompts support up to 1,000 characters.')],
+      ['another code', { status: 422, failureCode: 'prompt_blocked', message: 'anything' }],
+      ['a refusal with no words', { status: 400, failureCode: PROVIDER_INPUT_REFUSED, message: '  ' }],
+      ['no error at all', null],
+    ])('gives nothing for %s', (_name, error) => {
+      expect(getProviderInputRefusal(error)).toBeNull();
+    });
   });
 
   describe('held provider submissions (F14)', () => {

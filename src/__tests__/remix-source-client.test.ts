@@ -6,6 +6,9 @@ import {
   createRestoredRemixAssetState,
   getRemixRestoreWarning,
   getRemixResultReferenceLabel,
+  getRemixReferenceCapWarning,
+  joinRemixRestoreWarnings,
+  REMIX_RESTORE_WARNING,
 } from '@/lib/remix-source-client';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import type { RemixSourceBundle } from '@/lib/remix-source';
@@ -124,5 +127,51 @@ describe('remix prompt ownership', () => {
 
   it('does not count clearing the field as creator input worth keeping', () => {
     expect(hasCreatorEditedPromptDuringRemix('   ', 'something')).toBe(false);
+  });
+});
+
+describe('a remix whose model now takes fewer references', () => {
+  const element = (index: number, url: string | null = `https://signed.example.com/${index}.png`) => ({
+    id: `remix-${index}`,
+    displayName: `Ref ${index}`,
+    handle: `@ref_${index}`,
+    url,
+    storagePath: null,
+    sourceGenerationId: 'gen-1',
+  });
+
+  it('says how many came back when the cap left some out, and nothing when it did not', () => {
+    const twelve = Array.from({ length: 12 }, (_, index) => element(index + 1));
+    expect(getRemixReferenceCapWarning(twelve, 10, 'Nano Banana 2.0'))
+      .toBe("Nano Banana 2.0 takes up to 10 reference images, so 10 of this run's 12 came back.");
+    expect(getRemixReferenceCapWarning(twelve.slice(0, 10), 10, 'Nano Banana 2.0')).toBeNull();
+    // Unusable references (no link) are not counted as left out.
+    expect(getRemixReferenceCapWarning([...twelve.slice(0, 5), element(6, null)], 5, 'MiniMax H3')).toBeNull();
+    expect(getRemixReferenceCapWarning(twelve.slice(0, 2), 1, 'Grok Imagine'))
+      .toBe("Grok Imagine takes up to 1 reference image, so 1 of this run's 2 came back.");
+  });
+
+  it('gives a reference that cannot come back its place to the next one', () => {
+    const withLinkless = [element(1, null), ...Array.from({ length: 11 }, (_, index) => element(index + 2))];
+
+    expect(createRemixElementSeeds(withLinkless, 10).map((seed) => seed.id))
+      .toEqual(Array.from({ length: 10 }, (_, index) => `remix-${index + 2}`));
+    expect(getRemixReferenceCapWarning(withLinkless, 10, 'Nano Banana 2.0'))
+      .toBe("Nano Banana 2.0 takes up to 10 reference images, so 10 of this run's 11 came back.");
+  });
+
+  it('puts a cap notice after a restore problem', () => {
+    expect(joinRemixRestoreWarnings(null, 'Cap.')).toBe('Cap.');
+    expect(joinRemixRestoreWarnings('Restore.', 'Cap.')).toBe('Restore. Cap.');
+    expect(joinRemixRestoreWarnings('Restore.', null)).toBe('Restore.');
+  });
+
+  // A Seedance remix adds the restore notice after its cap notice; one the bundle already
+  // gave is not said twice.
+  it('adds a restore problem after a cap notice, and says each once', () => {
+    expect(joinRemixRestoreWarnings('Cap.', REMIX_RESTORE_WARNING)).toBe(`Cap. ${REMIX_RESTORE_WARNING}`);
+    expect(joinRemixRestoreWarnings(REMIX_RESTORE_WARNING, REMIX_RESTORE_WARNING)).toBe(REMIX_RESTORE_WARNING);
+    expect(joinRemixRestoreWarnings(`${REMIX_RESTORE_WARNING} Cap.`, REMIX_RESTORE_WARNING))
+      .toBe(`${REMIX_RESTORE_WARNING} Cap.`);
   });
 });

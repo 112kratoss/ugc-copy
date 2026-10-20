@@ -177,10 +177,12 @@ async function readMentionLines(page: Page, title: string): Promise<MentionLines
         return (sentence.textContent ?? '').replace(/\s+/g, ' ').trim();
       };
 
-      // The line under the prompt: the character count, then the message.
+      // The line under the prompt: the character count, then the message. The count reads
+      // "12 / 10,000" (PromptLengthCounter: digits grouped in threes, a space either side
+      // of the slash), with " characters" after it on the image creator.
       const unknown = Array.from(document.querySelectorAll<HTMLElement>('p, span')).find((candidate) => (
         /^Unknown element mention/.test((candidate.textContent ?? '').trim())
-        && /^\d+\/\d+/.test((candidate.previousElementSibling?.textContent ?? '').trim())
+        && /^\d{1,3}(?:,\d{3})* \/ \d{1,3}(?:,\d{3})*/.test((candidate.previousElementSibling?.textContent ?? '').trim())
       ));
       // The run panel's line, which is a paragraph of its own.
       const resolve = Array.from(document.querySelectorAll<HTMLElement>('p'))

@@ -1218,6 +1218,26 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(shotMentionPanelState()).toBeNull();
     });
 
+    it('counts each mention of a Kling clip in a shot as the 37 characters Kie counts', async () => {
+      const view = render(<CreateVideoClient prefill={{}} />);
+      addKlingClip(view.container, 'clip.mp4');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
+      fireEvent.click(screen.getByText('Multi-Shot'));
+      const shot = await screen.findByPlaceholderText('Describe shot 1...');
+      const generate = () => screen.getByRole('button', { name: /generate video/i });
+
+      // 479 characters as typed; 500 as Kie counts the 16-character handle's one mention.
+      const atLimit = `${'a'.repeat(500 - 37 - 1)} @video_element_1`;
+      fireEvent.change(shot, { target: { value: atLimit } });
+      expect(screen.getByText('500 / 500')).toHaveAttribute('data-state', 'near');
+      expect(generate()).toBeEnabled();
+
+      fireEvent.change(shot, { target: { value: `a${atLimit}` } });
+      expect(screen.getByText('501 / 500')).toHaveAttribute('data-state', 'over');
+      expect(screen.getByText('Shot 1: Kling 3.0 Cinematic shot prompts support up to 500 characters, counting each video element mention as 37.')).toBeInTheDocument();
+      expect(generate()).toBeDisabled();
+    });
+
     it('stops a multi-shot run at a mention no Kling clip has, before the clip is uploaded', async () => {
       const view = render(<CreateVideoClient prefill={{}} />);
       addKlingClip(view.container, 'clip.mp4');
@@ -1715,6 +1735,53 @@ describe('CreateVideoClient Kling video elements', () => {
         await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead']));
         expect(screen.queryByAltText('Umbrella')).not.toBeInTheDocument();
         expect(await unknownMentionLine()).toBe('Unknown element mention: @prop');
+      });
+
+      // The Seedance branch adds its own notice for a clip it cannot bring back. It used to
+      // add it only when no notice stood yet, so a cap notice before it hid it (2026-10-20).
+      it('tells a Seedance remix both that the cap left references out and that a clip did not come back', async () => {
+        const six = Array.from({ length: 6 }, (_, index) => keptImage(`0${index}`, `Shot ${index + 1}`, `@shot_${index + 1}`));
+        renderRemix(referenceRun('seedance-2', {
+          prompt: 'The harbour at dusk',
+          // An older run kept a prepared clip by its asset id alone, with no link to measure.
+          settings: { referenceVideoUrls: ['prepared-clip-asset'] },
+          video: { elements: six },
+        }));
+
+        expect(await screen.findByText(
+          /Seedance 2 takes up to 5 reference images, so 5 of this run's 6 came back\. Some source media could not be restored automatically/,
+        )).toBeInTheDocument();
+      });
+
+      // A run's saved Seedance assets follow its references, a lost one included. The remix
+      // paired them by place among the references that came back, so after a lost one each
+      // reference went out with the one before it's prepared asset, and Kie got that
+      // picture in its place (2026-10-20).
+      it('sends each restored Seedance reference with its own prepared asset after a lost one', async () => {
+        const lost = { ...keptImage('09', 'Lost shot', '@lost'), url: null, storagePath: null };
+        const prepared = (assetId: string) => ({
+          assetId,
+          assetType: 'Image' as const,
+          status: 'active' as const,
+          sourceUrl: null,
+          error: null,
+          lastCheckedAt: null,
+        });
+        const view = renderRemix(referenceRun('seedance-2', {
+          settings: { seedanceAssets: { images: [prepared('asset-lost'), prepared('asset-lead'), prepared('asset-prop')], videos: [], audios: [] } },
+          video: { elements: [lost, LEAD, PROP] },
+        }));
+
+        await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead', '@prop']));
+        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        expect((postedRun().inputs as Array<{ slot: string; url: string; assetId?: string | null }>)
+          .filter((input) => input.slot === 'imageReferences')
+          .map((input) => [input.url, input.assetId])).toEqual([
+          [LEAD.url, 'asset-lead'],
+          [PROP.url, 'asset-prop'],
+        ]);
       });
 
       it('restores no image reference into a multi-shot run, where the page shows no reference card and sends none', async () => {
@@ -2466,7 +2533,7 @@ describe('CreateVideoClient Kling video elements', () => {
       // The handle is one the page knows, so it is not an unknown mention.
       const row = promptBox().nextElementSibling;
       expect(Array.from(row?.children ?? []).map((part) => part.textContent)).toEqual([
-        `${prompt.length}/10000`,
+        `${prompt.length} / 2,500`,
         'On standby here: @hero',
       ]);
     });
@@ -2479,7 +2546,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       const row = promptBox().nextElementSibling;
       expect(Array.from(row?.children ?? []).map((part) => part.textContent)).toEqual([
-        `${withUnknown.length}/10000`,
+        `${withUnknown.length} / 2,500`,
         'Unknown element mention: @ghost',
       ]);
     });
@@ -2489,7 +2556,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(promptBox(), { target: { value: 'A harbour at dusk' } });
 
       const row = promptBox().nextElementSibling;
-      expect(row?.textContent).toBe('17/10000');
+      expect(row?.textContent).toBe('17 / 2,500');
       expect(row?.children).toHaveLength(1);
     });
 
@@ -2879,7 +2946,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(promptBox, { target: { value: prompt } });
 
       expect(Array.from(promptBox.nextElementSibling?.children ?? []).map((part) => part.textContent)).toEqual([
-        `${prompt.length}/10000`,
+        `${prompt.length} / 2,500`,
         'On standby here: @saved_image_1, @saved_image_2',
       ]);
 
@@ -3864,14 +3931,74 @@ describe('CreateVideoClient Kling video elements', () => {
         .toEqual([expect.objectContaining({ durationSeconds: 7.9 })]);
     });
 
-    it('takes prompts and shot prompts up to the shared limit of 10,000 characters', async () => {
+    // The boxes keep the route's shared 10,000, so a paste or a model switch never cuts a
+    // word; Kling 3.0's own limits (2,500 for the prompt, 500 for each shot) are what the
+    // counters read and what holds Generate.
+    it('holds the prompt and each shot to the model’s own limits, keeping every word', async () => {
       render(<CreateVideoClient prefill={{}} />);
+      const counter = () => promptBox().nextElementSibling?.firstElementChild;
       expect(promptBox()).toHaveAttribute('maxlength', '10000');
-      fireEvent.change(promptBox(), { target: { value: 'x'.repeat(3000) } });
-      expect(promptBox().nextElementSibling?.firstElementChild?.textContent).toBe('3000/10000');
 
+      fireEvent.change(promptBox(), { target: { value: 'x'.repeat(2400) } });
+      expect(counter()?.textContent).toBe('2,400 / 2,500');
+      expect(counter()).toHaveAttribute('data-state', 'near');
+      expect(generateButton()).toBeEnabled();
+
+      fireEvent.change(promptBox(), { target: { value: 'x'.repeat(3000) } });
+      expect(promptBox()).toHaveValue('x'.repeat(3000));
+      expect(counter()?.textContent).toBe('3,000 / 2,500');
+      expect(counter()).toHaveAttribute('data-state', 'over');
+      expect(promptBox()).toHaveAttribute('aria-invalid', 'true');
+      expect(screen.getByText('Kling 3.0 Cinematic prompts support up to 2,500 characters.')).toBeInTheDocument();
+      expect(generateButton()).toBeDisabled();
+      fireEvent.click(generateButton());
+      expect(postedStarts()).toHaveLength(0);
+
+      // A multi-shot Kling 3.0 run sends its shots and no prompt of its own: the shots are held.
       fireEvent.click(screen.getByText('Multi-Shot'));
-      expect(await screen.findByPlaceholderText('Describe shot 1...')).toHaveAttribute('maxlength', '10000');
+      const shot = await screen.findByPlaceholderText('Describe shot 1...');
+      expect(shot).toHaveAttribute('maxlength', '10000');
+      expect(screen.queryByText(/prompts support up to/)).not.toBeInTheDocument();
+      fireEvent.change(shot, { target: { value: 'y'.repeat(501) } });
+      expect(shot).toHaveValue('y'.repeat(501));
+      expect(screen.getByText('501 / 500')).toHaveAttribute('data-state', 'over');
+      expect(shot).toHaveAttribute('aria-invalid', 'true');
+      expect(screen.getByText('Shot 1: Kling 3.0 Cinematic shot prompts support up to 500 characters.')).toBeInTheDocument();
+      expect(generateButton()).toBeDisabled();
+
+      fireEvent.change(shot, { target: { value: 'y'.repeat(500) } });
+      expect(shot).not.toHaveAttribute('aria-invalid');
+      expect(screen.getByText('500 / 500')).toHaveAttribute('data-state', 'near');
+      expect(screen.queryByText(/shot prompts support up to/)).not.toBeInTheDocument();
+      expect(postedStarts()).toHaveLength(0);
+    });
+
+    it('keeps the prompt when the creator switches to a model with a lower limit, and marks it over there', async () => {
+      modelCatalogState.summaries = [
+        { id: 'seedance-2-5', kind: 'video', displayName: 'Seedance 2.5', description: 'Test multimodal video model' },
+        { id: 'kling-3.0-video', kind: 'video', displayName: 'Kling 3.0 Cinematic', description: 'Test video model' },
+        { id: 'wan-2.7', kind: 'video', displayName: 'Wan 2.7', description: 'Test frame-and-reference combining model' },
+      ];
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      const counter = () => promptBox().nextElementSibling?.firstElementChild;
+      const prompt = 'x'.repeat(4000);
+      fireEvent.change(promptBox(), { target: { value: prompt } });
+      // Seedance 2.5 sets no limit of its own: the route's 10,000 stands.
+      expect(counter()?.textContent).toBe('4,000 / 10,000');
+
+      chooseModel(view.container, 'Kling 3.0 Cinematic');
+      await waitFor(() => expect(counter()?.textContent).toBe('4,000 / 2,500'));
+      expect(promptBox()).toHaveValue(prompt);
+      expect(counter()).toHaveAttribute('data-state', 'over');
+      expect(screen.getByText('Kling 3.0 Cinematic prompts support up to 2,500 characters.')).toBeInTheDocument();
+      expect(generateButton()).toBeDisabled();
+
+      chooseModel(view.container, 'Wan 2.7');
+      await waitFor(() => expect(counter()?.textContent).toBe('4,000 / 5,000'));
+      expect(promptBox()).toHaveValue(prompt);
+      expect(counter()).toHaveAttribute('data-state', 'within');
+      expect(screen.queryByText(/prompts support up to/)).not.toBeInTheDocument();
+      expect(generateButton()).toBeEnabled();
     });
 
     it('prices a multi-shot run by its shots, and stops adding shots at the model’s length and shot limits', async () => {

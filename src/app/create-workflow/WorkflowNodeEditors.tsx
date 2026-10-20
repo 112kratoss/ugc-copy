@@ -5,6 +5,7 @@ import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 
 import EnhancePromptButton from '@/components/EnhancePromptButton';
+import PromptLengthCounter from '@/components/PromptLengthCounter';
 import Image from 'next/image';
 import { AlertCircle, Image as ImageIcon, Loader2, Sparkles, Trash2, Upload, Video, Volume2, X } from 'lucide-react';
 import { useContext, useRef, useState, type ReactNode } from 'react';
@@ -85,6 +86,13 @@ import type {
   WorkflowRunAffordance,
 } from './workflowCanvasUiTypes';
 import { formatHandleLabel, getNodeLabel, getNodePreviewKind } from './workflowCanvasUiUtils';
+import {
+  tightestWorkflowPromptLimit,
+  workflowGeneratorPromptLimits,
+  workflowPromptNodeLimits,
+  type WorkflowPromptLimitState,
+} from './workflowPromptLimits';
+import type { PromptLengthMeter } from '../../../ugc-mobile/lib/model-catalog/provider-prompt-limits';
 
 const VOICEOVER_MODEL_OPTIONS = [
   'text-to-speech-turbo-2-5',
@@ -174,12 +182,15 @@ function TextAreaField({
   onChange,
   placeholder,
   rows = 3,
+  footer,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   rows?: number;
+  /** Drawn under the box, such as its length against a model's limit. */
+  footer?: ReactNode;
 }) {
   return (
     <div>
@@ -192,6 +203,33 @@ function TextAreaField({
         onChange={(event) => onChange(event.target.value)}
         className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-emerald-500/40"
       />
+      {footer}
+    </div>
+  );
+}
+
+/**
+ * A prompt's length against the limit of the model it is sent to, and the start's own
+ * words once it is past it (or short of a provider's minimum). The text is kept as it
+ * is; the step is refused before anything is held.
+ */
+function PromptLimitFooter({
+  meter,
+  modelName,
+  message,
+}: {
+  meter: PromptLengthMeter;
+  /** Named beside the numbers where the box feeds a generator it does not belong to. */
+  modelName?: string;
+  message: string | null;
+}) {
+  return (
+    <div className="mt-2 space-y-1 text-xs">
+      <div className="flex items-center justify-end gap-2">
+        {modelName ? <span className="text-zinc-500">{modelName}</span> : null}
+        <PromptLengthCounter meter={meter} />
+      </div>
+      {message ? <p role="status" className="text-sm text-rose-300">{message}</p> : null}
     </div>
   );
 }
@@ -802,10 +840,13 @@ function WorkflowPromptField({
   value,
   onChange,
   candidates,
+  limit,
 }: {
   value: string;
   onChange: (value: string) => void;
   candidates: WorkflowPromptMentionCandidate[];
+  /** The generator this text is sent to with the least room under its model's limit, or null when it feeds none. */
+  limit: WorkflowPromptLimitState | null;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [activeMentionQuery, setActiveMentionQuery] = useState<{
@@ -885,6 +926,7 @@ function WorkflowPromptField({
         onKeyUp={syncPromptCaretState}
         className="mt-2 w-full rounded-3xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-emerald-500/40"
       />
+      {limit ? <PromptLimitFooter meter={limit.meter} modelName={limit.modelName} message={limit.violation} /> : null}
       {showMentionSuggestions ? (
         <div className="mt-4 rounded-3xl border border-white/10 bg-black/20 p-4">
           <div className="flex items-center justify-between gap-3">
@@ -998,6 +1040,7 @@ function MultiShotEditor({
   fixedLens,
   hasStartImage,
   hasEndImage,
+  limits,
 }: {
   shots: WorkflowMultiPrompt[];
   onChange: (nextShots: WorkflowMultiPrompt[]) => void;
@@ -1010,6 +1053,8 @@ function MultiShotEditor({
   fixedLens: boolean;
   hasStartImage: boolean;
   hasEndImage: boolean;
+  /** The node's model's limits on each shot (Kling 3.0 takes 500 characters, Kling O3 512). */
+  limits: WorkflowPromptLimitState | null;
 }) {
   return (
     <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4">
@@ -1083,6 +1128,13 @@ function MultiShotEditor({
                 ))
               )}
               rows={4}
+              footer={limits?.shotMeters[index] ? (
+                <PromptLimitFooter
+                  meter={limits.shotMeters[index]}
+                  // The refusal names its shot, so it stands under that one.
+                  message={limits.violation?.startsWith(`Shot ${index + 1}:`) ? limits.violation : null}
+                />
+              ) : null}
             />
             <NumberField
               label="Duration"
@@ -1101,6 +1153,10 @@ function MultiShotEditor({
           </div>
         ))}
       </div>
+      {/* A refusal of the prompt the step keeps behind its shots (Kling O3 sends it). */}
+      {limits?.violation && !/^Shot \d+:/.test(limits.violation) ? (
+        <p role="status" className="mt-3 text-sm text-rose-300">{limits.violation}</p>
+      ) : null}
     </div>
   );
 }
@@ -1858,6 +1914,12 @@ function NodeEditorContent({
   const promptMentionCandidates = selectedKind === 'text-input'
     ? getWorkflowPromptMentionCandidates(graph, node.id)
     : [];
+  // The model limits the prompts here are held to: a prompt node's by the generators its
+  // text is sent to, a generator's by its own model (its shots, in multi-shot).
+  const promptNodeLimit = selectedKind === 'text-input'
+    ? tightestWorkflowPromptLimit(workflowPromptNodeLimits(graph, node.id))
+    : null;
+  const generatorPromptLimits = workflowGeneratorPromptLimits(graph, node);
   const connectedImageReferences = resolvedImageReferences.filter((reference) => !reference.legacy);
   const legacyVideoReferencesPresent = selectedKind === 'video-generate' && !isSeedance2Family && (
     connectedImageReferences.length > 0 || (videoGenerateNode?.elements.length || 0) > 0
@@ -1910,6 +1972,7 @@ function NodeEditorContent({
           <WorkflowPromptField
             value={(node.data as TextInputNodeData).text ?? ''}
             candidates={promptMentionCandidates}
+            limit={promptNodeLimit}
             onChange={(value) => onUpdateNode(node.id, { ...node.data, text: value } as Partial<WorkflowNodeData>)}
           />
         </>
@@ -2199,6 +2262,20 @@ function NodeEditorContent({
         inputCounts={{ images: resolvedInputs.imageReferences.length, videos: resolvedInputs.videoUrls.length, audios: resolvedInputs.audioUrls.length }}
         onChange={(key, value) => onUpdateNode(node.id, { ...node.data, catalogSettings: { ...node.data.catalogSettings, [key]: value } })} />}
       {modelCatalog?.error && <button type="button" onClick={modelCatalog.refetch}>Retry model settings</button>}
+      {/* The connected prompt as this model counts it, once it nears the model's limit
+          (after a model switch, say). A multi-shot video's own shots say theirs below. */}
+      {generatorPromptLimits && generatorPromptLimits.shotMeters.length === 0 && !videoGenerateNode?.isMultiShot
+        && (generatorPromptLimits.meter.state !== 'within' || generatorPromptLimits.violation) ? (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <span className="uppercase tracking-[0.18em] text-zinc-500">Connected prompt</span>
+            <PromptLengthCounter meter={generatorPromptLimits.meter} />
+          </div>
+          {generatorPromptLimits.violation ? (
+            <p role="status" className="mt-2 text-sm text-rose-300">{generatorPromptLimits.violation}</p>
+          ) : null}
+        </div>
+      ) : null}
       {selectedKind === 'image-generate' && (
         <>
           <CapabilityLimitsCard graph={graph} node={node} />
@@ -2495,6 +2572,7 @@ function NodeEditorContent({
                 fixedLens={videoGenerateNode.fixedLens}
                 hasStartImage={Boolean(resolvedInputs.startFrameUrl)}
                 hasEndImage={Boolean(resolvedInputs.endFrameUrl)}
+                limits={generatorPromptLimits}
               />
             </>
           ) : (

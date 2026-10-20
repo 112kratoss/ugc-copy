@@ -1073,3 +1073,79 @@ describe('WorkflowNodeEditors', () => {
     expect(screen.getByDisplayValue('Enhanced video branch prompt')).toBeInTheDocument();
   });
 });
+
+/**
+ * The model limits a canvas prompt is held to (provider-prompt-limits), shown where it is
+ * written: a prompt node's box reads against the generator it feeds, a generator names
+ * an over-limit connected prompt once its model changes, and each multi-shot shot reads
+ * against its model's shot limit. Nothing typed is cut.
+ */
+describe('WorkflowNodeEditors prompt limits', () => {
+  function promptToImage(model: string, text: string) {
+    const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
+    const imageNode = createWorkflowNode('image-generate', { x: 240, y: 0 });
+    return {
+      promptNode,
+      imageNode,
+      graph: normalizeWorkflowGraph({
+        nodes: [
+          { ...promptNode, data: normalizeNodeData('text-input', { ...promptNode.data, text } as Partial<WorkflowNodeData>) },
+          { ...imageNode, data: normalizeNodeData('image-generate', { ...imageNode.data, model } as Partial<WorkflowNodeData>) },
+        ],
+        edges: [{ id: 'prompt-image', source: promptNode.id, target: imageNode.id, sourceHandle: 'text', targetHandle: 'prompt' }],
+      }),
+    };
+  }
+
+  it('counts a prompt node against the model it feeds, and keeps text past the limit with the model’s words', () => {
+    const { graph, promptNode } = promptToImage('z-image', 'A lighthouse at dawn');
+    renderInteractiveInspector(graph, { selectedNodeId: promptNode.id });
+
+    expect(screen.getByTestId('prompt-length')).toHaveTextContent('20 / 1,000');
+    expect(screen.getByText('Z-Image')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'x'.repeat(1001) } });
+
+    expect(screen.getByLabelText('Prompt')).toHaveValue('x'.repeat(1001));
+    expect(screen.getByTestId('prompt-length')).toHaveTextContent('1,001 / 1,000');
+    expect(screen.getByTestId('prompt-length')).toHaveAttribute('data-state', 'over');
+    expect(screen.getByText('Z-Image prompts support up to 1,000 characters.')).toBeInTheDocument();
+  });
+
+  it('names an over-limit connected prompt on the generator once its model changes to a lower limit', () => {
+    const { graph, imageNode } = promptToImage('nano-banana-2', 'x'.repeat(1500));
+    renderInteractiveInspector(graph, { selectedNodeId: imageNode.id });
+    // Far from Nano Banana 2.0's limit, the generator says nothing about it.
+    expect(screen.queryByText('Connected prompt')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'z-image' } });
+
+    expect(screen.getByText('Connected prompt')).toBeInTheDocument();
+    expect(screen.getByTestId('prompt-length')).toHaveTextContent('1,500 / 1,000');
+    expect(screen.getByText('Z-Image prompts support up to 1,000 characters.')).toBeInTheDocument();
+  });
+
+  it('counts each multi-shot shot against its model’s shot limit, and names the shot past it', () => {
+    const videoNode = createWorkflowNode('video-generate', { x: 0, y: 0 });
+    renderInteractiveInspector({
+      ...videoNode,
+      data: normalizeNodeData('video-generate', {
+        ...videoNode.data,
+        model: 'kling-3.0-video',
+        isMultiShot: true,
+        multiPrompts: [
+          { id: 's1', prompt: 'A door opens', duration: 5 },
+          { id: 's2', prompt: 'She walks in', duration: 5 },
+        ],
+      } as Partial<WorkflowNodeData>),
+    });
+
+    expect(screen.getAllByTestId('prompt-length').map((counter) => counter.textContent)).toEqual(['12 / 500', '12 / 500']);
+
+    fireEvent.change(screen.getAllByLabelText('Shot prompt')[1], { target: { value: 'z'.repeat(501) } });
+
+    expect(screen.getAllByLabelText('Shot prompt')[1]).toHaveValue('z'.repeat(501));
+    expect(screen.getAllByTestId('prompt-length').map((counter) => counter.getAttribute('data-state'))).toEqual(['within', 'over']);
+    expect(screen.getByText('Shot 2: Kling 3.0 Cinematic shot prompts support up to 500 characters.')).toBeInTheDocument();
+  });
+});

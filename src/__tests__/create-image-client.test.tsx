@@ -620,6 +620,27 @@ describe('CreateImageClient element handles', () => {
       expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
     });
 
+    it('says so when the model now takes fewer references than the run used', async () => {
+      // Nano Banana 2 takes 10 since 2026-10-20; a run from before could hold 14.
+      const twelve = Array.from({ length: 12 }, (_, index) => ({
+        id: `remix-${index + 1}`,
+        displayName: `Ref ${index + 1}`,
+        handle: `@ref_${index + 1}`,
+        url: `https://signed.example.com/${index + 1}.png`,
+        storagePath: `generation_inputs/owner-1/gen-1/${String(index).padStart(2, '0')}.png`,
+        sourceGenerationId: 'gen-1',
+      }));
+      vi.stubGlobal('fetch', vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ ...bundle, inputs: { image: { elements: twelve } } }),
+      } as Response)));
+
+      const view = render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+
+      await waitFor(() => expect(cardHandles(view.container)).toHaveLength(10));
+      expect(await screen.findByText(/takes up to 10 reference images, so 10 of this run's 12 came back\./)).toBeInTheDocument();
+    });
+
     it('does not hand a restored handle to another element that is renamed to match it', async () => {
       const view = render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
       await waitFor(() => expect(cardHandles(view.container)).toEqual(['@lead', '@prop']));
@@ -1513,5 +1534,121 @@ describe('CreateImageClient generation pipeline', () => {
       expect(link.querySelector('svg.lucide-images')).not.toBeNull();
       expect(link.querySelector('svg.lucide-download')).toBeNull();
     }
+  });
+});
+
+/**
+ * Each model's own prompt limit (provider-prompt-limits): Z-Image takes 1,000 characters
+ * where the route takes 10,000, and Seedream 5 Lite wants at least 4. The counter reads
+ * against the selected model's limit, and a prompt past it waits with the start's own
+ * words, kept whole, instead of meeting the refusal at Generate.
+ */
+describe('CreateImageClient prompt limits', () => {
+  const limitSummaries = [
+    ...imageModelSummaries,
+    { id: 'z-image', kind: 'image', displayName: 'Z-Image', description: 'Test model with a 1,000-character prompt' },
+  ];
+
+  beforeEach(() => {
+    getPersistedImageElementRecordsMock.mockReset();
+    getPersistedImageElementRecordsMock.mockResolvedValue([]);
+    modelCatalogState.missingIds = [];
+    modelCatalogState.error = null;
+    modelCatalogState.summaries = limitSummaries;
+    window.scrollTo = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function counter() {
+    return screen.getByTestId('prompt-length');
+  }
+
+  function generateButton() {
+    return screen.getByRole('button', { name: /Generate Image/ });
+  }
+
+  function promptBox() {
+    return screen.getByPlaceholderText(PROMPT_PLACEHOLDER);
+  }
+
+  it('counts the prompt against the model’s own limit: quiet with room, amber in its last tenth', async () => {
+    render(<CreateImageClient prefill={{ model: 'z-image' }} />);
+    expect(await screen.findByText('0 / 1,000 characters')).toBeInTheDocument();
+
+    typePrompt('x'.repeat(899));
+    expect(counter()).toHaveTextContent('899 / 1,000 characters');
+    expect(counter()).toHaveAttribute('data-state', 'within');
+
+    typePrompt('x'.repeat(1000));
+    expect(counter()).toHaveTextContent('1,000 / 1,000 characters');
+    expect(counter()).toHaveAttribute('data-state', 'near');
+    expect(generateButton()).toBeEnabled();
+    expect(screen.queryByText(/prompts support up to/)).not.toBeInTheDocument();
+  });
+
+  it('keeps a prompt past the limit whole, marks it over, and holds Generate with the model’s words', async () => {
+    const fetchMock = installFetch({ starts: [startedReply()] });
+    render(<CreateImageClient prefill={{ model: 'z-image' }} />);
+    await screen.findByText('0 / 1,000 characters');
+
+    // A paste past the limit: the box keeps the route's own 10,000, so nothing is cut.
+    expect(promptBox()).toHaveAttribute('maxlength', '10000');
+    typePrompt('x'.repeat(1001));
+    expect(promptBox()).toHaveValue('x'.repeat(1001));
+    expect(counter()).toHaveTextContent('1,001 / 1,000 characters');
+    expect(counter()).toHaveAttribute('data-state', 'over');
+    expect(promptBox()).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText('Z-Image prompts support up to 1,000 characters.')).toBeInTheDocument();
+    expect(generateButton()).toBeDisabled();
+    pressGenerate();
+    expect(startCalls(fetchMock)).toHaveLength(0);
+
+    // Back within it, the run goes as written.
+    typePrompt('A lighthouse at dawn');
+    expect(promptBox()).not.toHaveAttribute('aria-invalid');
+    expect(screen.queryByText('Z-Image prompts support up to 1,000 characters.')).not.toBeInTheDocument();
+    pressGenerate();
+    await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(1));
+    expect(startBody(startCalls(fetchMock)[0]).prompt).toBe('A lighthouse at dawn');
+  });
+
+  it('keeps the prompt when the creator switches to a model with a lower limit, and marks it over there', async () => {
+    const view = render(<CreateImageClient prefill={{}} />);
+    const prompt = `A harbour at dusk. ${'Lamps along the quay. '.repeat(70)}`.trim();
+    expect(prompt.length).toBeGreaterThan(1000);
+    typePrompt(prompt);
+    expect(counter()).toHaveTextContent(`${prompt.length.toLocaleString('en-US')} / 10,000 characters`);
+    expect(counter()).toHaveAttribute('data-state', 'within');
+
+    chooseModel(view.container, 'Z-Image');
+
+    await waitFor(() => expect(counter()).toHaveTextContent(`${prompt.length.toLocaleString('en-US')} / 1,000 characters`));
+    expect(promptBox()).toHaveValue(prompt);
+    expect(counter()).toHaveAttribute('data-state', 'over');
+    expect(screen.getByText('Z-Image prompts support up to 1,000 characters.')).toBeInTheDocument();
+    expect(generateButton()).toBeDisabled();
+
+    chooseModel(view.container, 'Nano Banana 2.0');
+
+    await waitFor(() => expect(counter()).toHaveAttribute('data-state', 'within'));
+    expect(promptBox()).toHaveValue(prompt);
+    expect(screen.queryByText(/prompts support up to/)).not.toBeInTheDocument();
+    expect(generateButton()).toBeEnabled();
+  });
+
+  it('holds a prompt shorter than the provider takes, where it asks for more than one character', async () => {
+    render(<CreateImageClient prefill={{ model: 'seedream-5-lite' }} />);
+    expect(await screen.findByText('0 / 2,995 characters')).toBeInTheDocument();
+
+    typePrompt('cat');
+    expect(screen.getByText('Seedream 5 Lite prompts need at least 4 characters.')).toBeInTheDocument();
+    expect(generateButton()).toBeDisabled();
+
+    typePrompt('cats');
+    expect(screen.queryByText(/prompts need at least/)).not.toBeInTheDocument();
+    expect(generateButton()).toBeEnabled();
   });
 });
