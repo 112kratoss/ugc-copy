@@ -74,6 +74,7 @@ import {
 } from '@/lib/unified-generation-start-service';
 import type { CatalogGenerationInputAsset } from '@/lib/generation-model-adapters';
 import { CatalogError, type CatalogPrimitive, type GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
+import { referenceMediaLengthViolation } from '@/lib/provider-input-limits';
 import { probeMediaDurationSeconds } from '@/lib/video-rendition';
 
 export interface WorkflowRunExecutionResult {
@@ -345,16 +346,17 @@ function templateMediaSourceOptions(templateContext?: TemplateGenerationContext)
 }
 
 /**
- * A motion step's length in whole seconds, measured from its reference clip:
- * the output runs as long as the clip, which is what POST /api/generations
- * prices too. Null when the clip cannot be read, or is not an HTTPS object.
+ * A motion step's reference clip, measured: `billableSeconds` is its length in whole
+ * seconds, which the output runs for and POST /api/generations prices too, and
+ * `measuredSeconds` the length itself, which the start holds to Kie's 3 s floor (a
+ * 2.4 s clip rounds up to 3). Null when the clip cannot be read, or is not an HTTPS object.
  */
 async function measureMotionReferenceSeconds(params: {
   supabase: SupabaseClient;
   referenceVideoUrl: string;
   userId: string;
   templateContext?: TemplateGenerationContext;
-}): Promise<number | null> {
+}): Promise<{ billableSeconds: number; measuredSeconds: number } | null> {
   const { supabase, referenceVideoUrl, userId, templateContext } = params;
   const source = await resolveGenerationMediaSource(
     supabase,
@@ -365,7 +367,7 @@ async function measureMotionReferenceSeconds(params: {
   if (!/^https:\/\//i.test(source)) return null;
   const measured = await probeMediaDurationSeconds(source);
   return measured !== null && Number.isFinite(measured) && measured > 0
-    ? Math.max(1, Math.ceil(measured))
+    ? { billableSeconds: Math.max(1, Math.ceil(measured)), measuredSeconds: measured }
     : null;
 }
 
@@ -992,8 +994,16 @@ export async function executeWorkflowRunnableNode(params: {
       ...elementPayload.referenceVideoLinks.map((url) => ({ slot: 'videoReferences', kind: 'video' as const, url })),
       ...elementPayload.referenceAudioLinks.map((url) => ({ slot: 'audioReferences', kind: 'audio' as const, url })),
     ];
+    // Kling 3.0's clips go as named elements, which Kie refuses under 3 s only after the
+    // hold. They are measured where the step's release can say what they are; a step with
+    // no revision runs as before rather than being blocked for it.
+    const elementMedia: CatalogGenerationInputAsset[] = catalogRevision
+      ? klingVideoElements.map((element) => ({
+          slot: 'videoElements', kind: 'video' as const, url: element.url, label: element.displayName,
+        }))
+      : [];
     let referenceVideoDurationsSeconds: number[] = [];
-    if (referenceMedia.length > 0) {
+    if (referenceMedia.length > 0 || elementMedia.length > 0) {
       if (!catalogRevision) return buildBlockedError('Refresh model settings before running this workflow.');
       const { catalog, operation } = await loadGenerationModelOperationByRevision({
         modelId: data.model, revision: catalogRevision, schemaVersion: 3,
@@ -1003,13 +1013,25 @@ export async function executeWorkflowRunnableNode(params: {
         descriptor: catalog.models.find((model) => model.id === data.model && model.kind === 'video'),
         request: {
           kind: 'video', modelId: data.model, catalogRevision, settings: {},
-          prompt: '', shots: [], inputs: referenceMedia, sourceGenerationId: null,
+          prompt: '', shots: [], inputs: [...referenceMedia, ...elementMedia], sourceGenerationId: null,
         },
       });
       if (measured instanceof UnifiedGenerationRequestError) return buildBlockedError(measured.message);
       referenceVideoDurationsSeconds = measured.inputs.flatMap((asset) => (
-        asset.kind === 'video' && typeof asset.durationSeconds === 'number' ? [asset.durationSeconds] : []
+        asset.slot === 'videoReferences' && typeof asset.durationSeconds === 'number' ? [asset.durationSeconds] : []
       ));
+      // What Kie would refuse after the hold, said on the step before anything is quoted
+      // or held, as POST /api/generations says it (provider-input-limits).
+      const tooShort = referenceMediaLengthViolation(data.model, measured.inputs.flatMap((asset) => (
+        asset.kind === 'video' || asset.kind === 'audio'
+          ? [{
+              role: asset.slot === 'videoElements' ? 'element' as const : asset.kind,
+              durationSeconds: asset.durationSeconds ?? null,
+              label: asset.label ?? null,
+            }]
+          : []
+      )));
+      if (tooShort) return buildBlockedError(tooShort);
     }
     const quotedDuration = data.isMultiShot
       ? data.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0)
@@ -1086,10 +1108,11 @@ export async function executeWorkflowRunnableNode(params: {
       return buildBlockedError('Motion control requires both an image input and a video input.');
     }
 
-    const duration = await measureMotionReferenceSeconds({ supabase, referenceVideoUrl, userId, templateContext });
-    if (duration === null) {
+    const clip = await measureMotionReferenceSeconds({ supabase, referenceVideoUrl, userId, templateContext });
+    if (clip === null) {
       return buildBlockedError('The reference clip’s length could not be verified.');
     }
+    const duration = clip.billableSeconds;
 
     const quote = await quoteRunnableNode({
       kind: 'motion',
@@ -1110,6 +1133,7 @@ export async function executeWorkflowRunnableNode(params: {
       referenceVideoUrl,
       characterImageUrl,
       duration,
+      referenceVideoSeconds: clip.measuredSeconds,
       characterOrientation: data.characterOrientation,
       mode: data.mode,
       quotedCostCredits: quote.costCredits,

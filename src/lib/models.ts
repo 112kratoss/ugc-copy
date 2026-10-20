@@ -65,15 +65,18 @@ export const IMAGE_MODELS = {
             '4K': 4,
         },
     },
+    // Re-checked 2026-10-20 (docs/model-api-references/nano_banana2.0.md): `image_input` is
+    // maxItems 10, and `google_search` is gone from the input schema, so there is no
+    // grounding to offer and no Google Search control to show.
     'nano-banana-2': {
         id: 'nano-banana-2' as const,
         displayName: 'Nano Banana 2.0',
-        description: 'Versatile image gen with Google Search grounding',
+        description: 'Versatile generation and multi-image edits up to 4K',
         badge: 'Recommended',
         badgeColor: 'from-blue-500 to-cyan-500',
         accentColor: 'blue',
-        maxImages: 14,
-        supportsGoogleSearch: true,
+        maxImages: 10,
+        supportsGoogleSearch: false,
         supportsOutputFormat: true,
         aspectRatios: ['auto', '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'] as const,
         resolutions: ['1K', '2K', '4K'] as const,
@@ -726,14 +729,17 @@ export const VIDEO_MODELS = {
         } as const,
         modeOptions: [] as const,
         resolutions: ['480p', '720p'] as const,
+        // Kie's list price (kie.ai/seedance-2-0, re-read 2026-10-20): the "until October 7"
+        // offer ended and the price stayed, so 11.7 / 24.8 and 6.8 / 15 are the rate now
+        // (docs/model-api-references/reference-audit-2026-09-04.md).
         pricing: {
             '480p': {
-                noVideo: 15.5,
-                withVideo: 9,
+                noVideo: 11.7,
+                withVideo: 6.8,
             },
             '720p': {
-                noVideo: 33,
-                withVideo: 20,
+                noVideo: 24.8,
+                withVideo: 15,
             },
         },
     },
@@ -756,14 +762,17 @@ export const VIDEO_MODELS = {
         } as const,
         modeOptions: [] as const,
         resolutions: ['480p', '720p'] as const,
+        // Kie's list price (kie.ai/seedance-2-0-mini, re-read 2026-10-20): the "until
+        // October 7" offer ended and the price stayed (docs/model-api-references/
+        // reference-audit-2026-09-04.md).
         pricing: {
             '480p': {
-                noVideo: 9.5,
-                withVideo: 6,
+                noVideo: 3.8,
+                withVideo: 2.4,
             },
             '720p': {
-                noVideo: 20.5,
-                withVideo: 12.5,
+                noVideo: 8.2,
+                withVideo: 5,
             },
         },
     },
@@ -946,15 +955,12 @@ export const VIDEO_MODELS = {
                 noVideo: 63,
                 withVideo: 38,
             },
-            // 480p and 720p are Kie's listed price passed through. 1080p is not: Kie
-            // currently lists 114 / 68.5 under a "Limited-Time 1080P Offer: 28% OFF"
-            // (originally until Sep 17, 2026, extended to Oct 17, 2026 06:00 UTC as of
-            // 2026-09-04), and we bill the standard rate behind it (114/0.72, 68.5/0.72,
-            // rounded up) so the tier stays correct when the offer lapses rather than
-            // silently under-billing the day it does.
+            // Kie's listed price at every tier. The 1080p "Limited-Time 1080P Offer: 28% OFF"
+            // ended on Oct 17, 2026 and Kie now lists 158 / 95 (re-read 2026-10-20); the
+            // 159 / 96 billed until then was the offer's figures divided by 0.72, rounded up.
             '1080p': {
-                noVideo: 159,
-                withVideo: 96,
+                noVideo: 158,
+                withVideo: 95,
             },
         },
     },
@@ -1138,23 +1144,16 @@ export const VIDEO_MODELS = {
         resolutions: ['360p', '540p', '720p', '1080p'] as const,
         modeOptions: [] as const,
         /**
-         * Credits per second, keyed by resolution + generated audio. Text, start-frame
-         * and frame-pair runs share one table; reference-to-video bills 12.5 % more
-         * (docs/model-api-references/pixverse-v6.md, read 2026-10-08).
+         * Credits per second, keyed by resolution + generated audio, for every shape: text,
+         * start frame, frame pair and named references. Reference-to-video billed 12.5 %
+         * more until Kie dropped that block (docs/model-api-references/pixverse-v6.md,
+         * re-read 2026-10-20).
          */
         pricing: {
-            standard: {
-                '360p': { noSound: 4, withSound: 5.6 },
-                '540p': { noSound: 5.6, withSound: 7.2 },
-                '720p': { noSound: 7.2, withSound: 9.6 },
-                '1080p': { noSound: 14.4, withSound: 18.4 },
-            },
-            reference: {
-                '360p': { noSound: 4.5, withSound: 6.3 },
-                '540p': { noSound: 6.3, withSound: 8.1 },
-                '720p': { noSound: 8.1, withSound: 10.8 },
-                '1080p': { noSound: 16.2, withSound: 20.7 },
-            },
+            '360p': { noSound: 4, withSound: 5.6 },
+            '540p': { noSound: 5.6, withSound: 7.2 },
+            '720p': { noSound: 7.2, withSound: 9.6 },
+            '1080p': { noSound: 14.4, withSound: 18.4 },
         },
     },
 } as const;
@@ -1205,8 +1204,10 @@ export function getVideoElementSupport(
         return { enabled: true, maxElements: 7, maxNamed: 3, reason: null };
     }
 
+    // minimax-h3/reference-to-video takes 9, but Kie bills 4 credits for each image past
+    // the fifth, so references stop at the five it includes.
     if (modelId === 'minimax-h3') {
-        return { enabled: true, maxElements: 9, maxNamed: 9, reason: null };
+        return { enabled: true, maxElements: 5, maxNamed: 5, reason: null };
     }
 
     if (modelId === 'happyhorse-1.1') {
@@ -1425,7 +1426,10 @@ export function getVideoCost(
         resolution?: string;
         hasReferenceVideo?: boolean;
         hasReferenceImage?: boolean;
-        /** Reference pictures beyond start and end frames: PixVerse bills its reference endpoint higher. */
+        /**
+         * Reference pictures beyond start and end frames. No model prices them apart since
+         * PixVerse dropped its reference surcharge (2026-10-20); the video start still says.
+         */
         hasReusableReference?: boolean;
     }
 ): number {
@@ -1574,7 +1578,7 @@ export function getVideoCost(
     }
 
     if (modelId === 'pixverse-v6') {
-        const table = VIDEO_MODELS['pixverse-v6'].pricing[options.hasReusableReference ? 'reference' : 'standard'];
+        const table = VIDEO_MODELS['pixverse-v6'].pricing;
         const resolution = options.resolution && options.resolution in table
             ? options.resolution as keyof typeof table
             : '360p';

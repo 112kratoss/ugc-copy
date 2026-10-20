@@ -1,5 +1,14 @@
 # Nano Banana 2 API Documentation
 
+> **2026-10-20 re-check** (`https://docs.kie.ai/market/google/nanobanana2.md`, lines 124-133 of the
+> saved spec): `image_input` is now `maxItems: 10` ("supports up to 10 images", 30 MB each), where
+> this capture said 14; and `google_search` is gone from the input schema, which lists `prompt`,
+> `image_input`, `aspect_ratio`, `resolution` and `output_format` only. The catalog caps references
+> at 10 and sends no `google_search`, so the "Google Search" toggle is gone; a `googleSearch`
+> setting an installed app or a saved draft still sends is ignored, never refused. Price
+> unchanged, quoted from `kie.ai/nano-banana-2`: "now just 8 credits ($0.04) for 1 K, 12 credits
+> ($0.06) for 2 K, and 18 credits ($0.09) for 4 K". The fields below are updated to match.
+
 > Generate content using the Nano Banana 2 model
 
 ## Overview
@@ -78,7 +87,8 @@ The `callBackUrl` parameter allows you to receive automatic notifications when y
 #### image_input
 - **Type**: `array`
 - **Required**: No
-- **Description**: Please provide the URL of the uploaded file,Input images to transform or use as reference (supports up to 14 images)
+- **Description**: Please provide the URL of the uploaded file,Input images to transform or use as reference (supports up to 10 images; 14 before the 2026-10-20 re-check)
+- **Max Items**: 10
 - **Max File Size**: 30MB
 - **Accepted File Types**: image/jpeg, image/png, image/webp
 - **Multiple Files**: Yes
@@ -106,11 +116,9 @@ The `callBackUrl` parameter allows you to receive automatic notifications when y
   - `auto`: Auto
 - **Default Value**: `"auto"`
 
-#### google_search
-- **Type**: `boolean`
-- **Required**: No
-- **Description**: Use Google Web Search grounding to generate images based on real-time information
-- **Default Value**: `false`
+#### google_search (removed)
+No longer in the input schema as of the 2026-10-20 re-check. It was a boolean, default `false`:
+"Use Google Web Search grounding to generate images based on real-time information".
 
 #### resolution
 - **Type**: `string`
@@ -140,7 +148,6 @@ The `callBackUrl` parameter allows you to receive automatic notifications when y
     "prompt": "translation of all the text to Hindi.",
     "image_input": ["https://static.aiquickdraw.com/tools/example/1772164675129_TZfXY2Sn.png"],
     "aspect_ratio": "auto",
-    "google_search": false,
     "resolution": "1K",
     "output_format": "jpg"
   }
@@ -189,7 +196,7 @@ GET https://api.kie.ai/api/v1/jobs/recordInfo?taskId=281e5b0********************
     "taskId": "281e5b0*********************f39b9",
     "model": "nano-banana-2",
     "state": "waiting",
-    "param": "{\"model\":\"nano-banana-2\",\"input\":{\"prompt\":\"translation of all the text to Hindi.\",\"image_input\":[\"https://static.aiquickdraw.com/tools/example/1772164675129_TZfXY2Sn.png\"],\"aspect_ratio\":\"auto\",\"google_search\":false,\"resolution\":\"1K\",\"output_format\":\"jpg\"}}",
+    "param": "{\"model\":\"nano-banana-2\",\"input\":{\"prompt\":\"translation of all the text to Hindi.\",\"image_input\":[\"https://static.aiquickdraw.com/tools/example/1772164675129_TZfXY2Sn.png\"],\"aspect_ratio\":\"auto\",\"resolution\":\"1K\",\"output_format\":\"jpg\"}}",
     "resultJson": "{\"resultUrls\":[\"https://static.aiquickdraw.com/tools/example/1772164735327_ts0byl1Q.png\"]}",
     "failCode": null,
     "failMsg": null,

@@ -1,0 +1,3694 @@
+{
+  "manifestVersion": 1,
+  "mode": "clone-active",
+  "release": {
+    "schemaVersion": 2,
+    "revision": "kie-checkup-20261020",
+    "basedOnRevision": "wan-start-frame-apart-20261019",
+    "changeNote": "Kie check-up of 2026-10-20 (archive/model-checkup-2026-10-20): Kie's list prices for Seedance 2 Mini (3.8/8.2, 2.4/5 per s) and Fast (11.7/24.8, 6.8/15) after their offers ended, Seedance 2.5 1080p 158/95, PixVerse V6 references at the standard rate (surcharge dropped); MiniMax H3 caps references at the 5 Kie includes; Nano Banana 2 takes 10 references and neither Nano Banana tier offers or sends google_search; Gemini Omni clips stop at 30 s; Seedance 2.5 reference audio at 30 s in total; Wan 2.7 voice at 10 s and no voice-only references run; Veo 3.1 reference runs at 16:9 or 9:16 only.",
+    "createdBy": "catalog-operations"
+  },
+  "upgrade": {
+    "legacyDescriptorsToV2": true
+  },
+  "expectedModelIds": [
+    "flux-2-pro",
+    "gemini-omni-1.1-flash",
+    "gemini-omni-video",
+    "gpt-image-2",
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst",
+    "grok-imagine-image",
+    "grok-imagine-image-2",
+    "grok-imagine-video",
+    "grok-imagine-video-1.5",
+    "hailuo-2.3",
+    "happyhorse-1.1",
+    "ideogram-character",
+    "ideogram-v3",
+    "imagen-4",
+    "imagen-4-fast",
+    "imagen-4-ultra",
+    "kling-2.6",
+    "kling-3.0",
+    "kling-3.0-turbo",
+    "kling-3.0-video",
+    "kling-o3",
+    "minimax-h3",
+    "nano-banana-2",
+    "nano-banana-2-lite",
+    "nano-banana-pro",
+    "pixverse-v6",
+    "qwen-image-2.1",
+    "qwen3",
+    "qwen3-pro",
+    "seedance-1.5-pro",
+    "seedance-2",
+    "seedance-2-5",
+    "seedance-2-fast",
+    "seedance-2-mini",
+    "seedream-5-flash",
+    "seedream-5-lite",
+    "seedream-5-pro",
+    "veo-3.1",
+    "wan-2.7",
+    "wan-2.7-image",
+    "wan-2.7-image-pro",
+    "wan-3.0",
+    "wan-3.0-prime",
+    "z-image"
+  ],
+  "defaults": {
+    "web": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    },
+    "mobile": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    }
+  },
+  "entries": [
+    {
+      "modelId": "nano-banana-2",
+      "kind": "image",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "nano-banana-2",
+        "kind": "image",
+        "displayName": "Nano Banana 2.0",
+        "description": "Versatile generation and multi-image edits up to 4K",
+        "badge": "Recommended",
+        "recommended": true,
+        "sortOrder": 10,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "select",
+            "defaultValue": "auto",
+            "options": [
+              {
+                "value": "auto",
+                "label": "auto"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "1:4",
+                "label": "1:4"
+              },
+              {
+                "value": "1:8",
+                "label": "1:8"
+              },
+              {
+                "value": "2:3",
+                "label": "2:3"
+              },
+              {
+                "value": "3:2",
+                "label": "3:2"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "4:1",
+                "label": "4:1"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "4:5",
+                "label": "4:5"
+              },
+              {
+                "value": "5:4",
+                "label": "5:4"
+              },
+              {
+                "value": "8:1",
+                "label": "8:1"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "21:9",
+                "label": "21:9"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "1K",
+            "options": [
+              {
+                "value": "1K",
+                "label": "1K"
+              },
+              {
+                "value": "2K",
+                "label": "2K"
+              },
+              {
+                "value": "4K",
+                "label": "4K"
+              }
+            ]
+          },
+          {
+            "key": "outputFormat",
+            "label": "Output format",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "jpg",
+            "options": [
+              {
+                "value": "jpg",
+                "label": "jpg"
+              },
+              {
+                "value": "png",
+                "label": "png"
+              }
+            ]
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": true
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 10,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": false,
+          "endFrame": false,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "references",
+            "label": "Reference images",
+            "default": true,
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 10,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "kie-task-v1",
+      "adapterConfig": {
+        "settings": {
+          "aspectRatio": {
+            "field": "aspect_ratio"
+          },
+          "resolution": {
+            "field": "resolution"
+          },
+          "outputFormat": {
+            "field": "output_format"
+          }
+        },
+        "slots": {
+          "imageReferences": {
+            "field": "image_input",
+            "cardinality": "many",
+            "source": "url"
+          }
+        }
+      },
+      "providerModelMap": {
+        "default": "nano-banana-2"
+      },
+      "pricingStrategy": "lookup",
+      "pricingConfig": {
+        "dimensions": [
+          {
+            "source": "setting",
+            "key": "resolution",
+            "defaultValue": "1K"
+          }
+        ],
+        "table": {
+          "1K": 8,
+          "2K": 12,
+          "4K": 18
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "normalizedDefaults": {
+          "outputFormat": "jpg",
+          "googleSearch": false
+        },
+        "rules": []
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "nano-banana-pro",
+      "kind": "image",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "nano-banana-pro",
+        "kind": "image",
+        "displayName": "Nano Banana Pro",
+        "description": "High-fidelity generation with multi-image reference",
+        "badge": "Pro",
+        "recommended": false,
+        "sortOrder": 20,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "select",
+            "defaultValue": "1:1",
+            "options": [
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "2:3",
+                "label": "2:3"
+              },
+              {
+                "value": "3:2",
+                "label": "3:2"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "4:5",
+                "label": "4:5"
+              },
+              {
+                "value": "5:4",
+                "label": "5:4"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "21:9",
+                "label": "21:9"
+              },
+              {
+                "value": "auto",
+                "label": "auto"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "1K",
+            "options": [
+              {
+                "value": "1K",
+                "label": "1K"
+              },
+              {
+                "value": "2K",
+                "label": "2K"
+              },
+              {
+                "value": "4K",
+                "label": "4K"
+              }
+            ]
+          },
+          {
+            "key": "outputFormat",
+            "label": "Output format",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "jpg",
+            "options": [
+              {
+                "value": "jpg",
+                "label": "jpg"
+              },
+              {
+                "value": "png",
+                "label": "png"
+              }
+            ]
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": true
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 8,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": false,
+          "endFrame": false,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "references",
+            "label": "Reference images",
+            "default": true,
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 8,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "kie-task-v1",
+      "adapterConfig": {
+        "settings": {
+          "aspectRatio": {
+            "field": "aspect_ratio"
+          },
+          "resolution": {
+            "field": "resolution"
+          },
+          "outputFormat": {
+            "field": "output_format"
+          }
+        },
+        "slots": {
+          "imageReferences": {
+            "field": "image_input",
+            "cardinality": "many",
+            "source": "url"
+          }
+        }
+      },
+      "providerModelMap": {
+        "default": "nano-banana-pro"
+      },
+      "pricingStrategy": "lookup",
+      "pricingConfig": {
+        "dimensions": [
+          {
+            "source": "setting",
+            "key": "resolution",
+            "defaultValue": "1K"
+          }
+        ],
+        "table": {
+          "1K": 18,
+          "2K": 18,
+          "4K": 24
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "normalizedDefaults": {
+          "outputFormat": "jpg",
+          "googleSearch": false
+        },
+        "rules": []
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "seedance-2-mini",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "seedance-2-mini",
+        "kind": "video",
+        "displayName": "Seedance 2 Mini",
+        "description": "Lower-cost Seedance 2 generation with multimodal references and generated audio",
+        "badge": "New",
+        "recommended": false,
+        "sortOrder": 50,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "16:9",
+            "options": [
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "21:9",
+                "label": "21:9"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "480p",
+            "options": [
+              {
+                "value": "480p",
+                "label": "480p"
+              },
+              {
+                "value": "720p",
+                "label": "720p"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "integer",
+            "presentation": "stepper",
+            "defaultValue": 10,
+            "min": 4,
+            "max": 15,
+            "step": 1,
+            "unit": "seconds"
+          },
+          {
+            "key": "sound",
+            "label": "Sound",
+            "type": "boolean",
+            "presentation": "toggle",
+            "defaultValue": false
+          },
+          {
+            "key": "referenceMode",
+            "label": "Input mode",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "frames",
+            "options": [
+              {
+                "value": "frames",
+                "label": "Frames"
+              },
+              {
+                "value": "elements",
+                "label": "References"
+              }
+            ],
+            "minClientSchemaVersion": 2
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": true,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 5,
+            "supportsNaming": true
+          },
+          "videoReferences": {
+            "max": 3
+          },
+          "audioReferences": {
+            "max": 3
+          },
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": true,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              },
+              {
+                "key": "endFrame",
+                "kind": "image",
+                "role": "endFrame",
+                "label": "End frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 5,
+                "supportsNaming": true
+              },
+              {
+                "key": "videoReferences",
+                "kind": "video",
+                "role": "reference",
+                "label": "Reference videos",
+                "min": 0,
+                "max": 3,
+                "durationMetadata": "required",
+                "maxDurationSeconds": 15
+              },
+              {
+                "key": "audioReferences",
+                "kind": "audio",
+                "role": "reference",
+                "label": "Reference audio",
+                "min": 0,
+                "max": 3,
+                "durationMetadata": "optional",
+                "maxDurationSeconds": 15
+              }
+            ]
+          }
+        ],
+        "inputConstraints": [
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "videoReferences"
+            ],
+            "max": 15,
+            "message": "Reference videos may be at most 15 seconds in total."
+          }
+        ]
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "bytedance/seedance-2-mini"
+      },
+      "pricingStrategy": "reference-adjustment",
+      "pricingConfig": {
+        "unit": "second",
+        "settingKey": "resolution",
+        "durationSettingKey": "duration",
+        "referenceDurationSlots": [
+          "videoReferences"
+        ],
+        "rounding": "ceil",
+        "rates": {
+          "noReference": {
+            "480p": 3.8,
+            "720p": 8.2
+          },
+          "withReference": {
+            "480p": 2.4,
+            "720p": 5
+          }
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 5,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ]
+          },
+          {
+            "type": "min-slot-count",
+            "slotKey": "startFrame",
+            "min": 1,
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "endFrame",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "startFrame",
+            "message": "Add a start frame to use an end frame with this model."
+          },
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "videoReferences"
+            ],
+            "max": 15,
+            "field": "videos",
+            "message": "Reference videos may be at most 15 seconds in total."
+          },
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "audioReferences"
+            ],
+            "max": 15,
+            "field": "audios",
+            "message": "Reference audio may be at most 15 seconds in total."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "seedance-2-fast",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "seedance-2-fast",
+        "kind": "video",
+        "displayName": "Seedance 2 Fast",
+        "description": "Faster ByteDance video model with image, video, and audio references",
+        "badge": null,
+        "recommended": false,
+        "sortOrder": 40,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "16:9",
+            "options": [
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "21:9",
+                "label": "21:9"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "480p",
+            "options": [
+              {
+                "value": "480p",
+                "label": "480p"
+              },
+              {
+                "value": "720p",
+                "label": "720p"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "integer",
+            "presentation": "stepper",
+            "defaultValue": 15,
+            "min": 4,
+            "max": 15,
+            "step": 1,
+            "unit": "seconds"
+          },
+          {
+            "key": "sound",
+            "label": "Sound",
+            "type": "boolean",
+            "presentation": "toggle",
+            "defaultValue": false
+          },
+          {
+            "key": "referenceMode",
+            "label": "Input mode",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "frames",
+            "options": [
+              {
+                "value": "frames",
+                "label": "Frames"
+              },
+              {
+                "value": "elements",
+                "label": "References"
+              }
+            ],
+            "minClientSchemaVersion": 2
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": true,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 5,
+            "supportsNaming": true
+          },
+          "videoReferences": {
+            "max": 3
+          },
+          "audioReferences": {
+            "max": 3
+          },
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": true,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              },
+              {
+                "key": "endFrame",
+                "kind": "image",
+                "role": "endFrame",
+                "label": "End frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 5,
+                "supportsNaming": true
+              },
+              {
+                "key": "videoReferences",
+                "kind": "video",
+                "role": "reference",
+                "label": "Reference videos",
+                "min": 0,
+                "max": 3,
+                "durationMetadata": "required",
+                "maxDurationSeconds": 15
+              },
+              {
+                "key": "audioReferences",
+                "kind": "audio",
+                "role": "reference",
+                "label": "Reference audio",
+                "min": 0,
+                "max": 3,
+                "durationMetadata": "optional",
+                "maxDurationSeconds": 15
+              }
+            ]
+          }
+        ],
+        "inputConstraints": [
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "videoReferences"
+            ],
+            "max": 15,
+            "message": "Reference videos may be at most 15 seconds in total."
+          }
+        ]
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "bytedance/seedance-2-fast"
+      },
+      "pricingStrategy": "reference-adjustment",
+      "pricingConfig": {
+        "unit": "second",
+        "settingKey": "resolution",
+        "durationSettingKey": "duration",
+        "referenceDurationSlots": [
+          "videoReferences"
+        ],
+        "rounding": "ceil",
+        "rates": {
+          "noReference": {
+            "480p": 11.7,
+            "720p": 24.8
+          },
+          "withReference": {
+            "480p": 6.8,
+            "720p": 15
+          }
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 5,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ]
+          },
+          {
+            "type": "min-slot-count",
+            "slotKey": "startFrame",
+            "min": 1,
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "endFrame",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "startFrame",
+            "message": "Add a start frame to use an end frame with this model."
+          },
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "videoReferences"
+            ],
+            "max": 15,
+            "field": "videos",
+            "message": "Reference videos may be at most 15 seconds in total."
+          },
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "audioReferences"
+            ],
+            "max": 15,
+            "field": "audios",
+            "message": "Reference audio may be at most 15 seconds in total."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "seedance-2-5",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "seedance-2-5",
+        "kind": "video",
+        "displayName": "Seedance 2.5",
+        "description": "Latest ByteDance model with 30-second output and audio references",
+        "badge": null,
+        "recommended": false,
+        "sortOrder": 120,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "16:9",
+            "options": [
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "21:9",
+                "label": "21:9"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "480p",
+            "options": [
+              {
+                "value": "480p",
+                "label": "480p"
+              },
+              {
+                "value": "720p",
+                "label": "720p"
+              },
+              {
+                "value": "1080p",
+                "label": "1080p"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "integer",
+            "presentation": "stepper",
+            "defaultValue": 5,
+            "min": 4,
+            "max": 30,
+            "step": 1,
+            "unit": "seconds"
+          },
+          {
+            "key": "sound",
+            "label": "Sound",
+            "type": "boolean",
+            "presentation": "toggle",
+            "defaultValue": false
+          },
+          {
+            "key": "referenceMode",
+            "label": "Input mode",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "frames",
+            "options": [
+              {
+                "value": "frames",
+                "label": "Frames"
+              },
+              {
+                "value": "elements",
+                "label": "References"
+              }
+            ],
+            "minClientSchemaVersion": 2
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": true,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 30,
+            "supportsNaming": true
+          },
+          "videoReferences": {
+            "max": 10
+          },
+          "audioReferences": {
+            "max": 10
+          },
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": true,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              },
+              {
+                "key": "endFrame",
+                "kind": "image",
+                "role": "endFrame",
+                "label": "End frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 30,
+                "supportsNaming": true
+              },
+              {
+                "key": "videoReferences",
+                "kind": "video",
+                "role": "reference",
+                "label": "Reference videos",
+                "min": 0,
+                "max": 10,
+                "durationMetadata": "required",
+                "maxDurationSeconds": 30
+              },
+              {
+                "key": "audioReferences",
+                "kind": "audio",
+                "role": "reference",
+                "label": "Reference audio",
+                "min": 0,
+                "max": 10,
+                "durationMetadata": "optional",
+                "maxDurationSeconds": 30
+              }
+            ]
+          }
+        ],
+        "inputConstraints": [
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "videoReferences"
+            ],
+            "max": 30,
+            "message": "Reference videos may be at most 30 seconds in total."
+          }
+        ]
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "bytedance/seedance-2-5"
+      },
+      "pricingStrategy": "reference-adjustment",
+      "pricingConfig": {
+        "unit": "second",
+        "settingKey": "resolution",
+        "durationSettingKey": "duration",
+        "referenceDurationSlots": [
+          "videoReferences"
+        ],
+        "rounding": "ceil",
+        "rates": {
+          "noReference": {
+            "480p": 28,
+            "720p": 63,
+            "1080p": 158
+          },
+          "withReference": {
+            "480p": 17,
+            "720p": 38,
+            "1080p": 95
+          }
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 30,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ]
+          },
+          {
+            "type": "min-slot-count",
+            "slotKey": "startFrame",
+            "min": 1,
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "endFrame",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "startFrame",
+            "message": "Add a start frame to use an end frame with this model."
+          },
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "videoReferences"
+            ],
+            "max": 30,
+            "field": "videos",
+            "message": "Reference videos may be at most 30 seconds in total."
+          },
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "audioReferences"
+            ],
+            "max": 30,
+            "field": "audios",
+            "message": "Reference audio may be at most 30 seconds in total."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "pixverse-v6",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "pixverse-v6",
+        "kind": "video",
+        "displayName": "PixVerse V6",
+        "description": "PixVerse video from text, a start frame, a frame pair, or named references, with optional audio",
+        "badge": "New",
+        "recommended": false,
+        "sortOrder": 190,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "16:9",
+            "options": [
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "3:2",
+                "label": "3:2"
+              },
+              {
+                "value": "2:3",
+                "label": "2:3"
+              },
+              {
+                "value": "21:9",
+                "label": "21:9"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "360p",
+            "options": [
+              {
+                "value": "360p",
+                "label": "360p"
+              },
+              {
+                "value": "540p",
+                "label": "540p"
+              },
+              {
+                "value": "720p",
+                "label": "720p"
+              },
+              {
+                "value": "1080p",
+                "label": "1080p"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "integer",
+            "presentation": "stepper",
+            "defaultValue": 5,
+            "min": 1,
+            "max": 15,
+            "step": 1,
+            "unit": "seconds"
+          },
+          {
+            "key": "sound",
+            "label": "Sound",
+            "type": "boolean",
+            "presentation": "toggle",
+            "defaultValue": false
+          },
+          {
+            "key": "referenceMode",
+            "label": "Input mode",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "frames",
+            "options": [
+              {
+                "value": "frames",
+                "label": "Frames"
+              },
+              {
+                "value": "elements",
+                "label": "References"
+              }
+            ],
+            "minClientSchemaVersion": 2
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": true,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 7,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": true,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              },
+              {
+                "key": "endFrame",
+                "kind": "image",
+                "role": "endFrame",
+                "label": "End frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 7,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "pixverse-v6/text-to-video",
+        "text": "pixverse-v6/text-to-video",
+        "image": "pixverse-v6/image-to-video",
+        "transition": "pixverse-v6/transition",
+        "reference": "pixverse-v6/reference-to-video"
+      },
+      "pricingStrategy": "per-second",
+      "pricingConfig": {
+        "durationSettingKey": "duration",
+        "rate": {
+          "strategy": "lookup",
+          "config": {
+            "dimensions": [
+              {
+                "source": "setting",
+                "key": "resolution",
+                "defaultValue": "360p"
+              },
+              {
+                "source": "setting",
+                "key": "sound",
+                "defaultValue": false
+              }
+            ],
+            "table": {
+              "360p": {
+                "false": 4,
+                "true": 5.6
+              },
+              "540p": {
+                "false": 5.6,
+                "true": 7.2
+              },
+              "720p": {
+                "false": 7.2,
+                "true": 9.6
+              },
+              "1080p": {
+                "false": 14.4,
+                "true": 18.4
+              }
+            }
+          }
+        },
+        "rounding": "ceil"
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 7,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ]
+          },
+          {
+            "type": "min-slot-count",
+            "slotKey": "startFrame",
+            "min": 1,
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "endFrame",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "startFrame",
+            "message": "Add a start frame to use an end frame with this model."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "minimax-h3",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "minimax-h3",
+        "kind": "video",
+        "displayName": "MiniMax H3",
+        "description": "Hailuo H3 generation from text, a frame, or references",
+        "badge": null,
+        "recommended": false,
+        "sortOrder": 140,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "21:9",
+            "options": [
+              {
+                "value": "21:9",
+                "label": "21:9"
+              },
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "768P",
+            "options": [
+              {
+                "value": "768P",
+                "label": "768P"
+              },
+              {
+                "value": "2K",
+                "label": "2K"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "integer",
+            "presentation": "stepper",
+            "defaultValue": 6,
+            "min": 4,
+            "max": 15,
+            "step": 1,
+            "unit": "seconds"
+          },
+          {
+            "key": "referenceMode",
+            "label": "Input mode",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "frames",
+            "options": [
+              {
+                "value": "frames",
+                "label": "Frames"
+              },
+              {
+                "value": "elements",
+                "label": "References"
+              }
+            ],
+            "minClientSchemaVersion": 2
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 5,
+            "supportsNaming": true
+          },
+          "videoReferences": {
+            "max": 3
+          },
+          "audioReferences": {
+            "max": 3
+          },
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": true,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              },
+              {
+                "key": "endFrame",
+                "kind": "image",
+                "role": "endFrame",
+                "label": "End frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 5,
+                "supportsNaming": true
+              },
+              {
+                "key": "videoReferences",
+                "kind": "video",
+                "role": "reference",
+                "label": "Reference videos",
+                "min": 0,
+                "max": 3,
+                "durationMetadata": "required",
+                "maxDurationSeconds": 15
+              },
+              {
+                "key": "audioReferences",
+                "kind": "audio",
+                "role": "reference",
+                "label": "Reference audio",
+                "min": 0,
+                "max": 3,
+                "durationMetadata": "optional",
+                "maxDurationSeconds": 15
+              }
+            ]
+          }
+        ],
+        "inputConstraints": [
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "videoReferences"
+            ],
+            "max": 15,
+            "message": "Reference videos may be at most 15 seconds in total."
+          }
+        ]
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "minimax-h3/text-to-video",
+        "text": "minimax-h3/text-to-video",
+        "image": "minimax-h3/image-to-video",
+        "reference": "minimax-h3/reference-to-video"
+      },
+      "pricingStrategy": "reference-adjustment",
+      "pricingConfig": {
+        "unit": "second",
+        "settingKey": "resolution",
+        "durationSettingKey": "duration",
+        "referenceDurationSlots": [
+          "videoReferences"
+        ],
+        "rounding": "ceil",
+        "rates": {
+          "noReference": {
+            "768P": 8,
+            "2K": 13
+          },
+          "withReference": {
+            "768P": 8,
+            "2K": 13
+          }
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 5,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ]
+          },
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "videoReferences"
+            ],
+            "max": 15,
+            "field": "videos",
+            "message": "Reference videos may be at most 15 seconds in total."
+          },
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "audioReferences"
+            ],
+            "max": 15,
+            "field": "audios",
+            "message": "Reference audio may be at most 15 seconds in total."
+          },
+          {
+            "type": "forbidden-combination",
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "audioReferences",
+                "operator": "greaterThan",
+                "value": 0
+              },
+              {
+                "source": "inputCount",
+                "key": "imageReferences",
+                "operator": "equals",
+                "value": 0
+              },
+              {
+                "source": "inputCount",
+                "key": "videoReferences",
+                "operator": "equals",
+                "value": 0
+              }
+            ],
+            "field": "audios",
+            "message": "MiniMax H3 needs a reference image or video alongside reference audio."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "gemini-omni-video",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "gemini-omni-video",
+        "kind": "video",
+        "displayName": "Gemini Omni Video",
+        "description": "Google multimodal video creation from text, images, or one reference clip",
+        "badge": null,
+        "recommended": false,
+        "sortOrder": 80,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "16:9",
+            "options": [
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "720p",
+            "options": [
+              {
+                "value": "720p",
+                "label": "720p"
+              },
+              {
+                "value": "1080p",
+                "label": "1080p"
+              },
+              {
+                "value": "4k",
+                "label": "4k"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "4",
+            "options": [
+              {
+                "value": "4",
+                "label": "4"
+              },
+              {
+                "value": "6",
+                "label": "6"
+              },
+              {
+                "value": "8",
+                "label": "8"
+              },
+              {
+                "value": "10",
+                "label": "10"
+              }
+            ],
+            "normalizedValueType": "number"
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 7,
+            "supportsNaming": true
+          },
+          "videoReferences": {
+            "max": 1
+          },
+          "audioReferences": null,
+          "preparedAudioReferences": {
+            "max": 3
+          },
+          "characterReferences": {
+            "max": 3
+          },
+          "startFrame": false,
+          "endFrame": false,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "default": true,
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 7,
+                "supportsNaming": true
+              },
+              {
+                "key": "videoReferences",
+                "kind": "video",
+                "role": "reference",
+                "label": "Reference videos",
+                "min": 0,
+                "max": 1,
+                "durationMetadata": "required",
+                "maxDurationSeconds": 30
+              }
+            ]
+          },
+          {
+            "key": "prepared-assets",
+            "label": "Prepared assets",
+            "default": false,
+            "slots": [
+              {
+                "key": "preparedVoices",
+                "kind": "preparedVoice",
+                "role": "reference",
+                "label": "Prepared voices",
+                "min": 0,
+                "max": 3
+              },
+              {
+                "key": "characters",
+                "kind": "character",
+                "role": "reference",
+                "label": "Characters",
+                "min": 0,
+                "max": 3
+              }
+            ]
+          }
+        ],
+        "inputConstraints": [
+          {
+            "type": "weighted-count",
+            "slotKeys": [
+              "imageReferences",
+              "videoReferences",
+              "characters"
+            ],
+            "weights": {
+              "imageReferences": 1,
+              "videoReferences": 2,
+              "characters": 1
+            },
+            "max": 7,
+            "message": "Gemini Omni supports seven reference slots; videos use two and characters use one."
+          }
+        ]
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "gemini-omni-video"
+      },
+      "pricingStrategy": "conditional",
+      "pricingConfig": {
+        "branches": [
+          {
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "videos",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "pricing": {
+              "strategy": "lookup",
+              "config": {
+                "dimensions": [
+                  {
+                    "source": "setting",
+                    "key": "resolution",
+                    "defaultValue": "720p"
+                  }
+                ],
+                "table": {
+                  "720p": 168,
+                  "1080p": 168,
+                  "4k": 252
+                }
+              }
+            }
+          }
+        ],
+        "fallback": {
+          "strategy": "lookup",
+          "config": {
+            "dimensions": [
+              {
+                "source": "setting",
+                "key": "resolution",
+                "defaultValue": "720p"
+              },
+              {
+                "source": "setting",
+                "key": "duration",
+                "defaultValue": 4
+              }
+            ],
+            "table": {
+              "720p": {
+                "4": 63,
+                "6": 84,
+                "8": 105,
+                "10": 126
+              },
+              "1080p": {
+                "4": 63,
+                "6": 84,
+                "8": 105,
+                "10": 126
+              },
+              "4k": {
+                "4": 147,
+                "6": 168,
+                "8": 189,
+                "10": 210
+              }
+            }
+          }
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 7,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "characters",
+            "max": 3,
+            "message": "Gemini Omni supports up to 3 prepared character references."
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "preparedAudios",
+            "max": 3,
+            "message": "Gemini Omni supports up to 3 prepared voice references."
+          },
+          {
+            "type": "weighted-slot-count",
+            "weights": {
+              "images": 1,
+              "videos": 2,
+              "characters": 1
+            },
+            "max": 7,
+            "field": "references",
+            "message": "Gemini Omni supports seven reference slots; videos use two and characters use one."
+          },
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "videoReferences"
+            ],
+            "max": 30,
+            "field": "videos",
+            "message": "Reference videos may be at most 30 seconds in total."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "gemini-omni-1.1-flash",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "gemini-omni-1.1-flash",
+        "kind": "video",
+        "displayName": "Gemini Omni 1.1 Flash",
+        "description": "Faster Gemini Omni with start and end frames, references, and 360p to 4K output",
+        "badge": "New",
+        "recommended": false,
+        "sortOrder": 150,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "16:9",
+            "options": [
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "360p",
+            "options": [
+              {
+                "value": "360p",
+                "label": "360p"
+              },
+              {
+                "value": "720p",
+                "label": "720p"
+              },
+              {
+                "value": "1080p",
+                "label": "1080p"
+              },
+              {
+                "value": "4k",
+                "label": "4k"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "4",
+            "options": [
+              {
+                "value": "4",
+                "label": "4"
+              },
+              {
+                "value": "6",
+                "label": "6"
+              },
+              {
+                "value": "8",
+                "label": "8"
+              },
+              {
+                "value": "10",
+                "label": "10"
+              }
+            ],
+            "normalizedValueType": "number"
+          },
+          {
+            "key": "referenceMode",
+            "label": "Input mode",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "frames",
+            "options": [
+              {
+                "value": "frames",
+                "label": "Frames"
+              },
+              {
+                "value": "elements",
+                "label": "References"
+              }
+            ],
+            "minClientSchemaVersion": 2
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 7,
+            "supportsNaming": true
+          },
+          "videoReferences": {
+            "max": 1
+          },
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": true,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              },
+              {
+                "key": "endFrame",
+                "kind": "image",
+                "role": "endFrame",
+                "label": "End frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 7,
+                "supportsNaming": true
+              },
+              {
+                "key": "videoReferences",
+                "kind": "video",
+                "role": "reference",
+                "label": "Reference videos",
+                "min": 0,
+                "max": 1,
+                "durationMetadata": "required",
+                "maxDurationSeconds": 30
+              }
+            ]
+          }
+        ],
+        "inputConstraints": [
+          {
+            "type": "weighted-count",
+            "slotKeys": [
+              "imageReferences",
+              "videoReferences"
+            ],
+            "weights": {
+              "imageReferences": 1,
+              "videoReferences": 2
+            },
+            "max": 7,
+            "message": "Gemini Omni 1.1 Flash supports seven reference slots; a video uses two."
+          }
+        ]
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "google/gemini-omni-flash-1-1"
+      },
+      "pricingStrategy": "conditional",
+      "pricingConfig": {
+        "branches": [
+          {
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "videos",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "pricing": {
+              "strategy": "lookup",
+              "config": {
+                "dimensions": [
+                  {
+                    "source": "setting",
+                    "key": "resolution",
+                    "defaultValue": "360p"
+                  }
+                ],
+                "table": {
+                  "360p": 168,
+                  "720p": 168,
+                  "1080p": 168,
+                  "4k": 252
+                }
+              }
+            }
+          }
+        ],
+        "fallback": {
+          "strategy": "lookup",
+          "config": {
+            "dimensions": [
+              {
+                "source": "setting",
+                "key": "resolution",
+                "defaultValue": "360p"
+              },
+              {
+                "source": "setting",
+                "key": "duration",
+                "defaultValue": 4
+              }
+            ],
+            "table": {
+              "360p": {
+                "4": 63,
+                "6": 84,
+                "8": 105,
+                "10": 126
+              },
+              "720p": {
+                "4": 63,
+                "6": 84,
+                "8": 105,
+                "10": 126
+              },
+              "1080p": {
+                "4": 63,
+                "6": 84,
+                "8": 105,
+                "10": 126
+              },
+              "4k": {
+                "4": 147,
+                "6": 168,
+                "8": 189,
+                "10": 210
+              }
+            }
+          }
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 7,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ]
+          },
+          {
+            "type": "min-slot-count",
+            "slotKey": "startFrame",
+            "min": 1,
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "endFrame",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "startFrame",
+            "message": "Add a start frame to use an end frame with this model."
+          },
+          {
+            "type": "weighted-slot-count",
+            "weights": {
+              "images": 1,
+              "videos": 2
+            },
+            "max": 7,
+            "field": "references",
+            "message": "Gemini Omni 1.1 Flash supports seven reference slots; a video uses two."
+          },
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "videoReferences"
+            ],
+            "max": 30,
+            "field": "videos",
+            "message": "Reference videos may be at most 30 seconds in total."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "wan-2.7",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "wan-2.7",
+        "kind": "video",
+        "displayName": "Wan 2.7",
+        "description": "Flexible text, frame, and multimodal reference-to-video generation",
+        "badge": "New",
+        "recommended": false,
+        "sortOrder": 60,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "16:9",
+            "options": [
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "720p",
+            "options": [
+              {
+                "value": "720p",
+                "label": "720p"
+              },
+              {
+                "value": "1080p",
+                "label": "1080p"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "integer",
+            "presentation": "stepper",
+            "defaultValue": 5,
+            "min": 2,
+            "max": 15,
+            "step": 1,
+            "unit": "seconds"
+          },
+          {
+            "key": "referenceMode",
+            "label": "Input mode",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "frames",
+            "options": [
+              {
+                "value": "frames",
+                "label": "Frames"
+              },
+              {
+                "value": "elements",
+                "label": "References"
+              }
+            ],
+            "minClientSchemaVersion": 2
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 5,
+            "supportsNaming": true
+          },
+          "videoReferences": {
+            "max": 5
+          },
+          "audioReferences": {
+            "max": 1
+          },
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": true,
+          "combineFramesWithReferences": true
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              },
+              {
+                "key": "endFrame",
+                "kind": "image",
+                "role": "endFrame",
+                "label": "End frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 5,
+                "supportsNaming": true
+              },
+              {
+                "key": "videoReferences",
+                "kind": "video",
+                "role": "reference",
+                "label": "Reference videos",
+                "min": 0,
+                "max": 5,
+                "durationMetadata": "optional"
+              },
+              {
+                "key": "audioReferences",
+                "kind": "audio",
+                "role": "reference",
+                "label": "Reference audio",
+                "min": 0,
+                "max": 1,
+                "durationMetadata": "optional",
+                "maxDurationSeconds": 10
+              },
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          }
+        ],
+        "inputConstraints": [
+          {
+            "type": "total-count",
+            "slotKeys": [
+              "imageReferences",
+              "videoReferences",
+              "audioReferences"
+            ],
+            "max": 5,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "message": "Wan 2.7 supports up to 5 reusable references in total."
+          }
+        ]
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "wan/2-7-text-to-video",
+        "text": "wan/2-7-text-to-video",
+        "image": "wan/2-7-image-to-video",
+        "reference": "wan/2-7-r2v"
+      },
+      "pricingStrategy": "per-second",
+      "pricingConfig": {
+        "durationSettingKey": "duration",
+        "rate": {
+          "strategy": "lookup",
+          "config": {
+            "dimensions": [
+              {
+                "source": "setting",
+                "key": "resolution",
+                "defaultValue": "720p"
+              }
+            ],
+            "table": {
+              "720p": 16,
+              "1080p": 24
+            }
+          }
+        },
+        "rounding": "ceil"
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "imageReferences",
+            "max": 5,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "field": "images",
+            "message": "Wan 2.7 supports up to 5 reference images."
+          },
+          {
+            "type": "weighted-slot-count",
+            "weights": {
+              "imageReferences": 1,
+              "videoReferences": 1,
+              "audioReferences": 1
+            },
+            "max": 5,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "field": "references",
+            "message": "Wan 2.7 supports up to 5 reusable references in total."
+          },
+          {
+            "type": "control-range",
+            "key": "duration",
+            "min": 2,
+            "max": 10,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "field": "duration",
+            "message": "Wan 2.7 reference-to-video runs may be at most 10 seconds."
+          },
+          {
+            "type": "min-slot-count",
+            "slotKey": "startFrame",
+            "min": 1,
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "endFrame",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "startFrame",
+            "message": "Add a start frame to use an end frame with this model."
+          },
+          {
+            "type": "combined-duration",
+            "slotKeys": [
+              "audioReferences"
+            ],
+            "max": 10,
+            "field": "audios",
+            "message": "Reference audio may be at most 10 seconds in total."
+          },
+          {
+            "type": "forbidden-combination",
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "audioReferences",
+                "operator": "greaterThan",
+                "value": 0
+              },
+              {
+                "source": "inputCount",
+                "key": "imageReferences",
+                "operator": "equals",
+                "value": 0
+              },
+              {
+                "source": "inputCount",
+                "key": "videoReferences",
+                "operator": "equals",
+                "value": 0
+              }
+            ],
+            "field": "audios",
+            "message": "Wan 2.7 needs a reference image or video alongside a reference voice."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "veo-3.1",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "veo-3.1",
+        "kind": "video",
+        "displayName": "Veo 3.1",
+        "description": "Google-class video generation with fast and quality variants",
+        "badge": null,
+        "recommended": false,
+        "sortOrder": 100,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "16:9",
+            "options": [
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "Auto",
+                "label": "Auto"
+              }
+            ]
+          },
+          {
+            "key": "mode",
+            "label": "Model variant",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "veo3_lite",
+            "options": [
+              {
+                "value": "veo3_lite",
+                "label": "Lite"
+              },
+              {
+                "value": "veo3_fast",
+                "label": "Fast"
+              },
+              {
+                "value": "veo3",
+                "label": "Quality"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "720p",
+            "options": [
+              {
+                "value": "720p",
+                "label": "720p"
+              },
+              {
+                "value": "1080p",
+                "label": "1080p"
+              },
+              {
+                "value": "4k",
+                "label": "4k"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "8",
+            "options": [
+              {
+                "value": "8",
+                "label": "8"
+              }
+            ],
+            "normalizedValueType": "number"
+          },
+          {
+            "key": "referenceMode",
+            "label": "Input mode",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "frames",
+            "options": [
+              {
+                "value": "frames",
+                "label": "Frames"
+              },
+              {
+                "value": "elements",
+                "label": "References"
+              }
+            ],
+            "minClientSchemaVersion": 2
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 3,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": true,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              },
+              {
+                "key": "endFrame",
+                "kind": "image",
+                "role": "endFrame",
+                "label": "End frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 3,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "veo3_fast",
+        "veo3_lite": "veo3_lite",
+        "veo3_fast": "veo3_fast",
+        "veo3": "veo3"
+      },
+      "pricingStrategy": "conditional",
+      "pricingConfig": {
+        "branches": [
+          {
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "mode",
+                "operator": "equals",
+                "value": "veo3"
+              }
+            ],
+            "pricing": {
+              "strategy": "lookup",
+              "config": {
+                "dimensions": [
+                  {
+                    "source": "inputCount",
+                    "key": "images",
+                    "presence": true
+                  },
+                  {
+                    "source": "setting",
+                    "key": "resolution",
+                    "defaultValue": "720p"
+                  }
+                ],
+                "table": {
+                  "false": {
+                    "720p": 250,
+                    "1080p": 255,
+                    "4k": 370
+                  },
+                  "true": {
+                    "720p": 250,
+                    "1080p": 255,
+                    "4k": 370
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "fallback": {
+          "strategy": "lookup",
+          "config": {
+            "dimensions": [
+              {
+                "source": "setting",
+                "key": "mode",
+                "defaultValue": "veo3_fast"
+              },
+              {
+                "source": "setting",
+                "key": "resolution",
+                "defaultValue": "720p"
+              }
+            ],
+            "table": {
+              "veo3_lite": {
+                "720p": 30,
+                "1080p": 35,
+                "4k": 150
+              },
+              "veo3_fast": {
+                "720p": 60,
+                "1080p": 65,
+                "4k": 180
+              }
+            }
+          }
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 3,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 0,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              },
+              {
+                "source": "setting",
+                "key": "mode",
+                "operator": "notIn",
+                "value": [
+                  "veo3_lite",
+                  "veo3_fast"
+                ]
+              }
+            ],
+            "message": "Reusable references require Veo Lite or Fast."
+          },
+          {
+            "type": "control-options",
+            "key": "aspectRatio",
+            "options": [
+              "16:9",
+              "9:16"
+            ],
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              },
+              {
+                "source": "inputCount",
+                "key": "imageReferences",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "aspectRatio",
+            "message": "Veo 3.1 renders reference runs at 16:9 or 9:16 only."
+          },
+          {
+            "type": "min-slot-count",
+            "slotKey": "startFrame",
+            "min": 1,
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "endFrame",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "startFrame",
+            "message": "Add a start frame to use an end frame with this model."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    }
+  ],
+  "acceptanceQuotes": [
+    {
+      "modelId": "seedance-2-mini",
+      "settings": {
+        "resolution": "480p",
+        "duration": 4,
+        "sound": false
+      },
+      "inputs": [],
+      "expectedCredits": 16
+    },
+    {
+      "modelId": "seedance-2-mini",
+      "settings": {
+        "resolution": "720p",
+        "duration": 10
+      },
+      "inputs": [],
+      "expectedCredits": 82
+    },
+    {
+      "modelId": "seedance-2-mini",
+      "settings": {
+        "resolution": "720p",
+        "duration": 5,
+        "referenceMode": "elements"
+      },
+      "inputs": [
+        {
+          "slot": "videoReferences",
+          "durationSeconds": 5
+        }
+      ],
+      "expectedCredits": 50
+    },
+    {
+      "modelId": "seedance-2-fast",
+      "settings": {
+        "resolution": "480p",
+        "duration": 5
+      },
+      "inputs": [],
+      "expectedCredits": 59
+    },
+    {
+      "modelId": "seedance-2-fast",
+      "settings": {
+        "resolution": "720p",
+        "duration": 5
+      },
+      "inputs": [],
+      "expectedCredits": 124
+    },
+    {
+      "modelId": "seedance-2-5",
+      "settings": {
+        "resolution": "1080p",
+        "duration": 5
+      },
+      "inputs": [],
+      "expectedCredits": 790
+    },
+    {
+      "modelId": "seedance-2-5",
+      "settings": {
+        "resolution": "1080p",
+        "duration": 5,
+        "referenceMode": "elements"
+      },
+      "inputs": [
+        {
+          "slot": "videoReferences",
+          "durationSeconds": 5
+        }
+      ],
+      "expectedCredits": 950
+    },
+    {
+      "modelId": "minimax-h3",
+      "settings": {
+        "resolution": "768P",
+        "duration": 6,
+        "referenceMode": "elements"
+      },
+      "inputs": [
+        {
+          "slot": "imageReferences"
+        },
+        {
+          "slot": "imageReferences"
+        },
+        {
+          "slot": "imageReferences"
+        },
+        {
+          "slot": "imageReferences"
+        },
+        {
+          "slot": "imageReferences"
+        }
+      ],
+      "expectedCredits": 48
+    }
+  ]
+}

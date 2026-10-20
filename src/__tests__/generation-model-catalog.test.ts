@@ -225,7 +225,8 @@ describe('generation model quotes', () => {
         modelId: 'seedance-2-fast',
         settings: { aspectRatio: '16:9', resolution: '480p', duration: 12, sound: true },
         inputCounts: { images: 1, videos: 1, audios: 1 },
-        expectedCost: 135,
+        // (12 s + a 3 s clip) at 6.8/s, Kie's list rate since its offer ended (2026-10-20).
+        expectedCost: 102,
       },
       {
         kind: 'video' as const,

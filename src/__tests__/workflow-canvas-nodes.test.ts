@@ -35,9 +35,11 @@ describe('workflow canvas node summaries', () => {
       googleSearch: true,
     } as never) as ImageGenerateNodeData;
 
+    // A saved node may still carry googleSearch: true; no model takes it since the
+    // 2026-10-20 re-check, so the summary no longer names it.
     expect(getImageGenerateNodeSummary(image)).toEqual([
       'Aspect 16:9',
-      '2K • PNG • Google Search',
+      '2K • PNG',
     ]);
     expect(getImageGenerateNodeSummary(proImage)[1]).toBe('1K • JPG');
     // Kie renders 5:4 and 4:5 at 1K only, so normalization clamps the requested 4K.

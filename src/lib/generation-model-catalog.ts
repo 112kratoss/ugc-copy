@@ -345,9 +345,10 @@ const VIDEO_INPUT_LIMITS: Record<VideoModelId, VideoInputLimits> = {
   // Kling O3 has no discrete frame slots — image-to-video and reference-to-video both
   // take `image_urls`, so the start frame stands in for the single-image variant.
   'kling-o3': { images: 7, videos: 0, audios: 0, startFrame: true, endFrame: false },
-  // MiniMax bills for input images past the first five, so we cap references there.
-  // minimax-h3/reference-to-video: 9 images, 3 videos (15s combined), 3 audios.
-  'minimax-h3': { images: 9, videos: 3, audios: 3, startFrame: true, endFrame: true },
+  // minimax-h3/reference-to-video takes 9 images, 3 videos (15s combined) and 3 audios, but
+  // Kie bills 4 credits for each image past the fifth (re-read 2026-10-20), so we cap
+  // references at the five it includes rather than price the rest.
+  'minimax-h3': { images: 5, videos: 3, audios: 3, startFrame: true, endFrame: true },
   'seedance-1.5-pro': { images: 2, videos: 0, audios: 0, startFrame: true, endFrame: true },
   'grok-imagine-video': { images: 1, videos: 0, audios: 0, startFrame: true, endFrame: false },
   'kling-3.0-video': { images: 0, videos: 3, audios: 0, startFrame: true, endFrame: true },
@@ -388,7 +389,9 @@ export function getVideoInputLimits(modelId: VideoModelId): VideoInputLimits {
  * single asset at the same figure Kie caps the combined total at, so one number serves
  * both the slot's `maxDurationSeconds` and its `combined-duration` constraint.
  * Seedance 2.5 reaches 30s where the rest of the Seedance 2 family stops at 15, and
- * minimax-h3 caps both its reference arrays at 15s total.
+ * minimax-h3 caps both its reference arrays at 15s total. The Gemini models take one clip
+ * of at most 30s (re-read 2026-10-20), so the per-clip cap is the total; their constraint
+ * is the weighted slot count, which `videoInputConstraints` returns first.
  */
 function referenceAssetCapSeconds(modelId: VideoModelId): number | undefined {
   if (modelId === 'seedance-2-5') return 30;
@@ -396,7 +399,18 @@ function referenceAssetCapSeconds(modelId: VideoModelId): number | undefined {
   if (modelId === 'minimax-h3') return 15;
   // wan/3-0-video: each reference clip and audio file 1–15 s, each kind 15 s in total.
   if (modelId === 'wan-3.0' || modelId === 'wan-3.0-prime') return 15;
+  if (modelId === 'gemini-omni-video' || modelId === 'gemini-omni-1.1-flash') return 30;
   return undefined;
+}
+
+/**
+ * Per-track ceiling for reference audio, in seconds: the shared reference cap, except where
+ * a model caps its audio apart from its clips. wan/2-7-r2v takes one `reference_voice` of
+ * "1 to 10 seconds" (re-read 2026-10-20) and states no length for `reference_video`.
+ */
+function referenceAudioCapSeconds(modelId: VideoModelId): number | undefined {
+  if (modelId === 'wan-2.7') return 10;
+  return referenceAssetCapSeconds(modelId);
 }
 
 function videoInputModes(
@@ -404,6 +418,7 @@ function videoInputModes(
   limits: ReturnType<typeof getVideoInputLimits>,
 ): CatalogInputMode[] {
   const videoCapSeconds = referenceAssetCapSeconds(modelId);
+  const audioCapSeconds = referenceAudioCapSeconds(modelId);
   const modes: CatalogInputMode[] = [];
   const frameSlots: CatalogInputSlot[] = [];
   if (limits.startFrame) {
@@ -488,7 +503,7 @@ function videoInputModes(
       min: 0,
       max: limits.audios,
       durationMetadata: 'optional',
-      ...(videoCapSeconds !== undefined ? { maxDurationSeconds: videoCapSeconds } : {}),
+      ...(audioCapSeconds !== undefined ? { maxDurationSeconds: audioCapSeconds } : {}),
     });
   }
   if (modelId === 'wan-2.7') {

@@ -10,6 +10,7 @@ import {
   withGenerationStartIdempotency,
 } from '@/lib/generation-start-idempotency';
 import { MOTION_MODELS, type MotionModelId } from '@/lib/models';
+import { referenceMediaLengthViolation } from '@/lib/provider-input-limits';
 import { normalizeRemixMediaAssetDescriptor } from '@/lib/remix-source';
 import { resolveSourceGenerationId } from '@/lib/source-generation';
 import { ReferenceDurationChangedError } from '@/lib/unified-generation-start-service';
@@ -153,6 +154,12 @@ export async function startMotionGenerationForRoute({
     // without reading its clip again.
     start: async (clientRequestKeyHash) => {
       const measuredSeconds = await measureReferenceVideoSeconds(supabase, referenceVideoUrl, userId);
+      // Kie's motion control takes a clip of 3 to 30 seconds; a shorter one was priced
+      // at 3, held, and refused by the provider.
+      const tooShort = referenceMediaLengthViolation(selectedModel, [
+        { role: 'motion', durationSeconds: measuredSeconds },
+      ]);
+      if (tooShort) throw new MotionGenerationStartValidationError(tooShort);
       const measuredDuration = Math.max(1, Math.ceil(measuredSeconds));
       const billableQuote = measuredDuration === Number(quote.normalizedSettings.duration)
         ? quote
@@ -180,6 +187,7 @@ export async function startMotionGenerationForRoute({
         referenceVideoUrl,
         characterImageUrl,
         duration: Number(normalizedSettings.duration),
+        referenceVideoSeconds: measuredSeconds,
         characterOrientation: characterOrientation === 'image' ? 'image' : 'video',
         mode: mode === '1080p' ? '1080p' : '720p',
         prompt: readString(body.prompt, ''),

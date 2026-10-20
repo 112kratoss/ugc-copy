@@ -3796,10 +3796,12 @@ describe('generation services', () => {
         aspect_ratio: '16:9',
         duration: 12,
         web_search: false,
-        return_last_frame: false,
       },
     });
-    expect(generations[0].cost).toBe(108);
+    // `deprecated: true` in the Seedance 2 Fast spec (2026-10-20), so it is no longer sent.
+    expect((providerBody as { input?: Record<string, unknown> } | null)?.input).not.toHaveProperty('return_last_frame');
+    // 12 s at Fast's 6.8/s with-video rate (Kie's list price since 2026-10-20), rounded up.
+    expect(generations[0].cost).toBe(82);
     expect(generations[0].workflow_settings).toMatchObject({
       referenceVideoUrls: ['asset-video-1'],
       referenceAudioUrls: ['asset-audio-1'],
@@ -5763,5 +5765,522 @@ describe('generation services', () => {
     expect(sent?.input?.prompt).toContain('@hero = attached reference image 1 (Hero bottle)');
     expect(generations[0].prompt).toBe('Use @hero on a clean tabletop scene.');
     expect(generations[0].workflow_settings?.compiledPrompt).toBe(sent?.input?.prompt);
+  });
+
+  // The 2026-10-20 model check-up (archive/model-checkup-2026-10-20): Kie answers a
+  // createTask it refuses with an error inside HTTP 200, after the start has held the
+  // run's credits, so the run failed and was refunded. Each refusal here comes first.
+  describe('what Kie refuses, refused before anything is held', () => {
+    type SentBody = { model?: string; input?: Record<string, unknown> };
+    let sent: SentBody[] = [];
+
+    beforeEach(() => {
+      sent = [];
+      vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        sent.push(JSON.parse(String(init?.body)));
+        return { ok: true, json: async () => ({ code: 200, data: { taskId: `task-kie-rule-${sent.length}` } }) } as Response;
+      });
+    });
+
+    /** Refused with `message`, with no credit hold and no provider request. */
+    async function expectRefusedBeforeHold(
+      start: (supabase: SupabaseClient) => Promise<unknown>,
+      message: string | ReturnType<typeof expect.stringMatching>,
+    ) {
+      const { supabase, rpcCalls } = createSupabaseMock();
+      const providerCalls = vi.mocked(fetch).mock.calls.length;
+      await expect(start(supabase)).rejects.toMatchObject({ status: 400, message });
+      expect(rpcCalls).toEqual([]);
+      expect(vi.mocked(fetch).mock.calls.length).toBe(providerCalls);
+    }
+
+    describe('an image prompt over its model’s own cap', () => {
+      it.each([
+        // Run through the catalog adapter, as production runs them.
+        { model: 'z-image', limit: 1000, message: 'Z-Image prompts support up to 1,000 characters.' },
+        { model: 'flux-2-pro', limit: 5000, message: 'FLUX.2 Pro prompts support up to 5,000 characters.' },
+        { model: 'grok-imagine-image-2', limit: 8000, message: 'Grok Imagine 2.0 prompts support up to 8,000 characters.' },
+        { model: 'qwen3-pro', limit: 5000, message: 'Qwen Image 3.0 Pro prompts support up to 5,000 characters.' },
+        { model: 'seedream-5-flash', limit: 5000, message: 'Seedream 5 Flash prompts support up to 5,000 characters.' },
+        // Run through the bodies built here.
+        { model: 'seedream-5-lite', limit: 2995, message: 'Seedream 5 Lite prompts support up to 2,995 characters.', resolution: '2K' },
+        { model: 'ideogram-v3', limit: 5000, message: 'Ideogram V3 prompts support up to 5,000 characters.', qualityMode: 'balanced' },
+        { model: 'wan-2.7-image-pro', limit: 5000, message: 'Wan 2.7 Image Pro prompts support up to 5,000 characters.' },
+      ] as const)('$model is refused past $limit characters and started at it', async (rule) => {
+        const { startImageGeneration } = await import('@/lib/generation-services');
+        const run = (supabase: SupabaseClient, prompt: string) => startImageGeneration({
+          supabase,
+          creditSupabase: supabase,
+          userId: 'user-1',
+          prompt,
+          model: rule.model,
+          ...('resolution' in rule ? { resolution: rule.resolution } : {}),
+          ...('qualityMode' in rule ? { qualityMode: rule.qualityMode } : {}),
+          // The catalog adapter takes a whole-credit quote, as every start path gives it.
+          quotedCostCredits: 10,
+        });
+
+        await expectRefusedBeforeHold((supabase) => run(supabase, 'a'.repeat(rule.limit + 1)), rule.message);
+
+        const { supabase } = createSupabaseMock();
+        await run(supabase, 'a'.repeat(rule.limit));
+        expect(sent[0]?.input?.prompt).toBe('a'.repeat(rule.limit));
+      });
+
+      it('counts the legend that names the pictures, since that is what Kie is sent', async () => {
+        const { startImageGeneration } = await import('@/lib/generation-services');
+        // Within Seedream 5 Lite's 2,995 as typed, past it once the legend is added.
+        const typed = `@hero ${'a'.repeat(2950)}`;
+        await expectRefusedBeforeHold((supabase) => startImageGeneration({
+          supabase,
+          creditSupabase: supabase,
+          userId: 'user-1',
+          prompt: typed,
+          model: 'seedream-5-lite',
+          resolution: '2K',
+          imageUrls: ['https://cdn.example.com/hero.png'],
+          elements: [{ id: 'element-1', displayName: 'Hero bottle', handle: '@hero', storagePath: null, sourceGenerationId: null }],
+        }), expect.stringMatching(/^Seedream 5 Lite prompts support up to 2,995 characters, including the [\d,]+ characters that name your references\. Shorten the prompt by [\d,]+ characters?\.$/));
+      });
+
+      it('holds Grok Imagine to 5,000 for text alone, where its image-to-image endpoint takes more', async () => {
+        const { startImageGeneration } = await import('@/lib/generation-services');
+        const long = 'a'.repeat(5001);
+        await expectRefusedBeforeHold((supabase) => startImageGeneration({
+          supabase, creditSupabase: supabase, userId: 'user-1', prompt: long, model: 'grok-imagine-image',
+        }), 'Grok Imagine prompts support up to 5,000 characters.');
+
+        const { supabase } = createSupabaseMock();
+        await startImageGeneration({
+          supabase,
+          creditSupabase: supabase,
+          userId: 'user-1',
+          prompt: long,
+          model: 'grok-imagine-image',
+          imageUrls: ['https://cdn.example.com/hero.png'],
+        });
+        expect(sent[0]).toMatchObject({ model: 'grok-imagine/image-to-image', input: { prompt: long } });
+      });
+
+      it('leaves a model whose cap is above the shared limit at the shared limit', async () => {
+        const { startImageGeneration } = await import('@/lib/generation-services');
+        const { supabase } = createSupabaseMock();
+        // GPT Image 2 takes 20,000; a legend past 10,000 is still sent.
+        const typed = `@hero ${'a'.repeat(GENERATION_PROMPT_MAX_LENGTH - 6)}`;
+        await startImageGeneration({
+          supabase,
+          creditSupabase: supabase,
+          userId: 'user-1',
+          prompt: typed,
+          model: 'gpt-image-2',
+          imageUrls: ['https://cdn.example.com/hero.png'],
+          elements: [{ id: 'element-1', displayName: 'Hero bottle', handle: '@hero', storagePath: null, sourceGenerationId: null }],
+        });
+        expect(String(sent[0]?.input?.prompt).length).toBeGreaterThan(GENERATION_PROMPT_MAX_LENGTH);
+      });
+
+      it('refuses a template step the same way, before its template hold', async () => {
+        const { startImageGeneration } = await import('@/lib/generation-services');
+        await expectRefusedBeforeHold((supabase) => startImageGeneration({
+          supabase,
+          creditSupabase: supabase,
+          userId: 'user-1',
+          prompt: 'a'.repeat(1001),
+          model: 'z-image',
+          privateRecipe: true,
+          persistInputMedia: false,
+          templateContext: { runId: 'run-1', stepId: 'step-image-1' },
+        }), 'Z-Image prompts support up to 1,000 characters.');
+      });
+
+      it('refuses a catalog run the same way, on the prompt the adapter sends', async () => {
+        const { startCatalogGeneration } = await import('@/lib/generation-services');
+        const { buildCodeGenerationModelOperations } = await import('@/lib/generation-model-runtime');
+        const operation = buildCodeGenerationModelOperations().find((entry) => entry.modelId === 'z-image')!;
+        const catalogRun = (supabase: SupabaseClient, prompt: string, compiledPrompt?: string) => startCatalogGeneration({
+          supabase,
+          creditSupabase: supabase,
+          userId: 'user-1',
+          operation,
+          catalogRevision: 'rev-1',
+          prompt,
+          ...(compiledPrompt ? { compiledPrompt } : {}),
+          settings: { aspectRatio: '1:1' },
+          quotedCostCredits: 1,
+        });
+
+        await expectRefusedBeforeHold((supabase) => catalogRun(supabase, 'a'.repeat(1001)), 'Z-Image prompts support up to 1,000 characters.');
+        // The creator's 900 characters fit; the legend the app adds takes the prompt to 1,002.
+        await expectRefusedBeforeHold(
+          (supabase) => catalogRun(supabase, 'a'.repeat(900), `legend\n${'a'.repeat(995)}`),
+          'Z-Image prompts support up to 1,000 characters, including the 102 characters that name your references. Shorten the prompt by 2 characters.',
+        );
+      });
+    });
+
+    describe('a prompt shorter than Kie takes', () => {
+      it.each([
+        { model: 'seedream-5-pro', prompt: 'abc', message: 'Seedream 5 Pro prompts need at least 4 characters.' },
+        { model: 'flux-2-pro', prompt: 'ab', message: 'FLUX.2 Pro prompts need at least 3 characters.' },
+      ] as const)('$model refuses "$prompt"', async ({ model, prompt, message }) => {
+        const { startImageGeneration } = await import('@/lib/generation-services');
+        await expectRefusedBeforeHold((supabase) => startImageGeneration({
+          supabase, creditSupabase: supabase, userId: 'user-1', prompt, model,
+        }), message);
+      });
+
+      it.each([
+        { model: 'pixverse-v6', message: 'PixVerse V6 prompts need at least 3 characters.' },
+        { model: 'seedance-2', message: 'Seedance 2 prompts need at least 3 characters.' },
+        { model: 'seedance-2-fast', message: 'Seedance 2 Fast prompts need at least 3 characters.' },
+        { model: 'seedance-2-mini', message: 'Seedance 2 Mini prompts need at least 3 characters.' },
+      ] as const)('$model refuses a two-letter prompt', async ({ model, message }) => {
+        const { startVideoGeneration } = await import('@/lib/generation-services');
+        await expectRefusedBeforeHold((supabase) => startVideoGeneration({
+          supabase, creditSupabase: supabase, userId: 'user-1', prompt: 'go', model, duration: 5, aspectRatio: '16:9', resolution: '720p',
+        }), message);
+      });
+
+      it('starts Seedance 2.5, whose spec sets no minimum, on a two-letter prompt', async () => {
+        const { startVideoGeneration } = await import('@/lib/generation-services');
+        const { supabase } = createSupabaseMock();
+        await startVideoGeneration({
+          supabase, creditSupabase: supabase, userId: 'user-1', prompt: 'go', model: 'seedance-2-5', duration: 5, aspectRatio: '16:9', resolution: '720p',
+        });
+        expect(sent[0]?.input?.prompt).toBe('go');
+      });
+    });
+
+    describe('a video prompt over its model’s own cap', () => {
+      it.each([
+        { model: 'kling-3.0-turbo', limit: 2500, message: 'Kling 3 Turbo prompts support up to 2,500 characters.', settings: { resolution: '720p' } },
+        { model: 'kling-3.0-video', limit: 2500, message: 'Kling 3.0 Cinematic prompts support up to 2,500 characters.', settings: { mode: 'std' } },
+        { model: 'kling-o3', limit: 3072, message: 'Kling O3 prompts support up to 3,072 characters.', settings: { resolution: '720p' } },
+        { model: 'seedance-1.5-pro', limit: 2500, message: 'Seedance 1.5 Pro prompts support up to 2,500 characters.', settings: { duration: 4, resolution: '720p' } },
+        { model: 'grok-imagine-video-1.5', limit: 4096, message: 'Grok Imagine Video 1.5 prompts support up to 4,096 characters.', settings: { resolution: '720p' } },
+        { model: 'pixverse-v6', limit: 5000, message: 'PixVerse V6 prompts support up to 5,000 characters.', settings: { resolution: '720p' } },
+        { model: 'wan-2.7', limit: 5000, message: 'Wan 2.7 prompts support up to 5,000 characters.', settings: { resolution: '720p' } },
+        { model: 'minimax-h3', limit: 7000, message: 'MiniMax H3 prompts support up to 7,000 characters.', settings: { resolution: '768P' } },
+      ] as const)('$model is refused past $limit characters and started at it', async (rule) => {
+        const { startVideoGeneration } = await import('@/lib/generation-services');
+        const run = (supabase: SupabaseClient, prompt: string) => startVideoGeneration({
+          supabase,
+          creditSupabase: supabase,
+          userId: 'user-1',
+          prompt,
+          model: rule.model,
+          duration: 5,
+          aspectRatio: '16:9',
+          ...rule.settings,
+        });
+
+        await expectRefusedBeforeHold((supabase) => run(supabase, 'a'.repeat(rule.limit + 1)), rule.message);
+
+        const { supabase } = createSupabaseMock();
+        await run(supabase, 'a'.repeat(rule.limit));
+        expect(sent[0]?.input?.prompt).toBe('a'.repeat(rule.limit));
+      });
+
+      it('holds each Kling shot to its shot cap and names the shot', async () => {
+        const { startVideoGeneration } = await import('@/lib/generation-services');
+        const shots = (model: 'kling-3.0-video' | 'kling-o3', second: string) => (supabase: SupabaseClient) => startVideoGeneration({
+          supabase,
+          creditSupabase: supabase,
+          userId: 'user-1',
+          prompt: '',
+          model,
+          isMultiShot: true,
+          mode: 'std',
+          aspectRatio: '16:9',
+          resolution: '720p',
+          multiPrompts: [
+            { id: 'shot-1', prompt: 'Open on the harbour at dusk.', duration: 3 },
+            { id: 'shot-2', prompt: second, duration: 3 },
+          ],
+        });
+
+        await expectRefusedBeforeHold(shots('kling-3.0-video', 'a'.repeat(501)), 'Shot 2: Kling 3.0 Cinematic shot prompts support up to 500 characters.');
+        await expectRefusedBeforeHold(shots('kling-o3', 'a'.repeat(513)), 'Shot 2: Kling O3 shot prompts support up to 512 characters.');
+
+        const { supabase } = createSupabaseMock();
+        await shots('kling-3.0-video', 'a'.repeat(500))(supabase);
+        await shots('kling-o3', 'a'.repeat(512))(supabase);
+        expect(sent).toHaveLength(2);
+      });
+
+      it('counts each Kling 3.0 element mention as the 37 characters Kie counts it as', async () => {
+        const { startVideoGeneration } = await import('@/lib/generation-services');
+        // 479 characters as typed; the mention is 5 of them, and Kie counts it as 37.
+        const shot = `${'a'.repeat(473)} @lead`;
+        const run = (prompt: string) => (supabase: SupabaseClient) => startVideoGeneration({
+          supabase,
+          creditSupabase: supabase,
+          userId: 'user-1',
+          prompt: '',
+          model: 'kling-3.0-video',
+          isMultiShot: true,
+          mode: 'std',
+          aspectRatio: '16:9',
+          multiPrompts: [{ id: 'shot-1', prompt, duration: 5 }],
+          klingVideoElements: [{ url: 'https://cdn.example.com/lead.mp4', handle: '@lead', displayName: 'Lead' }],
+        });
+
+        expect(shot).toHaveLength(479);
+        await expectRefusedBeforeHold(
+          run(shot),
+          'Shot 1: Kling 3.0 Cinematic shot prompts support up to 500 characters, counting each video element mention as 37.',
+        );
+
+        const { supabase } = createSupabaseMock();
+        await run(`${'a'.repeat(462)} @lead`)(supabase);
+        expect(sent).toHaveLength(1);
+      });
+    });
+
+    // Both creators leave the main prompt empty in multi-shot mode, and Kie's three O3
+    // endpoints require a prompt with something in it.
+    it('sends Kling O3 the first shot’s prompt when a multi-shot run has none of its own', async () => {
+      const { startVideoGeneration } = await import('@/lib/generation-services');
+      const { supabase } = createSupabaseMock();
+      const multiShot = (prompt: string) => startVideoGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt,
+        model: 'kling-o3',
+        isMultiShot: true,
+        aspectRatio: '16:9',
+        resolution: '720p',
+        multiPrompts: [
+          { id: 'shot-1', prompt: '  Open on the harbour at dusk.  ', duration: 3 },
+          { id: 'shot-2', prompt: 'Cut to the lighthouse.', duration: 2 },
+        ],
+      });
+
+      await multiShot('');
+      await multiShot('   ');
+      await multiShot('A fishing town wakes up.');
+
+      expect(sent.map((body) => body.input?.prompt)).toEqual([
+        'Open on the harbour at dusk.',
+        'Open on the harbour at dusk.',
+        'A fishing town wakes up.',
+      ]);
+      expect(sent[0]?.input?.multi_prompt).toEqual([
+        { prompt: 'Open on the harbour at dusk.', duration: 3 },
+        { prompt: 'Cut to the lighthouse.', duration: 2 },
+      ]);
+    });
+
+    // kling-3.0-omni/image-to-video: "for image-to-video single-shot, aspect_ratio must be auto".
+    it('sends Kling O3 aspect ratio "auto" for a single-shot start frame, and the chosen ratio otherwise', async () => {
+      const { startVideoGeneration } = await import('@/lib/generation-services');
+      const { supabase } = createSupabaseMock();
+      const o3 = (overrides: Partial<Parameters<typeof startVideoGeneration>[0]>) => startVideoGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'The lantern flickers on.',
+        model: 'kling-o3',
+        duration: 5,
+        aspectRatio: '9:16',
+        resolution: '720p',
+        ...overrides,
+      });
+
+      await o3({ startImageUrl: 'https://cdn.example.com/start.jpg' });
+      await o3({});
+      await o3({
+        prompt: '',
+        startImageUrl: 'https://cdn.example.com/start.jpg',
+        isMultiShot: true,
+        multiPrompts: [{ id: 'shot-1', prompt: 'The lantern flickers on.', duration: 5 }],
+      });
+      await o3({ imageUrls: ['https://cdn.example.com/look.jpg'], referenceMode: 'elements', aspectRatio: '1:1' });
+
+      expect(sent.map((body) => [body.model, body.input?.aspect_ratio])).toEqual([
+        ['kling-3.0-omni/image-to-video', 'auto'],
+        ['kling-3.0-omni/text-to-video', '9:16'],
+        ['kling-3.0-omni/image-to-video', '9:16'],
+        ['kling-3.0-omni/reference-to-video', '1:1'],
+      ]);
+    });
+
+    // ideogram/character and ideogram/v3-remix type num_images as a string enum '1'..'4'.
+    it('sends Ideogram num_images as the string its specs enumerate', async () => {
+      const { startImageGeneration } = await import('@/lib/generation-services');
+      const { supabase } = createSupabaseMock();
+      const ideogram = (model: 'ideogram-character' | 'ideogram-v3', imageUrls: string[]) => startImageGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'A bold typographic launch poster.',
+        model,
+        qualityMode: 'balanced',
+        imageUrls,
+      });
+
+      await ideogram('ideogram-character', ['https://cdn.example.com/character.png']);
+      await ideogram('ideogram-v3', ['https://cdn.example.com/look.png']);
+      await ideogram('ideogram-v3', []);
+
+      expect(sent[0]).toMatchObject({ model: 'ideogram/character', input: { num_images: '1' } });
+      expect(sent[1]).toMatchObject({ model: 'ideogram/v3-remix', input: { num_images: '1' } });
+      expect(sent[2]?.model).toBe('ideogram/v3-text-to-image');
+      expect(sent[2]?.input).not.toHaveProperty('num_images');
+    });
+
+    // return_last_frame is `deprecated: true` for Seedance 2 and Fast, absent from Mini's
+    // spec, and still listed for 2.5.
+    it('sends return_last_frame to Seedance 2.5 only', async () => {
+      const { startVideoGeneration } = await import('@/lib/generation-services');
+      const { supabase } = createSupabaseMock();
+      for (const model of ['seedance-2', 'seedance-2-fast', 'seedance-2-mini', 'seedance-2-5'] as const) {
+        await startVideoGeneration({
+          supabase, creditSupabase: supabase, userId: 'user-1', prompt: 'A slow push-in on the stage.', model, duration: 5, aspectRatio: '16:9', resolution: '720p',
+        });
+      }
+
+      expect(sent.map((body) => [body.model, body.input?.return_last_frame])).toEqual([
+        ['bytedance/seedance-2', undefined],
+        ['bytedance/seedance-2-fast', undefined],
+        ['bytedance/seedance-2-mini', undefined],
+        ['bytedance/seedance-2-5', false],
+      ]);
+      expect(sent.slice(0, 3).every((body) => !Object.hasOwn(body.input ?? {}, 'return_last_frame'))).toBe(true);
+    });
+
+    // kling-2.6/motion-control and kling-3.0/motion-control: "duration must be between 3 to 30 seconds".
+    describe('a motion reference clip under 3 seconds', () => {
+      const motion = (overrides: Partial<Parameters<typeof import('@/lib/generation-services').startMotionGeneration>[0]> = {}) => async (supabase: SupabaseClient) => {
+        const { startMotionGeneration } = await import('@/lib/generation-services');
+        return startMotionGeneration({
+          supabase,
+          creditSupabase: supabase,
+          userId: 'user-1',
+          prompt: '',
+          model: 'kling-2.6',
+          referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+          characterImageUrl: 'https://cdn.example.com/character.png',
+          duration: 3,
+          ...overrides,
+        });
+      };
+
+      it('is refused by its measured length', async () => {
+        await expectRefusedBeforeHold(
+          motion({ referenceVideoSeconds: 2.47 }),
+          'Kling 2.6 motion reference videos must be at least 3 seconds long. The reference video runs 2.4 seconds.',
+        );
+        await expectRefusedBeforeHold(
+          motion({ model: 'kling-3.0', mode: '1080p', referenceVideoSeconds: 1.2, duration: 2 }),
+          'Kling 3.0 motion reference videos must be at least 3 seconds long. The reference video runs 1.2 seconds.',
+        );
+      });
+
+      it('is refused by the whole seconds it is priced at, when that is all the caller knows', async () => {
+        await expectRefusedBeforeHold(
+          motion({ duration: 2 }),
+          'Kling 2.6 motion reference videos must be at least 3 seconds long.',
+        );
+      });
+
+      it('starts at 3 seconds', async () => {
+        const { supabase } = createSupabaseMock();
+        await motion({ referenceVideoSeconds: 3 })(supabase);
+        expect(sent).toHaveLength(1);
+      });
+    });
+
+    describe('a reference clip or track shorter than Kie takes', () => {
+      const SHORT_CLIP = { kind: 'video' as const, label: 'Dance clip', storagePath: null, sourceGenerationId: null };
+      const SHORT_TRACK = { kind: 'audio' as const, label: 'Beat', storagePath: null, sourceGenerationId: null };
+      const references = (
+        model: 'seedance-2' | 'seedance-2-5' | 'minimax-h3' | 'wan-2.7',
+        { videoSeconds, audioSeconds }: { videoSeconds?: number; audioSeconds?: number },
+      ) => async (supabase: SupabaseClient) => {
+        const { startVideoGeneration } = await import('@/lib/generation-services');
+        return startVideoGeneration({
+          supabase,
+          creditSupabase: supabase,
+          userId: 'user-1',
+          prompt: 'Follow the dance in the clip.',
+          model,
+          duration: 5,
+          aspectRatio: '16:9',
+          resolution: model === 'minimax-h3' ? '768P' : '720p',
+          referenceMode: 'elements',
+          imageUrls: ['https://cdn.example.com/look.png'],
+          ...(videoSeconds === undefined ? {} : {
+            referenceVideoUrls: ['https://cdn.example.com/dance.mp4'],
+            referenceVideos: [{ ...SHORT_CLIP, durationSeconds: videoSeconds }],
+          }),
+          ...(audioSeconds === undefined ? {} : {
+            referenceAudioUrls: ['https://cdn.example.com/beat.mp3'],
+            referenceAudios: [{ ...SHORT_TRACK, durationSeconds: audioSeconds }],
+          }),
+        });
+      };
+
+      it.each([
+        { model: 'seedance-2', videoSeconds: 1.5, message: 'Seedance 2 reference videos must be at least 2 seconds long. Dance clip runs 1.5 seconds.' },
+        { model: 'seedance-2-5', audioSeconds: 1.9, message: 'Seedance 2.5 reference audio must be at least 2 seconds long. Beat runs 1.9 seconds.' },
+        { model: 'minimax-h3', videoSeconds: 1, message: 'MiniMax H3 reference videos must be at least 2 seconds long. Dance clip runs 1 second.' },
+        { model: 'minimax-h3', audioSeconds: 1.4, message: 'MiniMax H3 reference audio must be at least 2 seconds long. Beat runs 1.4 seconds.' },
+        { model: 'wan-2.7', audioSeconds: 0.6, message: 'Wan 2.7 reference audio must be at least 1 second long. Beat runs 0.6 seconds.' },
+      ] as const)('$model: $message', async (rule) => {
+        await expectRefusedBeforeHold(references(rule.model, rule), rule.message);
+      });
+
+      it('starts at the minimum, and when the length is not known', async () => {
+        const { supabase } = createSupabaseMock();
+        await references('seedance-2', { videoSeconds: 2, audioSeconds: 2 })(supabase);
+        await references('wan-2.7', { audioSeconds: 1 })(supabase);
+        // The legacy routes measure nothing; the provider stays the judge there.
+        const { startVideoGeneration } = await import('@/lib/generation-services');
+        await startVideoGeneration({
+          supabase,
+          creditSupabase: supabase,
+          userId: 'user-1',
+          prompt: 'Follow the dance in the clip.',
+          model: 'seedance-2',
+          duration: 5,
+          aspectRatio: '16:9',
+          resolution: '720p',
+          referenceMode: 'elements',
+          referenceVideoUrls: ['https://cdn.example.com/dance.mp4'],
+        });
+        expect(sent).toHaveLength(3);
+      });
+
+      // kling-3.0/video: "Video duration should be at least 3 seconds".
+      it('refuses a Kling 3.0 video element under 3 seconds', async () => {
+        const { startVideoGeneration } = await import('@/lib/generation-services');
+        const element = (durationSeconds: number) => (supabase: SupabaseClient) => startVideoGeneration({
+          supabase,
+          creditSupabase: supabase,
+          userId: 'user-1',
+          prompt: 'Replace the background motion with @reference_dancer.',
+          model: 'kling-3.0-video',
+          duration: 5,
+          aspectRatio: '16:9',
+          mode: 'std',
+          klingVideoElements: [{
+            url: 'https://cdn.example.com/ref-dancer.mp4',
+            handle: '@reference_dancer',
+            displayName: 'Reference dancer',
+            durationSeconds,
+          }],
+        });
+
+        await expectRefusedBeforeHold(
+          element(2.4),
+          'Kling 3.0 Cinematic video elements must be at least 3 seconds long. Reference dancer runs 2.4 seconds.',
+        );
+        const { supabase } = createSupabaseMock();
+        await element(3)(supabase);
+        expect(sent).toHaveLength(1);
+      });
+    });
   });
 });

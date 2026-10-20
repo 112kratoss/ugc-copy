@@ -10,6 +10,8 @@ import {
 } from '@/lib/generation-model-catalog';
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 
+import { descriptorBeforeKieCheckup, operationBeforeKieCheckup } from './fixtures/kie-checkup-2026-10-20';
+
 /**
  * Release 2026-10-08-kie-video-models: Gemini Omni 1.1 Flash, Wan 3.0, Wan 3.0 Prime, Grok
  * Imagine Video 1.5 Preview and PixVerse V6 join the catalog (evidence:
@@ -17,7 +19,9 @@ import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runti
  * pixverse-v6.md). Every entry must equal the code build byte for byte — the shadow verifier
  * diffs projections — so entries are compared against buildGenerationModelCatalog and
  * buildCodeGenerationModelOperations, while provider ids, prices and the catches each spec
- * carries are pinned to the evidence files.
+ * carries are pinned to the evidence files. The build is read as it stood before the
+ * 2026-10-20 check-up, which capped the Gemini clip at 30 s and dropped PixVerse's
+ * reference branch; the quotes below are today's.
  */
 
 interface ManifestEntry {
@@ -132,10 +136,11 @@ describe('kie-video-models release', () => {
     expect(schemaVersion).toBe(2);
     // PixVerse shipped web-only in this release; release pixverse-mobile-20261008 turned
     // mobile on once the apps named its maker, so the code build differs there and only there.
+    const built = descriptorBeforeKieCheckup(descriptor(modelId));
     expect(publicDescriptor).toEqual(modelId === 'pixverse-v6'
-      ? { ...descriptor(modelId), availability: { web: true, mobile: false } }
-      : descriptor(modelId));
-    const operation = operations.get(modelId)!;
+      ? { ...built, availability: { web: true, mobile: false } }
+      : built);
+    const operation = operationBeforeKieCheckup(operations.get(modelId)!);
     expect(entry.kind).toBe('video');
     expect(entry.adapterKey).toBe(operation.adapterKey);
     expect(entry.adapterConfig).toEqual(operation.adapterConfig);
@@ -255,15 +260,16 @@ describe('kie-video-models release', () => {
     expect(() => credits(videoQuote('grok-imagine-video-1.5', { aspectRatio: '16:9', resolution: '480p', duration: 16 }))).toThrow();
   });
 
-  it('quotes PixVerse V6 by resolution and audio, with the reference-to-video uplift', () => {
-    // docs/model-api-references/pixverse-v6.md.
+  it('quotes PixVerse V6 by resolution and audio, references like every other run', () => {
+    // docs/model-api-references/pixverse-v6.md. The 12.5 % reference-to-video uplift this
+    // release shipped (81 and 108 below) is gone since the 2026-10-20 re-check.
     expect(options('pixverse-v6', 'resolution')).toEqual(['360p', '540p', '720p', '1080p']);
     expect(credits(videoQuote('pixverse-v6', { aspectRatio: '16:9', resolution: '360p', duration: 5 }))).toBe(20);
     expect(credits(videoQuote('pixverse-v6', { aspectRatio: '16:9', resolution: '360p', duration: 5, sound: true }))).toBe(28);
     expect(credits(videoQuote('pixverse-v6', { aspectRatio: '16:9', resolution: '1080p', duration: 10, sound: true }))).toBe(184);
     const reference = { aspectRatio: '16:9', resolution: '720p', duration: 10, referenceMode: 'elements' };
-    expect(credits(videoQuote('pixverse-v6', reference, { images: 1 }))).toBe(81);
-    expect(credits(videoQuote('pixverse-v6', { ...reference, sound: true }, { images: 7 }))).toBe(108);
+    expect(credits(videoQuote('pixverse-v6', reference, { images: 1 }))).toBe(72);
+    expect(credits(videoQuote('pixverse-v6', { ...reference, sound: true }, { images: 7 }))).toBe(96);
     expect(() => credits(videoQuote('pixverse-v6', reference, { images: 8 }))).toThrow();
     // A start frame or a frame pair is not a reference: the base table applies.
     expect(credits({

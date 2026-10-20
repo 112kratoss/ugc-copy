@@ -6,13 +6,16 @@ import { describe, expect, it } from 'vitest';
 import { buildGenerationModelCatalog, quoteGenerationModel } from '@/lib/generation-model-catalog';
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 
+import { descriptorBeforeKieCheckup } from './fixtures/kie-checkup-2026-10-20';
+
 /**
  * Release 2026-09-04-minimax-reference-duration moved minimax-h3 to reference-adjustment
  * pricing (Kie bills input clip seconds as well as output) by editing the manifest, while
  * `videoPricingExpression` stayed per-second on output alone. Nothing compared the two, so
  * the next release emitted from code would have carried production back to the
  * under-billing shape. This pins the shipped entry to the code build the way the other
- * release tests do.
+ * release tests do, reading the descriptor as it stood before the 2026-10-20 check-up capped
+ * references at five images.
  */
 
 const manifest = JSON.parse(fs.readFileSync(path.resolve(
@@ -47,8 +50,8 @@ describe('minimax reference-duration release', () => {
     const { schemaVersion, ...publicDescriptor } = entry.publicDescriptor;
     expect(schemaVersion).toBe(2);
     const descriptor = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 })
-      .models.find((model) => model.id === 'minimax-h3');
-    expect(publicDescriptor).toEqual(descriptor);
+      .models.find((model) => model.id === 'minimax-h3')!;
+    expect(publicDescriptor).toEqual(descriptorBeforeKieCheckup(descriptor));
   });
 
   it('bills input clip seconds at the same rate as output', () => {

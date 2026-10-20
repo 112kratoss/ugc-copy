@@ -5,7 +5,8 @@ Captured from `https://docs.kie.ai/market/pixverse/{text-to-video,image-to-video
 by README rule 9: each block precedes the `model` it belongs to). Credits are Kie credits 1:1
 (1 credit = $0.005). Listed by Kie on 2026-07-21; left out on 2026-08-15 over what looked like
 conflicting tiers (`dropin-models-2026-08-15.md`), resolved on 2026-09-11, prices unchanged on
-2026-10-07 and 2026-10-08.
+2026-10-07 and 2026-10-08. Re-checked 2026-10-20: the reference-to-video surcharge is gone (see
+the price section).
 
 ## Provider ids — one per input shape
 
@@ -60,6 +61,20 @@ own, 12.5 % higher:
 No promotional qualifier. (`kie-evidence.mjs price pixverse-v6` prints both blocks unlabelled;
 the order above is the page's.)
 
+**2026-10-20 re-check** (`archive/model-checkup-2026-10-20/evidence/prices-all.txt`): Kie dropped
+the reference surcharge. The `pixverse-v6/reference-to-video` block now reads the same as
+text-to-video, image-to-video, transition and extend:
+
+```
+360P: 4.0 credits/s ($0.020/s, no audio) | 5.6 credits/s ($0.028/s, with audio)
+540P: 5.6 credits/s ($0.028/s, no audio) | 7.2 credits/s ($0.036/s, with audio)
+720P: 7.2 credits/s ($0.036/s, no audio) | 9.6 credits/s ($0.048/s, with audio)
+1080P: 14.4 credits/s ($0.072/s, no audio) | 18.4 credits/s ($0.092/s, with audio)
+```
+
+"16.2" and "20.7" appear nowhere on the page, so the two right-hand columns above are history:
+a reference run bills the first two columns, like every other shape.
+
 ## Shipped (2026-10-08)
 
 - App id `pixverse-v6`, provider `pixverse`, maker PixVerse (new in `ai-data-recipients.ts`),
@@ -81,8 +96,9 @@ the order above is the page's.)
   `image_references` with `type: subject` and `ref_name` = the @handle without its `@`, cut to
   30 characters, so the provider resolves the prompt's @mentions itself (the compiled prompt
   keeps them). `seed`, `template_id` and `generate_multi_clip_switch` are never sent.
-- Price: the table above; the reference block applies when the run is in references mode with a
-  picture attached (`pixverse-v6` in `getVideoCost` and `videoPricingExpression`).
+- Price: the table above; the reference block applied when the run was in references mode with a
+  picture attached (`pixverse-v6` in `getVideoCost` and `videoPricingExpression`). Since the
+  2026-10-20 re-check one table prices every shape, references included.
 - Enhancer: a playbook of its own (plain sentences, @names kept verbatim, optional Audio line).
 
 ## Probes (2026-10-08)

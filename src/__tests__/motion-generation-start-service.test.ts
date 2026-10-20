@@ -310,6 +310,50 @@ describe('startMotionGenerationForRoute', () => {
     expect(startMotionGenerationMock).not.toHaveBeenCalled();
   });
 
+  // kling-2.6/motion-control and kling-3.0/motion-control take a clip of 3 to 30 seconds
+  // (Kie, 2026-10-20). A shorter one was priced at 3, held, sent and refused.
+  it('refuses, before any hold, a clip that measures under 3 seconds', async () => {
+    probeMediaDurationSecondsMock.mockResolvedValueOnce(2.4);
+
+    const refusal = await startMotionGenerationForRoute({
+      request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-6' } }),
+      body: motionBody({ model: 'kling-2.6', mode: '720p', duration: 3 }),
+      userId: 'user-1',
+      supabase: createClientMock().client,
+      adminSupabase: createClientMock().client,
+    }).catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(MotionGenerationStartValidationError);
+    expect(refusal).toMatchObject({
+      status: 400,
+      message: 'Kling 2.6 motion reference videos must be at least 3 seconds long. The reference video runs 2.4 seconds.',
+    });
+    expect(startMotionGenerationMock).not.toHaveBeenCalled();
+  });
+
+  it('starts a clip of 3 seconds and tells the start how long it measured', async () => {
+    startMotionGenerationMock.mockResolvedValueOnce({
+      predictionId: 'task-motion-7',
+      generationId: 'gen-motion-7',
+      remainingCredits: 500,
+      cost: 33,
+    });
+    probeMediaDurationSecondsMock.mockResolvedValueOnce(3);
+
+    await startMotionGenerationForRoute({
+      request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-7' } }),
+      body: motionBody({ model: 'kling-2.6', mode: '720p', duration: 3 }),
+      userId: 'user-1',
+      supabase: createClientMock().client,
+      adminSupabase: createClientMock().client,
+    });
+
+    expect(startMotionGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+      duration: 3,
+      referenceVideoSeconds: 3,
+    }));
+  });
+
   it.each([
     ['ffmpeg finds no length', 'probe', null],
     ['the clip resolves to a link that is not HTTPS', 'source', 'uploads/user-1/reference.mp4'],

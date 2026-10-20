@@ -146,6 +146,20 @@ export const seedance15ProModel = model('seedance-1.5-pro', 'video', 'Seedance 1
   ],
 });
 
+/** Production's seedance-2-mini controls (wan-start-frame-apart-20261019): an integer duration, 4–15 s. */
+export const seedance2MiniModel = model('seedance-2-mini', 'video', 'Seedance 2 Mini', {
+  sortOrder: 24,
+  controls: [
+    choiceControl('aspectRatio', 'Aspect ratio', '16:9', ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9']),
+    choiceControl('resolution', 'Resolution', '480p', ['480p', '720p']),
+    { key: 'duration', label: 'Duration', type: 'integer', presentation: 'stepper', unit: 'seconds', min: 4, max: 15, step: 1, defaultValue: 10 },
+    { key: 'sound', label: 'Sound', type: 'boolean', presentation: 'toggle', defaultValue: false },
+    choiceControl('referenceMode', 'Input mode', 'frames', ['frames', 'elements']),
+  ],
+  capabilities: { multiShot: false, sound: true, fixedLens: false, googleSearch: false, outputFormat: false },
+  inputs: { imageReferences: { max: 5, supportsNaming: true }, videoReferences: { max: 3 }, audioReferences: { max: 3 }, startFrame: true, endFrame: true },
+});
+
 /**
  * The production mobile descriptors a Recreate meets (revision gpt-image-2-5-20260911): their
  * controls, defaults, capabilities and input limits. Every tool's catalog default disagrees with

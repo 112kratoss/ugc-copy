@@ -573,6 +573,39 @@ describe('/api/generate-video route', () => {
     });
   });
 
+  // The 2026-10-20 model check-up: Kie refuses a Kling 3 Turbo prompt past 2,500
+  // characters, which it answered only after this start had held the run's credits.
+  it('refuses a prompt past its model’s own cap before deducting credits or calling the provider', async () => {
+    const providerFetch = vi.fn();
+    vi.stubGlobal('fetch', providerFetch);
+
+    const { POST } = await importRetiredStart();
+    const response = await POST(
+      new Request('http://localhost/api/generate-video', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+          'Idempotency-Key': 'video-prompt-cap-1',
+        },
+        body: JSON.stringify({
+          model: 'kling-3.0-turbo',
+          prompt: 'a'.repeat(2501),
+          duration: 5,
+          aspectRatio: '16:9',
+          resolution: '720p',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'Kling 3 Turbo prompts support up to 2,500 characters.',
+    });
+    expect(currentSupabaseMock.inserts).toHaveLength(0);
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
   it('rate limits video starts before deducting credits or calling the provider', async () => {
     currentSupabaseMock = createSupabaseMock(null, null, true, false);
     const providerFetch = vi.fn();
@@ -789,9 +822,10 @@ describe('/api/generate-video route', () => {
         aspect_ratio: '16:9',
         duration: 10,
         web_search: false,
-        return_last_frame: false,
       },
     });
+    // `deprecated: true` in the Seedance 2 spec (2026-10-20), so it is no longer sent.
+    expect((providerBody as { input?: Record<string, unknown> } | null)?.input).not.toHaveProperty('return_last_frame');
     expect(currentSupabaseMock.inserts[0].workflow_settings).toMatchObject({
       referenceVideoUrls: ['asset-video-1'],
       referenceAudioUrls: ['asset-audio-1'],
