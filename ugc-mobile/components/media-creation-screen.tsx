@@ -70,10 +70,14 @@ import {
   applyVerifiedInputDurations,
   buildCatalogQuoteRequest,
   buildUnifiedCatalogGenerationRequest,
+  catalogAppOutOfDateForRun,
   catalogDraftInputCounts,
   catalogDraftRunHandles,
+  catalogMotionDraftSlotKeys,
+  catalogMotionDraftSlotLabels,
   catalogMultiShotLimits,
   catalogPromptMeters,
+  catalogRefusedRunPrice,
   catalogRunEnhancementInputs,
   catalogRunSlots,
   catalogStartRequest,
@@ -82,11 +86,13 @@ import {
   getCatalogDraftSettings,
   hasCreatorEditedPromptDuringRemix,
   hydrateCatalogCreationDraftFromRemixSource,
+  MOTION_INPUT_LABELS,
   multiShotTotalDuration,
   normalizeCreationDraftForCatalog,
   readVerifiedInputDurations,
   REFERENCE_DURATION_CHANGED_CODE,
   validateCatalogCreationDraft,
+  type RefusedRunPrice,
 } from '@/lib/generation-model-draft';
 import { guidedCreationStarter, guidedCreationStarters } from '@/lib/guided-creation-starter';
 import {
@@ -497,8 +503,37 @@ function unavailableRunInputMessage(
     : `${name} is no longer available. Add this reference again.`;
 }
 
-/** Shown in place of a motion quote the server would refuse: it needs both inputs to price. */
-const MOTION_INPUTS_HINT = 'Add a character image and a motion clip.';
+/**
+ * Shown in place of a motion quote the server would refuse (it needs both inputs to price), asking
+ * for the inputs by what the composer's slots are called (`catalogMotionDraftSlotLabels`): production
+ * publishes Kling 3.0's as "Reference images" and "Reference videos", and a line asking for a
+ * character image and a motion clip named neither (2026-10-21). The motion-inputs pair keeps its
+ * own line, which says what the clip is for.
+ */
+function motionInputsHint(labels: { image: string; video: string }): string {
+  if (labels.image === MOTION_INPUT_LABELS.image && labels.video === MOTION_INPUT_LABELS.video) {
+    return 'Add a character image and a motion clip.';
+  }
+  return `Add ${slotLabelInSentence(labels.image)} and ${slotLabelInSentence(labels.video)}.`;
+}
+
+/** A slot's label mid-sentence: its first letter lowered when it starts a plain word, with an article unless it reads as a plural. */
+function slotLabelInSentence(label: string): string {
+  const words = /^[A-Z][a-z]/.test(label) ? `${label[0].toLowerCase()}${label.slice(1)}` : label;
+  return /s$/i.test(words) ? words : `${/^[aeiou]/i.test(words) ? 'an' : 'a'} ${words}`;
+}
+
+/**
+ * Said in place of a `cost_changed` refusal once the run's price, asked again, is the price the
+ * start refused (`catalogAppOutOfDateForRun`): this build prices the run as the server no longer
+ * does. It promises no fix on reopening: the update that prices the run as the server does goes
+ * out by hand after the server's deploy, so for a while there is none, and expo-updates swaps a
+ * fetched bundle in only at the cold start after the one that fetched it (`app-update-policy.ts`).
+ * Short enough for the creator bar's two lines, where a longer one lost its end on the Pixel 9a;
+ * the failure view adds that the draft is saved.
+ */
+const APP_OUT_OF_DATE_MESSAGE = 'This app is out of date, so it can’t price this run. Update it, or try again later.';
+const APP_OUT_OF_DATE_DRAFT_NOTE = 'Your draft is saved.';
 
 /**
  * What the failure view offers first for a refusal the server named, where pressing Try
@@ -1183,28 +1218,43 @@ function IdentityCreationScreen({
   // (buildUnifiedCatalogGenerationRequest), and the server normalizes and prices it again.
   const [quoteState, setQuoteState] = useState<{
     key: string | null;
+    /** The asking this answers (`quoteAsking.attempt`); an answer to an earlier one is no answer yet. */
+    attempt: number;
     status: 'idle' | 'pending' | 'ready' | 'error';
     cost: number | null;
     error: string | null;
-  }>({ key: null, status: 'idle', cost: null, error: null });
-  const [quoteRetryNonce, setQuoteRetryNonce] = useState(0);
+  }>({ key: null, attempt: 0, status: 'idle', cost: null, error: null });
+  // Each asking of the price, by Retry quote or after a refusal, and the run the start last refused
+  // at its price. One state, so a refusal and the asking again it brings arrive in one render: a
+  // ready quote read against the refusal is always the new answer, never the one refused.
+  const [quoteAsking, setQuoteAsking] = useState<{ attempt: number; refused: RefusedRunPrice | null }>({ attempt: 0, refused: null });
 
+  const quoteAttempt = quoteAsking.attempt;
   useEffect(() => {
+    const attempt = quoteAttempt;
     if (!quoteRequest || !quoteKey) {
-      setQuoteState({ key: null, status: 'idle', cost: null, error: null });
+      setQuoteState({ key: null, attempt, status: 'idle', cost: null, error: null });
       return;
     }
     const controller = new AbortController();
-    setQuoteState({ key: quoteKey, status: 'pending', cost: null, error: null });
     const timer = setTimeout(() => {
       void api.quoteGenerationModel(quoteRequest, controller.signal)
         .then((quote) => {
-          if (!controller.signal.aborted) setQuoteState({
+          if (controller.signal.aborted) return;
+          setQuoteState({
             key: quoteKey,
+            attempt,
             status: 'ready',
             cost: quote.costCredits,
             error: null,
           });
+          // A price in for the run the start refused: moved, and the refusal is forgotten, as the
+          // web creators forget it; unmoved, it stands (`catalogAppOutOfDateForRun`).
+          setQuoteAsking((current) => (
+            current.refused && current.refused.key === quoteKey && current.refused.costCredits !== quote.costCredits
+              ? { ...current, refused: null }
+              : current
+          ));
         })
         .catch((error) => {
           if (controller.signal.aborted) return;
@@ -1227,6 +1277,7 @@ function IdentityCreationScreen({
             : undefined;
           setQuoteState({
             key: quoteKey,
+            attempt,
             status: 'error',
             cost: null,
             error: fieldMessage ?? (error instanceof Error ? error.message : 'Could not calculate generation cost.'),
@@ -1237,11 +1288,18 @@ function IdentityCreationScreen({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [api, quoteKey, quoteRetryNonce, refetchCatalog]);
+  }, [api, quoteKey, quoteAttempt, refetchCatalog]);
 
-  const activeQuote = quoteState.key === quoteKey
+  // The answer to this run's open asking. Anything else in hand (another run's, or this run's from
+  // before a refusal or Retry quote asked again) is no answer yet, so the price reads as pending
+  // until the asking answers. Derived here, never set in the effect: a refusal and the asking it
+  // brings land in one render, and the answer the run was refused at is never read against it.
+  const activeQuote = quoteState.key === quoteKey && quoteState.attempt === quoteAttempt
     ? quoteState
     : { status: 'pending' as const, cost: null, error: null };
+  // The start refused this very run at its price, and asked again, its price is that price: the
+  // app prices it as the server no longer does, so the run is held and the app says why.
+  const appOutOfDate = catalogAppOutOfDateForRun(quoteAsking.refused, { key: quoteKey, status: activeQuote.status, cost: activeQuote.cost });
   const catalogUnavailable = Boolean(
     catalogQuery.isUnavailable ?? (!catalog && catalogQuery.error),
   );
@@ -1252,7 +1310,7 @@ function IdentityCreationScreen({
       void refetchCatalog();
       return;
     }
-    setQuoteRetryNonce((value) => value + 1);
+    setQuoteAsking((current) => ({ ...current, attempt: current.attempt + 1 }));
   };
   // A swept upload the run sends cannot be sent, so the run waits until it is removed or replaced.
   const unavailableReference = unavailableRunInputMessage(currentDraft, currentCatalogModel, unavailableReferencePaths);
@@ -1292,7 +1350,7 @@ function IdentityCreationScreen({
   // A model still loading its details (a pick from the What's new strip, which leaves Generate in view)
   // is not in the draft yet: a run started now would go to the model before it.
   const modelPickLoading = Boolean(modelPick && !modelPick.error);
-  const generateDisabled = !draftsHydrated || isRestoringRemix || remixRestoreFailed || isClosing || isGenerating || pollingInterrupted || isUploading || modelPickLoading || !catalog || activeQuote.status !== 'ready' || validation.errors.length > 0;
+  const generateDisabled = !draftsHydrated || isRestoringRemix || remixRestoreFailed || isClosing || isGenerating || pollingInterrupted || isUploading || modelPickLoading || !catalog || activeQuote.status !== 'ready' || appOutOfDate || validation.errors.length > 0;
   const openAuthForCurrentDraft = () => {
     router.push({
       pathname: '/auth',
@@ -1792,9 +1850,11 @@ function IdentityCreationScreen({
     const selectedModel = catalog ? getCatalogModel(catalog, selectedDraft.model) : null;
     const currentCount = target === 'video' ? videoDraft.referenceVideos.length : motionDraft.referenceVideo ? 1 : 0;
     const clipSlot = target === 'video' && selectedModel?.inputModes ? referenceVideoSlot(selectedModel, videoDraft, referenceRailShape(videoDraft, selectedModel)) : null;
+    // The slot the composer draws a motion run's clip in, whatever the model calls it.
+    const motionClipSlotKey = catalogMotionDraftSlotKeys(motionDraft, selectedModel).video;
     const maxVideos = target === 'video'
       ? selectedModel?.inputModes ? clipSlot?.max ?? 0 : selectedModel?.inputs.videoReferences?.max ?? 0
-      : catalogInputLimit(selectedModel, selectedDraft, 'referenceVideo', 1, 'elements');
+      : catalogInputLimit(selectedModel, selectedDraft, motionClipSlotKey, 1, 'elements');
     // Named clips are mentioned in the prompt, so each needs a handle of its own.
     const namesClips = clipSlot ? Boolean(clipSlot.supportsNaming) : videoDraft.model === 'kling-3.0-video';
     // A motion run takes one clip, so a new pick takes the place of the one attached, as Replace does.
@@ -1810,7 +1870,7 @@ function IdentityCreationScreen({
       const picked = await pickMedia('video');
       if (!picked) return;
       if (target === 'motion') {
-        const motionSlot = catalogInputSlot(selectedModel, motionDraft, 'referenceVideo');
+        const motionSlot = catalogInputSlot(selectedModel, motionDraft, motionClipSlotKey);
         const refusal = motionClipRefusal(picked, motionSlot?.maxDurationSeconds ?? MOTION_CLIP_DEFAULT_MAX_SECONDS);
         if (refusal) {
           setMessage(refusal);
@@ -2186,6 +2246,12 @@ function IdentityCreationScreen({
       attemptSaved = true;
       const started = await sendGenerationAttempt(attempt);
       startedPredictionId = started.predictionId;
+      // The server took a run from this build at the price it showed, so the refusal it last gave
+      // is no word on this build now: the run it refused goes as any other. The web creators forget
+      // a refusal on a start of the refused run itself; here any start the server takes forgets it,
+      // so a run refused before another started is not held once the server has come to agree with
+      // this build. One it still refuses is refused once more, and held from then.
+      setQuoteAsking((current) => (current.refused ? { ...current, refused: null } : current));
       void forgetPendingAttempt(attempt.identityUserId);
       runCostRef.current = typeof started.cost === 'number' ? started.cost : null;
       // Kept until the run ends, so a creator opened again watches this run rather than
@@ -2235,8 +2301,12 @@ function IdentityCreationScreen({
         setStartRefusal(refusal);
         // The balance the form reads can be stale; the server has just said it is short.
         if (refusal === 'insufficient_credits') void refreshProfile().catch(() => undefined);
-        // Priced again at once, so Try again states what the run now costs.
-        if (refusal === 'cost_changed') setQuoteRetryNonce((value) => value + 1);
+        // Priced again at once, so Try again states what the run now costs. The refused run is kept
+        // with the asking, so a price that comes back unmoved for it says this app is out of date.
+        if (refusal === 'cost_changed') {
+          const refused = request ? catalogRefusedRunPrice(request) : null;
+          setQuoteAsking((current) => ({ attempt: current.attempt + 1, refused }));
+        }
         // The server does not say which reference it could not use; storage says which are gone.
         if (refusal === 'invalid_input_media') void verifyStagedReferences([attempt.tool], { onlyExpired: false });
         if (details?.code === 'CATALOG_CHANGED' || details?.code === 'MODEL_UNAVAILABLE') {
@@ -2279,6 +2349,8 @@ function IdentityCreationScreen({
       setMessage(activeQuote.error ?? 'Wait for the current generation cost before continuing.');
       return;
     }
+    // The start would refuse this run as it did; the blocker already says why.
+    if (appOutOfDate) return;
     const nextValidation = validateCatalogCreationDraft(currentDraft, currentCatalogModel, { credits, quotedCost: activeQuote.cost });
     const nextErrors = unavailableReference
       ? [unavailableReference, ...nextValidation.errors]
@@ -2301,7 +2373,7 @@ function IdentityCreationScreen({
     // It carries the price on the button, which the server will not charge more than.
     const unifiedRequest = catalogStartRequest(
       buildUnifiedCatalogGenerationRequest(currentDraft, currentCatalogModel, catalog?.revision ?? ''),
-      quoteState,
+      { key: quoteKey, status: activeQuote.status, cost: activeQuote.cost },
     );
     const requestJson = JSON.stringify(unifiedRequest);
     // An unchanged press after a lost response is the same attempt, under the same key.
@@ -2546,7 +2618,9 @@ function IdentityCreationScreen({
     // refusal stays said until the next press.
     setMessage(refusalMessage);
   };
-  const refusalActionLabel = startRefusalActionLabel(startRefusal);
+  // An app out of date for this run has no new price to check: the refusal is answered with why.
+  const refusalOutOfDate = appOutOfDate && startRefusal === 'cost_changed';
+  const refusalActionLabel = refusalOutOfDate ? null : startRefusalActionLabel(startRefusal);
   const refusalAction = refusalActionLabel ? { label: refusalActionLabel, onPress: runRefusalAction } : null;
   const promptNotes = enhanceNotes && enhanceNotes.shotId === undefined && enhanceNotes.tool === activeTool && enhanceNotes.prompt === currentDraft.prompt
     ? enhanceNotes.warnings
@@ -2610,11 +2684,12 @@ function IdentityCreationScreen({
     const visibleValidationError = isRestoringRemix ? undefined : validation.errors.find((error) => (
       !isReferenceMentionActive || !error.startsWith('Unknown element mention:')
     ));
-    const blocker = (promptMessage
+    const blocker = ((appOutOfDate ? APP_OUT_OF_DATE_MESSAGE : null)
+      ?? promptMessage
       ?? message
       ?? (catalogUnavailable ? catalogQuery.error?.message : null)
       ?? (activeQuote.status === 'error' ? activeQuote.error : null)
-      ?? (motionInputsMissing && !unavailableReference ? MOTION_INPUTS_HINT : null)
+      ?? (motionInputsMissing && !unavailableReference ? motionInputsHint(catalogMotionDraftSlotLabels(motionDraft, selectedCreatorModel)) : null)
       // Through the same mapper the Generate press uses: before this, the
       // blocker stated the condition ("Prompt is required.") and pressing
       // Generate restated it as an instruction ("Add a prompt before
@@ -2828,9 +2903,10 @@ function IdentityCreationScreen({
           settingsSummary={`${selectedCreatorModel?.displayName ?? meta.title} · ${parameterSummary}`}
           startedAt={generationStartedAt}
           retryCost={activeQuote.status === 'ready' ? activeQuote.cost : null}
+          retryHeld={appOutOfDate}
           refusalAction={refusalAction}
-          notice={refundNotice}
-          error={activeGenerationStatus?.status === 'failed' ? activeGenerationStatus.error?.trim() || message : message}
+          notice={refusalOutOfDate ? APP_OUT_OF_DATE_DRAFT_NOTE : refundNotice}
+          error={refusalOutOfDate ? APP_OUT_OF_DATE_MESSAGE : activeGenerationStatus?.status === 'failed' ? activeGenerationStatus.error?.trim() || message : message}
           pollingInterrupted={pollingInterrupted && generationTool === activeTool}
           onResumePolling={() => void resumeGenerationPolling()}
           attemptUnconfirmed={Boolean(pendingAttempt) && !isGenerating && pendingAttempt?.tool === activeTool}
@@ -2885,7 +2961,8 @@ function IdentityCreationScreen({
     const visibleValidationError = isRestoringRemix ? undefined : validation.errors.find((error) => (
       !isReferenceMentionActive || !error.startsWith('Unknown element mention:')
     ));
-    const blocker = (promptMessage
+    const blocker = ((appOutOfDate ? APP_OUT_OF_DATE_MESSAGE : null)
+      ?? promptMessage
       ?? message
       ?? (catalogUnavailable ? catalogQuery.error?.message : null)
       ?? (activeQuote.status === 'error' ? activeQuote.error : null)
@@ -3100,9 +3177,10 @@ function IdentityCreationScreen({
           settingsSummary={`${selectedImageModel?.displayName ?? 'Image'} · ${parameterSummary || 'Default settings'}`}
           startedAt={generationStartedAt}
           retryCost={activeQuote.status === 'ready' ? activeQuote.cost : null}
+          retryHeld={appOutOfDate}
           refusalAction={refusalAction}
-          notice={refundNotice}
-          error={status?.status === 'failed' ? status.error?.trim() || message : message}
+          notice={refusalOutOfDate ? APP_OUT_OF_DATE_DRAFT_NOTE : refundNotice}
+          error={refusalOutOfDate ? APP_OUT_OF_DATE_MESSAGE : status?.status === 'failed' ? status.error?.trim() || message : message}
           pollingInterrupted={pollingInterrupted && generationTool === 'image'}
           onResumePolling={() => void resumeGenerationPolling()}
           attemptUnconfirmed={Boolean(pendingAttempt) && !isGenerating && pendingAttempt?.tool === 'image'}
@@ -4742,12 +4820,23 @@ function MotionCreatorComposer({
   const [selectedRole, setSelectedRole] = useState<'character' | 'motion' | null>(null);
   const selectedMedia = selectedRole === 'character' ? draft.characterImage : selectedRole === 'motion' ? draft.referenceVideo : null;
   const duration = draft.referenceVideo ? getMotionDuration(draft) : null;
-  const characterError = validationErrors.find((error) => /character image/i.test(error));
-  const motionError = validationErrors.find((error) => /reference video|motion video|between 1 and/i.test(error));
-  const characterSlot = catalogInputSlot(model, draft, 'characterImage');
-  const motionSlot = catalogInputSlot(model, draft, 'referenceVideo');
-  const supportsCharacter = catalogInputSupported(model, draft, 'characterImage', true);
-  const supportsMotion = catalogInputSupported(model, draft, 'referenceVideo', true);
+  // The lines under the slots, found by what the slots are called (`catalogMotionDraftSlotLabels`):
+  // the draft's checks open a line about a slot with its label, as the slot itself is titled. A line
+  // goes under the slot whose label it opens with, the longer label where both do, so a line about
+  // a "Reference video" is not also the line of a "Reference".
+  const labels = catalogMotionDraftSlotLabels(draft, model);
+  const slotNamedBy = (error: string) => [labels.image, labels.video]
+    .filter((label) => error.startsWith(`${label} `))
+    .sort((a, b) => b.length - a.length)[0];
+  const characterError = validationErrors.find((error) => slotNamedBy(error) === labels.image);
+  const motionError = validationErrors.find((error) => slotNamedBy(error) === labels.video);
+  // The slots the run sends its picture and its clip in, found by kind: Kling 3.0's are plain
+  // reference slots, where Kling 2.6 has the motion-inputs pair.
+  const slotKeys = catalogMotionDraftSlotKeys(draft, model);
+  const characterSlot = catalogInputSlot(model, draft, slotKeys.image);
+  const motionSlot = catalogInputSlot(model, draft, slotKeys.video);
+  const supportsCharacter = catalogInputSupported(model, draft, slotKeys.image, true);
+  const supportsMotion = catalogInputSupported(model, draft, slotKeys.video, true);
 
   return (
     <View testID="motion-creator-composer" style={{ gap: 12 }}>
@@ -4756,9 +4845,11 @@ function MotionCreatorComposer({
           <Text style={{ color: theme.colors.motion, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Required inputs</Text>
           <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>Choose the character to preserve and the movement to transfer.</Text>
         </View>
+        {/* Both are required whatever a slot's min says: a motion run starts with both or not at
+            all, as the checks under them and the server's start say. Kling 3.0's slots have a min of 0. */}
         <View style={{ flexDirection: 'row', gap: 9 }}>
-          {supportsCharacter ? <CompactReferenceSlot testID="motion-character-slot" title={characterSlot?.label ?? 'Character image'} helper="Who should move?" media={draft.characterImage} required={(characterSlot?.min ?? 1) > 0} isUploading={isUploading} progress={upload?.target === 'character' ? upload : null} onAdd={onUploadCharacter} onOpen={() => setSelectedRole('character')} /> : null}
-          {supportsMotion ? <CompactReferenceSlot testID="motion-video-slot" title={motionSlot?.label ?? 'Motion video'} helper="How should they move?" media={draft.referenceVideo} required={(motionSlot?.min ?? 1) > 0} isUploading={isUploading} progress={upload?.target === 'motion-clip' ? upload : null} onAdd={onUploadMotion} onOpen={() => setSelectedRole('motion')} /> : null}
+          {supportsCharacter ? <CompactReferenceSlot testID="motion-character-slot" title={characterSlot?.label ?? 'Character image'} helper="Who should move?" media={draft.characterImage} required isUploading={isUploading} progress={upload?.target === 'character' ? upload : null} onAdd={onUploadCharacter} onOpen={() => setSelectedRole('character')} /> : null}
+          {supportsMotion ? <CompactReferenceSlot testID="motion-video-slot" title={motionSlot?.label ?? 'Motion video'} helper="How should they move?" media={draft.referenceVideo} required isUploading={isUploading} progress={upload?.target === 'motion-clip' ? upload : null} onAdd={onUploadMotion} onOpen={() => setSelectedRole('motion')} /> : null}
         </View>
         <View style={{ gap: 4 }}>
           {characterError ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{characterError}</Text> : null}
@@ -5706,6 +5797,7 @@ function GenerationWorkspace({
   settingsSummary,
   startedAt,
   retryCost,
+  retryHeld = false,
   refusalAction = null,
   notice = null,
   error,
@@ -5737,6 +5829,8 @@ function GenerationWorkspace({
   startedAt: number | null;
   /** What another run of the same draft costs, or null while the quote is unsettled. */
   retryCost: number | null;
+  /** The same draft would be refused again as it was (an app out of date for it): no Try again. */
+  retryHeld?: boolean;
   /**
    * What to do first about a start the server refused outright, where sending it again would
    * only be refused again (Edit prompt, Get credits, …); Try again stays, second.
@@ -5907,7 +6001,7 @@ function GenerationWorkspace({
               {refusalAction ? <PrimaryButton label={refusalAction.label} onPress={refusalAction.onPress} /> : null}
               {/* "Retry" ran a full new paid generation behind a bare verb,
                   where every other route to that spend states the price. */}
-              {refusalAction
+              {retryHeld ? null : refusalAction
                 ? <SecondaryButton label={withCreditCost('Try again', retryCost)} onPress={onRetry} />
                 : <PrimaryButton label={withCreditCost('Try again', retryCost)} onPress={onRetry} />}
               <SecondaryButton label="Back to creator" onPress={onBack} />

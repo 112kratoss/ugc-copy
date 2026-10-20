@@ -36,9 +36,11 @@ import {
   type VideoShotDraft,
 } from './media-creation-view-model';
 import {
+  catalogMotionInputSlots,
   catalogRunQuoteInput,
   catalogRunWithShownCost,
   modeGatedSettingValues,
+  MOTION_INPUTS_FALLBACK_SLOTS,
   SUBJECT_IMAGES_PER_NAME,
   SUBJECT_IMAGES_SLOT_KEY,
   subjectsPerRun,
@@ -180,10 +182,64 @@ function idOnlyAsset(id: string, kind: 'character' | 'prepared-voice'): CatalogD
   return { id, kind };
 }
 
+/**
+ * The slots a motion run on this model sends its picture and its clip in, chosen by kind as the
+ * web's motion page chooses them (`catalogMotionInputSlots`): a slot the run must fill first, and
+ * never one that takes nothing. Production publishes Kling 2.6 with the motion-inputs slots
+ * (`characterImage`, `referenceVideo`) and Kling 3.0 with plain reference slots
+ * (`imageReferences`, `videoReferences`); the composer looked its slots up by the motion-inputs
+ * names, so on Kling 3.0 it drew neither and refused a clip (2026-10-20). Before the model's
+ * descriptor is in, the motion-inputs names.
+ */
+export function catalogMotionDraftSlotKeys(
+  draft: MotionCreationDraft,
+  model: GenerationModelDescriptor | null | undefined,
+): { image: string; video: string } {
+  return model ? catalogMotionInputSlots(model, getCatalogDraftSettings(draft, model)) : MOTION_INPUTS_FALLBACK_SLOTS;
+}
+
+/** What a motion run's picture and clip are called where the model's descriptor names no slot for them. */
+export const MOTION_INPUT_LABELS = { image: 'Character image', video: 'Reference video' } as const;
+
+/**
+ * What the composer calls a motion run's picture and clip: the labels of the slots it draws them in
+ * (`catalogMotionDraftSlotKeys`), or the motion-inputs names where the descriptor has no such slot or
+ * is not in. The lines under the slots, the creator bar's hint and the draft's checks all name an
+ * input by this, as the slot itself does: production publishes Kling 3.0's slots as "Reference
+ * images" and "Reference videos", under which the lines asked for a "Character image" and a
+ * "Reference video" (2026-10-21).
+ */
+export function catalogMotionDraftSlotLabels(
+  draft: MotionCreationDraft,
+  model: GenerationModelDescriptor | null | undefined,
+): { image: string; video: string } {
+  const keys = catalogMotionDraftSlotKeys(draft, model);
+  // The slots this run opens, which the composer titles: a key a closed mode declares under another
+  // label is called what the open one calls it.
+  const slots = model?.inputModes
+    ? getActiveCatalogInputSlots(model, getCatalogDraftSettings(draft, model), catalogDraftInputCounts(draft, model))
+    : [];
+  const labelOf = (key: string) => slots.find((slot) => slot.key === key)?.label.trim() || null;
+  return { image: labelOf(keys.image) ?? MOTION_INPUT_LABELS.image, video: labelOf(keys.video) ?? MOTION_INPUT_LABELS.video };
+}
+
+/** "Character image is required.", "Reference images are required.": a label ending in s reads as a plural. */
+function motionInputRequiredMessage(label: string): string {
+  return `${label} ${/s$/i.test(label) ? 'are' : 'is'} required.`;
+}
+
 function legacyAssetsForSlot(
   draft: CreationDraft,
   slot: CatalogInputSlot,
+  model: GenerationModelDescriptor,
 ): CatalogDraftInputAsset[] {
+  if (draft.tool === 'motion') {
+    // Each input goes in one slot of its kind, the one the composer draws it in.
+    const keys = catalogMotionDraftSlotKeys(draft, model);
+    if (slot.kind === 'image' && slot.key === keys.image && draft.characterImage) return [mediaDraftAsset(draft.characterImage)];
+    if (slot.kind === 'video' && slot.key === keys.video && draft.referenceVideo) return [mediaDraftAsset(draft.referenceVideo)];
+    return [];
+  }
   if (slot.role === 'startFrame') {
     return draft.tool === 'video' && draft.startFrame ? [mediaDraftAsset(draft.startFrame)] : [];
   }
@@ -203,15 +259,8 @@ function legacyAssetsForSlot(
         })))
       : [];
   }
-  if (slot.kind === 'image') {
-    if (draft.tool === 'image' || draft.tool === 'video') return draft.references.map(mediaDraftAsset);
-    return draft.characterImage ? [mediaDraftAsset(draft.characterImage)] : [];
-  }
-  if (slot.kind === 'video') {
-    if (draft.tool === 'video') return draft.referenceVideos.map(mediaDraftAsset);
-    if (draft.tool === 'motion' && draft.referenceVideo) return [mediaDraftAsset(draft.referenceVideo)];
-    return [];
-  }
+  if (slot.kind === 'image') return draft.references.map(mediaDraftAsset);
+  if (slot.kind === 'video') return draft.tool === 'video' ? draft.referenceVideos.map(mediaDraftAsset) : [];
   if (slot.kind === 'audio') {
     return draft.tool === 'video' ? draft.referenceAudios.map(mediaDraftAsset) : [];
   }
@@ -225,8 +274,8 @@ function legacyAssetsForSlot(
     : [];
 }
 
-function heldSlotAssets(draft: CreationDraft, slot: CatalogInputSlot): CatalogDraftInputAsset[] {
-  return draft.catalogInputSlots?.[slot.key] ?? legacyAssetsForSlot(draft, slot);
+function heldSlotAssets(draft: CreationDraft, slot: CatalogInputSlot, model: GenerationModelDescriptor): CatalogDraftInputAsset[] {
+  return draft.catalogInputSlots?.[slot.key] ?? legacyAssetsForSlot(draft, slot, model);
 }
 
 /**
@@ -238,7 +287,7 @@ function heldSlotAssets(draft: CreationDraft, slot: CatalogInputSlot): CatalogDr
 export function catalogDraftInputCounts(draft: CreationDraft, model: GenerationModelDescriptor): Record<string, number> {
   return Object.fromEntries((model.inputModes ?? [])
     .flatMap((mode) => mode.slots)
-    .map((slot) => [slot.key, heldSlotAssets(draft, slot).length]));
+    .map((slot) => [slot.key, heldSlotAssets(draft, slot, model).length]));
 }
 
 /**
@@ -251,7 +300,7 @@ function heldCatalogDraftInputSlots(
   settings: Record<string, CatalogPrimitive>,
 ): Array<{ slot: CatalogInputSlot; assets: CatalogDraftInputAsset[] }> {
   return getActiveCatalogInputSlots(model, settings, catalogDraftInputCounts(draft, model))
-    .map((slot) => ({ slot, assets: heldSlotAssets(draft, slot) }));
+    .map((slot) => ({ slot, assets: heldSlotAssets(draft, slot, model) }));
 }
 
 function hasReusableVideoInputs(model: GenerationModelDescriptor) {
@@ -325,7 +374,7 @@ export function catalogVideoRunReferenceMode(
   const framesShape = getActiveCatalogInputSlots(model, { ...settings, referenceMode: 'frames' }, counts);
   const referencesShape = getActiveCatalogInputSlots(model, { ...settings, referenceMode: 'elements' }, counts);
   const inFramesShape = new Set(framesShape.map((slot) => slot.key));
-  const holds = (slot: CatalogInputSlot) => heldSlotAssets(draft, slot).length > 0;
+  const holds = (slot: CatalogInputSlot) => heldSlotAssets(draft, slot, model).length > 0;
   if (referencesShape.some((slot) => slot.role === 'reference' && !inFramesShape.has(slot.key) && holds(slot))) {
     return 'elements';
   }
@@ -814,8 +863,10 @@ export function validateCatalogCreationDraft(
   const promptLimitError = catalogPromptLimitError(draft, model);
   if (promptLimitError) errors.push(promptLimitError);
   if (draft.tool === 'motion') {
-    if (!draft.characterImage) errors.push('Character image is required.');
-    if (!draft.referenceVideo) errors.push('Reference video is required.');
+    // Named as the composer's slots are, so a line under a slot says what the slot says.
+    const labels = catalogMotionDraftSlotLabels(draft, model);
+    if (!draft.characterImage) errors.push(motionInputRequiredMessage(labels.image));
+    if (!draft.referenceVideo) errors.push(motionInputRequiredMessage(labels.video));
   }
 
   validateControls(runDraft, model, errors);
@@ -1063,6 +1114,40 @@ export function catalogStartRequest(
   quote: { key: string | null; status: string; cost: number | null },
 ): CatalogGenerationRequest {
   return catalogRunWithShownCost(run, quote);
+}
+
+/** A run the start refused as costing more than its price (`cost_changed`): its quote request as JSON, and that price. */
+export type RefusedRunPrice = { key: string; costCredits: number };
+
+/**
+ * The run a `cost_changed` refusal was for, read off the start request refused: the quote request
+ * its price went with (the key `catalogStartRequest` attaches a price under) and the price it
+ * carried. Null for a run sent without a price, which the start never refuses on price.
+ */
+export function catalogRefusedRunPrice(run: CatalogGenerationRequest): RefusedRunPrice | null {
+  return typeof run.expectedCostCredits === 'number'
+    ? { key: JSON.stringify(catalogRunQuoteInput({ ...run, inputs: run.inputs ?? [] })), costCredits: run.expectedCostCredits }
+    : null;
+}
+
+/**
+ * Whether this build of the app is out of date for the run it would send: the start refused that
+ * very run at its price, and the quote, asked again since, prices it the same. The app asks a run's
+ * price with its own quote request and the start prices the run itself, so the two disagree when
+ * the app quotes runs as the deployed server no longer does (or when the server's own quote and
+ * start part, which its `generation_start_quote_drift` errors show), and another press could only
+ * be refused the same way. Each press was refused, priced again at the same price and offered
+ * again, until the app was updated (2026-10-20); the web creators hold an out-of-date page the same
+ * way. Another run, or a price that moved, goes as before.
+ */
+export function catalogAppOutOfDateForRun(
+  refused: RefusedRunPrice | null,
+  quote: { key: string | null; status: string; cost: number | null },
+): boolean {
+  return refused !== null
+    && quote.status === 'ready'
+    && quote.key === refused.key
+    && quote.cost === refused.costCredits;
 }
 
 export const REFERENCE_DURATION_CHANGED_CODE = 'REFERENCE_DURATION_CHANGED';

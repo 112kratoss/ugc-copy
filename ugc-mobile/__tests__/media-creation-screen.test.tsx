@@ -282,6 +282,7 @@ import { ApiError } from '../lib/api-client';
 import whatsNewContract from '../../contracts/whats-new-models-v1.json';
 import subjectsContract from '../../contracts/model-catalog-subjects-mode-v1.json';
 import liveCatalog from './fixtures/live-catalog-descriptors.json';
+import productionMotion from '../../contracts/production-motion-descriptors-v1.json';
 import { parseModelCatalogDetail } from '../lib/generation-model-catalog';
 
 const referenceModeIs = (value: 'frames' | 'elements') => [{ source: 'setting' as const, key: 'referenceMode', operator: 'equals' as const, value }];
@@ -5476,6 +5477,158 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(authState.api.startGeneration.mock.calls[1][1]).not.toBe(authState.api.startGeneration.mock.calls[0][1]);
       });
 
+      // An app that asks a run's price as the deployed server no longer prices it: its quote
+      // answers the same price every time, and the start refuses the run at that price every
+      // time. Before, each press was refused, priced again at that price, and offered again.
+      it('says the app is out of date when the run the start refused is priced again at the refused price, and holds that run', async () => {
+        catalogState.catalog = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14)]);
+        authState.api.startGeneration.mockRejectedValue(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'));
+        const tree = await openTyped();
+        const quotesBefore = authState.api.quoteGenerationModel.mock.calls.length;
+        await pressGenerate(tree);
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
+        expect(authState.api.startGeneration.mock.calls[0][0]).toMatchObject({ expectedCostCredits: 8 });
+        expect(authState.api.quoteGenerationModel.mock.calls.length).toBeGreaterThan(quotesBefore);
+
+        const outOfDate = 'This app is out of date, so it can’t price this run. Update it, or try again later.';
+        const workspace = () => tree.root.findByProps({ testID: 'generation-workspace' });
+        expect(collectText(workspace())).toContain(outOfDate);
+        expect(collectText(workspace())).toContain('Your draft is saved.');
+        expect(text(tree)).not.toContain('The price of this run changed.');
+        // Neither Try again nor Check the new price: both would send the run the start refuses.
+        expect(workspaceButtons(tree)).toEqual({ primary: [], secondary: ['Back to creator'] });
+
+        renderer.act(() => { workspace().find((node) => node.type === SecondaryButton && node.props.label === 'Back to creator').props.onPress(); });
+        expect(blocker(tree)).toBe(outOfDate);
+        expect(generateButton(tree).props.disabled).toBe(true);
+        // Pressed all the same, it sends nothing.
+        await pressGenerate(tree);
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
+
+        // Another run goes as before, at its own price.
+        renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Generation parameters.').props.onPress(); });
+        renderer.act(() => { labelled(tree.root, '1:1').props.onPress(); });
+        renderer.act(() => { labelled(tree.root, 'Close generation parameters').props.onPress(); });
+        await settle();
+        expect(generateButton(tree).props.disabled).toBe(false);
+        expect(text(tree)).not.toContain(outOfDate);
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        await pressGenerate(tree);
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(2);
+        expect(authState.api.startGeneration.mock.calls[1][0]).toMatchObject({ settings: expect.objectContaining({ aspectRatio: '1:1' }), expectedCostCredits: 8 });
+      });
+
+      it('goes on as before when the run the start refused is priced again at another price', async () => {
+        catalogState.catalog = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14)]);
+        authState.api.startGeneration.mockRejectedValueOnce(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'));
+        const tree = await openTyped();
+        quoteEchoingSettings(9);
+        await pressGenerate(tree);
+
+        expect(text(tree)).not.toContain('This app is out of date');
+        expect(workspaceButtons(tree)).toEqual({ primary: ['Check the new price'], secondary: ['Try again · 9 credits', 'Back to creator'] });
+
+        // The price moved, so the refusal is forgotten (as the web creators forget it): the same run,
+        // back at the price it was refused at, is not held.
+        quoteEchoingSettings(8);
+        renderer.act(() => { tree.root.findByProps({ testID: 'generation-workspace' }).find((node) => node.type === SecondaryButton && node.props.label === 'Back to creator').props.onPress(); });
+        for (const aspectRatio of ['1:1', '4:5']) {
+          renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Generation parameters.').props.onPress(); });
+          renderer.act(() => { labelled(tree.root, aspectRatio).props.onPress(); });
+          renderer.act(() => { labelled(tree.root, 'Close generation parameters').props.onPress(); });
+          await settle();
+        }
+        expect(text(tree)).not.toContain('This app is out of date');
+        expect(generateButton(tree).props.disabled).toBe(false);
+      });
+
+      it('keeps holding the refused run when another run is priced at another price: only an answer for that run forgets it', async () => {
+        catalogState.catalog = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14)]);
+        authState.api.startGeneration.mockRejectedValue(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'));
+        const tree = await openTyped();
+        const outOfDate = 'This app is out of date, so it can’t price this run. Update it, or try again later.';
+        const workspace = () => tree.root.findByProps({ testID: 'generation-workspace' });
+        const chooseAspectRatio = async (label: string) => {
+          renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Generation parameters.').props.onPress(); });
+          renderer.act(() => { labelled(tree.root, label).props.onPress(); });
+          renderer.act(() => { labelled(tree.root, 'Close generation parameters').props.onPress(); });
+          await settle();
+        };
+        await pressGenerate(tree);
+        expect(collectText(workspace())).toContain(outOfDate);
+        renderer.act(() => { workspace().find((node) => node.type === SecondaryButton && node.props.label === 'Back to creator').props.onPress(); });
+
+        // Another run, priced at 12: its price is no word on the run the start refused.
+        quoteEchoingSettings(12);
+        await chooseAspectRatio('1:1');
+        expect(text(tree)).not.toContain(outOfDate);
+        expect(generateButton(tree).props.disabled).toBe(false);
+
+        // Back to the refused run, priced again at the price it was refused at: still held.
+        quoteEchoingSettings(8);
+        await chooseAspectRatio('4:5');
+        expect(blocker(tree)).toBe(outOfDate);
+        expect(generateButton(tree).props.disabled).toBe(true);
+      });
+
+      it('holds the refusal unjudged until a price asked since answers: the price in hand, which the run was refused at, is not read against it', async () => {
+        catalogState.catalog = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14)]);
+        authState.api.startGeneration.mockRejectedValue(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'));
+        const tree = await openTyped();
+        // The asking the refusal brings answers only when the case says so.
+        let answer: (quote: unknown) => void = () => undefined;
+        authState.api.quoteGenerationModel.mockImplementation(() => new Promise<unknown>((resolve) => { answer = resolve; }));
+        const quotesBefore = authState.api.quoteGenerationModel.mock.calls.length;
+        await pressGenerate(tree);
+        expect(authState.api.quoteGenerationModel.mock.calls.length).toBe(quotesBefore + 1);
+
+        // The price in hand is the one the start refused: no word on this build yet, so the refusal
+        // stands as it was said, with the run's price unknown.
+        const outOfDate = 'This app is out of date, so it can’t price this run. Update it, or try again later.';
+        expect(text(tree)).not.toContain(outOfDate);
+        expect(text(tree)).toContain('The price of this run changed.');
+        expect(workspaceButtons(tree)).toEqual({ primary: ['Check the new price'], secondary: ['Try again', 'Back to creator'] });
+
+        await renderer.act(async () => { answer({ modelId: 'nano-banana-2', catalogRevision: 'parity-rev', normalizedSettings: {}, costCredits: 8 }); });
+        await settle();
+        expect(collectText(tree.root.findByProps({ testID: 'generation-workspace' }))).toContain(outOfDate);
+        expect(workspaceButtons(tree)).toEqual({ primary: [], secondary: ['Back to creator'] });
+      });
+
+      it('forgets the refusal once the server takes a run: the run it refused is not held when its price comes back', async () => {
+        catalogState.catalog = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14)]);
+        authState.api.startGeneration
+          .mockRejectedValueOnce(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'))
+          .mockResolvedValue(started('pred-taken'));
+        authState.api.getImageGeneration.mockResolvedValue({ status: 'succeeded', output: 'https://cdn.example.com/out.png' });
+        const tree = await openTyped();
+        const outOfDate = 'This app is out of date, so it can’t price this run. Update it, or try again later.';
+        const workspace = () => tree.root.findByProps({ testID: 'generation-workspace' });
+        const backToCreator = () => renderer.act(() => { workspace().find((node) => node.type === SecondaryButton && node.props.label === 'Back to creator').props.onPress(); });
+        const chooseAspectRatio = async (label: string) => {
+          renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Generation parameters.').props.onPress(); });
+          renderer.act(() => { labelled(tree.root, label).props.onPress(); });
+          renderer.act(() => { labelled(tree.root, 'Close generation parameters').props.onPress(); });
+          await settle();
+        };
+        await pressGenerate(tree);
+        expect(collectText(workspace())).toContain(outOfDate);
+        backToCreator();
+
+        // Another run, which the server takes.
+        await chooseAspectRatio('1:1');
+        await pressGenerate(tree);
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(2);
+        expect(labelled(workspace(), 'Post to feed')).toBeTruthy();
+        backToCreator();
+
+        // The run the start refused, priced again at the price it was refused at: a run has gone
+        // since, so it is not held.
+        await chooseAspectRatio('4:5');
+        expect(text(tree)).not.toContain(outOfDate);
+        expect(generateButton(tree).props.disabled).toBe(false);
+      });
+
       it('asks storage which reference is gone when the server cannot use the run’s media, and marks it', async () => {
         memory.set(ordinaryKey, savedDrafts({ image: { prompt: 'A bottle with @alpha', references: [stagedMedia('alpha')] } }));
         authState.api.startGeneration.mockRejectedValue(refusal(400, 'invalid_input_media', 'This reference upload has expired. Add it again.'));
@@ -6181,6 +6334,191 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await settle();
         expect(text(tree)).not.toContain('This model supports up to 1 reference video.');
         expect(storedDrafts().motion.referenceVideo).toMatchObject({ displayName: 'Moves', url: 'https://cdn.example.com/spin.mp4', durationSeconds: 7 });
+      });
+    });
+
+    // The motion models production publishes to the app (release kie-checkup-20261020, read
+    // 2026-10-20): Kling 2.6 in the motion-inputs slots (characterImage, referenceVideo), and
+    // Kling 3.0 in one default mode of plain reference slots (imageReferences, videoReferences,
+    // min 0, max 1). The composer looked its two slots up by the motion-inputs names, so on
+    // Kling 3.0 it drew neither, and refused a clip picked from Inputs.
+    describe('motion on the models production publishes', () => {
+      const productionMotionCatalog = (): GenerationModelCatalog => ({
+        schemaVersion: 3,
+        revision: productionMotion.revision,
+        defaults: { image: null, video: null, motion: 'kling-2.6' },
+        models: productionMotion.models.map((model) => parseModelCatalogDetail(model)),
+      });
+      const onMotionModel = (model: 'kling-2.6' | 'kling-3.0', motion: Record<string, unknown> = {}) => {
+        catalogState.catalog = productionMotionCatalog();
+        memory.set(ordinaryKey, savedDrafts({ motion: { model, catalogRevision: productionMotion.revision, ...motion } }));
+      };
+      const slotText = (tree: renderer.ReactTestRenderer, testID: string) => collectText(tree.root.findByProps({ testID }));
+      const pickedClip = { uri: 'file:///moves.mp4', fileName: 'moves.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 6000 };
+      const uploadedClip = () => uploaded('moves.mp4', { mimeType: 'video/mp4', kind: 'video', durationSeconds: 6 });
+      const sentInputs = () => (authState.api.startGeneration.mock.calls[0][0] as { inputs: Array<Record<string, unknown>> }).inputs;
+
+      beforeEach(() => {
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+      });
+
+      it('draw Kling 3.0’s picture and clip slots, each as required, named as its descriptor names them', async () => {
+        onMotionModel('kling-3.0');
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        expect(findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel).toContain('Kling 3.0');
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Reference images', 'Required', 'Who should move?']);
+        expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference videos', 'Required', 'How should they move?']);
+        // The lines under the slots and the bar's hint name the slots as drawn, not the motion-inputs pair.
+        expect(text(tree)).toContain('Reference images are required.');
+        expect(text(tree)).toContain('Reference videos are required.');
+        expect(text(tree)).not.toContain('Character image is required.');
+        expect(text(tree)).not.toContain('Reference video is required.');
+        expect(blocker(tree)).toBe('Add reference images and reference videos.');
+      });
+
+      it('keeps Kling 2.6’s lines, whose slots are the motion-inputs pair: the character image, the reference video, and the clip the bar asks for', async () => {
+        onMotionModel('kling-2.6');
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Character image', 'Required', 'Who should move?']);
+        expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference video', 'Required', 'How should they move?']);
+        expect(text(tree)).toContain('Character image is required.');
+        expect(text(tree)).toContain('Reference video is required.');
+        expect(blocker(tree)).toBe('Add a character image and a motion clip.');
+      });
+
+      it('take a clip on Kling 3.0 from Inputs, and send the picture and the clip in its slots', async () => {
+        onMotionModel('kling-3.0', { characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }) });
+        vi.mocked(pickMedia).mockResolvedValue(pickedClip as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploadedClip());
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        // With the picture in, Inputs asks for the clip.
+        await renderer.act(async () => { await labelled(tree.root, 'Inputs').props.onPress(); });
+        await settle();
+        expect(text(tree)).not.toContain('This model does not support reference videos.');
+        expect(pickMedia).toHaveBeenCalledWith('video');
+        expect(storedDrafts().motion.referenceVideo).toMatchObject({ url: 'https://cdn.example.com/moves.mp4', durationSeconds: 6 });
+        expect(labelled(tree.root, 'Open details for Reference Motion')).toBeTruthy();
+
+        await pressGenerate(tree);
+        expect(sentInputs()).toEqual([
+          expect.objectContaining({ slot: 'imageReferences', kind: 'image', url: 'https://cdn.example.com/dancer.png' }),
+          expect.objectContaining({ slot: 'videoReferences', kind: 'video', url: 'https://cdn.example.com/moves.mp4', durationSeconds: 6 }),
+        ]);
+      });
+
+      it('take a clip in Kling 3.0’s clip slot', async () => {
+        onMotionModel('kling-3.0');
+        vi.mocked(pickMedia).mockResolvedValue(pickedClip as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploadedClip());
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Add reference videos').props.onPress(); });
+        await settle();
+        expect(pickMedia).toHaveBeenCalledWith('video');
+        expect(storedDrafts().motion.referenceVideo).toMatchObject({ url: 'https://cdn.example.com/moves.mp4' });
+      });
+
+      it('draw and send Kling 2.6 as before: its own slot names, both required, the picture and the clip in its motion-inputs slots', async () => {
+        onMotionModel('kling-2.6', {
+          characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }),
+          referenceVideo: stagedMedia('moves', 'video', { displayName: 'Moves', durationSeconds: 6 }),
+          duration: 6,
+        });
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        expect(findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel).toContain('Kling 2.6');
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Character image', 'Required', 'Dancer']);
+        expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference video', 'Required', 'Moves']);
+        await pressGenerate(tree);
+        expect(sentInputs()).toEqual([
+          expect.objectContaining({ slot: 'characterImage', kind: 'image', url: 'https://cdn.example.com/dancer.png' }),
+          expect.objectContaining({ slot: 'referenceVideo', kind: 'video', url: 'https://cdn.example.com/moves.mp4', durationSeconds: 6 }),
+        ]);
+      });
+
+      it('put each input in one slot of its kind, the one a run must fill first, and never in one that takes nothing', async () => {
+        const model = parseModelCatalogDetail(productionMotion.models.find((entry) => entry.id === 'kling-3.0'));
+        model.inputModes = [{
+          key: 'default',
+          label: 'Default',
+          default: true,
+          slots: [
+            { key: 'styleImages', kind: 'image', role: 'reference', label: 'Style images', min: 0, max: 2 },
+            { key: 'castImage', kind: 'image', role: 'reference', label: 'Cast image', min: 1, max: 1 },
+            { key: 'retiredClips', kind: 'video', role: 'reference', label: 'Retired clips', min: 0, max: 0 },
+            { key: 'danceClip', kind: 'video', role: 'reference', label: 'Dance clip', min: 0, max: 1 },
+          ],
+        }];
+        catalogState.catalog = { ...productionMotionCatalog(), models: [model] };
+        memory.set(ordinaryKey, savedDrafts({ motion: {
+          model: 'kling-3.0',
+          catalogRevision: productionMotion.revision,
+          characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }),
+          referenceVideo: stagedMedia('moves', 'video', { displayName: 'Moves', durationSeconds: 6 }),
+          duration: 6,
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        // A clip held for every slot of its kind was held for the closed one too, past its max of 0.
+        expect(text(tree)).not.toContain('Retired clips supports up to 0 inputs.');
+        await pressGenerate(tree);
+        expect(sentInputs()).toEqual([
+          expect.objectContaining({ slot: 'castImage', url: 'https://cdn.example.com/dancer.png' }),
+          expect.objectContaining({ slot: 'danceClip', url: 'https://cdn.example.com/moves.mp4' }),
+        ]);
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Cast image', 'Required', 'Dancer']);
+        expect(slotText(tree, 'motion-video-slot')).toEqual(['Dance clip', 'Required', 'Moves']);
+      });
+
+      it('draw a line once, under the slot it names, where one slot’s label begins the other’s', async () => {
+        const model = parseModelCatalogDetail(productionMotion.models.find((entry) => entry.id === 'kling-3.0'));
+        model.inputModes = [{
+          key: 'default',
+          label: 'Default',
+          default: true,
+          slots: [
+            { key: 'imageReferences', kind: 'image', role: 'reference', label: 'Reference', min: 0, max: 1 },
+            { key: 'videoReferences', kind: 'video', role: 'reference', label: 'Reference video', min: 0, max: 1 },
+          ],
+        }];
+        catalogState.catalog = { ...productionMotionCatalog(), models: [model] };
+        memory.set(ordinaryKey, savedDrafts({ motion: {
+          model: 'kling-3.0',
+          catalogRevision: productionMotion.revision,
+          characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }),
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        // Only the clip is missing: its line is drawn once, and the picture's slot has none.
+        expect(slotText(tree, 'motion-required-inputs').filter((line) => line.endsWith(' required.')))
+          .toEqual(['Reference video is required.']);
+      });
+
+      it('name each slot as the mode the run opens does, where a closed mode gives its key another label', async () => {
+        const model = parseModelCatalogDetail(productionMotion.models.find((entry) => entry.id === 'kling-3.0'));
+        const openMode = model.inputModes![0];
+        model.inputModes = [
+          {
+            key: 'closed',
+            label: 'Closed',
+            default: false,
+            conditions: [{ source: 'setting', key: 'variant', operator: 'equals', value: 'never' }],
+            slots: openMode.slots.map((slot) => ({ ...slot, label: `Closed ${slot.label.toLowerCase()}` })),
+          },
+          openMode,
+        ];
+        catalogState.catalog = { ...productionMotionCatalog(), models: [model] };
+        memory.set(ordinaryKey, savedDrafts({ motion: { model: 'kling-3.0', catalogRevision: productionMotion.revision } }));
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Reference images', 'Required', 'Who should move?']);
+        expect(text(tree)).toContain('Reference images are required.');
+        expect(text(tree)).toContain('Reference videos are required.');
+        expect(text(tree)).not.toContain('Closed reference');
+        expect(blocker(tree)).toBe('Add reference images and reference videos.');
       });
     });
 
