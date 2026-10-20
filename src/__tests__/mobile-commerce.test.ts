@@ -308,12 +308,21 @@ function createNotificationOnlyFromMock(disallowedTables: string[]) {
       };
     }
 
-    // The handle a sale's alert names its buyer by: a read, and none here.
+    // The handle a sale's alert names its buyer by, read by id, and none here.
+    // Any other profiles read is a step the cash unlock must not take.
     if (table === 'profiles') {
       return {
-        select() {
+        select(columns: string) {
+          if (columns !== 'username') {
+            disallowedTables.push(`profiles(${columns})`);
+            throw new Error(`Unexpected client-side mobile cash unlock profiles read: ${columns}`);
+          }
           return {
-            eq() {
+            eq(column: string) {
+              if (column !== 'id') {
+                disallowedTables.push(`profiles.${column}`);
+                throw new Error(`Unexpected client-side mobile cash unlock profiles filter: ${column}`);
+              }
               return {
                 async maybeSingle() {
                   return { data: null, error: null };
