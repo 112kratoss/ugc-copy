@@ -1218,6 +1218,26 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(shotMentionPanelState()).toBeNull();
     });
 
+    it('counts each mention of a Kling clip in a shot as the 37 characters Kie counts', async () => {
+      const view = render(<CreateVideoClient prefill={{}} />);
+      addKlingClip(view.container, 'clip.mp4');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
+      fireEvent.click(screen.getByText('Multi-Shot'));
+      const shot = await screen.findByPlaceholderText('Describe shot 1...');
+      const generate = () => screen.getByRole('button', { name: /generate video/i });
+
+      // 479 characters as typed; 500 as Kie counts the 16-character handle's one mention.
+      const atLimit = `${'a'.repeat(500 - 37 - 1)} @video_element_1`;
+      fireEvent.change(shot, { target: { value: atLimit } });
+      expect(screen.getByText('500 / 500')).toHaveAttribute('data-state', 'near');
+      expect(generate()).toBeEnabled();
+
+      fireEvent.change(shot, { target: { value: `a${atLimit}` } });
+      expect(screen.getByText('501 / 500')).toHaveAttribute('data-state', 'over');
+      expect(screen.getByText('Shot 1: Kling 3.0 Cinematic shot prompts support up to 500 characters, counting each video element mention as 37.')).toBeInTheDocument();
+      expect(generate()).toBeDisabled();
+    });
+
     it('stops a multi-shot run at a mention no Kling clip has, before the clip is uploaded', async () => {
       const view = render(<CreateVideoClient prefill={{}} />);
       addKlingClip(view.container, 'clip.mp4');
@@ -2466,7 +2486,7 @@ describe('CreateVideoClient Kling video elements', () => {
       // The handle is one the page knows, so it is not an unknown mention.
       const row = promptBox().nextElementSibling;
       expect(Array.from(row?.children ?? []).map((part) => part.textContent)).toEqual([
-        `${prompt.length}/10000`,
+        `${prompt.length} / 2,500`,
         'On standby here: @hero',
       ]);
     });
@@ -2479,7 +2499,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       const row = promptBox().nextElementSibling;
       expect(Array.from(row?.children ?? []).map((part) => part.textContent)).toEqual([
-        `${withUnknown.length}/10000`,
+        `${withUnknown.length} / 2,500`,
         'Unknown element mention: @ghost',
       ]);
     });
@@ -2489,7 +2509,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(promptBox(), { target: { value: 'A harbour at dusk' } });
 
       const row = promptBox().nextElementSibling;
-      expect(row?.textContent).toBe('17/10000');
+      expect(row?.textContent).toBe('17 / 2,500');
       expect(row?.children).toHaveLength(1);
     });
 
@@ -2879,7 +2899,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(promptBox, { target: { value: prompt } });
 
       expect(Array.from(promptBox.nextElementSibling?.children ?? []).map((part) => part.textContent)).toEqual([
-        `${prompt.length}/10000`,
+        `${prompt.length} / 2,500`,
         'On standby here: @saved_image_1, @saved_image_2',
       ]);
 
@@ -3864,14 +3884,74 @@ describe('CreateVideoClient Kling video elements', () => {
         .toEqual([expect.objectContaining({ durationSeconds: 7.9 })]);
     });
 
-    it('takes prompts and shot prompts up to the shared limit of 10,000 characters', async () => {
+    // The boxes keep the route's shared 10,000, so a paste or a model switch never cuts a
+    // word; Kling 3.0's own limits (2,500 for the prompt, 500 for each shot) are what the
+    // counters read and what holds Generate.
+    it('holds the prompt and each shot to the model’s own limits, keeping every word', async () => {
       render(<CreateVideoClient prefill={{}} />);
+      const counter = () => promptBox().nextElementSibling?.firstElementChild;
       expect(promptBox()).toHaveAttribute('maxlength', '10000');
-      fireEvent.change(promptBox(), { target: { value: 'x'.repeat(3000) } });
-      expect(promptBox().nextElementSibling?.firstElementChild?.textContent).toBe('3000/10000');
 
+      fireEvent.change(promptBox(), { target: { value: 'x'.repeat(2400) } });
+      expect(counter()?.textContent).toBe('2,400 / 2,500');
+      expect(counter()).toHaveAttribute('data-state', 'near');
+      expect(generateButton()).toBeEnabled();
+
+      fireEvent.change(promptBox(), { target: { value: 'x'.repeat(3000) } });
+      expect(promptBox()).toHaveValue('x'.repeat(3000));
+      expect(counter()?.textContent).toBe('3,000 / 2,500');
+      expect(counter()).toHaveAttribute('data-state', 'over');
+      expect(promptBox()).toHaveAttribute('aria-invalid', 'true');
+      expect(screen.getByText('Kling 3.0 Cinematic prompts support up to 2,500 characters.')).toBeInTheDocument();
+      expect(generateButton()).toBeDisabled();
+      fireEvent.click(generateButton());
+      expect(postedStarts()).toHaveLength(0);
+
+      // A multi-shot Kling 3.0 run sends its shots and no prompt of its own: the shots are held.
       fireEvent.click(screen.getByText('Multi-Shot'));
-      expect(await screen.findByPlaceholderText('Describe shot 1...')).toHaveAttribute('maxlength', '10000');
+      const shot = await screen.findByPlaceholderText('Describe shot 1...');
+      expect(shot).toHaveAttribute('maxlength', '10000');
+      expect(screen.queryByText(/prompts support up to/)).not.toBeInTheDocument();
+      fireEvent.change(shot, { target: { value: 'y'.repeat(501) } });
+      expect(shot).toHaveValue('y'.repeat(501));
+      expect(screen.getByText('501 / 500')).toHaveAttribute('data-state', 'over');
+      expect(shot).toHaveAttribute('aria-invalid', 'true');
+      expect(screen.getByText('Shot 1: Kling 3.0 Cinematic shot prompts support up to 500 characters.')).toBeInTheDocument();
+      expect(generateButton()).toBeDisabled();
+
+      fireEvent.change(shot, { target: { value: 'y'.repeat(500) } });
+      expect(shot).not.toHaveAttribute('aria-invalid');
+      expect(screen.getByText('500 / 500')).toHaveAttribute('data-state', 'near');
+      expect(screen.queryByText(/shot prompts support up to/)).not.toBeInTheDocument();
+      expect(postedStarts()).toHaveLength(0);
+    });
+
+    it('keeps the prompt when the creator switches to a model with a lower limit, and marks it over there', async () => {
+      modelCatalogState.summaries = [
+        { id: 'seedance-2-5', kind: 'video', displayName: 'Seedance 2.5', description: 'Test multimodal video model' },
+        { id: 'kling-3.0-video', kind: 'video', displayName: 'Kling 3.0 Cinematic', description: 'Test video model' },
+        { id: 'wan-2.7', kind: 'video', displayName: 'Wan 2.7', description: 'Test frame-and-reference combining model' },
+      ];
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      const counter = () => promptBox().nextElementSibling?.firstElementChild;
+      const prompt = 'x'.repeat(4000);
+      fireEvent.change(promptBox(), { target: { value: prompt } });
+      // Seedance 2.5 sets no limit of its own: the route's 10,000 stands.
+      expect(counter()?.textContent).toBe('4,000 / 10,000');
+
+      chooseModel(view.container, 'Kling 3.0 Cinematic');
+      await waitFor(() => expect(counter()?.textContent).toBe('4,000 / 2,500'));
+      expect(promptBox()).toHaveValue(prompt);
+      expect(counter()).toHaveAttribute('data-state', 'over');
+      expect(screen.getByText('Kling 3.0 Cinematic prompts support up to 2,500 characters.')).toBeInTheDocument();
+      expect(generateButton()).toBeDisabled();
+
+      chooseModel(view.container, 'Wan 2.7');
+      await waitFor(() => expect(counter()?.textContent).toBe('4,000 / 5,000'));
+      expect(promptBox()).toHaveValue(prompt);
+      expect(counter()).toHaveAttribute('data-state', 'within');
+      expect(screen.queryByText(/prompts support up to/)).not.toBeInTheDocument();
+      expect(generateButton()).toBeEnabled();
     });
 
     it('prices a multi-shot run by its shots, and stops adding shots at the model’s length and shot limits', async () => {

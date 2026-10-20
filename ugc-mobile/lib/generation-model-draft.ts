@@ -49,6 +49,12 @@ import {
   isSeedance2VideoModelId,
   type SeedanceAssetKind,
 } from './model-catalog/seedance-assets';
+import {
+  creatorPromptViolation,
+  promptLengthMeter,
+  promptLimitFor,
+  type PromptLengthMeter,
+} from './model-catalog/provider-prompt-limits';
 import type {
   GenerationElementDescriptor,
   ImageGenerationRequest,
@@ -587,6 +593,71 @@ export function catalogMultiShotLimits(model: GenerationModelDescriptor): {
   };
 }
 
+/**
+ * What a run on this model sends that decides how its provider counts the prompt: whether
+ * it sends pictures (Grok Imagine's text-only cap goes with them), and the handles of
+ * Kling 3.0's named clips, each mention of which Kling counts as 37 characters.
+ */
+function catalogPromptRunFacts(draft: CreationDraft, model: GenerationModelDescriptor | null) {
+  if (draft.tool === 'motion') return { hasReferenceImages: false, elementHandles: [] as string[] };
+  // Before the model's descriptor is in, the draft's own references stand in for the run's.
+  if (!model) return { hasReferenceImages: draft.references.length > 0, elementHandles: [] as string[] };
+  const slots = catalogRunSlots(draft, model);
+  const sent = (kind: string) => slots.filter(({ slot }) => slot.kind === kind).flatMap(({ assets }) => assets);
+  return {
+    hasReferenceImages: model.inputModes
+      ? sent('image').length > 0
+      : legacyRunDraft(catalogRunDraft(draft, model), model).references.length > 0,
+    elementHandles: model.id === 'kling-3.0-video'
+      ? sent('video').map((asset) => asset.handle).filter((handle): handle is string => Boolean(handle))
+      : [],
+  };
+}
+
+/** What a composer's counters read: the prompt, and each shot of a multi-shot run by its id. */
+export type CatalogPromptMeters = {
+  prompt: PromptLengthMeter;
+  shots: Record<string, PromptLengthMeter>;
+};
+
+/**
+ * The prompt and each shot against the limits their model's provider sets
+ * (model-catalog/provider-prompt-limits.ts), counted as the run sends them; the route's own
+ * limit where the provider sets none (10,000, or 2,500 for motion). The draft's model names
+ * the limits before its descriptor is in. Nothing here shortens a prompt: one past its limit
+ * reads over, and `validateCatalogCreationDraft` holds the run.
+ */
+export function catalogPromptMeters(draft: CreationDraft, model: GenerationModelDescriptor | null): CatalogPromptMeters {
+  const facts = catalogPromptRunFacts(draft, model);
+  const limit = promptLimitFor(model?.id ?? draft.model, { hasReferenceImages: facts.hasReferenceImages, kind: draft.tool });
+  const options = { elementMentionLength: limit.elementMentionLength, elementHandles: facts.elementHandles };
+  return {
+    prompt: promptLengthMeter(draft.prompt, limit.maxLength, options),
+    shots: draft.tool === 'video'
+      ? Object.fromEntries(draft.multiPrompts.map((shot) => [shot.id, promptLengthMeter(shot.prompt, limit.shotMaxLength, options)]))
+      : {},
+  };
+}
+
+/**
+ * Why the start would refuse the prompts a run on this model sends, in the start's own
+ * words, which name the model and the limit: "Z-Image prompts support up to 1,000
+ * characters.", or "Shot 2: …" for a shot. Null while they fit, and for an empty prompt,
+ * which has a message of its own.
+ */
+export function catalogPromptLimitError(draft: CreationDraft, model: GenerationModelDescriptor): string | null {
+  if (draft.tool === 'motion') return null;
+  const isMultiShot = draft.tool === 'video' && draft.isMultiShot;
+  const shots = draft.tool === 'video' && isMultiShot ? draft.multiPrompts.map((shot) => shot.prompt) : [];
+  if (isMultiShot ? !shots.some((shot) => shot.trim()) : !draft.prompt.trim()) return null;
+  return creatorPromptViolation(model.id, model.displayName, {
+    prompt: draft.prompt,
+    isMultiShot,
+    shots,
+    ...catalogPromptRunFacts(draft, model),
+  });
+}
+
 function validateControls(draft: CreationDraft, model: GenerationModelDescriptor, errors: string[]) {
   // A value an input mode is gated on is a shape the model takes, listed by the
   // control or not; the server's quote accepts it the same way.
@@ -739,6 +810,9 @@ export function validateCatalogCreationDraft(
   if (draft.tool === 'image' && !draft.prompt.trim()) errors.push('Prompt is required.');
   if (draft.tool === 'video' && !draft.isMultiShot && !draft.prompt.trim()) errors.push('Prompt is required.');
   if (draft.tool === 'video' && draft.isMultiShot && !draft.multiPrompts.every((shot) => shot.prompt.trim())) errors.push('All multi-shot entries need a text prompt.');
+  // The model's own limit, which the start would otherwise refuse only at Generate.
+  const promptLimitError = catalogPromptLimitError(draft, model);
+  if (promptLimitError) errors.push(promptLimitError);
   if (draft.tool === 'motion') {
     if (!draft.characterImage) errors.push('Character image is required.');
     if (!draft.referenceVideo) errors.push('Reference video is required.');

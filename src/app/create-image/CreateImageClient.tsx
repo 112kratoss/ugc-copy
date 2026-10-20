@@ -8,6 +8,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import { catalogRunQuoteInput, GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import {
+    creatorPromptViolation,
+    promptLengthMeter,
+    promptLimitFor,
+} from '../../../ugc-mobile/lib/model-catalog/provider-prompt-limits';
+import {
     GeneratorPageHeader,
     MediaStudioShell,
     StudioBackgroundProcessingNotice,
@@ -27,6 +32,7 @@ import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSe
 import PublicShareButton from '@/components/PublicShareButton';
 import PublishToShowcaseModal from '@/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
+import PromptLengthCounter from '@/components/PromptLengthCounter';
 import { useAuth } from '@/components/AuthProvider';
 import type { RemixSourceBundle } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
@@ -1141,6 +1147,14 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const referencedElementHandles = extractPromptHandles(prompt).filter((handle) => sentElementHandles.includes(handle));
     const isElementEnhancementLocked = referencedElementHandles.length > 0;
     const staleElementMentions = findUnknownPromptHandles(prompt, sentElementHandles);
+    // The selected model's own prompt limit (Kie refuses past it), counted as the run
+    // sends the prompt. Text past it is kept and marked over, after a paste or a switch to
+    // a model with a lower limit alike, and the run waits with the start's own words.
+    const hasReferenceImages = sentElements.length > 0;
+    const promptMeter = promptLengthMeter(prompt, promptLimitFor(selectedModel, { hasReferenceImages }).maxLength);
+    const promptLimitMessage = prompt.trim()
+        ? creatorPromptViolation(selectedModel, model.displayName, { prompt, hasReferenceImages })
+        : null;
     // Derived, not kept in `error`: it clears the moment the references fit the model
     // again, instead of lingering until the next generation.
     const referenceLimitMessage = modelCatalog.detailsReady && elements.length > model.maxImages
@@ -1446,7 +1460,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             setError(`Unknown element mention${staleElementMentions.length > 1 ? 's' : ''}: ${staleElementMentions.join(', ')}`);
             return;
         }
-        if (referenceLimitMessage) return;
+        if (referenceLimitMessage || promptLimitMessage) return;
         if (newBuildAvailable && !remixId) {
             // A page older than the server may send what it no longer takes. The draft
             // is saved and comes back after the reload; a remix keeps no draft, so it
@@ -1883,10 +1897,11 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 onKeyUp={syncPromptCaretState}
                                 placeholder="Describe the image you want to create..."
                                 maxLength={GENERATION_PROMPT_MAX_LENGTH}
+                                aria-invalid={promptMeter.state === 'over' || undefined}
                                 className={`w-full bg-black/50 text-white rounded-2xl p-5 border border-white/10 ${accentStyles.ring} focus:ring-4 outline-none resize-y min-h-[150px] placeholder:text-zinc-600 transition-all text-sm leading-relaxed`}
                             />
                             <div className="mt-2 flex items-center justify-between gap-3 text-xs">
-                                <p className="text-zinc-600">{prompt.length}/{GENERATION_PROMPT_MAX_LENGTH} characters</p>
+                                <PromptLengthCounter meter={promptMeter} suffix=" characters" />
                                 {staleElementMentions.length > 0 ? (
                                     <p className="min-w-0 text-right text-rose-300">
                                         Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}:{' '}
@@ -2230,7 +2245,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         <button
                                             type="button"
                                             onClick={handleStartNewRun}
-                                            disabled={!prompt.trim() || quotePending || staleElementMentions.length > 0 || Boolean(referenceLimitMessage)}
+                                            disabled={!prompt.trim() || quotePending || staleElementMentions.length > 0 || Boolean(referenceLimitMessage) || Boolean(promptLimitMessage)}
                                             className="ui-focus-ring flex min-h-12 w-full items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-6 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                             {currentCost !== null ? `Start a new run · ${quoteUi.costLabel}` : 'Start a new run'}
@@ -2254,7 +2269,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 ) : (
                                     <button
                                         onClick={handleGenerate}
-                                        disabled={!prompt.trim() || isGenerating || quotePending || staleElementMentions.length > 0 || Boolean(referenceLimitMessage)}
+                                        disabled={!prompt.trim() || isGenerating || quotePending || staleElementMentions.length > 0 || Boolean(referenceLimitMessage) || Boolean(promptLimitMessage)}
                                         className="ui-focus-ring flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 py-4 text-base font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         {isGenerating ? (
@@ -2284,6 +2299,8 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         <p role="alert" className="text-sm text-amber-200">{pendingStartNotice ?? START_UNCONFIRMED_MESSAGE}</p>
                                     ) : referenceLimitMessage ? (
                                         <p className="text-sm text-red-400">{referenceLimitMessage}</p>
+                                    ) : promptLimitMessage ? (
+                                        <p className="text-sm text-red-400">{promptLimitMessage}</p>
                                     ) : error ? (
                                         // A price that could not be read since (asked again after
                                         // `cost_changed`, say) keeps its Retry under the error:
