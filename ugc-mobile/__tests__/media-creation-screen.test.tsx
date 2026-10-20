@@ -5490,7 +5490,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(authState.api.startGeneration.mock.calls[0][0]).toMatchObject({ expectedCostCredits: 8 });
         expect(authState.api.quoteGenerationModel.mock.calls.length).toBeGreaterThan(quotesBefore);
 
-        const outOfDate = 'This app is out of date, so it can’t price this run. Update it, or close and reopen it to get the latest version.';
+        const outOfDate = 'This app is out of date, so it can’t price this run. Update it, or try again later.';
         const workspace = () => tree.root.findByProps({ testID: 'generation-workspace' });
         expect(collectText(workspace())).toContain(outOfDate);
         expect(collectText(workspace())).toContain('Your draft is saved.');
@@ -5555,7 +5555,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
         // The price in hand is the one the start refused: no word on this build yet, so the refusal
         // stands as it was said, with the run's price unknown.
-        const outOfDate = 'This app is out of date, so it can’t price this run. Update it, or close and reopen it to get the latest version.';
+        const outOfDate = 'This app is out of date, so it can’t price this run. Update it, or try again later.';
         expect(text(tree)).not.toContain(outOfDate);
         expect(text(tree)).toContain('The price of this run changed.');
         expect(workspaceButtons(tree)).toEqual({ primary: ['Check the new price'], secondary: ['Try again', 'Back to creator'] });
@@ -5573,7 +5573,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           .mockResolvedValue(started('pred-taken'));
         authState.api.getImageGeneration.mockResolvedValue({ status: 'succeeded', output: 'https://cdn.example.com/out.png' });
         const tree = await openTyped();
-        const outOfDate = 'This app is out of date, so it can’t price this run. Update it, or close and reopen it to get the latest version.';
+        const outOfDate = 'This app is out of date, so it can’t price this run. Update it, or try again later.';
         const workspace = () => tree.root.findByProps({ testID: 'generation-workspace' });
         const backToCreator = () => renderer.act(() => { workspace().find((node) => node.type === SecondaryButton && node.props.label === 'Back to creator').props.onPress(); });
         const chooseAspectRatio = async (label: string) => {

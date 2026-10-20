@@ -526,11 +526,13 @@ function slotLabelInSentence(label: string): string {
 /**
  * Said in place of a `cost_changed` refusal once the run's price, asked again, is the price the
  * start refused (`catalogAppOutOfDateForRun`): this build prices the run as the server no longer
- * does. An update from the store, or the one the app fetches when it is opened again, brings a
- * build that prices it as the server does. Short enough for the creator bar's two lines, where a
- * longer one lost its end on the Pixel 9a; the failure view adds that the draft is saved.
+ * does. It promises no fix on reopening: the update that prices the run as the server does goes
+ * out by hand after the server's deploy, so for a while there is none, and expo-updates swaps a
+ * fetched bundle in only at the cold start after the one that fetched it (`app-update-policy.ts`).
+ * Short enough for the creator bar's two lines, where a longer one lost its end on the Pixel 9a;
+ * the failure view adds that the draft is saved.
  */
-const APP_OUT_OF_DATE_MESSAGE = 'This app is out of date, so it can’t price this run. Update it, or close and reopen it to get the latest version.';
+const APP_OUT_OF_DATE_MESSAGE = 'This app is out of date, so it can’t price this run. Update it, or try again later.';
 const APP_OUT_OF_DATE_DRAFT_NOTE = 'Your draft is saved.';
 
 /**
