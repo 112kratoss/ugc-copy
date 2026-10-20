@@ -127,6 +127,10 @@ const PROVIDER_IMAGE_LIMITS: Readonly<Record<string, readonly ProviderImageField
   'seedream/5-flash-image-to-image': [limit('image_urls', 'reference', 30)],
   // Seedance 2, Fast, Mini and 2.5: reference_image_urls "Size: Single image less than 30
   // MB" (bytedance/seedance-2:179-196, -2-fast:179-196, -2-mini:179-196, -2-5:184-201).
+  // Seedance 1.5 Pro (delisted on Kie's site 2026-10-20; its API still runs it): input_urls
+  // "Max File Size: 10MB", from the captured page (docs/model-api-references/bytedance/
+  // seedance-1.5-pro.md:80-84), the last one Kie published. It is the guided first video.
+  'bytedance/seedance-1.5-pro': [limit('input_urls', 'frame', 10)],
   'bytedance/seedance-2': SEEDANCE_2_LIMITS,
   'bytedance/seedance-2-fast': SEEDANCE_2_LIMITS,
   'bytedance/seedance-2-mini': SEEDANCE_2_LIMITS,

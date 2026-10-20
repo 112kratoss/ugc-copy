@@ -44,6 +44,8 @@ const KIE_IMAGE_LIMITS: Record<string, Array<[string, number] | [string, number,
   'seedream/5-pro-image-to-image': [['image_urls', 30]],
   'seedream/5-lite-image-to-image': [['image_urls', 30]],
   'seedream/5-flash-image-to-image': [['image_urls', 30]],
+  // Delisted on Kie's site; the last captured page's input_urls limit (provider-image-limits).
+  'bytedance/seedance-1.5-pro': [['input_urls', 10]],
   'bytedance/seedance-2': [['reference_image_urls', 30]],
   'bytedance/seedance-2-fast': [['reference_image_urls', 30]],
   'bytedance/seedance-2-mini': [['reference_image_urls', 30]],
@@ -59,7 +61,7 @@ const KIE_IMAGE_LIMITS: Record<string, Array<[string, number] | [string, number,
  * Endpoints the app sends pictures to whose pages document no size for them that day:
  * wan/2-7-r2v's "up to 30MB" is its reference voice, and pixverse-v6/reference-to-video,
  * the GPT Image pages, Wan 2.7's frame and image pages and Veo name none. Seedance 1.5
- * Pro's page is gone (404), so its old 10 MB cannot be re-read.
+ * Pro's page is gone (404); its last captured page's 10 MB is used (provider-image-limits).
  */
 const NO_DOCUMENTED_IMAGE_LIMIT = new Set([
   'wan/2-7-r2v',
@@ -70,7 +72,6 @@ const NO_DOCUMENTED_IMAGE_LIMIT = new Set([
   'gpt-image-2-image-to-image',
   'gpt-image-2-5-flare-image-to-image',
   'gpt-image-2-5-sunburst-image-to-image',
-  'bytedance/seedance-1.5-pro',
   'veo3',
   'veo3_fast',
   'veo3_lite',

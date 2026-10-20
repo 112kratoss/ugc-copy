@@ -437,6 +437,8 @@ describe('the provider image size check', () => {
     await expect(check).rejects.toBeInstanceOf(GenerationServiceError);
     await expect(check).rejects.toMatchObject({
       status: 400,
+      // Coded so a canvas or template step says it too.
+      failureCode: 'provider_input_refused',
       message: 'Qwen Image 3.0 takes reference images up to 10 MB; Reference 2 is 12.4 MB.',
     });
   });

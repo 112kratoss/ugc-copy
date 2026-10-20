@@ -4,6 +4,7 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendWarning } from '@/lib/backend-logger';
+import { PROVIDER_INPUT_REFUSED } from '@/lib/generation-public-failure';
 import { GenerationServiceError } from '@/lib/generation-service-core';
 import {
   providerImageSizeViolation,
@@ -302,5 +303,6 @@ export async function assertProviderImageSizesAccepted(
     model: params.modelId,
     providerModel: isRecord(request) ? request.model : null,
   });
-  throw new GenerationServiceError(violation, 400);
+  // Coded so a canvas or template step says it too (generation-public-failure).
+  throw new GenerationServiceError(violation, 400, PROVIDER_INPUT_REFUSED);
 }
