@@ -23,6 +23,10 @@
 @source "./delete-account";
 @source "./login";
 @source "./models";
+/* Alerts, the shell's tab on every page, draws its sign-in card here; its
+   signed-in half links the supplement itself, loaded once a reader is known. */
+@source "./notifications";
+@source not "./notifications/SignedInAlerts.tsx";
 @source "./pricing";
 @source "./privacy";
 @source "./r";

@@ -15,7 +15,9 @@ const SUPPLEMENT_IMPORT_PATTERN = /import\s+['"][^'"]*non-public-utilities\.css[
 // Every route a signed-out visitor can land on: the marketing and SEO pages,
 // the policy pages (the store listings link account deletion), share landings
 // (`/creators/[username]`, `/r/[code]`), the
-// template catalog and the sign-in/auth screens. A full load of these routes
+// template catalog, the sign-in/auth screens and Alerts, whose sign-in card a
+// signed-out visitor reaches from the shell on every page (its signed-in half
+// is a lazy boundary, below). A full load of these routes
 // carries the root `globals.css` alone (a client navigation from a route that
 // links the supplement keeps the supplement, which is why it scans every
 // route). With `experimental.inlineCss` on, a public route that also linked the
@@ -44,6 +46,7 @@ const PUBLIC_ROUTE_DIRECTORIES = new Set([
   'login',
   'marketplace',
   'models',
+  'notifications',
   'pricing',
   'privacy',
   'r',
@@ -52,10 +55,10 @@ const PUBLIC_ROUTE_DIRECTORIES = new Set([
   'terms',
 ]);
 // Every other route folder: the signed-in surfaces, each with a layout that
-// links the supplement. Search and Alerts also draw for a signed-out visitor
-// (results, a sign-in card) and keep it. A folder in neither list fails: one
-// left out used to count as signed-in, so a new public page built on a
-// signed-in layout passed and inlined both sheets.
+// links the supplement. Search also draws for a signed-out visitor (its
+// results) and keeps it. A folder in neither list fails: one left out used to
+// count as signed-in, so a new public page built on a signed-in layout passed
+// and inlined both sheets.
 const SIGNED_IN_ROUTE_DIRECTORIES = new Set([
   'admin',
   'create',
@@ -67,13 +70,21 @@ const SIGNED_IN_ROUTE_DIRECTORIES = new Set([
   'credits',
   'home',
   'invite',
-  'notifications',
   'post',
   'profile',
   'search',
   'template-runs',
   'unlocks',
   'welcome-reward',
+]);
+// A public page's signed-in half that brings the supplement itself, loaded with
+// import() only once a reader is known: Alerts is the shell's tab on every
+// page, so a signed-out visitor opens it, and its layout used to give every
+// such visit the signed-in sheet. Each is relative to src/app; globals.css
+// skips it (`@source not`), and the public import closure stops there: what it
+// draws is drawn with the sheet it brings.
+const LAZY_SUPPLEMENT_BOUNDARIES = new Set([
+  'notifications/SignedInAlerts.tsx',
 ]);
 const SOURCE_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
 const DYNAMIC_UTILITY_STRING = /['"`](?:[^'"`]*\s)?(?:from|via|to|bg|text|border|ring|shadow)-(?:\[[^\]]+\]|[a-z]+-\d{2,3})(?:\s+[^'"`]*)?['"`]/;
@@ -113,13 +124,14 @@ function resolveLocalImport(specifier: string, importer: string): string | null 
   return null;
 }
 
-function collectImportClosure(entryFiles: string[]): Set<string> {
+/** Every file the entries import, and what those import; a file in `boundaries` is neither entered nor read. */
+function collectImportClosure(entryFiles: string[], boundaries: ReadonlySet<string> = new Set()): Set<string> {
   const pendingFiles = [...entryFiles];
   const visitedFiles = new Set<string>();
 
   while (pendingFiles.length > 0) {
     const file = pendingFiles.pop();
-    if (!file || visitedFiles.has(file)) {
+    if (!file || visitedFiles.has(file) || boundaries.has(file)) {
       continue;
     }
 
@@ -148,12 +160,14 @@ function listRootMarkupFiles(): string[] {
     .sort();
 }
 
+/** What a public route draws with globals.css alone: it stops at each lazy supplement boundary. */
 function collectPublicImportClosure(): Set<string> {
   const routeSources = [...PUBLIC_ROUTE_DIRECTORIES].flatMap((directory) => (
     walkFiles(path.join(APP_ROOT, directory)).filter((file) => /\.(?:ts|tsx|js|jsx)$/.test(file))
   ));
+  const boundaries = new Set([...LAZY_SUPPLEMENT_BOUNDARIES].map((boundary) => path.join(APP_ROOT, boundary)));
 
-  return collectImportClosure([...listRootMarkupFiles(), ...routeSources]);
+  return collectImportClosure([...listRootMarkupFiles(), ...routeSources], boundaries);
 }
 
 /** Every file any route can draw: the root's own files and every route folder, with what they import. */
@@ -223,7 +237,8 @@ describe('route utility stylesheet readiness', () => {
 
     // A page made for signed-out visitors (marketing, policy, a landing) belongs
     // in PUBLIC_ROUTE_DIRECTORIES and globals.css instead. A signed-in surface
-    // that also draws a signed-out state (Search, Alerts) keeps the supplement.
+    // that also draws a signed-out state keeps the supplement (Search), or
+    // loads it with its signed-in half (Alerts, LAZY_SUPPLEMENT_BOUNDARIES).
     for (const directory of [...SIGNED_IN_ROUTE_DIRECTORIES].sort()) {
       const layoutPath = path.join(APP_ROOT, directory, 'layout.tsx');
       expect(existsSync(layoutPath), `${directory} is signed-in, so it needs a route layout`).toBe(true);
@@ -251,7 +266,8 @@ describe('route utility stylesheet readiness', () => {
     // layout or a component it imports would inline both sheets twice as surely
     // as its layout would. The import walker does not follow a bare CSS
     // import, so every file is read; any other import form puts the sheet
-    // itself in the closure.
+    // itself in the closure. The closure stops at a lazy boundary, which the
+    // next case holds to import() alone.
     const publicClosure = collectPublicImportClosure();
     expect(publicClosure.has(path.join(APP_ROOT, 'non-public-utilities.css')), 'a public route imports the supplement')
       .toBe(false);
@@ -267,6 +283,34 @@ describe('route utility stylesheet readiness', () => {
       expect(publicSources.has(`./${file}`), `${file} must be scanned by globals.css`).toBe(true);
       expect(readFileSync(path.join(APP_ROOT, file), 'utf8'), `${file} must not link the supplement`)
         .not.toContain('non-public-utilities.css');
+    }
+  });
+
+  // A static import of a boundary would put the supplement among the page's
+  // own stylesheets for every visitor again, and a globals.css line reaching
+  // it would put its utilities on every public page: import() alone loads it,
+  // and only the supplement scans it.
+  it('loads each lazy supplement boundary with import() alone, and only the supplement scans it', () => {
+    const globalsCss = readFileSync(path.join(APP_ROOT, 'globals.css'), 'utf8');
+    const supplementalCss = readFileSync(path.join(APP_ROOT, 'non-public-utilities.css'), 'utf8');
+    const sourceFiles = [APP_ROOT, path.join(SRC_ROOT, 'components'), path.join(SRC_ROOT, 'lib')]
+      .flatMap((directory) => walkFiles(directory))
+      .filter((file) => /\.(?:ts|tsx|js|jsx)$/.test(file));
+    const importersOf = (file: string, pattern: RegExp) => sourceFiles
+      .filter((importer) => [...readFileSync(importer, 'utf8').matchAll(pattern)]
+        .some((match) => resolveLocalImport(match[1], importer) === file))
+      .map((importer) => path.relative(SRC_ROOT, importer));
+
+    for (const boundary of LAZY_SUPPLEMENT_BOUNDARIES) {
+      const file = path.join(APP_ROOT, boundary);
+      expect(existsSync(file), `${boundary} is there`).toBe(true);
+      expect(readFileSync(file, 'utf8'), `${boundary} links the supplement`).toContain(SUPPLEMENT_IMPORT);
+      expect(isScannedBy(globalsCss, file), `globals.css must skip ${boundary} (@source not)`).toBe(false);
+      expect(isScannedBy(supplementalCss, file), `the supplement scans ${boundary}`).toBe(true);
+      // `from '…'`, wherever it is, and a bare `import '…'`.
+      expect(importersOf(file, /(?:\bfrom\s*|^\s*import\s*)['"]([^'"]+)['"]/gm), `${boundary} must be loaded with import() alone`)
+        .toEqual([]);
+      expect(importersOf(file, /\bimport\s*\(\s*['"]([^'"]+)['"]/g), `something loads ${boundary}`).not.toEqual([]);
     }
   });
 

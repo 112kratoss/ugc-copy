@@ -169,7 +169,8 @@ describe('the web Alerts page', () => {
     render(<NotificationsPage />);
 
     expect(await screen.findByText('2 unread alerts')).toBeInTheDocument();
-    const markAll = screen.getByRole('button', { name: 'Mark all read' });
+    // The buttons come with the signed-in half, which loads on its own (import()).
+    const markAll = await screen.findByRole('button', { name: 'Mark all read' });
     fireEvent.click(markAll);
     // One request at a time.
     expect(markAll).toBeDisabled();

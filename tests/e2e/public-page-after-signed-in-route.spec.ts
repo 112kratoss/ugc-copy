@@ -10,8 +10,10 @@ import { expect, test, type Page } from '@playwright/test';
 // 48px and its title 36px for 48px. Now the supplement scans every route, so its
 // own order decides (`route-style-two-sheet-order.test.ts` holds the classes).
 //
-// Each case opens Alerts, follows a client navigation to a public page, and reads
-// every element of it against the same page after a reload.
+// Each case opens Credit history, a signed-in route whose layout links the
+// supplement, follows a client navigation to a public page, and reads every
+// element of it against the same page after a reload. (Alerts was the start
+// until its sign-in card, the page offline here, moved to globals.css alone.)
 
 // Properties utility classes set whose computed value no fetched text changes.
 // Used widths and heights depend on that text (Pricing's credit balance differs
@@ -101,21 +103,21 @@ function stylesheets(page: Page) {
   )));
 }
 
-/** True while the page is still the window Alerts opened, so nothing since was a page load. */
-function stillTheWindowAlertsOpened(page: Page) {
-  return page.evaluate(() => (window as unknown as { openedOnAlerts?: boolean }).openedOnAlerts === true);
+/** True while the page is still the window Credit history opened, so nothing since was a page load. */
+function stillTheWindowCreditHistoryOpened(page: Page) {
+  return page.evaluate(() => (window as unknown as { openedOnCreditHistory?: boolean }).openedOnCreditHistory === true);
 }
 
 for (const { route, heading } of [
   { route: '/pricing', heading: 'Simple, transparent pricing' },
   { route: '/blog', heading: 'Blog & Resources' },
 ]) {
-  test(`${route}, opened from Alerts by a client navigation, draws as it does after a reload`, async ({ page }) => {
+  test(`${route}, opened from Credit history by a client navigation, draws as it does after a reload`, async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto('/notifications');
-    await expect(page.getByRole('heading', { level: 1, name: 'Alerts' })).toBeVisible(COLD_PAGE);
+    await page.goto('/credits');
+    await expect(page.getByRole('heading', { level: 1, name: 'Credit history' })).toBeVisible(COLD_PAGE);
     await hydrated(page);
-    await page.evaluate(() => { (window as unknown as { openedOnAlerts: boolean }).openedOnAlerts = true; });
+    await page.evaluate(() => { (window as unknown as { openedOnCreditHistory: boolean }).openedOnCreditHistory = true; });
 
     // What a link does: Next's router, in the same window.
     await page.evaluate((href) => (
@@ -126,8 +128,8 @@ for (const { route, heading } of [
     await hydrated(page);
     const navigated = await readDrawing(page);
     const sheetsAfterNavigation = await stylesheets(page);
-    // Read in the window Alerts opened, all of it: a client navigation, and no reload since.
-    expect(await stillTheWindowAlertsOpened(page)).toBe(true);
+    // Read in the window Credit history opened, all of it: a client navigation, and no reload since.
+    expect(await stillTheWindowCreditHistoryOpened(page)).toBe(true);
 
     await page.reload();
     await expect(page.getByRole('heading', { level: 1, name: heading })).toBeVisible(COLD_PAGE);
@@ -135,7 +137,7 @@ for (const { route, heading } of [
     const reloaded = await readDrawing(page);
     const sheetsAfterReload = await stylesheets(page);
 
-    // The supplement Alerts linked was still in the document, so the page was drawn with both sheets.
+    // The supplement Credit history linked was still in the document, so the page was drawn with both sheets.
     expect(sheetsAfterNavigation.filter((sheet) => !sheetsAfterReload.includes(sheet))).not.toEqual([]);
     expect(differences(reloaded, navigated)).toEqual([]);
   });
