@@ -2148,10 +2148,7 @@ export async function startImageGeneration(params: {
         resolution,
       };
       input.output_format = outputFormat;
-
-      if (modelConfig.supportsGoogleSearch) {
-        input.google_search = googleSearch;
-      }
+      // No `google_search`: neither Nano Banana spec lists it any more (2026-10-20).
 
       if (resolvedImageUrls.length > 0) {
         input.image_input = resolvedImageUrls;

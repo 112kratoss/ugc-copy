@@ -170,7 +170,9 @@ describe('startImageGenerationForRoute', () => {
       aspectRatio: '1:1',
       resolution: '1K',
       outputFormat: 'png',
-      googleSearch: true,
+      // An installed app still sends googleSearch: true. Nano Banana 2 no longer takes it
+      // (2026-10-20), so the quote drops the value and the run starts without it.
+      googleSearch: false,
       quotedCostCredits: 8,
       sourceGenerationId: '3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b',
     }));

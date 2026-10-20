@@ -2,6 +2,8 @@
 
 > **Superseded 2026-09-04 for `reference_image_urls maxItems: 9` and a dated promotion on the listed price.** See `reference-audit-2026-09-04.md`.
 
+> **2026-10-20 re-check:** the promotion ended and the lower price stayed, so it is the list price: "480P: 6.8 credits/s ($0.034/s, with video) | 11.7 credits/s ($0.059/s, no video)", "720P: 15 credits/s ($0.075/s, with video) | 24.8 credits/s ($0.124/s, no video)". The pricing line at the end of this capture is history. See `reference-audit-2026-09-04.md`.
+
 > Generate content using the Seedance 2 Fast model
 
 ## Overview
@@ -266,4 +268,6 @@ GET https://api.kie.ai/api/v1/jobs/recordInfo?taskId=281e5b0********************
 | 500 | Internal server error |
 
 Pricing: Pricing: 480P — 8 credits/s ($0.045/s, with video input) |15.5 credits/s ($0.0775/s, no video input); 720P — 20 credits/s ($0.100/s, with video input) |33 credits/s ($0.165/s, no video input) 
+
+2026-10-20 re-check: 480P — 6.8 credits/s ($0.034/s, with video) | 11.7 credits/s ($0.059/s, no video); 720P — 15 credits/s ($0.075/s, with video) | 24.8 credits/s ($0.124/s, no video). The promotion ended with these prices kept, and they are what the catalog bills.
 

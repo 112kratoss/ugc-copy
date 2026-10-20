@@ -11,6 +11,8 @@ import {
 } from '@/lib/generation-model-catalog';
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 
+import { descriptorBeforeKieCheckup, operationBeforeKieCheckup } from './fixtures/kie-checkup-2026-10-20';
+
 /**
  * Release 2026-09-04-reference-audit: the fixes from
  * docs/audits/model-reference-inputs-audit-2026-09-04.md that live in the catalog — three
@@ -64,7 +66,8 @@ function rulesFor(modelId: string): Array<Record<string, unknown>> {
  * The code build as this release shipped it. Release wan-start-frame-apart-20261019 keyed
  * Wan 2.7's two reference-count rules on the reference slots, so its start frame rides
  * beside five references (wan-start-frame-apart-manifest.test.ts); here they still counted
- * every picture.
+ * every picture. The 2026-10-20 check-up's changes are rewound first
+ * (fixtures/kie-checkup-2026-10-20.ts).
  */
 function validationConfigAsReleased(modelId: string, config: Record<string, unknown>): Record<string, unknown> {
   if (modelId !== 'wan-2.7') return config;
@@ -114,8 +117,8 @@ describe('reference-audit release', () => {
       const entry = manifest.entries.find((candidate) => candidate.modelId === modelId)!;
       const { schemaVersion, ...publicDescriptor } = entry.publicDescriptor;
       expect(schemaVersion).toBe(2);
-      expect(publicDescriptor).toEqual(descriptor(modelId));
-      const operation = operations.get(modelId)!;
+      expect(publicDescriptor).toEqual(descriptorBeforeKieCheckup(descriptor(modelId)));
+      const operation = operationBeforeKieCheckup(operations.get(modelId)!);
       expect(entry.pricingStrategy).toBe(operation.pricingStrategy);
       expect(entry.pricingConfig).toEqual(operation.pricingConfig);
       const { passthroughSettingKeys, ...validationConfig } = validationConfigAsReleased(
@@ -261,10 +264,12 @@ describe('reference-audit release', () => {
         // Advisory for a client that cannot measure audio (mobile): nothing to sum, no error.
         expect(() => quoteGenerationModel(audio(modelId, undefined)), modelId).not.toThrow();
       }
-      // Seedance 2.5 states a per-file range only, so it carries no audio total.
-      expect(rulesFor('seedance-2-5').some((rule) => (
+      // Seedance 2.5 stated a per-file range only when this release shipped, so it carried no
+      // audio total. Since the 2026-10-20 re-check its spec caps the total at 30 s
+      // (kie-checkup-2026-10-20.test.ts).
+      expect(rulesFor('seedance-2-5').filter((rule) => (
         rule.type === 'combined-duration' && (rule.slotKeys as string[]).includes('audioReferences')
-      ))).toBe(false);
+      )).map((rule) => rule.max)).toEqual([30]);
     });
 
     it('keeps Kling 2.6 image-oriented motion to ten seconds', () => {

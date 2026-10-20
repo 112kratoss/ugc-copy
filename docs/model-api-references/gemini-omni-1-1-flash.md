@@ -36,6 +36,14 @@ Against `gemini-omni-video` (`docs/model-api-references/reference-audit-2026-09-
 prompt, image_urls, video_list, duration, aspect_ratio and resolution body, plus the frame pair
 and the 360p tier.
 
+**2026-10-20 re-check**: prices unchanged on both pages (with video input "360P/720P/1080P: 168
+credits ($0.84) per generation", "4K: 252 credits ($1.26) per generation"; Gemini Omni Video
+lists the same from 720P). Both specs cap the one clip at 30 s: Flash "the video duration must
+not exceed `30s`" (lines 211-212 and 239 of the saved spec), Omni Video "no longer than `30s`"
+(lines 176-177 and 203). The catalog offered the clip with no length cap; both models' reference
+clip slot now carries `maxDurationSeconds: 30` with required duration metadata, and the server
+measures the clip before a start and refuses a longer one.
+
 ## Price (`pricingDesc`, 2026-10-08)
 
 - 360P / 720P / 1080P: 4 s 63, 6 s 84, 8 s 105, 10 s 126 credits.

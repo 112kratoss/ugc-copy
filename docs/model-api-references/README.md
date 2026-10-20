@@ -41,7 +41,11 @@ node scripts/ops/kie-evidence.mjs spec bytedance/seedance-2-5   # model enum + i
    not reprice itself on a date, so pinning a discounted figure under-bills the
    moment the offer lapses. `kie-evidence.mjs price` prints these qualifiers after
    the credit lines — read them. Pin the undiscounted rate unless someone decides
-   otherwise on purpose, and re-read the page after the quoted date.
+   otherwise on purpose, and re-read the page after the quoted date. An offer can
+   also end with its price kept: by the 2026-10-20 re-check the three dated offers
+   above had ended and Kie listed the lower figures as its price (Fast 11.7 / 24.8,
+   Mini 3.8 / 8.2, 2.5 1080p 158 / 95), so the pinned rates over-billed, Mini by
+   2.5×, until a release repriced them.
 6. **Read the schema, not the marketing page.** kie.ai/seedance-2-5 advertises
    "up to 50 multimodal references" and "native 4K output"; the OpenAPI schema
    says `maxItems: 30` and stops at 1080p.

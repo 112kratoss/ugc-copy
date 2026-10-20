@@ -51,12 +51,12 @@ export const IMAGE_MODELS = {
   'nano-banana-2': {
     id: 'nano-banana-2' as const,
     displayName: 'Nano Banana 2.0',
-    description: 'Versatile image gen with Google Search grounding',
+    description: 'Versatile generation and multi-image edits up to 4K',
     badge: 'Recommended',
     badgeColor: 'from-blue-500 to-cyan-500',
     accentColor: 'blue',
-    maxImages: 14,
-    supportsGoogleSearch: true,
+    maxImages: 10,
+    supportsGoogleSearch: false,
     supportsOutputFormat: true,
     aspectRatios: ['auto', '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'] as const,
     resolutions: ['1K', '2K', '4K'] as const,
@@ -630,7 +630,8 @@ export function getVideoElementSupport(
   if (modelId === 'seedance-2-5') return { enabled: true, maxElements: 30, maxNamed: 30, reason: null };
   // 7 reference images, at most 3 of them named as provider-resolved subjects.
   if (modelId === 'kling-o3') return { enabled: true, maxElements: 7, maxNamed: 3, reason: null };
-  if (modelId === 'minimax-h3') return { enabled: true, maxElements: 9, maxNamed: 9, reason: null };
+  // Kie bills each image past the fifth, so references stop at the five it includes.
+  if (modelId === 'minimax-h3') return { enabled: true, maxElements: 5, maxNamed: 5, reason: null };
   if (modelId === 'happyhorse-1.1') return { enabled: true, maxElements: 9, maxNamed: 9, reason: null };
   if (modelId === 'gemini-omni-video') return { enabled: true, maxElements: 7, maxNamed: 7, reason: null };
   if (modelId === 'veo-3.1') {
