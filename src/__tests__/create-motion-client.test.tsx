@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import CreateMotionClient from '@/app/create-motion/CreateMotionClient';
 import { GenerationStatusRequestError } from '@/lib/generation-status-client';
@@ -8,21 +8,12 @@ import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from 
 import type { CatalogInputMode } from '@/lib/generation-model-catalog';
 import { MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import { PRODUCTION_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
+import { quoteStandIn } from './fixtures/web-quote-stand-in';
 
 const modelCatalogState = vi.hoisted(() => ({
   missingIds: [] as string[],
   error: null as Error | null,
   summaries: [] as Array<{ id: string; kind: string; displayName: string; description: string }>,
-}));
-const quoteState = vi.hoisted(() => ({
-  errorCode: null as string | null,
-  requests: [] as Array<Record<string, unknown> | null>,
-  /** The attempt each request was asked under ("Retry quote" and a price that changed ask again). */
-  attempts: [] as number[],
-  /** The answer to each attempt, the last one repeating: a price, still pending, or a failure. */
-  answers: [20] as Array<number | 'pending' | 'error'>,
-  /** Answers as for another request than the page asked. */
-  forAnotherRequest: false,
 }));
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
 // One stable catalog: a fresh object per render re-runs every effect keyed on it.
@@ -157,7 +148,8 @@ vi.mock('@/lib/generation-status-client', async () => {
   return { ...actual, ...statusMocks };
 });
 
-vi.mock('@/lib/use-deployment-refresh', () => ({
+vi.mock('@/lib/use-deployment-refresh', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/use-deployment-refresh')>()),
   useDeploymentRefresh: (enabled: boolean) => {
     deployState.enabled.push(enabled);
     return { newBuildAvailable: deployState.newBuildAvailable };
@@ -181,6 +173,7 @@ vi.mock('@/lib/supabase', () => ({
 
 vi.mock('@/lib/generation-model-client', async () => {
   const actual = await vi.importActual<typeof import('@/lib/generation-model-client')>('@/lib/generation-model-client');
+  const { quoteHookStandIn } = await import('./fixtures/web-quote-stand-in');
   return {
     ...actual,
     useWebGenerationModelCatalog: () => ({
@@ -191,38 +184,8 @@ vi.mock('@/lib/generation-model-client', async () => {
       revision: 'test-catalog-rev',
       refetch: generationCatalogRefetchMock,
     }),
-    // As the real hook: no request, no quote; a state says the request it answers (`key`).
-    useWebGenerationModelQuote: (input: Record<string, unknown> | null, _accessToken?: string | null, attempt = 0) => {
-      void _accessToken;
-      quoteState.requests.push(input);
-      quoteState.attempts.push(attempt);
-      if (!input) return { status: 'idle', quote: null, error: null, key: null };
-      const key = JSON.stringify(quoteState.forAnotherRequest ? { ...input, modelId: 'another-model' } : input);
-      if (quoteState.errorCode) {
-        return {
-          status: 'error',
-          quote: null,
-          error: new actual.WebCatalogRequestError('The model catalog changed.', 409, quoteState.errorCode),
-          key,
-        };
-      }
-      const answer = quoteState.answers[Math.min(attempt, quoteState.answers.length - 1)];
-      if (answer === 'pending') return { status: 'pending', quote: null, error: null, key };
-      if (answer === 'error') {
-        return { status: 'error', quote: null, error: new actual.WebCatalogRequestError('Could not calculate generation cost.', 503), key };
-      }
-      return {
-        status: 'ready',
-        quote: {
-          modelId: 'kling-3.0',
-          catalogRevision: 'test-catalog-rev',
-          normalizedSettings: {},
-          costCredits: answer,
-        },
-        error: null,
-        key,
-      };
-    },
+    // Unless a test says otherwise, 20 credits, ready, and the price of the very request the page asked.
+    useWebGenerationModelQuote: quoteHookStandIn(actual.WebCatalogRequestError),
   };
 });
 
@@ -289,7 +252,7 @@ function costShown() {
 
 /** The page's last quote request, as JSON. */
 function shownQuote() {
-  return JSON.stringify(quoteState.requests.filter(Boolean).at(-1));
+  return JSON.stringify(quoteStandIn.requests.filter(Boolean).at(-1));
 }
 
 /**
@@ -358,11 +321,7 @@ beforeEach(() => {
   modelCatalogState.missingIds = [];
   modelCatalogState.error = null;
   modelCatalogState.summaries = [];
-  quoteState.errorCode = null;
-  quoteState.requests = [];
-  quoteState.attempts = [];
-  quoteState.answers = [20];
-  quoteState.forAnotherRequest = false;
+  quoteStandIn.reset(20);
   for (const model of motionCatalog.models) delete (model as { inputModes?: unknown }).inputModes;
   generationCatalogRefetchMock.mockClear();
   maybeSingleMock.mockClear();
@@ -442,7 +401,7 @@ describe('CreateMotionClient model notices', () => {
   });
 
   it('lets the creator dismiss a catalog-changed notice', async () => {
-    quoteState.errorCode = 'CATALOG_CHANGED';
+    quoteStandIn.errorCode = 'CATALOG_CHANGED';
     const view = render(<CreateMotionClient prefill={{}} />);
     await attachBothInputs(view.container);
     expect(await screen.findByText(/Review the refreshed options/)).toBeInTheDocument();
@@ -455,7 +414,7 @@ describe('CreateMotionClient model notices', () => {
   });
 
   it('clears a catalog-changed notice when the creator picks another model', async () => {
-    quoteState.errorCode = 'CATALOG_CHANGED';
+    quoteStandIn.errorCode = 'CATALOG_CHANGED';
     modelCatalogState.summaries = motionModelSummaries;
     const view = render(<CreateMotionClient prefill={{}} />);
     await attachBothInputs(view.container);
@@ -485,16 +444,16 @@ describe('CreateMotionClient quote', () => {
     expect(await screen.findByText('Add a character image and a motion clip to see the cost.')).toBeInTheDocument();
     expect(screen.getByText('Add both inputs')).toBeInTheDocument();
     expect(screen.queryByText('Retry quote')).not.toBeInTheDocument();
-    expect(quoteState.requests.every((request) => request === null)).toBe(true);
+    expect(quoteStandIn.requests.every((request) => request === null)).toBe(true);
 
     pickFile(view.container, 'motion-character-image-input', characterImage());
     await waitFor(() => expect(persistedMediaMocks.setPersistedFile).toHaveBeenCalledTimes(1));
-    expect(quoteState.requests.every((request) => request === null)).toBe(true);
+    expect(quoteStandIn.requests.every((request) => request === null)).toBe(true);
 
     pickFile(view.container, 'motion-reference-video-input', motionClip());
     expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
 
-    const lastRequest = quoteState.requests.at(-1);
+    const lastRequest = quoteStandIn.requests.at(-1);
     expect(lastRequest).toMatchObject({
       kind: 'motion',
       settings: { duration: 8 },
@@ -515,6 +474,18 @@ describe('CreateMotionClient quote', () => {
  */
 describe('CreateMotionClient price of the run it sends', () => {
   const COST_CHANGED = 'The price of this run changed. Check the updated cost and generate again.';
+  const ROOFTOP_REMIX = {
+    generation: { id: 'generation-source', title: 'Rooftop dance', prompt: 'Dance on the roof at dusk', category: 'video', model: 'kling-2.6' },
+    result: { mediaType: 'video', url: 'https://cdn.example/source-result.mp4' },
+    inputs: {
+      motion: {
+        characterImage: { kind: 'image', url: 'https://cdn.example/hero.png', label: 'Hero still', storagePath: 'uploads/user-1/hero.png', sourceGenerationId: null },
+        referenceVideo: { kind: 'video', url: 'https://cdn.example/dance.mp4', label: 'Original result video', storagePath: null, sourceGenerationId: 'generation-older' },
+      },
+    },
+    workflowSettings: { model: 'kling-2.6', mode: '1080p', characterOrientation: 'image' },
+    restoreIssues: [],
+  };
 
   it.each([
     ['a fresh draft', async () => undefined, { modelId: 'kling-3.0', settings: { resolution: '720p', characterOrientation: 'video' } }],
@@ -579,8 +550,8 @@ describe('CreateMotionClient price of the run it sends', () => {
   });
 
   it.each([
-    ['answers another request than the run’s', () => { quoteState.forAnotherRequest = true; }],
-    ['is not a whole number of credits', () => { quoteState.answers = [20.5]; }],
+    ['answers another request than the run’s', () => { quoteStandIn.forAnotherRequest = true; }],
+    ['is not a whole number of credits', () => { quoteStandIn.answers = [20.5]; }],
   ])('sends the run without a price when the quote %s', async (_case, setUp) => {
     setUp();
     const view = render(<CreateMotionClient prefill={{}} />);
@@ -594,14 +565,14 @@ describe('CreateMotionClient price of the run it sends', () => {
   });
 
   it('waits for a price, and sends the run with it once it is ready', async () => {
-    quoteState.answers = ['pending'];
+    quoteStandIn.answers = ['pending'];
     const view = render(<CreateMotionClient prefill={{}} />);
     await attachBothInputs(view.container);
     expect(costShown()).toBe('Calculating...');
     expect(generateButton()).toBeDisabled();
 
     // The answer comes in: the stand-in hook gives it at the page's next render.
-    quoteState.answers = [20];
+    quoteStandIn.answers = [20];
     view.rerender(<CreateMotionClient prefill={{}} />);
     expect(costShown()).toBe('20 credits');
     await pressGenerate();
@@ -611,17 +582,17 @@ describe('CreateMotionClient price of the run it sends', () => {
   });
 
   it('asks for the price again when the server says it changed, and sends the next run at the new price under a new key', async () => {
-    quoteState.answers = [20, 24];
+    quoteStandIn.answers = [20, 24];
     startAnswers = [jsonResponse({ code: 'cost_changed', error: COST_CHANGED }, 409)];
     const view = render(<CreateMotionClient prefill={{}} />);
     await attachBothInputs(view.container);
-    expect(quoteState.attempts.at(-1)).toBe(0);
+    expect(quoteStandIn.attempts.at(-1)).toBe(0);
     expect(costShown()).toBe('20 credits');
 
     await pressGenerate();
 
     expect(await screen.findByText(COST_CHANGED)).toBeInTheDocument();
-    expect(quoteState.attempts.at(-1)).toBe(1);
+    expect(quoteStandIn.attempts.at(-1)).toBe(1);
     expect(costShown()).toBe('24 credits');
     expect(loadPendingWebStart('motion', 'user-1')).toBeNull();
 
@@ -634,7 +605,7 @@ describe('CreateMotionClient price of the run it sends', () => {
   });
 
   it('keeps Retry quote under the refusal when the price cannot be read again after it changed', async () => {
-    quoteState.answers = [20, 'error', 24];
+    quoteStandIn.answers = [20, 'error', 24];
     startAnswers = [jsonResponse({ code: 'cost_changed', error: COST_CHANGED }, 409)];
     const view = render(<CreateMotionClient prefill={{}} />);
     await attachBothInputs(view.container);
@@ -653,6 +624,70 @@ describe('CreateMotionClient price of the run it sends', () => {
     expect(startBodies()[1].expectedCostCredits).toBe(24);
   });
 
+  it('says the page is out of date and holds Generate for a reload when asking again leaves a remix at the refused price', async () => {
+    // A remix sends from the page it is on, past a deploy too. When that deploy changed how
+    // its run is priced, the page's quote of the run and the start's disagree: asked again,
+    // the price did not move, and each press was refused the same way until a reload.
+    const reload = vi.fn();
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...originalLocation, reload } });
+    remixSourceBody = ROOFTOP_REMIX;
+    const costChanged = () => jsonResponse({ code: 'cost_changed', error: COST_CHANGED }, 409);
+    startAnswers = [costChanged, costChanged, costChanged];
+    document.documentElement.dataset.buildId = 'build-7';
+    onTestFinished(() => {
+      delete document.documentElement.dataset.buildId;
+    });
+    render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
+    expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+    await waitFor(() => expect(costShown()).toBe('20 credits'));
+
+    await pressGenerate();
+
+    const notice = await screen.findByRole('alert');
+    expect(notice).toHaveTextContent('This page is out of date, so it cannot show what this run costs.');
+    expect(notice).toHaveTextContent('The remix starts again from the original.');
+    // Asked again once, and the start's refusal stood: the same run at the same price.
+    expect(quoteStandIn.attempts.at(-1)).toBe(1);
+    expect(costShown()).toBe('20 credits');
+    expect(generateButton()).toBeDisabled();
+    fireEvent.click(generateButton());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(startPosts()).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reload page' }));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    // The build it left, so the page that loads next can tell if the same one came back.
+    expect(window.sessionStorage.getItem('magicbooklet:deployment-refresh:reloaded-from-build-id')).toBe('build-7');
+  });
+
+  // A run that goes is forgotten as a refusal: a later quote back at the refused price (a
+  // rollback) held Generate and said the page was out of date, though the start would take it.
+  it('forgets a refusal once that run goes, after the page was found out of date and the price then moved', async () => {
+    startAnswers = [jsonResponse({ code: 'cost_changed', error: COST_CHANGED }, 409)];
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+    await pressGenerate();
+    expect(await screen.findByRole('alert')).toHaveTextContent('This page is out of date');
+
+    // The price moves (a deploy that fixed this run's quote, say), and the run goes at it.
+    quoteStandIn.answers = [20, 24];
+    fireEvent.change(screen.getByPlaceholderText(/Describe the kind of movement/), { target: { value: 'Spin twice, then bow.' } });
+    expect(costShown()).toBe('24 credits');
+    expect(screen.queryByText(/This page is out of date/)).not.toBeInTheDocument();
+    await pressGenerate();
+    expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();
+    expect(startBodies().map((body) => body.expectedCostCredits)).toEqual([20, 24]);
+
+    // The old price back (a rollback): the run went, so the page holds nothing.
+    quoteStandIn.answers = [20, 20];
+    fireEvent.change(screen.getByPlaceholderText(/Describe the kind of movement/), { target: { value: 'Spin once, then bow.' } });
+    expect(costShown()).toBe('20 credits');
+    expect(screen.queryByText(/This page is out of date/)).not.toBeInTheDocument();
+    expect(generateButton()).toBeEnabled();
+  });
+
   it('checks an unanswered start again with the run and price it sent, though the price has moved since', async () => {
     startAnswers = [new TypeError('Failed to fetch')];
     const view = render(<CreateMotionClient prefill={{}} />);
@@ -661,7 +696,7 @@ describe('CreateMotionClient price of the run it sends', () => {
     expect(await screen.findByText('We couldn’t confirm your generation started. Check again — that can’t start a second run.')).toBeInTheDocument();
 
     // The price moves and the prompt is edited: Check again still sends what it sent.
-    quoteState.answers = [24];
+    quoteStandIn.answers = [24];
     fireEvent.change(screen.getByPlaceholderText(/Describe the kind of movement/), { target: { value: 'Spin twice, then bow.' } });
     expect(costShown()).toBe('24 credits');
     await pressGenerate();
@@ -673,18 +708,7 @@ describe('CreateMotionClient price of the run it sends', () => {
   });
 
   it('posts a remix from the inputs it restored, with its source, under its own price', async () => {
-    remixSourceBody = {
-      generation: { id: 'generation-source', title: 'Rooftop dance', prompt: 'Dance on the roof at dusk', category: 'video', model: 'kling-2.6' },
-      result: { mediaType: 'video', url: 'https://cdn.example/source-result.mp4' },
-      inputs: {
-        motion: {
-          characterImage: { kind: 'image', url: 'https://cdn.example/hero.png', label: 'Hero still', storagePath: 'uploads/user-1/hero.png', sourceGenerationId: null },
-          referenceVideo: { kind: 'video', url: 'https://cdn.example/dance.mp4', label: 'Original result video', storagePath: null, sourceGenerationId: 'generation-older' },
-        },
-      },
-      workflowSettings: { model: 'kling-2.6', mode: '1080p', characterOrientation: 'image' },
-      restoreIssues: [],
-    };
+    remixSourceBody = ROOFTOP_REMIX;
     render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
     expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
     await waitFor(() => expect(costShown()).toBe('20 credits'));
@@ -945,7 +969,7 @@ describe('CreateMotionClient start', () => {
 
     expect(await screen.findByText(/Check the updated cost, then generate again\./)).toBeInTheDocument();
     expect(screen.getByText('Reference length: 9.0s')).toBeInTheDocument();
-    expect(quoteState.requests.at(-1)).toMatchObject({ settings: { duration: 9 } });
+    expect(quoteStandIn.requests.at(-1)).toMatchObject({ settings: { duration: 9 } });
     expect(loadPendingWebStart('motion', 'user-1')).toBeNull();
     const shown = shownQuote();
 
@@ -1159,7 +1183,7 @@ describe('CreateMotionClient drafts and media', () => {
     render(<CreateMotionClient prefill={{}} />);
 
     expect(await screen.findByText('Reference length: 9.0s')).toBeInTheDocument();
-    await waitFor(() => expect(quoteState.requests.at(-1)).toMatchObject({ settings: { duration: 9 } }));
+    await waitFor(() => expect(quoteStandIn.requests.at(-1)).toMatchObject({ settings: { duration: 9 } }));
   });
 
   it('neither restores nor saves the ordinary draft on a remix page', async () => {

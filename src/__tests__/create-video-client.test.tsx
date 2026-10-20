@@ -18,6 +18,7 @@ import { supabase } from '@/lib/supabase';
 import { TemporaryMediaReadUrlError } from '@/lib/temporary-media-upload';
 // What the server quotes when it starts a run: for "the price of the run the page sends".
 import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
+import { quoteStandIn } from './fixtures/web-quote-stand-in';
 
 // One router for every render: a new object per render restarts effects that read it.
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
@@ -57,18 +58,6 @@ const publishModalPropsMock = vi.hoisted(() => vi.fn((_props: {
   void _props;
 }));
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
-const quoteRequestMock = vi.hoisted(() => vi.fn((_request: GenerationModelQuoteInput | null, _attempt?: number) => {
-  void _request;
-  void _attempt;
-}));
-// What the quote hook answers: unless a test says otherwise, 12 credits, ready, and the
-// price of the very request the page asked.
-const quoteAnswer = vi.hoisted(() => ({
-  /** The answer at each asking (the hook's attempt), a price or a quote not ready; the last one stands after that. */
-  answers: [12] as Array<number | 'pending' | 'error'>,
-  /** An answer that prices another request than the page's. */
-  forAnotherRequest: false,
-}));
 const modelCatalogState = vi.hoisted(() => ({
   missingIds: [] as string[],
   error: null as Error | null,
@@ -149,7 +138,8 @@ vi.mock('@/lib/video-metadata-probe', () => ({
   readVideoDurationSeconds: readDurationMock,
 }));
 
-vi.mock('@/lib/use-deployment-refresh', () => ({
+vi.mock('@/lib/use-deployment-refresh', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/use-deployment-refresh')>()),
   useDeploymentRefresh: (enabled: boolean) => {
     deployState.enabled.push(enabled);
     return { newBuildAvailable: deployState.newBuildAvailable };
@@ -253,6 +243,7 @@ vi.mock('@/lib/temporary-media-upload', async () => {
 
 vi.mock('@/lib/generation-model-client', async () => {
   const actual = await vi.importActual<typeof import('@/lib/generation-model-client')>('@/lib/generation-model-client');
+  const { quoteHookStandIn } = await import('./fixtures/web-quote-stand-in');
   return {
     ...actual,
     useWebGenerationModelCatalog: () => ({
@@ -314,23 +305,8 @@ vi.mock('@/lib/generation-model-client', async () => {
       revision: 'test-catalog-rev',
       refetch: generationCatalogRefetchMock,
     }),
-    useWebGenerationModelQuote: (request: GenerationModelQuoteInput | null, _accessToken?: string | null, attempt = 0) => {
-      void _accessToken;
-      quoteRequestMock(request, attempt);
-      const answer = quoteAnswer.answers[Math.min(attempt, quoteAnswer.answers.length - 1)];
-      return {
-        status: typeof answer === 'number' ? 'ready' : answer,
-        quote: typeof answer === 'number' ? {
-          modelId: 'kling-3.0-video',
-          catalogRevision: 'test-catalog-rev',
-          normalizedSettings: {},
-          costCredits: answer,
-        } : null,
-        error: answer === 'error' ? new actual.WebCatalogRequestError('Could not calculate generation cost.', 503) : null,
-        // The request the answer prices, as JSON, as the hook says it.
-        key: request ? JSON.stringify(quoteAnswer.forAnotherRequest ? { ...request, modelId: 'another-model' } : request) : null,
-      };
-    },
+    // Unless a test says otherwise, 12 credits, ready, and the price of the very request the page asked.
+    useWebGenerationModelQuote: quoteHookStandIn(actual.WebCatalogRequestError),
   };
 });
 
@@ -438,9 +414,7 @@ describe('CreateVideoClient Kling video elements', () => {
     mockPush.mockClear();
     mockUpdateCredits.mockClear();
     generationCatalogRefetchMock.mockClear();
-    quoteRequestMock.mockClear();
-    quoteAnswer.answers = [12];
-    quoteAnswer.forAnotherRequest = false;
+    quoteStandIn.reset(12);
     enhanceButtonPropsMock.mockClear();
     modelCatalogState.missingIds = [];
     modelCatalogState.error = null;
@@ -581,7 +555,7 @@ describe('CreateVideoClient Kling video elements', () => {
     render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
 
     await waitFor(() => {
-      const request = quoteRequestMock.mock.calls.at(-1)?.[0];
+      const request = quoteStandIn.lastRequest();
       expect(request?.modelId).toBe('seedance-2-5');
       expect(request?.inputMetadata?.slots?.videoReferences).toEqual({ count: 1, durationsSeconds: [12.16] });
       expect(request?.inputMetadata?.slots?.audioReferences).toEqual({ count: 1, durationsSeconds: [7.5] });
@@ -939,7 +913,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       // The quote prices a MiniMax H3 run by the seconds of its clips, so it is told each length.
       await waitFor(() => {
-        const request = quoteRequestMock.mock.calls.at(-1)?.[0];
+        const request = quoteStandIn.lastRequest();
         expect(request?.modelId).toBe('minimax-h3');
         expect(request?.settings?.referenceMode).toBe('elements');
         expect(request?.inputCounts).toMatchObject({ videos: 1, audios: 1 });
@@ -980,7 +954,7 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(await screen.findByText('Camera move')).toBeInTheDocument();
       expect(screen.getByText('5.0s clip')).toBeInTheDocument();
       await waitFor(() => {
-        expect(quoteRequestMock.mock.calls.at(-1)?.[0]?.inputMetadata?.slots?.videoReferences)
+        expect(quoteStandIn.lastRequest()?.inputMetadata?.slots?.videoReferences)
           .toEqual({ count: 1, durationsSeconds: [5] });
       });
 
@@ -1573,7 +1547,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       /** What the page last asked a price for. */
       function quotedRun() {
-        return quoteRequestMock.mock.calls.at(-1)?.[0];
+        return quoteStandIn.lastRequest();
       }
 
       /** The inputs of the run the page posted, as [slot, url, label] with a handle where the input has one. */
@@ -2654,7 +2628,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
     /** What the page last asked the price quote for. */
     function lastQuoteRequest() {
-      const request = quoteRequestMock.mock.calls.at(-1)?.[0];
+      const request = quoteStandIn.lastRequest();
       expect(request).toBeTruthy();
       return request as GenerationModelQuoteInput & {
         settings: Record<string, unknown>;
@@ -3215,7 +3189,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       // The price moves meanwhile. Checking again is the same attempt, so it goes with the
       // price it was sent with: another body under the same key is refused as a reused key.
-      quoteAnswer.answers = [15];
+      quoteStandIn.answers = [15];
       fireEvent.change(promptBox(), { target: { value: `${PROMPT} The water stays calm.` } });
       expect(screen.getByRole('button', { name: 'Start a new run · 15 credits' })).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
@@ -3508,7 +3482,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       await waitFor(() => expect(promptBox()).toHaveValue(PROMPT));
       expect(screen.getByPlaceholderText('Describe the Seedance 1.5 Pro scene in rich cinematic detail...')).toBeInTheDocument();
-      await waitFor(() => expect(quoteRequestMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      await waitFor(() => expect(quoteStandIn.lastRequest()).toMatchObject({
         modelId: 'seedance-1.5-pro',
         settings: { aspectRatio: '9:16' },
       }));
@@ -3526,7 +3500,7 @@ describe('CreateVideoClient Kling video elements', () => {
       render(<CreateVideoClient prefill={{ prompt: 'The prompt of the link' }} />);
 
       await waitFor(() => expect(screen.getByPlaceholderText('Describe the Seedance 1.5 Pro scene in rich cinematic detail...')).toHaveValue('The prompt of the link'));
-      await waitFor(() => expect(quoteRequestMock.mock.calls.at(-1)?.[0]?.settings).toMatchObject({ aspectRatio: '9:16' }));
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.settings).toMatchObject({ aspectRatio: '9:16' }));
     });
 
     it('keeps no draft of a remix, which restores its source', async () => {
@@ -3805,7 +3779,7 @@ describe('CreateVideoClient Kling video elements', () => {
       ['answers another request than the run’s', { forAnotherRequest: true }],
       ['is not a whole number of credits', { answers: [12.5] }],
     ])('sends the run without a price when the quote %s', async (_case, answer) => {
-      Object.assign(quoteAnswer, answer);
+      Object.assign(quoteStandIn, answer);
       render(<CreateVideoClient prefill={{}} />);
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
 
@@ -3817,7 +3791,7 @@ describe('CreateVideoClient Kling video elements', () => {
     });
 
     it('sends nothing while the price is not ready, and the run with its price once it is', async () => {
-      quoteAnswer.answers = ['pending'];
+      quoteStandIn.answers = ['pending'];
       render(<CreateVideoClient prefill={{}} />);
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
       expect(costShown()).toBe('Calculating...');
@@ -3829,7 +3803,7 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(generateButton()).toBeDisabled();
       expect(postedStarts()).toHaveLength(0);
 
-      quoteAnswer.answers = [12];
+      quoteStandIn.answers = [12];
       fireEvent.change(promptBox(), { target: { value: `${PROMPT} The water stays calm.` } });
       expect(costShown()).toBe('12 credits');
       fireEvent.click(generateButton());
@@ -3839,19 +3813,19 @@ describe('CreateVideoClient Kling video elements', () => {
     });
 
     it('asks for the price again when the server says it changed, and sends the next run at the new price under a new key', async () => {
-      quoteAnswer.answers = [12, 15];
+      quoteStandIn.answers = [12, 15];
       answerStarts(refusal(409, {
         code: 'cost_changed',
         error: 'The price of this run changed. Check the updated cost and generate again.',
       }));
       render(<CreateVideoClient prefill={{}} />);
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
-      expect(quoteRequestMock.mock.calls.at(-1)?.[1]).toBe(0);
+      expect(quoteStandIn.lastAttempt()).toBe(0);
       expect(costShown()).toBe('12 credits');
       fireEvent.click(generateButton());
 
       expect(await screen.findByText('The price of this run changed. Check the updated cost and generate again.')).toBeInTheDocument();
-      expect(quoteRequestMock.mock.calls.at(-1)?.[1]).toBe(1);
+      expect(quoteStandIn.lastAttempt()).toBe(1);
       expect(costShown()).toBe('15 credits');
       expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
 
@@ -3866,7 +3840,7 @@ describe('CreateVideoClient Kling video elements', () => {
     });
 
     it('keeps Retry quote in reach when the price cannot be read again after it changed', async () => {
-      quoteAnswer.answers = [12, 'error', 15];
+      quoteStandIn.answers = [12, 'error', 15];
       answerStarts(refusal(409, {
         code: 'cost_changed',
         error: 'The price of this run changed. Check the updated cost and generate again.',
@@ -3886,6 +3860,85 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.click(generateButton());
       await waitFor(() => expect(postedStarts()).toHaveLength(2));
       expect(postedStarts()[1].body.expectedCostCredits).toBe(15);
+    });
+
+    // A run that goes is forgotten as a refusal: a later quote back at the refused price
+    // (a rollback) held Generate and said the page was out of date, though the start would
+    // take it.
+    it('forgets a refusal once that run goes, after the page was found out of date and the price then moved', async () => {
+      answerStarts(refusal(409, {
+        code: 'cost_changed',
+        error: 'The price of this run changed. Check the updated cost and generate again.',
+      }));
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+      expect(await screen.findByRole('alert')).toHaveTextContent('This page is out of date');
+
+      // The price moves (a deploy that fixed this run's quote, say), and the run goes at it.
+      quoteStandIn.answers = [12, 15];
+      fireEvent.change(promptBox(), { target: { value: `${PROMPT} The water stays calm.` } });
+      expect(costShown()).toBe('15 credits');
+      expect(screen.queryByText(/This page is out of date/)).toBeNull();
+      fireEvent.click(generateButton());
+      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      expect(postedStarts().map((start) => start.body.expectedCostCredits)).toEqual([12, 15]);
+
+      // The old price back (a rollback): the run went, so the page holds nothing.
+      quoteStandIn.answers = [12, 12];
+      fireEvent.change(promptBox(), { target: { value: `${PROMPT} The water stays still.` } });
+      expect(costShown()).toBe('12 credits');
+      expect(screen.queryByText(/This page is out of date/)).toBeNull();
+      expect(generateButton()).toBeEnabled();
+    });
+
+    it('says the page is out of date and holds Generate for a reload when asking again leaves the run at the refused price', async () => {
+      // A page sends from its own build until it hears of a newer one, and a page served
+      // stale never does. When that build prices a run apart from the start, asking again
+      // gave the same price, and each press was refused the same way until a reload.
+      const costChanged = refusal(409, {
+        code: 'cost_changed',
+        error: 'The price of this run changed. Check the updated cost and generate again.',
+      });
+      answerStarts(costChanged, costChanged, costChanged);
+      document.documentElement.dataset.buildId = 'build-7';
+      render(<CreateVideoClient prefill={{}} />);
+      await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalled());
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+
+      const notice = await screen.findByRole('alert');
+      expect(notice).toHaveTextContent('This page is out of date, so it cannot show what this run costs.');
+      expect(notice).toHaveTextContent('Your draft is kept.');
+      // Asked again once, and the start's refusal stood: the same run at the same price.
+      expect(quoteStandIn.lastAttempt()).toBe(1);
+      expect(costShown()).toBe('12 credits');
+      expect(generateButton()).toBeDisabled();
+      fireEvent.click(generateButton());
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(postedStarts()).toHaveLength(1);
+
+      // jsdom does not navigate: it reports the reload it was asked for as not implemented.
+      const { virtualConsole } = (globalThis as unknown as {
+        jsdom: { virtualConsole: { on: (event: string, listener: (error: Error) => void) => void; off: (event: string, listener: (error: Error) => void) => void } };
+      }).jsdom;
+      const navigations: string[] = [];
+      const onJsdomError = (jsdomError: Error) => {
+        if (/navigation/i.test(jsdomError.message)) navigations.push(jsdomError.message);
+      };
+      virtualConsole.on('jsdomError', onJsdomError);
+      try {
+        fireEvent.click(screen.getByRole('button', { name: 'Reload page' }));
+        await waitFor(() => expect(navigations).toHaveLength(1));
+        expect(saveCreatorDraftMock).toHaveBeenCalledWith('video', 'user-1', expect.objectContaining({ prompt: PROMPT }));
+        // The build it left, so the page that loads next can tell if the same one came back.
+        expect(window.sessionStorage.getItem('magicbooklet:deployment-refresh:reloaded-from-build-id')).toBe('build-7');
+      } finally {
+        virtualConsole.off('jsdomError', onJsdomError);
+        delete document.documentElement.dataset.buildId;
+      }
     });
 
     it('promises a saved draft only where one is kept', async () => {
@@ -3923,7 +3976,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       expect(await screen.findByText(/Check the updated cost, then generate again\./)).toBeInTheDocument();
       expect(screen.getByText('7.9s clip')).toBeInTheDocument();
-      await waitFor(() => expect(quoteRequestMock.mock.calls.at(-1)?.[0]?.inputMetadata?.slots?.videoReferences)
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.inputMetadata?.slots?.videoReferences)
         .toEqual({ count: 1, durationsSeconds: [7.9] }));
       expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
       // The measured length is kept with the clip for the next visit.
@@ -4009,7 +4062,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       fireEvent.click(addShot);
       expect(await screen.findByText('2 of 5 shots · 10s in total, up to 15s')).toBeInTheDocument();
-      await waitFor(() => expect(quoteRequestMock.mock.calls.at(-1)?.[0]?.settings).toMatchObject({ isMultiShot: true, duration: 10 }));
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.settings).toMatchObject({ isMultiShot: true, duration: 10 }));
 
       // Kling 3.0 runs at most 15 seconds.
       fireEvent.click(addShot);

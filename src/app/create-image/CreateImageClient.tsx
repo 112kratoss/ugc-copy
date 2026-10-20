@@ -22,6 +22,8 @@ import {
     StudioGenerationStatus,
     StudioMediaPreviewModal,
     StudioModelNotice,
+    StudioOutOfDatePageNotice,
+    StudioQuoteRetry,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
     StudioRunPanel,
@@ -105,7 +107,6 @@ import {
     resolveWebGenerationQuoteUi,
     savePendingWebStart,
     useWebGenerationModelCatalog,
-    useWebGenerationModelQuote,
     WebCatalogRequestError,
     webCatalogStartRequest,
     type PendingWebStart,
@@ -113,7 +114,8 @@ import {
 } from '@/lib/generation-model-client';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
-import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
+import { useCreatorQuote } from '@/lib/use-creator-quote';
+import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
 import {
@@ -1099,8 +1101,12 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             persistUploadedImageElements(elementRefs.current),
         ]);
     };
-    const [quoteAttempt, setQuoteAttempt] = useState(0);
-    const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token, quoteAttempt);
+    /** Onto the current build, with the draft saved first: it comes back after the reload. */
+    const reloadPage = async () => {
+        await saveDraftNow();
+        reloadForNewerBuild();
+    };
+    const quoteState = useCreatorQuote(quoteRequest, session?.access_token);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
         // The quote response is the external signal that the local catalog is stale.
@@ -1135,11 +1141,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         ? creditRefusal.message
         : null;
     const showTopUp = insufficientCredits || Boolean(creditRefusalMessage);
-    const quotePending = quoteUi.blocksGenerate;
-    // The price could not be read: Generate waits for one, and this asks again.
-    const quoteRetry = quoteState.status === 'error' ? (
-        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={() => setQuoteAttempt((current) => current + 1)} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
-    ) : null;
+    // A page the start keeps refusing at its own price waits for a reload, not another press.
+    const quotePending = quoteUi.blocksGenerate || quoteState.pageOutOfDate;
+    const quoteRetry = quoteState.status === 'error' ? <StudioQuoteRetry message={quoteUi.message} onRetry={quoteState.retry} /> : null;
     // Only what the request carries can be mentioned: the server refuses a mention
     // of a picture it was not sent.
     const sentElements = runInputs.map((input) => input.element);
@@ -1192,7 +1196,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         return request;
     };
 
-    const handleStartRefusal = (refusal: unknown) => {
+    const handleStartRefusal = (refusal: unknown, run: CatalogGenerationRequestPayload) => {
         if (refusal instanceof WebCatalogRequestError && refusal.status === 401) {
             // The session lapsed after the press: back through sign-in, with the draft kept.
             void saveDraftNow().then(() => router.push(getLoginPathForThisPage()));
@@ -1221,7 +1225,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         } else if (code === 'cost_changed') {
             // Priced again at once: the run panel shows what the run costs now, and the
             // next press sends that price.
-            setQuoteAttempt((current) => current + 1);
+            quoteState.costChanged(run);
         }
     };
 
@@ -1277,10 +1281,11 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 return;
             }
             forgetPendingStart();
-            handleStartRefusal(startError);
+            handleStartRefusal(startError, start.body as CatalogGenerationRequestPayload);
             return;
         }
         forgetPendingStart();
+        quoteState.started(start.body as CatalogGenerationRequestPayload);
         setLatestGenerationId(started.generationId ?? null);
         setLatestIsPublic(false);
         announceGenerationStarted();
@@ -1465,8 +1470,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             // A page older than the server may send what it no longer takes. The draft
             // is saved and comes back after the reload; a remix keeps no draft, so it
             // sends from this page instead.
-            await saveDraftNow();
-            window.location.reload();
+            await reloadPage();
             return;
         }
 
@@ -2301,6 +2305,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         <p className="text-sm text-red-400">{referenceLimitMessage}</p>
                                     ) : promptLimitMessage ? (
                                         <p className="text-sm text-red-400">{promptLimitMessage}</p>
+                                    ) : quoteState.pageOutOfDate ? (
+                                        // In place of the start's refusal it stands for.
+                                        <StudioOutOfDatePageNotice
+                                            isRemix={Boolean(remixId)}
+                                            reloadDidNotHelp={reloadBroughtBackThisBuild()}
+                                            onReload={() => void reloadPage()}
+                                        />
                                     ) : error ? (
                                         // A price that could not be read since (asked again after
                                         // `cost_changed`, say) keeps its Retry under the error:

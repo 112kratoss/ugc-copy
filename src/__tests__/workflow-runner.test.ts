@@ -19,14 +19,17 @@ import {
   markHeldProviderSubmission,
   PROVIDER_INPUT_REFUSED,
 } from '@/lib/generation-public-failure';
+import { planMotionRunInputs } from '@/lib/creator-run-inputs';
 import {
   buildGenerationModelCatalog,
   quoteGenerationModel,
+  type CatalogInputMode,
   type GenerationModelQuoteInput,
 } from '@/lib/generation-model-catalog';
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 import { GenerationServiceError } from '@/lib/generation-service-core';
 import { createSeedanceAssetMetadata } from '@/lib/seedance-assets';
+import { PRODUCTION_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
 
 // The runner reads generations service-role (authenticated grants stop at the
 // resume projection), so the service client must serve the same state-backed
@@ -1083,6 +1086,122 @@ describe('workflow-runner recovery', () => {
         quotedCostCredits: 77,
       }));
       expect(result).toMatchObject({ status: 'processing', generation_id: 'gen-catalog' });
+    });
+
+    // A catalog motion step places its picture and clip by the motion rule the web motion page
+    // places its own by (protocol's catalogMotionInputSlots). It used to rename each standard
+    // handle to the model's one slot of its kind, which agreed on every published model, and
+    // left `characterImage`, a slot such a model does not declare, beside two image slots.
+    describe('a catalog motion step’s slots', () => {
+      async function slotsSent(inputModes?: CatalogInputMode[]) {
+        const { graph, node } = createSingleStepGraph('motion-generate');
+        const step = { ...node, data: { ...node.data, catalogSettings: { resolution: '720p' } } };
+        const modelId = String((step.data as { model?: unknown }).model);
+        const descriptor = codeCatalog.models.find((model) => model.id === modelId && model.kind === 'motion')!;
+        const published = inputModes ? { ...descriptor, inputModes } : descriptor;
+        loadGenerationModelOperationByRevisionMock.mockImplementationOnce(async () => ({
+          catalog: { ...codeCatalog, models: codeCatalog.models.map((model) => (model === descriptor ? published : model)) },
+          operation: { ...codeOperations.get(modelId)!, adapterKey: 'kie-task-v1' },
+          releaseId: null,
+        }));
+        probeMediaDurationSecondsMock.mockResolvedValueOnce(7.3);
+        startCatalogGenerationMock.mockClear();
+
+        const { executeWorkflowRunnableNode } = await import('@/lib/workflow-runner');
+        await executeWorkflowRunnableNode({
+          supabase: { role: 'runner' } as never,
+          userId: 'user-1',
+          graph: { ...graph, nodes: graph.nodes.map((candidate) => (candidate.id === step.id ? step : candidate)) },
+          node: step,
+          catalogRevision: 'catalog-rev-1',
+        });
+        expect(startCatalogGenerationMock).toHaveBeenCalledTimes(1);
+        const { inputs, settings } = startCatalogGenerationMock.mock.calls[0][0] as {
+          inputs: Array<{ slot: string; kind: string; url?: string }>;
+          settings: Record<string, string | number>;
+        };
+        return {
+          sent: inputs.map((input) => `${input.slot}:${input.kind}:${input.url}`),
+          // The web motion page's plan of the same run.
+          planned: planMotionRunInputs(published, settings).map((input) => input.slot),
+        };
+      }
+
+      it('sends the code catalog’s motion-inputs slots', async () => {
+        const { sent, planned } = await slotsSent();
+        expect(sent).toEqual(['characterImage:image:https://cdn.example.com/character.png', 'referenceVideo:video:https://cdn.example.com/reference.mp4']);
+        expect(planned).toEqual(['characterImage', 'referenceVideo']);
+      });
+
+      it('sends production Kling 3.0’s reference slots, as the web motion page does', async () => {
+        const { sent, planned } = await slotsSent(PRODUCTION_KLING_3_MOTION_MODES);
+        expect(sent).toEqual(['imageReferences:image:https://cdn.example.com/character.png', 'videoReferences:video:https://cdn.example.com/reference.mp4']);
+        expect(planned).toEqual(['imageReferences', 'videoReferences']);
+      });
+
+      it('puts the picture in the slot the run must fill when the model has two image slots', async () => {
+        const { sent, planned } = await slotsSent([{
+          key: 'default',
+          label: 'Default',
+          default: true,
+          slots: [
+            { key: 'imageReferences', label: 'Reference images', kind: 'image', role: 'reference', min: 0, max: 2 },
+            { key: 'portrait', label: 'Character', kind: 'image', role: 'reference', min: 1, max: 1 },
+            { key: 'videoReferences', label: 'Reference videos', kind: 'video', role: 'reference', min: 1, max: 1 },
+          ],
+        }]);
+        expect(sent).toEqual(['portrait:image:https://cdn.example.com/character.png', 'videoReferences:video:https://cdn.example.com/reference.mp4']);
+        expect(planned).toEqual(['portrait', 'videoReferences']);
+      });
+
+      // The canvas passes on an image input it has no file for, as a reference without a
+      // link. The step's guard took any image reference, and the run then left that one out,
+      // so the step reached its quote with the clip alone.
+      it('is blocked, with nothing quoted or held, when its picture input carries no file', async () => {
+        const { graph, node } = createSingleStepGraph('motion-generate');
+        const step = { ...node, data: { ...node.data, catalogSettings: { resolution: '720p' } } };
+        const modelId = String((step.data as { model?: unknown }).model);
+        loadGenerationModelOperationByRevisionMock.mockImplementationOnce(async () => ({
+          catalog: codeCatalog,
+          operation: { ...codeOperations.get(modelId)!, adapterKey: 'kie-task-v1' },
+          releaseId: null,
+        }));
+        probeMediaDurationSecondsMock.mockResolvedValueOnce(7.3);
+        quoteGenerationModelMock.mockClear();
+        startCatalogGenerationMock.mockClear();
+        const nodes = graph.nodes.map((candidate) => {
+          if (candidate.id === step.id) return step;
+          if (candidate.type !== 'image-input') return candidate;
+          return { ...candidate, data: { ...(candidate.data as ImageInputNodeData), imageUrl: null, storagePath: null } };
+        });
+
+        const { executeWorkflowRunnableNode } = await import('@/lib/workflow-runner');
+        const result = await executeWorkflowRunnableNode({
+          supabase: { role: 'runner' } as never,
+          userId: 'user-1',
+          graph: { ...graph, nodes } as WorkflowCanvasGraph,
+          node: step,
+          catalogRevision: 'catalog-rev-1',
+        });
+
+        expect(result).toMatchObject({ status: 'blocked', error_message: 'Motion control requires both an image input and a video input.' });
+        expect(quoteGenerationModelMock).not.toHaveBeenCalled();
+        expect(startCatalogGenerationMock).not.toHaveBeenCalled();
+      });
+
+      it('keeps the motion-inputs slot for a picture the model opens no slot for, and its quote says why', async () => {
+        const { sent, planned } = await slotsSent([{
+          key: 'default',
+          label: 'Default',
+          default: true,
+          slots: [
+            { key: 'imageReferences', label: 'Reference images', kind: 'image', role: 'reference', min: 0, max: 0 },
+            { key: 'videoReferences', label: 'Reference videos', kind: 'video', role: 'reference', min: 1, max: 1 },
+          ],
+        }]);
+        expect(sent).toEqual(['characterImage:image:https://cdn.example.com/character.png', 'videoReferences:video:https://cdn.example.com/reference.mp4']);
+        expect(planned).toEqual(['characterImage', 'videoReferences']);
+      });
     });
   });
 

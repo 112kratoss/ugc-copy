@@ -1,10 +1,8 @@
 import {
-  catalogConditionsMatch,
+  catalogMotionInputSlots,
   SUBJECT_IMAGES_SLOT_KEY,
-  type CatalogConditionLike,
   type CatalogConditionPrimitive,
-  type CLIENT_RENDERED_INPUT_SLOT_KINDS,
-  type CLIENT_RENDERED_INPUT_SLOT_ROLES,
+  type CatalogMotionInputsDescriptor,
 } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 /**
@@ -120,65 +118,24 @@ export function planImageRunInputs<Element>(elements: readonly Element[], maxIma
 }
 
 /** Where a motion run's inputs can go, as its model's descriptor publishes it. */
-export type MotionRunDescriptor = {
-  inputModes?: readonly {
-    conditions?: readonly CatalogConditionLike[];
-    slots: readonly {
-      key: string;
-      kind: (typeof CLIENT_RENDERED_INPUT_SLOT_KINDS)[number];
-      role: (typeof CLIENT_RENDERED_INPUT_SLOT_ROLES)[number];
-      min?: number;
-      max?: number;
-      conditions?: readonly CatalogConditionLike[];
-    }[];
-  }[];
-};
+export type MotionRunDescriptor = CatalogMotionInputsDescriptor;
 
 export type MotionRunInputs = readonly [{ slot: string; kind: 'image' }, { slot: string; kind: 'video' }];
 
 /**
  * The inputs a motion run sends, in this order: the character to animate and the clip whose
- * movement it takes, each in a reference slot its model's descriptor opens for its kind with
- * the run's settings (one the run must fill, or else the first that takes an input). The
- * start quotes a run with each input in its slot and refuses a slot the model does not
- * declare: production published Kling 3.0 motion with `imageReferences` and
- * `videoReferences`, and refused every web Kling 3.0 run while this page sent
- * `characterImage` and `referenceVideo` to every model (2026-10-19). The app reads the same
- * slots, and puts each input in every open slot of its kind; for a motion model with one
- * slot of each, as every published one has, the two send the same run. A descriptor that
- * opens no such slot keeps `characterImage` and `referenceVideo`, and its quote says why the
- * run cannot start. No length goes with the clip: the start measures it and, when the
+ * movement it takes, each in the slot the shared motion rule gives it
+ * (`catalogMotionInputSlots`, which the workflow runner's catalog motion step places its
+ * inputs with too). No length goes with the clip: the start measures it and, when the
  * measured length costs more than the price shown, sends the creator back to quote with it.
  */
 export function planMotionRunInputs(
   descriptor: MotionRunDescriptor | null | undefined,
   settings: Record<string, CatalogConditionPrimitive | undefined>,
 ): MotionRunInputs {
-  const modes = descriptor?.inputModes ?? [];
-  const isReference = (slot: (typeof modes)[number]['slots'][number]) => (
-    slot.role === 'reference' && (slot.kind === 'image' || slot.kind === 'video')
-  );
-  // The counts a mode's or slot's conditions read: the run's kind totals, as the server
-  // reads them, and one input in each reference slot, as the app counts a motion draft,
-  // whose frame slots hold nothing.
-  const inputCounts: Record<string, number> = { images: 1, videos: 1 };
-  for (const slot of modes.flatMap((mode) => mode.slots)) {
-    if (isReference(slot)) inputCounts[slot.key] = 1;
-  }
-  const open = modes
-    .filter((mode) => catalogConditionsMatch(mode.conditions, settings, inputCounts))
-    .flatMap((mode) => mode.slots)
-    .filter((slot) => (
-      isReference(slot)
-      && (slot.max ?? 1) > 0
-      && catalogConditionsMatch(slot.conditions, settings, inputCounts)
-    ));
-  const slotFor = (kind: 'image' | 'video') => {
-    const ofKind = open.filter((slot) => slot.kind === kind);
-    return (ofKind.find((slot) => (slot.min ?? 0) > 0) ?? ofKind[0])?.key;
-  };
+  const slots = catalogMotionInputSlots(descriptor, settings);
   return [
-    { slot: slotFor('image') ?? 'characterImage', kind: 'image' },
-    { slot: slotFor('video') ?? 'referenceVideo', kind: 'video' },
+    { slot: slots.image, kind: 'image' },
+    { slot: slots.video, kind: 'video' },
   ];
 }

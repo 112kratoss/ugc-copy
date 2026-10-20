@@ -14,6 +14,14 @@ const LEGACY_VERSION_RELOAD_MARKER_KEYS = [
   'emptybooklet:deployment-refresh:last-build-id',
   'ugc:deployment-refresh:last-build-id',
 ];
+/**
+ * The build a page left when it reloaded to reach a newer one (`reloadForNewerBuild`). The
+ * marker above names the build a tab reloads *for*, and only the version check writes it, once
+ * it has heard of that build: never on a motion remix, which runs no check, nor on a page that
+ * found itself out of date before its first check came back. Every page knows the build it
+ * leaves, so the page that loads next can tell a reload that brought the same one back.
+ */
+const RELOADED_FROM_BUILD_KEY = 'magicbooklet:deployment-refresh:reloaded-from-build-id';
 
 /**
  * The newer build this page has been told about. Module state lasts exactly as
@@ -64,6 +72,31 @@ function markReloadedBuild(buildId: string) {
 
 function reloadPage() {
   window.location.reload();
+}
+
+/**
+ * Reloads a page to reach a newer build, noting the build it leaves: a creator page that
+ * found itself out of date, or one pressed after it heard of a newer build.
+ */
+export function reloadForNewerBuild(reload: () => void = reloadPage): void {
+  const buildId = getCurrentBuildId();
+  if (buildId) {
+    try {
+      window.sessionStorage.setItem(RELOADED_FROM_BUILD_KEY, buildId);
+    } catch {
+      // Without the note the next page cannot tell, and offers the reload again.
+    }
+  }
+  reload();
+}
+
+/**
+ * Whether this page is the very build a reload for a newer one left (a page served stale):
+ * the same reload would only bring it back again.
+ */
+export function reloadBroughtBackThisBuild(): boolean {
+  const buildId = getCurrentBuildId();
+  return buildId !== null && readSessionValue(RELOADED_FROM_BUILD_KEY) === buildId;
 }
 
 type DeploymentRefreshOptions = {

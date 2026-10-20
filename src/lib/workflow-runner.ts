@@ -87,6 +87,7 @@ import {
 import { generationModelConditionMatches, type GenerationModelOperationalConfig } from '@/lib/generation-model-runtime';
 import { referenceMediaLengthViolation } from '@/lib/provider-input-limits';
 import { probeMediaDurationSeconds } from '@/lib/video-rendition';
+import { catalogMotionInputSlots } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 export interface WorkflowRunExecutionResult {
   runId: string;
@@ -946,7 +947,12 @@ export async function executeWorkflowRunnableNode(params: {
       // blocked steps, so a fixable graph never records a failed run.
       if (node.type === 'image-generate' && !inputs.prompt) return buildBlockedError('Image generator is missing a prompt input.');
       if (node.type === 'video-generate' && !node.data.isMultiShot && !inputs.prompt) return buildBlockedError('Video generator is missing a prompt input.');
-      if (node.type === 'motion-generate' && (!inputs.videoUrls.length || !(references.length || inputs.imageReferences.length))) {
+      // A motion step's picture is its first image input, as the motion step below reads it
+      // (elements resolve for image and video steps only), and an input with no file is no
+      // picture: the canvas passes one on without a link.
+      const motionPicture = node.type === 'motion-generate' ? inputs.imageReferences[0] : undefined;
+      const motionPictureUrl = motionPicture ? motionPicture.storagePath || motionPicture.url : null;
+      if (node.type === 'motion-generate' && (!inputs.videoUrls.length || !motionPictureUrl)) {
         return buildBlockedError('Motion control requires both an image input and a video input.');
       }
       const settings = Object.fromEntries(descriptor.controls.map(control => [control.key,
@@ -954,19 +960,35 @@ export async function executeWorkflowRunnableNode(params: {
           ?? node.data[control.key === 'resolution' && node.type === 'motion-generate' ? 'mode' : control.key]
           ?? control.defaultValue,
       ])) as Record<string, CatalogPrimitive>;
-      const assets: CatalogGenerationInputAsset[] = references.map(reference => ({
-        slot: descriptor.kind === 'motion' ? 'characterImage' : 'imageReferences', kind: 'image',
-        url: reference.url, storagePath: reference.storagePath, handle: reference.handle,
-        label: reference.displayName, sourceGenerationId: reference.sourceGenerationId,
-      }));
-      for (const url of inputs.videoUrls) assets.push({ slot: descriptor.kind === 'motion' ? 'referenceVideo' : 'videoReferences', kind: 'video', url });
-      for (const url of inputs.audioUrls) assets.push({ slot: 'audioReferences', kind: 'audio', url });
-      if (inputs.startFrameUrl) assets.push({ slot: 'startFrame', kind: 'image', url: inputs.startFrameUrl });
-      if (inputs.endFrameUrl) assets.push({ slot: 'endFrame', kind: 'image', url: inputs.endFrameUrl });
+      // A motion run sends its picture and its clip, one of each as the motion step below does,
+      // each in the slot the motion rule gives it (protocol's catalogMotionInputSlots), the rule
+      // the web motion page places its own by. Built from the resolved elements, a catalog
+      // motion step sent its clip alone.
+      const motionSlots = descriptor.kind === 'motion' ? catalogMotionInputSlots(descriptor, settings) : null;
+      const assets: CatalogGenerationInputAsset[] = motionSlots
+        ? [
+          ...(motionPicture && motionPictureUrl ? [{
+            slot: motionSlots.image, kind: 'image' as const,
+            url: motionPictureUrl, storagePath: motionPicture.storagePath,
+            label: motionPicture.sourceTitle, sourceGenerationId: motionPicture.sourceGenerationId,
+          }] : []),
+          ...inputs.videoUrls.slice(0, 1).map(url => ({ slot: motionSlots.video, kind: 'video' as const, url })),
+        ]
+        : references.map(reference => ({
+          slot: 'imageReferences', kind: 'image',
+          url: reference.url, storagePath: reference.storagePath, handle: reference.handle,
+          label: reference.displayName, sourceGenerationId: reference.sourceGenerationId,
+        }));
+      if (!motionSlots) {
+        for (const url of inputs.videoUrls) assets.push({ slot: 'videoReferences', kind: 'video', url });
+        for (const url of inputs.audioUrls) assets.push({ slot: 'audioReferences', kind: 'audio', url });
+        if (inputs.startFrameUrl) assets.push({ slot: 'startFrame', kind: 'image', url: inputs.startFrameUrl });
+        if (inputs.endFrameUrl) assets.push({ slot: 'endFrame', kind: 'image', url: inputs.endFrameUrl });
+      }
       // Resolve standard workflow handles to descriptor-defined slot names.
       const slots = [...new Map((descriptor.inputModes ?? []).flatMap(mode => mode.slots).map(slot => [slot.key, slot])).values()];
       for (const asset of assets) {
-        if (!slots.some(slot => slot.key === asset.slot)) {
+        if (!motionSlots && !slots.some(slot => slot.key === asset.slot)) {
           const role = asset.slot === 'startFrame' || asset.slot === 'endFrame' ? asset.slot : 'reference';
           const candidates = slots.filter(slot => slot.kind === asset.kind && slot.role === role);
           if (candidates.length === 1) asset.slot = candidates[0].key;
