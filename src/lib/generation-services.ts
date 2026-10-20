@@ -75,6 +75,7 @@ import {
   markGenerationStartRefusal,
   markHeldProviderSubmission,
   markRefundedGenerationStart,
+  PROVIDER_INPUT_REFUSED,
   type GenerationStartFailureCode,
   type GenerationStartRefusal,
   type PublicGenerationStartFailure,
@@ -891,16 +892,18 @@ function promptMaxLengthForKind(kind: GenerationModelKind): number {
  * (provider-input-limits): the prompt as sent, with the legend that names its
  * pictures, and each shot. Kie refuses a longer or shorter one only after the
  * start has held the run's credits, so every start asks this before its hold.
+ * Both refusals carry `provider_input_refused`, so a run step can say them in
+ * their own words where POST /api/generations does.
  */
 function assertProviderPromptAccepted(modelId: string, run: ProviderPromptRun): void {
   const violation = providerPromptViolation(modelId, run);
-  if (violation) throw new GenerationServiceError(violation, 400);
+  if (violation) throw new GenerationServiceError(violation, 400, PROVIDER_INPUT_REFUSED);
 }
 
 /** Holds a run's reference clips and tracks, where their lengths are known, to the provider's shortest. */
 function assertReferenceMediaLongEnough(modelId: string, media: readonly ReferenceMediaLength[]): void {
   const violation = referenceMediaLengthViolation(modelId, media);
-  if (violation) throw new GenerationServiceError(violation, 400);
+  if (violation) throw new GenerationServiceError(violation, 400, PROVIDER_INPUT_REFUSED);
 }
 
 export function trimPrompt(prompt: string, errorMessage: string): string {

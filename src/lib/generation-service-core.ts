@@ -2,7 +2,7 @@ import 'server-only';
 
 import { logBackendError } from '@/lib/backend-logger';
 import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
-import type { GenerationStartFailureCode } from '@/lib/generation-public-failure';
+import type { GenerationStartFailureCode, ProviderInputRefusedCode } from '@/lib/generation-public-failure';
 
 /**
  * Primitives shared by every generation seam.
@@ -17,11 +17,11 @@ import type { GenerationStartFailureCode } from '@/lib/generation-public-failure
 export const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 
 /**
- * What a start refusal is answered with. `cost_changed` is not one of the codes
- * a run can fail with: it is said before anything is held, and the caller
- * quotes again.
+ * What a start refusal is answered with. `cost_changed` and `provider_input_refused`
+ * are not codes a run can fail with: each is said before anything is held, the first
+ * so the caller quotes again, the second for what the provider would refuse.
  */
-export type GenerationServiceFailureCode = GenerationStartFailureCode | 'cost_changed';
+export type GenerationServiceFailureCode = GenerationStartFailureCode | ProviderInputRefusedCode | 'cost_changed';
 
 export class GenerationServiceError extends Error {
   status: number;

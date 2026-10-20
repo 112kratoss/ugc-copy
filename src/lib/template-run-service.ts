@@ -14,8 +14,10 @@ import {
 import { syncGenerationStatuses } from '@/lib/generation-status-sync';
 import {
   getGenerationStartRefusal,
+  getProviderInputRefusal,
   getPublicGenerationStartFailure,
   normalizeGenerationStartFailureCode,
+  PROVIDER_INPUT_REFUSED_MESSAGE,
   requiresReplacementGenerationInput,
   type GenerationStartFailureCode,
 } from '@/lib/generation-public-failure';
@@ -1502,6 +1504,33 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
           status: 'failed',
           error: TEMPLATE_CATALOG_OUTDATED_MESSAGE,
         });
+        continue;
+      }
+      const refusal = getProviderInputRefusal(error);
+      if (refusal !== null) {
+        // Refused before anything was held, for what the provider would refuse after the
+        // hold (provider-input-limits). A retry sends the same prompt and the same files,
+        // so the step ends here and a new run is the way on. The words name the template's
+        // model and its limit: the creator's test run of their own draft says them, and a
+        // run of a published template, whose recipe and model stay private (Studio shows
+        // its result's model as `template-workflow`), says the public copy.
+        const message = state.run.is_test ? refusal : PROVIDER_INPUT_REFUSED_MESSAGE;
+        logBackendWarning('template_run_step_input_refused', {
+          runId: state.run.id,
+          stepId: step.id,
+          nodeId: step.node_id,
+          attempt: step.attempt,
+          isTest: state.run.is_test,
+          error,
+        });
+        await client.from('template_run_steps').update({
+          status: 'failed',
+          can_retry: false,
+          error_message: message,
+          output_snapshot: failureSnapshot(step, 'provider_rejected'),
+          finished_at: new Date().toISOString(),
+        }).eq('id', step.id);
+        graph = updateNodeRunState(graph, node.id, { status: 'failed', error: message });
         continue;
       }
       const status = isRecord(error) && typeof error.status === 'number' ? error.status : 500;
