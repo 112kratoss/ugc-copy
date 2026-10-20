@@ -318,6 +318,40 @@ export function catalogRunQuoteInput<Kind extends string, Settings>(run: {
     catalogRevision: run.catalogRevision,
   };
 }
+/**
+ * A run as a creator sends it to start: with the price the creator was shown
+ * (`expectedCostCredits`) when that price is a ready quote of this very run, one
+ * asked with the run's own quote input (`catalogRunQuoteInput`; a quote state's
+ * `key` is that request as JSON). The start prices the run again, charges its own
+ * price up to that one, and refuses a run it prices above it (`cost_changed`)
+ * before any credits are held. Without such a quote the run goes without a price,
+ * and the start charges its own as it always has. Only a whole number of credits,
+ * zero or more, is ever sent: the start refuses the whole run for any other. Both
+ * creators send their runs through this, so they agree on when a price goes.
+ */
+export function catalogRunWithShownCost<
+  Run extends {
+    kind: string;
+    modelId: string;
+    catalogRevision: string;
+    settings: unknown;
+    inputs?: readonly CatalogRunInputFact[];
+    expectedCostCredits?: number;
+  },
+>(
+  run: Run,
+  quote: { key: string | null; status: string; cost: number | null | undefined },
+): Run {
+  const { cost } = quote;
+  const shownForThisRun =
+    quote.status === 'ready' &&
+    typeof cost === 'number' &&
+    Number.isSafeInteger(cost) &&
+    cost >= 0 &&
+    quote.key ===
+      JSON.stringify(catalogRunQuoteInput({ ...run, inputs: run.inputs ?? [] }));
+  return shownForThisRun ? { ...run, expectedCostCredits: cost } : run;
+}
 export function parseModelCatalogPage(
   value: unknown,
   revision: string,

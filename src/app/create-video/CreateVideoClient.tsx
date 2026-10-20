@@ -48,6 +48,7 @@ import {
     useWebGenerationModelCatalog,
     useWebGenerationModelQuote,
     WebCatalogRequestError,
+    webCatalogStartRequest,
     type PendingWebStart,
     type WebGenerationStartResponse,
 } from '@/lib/generation-model-client';
@@ -1415,6 +1416,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     });
     const estimatedCost = quoteUi.costCredits;
     const quotePending = quoteUi.blocksGenerate;
+    // The price could not be read: Generate waits for one, and this asks again.
+    const quoteRetry = quoteState.status === 'error' ? (
+        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={() => setQuoteAttempt((current) => current + 1)} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
+    ) : null;
     const estimatedGenerationTotalMs = estimateGenerationDurationMs({
         kind: 'video',
         model: selectedModel,
@@ -3840,7 +3845,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 }
             }
 
-            const payload: CatalogGenerationRequestPayload = {
+            // The price on the run panel goes with the run when it is this run's own quote.
+            const payload = webCatalogStartRequest({
                 kind: 'video',
                 modelId: selectedModel,
                 prompt: prompt.trim(),
@@ -3860,7 +3866,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 }),
                 ...(remixId ? { sourceGenerationId: remixId } : {}),
                 catalogRevision: modelCatalog.catalog?.revision ?? '',
-            };
+            }, quoteState);
 
             attempt = {
                 version: 1,
@@ -5399,12 +5405,17 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     ) : error ? (
                                         // The error can name a handle, and can print a subject's name or
                                         // whatever the server answered. A handle gets its own box; any other
-                                        // word that no line can hold breaks where the line ends.
-                                        <p className="text-sm text-red-400 [overflow-wrap:anywhere]">
-                                            <StudioElementHandleText text={error} />
-                                        </p>
+                                        // word that no line can hold breaks where the line ends. A price that
+                                        // could not be read since (asked again after `cost_changed`, say)
+                                        // keeps its Retry under the error: Generate waits for a price.
+                                        <div className="space-y-2">
+                                            <p className="text-sm text-red-400 [overflow-wrap:anywhere]">
+                                                <StudioElementHandleText text={error} />
+                                            </p>
+                                            {quoteRetry}
+                                        </div>
                                     ) : quoteState.status === 'error' ? (
-                                        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={() => setQuoteAttempt((current) => current + 1)} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
+                                        quoteRetry
                                     ) : (
                                         <p className="text-sm text-zinc-500">The current run will replace this workspace as soon as generation starts.</p>
                                     )}

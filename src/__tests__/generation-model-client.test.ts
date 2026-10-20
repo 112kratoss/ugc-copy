@@ -1,6 +1,10 @@
+import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import contractFixture from '../../contracts/generation-model-catalog-v1.json';
+import { catalogRunQuoteInput } from '../../ugc-mobile/lib/model-catalog/protocol';
+import type { CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
+import { parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 import {
   applyGenerationModelCatalogToRegistries,
   clearPendingWebStart,
@@ -13,7 +17,9 @@ import {
   resolveCatalogModelId,
   resolveWebGenerationQuoteUi,
   savePendingWebStart,
+  useWebGenerationModelQuote,
   WebCatalogRequestError,
+  webCatalogStartRequest,
   type PendingWebStart,
 } from '@/lib/generation-model-client';
 
@@ -463,5 +469,102 @@ describe('pending web starts', () => {
     });
 
     expect(savePendingWebStart(pendingStart())).toBe(false);
+  });
+});
+
+/**
+ * The price a web start carries: the one the creator was shown, when it is a ready quote of
+ * this very run. The start charges its own price up to it and refuses a run it prices above
+ * it (`cost_changed`) before any credits are held. The app's rule is the same
+ * (`catalogStartRequest` in ugc-mobile/lib/generation-model-draft.ts).
+ */
+describe('the price a web start carries', () => {
+  const run: CatalogGenerationRequestPayload = {
+    kind: 'video',
+    modelId: 'seedance-2',
+    catalogRevision: 'rev-1',
+    settings: { duration: 5, aspectRatio: '16:9' },
+    prompt: 'A dancer crosses a bright studio in the rhythm of the reference.',
+    inputs: [{ slot: 'videoReferences', kind: 'video', url: 'https://signed.example.com/clip.mp4', durationSeconds: 4.2 }],
+  };
+  /** The quote request a creator asks a run's price with, as JSON. */
+  const quoteKey = (priced: CatalogGenerationRequestPayload) => JSON.stringify(catalogRunQuoteInput({ ...priced, inputs: priced.inputs ?? [] }));
+  const ready = (costCredits: number, key: string | null = quoteKey(run)) => ({ status: 'ready' as const, quote: { costCredits }, key });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('carries a ready quote of this very run', () => {
+    expect(webCatalogStartRequest(run, ready(80))).toEqual({ ...run, expectedCostCredits: 80 });
+    expect(webCatalogStartRequest(run, ready(0))).toEqual({ ...run, expectedCostCredits: 0 });
+  });
+
+  it.each(['idle', 'pending', 'error'] as const)('carries no price while the quote is %s, even one left from an earlier answer', (status) => {
+    expect(webCatalogStartRequest(run, { status, quote: { costCredits: 80 }, key: quoteKey(run) })).toEqual(run);
+  });
+
+  it('carries no price quoted for another run', () => {
+    const [reference] = run.inputs!;
+    for (const other of [
+      { ...run, settings: { ...run.settings, duration: 10 } },
+      { ...run, inputs: [{ ...reference, durationSeconds: 8 }] },
+      { ...run, inputs: [] },
+      { ...run, modelId: 'seedance-2-5' },
+      { ...run, catalogRevision: 'rev-2' },
+    ]) {
+      expect(webCatalogStartRequest(run, ready(80, quoteKey(other)))).toEqual(run);
+    }
+    expect(webCatalogStartRequest(run, ready(80, null))).toEqual(run);
+  });
+
+  it('reads a run by what its price reads, not by its prompt or links', () => {
+    const [reference] = run.inputs!;
+    const relinked = {
+      ...run,
+      prompt: 'Another prompt',
+      inputs: [{ ...reference, url: 'https://signed.example.com/refreshed/clip.mp4', label: 'Dance clip', storagePath: 'uploads/user-1/clip.mp4' }],
+    };
+    expect(webCatalogStartRequest(relinked, ready(80))).toEqual({ ...relinked, expectedCostCredits: 80 });
+  });
+
+  it.each([12.5, -1, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53])('carries no price of %s credits, which is no whole number of credits', (costCredits) => {
+    expect(webCatalogStartRequest(run, ready(costCredits))).toEqual(run);
+  });
+
+  it('sends no price the start would refuse the whole run for', () => {
+    // As the page would have sent them (JSON sends NaN and Infinity as null, which the start
+    // reads as no price at all), the start refuses these, and the run with them.
+    for (const costCredits of [12.5, -1, 2 ** 53]) {
+      let refusal: unknown = null;
+      try {
+        parseUnifiedGenerationRequest(JSON.parse(JSON.stringify({ ...run, expectedCostCredits: costCredits })));
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal, String(costCredits)).toMatchObject({ status: 422, fieldErrors: { expectedCostCredits: expect.any(String) } });
+      expect(webCatalogStartRequest(run, ready(costCredits))).not.toHaveProperty('expectedCostCredits');
+    }
+    // What it does send, it reads back as sent.
+    expect(parseUnifiedGenerationRequest(JSON.parse(JSON.stringify(webCatalogStartRequest(run, ready(80))))).expectedCostCredits).toBe(80);
+  });
+
+  it('is told by the quote hook which request each answer prices', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      const asked = JSON.parse(String(init.body)) as { modelId: string; settings: { duration: number } };
+      return jsonResponse({ modelId: asked.modelId, catalogRevision: 'rev-1', normalizedSettings: {}, costCredits: asked.settings.duration * 16 }, 200);
+    }));
+    const first = catalogRunQuoteInput({ ...run, inputs: run.inputs! });
+    const second = { ...first, settings: { ...first.settings, duration: 10 } };
+    const hook = renderHook(({ request }) => useWebGenerationModelQuote(request, 'token'), { initialProps: { request: first } });
+
+    expect(hook.result.current).toMatchObject({ status: 'pending', key: JSON.stringify(first) });
+    await waitFor(() => expect(hook.result.current).toMatchObject({ status: 'ready', quote: { costCredits: 80 }, key: JSON.stringify(first) }));
+
+    hook.rerender({ request: second });
+    // The first answer is not this request's, so it is not this request's price.
+    expect(hook.result.current).toMatchObject({ status: 'pending', quote: null, key: JSON.stringify(second) });
+    await waitFor(() => expect(hook.result.current).toMatchObject({ status: 'ready', quote: { costCredits: 160 }, key: JSON.stringify(second) }));
+    hook.unmount();
   });
 });
