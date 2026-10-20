@@ -1703,4 +1703,28 @@ describe('CreateImageClient prompt limits', () => {
     expect(screen.queryByText(/prompts need at least/)).not.toBeInTheDocument();
     expect(generateButton()).toBeEnabled();
   });
+
+  // Both hold Generate. The prompt is the creator's to fix on the page, so its limit is
+  // said first; the prompt is no part of the run's price, so once it is fixed the run is
+  // still the one the start refused at that price, and the page is still out of date.
+  it('says a prompt past its limit before an out-of-date page, and the page again once the prompt is fixed', async () => {
+    const costChanged = { status: 409, body: { code: 'cost_changed', error: 'The price of this run changed. Check the updated cost and generate again.' } };
+    const fetchMock = installFetch({ starts: [costChanged] });
+    render(<CreateImageClient prefill={{ model: 'seedream-5-lite' }} />);
+    await screen.findByText('0 / 2,995 characters');
+    typePrompt('A lighthouse at dawn');
+    pressGenerate();
+    expect(await screen.findByRole('alert')).toHaveTextContent('This page is out of date');
+
+    typePrompt('cat');
+    expect(screen.getByText('Seedream 5 Lite prompts need at least 4 characters.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(generateButton()).toBeDisabled();
+
+    typePrompt('A lighthouse at dawn');
+    expect(screen.queryByText(/prompts need at least/)).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('This page is out of date');
+    expect(generateButton()).toBeDisabled();
+    expect(startCalls(fetchMock)).toHaveLength(1);
+  });
 });
