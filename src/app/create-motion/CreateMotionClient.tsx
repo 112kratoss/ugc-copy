@@ -66,7 +66,7 @@ import {
     type GenerationTiming,
 } from '@/lib/generation-timing';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
-import { MOTION_RUN_INPUTS } from '@/lib/creator-run-inputs';
+import { planMotionRunInputs } from '@/lib/creator-run-inputs';
 // Kie's motion cap; the motion start refuses a longer prompt before anything is held.
 import { catalogRunQuoteInput, MOTION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import { useTicker } from '@/lib/use-ticker';
@@ -825,8 +825,9 @@ export default function CreateMotionClient({
     // rose: quote with its length, which the refusal carries.
     const applyMeasuredClipLength = (details: Readonly<Record<string, unknown>>) => {
         const measuredInputs = Array.isArray(details.inputs) ? details.inputs.filter(isRecord) : [];
-        const clip = measuredInputs.find((input) => input.slot === 'referenceVideo')
-            ?? measuredInputs.find((input) => input.index === 1);
+        // The start names each length it measured by the input's place in the run, and a
+        // motion run sends its clip second, in whichever slot its model gives it.
+        const clip = measuredInputs.find((input) => input.index === 1);
         const measured = clip && typeof clip.durationSeconds === 'number' && Number.isFinite(clip.durationSeconds) && clip.durationSeconds > 0
             ? Math.ceil(clip.durationSeconds)
             : null;
@@ -1025,13 +1026,13 @@ export default function CreateMotionClient({
                 estimatedTotalMs,
             }));
             const sent = {
-                characterImage: {
+                image: {
                     url: imageUrl,
                     label: nextCharacterImageDescriptor?.label ?? 'Character image',
                     storagePath: nextCharacterImageDescriptor?.storagePath ?? null,
                     sourceGenerationId: nextCharacterImageDescriptor?.sourceGenerationId ?? null,
                 },
-                referenceVideo: {
+                video: {
                     url: videoUrl,
                     label: nextReferenceVideoDescriptor?.label ?? 'Reference video',
                     storagePath: nextReferenceVideoDescriptor?.storagePath ?? null,
@@ -1045,7 +1046,7 @@ export default function CreateMotionClient({
                 modelId: selectedModel,
                 settings: runSettings,
                 prompt,
-                inputs: MOTION_RUN_INPUTS.map((input) => ({ ...input, ...sent[input.slot] })),
+                inputs: runInputs.map((input) => ({ ...input, ...sent[input.kind] })),
                 sourceGenerationId: remixId || undefined,
                 catalogRevision: modelCatalog.catalog?.revision ?? '',
             }, quoteState);
@@ -1195,6 +1196,8 @@ export default function CreateMotionClient({
         resolution: mode,
         ...additionalSettings.settings,
     }), [additionalSettings.settings, characterOrientation, duration, mode]);
+    // The picture and the clip, each in the slot this model's descriptor opens for it.
+    const runInputs = useMemo(() => planMotionRunInputs(catalogDescriptor, runSettings), [catalogDescriptor, runSettings]);
     const hasCharacterImage = Boolean(characterImage || characterImageFile);
     const hasReferenceVideo = Boolean(referenceVideo || referenceVideoFile);
     // The server refuses a quote without both inputs and a length, so a fresh
@@ -1208,8 +1211,8 @@ export default function CreateMotionClient({
         modelId: selectedModel,
         catalogRevision: modelCatalog.catalog.revision,
         settings: runSettings,
-        inputs: MOTION_RUN_INPUTS,
-    }) : null, [modelCatalog.catalog, modelCatalog.detailsReady, motionInputsReady, runSettings, selectedModel]);
+        inputs: runInputs,
+    }) : null, [modelCatalog.catalog, modelCatalog.detailsReady, motionInputsReady, runInputs, runSettings, selectedModel]);
     const [quoteAttempt, setQuoteAttempt] = useState(0);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token, quoteAttempt);
     useEffect(() => {

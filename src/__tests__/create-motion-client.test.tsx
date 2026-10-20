@@ -5,7 +5,9 @@ import CreateMotionClient from '@/app/create-motion/CreateMotionClient';
 import { GenerationStatusRequestError } from '@/lib/generation-status-client';
 import { loadPendingWebStart, savePendingWebStart, type PendingWebStart } from '@/lib/generation-model-client';
 import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
+import type { CatalogInputMode } from '@/lib/generation-model-catalog';
 import { MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { PRODUCTION_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
 
 const modelCatalogState = vi.hoisted(() => ({
   missingIds: [] as string[],
@@ -361,6 +363,7 @@ beforeEach(() => {
   quoteState.attempts = [];
   quoteState.answers = [20];
   quoteState.forAnotherRequest = false;
+  for (const model of motionCatalog.models) delete (model as { inputModes?: unknown }).inputModes;
   generationCatalogRefetchMock.mockClear();
   maybeSingleMock.mockClear();
   queryBuilder.select.mockClear();
@@ -718,6 +721,58 @@ describe('CreateMotionClient price of the run it sends', () => {
     await waitFor(() => expect(startPosts()).toHaveLength(1));
     expect(startKeys()[0]).toBe('motion:saved-key');
     expect(startBodies()[0]).toEqual({ schemaVersion: 3, ...saved.body });
+  });
+});
+
+function publishMotionModes(modelId: 'kling-3.0' | 'kling-2.6', inputModes: CatalogInputMode[]) {
+  const model = motionCatalog.models.find((candidate) => candidate.id === modelId);
+  Object.assign(model!, { inputModes });
+}
+
+/**
+ * A motion run sends its picture and its clip in the slots its model declares: the start quotes
+ * the run with each input in its slot and refuses a slot the model does not have. The page sent
+ * `characterImage` and `referenceVideo` to every model, and production's Kling 3.0 refused every
+ * web run ("Kling 3.0 does not support the characterImage input."), as the app's went through.
+ * `creator-run-inputs.test.ts` holds the server's own verdict on these slots.
+ */
+describe('CreateMotionClient slots the model declares', () => {
+  it('sends Kling 3.0’s inputs in the slots production publishes', async () => {
+    publishMotionModes('kling-3.0', PRODUCTION_KLING_3_MOTION_MODES);
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+    await waitFor(() => expect(costShown()).toBe('20 credits'));
+    const shown = shownQuote();
+
+    await pressGenerate();
+    await waitFor(() => expect(startPosts()).toHaveLength(1));
+
+    const inputs = startBodies()[0].inputs as Array<Record<string, unknown>>;
+    expect(startBodies()[0].modelId).toBe('kling-3.0');
+    expect(inputs.map((input) => [input.slot, input.kind, input.storagePath])).toEqual([
+      ['imageReferences', 'image', 'uploads/user-1/hero.png'],
+      ['videoReferences', 'video', 'uploads/user-1/dance.mp4'],
+    ]);
+    expect(shown).toBe(startQuote(0));
+  });
+
+  it('plans the slots again when the creator switches model', async () => {
+    publishMotionModes('kling-3.0', PRODUCTION_KLING_3_MOTION_MODES);
+    modelCatalogState.summaries = motionModelSummaries;
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+    await waitFor(() => expect(JSON.parse(shownQuote()).inputMetadata.slots).toEqual({ imageReferences: { count: 1 }, videoReferences: { count: 1 } }));
+
+    chooseModel(view.container, 'Kling 2.6');
+    await waitFor(() => expect(JSON.parse(shownQuote()).modelId).toBe('kling-2.6'));
+    const shown = shownQuote();
+
+    await pressGenerate();
+    await waitFor(() => expect(startPosts()).toHaveLength(1));
+
+    expect(startBodies()[0].modelId).toBe('kling-2.6');
+    expect((startBodies()[0].inputs as Array<Record<string, unknown>>).map((input) => input.slot)).toEqual(['characterImage', 'referenceVideo']);
+    expect(shown).toBe(startQuote(0));
   });
 });
 

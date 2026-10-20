@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   planImageRunInputs,
+  planMotionRunInputs,
   planVideoRunInputs,
+  type MotionRunDescriptor,
   type VideoRunDraft,
 } from '@/lib/creator-run-inputs';
-import { catalogRunInputFacts } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { buildGenerationModelCatalog, quoteGenerationModel } from '@/lib/generation-model-catalog';
+import { catalogRunInputFacts, catalogRunQuoteInput } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { PRODUCTION_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
 
 type Media = {
   imageReference: string;
@@ -216,5 +220,120 @@ describe('planImageRunInputs', () => {
     ]);
     expect(planImageRunInputs(pictures(2), 0)).toEqual([]);
     expect(planImageRunInputs(pictures(2), -1)).toEqual([]);
+  });
+});
+
+const motionSettings = { duration: 8, characterOrientation: 'video', resolution: '720p' };
+const slotsOf = (descriptor: MotionRunDescriptor | null | undefined, settings: Record<string, string | number> = motionSettings) => (
+  planMotionRunInputs(descriptor, settings).map((input) => `${input.slot}:${input.kind}`)
+);
+
+describe('planMotionRunInputs', () => {
+  it('sends the picture and the clip in the slots each code motion model declares, whatever their names', () => {
+    const motionModels = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3 }).models.filter((model) => model.kind === 'motion');
+    expect(motionModels.map((model) => model.id).sort()).toEqual(['kling-2.6', 'kling-3.0']);
+    for (const model of motionModels) {
+      expect(slotsOf(model)).toEqual(['characterImage:image', 'referenceVideo:video']);
+      // The same model with its slots renamed: the plan follows the descriptor, not the names it knows.
+      const renamed = {
+        ...model,
+        inputModes: model.inputModes?.map((mode) => ({ ...mode, slots: mode.slots.map((slot) => ({ ...slot, key: `${slot.key}Renamed` })) })),
+      };
+      expect(slotsOf(renamed)).toEqual(['characterImageRenamed:image', 'referenceVideoRenamed:video']);
+    }
+  });
+
+  it("sends Kling 3.0's in the reference slots production publishes, counted as the run sends them", () => {
+    const planned = planMotionRunInputs({ inputModes: PRODUCTION_KLING_3_MOTION_MODES }, motionSettings);
+    expect(planned).toEqual([{ slot: 'imageReferences', kind: 'image' }, { slot: 'videoReferences', kind: 'video' }]);
+    expect(catalogRunInputFacts(planned)).toEqual({
+      inputCounts: { images: 1, videos: 1, audios: 0, preparedAudios: 0, characters: 0 },
+      inputMetadata: { slots: { imageReferences: { count: 1 }, videoReferences: { count: 1 } }, referenceVideoDurationsSeconds: [] },
+    });
+  });
+
+  it('keeps the motion-inputs slots for a descriptor that publishes no mode, or none for a kind', () => {
+    expect(slotsOf(undefined)).toEqual(['characterImage:image', 'referenceVideo:video']);
+    expect(slotsOf({})).toEqual(['characterImage:image', 'referenceVideo:video']);
+    expect(slotsOf({ inputModes: [{ slots: [{ key: 'imageReferences', kind: 'image', role: 'reference' }] }] }))
+      .toEqual(['imageReferences:image', 'referenceVideo:video']);
+  });
+
+  it('reads the slots of the mode the run’s settings open, and of the slots they open in it', () => {
+    const gated: MotionRunDescriptor = {
+      inputModes: [
+        {
+          conditions: [{ source: 'setting', key: 'characterOrientation', operator: 'equals', value: 'image' }],
+          slots: [
+            { key: 'portrait', kind: 'image', role: 'reference' },
+            { key: 'performance', kind: 'video', role: 'reference', conditions: [{ source: 'setting', key: 'resolution', operator: 'equals', value: '1080p' }] },
+            { key: 'take', kind: 'video', role: 'reference' },
+          ],
+        },
+        { slots: [{ key: 'character', kind: 'image', role: 'reference' }, { key: 'clip', kind: 'video', role: 'reference' }] },
+      ],
+    };
+    expect(slotsOf(gated, { ...motionSettings, characterOrientation: 'video' })).toEqual(['character:image', 'clip:video']);
+    expect(slotsOf(gated, { ...motionSettings, characterOrientation: 'image' })).toEqual(['portrait:image', 'take:video']);
+    expect(slotsOf(gated, { ...motionSettings, characterOrientation: 'image', resolution: '1080p' })).toEqual(['portrait:image', 'performance:video']);
+  });
+
+  it('skips a slot that takes nothing, and prefers one the run must fill', () => {
+    expect(slotsOf({
+      inputModes: [{
+        slots: [
+          { key: 'closed', kind: 'image', role: 'reference', min: 0, max: 0 },
+          { key: 'optional', kind: 'image', role: 'reference', min: 0, max: 1 },
+          { key: 'required', kind: 'image', role: 'reference', min: 1, max: 1 },
+          { key: 'clip', kind: 'video', role: 'reference', min: 0, max: 1 },
+        ],
+      }],
+    })).toEqual(['required:image', 'clip:video']);
+    expect(slotsOf({
+      inputModes: [{ slots: [{ key: 'closed', kind: 'image', role: 'reference', max: 0 }, { key: 'optional', kind: 'image', role: 'reference', max: 1 }] }],
+    })).toEqual(['optional:image', 'referenceVideo:video']);
+  });
+
+  it('reads a frame slot as empty in a mode’s conditions, as the server and the app do', () => {
+    expect(slotsOf({
+      inputModes: [
+        {
+          conditions: [{ source: 'inputCount', key: 'startFrame', operator: 'equals', value: 0 }],
+          slots: [{ key: 'imageReferences', kind: 'image', role: 'reference' }, { key: 'videoReferences', kind: 'video', role: 'reference' }],
+        },
+        { slots: [{ key: 'startFrame', kind: 'image', role: 'startFrame' }] },
+      ],
+    })).toEqual(['imageReferences:image', 'videoReferences:video']);
+  });
+
+  it('never puts the character in a frame slot', () => {
+    expect(slotsOf({
+      inputModes: [{
+        slots: [
+          { key: 'startFrame', kind: 'image', role: 'startFrame' },
+          { key: 'character', kind: 'image', role: 'reference' },
+          { key: 'clip', kind: 'video', role: 'reference' },
+        ],
+      }],
+    })).toEqual(['character:image', 'clip:video']);
+  });
+
+  it('is a run the server prices for every code motion model and for production’s Kling 3.0, where the fixed slots were refused', () => {
+    const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+    const quote = (models: typeof catalog.models, modelId: string, inputs: readonly { slot: string; kind: 'image' | 'video' }[]) => quoteGenerationModel(
+      catalogRunQuoteInput({ kind: 'motion' as const, modelId, catalogRevision: catalog.revision, settings: motionSettings, inputs }),
+      { catalog: { ...catalog, models } },
+    );
+    for (const model of catalog.models.filter((candidate) => candidate.kind === 'motion')) {
+      expect(quote(catalog.models, model.id, planMotionRunInputs(model, motionSettings)).costCredits).toEqual(expect.any(Number));
+    }
+
+    const asProduction = catalog.models.map((model) => (
+      model.id === 'kling-3.0' && model.kind === 'motion' ? { ...model, inputModes: PRODUCTION_KLING_3_MOTION_MODES } : model
+    ));
+    const kling3 = asProduction.find((model) => model.id === 'kling-3.0' && model.kind === 'motion');
+    expect(quote(asProduction, 'kling-3.0', planMotionRunInputs(kling3, motionSettings)).costCredits).toEqual(expect.any(Number));
+    expect(() => quote(asProduction, 'kling-3.0', [{ slot: 'characterImage', kind: 'image' }, { slot: 'referenceVideo', kind: 'video' }]))
+      .toThrow(expect.objectContaining({ fieldErrors: expect.objectContaining({ characterImage: 'Kling 3.0 does not support the characterImage input.' }) }));
   });
 });
