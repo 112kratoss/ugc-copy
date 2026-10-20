@@ -2,6 +2,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
+
+// A failed balance read must never count against backend health: provider dependency
+// events turn health to warning for an hour, which the release gate refuses.
+const recordProviderDependencyEventMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/provider-dependency-telemetry', () => ({
+  recordProviderDependencyEvent: recordProviderDependencyEventMock,
+}));
 import {
   KIE_ACCOUNT_BALANCE_ENDPOINT,
   KieAccountBalanceError,
@@ -165,6 +172,21 @@ describe('readKieAccountBalance', () => {
     expect(error.reason).toBe('http_error');
     expect(error.httpStatus).toBe(503);
     expectNoKeyLeak(error);
+  });
+
+  it('records no provider dependency event for a failed or timed-out read, so health never sees it', async () => {
+    recordProviderDependencyEventMock.mockClear();
+    await readError(readKieAccountBalance({
+      environment: env(),
+      fetcher: vi.fn<typeof fetch>(async () => new Response('upstream down', { status: 503 })),
+    }));
+    await readError(readKieAccountBalance({
+      environment: env(),
+      fetcher: vi.fn<typeof fetch>(() => new Promise<Response>(() => {})),
+      timeoutMs: 30,
+    }));
+
+    expect(recordProviderDependencyEventMock).not.toHaveBeenCalled();
   });
 
   it('names a body that is not JSON as malformed', async () => {

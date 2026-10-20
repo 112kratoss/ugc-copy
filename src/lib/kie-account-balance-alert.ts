@@ -128,17 +128,6 @@ export type KieBalanceCheckSummary = {
   consecutiveFailures: number;
 };
 
-export class KieAccountBalanceCheckError extends Error {
-  readonly summary: KieBalanceCheckSummary;
-
-  constructor(summary: KieBalanceCheckSummary) {
-    const lastFailure = summary.read.ok ? 'alert delivery failed' : `read ${summary.read.reason}`;
-    super(`Kie account balance check failed ${summary.consecutiveFailures} checks in a row (${lastFailure}).`);
-    this.name = 'KieAccountBalanceCheckError';
-    this.summary = summary;
-  }
-}
-
 const LEVEL_RANK: Record<KieBalanceAlertLevel, number> = { ok: 0, low: 1, exhausted: 2 };
 
 function higherLevel(left: KieBalanceAlertLevel, right: KieBalanceAlertLevel): KieBalanceAlertLevel {
@@ -510,9 +499,11 @@ function logCheck(summary: KieBalanceCheckSummary): void {
 /**
  * One balance check. The caller holds the `kie-account-balance` job lock and
  * has a run row under `lockOwner` (see `runKieAccountBalanceBackendJob` and
- * `runKieRefusalBalanceCheck`). Throws `KieAccountBalanceCheckError`, carrying
- * the summary, once `KIE_BALANCE_CHECK_FAILURE_LIMIT` checks in a row have
- * failed; any other throw is the state read failing, before Kie is asked.
+ * `runKieRefusalBalanceCheck`). A failed read or alert post never fails the run:
+ * a failed run is a backend health issue, and the release gate would then refuse
+ * every release, the fix included. `KIE_BALANCE_CHECK_FAILURE_LIMIT` failures in a
+ * row are reported on `/api/ops/backend-alerts` instead (`kieBalanceAlertFromStatus`).
+ * A throw is the state read or write failing.
  */
 export async function checkKieAccountBalance(
   client: SupabaseClient,
@@ -605,10 +596,6 @@ export async function checkKieAccountBalance(
 
   await recordOnOwnRun(client, options.lockOwner, summary);
   logCheck(summary);
-
-  if (summary.consecutiveFailures >= KIE_BALANCE_CHECK_FAILURE_LIMIT) {
-    throw new KieAccountBalanceCheckError(summary);
-  }
   return summary;
 }
 
@@ -675,17 +662,28 @@ export async function collectKieBalanceStatus(
 /** The open episode as a backend alert for `/api/ops/backend-alerts`, or null when none is open. */
 export function kieBalanceAlertFromStatus(
   status: KieBalanceStatus,
-): { code: 'KIE_BALANCE_LOW' | 'KIE_BALANCE_EXHAUSTED'; message: string } | null {
-  if (!status.available || status.episodeLevel === 'ok') return null;
-  const balance = status.credits === null
-    ? 'unknown (no successful reading yet)'
-    : `${formatCredits(status.credits)} credits at ${status.observedAt ?? 'an unknown time'}`;
-  return describeKieBalanceAlert({
-    level: status.episodeLevel,
-    balance,
-    thresholdCredits: status.thresholdCredits,
-    recoveryCredits: status.recoveryCredits,
-  });
+): { code: 'KIE_BALANCE_LOW' | 'KIE_BALANCE_EXHAUSTED' | 'KIE_BALANCE_CHECK_FAILING'; message: string } | null {
+  if (!status.available) return null;
+  if (status.episodeLevel !== 'ok') {
+    const balance = status.credits === null
+      ? 'unknown (no successful reading yet)'
+      : `${formatCredits(status.credits)} credits at ${status.observedAt ?? 'an unknown time'}`;
+    return describeKieBalanceAlert({
+      level: status.episodeLevel,
+      balance,
+      thresholdCredits: status.thresholdCredits,
+      recoveryCredits: status.recoveryCredits,
+    });
+  }
+  // A check failing again and again is reported here, never as a failed run: the
+  // watchdog still mails the owner, and backend health (the release gate) stays clean.
+  if (status.consecutiveFailures >= KIE_BALANCE_CHECK_FAILURE_LIMIT) {
+    return {
+      code: 'KIE_BALANCE_CHECK_FAILING',
+      message: `The Kie.ai credit balance check has failed ${status.consecutiveFailures} times in a row (${status.lastCheckError ?? 'unknown error'}), so a low balance would go unnoticed. Check KIE_AI_API_KEY and https://api.kie.ai/api/v1/chat/credit.`,
+    };
+  }
+  return null;
 }
 
 /** One line for the dashboard panel. */

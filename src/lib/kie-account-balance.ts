@@ -2,7 +2,6 @@ import 'server-only';
 
 import {
   PROVIDER_STATUS_POLL_TIMEOUT_MS,
-  fetchWithProviderTimeout,
   isExternalServiceTimeoutError,
   withExternalServiceTimeout,
 } from '@/lib/provider-fetch';
@@ -149,20 +148,19 @@ export async function readKieAccountBalance(options: {
     // The request carries its own abort signal; the outer bound also covers a
     // fetcher that ignores it and a body that never finishes arriving.
     body = await withExternalServiceTimeout((async () => {
-      const response = await fetchWithProviderTimeout(
-        KIE_ACCOUNT_BALANCE_ENDPOINT,
-        {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            Accept: 'application/json',
-          },
-          cache: 'no-store',
+      // A plain fetch, never fetchWithProviderTimeout: that records a provider dependency
+      // event for each timeout or error answer, and one such event turns backend health to
+      // warning for an hour, which the release gate refuses. A failed balance read is the
+      // job's own business (its summary and the alert), never the backend's health.
+      const response = await fetcher(KIE_ACCOUNT_BALANCE_ENDPOINT, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: 'application/json',
         },
-        timeoutMs,
-        fetcher,
-        KIE_ACCOUNT_BALANCE_SERVICE_NAME,
-      );
+        cache: 'no-store',
+        signal: AbortSignal.timeout(timeoutMs),
+      });
 
       if (!response.ok) {
         void response.body?.cancel().catch(() => undefined);
@@ -181,10 +179,10 @@ export async function readKieAccountBalance(options: {
     })(), timeoutMs, KIE_ACCOUNT_BALANCE_SERVICE_NAME);
   } catch (error) {
     if (error instanceof KieAccountBalanceError) throw error;
-    if (isExternalServiceTimeoutError(error)) {
+    const name = errorName(error);
+    if (isExternalServiceTimeoutError(error) || name === 'TimeoutError') {
       throw new KieAccountBalanceError('timeout', `Kie account balance read timed out after ${timeoutMs}ms.`);
     }
-    const name = errorName(error);
     throw new KieAccountBalanceError(
       'network_error',
       `Kie account balance read could not reach Kie${name ? ` (${name})` : ''}.`,

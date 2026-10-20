@@ -552,6 +552,12 @@ async function handleRequest(request, response) {
     });
   }
 
+  // The kie-account-balance job reads the credit balance every scheduler drive; a balance
+  // well above the alert threshold keeps a certification run quiet.
+  if (request.method === 'GET' && pathname === '/api/v1/chat/credit') {
+    return json(response, 200, { code: 200, msg: 'success', data: 1_000_000 });
+  }
+
   return json(response, 404, { code: 404, msg: `unhandled stub route: ${pathname}` });
 }
 

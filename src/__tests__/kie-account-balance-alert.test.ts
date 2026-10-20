@@ -8,11 +8,11 @@ import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 import {
   DEFAULT_KIE_BALANCE_ALERT_CREDITS,
   KIE_ACCOUNT_BALANCE_JOB_NAME,
-  KieAccountBalanceCheckError,
   checkKieAccountBalance,
   collectKieBalanceStatus,
   resolveKieBalanceAlertPolicy,
   type KieBalanceCheckSummary,
+  kieBalanceAlertFromStatus,
 } from '@/lib/kie-account-balance-alert';
 
 import {
@@ -312,7 +312,7 @@ describe('checkKieAccountBalance', () => {
     expect(providers.posts).toHaveLength(2);
   });
 
-  it('rides out a failed read or two and fails the check on the third in a row', async () => {
+  it('rides out failed reads without ever failing the run, counting them for the alert', async () => {
     providers.state.balance = 1900;
     await check(minutes(0));
 
@@ -326,14 +326,11 @@ describe('checkKieAccountBalance', () => {
     });
     expect(await check(minutes(20))).toMatchObject({ consecutiveFailures: 2 });
 
-    const third = check(minutes(30));
-    await expect(third).rejects.toBeInstanceOf(KieAccountBalanceCheckError);
-    const error = await third.then(
-      () => { throw new Error('expected the third failed read to fail the check'); },
-      (caught: unknown) => caught as KieAccountBalanceCheckError,
-    );
-    expect(error.summary).toMatchObject({ consecutiveFailures: 3, episodeLevel: 'low' });
-    expect(error.message).not.toContain(KIE_KEY);
+    // The third in a row is reported on /api/ops/backend-alerts (kieBalanceAlertFromStatus),
+    // never as a failed run: backend health would report that and hold every release.
+    const third = await check(minutes(30));
+    expect(third).toMatchObject({ consecutiveFailures: 3, episodeLevel: 'low' });
+    expect(JSON.stringify(third)).not.toContain(KIE_KEY);
 
     providers.state.balance = 1800;
     expect(await check(minutes(40))).toMatchObject({
@@ -485,6 +482,36 @@ describe('collectKieBalanceStatus', () => {
       error: 'database unavailable',
       credits: null,
     });
+  });
+});
+
+describe('kieBalanceAlertFromStatus', () => {
+  const status = {
+    available: true,
+    error: null,
+    thresholdCredits: 2000,
+    recoveryCredits: 2200,
+    episodeLevel: 'ok' as const,
+    credits: 25_000,
+    observedAt: '2026-10-20T09:00:00.000Z',
+    lastCheckedAt: '2026-10-20T09:30:00.000Z',
+    lastCheckError: 'timeout' as const,
+    consecutiveFailures: 0,
+    episodeStartedAt: null,
+  };
+
+  it('reports a check failing three times in a row, so the watchdog mails the owner', () => {
+    expect(kieBalanceAlertFromStatus({ ...status, consecutiveFailures: 2 })).toBeNull();
+    expect(kieBalanceAlertFromStatus({ ...status, consecutiveFailures: 3 })).toMatchObject({
+      code: 'KIE_BALANCE_CHECK_FAILING',
+      message: expect.stringContaining('failed 3 times in a row (timeout)'),
+    });
+  });
+
+  it('reports the open episode first, whatever the failure count', () => {
+    expect(kieBalanceAlertFromStatus({ ...status, episodeLevel: 'low', credits: 845.32, consecutiveFailures: 4 }))
+      .toMatchObject({ code: 'KIE_BALANCE_LOW' });
+    expect(kieBalanceAlertFromStatus({ ...status, available: false, consecutiveFailures: 9 })).toBeNull();
   });
 });
 

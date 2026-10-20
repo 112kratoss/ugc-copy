@@ -99,17 +99,17 @@ describe('the kie-account-balance backend job', () => {
     expect(providers.state.kieCalls).toBe(0);
   });
 
-  it('fails the run on the third failed read in a row, and keeps its state on the failed run', async () => {
+  it('never fails the run for failed reads, so backend health and the release gate stay clean', async () => {
     providers.state.balance = 'http_500';
 
     expect(await runJob(T0)).toMatchObject({ status: 'succeeded', summary: { consecutiveFailures: 1 } });
     expect(await runJob(T0 + 10 * 60_000)).toMatchObject({ status: 'succeeded', summary: { consecutiveFailures: 2 } });
+    // The third in a row is reported on /api/ops/backend-alerts as KIE_BALANCE_CHECK_FAILING.
     const third = await runJob(T0 + 20 * 60_000);
-    expect(third).toMatchObject({ success: false, status: 'failed' });
-    expect(third.success ? '' : third.error).not.toContain(KIE_KEY);
+    expect(third).toMatchObject({ status: 'succeeded', summary: { consecutiveFailures: 3 } });
+    expect(JSON.stringify(third)).not.toContain(KIE_KEY);
     expect(db.runs[2]).toMatchObject({
-      status: 'failed',
-      error_message: expect.stringContaining('3 checks in a row'),
+      status: 'succeeded',
       summary: expect.objectContaining({ consecutiveFailures: 3 }),
     });
 

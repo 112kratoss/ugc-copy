@@ -11,7 +11,6 @@ import { BACKEND_JOBS_BY_NAME } from '@/lib/backend-jobs';
 import { logBackendEvent } from '@/lib/backend-logger';
 import {
   KIE_ACCOUNT_BALANCE_JOB_NAME,
-  KieAccountBalanceCheckError,
   checkKieAccountBalance,
   type KieBalanceCheckSummary,
 } from '@/lib/kie-account-balance-alert';
@@ -166,12 +165,10 @@ export async function runKieRefusalBalanceCheck(options: {
     return { status: 'succeeded', summary: result.value };
   } catch (error) {
     const message = errorMessage(error);
-    const summary = error instanceof KieAccountBalanceCheckError ? error.summary : undefined;
     await finishBackendJobRun(client, run, {
       status: 'failed',
       finishedAtMs: Date.now(),
       errorMessage: message,
-      ...(summary ? { summary } : {}),
     });
     // The same event the scheduled run logs when it fails.
     logBackendEvent('error', 'kie_account_balance_check_failed', {
@@ -181,6 +178,6 @@ export async function runKieRefusalBalanceCheck(options: {
       requestId,
       error: message,
     });
-    return { status: 'failed', error: message, ...(summary ? { summary } : {}) };
+    return { status: 'failed', error: message };
   }
 }

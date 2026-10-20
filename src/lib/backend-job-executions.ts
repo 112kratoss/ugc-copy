@@ -41,10 +41,7 @@ import {
 } from '@/lib/generation-output-import-jobs-processor';
 import { verifyPublishedGenerationModels } from '@/lib/generation-model-provider-verification';
 import { hasConfiguredKieAccountBalanceCheck } from '@/lib/kie-account-balance';
-import {
-  KieAccountBalanceCheckError,
-  checkKieAccountBalance,
-} from '@/lib/kie-account-balance-alert';
+import { checkKieAccountBalance } from '@/lib/kie-account-balance-alert';
 import { hasRepairableMediaPreviews, repairMediaPreviews } from '@/lib/media-preview-repair';
 import {
   hasReclaimableMediaUploads,
@@ -352,13 +349,7 @@ async function runManagedBackendJob<TSummary>({
     };
     } catch (error) {
       const finishedAtMs = Date.now();
-      // The Kie balance check keeps its alert state in its summaries, so its
-      // failed run has to keep one too or the next check would forget it.
-      const partialSummary = error instanceof MobilePushMaintenanceError
-        || error instanceof ReferralRewardReconciliationError
-        || error instanceof KieAccountBalanceCheckError
-        ? error.summary
-        : undefined;
+      const partialSummary = error instanceof MobilePushMaintenanceError || error instanceof ReferralRewardReconciliationError ? error.summary : undefined;
       if (currentServiceClient) {
         await finishBackendJobRun(currentServiceClient, jobRun, {
           status: 'failed',
