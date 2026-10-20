@@ -303,6 +303,15 @@ describe('collectBackendHealth', () => {
             error_message: null,
           },
           {
+            job_name: 'kie-account-balance',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
             job_name: 'media-preview-repair',
             status: 'succeeded',
             started_at: '2026-06-21T09:45:00.000Z',
@@ -397,8 +406,8 @@ describe('collectBackendHealth', () => {
       cadenceMinutes: 10,
       dailyInvocations: 144,
       dailyInvocationBudget: 456,
-      logicalDailyInvocations: 1083,
-      coveredJobCount: 13,
+      logicalDailyInvocations: 1227,
+      coveredJobCount: 14,
       coveredJobs: expect.arrayContaining([
         expect.objectContaining({
           name: 'account-deletion-resweeps',
@@ -447,7 +456,12 @@ describe('collectBackendHealth', () => {
         }),
       ]),
     });
-    expect(health.jobs).toHaveLength(13);
+    expect(health.jobs).toHaveLength(14);
+    expect(health.jobs.find((job) => job.name === 'kie-account-balance')).toMatchObject({
+      status: 'ok',
+      dailyInvocations: 144,
+      expectedMaxAgeMinutes: 30,
+    });
     expect(health.jobs.find((job) => job.name === 'feed-embeddings')).toMatchObject({
       status: 'ok',
       dailyInvocations: 144,
@@ -1133,6 +1147,15 @@ describe('collectBackendHealth', () => {
             finished_at: '2026-06-21T09:20:03.000Z',
             duration_ms: 3000,
             skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'kie-account-balance',
+            status: 'skipped',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
+            duration_ms: 1000,
+            skip_reason: 'kie_api_key_not_configured',
             error_message: null,
           },
           {

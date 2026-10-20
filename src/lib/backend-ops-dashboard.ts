@@ -21,11 +21,16 @@ import {
   collectBackendModerationHealth,
   type BackendModerationHealth,
 } from '@/lib/backend-moderation-health';
+import {
+  collectKieBalanceStatus,
+  describeKieBalanceStatus,
+  type KieBalanceStatus,
+} from '@/lib/kie-account-balance-alert';
 
 export type BackendOpsDashboardStatus = 'ok' | 'warning' | 'degraded';
 
 export type BackendOpsDashboardPanel = {
-  id: 'health' | 'costs' | 'alerts';
+  id: 'health' | 'costs' | 'alerts' | 'kie-balance';
   title: string;
   status: BackendOpsDashboardStatus;
   href: string;
@@ -52,6 +57,8 @@ type BuildBackendOpsDashboardInput = {
   health: BackendHealth;
   costs: BackendCostReport;
   alerts: BackendAlertSummary;
+  /** The Kie credit balance the `kie-account-balance` job last read; no panel without it. */
+  kieBalance?: KieBalanceStatus | null;
   checkedAt?: string;
 };
 
@@ -64,6 +71,7 @@ type CollectBackendOpsDashboardOptions = {
     client: SupabaseClient,
     now: Date,
   ) => Promise<BackendModerationHealth>;
+  collectKieBalance?: (client: SupabaseClient) => Promise<KieBalanceStatus>;
 };
 
 const SOURCES = {
@@ -87,13 +95,52 @@ function panelSummary(status: BackendOpsDashboardStatus, issueCount: number): st
   return `${issueCount} active ${issueCount === 1 ? 'issue' : 'issues'}.`;
 }
 
+/**
+ * The last balance read, from the job's own run summary rather than a call to
+ * Kie, so opening the dashboard costs no provider request. At most a warning:
+ * the dashboard answers 503 for backend degradation, and a top-up is an owner
+ * action, not a fault the backend can clear. The alert itself goes out
+ * through alert delivery (kie-account-balance-alert.ts).
+ */
+function buildKieBalancePanel(balance: KieBalanceStatus): BackendOpsDashboardPanel {
+  const status: BackendOpsDashboardStatus = (
+    !balance.available || balance.episodeLevel !== 'ok' || balance.consecutiveFailures > 0
+  ) ? 'warning' : 'ok';
+
+  return {
+    id: 'kie-balance',
+    title: 'Kie credit balance',
+    status,
+    href: DASHBOARD_ENDPOINT,
+    issueCount: status === 'ok' ? 0 : 1,
+    summary: describeKieBalanceStatus(balance),
+    metrics: {
+      balanceCredits: balance.credits,
+      thresholdCredits: balance.thresholdCredits,
+      episodeLevel: balance.episodeLevel,
+      observedAt: balance.observedAt,
+      lastCheckedAt: balance.lastCheckedAt,
+      lastCheckError: balance.lastCheckError,
+      recoveryCredits: balance.recoveryCredits,
+      consecutiveFailures: balance.consecutiveFailures,
+    },
+  };
+}
+
 export function buildBackendOpsDashboard({
   health,
   costs,
   alerts,
+  kieBalance,
   checkedAt = new Date().toISOString(),
 }: BuildBackendOpsDashboardInput): BackendOpsDashboard {
-  const status = maxStatus([health.status, costs.status, alerts.status]);
+  const kieBalancePanel = kieBalance ? buildKieBalancePanel(kieBalance) : null;
+  const status = maxStatus([
+    health.status,
+    costs.status,
+    alerts.status,
+    ...(kieBalancePanel ? [kieBalancePanel.status] : []),
+  ]);
   const panels: BackendOpsDashboardPanel[] = [
     {
       id: 'health',
@@ -138,6 +185,7 @@ export function buildBackendOpsDashboard({
         moderationOldestAgeMinutes: alerts.signals.moderationOldestAgeMinutes,
       },
     },
+    ...(kieBalancePanel ? [kieBalancePanel] : []),
   ];
 
   return {
@@ -166,10 +214,13 @@ export async function collectBackendOpsDashboard(
       collectBackendCostReport(costClient, costNow, { environment })
     ));
   const collectModeration = options.collectModeration ?? collectBackendModerationHealth;
-  const [health, costs, moderation] = await Promise.all([
+  const collectKieBalance = options.collectKieBalance
+    ?? ((balanceClient: SupabaseClient) => collectKieBalanceStatus(balanceClient, { environment }));
+  const [health, costs, moderation, kieBalance] = await Promise.all([
     collectHealth(client, now),
     collectCosts(client, now),
     collectModeration(client, now),
+    collectKieBalance(client),
   ]);
   const alerts = buildBackendAlertSummary({
     health,
@@ -182,6 +233,7 @@ export async function collectBackendOpsDashboard(
     health,
     costs,
     alerts,
+    kieBalance,
     checkedAt: now.toISOString(),
   });
 }

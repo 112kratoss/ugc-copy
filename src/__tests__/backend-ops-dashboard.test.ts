@@ -8,6 +8,7 @@ import {
   buildBackendOpsDashboard,
   collectBackendOpsDashboard,
 } from '@/lib/backend-ops-dashboard';
+import type { KieBalanceStatus } from '@/lib/kie-account-balance-alert';
 
 const backendHealth = {
   status: 'degraded',
@@ -165,5 +166,107 @@ describe('backend ops dashboard', () => {
     expect(collectHealth).toHaveBeenCalledWith(client, now);
     expect(collectCosts).toHaveBeenCalledWith(client, now);
     expect(collectModeration).toHaveBeenCalledWith(client, now);
+  });
+
+  const lowKieBalance: KieBalanceStatus = {
+    available: true,
+    error: null,
+    thresholdCredits: 2000,
+    recoveryCredits: 2200,
+    episodeLevel: 'low',
+    credits: 845.32,
+    observedAt: '2026-10-20T06:00:00.000Z',
+    lastCheckedAt: '2026-10-20T06:10:00.000Z',
+    lastCheckError: null,
+    consecutiveFailures: 0,
+    episodeStartedAt: '2026-10-20T06:00:00.000Z',
+  };
+
+  it('shows the last observed Kie balance as its own panel, without ever degrading the dashboard', () => {
+    const quietHealth = { ...backendHealth, status: 'ok', issues: [] } as unknown as BackendHealth;
+    const quietCosts = { ...backendCosts, status: 'ok', issues: [] } as unknown as BackendCostReport;
+    const quietAlerts = {
+      ...backendAlerts,
+      status: 'ok',
+      counts: { total: 0, degraded: 0, warning: 0 },
+    } as unknown as BackendAlertSummary;
+
+    const low = buildBackendOpsDashboard({
+      health: quietHealth,
+      costs: quietCosts,
+      alerts: quietAlerts,
+      kieBalance: lowKieBalance,
+      checkedAt: '2026-10-20T06:11:00.000Z',
+    });
+
+    expect(low.status).toBe('warning');
+    expect(low.panels.map((panel) => panel.id)).toEqual(['health', 'costs', 'alerts', 'kie-balance']);
+    expect(low.panels[3]).toMatchObject({
+      id: 'kie-balance',
+      title: 'Kie credit balance',
+      status: 'warning',
+      issueCount: 1,
+      metrics: {
+        balanceCredits: 845.32,
+        thresholdCredits: 2000,
+        episodeLevel: 'low',
+        observedAt: '2026-10-20T06:00:00.000Z',
+        lastCheckedAt: '2026-10-20T06:10:00.000Z',
+        lastCheckError: null,
+      },
+    });
+    expect(low.panels[3].summary).toContain('845.32');
+
+    // Generations failing for want of Kie credits is still a warning here: the
+    // dashboard answers 503 only for backend degradation, and a top-up is an
+    // owner action, not a fault the backend can clear.
+    const exhausted = buildBackendOpsDashboard({
+      health: quietHealth,
+      costs: quietCosts,
+      alerts: quietAlerts,
+      kieBalance: { ...lowKieBalance, episodeLevel: 'exhausted', credits: 3 },
+    });
+    expect(exhausted.status).toBe('warning');
+
+    const healthy = buildBackendOpsDashboard({
+      health: quietHealth,
+      costs: quietCosts,
+      alerts: quietAlerts,
+      kieBalance: { ...lowKieBalance, episodeLevel: 'ok', credits: 25_000, episodeStartedAt: null },
+    });
+    expect(healthy.status).toBe('ok');
+    expect(healthy.panels[3]).toMatchObject({ status: 'ok', issueCount: 0 });
+  });
+
+  it('collects the Kie balance panel alongside the other collectors, and survives it failing', async () => {
+    const now = new Date('2026-10-20T06:12:00.000Z');
+    const collectKieBalance = vi.fn(async () => lowKieBalance);
+
+    const dashboard = await collectBackendOpsDashboard({ service: 'supabase' } as never, {
+      now,
+      collectHealth: vi.fn(async () => backendHealth),
+      collectCosts: vi.fn(async () => backendCosts),
+      collectModeration: vi.fn(async () => backendModeration),
+      collectKieBalance,
+    });
+
+    expect(collectKieBalance).toHaveBeenCalledTimes(1);
+    expect(dashboard.panels.find((panel) => panel.id === 'kie-balance')).toMatchObject({
+      status: 'warning',
+      metrics: { balanceCredits: 845.32 },
+    });
+
+    // The default collector reads the job's own run rows; a client that cannot
+    // read them leaves the panel unavailable rather than failing the dashboard.
+    const unreadable = await collectBackendOpsDashboard({ service: 'supabase' } as never, {
+      now,
+      collectHealth: vi.fn(async () => backendHealth),
+      collectCosts: vi.fn(async () => backendCosts),
+      collectModeration: vi.fn(async () => backendModeration),
+    });
+    expect(unreadable.panels.find((panel) => panel.id === 'kie-balance')).toMatchObject({
+      status: 'warning',
+      metrics: { balanceCredits: null },
+    });
   });
 });
