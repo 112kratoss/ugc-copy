@@ -23,6 +23,7 @@ import {
   type EnhancerContext,
   type Medium,
 } from '@/lib/prompt-enhancer';
+import { IMAGE_MODELS } from '@/lib/models';
 import { inspectPromptQuality } from '@/lib/prompt-quality';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -86,14 +87,27 @@ function sanitizeFrameImageUrls(value: unknown): string[] {
     .slice(0, MAX_FRAME_IMAGE_URLS);
 }
 
-function sanitizeEnhancerContext(context: EnhancerContext | undefined): EnhancerContext | undefined {
+function modelTakesGoogleSearch(modelId: string): boolean {
+  return Object.hasOwn(IMAGE_MODELS, modelId)
+    && (IMAGE_MODELS as Record<string, { supportsGoogleSearch?: boolean }>)[modelId].supportsGoogleSearch === true;
+}
+
+function sanitizeEnhancerContext(
+  context: EnhancerContext | undefined,
+  selectedModel: string,
+): EnhancerContext | undefined {
   if (!context) {
     return context;
   }
 
   const frameImageUrls = sanitizeFrameImageUrls(context.frameImageUrls);
+  // Grounding reaches the planner only for a model that takes it. Kie dropped
+  // `google_search` from both Nano Banana tiers (re-read 2026-10-20), so none does now,
+  // and a saved draft or remix still carrying `googleSearch: true` must not say it is on.
+  const { googleSearch, ...rest } = context;
   return {
-    ...context,
+    ...rest,
+    ...(googleSearch === true && modelTakesGoogleSearch(selectedModel) ? { googleSearch: true } : {}),
     frameImageUrls: frameImageUrls.length > 0 ? frameImageUrls : undefined,
   };
 }
@@ -131,7 +145,8 @@ function validatePromptEnhancementBody(body: unknown): PromptEnhancementRequest 
     selectedModel,
     prompt,
     context: sanitizeEnhancerContext(
-      isRecord(context) ? context as EnhancerContext : undefined
+      isRecord(context) ? context as EnhancerContext : undefined,
+      selectedModel,
     ),
     bodyRecord: body,
   };

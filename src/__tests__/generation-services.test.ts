@@ -5785,7 +5785,7 @@ describe('generation services', () => {
     /** Refused with `message`, with no credit hold and no provider request. */
     async function expectRefusedBeforeHold(
       start: (supabase: SupabaseClient) => Promise<unknown>,
-      message: string,
+      message: string | ReturnType<typeof expect.stringMatching>,
     ) {
       const { supabase, rpcCalls } = createSupabaseMock();
       const providerCalls = vi.mocked(fetch).mock.calls.length;
@@ -5840,7 +5840,7 @@ describe('generation services', () => {
           resolution: '2K',
           imageUrls: ['https://cdn.example.com/hero.png'],
           elements: [{ id: 'element-1', displayName: 'Hero bottle', handle: '@hero', storagePath: null, sourceGenerationId: null }],
-        }), 'Seedream 5 Lite prompts support up to 2,995 characters.');
+        }), expect.stringMatching(/^Seedream 5 Lite prompts support up to 2,995 characters, including the [\d,]+ characters that name your references\. Shorten the prompt by [\d,]+ characters?\.$/));
       });
 
       it('holds Grok Imagine to 5,000 for text alone, where its image-to-image endpoint takes more', async () => {
@@ -5910,9 +5910,10 @@ describe('generation services', () => {
         });
 
         await expectRefusedBeforeHold((supabase) => catalogRun(supabase, 'a'.repeat(1001)), 'Z-Image prompts support up to 1,000 characters.');
+        // The creator's 900 characters fit; the legend the app adds takes the prompt to 1,002.
         await expectRefusedBeforeHold(
           (supabase) => catalogRun(supabase, 'a'.repeat(900), `legend\n${'a'.repeat(995)}`),
-          'Z-Image prompts support up to 1,000 characters.',
+          'Z-Image prompts support up to 1,000 characters, including the 102 characters that name your references. Shorten the prompt by 2 characters.',
         );
       });
     });

@@ -798,6 +798,47 @@ describe('workflow-runner recovery', () => {
       expect(result).toMatchObject({ status: 'processing', generation_id: 'gen-video' });
     });
 
+    it('is blocked with the reason, with nothing quoted or held, when a clip is shorter than the model takes', async () => {
+      // minimax-h3/reference-to-video: each clip 2 to 15 seconds. Kie would refuse it after the hold.
+      probeMediaDurationSecondsMock.mockResolvedValueOnce(1.5);
+
+      const result = await runClipStep('minimax-h3');
+
+      expect(result).toEqual({
+        status: 'blocked',
+        generation_id: null,
+        input_snapshot: null,
+        output_snapshot: null,
+        error_message: 'MiniMax H3 reference videos must be at least 2 seconds long. Reference video 1 runs 1.5 seconds.',
+      });
+      expect(quoteGenerationModelMock).not.toHaveBeenCalled();
+      expect(startVideoGenerationMock).not.toHaveBeenCalled();
+    });
+
+    it('measures a Kling 3.0 element and blocks the step when it is shorter than 3 s', async () => {
+      probeMediaDurationSecondsMock.mockResolvedValueOnce(2);
+
+      const result = await runClipStep('kling-3.0-video');
+
+      expect(result).toMatchObject({ status: 'blocked', generation_id: null });
+      expect((result as { error_message: string }).error_message)
+        .toBe('Kling 3.0 Cinematic video elements must be at least 3 seconds long. Video input runs 2 seconds.');
+      expect(quoteGenerationModelMock).not.toHaveBeenCalled();
+      expect(startVideoGenerationMock).not.toHaveBeenCalled();
+    });
+
+    it('sends a Kling 3.0 element of 3 s or more as before', async () => {
+      probeMediaDurationSecondsMock.mockResolvedValueOnce(4);
+
+      const result = await runClipStep('kling-3.0-video');
+
+      expect(result).toMatchObject({ status: 'processing' });
+      expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+        model: 'kling-3.0-video',
+        klingVideoElements: [expect.objectContaining({ url: 'https://cdn.example.com/clip.mp4' })],
+      }));
+    });
+
     it('is blocked, with nothing quoted or held, when a clip’s length cannot be verified', async () => {
       probeMediaDurationSecondsMock.mockResolvedValueOnce(null);
 

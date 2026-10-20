@@ -116,6 +116,12 @@ describe('provider input limits', () => {
         .toBe('Kling 3.0 motion reference videos must be at least 3 seconds long. The reference video runs 2.9 seconds.');
       expect(referenceMediaLengthViolation('kling-2.6', [{ role: 'motion', durationSeconds: 2, exact: false }]))
         .toBe('Kling 2.6 motion reference videos must be at least 3 seconds long.');
+      // wan/3-0-video and -prime: each clip and track 1–15 s.
+      expect(referenceMediaLengthViolation('wan-3.0', [{ role: 'video', durationSeconds: 0.8 }]))
+        .toBe('Wan 3.0 reference videos must be at least 1 second long. Reference video 1 runs 0.8 seconds.');
+      expect(referenceMediaLengthViolation('wan-3.0-prime', [{ role: 'audio', durationSeconds: 0.5 }]))
+        .toMatch(/^Wan 3\.0 Prime reference audio must be at least 1 second long\./);
+      expect(referenceMediaLengthViolation('wan-3.0', [{ role: 'video', durationSeconds: 1 }, { role: 'audio', durationSeconds: 1 }])).toBeNull();
     });
 
     it('takes a file at the minimum, a length nobody measured, and a model with no minimum', () => {

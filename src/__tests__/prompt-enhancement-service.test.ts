@@ -234,6 +234,32 @@ describe('enhancePromptForUser', () => {
     });
   });
 
+  it('never tells the planner Google Search grounding is on for a model that has none', async () => {
+    // Kie dropped google_search from Nano Banana (2026-10-20); a saved draft can still say true.
+    const client = createClient({ remainingCredits: 41 });
+    buildEnhancerSystemPromptMock.mockReturnValue('system prompt');
+    callPromptEnhancerMock.mockResolvedValue({ enhancedPrompt: 'provider structured response' });
+    buildPromptEnhancementArtifactsMock.mockReturnValue({ compiledPrompt: 'compiled prompt', agentId: 'test-enhancer', appliedSafeguards: [] });
+    applyPromptEnhancementSafeguardsWithMetadataMock.mockReturnValue({ enhancedPrompt: 'final enhanced prompt', appliedSafeguards: [] });
+    inspectPromptQualityMock.mockReturnValue({ qualityScore: 90, warnings: [] });
+
+    await enhancePromptForUser({
+      body: {
+        medium: 'image',
+        selectedModel: 'nano-banana-2',
+        prompt: 'Latest phone launch poster',
+        context: { aspectRatio: '1:1', googleSearch: true },
+      },
+      userId: 'user-1',
+      request: createRequest('enhance-click-grounding'),
+      client: client.client,
+    });
+
+    const context = buildEnhancerSystemPromptMock.mock.lastCall?.[2] as Record<string, unknown>;
+    expect(context).toMatchObject({ aspectRatio: '1:1' });
+    expect(context).not.toHaveProperty('googleSearch');
+  });
+
   it('refunds paid usage when the provider fails after ledger start', async () => {
     const client = createClient({ remainingCredits: 41 });
     buildEnhancerSystemPromptMock.mockReturnValue('system prompt');

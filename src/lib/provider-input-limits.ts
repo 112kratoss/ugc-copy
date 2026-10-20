@@ -108,6 +108,11 @@ export type ProviderPromptRun = {
    * included, or null when the provider's body carries no prompt of the run's own.
    */
   prompt: string | null;
+  /**
+   * The prompt as the creator wrote it, before the app added the legend that names the
+   * run's pictures. When only the legend takes it past the limit, the refusal says so.
+   */
+  typedPrompt?: string;
   /** Each shot's prompt as it is sent, for a multi-shot run. */
   shots?: readonly string[];
   /** Whether the run sends reference pictures, which picks some models' reference endpoint. */
@@ -146,6 +151,14 @@ export function providerPromptViolation(modelId: string, run: ProviderPromptRun)
   if (run.prompt !== null) {
     const counted = countedPromptLength(run.prompt, rule.elementMentionLength, elementHandles);
     if (maxLength !== null && counted > maxLength) {
+      const typed = run.typedPrompt?.trim();
+      const typedCounted = typed === undefined
+        ? null
+        : countedPromptLength(typed, rule.elementMentionLength, elementHandles);
+      if (typedCounted !== null && typedCounted <= maxLength && counted > typedCounted) {
+        // The creator's own words fit; the names the app adds for the references do not.
+        return `${name} prompts support up to ${characters(maxLength)}, including the ${characters(counted - typedCounted)} that name your references. Shorten the prompt by ${characters(counted - maxLength)}.`;
+      }
       return `${name} prompts support up to ${characters(maxLength)}${mentionNote(run.prompt.length, maxLength)}.`;
     }
     if (rule.minLength !== undefined && run.prompt.trim().length < rule.minLength) {
@@ -182,6 +195,10 @@ const REFERENCE_MEDIA_MIN_SECONDS: Readonly<Record<string, Partial<Record<Refere
   'minimax-h3': { video: 2, audio: 2 },
   // wan/2-7-r2v: reference_voice "Duration: 1 to 10 seconds" (:166).
   'wan-2.7': { audio: 1 },
+  // wan/3-0-video and -prime: each reference clip "must be 1–15 seconds", each audio track
+  // 1–15 s (docs/model-api-references/wan-3-0.md:26-28).
+  'wan-3.0': { video: 1, audio: 1 },
+  'wan-3.0-prime': { video: 1, audio: 1 },
   // kling-3.0/video: a video element's "duration must be at least 3 seconds" (:179-180, :229).
   'kling-3.0-video': { element: 3 },
   // kling-2.6/motion-control and kling-3.0/motion-control: "Between 3-30 seconds per video"

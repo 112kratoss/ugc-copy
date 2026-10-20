@@ -1958,6 +1958,7 @@ export async function startImageGeneration(params: {
   // On the prompt the provider is sent, legend included, before either path below holds.
   assertProviderPromptAccepted(model, {
     prompt: compiledPrompt,
+    typedPrompt: trimmedPrompt,
     hasReferenceImages: resolvedImageUrls.length > 0,
   });
 
@@ -2806,6 +2807,7 @@ export async function startVideoGeneration(params: {
     prompt: model === 'kling-o3'
       ? klingO3Prompt
       : (model === 'kling-3.0-video' && isMultiShot ? null : compiledPrompt),
+    typedPrompt: trimmedPrompt || undefined,
     shots: isMultiShot ? normalizedMultiPrompts.map((shot) => shot.prompt) : [],
     hasReferenceImages: totalReferenceImageCount > 0,
     elementHandles: resolvedKlingVideoElements.map((element) => element.handle),
@@ -3870,6 +3872,7 @@ export async function startCatalogGeneration(params: {
     prompt: isRecord(operation.adapterConfig) && operation.adapterConfig.promptField === null
       ? null
       : providerPrompt,
+    typedPrompt: creatorPrompt,
     shots: shots.map((shot) => (typeof shot.prompt === 'string' ? shot.prompt : '')),
     hasReferenceImages: inputs.some((asset) => asset.kind === 'image'),
   });
