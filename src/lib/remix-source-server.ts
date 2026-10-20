@@ -520,11 +520,13 @@ export async function loadRemixSourceBundle(
 
     if (isMotionWorkflow) {
       // The catalog path stored these under plain reference roles until motion
-      // slots got motion roles; for those rows the slot says which is which.
+      // runs got motion roles, in whatever slots the model declares (production's
+      // Kling 3.0: imageReferences and videoReferences). A motion run holds one
+      // picture and one clip, so for those rows the kind says which is which.
       const characterImage = accessibleInputMedia.find((item) => item.role === 'character_image')
-        ?? accessibleInputMedia.find((item) => item.mediaType === 'image' && item.metadata?.slot === 'characterImage');
+        ?? accessibleInputMedia.find((item) => item.mediaType === 'image');
       const referenceVideo = accessibleInputMedia.find((item) => item.role === 'motion_reference_video')
-        ?? accessibleInputMedia.find((item) => item.mediaType === 'video' && item.metadata?.slot === 'referenceVideo');
+        ?? accessibleInputMedia.find((item) => item.mediaType === 'video');
       if (characterImage && !characterImage.url) {
         restoreIssues.push('motion-character-image');
       }

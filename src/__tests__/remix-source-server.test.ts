@@ -446,6 +446,25 @@ describe('remixing a motion generation made through the catalog', () => {
         referenceVideo: expect.objectContaining({ kind: 'video', label: 'Reference video', url: 'https://signed.example/durable-1' }),
       });
     });
+
+    // Runs kept before the roles went by kind: the plain reference roles, under the slots
+    // the model declares. Read by the motion-inputs slot names only, both came back as
+    // nothing, with no restore issue, and the motion creator opened empty.
+    it('restores runs kept under the plain reference roles in those slots, by kind', async () => {
+      mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', ROWS_WITH_REFERENCE_ROLES.map((row, index) => ({
+        ...row,
+        metadata: { ...row.metadata, slot: DECLARED_INPUTS[index].slot },
+      }))]]));
+
+      const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+      expect(bundle.inputs.video).toBeUndefined();
+      expect(bundle.inputs.motion).toEqual({
+        characterImage: expect.objectContaining({ kind: 'image', url: 'https://signed.example/hero.png' }),
+        referenceVideo: expect.objectContaining({ kind: 'video', url: 'https://signed.example/moves.mp4' }),
+      });
+      expect(bundle.restoreIssues.filter((issue) => issue.startsWith('motion-') || issue.startsWith('video-'))).toEqual([]);
+    });
   });
 });
 
