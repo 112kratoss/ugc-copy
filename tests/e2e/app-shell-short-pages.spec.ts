@@ -161,9 +161,9 @@ test.describe('a short page in the app shell', () => {
   });
 
   // Each page is emptied, so that it is short at every width whatever it shows.
-  // Alerts' root is `.ui-page` with a `min-h-[calc(100dvh-64px)]` of its own that
-  // lost to `.ui-page`'s 100vh, Search's is `min-h-screen`; both routes add
-  // non-public-utilities.css. Contact is styled by globals.css alone. The
+  // Alerts' root is `.ui-page` (its own `min-h-[calc(100dvh-64px)]` always lost to
+  // `.ui-page`'s rule, and went in October 2026), Search's is `min-h-screen`; both
+  // routes add non-public-utilities.css. Contact is styled by globals.css alone. The
   // workflow library's root was sized by hand (`min-h-[calc(100vh-4rem)]`),
   // which the shell's rule passed by, so below 768px it left the page the
   // room taller than the window.
