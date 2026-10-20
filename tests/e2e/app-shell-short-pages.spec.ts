@@ -98,6 +98,28 @@ async function expectOverTheBottomNav(page: Page, name: string) {
   expect.soft(showing, `the bottom navigation shows over ${name} at`).toEqual([]);
 }
 
+// A point near (fx, fy) of the pane's part in the window where the pane itself is
+// drawn: from there toward the pane's centre until no panel, control or minimap is
+// over it.
+function panePoint(page: Page, fx: number, fy: number) {
+  return page.evaluate(([fractionX, fractionY]) => {
+    const pane = document.querySelector('.react-flow__pane')!;
+    const r = pane.getBoundingClientRect();
+    const left = Math.max(r.left, 0) + 2;
+    const right = Math.min(r.right, window.innerWidth) - 2;
+    const top = Math.max(r.top, 0) + 2;
+    const bottom = Math.min(r.bottom, window.innerHeight) - 2;
+    const from = { x: left + (right - left) * fractionX, y: top + (bottom - top) * fractionY };
+    const centre = { x: (left + right) / 2, y: (top + bottom) / 2 };
+    for (let t = 0; t <= 1; t += 0.01) {
+      const x = from.x + (centre.x - from.x) * t;
+      const y = from.y + (centre.y - from.y) * t;
+      if (document.elementFromPoint(x, y) === pane) return { x, y };
+    }
+    return null;
+  }, [fx, fy] as const);
+}
+
 type CanvasNode = { id: string; type: string; position: { x: number; y: number }; data: Record<string, unknown> };
 
 // A canvas answered from memory: its list, its record, and nothing saved.
@@ -305,5 +327,33 @@ test.describe('the workflow pages in the app shell', () => {
     await unsaved.getByRole('button', { name: 'Cancel', exact: true }).click();
     await expect(unsaved).toBeHidden();
     await expect(importDialog).toBeVisible();
+  });
+
+  // The canvas's context menu never showed: the selection handler the editor gave
+  // React Flow closed it in the same commit that drew it, on every right-click. And
+  // it was drawn at the pointer, so near the window's right or bottom edge it would
+  // have run off the window. It opens on the pointer's other side there, as a native
+  // menu does, and on a phone it covers the bottom navigation.
+  test('the canvas\'s context menu opens and stays inside the window', async ({ page }) => {
+    await page.setViewportSize(VIEWPORTS[0]);
+    await openCanvas(page);
+    const menu = page.getByTestId('canvas-context-menu');
+    for (const viewport of [...VIEWPORTS, { width: 740, height: 304 }]) {
+      await page.setViewportSize(viewport);
+      for (const [where, fx, fy] of [['right edge', 1, 0.5], ['bottom edge', 0.2, 1]] as const) {
+        const point = await panePoint(page, fx, fy);
+        expect(point, `a point on the pane by its ${where} at ${viewport.width}x${viewport.height}`).not.toBeNull();
+        await page.mouse.click(point!.x, point!.y, { button: 'right' });
+        await expect(menu, `the menu opened by the pane's ${where} at ${viewport.width}x${viewport.height}`).toBeVisible();
+        await expect(menu, `the menu opened by the pane's ${where} at ${viewport.width}x${viewport.height}`).toBeInViewport({ ratio: 1 });
+        // It went to the pointer's other side, so this was a case that needed it.
+        const box = (await menu.boundingBox())!;
+        expect(where === 'right edge' ? box.x + box.width : box.y + box.height, `the menu ends at the pointer (${where})`)
+          .toBeCloseTo(where === 'right edge' ? point!.x : point!.y, 0);
+        if (viewport.width < 768) await expectOverTheBottomNav(page, 'the context menu');
+        await page.keyboard.press('Escape');
+        await expect(menu).toBeHidden();
+      }
+    }
   });
 });

@@ -276,7 +276,11 @@ export function WorkflowCanvasSurface({
               nodeIds: nextNodes.map((node) => node.id),
               edgeIds: nextEdges.map((edge) => edge.id),
             });
-            onCloseContextMenu();
+            // This closed the context menu too, and so the menu never showed: React
+            // Flow calls this again whenever it is handed a new function, which this is
+            // on every render, so it closed the menu in the same commit that drew it
+            // (a node's menu also selects its node as it opens). The menu's overlay
+            // takes any click outside it, and Escape and each of its actions close it.
           }}
           onInit={(instance) => {
             reactFlowInstanceRef.current = instance as unknown as ReactFlowInstance;

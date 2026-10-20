@@ -224,7 +224,7 @@ The two must look and behave like one product. A stale session falls back to the
   - control cards for the prompt, model and settings, and a run panel with generation status.
 - **Notices:** they occupy one slot: a retired or replaced model, reset settings, a remix being restored. A placeholder holds that slot while a remix loads, so the form never looks finished before it is.
 - **Tone:** a focused workspace, not a landing page. Accents come from `getAccentClasses`.
-- **The workflow builder** (`/create-workflow`) is the node canvas; `docs/plans/workflow_canvas.md` covers it.
+- **The workflow builder** (`/create-workflow`) is the node canvas; `docs/plans/workflow_canvas.md` covers it. Its right-click menu opens at the pointer, and on the pointer's other side where it would leave the window, as a native menu does (`placeMenuAtPointer`). Until October 2026 it never showed at all: the editor's selection handler closed it as it opened.
 
 ### Studio (`/creations`)
 
