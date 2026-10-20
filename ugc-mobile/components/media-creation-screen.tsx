@@ -72,6 +72,7 @@ import {
   buildUnifiedCatalogGenerationRequest,
   catalogDraftInputCounts,
   catalogDraftRunHandles,
+  catalogMotionDraftSlotKeys,
   catalogMultiShotLimits,
   catalogPromptMeters,
   catalogRunEnhancementInputs,
@@ -1792,9 +1793,11 @@ function IdentityCreationScreen({
     const selectedModel = catalog ? getCatalogModel(catalog, selectedDraft.model) : null;
     const currentCount = target === 'video' ? videoDraft.referenceVideos.length : motionDraft.referenceVideo ? 1 : 0;
     const clipSlot = target === 'video' && selectedModel?.inputModes ? referenceVideoSlot(selectedModel, videoDraft, referenceRailShape(videoDraft, selectedModel)) : null;
+    // The slot the composer draws a motion run's clip in, whatever the model calls it.
+    const motionClipSlotKey = catalogMotionDraftSlotKeys(motionDraft, selectedModel).video;
     const maxVideos = target === 'video'
       ? selectedModel?.inputModes ? clipSlot?.max ?? 0 : selectedModel?.inputs.videoReferences?.max ?? 0
-      : catalogInputLimit(selectedModel, selectedDraft, 'referenceVideo', 1, 'elements');
+      : catalogInputLimit(selectedModel, selectedDraft, motionClipSlotKey, 1, 'elements');
     // Named clips are mentioned in the prompt, so each needs a handle of its own.
     const namesClips = clipSlot ? Boolean(clipSlot.supportsNaming) : videoDraft.model === 'kling-3.0-video';
     // A motion run takes one clip, so a new pick takes the place of the one attached, as Replace does.
@@ -1810,7 +1813,7 @@ function IdentityCreationScreen({
       const picked = await pickMedia('video');
       if (!picked) return;
       if (target === 'motion') {
-        const motionSlot = catalogInputSlot(selectedModel, motionDraft, 'referenceVideo');
+        const motionSlot = catalogInputSlot(selectedModel, motionDraft, motionClipSlotKey);
         const refusal = motionClipRefusal(picked, motionSlot?.maxDurationSeconds ?? MOTION_CLIP_DEFAULT_MAX_SECONDS);
         if (refusal) {
           setMessage(refusal);
@@ -4744,10 +4747,13 @@ function MotionCreatorComposer({
   const duration = draft.referenceVideo ? getMotionDuration(draft) : null;
   const characterError = validationErrors.find((error) => /character image/i.test(error));
   const motionError = validationErrors.find((error) => /reference video|motion video|between 1 and/i.test(error));
-  const characterSlot = catalogInputSlot(model, draft, 'characterImage');
-  const motionSlot = catalogInputSlot(model, draft, 'referenceVideo');
-  const supportsCharacter = catalogInputSupported(model, draft, 'characterImage', true);
-  const supportsMotion = catalogInputSupported(model, draft, 'referenceVideo', true);
+  // The slots the run sends its picture and its clip in, found by kind: Kling 3.0's are plain
+  // reference slots, where Kling 2.6 has the motion-inputs pair.
+  const slotKeys = catalogMotionDraftSlotKeys(draft, model);
+  const characterSlot = catalogInputSlot(model, draft, slotKeys.image);
+  const motionSlot = catalogInputSlot(model, draft, slotKeys.video);
+  const supportsCharacter = catalogInputSupported(model, draft, slotKeys.image, true);
+  const supportsMotion = catalogInputSupported(model, draft, slotKeys.video, true);
 
   return (
     <View testID="motion-creator-composer" style={{ gap: 12 }}>
@@ -4756,9 +4762,11 @@ function MotionCreatorComposer({
           <Text style={{ color: theme.colors.motion, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Required inputs</Text>
           <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>Choose the character to preserve and the movement to transfer.</Text>
         </View>
+        {/* Both are required whatever a slot's min says: a motion run starts with both or not at
+            all, as the checks under them and the server's start say. Kling 3.0's slots have a min of 0. */}
         <View style={{ flexDirection: 'row', gap: 9 }}>
-          {supportsCharacter ? <CompactReferenceSlot testID="motion-character-slot" title={characterSlot?.label ?? 'Character image'} helper="Who should move?" media={draft.characterImage} required={(characterSlot?.min ?? 1) > 0} isUploading={isUploading} progress={upload?.target === 'character' ? upload : null} onAdd={onUploadCharacter} onOpen={() => setSelectedRole('character')} /> : null}
-          {supportsMotion ? <CompactReferenceSlot testID="motion-video-slot" title={motionSlot?.label ?? 'Motion video'} helper="How should they move?" media={draft.referenceVideo} required={(motionSlot?.min ?? 1) > 0} isUploading={isUploading} progress={upload?.target === 'motion-clip' ? upload : null} onAdd={onUploadMotion} onOpen={() => setSelectedRole('motion')} /> : null}
+          {supportsCharacter ? <CompactReferenceSlot testID="motion-character-slot" title={characterSlot?.label ?? 'Character image'} helper="Who should move?" media={draft.characterImage} required isUploading={isUploading} progress={upload?.target === 'character' ? upload : null} onAdd={onUploadCharacter} onOpen={() => setSelectedRole('character')} /> : null}
+          {supportsMotion ? <CompactReferenceSlot testID="motion-video-slot" title={motionSlot?.label ?? 'Motion video'} helper="How should they move?" media={draft.referenceVideo} required isUploading={isUploading} progress={upload?.target === 'motion-clip' ? upload : null} onAdd={onUploadMotion} onOpen={() => setSelectedRole('motion')} /> : null}
         </View>
         <View style={{ gap: 4 }}>
           {characterError ? <Text accessibilityRole="alert" style={{ color: theme.colors.amber, fontSize: 11, fontWeight: '700' }}>{characterError}</Text> : null}

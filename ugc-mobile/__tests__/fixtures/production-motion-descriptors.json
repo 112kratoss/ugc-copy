@@ -1,0 +1,195 @@
+{
+  "revision": "kie-checkup-20261020",
+  "models": [
+    {
+      "id": "kling-2.6",
+      "kind": "motion",
+      "displayName": "Kling 2.6",
+      "description": "Reliable motion transfer with smooth character animation",
+      "badge": "Stable",
+      "recommended": true,
+      "sortOrder": 0,
+      "minClientSchemaVersion": 1,
+      "controls": [
+        {
+          "key": "resolution",
+          "label": "Resolution",
+          "type": "choice",
+          "presentation": "chips",
+          "defaultValue": "720p",
+          "options": [
+            {
+              "value": "720p",
+              "label": "720p"
+            },
+            {
+              "value": "1080p",
+              "label": "1080p"
+            }
+          ]
+        },
+        {
+          "key": "characterOrientation",
+          "label": "Character orientation",
+          "type": "choice",
+          "presentation": "chips",
+          "defaultValue": "video",
+          "options": [
+            {
+              "value": "video",
+              "label": "video"
+            },
+            {
+              "value": "image",
+              "label": "image"
+            }
+          ]
+        },
+        {
+          "key": "duration",
+          "label": "Duration",
+          "type": "integer",
+          "presentation": "stepper",
+          "defaultValue": 10,
+          "min": 1,
+          "max": 30,
+          "step": 1,
+          "unit": "seconds"
+        }
+      ],
+      "capabilities": {
+        "multiShot": false,
+        "sound": false,
+        "fixedLens": false,
+        "googleSearch": false,
+        "outputFormat": false
+      },
+      "availability": {
+        "web": true,
+        "mobile": true
+      },
+      "inputModes": [
+        {
+          "key": "motion-inputs",
+          "label": "Motion inputs",
+          "default": true,
+          "slots": [
+            {
+              "key": "characterImage",
+              "label": "Character image",
+              "kind": "image",
+              "role": "reference",
+              "min": 1,
+              "max": 1
+            },
+            {
+              "key": "referenceVideo",
+              "label": "Reference video",
+              "kind": "video",
+              "role": "reference",
+              "min": 1,
+              "max": 1,
+              "durationMetadata": "optional",
+              "maxDurationSeconds": 30
+            }
+          ]
+        }
+      ],
+      "inputConstraints": []
+    },
+    {
+      "id": "kling-3.0",
+      "kind": "motion",
+      "displayName": "Kling 3.0",
+      "description": "Latest model — enhanced fidelity and motion accuracy",
+      "badge": "New",
+      "recommended": false,
+      "sortOrder": 10,
+      "minClientSchemaVersion": 1,
+      "controls": [
+        {
+          "key": "resolution",
+          "label": "Resolution",
+          "type": "choice",
+          "presentation": "chips",
+          "defaultValue": "720p",
+          "options": [
+            {
+              "value": "720p",
+              "label": "720p"
+            },
+            {
+              "value": "1080p",
+              "label": "1080p"
+            }
+          ]
+        },
+        {
+          "key": "characterOrientation",
+          "label": "Character orientation",
+          "type": "choice",
+          "presentation": "chips",
+          "defaultValue": "video",
+          "options": [
+            {
+              "value": "video",
+              "label": "video"
+            },
+            {
+              "value": "image",
+              "label": "image"
+            }
+          ]
+        },
+        {
+          "key": "duration",
+          "label": "Duration",
+          "type": "integer",
+          "presentation": "stepper",
+          "defaultValue": 10,
+          "min": 1,
+          "max": 30,
+          "step": 1,
+          "unit": "seconds"
+        }
+      ],
+      "capabilities": {
+        "multiShot": false,
+        "sound": false,
+        "fixedLens": false,
+        "googleSearch": false,
+        "outputFormat": false
+      },
+      "availability": {
+        "web": true,
+        "mobile": true
+      },
+      "inputModes": [
+        {
+          "key": "default",
+          "label": "Default",
+          "default": true,
+          "slots": [
+            {
+              "key": "imageReferences",
+              "label": "Reference images",
+              "kind": "image",
+              "role": "reference",
+              "min": 0,
+              "max": 1
+            },
+            {
+              "key": "videoReferences",
+              "label": "Reference videos",
+              "kind": "video",
+              "role": "reference",
+              "min": 0,
+              "max": 1
+            }
+          ]
+        }
+      ],
+      "inputConstraints": []
+    }
+  ]
+}

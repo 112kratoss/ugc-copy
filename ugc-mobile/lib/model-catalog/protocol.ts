@@ -261,10 +261,10 @@ export const MOTION_INPUTS_FALLBACK_SLOTS = {
  * Kling 3.0 run while the web page sent `characterImage` and `referenceVideo` to every
  * model (2026-10-19). Mode and slot conditions read the run's kind totals, as the server
  * does, and one input in each reference slot, as the app counts a motion draft (frame
- * slots hold nothing). The web motion page and the workflow runner's catalog motion step
- * both place their inputs with this; the app puts each input in every open slot of its
- * kind, which sends the same run for a model with one slot of each, as every published
- * motion model has.
+ * slots hold nothing). The web motion page, the workflow runner's catalog motion step and
+ * the app's motion creator all place their inputs with this: the app looked its two
+ * slots up by the motion-inputs names, and drew neither on production's Kling 3.0
+ * (2026-10-20).
  */
 export function catalogMotionInputSlots(
   descriptor: CatalogMotionInputsDescriptor | null | undefined,

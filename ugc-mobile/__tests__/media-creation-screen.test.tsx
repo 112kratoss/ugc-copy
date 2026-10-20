@@ -282,6 +282,7 @@ import { ApiError } from '../lib/api-client';
 import whatsNewContract from '../../contracts/whats-new-models-v1.json';
 import subjectsContract from '../../contracts/model-catalog-subjects-mode-v1.json';
 import liveCatalog from './fixtures/live-catalog-descriptors.json';
+import productionMotion from './fixtures/production-motion-descriptors.json';
 import { parseModelCatalogDetail } from '../lib/generation-model-catalog';
 
 const referenceModeIs = (value: 'frames' | 'elements') => [{ source: 'setting' as const, key: 'referenceMode', operator: 'equals' as const, value }];
@@ -6181,6 +6182,126 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await settle();
         expect(text(tree)).not.toContain('This model supports up to 1 reference video.');
         expect(storedDrafts().motion.referenceVideo).toMatchObject({ displayName: 'Moves', url: 'https://cdn.example.com/spin.mp4', durationSeconds: 7 });
+      });
+    });
+
+    // The motion models production publishes to the app (release kie-checkup-20261020, read
+    // 2026-10-20): Kling 2.6 in the motion-inputs slots (characterImage, referenceVideo), and
+    // Kling 3.0 in one default mode of plain reference slots (imageReferences, videoReferences,
+    // min 0, max 1). The composer looked its two slots up by the motion-inputs names, so on
+    // Kling 3.0 it drew neither, and refused a clip picked from Inputs.
+    describe('motion on the models production publishes', () => {
+      const productionMotionCatalog = (): GenerationModelCatalog => ({
+        schemaVersion: 3,
+        revision: productionMotion.revision,
+        defaults: { image: null, video: null, motion: 'kling-2.6' },
+        models: productionMotion.models.map((model) => parseModelCatalogDetail(model)),
+      });
+      const onMotionModel = (model: 'kling-2.6' | 'kling-3.0', motion: Record<string, unknown> = {}) => {
+        catalogState.catalog = productionMotionCatalog();
+        memory.set(ordinaryKey, savedDrafts({ motion: { model, catalogRevision: productionMotion.revision, ...motion } }));
+      };
+      const slotText = (tree: renderer.ReactTestRenderer, testID: string) => collectText(tree.root.findByProps({ testID }));
+      const pickedClip = { uri: 'file:///moves.mp4', fileName: 'moves.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 6000 };
+      const uploadedClip = () => uploaded('moves.mp4', { mimeType: 'video/mp4', kind: 'video', durationSeconds: 6 });
+      const sentInputs = () => (authState.api.startGeneration.mock.calls[0][0] as { inputs: Array<Record<string, unknown>> }).inputs;
+
+      beforeEach(() => {
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+      });
+
+      it('draw Kling 3.0’s picture and clip slots, each as required, named as its descriptor names them', async () => {
+        onMotionModel('kling-3.0');
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        expect(findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel).toContain('Kling 3.0');
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Reference images', 'Required', 'Who should move?']);
+        expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference videos', 'Required', 'How should they move?']);
+      });
+
+      it('take a clip on Kling 3.0 from Inputs, and send the picture and the clip in its slots', async () => {
+        onMotionModel('kling-3.0', { characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }) });
+        vi.mocked(pickMedia).mockResolvedValue(pickedClip as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploadedClip());
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        // With the picture in, Inputs asks for the clip.
+        await renderer.act(async () => { await labelled(tree.root, 'Inputs').props.onPress(); });
+        await settle();
+        expect(text(tree)).not.toContain('This model does not support reference videos.');
+        expect(pickMedia).toHaveBeenCalledWith('video');
+        expect(storedDrafts().motion.referenceVideo).toMatchObject({ url: 'https://cdn.example.com/moves.mp4', durationSeconds: 6 });
+        expect(labelled(tree.root, 'Open details for Reference Motion')).toBeTruthy();
+
+        await pressGenerate(tree);
+        expect(sentInputs()).toEqual([
+          expect.objectContaining({ slot: 'imageReferences', kind: 'image', url: 'https://cdn.example.com/dancer.png' }),
+          expect.objectContaining({ slot: 'videoReferences', kind: 'video', url: 'https://cdn.example.com/moves.mp4', durationSeconds: 6 }),
+        ]);
+      });
+
+      it('take a clip in Kling 3.0’s clip slot', async () => {
+        onMotionModel('kling-3.0');
+        vi.mocked(pickMedia).mockResolvedValue(pickedClip as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploadedClip());
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        await renderer.act(async () => { await labelled(tree.root, 'Add reference videos').props.onPress(); });
+        await settle();
+        expect(pickMedia).toHaveBeenCalledWith('video');
+        expect(storedDrafts().motion.referenceVideo).toMatchObject({ url: 'https://cdn.example.com/moves.mp4' });
+      });
+
+      it('draw and send Kling 2.6 as before: its own slot names, both required, the picture and the clip in its motion-inputs slots', async () => {
+        onMotionModel('kling-2.6', {
+          characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }),
+          referenceVideo: stagedMedia('moves', 'video', { displayName: 'Moves', durationSeconds: 6 }),
+          duration: 6,
+        });
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        expect(findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel).toContain('Kling 2.6');
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Character image', 'Required', 'Dancer']);
+        expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference video', 'Required', 'Moves']);
+        await pressGenerate(tree);
+        expect(sentInputs()).toEqual([
+          expect.objectContaining({ slot: 'characterImage', kind: 'image', url: 'https://cdn.example.com/dancer.png' }),
+          expect.objectContaining({ slot: 'referenceVideo', kind: 'video', url: 'https://cdn.example.com/moves.mp4', durationSeconds: 6 }),
+        ]);
+      });
+
+      it('put each input in one slot of its kind, the one a run must fill first, and never in one that takes nothing', async () => {
+        const model = parseModelCatalogDetail(productionMotion.models.find((entry) => entry.id === 'kling-3.0'));
+        model.inputModes = [{
+          key: 'default',
+          label: 'Default',
+          default: true,
+          slots: [
+            { key: 'styleImages', kind: 'image', role: 'reference', label: 'Style images', min: 0, max: 2 },
+            { key: 'castImage', kind: 'image', role: 'reference', label: 'Cast image', min: 1, max: 1 },
+            { key: 'retiredClips', kind: 'video', role: 'reference', label: 'Retired clips', min: 0, max: 0 },
+            { key: 'danceClip', kind: 'video', role: 'reference', label: 'Dance clip', min: 0, max: 1 },
+          ],
+        }];
+        catalogState.catalog = { ...productionMotionCatalog(), models: [model] };
+        memory.set(ordinaryKey, savedDrafts({ motion: {
+          model: 'kling-3.0',
+          catalogRevision: productionMotion.revision,
+          characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }),
+          referenceVideo: stagedMedia('moves', 'video', { displayName: 'Moves', durationSeconds: 6 }),
+          duration: 6,
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        // A clip held for every slot of its kind was held for the closed one too, past its max of 0.
+        expect(text(tree)).not.toContain('Retired clips supports up to 0 inputs.');
+        await pressGenerate(tree);
+        expect(sentInputs()).toEqual([
+          expect.objectContaining({ slot: 'castImage', url: 'https://cdn.example.com/dancer.png' }),
+          expect.objectContaining({ slot: 'danceClip', url: 'https://cdn.example.com/moves.mp4' }),
+        ]);
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Cast image', 'Required', 'Dancer']);
+        expect(slotText(tree, 'motion-video-slot')).toEqual(['Dance clip', 'Required', 'Moves']);
       });
     });
 

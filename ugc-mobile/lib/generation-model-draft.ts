@@ -36,9 +36,11 @@ import {
   type VideoShotDraft,
 } from './media-creation-view-model';
 import {
+  catalogMotionInputSlots,
   catalogRunQuoteInput,
   catalogRunWithShownCost,
   modeGatedSettingValues,
+  MOTION_INPUTS_FALLBACK_SLOTS,
   SUBJECT_IMAGES_PER_NAME,
   SUBJECT_IMAGES_SLOT_KEY,
   subjectsPerRun,
@@ -180,10 +182,34 @@ function idOnlyAsset(id: string, kind: 'character' | 'prepared-voice'): CatalogD
   return { id, kind };
 }
 
+/**
+ * The slots a motion run on this model sends its picture and its clip in, chosen by kind as the
+ * web's motion page chooses them (`catalogMotionInputSlots`): a slot the run must fill first, and
+ * never one that takes nothing. Production publishes Kling 2.6 with the motion-inputs slots
+ * (`characterImage`, `referenceVideo`) and Kling 3.0 with plain reference slots
+ * (`imageReferences`, `videoReferences`); the composer looked its slots up by the motion-inputs
+ * names, so on Kling 3.0 it drew neither and refused a clip (2026-10-20). Before the model's
+ * descriptor is in, the motion-inputs names.
+ */
+export function catalogMotionDraftSlotKeys(
+  draft: MotionCreationDraft,
+  model: GenerationModelDescriptor | null | undefined,
+): { image: string; video: string } {
+  return model ? catalogMotionInputSlots(model, getCatalogDraftSettings(draft, model)) : MOTION_INPUTS_FALLBACK_SLOTS;
+}
+
 function legacyAssetsForSlot(
   draft: CreationDraft,
   slot: CatalogInputSlot,
+  model: GenerationModelDescriptor,
 ): CatalogDraftInputAsset[] {
+  if (draft.tool === 'motion') {
+    // Each input goes in one slot of its kind, the one the composer draws it in.
+    const keys = catalogMotionDraftSlotKeys(draft, model);
+    if (slot.kind === 'image' && slot.key === keys.image && draft.characterImage) return [mediaDraftAsset(draft.characterImage)];
+    if (slot.kind === 'video' && slot.key === keys.video && draft.referenceVideo) return [mediaDraftAsset(draft.referenceVideo)];
+    return [];
+  }
   if (slot.role === 'startFrame') {
     return draft.tool === 'video' && draft.startFrame ? [mediaDraftAsset(draft.startFrame)] : [];
   }
@@ -203,15 +229,8 @@ function legacyAssetsForSlot(
         })))
       : [];
   }
-  if (slot.kind === 'image') {
-    if (draft.tool === 'image' || draft.tool === 'video') return draft.references.map(mediaDraftAsset);
-    return draft.characterImage ? [mediaDraftAsset(draft.characterImage)] : [];
-  }
-  if (slot.kind === 'video') {
-    if (draft.tool === 'video') return draft.referenceVideos.map(mediaDraftAsset);
-    if (draft.tool === 'motion' && draft.referenceVideo) return [mediaDraftAsset(draft.referenceVideo)];
-    return [];
-  }
+  if (slot.kind === 'image') return draft.references.map(mediaDraftAsset);
+  if (slot.kind === 'video') return draft.tool === 'video' ? draft.referenceVideos.map(mediaDraftAsset) : [];
   if (slot.kind === 'audio') {
     return draft.tool === 'video' ? draft.referenceAudios.map(mediaDraftAsset) : [];
   }
@@ -225,8 +244,8 @@ function legacyAssetsForSlot(
     : [];
 }
 
-function heldSlotAssets(draft: CreationDraft, slot: CatalogInputSlot): CatalogDraftInputAsset[] {
-  return draft.catalogInputSlots?.[slot.key] ?? legacyAssetsForSlot(draft, slot);
+function heldSlotAssets(draft: CreationDraft, slot: CatalogInputSlot, model: GenerationModelDescriptor): CatalogDraftInputAsset[] {
+  return draft.catalogInputSlots?.[slot.key] ?? legacyAssetsForSlot(draft, slot, model);
 }
 
 /**
@@ -238,7 +257,7 @@ function heldSlotAssets(draft: CreationDraft, slot: CatalogInputSlot): CatalogDr
 export function catalogDraftInputCounts(draft: CreationDraft, model: GenerationModelDescriptor): Record<string, number> {
   return Object.fromEntries((model.inputModes ?? [])
     .flatMap((mode) => mode.slots)
-    .map((slot) => [slot.key, heldSlotAssets(draft, slot).length]));
+    .map((slot) => [slot.key, heldSlotAssets(draft, slot, model).length]));
 }
 
 /**
@@ -251,7 +270,7 @@ function heldCatalogDraftInputSlots(
   settings: Record<string, CatalogPrimitive>,
 ): Array<{ slot: CatalogInputSlot; assets: CatalogDraftInputAsset[] }> {
   return getActiveCatalogInputSlots(model, settings, catalogDraftInputCounts(draft, model))
-    .map((slot) => ({ slot, assets: heldSlotAssets(draft, slot) }));
+    .map((slot) => ({ slot, assets: heldSlotAssets(draft, slot, model) }));
 }
 
 function hasReusableVideoInputs(model: GenerationModelDescriptor) {
@@ -325,7 +344,7 @@ export function catalogVideoRunReferenceMode(
   const framesShape = getActiveCatalogInputSlots(model, { ...settings, referenceMode: 'frames' }, counts);
   const referencesShape = getActiveCatalogInputSlots(model, { ...settings, referenceMode: 'elements' }, counts);
   const inFramesShape = new Set(framesShape.map((slot) => slot.key));
-  const holds = (slot: CatalogInputSlot) => heldSlotAssets(draft, slot).length > 0;
+  const holds = (slot: CatalogInputSlot) => heldSlotAssets(draft, slot, model).length > 0;
   if (referencesShape.some((slot) => slot.role === 'reference' && !inFramesShape.has(slot.key) && holds(slot))) {
     return 'elements';
   }
