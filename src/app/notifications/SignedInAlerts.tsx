@@ -18,6 +18,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 
+import { AlertsErrorCard } from './AlertsErrorCard';
 import type { WebNotification } from './web-notification';
 
 const CATEGORY_META = {
@@ -109,14 +110,7 @@ export default function SignedInAlerts({
       ) : null}
 
       {error ? (
-        <div role="alert" className="rounded-3xl border border-rose-300/25 bg-rose-400/10 p-6">
-          <h2 className="text-lg font-bold text-rose-200">Could not load alerts</h2>
-          <p className="mt-2 text-sm text-[var(--ui-text-secondary)]">{error}</p>
-          <button onClick={onRetry} className="ui-focus-ring mt-5 inline-flex min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)]">
-            <RefreshCw className="h-4 w-4" aria-hidden />
-            Retry
-          </button>
-        </div>
+        <AlertsErrorCard detail={error} onRetry={onRetry} />
       ) : notifications.length > 0 ? (
         <div className="space-y-3">
           {notifications.map((notification) => {

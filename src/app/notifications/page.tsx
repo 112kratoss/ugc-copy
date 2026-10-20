@@ -8,6 +8,8 @@ import { Bell, Loader2 } from 'lucide-react';
 import { publishUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
 import { supabase } from '@/lib/supabase';
 import { resolveWebNotificationPath } from '@/lib/web-notification-links';
+import { AlertsErrorCard } from './AlertsErrorCard';
+import { SignedInAlertsBoundary } from './SignedInAlertsBoundary';
 import type { WebNotification } from './web-notification';
 
 // The Alerts tab is in the shell of every page, so signed-out visitors open
@@ -16,6 +18,9 @@ import type { WebNotification } from './web-notification';
 // the session check finds a reader (globals.css skips its file). While this
 // folder's layout linked the supplement, a signed-out click on the tab
 // fetched the signed-in sheet's text and kept it for the rest of the visit.
+// Each use of the half sits in a SignedInAlertsBoundary: a load that fails (a
+// deploy rotated the chunk names while the tab was open; offline) draws the
+// page's error card, not Next's generic one.
 const SignedInAlerts = dynamic(() => import('./SignedInAlerts'), {
   ssr: false,
   loading: () => <AlertsLoading />,
@@ -328,14 +333,17 @@ export default function NotificationsPage() {
           </p>
         </div>
 
-        {/* Rendered as soon as a reader is known, so the signed-in half starts loading beside the list read. */}
+        {/* Rendered as soon as a reader is known, so the signed-in half starts loading beside the list read.
+            If the load fails, the list's boundary below says so; the row needs no second card. */}
         {isAuthenticated && (
-          <SignedInAlertsActions
-            unreadCount={unreadCount}
-            isMarkingAll={isMarkingAll}
-            onRefresh={() => void fetchNotifications()}
-            onMarkAllRead={() => void handleMarkAllRead()}
-          />
+          <SignedInAlertsBoundary fallback={null}>
+            <SignedInAlertsActions
+              unreadCount={unreadCount}
+              isMarkingAll={isMarkingAll}
+              onRefresh={() => void fetchNotifications()}
+              onMarkAllRead={() => void handleMarkAllRead()}
+            />
+          </SignedInAlertsBoundary>
         )}
       </div>
 
@@ -359,18 +367,28 @@ export default function NotificationsPage() {
       ) : isAuthenticated === null || loading ? (
         <AlertsLoading />
       ) : (
-        <SignedInAlerts
-          notifications={notifications}
-          hasOlder={inbox.hasOlder}
-          error={error}
-          markAllError={markAllError}
-          isLoadingOlder={isLoadingOlder}
-          olderError={olderError}
-          currentTimeMs={currentTimeMs}
-          onRetry={() => void fetchNotifications()}
-          onLoadOlder={() => void handleLoadOlder()}
-          onPressNotification={handlePressNotification}
-        />
+        <SignedInAlertsBoundary
+          fallback={(
+            // A reload fetches the chunk names of the deployment that is live now.
+            <AlertsErrorCard
+              detail="Part of this page did not load. Retry reloads it."
+              onRetry={() => window.location.reload()}
+            />
+          )}
+        >
+          <SignedInAlerts
+            notifications={notifications}
+            hasOlder={inbox.hasOlder}
+            error={error}
+            markAllError={markAllError}
+            isLoadingOlder={isLoadingOlder}
+            olderError={olderError}
+            currentTimeMs={currentTimeMs}
+            onRetry={() => void fetchNotifications()}
+            onLoadOlder={() => void handleLoadOlder()}
+            onPressNotification={handlePressNotification}
+          />
+        </SignedInAlertsBoundary>
       )}
       </div>
     </div>
