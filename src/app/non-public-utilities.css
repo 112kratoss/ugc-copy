@@ -7,8 +7,8 @@
  * globals.css owns Tailwind's theme/base layers and the utilities of every
  * route a signed-out visitor can land on, so a first load of a public page
  * carries nothing else. This sheet holds the utilities of every route, and the
- * routes that link it from their layouts carry it: the signed-in ones, and
- * Search, Cancellation and Delete account, which signed-out visitors open too.
+ * routes that link it from their layouts carry it: the signed-in ones, those
+ * that also draw for a signed-out visitor included (Search, Alerts).
  *
  * It comes after globals.css in the same layer, so a utility it emits outranks
  * any rule of globals.css of the same weight, whatever order Tailwind gave

@@ -36,7 +36,7 @@ Principles, distilled from Pinterest Gestalt, Shopify Polaris, Material 3, Apple
 
 ## CSS Split
 
-- `globals.css` is the stylesheet for every route a signed-out visitor can land on: marketing, blog, models, the post, creator and referral landings, templates, login and auth.
+- `globals.css` is the stylesheet for every route a signed-out visitor can land on: marketing, blog, models, the post, creator and referral landings, templates, login and auth, and the policy pages (terms, privacy, child safety, cancellation, account deletion).
 - Signed-in surfaces add `non-public-utilities.css` through their route layouts. It stays in the document after a client navigation, so a public page opened from a signed-in route is drawn with it too: it scans the whole app folder and every component, the public ones included, and holds every utility `globals.css` holds.
 - CSS is inlined per response (`experimental.inlineCss`), so a public route must never import the supplement.
 - `src/__tests__/route-style-readiness.test.ts` pins which directories link which sheet and the exact component closure of `globals.css`; `route-style-two-sheet-order.test.ts` holds the supplement to every utility rule of `globals.css`.
@@ -269,7 +269,7 @@ Do not add these in new UI:
 - One-off CTA, pill and card class bundles.
 - Inline SVGs when a Lucide icon exists.
 - Hero-scale type inside compact panels or cards.
-- A signed-in utility on a public route's closure (it belongs in `non-public-utilities.css`).
+- A signed-in route's utility on a public route's closure (it belongs in `non-public-utilities.css`). A signed-in state of a public page, such as the deletion form on `/delete-account`, is part of that page and rides on `globals.css`.
 - An intercepting route for a page served through a rewrite.
 
 ## Migration Rule
