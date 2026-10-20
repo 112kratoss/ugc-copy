@@ -91,12 +91,11 @@ select is(pg_temp.words('b4994000-0000-4000-8000-000000000007'),
   'You made a sale · A creator bought the resources attached to your post.',
   'an alert that named no one is left as it was');
 
--- 3. The buyer's account deleted. A follow alert naming them, another type,
--- keeps its words.
-insert into public.mobile_notifications (id,user_id,actor_user_id,type,category,title,body,object_type,object_id,dedupe_key) values
+-- 3. The buyer's account deleted. An alert of another type naming them keeps
+-- its words, even words a sale's alert would lose.
+insert into public.mobile_notifications (id,user_id,actor_user_id,type,category,title,body,object_type,object_id) values
 ('b4994000-0000-4000-8000-000000000008','b4990001-0000-4000-8000-000000000001','b4990006-0000-4000-8000-000000000006',
- 'creator_followed','social','New follower','@kai followed you.','profile','b4990006-0000-4000-8000-000000000006',
- 'creator-follow:b4990006-0000-4000-8000-000000000006:b4990001-0000-4000-8000-000000000001');
+ 'post_remixed','social','Someone remixed your post','@kai bought the resources attached to your post.','post','p1');
 reset role;
 select lives_ok($$ delete from auth.users where id='b4990006-0000-4000-8000-000000000006' $$,
   'deleting a buyer''s account succeeds');
@@ -110,7 +109,7 @@ select is(pg_temp.words('b4994000-0000-4000-8000-000000000006'),
   'Someone opened your free resources · A creator opened the resources attached to your post.',
   'and from a free open');
 select is(pg_temp.words('b4994000-0000-4000-8000-000000000008'),
-  'New follower · @kai followed you.',
+  'Someone remixed your post · @kai bought the resources attached to your post.',
   'another alert type is not this migration''s to change');
 
 -- The words function returns words that name no one unchanged.
