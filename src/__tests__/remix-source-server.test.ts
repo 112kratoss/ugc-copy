@@ -403,6 +403,50 @@ describe('remixing a motion generation made through the catalog', () => {
       referenceVideo: expect.objectContaining({ kind: 'video', storagePath: 'uploads/creator-1/moves.mp4', url: 'https://signed.example/upload' }),
     });
   });
+
+  // A catalog motion run sends its picture and clip in the slots its model declares
+  // (catalogMotionInputSlots): production publishes Kling 3.0 with imageReferences and
+  // videoReferences. A motion run holds one picture and one clip, so they are kept under
+  // the motion roles by kind: kept by the motion-inputs names, they came back as nothing.
+  describe('in the slots its model declares', () => {
+    const DECLARED_INPUTS = [
+      { slot: 'imageReferences', kind: 'image', label: 'Character image', storagePath: 'uploads/creator-1/hero.png' },
+      { slot: 'videoReferences', kind: 'video', label: 'Reference video', storagePath: 'uploads/creator-1/moves.mp4', durationSeconds: 8 },
+    ] as const;
+
+    beforeEach(() => {
+      const generation = catalogMotionGeneration();
+      mocks.generation = { ...generation, model: 'kling-3.0', workflow_settings: { ...generation.workflow_settings, model: 'kling-3.0', inputs: DECLARED_INPUTS } };
+    });
+
+    it('keeps them under the motion roles, and restores the durable copies into the motion creator', async () => {
+      const candidates = buildCatalogInputMediaCandidates(
+        'motion',
+        DECLARED_INPUTS.map((input) => ({ ...input, url: `https://provider.example/${input.slot}` })),
+      );
+      expect(candidates.map((candidate) => candidate.role)).toEqual(['character_image', 'motion_reference_video']);
+      mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', candidates.map((candidate, index) => ({
+        id: `row-${index}`,
+        generationId: 'gen-1',
+        mediaType: candidate.mediaType,
+        role: candidate.role,
+        label: candidate.label ?? '',
+        url: `https://signed.example/durable-${index}`,
+        storagePath: `generation_inputs/creator-1/gen-1/0${index}-${candidate.role}`,
+        sourceGenerationId: candidate.sourceGenerationId ?? null,
+        sortOrder: candidate.sortOrder ?? index,
+        metadata: { ...candidate.metadata, sourceStoragePath: candidate.sourceStoragePath ?? null },
+      }))]]));
+
+      const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+      expect(bundle.inputs.video).toBeUndefined();
+      expect(bundle.inputs.motion).toEqual({
+        characterImage: expect.objectContaining({ kind: 'image', label: 'Character image', url: 'https://signed.example/durable-0' }),
+        referenceVideo: expect.objectContaining({ kind: 'video', label: 'Reference video', url: 'https://signed.example/durable-1' }),
+      });
+    });
+  });
 });
 
 // Audit, additional risk: keeping a generation's inputs fails one item at a

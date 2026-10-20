@@ -8,12 +8,14 @@ type GenerationInputRole = PersistGenerationInputCandidate['role'];
  * The role a catalog input is kept under. Roles are what every reader keys on:
  * remix restores a motion generation from `character_image` and
  * `motion_reference_video`, and the owner and paywall views label inputs by
- * role. A motion model's slots are plainly an image and a video, so for motion
- * the slot decides, as the legacy motion start always did.
+ * role. A motion run sends one picture and one clip, in whatever slots its
+ * model declares (`catalogMotionInputSlots`: production's Kling 3.0 names them
+ * `imageReferences` and `videoReferences`), so for motion the kind decides, as
+ * the legacy motion start always did.
  */
 function catalogInputRole(operationKind: string, asset: ResolvedCatalogInput, mediaType: PersistGenerationInputCandidate['mediaType']): GenerationInputRole {
-  if (operationKind === 'motion' && asset.slot === 'characterImage') return 'character_image';
-  if (operationKind === 'motion' && asset.slot === 'referenceVideo') return 'motion_reference_video';
+  if (operationKind === 'motion' && mediaType === 'image') return 'character_image';
+  if (operationKind === 'motion' && mediaType === 'video') return 'motion_reference_video';
   if (mediaType === 'video') return 'reference_video';
   if (mediaType === 'audio') return 'reference_audio';
   if (asset.slot === 'startFrame') return 'start_frame';

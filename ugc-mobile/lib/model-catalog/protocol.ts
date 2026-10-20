@@ -228,6 +228,73 @@ export function modeGatedSettingValues(
   }
   return values;
 }
+/** Where a motion run's inputs can go: the input modes its model's descriptor publishes. */
+export type CatalogMotionInputsDescriptor = {
+  inputModes?: readonly {
+    conditions?: readonly CatalogConditionLike[];
+    slots: readonly {
+      key: string;
+      kind: (typeof CLIENT_RENDERED_INPUT_SLOT_KINDS)[number];
+      role: (typeof CLIENT_RENDERED_INPUT_SLOT_ROLES)[number];
+      min?: number;
+      max?: number;
+      conditions?: readonly CatalogConditionLike[];
+    }[];
+  }[];
+};
+/**
+ * The slots of the `motion-inputs` mode, where every motion run sent its inputs before
+ * descriptors named their own. A run whose descriptor opens no slot for an input still
+ * sends it here, and its quote says why the run cannot start.
+ */
+export const MOTION_INPUTS_FALLBACK_SLOTS = {
+  image: 'characterImage',
+  video: 'referenceVideo',
+} as const;
+/**
+ * The slots a motion run sends its two inputs in: the character to animate in an image
+ * slot and the clip whose movement it takes in a video slot, each a reference slot its
+ * model's descriptor opens with the run's settings, one the run must fill (`min > 0`)
+ * first, and never one that takes nothing (`max: 0`). The start quotes a run with each
+ * input in its slot and refuses a slot the model does not declare: production published
+ * Kling 3.0 motion with `imageReferences` and `videoReferences`, and refused every web
+ * Kling 3.0 run while the web page sent `characterImage` and `referenceVideo` to every
+ * model (2026-10-19). Mode and slot conditions read the run's kind totals, as the server
+ * does, and one input in each reference slot, as the app counts a motion draft (frame
+ * slots hold nothing). The web motion page and the workflow runner's catalog motion step
+ * both place their inputs with this; the app puts each input in every open slot of its
+ * kind, which sends the same run for a model with one slot of each, as every published
+ * motion model has.
+ */
+export function catalogMotionInputSlots(
+  descriptor: CatalogMotionInputsDescriptor | null | undefined,
+  settings: Record<string, CatalogConditionPrimitive | undefined>,
+): { image: string; video: string } {
+  const modes = descriptor?.inputModes ?? [];
+  const isReference = (slot: (typeof modes)[number]['slots'][number]) =>
+    slot.role === 'reference' && (slot.kind === 'image' || slot.kind === 'video');
+  const inputCounts: Record<string, number> = { images: 1, videos: 1 };
+  for (const slot of modes.flatMap((mode) => mode.slots)) {
+    if (isReference(slot)) inputCounts[slot.key] = 1;
+  }
+  const open = modes
+    .filter((mode) => catalogConditionsMatch(mode.conditions, settings, inputCounts))
+    .flatMap((mode) => mode.slots)
+    .filter(
+      (slot) =>
+        isReference(slot) &&
+        (slot.max ?? 1) > 0 &&
+        catalogConditionsMatch(slot.conditions, settings, inputCounts),
+    );
+  const slotFor = (kind: 'image' | 'video') => {
+    const ofKind = open.filter((slot) => slot.kind === kind);
+    return (ofKind.find((slot) => (slot.min ?? 0) > 0) ?? ofKind[0])?.key;
+  };
+  return {
+    image: slotFor('image') ?? MOTION_INPUTS_FALLBACK_SLOTS.image,
+    video: slotFor('video') ?? MOTION_INPUTS_FALLBACK_SLOTS.video,
+  };
+}
 /** One input a run sends, as far as its price reads it. */
 export type CatalogRunInputFact = {
   slot: string;
