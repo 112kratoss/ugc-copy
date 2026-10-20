@@ -425,7 +425,7 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
 
                 <nav
                     aria-label="Explore filters"
-                    className="sticky top-[72px] z-30 mb-7 rounded-[28px] border border-[var(--ui-border-default)] bg-[rgba(25,25,28,0.92)] p-3 shadow-[0_12px_30px_rgba(0,0,0,0.24)] backdrop-blur-xl sm:p-4"
+                    className="sticky top-[calc(var(--app-shell-topbar-height)+0.5rem)] z-30 mb-7 rounded-[28px] border border-[var(--ui-border-default)] bg-[rgba(25,25,28,0.92)] p-3 shadow-[0_12px_30px_rgba(0,0,0,0.24)] backdrop-blur-xl sm:p-4"
                 >
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                         <div className="relative min-w-0 w-full sm:w-auto">

@@ -32,10 +32,16 @@ function readFit(page: Page, inner?: string): Promise<Fit> {
     const main = document.getElementById('main-content')!;
     const root = [...main.children].find((element) => getComputedStyle(element).display !== 'none')!;
     const innerElement = innerSelector ? document.querySelector(innerSelector) : null;
+    // The token in pixels: it is 4rem, so it follows the root's font size.
+    const tokenProbe = document.createElement('div');
+    tokenProbe.style.cssText = 'position: absolute; visibility: hidden; height: var(--app-shell-topbar-height)';
+    document.body.append(tokenProbe);
+    const token = tokenProbe.getBoundingClientRect().height;
+    tokenProbe.remove();
     return {
       maxScroll: html.scrollHeight - html.clientHeight,
       bar: document.querySelector('header.app-shell-header')!.getBoundingClientRect().height,
-      token: parseFloat(getComputedStyle(html).getPropertyValue('--app-shell-topbar-height')),
+      token,
       // Where the page's background ends, and where the window ends less the
       // bottom navigation's room (main's padding below 768px, none above).
       rootBottom: root.getBoundingClientRect().bottom + window.scrollY,
@@ -177,6 +183,19 @@ test.describe('a short page in the app shell', () => {
     });
   }
 
+  // At a larger browser text size the bar's 3rem controls outgrow 64px. The bar grew
+  // round them, to 73px (75px with the search field) at 24px, past a token of 64px,
+  // and every short page was 9-11px taller than the window. The token is 4rem, which
+  // the bar is at every text size. `html { font-size: 24px }` stands in for Chrome's
+  // "Very large" text, which sets the root's font size the same way.
+  test('Alerts emptied, at a larger text size, is no taller than the window', async ({ page }) => {
+    await page.setViewportSize(VIEWPORTS[0]);
+    await page.goto('/notifications');
+    await expect(page.getByRole('heading', { level: 1, name: 'Alerts' })).toBeVisible();
+    await page.addStyleTag({ content: 'html { font-size: 24px; } #main-content > * > * { display: none !important; }' });
+    await expectFitsAtEveryWidth(page);
+  });
+
   // An address with no page, and a page that calls notFound() with no not-found
   // of its own (a comparison's), draw the app's not-found. Next's default one
   // sets `height: 100vh` inline, which no sheet rule overrides, so it overflowed
@@ -246,6 +265,14 @@ test.describe('the workflow pages in the app shell', () => {
     await page.setViewportSize({ width: 740, height: 304 });
     const workArea = await page.getByRole('application').boundingBox();
     expect(workArea?.height, 'the work area on a short window').toBeGreaterThan(150);
+  });
+
+  // The editor is sized from the bar's token too (the larger-text case above).
+  test('the workflow canvas, at a larger text size, still fills what the shell leaves', async ({ page }) => {
+    await page.setViewportSize(VIEWPORTS[0]);
+    await openCanvas(page);
+    await page.addStyleTag({ content: 'html { font-size: 24px; }' });
+    await expectFitsAtEveryWidth(page, { selector: '[role="application"]', name: 'the work area' });
   });
 
   // Below 768px the bottom navigation (z-60) floats over the page. The canvas's
