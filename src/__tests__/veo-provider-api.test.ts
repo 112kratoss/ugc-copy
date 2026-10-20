@@ -189,6 +189,37 @@ describe('the video a finished jobs-API Veo task produced', () => {
     })).toBe('https://tempfile.example.com/veo-4k.mp4');
   });
 
+  it('reads the 1080p record Kie returned on 2026-10-20, as Kie shaped it', () => {
+    // The approved paid Lite 1080p run (archive/model-checkup-2026-10-20/fixes/
+    // veo-new-api-probe-1080p-run.log): the rendered list and the original sit side by side
+    // in resultJson.data and again in `response.data`, each beside its own nested JSON.
+    const data = {
+      origin_urls: ['https://tempfile.example.com/veo-720p-origin.mp4'],
+      aspect_ratio: '16:9',
+      media_ids: ['media-1'],
+      seeds: [36921],
+      high_resolution_pending: false,
+      image_urls: ['https://tempfile.example.com/veo-poster.jpg'],
+      high_resolution_child_task_id: 'child-task-1',
+      result_urls: ['https://tempfile.example.com/veo-1080p.mp4'],
+      has_audio_list: [true],
+      resolution: '1080p',
+    };
+    const original = JSON.stringify({
+      code: 200,
+      data: { image_urls: data.image_urls, result_urls: ['https://tempfile.example.com/veo-720p-render.mp4'] },
+      message_type: 'success',
+      message: 'success',
+    });
+    const envelope = { code: 200, data, original_result_json: original, message_type: 'success', message: 'success' };
+
+    expect(readVeoJobsResultUrl({
+      state: 'success',
+      resultJson: JSON.stringify(envelope),
+      response: envelope,
+    })).toBe('https://tempfile.example.com/veo-1080p.mp4');
+  });
+
   it('prefers that documented high-resolution list over a top-level list', () => {
     expect(readVeoJobsResultUrl({
       resultJson: JSON.stringify({
