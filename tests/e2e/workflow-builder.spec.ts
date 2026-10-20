@@ -205,7 +205,12 @@ test.describe('workflow builder smoke tests', () => {
     });
   });
 
-  test('redirects unauthenticated visitors to login', async ({ page }) => {
+  test('redirects unauthenticated visitors to login', async ({ page, request }) => {
+    // `next dev` compiles a route on its first request, and no other test opens
+    // /login. Left to the redirect, that compile ran inside the 10-second
+    // toHaveURL wait below and outlasted it on CI's runner (Quality run
+    // 39339854631). Asking for the page here compiles it before the wait starts.
+    await request.get('/login');
     await page.goto('/create-workflow');
     await expect(page).toHaveURL(/\/login\?returnUrl=%2Fcreate-workflow/);
   });
