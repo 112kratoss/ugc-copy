@@ -22,13 +22,33 @@ const SignedInAlerts = dynamic(() => import('./SignedInAlerts'), {
 });
 const SignedInAlertsActions = dynamic(
   () => import('./SignedInAlerts').then((module) => module.SignedInAlertsActions),
-  { ssr: false },
+  { ssr: false, loading: () => <SignedInAlertsActionsPlaceholder /> },
 );
 
 function AlertsLoading() {
   return (
     <div className="flex min-h-[240px] items-center justify-center">
       <Loader2 className="h-8 w-8 animate-spin text-[var(--ui-primary)]" />
+    </div>
+  );
+}
+
+/**
+ * The outlines of Refresh and Mark all read, holding their place while the
+ * module that draws them loads. Without them the header row drew empty once a
+ * reader was known and the two controls popped in with the chunk and its sheet;
+ * below 640px, where the row stacks, that moved the spinner and the list down
+ * by 64px. The label is drawn transparent, so the second outline is exactly as
+ * wide as the button it stands for, whatever the font.
+ */
+function SignedInAlertsActionsPlaceholder() {
+  return (
+    <div className="flex gap-2 select-none" aria-hidden data-testid="alerts-actions-placeholder">
+      <span className="h-12 w-12 rounded-full border border-[var(--ui-border-default)]" />
+      <span className="inline-flex min-h-12 items-center gap-2 rounded-full border border-[var(--ui-border-default)] px-4 text-sm font-bold text-transparent">
+        <span className="h-4 w-4" />
+        Mark all read
+      </span>
     </div>
   );
 }

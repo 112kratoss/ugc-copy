@@ -11,10 +11,17 @@ import NotificationsPage from '@/app/notifications/page';
 
 type TestSession = { access_token: string } | null;
 
-const mocks = vi.hoisted(() => ({
-  session: null as { access_token: string } | null,
-  signedInHalfLoads: 0,
-}));
+const mocks = vi.hoisted(() => {
+  let releaseSignedInHalf = () => {};
+  const signedInHalfGate = new Promise<void>((resolve) => { releaseSignedInHalf = resolve; });
+  return {
+    session: null as { access_token: string } | null,
+    signedInHalfLoads: 0,
+    // The module's load waits here until a test lets it through, as a chunk on a slow connection does.
+    signedInHalfGate,
+    releaseSignedInHalf,
+  };
+});
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), prefetch: vi.fn(), back: vi.fn(), forward: vi.fn() }),
@@ -31,9 +38,10 @@ vi.mock('@/lib/supabase', () => ({
     },
   },
 }));
-// The module itself, counted as it loads.
+// The module itself, counted as it loads, and held until the test releases it.
 vi.mock('@/app/notifications/SignedInAlerts', async (importOriginal) => {
   mocks.signedInHalfLoads += 1;
+  await mocks.signedInHalfGate;
   return importOriginal();
 });
 
@@ -41,6 +49,8 @@ describe('the web Alerts page', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    // A failed test must not leave the module's load hanging for the next one.
+    mocks.releaseSignedInHalf();
   });
 
   // Signed out first: the module, once loaded, stays loaded for the file.
@@ -58,7 +68,10 @@ describe('the web Alerts page', () => {
     expect(screen.queryByRole('button', { name: 'Mark all read' })).toBeNull();
   });
 
-  it('loads the signed-in half once the session check finds a reader', async () => {
+  // The header row drew empty until the chunk and its sheet arrived, then
+  // Refresh and Mark all read popped in; below 640px, where the row stacks,
+  // the spinner and the list moved down 64px with them.
+  it('loads the signed-in half once the session check finds a reader, holding the controls\' place meanwhile', async () => {
     mocks.session = { access_token: 'viewer-token' };
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
@@ -67,8 +80,16 @@ describe('the web Alerts page', () => {
     })));
     render(<NotificationsPage />);
 
+    // While the module loads: the two controls' outlines, and nothing of the half.
+    expect(await screen.findByTestId('alerts-actions-placeholder')).toHaveAttribute('aria-hidden', 'true');
+    expect(mocks.signedInHalfLoads).toBe(1);
+    expect(screen.queryByRole('button', { name: 'Mark all read' })).toBeNull();
+    expect(screen.queryByText('You are all caught up')).toBeNull();
+
+    mocks.releaseSignedInHalf();
     expect(await screen.findByRole('button', { name: 'Mark all read' })).toBeInTheDocument();
     expect(await screen.findByText('You are all caught up')).toBeInTheDocument();
+    expect(screen.queryByTestId('alerts-actions-placeholder')).toBeNull();
     expect(mocks.signedInHalfLoads).toBe(1);
     expect(screen.queryByRole('link', { name: 'Sign in' })).toBeNull();
   });
