@@ -85,7 +85,7 @@ insert into public.user_blocks (blocker_user_id, blocked_user_id) values
 ('f0a10001-0000-4000-8000-000000000001','f0a10008-0000-4000-8000-000000000008');
 select is(pg_temp.alert('f0a14000-0000-4000-8000-000000000002'),
   'New follower · Someone followed your creator profile. · /studio',
-  'the creator blocking the follower afterwards takes the name and the page out');
+  'the creator blocking the follower afterwards takes the name and the page out, and keeps the alert');
 select is(pg_temp.alert('f0a14000-0000-4000-8000-000000000003'),
   'New follower · Someone followed your creator profile. · /studio',
   'and out of the alert that named the creator to the follower');
@@ -95,9 +95,6 @@ select is(pg_temp.alert('f0a14000-0000-4000-8000-000000000001'),
 select is(pg_temp.alert('f0a14000-0000-4000-8000-000000000009'),
   'New follower · Someone followed your creator profile. · /studio',
   'an alert that named no one is left as it was');
-select is((select count(*) from public.mobile_notifications
-           where id in ('f0a14000-0000-4000-8000-000000000002','f0a14000-0000-4000-8000-000000000003')),
-  2::bigint, 'a block keeps both alerts, the record that each follow was announced');
 
 insert into public.user_blocks (blocker_user_id, blocked_user_id) values
 ('f0a10002-0000-4000-8000-000000000002','f0a10001-0000-4000-8000-000000000001');
@@ -137,21 +134,12 @@ select is((select body || ' · ' || deep_link from public.unnamed_follow_alert_w
   'Someone followed your creator profile. · /studio',
   'words that name no one come back as they are');
 select is((select body || ' · ' || deep_link from public.unnamed_follow_alert_words(
-  'Someone followed your creator profile.', '/creators/maya')),
-  'Someone followed your creator profile. · /studio',
-  'a link to a follower''s page names them on its own');
-select is((select body || ' · ' || deep_link from public.unnamed_follow_alert_words(
   '@maya saved your post', '/showcase/p1')),
   '@maya saved your post · /showcase/p1',
   'and another alert''s words come back as they are');
 
--- Still one trigger on blocks (post_save_alerts.test.sql counts it too), and
--- nothing here is callable through the Data API.
+-- Nothing here is callable through the Data API.
 reset role;
-select is(
-  (select count(*) from pg_trigger
-    where tgrelid = 'public.user_blocks'::regclass and not tgisinternal),
-  1::bigint, 'one trigger on blocks does all of it');
 select ok(not has_function_privilege('anon', 'public.unnamed_follow_alert_words(text, text)', 'EXECUTE'),
   'anon cannot call the words function');
 select ok(not has_function_privilege('authenticated', 'public.unnamed_follow_alert_words(text, text)', 'EXECUTE'),

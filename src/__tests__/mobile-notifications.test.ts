@@ -17,6 +17,7 @@ import {
   NAMED_SAVE_PUSH_HOLD_MS,
   buildMobileNotificationDeepLink,
   createMobileNotification,
+  creatorFollowedWords,
   hasMobilePushMaintenanceWork,
   hasPendingMobilePushReceipts,
   normalizeMobilePushTokenPayload,
@@ -478,10 +479,13 @@ function sentBodies(fetchMock: { mock: { calls: Parameters<typeof fetch>[] } }) 
 /**
  * The tables one push fan-out touches, for an account holding `tokens`. Writes
  * are recorded as they arrive, so a test can count statements as well as rows.
+ * `stored` is what the database keeps in place of the words it was given, as
+ * a BEFORE INSERT trigger rewrites them.
  */
 function createPushFanOutSupabase(
   tokens: PushTokenRow[],
   summaryError: { message: string } | null = null,
+  stored: Partial<Record<'title' | 'body' | 'deep_link', string>> = {},
 ) {
   const deliveries: Record<string, unknown>[] = [];
   const rpcCalls: string[] = [];
@@ -542,6 +546,7 @@ function createPushFanOutSupabase(
                         is_read: false,
                         created_at: '2026-10-01T14:36:18.000Z',
                         updated_at: '2026-10-01T14:36:18.000Z',
+                        ...stored,
                       },
                       error: null,
                     };
@@ -1905,6 +1910,36 @@ describe('mobile notifications', () => {
         },
       },
     ]);
+  });
+
+  // A follow or sale alert written across a block is stored without the name
+  // (20261020072851, 20261020053858), and its push must say what was stored.
+  it('pushes the words the database stored, not the words it was asked to write', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => expoResponse({ data: [{ status: 'ok', id: 'ticket-1' }] }));
+    vi.stubGlobal('fetch', fetchMock);
+    const unnamed = creatorFollowedWords(null);
+    const fanOut = createPushFanOutSupabase(
+      [{ id: 'token-1', expo_push_token: 'ExponentPushToken[phone]', platform: 'android' }],
+      null,
+      { body: unnamed.body, deep_link: unnamed.deepLink },
+    );
+
+    await createMobileNotification({
+      adminSupabase: fanOut.adminSupabase as never,
+      userId: 'user-1',
+      actorUserId: 'follower-1',
+      type: 'creator_followed',
+      category: 'social',
+      ...creatorFollowedWords('maya'),
+      objectType: 'profile',
+      objectId: 'follower-1',
+    });
+
+    expect(sentBodies(fetchMock)).toEqual([[expect.objectContaining({
+      title: 'New follower',
+      body: 'Someone followed your creator profile.',
+      data: expect.objectContaining({ type: 'creator_followed', deepLink: '/studio' }),
+    })]]);
   });
 
   // The fan-out reads its tokens before it calls Expo. A sign-out on that phone,

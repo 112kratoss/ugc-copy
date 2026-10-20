@@ -2268,14 +2268,6 @@ export async function notifyCreatorPayoutResolved(
   });
 }
 
-/**
- * Tells a creator who followed them, by the follower's handle. The database
- * takes the name and the link to the follower's page back out of an alert
- * written across a block, when a block comes later, and when the follower's
- * account is deleted, which frees the handle for anyone to claim
- * (20261020072851). `unnamed_follow_alert_words` there turns these words into
- * the ones written for a follower with no handle, so the two change together.
- */
 export async function notifyCreatorFollowed(
   adminSupabase: SupabaseClient,
   params: { followerUserId: string; followingUserId: string; followerUsername?: string | null }
@@ -2286,17 +2278,31 @@ export async function notifyCreatorFollowed(
     actorUserId: params.followerUserId,
     type: 'creator_followed',
     category: 'social',
-    title: 'New follower',
-    body: params.followerUsername ? `@${params.followerUsername} followed you.` : 'Someone followed your creator profile.',
-    // The alert names a person, so it opens their page. With no handle to
-    // name, it stays on Alerts, where the row is read.
-    deepLink: params.followerUsername
-      ? buildMobileNotificationDeepLink({ kind: 'creatorProfile', username: params.followerUsername })
-      : buildMobileNotificationDeepLink({ kind: 'notifications' }),
+    ...creatorFollowedWords(params.followerUsername ?? null),
     objectType: 'profile',
     objectId: params.followerUserId,
     dedupeKey: `creator-follow:${params.followerUserId}:${params.followingUserId}`,
   });
+}
+
+/**
+ * A follow alert's words, by the follower's handle. The database takes the
+ * name and the link to the follower's page back out of an alert written across
+ * a block, when a block comes later, and when the follower's account is
+ * deleted, which frees the handle for anyone to claim (20261020072851).
+ * `unnamed_follow_alert_words` there turns the named words into the ones
+ * written for a follower with no handle, so the two change together.
+ */
+export function creatorFollowedWords(followerUsername: string | null) {
+  return {
+    title: 'New follower',
+    body: followerUsername ? `@${followerUsername} followed you.` : 'Someone followed your creator profile.',
+    // The alert names a person, so it opens their page. With no handle to
+    // name, it stays on Alerts, where the row is read.
+    deepLink: followerUsername
+      ? buildMobileNotificationDeepLink({ kind: 'creatorProfile', username: followerUsername })
+      : buildMobileNotificationDeepLink({ kind: 'notifications' }),
+  };
 }
 
 function socialAggregationWindow(date = new Date()) {

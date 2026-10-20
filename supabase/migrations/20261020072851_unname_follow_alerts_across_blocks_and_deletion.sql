@@ -21,8 +21,9 @@
 -- unblock and a follow again would push the same account another alert.
 -- 2 and 3 take the lock remove_follows_for_user_block and
 -- reject_blocked_user_follow take for the pair, so a block and an alert
--- written at the same moment are seen one after the other.
--- 4. The alerts already stored that 1 or 2 would have unnamed.
+-- written at the same moment are seen one after the other. The alerts already
+-- stored that 1 or 2 would have unnamed are repaired by the next migration
+-- (20261020084422), once this one has committed.
 
 SET LOCAL lock_timeout = '5s';
 
@@ -39,8 +40,9 @@ BEGIN
 END;
 $locks$;
 
--- The words and link a follow alert has with no one to name. An alert that
--- names no one comes back as it is.
+-- The words and link a follow alert has with no one to name. The body carries
+-- the name, and the link to the follower's page (Alerts, on alerts written
+-- before #453) goes with it. An alert that names no one comes back as it is.
 
 CREATE OR REPLACE FUNCTION public.unnamed_follow_alert_words(
   p_body text,
@@ -55,7 +57,7 @@ AS $$
 BEGIN
   body := p_body;
   deep_link := p_deep_link;
-  IF p_body ~ '^@\S+ followed you\.$' OR p_deep_link ~ '^/creators/' THEN
+  IF p_body ~ '^@\S+ followed you\.$' THEN
     body := 'Someone followed your creator profile.';
     deep_link := '/studio';
   END IF;
@@ -203,33 +205,3 @@ GRANT EXECUTE ON FUNCTION public.remove_follows_for_user_block() TO service_role
 
 COMMENT ON FUNCTION public.remove_follows_for_user_block() IS
   'When one account blocks another: removes the follows between them, either way, and every save alert naming either to the other; sale and follow alerts between them keep the sale or the follow without the name.';
-
--- 4. The alerts stored before this: those whose follower's account is gone,
--- and those across a block made before it. The trigger that stamps
--- updated_at is set aside, as 20261019211233 set it aside, so the repair does
--- not restart read-alert retention; one statement, so a failed repair cannot
--- leave it off.
-DO $repair$
-BEGIN
-  ALTER TABLE public.mobile_notifications DISABLE TRIGGER mobile_notifications_set_updated_at;
-
-  UPDATE public.mobile_notifications AS alert
-  SET body = words.body,
-      deep_link = words.deep_link
-  FROM public.mobile_notifications AS named
-  CROSS JOIN LATERAL public.unnamed_follow_alert_words(named.body, named.deep_link) AS words
-  WHERE alert.id = named.id
-    AND named.type = 'creator_followed'
-    AND (
-      named.actor_user_id IS NULL
-      OR EXISTS (
-        SELECT 1 FROM public.user_blocks AS block
-        WHERE (block.blocker_user_id = named.user_id AND block.blocked_user_id = named.actor_user_id)
-           OR (block.blocker_user_id = named.actor_user_id AND block.blocked_user_id = named.user_id)
-      )
-    )
-    AND (words.body, words.deep_link) IS DISTINCT FROM (named.body, named.deep_link);
-
-  ALTER TABLE public.mobile_notifications ENABLE TRIGGER mobile_notifications_set_updated_at;
-END;
-$repair$;

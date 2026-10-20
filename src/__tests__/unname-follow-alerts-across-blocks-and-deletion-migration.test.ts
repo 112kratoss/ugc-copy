@@ -1,59 +1,48 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 
-import {
-  createMobileNotificationHistory,
-  withMobileNotificationHistory,
-} from '@/__tests__/fixtures/mobile-notification-history';
-import { notifyCreatorFollowed } from '@/lib/mobile-notifications';
+import { creatorFollowedWords } from '@/lib/mobile-notifications';
 
-const read = (file: string) => fs.readFileSync(path.resolve(process.cwd(), 'supabase/migrations', file), 'utf8');
-const migration = read('20261020072851_unname_follow_alerts_across_blocks_and_deletion.sql');
-
-/** The migration's statements, without its comments. */
-const code = migration
+const directory = path.resolve(process.cwd(), 'supabase/migrations');
+const files = fs.readdirSync(directory).sort();
+const named = (suffix: string) => {
+  const file = files.find((name) => name.endsWith(suffix));
+  if (!file) throw new Error(`No migration ends with ${suffix}`);
+  return file;
+};
+const read = (file: string) => fs.readFileSync(path.join(directory, file), 'utf8');
+/** A migration's statements, without its comments. */
+const statementsOf = (sql: string) => sql
   .split('\n')
   .filter((line) => !line.trim().startsWith('--'))
   .join('\n');
 
-/** The row the server writes for a follow, by the real notifier. */
-async function followAlert(followerUsername: string | null) {
-  const history = createMobileNotificationHistory();
-  const elsewhere = (name: string) => {
-    throw new Error(`Unexpected call: ${name}`);
-  };
-  const client = withMobileNotificationHistory({
-    from: elsewhere,
-    rpc: async (name: string) => elsewhere(name),
-  } as unknown as SupabaseClient, history);
-  await notifyCreatorFollowed(client, { followerUserId: 'follower-1', followingUserId: 'creator-1', followerUsername });
-  expect(history.sent).toHaveLength(1);
-  return history.sent[0] as { title: string; body: string; deep_link: string };
-}
+const triggersFile = named('_unname_follow_alerts_across_blocks_and_deletion.sql');
+const repairFile = named('_unname_follow_alerts_already_stored.sql');
+const migration = read(triggersFile);
+const code = statementsOf(migration);
+const repair = statementsOf(read(repairFile));
 
 // What the triggers do to stored alerts is pinned live in
-// supabase/tests/database/follow_alert_names.test.sql.
+// supabase/tests/database/follow_alert_names.test.sql, and the repair in
+// src/__tests__/follow-alert-names-database.test.ts.
 describe('unname follow alerts across blocks and deletion migration', () => {
-  it('takes the name and the page out of what the server writes, back to what it writes with no handle', async () => {
+  it('takes the name and the page out of what the server writes, back to what it writes with no handle', () => {
     const namedBody = new RegExp(/p_body ~ '([^']+)'/.exec(code)![1]);
-    const namedLink = new RegExp(/p_deep_link ~ '([^']+)'/.exec(code)![1]);
+    const unnamed = creatorFollowedWords(null);
 
     for (const handle of ['maya', 'creator-0a1b2c3d']) {
-      const named = await followAlert(handle);
-      expect(named.body).toMatch(namedBody);
-      expect(named.deep_link).toMatch(namedLink);
+      const words = creatorFollowedWords(handle);
+      expect(words.body).toMatch(namedBody);
+      expect(words.deepLink).not.toBe(unnamed.deepLink);
+      // The title names no one, so it is never rewritten.
+      expect(words.title).toBe(unnamed.title);
     }
-
-    const unnamed = await followAlert(null);
     expect(unnamed.body).not.toMatch(namedBody);
-    expect(unnamed.deep_link).not.toMatch(namedLink);
     expect(code).toContain(`body := '${unnamed.body}';`);
-    expect(code).toContain(`deep_link := '${unnamed.deep_link}';`);
-    // The title names no one, so it is never rewritten.
-    expect((await followAlert('maya')).title).toBe(unnamed.title);
+    expect(code).toContain(`deep_link := '${unnamed.deepLink}';`);
   });
 
   it('stores an alert unnamed when it is written across a block, or once its follower is deleted', () => {
@@ -124,20 +113,30 @@ describe('unname follow alerts across blocks and deletion migration', () => {
       + '      greatest(NEW.user_id, NEW.actor_user_id)::text, 0');
   });
 
-  it('repairs the alerts already stored, once the triggers are there, without restarting their retention', () => {
-    const repair = code.slice(code.indexOf('DO $repair$'));
-    expect(code.indexOf('DO $repair$')).toBeGreaterThan(code.lastIndexOf('CREATE OR REPLACE TRIGGER'));
+  it('repairs the alerts already stored in a migration of its own, after the triggers, without restarting their retention', () => {
+    // Its own file, so a block still running the earlier block function when
+    // the triggers' migration took its lock has committed before the repair
+    // looks for blocks.
+    expect(files.indexOf(repairFile)).toBeGreaterThan(files.indexOf(triggersFile));
+    expect(code).not.toContain('DISABLE TRIGGER');
+    expect(code).not.toContain('named.actor_user_id IS NULL');
     expect(repair).toContain('named.actor_user_id IS NULL');
     expect(repair).toContain('(block.blocker_user_id = named.user_id AND block.blocked_user_id = named.actor_user_id)');
     expect(repair).toContain('OR (block.blocker_user_id = named.actor_user_id AND block.blocked_user_id = named.user_id)');
-    // One statement, so a failed repair cannot leave the trigger off.
+    expect(repair).toContain('public.unnamed_follow_alert_words(named.body, named.deep_link)');
+    expect(repair).toContain("SET LOCAL lock_timeout = '5s';");
+    // One statement, so a failed repair cannot leave the trigger off, and the
+    // timeout is set inside it, where it holds.
+    const timeout = repair.indexOf("PERFORM set_config('lock_timeout', '5s', true);");
     const off = repair.indexOf('DISABLE TRIGGER mobile_notifications_set_updated_at;');
     const update = repair.indexOf('UPDATE public.mobile_notifications AS alert');
     const on = repair.indexOf('ENABLE TRIGGER mobile_notifications_set_updated_at;');
-    expect(off).toBeGreaterThan(-1);
+    expect(repair.indexOf('DO $repair$')).toBeLessThan(timeout);
+    expect(timeout).toBeLessThan(off);
     expect(off).toBeLessThan(update);
     expect(update).toBeLessThan(on);
     expect(on).toBeLessThan(repair.indexOf('END;\n$repair$;'));
+    expect(repair).not.toMatch(/LOCK TABLE|DROP TRIGGER|CREATE/);
   });
 
   it('locks mobile_notifications before it changes anything, gives up after five seconds, and never drops a trigger', () => {

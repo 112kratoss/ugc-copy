@@ -2,48 +2,34 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import type { SupabaseClient } from '@supabase/supabase-js';
 import { Client } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  createMobileNotificationHistory,
-  withMobileNotificationHistory,
-} from '@/__tests__/fixtures/mobile-notification-history';
-import { notifyCreatorFollowed } from '@/lib/mobile-notifications';
+import { creatorFollowedWords } from '@/lib/mobile-notifications';
 
 const connectionString = process.env.SUPABASE_TEST_DB_URL;
 
 type AlertWords = { body: string; deep_link: string };
 
-/** The words and link the server writes for a follow, by the real notifier. */
-async function serverFollowAlert(followerUsername: string | null): Promise<AlertWords> {
-  const history = createMobileNotificationHistory();
-  const elsewhere = (name: string) => {
-    throw new Error(`Unexpected call: ${name}`);
-  };
-  const client = withMobileNotificationHistory({
-    from: elsewhere,
-    rpc: async (name: string) => elsewhere(name),
-  } as unknown as SupabaseClient, history);
-  await notifyCreatorFollowed(client, { followerUserId: 'follower-1', followingUserId: 'creator-1', followerUsername });
-  const { body, deep_link } = history.sent[0] as AlertWords;
-  return { body, deep_link };
+/** The words and link the server writes for a follow, as the row stores them. */
+function serverFollowAlert(followerUsername: string | null): AlertWords {
+  const { body, deepLink } = creatorFollowedWords(followerUsername);
+  return { body, deep_link: deepLink };
 }
 
 /**
  * A follow's alert against real PostgreSQL (20261020072851): a block and an
  * alert written at the same moment cannot miss each other, either way round
- * and in either order, and the migration's repair takes the name out of the
- * alerts stored before it. The single-session checks are in
- * supabase/tests/database/follow_alert_names.test.sql.
+ * and in either order, and the repair that follows it (20261020084422) takes
+ * the name out of the alerts stored before it. The single-session checks are
+ * in supabase/tests/database/follow_alert_names.test.sql.
  */
 describe.skipIf(!connectionString)('follow alert names with actual PostgreSQL', () => {
   let db: Client;
   let creator: string;
   let follower: string;
-  let named: AlertWords;
-  let unnamed: AlertWords;
+  const named = serverFollowAlert('maya');
+  const unnamed = serverFollowAlert(null);
 
   const connect = async () => {
     const client = new Client({ connectionString, statement_timeout: 10000 });
@@ -96,7 +82,6 @@ describe.skipIf(!connectionString)('follow alert names with actual PostgreSQL', 
 
   beforeAll(async () => {
     expect(['localhost', '127.0.0.1']).toContain(new URL(connectionString!).hostname);
-    [named, unnamed] = [await serverFollowAlert('maya'), await serverFollowAlert(null)];
     db = await connect();
   });
   afterAll(async () => { await db?.end(); });
@@ -153,8 +138,10 @@ describe.skipIf(!connectionString)('follow alert names with actual PostgreSQL', 
   }
 
   it('repairs the alerts stored before it, and leaves their retention where it was', async () => {
-    const migration = fs.readFileSync(path.resolve(process.cwd(),
-      'supabase/migrations/20261020072851_unname_follow_alerts_across_blocks_and_deletion.sql'), 'utf8');
+    const directory = path.resolve(process.cwd(), 'supabase/migrations');
+    const file = fs.readdirSync(directory).find((name) => name.endsWith('_unname_follow_alerts_already_stored.sql'));
+    expect(file).toBeDefined();
+    const migration = fs.readFileSync(path.join(directory, file!), 'utf8');
     const start = migration.indexOf('DO $repair$');
     const repair = migration.slice(start, migration.indexOf('$repair$;', start + 'DO $repair$'.length) + '$repair$;'.length);
     expect(repair).toMatch(/^DO \$repair\$[\s\S]*\$repair\$;$/);
