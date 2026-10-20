@@ -6269,6 +6269,23 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel).toContain('Kling 3.0');
         expect(slotText(tree, 'motion-character-slot')).toEqual(['Reference images', 'Required', 'Who should move?']);
         expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference videos', 'Required', 'How should they move?']);
+        // The lines under the slots and the bar's hint name the slots as drawn, not the motion-inputs pair.
+        expect(text(tree)).toContain('Reference images are required.');
+        expect(text(tree)).toContain('Reference videos are required.');
+        expect(text(tree)).not.toContain('Character image is required.');
+        expect(text(tree)).not.toContain('Reference video is required.');
+        expect(blocker(tree)).toBe('Add reference images and reference videos.');
+      });
+
+      it('keeps Kling 2.6’s lines, whose slots are the motion-inputs pair: the character image, the reference video, and the clip the bar asks for', async () => {
+        onMotionModel('kling-2.6');
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Character image', 'Required', 'Who should move?']);
+        expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference video', 'Required', 'How should they move?']);
+        expect(text(tree)).toContain('Character image is required.');
+        expect(text(tree)).toContain('Reference video is required.');
+        expect(blocker(tree)).toBe('Add a character image and a motion clip.');
       });
 
       it('take a clip on Kling 3.0 from Inputs, and send the picture and the clip in its slots', async () => {

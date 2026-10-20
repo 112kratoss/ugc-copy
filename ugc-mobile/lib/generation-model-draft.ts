@@ -198,6 +198,32 @@ export function catalogMotionDraftSlotKeys(
   return model ? catalogMotionInputSlots(model, getCatalogDraftSettings(draft, model)) : MOTION_INPUTS_FALLBACK_SLOTS;
 }
 
+/** What a motion run's picture and clip are called where the model's descriptor names no slot for them. */
+export const MOTION_INPUT_LABELS = { image: 'Character image', video: 'Reference video' } as const;
+
+/**
+ * What the composer calls a motion run's picture and clip: the labels of the slots it draws them in
+ * (`catalogMotionDraftSlotKeys`), or the motion-inputs names where the descriptor has no such slot or
+ * is not in. The lines under the slots, the creator bar's hint and the draft's checks all name an
+ * input by this, as the slot itself does: production publishes Kling 3.0's slots as "Reference
+ * images" and "Reference videos", under which the lines asked for a "Character image" and a
+ * "Reference video" (2026-10-21).
+ */
+export function catalogMotionDraftSlotLabels(
+  draft: MotionCreationDraft,
+  model: GenerationModelDescriptor | null | undefined,
+): { image: string; video: string } {
+  const keys = catalogMotionDraftSlotKeys(draft, model);
+  const slots = model?.inputModes?.flatMap((mode) => mode.slots) ?? [];
+  const labelOf = (key: string) => slots.find((slot) => slot.key === key)?.label.trim() || null;
+  return { image: labelOf(keys.image) ?? MOTION_INPUT_LABELS.image, video: labelOf(keys.video) ?? MOTION_INPUT_LABELS.video };
+}
+
+/** "Character image is required.", "Reference images are required.": a label ending in s reads as a plural. */
+function motionInputRequiredMessage(label: string): string {
+  return `${label} ${/s$/i.test(label) ? 'are' : 'is'} required.`;
+}
+
 function legacyAssetsForSlot(
   draft: CreationDraft,
   slot: CatalogInputSlot,
@@ -833,8 +859,10 @@ export function validateCatalogCreationDraft(
   const promptLimitError = catalogPromptLimitError(draft, model);
   if (promptLimitError) errors.push(promptLimitError);
   if (draft.tool === 'motion') {
-    if (!draft.characterImage) errors.push('Character image is required.');
-    if (!draft.referenceVideo) errors.push('Reference video is required.');
+    // Named as the composer's slots are, so a line under a slot says what the slot says.
+    const labels = catalogMotionDraftSlotLabels(draft, model);
+    if (!draft.characterImage) errors.push(motionInputRequiredMessage(labels.image));
+    if (!draft.referenceVideo) errors.push(motionInputRequiredMessage(labels.video));
   }
 
   validateControls(runDraft, model, errors);

@@ -74,6 +74,7 @@ import {
   catalogDraftInputCounts,
   catalogDraftRunHandles,
   catalogMotionDraftSlotKeys,
+  catalogMotionDraftSlotLabels,
   catalogMultiShotLimits,
   catalogPromptMeters,
   catalogRefusedRunPrice,
@@ -85,6 +86,7 @@ import {
   getCatalogDraftSettings,
   hasCreatorEditedPromptDuringRemix,
   hydrateCatalogCreationDraftFromRemixSource,
+  MOTION_INPUT_LABELS,
   multiShotTotalDuration,
   normalizeCreationDraftForCatalog,
   readVerifiedInputDurations,
@@ -501,8 +503,25 @@ function unavailableRunInputMessage(
     : `${name} is no longer available. Add this reference again.`;
 }
 
-/** Shown in place of a motion quote the server would refuse: it needs both inputs to price. */
-const MOTION_INPUTS_HINT = 'Add a character image and a motion clip.';
+/**
+ * Shown in place of a motion quote the server would refuse (it needs both inputs to price), asking
+ * for the inputs by what the composer's slots are called (`catalogMotionDraftSlotLabels`): production
+ * publishes Kling 3.0's as "Reference images" and "Reference videos", and a line asking for a
+ * character image and a motion clip named neither (2026-10-21). The motion-inputs pair keeps its
+ * own line, which says what the clip is for.
+ */
+function motionInputsHint(labels: { image: string; video: string }): string {
+  if (labels.image === MOTION_INPUT_LABELS.image && labels.video === MOTION_INPUT_LABELS.video) {
+    return 'Add a character image and a motion clip.';
+  }
+  return `Add ${slotLabelInSentence(labels.image)} and ${slotLabelInSentence(labels.video)}.`;
+}
+
+/** A slot's label mid-sentence: its first letter lowered when it starts a plain word, with an article unless it reads as a plural. */
+function slotLabelInSentence(label: string): string {
+  const words = /^[A-Z][a-z]/.test(label) ? `${label[0].toLowerCase()}${label.slice(1)}` : label;
+  return /s$/i.test(words) ? words : `${/^[aeiou]/i.test(words) ? 'an' : 'a'} ${words}`;
+}
 
 /**
  * Said in place of a `cost_changed` refusal once the run's price, asked again, is the price the
@@ -2651,7 +2670,7 @@ function IdentityCreationScreen({
       ?? message
       ?? (catalogUnavailable ? catalogQuery.error?.message : null)
       ?? (activeQuote.status === 'error' ? activeQuote.error : null)
-      ?? (motionInputsMissing && !unavailableReference ? MOTION_INPUTS_HINT : null)
+      ?? (motionInputsMissing && !unavailableReference ? motionInputsHint(catalogMotionDraftSlotLabels(motionDraft, selectedCreatorModel)) : null)
       // Through the same mapper the Generate press uses: before this, the
       // blocker stated the condition ("Prompt is required.") and pressing
       // Generate restated it as an instruction ("Add a prompt before
@@ -4782,8 +4801,12 @@ function MotionCreatorComposer({
   const [selectedRole, setSelectedRole] = useState<'character' | 'motion' | null>(null);
   const selectedMedia = selectedRole === 'character' ? draft.characterImage : selectedRole === 'motion' ? draft.referenceVideo : null;
   const duration = draft.referenceVideo ? getMotionDuration(draft) : null;
-  const characterError = validationErrors.find((error) => /character image/i.test(error));
-  const motionError = validationErrors.find((error) => /reference video|motion video|between 1 and/i.test(error));
+  // The lines under the slots, found by what the slots are called (`catalogMotionDraftSlotLabels`):
+  // the draft's checks name an input by its slot's label, as the slot itself does.
+  const labels = catalogMotionDraftSlotLabels(draft, model);
+  const names = (label: string) => (error: string) => error.toLowerCase().includes(label.toLowerCase());
+  const characterError = validationErrors.find(names(labels.image));
+  const motionError = validationErrors.find(names(labels.video));
   // The slots the run sends its picture and its clip in, found by kind: Kling 3.0's are plain
   // reference slots, where Kling 2.6 has the motion-inputs pair.
   const slotKeys = catalogMotionDraftSlotKeys(draft, model);
