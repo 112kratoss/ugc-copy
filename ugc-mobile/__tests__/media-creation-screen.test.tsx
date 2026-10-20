@@ -5542,6 +5542,35 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(generateButton(tree).props.disabled).toBe(false);
       });
 
+      it('keeps holding the refused run when another run is priced at another price: only an answer for that run forgets it', async () => {
+        catalogState.catalog = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14)]);
+        authState.api.startGeneration.mockRejectedValue(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'));
+        const tree = await openTyped();
+        const outOfDate = 'This app is out of date, so it can’t price this run. Update it, or try again later.';
+        const workspace = () => tree.root.findByProps({ testID: 'generation-workspace' });
+        const chooseAspectRatio = async (label: string) => {
+          renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Generation parameters.').props.onPress(); });
+          renderer.act(() => { labelled(tree.root, label).props.onPress(); });
+          renderer.act(() => { labelled(tree.root, 'Close generation parameters').props.onPress(); });
+          await settle();
+        };
+        await pressGenerate(tree);
+        expect(collectText(workspace())).toContain(outOfDate);
+        renderer.act(() => { workspace().find((node) => node.type === SecondaryButton && node.props.label === 'Back to creator').props.onPress(); });
+
+        // Another run, priced at 12: its price is no word on the run the start refused.
+        quoteEchoingSettings(12);
+        await chooseAspectRatio('1:1');
+        expect(text(tree)).not.toContain(outOfDate);
+        expect(generateButton(tree).props.disabled).toBe(false);
+
+        // Back to the refused run, priced again at the price it was refused at: still held.
+        quoteEchoingSettings(8);
+        await chooseAspectRatio('4:5');
+        expect(blocker(tree)).toBe(outOfDate);
+        expect(generateButton(tree).props.disabled).toBe(true);
+      });
+
       it('holds the refusal unjudged until a price asked since answers: the price in hand, which the run was refused at, is not read against it', async () => {
         catalogState.catalog = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14)]);
         authState.api.startGeneration.mockRejectedValue(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'));
