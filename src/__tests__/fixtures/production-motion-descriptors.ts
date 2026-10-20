@@ -1,18 +1,12 @@
 import type { CatalogInputMode } from '@/lib/generation-model-catalog';
+import productionMotion from '../../../contracts/production-motion-descriptors-v1.json';
 
 /**
- * Kling 3.0 motion's input modes as production publishes them (release
- * `wan-start-frame-apart-20261019`, read 2026-10-19): one default mode with plain reference
- * slots, the shape the compatibility release gave a model no later release re-emitted. The
- * code catalog, and Kling 2.6 in production, give motion its `motion-inputs` slots instead
- * (`characterImage`, `referenceVideo`). Update this when a release re-emits the model.
+ * Kling 3.0 motion's input modes as production publishes them, from the contract the app's suite
+ * reads too (`contracts/production-motion-descriptors-v1.json`, which says when and from which
+ * release it was read): one default mode with plain reference slots, the shape the compatibility
+ * release gave a model no later release re-emitted. The code catalog, and Kling 2.6 in production,
+ * give motion its `motion-inputs` slots instead (`characterImage`, `referenceVideo`).
  */
-export const PRODUCTION_KLING_3_MOTION_MODES: CatalogInputMode[] = [{
-  key: 'default',
-  label: 'Default',
-  default: true,
-  slots: [
-    { key: 'imageReferences', label: 'Reference images', kind: 'image', role: 'reference', min: 0, max: 1 },
-    { key: 'videoReferences', label: 'Reference videos', kind: 'video', role: 'reference', min: 0, max: 1 },
-  ],
-}];
+export const PRODUCTION_KLING_3_MOTION_MODES = productionMotion.models
+  .find((model) => model.id === 'kling-3.0')?.inputModes as CatalogInputMode[];

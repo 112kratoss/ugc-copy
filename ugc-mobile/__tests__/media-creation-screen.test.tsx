@@ -282,7 +282,7 @@ import { ApiError } from '../lib/api-client';
 import whatsNewContract from '../../contracts/whats-new-models-v1.json';
 import subjectsContract from '../../contracts/model-catalog-subjects-mode-v1.json';
 import liveCatalog from './fixtures/live-catalog-descriptors.json';
-import productionMotion from './fixtures/production-motion-descriptors.json';
+import productionMotion from '../../contracts/production-motion-descriptors-v1.json';
 import { parseModelCatalogDetail } from '../lib/generation-model-catalog';
 
 const referenceModeIs = (value: 'frames' | 'elements') => [{ source: 'setting' as const, key: 'referenceMode', operator: 'equals' as const, value }];
