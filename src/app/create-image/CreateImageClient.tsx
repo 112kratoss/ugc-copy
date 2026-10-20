@@ -1285,6 +1285,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             return;
         }
         forgetPendingStart();
+        quoteState.started(start.body as CatalogGenerationRequestPayload);
         setLatestGenerationId(started.generationId ?? null);
         setLatestIsPublic(false);
         announceGenerationStarted();

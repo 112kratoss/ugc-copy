@@ -655,6 +655,32 @@ describe('CreateMotionClient price of the run it sends', () => {
     await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
   });
 
+  // A run that goes is forgotten as a refusal: a later quote back at the refused price (a
+  // rollback) held Generate and said the page was out of date, though the start would take it.
+  it('forgets a refusal once that run goes, after the page was found out of date and the price then moved', async () => {
+    startAnswers = [jsonResponse({ code: 'cost_changed', error: COST_CHANGED }, 409)];
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+    await pressGenerate();
+    expect(await screen.findByRole('alert')).toHaveTextContent('This page is out of date');
+
+    // The price moves (a deploy that fixed this run's quote, say), and the run goes at it.
+    quoteStandIn.answers = [20, 24];
+    fireEvent.change(screen.getByPlaceholderText(/Describe the kind of movement/), { target: { value: 'Spin twice, then bow.' } });
+    expect(costShown()).toBe('24 credits');
+    expect(screen.queryByText(/This page is out of date/)).not.toBeInTheDocument();
+    await pressGenerate();
+    expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();
+    expect(startBodies().map((body) => body.expectedCostCredits)).toEqual([20, 24]);
+
+    // The old price back (a rollback): the run went, so the page holds nothing.
+    quoteStandIn.answers = [20, 20];
+    fireEvent.change(screen.getByPlaceholderText(/Describe the kind of movement/), { target: { value: 'Spin once, then bow.' } });
+    expect(costShown()).toBe('20 credits');
+    expect(screen.queryByText(/This page is out of date/)).not.toBeInTheDocument();
+    expect(generateButton()).toBeEnabled();
+  });
+
   it('checks an unanswered start again with the run and price it sent, though the price has moved since', async () => {
     startAnswers = [new TypeError('Failed to fetch')];
     const view = render(<CreateMotionClient prefill={{}} />);

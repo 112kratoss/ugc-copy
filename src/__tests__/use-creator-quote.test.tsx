@@ -103,6 +103,49 @@ describe('useCreatorQuote', () => {
     expect(result.current).toMatchObject({ status: 'ready', quote: { costCredits: 8 }, pageOutOfDate: false });
   });
 
+  // Only the first price in since the refusal is read against it. A later quote of the run
+  // back at the refused price (a price put back, a refreshed session, Retry) is no refusal:
+  // the start would take it, and the page held Generate and said it was out of date.
+  it('forgets a refusal once the price asked again has moved, and holds nothing when the old price comes back', () => {
+    quoteStandIn.answers = [8, 10, 8];
+    const { result } = renderQuote();
+    act(() => result.current.costChanged({ ...lighthouse.run, expectedCostCredits: 8 }));
+    expect(result.current).toMatchObject({ quote: { costCredits: 10 }, pageOutOfDate: false });
+
+    act(() => result.current.retry());
+
+    expect(quoteStandIn.lastAttempt()).toBe(2);
+    expect(result.current).toMatchObject({ status: 'ready', quote: { costCredits: 8 }, pageOutOfDate: false });
+  });
+
+  it('forgets a refusal once a start of that run succeeds', () => {
+    const { result, rerender } = renderQuote();
+    act(() => result.current.costChanged({ ...lighthouse.run, expectedCostCredits: 8 }));
+    expect(result.current.pageOutOfDate).toBe(true);
+
+    // The price moves (a deploy that fixed the page's quote, say), and the run goes at it.
+    quoteStandIn.answers = [8, 10];
+    rerender({ current: lighthouse.request });
+    expect(result.current).toMatchObject({ quote: { costCredits: 10 }, pageOutOfDate: false });
+    act(() => result.current.started({ ...lighthouse.run, expectedCostCredits: 10 }));
+
+    // The old price back (a rollback): the run went, so the page holds nothing.
+    quoteStandIn.answers = [8, 8];
+    rerender({ current: lighthouse.request });
+    expect(result.current).toMatchObject({ quote: { costCredits: 8 }, pageOutOfDate: false });
+  });
+
+  it('keeps a refusal when a start of another run succeeds', () => {
+    const { result, rerender } = renderQuote();
+    act(() => result.current.costChanged({ ...lighthouse.run, expectedCostCredits: 8 }));
+    expect(result.current.pageOutOfDate).toBe(true);
+
+    act(() => result.current.started({ ...square.run, expectedCostCredits: 8 }));
+    rerender({ current: lighthouse.request });
+
+    expect(result.current.pageOutOfDate).toBe(true);
+  });
+
   it('keeps the latest refusal only: a refusal at the price that moved is read against that price', () => {
     quoteStandIn.answers = [8, 10, 10];
     const { result } = renderQuote();

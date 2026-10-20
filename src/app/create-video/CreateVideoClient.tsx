@@ -3327,6 +3327,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         // The answer names the run: the attempt has done its work.
         clearPendingWebStart('video');
         setUnconfirmedStart(null);
+        quoteState.started(attempt.body as CatalogGenerationRequestPayload);
         try {
             setLatestGenerationId(started.generationId ?? null);
             setLatestIsPublic(false);

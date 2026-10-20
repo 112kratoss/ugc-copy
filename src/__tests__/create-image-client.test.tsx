@@ -1139,6 +1139,53 @@ describe('CreateImageClient generation pipeline', () => {
       expect(saveCreatorDraftMock).toHaveBeenCalledWith('image', 'user-1', expect.objectContaining({ prompt: 'A lighthouse at dawn' }));
     });
 
+    // Only the first price in since a refusal is read against it, and a run that goes is
+    // forgotten: a later quote back at the refused price (a rollback) held Generate and said
+    // the page was out of date, though the start would take it.
+    it('goes on at a price that moved after a refusal, and holds nothing when the old price comes back later', async () => {
+      quoteStandIn.answers = [8, 10];
+      const costChanged = { status: 409, body: { code: 'cost_changed', error: 'The price of this run changed. Check the updated cost and generate again.' } };
+      installFetch({ starts: [costChanged, startedReply({ cost: 10 })] });
+      render(<CreateImageClient prefill={{}} />);
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+      expect(await screen.findByText('The price of this run changed. Check the updated cost and generate again.')).toBeInTheDocument();
+      expect(costShown()).toBe('10 credits');
+      pressGenerate();
+      await findResult();
+
+      quoteStandIn.answers = [8, 8];
+      typePrompt('A lighthouse at dawn, in fog');
+
+      expect(costShown()).toBe('8 credits');
+      expect(screen.queryByText(/This page is out of date/)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Generate Image/ })).toBeEnabled();
+    });
+
+    it('forgets a refusal once that run goes, after the page was found out of date and the price then moved', async () => {
+      const costChanged = { status: 409, body: { code: 'cost_changed', error: 'The price of this run changed. Check the updated cost and generate again.' } };
+      installFetch({ starts: [costChanged, startedReply({ cost: 10 })] });
+      render(<CreateImageClient prefill={{}} />);
+      typePrompt('A lighthouse at dawn');
+      pressGenerate();
+      expect(await screen.findByRole('alert')).toHaveTextContent('This page is out of date');
+
+      // The price moves (a deploy that fixed this run's quote, say), and the run goes at it.
+      quoteStandIn.answers = [8, 10];
+      typePrompt('A lighthouse at dawn, in fog');
+      expect(costShown()).toBe('10 credits');
+      expect(screen.queryByText(/This page is out of date/)).not.toBeInTheDocument();
+      pressGenerate();
+      await findResult();
+
+      // The old price back (a rollback): the run went, so the page holds nothing.
+      quoteStandIn.answers = [8, 8];
+      typePrompt('A lighthouse at dawn, in rain');
+      expect(costShown()).toBe('8 credits');
+      expect(screen.queryByText(/This page is out of date/)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Generate Image/ })).toBeEnabled();
+    });
+
     it('lets the creator go on with another run, which the refusal does not hold', async () => {
       const costChanged = { status: 409, body: { code: 'cost_changed', error: 'The price of this run changed. Check the updated cost and generate again.' } };
       const fetchMock = installFetch({ starts: [costChanged, startedReply()] });
@@ -1149,7 +1196,7 @@ describe('CreateImageClient generation pipeline', () => {
 
       // Another run is priced on its own: nothing has refused it.
       fireEvent.click(screen.getByRole('button', { name: '1:1' }));
-      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.queryByText(/This page is out of date/)).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Generate Image/ })).toBeEnabled();
       pressGenerate();
       await findResult();
@@ -1718,7 +1765,7 @@ describe('CreateImageClient prompt limits', () => {
 
     typePrompt('cat');
     expect(screen.getByText('Seedream 5 Lite prompts need at least 4 characters.')).toBeInTheDocument();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText(/This page is out of date/)).not.toBeInTheDocument();
     expect(generateButton()).toBeDisabled();
 
     typePrompt('A lighthouse at dawn');

@@ -910,6 +910,7 @@ export default function CreateMotionClient({
             return;
         }
         forgetPendingStart();
+        quoteState.started(start.body as CatalogGenerationRequestPayload);
         latestRunCostRef.current = started.cost;
         setLatestGenerationId(started.generationId ?? null);
         setLatestIsPublic(false);

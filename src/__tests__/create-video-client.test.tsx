@@ -3861,6 +3861,36 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(postedStarts()[1].body.expectedCostCredits).toBe(15);
     });
 
+    // A run that goes is forgotten as a refusal: a later quote back at the refused price
+    // (a rollback) held Generate and said the page was out of date, though the start would
+    // take it.
+    it('forgets a refusal once that run goes, after the page was found out of date and the price then moved', async () => {
+      answerStarts(refusal(409, {
+        code: 'cost_changed',
+        error: 'The price of this run changed. Check the updated cost and generate again.',
+      }));
+      render(<CreateVideoClient prefill={{}} />);
+      fireEvent.change(promptBox(), { target: { value: PROMPT } });
+      fireEvent.click(generateButton());
+      expect(await screen.findByRole('alert')).toHaveTextContent('This page is out of date');
+
+      // The price moves (a deploy that fixed this run's quote, say), and the run goes at it.
+      quoteStandIn.answers = [12, 15];
+      fireEvent.change(promptBox(), { target: { value: `${PROMPT} The water stays calm.` } });
+      expect(costShown()).toBe('15 credits');
+      expect(screen.queryByText(/This page is out of date/)).toBeNull();
+      fireEvent.click(generateButton());
+      expect(await screen.findByText('Latest video result')).toBeInTheDocument();
+      expect(postedStarts().map((start) => start.body.expectedCostCredits)).toEqual([12, 15]);
+
+      // The old price back (a rollback): the run went, so the page holds nothing.
+      quoteStandIn.answers = [12, 12];
+      fireEvent.change(promptBox(), { target: { value: `${PROMPT} The water stays still.` } });
+      expect(costShown()).toBe('12 credits');
+      expect(screen.queryByText(/This page is out of date/)).toBeNull();
+      expect(generateButton()).toBeEnabled();
+    });
+
     it('says the page is out of date and holds Generate for a reload when asking again leaves the run at the refused price', async () => {
       // A page sends from its own build until it hears of a newer one, and a page served
       // stale never does. When that build prices a run apart from the start, asking again
