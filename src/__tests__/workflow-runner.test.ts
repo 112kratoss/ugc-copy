@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   type ApprovalGateNodeData,
+  type AudioInputNodeData,
   createCanvasEdge,
   createWorkflowNode,
   type ImageInputNodeData,
@@ -16,9 +17,15 @@ import {
 import {
   getPublicGenerationStartFailure,
   markHeldProviderSubmission,
+  PROVIDER_INPUT_REFUSED,
 } from '@/lib/generation-public-failure';
-import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
+import {
+  buildGenerationModelCatalog,
+  quoteGenerationModel,
+  type GenerationModelQuoteInput,
+} from '@/lib/generation-model-catalog';
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
+import { GenerationServiceError } from '@/lib/generation-service-core';
 import { createSeedanceAssetMetadata } from '@/lib/seedance-assets';
 
 // The runner reads generations service-role (authenticated grants stop at the
@@ -798,31 +805,29 @@ describe('workflow-runner recovery', () => {
       expect(result).toMatchObject({ status: 'processing', generation_id: 'gen-video' });
     });
 
-    it('is blocked with the reason, with nothing quoted or held, when a clip is shorter than the model takes', async () => {
+    // Refused as the start services refuse it, under the code a run worker reads: a
+    // `blocked` step reads to a template run as a missing input, and its words were lost.
+    it('refuses the step with the reason, with nothing quoted or held, when a clip is shorter than the model takes', async () => {
       // minimax-h3/reference-to-video: each clip 2 to 15 seconds. Kie would refuse it after the hold.
       probeMediaDurationSecondsMock.mockResolvedValueOnce(1.5);
 
-      const result = await runClipStep('minimax-h3');
-
-      expect(result).toEqual({
-        status: 'blocked',
-        generation_id: null,
-        input_snapshot: null,
-        output_snapshot: null,
-        error_message: 'MiniMax H3 reference videos must be at least 2 seconds long. Reference video 1 runs 1.5 seconds.',
+      await expect(runClipStep('minimax-h3')).rejects.toMatchObject({
+        status: 400,
+        failureCode: PROVIDER_INPUT_REFUSED,
+        message: 'MiniMax H3 reference videos must be at least 2 seconds long. Reference video 1 runs 1.5 seconds.',
       });
       expect(quoteGenerationModelMock).not.toHaveBeenCalled();
       expect(startVideoGenerationMock).not.toHaveBeenCalled();
     });
 
-    it('measures a Kling 3.0 element and blocks the step when it is shorter than 3 s', async () => {
+    it('measures a Kling 3.0 element and refuses the step when it is shorter than 3 s', async () => {
       probeMediaDurationSecondsMock.mockResolvedValueOnce(2);
 
-      const result = await runClipStep('kling-3.0-video');
-
-      expect(result).toMatchObject({ status: 'blocked', generation_id: null });
-      expect((result as { error_message: string }).error_message)
-        .toBe('Kling 3.0 Cinematic video elements must be at least 3 seconds long. Video input runs 2 seconds.');
+      await expect(runClipStep('kling-3.0-video')).rejects.toMatchObject({
+        status: 400,
+        failureCode: PROVIDER_INPUT_REFUSED,
+        message: 'Kling 3.0 Cinematic video elements must be at least 3 seconds long. Video input runs 2 seconds.',
+      });
       expect(quoteGenerationModelMock).not.toHaveBeenCalled();
       expect(startVideoGenerationMock).not.toHaveBeenCalled();
     });
@@ -837,6 +842,152 @@ describe('workflow-runner recovery', () => {
         model: 'kling-3.0-video',
         klingVideoElements: [expect.objectContaining({ url: 'https://cdn.example.com/clip.mp4' })],
       }));
+    });
+
+    // The release caps reference audio by length: each track to the slot's ceiling, and
+    // all of them together by a combined-duration rule (15 s for Seedance 2, Fast, Mini
+    // and MiniMax H3, 30 s for Seedance 2.5, 10 s for Wan 2.7's one voice). A step's
+    // quote counts kind totals and cannot carry a track's length: naming the audio slot
+    // in it would switch it to counting named slots alone. So the caps are read from the
+    // same release and held to the tracks the step measured.
+    describe('a step’s reference audio', () => {
+      // Each test below measures and quotes in its own way; the tests after them get the
+      // mocks' own implementations back.
+      const probeAsCreated = probeMediaDurationSecondsMock.getMockImplementation()!;
+      const quoteAsCreated = quoteGenerationModelMock.getMockImplementation()!;
+      afterEach(() => {
+        probeMediaDurationSecondsMock.mockImplementation(probeAsCreated);
+        quoteGenerationModelMock.mockImplementation(quoteAsCreated);
+      });
+
+      /** A video step given a prompt, a clip of `clipSeconds` and a track of each length. */
+      async function runTrackStep(
+        model: VideoGenerateNodeData['model'],
+        trackSeconds: number[],
+        { clipSeconds = 6, settings = {} }: { clipSeconds?: number; settings?: Partial<VideoGenerateNodeData> } = {},
+      ) {
+        const lengths = new Map<string, number>([['https://cdn.example.com/clip.mp4', clipSeconds]]);
+        trackSeconds.forEach((seconds, index) => lengths.set(`https://cdn.example.com/track-${index + 1}.mp3`, seconds));
+        probeMediaDurationSecondsMock.mockImplementation(async (...args: unknown[]) => lengths.get(String(args[0])) ?? null);
+
+        const prompt = createWorkflowNode('text-input', { x: 40, y: 40 });
+        const clip = createWorkflowNode('video-input', { x: 40, y: 200 });
+        const tracks = trackSeconds.map((_, index) => createWorkflowNode('audio-input', { x: 40, y: 360 + index * 160 }));
+        const step = createWorkflowNode('video-generate', { x: 320, y: 40 });
+        const graph = normalizeWorkflowGraph({
+          nodes: [
+            { ...prompt, data: { ...(prompt.data as TextInputNodeData), text: 'Dance to the beat, as in the clip.' } },
+            { ...clip, data: { ...(clip.data as VideoInputNodeData), videoUrl: 'https://cdn.example.com/clip.mp4' } },
+            ...tracks.map((track, index) => ({
+              ...track,
+              data: { ...(track.data as AudioInputNodeData), audioUrl: `https://cdn.example.com/track-${index + 1}.mp3` },
+            })),
+            { ...step, data: { ...(step.data as VideoGenerateNodeData), model, ...settings } },
+          ],
+          edges: [
+            createCanvasEdge(prompt.id, 'text', step.id, 'prompt'),
+            createCanvasEdge(clip.id, 'video', step.id, 'reference-video'),
+            ...tracks.map((track) => createCanvasEdge(track.id, 'audio', step.id, 'reference-audio')),
+          ],
+        });
+        const node = graph.nodes.find((candidate) => candidate.id === step.id)!;
+        const { executeWorkflowRunnableNode } = await import('@/lib/workflow-runner');
+        return {
+          data: node.data as VideoGenerateNodeData,
+          run: () => executeWorkflowRunnableNode({
+            supabase: { role: 'runner' } as never,
+            userId: 'user-1',
+            graph,
+            node,
+            catalogRevision: 'catalog-rev-1',
+            clientRequestKeyHash: 'd'.repeat(64),
+          }),
+        };
+      }
+
+      it.each([
+        // Each track within its slot's ceiling, together over the rule's total.
+        { model: 'seedance-2-5', tracks: [16, 15], message: 'Reference audio may be at most 30 seconds in total.' },
+        { model: 'seedance-2', tracks: [8, 7.5], message: 'Reference audio may be at most 15 seconds in total.' },
+        { model: 'seedance-2-fast', tracks: [10, 5.5], message: 'Reference audio may be at most 15 seconds in total.' },
+        { model: 'seedance-2-mini', tracks: [11, 2, 2.5], message: 'Reference audio may be at most 15 seconds in total.' },
+        { model: 'minimax-h3', tracks: [9, 9], message: 'Reference audio may be at most 15 seconds in total.' },
+        // One track over its slot's own ceiling.
+        { model: 'seedance-2-5', tracks: [31], message: 'Reference audio assets must be at most 30 seconds each.' },
+        { model: 'wan-2.7', tracks: [10.4], message: 'Reference audio assets must be at most 10 seconds each.' },
+      ] as const)('refuses $model tracks of $tracks s before the hold', async ({ model, tracks, message }) => {
+        const step = await runTrackStep(model, [...tracks]);
+
+        await expect(step.run()).rejects.toMatchObject({ status: 400, failureCode: PROVIDER_INPUT_REFUSED, message });
+        expect(startVideoGenerationMock).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        { model: 'seedance-2-5', tracks: [15, 15] },
+        { model: 'seedance-2', tracks: [7.5, 7.5] },
+        { model: 'minimax-h3', tracks: [15] },
+        { model: 'wan-2.7', tracks: [10] },
+      ] as const)('starts $model with tracks of $tracks s, at their caps', async ({ model, tracks }) => {
+        const step = await runTrackStep(model, [...tracks]);
+
+        await expect(step.run()).resolves.toMatchObject({ status: 'processing', generation_id: 'gen-video' });
+        expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+          model,
+          referenceAudioUrls: tracks.map((_, index) => `https://cdn.example.com/track-${index + 1}.mp3`),
+        }));
+      });
+
+      // Pricing and counts stay those of the kind-total quote every canvas step has had.
+      it('quotes a step with tracks as it always has: kind totals, the clip’s length, and no slot named', async () => {
+        // The code catalog stands in for the step's release.
+        const realQuote = (input: GenerationModelQuoteInput) => quoteGenerationModel(
+          { ...input, catalogRevision: null },
+          { catalog: codeCatalog, operations: codeOperations },
+        );
+        quoteGenerationModelMock.mockImplementation((input) => realQuote(input as GenerationModelQuoteInput));
+        const step = await runTrackStep('seedance-2-5', [12, 9], {
+          clipSeconds: 7,
+          settings: { aspectRatio: '16:9', duration: 5, resolution: '720p' },
+        });
+
+        await step.run();
+
+        const expectedInput: GenerationModelQuoteInput = {
+          kind: 'video',
+          modelId: 'seedance-2-5',
+          settings: {
+            mode: step.data.mode,
+            aspectRatio: step.data.aspectRatio,
+            sound: step.data.sound,
+            duration: step.data.duration,
+            resolution: step.data.resolution,
+            fixedLens: step.data.fixedLens,
+            isMultiShot: step.data.isMultiShot,
+          },
+          inputCounts: { images: 0, videos: 1, audios: 2 },
+          inputMetadata: { referenceVideoDurationsSeconds: [7] },
+          catalogRevision: 'catalog-rev-1',
+        };
+        expect(quoteGenerationModelMock).toHaveBeenCalledTimes(1);
+        expect(quoteGenerationModelMock.mock.calls[0][0]).toEqual(expectedInput);
+        expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+          referenceVideoUrls: ['https://cdn.example.com/clip.mp4'],
+          referenceAudioUrls: ['https://cdn.example.com/track-1.mp3', 'https://cdn.example.com/track-2.mp3'],
+          quotedCostCredits: realQuote(expectedInput).costCredits,
+        }));
+      });
+
+      it('quotes a step with no tracks exactly as before', async () => {
+        const step = await runTrackStep('seedance-2-5', [], { clipSeconds: 7 });
+
+        await step.run();
+
+        expect(quoteGenerationModelMock.mock.calls[0][0]).toEqual(expect.objectContaining({
+          inputCounts: { images: 0, videos: 1, audios: 0 },
+          inputMetadata: { referenceVideoDurationsSeconds: [7] },
+        }));
+        expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({ referenceAudioUrls: [], quotedCostCredits: 77 }));
+      });
     });
 
     it('is blocked, with nothing quoted or held, when a clip’s length cannot be verified', async () => {
@@ -2409,5 +2560,73 @@ describe('workflow-runner: a step the provider keeps turning away', () => {
       waitedMs: window + MINUTE,
       errorMessage: 'provider capacity is full',
     })]);
+  });
+});
+
+// provider-input-limits: a start refuses, before any hold, what Kie would refuse after
+// it, and says so in words that name the model and the limit. POST /api/generations
+// answered with them; a canvas step recorded the public classifier's generic copy.
+describe('workflow-runner: a step refused for what its provider would refuse', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    startVideoGenerationMock.mockReset();
+    syncGenerationStatusesMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function videoStep(state: RunnerTestState) {
+    const step = state.steps.find((candidate) => candidate.id === 'step-video');
+    if (!step) throw new Error('No stored video step');
+    return step;
+  }
+
+  async function advance(state: RunnerTestState) {
+    const runner = await import('@/lib/workflow-runner');
+    return runner.advanceWorkflowRunOnce({
+      supabase: createSupabaseMock(state) as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+  }
+
+  it('ends the step in the refusal’s own words: the canvas is its creator’s own recipe', async () => {
+    const state = createQueuedWorkflowState();
+    const words = 'Seedance 2.5 reference audio must be at least 2 seconds long. Reference audio 1 runs 1.9 seconds.';
+    startVideoGenerationMock.mockRejectedValue(new GenerationServiceError(words, 400, PROVIDER_INPUT_REFUSED));
+
+    const run = await advance(state);
+
+    expect(videoStep(state)).toMatchObject({ status: 'failed', generation_id: null, error_message: words });
+    expect(run.status).toBe('failed');
+    expect(run.steps.find((step) => step.id === 'step-video')).toMatchObject({ status: 'failed', error_message: words });
+  });
+
+  it('ends it at once, whatever the words say: a label that reads like an outage is not one', async () => {
+    const state = createQueuedWorkflowState();
+    const words = 'Kling 3.0 Cinematic video elements must be at least 3 seconds long. Busy network intro runs 2 seconds.';
+    startVideoGenerationMock.mockRejectedValue(new GenerationServiceError(words, 400, PROVIDER_INPUT_REFUSED));
+
+    await advance(state);
+
+    expect(videoStep(state)).toMatchObject({ status: 'failed', error_message: words, finished_at: expect.any(String) });
+    expect(videoStep(state).output_snapshot?.busySince).toBeUndefined();
+    expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the public copy for a refusal it cannot vouch for', async () => {
+    const state = createQueuedWorkflowState();
+    const providerWords = { status: 422, message: 'The request was not accepted: prompt "a private prompt" is invalid.' };
+    startVideoGenerationMock.mockRejectedValue(providerWords);
+
+    await advance(state);
+
+    expect(videoStep(state)).toMatchObject({
+      status: 'failed',
+      error_message: getPublicGenerationStartFailure(providerWords).message,
+    });
   });
 });

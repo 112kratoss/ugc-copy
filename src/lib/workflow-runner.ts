@@ -17,9 +17,12 @@ import {
   GENERATION_SUBMISSION_PENDING_MESSAGE,
   getHeldProviderSubmissionGenerationId,
   getInProgressStartGenerationId,
+  getProviderInputRefusal,
   getPublicGenerationStartFailure,
+  PROVIDER_INPUT_REFUSED,
   type PublicGenerationStartFailure,
 } from '@/lib/generation-public-failure';
+import { GenerationServiceError, isRecord } from '@/lib/generation-service-core';
 import { syncGenerationStatuses } from '@/lib/generation-status-sync';
 import { notifyWorkflowRunStopped } from '@/lib/mobile-notifications';
 import { notifyRunStepStartFailure } from '@/lib/run-step-start-failure-notification';
@@ -73,7 +76,15 @@ import {
   type UnifiedGenerationRequest,
 } from '@/lib/unified-generation-start-service';
 import type { CatalogGenerationInputAsset } from '@/lib/generation-model-adapters';
-import { CatalogError, type CatalogPrimitive, type GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
+import {
+  CatalogError,
+  normalizeGenerationModelInputFacts,
+  type CatalogCondition,
+  type CatalogPrimitive,
+  type GenerationModelDescriptor,
+  type GenerationModelQuoteInput,
+} from '@/lib/generation-model-catalog';
+import { generationModelConditionMatches, type GenerationModelOperationalConfig } from '@/lib/generation-model-runtime';
 import { referenceMediaLengthViolation } from '@/lib/provider-input-limits';
 import { probeMediaDurationSeconds } from '@/lib/video-rendition';
 
@@ -403,6 +414,75 @@ async function measureStepReferenceMedia(params: Pick<BillableInputDurationsPara
     if (error instanceof UnifiedGenerationRequestError) return error;
     throw error;
   }
+}
+
+/**
+ * A step refused, before anything is held, for what its provider would refuse after
+ * the hold, as the start services refuse it (provider-input-limits): under the code a
+ * run worker reads, in words that name the model and the limit. Thrown, not returned
+ * `blocked`: a template run records every blocked step as a missing input.
+ */
+function providerInputRefusal(message: string): GenerationServiceError {
+  return new GenerationServiceError(message, 400, PROVIDER_INPUT_REFUSED);
+}
+
+/** A step's reference tracks, measured, with the release that limits their lengths. */
+type StepReferenceAudio = {
+  descriptor: GenerationModelDescriptor | undefined;
+  operation: Pick<GenerationModelOperationalConfig, 'validationConfig'>;
+  durationsSeconds: readonly number[];
+};
+
+/**
+ * The reference-audio limits of a step's release, held to the tracks the step measured
+ * and said in the quote's own words: each track to its slot's ceiling, and the tracks
+ * together to each `combined-duration` rule that counts them (Seedance 2, Fast, Mini and
+ * MiniMax H3 take 15 s in all, Seedance 2.5 30 s, Wan 2.7 one voice of 10 s).
+ *
+ * POST /api/generations quotes a run by the slots it fills, lengths included, so its
+ * quote holds them. A canvas step is quoted by kind totals, which carry no track lengths,
+ * and naming a slot in that quote switches it to counting only the slots named
+ * (normalizeGenerationModelInputFacts), which would change what its pictures, clips and
+ * frames count and cost. So the quote is left as it is and the release's own limits are
+ * read here: a rule's conditions against the settings it normalized and the facts it
+ * counted, with the tracks' lengths added. A slot's ceiling holds whatever mode the quote
+ * reads the step in, since the step sends its tracks in every mode.
+ */
+function referenceAudioLimitViolation(params: StepReferenceAudio & {
+  quoteInput: Pick<GenerationModelQuoteInput, 'inputCounts' | 'inputMetadata'>;
+  normalizedSettings: Record<string, CatalogPrimitive>;
+}): string | null {
+  const { descriptor, operation, durationsSeconds, quoteInput, normalizedSettings } = params;
+  if (durationsSeconds.length === 0) return null;
+
+  for (const slot of (descriptor?.inputModes ?? []).flatMap((mode) => mode.slots)) {
+    const ceiling = slot.key === 'audioReferences' ? slot.maxDurationSeconds : undefined;
+    if (ceiling !== undefined && durationsSeconds.some((seconds) => seconds > ceiling)) {
+      return `${slot.label} assets must be at most ${ceiling} seconds each.`;
+    }
+  }
+
+  const facts = normalizeGenerationModelInputFacts(quoteInput);
+  facts.slotDurationsSeconds.audioReferences = [...durationsSeconds];
+  const rules = Array.isArray(operation.validationConfig.rules) ? operation.validationConfig.rules : [];
+  for (const rule of rules) {
+    if (!isRecord(rule) || rule.type !== 'combined-duration' || typeof rule.max !== 'number') continue;
+    const slotKeys = Array.isArray(rule.slotKeys)
+      ? rule.slotKeys.filter((key): key is string => typeof key === 'string')
+      : [];
+    if (!slotKeys.includes('audioReferences')) continue;
+    const conditions = Array.isArray(rule.conditions) ? rule.conditions as CatalogCondition[] : [];
+    if (!conditions.every((condition) => generationModelConditionMatches(condition, normalizedSettings, facts))) continue;
+    const total = slotKeys.reduce((sum, key) => sum + (
+      facts.slotDurationsSeconds[key] ?? (key === 'videoReferences' ? facts.referenceVideoDurationsSeconds : [])
+    ).reduce((slotSum, seconds) => slotSum + seconds, 0), 0);
+    if (total > rule.max) {
+      return typeof rule.message === 'string' && rule.message
+        ? rule.message
+        : `Combined duration may be at most ${rule.max} seconds.`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -1003,14 +1083,15 @@ export async function executeWorkflowRunnableNode(params: {
         }))
       : [];
     let referenceVideoDurationsSeconds: number[] = [];
+    let referenceAudio: StepReferenceAudio | null = null;
     if (referenceMedia.length > 0 || elementMedia.length > 0) {
       if (!catalogRevision) return buildBlockedError('Refresh model settings before running this workflow.');
       const { catalog, operation } = await loadGenerationModelOperationByRevision({
         modelId: data.model, revision: catalogRevision, schemaVersion: 3,
       });
+      const descriptor = catalog.models.find((model) => model.id === data.model && model.kind === 'video');
       const measured = await measureStepReferenceMedia({
-        supabase, userId, templateContext, operation,
-        descriptor: catalog.models.find((model) => model.id === data.model && model.kind === 'video'),
+        supabase, userId, templateContext, operation, descriptor,
         request: {
           kind: 'video', modelId: data.model, catalogRevision, settings: {},
           prompt: '', shots: [], inputs: [...referenceMedia, ...elementMedia], sourceGenerationId: null,
@@ -1031,12 +1112,18 @@ export async function executeWorkflowRunnableNode(params: {
             }]
           : []
       )));
-      if (tooShort) return buildBlockedError(tooShort);
+      if (tooShort) throw providerInputRefusal(tooShort);
+      const audioDurationsSeconds = measured.inputs.flatMap((asset) => (
+        asset.slot === 'audioReferences' && typeof asset.durationSeconds === 'number' ? [asset.durationSeconds] : []
+      ));
+      if (audioDurationsSeconds.length > 0) {
+        referenceAudio = { descriptor, operation, durationsSeconds: audioDurationsSeconds };
+      }
     }
     const quotedDuration = data.isMultiShot
       ? data.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0)
       : data.duration;
-    const quote = await quoteRunnableNode({
+    const quoteInput: Omit<GenerationModelQuoteInput, 'catalogRevision'> = {
       kind: 'video',
       modelId: data.model,
       settings: {
@@ -1056,7 +1143,14 @@ export async function executeWorkflowRunnableNode(params: {
         audios: elementPayload.referenceAudioUrls.length,
       },
       ...(referenceVideoDurationsSeconds.length > 0 ? { inputMetadata: { referenceVideoDurationsSeconds } } : {}),
+    };
+    const quote = await quoteRunnableNode(quoteInput);
+    // The tracks' lengths, which the quote cannot carry, held to the same release's
+    // limits before the hold: Kie refuses a longer one only after it.
+    const audioOverLimit = referenceAudio && referenceAudioLimitViolation({
+      ...referenceAudio, quoteInput, normalizedSettings: quote.normalizedSettings,
     });
+    if (audioOverLimit) throw providerInputRefusal(audioOverLimit);
     const result = await startVideoGeneration({
       supabase,
       creditSupabase,
@@ -1324,11 +1418,19 @@ const CATALOG_REFUSAL_MESSAGES: Record<CatalogError['code'], string> = {
  * waited on, and would end under the note for an outage.
  * `provider_rejected` is the code that ends a step, and the one the template
  * worker records for the same refusal.
+ *
+ * A start refused for what its provider would refuse (provider-input-limits)
+ * names the model and the limit, as POST /api/generations says it. The public
+ * copy keeps those from a template's runner, whose recipe is private; a canvas
+ * is its creator's own, so its step says them.
  */
 function getRunStepStartFailure(error: unknown): PublicGenerationStartFailure {
   if (error instanceof CatalogError) {
     return { code: 'provider_rejected', message: CATALOG_REFUSAL_MESSAGES[error.code] };
   }
+
+  const refusal = getProviderInputRefusal(error);
+  if (refusal) return { code: 'provider_rejected', message: refusal };
 
   return getPublicGenerationStartFailure(error);
 }
