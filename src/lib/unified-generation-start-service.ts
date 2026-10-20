@@ -820,6 +820,9 @@ export async function dispatchCatalogGenerationAdapter({
         displayName: asset.label ?? `Video ${index + 1}`,
         storagePath: asset.storagePath ?? null,
         sourceGenerationId: asset.sourceGenerationId ?? null,
+        // Measured before the run was priced (the slot declares duration metadata), so
+        // the start can hold the clip to Kie's shortest element.
+        durationSeconds: asset.durationSeconds ?? null,
       })),
       klingSubjects,
       seedanceAssets,
@@ -859,6 +862,8 @@ export async function dispatchCatalogGenerationAdapter({
       characterImageUrl: character.url,
       referenceVideoUrl: reference.url,
       duration: Number(normalized.duration ?? 1),
+      // A motion run's performance is always measured before it is priced (resolveBillableInputDurations).
+      referenceVideoSeconds: reference.durationSeconds ?? null,
       characterOrientation: normalized.characterOrientation === 'image' ? 'image' : 'video',
       mode: normalized.resolution === '1080p' ? '1080p' : '720p',
       quotedCostCredits: quote.costCredits,
