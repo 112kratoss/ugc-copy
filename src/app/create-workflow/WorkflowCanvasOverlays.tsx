@@ -240,14 +240,28 @@ function CanvasContextMenu({
   const actionClassName = 'flex w-full items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-zinc-200 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-60';
 
   // Over the app shell's top bar and bottom navigation, like the app's other menus
-  // drawn in the page body (z-[90]).
+  // drawn in the page body (z-[90]). A right-click outside the menu closes it, as a
+  // native menu closes on that gesture: the overlay is what the right-click lands on,
+  // so the browser drew its own menu over ours while ours kept showing its first
+  // target. On the menu itself a right-click does nothing.
   return (
-    <div className="fixed inset-0 z-[90]" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-[90]"
+      onClick={onClose}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
       <div
         ref={menuRef}
         data-testid="canvas-context-menu"
         className="absolute w-max min-w-[260px] max-w-[calc(100%-1rem)] max-h-[calc(100%-1rem)] overflow-y-auto rounded-[24px] border border-white/10 bg-black/95 p-3 shadow-[0_24px_80px_rgba(0,0,0,0.5)] backdrop-blur"
         onClick={(event) => event.stopPropagation()}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
       >
         <div className="mb-3 px-2">
           <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">
