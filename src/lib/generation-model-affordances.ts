@@ -181,7 +181,8 @@ function legacyFallbackAffordances(
     },
     referenceVideos: {
       max: isKling ? 0 : references.videos,
-      maxDurationSeconds: modelId === 'seedance-2-5'
+      // Mirrors referenceAssetCapSeconds in generation-model-catalog.
+      maxDurationSeconds: modelId === 'seedance-2-5' || modelId === 'gemini-omni-video' || modelId === 'gemini-omni-1.1-flash'
         ? 30
         : (modelId.startsWith('seedance-2') || modelId === 'minimax-h3' || modelId === 'wan-3.0' || modelId === 'wan-3.0-prime' ? 15 : null),
     },

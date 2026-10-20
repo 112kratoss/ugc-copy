@@ -203,7 +203,9 @@ describe('Model Pricing', () => {
             expect(getVideoCost('seedance-2', { resolution: '4k', durationSeconds: 7, hasReferenceVideo: true })).toBe(896);
         });
         it('seedance 2 fast 480p 12s with reference video uses the lower tier', () => {
-            expect(getVideoCost('seedance-2-fast', { resolution: '480p', durationSeconds: 12, hasReferenceVideo: true })).toBe(108);
+            // Kie's list rate since its offer ended (6.8/s with video, re-read 2026-10-20).
+            expect(getVideoCost('seedance-2-fast', { resolution: '480p', durationSeconds: 12, hasReferenceVideo: true })).toBe(82);
+            expect(getVideoCost('seedance-2-fast', { resolution: '720p', durationSeconds: 12 })).toBe(298);
         });
         it('prices seedance 2.5 from its own 480p/720p tiers', () => {
             // 720p noVideo 63/s, withVideo 38/s; 480p 28/s and 17/s.
@@ -242,8 +244,10 @@ describe('Model Pricing', () => {
             }
         });
         it('prices the new Kie video models from their provider tiers', () => {
-            expect(getVideoCost('seedance-2-mini', { resolution: '720p', durationSeconds: 10 })).toBe(205);
-            expect(getVideoCost('seedance-2-mini', { resolution: '480p', durationSeconds: 10, hasReferenceVideo: true })).toBe(60);
+            // Seedance 2 Mini at Kie's list rate since its offer ended (8.2/s and 2.4/s,
+            // re-read 2026-10-20).
+            expect(getVideoCost('seedance-2-mini', { resolution: '720p', durationSeconds: 10 })).toBe(82);
+            expect(getVideoCost('seedance-2-mini', { resolution: '480p', durationSeconds: 10, hasReferenceVideo: true })).toBe(24);
             expect(getVideoCost('kling-3.0-turbo', { resolution: '1080p', durationSeconds: 5 })).toBe(113);
             expect(getVideoCost('wan-2.7', { resolution: '720p', durationSeconds: 5 })).toBe(80);
             expect(getVideoCost('hailuo-2.3', { mode: 'standard', resolution: '768P', durationSeconds: 10 })).toBe(50);
@@ -301,14 +305,15 @@ describe('Model Pricing', () => {
             expect(VIDEO_MODELS['grok-imagine-video-1.5'].resolutions).toEqual(['480p', '720p']);
             expect(getVideoDurationRange('grok-imagine-video-1.5')).toEqual({ min: 1, max: 15, default: 8 });
         });
-        it('prices PixVerse V6 by resolution, audio, and the reference-to-video uplift', () => {
-            // docs/model-api-references/pixverse-v6.md (2026-10-08).
+        it('prices PixVerse V6 by resolution and audio, references included', () => {
+            // docs/model-api-references/pixverse-v6.md. Kie dropped the 12.5 % reference-to-video
+            // uplift (81 and 108 below until the 2026-10-20 re-check).
             expect(getVideoCost('pixverse-v6', { resolution: '360p', durationSeconds: 5 })).toBe(20);
             expect(getVideoCost('pixverse-v6', { resolution: '360p', durationSeconds: 5, sound: true })).toBe(28);
             expect(getVideoCost('pixverse-v6', { resolution: '1080p', durationSeconds: 10 })).toBe(144);
             expect(getVideoCost('pixverse-v6', { resolution: '1080p', durationSeconds: 10, sound: true })).toBe(184);
-            expect(getVideoCost('pixverse-v6', { resolution: '720p', durationSeconds: 10, hasReusableReference: true })).toBe(81);
-            expect(getVideoCost('pixverse-v6', { resolution: '720p', durationSeconds: 10, sound: true, hasReusableReference: true })).toBe(108);
+            expect(getVideoCost('pixverse-v6', { resolution: '720p', durationSeconds: 10, hasReusableReference: true })).toBe(72);
+            expect(getVideoCost('pixverse-v6', { resolution: '720p', durationSeconds: 10, sound: true, hasReusableReference: true })).toBe(96);
             // Frames are not references: a start frame or a frame pair bills the base table.
             expect(getVideoCost('pixverse-v6', { resolution: '540p', durationSeconds: 5, hasReferenceImage: true })).toBe(28);
         });

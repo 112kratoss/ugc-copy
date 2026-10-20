@@ -5,12 +5,15 @@ import { describe, expect, it } from 'vitest';
 
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 
+import { operationBeforeKieCheckup } from './fixtures/kie-checkup-2026-10-20';
+
 /**
  * Release manifest test for the kie-task-v1 image adapter migration
  * (2026-08-16). This release moves nine image models off the hand-coded
  * payload ladder; it must change adapter wiring and NOTHING else — pricing,
  * provider ids, and validation stay byte-equal to the code build, which the
- * emitter derives them from.
+ * emitter derives them from. The build is read as it stood before the 2026-10-20
+ * check-up, which stopped both Nano Banana tiers binding `google_search`.
  */
 
 const MIGRATED = [
@@ -47,7 +50,7 @@ const manifest = JSON.parse(fs.readFileSync(path.resolve(
 };
 
 const operations = new Map(
-  buildCodeGenerationModelOperations().map((operation) => [operation.modelId, operation]),
+  buildCodeGenerationModelOperations().map((operation) => [operation.modelId, operationBeforeKieCheckup(operation)]),
 );
 
 describe('kie-task image adapter migration manifest', () => {

@@ -334,8 +334,10 @@ describe('CreateImageClient persisted elements', () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith(expect.stringContaining('blob:'));
   });
 
+  // Nano Banana 2, the default model, takes 10 references since the 2026-10-20 re-check
+  // (14 before), so eleven restored pictures are one over.
   it('preserves restored media exceeding the model limit and explains how to resolve it', async () => {
-    const restoredRecords = Array.from({ length: 15 }, (_, index) => ({
+    const restoredRecords = Array.from({ length: 11 }, (_, index) => ({
       id: `restored-${index + 1}`,
       displayName: `Restored ${index + 1}`,
       file: new File([`image-${index + 1}`], `restored-${index + 1}.png`, { type: 'image/png' }),
@@ -345,16 +347,16 @@ describe('CreateImageClient persisted elements', () => {
     render(<CreateImageClient prefill={{}} />);
 
     await waitFor(() => {
-      expect(screen.getAllByText('15/14')).not.toHaveLength(0);
+      expect(screen.getAllByText('11/10')).not.toHaveLength(0);
     });
     expect(await screen.findByText(/Your references are preserved/)).toBeInTheDocument();
     expect(setPersistedImageElementRecordsMock).not.toHaveBeenCalled();
   });
 
-  it('prices the fourteen pictures a run would send while fifteen are on the grid', async () => {
-    // The run sends the pictures the model takes (the first fourteen); the quote
-    // counted all fifteen, so its price was not the price of any run the page sends.
-    getPersistedImageElementRecordsMock.mockResolvedValueOnce(Array.from({ length: 15 }, (_, index) => ({
+  it('prices the ten pictures a run would send while eleven are on the grid', async () => {
+    // The run sends the pictures the model takes (the first ten); the quote counted
+    // every picture on the grid, so its price was not the price of any run the page sends.
+    getPersistedImageElementRecordsMock.mockResolvedValueOnce(Array.from({ length: 11 }, (_, index) => ({
       id: `restored-${index + 1}`,
       displayName: `Restored ${index + 1}`,
       file: new File([`image-${index + 1}`], `restored-${index + 1}.png`, { type: 'image/png' }),
@@ -364,12 +366,12 @@ describe('CreateImageClient persisted elements', () => {
     expect(await screen.findByText(/Your references are preserved/)).toBeInTheDocument();
 
     const request = quoteRequestMock.mock.calls.at(-1)?.[0];
-    expect(request?.inputCounts).toMatchObject({ images: 14, videos: 0, audios: 0 });
-    expect(request?.inputMetadata?.slots).toEqual({ imageReferences: { count: 14 } });
+    expect(request?.inputCounts).toMatchObject({ images: 10, videos: 0, audios: 0 });
+    expect(request?.inputMetadata?.slots).toEqual({ imageReferences: { count: 10 } });
   });
 
   it('clears the over-limit explanation once the extra reference is removed', async () => {
-    getPersistedImageElementRecordsMock.mockResolvedValueOnce(Array.from({ length: 15 }, (_, index) => ({
+    getPersistedImageElementRecordsMock.mockResolvedValueOnce(Array.from({ length: 11 }, (_, index) => ({
       id: `restored-${index + 1}`,
       displayName: `Restored ${index + 1}`,
       file: new File([`image-${index + 1}`], `restored-${index + 1}.png`, { type: 'image/png' }),
@@ -378,13 +380,13 @@ describe('CreateImageClient persisted elements', () => {
     render(<CreateImageClient prefill={{}} />);
     expect(await screen.findByText(/Your references are preserved/)).toBeInTheDocument();
 
-    const extraImage = await screen.findByAltText('Restored 15');
+    const extraImage = await screen.findByAltText('Restored 11');
     const removeButton = extraImage.closest('div.relative')?.querySelectorAll('button')[1];
     expect(removeButton).toBeDefined();
     fireEvent.click(removeButton!);
 
     await waitFor(() => {
-      expect(screen.getAllByText('14/14')).not.toHaveLength(0);
+      expect(screen.getAllByText('10/10')).not.toHaveLength(0);
     });
     await waitFor(() => {
       expect(screen.queryByText(/Your references are preserved/)).not.toBeInTheDocument();

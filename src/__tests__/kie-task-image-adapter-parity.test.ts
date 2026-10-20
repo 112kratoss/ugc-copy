@@ -74,19 +74,22 @@ describe('kie-task-v1 image adapter parity with the legacy payload ladder', () =
     });
   });
 
-  it('nano banana 2 and pro keep the generic-branch field set', () => {
+  it('nano banana 2 and pro keep the generic-branch field set, without google_search', () => {
+    // Neither spec lists google_search since the 2026-10-20 re-check, and the ladder's
+    // generic branch stopped sending it too, so a googleSearch setting reaches neither path.
     for (const modelId of ['nano-banana-2', 'nano-banana-pro']) {
-      const text = build(modelId, { ...BASE_SETTINGS, resolution: '2K' });
-      expect(text.body).toEqual({
-        model: modelId,
-        input: {
-          prompt: PROMPT,
-          aspect_ratio: '1:1',
-          resolution: '2K',
-          output_format: 'jpg',
-          google_search: false,
-        },
-      });
+      for (const googleSearch of [false, true]) {
+        const text = build(modelId, { ...BASE_SETTINGS, resolution: '2K', googleSearch });
+        expect(text.body).toEqual({
+          model: modelId,
+          input: {
+            prompt: PROMPT,
+            aspect_ratio: '1:1',
+            resolution: '2K',
+            output_format: 'jpg',
+          },
+        });
+      }
       const withRefs = build(modelId, { ...BASE_SETTINGS, resolution: '2K' }, [REF_URL, REF_URL_2]);
       expect(withRefs.body.input).toMatchObject({ image_input: [REF_URL, REF_URL_2] });
     }

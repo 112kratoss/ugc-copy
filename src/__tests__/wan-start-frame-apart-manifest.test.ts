@@ -17,6 +17,8 @@ import {
   type CatalogRunInputFact,
 } from '../../ugc-mobile/lib/model-catalog/protocol';
 
+import { descriptorBeforeKieCheckup, operationBeforeKieCheckup } from './fixtures/kie-checkup-2026-10-20';
+
 /**
  * Release 2026-10-19-wan-start-frame-apart: wan/2-7-r2v takes `reference_image` and
  * `reference_video`, five in total, and a `first_frame` of its own beside them
@@ -24,7 +26,8 @@ import {
  * already counted only the reference slots, but Wan 2.7's two quote rules counted every
  * picture the run sends, so five references and a start frame were refused. This release
  * keys both rules on the reference slots and changes nothing else about the model. Its
- * entry must equal the code build (the shadow verifier diffs projections).
+ * entry must equal the code build (the shadow verifier diffs projections), read as it stood
+ * before the 2026-10-20 check-up capped the reference voice at 10 s and refused it alone.
  */
 
 interface ManifestEntry {
@@ -64,7 +67,9 @@ const base = read('2026-10-08-pixverse-mobile.json');
 const previous = read('2026-09-04-reference-audit.json').entries.find((entry) => entry.modelId === 'wan-2.7')!;
 
 const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
-const operation = buildCodeGenerationModelOperations().find((candidate) => candidate.modelId === 'wan-2.7')!;
+const operation = operationBeforeKieCheckup(
+  buildCodeGenerationModelOperations().find((candidate) => candidate.modelId === 'wan-2.7')!,
+);
 
 function entry(): ManifestEntry {
   const found = manifest.entries.find((candidate) => candidate.modelId === 'wan-2.7');
@@ -132,7 +137,7 @@ describe('wan-start-frame-apart release', () => {
   it('is the code build', () => {
     const { schemaVersion, ...publicDescriptor } = entry().publicDescriptor;
     expect(schemaVersion).toBe(2);
-    expect(publicDescriptor).toEqual(catalog.models.find((model) => model.id === 'wan-2.7'));
+    expect(publicDescriptor).toEqual(descriptorBeforeKieCheckup(catalog.models.find((model) => model.id === 'wan-2.7')!));
     expect(entry().adapterKey).toBe(operation.adapterKey);
     expect(entry().adapterConfig).toEqual(operation.adapterConfig);
     expect(entry().providerModelMap).toEqual(operation.providerModelMap);

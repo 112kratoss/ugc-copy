@@ -3799,7 +3799,8 @@ describe('generation services', () => {
         return_last_frame: false,
       },
     });
-    expect(generations[0].cost).toBe(108);
+    // 12 s at Fast's 6.8/s with-video rate (Kie's list price since 2026-10-20), rounded up.
+    expect(generations[0].cost).toBe(82);
     expect(generations[0].workflow_settings).toMatchObject({
       referenceVideoUrls: ['asset-video-1'],
       referenceAudioUrls: ['asset-audio-1'],

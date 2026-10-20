@@ -297,11 +297,10 @@ describe('WorkflowNodeEditors', () => {
 
     expect(screen.getByRole('option', { name: 'GPT Image 2' })).toBeInTheDocument();
 
-    const googleSearch = screen.getByLabelText(/google search grounding/i) as HTMLInputElement;
-    expect(googleSearch).not.toBeChecked();
-
-    fireEvent.click(googleSearch);
-    expect(screen.getByLabelText(/google search grounding/i)).toBeChecked();
+    // Nano Banana 2, the default, lost its Google Search toggle when Kie dropped
+    // google_search (2026-10-20); no image model offers one now.
+    expect(screen.queryByLabelText(/google search grounding/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '1:4' })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Model'), {
       target: { value: 'nano-banana-pro' },
@@ -314,7 +313,8 @@ describe('WorkflowNodeEditors', () => {
       target: { value: 'nano-banana-2' },
     });
 
-    expect(screen.getByLabelText(/google search grounding/i)).not.toBeChecked();
+    expect(screen.queryByLabelText(/google search grounding/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '1:4' })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Model'), {
       target: { value: 'gpt-image-2' },

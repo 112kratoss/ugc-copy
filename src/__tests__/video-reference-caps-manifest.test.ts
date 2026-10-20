@@ -10,6 +10,8 @@ import {
 } from '@/lib/generation-model-catalog';
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 
+import { descriptorBeforeKieCheckup } from './fixtures/kie-checkup-2026-10-20';
+
 /**
  * Release 2026-09-03-video-reference-caps: seedance-2-5 and minimax-h3 refreshed against
  * Kie's live OpenAPI specs.
@@ -19,7 +21,9 @@ import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runti
  * and client), getVideoReferenceSupport, and the mobile view model. Raising one and missing
  * another is how this family of models shipped advertising references it could not accept.
  * Comparing the manifest descriptor to the descriptor the app builds catches every one of
- * them at once, because the app descriptor is assembled from those same tables.
+ * them at once, because the app descriptor is assembled from those same tables. The app
+ * descriptor is read as it stood before the 2026-10-20 check-up, which capped minimax-h3 at
+ * five reference images; the caps and prices asserted below are today's.
  */
 
 type ManifestSlot = { key: string; durationMetadata?: string; max?: number };
@@ -75,9 +79,10 @@ describe('video reference caps track Kie', () => {
   it.each(['seedance-2-5', 'minimax-h3'])(
     '%s: the manifest and the app agree on every reference cap',
     (modelId) => {
-      expect(descriptor(modelId).inputs).toEqual(entry(modelId).publicDescriptor.inputs);
+      const built = descriptorBeforeKieCheckup(descriptor(modelId));
+      expect(built.inputs).toEqual(entry(modelId).publicDescriptor.inputs);
       for (const slotKey of ['imageReferences', 'videoReferences', 'audioReferences']) {
-        expect(slot(descriptor(modelId) as unknown as ManifestDescriptor, 'references', slotKey), `${modelId}.${slotKey}`)
+        expect(slot(built as unknown as ManifestDescriptor, 'references', slotKey), `${modelId}.${slotKey}`)
           .toEqual(slot(entry(modelId).publicDescriptor, 'references', slotKey));
       }
     },
@@ -106,8 +111,9 @@ describe('video reference caps track Kie', () => {
   });
 
   it('reads minimax-h3 caps off minimax-h3/reference-to-video', () => {
-    // reference_image_urls maxItems 9, reference_video_urls 3, reference_audio_urls 3.
-    expect(descriptor('minimax-h3').inputs.imageReferences?.max).toBe(9);
+    // reference_image_urls maxItems 9, reference_video_urls 3, reference_audio_urls 3. Kie
+    // bills each image past the fifth, so since the 2026-10-20 re-check references stop at 5.
+    expect(descriptor('minimax-h3').inputs.imageReferences?.max).toBe(5);
     expect(descriptor('minimax-h3').inputs.videoReferences?.max).toBe(3);
     expect(descriptor('minimax-h3').inputs.audioReferences?.max).toBe(3);
   });
@@ -147,18 +153,19 @@ describe('video reference caps track Kie', () => {
     })).not.toThrow();
   });
 
-  it('prices seedance-2-5 1080p at the standard rate, not the offer', () => {
-    // Kie lists 114 / 68.5 under a "Limited-Time 1080P Offer: 28% OFF until Sep 17, 2026
-    // 06:00 UTC". Billing the offer would under-bill every 1080p run from the moment it
-    // lapses, so this tier carries the standard rate behind it (114/0.72 and 68.5/0.72,
-    // rounded up). 480p and 720p carry no offer and pass Kie's listed credits through.
+  it('prices seedance-2-5 1080p at Kie\'s list rate, not the offer', () => {
+    // Kie listed 114 / 68.5 under a "Limited-Time 1080P Offer: 28% OFF until Sep 17, 2026
+    // 06:00 UTC". Billing the offer would have under-billed every 1080p run from the moment
+    // it lapsed, so this tier carried the rate behind it (114/0.72 and 68.5/0.72, rounded up:
+    // 159 / 96). The offer ended on Oct 17 and Kie lists 158 / 95 (re-read 2026-10-20), which
+    // the tier now passes through like 480p and 720p.
     const quote = quoteGenerationModel({
       kind: 'video',
       modelId: 'seedance-2-5',
       settings: { resolution: '1080p', duration: 10 },
       inputCounts: {},
     });
-    expect(quote.costCredits).toBe(1590);
+    expect(quote.costCredits).toBe(1580);
     expect(quote.costCredits).toBeGreaterThan(114 * 10);
 
     const withReference = quoteGenerationModel({
@@ -169,7 +176,7 @@ describe('video reference caps track Kie', () => {
       inputMetadata: { slots: { videoReferences: { count: 1, durationsSeconds: [5] } } },
     });
     // Billed on input plus output seconds, per Kie's note on the with-video rate.
-    expect(withReference.costCredits).toBe((10 + 5) * 96);
+    expect(withReference.costCredits).toBe((10 + 5) * 95);
   });
 
   it('leaves the 480p and 720p tiers alone', () => {

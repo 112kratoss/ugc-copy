@@ -2,6 +2,8 @@
 
 > **Update 2026-09-04:** the Seedance 2.5 1080p offer quoted below was extended from Sep 17 to Oct 17, 2026 06:00 UTC; the pinned undiscounted 159 / 96 is unaffected. See `reference-audit-2026-09-04.md`.
 
+> **2026-10-20 re-check:** the 1080p offer ended and Kie lists "1080P: 95 credits/s ($0.475/s, with video) | 158 credits/s ($0.790/s, no video)", so 158 / 95 replaces the pinned 159 / 96; Seedance 2.5 reference audio is now also capped at 30 s in total. MiniMax H3 references are capped at **5** images, not the schema's 9: the price block below still bills "Additional image input: 4 credits/image" past "The first 5 images", and the app bills no image term. Both in `reference-audit-2026-09-04.md`.
+
 Read from `https://docs.kie.ai/market/bytedance/seedance-2-5.md`,
 `https://docs.kie.ai/market/minimax-h3/reference-to-video.md` and the `pricingDesc` field
 embedded in the `https://kie.ai/<slug>` market pages. Method: `curl` with a browser
@@ -140,3 +142,12 @@ Two costs we do not model, both unchanged by this release and both comfortably i
 
 If Kie's 50% offer ever lapses, both become live concerns and minimax-h3 should move to the
 `reference-adjustment` pricing strategy that Seedance already uses.
+
+**2026-10-20 re-check — the image cap is back at 5.** The first of those moved in
+`minimax-reference-duration-20260904`, which priced Kie's listed 8 / 13 credits/s on output plus
+input seconds, so the 2× margin is gone. The second was still open: a run with 6–9 reference
+images cost up to 16 credits more at Kie than the app charged (768P 6 s with 9 images: 48 here,
+64 at Kie). The owner chose to cap `reference_image_urls` at 5, the five Kie includes, rather
+than bill the rest: `VIDEO_INPUT_LIMITS` and `VIDEO_REFERENCE_IMAGE_CAPS`, both
+`getVideoElementSupport` copies and the published descriptor all say 5. Clips and audio keep
+3 each.

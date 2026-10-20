@@ -644,7 +644,8 @@ describe('workflow canvas helpers', () => {
   });
 
   it('enforces Nano Banana 2 image-reference limits and blocks extra connections', () => {
-    const graph = createImageReferenceGraph(14, 'nano-banana-2');
+    // Kie's image_input takes 10 since the 2026-10-20 re-check (14 before).
+    const graph = createImageReferenceGraph(10, 'nano-banana-2');
     const imageNode = graph.nodes.find((node) => node.type === 'image-generate');
     const extraInput = createWorkflowNode('image-input', { x: 0, y: 1280 });
     const graphWithExtraInput = normalizeWorkflowGraph({
@@ -655,8 +656,8 @@ describe('workflow canvas helpers', () => {
     expect(imageNode).toBeDefined();
     expect(inspectWorkflowNodeCapabilities(graph, imageNode!)).toMatchObject({
       isValid: true,
-      referenceImageCount: 14,
-      referenceImageLimit: 14,
+      referenceImageCount: 10,
+      referenceImageLimit: 10,
     });
 
     const validation = validateWorkflowConnectionForGraph({
@@ -668,7 +669,7 @@ describe('workflow canvas helpers', () => {
     });
 
     expect(validation.valid).toBe(false);
-    expect(validation.message).toMatch(/up to 14 total image references/i);
+    expect(validation.message).toMatch(/up to 10 total image references/i);
   });
 
   it('enforces GPT Image 2 image-reference limits', () => {
