@@ -56,6 +56,7 @@ describe('the Veo 3.1 jobs-API task body', () => {
         aspect_ratio: '16:9',
         resolution: '720p',
         duration: 8,
+        enable_translation: true,
       },
     });
   });
@@ -71,6 +72,7 @@ describe('the Veo 3.1 jobs-API task body', () => {
         aspect_ratio: '16:9',
         resolution: '720p',
         duration: 8,
+        enable_translation: true,
       },
     });
   });
@@ -84,6 +86,7 @@ describe('the Veo 3.1 jobs-API task body', () => {
       aspect_ratio: '16:9',
       resolution: '4k',
       duration: 8,
+      enable_translation: true,
     });
   });
 
@@ -102,11 +105,20 @@ describe('the Veo 3.1 jobs-API task body', () => {
       aspect_ratio: '9:16',
       resolution: '1080p',
       duration: 8,
+      enable_translation: true,
     });
   });
 
   it('passes Auto through in the spelling both APIs list', () => {
     expect(body({ aspectRatio: 'Auto', frameImageUrls: [START] }).input.aspect_ratio).toBe('Auto');
+  });
+
+  it('keeps the legacy endpoint\'s translation default by asking for it', () => {
+    // The legacy /api/v1/veo/generate translated prompts to English unless told not to
+    // (`enableTranslation`, default true: docs/model-api-references/veo-3-1.md). The jobs
+    // API documents no default for `enable_translation`, so the body says so itself; a
+    // Hindi or Spanish prompt reaches Veo as it did before the move.
+    expect(body().input.enable_translation).toBe(true);
   });
 
   it('carries none of the legacy flat fields, and nothing the legacy body did not send', () => {
@@ -115,8 +127,8 @@ describe('the Veo 3.1 jobs-API task body', () => {
     for (const legacy of ['prompt', 'imageUrls', 'generationType', 'aspect_ratio', 'aspectRatio', 'resolution']) {
       expect(sent).not.toHaveProperty(legacy);
     }
-    // The app never sent a watermark, a seed, a fallback or a translation flag.
-    for (const unsent of ['watermark', 'seeds', 'seed', 'enable_fallback', 'enable_translation', 'imageUrls', 'generationType']) {
+    // The app never sent a watermark, a seed or a fallback flag.
+    for (const unsent of ['watermark', 'seeds', 'seed', 'enable_fallback', 'enableTranslation', 'imageUrls', 'generationType']) {
       expect(sent.input).not.toHaveProperty(unsent);
     }
   });
@@ -265,6 +277,57 @@ describe('the video a finished jobs-API Veo task produced', () => {
     expect(readVeoJobsResultUrl({
       resultJson: JSON.stringify({ resultUrls: '["https://tempfile.example.com/string-list.mp4"]' }),
     })).toBe('https://tempfile.example.com/string-list.mp4');
+  });
+
+  it('keeps polling while Kie still renders the 1080p or 4k file, instead of delivering its 720p original', () => {
+    // The live 1080p record (2026-10-20) carries `high_resolution_pending` beside the two
+    // lists. While it is true the record holds only the 720p original, and settling that
+    // would charge the 4k price for a 720p file: the next poll finds the render.
+    const pending = {
+      state: 'success',
+      resultJson: JSON.stringify({
+        data: {
+          origin_urls: ['https://tempfile.example.com/veo-720p.mp4'],
+          result_urls: [],
+          high_resolution_pending: true,
+          resolution: '4k',
+        },
+      }),
+    };
+    expect(readVeoJobsResultUrl(pending)).toBeNull();
+    expect(readVeoJobsResultUrl(pending, 'https://tempfile.example.com/from-the-generic-reader.mp4')).toBeNull();
+
+    // Once the render is there it is read, whatever the flag says.
+    expect(readVeoJobsResultUrl({
+      state: 'success',
+      resultJson: JSON.stringify({
+        data: {
+          origin_urls: ['https://tempfile.example.com/veo-720p.mp4'],
+          result_urls: ['https://tempfile.example.com/veo-4k.mp4'],
+          high_resolution_pending: true,
+        },
+      }),
+    })).toBe('https://tempfile.example.com/veo-4k.mp4');
+    // And a record that says the render is not pending falls back to the original, as before.
+    expect(readVeoJobsResultUrl({
+      state: 'success',
+      resultJson: JSON.stringify({
+        data: { origin_urls: ['https://tempfile.example.com/veo-720p.mp4'], high_resolution_pending: false },
+      }),
+    })).toBe('https://tempfile.example.com/veo-720p.mp4');
+  });
+
+  it('takes the caller\'s fallback for a shape it does not read itself', () => {
+    // The shared result reader (getFirstResultUrl) also knows `resultUrl`, `url` and a
+    // bare list; the sync hands its answer in so a Veo row never loses a URL it found.
+    const singular = { state: 'success', resultJson: JSON.stringify({ resultUrl: 'https://tempfile.example.com/singular.mp4' }) };
+    expect(readVeoJobsResultUrl(singular)).toBeNull();
+    expect(readVeoJobsResultUrl(singular, 'https://tempfile.example.com/singular.mp4'))
+      .toBe('https://tempfile.example.com/singular.mp4');
+    // A list the reader knows wins over the fallback, renders first.
+    expect(readVeoJobsResultUrl({
+      resultJson: JSON.stringify({ data: { result_urls: ['https://tempfile.example.com/4k.mp4'] } }),
+    }, 'https://tempfile.example.com/other.mp4')).toBe('https://tempfile.example.com/4k.mp4');
   });
 
   it.each([

@@ -4356,6 +4356,8 @@ describe('generation services', () => {
           aspect_ratio: '16:9',
           resolution: '720p',
           duration: 8,
+          // The legacy endpoint translated prompts by default; the jobs API is asked to.
+          enable_translation: true,
         },
       });
       // The marker rides in with the reservation, so it is there before the provider is asked.
@@ -4380,6 +4382,7 @@ describe('generation services', () => {
         aspect_ratio: 'Auto',
         resolution: '720p',
         duration: 8,
+        enable_translation: true,
       });
       expect(generations[0].workflow_settings).toMatchObject({ referenceMode: 'frames', providerApi: 'jobs' });
     });
@@ -4401,6 +4404,7 @@ describe('generation services', () => {
         aspect_ratio: '9:16',
         resolution: '4k',
         duration: 8,
+        enable_translation: true,
       });
       expect(generations[0].cost).toBe(370);
     });
@@ -5285,6 +5289,45 @@ describe('generation services', () => {
       expect(urls).toEqual([JOBS_STATUS_URL]);
       expect(generations[0].status).toBe('processing');
       expect(importedOutputs(rpcCalls)).toEqual([]);
+    });
+
+    it('keeps polling a jobs-API task whose 1080p or 4k render is still pending, rather than settling its 720p original', async () => {
+      // The live 1080p record carries `high_resolution_pending` beside its lists. A record
+      // that says success while the render is pending holds only the 720p original.
+      const { syncGenerationStatuses } = await import('@/lib/generation-status-sync');
+      const urls = answerStatusChecksWith({
+        taskId: TASK_ID,
+        state: 'success',
+        completeTime: '2026-04-15T10:02:00.000Z',
+        resultJson: JSON.stringify({
+          data: { origin_urls: ['https://tempfile.example.com/jobs-720p.mp4'], result_urls: [], high_resolution_pending: true, resolution: '4k' },
+        }),
+      });
+      const { supabase, rpcCalls, generations } = createClient(veoRow({ model: 'veo-3.1', resolution: '4k', providerApi: 'jobs' }));
+
+      await syncGenerationStatuses({ supabase, creditSupabase: supabase, generationIds: ['gen-veo-sync-1'] });
+
+      expect(urls).toEqual([JOBS_STATUS_URL]);
+      expect(generations[0].status).toBe('processing');
+      expect(importedOutputs(rpcCalls)).toEqual([]);
+    });
+
+    it('imports a jobs-API result in a shape only the shared result reader knows', async () => {
+      // The Veo reader looks for Kie's documented lists; the shared reader also knows a
+      // singular `resultUrl`. Its answer must not be lost for a Veo row.
+      const { syncGenerationStatuses } = await import('@/lib/generation-status-sync');
+      const urls = answerStatusChecksWith({
+        taskId: TASK_ID,
+        state: 'success',
+        completeTime: '2026-04-15T10:02:00.000Z',
+        resultJson: JSON.stringify({ resultUrl: 'https://tempfile.example.com/jobs-singular.mp4' }),
+      });
+      const { supabase, rpcCalls } = createClient(veoRow({ model: 'veo-3.1', providerApi: 'jobs' }));
+
+      await syncGenerationStatuses({ supabase, creditSupabase: supabase, generationIds: ['gen-veo-sync-1'] });
+
+      expect(urls).toEqual([JOBS_STATUS_URL]);
+      expect(importedOutputs(rpcCalls)).toEqual([['https://tempfile.example.com/jobs-singular.mp4']]);
     });
 
     it('imports a jobs-API task from a market-shaped callback without polling', async () => {

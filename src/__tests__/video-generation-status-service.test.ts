@@ -628,6 +628,23 @@ describe('Veo 3.1 status checks on either Kie API', () => {
     }));
   });
 
+  it('keeps a jobs-API task whose 4k render is still pending in progress, importing nothing', async () => {
+    const { result, enqueueGenerationOutputImportJob, settleGenerationFailed } = pollVeo(
+      { workflow_settings: { model: 'veo-3.1', resolution: '4k', providerApi: 'jobs' } },
+      {
+        state: 'success',
+        completeTime: '2026-04-15T10:01:00.000Z',
+        resultJson: JSON.stringify({
+          data: { origin_urls: ['https://tempfile.example.com/veo-720p.mp4'], result_urls: [], high_resolution_pending: true, resolution: '4k' },
+        }),
+      },
+    );
+
+    await expect(result).resolves.toMatchObject({ ok: true, body: { status: 'processing' } });
+    expect(enqueueGenerationOutputImportJob).not.toHaveBeenCalled();
+    expect(settleGenerationFailed).not.toHaveBeenCalled();
+  });
+
   it('settles a jobs-API failure with the reason on the task', async () => {
     const { result, urls, settleGenerationFailed, admin } = pollVeo(
       { workflow_settings: { model: 'veo-3.1', providerApi: 'jobs' } },

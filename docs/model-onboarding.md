@@ -54,9 +54,12 @@ URLs; [gpt-image-2-5.md](model-api-references/gpt-image-2-5.md) is the template.
   refused.
 - [ ] **What the prompt enhancer needs.** Does the model always generate audio? Does Kie rewrite
   prompts on its side (`expand_prompt`, `prompt_extend`)? Both change the model's playbook.
-- [ ] **Endpoint.** Market models use `jobs/createTask` and the shared status and callback path. A
-  model on an endpoint of its own, as Veo is on `veo/generate`, also needs status-polling work in
-  `src/lib/video-generation-status-service.ts`.
+- [ ] **Endpoint.** Market models use `jobs/createTask` and the shared status and callback path.
+  Every video model starts there now, Veo 3.1 included since 2026-10-20 (#504; before that it had
+  its own `veo/generate`, whose rows are still polled at `veo/record-info` by the marker in
+  `src/lib/veo-provider-api.ts`). A model on an endpoint of its own needs status work in both
+  readers: `src/lib/generation-status-sync.ts` (webhooks, the cron, template and workflow runs)
+  and `src/lib/video-generation-status-service.ts` (the status route).
 - [ ] **Probe.** Send `{"model":"<id>","input":{}}` to `jobs/createTask`. An unknown id comes back
   as `code: 422` with "not supported"; a known id fails on its missing fields and creates no task.
   A model whose spec has no required fields starts a real, paid task on this probe, so read the

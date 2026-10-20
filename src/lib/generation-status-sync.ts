@@ -210,9 +210,11 @@ async function syncSingleGenerationStatusFromProviderPayload(
       logBackendError('generation_result_parse_failed', { error });
     }
     // A Veo task on the jobs API keeps its 1080p/4k render apart from its 720p
-    // original, so it is read where Kie's Veo docs put it, never the default.
+    // original, so it is read where Kie's Veo docs put it, ahead of the shared
+    // reader's answer; while the render is still pending the answer is null, and
+    // the fresh poll below finds it.
     if (isVeoGeneration(generation)) {
-      tempUrl = readVeoJobsResultUrl(taskData);
+      tempUrl = readVeoJobsResultUrl(taskData, tempUrl);
     }
 
     if (tempUrl) {
@@ -349,8 +351,10 @@ async function syncSingleGenerationStatus(
     } catch (error) {
       logBackendError('generation_result_parse_failed', { error });
     }
+    // As above: the rendered file first, the shared reader's answer after, and null
+    // while a 1080p/4k render is pending, which the retry below polls again.
     if (isVeoGeneration(generation)) {
-      tempUrl = readVeoJobsResultUrl(data.data);
+      tempUrl = readVeoJobsResultUrl(data.data, tempUrl);
     }
 
     if (tempUrl) {

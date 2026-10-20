@@ -21,8 +21,9 @@
  *   aspect_ratio → input.aspect_ratio (16:9 | 9:16 | Auto, same spelling)
  *   resolution → input.resolution (720p | 1080p | 4k)
  *   (duration, omitted: Kie's default 8) → input.duration 8, sent explicitly
- * The app sent no watermark, seed, enable_fallback or enableTranslation before
- * and sends none now.
+ *   (enableTranslation, omitted: the legacy default true) → input.enable_translation true,
+ *     sent explicitly, since the jobs API documents no default for it
+ * The app sent no watermark, seed or enable_fallback before and sends none now.
  */
 
 export const VEO_JOBS_MODEL_ID = 'veo-3-1';
@@ -107,6 +108,9 @@ export function buildVeoJobsTaskBody(params: {
       aspect_ratio: params.aspectRatio,
       resolution: params.resolution,
       duration: params.durationSeconds,
+      // The legacy endpoint translated prompts to English unless told not to; the jobs
+      // API lists no default, so a Hindi or Spanish prompt is translated as before.
+      enable_translation: true,
     },
   };
 }
@@ -146,6 +150,16 @@ function parseRecord(value: unknown): Record<string, unknown> | null {
 const RENDERED_LIST_KEYS = ['result_urls', 'resultUrls'] as const;
 const ORIGIN_LIST_KEYS = ['origin_urls', 'originUrls'] as const;
 
+function firstListUrl(containers: readonly Record<string, unknown>[], keys: readonly string[]): string | null {
+  for (const container of containers) {
+    for (const key of keys) {
+      const url = firstUrl(container[key]);
+      if (url) return url;
+    }
+  }
+  return null;
+}
+
 /**
  * The video a finished jobs-API Veo task produced, read from its record
  * (GET /api/v1/jobs/recordInfo `data`) or a callback's `data`, or null.
@@ -154,11 +168,16 @@ const ORIGIN_LIST_KEYS = ['origin_urls', 'originUrls'] as const;
  * 1080p or 4k render at `resultJson.data.result_urls` and its 720p original at
  * `data.origin_urls`, and Veo's own callbacks at `info.resultUrls`. Every rendered
  * list is read before any origin list, so a 1080p or 4k run is never delivered at
- * 720p while its render exists; an origin list stands in only when no rendered list
- * has a URL, the order the legacy reader used (resultUrls, then originUrls).
+ * 720p while its render exists. While the record says the render is still pending
+ * (`high_resolution_pending`, beside the lists on the live 1080p record of 2026-10-20)
+ * it holds only the 720p original, and the answer is null: the next check finds the
+ * render, where settling the original would have charged the render's price for it.
+ * Otherwise an origin list stands in when no rendered list has a URL, the order the
+ * legacy reader used (resultUrls, then originUrls), and after that `fallbackUrl`: the
+ * shared result reader's answer, which also knows `resultUrl`, `url` and a bare list.
  */
-export function readVeoJobsResultUrl(task: unknown): string | null {
-  if (!isRecord(task)) return null;
+export function readVeoJobsResultUrl(task: unknown, fallbackUrl: string | null = null): string | null {
+  if (!isRecord(task)) return fallbackUrl;
 
   const result = parseRecord(task.resultJson);
   const response = parseRecord(task.response);
@@ -170,18 +189,14 @@ export function readVeoJobsResultUrl(task: unknown): string | null {
     response,
     info,
     // The record's own keys last: the docs put the 720p original at `data.origin_urls`.
-    // Only Lite 720p was run live (2026-10-20, `resultJson.resultUrls`), so a 1080p or 4k
-    // record that keeps a list there is still read rather than failing after Kie billed.
+    // Lite 720p (`resultJson.resultUrls`) and Lite 1080p (`resultJson.data.result_urls`)
+    // were run live on 2026-10-20; a 4k record that keeps a list on the record itself
+    // is still read rather than failing after Kie billed.
     task,
   ].filter((container): container is Record<string, unknown> => container !== null);
 
-  for (const keys of [RENDERED_LIST_KEYS, ORIGIN_LIST_KEYS]) {
-    for (const container of containers) {
-      for (const key of keys) {
-        const url = firstUrl(container[key]);
-        if (url) return url;
-      }
-    }
-  }
-  return null;
+  const rendered = firstListUrl(containers, RENDERED_LIST_KEYS);
+  if (rendered) return rendered;
+  if (containers.some((container) => container.high_resolution_pending === true)) return null;
+  return firstListUrl(containers, ORIGIN_LIST_KEYS) ?? fallbackUrl;
 }

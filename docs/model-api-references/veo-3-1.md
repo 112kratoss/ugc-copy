@@ -1,5 +1,13 @@
 # Generate Veo3.1 Video
 
+> **Legacy capture.** The OpenAPI body below is Kie's flat `POST /api/v1/veo/generate` (polled at
+> `GET /api/v1/veo/record-info`), which Kie moved under its docs' `old-model` section. Since
+> 2026-10-20 (#504) the app starts Veo 3.1 on the unified jobs API; see "Jobs API (read
+> 2026-10-20)" at the end of this file. Rows started before the move are still polled at
+> `veo/record-info`: `src/lib/veo-provider-api.ts` tells them apart by the `providerApi` marker.
+> This capture was also wrong on resolutions and reference modes before the 2026-09-04 audit
+> (`reference-audit-2026-09-04.md`, section `veo-3.1`).
+
 ## OpenAPI Specification
 
 ```yaml
@@ -648,3 +656,42 @@ security:
 
 Pricing: Fast mode (text-to-video / image-to-video / reference-to-video): 60 credits per video (≈ $0.30) ·
 Quality mode (text-to-video / image-to-video): 250 credits per video (≈ $1.25)
+## Jobs API (read 2026-10-20)
+
+Source: `https://docs.kie.ai/veo3-api/generate-veo-3-video.md`, read on 2026-10-20 for #504, plus two
+paid Lite runs the owner approved (`UGC copy/archive/model-checkup-2026-10-20/fixes/veo-new-api-probe-run.log`,
+720p, and `veo-new-api-probe-1080p-run.log`, 1080p). The body the app sends is `buildVeoJobsTaskBody`
+in `src/lib/veo-provider-api.ts`; its tests pin every shape below.
+
+- **Create:** `POST /api/v1/jobs/createTask` with `model: "veo-3-1"`, a top-level `callBackUrl`, and the run
+  in `input`:
+  - `prompt` (string, required).
+  - `model`: the tier, `veo3_fast` (Kie's default), `veo3_lite` or `veo3` (Quality). `REFERENCE_2_VIDEO`
+    supports `veo3_fast` and `veo3_lite` only.
+  - `generation_type`: `TEXT_2_VIDEO`, `FIRST_AND_LAST_FRAMES_2_VIDEO` or `REFERENCE_2_VIDEO`; the app
+    always sends one. `image_urls`: the start frame, or start and end in that order, or 1–3 reference
+    pictures (reference runs are 8 s only).
+  - `aspect_ratio`: `16:9` (default), `9:16` or `Auto` (centre-cropped to whichever is nearer the
+    input picture); the catalog refuses Auto on a reference run.
+  - `resolution`: `720p` (default), `1080p` or `4k`. `duration`: `4`, `6` or `8` (default 8); the app
+    sends 8, the length it prices.
+  - `enable_translation` (boolean, no documented default; Kie's example sets `true`): the app sends
+    `true`, the legacy endpoint's default. `enable_fallback` is deprecated ("remove it from requests");
+    `watermark` is optional. The app sends neither.
+- **Status:** `GET /api/v1/jobs/recordInfo?taskId=…`, the market record (`state` waiting → generating →
+  success | fail, `resultJson` as a JSON string, `failMsg`, `createTime`, `completeTime`). Both live runs
+  went waiting → generating → success in 60–110 s.
+- **Where the file is:** the 720p run kept it at `resultJson.resultUrls`. The 1080p run kept the render
+  at `resultJson.data.result_urls` beside the 720p original at `data.origin_urls` (the docs:
+  "For 1080p and 4k, the video URL is in resultJson.data.result_urls (the 720p version is in
+  data.origin_urls)"), with `high_resolution_pending: false`, `high_resolution_child_task_id`,
+  `resolution: "1080p"`, `image_urls` (a poster) and `has_audio_list` next to them, and the same
+  record again under `response`. `high_resolution_pending` is not documented; the reader treats
+  `true` as "not finished yet" and polls again rather than settling the 720p original. 4k was not run.
+- **Hosts:** both files came back on `tempfile.aiquickdraw.com`, which the import allowlist carries.
+- **Price:** exactly the credits the catalog charges: Lite 720p 30, Lite 1080p 35 (balance 845.32 →
+  815.32 → 780.32). Pinned for all nine tier × resolution pairs in `veo-provider-api.test.ts`.
+- **Callbacks:** the docs show `data.info.resultUrls` / `originUrls` / `resolution` for Veo's own
+  callback shape, and the market shape carries `data.state` and `data.resultJson`. The edge function
+  and the webhook route key on `data.taskId`, which both carry; a Veo-shaped success callback is
+  answered by polling `jobs/recordInfo`, so a 1080p/4k run is never imported from a callback's 720p list.
