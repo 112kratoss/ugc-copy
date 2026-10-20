@@ -67,6 +67,7 @@ import {
     createRemixElementSeeds,
     getRemixReferenceCapWarning,
     joinRemixRestoreWarnings,
+    REMIX_RESTORE_WARNING,
     createRestoredRemixAssetState,
     getRemixRestoreWarning,
 } from '@/lib/remix-source-client';
@@ -1945,8 +1946,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                    commitReferenceAudios(hydrateSeedanceMediaReferences('Audio', referenceAudioSeeds));
 	                    commitKlingVideoElements([]);
 	                    if (unrestorableReferences > 0) {
-	                        setRemixRestoreWarning((current) => current
-	                            ?? 'Some source media could not be restored automatically, so you may need to re-add a few references.');
+	                        // Said beside a cap notice too, and once if the bundle already said it.
+	                        setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, REMIX_RESTORE_WARNING));
 	                    }
 
 	                    setStartImageFile(null);

@@ -1737,6 +1737,22 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(await unknownMentionLine()).toBe('Unknown element mention: @prop');
       });
 
+      // The Seedance branch adds its own notice for a clip it cannot bring back. It used to
+      // add it only when no notice stood yet, so a cap notice before it hid it (2026-10-20).
+      it('tells a Seedance remix both that the cap left references out and that a clip did not come back', async () => {
+        const six = Array.from({ length: 6 }, (_, index) => keptImage(`0${index}`, `Shot ${index + 1}`, `@shot_${index + 1}`));
+        renderRemix(referenceRun('seedance-2', {
+          prompt: 'The harbour at dusk',
+          // An older run kept a prepared clip by its asset id alone, with no link to measure.
+          settings: { referenceVideoUrls: ['prepared-clip-asset'] },
+          video: { elements: six },
+        }));
+
+        expect(await screen.findByText(
+          /Seedance 2 takes up to 5 reference images, so 5 of this run's 6 came back\. Some source media could not be restored automatically/,
+        )).toBeInTheDocument();
+      });
+
       it('restores no image reference into a multi-shot run, where the page shows no reference card and sends none', async () => {
         const shots = [
           { id: 'shot-1', prompt: 'Open on the harbour in the rain, slow push in.', duration: 5 },

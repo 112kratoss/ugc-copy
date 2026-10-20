@@ -250,7 +250,7 @@ test.describe('Kling O3 named subjects', () => {
 
     await withNamedSubject(page, 'Hero', async () => {
       await prompt.fill('A scene with @hero walking', { timeout: 5_000 });
-      await expect(page.getByText('26/10000')).toBeVisible({ timeout: 5_000 });
+      await expect(page.getByText('26 / 3,072')).toBeVisible({ timeout: 5_000 });
 
       // While the new name is typed the subject is still "@hero" to the prompt.
       await nameField.fill('Villain', { timeout: 5_000 });
@@ -319,7 +319,7 @@ test.describe('Kling O3 named subjects', () => {
       // Typed in full, it is a mention the prompt knows. The character count shows
       // that the page has taken the new prompt in, so a missing warning means none.
       await prompt.fill('A scene with @hero_creator walking');
-      await expect(page.getByText('34/10000')).toBeVisible({ timeout: 5_000 });
+      await expect(page.getByText('34 / 3,072')).toBeVisible({ timeout: 5_000 });
       await expect(page.getByText(/^Unknown element mention/)).toHaveCount(0);
     });
   });

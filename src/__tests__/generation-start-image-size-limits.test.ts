@@ -15,11 +15,12 @@ vi.mock('@/lib/server-helpers', async (importOriginal) => ({
 }));
 
 /**
- * Every start refuses a picture larger than Kie takes for its model before the run's
- * credits are held (provider-image-limits). Kie used to refuse it only after the hold, so
- * the run failed and was refunded. These drive the real start services; the service
- * client stands in for the database and storage, and the hold is the `start_generation`
- * call, which answers with an error so a start that gets that far stops there.
+ * Every start measures the pictures it sends against the largest Kie's docs say its model
+ * takes (provider-image-limits), logs one over it before the run's credits are held, and
+ * goes on: no run has shown yet that Kie refuses such a picture, so a size never stops a
+ * start. These drive the real start services; the service client stands in for the
+ * database and storage, and the hold is the `start_generation` call, which answers with an
+ * error so a start that gets that far stops there.
  */
 
 const MB = 1024 * 1024;
@@ -103,9 +104,23 @@ async function settle(promise: Promise<unknown>): Promise<unknown> {
   throw new Error('expected the start to stop');
 }
 
-describe('generation starts hold pictures to Kie’s size limits before the credit hold', () => {
-  beforeEach(() => {
+describe('generation starts log a picture over Kie’s documented size limit, then hold', () => {
+  let records: Array<Record<string, unknown>> = [];
+  let restoreSink: () => void = () => undefined;
+
+  /** What each start logged about a picture over its limit, in its words. */
+  const overLimitLogs = () => records
+    .filter((record) => record.msg === 'generation_input_image_over_provider_limit')
+    .map((record) => record.detail);
+
+  beforeEach(async () => {
     vi.resetModules();
+    records = [];
+    // The logger the start services load once the modules are reset.
+    const { setBackendLogSink } = await import('@/lib/backend-logger');
+    restoreSink = setBackendLogSink((record) => {
+      records.push(record);
+    });
     vi.stubEnv('KIE_AI_API_KEY', 'test-key');
     vi.stubEnv('KIE_PROVIDER_WEBHOOK_SECRET', 'test-webhook-secret');
     vi.stubEnv('KIE_WEBHOOK_HMAC_KEY', 'hmac-key');
@@ -116,6 +131,7 @@ describe('generation starts hold pictures to Kie’s size limits before the cred
   });
 
   afterEach(() => {
+    restoreSink();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
@@ -141,32 +157,31 @@ describe('generation starts hold pictures to Kie’s size limits before the cred
     return { outcome, ...service };
   }
 
-  it('refuses an oversized reference before the hold', async () => {
+  it('logs an oversized reference before the hold, and holds', async () => {
     const { outcome, holds, reservationReads } = await startQwen({ 'bottle.png': 2 * MB, 'label.png': 13_002_342 });
 
-    expect(outcome).toMatchObject({
-      name: 'GenerationServiceError',
-      status: 400,
-      message: 'Qwen Image 3.0 takes reference images up to 10 MB; Reference 2 is 12.4 MB.',
-    });
-    expect(holds).toEqual([]);
+    expect(overLimitLogs()).toEqual(['Qwen Image 3.0 takes reference images up to 10 MB; Reference 2 is 12.4 MB.']);
+    expect(outcome).toMatchObject({ message: 'Stopped at the credit hold.' });
+    expect(holds).toEqual(['start_generation']);
     expect(fetch).not.toHaveBeenCalled();
     // Both uploads in one read.
     expect(reservationReads).toEqual([[`${USER_ID}/bottle.png`, `${USER_ID}/label.png`]]);
   });
 
-  it('starts a run whose pictures are at the limit', async () => {
+  it('logs nothing for a run whose pictures are at the limit', async () => {
     const { outcome, holds } = await startQwen({ 'bottle.png': 10 * MB, 'label.png': 10 * MB });
 
     expect(outcome).toMatchObject({ message: 'Stopped at the credit hold.' });
     expect(holds).toEqual(['start_generation']);
+    expect(overLimitLogs()).toEqual([]);
   });
 
-  it('starts a run whose picture sizes cannot be learned', async () => {
+  it('logs nothing for a run whose picture sizes cannot be learned', async () => {
     const { outcome, holds } = await startQwen({});
 
     expect(outcome).toMatchObject({ message: 'Stopped at the credit hold.' });
     expect(holds).toEqual(['start_generation']);
+    expect(overLimitLogs()).toEqual([]);
   });
 
   it('measures a model with no limit not at all', async () => {
@@ -190,9 +205,10 @@ describe('generation starts hold pictures to Kie’s size limits before the cred
     expect(service.holds).toEqual(['start_generation']);
     expect(service.reservationReads).toEqual([]);
     expect(service.client.storage.from).not.toHaveBeenCalled();
+    expect(overLimitLogs()).toEqual([]);
   });
 
-  it('refuses through the image start’s own payload path (Grok Imagine)', async () => {
+  it('logs through the image start’s own payload path (Grok Imagine)', async () => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     const service = createServiceClient({ 'look.png': 11 * MB });
 
@@ -208,14 +224,12 @@ describe('generation starts hold pictures to Kie’s size limits before the cred
       persistInputMedia: false,
     }));
 
-    expect(outcome).toMatchObject({
-      status: 400,
-      message: 'Grok Imagine takes reference images up to 10 MB; Reference 1 is 11.0 MB.',
-    });
-    expect(service.holds).toEqual([]);
+    expect(overLimitLogs()).toEqual(['Grok Imagine takes reference images up to 10 MB; Reference 1 is 11.0 MB.']);
+    expect(outcome).toMatchObject({ message: 'Stopped at the credit hold.' });
+    expect(service.holds).toEqual(['start_generation']);
   });
 
-  it('refuses through the image start’s catalog path once (Qwen Image 3.0)', async () => {
+  it('logs through the image start’s catalog path once (Qwen Image 3.0)', async () => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     const service = createServiceClient({ 'label.png': 10 * MB + 1 });
 
@@ -231,15 +245,13 @@ describe('generation starts hold pictures to Kie’s size limits before the cred
       persistInputMedia: false,
     }));
 
-    expect(outcome).toMatchObject({
-      status: 400,
-      message: 'Qwen Image 3.0 takes reference images up to 10 MB; Reference 1 is 10.1 MB.',
-    });
-    expect(service.holds).toEqual([]);
+    expect(overLimitLogs()).toEqual(['Qwen Image 3.0 takes reference images up to 10 MB; Reference 1 is 10.1 MB.']);
+    expect(outcome).toMatchObject({ message: 'Stopped at the credit hold.' });
+    expect(service.holds).toEqual(['start_generation']);
     expect(service.reservationReads).toHaveLength(1);
   });
 
-  it('holds Ideogram Character’s reference to the 10 MB its references may total', async () => {
+  it('measures Ideogram Character’s reference against the 10 MB its references may total', async () => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     const service = createServiceClient({ 'hero.png': 10.5 * MB });
 
@@ -256,14 +268,12 @@ describe('generation starts hold pictures to Kie’s size limits before the cred
       persistInputMedia: false,
     }));
 
-    expect(outcome).toMatchObject({
-      status: 400,
-      message: 'Ideogram Character takes up to 10 MB of reference images in total; yours come to 10.5 MB.',
-    });
-    expect(service.holds).toEqual([]);
+    expect(overLimitLogs()).toEqual(['Ideogram Character takes up to 10 MB of reference images in total; yours come to 10.5 MB.']);
+    expect(outcome).toMatchObject({ message: 'Stopped at the credit hold.' });
+    expect(service.holds).toEqual(['start_generation']);
   });
 
-  it('refuses an oversized start frame through the video start (Hailuo 2.3)', async () => {
+  it('logs an oversized start frame through the video start (Hailuo 2.3)', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
     const service = createServiceClient({ 'frame.png': 12 * MB });
 
@@ -282,15 +292,13 @@ describe('generation starts hold pictures to Kie’s size limits before the cred
       persistInputMedia: false,
     }));
 
-    expect(outcome).toMatchObject({
-      status: 400,
-      message: 'Hailuo 2.3 takes frames up to 10 MB; the start frame is 12.0 MB.',
-    });
-    expect(service.holds).toEqual([]);
+    expect(overLimitLogs()).toEqual(['Hailuo 2.3 takes frames up to 10 MB; the start frame is 12.0 MB.']);
+    expect(outcome).toMatchObject({ message: 'Stopped at the credit hold.' });
+    expect(service.holds).toEqual(['start_generation']);
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('refuses an oversized character image through the motion start (Kling 2.6)', async () => {
+  it('logs an oversized character image through the motion start (Kling 2.6)', async () => {
     const { startMotionGeneration } = await import('@/lib/generation-services');
     const service = createServiceClient({ 'hero.png': 10 * MB + 1 });
 
@@ -307,20 +315,18 @@ describe('generation starts hold pictures to Kie’s size limits before the cred
       operationalConfig: operation('kling-2.6'),
     }));
 
-    expect(outcome).toMatchObject({
-      status: 400,
-      message: 'Kling 2.6 takes character images up to 10 MB; the character image is 10.1 MB.',
-    });
-    expect(service.holds).toEqual([]);
+    expect(overLimitLogs()).toEqual(['Kling 2.6 takes character images up to 10 MB; the character image is 10.1 MB.']);
+    expect(outcome).toMatchObject({ message: 'Stopped at the credit hold.' });
+    expect(service.holds).toEqual(['start_generation']);
   });
 
-  it('refuses through POST /api/generations’ unified start before anything is held', async () => {
+  it('logs through POST /api/generations’ unified start before the hold', async () => {
     const { startUnifiedGenerationForRoute } = await import('@/lib/unified-generation-start-service');
     const { loadPublishedGenerationModelCatalog } = await import('@/lib/generation-model-catalog-store');
     const { catalog } = await loadPublishedGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
     const service = createServiceClient({ 'label.png': 13_002_342 });
 
-    const outcome = await settle(startUnifiedGenerationForRoute(
+    await settle(startUnifiedGenerationForRoute(
       {
         request: new Request('http://localhost/api/generations', {
           method: 'POST',
@@ -344,15 +350,12 @@ describe('generation starts hold pictures to Kie’s size limits before the cred
       },
     ));
 
-    expect(outcome).toMatchObject({
-      status: 400,
-      message: 'Qwen Image 3.0 takes reference images up to 10 MB; Reference 1 is 12.4 MB.',
-    });
-    expect(service.holds).toEqual([]);
+    expect(overLimitLogs()).toEqual(['Qwen Image 3.0 takes reference images up to 10 MB; Reference 1 is 12.4 MB.']);
+    expect(service.holds).toEqual(['start_generation']);
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('refuses a workflow step, and a template run’s step, before anything is held', async () => {
+  it('logs a workflow step, and a template run’s step, before the hold', async () => {
     const { loadPublishedGenerationModelCatalog } = await import('@/lib/generation-model-catalog-store');
     const { catalog } = await loadPublishedGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
     const { createCanvasEdge, createWorkflowNode, normalizeWorkflowGraph } = await import('@/lib/workflow-canvas');
@@ -399,7 +402,8 @@ describe('generation starts hold pictures to Kie’s size limits before the cred
         templateContext: { runId: 'run-1', stepId: 'step-1', templateId: 'template-1', templateVersionId: 'version-1' },
       },
     ]) {
-      const outcome = await settle(executeWorkflowRunnableNode({
+      // Each step stops at its hold.
+      await settle(executeWorkflowRunnableNode({
         supabase: service.client as never,
         userId: USER_ID,
         graph,
@@ -409,13 +413,12 @@ describe('generation starts hold pictures to Kie’s size limits before the cred
         persistInputMedia: false,
         ...run,
       }));
-
-      expect(outcome).toMatchObject({
-        status: 400,
-        message: 'Kling 3 Turbo takes frames up to 10 MB; the start frame is 12.0 MB.',
-      });
     }
-    expect(service.holds).toEqual([]);
+    expect(overLimitLogs()).toEqual([
+      'Kling 3 Turbo takes frames up to 10 MB; the start frame is 12.0 MB.',
+      'Kling 3 Turbo takes frames up to 10 MB; the start frame is 12.0 MB.',
+    ]);
+    expect(service.holds).toEqual(['start_generation', 'start_template_generation']);
     expect(fetch).not.toHaveBeenCalled();
   });
 });

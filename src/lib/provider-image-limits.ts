@@ -1,27 +1,28 @@
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/models';
 
 /**
- * The largest picture Kie takes in each request field that carries pictures, for each Kie
- * endpoint the app sends pictures to, as the endpoint's docs page
+ * The largest picture Kie's docs say it takes in each request field that carries pictures,
+ * for each Kie endpoint the app sends pictures to, as the endpoint's docs page
  * (docs.kie.ai/market/<page>.md) documented it on 2026-10-20; the line numbers cited are
- * that day's. Kie fetches a run's pictures only after the start has held its credits and
- * answers one over the limit with a failed task, so the run failed and was refunded.
- * Every start now measures the pictures it sends and asks this first, before any hold
- * (provider-image-sizes).
+ * that day's. Kie fetches a run's pictures only after the start has held its credits, and
+ * no run has shown yet what it does with one over its limit: the 2026-10-20 check-up read
+ * these limits and tested none. So every start measures the pictures it sends and logs one
+ * over its limit (provider-image-sizes), a run Kie then fails can be matched to that log,
+ * and nothing is refused for its size until Kie is seen to refuse it.
  *
  * Kie's "MB" is read as 1,024 × 1,024 bytes, the larger reading and the unit of the app's
- * own upload caps, so no picture Kie takes is refused here; Seedance's "less than 30 MB"
+ * own upload caps, so no picture Kie takes is logged as over; Seedance's "less than 30 MB"
  * is held as at most 30 MB for the same reason. An endpoint or field with no entry
  * documents no size for its pictures and is never measured: among the endpoints the app
  * sends pictures to, the GPT Image and Wan 2.7 pages, pixverse/reference-to-video,
  * kling-3.0/video's frames, the Seedance 2 frames and Veo name none, and wan/2-7-r2v's
- * "up to `30MB`" (:168) is its reference voice. Seedance 1.5 Pro's page is gone (404), so
- * the 10 MB of its archived capture cannot be re-read and is not held.
+ * "up to `30MB`" (:168) is its reference voice. Seedance 1.5 Pro's page is gone (404); its
+ * entry keeps the 10 MB of the page's archived capture.
  */
 
 const MEGABYTE = 1024 * 1024;
 
-/** What a field's pictures are to the run, which is how a refusal names them. */
+/** What a field's pictures are to the run, which is how the words name them. */
 export type ProviderImageRole = 'reference' | 'frame' | 'image' | 'character' | 'element';
 
 export type ProviderImageFieldLimit = {
@@ -130,7 +131,8 @@ const PROVIDER_IMAGE_LIMITS: Readonly<Record<string, readonly ProviderImageField
   // Seedance 1.5 Pro (delisted on Kie's site 2026-10-20; its API still runs it): input_urls
   // "Max File Size: 10MB", from the captured page (docs/model-api-references/bytedance/
   // seedance-1.5-pro.md:80-84), the last one Kie published. It is the guided first video.
-  'bytedance/seedance-1.5-pro': [limit('input_urls', 'frame', 10)],
+  // The field carries a run's reference pictures or its frames.
+  'bytedance/seedance-1.5-pro': [limit('input_urls', 'image', 10)],
   'bytedance/seedance-2': SEEDANCE_2_LIMITS,
   'bytedance/seedance-2-fast': SEEDANCE_2_LIMITS,
   'bytedance/seedance-2-mini': SEEDANCE_2_LIMITS,
@@ -163,7 +165,7 @@ export function providerImageFieldLimits(providerModelId: string): readonly Prov
 export type ProviderRequestImage = {
   /** The link the provider is sent, as the request carries it. */
   url: string;
-  /** How a refusal names it: "Reference 2", "the start frame". */
+  /** How the words name it: "Reference 2", "the start frame". */
   label: string;
   limit: ProviderImageFieldLimit;
 };
@@ -230,7 +232,7 @@ const ROLE_NOUNS: Readonly<Record<ProviderImageRole, string>> = {
   element: 'element images',
 };
 
-/** The name the creators show for a model, so a refusal says which model it is. */
+/** The name the creators show for a model, so the words say which model it is. */
 function modelDisplayName(modelId: string): string {
   for (const models of [IMAGE_MODELS, VIDEO_MODELS, MOTION_MODELS] as const) {
     if (Object.hasOwn(models, modelId)) {
@@ -240,7 +242,7 @@ function modelDisplayName(modelId: string): string {
   return modelId;
 }
 
-/** Rounded up to a tenth, so a picture refused for its size never reads as within the limit. */
+/** Rounded up to a tenth, so a picture over its limit never reads as within it. */
 function megabytes(bytes: number): string {
   // Dividing by a power of two is exact, so the rounding carries no error of its own.
   return `${(Math.ceil((bytes * 10) / MEGABYTE) / 10).toFixed(1)} MB`;
@@ -253,10 +255,10 @@ function knownSize(image: MeasuredProviderImage): number | null {
 }
 
 /**
- * Why Kie would refuse a request's pictures for their size, in words for the creator that
+ * Why Kie's docs say it would refuse a request's pictures for their size, in words that
  * name the model, the limit and the picture, or null when every size known is within it.
  * A picture whose size is unknown is never the reason: a limit on the pictures together
- * refuses only when the ones known already pass it.
+ * is passed only when the ones known already pass it.
  */
 export function providerImageSizeViolation(
   modelId: string,

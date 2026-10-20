@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { GenerationServiceError } from '@/lib/generation-service-core';
+import { type BackendLogRecord, setBackendLogSink } from '@/lib/backend-logger';
 import {
-  assertProviderImageSizesAccepted,
+  logProviderImageSizesOverLimit,
   lookupImageSizes,
 } from '@/lib/provider-image-sizes';
 
@@ -407,60 +407,76 @@ describe('image size lookups', () => {
   });
 });
 
-describe('the provider image size check', () => {
+describe('the provider image size log', () => {
+  let records: BackendLogRecord[] = [];
+  let restoreSink: () => void = () => undefined;
+
   beforeEach(() => {
     vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPABASE);
     vi.stubEnv('MEDIA_IMPORT_HOST_ALLOWLIST', MEDIA_HOST);
+    records = [];
+    restoreSink = setBackendLogSink((record) => {
+      records.push(record);
+    });
   });
 
   afterEach(() => {
+    restoreSink();
     vi.unstubAllEnvs();
   });
+
+  const overLimitLogs = () => records.filter((record) => record.msg === 'generation_input_image_over_provider_limit');
 
   const qwenRequest = {
     model: 'qwen3/image-to-image',
     input: { prompt: 'Swap the label', image_urls: [`uploads/${USER_ID}/a.png`, `uploads/${USER_ID}/b.png`] },
   };
 
-  it('refuses a picture over its model’s limit', async () => {
+  // Kie's docs state the limits, and no run has shown that Kie refuses a picture over one,
+  // so a start is never stopped for a size: it logs the picture and goes on.
+  it('logs a picture over its model’s limit, and lets the start go on', async () => {
     const { client } = createClient({
       reservations: [upload(`${USER_ID}/a.png`, 2 * MB), upload(`${USER_ID}/b.png`, 13_002_342)],
     });
 
-    const check = assertProviderImageSizesAccepted({
+    await expect(logProviderImageSizesOverLimit({
       supabase: client as never,
       userId: USER_ID,
       modelId: 'qwen3',
       request: qwenRequest,
-    });
+    })).resolves.toBeUndefined();
 
-    await expect(check).rejects.toBeInstanceOf(GenerationServiceError);
-    await expect(check).rejects.toMatchObject({
-      status: 400,
-      // Coded so a canvas or template step says it too.
-      failureCode: 'provider_input_refused',
-      message: 'Qwen Image 3.0 takes reference images up to 10 MB; Reference 2 is 12.4 MB.',
-    });
+    expect(overLimitLogs()).toEqual([
+      expect.objectContaining({
+        level: 'warn',
+        userId: USER_ID,
+        model: 'qwen3',
+        providerModel: 'qwen3/image-to-image',
+        detail: 'Qwen Image 3.0 takes reference images up to 10 MB; Reference 2 is 12.4 MB.',
+      }),
+    ]);
   });
 
-  it('accepts pictures at the limit and pictures of unknown size', async () => {
+  it('logs nothing for pictures at the limit or of unknown size', async () => {
     const atLimit = createClient({
       reservations: [upload(`${USER_ID}/a.png`, 10 * MB), upload(`${USER_ID}/b.png`, 10 * MB)],
     });
-    await expect(assertProviderImageSizesAccepted({
+    await logProviderImageSizesOverLimit({
       supabase: atLimit.client as never,
       userId: USER_ID,
       modelId: 'qwen3',
       request: qwenRequest,
-    })).resolves.toBeUndefined();
+    });
 
     const unknown = createClient();
-    await expect(assertProviderImageSizesAccepted({
+    await logProviderImageSizesOverLimit({
       supabase: unknown.client as never,
       userId: USER_ID,
       modelId: 'qwen3',
       request: qwenRequest,
-    })).resolves.toBeUndefined();
+    });
+
+    expect(overLimitLogs()).toEqual([]);
   });
 
   it('holds Ideogram Character’s references to their total', async () => {
@@ -468,22 +484,23 @@ describe('the provider image size check', () => {
       reservations: [upload(`${USER_ID}/a.png`, 10 * MB + 1)],
     });
 
-    await expect(assertProviderImageSizesAccepted({
+    await logProviderImageSizesOverLimit({
       supabase: client as never,
       userId: USER_ID,
       modelId: 'ideogram-character',
       request: { model: 'ideogram/character', input: { reference_image_urls: [`uploads/${USER_ID}/a.png`] } },
-    })).rejects.toMatchObject({
-      status: 400,
-      message: 'Ideogram Character takes up to 10 MB of reference images in total; yours come to 10.1 MB.',
     });
+
+    expect(overLimitLogs().map((record) => record.detail)).toEqual([
+      'Ideogram Character takes up to 10 MB of reference images in total; yours come to 10.1 MB.',
+    ]);
   });
 
   it('looks nothing up for a model with no limit', async () => {
     const { client } = createClient({ reservations: [upload(`${USER_ID}/a.png`, 40 * MB)] });
     const fetcher = vi.fn();
 
-    await expect(assertProviderImageSizesAccepted({
+    await expect(logProviderImageSizesOverLimit({
       supabase: client as never,
       userId: USER_ID,
       modelId: 'gpt-image-2',
@@ -493,12 +510,13 @@ describe('the provider image size check', () => {
     expect(client.from).not.toHaveBeenCalled();
     expect(client.storage.from).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();
+    expect(overLimitLogs()).toEqual([]);
   });
 
   it('leaves a request it cannot build to the start that builds it', async () => {
     const { client } = createClient();
 
-    await expect(assertProviderImageSizesAccepted({
+    await expect(logProviderImageSizesOverLimit({
       supabase: client as never,
       userId: USER_ID,
       modelId: 'qwen3',

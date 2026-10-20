@@ -129,11 +129,11 @@ describe('provider image limits', () => {
       .toBe('Qwen Image 3.0 takes reference images up to 10 MB; Reference 2 is 12.4 MB.');
   });
 
-  it('accepts a picture at the limit and refuses one a byte over it', () => {
+  it('accepts a picture at the limit and flags one a byte over it', () => {
     const request = { model: 'flux-2/pro-image-to-image', input: { input_urls: ['https://cdn/a.png'] } };
 
     expect(violation('flux-2-pro', request, [10 * MB])).toBeNull();
-    // Rounded up, so a picture refused for its size never reads as within the limit.
+    // Rounded up, so a picture over its limit never reads as within it.
     expect(violation('flux-2-pro', request, [10 * MB + 1]))
       .toBe('FLUX.2 Pro takes reference images up to 10 MB; Reference 1 is 10.1 MB.');
   });
@@ -222,6 +222,11 @@ describe('provider image limits', () => {
       model: 'grok-imagine/image-to-video',
       input: { image_urls: ['https://cdn/a.png'] },
     }, [11 * MB])).toBe('Grok Imagine Video takes images up to 10 MB; Image 1 is 11.0 MB.');
+    // Seedance 1.5 Pro's input_urls carry its reference pictures or its frames.
+    expect(violation('seedance-1.5-pro', {
+      model: 'bytedance/seedance-1.5-pro',
+      input: { input_urls: ['https://cdn/a.png', 'https://cdn/b.png'] },
+    }, [1 * MB, 11 * MB])).toBe('Seedance 1.5 Pro takes images up to 10 MB; Image 2 is 11.0 MB.');
     expect(violation('wan-3.0', {
       model: 'wan/3-0-video',
       input: { reference_image_urls: ['https://cdn/a.png', 'https://cdn/b.png'] },

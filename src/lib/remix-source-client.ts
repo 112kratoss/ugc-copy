@@ -17,13 +17,17 @@ export interface RestoredRemixAssetState {
   descriptor: RemixMediaAssetDescriptor;
 }
 
+/**
+ * The run's references a remix can bring back, the first `limit` of those with a link: one
+ * whose media could not be restored leaves its place to the next.
+ */
 export function createRemixElementSeeds(
   elements: RemixResolvedImageElement[],
   limit = elements.length
 ): RemixElementSeed[] {
   return elements
-    .slice(0, limit)
     .filter((element): element is RemixResolvedImageElement & { url: string } => typeof element.url === 'string' && element.url.length > 0)
+    .slice(0, limit)
     .map((element) => ({
       id: element.id,
       displayName: element.displayName,
@@ -53,9 +57,12 @@ export function getRemixReferenceCapWarning(
   return `${modelName} takes up to ${limit} reference image${limit === 1 ? '' : 's'}, so ${restored} of this run's ${usable} came back.`;
 }
 
-/** Two remix notices, one after the other: a restore problem and a model cap. */
+/**
+ * Two remix notices, one after the other (a restore problem and a model cap, in the order
+ * they were found), each said once.
+ */
 export function joinRemixRestoreWarnings(current: string | null, next: string | null): string | null {
-  if (!next) return current;
+  if (!next || current?.includes(next)) return current;
   return current ? `${current} ${next}` : next;
 }
 
@@ -99,10 +106,14 @@ export function createRemixResultReferenceElement(bundle: RemixSourceBundle): Re
   };
 }
 
+/** What a remix says when some of the run's media could not be brought back. */
+export const REMIX_RESTORE_WARNING =
+  'Some source media could not be restored automatically, so you may need to re-add a few references.';
+
 export function getRemixRestoreWarning(issues: string[]): string | null {
   if (issues.length === 0) {
     return null;
   }
 
-  return 'Some source media could not be restored automatically, so you may need to re-add a few references.';
+  return REMIX_RESTORE_WARNING;
 }

@@ -4,8 +4,6 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendWarning } from '@/lib/backend-logger';
-import { PROVIDER_INPUT_REFUSED } from '@/lib/generation-public-failure';
-import { GenerationServiceError } from '@/lib/generation-service-core';
 import {
   providerImageSizeViolation,
   providerRequestImages,
@@ -19,8 +17,9 @@ import { UPLOAD_RESERVATIONS_TABLE } from '@/lib/upload-finalization';
 
 /**
  * The sizes of the pictures a run sends its provider, learned without downloading any of
- * them, so a start can hold them to the provider's limits (provider-image-limits) before
- * it holds the run's credits. Each kind of link is sized the cheapest reliable way:
+ * them, so a start can log a picture over its provider's documented limit
+ * (provider-image-limits) before it holds the run's credits. Each kind of link is sized
+ * the cheapest reliable way:
  *
  * - the caller's uploads (`uploads`, `template_inputs`): the size Storage reported when the
  *   upload was finalized, from one indexed read of `upload_byte_reservations` for the whole
@@ -34,9 +33,9 @@ import { UPLOAD_RESERVATIONS_TABLE } from '@/lib/upload-finalization';
  *
  * They all run at once, and none is waited on past two seconds. A size that cannot be
  * learned (a prepared asset id, a lookup that fails or runs out of time, an answer with no
- * length) is null, and a picture of unknown size is never refused. Another account's
- * object is never read by its path, only through a link it was signed for, so a refusal
- * tells nobody the size of a file they cannot read.
+ * length) is null, and a picture of unknown size is never logged as over. Another account's
+ * object is never read by its path, only through a link it was signed for, so no one's
+ * file is sized by a run that cannot read it.
  */
 
 /** Staging buckets whose every object arrives by a signed upload with a reservation. */
@@ -268,41 +267,43 @@ export async function lookupImageSizes(
 }
 
 /**
- * Refuses, before anything is held, a run whose provider request carries a picture larger
- * than Kie takes for its model. `request` is the body createTask will be sent, or a builder
- * of it: a builder that throws leaves the start to build the request after its hold and
- * answer the failure there, as it always has. Pictures in fields Kie sets no limit on are
- * never measured, so a model without limits costs nothing here.
+ * Logs a run whose provider request carries a picture larger than Kie's docs say its model
+ * takes (`generation_input_image_over_provider_limit`, naming the limit and the picture),
+ * and lets the run go on. Nothing on record shows that Kie refuses such a picture
+ * (provider-image-limits), so a size alone never stops a start; a run Kie then fails can
+ * be matched to its log, which is the evidence a refusal before the hold would need.
+ * `request` is the body createTask will be sent, or a builder of it. Pictures in fields
+ * Kie sets no limit on are never measured, so a model without limits costs nothing here,
+ * and the lookups are waited on for two seconds at most. It never throws.
  */
-export async function assertProviderImageSizesAccepted(
+export async function logProviderImageSizesOverLimit(
   params: ImageSizeLookupContext & {
-    /** The app's model id, which the refusal names. */
+    /** The app's model id, which the log names. */
     modelId: string;
     request: unknown;
   },
   dependencies: ImageSizeLookupDependencies = {},
 ): Promise<void> {
-  let request: unknown;
   try {
-    request = typeof params.request === 'function' ? (params.request as () => unknown)() : params.request;
+    const request = typeof params.request === 'function' ? (params.request as () => unknown)() : params.request;
+    const images = providerRequestImages(request);
+    if (images.length === 0) return;
+
+    const sizes = await lookupImageSizes(images.map((image) => image.url), params, dependencies);
+    const violation = providerImageSizeViolation(
+      params.modelId,
+      images.map((image) => ({ ...image, sizeBytes: sizes.get(image.url) ?? null })),
+    );
+    if (!violation) return;
+
+    logBackendWarning('generation_input_image_over_provider_limit', {
+      userId: params.userId,
+      model: params.modelId,
+      providerModel: isRecord(request) ? request.model : null,
+      detail: violation,
+    });
   } catch {
-    return;
+    // A request its builder cannot build is left to the start, which builds it after its
+    // hold and answers the failure there; and a diagnostic never stops a start.
   }
-  const images = providerRequestImages(request);
-  if (images.length === 0) return;
-
-  const sizes = await lookupImageSizes(images.map((image) => image.url), params, dependencies);
-  const violation = providerImageSizeViolation(
-    params.modelId,
-    images.map((image) => ({ ...image, sizeBytes: sizes.get(image.url) ?? null })),
-  );
-  if (!violation) return;
-
-  logBackendWarning('generation_input_image_over_provider_limit', {
-    userId: params.userId,
-    model: params.modelId,
-    providerModel: isRecord(request) ? request.model : null,
-  });
-  // Coded so a canvas or template step says it too (generation-public-failure).
-  throw new GenerationServiceError(violation, 400, PROVIDER_INPUT_REFUSED);
 }
