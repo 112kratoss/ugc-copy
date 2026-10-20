@@ -453,7 +453,8 @@ describe('verifyPostResourceBundlePaymentForRoute', () => {
 
 describe('alerts for a recipe bought on the web', () => {
   // The real alerts, written to notification history: what a purchase made in
-  // the app writes, "Post resources unlocked" and "You made a sale".
+  // the app writes, "Post resources unlocked" and "You made a sale", which
+  // names the buyer by their handle.
   const purchaseAlerts = [
     expect.objectContaining({
       user_id: 'buyer-1',
@@ -467,6 +468,8 @@ describe('alerts for a recipe bought on the web', () => {
       actor_user_id: 'buyer-1',
       type: 'post_resource_unlocked',
       category: 'commerce',
+      title: 'You made a sale',
+      body: '@maya bought the resources attached to your post.',
       deep_link: '/seller-dashboard',
       dedupe_key: 'post-resource-sale:post-1:buyer-1',
     }),
@@ -490,7 +493,7 @@ describe('alerts for a recipe bought on the web', () => {
 
   it('tells the buyer and the owner, once, behind the answer of the verify that settled it', async () => {
     const admin = createAdminSupabaseMock({ settledOrder: settledBundleOrder });
-    const history = createMobileNotificationHistory();
+    const history = createMobileNotificationHistory({ profiles: { 'buyer-1': 'maya' } });
     const deferred: Array<() => Promise<unknown>> = [];
 
     await expect(settle(admin, history, (task) => { deferred.push(task); }))
@@ -505,7 +508,7 @@ describe('alerts for a recipe bought on the web', () => {
 
   it('tells them before answering when the caller has nowhere to run work after it', async () => {
     const admin = createAdminSupabaseMock({ settledOrder: settledBundleOrder });
-    const history = createMobileNotificationHistory();
+    const history = createMobileNotificationHistory({ profiles: { 'buyer-1': 'maya' } });
     history.hold();
 
     const verification = settle(admin, history);
@@ -547,7 +550,7 @@ describe('alerts for a recipe bought on the web', () => {
         return query;
       },
     } as unknown as SupabaseClient;
-    const history = createMobileNotificationHistory();
+    const history = createMobileNotificationHistory({ profiles: { 'buyer-1': 'maya' } });
 
     await notifyRazorpayPostResourcePurchase(withMobileNotificationHistory(orders, history), 'order_bundle_123');
 

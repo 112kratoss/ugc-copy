@@ -2445,7 +2445,7 @@ describe('what each alert opens and says', () => {
 
   it('opens the post page from a saved, shared or recipe-unlocked alert, and Your Sales from a sale', async () => {
     // A finished remix's alert is pinned in completed-remix-notification.test.ts.
-    const history = createMobileNotificationHistory();
+    const history = createMobileNotificationHistory({ profiles: {} });
     const client = writtenTo(history);
 
     await notifyPostSocialActivity(client, { type: 'post_saved', recipientUserId: 'creator-1', actorUserId: 'reader-1', postId: 'post-1' });
@@ -2467,7 +2467,7 @@ describe('what each alert opens and says', () => {
   });
 
   it('tells a seller of a sale and of a free open as commerce, in words that tell the two apart', async () => {
-    const history = createMobileNotificationHistory();
+    const history = createMobileNotificationHistory({ profiles: {} });
     const client = writtenTo(history);
     const unlock = { buyerUserId: 'reader-1', ownerUserId: 'creator-1', postId: 'post-1', bundleId: 'bundle-1' };
 
@@ -2503,6 +2503,83 @@ describe('what each alert opens and says', () => {
       ['Post resources unlocked', '/showcase/post-1'],
       ['Post resources unlocked', '/showcase/post-1'],
     ]);
+  });
+
+  it('names the buyer to the seller by their handle, in a sale and in a free open', async () => {
+    // Recent sales lists paid buyers by handle already. Any handle, the
+    // creator-xxxxxxxx one every account starts with included, as a follow
+    // alert names a follower.
+    const history = createMobileNotificationHistory({ profiles: { 'reader-1': 'Maya', 'reader-2': 'creator-0a1b2c3d' } });
+    const client = writtenTo(history);
+    const unlock = { buyerUserId: 'reader-1', ownerUserId: 'creator-1', postId: 'post-1', bundleId: 'bundle-1' };
+
+    await notifyPostResourceUnlockCompleted(client, unlock);
+    await notifyPostResourceUnlockCompleted(client, { ...unlock, buyerUserId: 'reader-2', free: true });
+
+    const sellerAlerts = history.sent.filter((row) => row.user_id === 'creator-1');
+    expect(sellerAlerts.map(({ actor_user_id, category, title, body, deep_link, dedupe_key }) => (
+      { actor_user_id, category, title, body, deep_link, dedupe_key }
+    ))).toEqual([
+      {
+        actor_user_id: 'reader-1',
+        category: 'commerce',
+        title: 'You made a sale',
+        body: '@maya bought the resources attached to your post.',
+        deep_link: '/seller-dashboard',
+        dedupe_key: 'post-resource-sale:post-1:reader-1',
+      },
+      {
+        actor_user_id: 'reader-2',
+        category: 'commerce',
+        title: '@creator-0a1b2c3d opened your free resources',
+        body: 'They can view the prompt, files, or workflow now.',
+        deep_link: '/seller-dashboard',
+        dedupe_key: 'post-resource-sale:post-1:reader-2',
+      },
+    ]);
+    // The buyer's own alert names no one.
+    expect(history.sent.filter((row) => row.user_id !== 'creator-1').map((row) => [row.title, row.body])).toEqual([
+      ['Post resources unlocked', 'The prompt, files, or workflow are ready to view.'],
+      ['Post resources unlocked', 'The prompt, files, or workflow are ready to view.'],
+    ]);
+  });
+
+  it('tells the seller without a name when the buyer has no handle, or it cannot be read', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const unlock = { ownerUserId: 'creator-1', postId: 'post-1', bundleId: 'bundle-1' };
+    const unnamed = [
+      ['You made a sale', 'A creator bought the resources attached to your post.'],
+      ['Someone opened your free resources', 'A creator opened the resources attached to your post.'],
+    ];
+
+    // reader-1 has no handle; reader-2 has no profile row.
+    const history = createMobileNotificationHistory({ profiles: { 'reader-1': null } });
+    const client = writtenTo(history);
+    await notifyPostResourceUnlockCompleted(client, { ...unlock, buyerUserId: 'reader-1' });
+    await notifyPostResourceUnlockCompleted(client, { ...unlock, buyerUserId: 'reader-2', free: true });
+    expect(history.sent.filter((row) => row.user_id === 'creator-1').map((row) => [row.title, row.body])).toEqual(unnamed);
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    // The profile read fails: that costs the name, never the alert.
+    const unreadable = createMobileNotificationHistory();
+    const unreadableClient = withMobileNotificationHistory({
+      from: (table: string) => {
+        if (table !== 'profiles') throw new Error(`Unexpected call: ${table}`);
+        return {
+          select: () => ({
+            eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'read failed' } }) }),
+          }),
+        };
+      },
+      rpc: async (name: string) => {
+        throw new Error(`Unexpected call: ${name}`);
+      },
+    } as unknown as SupabaseClient, unreadable);
+    await notifyPostResourceUnlockCompleted(unreadableClient, { ...unlock, buyerUserId: 'reader-3' });
+    await notifyPostResourceUnlockCompleted(unreadableClient, { ...unlock, buyerUserId: 'reader-4', free: true });
+    expect(unreadable.sent.filter((row) => row.user_id === 'creator-1').map((row) => [row.title, row.body])).toEqual(unnamed);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('failed_to_load_alert_profile'));
+    errorSpy.mockRestore();
   });
 
   it('tells a seller their payout was sent, or not sent and why, and opens Your Sales', async () => {
@@ -2557,13 +2634,16 @@ describe('what each alert opens and says', () => {
   });
 
   it('words the seller alerts for both clients', async () => {
-    // The web's Alerts prints these as written, beside the app.
-    const history = createMobileNotificationHistory();
+    // The web's Alerts prints these as written, beside the app. reader-1 and
+    // reader-2 are named; reader-3 and reader-4 have no handle.
+    const history = createMobileNotificationHistory({ profiles: { 'reader-1': 'maya', 'reader-2': 'lee' } });
     const client = writtenTo(history);
     const unlock = { buyerUserId: 'reader-1', ownerUserId: 'creator-1', postId: 'post-1', bundleId: 'bundle-1' };
 
     await notifyPostResourceUnlockCompleted(client, unlock);
     await notifyPostResourceUnlockCompleted(client, { ...unlock, buyerUserId: 'reader-2', free: true });
+    await notifyPostResourceUnlockCompleted(client, { ...unlock, buyerUserId: 'reader-3' });
+    await notifyPostResourceUnlockCompleted(client, { ...unlock, buyerUserId: 'reader-4', free: true });
     await notifyCreatorPayoutResolved(client, { userId: 'creator-1', requestId: 'request-1', status: 'paid', amountUsd: '$150.00', reason: null });
     await notifyCreatorPayoutResolved(client, { userId: 'creator-1', requestId: 'request-2', status: 'rejected', amountUsd: '$150.00', reason: 'Wrong account' });
 
