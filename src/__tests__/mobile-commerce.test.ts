@@ -308,6 +308,32 @@ function createNotificationOnlyFromMock(disallowedTables: string[]) {
       };
     }
 
+    // The handle a sale's alert names its buyer by, read by id, and none here.
+    // Any other profiles read is a step the cash unlock must not take.
+    if (table === 'profiles') {
+      return {
+        select(columns: string) {
+          if (columns !== 'username') {
+            disallowedTables.push(`profiles(${columns})`);
+            throw new Error(`Unexpected client-side mobile cash unlock profiles read: ${columns}`);
+          }
+          return {
+            eq(column: string) {
+              if (column !== 'id') {
+                disallowedTables.push(`profiles.${column}`);
+                throw new Error(`Unexpected client-side mobile cash unlock profiles filter: ${column}`);
+              }
+              return {
+                async maybeSingle() {
+                  return { data: null, error: null };
+                },
+              };
+            },
+          };
+        },
+      };
+    }
+
     disallowedTables.push(table);
     throw new Error(`Unexpected client-side mobile cash unlock table step: ${table}`);
   });
@@ -2182,8 +2208,12 @@ describe('mobile purchase notifications', () => {
     }
 
     expect(logged.length).toBeGreaterThan(0);
+    // Each failure is an alert not written, or the handle a sale's alert names
+    // its buyer by not read (the alert then goes unnamed).
     expect(logged.map((record) => record.msg)).toEqual(
-      logged.map(() => 'failed_to_create_mobile_notification'),
+      logged.map((record) => (
+        record.msg === 'failed_to_load_alert_profile' ? record.msg : 'failed_to_create_mobile_notification'
+      )),
     );
   });
 });

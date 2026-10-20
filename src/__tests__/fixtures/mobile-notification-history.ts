@@ -20,6 +20,9 @@ import { isClaimedProfileUsername, normalizeUsername } from '@/lib/profile';
  * stand, across a block, or twice. As in the database, no save stands until
  * one is recorded.
  *
+ * A sale's alert names its buyer by the handle `profiles` gives them. Without
+ * `profiles` a profile read goes to the client, as any other table does.
+ *
  * Push is switched off for every account unless `pushTo` names it with the
  * Expo tokens of its live devices. Then the real push path runs against these
  * tables, and against whatever a test stubs in as `fetch` for Expo
@@ -33,6 +36,7 @@ export function createMobileNotificationHistory({
   pushTo = {},
   posts = {},
   savers = {},
+  profiles,
 }: {
   /**
    * Accounts with push switched on, and the Expo token of each live device
@@ -44,6 +48,11 @@ export function createMobileNotificationHistory({
   posts?: Record<string, string>;
   /** Saving accounts' profiles: their handle, and whether their telling is on record. */
   savers?: Record<string, { username: string | null; told: boolean }>;
+  /**
+   * Accounts' handles as `profiles.username` holds them (null: none), read by
+   * a sale's alert. An account left out has no profile row.
+   */
+  profiles?: Record<string, string | null>;
 } = {}) {
   const started: string[] = [];
   const sent: Array<Record<string, unknown>> = [];
@@ -184,7 +193,8 @@ export function createMobileNotificationHistory({
       return table === 'mobile_notifications'
         || table === 'mobile_notification_preferences'
         || table === 'mobile_push_tokens'
-        || table === 'mobile_push_deliveries';
+        || table === 'mobile_push_deliveries'
+        || (table === 'profiles' && profiles !== undefined);
     },
     from(table: string) {
       if (table === 'mobile_notifications') {
@@ -315,6 +325,26 @@ export function createMobileNotificationHistory({
                   pushed.splice(pushed.indexOf(push), 1);
                 }
                 return { error: null };
+              },
+            };
+          },
+        };
+      }
+
+      // Only the read a sale's alert makes: an account's handle, by its id.
+      if (table === 'profiles' && profiles) {
+        return {
+          select(columns: string) {
+            if (columns !== 'username') throw new Error(`Unexpected profiles read: ${columns}`);
+            return {
+              eq(column: string, userId: unknown) {
+                if (column !== 'id') throw new Error(`Unexpected profiles filter: ${column}`);
+                return {
+                  async maybeSingle() {
+                    const key = String(userId);
+                    return { data: Object.hasOwn(profiles, key) ? { username: profiles[key] } : null, error: null };
+                  },
+                };
               },
             };
           },

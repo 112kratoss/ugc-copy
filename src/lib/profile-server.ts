@@ -83,10 +83,11 @@ export async function findShareableProfileByUsername(
 }
 
 /**
- * The handle a follow alert names ("@maya followed you."), or null when it
- * cannot be read: that costs the name, never the alert. Any handle, the
- * generated `creator-xxxxxxxx` one included: follows are public, and the alert
- * opens the follower's page by it.
+ * The handle a follow alert names ("@maya followed you.") and a sale's alert
+ * names its buyer by, or null when it cannot be read: that costs the name,
+ * never the alert. Any handle, the generated `creator-xxxxxxxx` one included:
+ * follows are public and the alert opens the follower's page by it, and
+ * Recent sales lists buyers by the same handle.
  */
 export async function loadProfileHandle(
   adminSupabase: SupabaseClient,
