@@ -54,6 +54,12 @@ import {
 } from '@/lib/generation-model-client';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { catalogRunQuoteInput, GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
+import {
+    creatorPromptViolation,
+    promptLengthMeter,
+    promptLimitFor,
+} from '../../../ugc-mobile/lib/model-catalog/provider-prompt-limits';
+import PromptLengthCounter from '@/components/PromptLengthCounter';
 import { useAuth } from '@/components/AuthProvider';
 import type { RemixMediaAssetDescriptor, RemixResolvedAsset, RemixSourceBundle } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
@@ -1485,6 +1491,25 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const multiShotUnknownMentions = shotPromptsTakeMentions && currentIsMultiShot
         ? Array.from(new Set(multiPrompts.flatMap((shot) => findUnknownPromptHandles(shot.prompt, shotMentionHandles))))
         : [];
+    // The selected model's own limits on the prompt and each shot (Kie refuses past them),
+    // counted as the run sends them: Kling 3.0 counts each mention of one of its video
+    // elements as 37 characters. Text past a limit is kept and marked over, after a paste
+    // or a switch to a model with a lower limit alike, and the run waits with the start's
+    // own words.
+    const runSendsImages = runInputs.some((input) => input.kind === 'image');
+    const promptLimit = promptLimitFor(selectedModel, { hasReferenceImages: runSendsImages, kind: 'video' });
+    const promptMeterOptions = { elementMentionLength: promptLimit.elementMentionLength, elementHandles: klingVideoHandles };
+    const promptMeter = promptLengthMeter(prompt, promptLimit.maxLength, promptMeterOptions);
+    const shotMeter = (shotPrompt: string) => promptLengthMeter(shotPrompt, promptLimit.shotMaxLength, promptMeterOptions);
+    const promptLimitMessage = (currentIsMultiShot ? multiPrompts.some((shot) => shot.prompt.trim()) : prompt.trim())
+        ? creatorPromptViolation(selectedModel, videoModel.displayName, {
+            prompt,
+            isMultiShot: currentIsMultiShot,
+            shots: multiPrompts.map((shot) => shot.prompt),
+            hasReferenceImages: runSendsImages,
+            elementHandles: klingVideoHandles,
+        })
+        : null;
     const hasKnownElementMentions = knownElementMentions.length > 0;
     const hasKnownKlingVideoMentions = knownKlingVideoMentions.length > 0;
     // The saved references the prompt mentions that this run leaves out. The row under
@@ -3428,6 +3453,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return;
         }
 
+        // Said beside Generate for as long as it holds, so nothing is set here.
+        if (promptLimitMessage) return;
+
         if (!currentIsMultiShot && staleElementMentions.length > 0) {
             setError(`Unknown element mention${staleElementMentions.length > 1 ? 's' : ''}: ${staleElementMentions.join(', ')}`);
             return;
@@ -4210,10 +4238,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         onKeyUp={syncPromptCaretState}
                                         placeholder={`Describe the ${videoModel.displayName} scene in rich cinematic detail...`}
                                         maxLength={GENERATION_PROMPT_MAX_LENGTH}
+                                        aria-invalid={promptMeter.state === 'over' || undefined}
                                         className="w-full bg-black/50 text-white rounded-2xl p-5 border border-white/10 focus:border-[#ff7a59]/50 focus:ring-4 focus:ring-[#ff7a59]/10 outline-none resize-y min-h-[140px] text-sm leading-relaxed"
                                     />
                                     <div className="mt-2 flex items-center justify-between gap-3 text-xs">
-                                        <span className="text-zinc-600">{prompt.length}/{GENERATION_PROMPT_MAX_LENGTH}</span>
+                                        <PromptLengthCounter meter={promptMeter} />
                                         {staleElementMentions.length > 0 ? (
                                             <span className="min-w-0 text-right text-rose-300">
                                                 Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}:{' '}
@@ -4358,6 +4387,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                    onKeyUp={() => syncShotPromptCaretState(shot)}
 	                                                    placeholder={`Describe shot ${index + 1}...`}
 	                                                    maxLength={GENERATION_PROMPT_MAX_LENGTH}
+	                                                    aria-invalid={shotMeter(shot.prompt).state === 'over' || undefined}
 	                                                    className="mb-4 min-h-[100px] w-full resize-none rounded-2xl border border-white/10 bg-black/50 p-4 text-sm text-white outline-none focus:border-[#ff7a59]/50"
 	                                                />
 	                                                {activeShotMentionQuery?.shotId === shot.id && shotPromptsTakeMentions ? (
@@ -4403,6 +4433,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                         className="w-32 accent-[#ff7a59]"
                                                     />
                                                     <span className="text-xs font-bold text-white">{shot.duration}s</span>
+                                                    {/* The shot's own limit, which Kling 3.0 and Kling O3 set far below the prompt's. */}
+                                                    <PromptLengthCounter meter={shotMeter(shot.prompt)} className="ml-auto text-xs" />
                                                 </div>
                                             </motion.div>
                                         ))}
@@ -5350,7 +5382,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         <button
                                             type="button"
                                             onClick={startNewRunInstead}
-                                            disabled={isGenerating || quotePending}
+                                            disabled={isGenerating || quotePending || Boolean(promptLimitMessage)}
                                             className="ui-focus-ring flex min-h-12 w-full items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-6 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                             {estimatedCost !== null ? `Start a new run · ${quoteUi.costLabel}` : 'Start a new run'}
@@ -5374,7 +5406,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 ) : (
                                     <button
                                         onClick={() => void handleGenerate()}
-                                        disabled={isGenerating || quotePending}
+                                        disabled={isGenerating || quotePending || Boolean(promptLimitMessage)}
                                         className="ui-focus-ring flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 py-4 text-base font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         {isGenerating ? <><Loader2 className="w-5 h-5 animate-spin" /> Generating...</> : <><Video className="w-5 h-5" /> Generate Video</>}
@@ -5402,6 +5434,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         <p className="text-sm text-amber-300 [overflow-wrap:anywhere]">{pickNotice}</p>
                                     ) : referenceLimitMessage ? (
                                         <p className="text-sm text-red-400">{referenceLimitMessage}</p>
+                                    ) : promptLimitMessage ? (
+                                        <p className="text-sm text-red-400">{promptLimitMessage}</p>
                                     ) : error ? (
                                         // The error can name a handle, and can print a subject's name or
                                         // whatever the server answered. A handle gets its own box; any other

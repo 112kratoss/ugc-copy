@@ -73,6 +73,7 @@ import {
   catalogDraftInputCounts,
   catalogDraftRunHandles,
   catalogMultiShotLimits,
+  catalogPromptMeters,
   catalogRunEnhancementInputs,
   catalogRunSlots,
   catalogStartRequest,
@@ -150,6 +151,7 @@ import { useAppTheme } from '@/lib/theme-context';
 import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel, PromptEnhancementRequest, PromptEnhancementResponse, PromptEnhancementWarning, SeedanceAssetResponse } from '@/lib/types';
 import { SUBJECT_IMAGES_PER_NAME, SUBJECT_IMAGES_SLOT_KEY, subjectsPerRun, type ModelCatalogSummary, GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH, PROMPT_ENHANCEMENT_COST_CREDITS } from '@/lib/model-catalog/protocol';
 import { createSeedanceAssetMetadata, isSeedance2VideoModelId, type SeedanceAssetKind, type SeedanceAssetMetadata } from '@/lib/model-catalog/seedance-assets';
+import type { PromptLengthMeter } from '@/lib/model-catalog/provider-prompt-limits';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
 import { verticalHitSlop } from '@/lib/hit-target';
@@ -2977,6 +2979,7 @@ function IdentityCreationScreen({
             promptOnlyModelName={selectedImageModel && maxImageReferences === 0 ? selectedImageModel.displayName : null}
             mentionHandles={selectedImageModel ? catalogDraftRunHandles(imageDraft, selectedImageModel) : null}
             referenceLimitMessage={validation.errors.find(isReferenceLimitError) ?? null}
+            promptMeter={catalogPromptMeters(imageDraft, selectedImageModel).prompt}
             promptFocusRequest={promptFocusRequest}
             isEnhancing={isEnhancing}
             enhanceVerb={imagePromptNamesReference(imageDraft, selectedImageModel) ? 'Polish' : 'Enhance'}
@@ -3340,6 +3343,7 @@ function ImagePromptComposer({
   promptOnlyModelName,
   mentionHandles,
   referenceLimitMessage,
+  promptMeter,
   promptFocusRequest,
   isEnhancing,
   enhanceVerb,
@@ -3372,6 +3376,8 @@ function ImagePromptComposer({
   mentionHandles: string[] | null;
   /** The validator's word on references past the model's max, said beside them. */
   referenceLimitMessage: string | null;
+  /** The prompt's length against the model's own limit (`catalogPromptMeters`). */
+  promptMeter: PromptLengthMeter;
   /** Bumped to put the cursor in the prompt, after a refusal of what it says. */
   promptFocusRequest: number;
   isEnhancing: boolean;
@@ -3563,7 +3569,7 @@ function ImagePromptComposer({
             style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 16, backgroundColor: theme.colors.panel }}
           />
         </View>
-        <PromptLengthCounter length={draft.prompt.length} />
+        <PromptLengthCounter meter={promptMeter} />
         {promptMessage ? (
           <Text accessibilityRole="alert" selectable style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 10 }}>
             {promptMessage}
@@ -3804,6 +3810,8 @@ function CompactShotEditor({
   const atShotCap = (maxShots !== null && draft.multiPrompts.length >= maxShots)
     || (maxTotalSeconds !== null && totalDuration >= maxTotalSeconds);
   const selectedShotNumber = selectedShot ? draft.multiPrompts.findIndex((shot) => shot.id === selectedShot.id) + 1 : 0;
+  // Each shot against its model's shot limit (Kling 3.0 takes 500 characters, Kling O3 512).
+  const shotMeters = catalogPromptMeters(draft, model).shots;
   const shotEnhanceLabels = shotEnhanceButtonLabels(selectedShotNumber, isEnhancing);
   // A shot with no words has nothing to enhance, as the web's per-shot button says by being off.
   const shotEnhanceDisabled = isEnhancing || !selectedShot?.prompt.trim();
@@ -3847,16 +3855,18 @@ function CompactShotEditor({
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 8 }}>
         {draft.multiPrompts.map((shot, index) => {
           const active = shot.id === selectedShot?.id;
+          // A shot past its limit says so on its chip too, so it can be found among the others.
+          const over = shotMeters[shot.id]?.state === 'over';
           return (
             <Pressable
               key={shot.id}
               accessibilityRole="button"
-              accessibilityLabel={`Edit shot ${index + 1}`}
+              accessibilityLabel={`Edit shot ${index + 1}${over ? ', over the character limit' : ''}`}
               accessibilityState={{ selected: active }}
               onPress={() => setSelectedId(shot.id)}
-              style={({ pressed }) => ({ minWidth: 76, minHeight: 48, borderRadius: 16, borderWidth: 1, borderColor: active ? hexWithAlpha(theme.colors.image, 0.55) : theme.colors.border, backgroundColor: active ? hexWithAlpha(theme.colors.image, 0.12) : theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', gap: 2, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+              style={({ pressed }) => ({ minWidth: 76, minHeight: 48, borderRadius: 16, borderWidth: 1, borderColor: over ? theme.colors.danger : active ? hexWithAlpha(theme.colors.image, 0.55) : theme.colors.border, backgroundColor: active ? hexWithAlpha(theme.colors.image, 0.12) : theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', gap: 2, opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
-              <Text style={{ color: active ? theme.colors.text : theme.colors.muted, fontSize: 11, fontWeight: '900' }}>Shot {index + 1}</Text>
+              <Text style={{ color: over ? theme.colors.danger : active ? theme.colors.text : theme.colors.muted, fontSize: 11, fontWeight: '900' }}>Shot {index + 1}</Text>
               <Text style={{ color: theme.colors.faint, fontSize: 11 }}>{shot.duration}s</Text>
             </Pressable>
           );
@@ -3879,6 +3889,7 @@ function CompactShotEditor({
             onBlur={onBlur}
             style={{ height: 154, color: theme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 15, paddingTop: 15, paddingBottom: 22 }}
           />
+          {shotMeters[selectedShot.id] ? <PromptLengthCounter testID="shot-prompt-length" meter={shotMeters[selectedShot.id]} /> : null}
           {promptMessage ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 15, paddingBottom: 10 }}>{promptMessage}</Text> : null}
           {notes && notes.shotId === selectedShot.id && notes.prompt === selectedShot.prompt ? <PromptQualityNotes warnings={notes.warnings} /> : null}
           <View style={{ paddingHorizontal: 12, paddingBottom: 4 }}>
@@ -4374,7 +4385,7 @@ function VideoCreatorComposer({
             }}
             style={{ height: 188, color: theme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 28 }}
           />
-          <PromptLengthCounter length={draft.prompt.length} />
+          <PromptLengthCounter meter={catalogPromptMeters(draft, model).prompt} />
           {promptMessage ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 11 }}>{promptMessage}</Text> : null}
           <PromptQualityNotes warnings={promptNotes} />
         </View>
@@ -4784,7 +4795,7 @@ function MotionCreatorComposer({
           onBlur={onBlur}
           style={{ height: 128, color: theme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 22 }}
         />
-        <PromptLengthCounter length={draft.prompt.length} limit={MOTION_PROMPT_MAX_LENGTH} />
+        <PromptLengthCounter meter={catalogPromptMeters(draft, model).prompt} />
         {promptMessage ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 11 }}>{promptMessage}</Text> : null}
         <PromptQualityNotes warnings={promptNotes} />
       </View>
@@ -6565,19 +6576,22 @@ function useReferencePreviewUrl(media: MediaDraft) {
 }
 
 /**
- * The prompt's length against the limit the routes and every composer read for its kind, as web's
- * counter shows it: 10,000 for image and video, Kie's own 2,500 for motion.
+ * A prompt's length against its model's own limit, as web's counter shows it ("4,812 / 5,000"):
+ * the limit Kie sets for that model (Z-Image 1,000, a Kling 3.0 shot 500), or the route's where it
+ * sets none (10,000, motion 2,500). Muted with room, amber in the limit's last tenth, danger past it.
+ * The box never cuts what is past it (its maxLength stays the route's): the run waits, and the
+ * blocker beside Generate says why in the start's own words.
  */
-function PromptLengthCounter({ length, limit = GENERATION_PROMPT_MAX_LENGTH }: { length: number; limit?: number }) {
+function PromptLengthCounter({ meter, testID = 'prompt-length' }: { meter: PromptLengthMeter; testID?: string }) {
   const theme = useAppTheme();
-  const atLimit = length >= limit;
+  const color = meter.state === 'over' ? theme.colors.danger : meter.state === 'near' ? theme.colors.amber : theme.colors.muted;
   return (
     <Text
-      testID="prompt-length"
-      accessibilityLabel={`${groupDigits(length)} of ${groupDigits(limit)} characters`}
-      style={{ alignSelf: 'flex-end', color: atLimit ? theme.colors.amber : theme.colors.muted, fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'], paddingHorizontal: 16, paddingBottom: 10 }}
+      testID={testID}
+      accessibilityLabel={`${groupDigits(meter.length)} of ${groupDigits(meter.limit)} characters${meter.state === 'over' ? ', over the limit' : ''}`}
+      style={{ alignSelf: 'flex-end', color, fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'], paddingHorizontal: 16, paddingBottom: 10 }}
     >
-      {`${groupDigits(length)}/${groupDigits(limit)}`}
+      {meter.label}
     </Text>
   );
 }
