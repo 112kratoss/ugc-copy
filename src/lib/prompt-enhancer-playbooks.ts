@@ -150,7 +150,8 @@ const IMAGE_PLAYBOOKS: Record<string, EnhancerPlaybook> = {
       strategyRules: [
         'Compose one flowing narrative paragraph — this is a reasoning model that parses instructions and plans composition.',
         'For edits, state the single change and then keep everything else exactly the same (style, lighting, composition).',
-        'Only reference Google Search when grounding is enabled, and then instruct search, analysis, and the visual consequence explicitly.',
+        // Kie's Nano Banana 2 no longer takes `google_search` (re-read 2026-10-20), so it has no grounding.
+        'Never reference Google Search or live data — this model has no grounding.',
       ],
       defaultSafeguards: [PRESERVE_INTENT_SAFEGUARD],
     },
