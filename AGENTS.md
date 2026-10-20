@@ -101,7 +101,7 @@ Production model definitions, controls, and pricing live in Supabase, released t
 
 ### Web ↔ mobile contract
 
-`contracts/` holds fourteen versioned JSON contracts: five are read at runtime (the mobile CORS allowlist, universal links, resource-bundle authoring, credit packs, reserved handles) and nine are fixtures imported by both `src/__tests__` and `ugc-mobile/__tests__`, so a breaking API change fails tests on both sides. Changing a mobile-facing route means updating the contract files and both suites. Three catalog modules under `ugc-mobile/lib/model-catalog/` and the saver notice's policy (`ugc-mobile/lib/saver-notice-policy/`) are shared with the web by relative import and must stay free of React Native, Expo and Node imports. `src/proxy.ts` is the bearer admission boundary for every policy-listed `/api` route (`src/lib/route-identity-policy.ts`), with two guest exception lists, and `/api/showcase/feed` runs the same check at the route itself. The full contract, deep-link and admission rules are `.claude/rules/web-mobile-contract.md`, loaded when those files are touched; read it before changing any of them.
+`contracts/` holds fourteen versioned JSON contracts: five are read at runtime (the mobile CORS allowlist, universal links, resource-bundle authoring, credit packs, reserved handles) and nine are fixtures imported by both `src/__tests__` and `ugc-mobile/__tests__`, so a breaking API change fails tests on both sides. Changing a mobile-facing route means updating the contract files and both suites. Four catalog modules under `ugc-mobile/lib/model-catalog/` and the saver notice's policy (`ugc-mobile/lib/saver-notice-policy/`) are shared with the web by relative import and must stay free of React Native, Expo and Node imports. `src/proxy.ts` is the bearer admission boundary for every policy-listed `/api` route (`src/lib/route-identity-policy.ts`), with two guest exception lists, and `/api/showcase/feed` runs the same check at the route itself. The full contract, deep-link and admission rules are `.claude/rules/web-mobile-contract.md`, loaded when those files are touched; read it before changing any of them.
 
 ### Admin console (`/admin`)
 
@@ -115,7 +115,7 @@ Three Vercel crons run every 10 min under `CRON_SECRET` bearer auth: `/api/cron/
 
 All web unit/integration tests live flat in `src/__tests__/` (~1,050 files; `ugc-mobile/__tests__/` holds ~360 more) — never colocated. Notable conventions: `*-migration.test.ts` files assert the SQL content of migrations (add one when you add a migration); contract fixture tests pin the mobile API. E2E lives in `tests/e2e/` and uses an auth bypass (`src/lib/e2e-auth.ts`) that is build-blocked in production. Mobile logic is factored into `ugc-mobile/lib/*-view-model.ts` modules precisely so it can be vitest-tested without rendering.
 
-The three E2E gotchas (a second `next dev` blocks Playwright's own server, the auth bypass needs its cookie, two open pages reload each other after a compile) are `.claude/rules/e2e.md`, loaded with `tests/e2e/`.
+The four E2E gotchas (a second `next dev` blocks Playwright's own server, the auth bypass needs its cookie, two open pages reload each other after a compile, a compile spends the timeout of whatever waits while it runs) are `.claude/rules/e2e.md`, loaded with `tests/e2e/`.
 
 ## Conventions and cautions
 

@@ -5153,6 +5153,91 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       });
     });
 
+    // Each model's own prompt limit (lib/model-catalog/provider-prompt-limits.ts), which the start
+    // refused only after Generate was pressed: the counter reads against it, and past it the run
+    // waits with the start's own words. Nothing typed is cut.
+    describe('a prompt past its model’s own limit', () => {
+      const shot = (id: string, prompt: string, duration = 5) => ({ id, prompt, duration });
+      // The counter's text node, not the component that draws it (both carry the testID).
+      const counterText = (tree: renderer.ReactTestRenderer, testID = 'prompt-length') => {
+        const [node] = tree.root.findAll((candidate) => String(candidate.type) === 'text' && candidate.props.testID === testID);
+        return { text: collectText(node).join(''), label: node.props.accessibilityLabel as string };
+      };
+      const promptValue = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value as string;
+
+      it('reads over on Kling 3.0 past 2,500 and holds Generate with the model’s words, keeping every character', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: { model: 'kling-3.0-video', catalogRevision: 'parity-rev' } }));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        await typePrompt(tree, 'x'.repeat(2400));
+        expect(counterText(tree).text).toBe('2,400 / 2,500');
+        expect(generateButton(tree).props.disabled).toBe(false);
+
+        await typePrompt(tree, 'x'.repeat(2501));
+        expect(promptValue(tree)).toBe('x'.repeat(2501));
+        expect(counterText(tree)).toEqual({ text: '2,501 / 2,500', label: '2,501 of 2,500 characters, over the limit' });
+        expect(blocker(tree)).toContain('Kling 3.0 Cinematic prompts support up to 2,500 characters.');
+        expect(generateButton(tree).props.disabled).toBe(true);
+        expect(storedDrafts().video.prompt).toBe('x'.repeat(2501));
+      });
+
+      it('marks a story’s shot past its 500 on its chip and under it, and names that shot', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        memory.set(ordinaryKey, savedDrafts({ video: {
+          model: 'kling-3.0-video',
+          catalogRevision: 'parity-rev',
+          isMultiShot: true,
+          multiPrompts: [shot('s1', 'A door opens'), shot('s2', 'z'.repeat(501))],
+        } }));
+        const tree = await open(<MediaCreationScreen initialTool="video" />);
+
+        expect(counterText(tree, 'shot-prompt-length').text).toBe('12 / 500');
+        expect(labelled(tree.root, 'Edit shot 1').props.accessibilityState).toEqual({ selected: true });
+        expect(blocker(tree)).toContain('Shot 2: Kling 3.0 Cinematic shot prompts support up to 500 characters.');
+        expect(generateButton(tree).props.disabled).toBe(true);
+
+        renderer.act(() => { labelled(tree.root, 'Edit shot 2, over the character limit').props.onPress(); });
+        expect(counterText(tree, 'shot-prompt-length')).toEqual({ text: '501 / 500', label: '501 of 500 characters, over the limit' });
+        expect(tree.root.findByProps({ testID: 'selected-shot-prompt' }).props.value).toBe('z'.repeat(501));
+
+        renderer.act(() => { tree.root.findByProps({ testID: 'selected-shot-prompt' }).props.onChangeText('z'.repeat(500)); });
+        await settle();
+        expect(counterText(tree, 'shot-prompt-length').text).toBe('500 / 500');
+        expect(labelled(tree.root, 'Edit shot 2').props.accessibilityState).toEqual({ selected: true });
+        // Nothing holds the run any more, so no blocker is drawn.
+        expect(tree.root.findAllByProps({ testID: 'creator-contextual-blocker' })).toHaveLength(0);
+        expect(generateButton(tree).props.disabled).toBe(false);
+      });
+
+      it('keeps the prompt when the creator picks a model with a lower limit, and frees it on the way back', async () => {
+        catalogState.catalog = parityCatalog([
+          parityImageModel('nano-banana-2', 'Nano Banana 2.0', 4),
+          parityImageModel('z-image', 'Z-Image', 0),
+        ]);
+        const prompt = `A harbour at dusk. ${'Lamps along the quay. '.repeat(70)}`.trim();
+        memory.set(ordinaryKey, savedDrafts({ image: { model: 'nano-banana-2', catalogRevision: 'parity-rev', prompt } }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        expect(counterText(tree).text).toBe('1,558 / 10,000');
+        expect(generateButton(tree).props.disabled).toBe(false);
+
+        await pickModel(tree, 'Z-Image');
+        await settle();
+        expect(modelChip(tree)).toContain('Z-Image');
+        expect(promptValue(tree)).toBe(prompt);
+        expect(counterText(tree).text).toBe('1,558 / 1,000');
+        expect(blocker(tree)).toContain('Z-Image prompts support up to 1,000 characters.');
+        expect(generateButton(tree).props.disabled).toBe(true);
+        expect(storedDrafts().image.prompt).toBe(prompt);
+
+        await pickModel(tree, 'Nano Banana 2.0');
+        await settle();
+        expect(promptValue(tree)).toBe(prompt);
+        expect(counterText(tree).text).toBe('1,558 / 10,000');
+        expect(generateButton(tree).props.disabled).toBe(false);
+      });
+    });
+
     // A run is the request its price was quoted for: it carries the draft's settings in the shape
     // the quote request sent them, and nothing is read back from the quote's answer; the server
     // quotes every run again and makes it with its own normalized result. The quote here answers
@@ -6382,19 +6467,22 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     describe('the prompt and the parameter sheet', () => {
-      // Motion is held to Kie's own 2,500 (product decision 20); image and video keep 10,000.
+      // Each prompt counts against its model's own limit (provider-prompt-limits): Nano Banana 2.0
+      // sets none, so the route's 10,000 stands; Kling 3.0 Cinematic takes 2,500; motion keeps Kie's
+      // 2,500 (product decision 20). The box itself stops only at the route's limit, so a switch to
+      // a model with a lower one never cuts what was typed.
       it.each([
         ['image', 'Generation prompt', 10000, '10,000'],
-        ['video', 'Generation prompt', 10000, '10,000'],
+        ['video', 'Generation prompt', 10000, '2,500'],
         ['motion', 'Optional motion prompt', 2500, '2,500'],
-      ] as const)('count the %s prompt against its limit', async (tool, promptLabel, limit, limitLabel) => {
+      ] as const)('count the %s prompt against its model’s limit', async (tool, promptLabel, maxLength, limitLabel) => {
         const tree = await open(<MediaCreationScreen initialTool={tool} />);
-        expect(collectText(tree.root.findByProps({ testID: 'prompt-length' }))).toEqual([`0/${limitLabel}`]);
-        expect(tree.root.findByProps({ accessibilityLabel: promptLabel }).props.maxLength).toBe(limit);
+        expect(collectText(tree.root.findByProps({ testID: 'prompt-length' }))).toEqual([`0 / ${limitLabel}`]);
+        expect(tree.root.findByProps({ accessibilityLabel: promptLabel }).props.maxLength).toBe(maxLength);
 
         await typePrompt(tree, 'x'.repeat(1234), promptLabel);
         const counter = tree.root.findByProps({ testID: 'prompt-length' });
-        expect(collectText(counter)).toEqual([`1,234/${limitLabel}`]);
+        expect(collectText(counter)).toEqual([`1,234 / ${limitLabel}`]);
         expect(counter.props.accessibilityLabel).toBe(`1,234 of ${limitLabel} characters`);
       });
 

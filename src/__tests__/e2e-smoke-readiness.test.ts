@@ -12,8 +12,8 @@ function read(relativePath: string) {
 // A failed Quality run on main skips the production release without a word, so
 // the E2E job has to fail only for a reason in the code.
 describe('E2E smoke job', () => {
-  // Two pages open on one `next dev` reload each other (AGENTS.md, the third E2E
-  // gotcha): with two workers every cold run reloaded a page under a test.
+  // Two pages open on one `next dev` reload each other (the third gotcha in
+  // .claude/rules/e2e.md): with two workers every cold run reloaded a page under a test.
   it('runs the suite on one worker in CI', () => {
     expect(read('playwright.config.ts')).toContain('workers: process.env.CI ? 1 : undefined,');
   });

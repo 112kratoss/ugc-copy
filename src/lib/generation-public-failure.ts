@@ -20,6 +20,29 @@ export const GENERATION_PROMPT_BLOCKED_MESSAGE =
 export const GENERATION_SUBMISSION_PENDING_MESSAGE =
   'We could not confirm this request with the generation provider in time. It may still be running — check Studio in a few minutes. Your credits stay reserved until it resolves, and are returned automatically if it does not.';
 
+/**
+ * The failure code of a start refused, before anything is held, for what its provider
+ * would refuse after the hold (provider-input-limits: a prompt too long or too short
+ * for the model, a reference clip, track or element too short; and a canvas step's
+ * reference audio past its release's caps). Its message names the model and the limit
+ * and none of the prompt.
+ *
+ * It is not one of the codes a run fails with: POST /api/generations answers it as
+ * INVALID_GENERATION_REQUEST in the refusal's own words, and the public copy below ends
+ * a run step as `provider_rejected`. A step whose recipe is its viewer's own says the
+ * words instead (`getProviderInputRefusal`).
+ */
+export const PROVIDER_INPUT_REFUSED = 'provider_input_refused';
+export type ProviderInputRefusedCode = typeof PROVIDER_INPUT_REFUSED;
+
+/**
+ * What a step refused that way says where its recipe is private (a run of a published
+ * template): no model, no limit, no prompt. The same prompt and files are refused
+ * again, so it offers a new run, not a retry.
+ */
+export const PROVIDER_INPUT_REFUSED_MESSAGE =
+  'This step could not be started because part of this run is outside what the template’s model accepts, such as a clip that is too short or too long. No credits were used for it. Retrying will not help: start a new run with different uploads to try again.';
+
 export type PublicGenerationStartFailure = Readonly<{
   code: GenerationStartFailureCode;
   message: string;
@@ -249,6 +272,17 @@ function hasInvalidInputMediaSignal(value: string): boolean {
   ].some((pattern) => pattern.test(signal));
 }
 
+/**
+ * The words of a start refused for what its provider would refuse, which name the model
+ * and the limit, or null for any other error. Only a caller whose viewer owns the recipe
+ * shows them: the canvas, and a template's test run by its creator.
+ */
+export function getProviderInputRefusal(error: unknown): string | null {
+  if (errorCode(error) !== PROVIDER_INPUT_REFUSED) return null;
+  const message = errorMessage(error).trim();
+  return message || null;
+}
+
 export function normalizeGenerationStartFailureCode(value: unknown): GenerationStartFailureCode | null {
   return typeof value === 'string' && GENERATION_START_FAILURE_CODES.has(value as GenerationStartFailureCode)
     ? value as GenerationStartFailureCode
@@ -293,6 +327,13 @@ export function getPublicGenerationStartFailure(error: unknown): PublicGeneratio
 
   if (code === 'prompt blocked') {
     return { code: 'prompt_blocked', message: GENERATION_PROMPT_BLOCKED_MESSAGE };
+  }
+
+  // Read by its code alone, before any words: they carry a label the creator chose, and
+  // one that says "busy" or "invalid image" must not leave a step waiting on a provider
+  // or asking for a new upload. Nothing was held, and the same request is refused again.
+  if (code === normalizedSignal(PROVIDER_INPUT_REFUSED)) {
+    return { code: 'provider_rejected', message: PROVIDER_INPUT_REFUSED_MESSAGE };
   }
 
   if (code === 'service misconfigured') {

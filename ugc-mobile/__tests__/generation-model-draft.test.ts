@@ -13,6 +13,8 @@ import {
   catalogDraftInputCounts,
   catalogDraftRunHandles,
   catalogMultiShotLimits,
+  catalogPromptLimitError,
+  catalogPromptMeters,
   catalogRunEnhancementInputs,
   catalogRunInputSlots,
   catalogVideoRunReferenceMode,
@@ -1266,5 +1268,108 @@ describe('what the creator reads off the run it would send', () => {
       });
       expect(enhanced(draft, klingO3)).not.toHaveProperty('frameImageUrls');
     });
+  });
+});
+
+/**
+ * Each model's own prompt limit (lib/model-catalog/provider-prompt-limits.ts, which the server's
+ * starts read too): the run waits with the start's own words, which name the model and the limit,
+ * and nothing shortens the prompt, across a model change included.
+ */
+describe('a prompt is held to its model’s own limit', () => {
+  const imageDraftOn = (model: GenerationModelDescriptor, prompt: string, overrides: Partial<ImageCreationDraft> = {}) => (
+    applyCatalogModelDefaults({ ...createDefaultCreationDraft('image'), model: model.id, prompt, ...overrides }, model) as ImageCreationDraft
+  );
+  const zImage = imageModelWithSlots('z-image', 'Z-Image', 0);
+
+  it('waits past the limit in the start’s words, keeps the prompt whole, and reads the counter over', () => {
+    const over = imageDraftOn(zImage, 'x'.repeat(1001));
+    expect(over.prompt).toHaveLength(1001);
+    expect(validateCatalogCreationDraft(over, zImage, ready)).toMatchObject({
+      errors: ['Z-Image prompts support up to 1,000 characters.'],
+      canGenerate: false,
+    });
+    expect(catalogPromptLimitError(over, zImage)).toBe('Z-Image prompts support up to 1,000 characters.');
+    expect(catalogPromptMeters(over, zImage).prompt).toEqual({ length: 1001, limit: 1000, state: 'over', label: '1,001 / 1,000' });
+
+    const atLimit = imageDraftOn(zImage, 'x'.repeat(1000));
+    expect(validateCatalogCreationDraft(atLimit, zImage, ready)).toMatchObject({ errors: [], canGenerate: true });
+    expect(catalogPromptMeters(atLimit, zImage).prompt).toMatchObject({ label: '1,000 / 1,000', state: 'near' });
+  });
+
+  it('keeps the prompt across a switch to a model with a lower limit, which marks it over until the switch back', () => {
+    const roomy = imageModelWithSlots('nano-banana-2', 'Nano Banana 2.0', 4);
+    const prompt = 'y'.repeat(4000);
+    const onRoomy = imageDraftOn(roomy, prompt);
+    expect(validateCatalogCreationDraft(onRoomy, roomy, ready).errors).toEqual([]);
+    expect(catalogPromptMeters(onRoomy, roomy).prompt).toMatchObject({ label: '4,000 / 10,000', state: 'within' });
+
+    const onZImage = applyCatalogModelDefaults(onRoomy, zImage) as ImageCreationDraft;
+    expect(onZImage.prompt).toBe(prompt);
+    expect(validateCatalogCreationDraft(onZImage, zImage, ready).errors).toEqual(['Z-Image prompts support up to 1,000 characters.']);
+    expect(catalogPromptMeters(onZImage, zImage).prompt).toMatchObject({ label: '4,000 / 1,000', state: 'over' });
+
+    const back = applyCatalogModelDefaults(onZImage, roomy) as ImageCreationDraft;
+    expect(back.prompt).toBe(prompt);
+    expect(validateCatalogCreationDraft(back, roomy, ready)).toMatchObject({ errors: [], canGenerate: true });
+  });
+
+  it('asks for the fewest characters a provider takes, and leaves an empty prompt to its own message', () => {
+    const lite = imageModelWithSlots('seedream-5-lite', 'Seedream 5 Lite', 14);
+    expect(validateCatalogCreationDraft(imageDraftOn(lite, 'cat'), lite, ready).errors).toEqual(['Seedream 5 Lite prompts need at least 4 characters.']);
+    expect(validateCatalogCreationDraft(imageDraftOn(lite, 'cats'), lite, ready).errors).toEqual([]);
+    expect(validateCatalogCreationDraft(imageDraftOn(lite, '   '), lite, ready).errors).toEqual(['Prompt is required.']);
+    expect(catalogPromptMeters(imageDraftOn(lite, ''), lite).prompt.label).toBe('0 / 2,995');
+  });
+
+  it('lifts Grok Imagine’s text-only cap while the run sends a picture, as its edit endpoint takes more', () => {
+    const grok = imageModelWithSlots('grok-imagine-image', 'Grok Imagine', 1);
+    const textOnly = imageDraftOn(grok, 'g'.repeat(5001));
+    expect(validateCatalogCreationDraft(textOnly, grok, ready).errors).toEqual(['Grok Imagine prompts support up to 5,000 characters.']);
+    expect(catalogPromptMeters(textOnly, grok).prompt.limit).toBe(5000);
+
+    const edit = imageDraftOn(grok, 'g'.repeat(5001), { references: [upload('hero.png', 'image')] });
+    expect(validateCatalogCreationDraft(edit, grok, ready).errors).toEqual([]);
+    expect(catalogPromptMeters(edit, grok).prompt.limit).toBe(10000);
+  });
+
+  it('holds each shot to its model’s shot limit, names the shot, and leaves the prompt kept behind a Kling 3.0 story alone', () => {
+    const story = videoDraft(kling30, {
+      prompt: 'x'.repeat(3000),
+      isMultiShot: true,
+      multiPrompts: [{ id: 's1', prompt: 'A door opens', duration: 5 }, { id: 's2', prompt: 'z'.repeat(501), duration: 5 }],
+    });
+    expect(validateCatalogCreationDraft(story, kling30, ready).errors).toEqual(['Shot 2: Kling 3.0 Cinematic shot prompts support up to 500 characters.']);
+    expect(catalogPromptMeters(story, kling30).shots).toEqual({
+      s1: { length: 12, limit: 500, state: 'within', label: '12 / 500' },
+      s2: { length: 501, limit: 500, state: 'over', label: '501 / 500' },
+    });
+    // The 3,000-character prompt behind the shots is not sent to Kling 3.0 in a story.
+    const fits = { ...story, multiPrompts: [story.multiPrompts[0], { ...story.multiPrompts[1], prompt: 'z'.repeat(500) }] };
+    expect(validateCatalogCreationDraft(fits, kling30, ready).errors).toEqual([]);
+    // Kling O3's shots take 512.
+    const o3 = videoDraft(klingO3, { isMultiShot: true, multiPrompts: [{ id: 's1', prompt: 'o'.repeat(512), duration: 5 }] });
+    expect(validateCatalogCreationDraft(o3, klingO3, ready).errors).toEqual([]);
+    expect(validateCatalogCreationDraft({ ...o3, multiPrompts: [{ id: 's1', prompt: 'o'.repeat(513), duration: 5 }] }, klingO3, ready).errors)
+      .toEqual(['Shot 1: Kling O3 shot prompts support up to 512 characters.']);
+  });
+
+  it('counts each mention of one of a Kling 3.0 run’s clips as the 37 characters Kling counts', () => {
+    const spin = { ...upload('spin.mp4', 'video', { durationSeconds: 4 }), handle: '@spin' };
+    // 2,468 characters as written; 2,500 as Kling counts its one mention of @spin.
+    const typed = `${'a'.repeat(2500 - 37 - 1)} @spin`;
+    const draft = videoDraft(kling30, { prompt: typed, startFrame: upload('start.png', 'image'), referenceVideos: [spin] });
+    expect(catalogPromptMeters(draft, kling30).prompt).toMatchObject({ length: 2500, state: 'near' });
+    expect(validateCatalogCreationDraft(draft, kling30, ready).errors).toEqual([]);
+
+    expect(validateCatalogCreationDraft({ ...draft, prompt: `a${typed}` }, kling30, ready).errors)
+      .toEqual(['Kling 3.0 Cinematic prompts support up to 2,500 characters, counting each video element mention as 37.']);
+  });
+
+  it('counts a motion prompt against Kie’s 2,500, and a draft whose model is not in yet by its own id', () => {
+    const motionModel = createTestGenerationModelCatalog().models.find((model) => model.id === 'kling-3.0')!;
+    const motion = { ...createDefaultCreationDraft('motion'), prompt: 'Calm, then a spin.' };
+    expect(catalogPromptMeters(motion, motionModel).prompt).toMatchObject({ limit: 2500, label: '18 / 2,500' });
+    expect(catalogPromptMeters({ ...createDefaultCreationDraft('image'), model: 'z-image', prompt: 'x' }, null).prompt.limit).toBe(1000);
   });
 });
