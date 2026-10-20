@@ -206,6 +206,14 @@ test.describe('workflow builder smoke tests', () => {
   });
 
   test('redirects unauthenticated visitors to login', async ({ page }) => {
+    // `next dev` compiles /login when it is first asked for, and again after
+    // dropping it for a minute unused, so the redirect's load of /login could
+    // wait out a compile inside the 10-second toHaveURL below; on CI's runner it
+    // did (Quality run 39339854631). Asking for the page right before the wait
+    // compiles it first; earlier (beforeAll, globalSetup) it may be dropped again.
+    // `page.request` keeps the page's trace and cookies; `timeout: 0` leaves the
+    // compile to the test's own timeout. See .claude/rules/e2e.md.
+    await page.request.get('/login', { timeout: 0 });
     await page.goto('/create-workflow');
     await expect(page).toHaveURL(/\/login\?returnUrl=%2Fcreate-workflow/);
   });
