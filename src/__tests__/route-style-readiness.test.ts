@@ -23,7 +23,9 @@ const SUPPLEMENT_IMPORT_PATTERN = /import\s+['"][^'"]*non-public-utilities\.css[
 // Signed-in-only pages that live inside these directories (`/templates/mine`,
 // `/templates/new`, `/creators/[username]` actions) are scanned by the public
 // sheet too; their component closure is already part of it. `/delete-account`'s
-// signed-in deletion form rides on the public sheet the same way. `/post` is not
+// signed-in deletion form rides on the public sheet the same way, and so does a
+// file of a signed-in folder that a public page draws (the profile editor an
+// owner opens on their creator page): globals.css names each one. `/post` is not
 // public: it holds only the composer and the edit page.
 const PUBLIC_ROUTE_DIRECTORIES = new Set([
   'ai-image-generator',
@@ -48,6 +50,30 @@ const PUBLIC_ROUTE_DIRECTORIES = new Set([
   'showcase',
   'templates',
   'terms',
+]);
+// Every other route folder: the signed-in surfaces, each with a layout that
+// links the supplement. Search and Alerts also draw for a signed-out visitor
+// (results, a sign-in card) and keep it. A folder in neither list fails: one
+// left out used to count as signed-in, so a new public page built on a
+// signed-in layout passed and inlined both sheets.
+const SIGNED_IN_ROUTE_DIRECTORIES = new Set([
+  'admin',
+  'create',
+  'create-image',
+  'create-motion',
+  'create-video',
+  'create-workflow',
+  'creations',
+  'credits',
+  'home',
+  'invite',
+  'notifications',
+  'post',
+  'profile',
+  'search',
+  'template-runs',
+  'unlocks',
+  'welcome-reward',
 ]);
 const SOURCE_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
 const DYNAMIC_UTILITY_STRING = /['"`](?:[^'"`]*\s)?(?:from|via|to|bg|text|border|ring|shadow)-(?:\[[^\]]+\]|[a-z]+-\d{2,3})(?:\s+[^'"`]*)?['"`]/;
@@ -140,33 +166,68 @@ function collectRouteImportClosure(): Set<string> {
   return collectImportClosure([...listRootMarkupFiles(), ...routeSources]);
 }
 
+/**
+ * The folders of src/app that draw a route: every one with markup in it, but
+ * the API routes. Parallel-route slots (`@modal`) are not route boundaries:
+ * they render inside whichever route is already on screen, public or not, so
+ * they cannot own a stylesheet (the slot test below keeps markup out of them).
+ */
+function listRouteDirectories(): string[] {
+  return readdirSync(APP_ROOT, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name !== 'api' && !entry.name.startsWith('@'))
+    .filter((entry) => walkFiles(path.join(APP_ROOT, entry.name)).some((file) => /\.(?:tsx|jsx)$/.test(file)))
+    .map((entry) => entry.name)
+    .sort();
+}
+
+// Tailwind reads either quote.
 function getDeclaredSources(stylesheet: string): string[] {
-  return [...stylesheet.matchAll(/@source\s+"([^"]+)";/g)].map((match) => match[1]);
+  return [...stylesheet.matchAll(/@source\s+(["'])([^"']+)\1\s*;/g)].map((match) => match[2]);
+}
+
+function getExcludedSources(stylesheet: string): string[] {
+  return [...stylesheet.matchAll(/@source\s+not\s+(["'])([^"']+)\1\s*;/g)].map((match) => match[2]);
+}
+
+/** Whether a sheet's source lines reach `file`: a line naming it or a folder above it, and no `not` line doing the same. */
+function isScannedBy(stylesheet: string, file: string): boolean {
+  const reaches = (source: string) => {
+    const scanned = path.resolve(APP_ROOT, source);
+    return file === scanned || file.startsWith(`${scanned}${path.sep}`);
+  };
+  return getDeclaredSources(stylesheet).some(reaches) && !getExcludedSources(stylesheet).some(reaches);
 }
 
 describe('route utility stylesheet readiness', () => {
-  it('links the supplemental utility sheet from every non-public visual route boundary', () => {
+  it('classifies every route folder as public or signed-in', () => {
+    const routeDirectories = listRouteDirectories();
+    expect(
+      routeDirectories.filter((directory) => (
+        !PUBLIC_ROUTE_DIRECTORIES.has(directory) && !SIGNED_IN_ROUTE_DIRECTORIES.has(directory)
+      )),
+      'route folders in neither list: one a signed-out visitor can land on goes in PUBLIC_ROUTE_DIRECTORIES and '
+        + 'globals.css, any other in SIGNED_IN_ROUTE_DIRECTORIES with a layout that links the supplement',
+    ).toEqual([]);
+    expect(
+      [...PUBLIC_ROUTE_DIRECTORIES].filter((directory) => SIGNED_IN_ROUTE_DIRECTORIES.has(directory)),
+      'route folders in both lists',
+    ).toEqual([]);
+    expect(
+      [...PUBLIC_ROUTE_DIRECTORIES, ...SIGNED_IN_ROUTE_DIRECTORIES].filter((directory) => !routeDirectories.includes(directory)),
+      'listed folders that draw no route',
+    ).toEqual([]);
+  });
+
+  it('links the supplemental utility sheet from every signed-in route layout', () => {
     const supplementalCss = readFileSync(path.join(APP_ROOT, 'non-public-utilities.css'), 'utf8');
-    const visualRouteDirectories = readdirSync(APP_ROOT, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .filter((entry) => walkFiles(path.join(APP_ROOT, entry.name)).some((file) => file.endsWith('/page.tsx')))
-      .map((entry) => entry.name)
-      // Parallel-route slots (`@modal`) are not route boundaries: they render
-      // inside whichever route is already on screen, public or not, so they
-      // cannot own a stylesheet. Requiring the private supplement here would
-      // load authenticated-only CSS on public routes and invert the split.
-      // Slot markup therefore lives under an already-scanned directory.
-      .filter((directory) => !directory.startsWith('@'))
-      .filter((directory) => !PUBLIC_ROUTE_DIRECTORIES.has(directory))
-      .sort();
 
     // A page made for signed-out visitors (marketing, policy, a landing) belongs
     // in PUBLIC_ROUTE_DIRECTORIES and globals.css instead. A signed-in surface
     // that also draws a signed-out state (Search, Alerts) keeps the supplement.
-    for (const directory of visualRouteDirectories) {
+    for (const directory of [...SIGNED_IN_ROUTE_DIRECTORIES].sort()) {
       const layoutPath = path.join(APP_ROOT, directory, 'layout.tsx');
-      expect(existsSync(layoutPath), `${directory} is not public, so it needs a route layout`).toBe(true);
-      expect(readFileSync(layoutPath, 'utf8'), `${directory} is not public, so its layout must link the supplement`)
+      expect(existsSync(layoutPath), `${directory} is signed-in, so it needs a route layout`).toBe(true);
+      expect(readFileSync(layoutPath, 'utf8'), `${directory} is signed-in, so its layout must link the supplement`)
         .toContain(SUPPLEMENT_IMPORT);
     }
 
@@ -251,6 +312,34 @@ describe('route utility stylesheet readiness', () => {
       .sort();
 
     expect(declaredLibSources).toEqual(expectedLibSources);
+  });
+
+  // A public page can draw a file that lives in a signed-in folder: a creator's
+  // own page opens the profile editor from src/app/creations. A full load draws
+  // it with globals.css alone, so globals.css has to scan it; the supplement,
+  // which scans every route, drew it right only after a client navigation from
+  // a signed-in route.
+  it('scans every file of the app folder that a public route draws', () => {
+    const globalsCss = readFileSync(path.join(APP_ROOT, 'globals.css'), 'utf8');
+    const appFiles = [...collectPublicImportClosure()].filter((file) => file.startsWith(`${APP_ROOT}${path.sep}`));
+    expect(
+      appFiles.filter((file) => !isScannedBy(globalsCss, file)).map((file) => path.relative(SRC_ROOT, file)).sort(),
+      'files a public route draws that globals.css does not scan: name each as @source "./<folder>/<file>"',
+    ).toEqual([]);
+
+    // File for file, as the component lines are: a line left after nothing
+    // public draws its file any more puts a signed-in file's utilities on every
+    // public page.
+    const isInPublicFolder = (relative: string) => PUBLIC_ROUTE_DIRECTORIES.has(relative.split('/')[0]);
+    const expectedFileSources = appFiles
+      .map((file) => path.relative(APP_ROOT, file).split(path.sep).join('/'))
+      .filter((relative) => relative.includes('/') && !isInPublicFolder(relative))
+      .map((relative) => `./${relative}`)
+      .sort();
+    const declaredFileSources = getDeclaredSources(globalsCss)
+      .filter((source) => /^\.\/[^/]+\/./.test(source) && !isInPublicFolder(source.slice('./'.length)))
+      .sort();
+    expect(declaredFileSources, 'files of signed-in folders that globals.css names').toEqual(expectedFileSources);
   });
 
   // The supplement comes after globals.css in the same cascade layer, and it
