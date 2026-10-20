@@ -255,7 +255,11 @@ export function WorkflowCanvasSurface({
           onEdgesChange={handleEdgesChange as never}
           onConnect={isReadOnly ? undefined : onConnect as never}
           onPaneClick={onPaneClick}
-          onPaneContextMenu={onPaneContextMenu as never}
+          // Gated like the node and edge menus. While an AI Builder proposal is
+          // previewed the editor hands this Surface no menu to draw, so a right-click
+          // on the pane stored one that nothing showed, and the stored menu came up at
+          // the old pointer once the proposal was dismissed.
+          onPaneContextMenu={isReadOnly ? undefined : onPaneContextMenu as never}
           onEdgeClick={isReadOnly ? undefined : onEdgeClick as never}
           onNodeClick={isReadOnly ? undefined : onNodeClick as never}
           onNodeDoubleClick={isReadOnly ? undefined : onNodeDoubleClick as never}
