@@ -1,5 +1,5 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import NotificationsPage from '@/app/notifications/page';
 
@@ -11,17 +11,16 @@ import NotificationsPage from '@/app/notifications/page';
 
 type TestSession = { access_token: string } | null;
 
-const mocks = vi.hoisted(() => {
-  let releaseSignedInHalf = () => {};
-  const signedInHalfGate = new Promise<void>((resolve) => { releaseSignedInHalf = resolve; });
-  return {
-    session: null as { access_token: string } | null,
-    signedInHalfLoads: 0,
-    // The module's load waits here until a test lets it through, as a chunk on a slow connection does.
-    signedInHalfGate,
-    releaseSignedInHalf,
-  };
-});
+const mocks = vi.hoisted(() => ({
+  session: null as { access_token: string } | null,
+  signedInHalfLoads: 0,
+  // The module's load waits here until a test lets it through, as a chunk on a
+  // slow connection does. Each test gets a gate of its own: one gate for the
+  // file was opened by the first test's cleanup, so the signed-in test ran
+  // with its load not held at all.
+  signedInHalfGate: Promise.resolve(),
+  releaseSignedInHalf: () => {},
+}));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), prefetch: vi.fn(), back: vi.fn(), forward: vi.fn() }),
@@ -46,6 +45,10 @@ vi.mock('@/app/notifications/SignedInAlerts', async (importOriginal) => {
 });
 
 describe('the web Alerts page', () => {
+  beforeEach(() => {
+    mocks.signedInHalfGate = new Promise<void>((resolve) => { mocks.releaseSignedInHalf = resolve; });
+  });
+
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
