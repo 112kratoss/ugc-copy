@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { GenerationModelCatalog, GenerationModelDescriptor } from '../lib/generation-model-catalog';
 import { normalizeCreationDraftForCatalog } from '../lib/generation-model-draft';
-import { GUIDED_CREATION_STARTERS } from '../lib/guided-creation-starter';
+import { GUIDED_CREATION_STARTERS, guidedCreationStarter } from '../lib/guided-creation-starter';
 import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
-import { createRemixRestoreCatalog, seedance15ProModel } from './fixtures/generation-model-catalog';
+import { createRemixRestoreCatalog, seedance15ProModel, seedance2MiniModel } from './fixtures/generation-model-catalog';
 
 describe('normalizeCreationDraftForCatalog', () => {
   const catalog = createRemixRestoreCatalog();
@@ -65,7 +65,7 @@ describe('normalizeCreationDraftForCatalog', () => {
 });
 
 describe('normalizeCreationDraftForCatalog with a guided starter', () => {
-  const starter = GUIDED_CREATION_STARTERS.video!;
+  const [starter, fallbackStarter] = GUIDED_CREATION_STARTERS.video!;
   const withSeedance = (): GenerationModelCatalog => {
     const catalog = createRemixRestoreCatalog();
     return { ...catalog, models: [...catalog.models, seedance15ProModel] };
@@ -152,6 +152,63 @@ describe('normalizeCreationDraftForCatalog with a guided starter', () => {
     // The default's details not in yet either: it waits rather than read as a missing model.
     const noDetails: GenerationModelCatalog = { ...createRemixRestoreCatalog(), models: [] };
     expect(normalizeCreationDraftForCatalog(started, noDetails, gone)).toEqual({ draft: started, warning: null, missingModel: false });
+  });
+
+  it('lists Seedance 2 Mini behind Seedance 1.5 Pro, inside the welcome credits at Kie\'s 2026-10-20 price', () => {
+    // Kie took Seedance 1.5 Pro off its site (2026-10-20) while its API still runs it. Seedance 2 Mini at 480p
+    // for 4 s without sound is 3.8 a second: 16 credits (src/__tests__/guided-first-video-starter-price.test.ts).
+    expect(GUIDED_CREATION_STARTERS.video).toEqual([
+      { modelId: 'seedance-1.5-pro', settings: { resolution: '720p', duration: '4', sound: false } },
+      { modelId: 'seedance-2-mini', settings: { resolution: '480p', duration: 4, sound: false } },
+    ]);
+  });
+
+  it('picks the first starter the catalog still carries, and only on the guided tool', () => {
+    const screen = { guided: true, initialTool: 'video' as const };
+    expect(guidedCreationStarter('video', screen)?.modelId).toBe('seedance-1.5-pro');
+    expect(guidedCreationStarter('video', screen, ['seedance-1.5-pro'])?.modelId).toBe('seedance-2-mini');
+    // Every starter dropped: the last, which the reconcile reads as gone and replaces with the default.
+    expect(guidedCreationStarter('video', screen, ['seedance-1.5-pro', 'seedance-2-mini'])?.modelId).toBe('seedance-2-mini');
+    expect(guidedCreationStarter('video', { guided: false, initialTool: 'video' })).toBeNull();
+    expect(guidedCreationStarter('image', screen)).toBeNull();
+  });
+
+  it('moves a draft seeded with a dropped starter to the next one, keeping its words', () => {
+    const seededIds = GUIDED_CREATION_STARTERS.video!.map((candidate) => candidate.modelId);
+    const started = { ...guidedVideoDraft(), prompt: 'A lighthouse in a storm' };
+    const catalog: GenerationModelCatalog = { ...createRemixRestoreCatalog(), models: [...createRemixRestoreCatalog().models, seedance2MiniModel] };
+    const options = { modelSelectionTouched: false, starter: fallbackStarter, missingIds: ['seedance-1.5-pro'], seededModelIds: seededIds };
+
+    const result = normalizeCreationDraftForCatalog(started, catalog, options);
+    expect(result).toMatchObject({ warning: null, missingModel: false });
+    expect(result.draft).toMatchObject({
+      model: 'seedance-2-mini',
+      prompt: 'A lighthouse in a storm',
+      resolution: '480p',
+      duration: 4,
+      sound: false,
+      catalogSettings: { resolution: '480p', duration: 4, sound: false },
+    });
+    expect(normalizeCreationDraftForCatalog(result.draft, catalog, options).draft).toEqual(result.draft);
+
+    // The next starter's details not in yet: it waits rather than settle on the default, which would stick.
+    expect(normalizeCreationDraftForCatalog(started, createRemixRestoreCatalog(), options))
+      .toEqual({ draft: started, warning: null, missingModel: false });
+
+    // Without the seeded ids the same draft reads as the creator's own, and its model as missing.
+    expect(normalizeCreationDraftForCatalog(started, catalog, { ...options, seededModelIds: undefined }).missingModel).toBe(true);
+  });
+
+  it('gives a seeded draft the catalog default once the catalog has dropped every starter', () => {
+    const seededIds = GUIDED_CREATION_STARTERS.video!.map((candidate) => candidate.modelId);
+    const started = { ...guidedVideoDraft(), prompt: 'A lighthouse in a storm' };
+    const result = normalizeCreationDraftForCatalog(started, createRemixRestoreCatalog(), {
+      modelSelectionTouched: false,
+      starter: fallbackStarter,
+      missingIds: seededIds,
+      seededModelIds: seededIds,
+    });
+    expect(result.draft).toMatchObject({ model: 'kling-3.0-video', prompt: 'A lighthouse in a storm' });
   });
 
   it('holds every pinned value against the model defaults, on the schema the live catalog uses', () => {

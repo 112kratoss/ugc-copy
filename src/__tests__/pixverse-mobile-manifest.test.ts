@@ -6,13 +6,16 @@ import { describe, expect, it } from 'vitest';
 import { buildGenerationModelCatalog, quoteGenerationModel } from '@/lib/generation-model-catalog';
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 
+import { descriptorBeforeKieCheckup, operationBeforeKieCheckup } from './fixtures/kie-checkup-2026-10-20';
+
 /**
  * Release 2026-10-08-pixverse-mobile: PixVerse V6 shipped web-only in kie-video-models-20261008
  * because the installed apps name every maker in their AI-data question and PixVerse was new
  * there. The apps name it from consent version 2 on (ugc-mobile/lib/ai-data-consent.ts), so
  * this release lists the one changed model with its availability turned on for mobile. The
  * entry must equal the code build byte for byte (the shadow verifier diffs projections), and
- * nothing else about the model may change in the same release.
+ * nothing else about the model may change in the same release. The build is read as it stood
+ * before the 2026-10-20 check-up, which dropped PixVerse's reference-to-video price branch.
  */
 
 interface ManifestEntry {
@@ -50,7 +53,9 @@ const base = read('2026-10-08-kie-video-models.json');
 
 const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
 const mobileCatalog = buildGenerationModelCatalog({ platform: 'mobile', schemaVersion: 2 });
-const operation = buildCodeGenerationModelOperations().find((candidate) => candidate.modelId === 'pixverse-v6')!;
+const operation = operationBeforeKieCheckup(
+  buildCodeGenerationModelOperations().find((candidate) => candidate.modelId === 'pixverse-v6')!,
+);
 
 function entry(): ManifestEntry {
   const found = manifest.entries.find((candidate) => candidate.modelId === 'pixverse-v6');
@@ -80,7 +85,7 @@ describe('pixverse-mobile release', () => {
   it('is the code build, with mobile on', () => {
     const { schemaVersion, ...publicDescriptor } = entry().publicDescriptor;
     expect(schemaVersion).toBe(2);
-    expect(publicDescriptor).toEqual(catalog.models.find((model) => model.id === 'pixverse-v6'));
+    expect(publicDescriptor).toEqual(descriptorBeforeKieCheckup(catalog.models.find((model) => model.id === 'pixverse-v6')!));
     expect(entry().webEnabled).toBe(true);
     expect(entry().mobileEnabled).toBe(true);
     expect(entry().publicDescriptor.availability).toEqual({ web: true, mobile: true });
@@ -104,8 +109,7 @@ describe('pixverse-mobile release', () => {
     expect(after.pricingConfig).toEqual(before.pricingConfig);
     expect(after.validationConfig).toEqual(before.validationConfig);
     expect(after.adapterConfig).toEqual(before.adapterConfig);
-    // Same prices as the evidence file: 360p 5 s 20 credits, 720p 10 s with sound and a
-    // reference 108.
+    // Same prices as the evidence file: 360p 5 s 20 credits.
     expect(quoteGenerationModel({
       kind: 'video',
       modelId: 'pixverse-v6',

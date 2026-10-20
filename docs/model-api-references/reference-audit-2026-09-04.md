@@ -101,12 +101,36 @@ Both are dated promotions (Fast ≈ 25 % off, Mini 60 % off the rates we ship: 1
 until Oct 7 users pay 1.33× (Fast) and 2.5× (Mini) Kie's current list. Re-read both pages
 after Oct 7 06:00 UTC. Seedance 2 (standard) is unchanged and matches exactly.
 
+**2026-10-20 re-check** (`archive/model-checkup-2026-10-20/evidence/prices-all.txt`): both offers
+ended and Kie kept the lower prices, with no "until" or "Limited" line on either page and no
+limited-time tag on kie.ai/pricing, so they are the list prices now:
+
+```
+bytedance/seedance-2-fast
+   480P: 6.8 credits/s ($0.034/s, with video) | 11.7 credits/s ($0.059/s, no video)
+   720P: 15 credits/s ($0.075/s, with video) | 24.8 credits/s ($0.124/s, no video)
+bytedance/seedance-2-mini
+   480p — 2.4 credits/s ($0.012/s, with video) | 3.8 credits/s ($0.019/s, no video)
+   720p — 5.0 credits/s ($0.025/s, with video) | 8.2 credits/s ($0.041/s, no video)
+```
+
+Shipped: Fast 11.7 / 24.8 and Mini 3.8 / 8.2 without a clip, Fast 6.8 / 15 and Mini 2.4 / 5.0
+with one, in place of the pinned 15.5 / 33, 9 / 20, 9.5 / 20.5 and 6 / 12.5. Seedance 2 is
+still unchanged.
+
 ## `seedance-2-5`
 
 Caps unchanged from `video-reference-caps-2026-09-03.md` (30 / 10 / 10, 30 s of clips).
 `last_frame_url`: "cannot be passed alone; first_frame_url must be provided together with
 it." The 1080p promotion moved: "Limited-Time 1080P Offer: 28% OFF until **Oct 17**, 2026
 06:00 UTC" (was Sep 17). The pinned undiscounted 159 / 96 stands.
+
+**2026-10-20 re-check**: the offer ended and Kie lists the 1080p tier with no qualifier,
+`1080P: 95 credits/s ($0.475/s, with video) | 158 credits/s ($0.790/s, no video)`. Shipped
+158 / 95 in place of 159 / 96 (114 / 0.72 and 68.5 / 0.72, rounded up); 480P (17 / 28) and 720P
+(38 / 63) are unchanged. `reference_audio_urls` now also says "total duration of reference audio
+must not exceed 30 seconds" (lines 259-261 of the saved spec), so the quote refuses reference
+audio over 30 s in total, as it does clips.
 
 ## `seedance-1.5-pro`
 
@@ -129,12 +153,24 @@ credits". We billed 380 for quality 4K text-to-video; shipped 370. `generationTy
 prose: "REFERENCE_2_VIDEO … requires 1-3 images in imageUrls" and "currently supports the
 veo3_fast and veo3_lite models"; `duration` enum is now `4 | 6 | 8` (reference mode 8 only).
 
+**2026-10-20 re-check** (`docs.kie.ai/veo3-api/generate-veo-3-video.md`, lines 43-52): prices
+unchanged (Lite 30 / 35 / 150, Fast 60 / 65 / 180, Quality 250 / 255 / 370), and
+REFERENCE_2_VIDEO is "based on material images (**Fast model** and **Lite model**, supports
+**16:9 & 9:16**)". The catalog offered Auto with references; a quote rule now refuses Auto on a
+run with a reference picture, and text and frame runs keep it.
+
 ## `minimax-h3`
 
 Unchanged from `video-reference-caps-2026-09-03.md`. `image-to-video`: "Either
 first_frame_url or last_frame_url must be provided", so a last-only run is legal and now
 travels as `last_frame_url`. `reference-to-video`: "the total duration of all reference
 audios cannot exceed 15 seconds."
+
+**2026-10-20 re-check**: price unchanged, and the image charge is still on the page: "Additional
+image input: 4 credits/image ($0.02/image) for both 768P and 2K" and "The first 5 images are
+free; additional images are charged separately". The app bills no image term, so references
+are now capped at the five Kie includes, not the schema's 9 (see
+`video-reference-caps-2026-09-03.md`).
 
 ## `wan-2.7` → `wan/2-7-r2v`
 
@@ -148,6 +184,13 @@ wan/2-7-r2v`): unchanged. `first_frame` is a field of its own beside the five re
 ("If supplied, `aspect_ratio` is ignored"), so release `wan-start-frame-apart-20261019` counts
 a start frame apart from them. The catalog still counts the voice among the five, though
 `reference_voice` sits outside Kie's total too.
+
+**2026-10-20 re-check** (lines 116-119 and 162-166 of the saved spec): `reference_voice` is
+"Duration: `1` to `10` seconds", and "At least one of `reference_image` or `reference_video`
+must be provided". Prices unchanged. Shipped: the voice slot carries `maxDurationSeconds: 10`
+(the server measures the track before a start), and a references run whose only reference is
+the voice, with or without a start frame, is refused on the quote by the same
+`forbidden-combination` rule MiniMax H3 states its audio contract with.
 
 ## `gpt-image-2`
 

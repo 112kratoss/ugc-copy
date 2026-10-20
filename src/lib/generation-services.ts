@@ -130,6 +130,12 @@ import {
 } from '@/lib/generation-model-runtime';
 import { getVideoInputLimits, type CatalogPrimitive, type GenerationModelKind } from '@/lib/generation-model-catalog';
 import {
+  providerPromptViolation,
+  referenceMediaLengthViolation,
+  type ProviderPromptRun,
+  type ReferenceMediaLength,
+} from '@/lib/provider-input-limits';
+import {
   buildGenerationProviderRequest,
   type CatalogGenerationInputAsset,
   type CatalogGenerationShot,
@@ -166,6 +172,8 @@ export interface KlingVideoElementInput {
   displayName?: string | null;
   storagePath?: string | null;
   sourceGenerationId?: string | null;
+  /** The clip's measured length, where the caller measured it (the unified start does). */
+  durationSeconds?: number | null;
 }
 
 export interface KlingSubjectImageInput {
@@ -878,6 +886,23 @@ function promptMaxLengthForKind(kind: GenerationModelKind): number {
   return kind === 'motion' ? MOTION_PROMPT_MAX_LENGTH : GENERATION_PROMPT_MAX_LENGTH;
 }
 
+/**
+ * Holds the prompts a run sends to the provider's own limits for its model
+ * (provider-input-limits): the prompt as sent, with the legend that names its
+ * pictures, and each shot. Kie refuses a longer or shorter one only after the
+ * start has held the run's credits, so every start asks this before its hold.
+ */
+function assertProviderPromptAccepted(modelId: string, run: ProviderPromptRun): void {
+  const violation = providerPromptViolation(modelId, run);
+  if (violation) throw new GenerationServiceError(violation, 400);
+}
+
+/** Holds a run's reference clips and tracks, where their lengths are known, to the provider's shortest. */
+function assertReferenceMediaLongEnough(modelId: string, media: readonly ReferenceMediaLength[]): void {
+  const violation = referenceMediaLengthViolation(modelId, media);
+  if (violation) throw new GenerationServiceError(violation, 400);
+}
+
 export function trimPrompt(prompt: string, errorMessage: string): string {
   const trimmed = prompt.trim();
   if (!trimmed) {
@@ -1013,6 +1038,10 @@ function normalizeKlingVideoElementInputs(value: KlingVideoElementInput[] | unde
           typeof element.sourceGenerationId === 'string'
             ? element.sourceGenerationId
             : null,
+        durationSeconds:
+          typeof element.durationSeconds === 'number' && Number.isFinite(element.durationSeconds)
+            ? element.durationSeconds
+            : null,
       };
     })
     .filter((element): element is {
@@ -1022,6 +1051,7 @@ function normalizeKlingVideoElementInputs(value: KlingVideoElementInput[] | unde
       displayName: string;
       storagePath: string | null;
       sourceGenerationId: string | null;
+      durationSeconds: number | null;
     } => Boolean(element));
 }
 
@@ -1925,6 +1955,12 @@ export async function startImageGeneration(params: {
   const compiledPrompt = normalizedElements.length > 0
     ? compileImagePromptWithElements(trimmedPrompt, normalizedElements)
     : trimmedPrompt;
+  // On the prompt the provider is sent, legend included, before either path below holds.
+  assertProviderPromptAccepted(model, {
+    prompt: compiledPrompt,
+    typedPrompt: trimmedPrompt,
+    hasReferenceImages: resolvedImageUrls.length > 0,
+  });
 
   const computedCost = getImageCost(model, resolution, {
     qualityMode,
@@ -2089,7 +2125,8 @@ export async function startImageGeneration(params: {
       };
       if (resolvedImageUrls[0]) {
         input.image_url = resolvedImageUrls[0];
-        input.num_images = 1;
+        // ideogram/v3-remix types num_images as a string enum, '1' to '4'.
+        input.num_images = '1';
         input.strength = 0.6;
       }
     } else if (model === 'flux-2-pro') {
@@ -2133,7 +2170,8 @@ export async function startImageGeneration(params: {
         expand_prompt: !promptLocksExactText(compiledPrompt),
         image_size: getIdeogramImageSize(aspectRatio),
         reference_image_urls: resolvedImageUrls,
-        num_images: 1,
+        // ideogram/character types num_images as a string enum, '1' to '4'.
+        num_images: '1',
       };
     } else if (model === 'z-image') {
       input = {
@@ -2148,10 +2186,7 @@ export async function startImageGeneration(params: {
         resolution,
       };
       input.output_format = outputFormat;
-
-      if (modelConfig.supportsGoogleSearch) {
-        input.google_search = googleSearch;
-      }
+      // No `google_search`: neither Nano Banana spec lists it any more (2026-10-20).
 
       if (resolvedImageUrls.length > 0) {
         input.image_input = resolvedImageUrls;
@@ -2762,6 +2797,41 @@ export async function startVideoGeneration(params: {
       );
     }
   }
+  // Kling O3's three endpoints refuse a prompt with nothing in it, and both creators
+  // leave the run's own prompt empty in multi-shot mode, so the first shot's prompt,
+  // as the shots are sent, stands in for it.
+  const klingO3Prompt = compiledPrompt || (isMultiShot ? normalizedMultiPrompts[0]?.prompt ?? '' : '');
+  // What the provider is sent, held to its limits for the model before anything is
+  // held. Kling 3.0's multi-shot body carries its shots and no prompt of its own.
+  assertProviderPromptAccepted(model, {
+    prompt: model === 'kling-o3'
+      ? klingO3Prompt
+      : (model === 'kling-3.0-video' && isMultiShot ? null : compiledPrompt),
+    typedPrompt: trimmedPrompt || undefined,
+    shots: isMultiShot ? normalizedMultiPrompts.map((shot) => shot.prompt) : [],
+    hasReferenceImages: totalReferenceImageCount > 0,
+    elementHandles: resolvedKlingVideoElements.map((element) => element.handle),
+  });
+  // The lengths the caller measured (the unified start measures every clip and track it
+  // sends), held to the provider's shortest. Clips and tracks only count where this
+  // model sends them; a Kling 3.0 clip goes as a named element.
+  assertReferenceMediaLongEnough(model, [
+    ...(resolvedReferenceVideoUrls.length > 0 ? referenceVideos ?? [] : []).map((descriptor) => ({
+      role: 'video' as const,
+      durationSeconds: descriptor?.durationSeconds ?? null,
+      label: descriptor?.label ?? null,
+    })),
+    ...(resolvedReferenceAudioUrls.length > 0 ? referenceAudios ?? [] : []).map((descriptor) => ({
+      role: 'audio' as const,
+      durationSeconds: descriptor?.durationSeconds ?? null,
+      label: descriptor?.label ?? null,
+    })),
+    ...resolvedKlingVideoElements.map((element) => ({
+      role: 'element' as const,
+      durationSeconds: element.durationSeconds,
+      label: element.displayName,
+    })),
+  ]);
   const hasReusableReference = totalReferenceImageCount > 0
     || resolvedReferenceVideoUrls.length > 0
     || resolvedReferenceAudioUrls.length > 0
@@ -2874,9 +2944,14 @@ export async function startVideoGeneration(params: {
       );
 
       const input: Record<string, unknown> = {
-        prompt: compiledPrompt,
+        prompt: klingO3Prompt,
         resolution,
-        aspect_ratio: aspectRatio,
+        // kling-3.0-omni/image-to-video: "for image-to-video single-shot, aspect_ratio must
+        // be auto"; its three ratios are for custom multi-shot. Text and reference runs
+        // take the chosen ratio.
+        aspect_ratio: providerReferenceImageUrls.length === 0 && frameImageUrls.length > 0 && !isMultiShot
+          ? 'auto'
+          : aspectRatio,
         duration: totalDuration,
         audio: soundEnabled,
         customize_multi_shots: Boolean(isMultiShot),
@@ -2984,7 +3059,9 @@ export async function startVideoGeneration(params: {
           duration,
           generate_audio: soundEnabled,
           web_search: false,
-          return_last_frame: false,
+          // Still listed for 2.5; `deprecated: true` for Seedance 2 and Fast, and gone
+          // from Mini's spec, so only 2.5 is sent it.
+          ...(model === 'seedance-2-5' ? { return_last_frame: false } : {}),
         };
 
         if (effectiveReferenceMode === 'frames') {
@@ -3542,7 +3619,10 @@ export async function startMotionGeneration(params: {
   model: MotionModelId;
   referenceVideoUrl: string;
   characterImageUrl: string;
+  /** Whole seconds: the reference clip's length rounded up, which the run is priced at. */
   duration: number;
+  /** The reference clip's measured length, where the caller measured it. */
+  referenceVideoSeconds?: number | null;
   characterOrientation?: 'video' | 'image';
   mode?: '720p' | '1080p';
   sourceGenerationId?: string | null;
@@ -3562,6 +3642,7 @@ export async function startMotionGeneration(params: {
     referenceVideoUrl,
     characterImageUrl,
     duration,
+    referenceVideoSeconds = null,
     characterOrientation = 'video',
     mode = '720p',
     sourceGenerationId = null,
@@ -3602,6 +3683,14 @@ export async function startMotionGeneration(params: {
       400
     );
   }
+  // Kie's motion control takes a performance of 3 to 30 seconds. A caller that measured
+  // the clip says how long it runs; the rest give the whole seconds it is priced at,
+  // which still tell a clip of 2 seconds or less.
+  assertReferenceMediaLongEnough(model, [
+    typeof referenceVideoSeconds === 'number' && referenceVideoSeconds > 0
+      ? { role: 'motion', durationSeconds: referenceVideoSeconds }
+      : { role: 'motion', durationSeconds: duration, exact: false },
+  ]);
   const runtimeConfig = operationalConfig
     ?? await loadGenerationModelOperationalConfig(model, catalogRevision
       ? { catalogRevision, schemaVersion: 1 }
@@ -3777,6 +3866,27 @@ export async function startCatalogGeneration(params: {
     [prompt, compiledPrompt, ...shots.map((shot) => (typeof shot.prompt === 'string' ? shot.prompt : null))],
     { userId, model: operation.modelId },
   );
+  // And held to the provider's own limits for the model, as the adapter sends it: in
+  // `promptField` ('prompt' unless the config sets it to null), and each shot as written.
+  assertProviderPromptAccepted(operation.modelId, {
+    prompt: isRecord(operation.adapterConfig) && operation.adapterConfig.promptField === null
+      ? null
+      : providerPrompt,
+    typedPrompt: creatorPrompt,
+    shots: shots.map((shot) => (typeof shot.prompt === 'string' ? shot.prompt : '')),
+    hasReferenceImages: inputs.some((asset) => asset.kind === 'image'),
+  });
+  assertReferenceMediaLongEnough(operation.modelId, inputs.flatMap((asset): ReferenceMediaLength[] => (
+    asset.kind === 'video' || asset.kind === 'audio'
+      ? [{
+          role: asset.kind === 'audio'
+            ? 'audio'
+            : operation.kind === 'motion' ? 'motion' : asset.slot === 'videoElements' ? 'element' : 'video',
+          durationSeconds: asset.durationSeconds ?? null,
+          label: asset.label ?? null,
+        }]
+      : []
+  )));
 
   const durationSetting = settings.duration;
   const duration = typeof durationSetting === 'number' && Number.isFinite(durationSetting)

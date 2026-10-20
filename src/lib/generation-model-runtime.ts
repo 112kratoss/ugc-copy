@@ -56,25 +56,33 @@ const REFERENCE_VIDEO_SECONDS_CAPS: Record<string, number> = {
   // wan/3-0-video: "up to 5 clips ... with a total duration ≤ 15 seconds".
   'wan-3.0': 15,
   'wan-3.0-prime': 15,
+  // gemini-omni-video and google/gemini-omni-flash-1-1 (re-read 2026-10-20): the one
+  // `video_list` clip "must not exceed 30s".
+  'gemini-omni-video': 30,
+  'gemini-omni-1.1-flash': 30,
 };
 
 /**
  * Combined reference-audio duration ceiling, in seconds. Seedance 2, Fast and Mini say
  * "total duration of all audios not exceeding 15 s"; minimax-h3/reference-to-video says
- * "the total duration of all reference audios cannot exceed 15 seconds". Seedance 2.5
- * states a per-file range only, so it carries no total. Enforced as a runtime rule, not a
- * descriptor constraint: audio slots keep optional duration metadata (mobile cannot
- * measure a picked audio file), so the rule sums what a client reports and stays silent
- * for a client that reports nothing, rather than refusing every mobile run.
+ * "the total duration of all reference audios cannot exceed 15 seconds"; Seedance 2.5
+ * now says "total duration of reference audio must not exceed 30 seconds" (re-read
+ * 2026-10-20), and wan/2-7-r2v takes one `reference_voice` of "1 to 10 seconds". Enforced
+ * as a runtime rule, not a descriptor constraint: audio slots keep optional duration
+ * metadata (mobile cannot measure a picked audio file), so the rule sums what a client
+ * reports and stays silent for a client that reports nothing, rather than refusing every
+ * mobile run; the server measures every track before it starts a run.
  */
 const REFERENCE_AUDIO_SECONDS_CAPS: Record<string, number> = {
   'seedance-2': 15,
   'seedance-2-fast': 15,
   'seedance-2-mini': 15,
+  'seedance-2-5': 30,
   'minimax-h3': 15,
   // wan/3-0-video: "up to 5 clips ... with a total duration ≤ 15 seconds" for audio too.
   'wan-3.0': 15,
   'wan-3.0-prime': 15,
+  'wan-2.7': 10,
 };
 
 /**
@@ -138,7 +146,8 @@ const VIDEO_REFERENCE_IMAGE_CAPS: Record<string, number> = {
   'veo-3.1': 3,
   'grok-imagine-video': 1,
   'kling-o3': 7,
-  'minimax-h3': 9,
+  // Kie takes 9 but bills each image past the fifth; the app caps references at five.
+  'minimax-h3': 5,
   'gemini-omni-1.1-flash': 7,
   'wan-3.0': 10,
   'wan-3.0-prime': 10,
@@ -289,13 +298,14 @@ const IMAGE_PROVIDER_MODELS: Record<ImageModelId, Record<string, string>> = {
 /**
  * Shared by both Nano Banana tiers — they take the same provider fields, so keeping one
  * definition stops a provider change from landing on one tier and missing the other.
+ * Neither spec lists `google_search` any more (re-read 2026-10-20), so a `googleSearch`
+ * setting an installed app or a saved draft still sends is never bound to it.
  */
 const NANO_BANANA_ADAPTER_CONFIG: Record<string, unknown> = {
   settings: {
     aspectRatio: { field: 'aspect_ratio' },
     resolution: { field: 'resolution' },
     outputFormat: { field: 'output_format' },
-    googleSearch: { field: 'google_search' },
   },
   slots: { imageReferences: { field: 'image_input', cardinality: 'many', source: 'url' } },
 };
@@ -684,36 +694,18 @@ function videoPricingExpression(model: (typeof VIDEO_MODELS)[VideoModelId]): Pri
         model.pricing,
       ));
     case 'pixverse-v6':
-      // Reference-to-video bills 12.5 % more than text, start-frame and frame-pair runs;
-      // a frames run also counts pictures, so the branch keys on the mode as well.
-      return conditional(
-        [{
-          conditions: [
-            { source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' },
-            { source: 'inputCount', key: 'images', operator: 'greaterThan', value: 0 },
-          ],
-          pricing: perSecond(lookup(
-            [
-              selector('setting', 'resolution', { defaultValue: model.resolutions[0] }),
-              selector('setting', 'sound', { defaultValue: false }),
-            ],
-            Object.fromEntries(Object.entries(model.pricing.reference).map(([resolution, rates]) => [
-              resolution,
-              { false: rates.noSound, true: rates.withSound },
-            ])),
-          )),
-        }],
-        perSecond(lookup(
-          [
-            selector('setting', 'resolution', { defaultValue: model.resolutions[0] }),
-            selector('setting', 'sound', { defaultValue: false }),
-          ],
-          Object.fromEntries(Object.entries(model.pricing.standard).map(([resolution, rates]) => [
-            resolution,
-            { false: rates.noSound, true: rates.withSound },
-          ])),
-        )),
-      );
+      // One table for every shape: Kie dropped the 12.5 % reference-to-video surcharge
+      // (re-read 2026-10-20), so a references run no longer has a branch of its own.
+      return perSecond(lookup(
+        [
+          selector('setting', 'resolution', { defaultValue: model.resolutions[0] }),
+          selector('setting', 'sound', { defaultValue: false }),
+        ],
+        Object.fromEntries(Object.entries(model.pricing).map(([resolution, rates]) => [
+          resolution,
+          { false: rates.noSound, true: rates.withSound },
+        ])),
+      ));
     case 'gemini-omni-1.1-flash':
       return conditional(
         [{
@@ -985,16 +977,32 @@ function validationConfigForModel(
       });
     }
     if (modelId === 'veo-3.1') {
-      rules.push({
-        type: 'max-slot-count',
-        slotKey: 'images',
-        max: 0,
-        conditions: [
-          { source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' },
-          { source: 'setting', key: 'mode', operator: 'notIn', value: ['veo3_lite', 'veo3_fast'] },
-        ],
-        message: 'Reusable references require Veo Lite or Fast.',
-      });
+      rules.push(
+        {
+          type: 'max-slot-count',
+          slotKey: 'images',
+          max: 0,
+          conditions: [
+            { source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' },
+            { source: 'setting', key: 'mode', operator: 'notIn', value: ['veo3_lite', 'veo3_fast'] },
+          ],
+          message: 'Reusable references require Veo Lite or Fast.',
+        },
+        {
+          // REFERENCE_2_VIDEO "supports 16:9 & 9:16" (veo3 spec, re-read 2026-10-20), and the
+          // start sends that generation type whenever a reference picture is attached. Auto
+          // stays for text and frame runs and is refused on a run with references.
+          type: 'control-options',
+          key: 'aspectRatio',
+          options: ['16:9', '9:16'],
+          conditions: [
+            { source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' },
+            { source: 'inputCount', key: 'imageReferences', operator: 'greaterThan', value: 0 },
+          ],
+          field: 'aspectRatio',
+          message: 'Veo 3.1 renders reference runs at 16:9 or 9:16 only.',
+        },
+      );
     }
     if (modelId === 'wan-2.7') {
       rules.push(
@@ -1145,7 +1153,27 @@ function validationConfigForModel(
         message: 'MiniMax H3 needs a reference image or video alongside reference audio.',
       });
     }
+    if (modelId === 'wan-2.7') {
+      // wan/2-7-r2v: "At least one of `reference_image` or `reference_video` must be
+      // provided". Attached audio routes a run to r2v as `reference_voice` (see the wan
+      // branch in generation-services), with a start frame or without one, so a voice
+      // with no picture or clip beside it is the same refused shape as MiniMax's above.
+      rules.push({
+        type: 'forbidden-combination',
+        conditions: [
+          { source: 'inputCount', key: 'audioReferences', operator: 'greaterThan', value: 0 },
+          { source: 'inputCount', key: 'imageReferences', operator: 'equals', value: 0 },
+          { source: 'inputCount', key: 'videoReferences', operator: 'equals', value: 0 },
+        ],
+        field: 'audios',
+        message: 'Wan 2.7 needs a reference image or video alongside a reference voice.',
+      });
+    }
   }
+  // `googleSearch: false` binds to nothing since the Nano Banana adapters stopped sending
+  // `google_search` (2026-10-20). It stays so every image entry, and every run an older
+  // app or a saved draft sends with the key, normalizes as it did; dropping it would
+  // rewrite every image model's published entry for no change in behaviour.
   const normalizedDefaults = kind === 'image'
     ? { outputFormat: 'jpg', googleSearch: false }
     : kind === 'video'
