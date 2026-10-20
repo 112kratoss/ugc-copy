@@ -106,7 +106,9 @@ async function expectOverTheBottomNav(page: Page, name: string) {
 
 // A point near (fx, fy) of the pane's part in the window where the pane itself is
 // drawn: from there toward the pane's centre until no panel, control or minimap is
-// over it.
+// over it. In whole pixels: the browser reports a right-click's clientX/Y in whole
+// pixels and the menu is placed from those, so a fractional point here (the walk's,
+// whenever it runs) missed the menu's edge by its fraction.
 function panePoint(page: Page, fx: number, fy: number) {
   return page.evaluate(([fractionX, fractionY]) => {
     const pane = document.querySelector('.react-flow__pane')!;
@@ -118,8 +120,8 @@ function panePoint(page: Page, fx: number, fy: number) {
     const from = { x: left + (right - left) * fractionX, y: top + (bottom - top) * fractionY };
     const centre = { x: (left + right) / 2, y: (top + bottom) / 2 };
     for (let t = 0; t <= 1; t += 0.01) {
-      const x = from.x + (centre.x - from.x) * t;
-      const y = from.y + (centre.y - from.y) * t;
+      const x = Math.round(from.x + (centre.x - from.x) * t);
+      const y = Math.round(from.y + (centre.y - from.y) * t);
       if (document.elementFromPoint(x, y) === pane) return { x, y };
     }
     return null;
