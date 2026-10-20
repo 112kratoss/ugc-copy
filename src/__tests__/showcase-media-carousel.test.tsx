@@ -652,31 +652,6 @@ describe('ShowcaseMediaCarousel', () => {
         .toHaveAttribute('src', 'https://example.com/clip.mp4');
     });
 
-    it('reads the rendition off the media descriptor too', () => {
-      // post-media.ts populates both the top-level field and the descriptor;
-      // mobile prefers the descriptor, so web must resolve it the same way.
-      const item = createVideoItem({
-        preview: {
-          id: 'video-1',
-          kind: 'video',
-          url: 'https://example.com/clip.mp4',
-          renditionUrl: RENDITION,
-          teaserUrl: null,
-          feedStreamUrl: null,
-          previewUrl: null,
-          thumbhash: null,
-          cacheKey: 'video-1',
-          expiresAt: null,
-          width: 1080,
-          height: 1350,
-          durationSeconds: 8,
-          status: 'ready',
-          gridReady: false,
-        },
-      });
-      expect(playInFeed(item)).toHaveAttribute('src', RENDITION);
-    });
-
     it('streams the rendition in reel and detail modes too', () => {
       // These play unmuted at full size and used to insist on the source for
       // quality. The 2026-08 scaling audit measured that preference as the

@@ -1072,10 +1072,12 @@ describe('showcase feed', () => {
       limit: 12,
     });
 
-    expect(page.items[0].mediaItems?.[0].preview).toMatchObject({
-      previewUrl: 'https://proxy.example.com/generated_images/user-1/unmeasured.preview.webp',
-      width: null,
-      height: null,
+    expect(page.items[0].mediaItems?.[0]).toMatchObject({
+      preview: {
+        previewUrl: 'https://proxy.example.com/generated_images/user-1/unmeasured.preview.webp',
+        width: null,
+        height: null,
+      },
     });
     expect(page.items[0].mediaItems?.[0]).toMatchObject({ width: null, height: null });
   });

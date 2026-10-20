@@ -268,6 +268,56 @@ describe('post media summaries', () => {
     });
   });
 
+  // The web reads an item's own renditionUrl, teaserUrl and durationSeconds:
+  // the descriptor (`preview`) travels for the app and is not on the web's
+  // ShowcaseMediaItem, and Explore's first page leaves it out.
+  it('gives a video row the same rendition, teaser and duration as its descriptor', async () => {
+    const rows = [{
+      id: 'media-video',
+      post_id: 'post-1',
+      storage_path: 'posts/post-1/clip.mp4',
+      preview_storage_path: 'posts/post-1/clip.preview.webp',
+      rendition_storage_path: 'posts/post-1/clip.feed.mp4',
+      rendition_status: 'ready',
+      teaser_storage_path: 'posts/post-1/clip.teaser.mp4',
+      external_url: null,
+      media_kind: 'video',
+      content_type: 'video/mp4',
+      original_name: 'clip.mp4',
+      width: 720,
+      height: 1280,
+      duration_seconds: 24,
+      sort_order: 0,
+    }];
+    const query = {
+      select() { return query; },
+      in() { return query; },
+      order() { return Promise.resolve({ data: rows, error: null }); },
+    };
+    const supabase = {
+      from: () => query,
+      storage: {
+        from: () => ({
+          getPublicUrl: (storagePath: string) => ({ data: { publicUrl: `https://cdn.example.com/${storagePath}` } }),
+        }),
+      },
+    };
+
+    const item = (await loadPostMediaItemsMap(supabase as never, ['post-1'])).get('post-1')?.[0];
+
+    expect(item).toMatchObject({
+      renditionUrl: 'https://cdn.example.com/posts/post-1/clip.feed.mp4',
+      teaserUrl: 'https://cdn.example.com/posts/post-1/clip.teaser.mp4',
+      durationSeconds: 24,
+    });
+    expect(item?.preview).toMatchObject({
+      renditionUrl: item?.renditionUrl,
+      teaserUrl: item?.teaserUrl,
+      feedStreamUrl: item?.feedStreamUrl,
+      durationSeconds: item?.durationSeconds,
+    });
+  });
+
   it('supplies a deterministic key for legacy rows', async () => {
     const rows = [{
       id: 'legacy-media',

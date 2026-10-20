@@ -1062,7 +1062,7 @@ export default function OwnerProfileMediaHub({
                     mediaUrl={post.mediaUrl}
                     unavailable={Boolean(post.mediaItems?.[0]?.sourceUnavailableAt)}
                     previewUrl={post.mediaItems?.[0]?.previewUrl}
-                    renditionUrl={post.mediaItems?.[0]?.preview?.renditionUrl ?? post.mediaItems?.[0]?.renditionUrl}
+                    renditionUrl={post.mediaItems?.[0]?.renditionUrl}
                     mediaKind={post.mediaKind}
                     textBody={post.postFormat === 'text' ? post.body || post.description : undefined}
                     badges={[post.visibility, ...(recipeLabel ? [recipeLabel] : [])]}
@@ -1080,7 +1080,7 @@ export default function OwnerProfileMediaHub({
                     subtitle={`${item.creator.name} · ${formatShortDate(item.savedAt || item.createdAt)}`}
                     mediaUrl={cover?.url || item.mediaUrl}
                     previewUrl={cover?.previewUrl}
-                    renditionUrl={cover?.preview?.renditionUrl ?? cover?.renditionUrl}
+                    renditionUrl={cover?.renditionUrl}
                     mediaKind={cover?.mediaKind || item.mediaKind}
                     textBody={item.postFormat === 'text' ? item.body || item.prompt : undefined}
                     badges={item.asset ? ['Recipe attached'] : undefined}

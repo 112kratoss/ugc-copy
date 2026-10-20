@@ -106,9 +106,10 @@ describe('production performance readiness', () => {
     expect(priorityPoster).toContain("return `data:image/webp;base64,${Buffer.from(bytes).toString('base64')}`");
     // A client component's props are written into the flight data of every
     // first load. The tool filters get each tool's slug and label alone, and
-    // the first feed page drops the media fields only the app reads: 45 KB of
-    // /showcase and 31 KB of /marketplace on 2026-10-20
-    // (showcase-first-load-props.test.ts holds what is left out).
+    // the first feed page drops the media fields only the app reads: 47 KB of
+    // /showcase and 31 KB of /marketplace on 2026-10-20, margin under the
+    // decoded budgets below (showcase-first-load-props.test.ts and the two
+    // page tests hold what is left out).
     expect(showcasePage).toContain('initialFeed={toShowcaseBootstrapFeedPage(initialFeed)}');
     expect(showcasePage).toContain('sourceToolOptions={toSourceToolFilterOptions(sourceToolOptions)}');
     expect(marketplacePage).toContain('sourceToolOptions: toSourceToolFilterOptions(sourceToolOptions)');

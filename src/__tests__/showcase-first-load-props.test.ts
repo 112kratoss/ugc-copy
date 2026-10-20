@@ -1,10 +1,9 @@
-import { readFileSync, readdirSync } from 'node:fs';
-import path from 'node:path';
-
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import { buildVisualMediaDescriptor } from '@/lib/media-descriptor';
+import type { PostMediaSummary } from '@/lib/post-media';
 import {
+  SHOWCASE_APP_ONLY_MEDIA_FIELDS,
   toShowcaseBootstrapFeedPage,
   type ShowcaseFeedItem,
   type ShowcaseFeedPage,
@@ -12,9 +11,8 @@ import {
 } from '@/lib/showcase';
 import { FALLBACK_SOURCE_TOOLS, toSourceToolFilterOptions } from '@/lib/source-tools';
 
-const SRC_ROOT = path.join(process.cwd(), 'src');
-
-function createMediaItem(overrides: Partial<ShowcaseMediaItem> = {}): ShowcaseMediaItem {
+// A media row as post-media.ts serves it to every surface, the app's fields included.
+function createMediaRow(overrides: Partial<PostMediaSummary> = {}): PostMediaSummary {
   const preview = buildVisualMediaDescriptor({
     id: 'media-1',
     kind: 'video',
@@ -36,7 +34,9 @@ function createMediaItem(overrides: Partial<ShowcaseMediaItem> = {}): ShowcaseMe
     id: 'media-1',
     mediaKey: 'media-1',
     url: preview.url,
+    displayUrl: null,
     renditionUrl: preview.renditionUrl,
+    renditionStatus: 'ready',
     teaserUrl: preview.teaserUrl,
     feedStreamUrl: preview.feedStreamUrl,
     previewUrl: preview.previewUrl,
@@ -61,7 +61,7 @@ function createItem(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem
     id: 'post-1',
     mediaUrl: 'https://example.com/source.mp4',
     mediaKind: 'video',
-    mediaItems: [createMediaItem(), createMediaItem({ id: 'media-2', mediaKey: 'media-2', sortOrder: 1 })],
+    mediaItems: [createMediaRow(), createMediaRow({ id: 'media-2', mediaKey: 'media-2', sortOrder: 1 })],
     model: 'kling-3.0',
     title: 'Paper boat',
     prompt: 'A paper boat drifting across a pond',
@@ -80,14 +80,6 @@ function createItem(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem
     canRemix: true,
     ...overrides,
   };
-}
-
-function listSourceFiles(directory: string): string[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const entryPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) return entry.name === 'api' ? [] : listSourceFiles(entryPath);
-    return /\.tsx?$/.test(entry.name) ? [entryPath] : [];
-  });
 }
 
 describe('what Explore and the marketplace write into a first load', () => {
@@ -118,34 +110,25 @@ describe('what Explore and the marketplace write into a first load', () => {
     const trimmed = toShowcaseBootstrapFeedPage(feed);
 
     expect(feed).toEqual(before);
-    const keptMediaItems = before.items[0].mediaItems?.map((mediaItem) => {
-      const kept = { ...mediaItem };
-      delete kept.preview;
-      delete kept.previewCacheKey;
-      return kept;
-    });
+    const appOnly = new Set<string>(SHOWCASE_APP_ONLY_MEDIA_FIELDS);
+    const keptMediaItems = before.items[0].mediaItems?.map((mediaItem) => Object.fromEntries(
+      Object.entries(mediaItem).filter(([field]) => !appOnly.has(field)),
+    ));
     expect(trimmed).toEqual({
       ...before,
       items: [{ ...before.items[0], mediaItems: keptMediaItems }, textPost],
     });
     for (const mediaItem of trimmed.items[0].mediaItems ?? []) {
-      expect(mediaItem).not.toHaveProperty('preview');
-      expect(mediaItem).not.toHaveProperty('previewCacheKey');
+      for (const field of SHOWCASE_APP_ONLY_MEDIA_FIELDS) expect(mediaItem).not.toHaveProperty(field);
     }
   });
 
-  it('pairs every web read of a media preview with the item’s own field', () => {
-    // The first load's media items carry no `preview` (toShowcaseBootstrapFeedPage),
-    // so a web read of one with nothing to fall back on would draw those posts
-    // differently from the ones a later page brings.
-    const previewReads = [path.join(SRC_ROOT, 'app'), path.join(SRC_ROOT, 'components')]
-      .flatMap(listSourceFiles)
-      .flatMap((file) => readFileSync(file, 'utf8')
-        .split('\n')
-        .filter((line) => /\.preview\??\.(?:url|renditionUrl|teaserUrl|feedStreamUrl|previewUrl|thumbhash|cacheKey|width|height|durationSeconds|status|gridReady)\b/.test(line))
-        .map((line) => `${path.relative(SRC_ROOT, file)}: ${line.trim()}`));
-
-    expect(previewReads.length).toBeGreaterThan(0);
-    expect(previewReads.filter((read) => !read.includes('??'))).toEqual([]);
+  it('keeps the app-only media fields off the web’s media type', () => {
+    // A server media field is either on ShowcaseMediaItem, where the web may read
+    // it and the first page keeps it, or on this list, where the web cannot read
+    // it (a typecheck error) and the first page drops it. A new field has to
+    // take one side before typecheck:tests passes again.
+    expectTypeOf<Exclude<keyof PostMediaSummary, keyof ShowcaseMediaItem>>()
+      .toEqualTypeOf<(typeof SHOWCASE_APP_ONLY_MEDIA_FIELDS)[number]>();
   });
 });
