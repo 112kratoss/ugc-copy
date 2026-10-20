@@ -1084,6 +1084,40 @@ export function catalogStartRequest(
   return catalogRunWithShownCost(run, quote);
 }
 
+/** A run the start refused as costing more than its price (`cost_changed`): its quote request as JSON, and that price. */
+export type RefusedRunPrice = { key: string; costCredits: number };
+
+/**
+ * The run a `cost_changed` refusal was for, read off the start request refused: the quote request
+ * its price went with (the key `catalogStartRequest` attaches a price under) and the price it
+ * carried. Null for a run sent without a price, which the start never refuses on price.
+ */
+export function catalogRefusedRunPrice(run: CatalogGenerationRequest): RefusedRunPrice | null {
+  return typeof run.expectedCostCredits === 'number'
+    ? { key: JSON.stringify(catalogRunQuoteInput({ ...run, inputs: run.inputs ?? [] })), costCredits: run.expectedCostCredits }
+    : null;
+}
+
+/**
+ * Whether this build of the app is out of date for the run it would send: the start refused that
+ * very run at its price, and the quote, asked again since, prices it the same. The app asks a run's
+ * price with its own quote request and the start prices the run itself, so the two disagree when
+ * the app quotes runs as the deployed server no longer does (or when the server's own quote and
+ * start part, which its `generation_start_quote_drift` errors show), and another press could only
+ * be refused the same way. Each press was refused, priced again at the same price and offered
+ * again, until the app was updated (2026-10-20); the web creators hold an out-of-date page the same
+ * way. Another run, or a price that moved, goes as before.
+ */
+export function catalogAppOutOfDateForRun(
+  refused: RefusedRunPrice | null,
+  quote: { key: string | null; status: string; cost: number | null },
+): boolean {
+  return refused !== null
+    && quote.status === 'ready'
+    && quote.key === refused.key
+    && quote.cost === refused.costCredits;
+}
+
 export const REFERENCE_DURATION_CHANGED_CODE = 'REFERENCE_DURATION_CHANGED';
 
 export type VerifiedInputDuration = {

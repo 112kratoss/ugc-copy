@@ -70,11 +70,13 @@ import {
   applyVerifiedInputDurations,
   buildCatalogQuoteRequest,
   buildUnifiedCatalogGenerationRequest,
+  catalogAppOutOfDateForRun,
   catalogDraftInputCounts,
   catalogDraftRunHandles,
   catalogMotionDraftSlotKeys,
   catalogMultiShotLimits,
   catalogPromptMeters,
+  catalogRefusedRunPrice,
   catalogRunEnhancementInputs,
   catalogRunSlots,
   catalogStartRequest,
@@ -88,6 +90,7 @@ import {
   readVerifiedInputDurations,
   REFERENCE_DURATION_CHANGED_CODE,
   validateCatalogCreationDraft,
+  type RefusedRunPrice,
 } from '@/lib/generation-model-draft';
 import { guidedCreationStarter, guidedCreationStarters } from '@/lib/guided-creation-starter';
 import {
@@ -500,6 +503,16 @@ function unavailableRunInputMessage(
 
 /** Shown in place of a motion quote the server would refuse: it needs both inputs to price. */
 const MOTION_INPUTS_HINT = 'Add a character image and a motion clip.';
+
+/**
+ * Said in place of a `cost_changed` refusal once the run's price, asked again, is the price the
+ * start refused (`catalogAppOutOfDateForRun`): this build prices the run as the server no longer
+ * does. An update from the store, or the one the app fetches when it is opened again, brings a
+ * build that prices it as the server does. Short enough for the creator bar's two lines, where a
+ * longer one lost its end on the Pixel 9a; the failure view adds that the draft is saved.
+ */
+const APP_OUT_OF_DATE_MESSAGE = 'This app is out of date, so it can’t price this run. Update it, or close and reopen it to get the latest version.';
+const APP_OUT_OF_DATE_DRAFT_NOTE = 'Your draft is saved.';
 
 /**
  * What the failure view offers first for a refusal the server named, where pressing Try
@@ -1184,24 +1197,32 @@ function IdentityCreationScreen({
   // (buildUnifiedCatalogGenerationRequest), and the server normalizes and prices it again.
   const [quoteState, setQuoteState] = useState<{
     key: string | null;
+    /** The asking this answers (`quoteAsking.attempt`); an answer to an earlier one is no answer yet. */
+    attempt: number;
     status: 'idle' | 'pending' | 'ready' | 'error';
     cost: number | null;
     error: string | null;
-  }>({ key: null, status: 'idle', cost: null, error: null });
-  const [quoteRetryNonce, setQuoteRetryNonce] = useState(0);
+  }>({ key: null, attempt: 0, status: 'idle', cost: null, error: null });
+  // Each asking of the price, by Retry quote or after a refusal, and the run the start last refused
+  // at its price. One state, so a refusal and the asking again it brings arrive in one render: a
+  // ready quote read against the refusal is always the new answer, never the one refused.
+  const [quoteAsking, setQuoteAsking] = useState<{ attempt: number; refused: RefusedRunPrice | null }>({ attempt: 0, refused: null });
 
+  const quoteAttempt = quoteAsking.attempt;
   useEffect(() => {
+    const attempt = quoteAttempt;
     if (!quoteRequest || !quoteKey) {
-      setQuoteState({ key: null, status: 'idle', cost: null, error: null });
+      setQuoteState({ key: null, attempt, status: 'idle', cost: null, error: null });
       return;
     }
     const controller = new AbortController();
-    setQuoteState({ key: quoteKey, status: 'pending', cost: null, error: null });
+    setQuoteState({ key: quoteKey, attempt, status: 'pending', cost: null, error: null });
     const timer = setTimeout(() => {
       void api.quoteGenerationModel(quoteRequest, controller.signal)
         .then((quote) => {
           if (!controller.signal.aborted) setQuoteState({
             key: quoteKey,
+            attempt,
             status: 'ready',
             cost: quote.costCredits,
             error: null,
@@ -1228,6 +1249,7 @@ function IdentityCreationScreen({
             : undefined;
           setQuoteState({
             key: quoteKey,
+            attempt,
             status: 'error',
             cost: null,
             error: fieldMessage ?? (error instanceof Error ? error.message : 'Could not calculate generation cost.'),
@@ -1238,11 +1260,14 @@ function IdentityCreationScreen({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [api, quoteKey, quoteRetryNonce, refetchCatalog]);
+  }, [api, quoteKey, quoteAttempt, refetchCatalog]);
 
-  const activeQuote = quoteState.key === quoteKey
+  const activeQuote = quoteState.key === quoteKey && quoteState.attempt === quoteAttempt
     ? quoteState
     : { status: 'pending' as const, cost: null, error: null };
+  // The start refused this very run at its price, and asked again, its price is that price: the
+  // app prices it as the server no longer does, so the run is held and the app says why.
+  const appOutOfDate = catalogAppOutOfDateForRun(quoteAsking.refused, { key: quoteKey, status: activeQuote.status, cost: activeQuote.cost });
   const catalogUnavailable = Boolean(
     catalogQuery.isUnavailable ?? (!catalog && catalogQuery.error),
   );
@@ -1253,7 +1278,7 @@ function IdentityCreationScreen({
       void refetchCatalog();
       return;
     }
-    setQuoteRetryNonce((value) => value + 1);
+    setQuoteAsking((current) => ({ ...current, attempt: current.attempt + 1 }));
   };
   // A swept upload the run sends cannot be sent, so the run waits until it is removed or replaced.
   const unavailableReference = unavailableRunInputMessage(currentDraft, currentCatalogModel, unavailableReferencePaths);
@@ -1293,7 +1318,7 @@ function IdentityCreationScreen({
   // A model still loading its details (a pick from the What's new strip, which leaves Generate in view)
   // is not in the draft yet: a run started now would go to the model before it.
   const modelPickLoading = Boolean(modelPick && !modelPick.error);
-  const generateDisabled = !draftsHydrated || isRestoringRemix || remixRestoreFailed || isClosing || isGenerating || pollingInterrupted || isUploading || modelPickLoading || !catalog || activeQuote.status !== 'ready' || validation.errors.length > 0;
+  const generateDisabled = !draftsHydrated || isRestoringRemix || remixRestoreFailed || isClosing || isGenerating || pollingInterrupted || isUploading || modelPickLoading || !catalog || activeQuote.status !== 'ready' || appOutOfDate || validation.errors.length > 0;
   const openAuthForCurrentDraft = () => {
     router.push({
       pathname: '/auth',
@@ -2238,8 +2263,12 @@ function IdentityCreationScreen({
         setStartRefusal(refusal);
         // The balance the form reads can be stale; the server has just said it is short.
         if (refusal === 'insufficient_credits') void refreshProfile().catch(() => undefined);
-        // Priced again at once, so Try again states what the run now costs.
-        if (refusal === 'cost_changed') setQuoteRetryNonce((value) => value + 1);
+        // Priced again at once, so Try again states what the run now costs. The refused run is kept
+        // with the asking, so a price that comes back unmoved for it says this app is out of date.
+        if (refusal === 'cost_changed') {
+          const refused = request ? catalogRefusedRunPrice(request) : null;
+          setQuoteAsking((current) => ({ attempt: current.attempt + 1, refused }));
+        }
         // The server does not say which reference it could not use; storage says which are gone.
         if (refusal === 'invalid_input_media') void verifyStagedReferences([attempt.tool], { onlyExpired: false });
         if (details?.code === 'CATALOG_CHANGED' || details?.code === 'MODEL_UNAVAILABLE') {
@@ -2282,6 +2311,8 @@ function IdentityCreationScreen({
       setMessage(activeQuote.error ?? 'Wait for the current generation cost before continuing.');
       return;
     }
+    // The start would refuse this run as it did; the blocker already says why.
+    if (appOutOfDate) return;
     const nextValidation = validateCatalogCreationDraft(currentDraft, currentCatalogModel, { credits, quotedCost: activeQuote.cost });
     const nextErrors = unavailableReference
       ? [unavailableReference, ...nextValidation.errors]
@@ -2549,7 +2580,9 @@ function IdentityCreationScreen({
     // refusal stays said until the next press.
     setMessage(refusalMessage);
   };
-  const refusalActionLabel = startRefusalActionLabel(startRefusal);
+  // An app out of date for this run has no new price to check: the refusal is answered with why.
+  const refusalOutOfDate = appOutOfDate && startRefusal === 'cost_changed';
+  const refusalActionLabel = refusalOutOfDate ? null : startRefusalActionLabel(startRefusal);
   const refusalAction = refusalActionLabel ? { label: refusalActionLabel, onPress: runRefusalAction } : null;
   const promptNotes = enhanceNotes && enhanceNotes.shotId === undefined && enhanceNotes.tool === activeTool && enhanceNotes.prompt === currentDraft.prompt
     ? enhanceNotes.warnings
@@ -2613,7 +2646,8 @@ function IdentityCreationScreen({
     const visibleValidationError = isRestoringRemix ? undefined : validation.errors.find((error) => (
       !isReferenceMentionActive || !error.startsWith('Unknown element mention:')
     ));
-    const blocker = (promptMessage
+    const blocker = ((appOutOfDate ? APP_OUT_OF_DATE_MESSAGE : null)
+      ?? promptMessage
       ?? message
       ?? (catalogUnavailable ? catalogQuery.error?.message : null)
       ?? (activeQuote.status === 'error' ? activeQuote.error : null)
@@ -2831,9 +2865,10 @@ function IdentityCreationScreen({
           settingsSummary={`${selectedCreatorModel?.displayName ?? meta.title} · ${parameterSummary}`}
           startedAt={generationStartedAt}
           retryCost={activeQuote.status === 'ready' ? activeQuote.cost : null}
+          retryHeld={appOutOfDate}
           refusalAction={refusalAction}
-          notice={refundNotice}
-          error={activeGenerationStatus?.status === 'failed' ? activeGenerationStatus.error?.trim() || message : message}
+          notice={refusalOutOfDate ? APP_OUT_OF_DATE_DRAFT_NOTE : refundNotice}
+          error={refusalOutOfDate ? APP_OUT_OF_DATE_MESSAGE : activeGenerationStatus?.status === 'failed' ? activeGenerationStatus.error?.trim() || message : message}
           pollingInterrupted={pollingInterrupted && generationTool === activeTool}
           onResumePolling={() => void resumeGenerationPolling()}
           attemptUnconfirmed={Boolean(pendingAttempt) && !isGenerating && pendingAttempt?.tool === activeTool}
@@ -2888,7 +2923,8 @@ function IdentityCreationScreen({
     const visibleValidationError = isRestoringRemix ? undefined : validation.errors.find((error) => (
       !isReferenceMentionActive || !error.startsWith('Unknown element mention:')
     ));
-    const blocker = (promptMessage
+    const blocker = ((appOutOfDate ? APP_OUT_OF_DATE_MESSAGE : null)
+      ?? promptMessage
       ?? message
       ?? (catalogUnavailable ? catalogQuery.error?.message : null)
       ?? (activeQuote.status === 'error' ? activeQuote.error : null)
@@ -3103,9 +3139,10 @@ function IdentityCreationScreen({
           settingsSummary={`${selectedImageModel?.displayName ?? 'Image'} · ${parameterSummary || 'Default settings'}`}
           startedAt={generationStartedAt}
           retryCost={activeQuote.status === 'ready' ? activeQuote.cost : null}
+          retryHeld={appOutOfDate}
           refusalAction={refusalAction}
-          notice={refundNotice}
-          error={status?.status === 'failed' ? status.error?.trim() || message : message}
+          notice={refusalOutOfDate ? APP_OUT_OF_DATE_DRAFT_NOTE : refundNotice}
+          error={refusalOutOfDate ? APP_OUT_OF_DATE_MESSAGE : status?.status === 'failed' ? status.error?.trim() || message : message}
           pollingInterrupted={pollingInterrupted && generationTool === 'image'}
           onResumePolling={() => void resumeGenerationPolling()}
           attemptUnconfirmed={Boolean(pendingAttempt) && !isGenerating && pendingAttempt?.tool === 'image'}
@@ -5714,6 +5751,7 @@ function GenerationWorkspace({
   settingsSummary,
   startedAt,
   retryCost,
+  retryHeld = false,
   refusalAction = null,
   notice = null,
   error,
@@ -5745,6 +5783,8 @@ function GenerationWorkspace({
   startedAt: number | null;
   /** What another run of the same draft costs, or null while the quote is unsettled. */
   retryCost: number | null;
+  /** The same draft would be refused again as it was (an app out of date for it): no Try again. */
+  retryHeld?: boolean;
   /**
    * What to do first about a start the server refused outright, where sending it again would
    * only be refused again (Edit prompt, Get credits, …); Try again stays, second.
@@ -5915,7 +5955,7 @@ function GenerationWorkspace({
               {refusalAction ? <PrimaryButton label={refusalAction.label} onPress={refusalAction.onPress} /> : null}
               {/* "Retry" ran a full new paid generation behind a bare verb,
                   where every other route to that spend states the price. */}
-              {refusalAction
+              {retryHeld ? null : refusalAction
                 ? <SecondaryButton label={withCreditCost('Try again', retryCost)} onPress={onRetry} />
                 : <PrimaryButton label={withCreditCost('Try again', retryCost)} onPress={onRetry} />}
               <SecondaryButton label="Back to creator" onPress={onBack} />

@@ -5477,6 +5477,58 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(authState.api.startGeneration.mock.calls[1][1]).not.toBe(authState.api.startGeneration.mock.calls[0][1]);
       });
 
+      // An app that asks a run's price as the deployed server no longer prices it: its quote
+      // answers the same price every time, and the start refuses the run at that price every
+      // time. Before, each press was refused, priced again at that price, and offered again.
+      it('says the app is out of date when the run the start refused is priced again at the refused price, and holds that run', async () => {
+        catalogState.catalog = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14)]);
+        authState.api.startGeneration.mockRejectedValue(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'));
+        const tree = await openTyped();
+        const quotesBefore = authState.api.quoteGenerationModel.mock.calls.length;
+        await pressGenerate(tree);
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
+        expect(authState.api.startGeneration.mock.calls[0][0]).toMatchObject({ expectedCostCredits: 8 });
+        expect(authState.api.quoteGenerationModel.mock.calls.length).toBeGreaterThan(quotesBefore);
+
+        const outOfDate = 'This app is out of date, so it can’t price this run. Update it, or close and reopen it to get the latest version.';
+        const workspace = () => tree.root.findByProps({ testID: 'generation-workspace' });
+        expect(collectText(workspace())).toContain(outOfDate);
+        expect(collectText(workspace())).toContain('Your draft is saved.');
+        expect(text(tree)).not.toContain('The price of this run changed.');
+        // Neither Try again nor Check the new price: both would send the run the start refuses.
+        expect(workspaceButtons(tree)).toEqual({ primary: [], secondary: ['Back to creator'] });
+
+        renderer.act(() => { workspace().find((node) => node.type === SecondaryButton && node.props.label === 'Back to creator').props.onPress(); });
+        expect(blocker(tree)).toBe(outOfDate);
+        expect(generateButton(tree).props.disabled).toBe(true);
+        // Pressed all the same, it sends nothing.
+        await pressGenerate(tree);
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(1);
+
+        // Another run goes as before, at its own price.
+        renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Generation parameters.').props.onPress(); });
+        renderer.act(() => { labelled(tree.root, '1:1').props.onPress(); });
+        renderer.act(() => { labelled(tree.root, 'Close generation parameters').props.onPress(); });
+        await settle();
+        expect(generateButton(tree).props.disabled).toBe(false);
+        expect(text(tree)).not.toContain(outOfDate);
+        authState.api.startGeneration.mockReturnValue(new Promise(() => undefined));
+        await pressGenerate(tree);
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(2);
+        expect(authState.api.startGeneration.mock.calls[1][0]).toMatchObject({ settings: expect.objectContaining({ aspectRatio: '1:1' }), expectedCostCredits: 8 });
+      });
+
+      it('goes on as before when the run the start refused is priced again at another price', async () => {
+        catalogState.catalog = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14)]);
+        authState.api.startGeneration.mockRejectedValueOnce(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'));
+        const tree = await openTyped();
+        quoteEchoingSettings(9);
+        await pressGenerate(tree);
+
+        expect(text(tree)).not.toContain('This app is out of date');
+        expect(workspaceButtons(tree)).toEqual({ primary: ['Check the new price'], secondary: ['Try again · 9 credits', 'Back to creator'] });
+      });
+
       it('asks storage which reference is gone when the server cannot use the run’s media, and marks it', async () => {
         memory.set(ordinaryKey, savedDrafts({ image: { prompt: 'A bottle with @alpha', references: [stagedMedia('alpha')] } }));
         authState.api.startGeneration.mockRejectedValue(refusal(400, 'invalid_input_media', 'This reference upload has expired. Add it again.'));
