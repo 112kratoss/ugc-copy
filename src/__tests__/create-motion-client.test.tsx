@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CreateMotionClient from '@/app/create-motion/CreateMotionClient';
 import { GenerationStatusRequestError } from '@/lib/generation-status-client';
 import { loadPendingWebStart, savePendingWebStart, type PendingWebStart } from '@/lib/generation-model-client';
+import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 import { MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 const modelCatalogState = vi.hoisted(() => ({
@@ -14,6 +15,12 @@ const modelCatalogState = vi.hoisted(() => ({
 const quoteState = vi.hoisted(() => ({
   errorCode: null as string | null,
   requests: [] as Array<Record<string, unknown> | null>,
+  /** The attempt each request was asked under ("Retry quote" and a price that changed ask again). */
+  attempts: [] as number[],
+  /** The answer to each attempt, the last one repeating: a price, still pending, or a failure. */
+  answers: [20] as Array<number | 'pending' | 'error'>,
+  /** Answers as for another request than the page asked. */
+  forAnotherRequest: false,
 }));
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
 // One stable catalog: a fresh object per render re-runs every effect keyed on it.
@@ -182,26 +189,37 @@ vi.mock('@/lib/generation-model-client', async () => {
       revision: 'test-catalog-rev',
       refetch: generationCatalogRefetchMock,
     }),
-    // As the real hook: no request, no quote.
-    useWebGenerationModelQuote: (input: Record<string, unknown> | null) => {
+    // As the real hook: no request, no quote; a state says the request it answers (`key`).
+    useWebGenerationModelQuote: (input: Record<string, unknown> | null, _accessToken?: string | null, attempt = 0) => {
+      void _accessToken;
       quoteState.requests.push(input);
-      if (!input) return { status: 'idle', quote: null, error: null };
-      return quoteState.errorCode
-        ? {
+      quoteState.attempts.push(attempt);
+      if (!input) return { status: 'idle', quote: null, error: null, key: null };
+      const key = JSON.stringify(quoteState.forAnotherRequest ? { ...input, modelId: 'another-model' } : input);
+      if (quoteState.errorCode) {
+        return {
           status: 'error',
           quote: null,
           error: new actual.WebCatalogRequestError('The model catalog changed.', 409, quoteState.errorCode),
-        }
-        : {
-          status: 'ready',
-          quote: {
-            modelId: 'kling-3.0',
-            catalogRevision: 'test-catalog-rev',
-            normalizedSettings: {},
-            costCredits: 20,
-          },
-          error: null,
+          key,
         };
+      }
+      const answer = quoteState.answers[Math.min(attempt, quoteState.answers.length - 1)];
+      if (answer === 'pending') return { status: 'pending', quote: null, error: null, key };
+      if (answer === 'error') {
+        return { status: 'error', quote: null, error: new actual.WebCatalogRequestError('Could not calculate generation cost.', 503), key };
+      }
+      return {
+        status: 'ready',
+        quote: {
+          modelId: 'kling-3.0',
+          catalogRevision: 'test-catalog-rev',
+          normalizedSettings: {},
+          costCredits: answer,
+        },
+        error: null,
+        key,
+      };
     },
   };
 });
@@ -214,6 +232,7 @@ const motionModelSummaries = [
 type StartAnswer = Response | Error | (() => Response | Promise<Response>);
 let startAnswers: StartAnswer[] = [];
 let generationLookupBody: unknown = { generations: [] };
+let remixSourceBody: unknown = null;
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -240,6 +259,9 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     if (answer instanceof Error) throw answer;
     return typeof answer === 'function' ? answer() : answer;
   }
+  if (url.startsWith('/api/remix-source?') && remixSourceBody) {
+    return jsonResponse(remixSourceBody);
+  }
   if (url.startsWith('/api/generations?')) {
     return jsonResponse(generationLookupBody);
   }
@@ -256,6 +278,24 @@ function startKeys() {
 
 function startBodies() {
   return startPosts().map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
+}
+
+/** The price on the run panel. */
+function costShown() {
+  return screen.getByText('Cost').nextElementSibling?.textContent;
+}
+
+/** The page's last quote request, as JSON. */
+function shownQuote() {
+  return JSON.stringify(quoteState.requests.filter(Boolean).at(-1));
+}
+
+/**
+ * The start's own quote of the run the page posted, as JSON: byte for byte what the price
+ * shown must have been asked with, as the page's price rule compares them.
+ */
+function startQuote(index: number) {
+  return JSON.stringify(buildUnifiedGenerationQuoteInput(parseUnifiedGenerationRequest(startBodies()[index])));
 }
 
 function chooseModel(container: HTMLElement, displayName: string) {
@@ -318,6 +358,9 @@ beforeEach(() => {
   modelCatalogState.summaries = [];
   quoteState.errorCode = null;
   quoteState.requests = [];
+  quoteState.attempts = [];
+  quoteState.answers = [20];
+  quoteState.forAnotherRequest = false;
   generationCatalogRefetchMock.mockClear();
   maybeSingleMock.mockClear();
   queryBuilder.select.mockClear();
@@ -342,6 +385,7 @@ beforeEach(() => {
   publishModalState.props = null;
   startAnswers = [];
   generationLookupBody = { generations: [] };
+  remixSourceBody = null;
   fetchMock.mockClear();
   vi.stubGlobal('fetch', fetchMock);
   window.sessionStorage.clear();
@@ -458,6 +502,225 @@ describe('CreateMotionClient quote', () => {
   });
 });
 
+/**
+ * The price is the server's own quote of the run the page posts, and goes with the run as the
+ * most its start may charge (`expectedCostCredits`). The start quotes a run again from the inputs
+ * it is sent, each in its slot, and refuses one it prices above the price sent (`cost_changed`).
+ * The page built its quote by hand, from kind totals, so the price shown was not always the
+ * start's: on production's catalog of 2026-10-19 every Kling 3.0 run showed a price the start
+ * then refused.
+ */
+describe('CreateMotionClient price of the run it sends', () => {
+  const COST_CHANGED = 'The price of this run changed. Check the updated cost and generate again.';
+
+  it.each([
+    ['a fresh draft', async () => undefined, { modelId: 'kling-3.0', settings: { resolution: '720p', characterOrientation: 'video' } }],
+    // Chosen once the saved draft is read: before that, the catalog's default takes the page back.
+    ['Kling 2.6 at 1080p, favoring the image', async (container: HTMLElement) => {
+      chooseModel(container, 'Kling 2.6');
+      fireEvent.click(screen.getByRole('button', { name: 'Pro 1080p' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Favor image' }));
+    }, { modelId: 'kling-2.6', settings: { resolution: '1080p', characterOrientation: 'image' } }],
+  ])('asks for its price with the start’s own quote of the run it posts: %s', async (_case, setUp, run) => {
+    modelCatalogState.summaries = motionModelSummaries;
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+    await setUp(view.container);
+    await waitFor(() => expect(costShown()).toBe('20 credits'));
+    const shown = shownQuote();
+
+    await pressGenerate();
+    await waitFor(() => expect(startPosts()).toHaveLength(1));
+
+    expect(startBodies()[0]).toMatchObject(run);
+    expect(shown).toBe(startQuote(0));
+    expect(JSON.parse(shown)).toMatchObject({ schemaVersion: 2, inputMetadata: { slots: { characterImage: { count: 1 }, referenceVideo: { count: 1 } } } });
+  });
+
+  it('sends the price it shows with the run, as the most the start may charge, and the run as it was', async () => {
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+    expect(costShown()).toBe('20 credits');
+
+    await pressGenerate();
+
+    await waitFor(() => expect(startPosts()).toHaveLength(1));
+    expect(startBodies()[0]).toEqual({
+      schemaVersion: 3,
+      kind: 'motion',
+      modelId: 'kling-3.0',
+      settings: { duration: 8, characterOrientation: 'video', resolution: '720p' },
+      prompt: "No distortion, the character's movements are consistent with the video.",
+      inputs: [
+        {
+          slot: 'characterImage',
+          kind: 'image',
+          url: 'https://storage.example/uploads/hero.png?token=first',
+          label: 'Character image',
+          storagePath: 'uploads/user-1/hero.png',
+          sourceGenerationId: null,
+        },
+        {
+          slot: 'referenceVideo',
+          kind: 'video',
+          url: 'https://storage.example/uploads/dance.mp4?token=first',
+          label: 'Reference video',
+          storagePath: 'uploads/user-1/dance.mp4',
+          sourceGenerationId: null,
+        },
+      ],
+      catalogRevision: 'test-catalog-rev',
+      expectedCostCredits: 20,
+    });
+    expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['answers another request than the run’s', () => { quoteState.forAnotherRequest = true; }],
+    ['is not a whole number of credits', () => { quoteState.answers = [20.5]; }],
+  ])('sends the run without a price when the quote %s', async (_case, setUp) => {
+    setUp();
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+
+    await pressGenerate();
+
+    // The run goes, and the start charges its own price, as it did before a price was sent.
+    await waitFor(() => expect(startPosts()).toHaveLength(1));
+    expect(startBodies()[0]).not.toHaveProperty('expectedCostCredits');
+  });
+
+  it('waits for a price, and sends the run with it once it is ready', async () => {
+    quoteState.answers = ['pending'];
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+    expect(costShown()).toBe('Calculating...');
+    expect(generateButton()).toBeDisabled();
+
+    // The answer comes in: the stand-in hook gives it at the page's next render.
+    quoteState.answers = [20];
+    view.rerender(<CreateMotionClient prefill={{}} />);
+    expect(costShown()).toBe('20 credits');
+    await pressGenerate();
+
+    await waitFor(() => expect(startPosts()).toHaveLength(1));
+    expect(startBodies()[0].expectedCostCredits).toBe(20);
+  });
+
+  it('asks for the price again when the server says it changed, and sends the next run at the new price under a new key', async () => {
+    quoteState.answers = [20, 24];
+    startAnswers = [jsonResponse({ code: 'cost_changed', error: COST_CHANGED }, 409)];
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+    expect(quoteState.attempts.at(-1)).toBe(0);
+    expect(costShown()).toBe('20 credits');
+
+    await pressGenerate();
+
+    expect(await screen.findByText(COST_CHANGED)).toBeInTheDocument();
+    expect(quoteState.attempts.at(-1)).toBe(1);
+    expect(costShown()).toBe('24 credits');
+    expect(loadPendingWebStart('motion', 'user-1')).toBeNull();
+
+    await pressGenerate();
+
+    await waitFor(() => expect(startPosts()).toHaveLength(2));
+    expect(startBodies().map((body) => body.expectedCostCredits)).toEqual([20, 24]);
+    expect(startKeys()[1]).not.toBe(startKeys()[0]);
+    expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();
+  });
+
+  it('keeps Retry quote under the refusal when the price cannot be read again after it changed', async () => {
+    quoteState.answers = [20, 'error', 24];
+    startAnswers = [jsonResponse({ code: 'cost_changed', error: COST_CHANGED }, 409)];
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+
+    await pressGenerate();
+
+    // The refusal stays said, and asking again is the only way to a price: Generate waits for one.
+    expect(await screen.findByText(COST_CHANGED)).toBeInTheDocument();
+    expect(costShown()).toBe('Unavailable');
+    expect(generateButton()).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry quote' }));
+
+    expect(costShown()).toBe('24 credits');
+    await pressGenerate();
+    await waitFor(() => expect(startPosts()).toHaveLength(2));
+    expect(startBodies()[1].expectedCostCredits).toBe(24);
+  });
+
+  it('checks an unanswered start again with the run and price it sent, though the price has moved since', async () => {
+    startAnswers = [new TypeError('Failed to fetch')];
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+    await pressGenerate();
+    expect(await screen.findByText('We couldn’t confirm your generation started. Check again — that can’t start a second run.')).toBeInTheDocument();
+
+    // The price moves and the prompt is edited: Check again still sends what it sent.
+    quoteState.answers = [24];
+    fireEvent.change(screen.getByPlaceholderText(/Describe the kind of movement/), { target: { value: 'Spin twice, then bow.' } });
+    expect(costShown()).toBe('24 credits');
+    await pressGenerate();
+
+    await waitFor(() => expect(startPosts()).toHaveLength(2));
+    expect(startKeys()[1]).toBe(startKeys()[0]);
+    expect(startBodies()[1]).toEqual(startBodies()[0]);
+    expect(startBodies()[1].expectedCostCredits).toBe(20);
+  });
+
+  it('posts a remix from the inputs it restored, with its source, under its own price', async () => {
+    remixSourceBody = {
+      generation: { id: 'generation-source', title: 'Rooftop dance', prompt: 'Dance on the roof at dusk', category: 'video', model: 'kling-2.6' },
+      result: { mediaType: 'video', url: 'https://cdn.example/source-result.mp4' },
+      inputs: {
+        motion: {
+          characterImage: { kind: 'image', url: 'https://cdn.example/hero.png', label: 'Hero still', storagePath: 'uploads/user-1/hero.png', sourceGenerationId: null },
+          referenceVideo: { kind: 'video', url: 'https://cdn.example/dance.mp4', label: 'Original result video', storagePath: null, sourceGenerationId: 'generation-older' },
+        },
+      },
+      workflowSettings: { model: 'kling-2.6', mode: '1080p', characterOrientation: 'image' },
+      restoreIssues: [],
+    };
+    render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
+    expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+    await waitFor(() => expect(costShown()).toBe('20 credits'));
+    const shown = shownQuote();
+
+    await pressGenerate();
+
+    await waitFor(() => expect(startPosts()).toHaveLength(1));
+    expect(startBodies()[0]).toEqual({
+      schemaVersion: 3,
+      kind: 'motion',
+      modelId: 'kling-2.6',
+      settings: { duration: 8, characterOrientation: 'image', resolution: '1080p' },
+      prompt: 'Dance on the roof at dusk',
+      inputs: [
+        { slot: 'characterImage', kind: 'image', url: 'https://cdn.example/hero.png', label: 'Hero still', storagePath: 'uploads/user-1/hero.png', sourceGenerationId: null },
+        { slot: 'referenceVideo', kind: 'video', url: 'https://cdn.example/dance.mp4', label: 'Original result video', storagePath: null, sourceGenerationId: 'generation-older' },
+      ],
+      sourceGenerationId: 'generation-source',
+      catalogRevision: 'test-catalog-rev',
+      expectedCostCredits: 20,
+    });
+    expect(shown).toBe(startQuote(0));
+    expect(uploadMocks.uploadMediaToTemporaryStorage).not.toHaveBeenCalled();
+  });
+
+  it('replays a start saved on another visit with the price it was sent with', async () => {
+    const saved = pendingStart();
+    saved.body = { ...saved.body, expectedCostCredits: 9 };
+    savePendingWebStart(saved);
+
+    render(<CreateMotionClient prefill={{}} />);
+
+    await waitFor(() => expect(startPosts()).toHaveLength(1));
+    expect(startKeys()[0]).toBe('motion:saved-key');
+    expect(startBodies()[0]).toEqual({ schemaVersion: 3, ...saved.body });
+  });
+});
+
 describe('CreateMotionClient start', () => {
   it('keeps the key of a start whose answer was lost, and the next press checks it under that key', async () => {
     let pendingWhileSending: PendingWebStart | null = null;
@@ -519,7 +782,8 @@ describe('CreateMotionClient start', () => {
 
     await waitFor(() => expect(startPosts()).toHaveLength(1));
     expect(startKeys()[0]).toBe('motion:saved-key');
-    expect(startBodies()[0]).toMatchObject({ prompt: 'Saved prompt', schemaVersion: 3 });
+    // Exactly as saved: a start saved before the price went with runs goes without one.
+    expect(startBodies()[0]).toEqual({ schemaVersion: 3, ...pendingStart().body });
     expect(await screen.findByRole('link', { name: /Download video/ })).toBeInTheDocument();
     expect(queryBuilder.select).not.toHaveBeenCalled();
     expect(loadPendingWebStart('motion', 'user-1')).toBeNull();
@@ -628,10 +892,13 @@ describe('CreateMotionClient start', () => {
     expect(screen.getByText('Reference length: 9.0s')).toBeInTheDocument();
     expect(quoteState.requests.at(-1)).toMatchObject({ settings: { duration: 9 } });
     expect(loadPendingWebStart('motion', 'user-1')).toBeNull();
+    const shown = shownQuote();
 
     await pressGenerate();
     await waitFor(() => expect(startPosts()).toHaveLength(2));
-    expect(startBodies()[1]).toMatchObject({ settings: { duration: 9 } });
+    expect(startBodies()[1]).toMatchObject({ settings: { duration: 9 }, expectedCostCredits: 20 });
+    // The price of the measured length is the start's own quote of the run it is sent.
+    expect(shown).toBe(startQuote(1));
   });
 
   it('says the credits of a failed run were returned and refreshes the balance', async () => {

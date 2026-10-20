@@ -1,4 +1,4 @@
-import { SUBJECT_IMAGES_SLOT_KEY } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { SUBJECT_IMAGES_SLOT_KEY, type CatalogRunInputFact } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 /**
  * The inputs a web creator's run sends, worked out before any file is uploaded: each
@@ -111,3 +111,17 @@ export function planImageRunInputs<Element>(elements: readonly Element[], maxIma
     .slice(0, Math.max(0, maxImages))
     .map((element) => ({ slot: 'imageReferences', kind: 'image', element }));
 }
+
+/**
+ * The inputs the web motion creator's runs send, in this order: the character to animate
+ * and the clip whose movement it takes, in the slots of the motion models' `motion-inputs`
+ * mode. The creator asked for its price with kind totals instead, which the start, reading
+ * each input's slot, does not: a model whose descriptor names other slots refused, at the
+ * start, runs that price had been shown for. No length goes with the clip: the start
+ * measures it and, when the measured length costs more than the price shown, sends the
+ * creator back to quote with it.
+ */
+export const MOTION_RUN_INPUTS = [
+  { slot: 'characterImage', kind: 'image' },
+  { slot: 'referenceVideo', kind: 'video' },
+] as const satisfies readonly CatalogRunInputFact[];

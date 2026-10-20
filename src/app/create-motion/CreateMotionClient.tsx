@@ -66,8 +66,9 @@ import {
     type GenerationTiming,
 } from '@/lib/generation-timing';
 import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
+import { MOTION_RUN_INPUTS } from '@/lib/creator-run-inputs';
 // Kie's motion cap; the motion start refuses a longer prompt before anything is held.
-import { MOTION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
+import { catalogRunQuoteInput, MOTION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
 import { useTicker } from '@/lib/use-ticker';
 import {
     refreshTemporaryMediaUrl,
@@ -85,6 +86,7 @@ import {
     useWebGenerationModelCatalog,
     useWebGenerationModelQuote,
     WebCatalogRequestError,
+    webCatalogStartRequest,
     type PendingWebStart,
     type WebGenerationStartResponse,
 } from '@/lib/generation-model-client';
@@ -865,6 +867,10 @@ export default function CreateMotionClient({
             || (code === 'INVALID_GENERATION_REQUEST' && (fieldKeys.length === 0 || fieldKeys.some((key) => key.startsWith('prompt'))))
         ) {
             promptInputRef.current?.focus();
+        } else if (code === 'cost_changed') {
+            // Priced again at once: the run panel shows what the run costs now, and the
+            // next press sends that price.
+            setQuoteAttempt((current) => current + 1);
         }
     };
 
@@ -955,11 +961,10 @@ export default function CreateMotionClient({
 
     const startFreshRun = async () => {
         if (activeGenerationRequestKeyRef.current) return;
-        const effectiveDuration = Math.ceil(duration);
         const idempotencyKey = createGenerationIdempotencyKey('motion');
         activeGenerationRequestKeyRef.current = idempotencyKey;
         const startedAtMs = getCurrentTimestampMs();
-        const estimatedTotalMs = getMotionGenerationEstimate(effectiveDuration);
+        const estimatedTotalMs = getMotionGenerationEstimate(runSettings.duration);
         beginRunView(startedAtMs, estimatedTotalMs, 'Preparing inputs');
 
         try {
@@ -1019,37 +1024,31 @@ export default function CreateMotionClient({
                 startedAtMs,
                 estimatedTotalMs,
             }));
-            const body: CatalogGenerationRequestPayload = {
+            const sent = {
+                characterImage: {
+                    url: imageUrl,
+                    label: nextCharacterImageDescriptor?.label ?? 'Character image',
+                    storagePath: nextCharacterImageDescriptor?.storagePath ?? null,
+                    sourceGenerationId: nextCharacterImageDescriptor?.sourceGenerationId ?? null,
+                },
+                referenceVideo: {
+                    url: videoUrl,
+                    label: nextReferenceVideoDescriptor?.label ?? 'Reference video',
+                    storagePath: nextReferenceVideoDescriptor?.storagePath ?? null,
+                    sourceGenerationId: nextReferenceVideoDescriptor?.sourceGenerationId ?? null,
+                },
+            };
+            // Posted from the inputs and settings its price was quoted from, with that price
+            // when it is this run's own quote.
+            const body = webCatalogStartRequest({
                 kind: 'motion',
                 modelId: selectedModel,
-                settings: {
-                    duration: effectiveDuration,
-                    characterOrientation,
-                    resolution: mode,
-                    ...additionalSettings.settings,
-                },
+                settings: runSettings,
                 prompt,
-                inputs: [
-                    {
-                        slot: 'characterImage',
-                        kind: 'image',
-                        url: imageUrl,
-                        label: nextCharacterImageDescriptor?.label ?? 'Character image',
-                        storagePath: nextCharacterImageDescriptor?.storagePath ?? null,
-                        sourceGenerationId: nextCharacterImageDescriptor?.sourceGenerationId ?? null,
-                    },
-                    {
-                        slot: 'referenceVideo',
-                        kind: 'video',
-                        url: videoUrl,
-                        label: nextReferenceVideoDescriptor?.label ?? 'Reference video',
-                        storagePath: nextReferenceVideoDescriptor?.storagePath ?? null,
-                        sourceGenerationId: nextReferenceVideoDescriptor?.sourceGenerationId ?? null,
-                    },
-                ],
+                inputs: MOTION_RUN_INPUTS.map((input) => ({ ...input, ...sent[input.slot] })),
                 sourceGenerationId: remixId || undefined,
                 catalogRevision: modelCatalog.catalog?.revision ?? '',
-            };
+            }, quoteState);
             const start: PendingWebStart = {
                 version: 1,
                 tool: 'motion',
@@ -1188,21 +1187,29 @@ export default function CreateMotionClient({
     }, [latestGenerationId, outputVideo]);
 
     const additionalSettings = useAdditionalCatalogSettings(catalogDescriptor, CATALOG_HANDLED_KEYS);
+    // One settings object for the price and the run. Whole seconds: the duration control is
+    // an integer, and a 7.3 s clip made the quote a 422 with no reason shown.
+    const runSettings = useMemo(() => ({
+        duration: Math.ceil(duration),
+        characterOrientation,
+        resolution: mode,
+        ...additionalSettings.settings,
+    }), [additionalSettings.settings, characterOrientation, duration, mode]);
     const hasCharacterImage = Boolean(characterImage || characterImageFile);
     const hasReferenceVideo = Boolean(referenceVideo || referenceVideoFile);
     // The server refuses a quote without both inputs and a length, so a fresh
     // page opened on that refusal and a Retry that could not help.
     const motionInputsReady = hasCharacterImage && hasReferenceVideo && duration > 0;
     const hasCatalogSettings = Boolean(modelCatalog.catalog && modelCatalog.detailsReady);
-    const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady && motionInputsReady ? {
+    // The price is the server's own quote of the run the page posts, as the start quotes
+    // the run it is sent (catalogRunQuoteInput of its inputs, each in its slot).
+    const quoteRequest = useMemo(() => modelCatalog.catalog && modelCatalog.detailsReady && motionInputsReady ? catalogRunQuoteInput({
         kind: 'motion' as const,
         modelId: selectedModel,
-        // Whole seconds, as the submit sends: the duration control is an
-        // integer, and a 7.3 s clip made the quote a 422 with no reason shown.
-        settings: { resolution: mode, characterOrientation, duration: Math.ceil(duration), ...additionalSettings.settings },
-        inputCounts: { images: characterImage ? 1 : 0, videos: referenceVideo ? 1 : 0, audios: 0 },
         catalogRevision: modelCatalog.catalog.revision,
-    } : null, [characterImage, characterOrientation, duration, mode, modelCatalog.catalog, motionInputsReady, referenceVideo, selectedModel, modelCatalog.detailsReady, additionalSettings.settings]);
+        settings: runSettings,
+        inputs: MOTION_RUN_INPUTS,
+    }) : null, [modelCatalog.catalog, modelCatalog.detailsReady, motionInputsReady, runSettings, selectedModel]);
     const [quoteAttempt, setQuoteAttempt] = useState(0);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token, quoteAttempt);
     useEffect(() => {
@@ -1227,6 +1234,10 @@ export default function CreateMotionClient({
         });
     const estimatedCost = quoteUi.costCredits;
     const quotePending = quoteUi.blocksGenerate;
+    // The price could not be read: Generate waits for one, and this asks again.
+    const quoteRetry = quoteState.status === 'error' ? (
+        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={() => setQuoteAttempt((current) => current + 1)} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
+    ) : null;
     const insufficientCredits = userCredits !== null && estimatedCost !== null && estimatedCost > 0 && userCredits < estimatedCost;
     // The server's refusal holds until the balance or the price on screen moves.
     const creditRefusalMessage = creditRefusal && creditRefusal.balance === userCredits && creditRefusal.cost === estimatedCost
@@ -1759,10 +1770,16 @@ export default function CreateMotionClient({
                                         </div>
                                     ) : videoError ? (
                                         <p className="text-sm text-rose-300">{videoError}</p>
-                                    ) : quoteState.status === 'error' ? (
-                                        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={() => setQuoteAttempt((current) => current + 1)} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
                                     ) : error ? (
-                                        <p className="text-sm text-rose-300">{error}</p>
+                                        // A price that could not be read since (asked again after
+                                        // `cost_changed`, say) keeps its Retry under the error:
+                                        // Generate waits for a price.
+                                        <div className="space-y-2">
+                                            <p className="text-sm text-rose-300">{error}</p>
+                                            {quoteRetry}
+                                        </div>
+                                    ) : quoteState.status === 'error' ? (
+                                        quoteRetry
                                     ) : hasCatalogSettings && !motionInputsReady ? (
                                         <p className="text-sm text-zinc-400">{quoteUi.message}</p>
                                     ) : (
