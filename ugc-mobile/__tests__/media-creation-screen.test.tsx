@@ -6496,6 +6496,30 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(slotText(tree, 'motion-required-inputs').filter((line) => line.endsWith(' required.')))
           .toEqual(['Reference video is required.']);
       });
+
+      it('name each slot as the mode the run opens does, where a closed mode gives its key another label', async () => {
+        const model = parseModelCatalogDetail(productionMotion.models.find((entry) => entry.id === 'kling-3.0'));
+        const openMode = model.inputModes![0];
+        model.inputModes = [
+          {
+            key: 'closed',
+            label: 'Closed',
+            default: false,
+            conditions: [{ source: 'setting', key: 'variant', operator: 'equals', value: 'never' }],
+            slots: openMode.slots.map((slot) => ({ ...slot, label: `Closed ${slot.label.toLowerCase()}` })),
+          },
+          openMode,
+        ];
+        catalogState.catalog = { ...productionMotionCatalog(), models: [model] };
+        memory.set(ordinaryKey, savedDrafts({ motion: { model: 'kling-3.0', catalogRevision: productionMotion.revision } }));
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Reference images', 'Required', 'Who should move?']);
+        expect(text(tree)).toContain('Reference images are required.');
+        expect(text(tree)).toContain('Reference videos are required.');
+        expect(text(tree)).not.toContain('Closed reference');
+        expect(blocker(tree)).toBe('Add reference images and reference videos.');
+      });
     });
 
     describe('the result', () => {

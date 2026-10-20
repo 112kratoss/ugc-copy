@@ -214,7 +214,11 @@ export function catalogMotionDraftSlotLabels(
   model: GenerationModelDescriptor | null | undefined,
 ): { image: string; video: string } {
   const keys = catalogMotionDraftSlotKeys(draft, model);
-  const slots = model?.inputModes?.flatMap((mode) => mode.slots) ?? [];
+  // The slots this run opens, which the composer titles: a key a closed mode declares under another
+  // label is called what the open one calls it.
+  const slots = model?.inputModes
+    ? getActiveCatalogInputSlots(model, getCatalogDraftSettings(draft, model), catalogDraftInputCounts(draft, model))
+    : [];
   const labelOf = (key: string) => slots.find((slot) => slot.key === key)?.label.trim() || null;
   return { image: labelOf(keys.image) ?? MOTION_INPUT_LABELS.image, video: labelOf(keys.video) ?? MOTION_INPUT_LABELS.video };
 }
