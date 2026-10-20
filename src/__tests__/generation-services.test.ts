@@ -4341,6 +4341,38 @@ describe('generation services', () => {
       return { ...client, calls, result };
     }
 
+    it('refuses Auto on a reference run before any hold, which Kie renders at 16:9 or 9:16 only', async () => {
+      // The catalog's quote rule refuses this on the unified path; the workflow, template and
+      // legacy video routes quote without the reference count, so the start refuses it too.
+      const { startVideoGeneration } = await import('@/lib/generation-services');
+      const client = createSupabaseMock();
+      vi.mocked(fetch).mockClear();
+
+      await expect(startVideoGeneration({
+        supabase: client.supabase,
+        creditSupabase: client.supabase,
+        userId: 'user-1',
+        prompt: '@lead walks along the harbour at dusk.',
+        model: 'veo-3.1',
+        mode: 'veo3_fast',
+        aspectRatio: 'Auto',
+        resolution: '720p',
+        referenceMode: 'elements',
+        imageUrls: [],
+        elements: [{
+          id: 'imageReferences-1',
+          displayName: 'Hero shot',
+          handle: '@lead',
+          storagePath: 'uploads/user-1/lead.png',
+          sourceGenerationId: null,
+        }],
+        elementImageUrls: [REFERENCE],
+      })).rejects.toThrow('Veo 3.1 renders reference runs at 16:9 or 9:16 only.');
+
+      expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+      expect(client.generations).toEqual([]);
+    });
+
     it('sends a text run to jobs/createTask and marks the run as a jobs-API task', async () => {
       const { calls, generations, result } = await startVeo({});
 

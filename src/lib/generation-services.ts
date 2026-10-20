@@ -3357,6 +3357,13 @@ export async function startVideoGeneration(params: {
         mode === 'veo3' || mode === 'veo3_lite' ? mode : 'veo3_fast',
         mode === 'veo3' || mode === 'veo3_lite' ? mode : 'veo3_fast',
       );
+      if (providerReferenceImageUrls.length > 0 && aspectRatio === 'Auto') {
+        // REFERENCE_2_VIDEO renders at 16:9 or 9:16 (Kie's Veo page, read 2026-10-20). The
+        // catalog's quote rule refuses this on the unified path, but the workflow, template
+        // and legacy video routes quote without the reference count, so the run is refused
+        // here as well, before any hold, rather than sent for Kie to reject or crop.
+        throw new GenerationServiceError('Veo 3.1 renders reference runs at 16:9 or 9:16 only.', 400);
+      }
       body = buildVeoJobsTaskBody({
         prompt: compiledPrompt,
         providerModelId,
