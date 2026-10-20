@@ -11,10 +11,18 @@ import { expect, test, type Page } from '@playwright/test';
 
 // A rule only the supplement holds: the workflow publish drawer's checkbox, a
 // signed-in file. Each case also finds it on a route that links the sheet, so
-// the reading cannot pass by losing the rule.
+// the reading cannot pass by losing the rule. route-style-two-sheet-order.test.ts
+// reads this line and fails when the supplement stops holding the rule or
+// globals.css takes it up: then pick another rule only the supplement holds.
 const SUPPLEMENT_ONLY_SELECTOR = '.accent-emerald-500';
+const SHEET_IN_DOCUMENT = `the signed-in sheet is in the document (a stylesheet holds ${SUPPLEMENT_ONLY_SELECTOR})`;
 // In `next dev` a page compiles on its first request.
 const COLD_PAGE = { timeout: 45_000 };
+const POSITIVE_CONTROL = {
+  ...COLD_PAGE,
+  message: `no stylesheet holds ${SUPPLEMENT_ONLY_SELECTOR} on a route that links the supplement: if that class `
+    + 'moved, pick another rule only non-public-utilities.css holds',
+};
 
 /** Waits for React to own the shell and the page: a click before then is lost. */
 async function hydrated(page: Page) {
@@ -60,12 +68,12 @@ test('a signed-out full load of Alerts carries globals.css alone', async ({ page
   await expect(page.getByRole('heading', { name: 'Sign in required' })).toBeVisible(COLD_PAGE);
   await hydrated(page);
   await settled(page);
-  expect(await supplementInDocument(page), 'the signed-in sheet is in the document').toBe(false);
+  expect(await supplementInDocument(page), SHEET_IN_DOCUMENT).toBe(false);
 
   // Positive control: Search, which a signed-out visitor opens too, keeps the
   // sheet its layout links.
   await page.goto('/search');
-  await expect.poll(() => supplementInDocument(page), COLD_PAGE).toBe(true);
+  await expect.poll(() => supplementInDocument(page), POSITIVE_CONTROL).toBe(true);
 });
 
 test('a signed-out click on the Alerts tab leaves the signed-in sheet out of the visit', async ({ page }) => {
@@ -79,19 +87,19 @@ test('a signed-out click on the Alerts tab leaves the signed-in sheet out of the
   await expect(page.getByRole('heading', { name: 'Sign in required' })).toBeVisible(COLD_PAGE);
   await hydrated(page);
   await settled(page);
-  expect(await supplementInDocument(page), 'the signed-in sheet is in the document').toBe(false);
+  expect(await supplementInDocument(page), SHEET_IN_DOCUMENT).toBe(false);
 
   // And so for the rest of the visit: back to a public page.
   await push(page, '/terms');
   await expect(page).toHaveURL(/\/terms$/, COLD_PAGE);
   await hydrated(page);
   await settled(page);
-  expect(await supplementInDocument(page), 'the signed-in sheet is in the document').toBe(false);
+  expect(await supplementInDocument(page), SHEET_IN_DOCUMENT).toBe(false);
   // All in the window /terms opened: client navigations, and no reload.
   expect(await page.evaluate(() => (window as unknown as { openedOnTerms?: boolean }).openedOnTerms === true)).toBe(true);
 
   // Positive control: a client navigation to a route that links the sheet brings it.
   await push(page, '/search');
   await expect(page).toHaveURL(/\/search$/, COLD_PAGE);
-  await expect.poll(() => supplementInDocument(page), COLD_PAGE).toBe(true);
+  await expect.poll(() => supplementInDocument(page), POSITIVE_CONTROL).toBe(true);
 });

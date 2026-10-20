@@ -132,4 +132,21 @@ describe('the two stylesheets of a page drawn with both', () => {
   it('keeps the supplement under its size ceiling', () => {
     expect(supplement.bytes).toBeLessThan(SUPPLEMENT_BYTES_CEILING);
   });
+
+  // The Alerts E2E spec tells the supplement is in the document by one rule only
+  // it holds. A restyle of the file that draws it would fail the spec's positive
+  // control, and a public file taking up the class its signed-out reads, each
+  // with a message about Alerts.
+  it('holds the rule the Alerts E2E spec looks for in the supplement alone', () => {
+    const spec = 'tests/e2e/alerts-signed-out-sheet.spec.ts';
+    const selector = readFileSync(path.join(process.cwd(), spec), 'utf8')
+      .match(/const SUPPLEMENT_ONLY_SELECTOR = '([^']+)';/)?.[1];
+    expect(selector, `${spec} names its SUPPLEMENT_ONLY_SELECTOR`).toBeTruthy();
+
+    const pickAnother = `pick another rule only non-public-utilities.css holds for ${spec}`;
+    expect(supplement.rules.some((rule) => rule.selector === selector), `the supplement no longer holds ${selector}: ${pickAnother}`)
+      .toBe(true);
+    expect(publicSheet.rules.some((rule) => rule.selector === selector), `globals.css holds ${selector} now: ${pickAnother}`)
+      .toBe(false);
+  });
 });
