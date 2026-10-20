@@ -5527,6 +5527,77 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
         expect(text(tree)).not.toContain('This app is out of date');
         expect(workspaceButtons(tree)).toEqual({ primary: ['Check the new price'], secondary: ['Try again · 9 credits', 'Back to creator'] });
+
+        // The price moved, so the refusal is forgotten (as the web creators forget it): the same run,
+        // back at the price it was refused at, is not held.
+        quoteEchoingSettings(8);
+        renderer.act(() => { tree.root.findByProps({ testID: 'generation-workspace' }).find((node) => node.type === SecondaryButton && node.props.label === 'Back to creator').props.onPress(); });
+        for (const aspectRatio of ['1:1', '4:5']) {
+          renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Generation parameters.').props.onPress(); });
+          renderer.act(() => { labelled(tree.root, aspectRatio).props.onPress(); });
+          renderer.act(() => { labelled(tree.root, 'Close generation parameters').props.onPress(); });
+          await settle();
+        }
+        expect(text(tree)).not.toContain('This app is out of date');
+        expect(generateButton(tree).props.disabled).toBe(false);
+      });
+
+      it('holds the refusal unjudged until a price asked since answers: the price in hand, which the run was refused at, is not read against it', async () => {
+        catalogState.catalog = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14)]);
+        authState.api.startGeneration.mockRejectedValue(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'));
+        const tree = await openTyped();
+        // The asking the refusal brings answers only when the case says so.
+        let answer: (quote: unknown) => void = () => undefined;
+        authState.api.quoteGenerationModel.mockImplementation(() => new Promise<unknown>((resolve) => { answer = resolve; }));
+        const quotesBefore = authState.api.quoteGenerationModel.mock.calls.length;
+        await pressGenerate(tree);
+        expect(authState.api.quoteGenerationModel.mock.calls.length).toBe(quotesBefore + 1);
+
+        // The price in hand is the one the start refused: no word on this build yet, so the refusal
+        // stands as it was said, with the run's price unknown.
+        const outOfDate = 'This app is out of date, so it can’t price this run. Update it, or close and reopen it to get the latest version.';
+        expect(text(tree)).not.toContain(outOfDate);
+        expect(text(tree)).toContain('The price of this run changed.');
+        expect(workspaceButtons(tree)).toEqual({ primary: ['Check the new price'], secondary: ['Try again', 'Back to creator'] });
+
+        await renderer.act(async () => { answer({ modelId: 'nano-banana-2', catalogRevision: 'parity-rev', normalizedSettings: {}, costCredits: 8 }); });
+        await settle();
+        expect(collectText(tree.root.findByProps({ testID: 'generation-workspace' }))).toContain(outOfDate);
+        expect(workspaceButtons(tree)).toEqual({ primary: [], secondary: ['Back to creator'] });
+      });
+
+      it('forgets the refusal once the server takes a run: the run it refused is not held when its price comes back', async () => {
+        catalogState.catalog = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14)]);
+        authState.api.startGeneration
+          .mockRejectedValueOnce(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'))
+          .mockResolvedValue(started('pred-taken'));
+        authState.api.getImageGeneration.mockResolvedValue({ status: 'succeeded', output: 'https://cdn.example.com/out.png' });
+        const tree = await openTyped();
+        const outOfDate = 'This app is out of date, so it can’t price this run. Update it, or close and reopen it to get the latest version.';
+        const workspace = () => tree.root.findByProps({ testID: 'generation-workspace' });
+        const backToCreator = () => renderer.act(() => { workspace().find((node) => node.type === SecondaryButton && node.props.label === 'Back to creator').props.onPress(); });
+        const chooseAspectRatio = async (label: string) => {
+          renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Generation parameters.').props.onPress(); });
+          renderer.act(() => { labelled(tree.root, label).props.onPress(); });
+          renderer.act(() => { labelled(tree.root, 'Close generation parameters').props.onPress(); });
+          await settle();
+        };
+        await pressGenerate(tree);
+        expect(collectText(workspace())).toContain(outOfDate);
+        backToCreator();
+
+        // Another run, which the server takes.
+        await chooseAspectRatio('1:1');
+        await pressGenerate(tree);
+        expect(authState.api.startGeneration).toHaveBeenCalledTimes(2);
+        expect(labelled(workspace(), 'Post to feed')).toBeTruthy();
+        backToCreator();
+
+        // The run the start refused, priced again at the price it was refused at: a run has gone
+        // since, so it is not held.
+        await chooseAspectRatio('4:5');
+        expect(text(tree)).not.toContain(outOfDate);
+        expect(generateButton(tree).props.disabled).toBe(false);
       });
 
       it('asks storage which reference is gone when the server cannot use the run’s media, and marks it', async () => {

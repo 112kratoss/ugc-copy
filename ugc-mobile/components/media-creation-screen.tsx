@@ -1235,17 +1235,24 @@ function IdentityCreationScreen({
       return;
     }
     const controller = new AbortController();
-    setQuoteState({ key: quoteKey, attempt, status: 'pending', cost: null, error: null });
     const timer = setTimeout(() => {
       void api.quoteGenerationModel(quoteRequest, controller.signal)
         .then((quote) => {
-          if (!controller.signal.aborted) setQuoteState({
+          if (controller.signal.aborted) return;
+          setQuoteState({
             key: quoteKey,
             attempt,
             status: 'ready',
             cost: quote.costCredits,
             error: null,
           });
+          // A price in for the run the start refused: moved, and the refusal is forgotten, as the
+          // web creators forget it; unmoved, it stands (`catalogAppOutOfDateForRun`).
+          setQuoteAsking((current) => (
+            current.refused && current.refused.key === quoteKey && current.refused.costCredits !== quote.costCredits
+              ? { ...current, refused: null }
+              : current
+          ));
         })
         .catch((error) => {
           if (controller.signal.aborted) return;
@@ -1281,6 +1288,10 @@ function IdentityCreationScreen({
     };
   }, [api, quoteKey, quoteAttempt, refetchCatalog]);
 
+  // The answer to this run's open asking. Anything else in hand (another run's, or this run's from
+  // before a refusal or Retry quote asked again) is no answer yet, so the price reads as pending
+  // until the asking answers. Derived here, never set in the effect: a refusal and the asking it
+  // brings land in one render, and the answer the run was refused at is never read against it.
   const activeQuote = quoteState.key === quoteKey && quoteState.attempt === quoteAttempt
     ? quoteState
     : { status: 'pending' as const, cost: null, error: null };
@@ -2233,6 +2244,12 @@ function IdentityCreationScreen({
       attemptSaved = true;
       const started = await sendGenerationAttempt(attempt);
       startedPredictionId = started.predictionId;
+      // The server took a run from this build at the price it showed, so the refusal it last gave
+      // is no word on this build now: the run it refused goes as any other. The web creators forget
+      // a refusal on a start of the refused run itself; here any start the server takes forgets it,
+      // so a run refused before another started is not held once the server has come to agree with
+      // this build. One it still refuses is refused once more, and held from then.
+      setQuoteAsking((current) => (current.refused ? { ...current, refused: null } : current));
       void forgetPendingAttempt(attempt.identityUserId);
       runCostRef.current = typeof started.cost === 'number' ? started.cost : null;
       // Kept until the run ends, so a creator opened again watches this run rather than
@@ -2354,7 +2371,7 @@ function IdentityCreationScreen({
     // It carries the price on the button, which the server will not charge more than.
     const unifiedRequest = catalogStartRequest(
       buildUnifiedCatalogGenerationRequest(currentDraft, currentCatalogModel, catalog?.revision ?? ''),
-      quoteState,
+      { key: quoteKey, status: activeQuote.status, cost: activeQuote.cost },
     );
     const requestJson = JSON.stringify(unifiedRequest);
     // An unchanged press after a lost response is the same attempt, under the same key.
