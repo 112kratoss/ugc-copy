@@ -15,6 +15,7 @@ import { settleGenerationFailed } from '@/lib/generation-settlement';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import { readProviderFailureReason } from '@/lib/provider-failure-messages';
 import { extractKieWebhookTaskId } from '@/lib/kie-webhook';
+import { readVeoJobsResultUrl, readVeoProviderApi } from '@/lib/veo-provider-api';
 import { enqueueGenerationOutputImportJob } from '@/lib/generation-output-import-jobs';
 import { getGenerationKind, normalizeMarketGenerationTiming, toIsoTimestamp } from '@/lib/generation-timing';
 import {
@@ -108,6 +109,16 @@ function isVeoGeneration(generation: SyncableGenerationRecord): boolean {
   return workflowModel === 'veo-3.1' || generation.model === 'veo3' || generation.model === 'veo3_fast';
 }
 
+/**
+ * A Veo task created on Kie's legacy endpoints (/api/v1/veo/*), which is checked at
+ * /api/v1/veo/record-info in its own shape. A Veo start on the jobs API marks its
+ * recipe, and its task is checked like any market task (veo-provider-api.ts); a row
+ * without the marker predates the move.
+ */
+function isLegacyVeoGeneration(generation: SyncableGenerationRecord): boolean {
+  return isVeoGeneration(generation) && readVeoProviderApi(generation.workflow_settings) === 'legacy';
+}
+
 function getProviderPayloadTaskData(
   providerPayload: Record<string, unknown> | null | undefined,
   predictionId: string,
@@ -142,7 +153,7 @@ async function syncSingleGenerationStatusFromProviderPayload(
     ? null
     : Date.parse(generation.created_at);
 
-  if (isVeoGeneration(generation)) {
+  if (isLegacyVeoGeneration(generation)) {
     const successFlag = taskData.successFlag;
     const responseData = isRecord(taskData.response) ? taskData.response : null;
     const timing = normalizeVeoGenerationTiming({
@@ -197,6 +208,11 @@ async function syncSingleGenerationStatusFromProviderPayload(
       tempUrl = getFirstResultUrl(result);
     } catch (error) {
       logBackendError('generation_result_parse_failed', { error });
+    }
+    // A Veo task on the jobs API keeps its 1080p/4k render apart from its 720p
+    // original, so it is read where Kie's Veo docs put it, never the default.
+    if (isVeoGeneration(generation)) {
+      tempUrl = readVeoJobsResultUrl(taskData);
     }
 
     if (tempUrl) {
@@ -255,7 +271,7 @@ async function syncSingleGenerationStatus(
     ? null
     : Date.parse(generation.created_at);
 
-  if (isVeoGeneration(generation)) {
+  if (isLegacyVeoGeneration(generation)) {
     const response = await withProviderModel(resolveGenerationAppModelId(generation), () => fetchWithProviderRetry(`https://api.kie.ai/api/v1/veo/record-info?taskId=${generation.prediction_id}`, {
       headers: { Authorization: `Bearer ${KIE_API_KEY}` },
     }, PROVIDER_STATUS_POLL_TIMEOUT_MS, PROVIDER_STATUS_POLL_RETRY_POLICY, fetch, 'KIE Veo status'));
@@ -332,6 +348,9 @@ async function syncSingleGenerationStatus(
       tempUrl = getFirstResultUrl(result);
     } catch (error) {
       logBackendError('generation_result_parse_failed', { error });
+    }
+    if (isVeoGeneration(generation)) {
+      tempUrl = readVeoJobsResultUrl(data.data);
     }
 
     if (tempUrl) {

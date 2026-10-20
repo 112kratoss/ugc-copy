@@ -67,6 +67,7 @@ import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-cand
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { getCanonicalStoredMediaLocation, getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
+import { buildVeoJobsTaskBody, VEO_JOBS_PROVIDER_API_SETTINGS } from '@/lib/veo-provider-api';
 import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 import {
   GENERATION_PROMPT_BLOCKED_MESSAGE,
@@ -2276,6 +2277,22 @@ export async function startImageGeneration(params: {
   }
 }
 
+/**
+ * Marks a Veo generation whose reservation kept no recipe as a task on Kie's jobs
+ * API (veo-provider-api.ts). Such a row's `workflow_settings` is empty, so the
+ * marker replaces it; nothing of the recipe is written.
+ */
+async function recordVeoJobsProviderApi(client: SupabaseClient, generationId: string): Promise<void> {
+  const { error } = await client
+    .from('generations')
+    .update({ workflow_settings: { ...VEO_JOBS_PROVIDER_API_SETTINGS } })
+    .eq('id', generationId);
+  if (error) {
+    logBackendError('veo_provider_api_marker_failed', { generationId, error });
+    throw new GenerationServiceError('Failed to start generation.', 500);
+  }
+}
+
 export async function startVideoGeneration(params: {
   supabase: SupabaseClient;
   creditSupabase: SupabaseClient;
@@ -2898,7 +2915,8 @@ export async function startVideoGeneration(params: {
   let generationId: string | null = null;
   let predictionId: string | null = null;
   try {
-    let endpoint = 'https://api.kie.ai/api/v1/jobs/createTask';
+    // Every video model, Veo 3.1 included since its move, starts on the jobs API.
+    const endpoint = 'https://api.kie.ai/api/v1/jobs/createTask';
     let body: Record<string, unknown>;
     let providerModelId = resolveProviderModelId(runtimeConfig, 'default', selectedModel.apiModelId || mode);
     const requestedMode = mode;
@@ -3323,31 +3341,26 @@ export async function startVideoGeneration(params: {
         input,
       };
     } else if (selectedModel.provider === 'veo') {
-      endpoint = 'https://api.kie.ai/api/v1/veo/generate';
+      // Veo 3.1 runs on Kie's jobs API (jobs/createTask, model "veo-3-1"): the
+      // providerModelMap value for the mode is the tier, sent as input.model, and
+      // every setting moves into `input`, snake-cased. The legacy /api/v1/veo/generate
+      // body and the field mapping are in veo-provider-api.ts. The run's recipe is
+      // marked as a jobs-API task below, which is how the status checks find it.
       providerModelId = resolveProviderModelId(
         runtimeConfig,
         mode === 'veo3' || mode === 'veo3_lite' ? mode : 'veo3_fast',
         mode === 'veo3' || mode === 'veo3_lite' ? mode : 'veo3_fast',
       );
-      // The veo endpoint names this field `aspect_ratio`, unlike its camelCase
-      // neighbours (`imageUrls`, `generationType`, `callBackUrl`). Sending
-      // `aspectRatio` meant veo never saw a ratio and silently fell back to its
-      // 16:9 default, so the picker had no effect on the rendered video.
-      // `resolution` (720p/1080p/4k) is a valid veo request field.
-      // NOTE: docs/model-api-references/veo-3-1.md is stale on both points — verify
-      // against https://docs.kie.ai/veo3-api/generate-veo-3-video.md instead.
-      body = {
+      body = buildVeoJobsTaskBody({
         prompt: compiledPrompt,
-        model: providerModelId,
-        aspect_ratio: aspectRatio,
+        providerModelId,
+        aspectRatio,
         resolution,
-        generationType: providerReferenceImageUrls.length > 0
-          ? 'REFERENCE_2_VIDEO'
-          : (frameImageUrls.length > 0 ? 'FIRST_AND_LAST_FRAMES_2_VIDEO' : 'TEXT_2_VIDEO'),
-        ...(providerReferenceImageUrls.length > 0
-          ? { imageUrls: providerReferenceImageUrls }
-          : (frameImageUrls.length > 0 ? { imageUrls: frameImageUrls } : {})),
-      };
+        // 8 s, Veo's one length here, and the length its price is quoted for.
+        durationSeconds: totalDuration,
+        referenceImageUrls: providerReferenceImageUrls,
+        frameImageUrls,
+      });
     } else {
       // This ladder used to end in an implicit Veo fallthrough: any video model
       // without an explicit branch was silently ROUTED to the Veo endpoint and
@@ -3442,6 +3455,8 @@ export async function startVideoGeneration(params: {
         ...(effectiveReferenceMode === 'frames' && normalizedEndFrame
           ? { endFrame: normalizedEndFrame }
           : {}),
+        // Which Kie API holds a Veo task. The status checks read it (veo-provider-api.ts).
+        ...(selectedModel.provider === 'veo' ? VEO_JOBS_PROVIDER_API_SETTINGS : {}),
       },
     }, templateContext);
     generationId = reservation.generationId;
@@ -3453,6 +3468,14 @@ export async function startVideoGeneration(params: {
         generationId,
         idempotentReplay: reservation.idempotentReplay,
       };
+    }
+
+    if (selectedModel.provider === 'veo' && privateRecipe) {
+      // A reservation that keeps no recipe (a template step's) stores no marker, so
+      // it is written here, before the provider is asked: no task is ever created
+      // that its status checks would look for on the legacy API. A failed write is
+      // refunded below like any other refusal before submission.
+      await recordVeoJobsProviderApi(creditSupabase, generationId);
     }
 
     predictionId = await createKieTask(body, endpoint, { generationId, modelId: model });

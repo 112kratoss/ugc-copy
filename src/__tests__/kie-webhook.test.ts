@@ -42,6 +42,32 @@ describe('KIE webhook helpers', () => {
     expect(webhook.extractKieWebhookTaskId?.({ data: {} })).toBeNull();
   });
 
+  it('extracts the task of a Veo 3.1 jobs-API callback in either shape Kie documents', async () => {
+    const { extractKieWebhookTaskId } = await import('@/lib/kie-webhook');
+
+    // veo3-api/generate-veo-3-video-callbacks.md: Veo's own words, success and failure.
+    expect(extractKieWebhookTaskId({
+      code: 200,
+      msg: 'Video generated successfully.',
+      data: {
+        taskId: 'veo-task-success',
+        info: { resultUrls: ['https://tempfile.example.com/veo.mp4'], resolution: '1080p' },
+        creditsConsumed: 60,
+      },
+    })).toBe('veo-task-success');
+    expect(extractKieWebhookTaskId({
+      code: 400,
+      msg: 'Your prompt was flagged by Website as violating content policies.',
+      data: { taskId: 'veo-task-failure' },
+    })).toBe('veo-task-failure');
+    // The market shape every other jobs-API model calls back with.
+    expect(extractKieWebhookTaskId({
+      code: 200,
+      msg: 'success',
+      data: { taskId: 'veo-task-market', state: 'success', resultJson: '{"resultUrls":[]}' },
+    })).toBe('veo-task-market');
+  });
+
   it('accepts a valid KIE HMAC signature', async () => {
     const webhook = await import('@/lib/kie-webhook') as unknown as {
       verifyKieWebhookAuthorization?: (input: {

@@ -1116,13 +1116,14 @@ describe('a page run with a named reference picture', () => {
       label: 'Veo 3.1 Fast',
       modelId: 'veo-3.1',
       settings: { mode: 'veo3_fast', duration: 8, resolution: '720p' },
-      request: { model: 'veo3_fast', generationType: 'REFERENCE_2_VIDEO', imageUrls: [REFERENCE] },
+      // Kie's jobs API: model veo-3-1, the tier and the fields inside `input`.
+      request: { model: 'veo-3-1', input: { model: 'veo3_fast', generation_type: 'REFERENCE_2_VIDEO', image_urls: [REFERENCE] } },
     },
     {
       label: 'Veo 3.1 Lite',
       modelId: 'veo-3.1',
       settings: { mode: 'veo3_lite', duration: 8, resolution: '720p' },
-      request: { model: 'veo3_lite', generationType: 'REFERENCE_2_VIDEO', imageUrls: [REFERENCE] },
+      request: { model: 'veo-3-1', input: { model: 'veo3_lite', generation_type: 'REFERENCE_2_VIDEO', image_urls: [REFERENCE] } },
     },
     {
       // One of the models that always sent it, so a pass here is not the harness.

@@ -39,6 +39,7 @@ import {
 } from '@/lib/provider-fetch';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { readProviderFailureReason, UNKNOWN_PROVIDER_FAILURE } from '@/lib/provider-failure-messages';
+import { readVeoJobsResultUrl, readVeoProviderApi } from '@/lib/veo-provider-api';
 
 const VIDEO_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration, error_message, template_run_id';
 
@@ -108,7 +109,13 @@ function getWorkflowModelId(localGeneration: { workflow_settings?: unknown; mode
     return selectedModel as VideoModelId;
   }
 
-  if (localGeneration?.model === 'veo3' || localGeneration?.model === 'veo3_fast') {
+  // A template step's recipe is empty, so its row's own model is all there is to go
+  // on. Read as anything else, a Veo step was checked on the wrong Kie API.
+  if (
+    localGeneration?.model === 'veo-3.1'
+    || localGeneration?.model === 'veo3'
+    || localGeneration?.model === 'veo3_fast'
+  ) {
     return 'veo-3.1';
   }
 
@@ -313,7 +320,13 @@ export async function getVideoGenerationStatusForRoute({
       );
     }
 
-    if (selectedModel === 'veo-3.1') {
+    // A Veo task lives on the Kie API its start used: the legacy /api/v1/veo/*
+    // endpoints, or since the move the jobs API, whose starts mark their recipe
+    // (veo-provider-api.ts). A row without the marker predates the move.
+    const isLegacyVeoTask = selectedModel === 'veo-3.1'
+      && readVeoProviderApi(localGeneration.workflow_settings) === 'legacy';
+
+    if (isLegacyVeoTask) {
       const response = await withProviderModel(resolveGenerationAppModelId(localGeneration), () => resolvedDependencies.fetchWithProviderTimeout(`https://api.kie.ai/api/v1/veo/record-info?taskId=${predictionId}`, {
         headers: { Authorization: `Bearer ${kieApiKey}` },
       }, PROVIDER_STATUS_POLL_TIMEOUT_MS, fetch, 'KIE Veo status'));
@@ -388,8 +401,10 @@ export async function getVideoGenerationStatusForRoute({
 
       if (status === 'succeeded') {
         try {
-          const result = JSON.parse(data.data.resultJson);
-          const tempUrl = getFirstResultUrl(result.resultUrls);
+          // A jobs-API Veo task keeps its 1080p/4k render apart from its 720p original.
+          const tempUrl = selectedModel === 'veo-3.1'
+            ? readVeoJobsResultUrl(data.data)
+            : getFirstResultUrl(JSON.parse(data.data.resultJson).resultUrls);
 
           if (tempUrl) {
             // Keep settlement behind the durable import, including storage retries.
