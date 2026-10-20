@@ -1,4 +1,9 @@
-import { SUBJECT_IMAGES_SLOT_KEY, type CatalogRunInputFact } from '../../ugc-mobile/lib/model-catalog/protocol';
+import {
+  catalogConditionsMatch,
+  SUBJECT_IMAGES_SLOT_KEY,
+  type CatalogConditionLike,
+  type CatalogConditionPrimitive,
+} from '../../ugc-mobile/lib/model-catalog/protocol';
 
 /**
  * The inputs a web creator's run sends, worked out before any file is uploaded: each
@@ -112,16 +117,49 @@ export function planImageRunInputs<Element>(elements: readonly Element[], maxIma
     .map((element) => ({ slot: 'imageReferences', kind: 'image', element }));
 }
 
+/** Where a motion run's inputs can go, as its model's descriptor publishes it. */
+export type MotionRunDescriptor = {
+  inputModes?: readonly {
+    conditions?: readonly CatalogConditionLike[];
+    slots: readonly { key: string; kind: string; role?: string; conditions?: readonly CatalogConditionLike[] }[];
+  }[];
+};
+
+export type MotionRunInputs = readonly [{ slot: string; kind: 'image' }, { slot: string; kind: 'video' }];
+
 /**
- * The inputs the web motion creator's runs send, in this order: the character to animate
- * and the clip whose movement it takes, in the slots of the motion models' `motion-inputs`
- * mode. The creator asked for its price with kind totals instead, which the start, reading
- * each input's slot, does not: a model whose descriptor names other slots refused, at the
- * start, runs that price had been shown for. No length goes with the clip: the start
- * measures it and, when the measured length costs more than the price shown, sends the
- * creator back to quote with it.
+ * The inputs a motion run sends, in this order: the character to animate and the clip whose
+ * movement it takes, each in the slot its model's descriptor opens for its kind (the first
+ * image and the first video slot of the modes the run's settings select), as the app sends
+ * them. The start quotes a run with each input in its slot and refuses a slot the model does
+ * not declare: production published Kling 3.0 motion with `imageReferences` and
+ * `videoReferences`, and refused every web Kling 3.0 run while this page sent
+ * `characterImage` and `referenceVideo` to every model (2026-10-19). A descriptor that opens
+ * no such slot keeps those two, and its quote says why the run cannot start. No length goes
+ * with the clip: the start measures it and, when the measured length costs more than the
+ * price shown, sends the creator back to quote with it.
  */
-export const MOTION_RUN_INPUTS = [
-  { slot: 'characterImage', kind: 'image' },
-  { slot: 'referenceVideo', kind: 'video' },
-] as const satisfies readonly CatalogRunInputFact[];
+export function planMotionRunInputs(
+  descriptor: MotionRunDescriptor | null | undefined,
+  settings: Record<string, CatalogConditionPrimitive | undefined>,
+): MotionRunInputs {
+  const modes = descriptor?.inputModes ?? [];
+  // What a motion run holds, counted as the app counts it: its picture in each image slot,
+  // its clip in each video slot.
+  const inputCounts: Record<string, number> = { images: 1, videos: 1 };
+  for (const slot of modes.flatMap((mode) => mode.slots)) {
+    if (slot.kind === 'image' || slot.kind === 'video') inputCounts[slot.key] = 1;
+  }
+  const open = modes
+    .filter((mode) => catalogConditionsMatch(mode.conditions, settings, inputCounts))
+    .flatMap((mode) => mode.slots)
+    .filter((slot) => (
+      slot.role !== 'startFrame'
+      && slot.role !== 'endFrame'
+      && catalogConditionsMatch(slot.conditions, settings, inputCounts)
+    ));
+  return [
+    { slot: open.find((slot) => slot.kind === 'image')?.key ?? 'characterImage', kind: 'image' },
+    { slot: open.find((slot) => slot.kind === 'video')?.key ?? 'referenceVideo', kind: 'video' },
+  ];
+}

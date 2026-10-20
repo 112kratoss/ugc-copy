@@ -5,6 +5,8 @@ import CreateMotionClient from '@/app/create-motion/CreateMotionClient';
 import { GenerationStatusRequestError } from '@/lib/generation-status-client';
 import { loadPendingWebStart, savePendingWebStart, type PendingWebStart } from '@/lib/generation-model-client';
 import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
+import { buildGenerationModelCatalog, quoteGenerationModel, type CatalogInputMode } from '@/lib/generation-model-catalog';
+import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 import { MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 const modelCatalogState = vi.hoisted(() => ({
@@ -361,6 +363,7 @@ beforeEach(() => {
   quoteState.attempts = [];
   quoteState.answers = [20];
   quoteState.forAnotherRequest = false;
+  for (const model of motionCatalog.models) delete (model as { inputModes?: unknown }).inputModes;
   generationCatalogRefetchMock.mockClear();
   maybeSingleMock.mockClear();
   queryBuilder.select.mockClear();
@@ -718,6 +721,113 @@ describe('CreateMotionClient price of the run it sends', () => {
     await waitFor(() => expect(startPosts()).toHaveLength(1));
     expect(startKeys()[0]).toBe('motion:saved-key');
     expect(startBodies()[0]).toEqual({ schemaVersion: 3, ...saved.body });
+  });
+});
+
+/**
+ * Kling 3.0 motion as production publishes it (release `wan-start-frame-apart-20261019`, read
+ * 2026-10-19): one default mode with plain reference slots. The code catalog, and Kling 2.6 in
+ * production, give motion its `motion-inputs` slots instead.
+ */
+const PRODUCTION_KLING_3_MOTION_MODES: CatalogInputMode[] = [{
+  key: 'default',
+  label: 'Default',
+  default: true,
+  slots: [
+    { key: 'imageReferences', label: 'Reference images', kind: 'image', role: 'reference', min: 0, max: 1 },
+    { key: 'videoReferences', label: 'Reference videos', kind: 'video', role: 'reference', min: 0, max: 1 },
+  ],
+}];
+const MOTION_INPUTS_MODES: CatalogInputMode[] = [{
+  key: 'motion-inputs',
+  label: 'Motion inputs',
+  default: true,
+  slots: [
+    { key: 'characterImage', label: 'Character image', kind: 'image', role: 'reference', min: 1, max: 1 },
+    { key: 'referenceVideo', label: 'Reference video', kind: 'video', role: 'reference', min: 1, max: 1, durationMetadata: 'optional', maxDurationSeconds: 30 },
+  ],
+}];
+
+function publishMotionModes(modelId: 'kling-3.0' | 'kling-2.6', inputModes: CatalogInputMode[]) {
+  const model = motionCatalog.models.find((candidate) => candidate.id === modelId);
+  Object.assign(model!, { inputModes });
+}
+
+/** The server's own verdict on a quote request, with Kling 3.0 motion published as production publishes it. */
+function productionVerdict(quoteJson: string) {
+  const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+  catalog.models = catalog.models.map((model) => (
+    model.id === 'kling-3.0' && model.kind === 'motion' ? { ...model, inputModes: PRODUCTION_KLING_3_MOTION_MODES } : model
+  ));
+  const operations = new Map(buildCodeGenerationModelOperations().map((entry) => [entry.modelId, entry]));
+  try {
+    return quoteGenerationModel({ ...JSON.parse(quoteJson), catalogRevision: catalog.revision }, { catalog, operations }).costCredits;
+  } catch (error) {
+    return (error as { fieldErrors?: Record<string, string> }).fieldErrors ?? String(error);
+  }
+}
+
+/**
+ * A motion run sends its picture and its clip in the slots its model declares: the start quotes
+ * the run with each input in its slot and refuses a slot the model does not have. The page sent
+ * `characterImage` and `referenceVideo` to every model, and production's Kling 3.0 refused every
+ * web run ("Kling 3.0 does not support the characterImage input."), as the app's went through.
+ */
+describe('CreateMotionClient slots the model declares', () => {
+  it('sends Kling 3.0’s inputs in the slots production publishes, a run the server prices', async () => {
+    publishMotionModes('kling-3.0', PRODUCTION_KLING_3_MOTION_MODES);
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+    await waitFor(() => expect(costShown()).toBe('20 credits'));
+    const shown = shownQuote();
+
+    await pressGenerate();
+    await waitFor(() => expect(startPosts()).toHaveLength(1));
+
+    const inputs = startBodies()[0].inputs as Array<Record<string, unknown>>;
+    expect(startBodies()[0].modelId).toBe('kling-3.0');
+    expect(inputs.map((input) => [input.slot, input.kind, input.storagePath])).toEqual([
+      ['imageReferences', 'image', 'uploads/user-1/hero.png'],
+      ['videoReferences', 'video', 'uploads/user-1/dance.mp4'],
+    ]);
+    expect(shown).toBe(startQuote(0));
+    expect(productionVerdict(shown)).toEqual(expect.any(Number));
+  });
+
+  it('keeps the motion-inputs slots a model publishes them under', async () => {
+    publishMotionModes('kling-3.0', PRODUCTION_KLING_3_MOTION_MODES);
+    publishMotionModes('kling-2.6', MOTION_INPUTS_MODES);
+    modelCatalogState.summaries = motionModelSummaries;
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+    chooseModel(view.container, 'Kling 2.6');
+    await waitFor(() => expect(costShown()).toBe('20 credits'));
+    const shown = shownQuote();
+
+    await pressGenerate();
+    await waitFor(() => expect(startPosts()).toHaveLength(1));
+
+    expect(startBodies()[0].modelId).toBe('kling-2.6');
+    expect((startBodies()[0].inputs as Array<Record<string, unknown>>).map((input) => input.slot)).toEqual(['characterImage', 'referenceVideo']);
+    expect(shown).toBe(startQuote(0));
+  });
+
+  it('takes the length the server measured for the clip in the model’s own video slot', async () => {
+    publishMotionModes('kling-3.0', PRODUCTION_KLING_3_MOTION_MODES);
+    startAnswers = [
+      jsonResponse({
+        code: 'REFERENCE_DURATION_CHANGED',
+        error: 'Your reference media runs longer than the length this price was based on. Check the updated cost, then generate again.',
+        inputs: [{ index: 1, slot: 'videoReferences', durationSeconds: 8.2 }],
+      }, 409),
+    ];
+    const view = render(<CreateMotionClient prefill={{}} />);
+    await attachBothInputs(view.container);
+
+    await pressGenerate();
+
+    expect(await screen.findByText('Reference length: 9.0s')).toBeInTheDocument();
+    await waitFor(() => expect(JSON.parse(shownQuote())).toMatchObject({ settings: { duration: 9 } }));
   });
 });
 
