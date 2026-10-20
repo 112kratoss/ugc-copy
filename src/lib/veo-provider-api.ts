@@ -169,6 +169,10 @@ export function readVeoJobsResultUrl(task: unknown): string | null {
     parseRecord(response?.data),
     response,
     info,
+    // The record's own keys last: the docs put the 720p original at `data.origin_urls`.
+    // Only Lite 720p was run live (2026-10-20, `resultJson.resultUrls`), so a 1080p or 4k
+    // record that keeps a list there is still read rather than failing after Kie billed.
+    task,
   ].filter((container): container is Record<string, unknown> => container !== null);
 
   for (const keys of [RENDERED_LIST_KEYS, ORIGIN_LIST_KEYS]) {

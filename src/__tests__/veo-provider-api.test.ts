@@ -301,3 +301,21 @@ describe('the Veo 3.1 price after the move', () => {
     }
   });
 });
+
+describe('readVeoJobsResultUrl on the record itself', () => {
+  it('reads lists kept on the task record, renders before originals', () => {
+    // As run live on 2026-10-20 (Lite 720p): the result under resultJson.resultUrls.
+    expect(readVeoJobsResultUrl({ resultJson: JSON.stringify({ resultUrls: ['https://tempfile.aiquickdraw.com/a.mp4'] }) }))
+      .toBe('https://tempfile.aiquickdraw.com/a.mp4');
+    // The docs' 720p original on the record itself, with no other list.
+    expect(readVeoJobsResultUrl({ state: 'success', origin_urls: ['https://tempfile.aiquickdraw.com/origin.mp4'] }))
+      .toBe('https://tempfile.aiquickdraw.com/origin.mp4');
+    // A render anywhere wins over an original anywhere, the record's own included.
+    expect(readVeoJobsResultUrl({
+      origin_urls: ['https://tempfile.aiquickdraw.com/origin.mp4'],
+      resultJson: JSON.stringify({ data: { result_urls: ['https://tempfile.aiquickdraw.com/1080p.mp4'] } }),
+    })).toBe('https://tempfile.aiquickdraw.com/1080p.mp4');
+    expect(readVeoJobsResultUrl({ result_urls: ['https://tempfile.aiquickdraw.com/4k.mp4'], originUrls: ['https://tempfile.aiquickdraw.com/o.mp4'] }))
+      .toBe('https://tempfile.aiquickdraw.com/4k.mp4');
+  });
+});
