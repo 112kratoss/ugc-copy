@@ -135,6 +135,7 @@ import {
   type ProviderPromptRun,
   type ReferenceMediaLength,
 } from '@/lib/provider-input-limits';
+import { assertProviderImageSizesAccepted } from '@/lib/provider-image-sizes';
 import {
   buildGenerationProviderRequest,
   type CatalogGenerationInputAsset,
@@ -2193,6 +2194,8 @@ export async function startImageGeneration(params: {
       }
     }
 
+    // Kie fetches the pictures only after the hold, and fails a run with one over its limit.
+    await assertProviderImageSizesAccepted({ supabase: creditSupabase, userId, modelId: model, request: { model: providerModel, input }, templateAssetScope: templateAssetScope(templateContext) });
     const reservation = await startGenerationRecord(creditSupabase, {
       user_id: userId,
       model,
@@ -3360,6 +3363,8 @@ export async function startVideoGeneration(params: {
       );
     }
 
+    // Kie fetches the pictures only after the hold, and fails a run with one over its limit.
+    await assertProviderImageSizesAccepted({ supabase: creditSupabase, userId, modelId: model, request: body, templateAssetScope: templateAssetScope(templateContext) });
     const reservation = await startGenerationRecord(creditSupabase, {
       user_id: userId,
       model,
@@ -3699,6 +3704,8 @@ export async function startMotionGeneration(params: {
 
   const computedCost = getMotionCost(model, mode, duration);
   const cost = resolveQuotedGenerationCost(computedCost, quotedCostCredits);
+  // The character image as the task below sends it; Kie fetches it only after the hold.
+  await assertProviderImageSizesAccepted({ supabase: creditSupabase, userId, modelId: model, request: { model: providerModelId, input: { input_urls: [characterImageUrl] } } });
   let generationId: string | null = null;
   let predictionId: string | null = null;
   try {
@@ -3897,6 +3904,8 @@ export async function startCatalogGeneration(params: {
           : 0)
       ), 0) || null;
 
+  // The pictures as the request below will send them; Kie fetches them only after the hold.
+  await assertProviderImageSizesAccepted({ supabase: creditSupabase, userId, modelId: operation.modelId, request: () => buildGenerationProviderRequest({ operation, prompt: providerPrompt, settings, inputs, shots }).body, templateAssetScope: templateAssetScope(templateContext) });
   let generationId: string | null = null;
   let predictionId: string | null = null;
   try {
