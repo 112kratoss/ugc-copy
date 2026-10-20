@@ -170,6 +170,54 @@ describe('backend alerts', () => {
     expect(collectModeration).toHaveBeenCalledWith(client, now);
   });
 
+  it('reports an open Kie balance episode as degraded, so the endpoint answers 503 while health stays ok', async () => {
+    const client = { service: 'supabase' };
+    const now = new Date('2026-10-20T10:00:00.000Z');
+    const lowBalance = {
+      available: true,
+      error: null,
+      thresholdCredits: 2000,
+      recoveryCredits: 2200,
+      episodeLevel: 'low' as const,
+      credits: 845.32,
+      observedAt: '2026-10-20T09:50:00.000Z',
+      lastCheckedAt: '2026-10-20T09:50:00.000Z',
+      lastCheckError: null,
+      consecutiveFailures: 0,
+      episodeStartedAt: '2026-10-20T09:50:00.000Z',
+    };
+    const collectHealth = vi.fn(async () => healthyBackend);
+    const options = {
+      now,
+      collectHealth,
+      collectCosts: vi.fn(async () => quietCosts),
+      collectModeration: vi.fn(async () => quietModeration),
+      collectKieBalance: vi.fn(async () => lowBalance),
+    };
+
+    // The pulled summary: /api/ops/backend-alerts answers 503 for degraded, so the hourly
+    // watchdog fails and GitHub mails the owner until the account is topped up.
+    const pulled = await collectBackendAlerts(client as never, options);
+    expect(pulled.status).toBe('degraded');
+    expect(pulled.alerts).toEqual([
+      expect.objectContaining({ source: 'kie-balance', severity: 'degraded', code: 'KIE_BALANCE_LOW' }),
+    ]);
+    // Backend health is collected apart and never sees the balance: the release gate stays open.
+    expect(await collectHealth.mock.results[0].value).toMatchObject({ status: 'ok', issues: [] });
+
+    // The ten-minute push leaves the balance out: the balance job posts its own events once per episode.
+    const pushed = await collectBackendAlerts(client as never, { ...options, includeKieBalance: false });
+    expect(pushed.status).toBe('ok');
+    expect(pushed.alerts).toEqual([]);
+
+    // Once the episode closes, nothing is reported.
+    const recovered = await collectBackendAlerts(client as never, {
+      ...options,
+      collectKieBalance: vi.fn(async () => ({ ...lowBalance, episodeLevel: 'ok' as const, credits: 25_000, episodeStartedAt: null })),
+    });
+    expect(recovered.status).toBe('ok');
+  });
+
   it('documents production alert delivery wiring against the normalized payload', () => {
     expect(operationsRunbook).toContain('## Production Alert Delivery Wiring');
     expect(operationsRunbook).toContain('/api/ops/backend-alerts');

@@ -5,6 +5,7 @@ export type BackendJobName =
   | 'feed-maintenance'
   | 'generation-completions'
   | 'generation-model-verification'
+  | 'kie-account-balance'
   | 'media-preview-repair'
   | 'media-upload-reclaim'
   | 'mobile-push-receipts'
@@ -54,11 +55,18 @@ export type BackendJobDefinition = {
 /**
  * Ceiling on *Vercel cron* invocations per day, not logical job runs.
  *
- * Currently 144 (scheduler) + 144 (generation-completions) + 24
- * (media-preview-repair) = 312, leaving room for one more ten-minute dedicated
- * cron before this needs revisiting. Vercel Pro allows 40 cron entries, so the
- * binding constraint is cost rather than the plan — and under Fluid compute
- * billing follows CPU time, so a mostly-idle extra cron is close to free.
+ * Currently 144 (scheduler) + 144 (generation-completions) + 144
+ * (media-preview-repair) = 432, leaving room for a cron that fires at most 24
+ * times a day before this needs revisiting. Vercel Pro allows 40 cron entries,
+ * so the binding constraint is cost rather than the plan — and under Fluid
+ * compute billing follows CPU time, so a mostly-idle extra cron is close to
+ * free.
+ *
+ * A `scheduler` job adds logical runs, never invocations: `kie-account-balance`
+ * runs inside the shared `/api/cron/backend-jobs` tick (144 logical runs a
+ * day) and adds nothing here. Its provider-refusal checks run behind a
+ * generation request's response, not on a cron, and are latched to one per
+ * ten minutes (`kie-account-balance-refusal.ts`).
  */
 export const BACKEND_JOB_DAILY_INVOCATION_BUDGET = 456;
 
@@ -266,6 +274,20 @@ export const BACKEND_JOB_REGISTRY = [
     lockTtlSeconds: 14 * 60,
     noWorkSkipReason: 'no_published_generation_models',
     maxMissedRunsBeforeDegraded: 2,
+  }),
+  defineBackendJob({
+    // Reads the Kie.ai prepaid credit balance that pays for every generation
+    // and alerts the operator once per crossing below KIE_BALANCE_ALERT_CREDITS
+    // (kie-account-balance-alert.ts). Shared dispatch: one bounded Kie read and
+    // at most one alert post. Kie rate-limits the whole account, so this polls
+    // no faster than the scheduler and never retries within a run.
+    name: 'kie-account-balance',
+    route: '/api/cron/kie-account-balance',
+    schedule: '*/10 * * * *',
+    maxDurationSeconds: 60,
+    lockTtlSeconds: 120,
+    noWorkSkipReason: 'kie_api_key_not_configured',
+    maxMissedRunsBeforeDegraded: 3,
   }),
   defineBackendJob({
     // F14: dedicated. Shells out to ffmpeg, which is memory-hungry and was the

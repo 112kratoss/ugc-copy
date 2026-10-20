@@ -263,6 +263,7 @@ const SERVICE_ROUTES = [
   '/api/cron/feed-maintenance',
   '/api/cron/generation-completions',
   '/api/cron/generation-model-verification',
+  '/api/cron/kie-account-balance',
   '/api/cron/media-preview-repair',
   '/api/cron/media-upload-reclaim',
   '/api/cron/mobile-push-receipts',

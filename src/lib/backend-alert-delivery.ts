@@ -8,9 +8,14 @@ import {
   type BackendAlertSummary,
 } from '@/lib/backend-alerts';
 import {
-  EXTERNAL_API_REQUEST_TIMEOUT_MS,
-  fetchWithProviderTimeout,
-} from '@/lib/provider-fetch';
+  getBackendAlertDeliveryUrl,
+  getBackendAlertDestinationHost,
+  hasConfiguredBackendAlertDelivery,
+  postBackendAlertEvent,
+  shouldNotifyBackendAlertOk,
+} from '@/lib/backend-alert-transport';
+
+export { hasConfiguredBackendAlertDelivery };
 
 export type BackendAlertDeliveryResult = {
   configured: boolean;
@@ -31,6 +36,7 @@ type BackendAlertDeliveryOptions = {
   now?: Date;
 };
 
+/** The `backend_alerts` envelope, typed by the summary it carries. */
 type BackendAlertDeliveryPayload = {
   event: 'backend_alerts';
   source: 'magicbooklet-backend';
@@ -42,33 +48,6 @@ type BackendAlertDeliveryPayload = {
   monitorEndpoints: BackendAlertSummary['monitorEndpoints'];
   alerts: BackendAlertSummary['alerts'];
 };
-
-const ALERT_DELIVERY_SERVICE_NAME = 'Backend alert delivery';
-
-function configuredValue(environment: NodeJS.ProcessEnv, key: string): string | null {
-  const value = environment[key]?.trim();
-  return value ? value : null;
-}
-
-function getAlertDeliveryUrl(environment: NodeJS.ProcessEnv): string | null {
-  return configuredValue(environment, 'BACKEND_ALERT_DELIVERY_URL');
-}
-
-function shouldNotifyOk(environment: NodeJS.ProcessEnv): boolean {
-  return configuredValue(environment, 'BACKEND_ALERT_DELIVERY_NOTIFY_OK') === 'true';
-}
-
-function getAlertDeliveryAuthHeader(environment: NodeJS.ProcessEnv): string | null {
-  return configuredValue(environment, 'BACKEND_ALERT_DELIVERY_AUTH_HEADER');
-}
-
-function getDestinationHost(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return 'invalid-url';
-  }
-}
 
 function buildDeliveryPayload(summary: BackendAlertSummary): BackendAlertDeliveryPayload {
   return {
@@ -84,29 +63,6 @@ function buildDeliveryPayload(summary: BackendAlertSummary): BackendAlertDeliver
   };
 }
 
-function buildDeliveryHeaders(
-  summary: BackendAlertSummary,
-  environment: NodeJS.ProcessEnv,
-): Headers {
-  const headers = new Headers({
-    'Content-Type': 'application/json',
-    'User-Agent': 'MagicBookletBackendAlerts/1.0',
-    'x-magicbooklet-alert-status': summary.status,
-    'x-magicbooklet-alert-dedupe-key': summary.delivery.dedupeKey,
-  });
-  const authHeader = getAlertDeliveryAuthHeader(environment);
-  if (authHeader) {
-    headers.set('Authorization', authHeader);
-  }
-  return headers;
-}
-
-export function hasConfiguredBackendAlertDelivery(
-  environment: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return Boolean(getAlertDeliveryUrl(environment));
-}
-
 export function getBackendAlertDeliveryNotConfiguredSummary(): BackendAlertDeliveryResult {
   return {
     configured: false,
@@ -120,23 +76,28 @@ export async function deliverBackendAlerts(
   options: BackendAlertDeliveryOptions = {},
 ): Promise<BackendAlertDeliveryResult> {
   const environment = options.environment ?? process.env;
-  const destinationUrl = getAlertDeliveryUrl(environment);
+  const destinationUrl = getBackendAlertDeliveryUrl(environment);
   if (!destinationUrl) {
     return getBackendAlertDeliveryNotConfiguredSummary();
   }
 
   const collectAlerts = options.collectAlerts ?? collectBackendAlerts;
-  const summary = await collectAlerts(client, options.now ? { now: options.now } : {});
+  // The Kie balance job posts its own alert once per episode; leaving it out
+  // here keeps this ten-minute push from re-sending it on every tick.
+  const summary = await collectAlerts(client, {
+    ...(options.now ? { now: options.now } : {}),
+    includeKieBalance: false,
+  });
   const baseResult = {
     configured: true,
     alertStatus: summary.status,
     alertCount: summary.counts.total,
-    destinationHost: getDestinationHost(destinationUrl),
+    destinationHost: getBackendAlertDestinationHost(destinationUrl),
     dedupeKey: summary.delivery.dedupeKey,
     checkedAt: summary.checkedAt,
   };
 
-  if (summary.status === 'ok' && !shouldNotifyOk(environment)) {
+  if (summary.status === 'ok' && !shouldNotifyBackendAlertOk(environment)) {
     return {
       ...baseResult,
       delivered: false,
@@ -144,25 +105,14 @@ export async function deliverBackendAlerts(
     };
   }
 
-  const response = await fetchWithProviderTimeout(
-    destinationUrl,
-    {
-      method: 'POST',
-      headers: buildDeliveryHeaders(summary, environment),
-      body: JSON.stringify(buildDeliveryPayload(summary)),
-    },
-    EXTERNAL_API_REQUEST_TIMEOUT_MS,
-    options.fetcher ?? fetch,
-    ALERT_DELIVERY_SERVICE_NAME,
-  );
-
-  if (!response.ok) {
-    throw new Error(`Backend alert delivery failed with status ${response.status}.`);
-  }
+  const receipt = await postBackendAlertEvent(buildDeliveryPayload(summary), {
+    environment,
+    fetcher: options.fetcher,
+  });
 
   return {
     ...baseResult,
     delivered: true,
-    responseStatus: response.status,
+    responseStatus: receipt.responseStatus,
   };
 }

@@ -40,6 +40,8 @@ import {
   processGenerationOutputImportJobs,
 } from '@/lib/generation-output-import-jobs-processor';
 import { verifyPublishedGenerationModels } from '@/lib/generation-model-provider-verification';
+import { hasConfiguredKieAccountBalanceCheck } from '@/lib/kie-account-balance';
+import { checkKieAccountBalance } from '@/lib/kie-account-balance-alert';
 import { hasRepairableMediaPreviews, repairMediaPreviews } from '@/lib/media-preview-repair';
 import {
   hasReclaimableMediaUploads,
@@ -507,6 +509,33 @@ export function runBackendAlertDeliveryJob(options: {
     hasWork: async () => hasConfiguredBackendAlertDelivery(),
     onNoWork: async () => getBackendAlertDeliveryNotConfiguredSummary(),
     run: (client, context) => deliverBackendAlerts(client, { now: new Date(context.startedAtMs) }),
+  });
+}
+
+export function runKieAccountBalanceBackendJob(options: {
+  requestId?: string;
+  startedAtMs?: number;
+  serviceClient?: SupabaseClient;
+  triggerRoute?: string;
+} = {}) {
+  const job = BACKEND_JOBS_BY_NAME['kie-account-balance'];
+  return runManagedBackendJob({
+    ...options,
+    job,
+    messages: {
+      started: 'kie_account_balance_check_started',
+      skippedNoWork: 'kie_account_balance_check_skipped_not_configured',
+      skippedLocked: 'kie_account_balance_check_skipped',
+      completed: 'kie_account_balance_check_completed',
+      failed: 'kie_account_balance_check_failed',
+    },
+    hasWork: async () => hasConfiguredKieAccountBalanceCheck(),
+    onNoWork: async () => ({ configured: false }),
+    run: (client, context) => checkKieAccountBalance(client, {
+      trigger: 'schedule',
+      lockOwner: context.lockOwner,
+      now: new Date(context.startedAtMs),
+    }),
   });
 }
 

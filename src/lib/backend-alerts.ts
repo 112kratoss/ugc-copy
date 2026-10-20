@@ -18,9 +18,14 @@ import {
   type BackendModerationHealthIssue,
   type BackendModerationHealthStatus,
 } from '@/lib/backend-moderation-health';
+import {
+  collectKieBalanceStatus,
+  kieBalanceAlertFromStatus,
+  type KieBalanceStatus,
+} from '@/lib/kie-account-balance-alert';
 
 export type BackendAlertSeverity = 'warning' | 'degraded';
-export type BackendAlertSource = 'health' | 'costs' | 'moderation';
+export type BackendAlertSource = 'health' | 'costs' | 'moderation' | 'kie-balance';
 export type BackendAlertStatus = 'ok' | BackendAlertSeverity;
 
 export type BackendAlert = {
@@ -65,6 +70,8 @@ type BuildBackendAlertSummaryInput = {
   health: BackendHealth;
   costs: BackendCostReport;
   moderation: BackendModerationHealth;
+  /** The Kie credit balance episode (kie-account-balance-alert.ts); no alert without one. */
+  kieBalance?: KieBalanceStatus | null;
   checkedAt?: string;
 };
 
@@ -76,6 +83,12 @@ type CollectBackendAlertsOptions = {
     client: SupabaseClient,
     now: Date,
   ) => Promise<BackendModerationHealth>;
+  collectKieBalance?: (client: SupabaseClient) => Promise<KieBalanceStatus>;
+  /**
+   * False for the ten-minute alert push: the balance job pushes its own alert
+   * once per episode, so the summary push must not re-send it every tick.
+   */
+  includeKieBalance?: boolean;
 };
 
 const MONITOR_ENDPOINTS = [
@@ -100,6 +113,17 @@ function toAlerts(
     code: issue.code,
     message: issue.message,
   }));
+}
+
+/**
+ * An open Kie credit balance episode is always degraded here: it is what makes
+ * this endpoint answer 503, so the hourly watchdog fails and mails the owner
+ * until the account is topped up. It is never a health issue, so it cannot
+ * hold a release.
+ */
+function toKieBalanceAlerts(kieBalance: KieBalanceStatus | null | undefined): BackendAlert[] {
+  const alert = kieBalance ? kieBalanceAlertFromStatus(kieBalance) : null;
+  return alert ? [{ source: 'kie-balance', severity: 'degraded', ...alert }] : [];
 }
 
 function buildDeliveryPayload(
@@ -137,12 +161,14 @@ export function buildBackendAlertSummary({
   health,
   costs,
   moderation,
+  kieBalance,
   checkedAt = new Date().toISOString(),
 }: BuildBackendAlertSummaryInput): BackendAlertSummary {
   const alerts = [
     ...toAlerts('health', health.issues),
     ...toAlerts('costs', costs.issues),
     ...toAlerts('moderation', moderation.issues),
+    ...toKieBalanceAlerts(kieBalance),
   ];
   const degraded = alerts.filter((alert) => alert.severity === 'degraded').length;
   const warning = alerts.filter((alert) => alert.severity === 'warning').length;
@@ -185,16 +211,19 @@ export async function collectBackendAlerts(
   const collectHealth = options.collectHealth ?? collectBackendHealth;
   const collectCosts = options.collectCosts ?? collectBackendCostReport;
   const collectModeration = options.collectModeration ?? collectBackendModerationHealth;
-  const [health, costs, moderation] = await Promise.all([
+  const collectKieBalance = options.collectKieBalance ?? collectKieBalanceStatus;
+  const [health, costs, moderation, kieBalance] = await Promise.all([
     collectHealth(client, now),
     collectCosts(client, now),
     collectModeration(client, now),
+    options.includeKieBalance === false ? null : collectKieBalance(client),
   ]);
 
   return buildBackendAlertSummary({
     health,
     costs,
     moderation,
+    kieBalance,
     checkedAt: now.toISOString(),
   });
 }
