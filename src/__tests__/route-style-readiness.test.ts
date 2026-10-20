@@ -11,8 +11,10 @@ const PROJECT_ROOT = process.cwd();
 const SRC_ROOT = path.join(PROJECT_ROOT, 'src');
 const APP_ROOT = path.join(SRC_ROOT, 'app');
 const SUPPLEMENT_IMPORT = "import '@/app/non-public-utilities.css';";
+const SUPPLEMENT_IMPORT_PATTERN = /import\s+['"][^'"]*non-public-utilities\.css['"]/;
 // Every route a signed-out visitor can land on: the marketing and SEO pages,
-// share landings (`/creators/[username]`, `/r/[code]`), the
+// the policy pages (the store listings link account deletion), share landings
+// (`/creators/[username]`, `/r/[code]`), the
 // template catalog and the sign-in/auth screens. A full load of these routes
 // carries the root `globals.css` alone (a client navigation from a route that
 // links the supplement keeps the supplement, which is why it scans every
@@ -20,7 +22,8 @@ const SUPPLEMENT_IMPORT = "import '@/app/non-public-utilities.css';";
 // supplement would inline both sheets twice per response.
 // Signed-in-only pages that live inside these directories (`/templates/mine`,
 // `/templates/new`, `/creators/[username]` actions) are scanned by the public
-// sheet too; their component closure is already part of it. `/post` is not
+// sheet too; their component closure is already part of it. `/delete-account`'s
+// signed-in deletion form rides on the public sheet the same way. `/post` is not
 // public: it holds only the composer and the edit page.
 const PUBLIC_ROUTE_DIRECTORIES = new Set([
   'ai-image-generator',
@@ -30,9 +33,11 @@ const PUBLIC_ROUTE_DIRECTORIES = new Set([
   'alternatives',
   'auth',
   'blog',
+  'cancellation',
   'child-safety',
   'contact',
   'creators',
+  'delete-account',
   'feed',
   'login',
   'marketplace',
@@ -155,10 +160,13 @@ describe('route utility stylesheet readiness', () => {
       .filter((directory) => !PUBLIC_ROUTE_DIRECTORIES.has(directory))
       .sort();
 
+    // A page made for signed-out visitors (marketing, policy, a landing) belongs
+    // in PUBLIC_ROUTE_DIRECTORIES and globals.css instead. A signed-in surface
+    // that also draws a signed-out state (Search, Alerts) keeps the supplement.
     for (const directory of visualRouteDirectories) {
       const layoutPath = path.join(APP_ROOT, directory, 'layout.tsx');
-      expect(existsSync(layoutPath), `${directory} needs a route layout`).toBe(true);
-      expect(readFileSync(layoutPath, 'utf8'), `${directory} must link the supplement`)
+      expect(existsSync(layoutPath), `${directory} is not public, so it needs a route layout`).toBe(true);
+      expect(readFileSync(layoutPath, 'utf8'), `${directory} is not public, so its layout must link the supplement`)
         .toContain(SUPPLEMENT_IMPORT);
     }
 
@@ -168,13 +176,27 @@ describe('route utility stylesheet readiness', () => {
     const globalsCss = readFileSync(path.join(APP_ROOT, 'globals.css'), 'utf8');
     const publicSources = new Set(getDeclaredSources(globalsCss));
     for (const publicDirectory of PUBLIC_ROUTE_DIRECTORIES) {
-      const layoutPath = path.join(APP_ROOT, publicDirectory, 'layout.tsx');
-      if (existsSync(layoutPath)) {
-        expect(readFileSync(layoutPath, 'utf8'), `${publicDirectory} must not link the supplement`)
-          .not.toContain('non-public-utilities.css');
-      }
       expect(publicSources.has(`./${publicDirectory}`), `${publicDirectory} must be scanned by globals.css`)
         .toBe(true);
+    }
+    // And no other route folder: one left in globals.css after its route went
+    // signed-in would put that route's utilities on every public page.
+    const scannedRouteDirectories = [...publicSources]
+      .filter((source) => /^\.\/[^./]+$/.test(source))
+      .map((source) => source.slice('./'.length))
+      .sort();
+    expect(scannedRouteDirectories, 'route folders globals.css scans').toEqual([...PUBLIC_ROUTE_DIRECTORIES].sort());
+    // Nothing a public route draws links the supplement: a page, a nested
+    // layout or a component it imports would inline both sheets twice as surely
+    // as its layout would. The import walker does not follow a bare CSS
+    // import, so every file is read; any other import form puts the sheet
+    // itself in the closure.
+    const publicClosure = collectPublicImportClosure();
+    expect(publicClosure.has(path.join(APP_ROOT, 'non-public-utilities.css')), 'a public route imports the supplement')
+      .toBe(false);
+    for (const file of publicClosure) {
+      expect(readFileSync(file, 'utf8'), `${path.relative(SRC_ROOT, file)} must not link the supplement`)
+        .not.toMatch(SUPPLEMENT_IMPORT_PATTERN);
     }
     // An address with no page draws the root's files with globals.css alone,
     // and the not-found rides in every page's payload: none links the supplement.

@@ -16,9 +16,11 @@
 @source "./alternatives";
 @source "./auth";
 @source "./blog";
+@source "./cancellation";
 @source "./child-safety";
 @source "./contact";
 @source "./creators";
+@source "./delete-account";
 @source "./login";
 @source "./models";
 @source "./pricing";
