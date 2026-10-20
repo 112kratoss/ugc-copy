@@ -37,9 +37,9 @@ Principles, distilled from Pinterest Gestalt, Shopify Polaris, Material 3, Apple
 ## CSS Split
 
 - `globals.css` is the stylesheet for every route a signed-out visitor can land on: marketing, blog, models, the post, creator and referral landings, templates, login and auth, and the policy pages (terms, privacy, child safety, cancellation, account deletion).
-- Signed-in surfaces add `non-public-utilities.css` through their route layouts. It stays in the document after a client navigation, so a public page opened from a signed-in route is drawn with it too: it scans the whole app folder and every component, the public ones included, and holds every utility `globals.css` holds.
+- Signed-in surfaces add `non-public-utilities.css` through their route layouts. Alerts, the shell's tab on every page, draws its sign-in card on `globals.css`; its signed-in half links the supplement itself and loads with `import()` once a reader is known. The supplement stays in the document after a client navigation, so a public page opened from a signed-in route is drawn with it too: it scans the whole app folder and every component, the public ones included, and holds every utility `globals.css` holds.
 - CSS is inlined per response (`experimental.inlineCss`), so a public route must never import the supplement.
-- `src/__tests__/route-style-readiness.test.ts` pins which directories link which sheet and the exact component closure of `globals.css`; `route-style-two-sheet-order.test.ts` holds the supplement to every utility rule of `globals.css`.
+- `src/__tests__/route-style-readiness.test.ts` lists every route folder as public or signed-in, pins which directories link which sheet, and holds `globals.css` to the exact closure of the public routes: their components, and any file of a signed-in folder that a public page draws, such as the profile editor on a creator's own page; `route-style-two-sheet-order.test.ts` holds the supplement to every utility rule of `globals.css`.
 - A class used by both public and signed-in pages, such as toasts and the confirm dialog, lives in `globals.css` as a named class rather than as utilities.
 
 ## Typography
