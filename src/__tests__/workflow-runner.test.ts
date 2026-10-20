@@ -1154,6 +1154,41 @@ describe('workflow-runner recovery', () => {
         expect(planned).toEqual(['portrait', 'videoReferences']);
       });
 
+      // The canvas passes on an image input it has no file for, as a reference without a
+      // link. The step's guard took any image reference, and the run then left that one out,
+      // so the step reached its quote with the clip alone.
+      it('is blocked, with nothing quoted or held, when its picture input carries no file', async () => {
+        const { graph, node } = createSingleStepGraph('motion-generate');
+        const step = { ...node, data: { ...node.data, catalogSettings: { resolution: '720p' } } };
+        const modelId = String((step.data as { model?: unknown }).model);
+        loadGenerationModelOperationByRevisionMock.mockImplementationOnce(async () => ({
+          catalog: codeCatalog,
+          operation: { ...codeOperations.get(modelId)!, adapterKey: 'kie-task-v1' },
+          releaseId: null,
+        }));
+        probeMediaDurationSecondsMock.mockResolvedValueOnce(7.3);
+        quoteGenerationModelMock.mockClear();
+        startCatalogGenerationMock.mockClear();
+        const nodes = graph.nodes.map((candidate) => {
+          if (candidate.id === step.id) return step;
+          if (candidate.type !== 'image-input') return candidate;
+          return { ...candidate, data: { ...(candidate.data as ImageInputNodeData), imageUrl: null, storagePath: null } };
+        });
+
+        const { executeWorkflowRunnableNode } = await import('@/lib/workflow-runner');
+        const result = await executeWorkflowRunnableNode({
+          supabase: { role: 'runner' } as never,
+          userId: 'user-1',
+          graph: { ...graph, nodes } as WorkflowCanvasGraph,
+          node: step,
+          catalogRevision: 'catalog-rev-1',
+        });
+
+        expect(result).toMatchObject({ status: 'blocked', error_message: 'Motion control requires both an image input and a video input.' });
+        expect(quoteGenerationModelMock).not.toHaveBeenCalled();
+        expect(startCatalogGenerationMock).not.toHaveBeenCalled();
+      });
+
       it('keeps the motion-inputs slot for a picture the model opens no slot for, and its quote says why', async () => {
         const { sent, planned } = await slotsSent([{
           key: 'default',

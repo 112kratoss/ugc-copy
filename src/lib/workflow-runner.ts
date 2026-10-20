@@ -947,7 +947,12 @@ export async function executeWorkflowRunnableNode(params: {
       // blocked steps, so a fixable graph never records a failed run.
       if (node.type === 'image-generate' && !inputs.prompt) return buildBlockedError('Image generator is missing a prompt input.');
       if (node.type === 'video-generate' && !node.data.isMultiShot && !inputs.prompt) return buildBlockedError('Video generator is missing a prompt input.');
-      if (node.type === 'motion-generate' && (!inputs.videoUrls.length || !(references.length || inputs.imageReferences.length))) {
+      // A motion step's picture is its first image input, as the motion step below reads it
+      // (elements resolve for image and video steps only), and an input with no file is no
+      // picture: the canvas passes one on without a link.
+      const motionPicture = node.type === 'motion-generate' ? inputs.imageReferences[0] : undefined;
+      const motionPictureUrl = motionPicture ? motionPicture.storagePath || motionPicture.url : null;
+      if (node.type === 'motion-generate' && (!inputs.videoUrls.length || !motionPictureUrl)) {
         return buildBlockedError('Motion control requires both an image input and a video input.');
       }
       const settings = Object.fromEntries(descriptor.controls.map(control => [control.key,
@@ -957,16 +962,14 @@ export async function executeWorkflowRunnableNode(params: {
       ])) as Record<string, CatalogPrimitive>;
       // A motion run sends its picture and its clip, one of each as the motion step below does,
       // each in the slot the motion rule gives it (protocol's catalogMotionInputSlots), the rule
-      // the web motion page places its own by. Elements resolve for image and video steps only,
-      // so a motion step's picture is its first image input: built from those elements, a
-      // catalog motion step sent its clip alone.
+      // the web motion page places its own by. Built from the resolved elements, a catalog
+      // motion step sent its clip alone.
       const motionSlots = descriptor.kind === 'motion' ? catalogMotionInputSlots(descriptor, settings) : null;
-      const motionPicture = inputs.imageReferences[0];
       const assets: CatalogGenerationInputAsset[] = motionSlots
         ? [
-          ...(motionPicture && (motionPicture.storagePath || motionPicture.url) ? [{
+          ...(motionPicture && motionPictureUrl ? [{
             slot: motionSlots.image, kind: 'image' as const,
-            url: motionPicture.storagePath || motionPicture.url, storagePath: motionPicture.storagePath,
+            url: motionPictureUrl, storagePath: motionPicture.storagePath,
             label: motionPicture.sourceTitle, sourceGenerationId: motionPicture.sourceGenerationId,
           }] : []),
           ...inputs.videoUrls.slice(0, 1).map(url => ({ slot: motionSlots.video, kind: 'video' as const, url })),
