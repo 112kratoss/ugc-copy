@@ -74,6 +74,52 @@ async function expectClearOfTheBottomNav(locator: Locator, name: string) {
   expect(drawnOnTop, `nothing covers ${name}`).toBe(true);
 }
 
+// Something else is drawn at the centre of every bottom-nav link and at the nav's two
+// ends: an overlay that covers the page covers the nav too. `next dev` draws its own
+// badge over the bottom-left corner, which is skipped. Soft, so that a failure lists
+// every overlay the nav shows over.
+async function expectOverTheBottomNav(page: Page, name: string) {
+  const showing = await page.evaluate(() => {
+    const nav = document.querySelector('nav.app-shell-bottom-nav')!;
+    const box = nav.getBoundingClientRect();
+    const points = [...nav.querySelectorAll('a')].map((link) => {
+      const r = link.getBoundingClientRect();
+      return { name: link.getAttribute('aria-label') || link.textContent?.trim() || '', x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    });
+    points.push(
+      { name: 'its left end', x: box.left + 6, y: box.top + box.height / 2 },
+      { name: 'its right end', x: box.right - 6, y: box.top + box.height / 2 },
+    );
+    return points.filter(({ x, y }) => {
+      const hit = document.elementsFromPoint(x, y).find((element) => !element.closest('nextjs-portal'));
+      return Boolean(hit && nav.contains(hit));
+    }).map((point) => point.name);
+  });
+  expect.soft(showing, `the bottom navigation shows over ${name} at`).toEqual([]);
+}
+
+type CanvasNode = { id: string; type: string; position: { x: number; y: number }; data: Record<string, unknown> };
+
+// A canvas answered from memory: its list, its record, and nothing saved.
+async function openCanvas(page: Page, nodes: CanvasNode[] = []) {
+  const canvas = {
+    id: 'canvas-1',
+    title: 'Workflow canvas',
+    updated_at: '2026-03-30T04:00:00.000Z',
+    revision: 0,
+    graph: { version: 1, viewport: { x: 0, y: 0, zoom: 1 }, nodes, edges: [] },
+  };
+  await page.route('**/api/workflow-canvases', (route) => route.fulfill({
+    json: { canvases: [{ id: canvas.id, title: canvas.title, updated_at: canvas.updated_at, revision: canvas.revision }] },
+  }));
+  await page.route('**/api/workflow-canvases/*', (route) => (
+    route.request().method() === 'GET' ? route.fulfill({ json: { canvas } }) : route.abort()
+  ));
+  await page.goto(`/create-workflow?canvas=${canvas.id}`);
+  await expect(page.getByTestId('workflow-canvas-header')).toBeVisible();
+  return canvas;
+}
+
 test.beforeEach(async ({ context }) => {
   await context.addCookies([{ name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' }]);
 });
@@ -152,22 +198,8 @@ test.describe('the workflow pages in the app shell', () => {
   });
 
   test('the workflow canvas fills what the shell leaves and never scrolls the page', async ({ page }) => {
-    const canvas = {
-      id: 'canvas-1',
-      title: 'Workflow canvas',
-      updated_at: '2026-03-30T04:00:00.000Z',
-      revision: 0,
-      graph: { version: 1, viewport: { x: 0, y: 0, zoom: 1 }, nodes: [], edges: [] },
-    };
-    await page.route('**/api/workflow-canvases', (route) => route.fulfill({
-      json: { canvases: [{ id: canvas.id, title: canvas.title, updated_at: canvas.updated_at, revision: canvas.revision }] },
-    }));
-    await page.route('**/api/workflow-canvases/*', (route) => (
-      route.request().method() === 'GET' ? route.fulfill({ json: { canvas } }) : route.abort()
-    ));
     await page.setViewportSize(VIEWPORTS[0]);
-    await page.goto(`/create-workflow?canvas=${canvas.id}`);
-    await expect(page.getByTestId('workflow-canvas-header')).toBeVisible();
+    await openCanvas(page);
     // A height, not a minimum: the editor's work area reaches its bottom.
     await expectFitsAtEveryWidth(page, { selector: '[role="application"]', name: 'the work area' });
     // An editor that does not fit has nothing to press below: stop here.
@@ -192,5 +224,86 @@ test.describe('the workflow pages in the app shell', () => {
     await page.setViewportSize({ width: 740, height: 304 });
     const workArea = await page.getByRole('application').boundingBox();
     expect(workArea?.height, 'the work area on a short window').toBeGreaterThan(150);
+  });
+
+  // Below 768px the bottom navigation (z-60) floats over the page. The canvas's
+  // dialogs and its media preview were z-50, so the nav's links stayed on top of
+  // them, live, and over the preview's bottom 40px at 390x844; the phone node
+  // library's backdrop was z-60, so the nav's right end showed past the drawer. And
+  // the unsaved-changes dialog that Import raises sat under the import dialog, where
+  // none of its buttons could be pressed.
+  test('the canvas\'s dialogs, preview and node library are drawn over the bottom navigation', async ({ page }) => {
+    const shareId = '11111111-1111-4111-8111-111111111111';
+    const share = {
+      id: shareId,
+      title: 'Shared workflow',
+      nodeCount: 1,
+      edgeCount: 0,
+      importCount: 0,
+      createdAt: '2026-03-30T04:00:00.000Z',
+      importPath: `/create-workflow?import=${shareId}`,
+      importUrl: `http://127.0.0.1:3100/create-workflow?import=${shareId}`,
+    };
+    // A tall portrait, so the preview is as tall as it gets (76vh).
+    await page.route('**/e2e-canvas-preview.svg', (route) => route.fulfill({
+      contentType: 'image/svg+xml',
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="1800"><rect width="600" height="1800" fill="#3b4a5a"/></svg>',
+    }));
+    await page.route('**/api/workflow-canvases/*/share', (route) => route.fulfill({ json: { share } }));
+    await page.route('**/api/workflow-shares/*', (route) => route.fulfill({
+      json: { share: { ...share, graph: { version: 1, viewport: { x: 0, y: 0, zoom: 1 }, nodes: [], edges: [] }, sourceCanvasId: null, sourceRevision: 0 } },
+    }));
+    await page.setViewportSize(VIEWPORTS[0]);
+    await openCanvas(page, [{
+      id: 'image-input-1',
+      type: 'image-input',
+      position: { x: 0, y: 0 },
+      data: {
+        title: 'Image input',
+        subtitle: 'Upload or connect image',
+        imageUrl: '/e2e-canvas-preview.svg',
+        storagePath: null,
+        runState: { status: 'idle', generationId: null, outputUrl: null, error: null, cost: null, updatedAt: null },
+      },
+    }]);
+
+    await page.getByRole('button', { name: 'Open image input preview' }).click();
+    await expect(page.getByText('Press Escape to close')).toBeVisible();
+    await expectOverTheBottomNav(page, 'the media preview');
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
+
+    // Its link, or the save it asks for first failing (nothing is saved here).
+    await page.getByRole('button', { name: 'Share workflow' }).click();
+    await expect(page.getByTestId('workflow-share-dialog')).toBeVisible();
+    await expect(page.getByText('Creating a fresh snapshot link...')).toBeHidden();
+    await expectOverTheBottomNav(page, 'the share dialog');
+    // A click on the backdrop closes it.
+    await page.mouse.click(8, 8);
+    await expect(page.getByTestId('workflow-share-dialog')).toBeHidden();
+
+    await page.getByRole('button', { name: /^Open (node library|nodes and workflows)$/ }).click();
+    await expect(page.getByTestId('workflow-left-rail')).toBeVisible();
+    await expectOverTheBottomNav(page, 'the node library and its backdrop');
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'Build your graph' })).toBeHidden();
+
+    // An edit, then Import: the unsaved-changes dialog comes up over the import dialog.
+    await page.getByRole('textbox', { name: 'Workflow title' }).fill('Edited workflow canvas');
+    await page.getByRole('button', { name: 'Import workflow' }).click();
+    const importDialog = page.getByTestId('workflow-import-dialog');
+    await expectOverTheBottomNav(page, 'the import dialog');
+    await importDialog.getByRole('textbox', { name: 'Shared workflow URL or id' }).fill(shareId);
+    await importDialog.getByRole('button', { name: 'Preview import' }).click();
+    await expect(importDialog.getByText(share.title, { exact: true })).toBeVisible();
+    await importDialog.getByRole('button', { name: 'Import workflow' }).click();
+    const unsaved = page.locator('div.max-w-md', { hasText: 'Save before continuing?' });
+    await expect(unsaved).toBeVisible();
+    for (const name of ['Cancel', 'Discard', 'Save']) {
+      await expectClearOfTheBottomNav(unsaved.getByRole('button', { name, exact: true }), `the unsaved-changes dialog's ${name}`);
+    }
+    await expectOverTheBottomNav(page, 'the unsaved-changes dialog');
+    await unsaved.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(unsaved).toBeHidden();
+    await expect(importDialog).toBeVisible();
   });
 });

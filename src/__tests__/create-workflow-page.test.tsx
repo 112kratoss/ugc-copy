@@ -814,7 +814,7 @@ describe('CreateWorkflowPage', () => {
     expect(mobileDrawer).toBe(screen.getByTestId('workflow-left-rail'));
     expect(mobileDrawer).toHaveAttribute('aria-modal', 'true');
     expect(mobileDrawer).toHaveClass('fixed', 'z-[70]', 'md:static', 'md:z-auto');
-    expect(screen.getByRole('button', { name: /dismiss nodes and workflows/i })).toHaveClass('z-[60]');
+    expect(screen.getByRole('button', { name: /dismiss nodes and workflows/i })).toHaveClass('z-[70]');
 
     fireEvent.keyDown(document, { key: 'Escape' });
 

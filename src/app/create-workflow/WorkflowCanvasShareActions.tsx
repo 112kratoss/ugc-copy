@@ -60,9 +60,10 @@ function OverlayShell({
   children: ReactNode;
   onClose: () => void;
 }) {
+  // Over the app shell's bottom navigation (z-60), as the app's other modals are.
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/72 backdrop-blur-sm"
+      className="fixed inset-0 z-[80] bg-black/72 backdrop-blur-sm"
       onClick={onClose}
     >
       {children}

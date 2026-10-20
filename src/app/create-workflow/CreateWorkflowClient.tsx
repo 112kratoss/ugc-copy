@@ -127,8 +127,10 @@ function UnsavedChangesDialog({
     return null;
   }
 
+  // Over the app shell's bottom navigation (z-60), and over the share and import
+  // dialogs (z-[80]): Import asks this first when the canvas has unsaved changes.
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/75 p-6 backdrop-blur-sm">
       <div className="w-full max-w-md rounded-[28px] border border-white/10 bg-[#050505] p-6 shadow-[0_32px_120px_rgba(0,0,0,0.65)]">
         <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Unsaved changes</div>
         <div className="mt-3 text-xl font-semibold text-white">Save before continuing?</div>

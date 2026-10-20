@@ -115,9 +115,10 @@ function PreviewMediaOverlay({
     return null;
   }
 
+  // A lightbox, over the app shell's bottom navigation (z-60) like the app's others.
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-6 backdrop-blur-sm"
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/85 p-6 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
@@ -215,8 +216,10 @@ function CanvasContextMenu({
   const nodeRunState = node ? nodeRunStateById[node.id] : undefined;
   const actionClassName = 'flex w-full items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-zinc-200 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-60';
 
+  // Over the app shell's top bar and bottom navigation, like the app's other menus
+  // drawn in the page body (z-[90]).
   return (
-    <div className="fixed inset-0 z-40" onClick={onClose}>
+    <div className="fixed inset-0 z-[90]" onClick={onClose}>
       <div
         data-testid="canvas-context-menu"
         className="absolute min-w-[260px] rounded-[24px] border border-white/10 bg-black/95 p-3 shadow-[0_24px_80px_rgba(0,0,0,0.5)] backdrop-blur"

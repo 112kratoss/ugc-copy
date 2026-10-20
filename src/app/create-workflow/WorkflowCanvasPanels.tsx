@@ -263,11 +263,13 @@ export function WorkflowCanvasLeftRail({
           {showWorkflowSwitcher ? 'Nodes & workflows' : 'Add nodes'}
         </button>
       ) : (
+        // In the drawer's layer, over the app shell's bottom navigation (z-60), whose
+        // right end showed past the drawer and still took taps.
         <button
           type="button"
           aria-label={showWorkflowSwitcher ? 'Dismiss nodes and workflows' : 'Dismiss node library'}
           onClick={() => setIsMobileLibraryOpen(false)}
-          className="fixed inset-x-0 bottom-0 top-16 z-[60] bg-black/70 backdrop-blur-sm md:hidden"
+          className="fixed inset-x-0 bottom-0 top-16 z-[70] bg-black/70 backdrop-blur-sm md:hidden"
         />
       )}
 
