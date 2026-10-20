@@ -284,8 +284,14 @@ export async function logProviderImageSizesOverLimit(
   },
   dependencies: ImageSizeLookupDependencies = {},
 ): Promise<void> {
+  let request: unknown;
   try {
-    const request = typeof params.request === 'function' ? (params.request as () => unknown)() : params.request;
+    request = typeof params.request === 'function' ? (params.request as () => unknown)() : params.request;
+  } catch {
+    // Left to the start, which builds the request after its hold and answers the failure there.
+    return;
+  }
+  try {
     const images = providerRequestImages(request);
     if (images.length === 0) return;
 
@@ -302,8 +308,13 @@ export async function logProviderImageSizesOverLimit(
       providerModel: isRecord(request) ? request.model : null,
       detail: violation,
     });
-  } catch {
-    // A request its builder cannot build is left to the start, which builds it after its
-    // hold and answers the failure there; and a diagnostic never stops a start.
+  } catch (error) {
+    // A diagnostic never stops a start, but one that broke says so, so a quiet log is
+    // never taken for pictures within their limits.
+    logBackendWarning('generation_input_image_size_check_failed', {
+      userId: params.userId,
+      model: params.modelId,
+      error,
+    });
   }
 }

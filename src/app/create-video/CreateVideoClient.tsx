@@ -1854,13 +1854,18 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 if (capWarning) setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, capWarning));
 
                 if (isSeedance2VideoModelId(nextModelId)) {
+                    const restoredElements = restoredVideoInputs?.elements ?? [];
                     const restoredSeeds = createRemixElementSeeds(
-                        restoredVideoInputs?.elements ?? [],
+                        restoredElements,
                         restoredElementSupport.maxTotal
-                    ).map((seed, index) => ({
+                    ).map((seed) => ({
                         ...seed,
                         file: null,
-                        seedanceAsset: restoredSeedanceAssets?.images?.[index] ?? undefined,
+                        // The saved assets follow the run's references, one that could not come
+                        // back included, so each pairs by its place among them (as a draft's do).
+                        seedanceAsset: restoredSeedanceAssets?.images?.[
+                            restoredElements.findIndex((element) => element.id === seed.id)
+                        ] ?? undefined,
                     }));
 
                     const legacyFrameSeeds = restoredSeeds.length === 0

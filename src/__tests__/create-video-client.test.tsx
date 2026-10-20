@@ -1753,6 +1753,37 @@ describe('CreateVideoClient Kling video elements', () => {
         )).toBeInTheDocument();
       });
 
+      // A run's saved Seedance assets follow its references, a lost one included. The remix
+      // paired them by place among the references that came back, so after a lost one each
+      // reference went out with the one before it's prepared asset, and Kie got that
+      // picture in its place (2026-10-20).
+      it('sends each restored Seedance reference with its own prepared asset after a lost one', async () => {
+        const lost = { ...keptImage('09', 'Lost shot', '@lost'), url: null, storagePath: null };
+        const prepared = (assetId: string) => ({
+          assetId,
+          assetType: 'Image' as const,
+          status: 'active' as const,
+          sourceUrl: null,
+          error: null,
+          lastCheckedAt: null,
+        });
+        const view = renderRemix(referenceRun('seedance-2', {
+          settings: { seedanceAssets: { images: [prepared('asset-lost'), prepared('asset-lead'), prepared('asset-prop')], videos: [], audios: [] } },
+          video: { elements: [lost, LEAD, PROP] },
+        }));
+
+        await waitFor(() => expect(cardHandles(view.container, IMAGE_RENAME)).toEqual(['@lead', '@prop']));
+        fireEvent.click(screen.getByRole('button', { name: /generate video/i }));
+
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        expect((postedRun().inputs as Array<{ slot: string; url: string; assetId?: string | null }>)
+          .filter((input) => input.slot === 'imageReferences')
+          .map((input) => [input.url, input.assetId])).toEqual([
+          [LEAD.url, 'asset-lead'],
+          [PROP.url, 'asset-prop'],
+        ]);
+      });
+
       it('restores no image reference into a multi-shot run, where the page shows no reference card and sends none', async () => {
         const shots = [
           { id: 'shot-1', prompt: 'Open on the harbour in the rain, slow push in.', duration: 5 },

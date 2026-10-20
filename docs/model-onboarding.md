@@ -56,11 +56,13 @@ URLs; [gpt-image-2-5.md](model-api-references/gpt-image-2-5.md) is the template.
   the run's credits, so the run fails and is refunded. Record each in the module that refuses it
   first: the prompt's `maxLength`/`minLength` (and per shot) in
   `ugc-mobile/lib/model-catalog/provider-prompt-limits.ts`, which both creators count against;
-  reference clip and track minimums in `src/lib/provider-input-limits.ts`; and each image field's
-  documented size limit in `src/lib/provider-image-limits.ts` (its test fails for an endpoint
-  that is neither limited nor listed as having no documented limit). The image sizes are only
-  logged (`generation_input_image_over_provider_limit`) until a run shows Kie refuses one. Cite
-  the spec line for each value.
+  reference clip and track minimums in `src/lib/provider-input-limits.ts`. Cite the spec line for
+  each value.
+- [ ] **Documented image sizes.** Record each image field's documented size limit in
+  `src/lib/provider-image-limits.ts` (its test fails for an endpoint that is neither limited nor
+  listed as having no documented limit), citing the spec line. Nothing refuses on these: a start
+  logs a picture over its limit (`generation_input_image_over_provider_limit`) until a run shows
+  Kie refuses one.
 - [ ] **What the prompt enhancer needs.** Does the model always generate audio? Does Kie rewrite
   prompts on its side (`expand_prompt`, `prompt_extend`)? Both change the model's playbook.
 - [ ] **Endpoint.** Market models use `jobs/createTask` and the shared status and callback path. A

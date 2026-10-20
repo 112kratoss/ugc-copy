@@ -525,5 +525,35 @@ describe('the provider image size log', () => {
       },
     })).resolves.toBeUndefined();
     expect(client.from).not.toHaveBeenCalled();
+    expect(records).toEqual([]);
+  });
+
+  // The log is the only evidence of whether Kie enforces these limits, so a check that
+  // broke must not read as pictures within them.
+  it('says when the check itself breaks, and still lets the start go on', async () => {
+    const { client } = createClient();
+    const request = {
+      model: 'qwen3/image-to-image',
+      get input(): never {
+        throw new Error('The request could not be read.');
+      },
+    };
+
+    await expect(logProviderImageSizesOverLimit({
+      supabase: client as never,
+      userId: USER_ID,
+      modelId: 'qwen3',
+      request,
+    })).resolves.toBeUndefined();
+
+    expect(records.filter((record) => record.msg === 'generation_input_image_size_check_failed')).toEqual([
+      expect.objectContaining({
+        level: 'warn',
+        userId: USER_ID,
+        model: 'qwen3',
+        errorMessage: 'The request could not be read.',
+      }),
+    ]);
+    expect(overLimitLogs()).toEqual([]);
   });
 });
