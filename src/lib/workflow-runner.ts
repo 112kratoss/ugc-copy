@@ -345,16 +345,17 @@ function templateMediaSourceOptions(templateContext?: TemplateGenerationContext)
 }
 
 /**
- * A motion step's length in whole seconds, measured from its reference clip:
- * the output runs as long as the clip, which is what POST /api/generations
- * prices too. Null when the clip cannot be read, or is not an HTTPS object.
+ * A motion step's reference clip, measured: `billableSeconds` is its length in whole
+ * seconds, which the output runs for and POST /api/generations prices too, and
+ * `measuredSeconds` the length itself, which the start holds to Kie's 3 s floor (a
+ * 2.4 s clip rounds up to 3). Null when the clip cannot be read, or is not an HTTPS object.
  */
 async function measureMotionReferenceSeconds(params: {
   supabase: SupabaseClient;
   referenceVideoUrl: string;
   userId: string;
   templateContext?: TemplateGenerationContext;
-}): Promise<number | null> {
+}): Promise<{ billableSeconds: number; measuredSeconds: number } | null> {
   const { supabase, referenceVideoUrl, userId, templateContext } = params;
   const source = await resolveGenerationMediaSource(
     supabase,
@@ -365,7 +366,7 @@ async function measureMotionReferenceSeconds(params: {
   if (!/^https:\/\//i.test(source)) return null;
   const measured = await probeMediaDurationSeconds(source);
   return measured !== null && Number.isFinite(measured) && measured > 0
-    ? Math.max(1, Math.ceil(measured))
+    ? { billableSeconds: Math.max(1, Math.ceil(measured)), measuredSeconds: measured }
     : null;
 }
 
@@ -1086,10 +1087,11 @@ export async function executeWorkflowRunnableNode(params: {
       return buildBlockedError('Motion control requires both an image input and a video input.');
     }
 
-    const duration = await measureMotionReferenceSeconds({ supabase, referenceVideoUrl, userId, templateContext });
-    if (duration === null) {
+    const clip = await measureMotionReferenceSeconds({ supabase, referenceVideoUrl, userId, templateContext });
+    if (clip === null) {
       return buildBlockedError('The reference clip’s length could not be verified.');
     }
+    const duration = clip.billableSeconds;
 
     const quote = await quoteRunnableNode({
       kind: 'motion',
@@ -1110,6 +1112,7 @@ export async function executeWorkflowRunnableNode(params: {
       referenceVideoUrl,
       characterImageUrl,
       duration,
+      referenceVideoSeconds: clip.measuredSeconds,
       characterOrientation: data.characterOrientation,
       mode: data.mode,
       quotedCostCredits: quote.costCredits,

@@ -686,6 +686,9 @@ describe('workflow-runner recovery', () => {
       }));
       expect(startMotionGeneration).toHaveBeenCalledWith(expect.objectContaining({
         duration: 8,
+        // The measured length too, so the start can hold it to Kie's 3 s floor: a 2.4 s clip
+        // rounds up to 3 and would pass on the whole seconds alone.
+        referenceVideoSeconds: 7.3,
         quotedCostCredits: 77,
       }));
       expect(result).toMatchObject({ status: 'processing', generation_id: 'gen-motion' });
