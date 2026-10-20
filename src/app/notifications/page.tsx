@@ -20,13 +20,18 @@ import type { WebNotification } from './web-notification';
 // fetched the signed-in sheet's text and kept it for the rest of the visit.
 // Each use of the half sits in a SignedInAlertsBoundary: a load that fails (a
 // deploy rotated the chunk names while the tab was open; offline) draws the
-// page's error card, not Next's generic one.
-const SignedInAlerts = dynamic(() => import('./SignedInAlerts'), {
+// page's error card, not Next's generic one. Both uses share one load, so they
+// arrive or fail together: with an import() each, the controls' load could fail
+// on a flaky connection and the list's succeed a moment later (a failed chunk
+// is asked for again by the next import()), leaving the list without Refresh
+// and Mark all read, and no card to say so, until a reload.
+let signedInHalf: Promise<typeof import('./SignedInAlerts')> | undefined;
+const SignedInAlerts = dynamic(() => (signedInHalf ??= import('./SignedInAlerts')), {
   ssr: false,
   loading: () => <AlertsLoading />,
 });
 const SignedInAlertsActions = dynamic(
-  () => import('./SignedInAlerts').then((module) => module.SignedInAlertsActions),
+  () => (signedInHalf ??= import('./SignedInAlerts')).then((module) => module.SignedInAlertsActions),
   { ssr: false, loading: () => <SignedInAlertsActionsPlaceholder /> },
 );
 
