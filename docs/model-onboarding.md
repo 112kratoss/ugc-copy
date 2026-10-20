@@ -52,6 +52,13 @@ URLs; [gpt-image-2-5.md](model-api-references/gpt-image-2-5.md) is the template.
   Match how the model bills: per image, per second, with or without audio, or input plus output
   seconds. A setting that cannot be priced before the run (Wan 3.0's `duration: -1`) must be
   refused.
+- [ ] **Limits Kie refuses only after the hold.** Kie validates some inputs after the app has held
+  the run's credits, so the run fails and is refunded. Record each in the module that refuses it
+  first: the prompt's `maxLength`/`minLength` (and per shot) in
+  `ugc-mobile/lib/model-catalog/provider-prompt-limits.ts`, which both creators count against;
+  each image field's size limit in `src/lib/provider-image-limits.ts` (its test fails for an
+  endpoint that is neither limited nor listed as having no documented limit); reference clip and
+  track minimums in `src/lib/provider-input-limits.ts`. Cite the spec line for each value.
 - [ ] **What the prompt enhancer needs.** Does the model always generate audio? Does Kie rewrite
   prompts on its side (`expand_prompt`, `prompt_extend`)? Both change the model's playbook.
 - [ ] **Endpoint.** Market models use `jobs/createTask` and the shared status and callback path. A
