@@ -3102,9 +3102,12 @@ describe('generation services', () => {
   it('sends Veo video generations with start and end frames', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;
+    let providerUrl = '';
     const fetchMock = vi.mocked(fetch);
-    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       providerBody = JSON.parse(String(init?.body));
+      // Only the provider call carries a body; the frames kept afterwards do not.
+      providerUrl = String(input);
       return {
         ok: true,
         json: async () => ({ code: 200, data: { taskId: 'task-veo-frames-1' } }),
@@ -3124,13 +3127,18 @@ describe('generation services', () => {
       endImageUrl: 'https://cdn.example.com/end.jpg',
     });
 
+    // Kie's jobs API: model veo-3-1, the tier and the fields inside `input`.
+    expect(providerUrl).toBe('https://api.kie.ai/api/v1/jobs/createTask');
     expect(providerBody).toMatchObject({
-      model: 'veo3_fast',
-      generationType: 'FIRST_AND_LAST_FRAMES_2_VIDEO',
-      imageUrls: [
-        'https://cdn.example.com/start.jpg',
-        'https://cdn.example.com/end.jpg',
-      ],
+      model: 'veo-3-1',
+      input: {
+        model: 'veo3_fast',
+        generation_type: 'FIRST_AND_LAST_FRAMES_2_VIDEO',
+        image_urls: [
+          'https://cdn.example.com/start.jpg',
+          'https://cdn.example.com/end.jpg',
+        ],
+      },
     });
     expect(generations[0].workflow_settings?.referenceMode).toBe('frames');
   });
@@ -4238,16 +4246,19 @@ describe('generation services', () => {
       resolution: '1080p',
     });
 
-    // veo names this field `aspect_ratio`, unlike its camelCase neighbours.
-    // Sending `aspectRatio` meant veo never received a ratio and silently used
-    // its 16:9 default, so assert the wire key and not just the value.
+    // Veo names this field `aspect_ratio`. Sending `aspectRatio` once meant Veo never
+    // received a ratio and silently used its 16:9 default, so assert the wire key and
+    // not just the value.
     expect(providerBody).toMatchObject({
-      model: 'veo3_lite',
-      resolution: '1080p',
-      generationType: 'TEXT_2_VIDEO',
-      aspect_ratio: '16:9',
+      model: 'veo-3-1',
+      input: {
+        model: 'veo3_lite',
+        resolution: '1080p',
+        generation_type: 'TEXT_2_VIDEO',
+        aspect_ratio: '16:9',
+      },
     });
-    expect(providerBody).not.toHaveProperty('aspectRatio');
+    expect((providerBody as unknown as { input: Record<string, unknown> }).input).not.toHaveProperty('aspectRatio');
     expect(generations[0].cost).toBe(35);
   });
 
@@ -4283,6 +4294,275 @@ describe('generation services', () => {
     // Rejected before any provider call, so no hold is placed for a request the
     // provider would refuse.
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  // Kie moved Veo 3.1 from POST /api/v1/veo/generate (a flat, camel-cased body whose
+  // `model` was the tier) to its jobs API: POST /api/v1/jobs/createTask with model
+  // "veo-3-1" and the tier and every setting inside `input`, snake-cased
+  // (docs.kie.ai/veo3-api/generate-veo-3-video.md, read 2026-10-20). Each start
+  // records that in its recipe, because the status checks must ask the API that holds
+  // the task.
+  describe('Veo 3.1 on the jobs API', () => {
+    type VideoStart = Parameters<typeof import('@/lib/generation-services')['startVideoGeneration']>[0];
+    type ProviderCall = {
+      url: string;
+      body: { model?: unknown; callBackUrl?: unknown; input: Record<string, unknown> };
+      /** The row's recipe when the provider was asked. */
+      recipeWhenSent: unknown;
+    };
+
+    const START = 'https://cdn.example.com/start.jpg';
+    const END = 'https://cdn.example.com/end.jpg';
+    const REFERENCE = 'https://signed.example.com/uploads/user-1/lead.png';
+
+    async function startVeo(settings: Partial<VideoStart>, options: SupabaseMockOptions = {}) {
+      const { startVideoGeneration } = await import('@/lib/generation-services');
+      const client = createSupabaseMock([], options);
+      const calls: ProviderCall[] = [];
+      vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({
+          url: String(input),
+          body: JSON.parse(String(init?.body)),
+          recipeWhenSent: structuredClone(client.generations[0]?.workflow_settings),
+        });
+        return { ok: true, json: async () => ({ code: 200, data: { taskId: 'task-veo-jobs-1' } }) } as Response;
+      });
+      const result = await startVideoGeneration({
+        supabase: client.supabase,
+        creditSupabase: client.supabase,
+        userId: 'user-1',
+        prompt: 'A calm ocean at sunrise.',
+        model: 'veo-3.1',
+        mode: 'veo3_lite',
+        aspectRatio: '16:9',
+        resolution: '720p',
+        ...settings,
+      });
+      return { ...client, calls, result };
+    }
+
+    it('refuses Auto on a reference run before any hold, which Kie renders at 16:9 or 9:16 only', async () => {
+      // The catalog's quote rule refuses this on the unified path; the workflow, template and
+      // legacy video routes quote without the reference count, so the start refuses it too.
+      const { startVideoGeneration } = await import('@/lib/generation-services');
+      const client = createSupabaseMock();
+      vi.mocked(fetch).mockClear();
+
+      await expect(startVideoGeneration({
+        supabase: client.supabase,
+        creditSupabase: client.supabase,
+        userId: 'user-1',
+        prompt: '@lead walks along the harbour at dusk.',
+        model: 'veo-3.1',
+        mode: 'veo3_fast',
+        aspectRatio: 'Auto',
+        resolution: '720p',
+        referenceMode: 'elements',
+        imageUrls: [],
+        elements: [{
+          id: 'imageReferences-1',
+          displayName: 'Hero shot',
+          handle: '@lead',
+          storagePath: 'uploads/user-1/lead.png',
+          sourceGenerationId: null,
+        }],
+        elementImageUrls: [REFERENCE],
+      })).rejects.toThrow('Veo 3.1 renders reference runs at 16:9 or 9:16 only.');
+
+      expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+      expect(client.generations).toEqual([]);
+    });
+
+    it('sends a text run to jobs/createTask and marks the run as a jobs-API task', async () => {
+      const { calls, generations, result } = await startVeo({});
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toBe('https://api.kie.ai/api/v1/jobs/createTask');
+      expect(calls[0].body).toEqual({
+        model: 'veo-3-1',
+        callBackUrl: expect.stringMatching(/^https:\/\/project\.supabase\.co\/functions\/v1\/kie-webhook\?generationId=gen-1&/),
+        input: {
+          prompt: 'A calm ocean at sunrise.',
+          model: 'veo3_lite',
+          generation_type: 'TEXT_2_VIDEO',
+          aspect_ratio: '16:9',
+          resolution: '720p',
+          duration: 8,
+          // The legacy endpoint translated prompts by default; the jobs API is asked to.
+          enable_translation: true,
+        },
+      });
+      // The marker rides in with the reservation, so it is there before the provider is asked.
+      expect(calls[0].recipeWhenSent).toMatchObject({ model: 'veo-3.1', mode: 'veo3_lite', providerApi: 'jobs' });
+      expect(generations[0]).toMatchObject({
+        prediction_id: 'task-veo-jobs-1',
+        duration: 8,
+        cost: 30,
+        workflow_settings: { model: 'veo-3.1', mode: 'veo3_lite', aspectRatio: '16:9', resolution: '720p', providerApi: 'jobs' },
+      });
+      expect(result).toMatchObject({ predictionId: 'task-veo-jobs-1', cost: 30 });
+    });
+
+    it('sends a start frame alone as a one-image frames run', async () => {
+      const { calls, generations } = await startVeo({ mode: 'veo3_fast', aspectRatio: 'Auto', startImageUrl: START });
+
+      expect(calls[0].body.input).toEqual({
+        prompt: 'A calm ocean at sunrise.',
+        model: 'veo3_fast',
+        generation_type: 'FIRST_AND_LAST_FRAMES_2_VIDEO',
+        image_urls: [START],
+        aspect_ratio: 'Auto',
+        resolution: '720p',
+        duration: 8,
+        enable_translation: true,
+      });
+      expect(generations[0].workflow_settings).toMatchObject({ referenceMode: 'frames', providerApi: 'jobs' });
+    });
+
+    it('sends a start and an end frame in that order on Quality', async () => {
+      const { calls, generations } = await startVeo({
+        mode: 'veo3',
+        resolution: '4k',
+        aspectRatio: '9:16',
+        startImageUrl: START,
+        endImageUrl: END,
+      });
+
+      expect(calls[0].body.input).toEqual({
+        prompt: 'A calm ocean at sunrise.',
+        model: 'veo3',
+        generation_type: 'FIRST_AND_LAST_FRAMES_2_VIDEO',
+        image_urls: [START, END],
+        aspect_ratio: '9:16',
+        resolution: '4k',
+        duration: 8,
+        enable_translation: true,
+      });
+      expect(generations[0].cost).toBe(370);
+    });
+
+    it('sends named reference pictures as a REFERENCE_2_VIDEO run', async () => {
+      const { calls, generations } = await startVeo({
+        mode: 'veo3_fast',
+        resolution: '1080p',
+        prompt: '@lead walks along the harbour at dusk.',
+        referenceMode: 'elements',
+        imageUrls: [],
+        elements: [{
+          id: 'imageReferences-1',
+          displayName: 'Hero shot',
+          handle: '@lead',
+          storagePath: 'uploads/user-1/lead.png',
+          sourceGenerationId: null,
+        }],
+        elementImageUrls: [REFERENCE],
+      });
+
+      expect(calls[0].body).toMatchObject({
+        model: 'veo-3-1',
+        input: {
+          model: 'veo3_fast',
+          generation_type: 'REFERENCE_2_VIDEO',
+          image_urls: [REFERENCE],
+          aspect_ratio: '16:9',
+          resolution: '1080p',
+          duration: 8,
+        },
+      });
+      expect(String(calls[0].body.input.prompt)).toContain('@lead = attached reference image 1');
+      expect(generations[0].cost).toBe(65);
+    });
+
+    it.each([
+      ['a template step', { templateContext: { runId: 'run-1', stepId: 'step-video-1' }, persistInputMedia: false }, 'start_template_generation'],
+      ['a private recipe', {}, 'start_generation'],
+    ] as const)('marks %s, whose reservation keeps no recipe, before the provider is asked', async (_label, extra, reservation) => {
+      const { calls, generations, rpcCalls } = await startVeo({ privateRecipe: true, ...extra });
+
+      expect(rpcCalls[0].fn).toBe(reservation);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].recipeWhenSent).toEqual({ providerApi: 'jobs' });
+      expect(calls[0].body).toMatchObject({ model: 'veo-3-1', input: { model: 'veo3_lite' } });
+      // Nothing of the recipe itself is kept.
+      expect(generations[0]).toMatchObject({ prompt: undefined, workflow_settings: { providerApi: 'jobs' } });
+    });
+
+    it('refunds a template step and asks the provider nothing when its marker cannot be written', async () => {
+      // A task the status checks would look for on the wrong API is never created.
+      const client = createSupabaseMock([], { generationUpdateErrors: [new Error('generations update failed')] });
+      const { startVideoGeneration } = await import('@/lib/generation-services');
+      const refusal = await startVideoGeneration({
+        supabase: client.supabase,
+        creditSupabase: client.supabase,
+        userId: 'user-1',
+        prompt: 'A calm ocean at sunrise.',
+        model: 'veo-3.1',
+        mode: 'veo3_lite',
+        aspectRatio: '16:9',
+        resolution: '720p',
+        privateRecipe: true,
+        persistInputMedia: false,
+        templateContext: { runId: 'run-1', stepId: 'step-video-1' },
+      }).catch((error: unknown) => error);
+
+      expect(refusal).toBeInstanceOf(Error);
+      expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+      expect(client.rpcCalls.map((call) => call.fn)).toEqual([
+        'start_template_generation',
+        'settle_template_generation_start_failed',
+      ]);
+      expect(client.generations[0]).toMatchObject({ status: 'failed', refunded: true, prediction_id: null });
+    });
+
+    it.each([
+      ['veo3_lite', '720p', 30], ['veo3_lite', '1080p', 35], ['veo3_lite', '4k', 150],
+      ['veo3_fast', '720p', 60], ['veo3_fast', '1080p', 65], ['veo3_fast', '4k', 180],
+      ['veo3', '720p', 250], ['veo3', '1080p', 255], ['veo3', '4k', 370],
+    ] as const)('holds %s at %s at %i credits, Kie\'s price for the tier it is sent', async (mode, resolution, credits) => {
+      // kie.ai/veo-3-1 pricingDesc for model veo-3-1, read 2026-10-20.
+      const { calls, generations } = await startVeo({ mode, resolution });
+
+      expect(calls[0].body.input).toMatchObject({ model: mode, resolution, duration: 8 });
+      expect(generations[0].cost).toBe(credits);
+    });
+
+    it('sends the tier the published provider map names for the mode', async () => {
+      const { buildCodeGenerationModelOperations } = await import('@/lib/generation-model-runtime');
+      const operationalConfig = buildCodeGenerationModelOperations().find((entry) => entry.modelId === 'veo-3.1')!;
+      const { calls } = await startVeo({
+        mode: 'veo3_fast',
+        operationalConfig: {
+          ...operationalConfig,
+          providerModelMap: { ...operationalConfig.providerModelMap, veo3_fast: 'veo3_lite' },
+        },
+      });
+
+      expect(calls[0].body).toMatchObject({ model: 'veo-3-1', input: { model: 'veo3_lite' } });
+    });
+
+    it('refuses a published provider map value that is not a Veo tier before holding anything', async () => {
+      const { buildCodeGenerationModelOperations } = await import('@/lib/generation-model-runtime');
+      const operationalConfig = buildCodeGenerationModelOperations().find((entry) => entry.modelId === 'veo-3.1')!;
+      const client = createSupabaseMock();
+      const { startVideoGeneration } = await import('@/lib/generation-services');
+
+      await expect(startVideoGeneration({
+        supabase: client.supabase,
+        creditSupabase: client.supabase,
+        userId: 'user-1',
+        prompt: 'A calm ocean at sunrise.',
+        model: 'veo-3.1',
+        mode: 'veo3_fast',
+        aspectRatio: '16:9',
+        resolution: '720p',
+        operationalConfig: {
+          ...operationalConfig,
+          providerModelMap: { ...operationalConfig.providerModelMap, veo3_fast: 'veo-3-1' },
+        },
+      })).rejects.toThrow(/Veo 3\.1/);
+      expect(client.rpcCalls).toEqual([]);
+      expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+    });
   });
 
   // The page and the app give every reference picture an @handle, and the unified start
@@ -4387,13 +4667,13 @@ describe('generation services', () => {
         label: 'Veo 3.1 Fast',
         model: 'veo-3.1',
         settings: { mode: 'veo3_fast', resolution: '720p' },
-        request: { model: 'veo3_fast', generationType: 'REFERENCE_2_VIDEO', imageUrls: [REFERENCE] },
+        request: { model: 'veo-3-1', input: { model: 'veo3_fast', generation_type: 'REFERENCE_2_VIDEO', image_urls: [REFERENCE] } },
       },
       {
         label: 'Veo 3.1 Lite',
         model: 'veo-3.1',
         settings: { mode: 'veo3_lite', resolution: '720p' },
-        request: { model: 'veo3_lite', generationType: 'REFERENCE_2_VIDEO', imageUrls: [REFERENCE] },
+        request: { model: 'veo-3-1', input: { model: 'veo3_lite', generation_type: 'REFERENCE_2_VIDEO', image_urls: [REFERENCE] } },
       },
       {
         label: 'Grok Imagine Video',
@@ -4902,6 +5182,292 @@ describe('generation services', () => {
       },
     });
     expect(rpcCalls.some((call) => call.fn === 'refund_generation')).toBe(false);
+  });
+
+  // A Veo task is known only to the Kie API that created it. The sync behind webhooks,
+  // template and workflow runs and the completion cron asks each row's own: a jobs-API
+  // start marks its recipe `providerApi: 'jobs'`, and a row without the marker was
+  // started on the legacy /api/v1/veo/generate before the move.
+  describe('Veo 3.1 status sync on either Kie API', () => {
+    const TASK_ID = 'task-veo-sync-1';
+    const LEGACY_STATUS_URL = `https://api.kie.ai/api/v1/veo/record-info?taskId=${TASK_ID}`;
+    const JOBS_STATUS_URL = `https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${TASK_ID}`;
+    const LEGACY_SUCCESS = {
+      taskId: TASK_ID,
+      successFlag: 1,
+      completeTime: '2026-04-15T10:02:00.000Z',
+      response: { resultUrls: ['https://tempfile.example.com/legacy.mp4'] },
+    };
+    // generate-veo-3-video.md: "For 1080p and 4k, the video URL is in
+    // resultJson.data.result_urls (the 720p version is in data.origin_urls)".
+    const JOBS_SUCCESS = {
+      taskId: TASK_ID,
+      state: 'success',
+      completeTime: '2026-04-15T10:02:00.000Z',
+      resultJson: JSON.stringify({
+        data: {
+          origin_urls: ['https://tempfile.example.com/jobs-720p.mp4'],
+          result_urls: ['https://tempfile.example.com/jobs-1080p.mp4'],
+        },
+      }),
+    };
+    const JOBS_FAILURE = {
+      taskId: TASK_ID,
+      state: 'fail',
+      completeTime: '2026-04-15T10:02:00.000Z',
+      failMsg: 'provider failure',
+      resultJson: '',
+    };
+
+    function veoRow(workflowSettings: Record<string, unknown> | null, overrides: Partial<GenerationRow> = {}): GenerationRow {
+      return {
+        id: 'gen-veo-sync-1',
+        user_id: 'user-1',
+        prediction_id: TASK_ID,
+        status: 'processing',
+        output_url: null,
+        model: 'veo-3.1',
+        category: 'video',
+        workflow_settings: workflowSettings,
+        created_at: '2026-04-15T10:00:00.000Z',
+        completed_at: null,
+        ...overrides,
+      };
+    }
+
+    function answerStatusChecksWith(task: Record<string, unknown>) {
+      const urls: string[] = [];
+      vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+        urls.push(String(input));
+        return { ok: true, json: async () => ({ code: 200, msg: 'success', data: task }) } as Response;
+      });
+      return urls;
+    }
+
+    function importedOutputs(rpcCalls: Array<{ fn: string; args: Record<string, unknown> }>) {
+      return rpcCalls
+        .filter((call) => call.fn === 'enqueue_generation_output_import_job')
+        .map((call) => call.args.p_output_urls);
+    }
+
+    function createClient(row: GenerationRow) {
+      const { supabase: generationsClient, generations, rpcCalls } = createSupabaseMock([row]);
+      const notifications = createMobileNotificationHistory();
+      return {
+        supabase: withMobileNotificationHistory(generationsClient, notifications),
+        generations,
+        rpcCalls,
+        notifications,
+      };
+    }
+
+    it.each([
+      ['a recipe with no marker', veoRow({ model: 'veo-3.1', mode: 'veo3_fast' })],
+      ['an early row that kept the provider id as its model', veoRow(null, { model: 'veo3_fast' })],
+      ['a template step, whose recipe is empty', veoRow({})],
+      ['a marker it does not know', veoRow({ model: 'veo-3.1', providerApi: 'veo' })],
+    ])('polls %s on the legacy record-info endpoint', async (_label, row) => {
+      const { syncGenerationStatuses } = await import('@/lib/generation-status-sync');
+      const urls = answerStatusChecksWith(LEGACY_SUCCESS);
+      const { supabase, rpcCalls } = createClient(row);
+
+      await syncGenerationStatuses({ supabase, creditSupabase: supabase, generationIds: ['gen-veo-sync-1'] });
+
+      expect(urls).toEqual([LEGACY_STATUS_URL]);
+      expect(importedOutputs(rpcCalls)).toEqual([['https://tempfile.example.com/legacy.mp4']]);
+    });
+
+    it.each([
+      ['a creation', veoRow({ model: 'veo-3.1', mode: 'veo3_lite', providerApi: 'jobs' })],
+      ['a template step', veoRow({ providerApi: 'jobs' })],
+    ])('polls %s started on the jobs API at jobs/recordInfo and imports its rendered file', async (_label, row) => {
+      const { syncGenerationStatuses } = await import('@/lib/generation-status-sync');
+      const urls = answerStatusChecksWith(JOBS_SUCCESS);
+      const { supabase, rpcCalls } = createClient(row);
+
+      await syncGenerationStatuses({ supabase, creditSupabase: supabase, generationIds: ['gen-veo-sync-1'] });
+
+      expect(urls).toEqual([JOBS_STATUS_URL]);
+      expect(importedOutputs(rpcCalls)).toEqual([['https://tempfile.example.com/jobs-1080p.mp4']]);
+    });
+
+    it('settles a jobs-API failure a poll finds with the reason on the task', async () => {
+      const { syncGenerationStatuses } = await import('@/lib/generation-status-sync');
+      const urls = answerStatusChecksWith(JOBS_FAILURE);
+      const { supabase, rpcCalls, generations, notifications } = createClient(veoRow({ model: 'veo-3.1', providerApi: 'jobs' }));
+
+      await syncGenerationStatuses({ supabase, creditSupabase: supabase, generationIds: ['gen-veo-sync-1'] });
+
+      expect(urls).toEqual([JOBS_STATUS_URL]);
+      expect(generations[0].status).toBe('failed');
+      expect(notifications.started).toEqual(['generation:gen-veo-sync-1:failed']);
+      expect(rpcCalls).toContainEqual({
+        fn: 'settle_generation_failed',
+        args: {
+          p_prediction_id: TASK_ID,
+          p_completed_at: '2026-04-15T10:02:00.000Z',
+          p_error_message: 'provider failure',
+        },
+      });
+    });
+
+    it('keeps polling a jobs-API task that is still rendering', async () => {
+      const { syncGenerationStatuses } = await import('@/lib/generation-status-sync');
+      const urls = answerStatusChecksWith({ taskId: TASK_ID, state: 'generating' });
+      const { supabase, rpcCalls, generations } = createClient(veoRow({ model: 'veo-3.1', providerApi: 'jobs' }));
+
+      await syncGenerationStatuses({ supabase, creditSupabase: supabase, generationIds: ['gen-veo-sync-1'] });
+
+      expect(urls).toEqual([JOBS_STATUS_URL]);
+      expect(generations[0].status).toBe('processing');
+      expect(importedOutputs(rpcCalls)).toEqual([]);
+    });
+
+    it('keeps polling a jobs-API task whose 1080p or 4k render is still pending, rather than settling its 720p original', async () => {
+      // The live 1080p record carries `high_resolution_pending` beside its lists. A record
+      // that says success while the render is pending holds only the 720p original.
+      const { syncGenerationStatuses } = await import('@/lib/generation-status-sync');
+      const urls = answerStatusChecksWith({
+        taskId: TASK_ID,
+        state: 'success',
+        completeTime: '2026-04-15T10:02:00.000Z',
+        resultJson: JSON.stringify({
+          data: { origin_urls: ['https://tempfile.example.com/jobs-720p.mp4'], result_urls: [], high_resolution_pending: true, resolution: '4k' },
+        }),
+      });
+      const { supabase, rpcCalls, generations } = createClient(veoRow({ model: 'veo-3.1', resolution: '4k', providerApi: 'jobs' }));
+
+      await syncGenerationStatuses({ supabase, creditSupabase: supabase, generationIds: ['gen-veo-sync-1'] });
+
+      expect(urls).toEqual([JOBS_STATUS_URL]);
+      expect(generations[0].status).toBe('processing');
+      expect(importedOutputs(rpcCalls)).toEqual([]);
+    });
+
+    it('imports a jobs-API result in a shape only the shared result reader knows', async () => {
+      // The Veo reader looks for Kie's documented lists; the shared reader also knows a
+      // singular `resultUrl`. Its answer must not be lost for a Veo row.
+      const { syncGenerationStatuses } = await import('@/lib/generation-status-sync');
+      const urls = answerStatusChecksWith({
+        taskId: TASK_ID,
+        state: 'success',
+        completeTime: '2026-04-15T10:02:00.000Z',
+        resultJson: JSON.stringify({ resultUrl: 'https://tempfile.example.com/jobs-singular.mp4' }),
+      });
+      const { supabase, rpcCalls } = createClient(veoRow({ model: 'veo-3.1', providerApi: 'jobs' }));
+
+      await syncGenerationStatuses({ supabase, creditSupabase: supabase, generationIds: ['gen-veo-sync-1'] });
+
+      expect(urls).toEqual([JOBS_STATUS_URL]);
+      expect(importedOutputs(rpcCalls)).toEqual([['https://tempfile.example.com/jobs-singular.mp4']]);
+    });
+
+    it('imports a jobs-API task from a market-shaped callback without polling', async () => {
+      const { syncGenerationStatusByPredictionId } = await import('@/lib/generation-status-sync');
+      vi.mocked(fetch).mockRejectedValue(new Error('provider status should not be polled'));
+      const { supabase, rpcCalls } = createClient(veoRow({ model: 'veo-3.1', providerApi: 'jobs' }));
+
+      await expect(syncGenerationStatusByPredictionId({
+        supabase,
+        creditSupabase: supabase,
+        predictionId: TASK_ID,
+        providerPayload: { code: 200, msg: 'success', data: JOBS_SUCCESS },
+      })).resolves.toMatchObject({ found: true, status: 'succeeded' });
+
+      expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+      expect(importedOutputs(rpcCalls)).toEqual([['https://tempfile.example.com/jobs-1080p.mp4']]);
+    });
+
+    it('settles a jobs-API failure from a market-shaped callback without polling', async () => {
+      const { syncGenerationStatusByPredictionId } = await import('@/lib/generation-status-sync');
+      vi.mocked(fetch).mockRejectedValue(new Error('provider status should not be polled'));
+      const { supabase, rpcCalls } = createClient(veoRow({ model: 'veo-3.1', providerApi: 'jobs' }));
+
+      await expect(syncGenerationStatusByPredictionId({
+        supabase,
+        creditSupabase: supabase,
+        predictionId: TASK_ID,
+        providerPayload: { code: 501, msg: 'failed', data: JOBS_FAILURE },
+      })).resolves.toMatchObject({ found: true, status: 'failed' });
+
+      expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+      expect(rpcCalls).toContainEqual(expect.objectContaining({
+        fn: 'settle_generation_failed',
+        args: expect.objectContaining({ p_prediction_id: TASK_ID, p_error_message: 'provider failure' }),
+      }));
+    });
+
+    // veo3-api/generate-veo-3-video-callbacks.md documents the jobs-API Veo callback
+    // in Veo's own words (`info.resultUrls`, a bare `{ taskId }` on failure), with no
+    // market `state`. Such a callback says the task finished; the task's own record
+    // says how, so it is read where the task lives.
+    it('answers a Veo-shaped success callback for a jobs-API task from jobs/recordInfo', async () => {
+      const { syncGenerationStatusByPredictionId } = await import('@/lib/generation-status-sync');
+      const urls = answerStatusChecksWith(JOBS_SUCCESS);
+      const { supabase, rpcCalls } = createClient(veoRow({ model: 'veo-3.1', providerApi: 'jobs' }));
+
+      await expect(syncGenerationStatusByPredictionId({
+        supabase,
+        creditSupabase: supabase,
+        predictionId: TASK_ID,
+        providerPayload: {
+          code: 200,
+          msg: 'Video generated successfully.',
+          data: {
+            taskId: TASK_ID,
+            promptJson: '{"model":"veo3_lite","prompt":"cat"}',
+            info: { resultUrls: ['https://tempfile.example.com/callback.mp4'], resolution: '1080p' },
+            creditsConsumed: 30,
+          },
+        },
+      })).resolves.toMatchObject({ found: true, status: 'succeeded' });
+
+      expect(urls).toEqual([JOBS_STATUS_URL]);
+      expect(importedOutputs(rpcCalls)).toEqual([['https://tempfile.example.com/jobs-1080p.mp4']]);
+    });
+
+    it('answers a Veo-shaped failure callback for a jobs-API task from jobs/recordInfo', async () => {
+      const { syncGenerationStatusByPredictionId } = await import('@/lib/generation-status-sync');
+      const urls = answerStatusChecksWith(JOBS_FAILURE);
+      const { supabase, rpcCalls } = createClient(veoRow({ model: 'veo-3.1', providerApi: 'jobs' }));
+
+      await expect(syncGenerationStatusByPredictionId({
+        supabase,
+        creditSupabase: supabase,
+        predictionId: TASK_ID,
+        providerPayload: {
+          code: 400,
+          msg: 'Your prompt was flagged by Website as violating content policies.',
+          data: { taskId: TASK_ID },
+        },
+      })).resolves.toMatchObject({ found: true, status: 'failed' });
+
+      expect(urls).toEqual([JOBS_STATUS_URL]);
+      expect(rpcCalls).toContainEqual(expect.objectContaining({
+        fn: 'settle_generation_failed',
+        args: expect.objectContaining({ p_prediction_id: TASK_ID, p_error_message: 'provider failure' }),
+      }));
+    });
+
+    it('answers a callback for a legacy task from the legacy record-info endpoint', async () => {
+      const { syncGenerationStatusByPredictionId } = await import('@/lib/generation-status-sync');
+      const urls = answerStatusChecksWith(LEGACY_SUCCESS);
+      const { supabase, rpcCalls } = createClient(veoRow({ model: 'veo-3.1', mode: 'veo3_fast' }));
+
+      await expect(syncGenerationStatusByPredictionId({
+        supabase,
+        creditSupabase: supabase,
+        predictionId: TASK_ID,
+        providerPayload: {
+          code: 200,
+          msg: 'Veo3.1 video generated successfully.',
+          data: { taskId: TASK_ID, info: { resultUrls: '[https://tempfile.example.com/legacy.mp4]' }, fallbackFlag: false },
+        },
+      })).resolves.toMatchObject({ found: true, status: 'succeeded' });
+
+      expect(urls).toEqual([LEGACY_STATUS_URL]);
+      expect(importedOutputs(rpcCalls)).toEqual([['https://tempfile.example.com/legacy.mp4']]);
+    });
   });
 
   it('maps Kling O3 named subjects into the provider elements field', async () => {

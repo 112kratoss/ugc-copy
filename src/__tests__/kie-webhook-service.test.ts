@@ -161,6 +161,54 @@ describe('kie webhook service', () => {
     });
   });
 
+  // Veo 3.1 moved to Kie's jobs API. Its callbacks may come in the market shape or in
+  // Veo's own (veo3-api/generate-veo-3-video-callbacks.md); the route keys on the task
+  // id alone and hands the payload, untouched, to the completion job that reads it.
+  it.each([
+    ['the market shape', {
+      code: 200,
+      msg: 'success',
+      data: {
+        taskId: 'task-1',
+        state: 'success',
+        resultJson: JSON.stringify({ resultUrls: ['https://tempfile.example.com/veo.mp4'] }),
+      },
+    }],
+    ['Veo\'s success shape', {
+      code: 200,
+      msg: 'Video generated successfully.',
+      data: {
+        taskId: 'task-1',
+        info: { resultUrls: ['https://tempfile.example.com/veo.mp4'], resolution: '1080p' },
+        creditsConsumed: 60,
+      },
+    }],
+    ['Veo\'s failure shape', {
+      code: 400,
+      msg: 'Your prompt was flagged by Website as violating content policies.',
+      data: { taskId: 'task-1' },
+    }],
+  ])('accepts a Veo 3.1 jobs-API callback in %s and queues it whole', async (_shape, payload) => {
+    const { handleKieWebhookForRoute } = await import('@/lib/kie-webhook-service');
+    const result = await handleKieWebhookForRoute({
+      createServiceClient,
+      env: { KIE_WEBHOOK_HMAC_KEY: 'hmac-key' },
+      nowSeconds: 1782039000,
+      request: signedKieRequest(payload, '1782039000', 'http://localhost/api/webhooks/kie?generationId=gen-1'),
+      scheduleAfter,
+    });
+
+    expect(result).toEqual({ body: { received: true, predictionId: 'task-1' }, status: 200 });
+    expect(mocks.attachGenerationProviderTask).toHaveBeenCalledWith(serviceClient, {
+      generationId: 'gen-1',
+      predictionId: 'task-1',
+    });
+    expect(mocks.enqueueGenerationCompletionJob).toHaveBeenCalledWith(serviceClient, {
+      predictionId: 'task-1',
+      payload: { ...payload, magicbooklet: { callbackGenerationId: 'gen-1' } },
+    });
+  });
+
   it('adds callback generation metadata after attaching a provider task id', async () => {
     const { handleKieWebhookForRoute } = await import('@/lib/kie-webhook-service');
     const payload = {

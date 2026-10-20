@@ -536,6 +536,8 @@ The shared API treats requests without mobile compatibility headers as legacy AP
 
 Use Vercel rollback or promote the last known-good deployment. Verify custom domains, runtime logs, cron definitions, cache headers, and health immediately afterward.
 
+**Never roll back past the Veo jobs-API move (#504, merged 2026-10-20).** A Veo 3.1 run started since then is a task on Kie's `jobs/createTask`, marked `workflow_settings.providerApi = 'jobs'`. A build from before #504 polls every Veo row at the legacy `veo/record-info`, where a jobs task never reads as finished: each such run is refunded after five completion attempts (about 15 minutes) while Kie keeps its credits, and rolling forward again does not recover those rows. If something else needs a rollback, roll forward with a fix instead.
+
 ### Database Recovery
 
 Production migrations are forward-only. Do not run destructive down migrations during an incident. Prefer a corrective additive migration, restore a feature flag/default, or temporarily disable the affected route.

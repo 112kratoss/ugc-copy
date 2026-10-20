@@ -159,6 +159,14 @@ REFERENCE_2_VIDEO is "based on material images (**Fast model** and **Lite model*
 **16:9 & 9:16**)". The catalog offered Auto with references; a quote rule now refuses Auto on a
 run with a reference picture, and text and frame runs keep it.
 
+**2026-10-20 move to the jobs API** (#504): Kie's page now documents Veo 3.1 on `POST
+/api/v1/jobs/createTask` (`model: "veo-3-1"`, settings in `input`, snake_cased) and
+`GET /api/v1/jobs/recordInfo`; the flat `POST /api/v1/veo/generate` moved under docs' `old-model`
+section. `veo-3-1.md` keeps the legacy capture with a dated banner and a jobs-API section; the
+body the app sends is `buildVeoJobsTaskBody` in `src/lib/veo-provider-api.ts`. Two paid Lite
+runs (720p, 1080p) confirmed the price and where the file sits
+(`UGC copy/archive/model-checkup-2026-10-20/fixes/veo-new-api-probe*-run.log`).
+
 ## `minimax-h3`
 
 Unchanged from `video-reference-caps-2026-09-03.md`. `image-to-video`: "Either

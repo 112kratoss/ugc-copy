@@ -321,8 +321,8 @@ export function getGenerationPromptSafetyViolation(
 
 /**
  * Collects every positive `prompt` string in a provider request body, at any
- * depth: `input.prompt`, Veo's top-level `prompt`, and each `multi_prompt[]`
- * shot. `negative_prompt` is a different key and is never read.
+ * depth: `input.prompt`, the legacy Veo body's top-level `prompt`, and each
+ * `multi_prompt[]` shot. `negative_prompt` is a different key and is never read.
  */
 export function collectProviderPrompts(body: unknown, depth = 0): string[] {
   if (depth > 4 || !body || typeof body !== 'object') return [];

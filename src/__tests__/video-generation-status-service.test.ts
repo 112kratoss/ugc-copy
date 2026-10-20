@@ -515,3 +515,168 @@ describe('video generation failure notifications', () => {
     expect(history.started).toEqual([]);
   });
 });
+
+describe('Veo 3.1 status checks on either Kie API', () => {
+  // Kie moved Veo 3.1 to its jobs (market) API. A task is only known to the API
+  // that created it, so each generation is checked where its own start sent it:
+  // a jobs-API start marks its recipe `providerApi: 'jobs'`, and a row without
+  // that marker was started on the legacy /api/v1/veo/generate.
+  const LEGACY_STATUS_URL = 'https://api.kie.ai/api/v1/veo/record-info?taskId=task-video-1';
+  const JOBS_STATUS_URL = 'https://api.kie.ai/api/v1/jobs/recordInfo?taskId=task-video-1';
+
+  function pollVeo(generation: Record<string, unknown>, task: Record<string, unknown>) {
+    const admin = createStatusClientMock({
+      status: 'processing',
+      output_url: null,
+      completed_at: null,
+      model: 'veo-3.1',
+      ...generation,
+    });
+    const urls: string[] = [];
+    const enqueueGenerationOutputImportJob = vi.fn<
+      VideoGenerationStatusDependencies['enqueueGenerationOutputImportJob']
+    >(async () => 'import-job');
+    const settleGenerationFailed = vi.fn<VideoGenerationStatusDependencies['settleGenerationFailed']>(
+      async () => 'failed',
+    );
+    const result = getVideoGenerationStatusForRoute({
+      request: new Request('http://localhost/api/generate-video?id=task-video-1'),
+      predictionId: 'task-video-1',
+      userId: 'user-1',
+      supabase: admin.client,
+      createAdminSupabase: () => admin.client,
+      kieApiKey: 'test-key',
+      runAfterResponse: () => {},
+      dependencies: {
+        withBackendJobLock: async (_client, _options, run) => ({ acquired: true, value: await run() }),
+        tryAcquireGenerationProviderStatusThrottle: async () => true,
+        fetchWithProviderTimeout: async (url) => {
+          urls.push(String(url));
+          return Response.json({ code: 200, data: task });
+        },
+        enqueueGenerationOutputImportJob,
+        settleGenerationFailed,
+        notifyGenerationStatus: vi.fn(async () => null),
+      },
+    });
+    return { result, urls, enqueueGenerationOutputImportJob, settleGenerationFailed, admin };
+  }
+
+  const legacySuccess = {
+    successFlag: 1,
+    completeTime: '2026-04-15T10:01:00.000Z',
+    response: { resultUrls: ['https://tempfile.example.com/legacy.mp4'] },
+  };
+  const jobsSuccess = {
+    state: 'success',
+    completeTime: '2026-04-15T10:01:00.000Z',
+    resultJson: JSON.stringify({ resultUrls: ['https://tempfile.example.com/jobs.mp4'] }),
+  };
+
+  it.each([
+    ['a recipe with no marker', { workflow_settings: { model: 'veo-3.1', mode: 'veo3_fast' } }],
+    ['an early row that kept the provider id as its model', { model: 'veo3_fast', workflow_settings: null }],
+    ['a template step, whose recipe is empty', { workflow_settings: {}, template_run_id: 'run-1' }],
+    ['a marker it does not know', { workflow_settings: { model: 'veo-3.1', providerApi: 'veo' } }],
+  ])('keeps checking %s on the legacy record-info endpoint', async (_label, generation) => {
+    const { result, urls, enqueueGenerationOutputImportJob, admin } = pollVeo(generation, legacySuccess);
+
+    await expect(result).resolves.toMatchObject({ ok: true, body: { status: 'processing' } });
+    expect(urls).toEqual([LEGACY_STATUS_URL]);
+    expect(enqueueGenerationOutputImportJob).toHaveBeenCalledWith({
+      client: admin.client,
+      generationId: 'gen-video-1',
+      outputUrls: ['https://tempfile.example.com/legacy.mp4'],
+      providerCompletedAt: '2026-04-15T10:01:00.000Z',
+    });
+  });
+
+  it.each([
+    ['a creation', { workflow_settings: { model: 'veo-3.1', mode: 'veo3_lite', providerApi: 'jobs' } }],
+    ['a template step', { workflow_settings: { providerApi: 'jobs' }, template_run_id: 'run-1' }],
+  ])('checks %s started on the jobs API at jobs/recordInfo', async (_label, generation) => {
+    const { result, urls, enqueueGenerationOutputImportJob, admin } = pollVeo(generation, jobsSuccess);
+
+    await expect(result).resolves.toMatchObject({ ok: true, body: { status: 'processing' } });
+    expect(urls).toEqual([JOBS_STATUS_URL]);
+    expect(enqueueGenerationOutputImportJob).toHaveBeenCalledWith({
+      client: admin.client,
+      generationId: 'gen-video-1',
+      outputUrls: ['https://tempfile.example.com/jobs.mp4'],
+      providerCompletedAt: '2026-04-15T10:01:00.000Z',
+    });
+  });
+
+  it('imports the rendered 4k file of a jobs-API task, never its 720p origin', async () => {
+    const { result, enqueueGenerationOutputImportJob } = pollVeo(
+      { workflow_settings: { model: 'veo-3.1', resolution: '4k', providerApi: 'jobs' } },
+      {
+        state: 'success',
+        completeTime: '2026-04-15T10:01:00.000Z',
+        resultJson: JSON.stringify({
+          data: {
+            origin_urls: ['https://tempfile.example.com/veo-720p.mp4'],
+            result_urls: ['https://tempfile.example.com/veo-4k.mp4'],
+          },
+        }),
+      },
+    );
+
+    await expect(result).resolves.toMatchObject({ ok: true, body: { status: 'processing' } });
+    expect(enqueueGenerationOutputImportJob).toHaveBeenCalledWith(expect.objectContaining({
+      outputUrls: ['https://tempfile.example.com/veo-4k.mp4'],
+    }));
+  });
+
+  it('keeps a jobs-API task whose 4k render is still pending in progress, importing nothing', async () => {
+    const { result, enqueueGenerationOutputImportJob, settleGenerationFailed } = pollVeo(
+      { workflow_settings: { model: 'veo-3.1', resolution: '4k', providerApi: 'jobs' } },
+      {
+        state: 'success',
+        completeTime: '2026-04-15T10:01:00.000Z',
+        resultJson: JSON.stringify({
+          data: { origin_urls: ['https://tempfile.example.com/veo-720p.mp4'], result_urls: [], high_resolution_pending: true, resolution: '4k' },
+        }),
+      },
+    );
+
+    await expect(result).resolves.toMatchObject({ ok: true, body: { status: 'processing' } });
+    expect(enqueueGenerationOutputImportJob).not.toHaveBeenCalled();
+    expect(settleGenerationFailed).not.toHaveBeenCalled();
+  });
+
+  it('settles a jobs-API failure with the reason on the task', async () => {
+    const { result, urls, settleGenerationFailed, admin } = pollVeo(
+      { workflow_settings: { model: 'veo-3.1', providerApi: 'jobs' } },
+      { state: 'fail', completeTime: '2026-04-15T10:01:00.000Z', failMsg: 'provider failure', resultJson: '' },
+    );
+
+    await expect(result).resolves.toMatchObject({
+      ok: true,
+      body: { status: 'failed', error: 'provider failure' },
+    });
+    expect(urls).toEqual([JOBS_STATUS_URL]);
+    expect(settleGenerationFailed).toHaveBeenCalledWith(
+      admin.client,
+      'task-video-1',
+      '2026-04-15T10:01:00.000Z',
+      'provider failure',
+    );
+  });
+
+  it.each([
+    ['still rendering', { state: 'generating' }],
+    ['finished without a file', { state: 'success', resultJson: '{"resultUrls":[]}' }],
+    ['finished with a malformed result', { state: 'success', resultJson: '{broken' }],
+  ])('keeps a jobs-API task %s processing without importing anything', async (_label, task) => {
+    const { result, urls, enqueueGenerationOutputImportJob, settleGenerationFailed } = pollVeo(
+      { workflow_settings: { model: 'veo-3.1', providerApi: 'jobs' } },
+      task,
+    );
+
+    await expect(result).resolves.toMatchObject({ ok: true, body: { status: 'processing' } });
+    expect(urls).toEqual([JOBS_STATUS_URL]);
+    expect(enqueueGenerationOutputImportJob).not.toHaveBeenCalled();
+    expect(settleGenerationFailed).not.toHaveBeenCalled();
+  });
+});
