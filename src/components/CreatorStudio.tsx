@@ -519,6 +519,17 @@ export function StudioRunPanel({
 }
 
 /**
+ * The run's price could not be read: Generate waits for one, and this asks again. A creator
+ * page draws it alone, or under a start's refusal when the price asked again since (after
+ * `cost_changed`, say) could not be read either.
+ */
+export function StudioQuoteRetry({ message, onRetry }: { message: string | null; onRetry: () => void }) {
+  return (
+    <p className="text-sm text-amber-300">{message}<button type="button" onClick={onRetry} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
+  );
+}
+
+/**
  * The page and the start price this run apart, and asking again did not move the price
  * (`useCreatorQuote`'s `pageOutOfDate`): only a reload onto the current build ends it, so a
  * creator page draws this in place of the start's refusal while Generate waits. A remix

@@ -22,6 +22,7 @@ import {
     StudioMediaPreviewModal,
     StudioModelNotice,
     StudioOutOfDatePageNotice,
+    StudioQuoteRetry,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
     StudioRunPanel,
@@ -1426,10 +1427,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const estimatedCost = quoteUi.costCredits;
     // A page the start keeps refusing at its own price waits for a reload, not another press.
     const quotePending = quoteUi.blocksGenerate || quoteState.pageOutOfDate;
-    // The price could not be read: Generate waits for one, and this asks again.
-    const quoteRetry = quoteState.status === 'error' ? (
-        <p className="text-sm text-amber-300">{quoteUi.message}<button type="button" onClick={quoteState.retry} className="ml-2 underline underline-offset-2 hover:text-amber-100">Retry quote</button></p>
-    ) : null;
+    const quoteRetry = quoteState.status === 'error' ? <StudioQuoteRetry message={quoteUi.message} onRetry={quoteState.retry} /> : null;
     const estimatedGenerationTotalMs = estimateGenerationDurationMs({
         kind: 'video',
         model: selectedModel,

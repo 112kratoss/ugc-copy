@@ -5,7 +5,7 @@ import type { CatalogGenerationRequestPayload } from '@/lib/generation-model-ada
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import { useCreatorQuote } from '@/lib/use-creator-quote';
 import { catalogRunQuoteInput } from '../../ugc-mobile/lib/model-catalog/protocol';
-import { lastQuoteAttempt, quoteStandIn, resetQuoteStandIn } from './fixtures/web-quote-stand-in';
+import { quoteStandIn } from './fixtures/web-quote-stand-in';
 
 vi.mock('@/lib/generation-model-client', async () => {
   const actual = await vi.importActual<typeof import('@/lib/generation-model-client')>('@/lib/generation-model-client');
@@ -34,7 +34,7 @@ function renderQuote(request: GenerationModelQuoteInput | null = lighthouse.requ
 }
 
 beforeEach(() => {
-  resetQuoteStandIn(8);
+  quoteStandIn.reset(8);
 });
 
 describe('useCreatorQuote', () => {
@@ -45,7 +45,7 @@ describe('useCreatorQuote', () => {
 
     act(() => result.current.retry());
 
-    expect(lastQuoteAttempt()).toBe(1);
+    expect(quoteStandIn.lastAttempt()).toBe(1);
     expect(result.current).toMatchObject({ status: 'ready', quote: { costCredits: 8 }, pageOutOfDate: false });
   });
 
@@ -55,7 +55,7 @@ describe('useCreatorQuote', () => {
 
     act(() => result.current.costChanged({ ...lighthouse.run, expectedCostCredits: 8 }));
 
-    expect(lastQuoteAttempt()).toBe(1);
+    expect(quoteStandIn.lastAttempt()).toBe(1);
     expect(result.current).toMatchObject({ status: 'ready', quote: { costCredits: 10 }, pageOutOfDate: false });
   });
 
@@ -64,7 +64,7 @@ describe('useCreatorQuote', () => {
 
     act(() => result.current.costChanged({ ...lighthouse.run, expectedCostCredits: 8 }));
 
-    expect(lastQuoteAttempt()).toBe(1);
+    expect(quoteStandIn.lastAttempt()).toBe(1);
     expect(result.current).toMatchObject({ status: 'ready', quote: { costCredits: 8 }, pageOutOfDate: true });
   });
 
@@ -99,7 +99,7 @@ describe('useCreatorQuote', () => {
 
     act(() => result.current.costChanged(lighthouse.run));
 
-    expect(lastQuoteAttempt()).toBe(1);
+    expect(quoteStandIn.lastAttempt()).toBe(1);
     expect(result.current).toMatchObject({ status: 'ready', quote: { costCredits: 8 }, pageOutOfDate: false });
   });
 
@@ -111,7 +111,7 @@ describe('useCreatorQuote', () => {
 
     act(() => result.current.costChanged({ ...lighthouse.run, expectedCostCredits: 10 }));
 
-    expect(lastQuoteAttempt()).toBe(2);
+    expect(quoteStandIn.lastAttempt()).toBe(2);
     expect(result.current).toMatchObject({ quote: { costCredits: 10 }, pageOutOfDate: true });
   });
 });

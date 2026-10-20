@@ -1,12 +1,12 @@
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 
 /**
- * A stand-in for the web creators' quote hook (`useWebGenerationModelQuote`), shared by the
- * page tests and the quote hook's own. It answers at once, as the real hook does once its
- * request is answered: no request, no quote; a state says the request it answers (`key`, as
- * JSON). A test sets what it answers here and reads here what the page asked.
+ * The stand-in for the web creators' quote hook (`useWebGenerationModelQuote`) that the video,
+ * image and motion page tests and the quote hook's own share. It answers at once, as the real
+ * hook does once its request is answered: no request, no quote; a state says the request it
+ * answers (`key`, as JSON). A test sets what it answers here and reads here what the page asked.
  *
- * A test file mocks the client module with it, passing the module's own error class (the
+ * A test file mocks the client module with it, handing over the module's own error class (the
  * stand-in cannot import the module it stands in for):
  *
  *   vi.mock('@/lib/generation-model-client', async () => {
@@ -19,32 +19,29 @@ export const quoteStandIn = {
   /** Each request the hook was given, a render at a time, and the attempt it was asked under. */
   requests: [] as Array<GenerationModelQuoteInput | null>,
   attempts: [] as number[],
-  /** The answer at each attempt, a price, a quote not ready, or a failure; the last one stands after that. */
+  /** The answer at each attempt: a price, a quote not ready, or a failure; the last one stands after that. */
   answers: [8] as Array<number | 'pending' | 'error'>,
   /** Answers as for another request than the page asked. */
   forAnotherRequest: false,
   /** Every answer is this refusal, as for a catalog that changed under the page. */
   errorCode: null as string | null,
+  /** The page's last quote request (a render without one counts). */
+  lastRequest(): GenerationModelQuoteInput | null | undefined {
+    return quoteStandIn.requests.at(-1);
+  },
+  /** The attempt the page's last quote request was asked under. */
+  lastAttempt(): number | undefined {
+    return quoteStandIn.attempts.at(-1);
+  },
+  /** Nothing asked yet, and `price` at every asking. */
+  reset(price: number): void {
+    quoteStandIn.requests = [];
+    quoteStandIn.attempts = [];
+    quoteStandIn.answers = [price];
+    quoteStandIn.forAnotherRequest = false;
+    quoteStandIn.errorCode = null;
+  },
 };
-
-/** The page's last quote request (a render without one counts). */
-export function lastQuoteRequest(): GenerationModelQuoteInput | null | undefined {
-  return quoteStandIn.requests.at(-1);
-}
-
-/** The attempt the page's last quote request was asked under. */
-export function lastQuoteAttempt(): number | undefined {
-  return quoteStandIn.attempts.at(-1);
-}
-
-/** Nothing asked yet, and `price` at every asking. */
-export function resetQuoteStandIn(price: number): void {
-  quoteStandIn.requests = [];
-  quoteStandIn.attempts = [];
-  quoteStandIn.answers = [price];
-  quoteStandIn.forAnotherRequest = false;
-  quoteStandIn.errorCode = null;
-}
 
 type RequestErrorClass = new (message: string, status: number, code?: string) => Error;
 
