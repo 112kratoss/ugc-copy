@@ -252,4 +252,49 @@ describe('ShowcasePage cacheability', () => {
 
     expect(document.querySelector('link[rel="preload"][as="image"]')).toBeNull();
   });
+
+  // Every first load carries the client's props in its flight data.
+  it('hands the client the filters’ slug and label and media items without the app-only fields', async () => {
+    getShowcaseFeedPageMock.mockResolvedValue({
+      items: [{
+        id: 'image-post',
+        category: 'image',
+        postFormat: 'media',
+        mediaUrl: 'https://example.com/image.webp',
+        mediaKind: 'image',
+        mediaItems: [{
+          id: 'image-cover',
+          url: 'https://example.com/image.webp',
+          previewUrl: 'https://example.com/image-preview.webp',
+          previewCacheKey: 'posts/image-post/image-preview.webp',
+          preview: { id: 'image-cover', url: 'https://example.com/image.webp' },
+          mediaKind: 'image',
+          sortOrder: 0,
+        }],
+      }],
+      pageInfo: {
+        hasMore: false,
+        nextOffset: null,
+        limit: 12,
+        offset: 0,
+      },
+    });
+    const { default: ShowcasePage } = await import('@/app/showcase/(feed)/page');
+
+    render(await ShowcasePage({ searchParams: Promise.resolve({}) }));
+
+    const props = showcaseClientPropsMock.mock.calls[0]?.[0] as {
+      initialFeed: { items: Array<{ mediaItems: Array<Record<string, unknown>> }> };
+      sourceToolOptions: unknown;
+    };
+    expect(props.sourceToolOptions).toEqual([{ slug: 'magicbooklet', label: 'magicbooklet' }]);
+    expect(props.initialFeed.items[0]?.mediaItems[0]).toEqual({
+      id: 'image-cover',
+      url: 'https://example.com/image.webp',
+      previewUrl: 'https://example.com/image-preview.webp',
+      mediaKind: 'image',
+      sortOrder: 0,
+    });
+    expect(props.initialFeed.items[0]?.mediaItems[0]).not.toHaveProperty('preview');
+  });
 });

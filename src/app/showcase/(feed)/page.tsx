@@ -3,6 +3,7 @@ import { createShowcaseLoadTiming } from '@/lib/showcase-load-timing';
 
 import ShowcaseBootstrapClient from '@/app/showcase/ShowcaseBootstrapClient';
 import { getShowcaseFeedPage } from '@/lib/showcase-feed';
+import { toSourceToolFilterOptions } from '@/lib/source-tools';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import {
     SHOWCASE_INITIAL_PAGE_SIZE,
@@ -13,6 +14,7 @@ import {
     normalizeShowcaseResourceFilter,
     normalizeShowcaseSort,
     normalizeShowcaseUnlockFilter,
+    toShowcaseBootstrapFeedPage,
     type ShowcaseFeedPage,
     type ShowcasePriorityPosterData,
 } from '@/lib/showcase';
@@ -184,14 +186,16 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
                     fetchPriority="high"
                 />
             ) : null}
+            {/* A client component's props are written into every first load's
+                flight data, so these two carry only what the web reads. */}
             <ShowcaseBootstrapClient
-                initialFeed={initialFeed}
+                initialFeed={toShowcaseBootstrapFeedPage(initialFeed)}
                 initialCategory={category}
                 initialSort={sort}
                 initialTool={tool}
                 initialUnlock={unlock}
                 initialResource={resource}
-                sourceToolOptions={sourceToolOptions}
+                sourceToolOptions={toSourceToolFilterOptions(sourceToolOptions)}
                 initialPriorityPoster={initialPriorityPoster}
             />
         </>

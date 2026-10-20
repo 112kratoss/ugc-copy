@@ -25,6 +25,14 @@ export interface SourceToolOption {
   aliases?: string[];
 }
 
+/**
+ * What a tool filter draws from the catalog: a chip's label and the slug its
+ * link carries. Explore and the marketplace hand their clients only this
+ * (`toSourceToolFilterOptions`): the models, aliases and capabilities no
+ * filter reads were 31 KB of every first load of either page on 2026-10-20.
+ */
+export type SourceToolFilterOption = Pick<SourceToolOption, 'slug' | 'label'>;
+
 export interface SourceToolSelection {
   toolLabel: string;
   toolSlug: string | null;
@@ -483,6 +491,10 @@ export function getSourceToolOptionFromCatalog(
   slug: string | null | undefined
 ): SourceToolOption | null {
   return getSourceToolBySlug(catalog, slug);
+}
+
+export function toSourceToolFilterOptions(catalog: SourceToolOption[]): SourceToolFilterOption[] {
+  return catalog.map(({ slug, label }) => ({ slug, label }));
 }
 
 export function normalizeSourceToolInputWithCatalog(

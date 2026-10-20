@@ -166,12 +166,12 @@ export default function ShowcaseMediaCarousel({
       ? activeItem.feedStreamUrl ?? ''
       : resolvePlaybackUrl({
         url: activeItem.url,
-        renditionUrl: activeItem.preview?.renditionUrl ?? activeItem.renditionUrl ?? null,
+        renditionUrl: activeItem.renditionUrl ?? null,
       }))
     : '';
   // The server's teaser is the head of a long clip, not the clip: progress
   // through it is measured against the source (`sourceVideoProgress`).
-  const activeTeaserUrl = activeItem?.teaserUrl ?? activeItem?.preview?.teaserUrl ?? null;
+  const activeTeaserUrl = activeItem?.teaserUrl ?? null;
   const playingTeaser = Boolean(activeTeaserUrl) && activePlaybackUrl === activeTeaserUrl;
   const shouldPlayVideo = Boolean(activePlaybackUrl) && canPlayMotion && (
     mode === 'feed'
@@ -539,7 +539,7 @@ export default function ShowcaseMediaCarousel({
                     currentTime: media.currentTime,
                     streamDuration: media.duration,
                     teaser: playingTeaser,
-                    sourceDurationSeconds: renderedActiveItem.durationSeconds ?? renderedActiveItem.preview?.durationSeconds,
+                    sourceDurationSeconds: renderedActiveItem.durationSeconds,
                   });
                   if (sample) onVideoProgress(sample.progress, sample.durationMs);
                 }}

@@ -17,10 +17,12 @@ describe('production performance readiness', () => {
     // `inlineCss` is on so the public pages paint without a second,
     // render-blocking request: on the throttled mobile Lighthouse run that
     // request competed with the script chunks and moved the home page's first
-    // paint from 0.8 s to 2.2 s. Next inlines the sheet twice per response (a
-    // documented limitation), so the sheet a public page inlines has to stay
-    // small: globals.css scans only public routes, and a public route never
-    // links the supplement (route-style-readiness.test.ts pins the split).
+    // paint from 0.8 s to 2.2 s. Next inlines the root sheet three times per
+    // response (a <style> tag, and copies in the flight data for the root
+    // layout and the global-error boundary), so the sheet a public page
+    // inlines has to stay small: globals.css scans only public routes, and a
+    // public route never links the supplement (route-style-readiness.test.ts
+    // pins the split).
     expect(nextConfig).toContain('inlineCss: true');
     expect(nextConfig).toContain('`inlineCss` is deliberately on');
     expect(globalCss).toContain('@import "tailwindcss" source(none)');
@@ -53,6 +55,7 @@ describe('production performance readiness', () => {
     const priorityPoster = readProjectFile('src/lib/showcase-priority-poster.ts');
     const marketplacePolicy = readProjectFile('src/lib/marketplace-resource-list-cache-policy.ts');
     const marketplaceClient = readProjectFile('src/app/marketplace/MarketplaceBrowser.tsx');
+    const marketplacePage = readProjectFile('src/app/marketplace/page.tsx');
 
     expect(showcaseModel).toContain('SHOWCASE_INITIAL_RENDER_COUNT = 6');
     expect(showcaseModel).toContain('SHOWCASE_INITIAL_PAGE_SIZE = 12');
@@ -101,6 +104,15 @@ describe('production performance readiness', () => {
     expect(showcasePage).toContain('getInlineShowcasePriorityPoster(priorityVideoPoster.sourceUrl)');
     expect(priorityPoster).toContain('SHOWCASE_PRIORITY_POSTER_MAX_BYTES = 64 * 1024');
     expect(priorityPoster).toContain("return `data:image/webp;base64,${Buffer.from(bytes).toString('base64')}`");
+    // A client component's props are written into the flight data of every
+    // first load. The tool filters get each tool's slug and label alone, and
+    // the first feed page drops the media fields only the app reads: 47 KB of
+    // /showcase and 31 KB of /marketplace on 2026-10-20, margin under the
+    // decoded budgets below (showcase-first-load-props.test.ts and the two
+    // page tests hold what is left out).
+    expect(showcasePage).toContain('initialFeed={toShowcaseBootstrapFeedPage(initialFeed)}');
+    expect(showcasePage).toContain('sourceToolOptions={toSourceToolFilterOptions(sourceToolOptions)}');
+    expect(marketplacePage).toContain('sourceToolOptions: toSourceToolFilterOptions(sourceToolOptions)');
     expect(nextConfig).toContain('value: `<${supabaseUrl.origin}>; rel=preconnect`');
     expect(nextConfig).toContain('["/", "/home", "/feed", "/showcase", "/marketplace"]');
     expect(nextConfig).toContain('headers: publicMediaPreconnectHeaders');
@@ -158,15 +170,21 @@ describe('production performance readiness', () => {
     };
 
     expect(budgets.load.targets.length).toBeGreaterThanOrEqual(4);
-    // With `inlineCss` on, every public document carries the public stylesheet
-    // about three times over (the <style> tag plus its escaped copy in the RSC
-    // payload), so the decoded size of a page is dominated by the sheet rather
-    // than its content. The three page targets therefore budget decoded bytes
-    // explicitly, re-based on the measured inlined documents (home 763,979 B,
-    // showcase 586,662 B, marketplace 565,782 B on 2026-09-15) with the same
-    // ~10% headroom the earlier budgets had. Encoded budgets are untouched:
-    // brotli matches the duplicate copy against the first, so the wire cost of
-    // inlining is about one compressed copy (~20 KB).
+    // With `inlineCss` on, every document carries the root stylesheet three
+    // times: the <style> tag, its escaped copy in the RSC payload, and a second
+    // escaped copy Next writes for the global-error boundary (the payload's
+    // `G`), which Turbopack credits with the root layout's CSS. That was
+    // 454 KB of /showcase's 602 KB on 2026-10-20, so the decoded size of a
+    // page is dominated by the sheet rather than its content. The three page
+    // targets therefore budget decoded bytes explicitly, re-based on the
+    // measured inlined documents (home 763,979 B, showcase 586,662 B,
+    // marketplace 565,782 B on 2026-09-15) with the same ~10% headroom the
+    // earlier budgets had. Encoded budgets are untouched: brotli matches the
+    // duplicate copies against the first, so the wire cost of inlining is
+    // about one compressed copy (~20 KB). /showcase also moves with its first
+    // post: a video there inlines its poster (up to
+    // SHOWCASE_PRIORITY_POSTER_MAX_BYTES) in the HTML and again in the flight
+    // data, about 35 KB more on the 2026-10-12 and 10-19 runs.
     const pageTargets = Object.fromEntries(
       budgets.load.targets
         .filter((target) => !target.path.startsWith('/api/'))

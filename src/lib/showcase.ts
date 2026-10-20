@@ -7,7 +7,6 @@ import {
     type PostResourceBundleLockedPreview,
     type PostResourceKind,
 } from '@/lib/post-resource-bundles';
-import type { VisualMediaDescriptor } from '@/lib/media-descriptor';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 
 export const SHOWCASE_PAGE_SIZE = 12;
@@ -104,9 +103,10 @@ export interface ShowcaseMediaItem {
     previewUrl?: string | null;
     previewThumbhash?: string | null;
     previewStatus?: 'pending' | 'processing' | 'ready' | 'failed';
-    previewCacheKey?: string;
     gridReady?: boolean;
-    preview?: VisualMediaDescriptor;
+    // The server's media rows also carry SHOWCASE_APP_ONLY_MEDIA_FIELDS for the
+    // app. They stay off this type so no web code reads them: Explore's first
+    // page leaves them out, while /api/showcase/feed still sends them.
     mediaKind: ShowcaseMediaKind;
     contentType: string | null;
     originalName: string | null;
@@ -312,6 +312,39 @@ export function sanitizeShowcaseFeedPage(feed: ShowcaseFeedPage): ShowcaseFeedPa
         ...feed,
         items: feed.items.map(sanitizeShowcaseFeedItem),
     };
+}
+
+/**
+ * What the server's media rows carry for the app alone: `preview`, a copy of
+ * the item's own preview fields; `previewCacheKey`, the app's image-cache key;
+ * `displayUrl`, the app's image slide; and `renditionStatus`, which the server
+ * has already turned into `feedStreamUrl`. None of them is on
+ * ShowcaseMediaItem, so the web cannot read them.
+ */
+export const SHOWCASE_APP_ONLY_MEDIA_FIELDS = ['preview', 'previewCacheKey', 'displayUrl', 'renditionStatus'] as const;
+
+/**
+ * The first feed page Explore hands its client, without
+ * SHOWCASE_APP_ONLY_MEDIA_FIELDS: 15 of the 47 KB the twelve posts took in the
+ * document on 2026-10-20. `/api/showcase/feed` still sends them.
+ */
+export function toShowcaseBootstrapFeedPage(feed: ShowcaseFeedPage): ShowcaseFeedPage {
+    return {
+        ...feed,
+        items: feed.items.map((item) => (item.mediaItems
+            ? { ...item, mediaItems: item.mediaItems.map(withoutAppOnlyMediaFields) }
+            : item)),
+    };
+}
+
+function withoutAppOnlyMediaFields(mediaItem: ShowcaseMediaItem): ShowcaseMediaItem {
+    const trimmed: ShowcaseMediaItem & Partial<Record<(typeof SHOWCASE_APP_ONLY_MEDIA_FIELDS)[number], unknown>> = {
+        ...mediaItem,
+    };
+    for (const field of SHOWCASE_APP_ONLY_MEDIA_FIELDS) {
+        delete trimmed[field];
+    }
+    return trimmed;
 }
 
 export function normalizeShowcaseCategory(value: string | null | undefined): ShowcaseCategory {
