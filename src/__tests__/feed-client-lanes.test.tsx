@@ -1324,6 +1324,30 @@ describe('FeedClient lanes and card actions', () => {
             scrollTo.mockRestore();
         });
 
+        it('keeps an embedded lane a rem under the shell bar at a larger text size, where the bar is taller', async () => {
+            mockLaneAndProbe();
+            const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+            // Chrome's "Very large" text: 24px, and the 4rem bar 96px tall.
+            const bar = document.createElement('header');
+            bar.className = 'app-shell-header';
+            bar.getBoundingClientRect = () => ({ height: 96 } as DOMRect);
+            document.body.append(bar);
+            document.documentElement.style.fontSize = '24px';
+            try {
+                render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" variant="embedded" />);
+
+                await comeBackAfter(6);
+                Object.defineProperty(window, 'scrollY', { configurable: true, value: 1_200 });
+                fireEvent.click(await screen.findByRole('button', { name: 'New posts' }));
+
+                expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 1_200 - 96 - 24 }));
+            } finally {
+                bar.remove();
+                document.documentElement.style.fontSize = '';
+                scrollTo.mockRestore();
+            }
+        });
+
         it('shows nothing within five minutes, nor when the newest post is one the lane holds', async () => {
             const fetchMock = mockLaneAndProbe();
             render(<FeedClient initialFeed={rankedFeed} initialChipId="for-you" />);

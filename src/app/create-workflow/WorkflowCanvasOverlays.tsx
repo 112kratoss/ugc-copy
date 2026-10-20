@@ -3,7 +3,7 @@
 import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 
 import Image from 'next/image';
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import GenerationResultVideo from '@/components/GenerationResultVideo';
 import { Layers3, PencilLine, Play, Plus, Trash2, X, ZoomIn } from 'lucide-react';
@@ -13,7 +13,7 @@ import type {
   CanvasSelectionState,
   PreviewMediaState,
 } from './workflowCanvasUiTypes';
-import { getNodeLabel } from './workflowCanvasUiUtils';
+import { getNodeLabel, placeMenuAtPointer } from './workflowCanvasUiUtils';
 
 interface WorkflowCanvasOverlaysProps {
   contextMenu: CanvasContextMenuState | null;
@@ -115,9 +115,10 @@ function PreviewMediaOverlay({
     return null;
   }
 
+  // A lightbox, over the app shell's bottom navigation (z-60) like the app's others.
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-6 backdrop-blur-sm"
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/85 p-6 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
@@ -204,6 +205,29 @@ function CanvasContextMenu({
   onRunNode: (nodeId: string) => void;
   onSelectAll: () => void;
 }) {
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Placed once it is drawn and measured, before the browser paints it. At the
+  // pointer, as it was, a menu opened near the window's right or bottom edge ran off
+  // it. Its width does not depend on where it is (`w-max`), so it measures the same
+  // wherever it starts. Every render, as a price or the selection can resize it.
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    const overlay = menu?.parentElement;
+    if (!contextMenu || !menu || !overlay) {
+      return;
+    }
+
+    const size = menu.getBoundingClientRect();
+    const { left, top } = placeMenuAtPointer({
+      pointer: { x: contextMenu.x, y: contextMenu.y },
+      menu: { width: size.width, height: size.height },
+      bounds: { width: overlay.clientWidth, height: overlay.clientHeight },
+    });
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+  });
+
   if (!contextMenu) {
     return null;
   }
@@ -215,13 +239,29 @@ function CanvasContextMenu({
   const nodeRunState = node ? nodeRunStateById[node.id] : undefined;
   const actionClassName = 'flex w-full items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-zinc-200 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-60';
 
+  // Over the app shell's top bar and bottom navigation, like the app's other menus
+  // drawn in the page body (z-[90]). A right-click outside the menu closes it, as a
+  // native menu closes on that gesture: the overlay is what the right-click lands on,
+  // so the browser drew its own menu over ours while ours kept showing its first
+  // target. On the menu itself a right-click does nothing.
   return (
-    <div className="fixed inset-0 z-40" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-[90]"
+      onClick={onClose}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
       <div
+        ref={menuRef}
         data-testid="canvas-context-menu"
-        className="absolute min-w-[260px] rounded-[24px] border border-white/10 bg-black/95 p-3 shadow-[0_24px_80px_rgba(0,0,0,0.5)] backdrop-blur"
-        style={{ left: contextMenu.x, top: contextMenu.y }}
+        className="absolute w-max min-w-[260px] max-w-[calc(100%-1rem)] max-h-[calc(100%-1rem)] overflow-y-auto rounded-[24px] border border-white/10 bg-black/95 p-3 shadow-[0_24px_80px_rgba(0,0,0,0.5)] backdrop-blur"
         onClick={(event) => event.stopPropagation()}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
       >
         <div className="mb-3 px-2">
           <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">

@@ -255,7 +255,11 @@ export function WorkflowCanvasSurface({
           onEdgesChange={handleEdgesChange as never}
           onConnect={isReadOnly ? undefined : onConnect as never}
           onPaneClick={onPaneClick}
-          onPaneContextMenu={onPaneContextMenu as never}
+          // Gated like the node and edge menus. While an AI Builder proposal is
+          // previewed the editor hands this Surface no menu to draw, so a right-click
+          // on the pane stored one that nothing showed, and the stored menu came up at
+          // the old pointer once the proposal was dismissed.
+          onPaneContextMenu={isReadOnly ? undefined : onPaneContextMenu as never}
           onEdgeClick={isReadOnly ? undefined : onEdgeClick as never}
           onNodeClick={isReadOnly ? undefined : onNodeClick as never}
           onNodeDoubleClick={isReadOnly ? undefined : onNodeDoubleClick as never}
@@ -276,7 +280,11 @@ export function WorkflowCanvasSurface({
               nodeIds: nextNodes.map((node) => node.id),
               edgeIds: nextEdges.map((edge) => edge.id),
             });
-            onCloseContextMenu();
+            // This closed the context menu too, and so the menu never showed: React
+            // Flow calls this again whenever it is handed a new function, which this is
+            // on every render, so it closed the menu in the same commit that drew it
+            // (a node's menu also selects its node as it opens). The menu's overlay
+            // takes any click outside it, and Escape and each of its actions close it.
           }}
           onInit={(instance) => {
             reactFlowInstanceRef.current = instance as unknown as ReactFlowInstance;

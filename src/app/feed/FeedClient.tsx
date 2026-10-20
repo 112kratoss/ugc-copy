@@ -74,8 +74,14 @@ type FeedFetchMode = 'replace' | 'append' | 'merge';
 const getCardKey = (card: PostFeedCard) => card.id;
 
 // Where the top of an embedded lane lands when the pill takes the reader
-// there: under the shell's sticky top bar (64px, `--app-shell-topbar-height`).
-const EMBEDDED_FEED_TOP_OFFSET_PX = 80;
+// there: a rem under the shell's sticky top bar, 80px at the default text size.
+// The bar is `--app-shell-topbar-height`, 4rem, so it grows with a larger text
+// size and is measured; a fixed 80px put the lane's top under it.
+function embeddedFeedTopOffset() {
+    const bar = document.querySelector('.app-shell-header')?.getBoundingClientRect().height || 64;
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    return bar + rem;
+}
 
 type LaneCacheEntry = {
     items: ShowcaseFeedItem[];
@@ -1077,7 +1083,7 @@ export default function FeedClient({
         const root = rootRef.current;
         if (root) {
             const top = isEmbedded
-                ? root.getBoundingClientRect().top + window.scrollY - EMBEDDED_FEED_TOP_OFFSET_PX
+                ? root.getBoundingClientRect().top + window.scrollY - embeddedFeedTopOffset()
                 : 0;
             if (window.scrollY > top) window.scrollTo({ top: Math.max(0, top), behavior: newPostsScrollBehavior() });
         }

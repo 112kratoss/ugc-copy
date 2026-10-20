@@ -4,7 +4,7 @@ import { UserRoundX } from 'lucide-react';
 /** An unknown handle: say so, with a way into Explore, instead of the generic 404. */
 export default function CreatorNotFound() {
   return (
-    <div className="ui-page ui-page-ambient min-h-[calc(100dvh-64px)] px-4 py-8 sm:px-6 sm:py-12">
+    <div className="ui-page ui-page-ambient px-4 py-8 sm:px-6 sm:py-12">
       <section className="mx-auto max-w-2xl rounded-[28px] border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 text-center shadow-[var(--ui-shadow-panel)] sm:p-8">
         <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)]">
           <UserRoundX className="h-5 w-5" aria-hidden />

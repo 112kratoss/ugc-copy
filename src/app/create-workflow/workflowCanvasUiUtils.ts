@@ -61,6 +61,35 @@ export function getNodeAnchoredPopupPosition({
   };
 }
 
+/**
+ * Where a menu opened at the pointer goes so that all of it stays inside `bounds`
+ * (the window): on whichever side of the pointer it fits, right and down first, as a
+ * native context menu opens, and held `margin` inside the far edge when it fits on
+ * neither side.
+ */
+export function placeMenuAtPointer({
+  pointer,
+  menu,
+  bounds,
+  margin = 8,
+}: {
+  pointer: { x: number; y: number };
+  menu: { width: number; height: number };
+  bounds: { width: number; height: number };
+  margin?: number;
+}): { left: number; top: number } {
+  const place = (start: number, size: number, room: number) => {
+    if (start + size <= room - margin) return start;
+    if (start - size >= margin) return start - size;
+    return Math.max(margin, room - margin - size);
+  };
+
+  return {
+    left: place(pointer.x, menu.width, bounds.width),
+    top: place(pointer.y, menu.height, bounds.height),
+  };
+}
+
 export function getNodeLabel(nodes: WorkflowCanvasGraph['nodes'], nodeId: string): string {
   return nodes.find((node) => node.id === nodeId)?.data.title || 'Unknown node';
 }

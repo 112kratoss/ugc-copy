@@ -3,7 +3,7 @@ import SkeletonLoader from '@/components/SkeletonLoader';
 /** The page's shape while 24 posts, stats and prices load; there was only the top progress bar. */
 export default function CreatorLoading() {
   return (
-    <div className="ui-page ui-page-ambient min-h-[calc(100dvh-64px)] px-4 py-8 sm:px-6 sm:py-12" aria-busy="true" aria-label="Loading creator">
+    <div className="ui-page ui-page-ambient px-4 py-8 sm:px-6 sm:py-12" aria-busy="true" aria-label="Loading creator">
       <div className="mx-auto max-w-5xl">
         <SkeletonLoader className="h-40 rounded-[28px]" />
         <div className="mt-6 flex items-center gap-4">

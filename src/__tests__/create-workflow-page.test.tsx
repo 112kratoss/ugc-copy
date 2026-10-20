@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateWorkflowPage from '@/app/create-workflow/page';
 import CreateWorkflowEntry from '@/app/create-workflow/CreateWorkflowEntry';
 import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
+import type { WorkflowCanvasAssistantProposalRecord } from '@/lib/workflow-assistant-client';
 import { createStarterGraph, type VideoGenerateNodeData, type WorkflowCanvasRecord } from '@/lib/workflow-canvas';
 
 const mockPush = vi.fn();
@@ -110,6 +111,19 @@ vi.mock('@xyflow/react', async () => {
           onClick={() => (props.onPaneClick as (() => void) | undefined)?.()}
         >
           Pane click
+        </button>
+        <button
+          type="button"
+          data-testid="pane-context"
+          onClick={() =>
+            (props.onPaneContextMenu as ((event: Record<string, unknown>) => void) | undefined)?.({
+              preventDefault() {},
+              clientX: 140,
+              clientY: 160,
+            })
+          }
+        >
+          Pane menu
         </button>
         <button
           type="button"
@@ -388,6 +402,9 @@ describe('CreateWorkflowPage', () => {
   let orderedCanvasIds: string[];
   let nextCanvasIdNumber: number;
   let nextShareIdNumber: number;
+  // What the AI Builder's state route answers for the canvas it names: a ready
+  // proposal opens its preview over the canvas as the page loads.
+  let assistantProposal: WorkflowCanvasAssistantProposalRecord | null;
   const workflowCatalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3 });
 
   function buildShareId(value: number) {
@@ -467,6 +484,7 @@ describe('CreateWorkflowPage', () => {
     orderedCanvasIds = ['canvas-1', 'canvas-2'];
     nextCanvasIdNumber = 3;
     nextShareIdNumber = 1;
+    assistantProposal = null;
     sharesById = {
       [DEFAULT_IMPORTED_SHARE_ID]: {
         id: DEFAULT_IMPORTED_SHARE_ID,
@@ -535,6 +553,19 @@ describe('CreateWorkflowPage', () => {
         return {
           ok: true,
           json: async () => ({ canvas }),
+        } as Response;
+      }
+
+      const assistantMatch = url.match(/\/api\/workflow-canvases\/([^/]+)\/assistant$/);
+      if (assistantMatch && method === 'GET') {
+        return {
+          ok: true,
+          json: async () => ({
+            messages: [],
+            proposal: assistantProposal?.canvas_id === assistantMatch[1] ? assistantProposal : null,
+            availability: 'ready',
+            setupMessage: null,
+          }),
         } as Response;
       }
 
@@ -814,7 +845,7 @@ describe('CreateWorkflowPage', () => {
     expect(mobileDrawer).toBe(screen.getByTestId('workflow-left-rail'));
     expect(mobileDrawer).toHaveAttribute('aria-modal', 'true');
     expect(mobileDrawer).toHaveClass('fixed', 'z-[70]', 'md:static', 'md:z-auto');
-    expect(screen.getByRole('button', { name: /dismiss nodes and workflows/i })).toHaveClass('z-[60]');
+    expect(screen.getByRole('button', { name: /dismiss nodes and workflows/i })).toHaveClass('z-[70]');
 
     fireEvent.keyDown(document, { key: 'Escape' });
 
@@ -1064,6 +1095,90 @@ describe('CreateWorkflowPage', () => {
     expect(await screen.findByTestId('dock-node-editor')).toBeInTheDocument();
 
     fireEvent.click(await screen.findByTestId(`node-select-${firstNodeId}`));
+    expect(await screen.findByTestId('dock-node-editor')).toBeInTheDocument();
+  });
+
+  // While an AI Builder proposal is previewed the Surface is handed no menu to draw,
+  // but a right-click on the pane still stored one, and it came up at the old pointer
+  // once the proposal was dismissed.
+  it('ignores a right-click on the pane while a proposal is previewed, so no menu waits for the proposal to go', async () => {
+    const graph = canvasesById['canvas-1'].graph;
+    const promptNode = graph.nodes[0];
+    assistantProposal = {
+      id: 'proposal-1',
+      canvas_id: 'canvas-1',
+      base_revision: 0,
+      status: 'ready',
+      summary: 'Retitle the prompt.',
+      diff: {
+        regionId: 'region-1',
+        nodes: {
+          added: [],
+          changed: [{ id: promptNode.id, title: 'Proposed prompt', type: promptNode.type, roleKey: null, slotKey: null }],
+          removed: [],
+        },
+        edges: { added: 0, removed: 0 },
+      },
+      proposed_graph: {
+        ...graph,
+        nodes: graph.nodes.map((node) => (
+          node.id === promptNode.id ? { ...node, data: { ...node.data, title: 'Proposed prompt' } } : node
+        )),
+      },
+      created_at: '2026-03-22T00:14:00.000Z',
+      applied_at: null,
+      discarded_at: null,
+    };
+    await renderLoadedPage();
+
+    // The preview is showing: the proposal's graph is drawn, with its Discard.
+    const discard = await screen.findByRole('button', { name: 'Discard' });
+    await waitFor(() => expect(screen.getByTestId(`node-select-${promptNode.id}`)).toHaveTextContent('Proposed prompt'));
+    fireEvent.click(screen.getByTestId('pane-context'));
+    expect(screen.queryByTestId('canvas-context-menu')).not.toBeInTheDocument();
+
+    fireEvent.click(discard);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Discard' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId(`node-select-${promptNode.id}`)).toHaveTextContent(promptNode.data.title));
+    expect(screen.queryByTestId('canvas-context-menu')).not.toBeInTheDocument();
+
+    // Editable again, the pane's menu opens as before.
+    fireEvent.click(screen.getByTestId('pane-context'));
+    expect(await screen.findByTestId('canvas-context-menu')).toBeInTheDocument();
+    expect(within(screen.getByTestId('canvas-context-menu')).getByRole('button', { name: /add note/i })).toBeInTheDocument();
+  });
+
+  // The window's keydown handler special-cased the open menu for Escape only, so under
+  // it Enter opened the node editor, n took the focus to the node library's search and
+  // Cmd/Ctrl+A re-selected everything and re-labelled the menu.
+  it('keeps the canvas shortcuts quiet under an open context menu until it closes', async () => {
+    await renderLoadedPage();
+
+    const firstNodeId = canvasesById['canvas-1'].graph.nodes[0]?.id;
+    fireEvent.click(await screen.findByTestId(`node-context-${firstNodeId}`));
+    const contextMenu = await screen.findByTestId('canvas-context-menu');
+    expect(within(contextMenu).getByText('Node')).toBeInTheDocument();
+    const librarySearch = screen.getByPlaceholderText('Search prompt, video, note...');
+
+    // The editor's popup is placed in an animation frame, so give it two.
+    fireEvent.keyDown(window, { key: 'Enter' });
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    });
+    expect(screen.queryByTestId('dock-node-editor')).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'n' });
+    expect(librarySearch).not.toHaveFocus();
+
+    fireEvent.keyDown(window, { key: 'a', metaKey: true });
+    expect(within(contextMenu).getByText('Node')).toBeInTheDocument();
+    expect(within(contextMenu).getByRole('button', { name: /edit node/i })).toBeInTheDocument();
+    expect(within(contextMenu).queryByRole('button', { name: /delete selected/i })).not.toBeInTheDocument();
+
+    // Escape closes it, and the shortcuts are back: Enter opens the node's editor.
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByTestId('canvas-context-menu')).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Enter' });
     expect(await screen.findByTestId('dock-node-editor')).toBeInTheDocument();
   });
 

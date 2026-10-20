@@ -10,7 +10,7 @@ import { AlertTriangle, RefreshCw } from 'lucide-react';
 // same errored payload, so a database blip stayed on screen.
 export default function CreatorError({ retry }: { retry: () => void }) {
   return (
-    <div className="ui-page ui-page-ambient min-h-[calc(100dvh-64px)] px-4 py-8 sm:px-6 sm:py-12">
+    <div className="ui-page ui-page-ambient px-4 py-8 sm:px-6 sm:py-12">
       <section
         role="alert"
         className="mx-auto max-w-2xl rounded-[28px] border border-rose-300/25 bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8"

@@ -121,8 +121,11 @@
 :root {
   /* The sticky app-shell topbar height, which .app-shell-header is
      exactly; anything else that pins below the topbar (e.g. .home-rail)
-     must offset by this. */
-  --app-shell-topbar-height: 64px;
+     must offset by this. 4rem, 64px at the default text size: the bar's 3rem
+     controls grow with a larger browser text size, and so does the bar. At a
+     fixed 64px the bar grew round them all the same (73-75px at 24px text), and
+     every page sized from the token was 9-11px taller than the window. */
+  --app-shell-topbar-height: 4rem;
   --background: #101012;
   --foreground: #fff8ed;
   --ui-bg-app: #0c0c0e;
@@ -184,7 +187,10 @@ body {
     var(--background);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  min-height: 100vh;
+  /* The window as it is now (dvh), as the app shell sizes itself. On a phone 100vh
+     is the window with its toolbar put away, so while the toolbar showed, a body of
+     100vh let every short page in the shell scroll by the toolbar's height. */
+  min-height: 100dvh;
   color-scheme: dark;
 }
 
@@ -982,12 +988,13 @@ button:disabled,
   width: 100%;
 }
 
-/* The token tall, border included; its controls (48px, the search field 50px)
-   centre in the bar. With 8px of vertical padding it came to 65px, and to 67px
-   once the search field showed, so everything sized by the token was 1-3px
-   short of it. A min-height, not a height: at a larger browser text size the
-   3rem controls outgrow 64px, and the bar grows around them rather than letting
-   them spill over the page. */
+/* The token tall, border included; its controls (3rem, the search field 3rem
+   and its border) centre in the bar. With 8px of vertical padding it came to
+   65px, and to 67px once the search field showed, so everything sized by the
+   token was 1-3px short of it. A min-height, not a height, so that anything
+   taller than the token grows the bar rather than spilling over the page; the
+   token is in rem, so a larger browser text size, which grows the controls,
+   grows it with them. */
 .app-shell-header {
   position: sticky;
   top: 0;

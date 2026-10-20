@@ -105,6 +105,47 @@ describe('WorkflowCanvasOverlays', () => {
     expect(within(contextMenu).getByText('A motion step is charged for its clip’s measured length.')).toBeInTheDocument();
   });
 
+  // With node A's menu open, a right-click on node B or the pane lands on the menu's
+  // full-window overlay. It closed on a click only, so the browser drew its own menu
+  // over ours, which kept showing node A.
+  it('closes on a right-click outside the menu and keeps the browser\'s menu away', () => {
+    const graph = createStarterGraph();
+    const node = graph.nodes[0];
+    const onCloseContextMenu = vi.fn();
+
+    render(
+      <WorkflowCanvasOverlays
+        contextMenu={{ x: 120, y: 120, target: 'node', nodeId: node.id }}
+        edges={graph.edges}
+        nodes={graph.nodes}
+        nodeRunStateById={{}}
+        onAddNote={vi.fn()}
+        onClearSelection={vi.fn()}
+        onCloseContextMenu={onCloseContextMenu}
+        onClosePreview={vi.fn()}
+        onDeleteSelection={vi.fn()}
+        onEditNode={vi.fn()}
+        onFitView={vi.fn()}
+        onRunBranch={vi.fn()}
+        onRunNode={vi.fn()}
+        onSelectAll={vi.fn()}
+        preview={null}
+        selection={{ nodeIds: [node.id], edgeIds: [] }}
+        showSelectionHud={false}
+      />
+    );
+
+    const contextMenu = screen.getByTestId('canvas-context-menu');
+    const overlay = contextMenu.parentElement!;
+
+    // fireEvent returns false when the event's default was prevented: no browser menu.
+    expect(fireEvent.contextMenu(within(contextMenu).getByRole('button', { name: /edit node/i }))).toBe(false);
+    expect(onCloseContextMenu).not.toHaveBeenCalled();
+
+    expect(fireEvent.contextMenu(overlay)).toBe(false);
+    expect(onCloseContextMenu).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the pane context menu focused on simple canvas actions', () => {
     const graph = createStarterGraph();
 
