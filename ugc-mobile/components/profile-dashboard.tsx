@@ -20,7 +20,6 @@ import {
   Play,
   RefreshCw,
   Sparkles,
-  Store,
   UserRound,
   Wallet,
 } from 'lucide-react-native';
@@ -528,11 +527,12 @@ export function ProfileDashboard({
               value={wallet.value}
               caption={wallet.caption}
               accessibilityLabel={wallet.accessibilityLabel}
+              // The way to Recipe Sales on the profile; the side menu has the other.
+              accessibilityHint="Opens Recipe Sales"
               onPress={() => router.push('/seller-dashboard' as never)}
             />
           </View>
           <InviteAndEarnButton />
-          <SellerDashboardButton />
         </>
       ) : (
         <>
@@ -1179,39 +1179,6 @@ function BalanceCard({
         ) : null}
       </View>
       <ChevronRight size={16} color={theme.colors.faint} />
-    </Pressable>
-  );
-}
-
-function SellerDashboardButton() {
-  const theme = useAppTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Open seller dashboard"
-      onPress={() => router.push('/seller-dashboard' as never)}
-      style={({ pressed }) => ({
-        minHeight: 58,
-        borderRadius: 20,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: theme.colors.panel,
-        paddingHorizontal: 14,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-      })}
-    >
-      <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: theme.colors.pressed, alignItems: 'center', justifyContent: 'center' }}>
-        <Store size={appTheme.icon.default} color={theme.colors.primary} />
-      </View>
-      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <AppText variant="label" numberOfLines={1} style={{ fontSize: 14 }}>Recipe Sales</AppText>
-        <AppText variant="caption" color="muted" numberOfLines={1}>Sales, unlocks, and listings</AppText>
-      </View>
-      <ChevronRight size={20} color={theme.colors.faint} />
     </Pressable>
   );
 }

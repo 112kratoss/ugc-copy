@@ -738,6 +738,16 @@ describe('ProfileDashboard Wallet card', () => {
     expect(routerState.push).toHaveBeenCalledWith('/seller-dashboard');
   });
 
+  // The Wallet card and the side menu both open Recipe Sales, so the row under the card that
+  // opened it a third way is gone (owner's call on A4, 2026-10-21); the card says where it goes.
+  it('is the one way to Recipe Sales on the profile, and says so', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<ProfileDashboard />); });
+
+    expect(findPressableByText(tree.root, 'Wallet').props.accessibilityHint).toBe('Opens Recipe Sales');
+    expect(tree.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Open seller dashboard')).toHaveLength(0);
+  });
+
   it('draws the dash, never $0, while the payout state is on its way', () => {
     const { card, texts } = renderWallet();
 
@@ -1049,13 +1059,13 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(routerState.push).toHaveBeenCalledWith('/seller-dashboard');
   });
 
-  it('keeps Your Sales routed to the seller earnings screen', () => {
+  it('keeps Recipe Sales routed to the seller earnings screen, from the Wallet card', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<ProfileDashboard />);
     });
 
-    const sellerDashboard = findPressableByText(tree!.root, 'Recipe Sales');
+    const sellerDashboard = findPressableByText(tree!.root, 'Wallet');
     renderer.act(() => {
       sellerDashboard.props.onPress();
     });
